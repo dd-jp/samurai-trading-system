@@ -140,10 +140,10 @@ export interface DashboardServerOptions {
 }
 
 export interface DashboardServer {
-  /** Actual bound port (OS-assigned when constructed with port 0). */
+  /** Actual bound port (OS-assigned when constructed with port 0) */
   readonly port: number;
   readonly host: string;
-  /** `http://host:port` using the actual bound port. */
+  /** `http://host:port` using the actual bound port */
   readonly url: string;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -154,7 +154,7 @@ const JSON_HEADERS = {
   'Cache-Control': 'no-store',
 } as const;
 
-/** The only two legal `?arm=` values (migration 0033's `CHECK(arm IN (...))`). */
+/** The only two legal `?arm=` values (migration 0033's `CHECK(arm IN (...))`) */
 const TRADING_ARMS: readonly TradingArm[] = ['live', 'control'];
 
 function isTradingArm(value: string): value is TradingArm {
@@ -202,14 +202,14 @@ export const BUNDLE_CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.svg': 'image/svg+xml; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   // Sourcemaps are JSON. Served so a stack trace in an operator's dev tools
-  // points at real source rather than at a minified column number.
+  // points at real source rather than at a minified column number
   '.map': 'application/json; charset=utf-8',
   // Binary — no charset. A `charset` on a font is meaningless at best.
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
 };
 
-/** `Content-Type` for a resolved bundle path, or `undefined` if not servable. */
+/** `Content-Type` for a resolved bundle path, or `undefined` if not servable */
 export function bundleContentType(filePath: string): string | undefined {
   return BUNDLE_CONTENT_TYPES[extname(filePath).toLowerCase()];
 }
@@ -247,7 +247,7 @@ export function resolveBundlePath(root: string, urlPath: string): string | null 
 
   const rel = relative(resolvedRoot, resolved);
   // `rel === ''` is the root directory itself — a directory, not a file, and
-  // only `/` maps to `index.html`.
+  // only `/` maps to `index.html`
   if (rel === '') return null;
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
   return resolved;
@@ -334,12 +334,12 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
           // `index.html` is not — and it is the file that names the current
           // hashes. Revalidating everything keeps a redeployed dashboard from
           // serving an operator a stale page; the cost is one conditional
-          // request against localhost.
+          // request against localhost
           'Cache-Control': 'no-cache',
         })
         .end(body);
     } catch {
-      // ENOENT, EISDIR, EACCES — all of them mean "no file to serve here".
+      // ENOENT, EISDIR, EACCES — all of them mean "no file to serve here"
       await respondNotFound(res);
     }
   }
@@ -368,7 +368,7 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
 
   const server: Server = createServer((req, res) => {
     // Every handler below is GET-only. A non-GET method is a 405 (not a
-    // silent 404) so a misuse is obvious in dev tools.
+    // silent 404) so a misuse is obvious in dev tools
     if (req.method !== 'GET') {
       res.writeHead(405, { Allow: 'GET' }).end(JSON.stringify({ error: 'method not allowed' }));
       return;
@@ -376,14 +376,14 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
 
     // Parsed rather than string-compared so a query string cannot change
     // which handler runs, and so the static path is the URL's `pathname` and
-    // nothing else.
+    // nothing else
     let parsedUrl: URL;
     let urlPath: string;
     try {
       parsedUrl = new URL(req.url ?? '/', 'http://localhost');
       urlPath = decodeURIComponent(parsedUrl.pathname);
     } catch {
-      // Malformed percent-escapes (`%zz`) — `decodeURIComponent` throws.
+      // Malformed percent-escapes (`%zz`) — `decodeURIComponent` throws
       res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: 'bad request' }));
       return;
     }
@@ -391,14 +391,14 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
     if (urlPath === '/api/snapshot') {
       // #1038: verified before buildSnapshot ever runs, so a request with no
       // valid credential never touches the store — the store's data is the
-      // asset this check protects, not just the HTTP response.
+      // asset this check protects, not just the HTTP response
       if (!isAuthorizedRequest(req.headers.authorization, opts.dashboardCredential)) {
         res
           .writeHead(401, { ...JSON_HEADERS, 'WWW-Authenticate': 'Bearer' })
           .end(JSON.stringify({ error: 'unauthorized' }));
         return;
       }
-      // #1592: named arm, or 400 — never a silent fallback to live on a bad value.
+      // #1592: named arm, or 400 — never a silent fallback to live on a bad value
       const parsedArm = parseArmParam(parsedUrl.searchParams);
       if (!parsedArm.ok) {
         res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: parsedArm.reason }));

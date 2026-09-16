@@ -48,7 +48,7 @@ export const UNTRUSTED_WRAPPER_TEMPLATE = [PREAMBLE, OPEN_TAG, CLOSE_TAG].join('
 /**
  * Wraps `text` in a tagged, delimited block with an explicit preamble
  * instructing the model to treat the enclosed content strictly as data,
- * never as instructions — the minimum-bar mitigation the ticket calls for.
+ * never as instructions — the minimum-bar mitigation the ticket calls for
  */
 export function wrapUntrusted(text: string): string {
   return [PREAMBLE, OPEN_TAG, neutralizeTagMarkers(text), CLOSE_TAG].join('\n');

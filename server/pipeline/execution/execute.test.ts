@@ -8,7 +8,7 @@ import { sanitizeBrokerError } from './broker-error.js';
 /**
  * A value `describeThrown` cannot render on its own: circular (defeats
  * `JSON.stringify`) with a throwing `Symbol.toPrimitive` (defeats the
- * `String()` fallback too) — #1262's hostile-throw fixture.
+ * `String()` fallback too) — #1262's hostile-throw fixture
  */
 function hostileThrownValue(): Record<string, unknown> {
   const hostile: Record<string, unknown> = {
@@ -104,7 +104,7 @@ function makeGo(orderOverrides: Partial<OrderIntent> = {}): VerdictDecision {
   };
 }
 
-/** One `submitFlatten` call, recorded verbatim for assertion. */
+/** One `submitFlatten` call, recorded verbatim for assertion */
 interface FlattenCall {
   instrument: string;
   side: 'buy' | 'sell';
@@ -112,13 +112,13 @@ interface FlattenCall {
   clientOrderId: string;
 }
 
-/** One `cancel` call, recorded verbatim for assertion. */
+/** One `cancel` call, recorded verbatim for assertion */
 interface CancelCall {
   clientOrderId: string;
   instrument: string;
 }
 
-/** One `rearmProtectiveLegs` call, recorded verbatim for assertion (#525). */
+/** One `rearmProtectiveLegs` call, recorded verbatim for assertion (#525) */
 interface RearmCall {
   clientOrderId: string;
   instrument: string;
@@ -128,7 +128,7 @@ interface RearmCall {
   target: number;
 }
 
-/** Accepts everything and records what it was handed. */
+/** Accepts everything and records what it was handed */
 function makeBroker(
   onSubmit?: (order: NativeBracketRequest) => void | Promise<void>,
   onFlatten?: (call: FlattenCall) => void | Promise<void>,
@@ -139,14 +139,14 @@ function makeBroker(
   flattenCalls: FlattenCall[];
   cancelCalls: CancelCall[];
   rearmCalls: RearmCall[];
-  /** Every submitBracket/submitFlatten/cancel call, in call order — the PR #516 review's ordering property (cancel-before-flatten) is otherwise unobservable from the three arrays alone. */
+  /** Every submitBracket/submitFlatten/cancel call, in call order — the PR #516 review's ordering property (cancel-before-flatten) is otherwise unobservable from the three arrays alone */
   callSequence: string[];
 } {
   const calls: NativeBracketRequest[] = [];
   // Kept separate from `calls` (NativeBracketRequest[]): several existing
   // tests assert `broker.calls` has length 0 to mean "no bracket submitted",
   // and a flatten is not a bracket — folding it in would make those
-  // assertions pass for the wrong reason.
+  // assertions pass for the wrong reason
   const flattenCalls: FlattenCall[] = [];
   const cancelCalls: CancelCall[] = [];
   const rearmCalls: RearmCall[] = [];
@@ -168,7 +168,7 @@ function makeBroker(
       };
     },
     // execute() never drives the fill lifecycle; these satisfy the widened
-    // interface (#83) without behaviour these tests exercise.
+    // interface (#83) without behaviour these tests exercise
     async fetchNewFills(): Promise<NormalizedFill[]> {
       return [];
     },
@@ -177,13 +177,13 @@ function makeBroker(
     // "AUTHORITATIVELY never placed", which `reconcile` acts on by marking the
     // lot `rejected`. A stub that answered null would make this double lie in
     // exactly the direction that buries a live position. `execute()` never
-    // calls it, so reaching this is itself the bug.
+    // calls it, so reaching this is itself the bug
     async getOrder(): Promise<never> {
       throw new Error('makeBroker.getOrder: execute() does not reconcile');
     },
     // #508's exit path: recorded like `submitBracket`, mirroring its ack shape
     // (client_order_id + broker_order_ids + order_state) rather than throwing,
-    // since `execute()` now genuinely reaches for this on an `exit` intent.
+    // since `execute()` now genuinely reaches for this on an `exit` intent
     async submitFlatten(
       instrument: string,
       side: 'buy' | 'sell',
@@ -203,7 +203,7 @@ function makeBroker(
     // PR #516 review (comment 1): the exit path now genuinely calls this,
     // to clear a held lot's stop/target legs before flattening — resolves
     // rather than throwing, mirroring the production adapters' own
-    // idempotent-cancel contract (types/broker.ts).
+    // idempotent-cancel contract (types/broker.ts)
     async cancel(clientOrderId: string, instrument: string): Promise<void> {
       const call = { clientOrderId, instrument };
       cancelCalls.push(call);
@@ -211,7 +211,7 @@ function makeBroker(
       await onCancel?.(call);
     },
     // #525's re-arm path: recorded like `cancel`, resolving by default
-    // (a successful re-arm) unless `onRearm` throws.
+    // (a successful re-arm) unless `onRearm` throws
     async rearmProtectiveLegs(
       clientOrderId: string,
       instrument: string,
@@ -228,14 +228,14 @@ function makeBroker(
     async getOpenPositions(): Promise<never> {
       throw new Error('makeBroker.getOpenPositions: execute() does not reconcile');
     },
-    // #519/#526's reconcile-only surface — execute() never calls it.
+    // #519/#526's reconcile-only surface — execute() never calls it
     async resumeFlatten(): Promise<never> {
       throw new Error('makeBroker.resumeFlatten: execute() does not reconcile');
     },
   };
 }
 
-/** Records every alert posted (#525) — never posted for a SUCCESSFUL re-arm. */
+/** Records every alert posted (#525) — never posted for a SUCCESSFUL re-arm */
 function makeResidualExposureAlerts(): ResidualExposureAlertChannel & {
   alerts: ResidualExposureAlert[];
 } {
@@ -248,7 +248,7 @@ function makeResidualExposureAlerts(): ResidualExposureAlertChannel & {
   };
 }
 
-/** Records every warning posted (#527) — never posted for a clean split. */
+/** Records every warning posted (#527) — never posted for a clean split */
 function makeFlattenOverfillAlerts(): FlattenOverfillAlertChannel & {
   warnings: FlattenOverfillWarning[];
 } {
@@ -261,7 +261,7 @@ function makeFlattenOverfillAlerts(): FlattenOverfillAlertChannel & {
   };
 }
 
-/** Records every alert posted (#519) — never posted for a clean settle. */
+/** Records every alert posted (#519) — never posted for a clean settle */
 function makeFlattenReconcileAlerts(): FlattenReconcileAlertChannel {
   return {
     async postFlattenReconcileAlert(): Promise<void> {},
@@ -299,7 +299,7 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     // enough for almost every test here. The exceptions pass their own
     // `recordingLogger()`: the #1001 snapshot-budget warn, and #1214 review
     // round 2's `flatten_refused_in_flight`, which is an outcome a caller
-    // cannot tell from an ordinary dedup by status alone.
+    // cannot tell from an ordinary dedup by status alone
     logger: { log: () => {} },
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     ...overrides,
@@ -330,7 +330,7 @@ describe('ExecutionImpl.execute', () => {
 
     expect(broker.calls).toHaveLength(1);
     expect(broker.calls[0]).toEqual({
-      // Dedup layer 2: the venue rejects a duplicate of this id.
+      // Dedup layer 2: the venue rejects a duplicate of this id
       client_order_id: 'key-aapl-1355',
       instrument: 'AAPL',
       asset_class: 'stocks',
@@ -346,7 +346,7 @@ describe('ExecutionImpl.execute', () => {
   // AC: "Write-ahead record exists before the simulated broker call." This is
   // an ordering claim, so it is observed from inside the broker call itself —
   // asserting after execute() returns would pass even if the write happened
-  // afterwards.
+  // afterwards
   it('persists the pending record BEFORE calling the broker', async () => {
     const { store } = openTestExecutionStore();
     let stateAtSubmit: OpenPosition | null = null;
@@ -361,7 +361,7 @@ describe('ExecutionImpl.execute', () => {
     // read, so its control-flow analysis still holds the initialiser's `null`
     // and `stateAtSubmit?.order_state` narrows to `never`. The runtime value
     // is the position captured mid-submit; the assertion below is what proves
-    // it.
+    // it
     const captured = stateAtSubmit as OpenPosition | null;
 
     expect(captured).not.toBeNull();
@@ -386,7 +386,7 @@ describe('ExecutionImpl.execute', () => {
       side: 'buy',
       intent_type: 'entry',
       requested_size: 100,
-      // Nothing has filled at `pending`, so the lot carries no exposure yet.
+      // Nothing has filled at `pending`, so the lot carries no exposure yet
       filled_size: 0,
       avg_entry_price: 0,
       stop: 95,
@@ -397,11 +397,11 @@ describe('ExecutionImpl.execute', () => {
       decision_timestamp: new Date('2026-07-15T13:55:00Z'),
       conviction: 0.72,
       converged: true,
-      // #1001: always populated, no I/O — `order.entry` from `makeIntent()`.
+      // #1001: always populated, no I/O — `order.entry` from `makeIntent()`
       // The quote/modelled-cost-breakdown fields stay absent here because
       // this test's `makeInput` default `marketData`/`costModel` are `{}`,
       // so both of `captureSubmitSnapshot`'s independent reads throw and
-      // degrade to null (see the dedicated #1001 describe block below).
+      // degrade to null (see the dedicated #1001 describe block below)
       decision_price: 100,
     });
   });
@@ -418,13 +418,13 @@ describe('ExecutionImpl.execute', () => {
 
   // TOCTOU tail of the findByKey gate: a concurrent execute() for the same
   // key can pass the gate before this one's write-ahead lands. The loser of
-  // the PK race must come back `deduped`, not throw.
+  // the PK race must come back `deduped`, not throw
   it('returns deduped when a concurrent execute() wins the write-ahead race', async () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
 
     // Simulate the interleaving: findByKey says "free" the first time, then a
-    // rival's write-ahead lands before ours does.
+    // rival's write-ahead lands before ours does
     let firstCheck = true;
     const racingStore: typeof store = Object.create(store);
     racingStore.findByKey = async (key: string) => {
@@ -461,7 +461,7 @@ describe('ExecutionImpl.execute', () => {
   // Only a constraint collision means "a rival got there first". A write that
   // failed for any other reason (disk full, SQLITE_BUSY) must surface — a
   // `deduped` there would tell the caller an order is already live when
-  // nothing was persisted and nothing was sent (PR #290 review, deepseek).
+  // nothing was persisted and nothing was sent (PR #290 review, deepseek)
   it('rethrows a non-constraint write-ahead failure instead of reporting deduped', async () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
@@ -471,7 +471,7 @@ describe('ExecutionImpl.execute', () => {
       throw new Error('database or disk is full');
     };
     // Free at the gate, present by the time the catch re-checks — the shape
-    // the old row-existence-only catch would have swallowed as `deduped`.
+    // the old row-existence-only catch would have swallowed as `deduped`
     let firstCheck = true;
     failingStore.findByKey = async () => {
       if (firstCheck) {
@@ -502,7 +502,7 @@ describe('ExecutionImpl.execute', () => {
     expect(second.reason).toBe('an order or fill already exists for this idempotency_key');
     expect(second.broker_order_ids).toBeNull();
     // The first call owns the lot; this one wrote nothing and so has no
-    // state of its own to report.
+    // state of its own to report
     expect(second.order_state).toBeNull();
     expect(broker.calls).toHaveLength(1);
   });
@@ -510,7 +510,7 @@ describe('ExecutionImpl.execute', () => {
   // The `findByKey` gate is check-then-act: two concurrent calls both read
   // "absent" before either writes, so the primary key — not the gate — is what
   // decides the race. The loser must land on `deduped`, not on an unhandled
-  // constraint violation escaping execute().
+  // constraint violation escaping execute()
   it('dedupes the loser of a concurrent race on the same key', async () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
@@ -525,12 +525,12 @@ describe('ExecutionImpl.execute', () => {
     // Pins WHICH layer deduped: two write-ahead attempts means both calls got
     // past `findByKey` and the primary key settled it. Without this the test
     // would pass just as happily if the gate had caught the second call,
-    // silently stopping short of the branch it exists to cover.
+    // silently stopping short of the branch it exists to cover
     expect(store.writeLog.filter((entry) => entry.startsWith('write-ahead')).length).toBe(2);
     const deduped = first?.status === 'deduped' ? first : second;
     expect(deduped?.reason).toBe('an order or fill already exists for this idempotency_key');
     expect(deduped?.broker_order_ids).toBeNull();
-    // The whole point: the race cost the venue nothing and the store one row.
+    // The whole point: the race cost the venue nothing and the store one row
     expect(broker.calls).toHaveLength(1);
     expect(await store.countAllPositions()).toBe(1);
   });
@@ -538,7 +538,7 @@ describe('ExecutionImpl.execute', () => {
   it('rethrows a write-ahead failure that is not a duplicate key', async () => {
     // A store that could not write has NOT written; reporting that as dedup
     // would claim a durable record that does not exist, and the lot would
-    // reach the broker with nothing behind it to reconcile.
+    // reach the broker with nothing behind it to reconcile
     const { store } = openTestExecutionStore();
     vi.spyOn(store, 'writeAheadPosition').mockRejectedValue(new Error('disk full'));
     const broker = makeBroker();
@@ -551,7 +551,7 @@ describe('ExecutionImpl.execute', () => {
 
   // AC: "submit-N-times yields exactly one fill" — at this seam, exactly one
   // submission reaches the broker, which is what makes exactly one fill
-  // possible downstream.
+  // possible downstream
   it('submits exactly once across N replays of the same decision', async () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
@@ -597,7 +597,7 @@ describe('ExecutionImpl.execute', () => {
       rearmProtectiveLegs: vi
         .fn()
         .mockRejectedValue(new Error('rearmProtectiveLegs: not part of execute()')),
-      // See `makeBroker`: never null, and never reached on this path.
+      // See `makeBroker`: never null, and never reached on this path
       getOrder: vi.fn().mockRejectedValue(new Error('getOrder: not part of execute()')),
       submitFlatten: vi.fn().mockRejectedValue(new Error('submitFlatten: not part of execute()')),
       cancel: vi.fn().mockRejectedValue(new Error('cancel: not part of execute()')),
@@ -614,7 +614,7 @@ describe('ExecutionImpl.execute', () => {
     expect(result.broker_order_ids).toBeNull();
     // Whether the bracket landed is unknowable here — only the broker can
     // settle it, so the record stays `pending` for #86 to reconcile rather
-    // than being guessed terminal.
+    // than being guessed terminal
     expect(result.order_state).toBe('pending');
     expect((await store.getPosition('key-aapl-1355'))?.order_state).toBe('pending');
   });
@@ -642,7 +642,7 @@ describe('ExecutionImpl.execute', () => {
     // The `pending` row is the whole point: it is what #86's reconcile adopts
     // broker truth against. Rendering the rejection unguarded threw out of
     // `execute()` before this result existed, so the caller saw a raw throw
-    // and the ambiguity was never reported as one.
+    // and the ambiguity was never reported as one
     expect(result.status).toBe('error');
     expect(result.reason).toBe('[unrenderable error]');
     expect(result.order_state).toBe('pending');
@@ -657,7 +657,7 @@ describe('ExecutionImpl.execute', () => {
   // non-credentialed diagnostics (see broker-error.ts's `readVenueCode`/
   // `readVenueMessage`), so they now ride through into `ExecutionResult.reason`
   // — the same field this suite already pins to `error.message` verbatim
-  // (see the 'connection reset' case above).
+  // (see the 'connection reset' case above)
   it('surfaces the venue diagnostic detail, not just the HTTP status, when a rejected order is caught', async () => {
     const { store } = openTestExecutionStore();
     const brokerError = sanitizeBrokerError('alpaca', 'submitBracket', {
@@ -687,7 +687,7 @@ describe('ExecutionImpl.execute', () => {
 
     expect(result.status).toBe('error');
     // Not just the generic status string — the venue's own diagnostic text
-    // must be present too.
+    // must be present too
     expect(result.reason).toContain('status 422');
     expect(result.reason).toContain('code 42210000');
     expect(result.reason).toContain('sub-penny increment does not fulfill minimum pricing');
@@ -729,7 +729,7 @@ describe('ExecutionImpl.execute', () => {
   });
 
   describe('exit intent (#508, hardened by PR #516 review)', () => {
-    /** A closing sell of the held quantity — `buildExitIntent` (trader/decide.ts) shape. */
+    /** A closing sell of the held quantity — `buildExitIntent` (trader/decide.ts) shape */
     function makeExitGo(overrides: Partial<OrderIntent> = {}): VerdictDecision {
       return makeGo({
         intent_type: 'exit',
@@ -737,13 +737,13 @@ describe('ExecutionImpl.execute', () => {
         size: 40,
         // An exit's stop/target are degenerate (equal to entry) — #83's
         // flatten lifecycle does not consult them (decide.ts comment above
-        // `buildExitIntent`).
+        // `buildExitIntent`)
         entry: 100,
         stop: 100,
         target: 100,
         // #793: every exit intent carries `metadata.exit_reason`
         // (`buildFlattenExit` requires the argument) — `executeExit` now
-        // refuses to write ahead without one.
+        // refuses to write ahead without one
         metadata: { ...makeIntent().metadata, exit_reason: 'flatten' },
         ...overrides,
       });
@@ -791,7 +791,7 @@ describe('ExecutionImpl.execute', () => {
 
       // Review comment 1: the held lot's bracket is cancelled BEFORE the
       // flatten, so a resting stop/target leg cannot fire into the
-      // now-flat position.
+      // now-flat position
       expect(broker.cancelCalls).toEqual([
         { clientOrderId: 'key-aapl-entry-1', instrument: 'AAPL' },
       ]);
@@ -800,11 +800,11 @@ describe('ExecutionImpl.execute', () => {
           instrument: 'AAPL',
           // The CLOSING side, carried straight through — `side` on the
           // exit intent is already the closing side (decide.ts's
-          // `buildExitIntent`), so this must not be inverted here.
+          // `buildExitIntent`), so this must not be inverted here
           side: 'sell',
           // The HELD quantity, not a risk-fraction size: `order.size` is
           // already `buildExitIntent`'s sum of filled_size across the
-          // instrument's open lots, so execute() passes it through as-is.
+          // instrument's open lots, so execute() passes it through as-is
           size: 40,
           clientOrderId: 'key-aapl-1355',
         },
@@ -813,7 +813,7 @@ describe('ExecutionImpl.execute', () => {
         'cancel:key-aapl-entry-1',
         'submitFlatten:key-aapl-1355',
       ]);
-      // No bracket path touched.
+      // No bracket path touched
       expect(broker.calls).toHaveLength(0);
     });
 
@@ -837,7 +837,7 @@ describe('ExecutionImpl.execute', () => {
     // so execute() must never write a NEW `open_positions` row for the
     // flatten itself — only the seeded lot (unwritten-to by the exit) may
     // be there. The flatten gets its OWN durable record instead, in
-    // `flatten_submissions` (review comments 2+4).
+    // `flatten_submissions` (review comments 2+4)
     it('writes no OpenPosition row for the flatten — only the flatten_submissions journal', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
@@ -845,7 +845,7 @@ describe('ExecutionImpl.execute', () => {
 
       await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
 
-      // Exactly the one seeded lot — the exit added no second position row.
+      // Exactly the one seeded lot — the exit added no second position row
       expect(await store.countAllPositions()).toBe(1);
       expect(store.writeLog).not.toContain('write-ahead:key-aapl-1355');
       expect(await store.countAllFlattenSubmissions()).toBe(1);
@@ -857,7 +857,7 @@ describe('ExecutionImpl.execute', () => {
     // INSIDE the `submitFlatten` call itself, the same technique the
     // bracket path's "persists the pending record BEFORE calling the
     // broker" test above uses, so this fails if the ordering is ever
-    // silently reversed.
+    // silently reversed
     it('journals the flatten to flatten_submissions before calling the broker, and resolves it after the ack', async () => {
       const { store } = openTestExecutionStore();
       let stateAtFlattenCall: Awaited<ReturnType<typeof store.getFlattenSubmission>> = null;
@@ -882,7 +882,7 @@ describe('ExecutionImpl.execute', () => {
 
       expect(store.writeLog).toEqual([
         // The seed itself, from `writeAheadPosition`/`updatePositionState`
-        // (`seedHeldLot` uses only the first).
+        // (`seedHeldLot` uses only the first)
         'write-ahead:key-aapl-entry-1',
         'write-ahead-flatten:key-aapl-1355',
         'resolve-flatten:key-aapl-1355:submitted',
@@ -893,7 +893,7 @@ describe('ExecutionImpl.execute', () => {
     // broker call throws" — but the ambiguity here is genuine (the venue
     // MAY have seen the flatten before the response was lost), so the row
     // is left at 'submitting' for #86's reconcile, exactly as the bracket
-    // path leaves its `pending` record on a `submitBracket` failure.
+    // path leaves its `pending` record on a `submitBracket` failure
     it('reports an error with no order_state when submitFlatten throws, leaving the journal row at submitting', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker(undefined, () => {
@@ -925,7 +925,7 @@ describe('ExecutionImpl.execute', () => {
       // 'submitting' is the ambiguous-order-state record #86's reconcile
       // resolves against. Rendering the rejection unguarded threw out of
       // `execute()` before this result existed, so the caller got a raw throw
-      // instead of the row's genuine ambiguity.
+      // instead of the row's genuine ambiguity
       expect(result.status).toBe('error');
       expect(result.reason).toBe('[unrenderable error]');
       expect(result.order_state).toBeNull();
@@ -938,7 +938,7 @@ describe('ExecutionImpl.execute', () => {
     // above: this is NOT ambiguous (the flatten provably never reached the
     // broker), so the journal resolves to 'error' immediately, and
     // `submitFlatten` must never be called while it is unknown whether the
-    // held lot's legs are actually gone.
+    // held lot's legs are actually gone
     it('refuses without ever calling submitFlatten when cancelling the held lot fails, and resolves the journal row to error', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker(undefined, undefined, () => {
@@ -960,7 +960,7 @@ describe('ExecutionImpl.execute', () => {
       // legs may still be working at the venue (the adapter's `cancel()` is
       // ordered so a throw usually means nothing was cancelled), and the
       // #549 sweep would re-arm an OCO over a live bracket — double
-      // protection, which over-closes into a reverse position.
+      // protection, which over-closes into a reverse position
       expect(await store.getUnprotectedResidualLots()).toEqual([]);
     });
 
@@ -969,7 +969,7 @@ describe('ExecutionImpl.execute', () => {
     // refused — leaving it open with no protection and (before this change)
     // nothing but a `flatten_submissions` row to say so. `sweepResidualProtection`
     // only ever retries lots carrying #549's marker, so without this write it
-    // would never look at lot 1 at all.
+    // would never look at lot 1 at all
     it('marks every already-cancelled lot unprotected when a later cancel fails, so the #549 sweep re-arms it (#867)', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker(undefined, undefined, ({ clientOrderId }) => {
@@ -987,7 +987,7 @@ describe('ExecutionImpl.execute', () => {
       expect((await store.getFlattenSubmission('key-aapl-1355'))?.status).toBe('error');
 
       // Lot 1 only: confirmed naked. Lot 2's cancel threw, so its state is
-      // unknown and it is deliberately left alone (see the test above).
+      // unknown and it is deliberately left alone (see the test above)
       const marked = await store.getUnprotectedResidualLots();
       expect(marked.map((lot) => lot.position.idempotency_key)).toEqual(['key-aapl-entry-1']);
     });
@@ -1008,7 +1008,7 @@ describe('ExecutionImpl.execute', () => {
       // `markLotsUnprotected` and `resolveFlattenError`, so rendering the
       // rejection unguarded skipped both — lot 1 was left cancelled (stop and
       // target provably gone) with no #549 marker for the sweep to find, and
-      // the journal row was left unresolved.
+      // the journal row was left unresolved
       const marked = await store.getUnprotectedResidualLots();
       expect(marked.map((lot) => lot.position.idempotency_key)).toEqual(['key-aapl-entry-1']);
       const row = await store.getFlattenSubmission('key-aapl-1355');
@@ -1025,7 +1025,7 @@ describe('ExecutionImpl.execute', () => {
     // cadence (`startFillSync` -> `execution.sweepResidualProtection()`,
     // production.ts). Driven here through the SAME `Execution` surface that
     // loop holds, so the assertion is that the naked lot really does get its
-    // stop and target back rather than merely a database column set.
+    // stop and target back rather than merely a database column set
     it('the #549 sweep then re-arms the lot this path marked, at its full held size (#867)', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker(undefined, undefined, ({ clientOrderId }) => {
@@ -1036,7 +1036,7 @@ describe('ExecutionImpl.execute', () => {
       // `seedHeldLot` writes the position row only. The sweep recomputes the
       // residual from the FILL record (`getFills`), not from `filled_size`,
       // so lot 1 needs the entry fill a real lot would already have — without
-      // it the sweep reads "entry not filled yet, nothing to protect".
+      // it the sweep reads "entry not filled yet, nothing to protect"
       await store.applyLotAdvance({
         idempotency_key: 'key-aapl-entry-1',
         fills: [
@@ -1057,7 +1057,7 @@ describe('ExecutionImpl.execute', () => {
       await execution.sweepResidualProtection();
 
       // No exit fill ever landed, so the residual IS the whole lot — 40, the
-      // seeded `filled_size`, at the lot's own stop/target.
+      // seeded `filled_size`, at the lot's own stop/target
       expect(broker.rearmCalls).toEqual([
         {
           clientOrderId: 'key-aapl-entry-1',
@@ -1068,7 +1068,7 @@ describe('ExecutionImpl.execute', () => {
           target: 110,
         },
       ]);
-      // Re-armed, so the marker is cleared and the sweep stops retrying it.
+      // Re-armed, so the marker is cleared and the sweep stops retrying it
       expect(await store.getUnprotectedResidualLots()).toEqual([]);
     });
 
@@ -1076,7 +1076,7 @@ describe('ExecutionImpl.execute', () => {
     // the SAME exit decision replayed (crash-restart, retry) now dedupes
     // exactly like an entry does — `findByKey` sees the `flatten_submissions`
     // row the first call journalled, so the second call never reaches
-    // `cancel` or `submitFlatten` at all.
+    // `cancel` or `submitFlatten` at all
     it('dedupes a replayed exit without touching the broker a second time', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
@@ -1111,7 +1111,7 @@ describe('ExecutionImpl.execute', () => {
     describe('one flatten per instrument (#1214 review)', () => {
       const REFLATTEN_KEY = 'key-aapl-entry-1:residual-reflatten-1';
 
-      /** A live residual re-flatten on the held lot: journalled, acked by the venue, no fills swept. */
+      /** A live residual re-flatten on the held lot: journalled, acked by the venue, no fills swept */
       async function seedLiveReflatten(
         store: ReturnType<typeof openTestExecutionStore>['store'],
         submittedAt: Date = NOW,
@@ -1152,7 +1152,7 @@ describe('ExecutionImpl.execute', () => {
 
         expect(broker.flattenCalls).toEqual([]);
         // 'deduped', not 'error': the instrument IS being closed, by the other
-        // submitter's order.
+        // submitter's order
         expect(result.status).toBe('deduped');
         /**
          * #1214 review round 2, finding 4. THE MUTATION THIS KILLS: delete the
@@ -1174,7 +1174,7 @@ describe('ExecutionImpl.execute', () => {
         );
         // The refusal happens at the write-ahead, ABOVE the cancel loop, so the
         // lot keeps the protective legs it still has. A guard placed after the
-        // cancel loop would have stripped them and then refused.
+        // cancel loop would have stripped them and then refused
         expect(broker.cancelCalls).toEqual([]);
         expect(await store.getFlattenSubmission('key-aapl-1355')).toBeNull();
       });
@@ -1188,7 +1188,7 @@ describe('ExecutionImpl.execute', () => {
         // NOTHING. Nothing else can resolve such a row — only `ingestFills()`
         // sets `fills_swept_at`, and only for a flatten that produced fills —
         // so before this fix the row stayed unresolved forever and the refusal
-        // above became permanent, across restarts.
+        // above became permanent, across restarts
         const reconcilingBroker = {
           ...makeBroker(),
           async resumeFlatten(): Promise<NormalizedOrder> {
@@ -1241,7 +1241,7 @@ describe('ExecutionImpl.execute', () => {
        * again" is.
        */
       describe('an unresolvable acked flatten is bounded, not permanent', () => {
-        /** The venue denies all knowledge of a flatten it acked — forever. */
+        /** The venue denies all knowledge of a flatten it acked — forever */
         const deniesEverything = {
           ...makeBroker(),
           async resumeFlatten(): Promise<NormalizedOrder | null> {
@@ -1291,7 +1291,7 @@ describe('ExecutionImpl.execute', () => {
           );
           // The reason must not claim proof the venue never gave, NOR an
           // observation history that was never gathered — the bound fires on
-          // one answer past an age, not on a run of denials.
+          // one answer past an age, not on a run of denials
           const row = await store.getFlattenSubmission(REFLATTEN_KEY);
           expect(row?.status).toBe('error');
           expect(row?.reason).toContain(
@@ -1301,7 +1301,7 @@ describe('ExecutionImpl.execute', () => {
           expect(await store.getUnresolvedFlattens()).toEqual([]);
 
           // The whole point: the mandatory flat-by-close goes out, for the
-          // instrument's FULL held quantity.
+          // instrument's FULL held quantity
           const broker = makeBroker();
           const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
             makeExitGo(),
@@ -1314,12 +1314,12 @@ describe('ExecutionImpl.execute', () => {
       });
     });
 
-    // #921: closing gap #1 in the issue's remaining "resilience gaps" list.
+    // #921: closing gap #1 in the issue's remaining "resilience gaps" list
     // Once a `flatten_submissions` row exists under a key, EVERY replay used
     // to dedupe forever — including the case where the row's own status
     // (`'error'`) PROVES the flatten never reached the broker. A mandatory
     // flatten cannot be allowed to stall like that: the next tick's retry of
-    // the same exit decision must get a fresh key and a fresh attempt.
+    // the same exit decision must get a fresh key and a fresh attempt
     describe('fresh idempotency key on flatten retry (#921)', () => {
       it('retries under a :retry-1 key when the cancel loop failed (row resolved to error), and the retry row is distinct from the original', async () => {
         const { store } = openTestExecutionStore();
@@ -1335,7 +1335,7 @@ describe('ExecutionImpl.execute', () => {
         expect((await store.getFlattenSubmission('key-aapl-1355'))?.status).toBe('error');
 
         // The next tick: the cancel loop now succeeds (the transient venue
-        // issue cleared), so the retry should actually flatten.
+        // issue cleared), so the retry should actually flatten
         failCancel = false;
         const second = await execution.execute(makeExitGo());
 
@@ -1351,7 +1351,7 @@ describe('ExecutionImpl.execute', () => {
         ]);
         // The retry re-ran the FULL cancel loop rather than assuming the
         // first attempt's (failed) cancel still holds — this is the
-        // `sweepResidualProtection`-may-have-re-armed-in-between guarantee.
+        // `sweepResidualProtection`-may-have-re-armed-in-between guarantee
         expect(broker.cancelCalls).toEqual([
           { clientOrderId: 'key-aapl-entry-1', instrument: 'AAPL' },
           { clientOrderId: 'key-aapl-entry-1', instrument: 'AAPL' },
@@ -1359,7 +1359,7 @@ describe('ExecutionImpl.execute', () => {
 
         // The original row is untouched, and a DISTINCT row now exists for
         // the retry key — two separate flatten_submissions rows, not one
-        // overwritten in place.
+        // overwritten in place
         const original = await store.getFlattenSubmission('key-aapl-1355');
         expect(original?.status).toBe('error');
         const retry = await store.getFlattenSubmission('key-aapl-1355:retry-1');
@@ -1370,7 +1370,7 @@ describe('ExecutionImpl.execute', () => {
       it('still dedupes (does not retry) when the prior attempt is stuck at submitting — a lost ack is genuinely ambiguous', async () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker(undefined, () => {
-          // submitFlatten itself throws: ambiguous, row stays 'submitting'.
+          // submitFlatten itself throws: ambiguous, row stays 'submitting'
           throw new Error('response lost');
         });
         await seedHeldLot(store);
@@ -1385,7 +1385,7 @@ describe('ExecutionImpl.execute', () => {
         expect(second.status).toBe('deduped');
         expect(second.idempotency_key).toBe('key-aapl-1355');
         // No second cancel/flatten attempt of any kind — both call counts are
-        // exactly what the FIRST (ambiguous) attempt left behind.
+        // exactly what the FIRST (ambiguous) attempt left behind
         expect(broker.cancelCalls).toHaveLength(1);
         expect(broker.flattenCalls).toHaveLength(1);
         expect(await store.countAllFlattenSubmissions()).toBe(1);
@@ -1412,7 +1412,7 @@ describe('ExecutionImpl.execute', () => {
 
       // Entry/scale_in must not gain any retry behaviour — a replayed entry
       // decision always means "this was already acted on", never "the prior
-      // attempt provably failed and should be retried under a new id".
+      // attempt provably failed and should be retried under a new id"
       it('never applies retry treatment to entry/scale_in intents — same key always dedupes unconditionally', async () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
@@ -1426,7 +1426,7 @@ describe('ExecutionImpl.execute', () => {
         expect(second.idempotency_key).toBe('key-aapl-1355');
         expect(broker.calls).toHaveLength(1);
         // isRetryableFlattenError is never even consulted for a bracket path
-        // key — there is no flatten_submissions row to find.
+        // key — there is no flatten_submissions row to find
         expect(await store.isRetryableFlattenError('key-aapl-1355')).toBe(false);
       });
 
@@ -1439,7 +1439,7 @@ describe('ExecutionImpl.execute', () => {
         const execution = new ExecutionImpl(makeInput({ store, broker }));
 
         // Every attempt's cancel loop fails, so every row resolves to
-        // 'error' — a persistently failing venue, never a lost ack.
+        // 'error' — a persistently failing venue, never a lost ack
         const results = [];
         for (let i = 0; i < 5; i++) {
           results.push(await execution.execute(makeExitGo()));
@@ -1448,7 +1448,7 @@ describe('ExecutionImpl.execute', () => {
         // base key + :retry-1 + :retry-2 + :retry-3 all attempt-and-fail
         // (each is a genuine attempt, each ends in 'error'); the 5th call has
         // exhausted MAX_EXIT_RETRY_ATTEMPTS (3) and falls back to 'deduped'
-        // rather than minting a 5th key.
+        // rather than minting a 5th key
         expect(results.map((r) => r.status)).toEqual([
           'error',
           'error',
@@ -1471,7 +1471,7 @@ describe('ExecutionImpl.execute', () => {
       it('refuses when the store holds no open lot for the instrument to close', async () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
-        // No seed: the store has nothing open for AAPL.
+        // No seed: the store has nothing open for AAPL
 
         const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
 
@@ -1554,7 +1554,7 @@ describe('ExecutionImpl.execute', () => {
         // What a pre-#568 `buildExitIntent` produced: the entry total, 10,
         // against a venue holding 6. Submitted, that is a market sell of 10
         // into 6 — 4 SHORT, with the re-armed OCO cancelled first, i.e. a
-        // reverse position with no lot, no bracket and no protective leg.
+        // reverse position with no lot, no bracket and no protective leg
         const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
           makeExitGo({ size: 10 }),
         );
@@ -1563,7 +1563,7 @@ describe('ExecutionImpl.execute', () => {
         expect(result.reason).toContain('10');
         expect(result.reason).toContain('6');
         // Refused BEFORE the cancel loop: a protective leg the flatten never
-        // replaced must not be taken off the venue on the way to a refusal.
+        // replaced must not be taken off the venue on the way to a refusal
         expect(broker.cancelCalls).toHaveLength(0);
         expect(broker.flattenCalls).toHaveLength(0);
         expect(await store.countAllFlattenSubmissions()).toBe(0);
@@ -1577,7 +1577,7 @@ describe('ExecutionImpl.execute', () => {
 
         // Any size at all: the divergence is refused before the size is
         // compared, because a negative lot would otherwise net against a
-        // sibling into a total that looks plausible and is not.
+        // sibling into a total that looks plausible and is not
         const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
           makeExitGo({ size: 6 }),
         );
@@ -1637,7 +1637,7 @@ describe('ExecutionImpl.execute', () => {
           // What the Trader recorded at decide-time: one lot up, the other
           // down by the same amount. 25 + 15 === 20 + 20 === order.size (40),
           // so the total-only guard above stays silent on this — it is only
-          // visible per lot.
+          // visible per lot
           const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
             makeExitGo({
               metadata: {
@@ -1703,7 +1703,7 @@ describe('ExecutionImpl.execute', () => {
     // has never seen a `submitBracket` call for this key, so its own
     // `accepted` book has no matching entry. `submitFlatten` never inspects
     // a position book — it prices and fills unconditionally
-    // (simulated-adapter.ts) — so the flatten still acks.
+    // (simulated-adapter.ts) — so the flatten still acks
     it('submits through the real SimulatedBrokerAdapter when the VENUE holds no matching position', async () => {
       const { store } = openTestExecutionStore();
       await seedHeldLot(store);
@@ -1752,7 +1752,7 @@ describe('ExecutionImpl.execute', () => {
       // matching position exists at the venue — yet the flatten still
       // acks, because `cancel()` on an unknown id resolves quietly
       // (idempotent by contract, types/broker.ts) and `submitFlatten`
-      // never consults the venue's book either.
+      // never consults the venue's book either
       const result = await new ExecutionImpl(
         makeInput({ store, broker, costModel, marketData }),
       ).execute(makeExitGo());
@@ -1772,7 +1772,7 @@ describe('ExecutionImpl.execute', () => {
     // flatten-attribution test needs a lot that was actually FILLED through
     // this same pipeline, not a seeded position — which is exactly the gap
     // that let this issue go unnoticed: every prior exit test stopped at
-    // `execute()`'s submission ack and never called `ingestFills()` at all.
+    // `execute()`'s submission ack and never called `ingestFills()` at all
     describe('flatten fill attribution (#517)', () => {
       function makeMarketData(): MarketDataService {
         return {
@@ -1861,7 +1861,7 @@ describe('ExecutionImpl.execute', () => {
         expect(closedTrades).toHaveLength(1);
         expect(closedTrades[0]).toMatchObject({
           // The LOT's own key, not the flatten's — the attribution this
-          // ticket exists to fix.
+          // ticket exists to fix
           idempotency_key: 'key-aapl-entry-1',
           debate_id: 'debate-abc123',
           instrument: 'AAPL',
@@ -1872,10 +1872,10 @@ describe('ExecutionImpl.execute', () => {
           // time) — `close_reason` reading the flatten's journalled
           // `exit_reason` ('flatten', `makeExitGo`'s default), not 'entry',
           // proves `ingestFills()` overrode the adapter's tag AND threaded
-          // the real reason through, rather than trusting either (#793).
+          // the real reason through, rather than trusting either (#793)
           close_reason: 'flatten',
         });
-        // gross = (99.5 - 95) * 40 = 180; fees = 0 (entry) + 0.2 (flatten commission).
+        // gross = (99.5 - 95) * 40 = 180; fees = 0 (entry) + 0.2 (flatten commission)
         expect(closedTrades[0].realized_pnl_net).toBeCloseTo(180 - 0.2, 6);
         expect(closedTrades[0].fees_total).toBeCloseTo(0.2, 6);
 
@@ -1889,7 +1889,7 @@ describe('ExecutionImpl.execute', () => {
       // exited for, both submitted through the same `intent_type: 'exit'`
       // path. Before this ticket both collapsed to the single `leg: 'exit'`
       // tag; this test pins that they now read distinct `close_reason`
-      // values off the exit's own `metadata.exit_reason`.
+      // values off the exit's own `metadata.exit_reason`
       it('gives a signal-decay release and a flatten different close_reason values on their closed-trade rows', async () => {
         const { store } = openTestExecutionStore();
         const costModel: CostModel = {
@@ -1917,7 +1917,7 @@ describe('ExecutionImpl.execute', () => {
         // held for the instrument (see `heldSize`/`totalHeldQuantity`
         // above), not against an individual lot, so sharing one
         // instrument between the two lots would make a size-10 exit an
-        // (refused) partial rather than the full flatten this test needs.
+        // (refused) partial rather than the full flatten this test needs
         await execution.execute(
           makeGo({
             idempotency_key: 'key-lot-a',
@@ -2006,7 +2006,7 @@ describe('ExecutionImpl.execute', () => {
         await execution.ingestFills();
         // A second poll re-offers the SAME flatten fill (the Simulated
         // adapter's `fetchNewFills` is inclusive of `since`, by contract) —
-        // it must dedupe, not close the same lot twice or double-count PnL.
+        // it must dedupe, not close the same lot twice or double-count PnL
         await execution.ingestFills();
 
         expect(await store.getClosedTrades()).toHaveLength(1);
@@ -2042,7 +2042,7 @@ describe('ExecutionImpl.execute', () => {
           makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
         );
         await execution.ingestFills();
-        now = new Date(now.getTime() + 60_000); // lot 2 opens a minute after lot 1.
+        now = new Date(now.getTime() + 60_000); // lot 2 opens a minute after lot 1
         await execution.execute(
           makeGo({
             idempotency_key: 'key-lot-2',
@@ -2066,7 +2066,7 @@ describe('ExecutionImpl.execute', () => {
         expect(byKey.get('key-lot-1')).toMatchObject({ filled_size: 10, close_reason: 'flatten' });
         expect(byKey.get('key-lot-2')).toMatchObject({ filled_size: 15, close_reason: 'flatten' });
         // Each lot's PnL against its OWN entry price, not a blended average —
-        // proof the FIFO split, not a pro-rata one, drove the allocation.
+        // proof the FIFO split, not a pro-rata one, drove the allocation
         expect(byKey.get('key-lot-1')?.realized_pnl_net).toBeCloseTo((100 - 90) * 10, 6);
         expect(byKey.get('key-lot-2')?.realized_pnl_net).toBeCloseTo((100 - 92) * 15, 6);
         expect(await store.getOpenPositions()).toHaveLength(0);
@@ -2081,10 +2081,10 @@ describe('ExecutionImpl.execute', () => {
       // from anything that moves as fills persist (each lot's prior EXIT
       // fills, or a filter to lots still open in the CURRENT poll's
       // `positions`) drifts exactly that way. The journalled held quantity
-      // the split reads is fixed at the flatten's write-ahead, so it does not.
+      // the split reads is fixed at the flatten's write-ahead, so it does not
       //
       // Neither lot here has prior exits, so this pins the property for the
-      // simple case; the #571 suite below pins it for a lot that does.
+      // simple case; the #571 suite below pins it for a lot that does
       it('gives a partially-filled multi-lot flatten a stable split across repeated polls, closing what it can and leaving the rest genuinely open', async () => {
         const { store } = openTestExecutionStore();
         let now = NOW;
@@ -2095,7 +2095,7 @@ describe('ExecutionImpl.execute', () => {
             .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
             .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
             // The flatten asked for 25 (10 + 15) but the IOC only fills 20 —
-            // a thin book taking part of the order and cancelling the rest.
+            // a thin book taking part of the order and cancelling the rest
             .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() }),
         };
         const marketData = makeMarketData();
@@ -2130,19 +2130,19 @@ describe('ExecutionImpl.execute', () => {
         await execution.execute(makeExitGo({ size: 25 }));
         // Polled three times: the Simulated adapter's `fetchNewFills` is
         // unconditional (re-offers the same historical fill every call), so
-        // this exercises exactly the repeat-poll path the fix above targets.
+        // this exercises exactly the repeat-poll path the fix above targets
         await execution.ingestFills();
         await execution.ingestFills();
         await execution.ingestFills();
 
-        // Lot 1's full 10-share is covered by the 20 that filled — closes.
+        // Lot 1's full 10-share is covered by the 20 that filled — closes
         const closedTrades = await store.getClosedTrades();
         expect(closedTrades).toHaveLength(1);
         expect(closedTrades[0]).toMatchObject({ idempotency_key: 'key-lot-1', filled_size: 10 });
 
         // Lot 2 gets its FIFO remainder of the 20 (10, after lot 1's 10) —
         // 5 short of its own 15 need, so it stays open, not silently
-        // dropped and not double-counted by the repeat polls above.
+        // dropped and not double-counted by the repeat polls above
         const lot2 = await store.getPosition('key-lot-2');
         expect(lot2?.order_state).toBe('filled'); // entry complete; exit is not
         const lot2ExitQty = (await store.getFills('key-lot-2'))
@@ -2158,7 +2158,7 @@ describe('ExecutionImpl.execute', () => {
       // moment an older named lot has prior exit fills, which is reachable by
       // design: `decide.ts`'s `scale_in` opens additional same-side lots on
       // one instrument, and any partial flatten leaves one of them
-      // part-closed.
+      // part-closed
       //
       // The repro, run end to end below: lot 1 entry 10 with 4 already closed
       // (holds 6), lot 2 entry 5 with none closed (holds 5). The exit sizes
@@ -2170,7 +2170,7 @@ describe('ExecutionImpl.execute', () => {
       // `maybeRearmResidual` arming protective legs over the missing 4: a
       // resting order that fires into nothing and OPENS A REVERSE POSITION,
       // #516's hazard. Against the HELD quantities the flatten journalled at
-      // write-ahead, lot 1 takes exactly its own 6 and lot 2 its own 5.
+      // write-ahead, lot 1 takes exactly its own 6 and lot 2 its own 5
       describe('multi-lot split by journalled held quantity (#571)', () => {
         /**
          * Lot 1 (entry 10 @ 90) and lot 2 (entry 5 @ 92, `scale_in`), then a
@@ -2242,7 +2242,7 @@ describe('ExecutionImpl.execute', () => {
           now = new Date(now.getTime() + 60_000);
 
           // The precondition, asserted rather than assumed: lot 1 holds 6 of
-          // its 10, lot 2 still holds all 5, and both are open.
+          // its 10, lot 2 still holds all 5, and both are open
           expect((await store.getExitFillSizes(['key-lot-1', 'key-lot-2'])).get('key-lot-1')).toBe(
             firstFlattenQty,
           );
@@ -2252,7 +2252,7 @@ describe('ExecutionImpl.execute', () => {
             makeExitGo({ idempotency_key: 'key-exit-2', size: 11 }),
           );
           // The guard passes on 6 + 5 — this is a correctly sized exit, which
-          // is what made the mis-split so quiet.
+          // is what made the mis-split so quiet
           expect(second.status).toBe('submitted');
 
           return { execution, broker };
@@ -2270,7 +2270,7 @@ describe('ExecutionImpl.execute', () => {
           ]);
           // 6, not lot 1's entry total of 10 — and the pair sums to the
           // flatten's own size, which `executeExit` already checked equals the
-          // exit intent's.
+          // exit intent's
           expect(JSON.parse(journal?.lot_held_quantities ?? 'null')).toEqual([6, 5]);
           expect(journal?.size).toBe(11);
         });
@@ -2282,7 +2282,7 @@ describe('ExecutionImpl.execute', () => {
           await execution.ingestFills();
           // Re-polled: the split must land identically the second time or the
           // difference vanishes behind `hasFill`'s dedup on the full
-          // `(idempotency_key, broker_fill_id)` pair (#1320).
+          // `(idempotency_key, broker_fill_id)` pair (#1320)
           await execution.ingestFills();
 
           const closedTrades = await store.getClosedTrades();
@@ -2292,21 +2292,21 @@ describe('ExecutionImpl.execute', () => {
           // Lot 1's exit price is weighted over its OWN ten units — 4 at 99
           // from the first flatten plus 6 at 100 from this one, i.e. 99.6.
           // The entry-total split weighted it over fourteen (4 + 10) and
-          // reported 97.14 here.
+          // reported 97.14 here
           expect(byKey.get('key-lot-1')).toMatchObject({ filled_size: 10 });
           expect(byKey.get('key-lot-1')?.realized_pnl_net).toBeCloseTo((99.6 - 90) * 10, 6);
           expect(byKey.get('key-lot-2')).toMatchObject({ filled_size: 5 });
           expect(byKey.get('key-lot-2')?.realized_pnl_net).toBeCloseTo((100 - 92) * 5, 6);
 
           // No phantom: the venue sold all of lot 2, so lot 2 is closed, not
-          // left open holding 4 units that do not exist.
+          // left open holding 4 units that do not exist
           expect(await store.getOpenPositions()).toEqual([]);
           expect((await store.getPosition('key-lot-2'))?.order_state).toBe('closed');
           // And nothing re-armed protection over that phantom. `executeExit`
           // cancelled both lots' legs before the flatten (#525); lot 2 is flat
           // afterwards, so `advanceLot` must leave them cancelled rather than
           // arm a resting order that would fire into nothing and open a
-          // REVERSE position (#516).
+          // REVERSE position (#516)
           expect(broker.getProtectedQty('key-lot-2')).toBeNull();
           expect(broker.getProtectedQty('key-lot-1')).toBeNull();
         });
@@ -2314,11 +2314,11 @@ describe('ExecutionImpl.execute', () => {
         // The stability property the entry-total split was chosen for, now
         // proven for a lot that HAS prior exits — the case that made the
         // entry total the wrong number. A PARTIAL fill is what exercises it:
-        // the shares must not move as this very flatten's own fills persist.
+        // the shares must not move as this very flatten's own fills persist
         it('splits a PARTIAL fill identically across repeated polls when a lot has prior exits', async () => {
           const { store } = openTestExecutionStore();
 
-          // 8 of the 11 asked for: lot 1's whole 6-share, then 2 of lot 2's 5.
+          // 8 of the 11 asked for: lot 1's whole 6-share, then 2 of lot 2's 5
           const { execution, broker } = await seedTwoLotsWithPriorExit(store, 4, 8);
           await execution.ingestFills();
           await execution.ingestFills();
@@ -2326,7 +2326,7 @@ describe('ExecutionImpl.execute', () => {
 
           // Lot 1 is genuinely flat — 4 + 6 against an entry of 10 — and its
           // realized record is the same as the full-fill case above, because
-          // its share never depended on how much of lot 2's share filled.
+          // its share never depended on how much of lot 2's share filled
           const closedTrades = await store.getClosedTrades();
           expect(closedTrades).toHaveLength(1);
           expect(closedTrades[0]).toMatchObject({ idempotency_key: 'key-lot-1', filled_size: 10 });
@@ -2335,7 +2335,7 @@ describe('ExecutionImpl.execute', () => {
           // Lot 2 took the remaining 2 — once, not once per poll — and its
           // genuine residual of 3 carries fresh protection. The entry-total
           // split gave it ZERO here (lot 1 absorbed all 8 of its 10-share),
-          // leaving it protected at a stale 5.
+          // leaving it protected at a stale 5
           const lot2ExitQty = (await store.getFills('key-lot-2'))
             .filter((lotFill) => lotFill.leg === 'exit')
             .reduce((sum, lotFill) => sum + lotFill.qty, 0);
@@ -2348,7 +2348,7 @@ describe('ExecutionImpl.execute', () => {
         // journalled before the column existed has NULL there and must keep
         // the pre-#571 entry-total split rather than fail. Only reachable for
         // a flatten submitted before this code shipped whose fill had not been
-        // ingested yet.
+        // ingested yet
         it('falls back to the entry-total split for a flatten journalled before migration 0021', async () => {
           const { store } = openTestExecutionStore();
           let now = NOW;
@@ -2395,14 +2395,14 @@ describe('ExecutionImpl.execute', () => {
 
           await execution.execute(makeExitGo({ idempotency_key: 'key-exit-1', size: 15 }));
           // Ages the journal row back to its pre-0021 shape, BEFORE the fill
-          // is ingested — the only window in which such a row can be read.
+          // is ingested — the only window in which such a row can be read
           store.ageFlattenHeldQuantities('key-exit-1');
 
           await execution.ingestFills();
 
           // Neither lot has prior exits, so the entry totals ARE the held
           // quantities and the old split is still correct here — the point is
-          // that it runs at all instead of throwing on a NULL column.
+          // that it runs at all instead of throwing on a NULL column
           const closedTrades = await store.getClosedTrades();
           expect(closedTrades).toHaveLength(2);
           const byKey = new Map(closedTrades.map((trade) => [trade.idempotency_key, trade]));
@@ -2420,7 +2420,7 @@ describe('ExecutionImpl.execute', () => {
               .fn()
               .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
               // The flatten asks for 40 but a thin book only fills 25 — a
-              // naked residual of 15 if nothing re-arms it.
+              // naked residual of 15 if nothing re-arms it
               .mockReturnValueOnce({
                 fill_price: 99,
                 filled_size: 25,
@@ -2457,7 +2457,7 @@ describe('ExecutionImpl.execute', () => {
           );
           await execution.ingestFills();
           // Legs armed at entry-fill time, before any flatten — `cancel()`
-          // (inside `executeExit`, below) is what removes them.
+          // (inside `executeExit`, below) is what removes them
           expect(broker.getProtectedQty('key-aapl-entry-1')).toBe(40);
 
           const exitResult = await execution.execute(makeExitGo({ size: 40 }));
@@ -2467,13 +2467,13 @@ describe('ExecutionImpl.execute', () => {
           // The lot is genuinely still open — not closed, not silently
           // dropped — and its remaining 15 (40 - 25) carries fresh protection
           // at the SAME stop/target the original bracket used (95's stop is
-          // 90, target 110 — `makeGo`'s own fixture above).
+          // 90, target 110 — `makeGo`'s own fixture above)
           expect(await store.getOpenPositions()).toHaveLength(1);
           expect(await store.getClosedTrades()).toHaveLength(0);
           expect(broker.getProtectedQty('key-aapl-entry-1')).toBe(15);
           // No alert on a SUCCESSFUL re-arm — the decision comment on #525
           // is explicit that the alert is the fallback, not the primary
-          // mechanism.
+          // mechanism
           expect(residualExposureAlerts.alerts).toEqual([]);
         });
 
@@ -2484,16 +2484,16 @@ describe('ExecutionImpl.execute', () => {
         // exit path, they agreed, and the guard passed — a market sell of 40
         // into a venue holding 15, i.e. 25 SHORT with the re-armed OCO
         // cancelled first: a reverse position with no lot, no bracket and no
-        // protective leg.
+        // protective leg
         it('sizes and accepts a SECOND exit at the residual, and refuses one sized to the original lot', async () => {
           const { store } = openTestExecutionStore();
           const costModel: CostModel = {
             fill: vi
               .fn()
               .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
-              // First flatten: asks 40, fills 25 — residual 15.
+              // First flatten: asks 40, fills 25 — residual 15
               .mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() })
-              // Second flatten: the residual, in full.
+              // Second flatten: the residual, in full
               .mockReturnValueOnce({
                 fill_price: 98,
                 filled_size: 15,
@@ -2520,18 +2520,18 @@ describe('ExecutionImpl.execute', () => {
 
           // Mid-scenario: 25 of 40 closed. The lot is NOT genuinely flat, so
           // no ClosedTrade may exist for it — a realized record here would be
-          // a round-trip the position never made.
+          // a round-trip the position never made
           expect(await store.getClosedTrades()).toHaveLength(0);
           const openLot = (await store.getOpenPositions())[0];
           // Still carrying the ENTRY total, which is why held quantity cannot
-          // be read off it directly.
+          // be read off it directly
           expect(openLot?.filled_size).toBe(40);
           expect((await store.getExitFillSizes(['key-aapl-entry-1'])).get('key-aapl-entry-1')).toBe(
             25,
           );
 
           // The pre-#568 exit: the lot's original size, refused without
-          // touching the broker — the re-armed protective legs stay on.
+          // touching the broker — the re-armed protective legs stay on
           const oversized = await execution.execute(
             makeExitGo({ idempotency_key: 'key-aapl-1400', size: 40 }),
           );
@@ -2539,7 +2539,7 @@ describe('ExecutionImpl.execute', () => {
           expect(oversized.reason).toContain('does not match the held quantity 15');
           expect(broker.getProtectedQty('key-aapl-entry-1')).toBe(15);
 
-          // The residual, which is what `buildExitIntent` now sizes.
+          // The residual, which is what `buildExitIntent` now sizes
           const residualExit = await execution.execute(
             makeExitGo({ idempotency_key: 'key-aapl-1405', size: 15 }),
           );
@@ -2547,7 +2547,7 @@ describe('ExecutionImpl.execute', () => {
           await execution.ingestFills();
 
           // Genuinely flat now — one ClosedTrade for the whole 40, and
-          // nothing left open.
+          // nothing left open
           expect(await store.getOpenPositions()).toEqual([]);
           const closed = await store.getClosedTrades();
           expect(closed).toHaveLength(1);
@@ -2560,7 +2560,7 @@ describe('ExecutionImpl.execute', () => {
           // row at all this poll, yet its legs were cancelled by the SAME
           // `executeExit` call that cancelled lot 1's. `redistributeFlattenFills`'
           // returned lot-key set (#525) is what makes this lot's re-arm run
-          // despite it having no new fill to trigger the ordinary path.
+          // despite it having no new fill to trigger the ordinary path
           const { store } = openTestExecutionStore();
           let now = NOW;
           const steppingClock: Clock = { now: () => now };
@@ -2570,7 +2570,7 @@ describe('ExecutionImpl.execute', () => {
               .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
               .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
               // The flatten asks for 25 (10 + 15) but only 7 fills — less
-              // than even lot 1's own 10-share, so lot 2 gets nothing.
+              // than even lot 1's own 10-share, so lot 2 gets nothing
               .mockReturnValueOnce({
                 fill_price: 100,
                 filled_size: 7,
@@ -2617,15 +2617,15 @@ describe('ExecutionImpl.execute', () => {
           await execution.execute(makeExitGo({ size: 25 }));
           await execution.ingestFills();
 
-          // Lot 1: 7 of its 10-share filled, 3 left — re-armed to 3.
+          // Lot 1: 7 of its 10-share filled, 3 left — re-armed to 3
           expect(broker.getProtectedQty('key-lot-1')).toBe(3);
           // Lot 2: ZERO share this poll — re-armed to its FULL original 15,
           // not left at `null` (unprotected) the way `cancel()` alone would
-          // leave it.
+          // leave it
           expect(broker.getProtectedQty('key-lot-2')).toBe(15);
           expect(await store.getOpenPositions()).toHaveLength(2);
           expect(await store.getClosedTrades()).toHaveLength(0);
-          // Both re-arms succeeded — no alert.
+          // Both re-arms succeeded — no alert
           expect(residualExposureAlerts.alerts).toEqual([]);
         });
 
@@ -2642,9 +2642,9 @@ describe('ExecutionImpl.execute', () => {
             // lot the same poll had yet to reach — reproduced here with a
             // THIRD lot (`key-lot-3`) that has a genuine new entry fill
             // waiting in the SAME poll, positioned after the flaky one in
-            // `getOpenPositions()`'s `opened_at` order.
+            // `getOpenPositions()`'s `opened_at` order
             class FlakyGetFillsStore extends TestExecutionStore {
-              /** Only throws once armed — lot 2's OWN entry-fill poll must still succeed. */
+              /** Only throws once armed — lot 2's OWN entry-fill poll must still succeed */
               armed = false;
               override async getFills(idempotency_key: string): Promise<Fill[]> {
                 if (this.armed && idempotency_key === 'key-lot-2') {
@@ -2677,7 +2677,7 @@ describe('ExecutionImpl.execute', () => {
                   cost_breakdown: zeroCosts(),
                 }) // lot 3 entry
                 // Same shape as the ZERO-share-sibling test above: less than
-                // even lot 1's own 10-share, so lot 2 gets nothing.
+                // even lot 1's own 10-share, so lot 2 gets nothing
                 .mockReturnValueOnce({
                   fill_price: 100,
                   filled_size: 7,
@@ -2731,7 +2731,7 @@ describe('ExecutionImpl.execute', () => {
               }),
             );
             // Deliberately NOT ingested yet — lot 3's entry fill stays fresh
-            // for the SAME poll the flatten resolves in, below.
+            // for the SAME poll the flatten resolves in, below
             now = new Date(now.getTime() + 60_000);
 
             await execution.execute(makeExitGo({ size: 25 }));
@@ -2741,13 +2741,13 @@ describe('ExecutionImpl.execute', () => {
 
             // Lot 1, iterated BEFORE the flaky lot: unaffected either way —
             // re-armed to its 3 residual exactly as the zero-share-sibling
-            // test above.
+            // test above
             expect(broker.getProtectedQty('key-lot-1')).toBe(3);
 
             // Lot 2: the store read failed, so there is no residual figure to
             // re-arm with — never armed, and the fallback alert fires with
             // its full requested size (15) as a conservative upper bound,
-            // not a guess at the true, unknowable residual.
+            // not a guess at the true, unknowable residual
             expect(broker.getProtectedQty('key-lot-2')).toBeNull();
             expect(residualExposureAlerts.alerts).toEqual([
               {
@@ -2757,10 +2757,10 @@ describe('ExecutionImpl.execute', () => {
                 side: 'buy',
                 residual_qty: 15,
                 // The fill read failed, so this is the lot's whole requested
-                // size, not the exact residual — and the alert says so.
+                // size, not the exact residual — and the alert says so
                 residual_qty_is_upper_bound: true,
                 // No re-arm was attempted at all, so nothing proves the
-                // venue could not do one (#1214).
+                // venue could not do one (#1214)
                 rearm_unsupported: false,
                 stop: 85,
                 target: 110,
@@ -2770,7 +2770,7 @@ describe('ExecutionImpl.execute', () => {
 
             // Lot 3, iterated AFTER the flaky lot: THIS is the regression the
             // unguarded read caused — its entry fill must still be ingested
-            // in the SAME poll despite lot 2's read failing first.
+            // in the SAME poll despite lot 2's read failing first
             const lot3 = await store.getPosition('key-lot-3');
             expect(lot3?.filled_size).toBe(8);
             expect(lot3?.order_state).toBe('filled');
@@ -2788,13 +2788,13 @@ describe('ExecutionImpl.execute', () => {
             // lot advanced — and, being a DURABLE row, aborted every
             // subsequent poll identically. During a 14-day unattended soak
             // (#238) that is a permanent halt to fill persistence, not a
-            // transient error.
+            // transient error
             //
             // Driven through the REAL sqlite store with a genuinely
             // unparseable `lot_held_quantities` — the column PR #574 added,
             // which is what widened this call site from two throw paths to
             // five — rather than a fake store that rejects, so the actual
-            // `JSON.parse` path is the thing being contained.
+            // `JSON.parse` path is the thing being contained
             const { store } = openTestExecutionStore();
             let now = NOW;
             const steppingClock: Clock = { now: () => now };
@@ -2871,33 +2871,33 @@ describe('ExecutionImpl.execute', () => {
             // Deliberately NOT ingested yet — lot 3's entry fill is the
             // UNRELATED work that must still land in the SAME poll the corrupt
             // flatten row is read in. It is also why the exit below is sized
-            // to 25 and not 33: lot 3 holds nothing yet.
+            // to 25 and not 33: lot 3 holds nothing yet
             now = new Date(now.getTime() + 60_000);
 
             // Writes the journal row (naming lots 1 and 2) and submits the
-            // flatten under its own fresh key.
+            // flatten under its own fresh key
             await execution.execute(makeExitGo({ size: 25 }));
             // Corrupted AFTER the write-ahead, before the fill is read back —
-            // the only window in which this row is ever consulted.
+            // the only window in which this row is ever consulted
             store.ageFlattenHeldQuantities('key-aapl-1355', '{not json');
 
             // Fail-CLOSED and VISIBLE, not silent: the poll still reports the
             // failure, and the message names the offending row's own
             // idempotency key (never the raw column content — the
             // `getFlattenAttribution` rule, since an uncaught throw here is
-            // durably recorded to `audit_log` by #507).
+            // durably recorded to `audit_log` by #507)
             await expect(execution.ingestFills()).rejects.toThrow('key-aapl-1355');
 
             // THE FIX: lot 3 is untouched by the corrupt flatten and advances
             // in the very same poll. Before #575 this assertion failed —
-            // `ingestFills` threw before its per-lot loop began.
+            // `ingestFills` threw before its per-lot loop began
             const lot3 = await store.getPosition('key-lot-3');
             expect(lot3?.filled_size).toBe(8);
             expect(lot3?.order_state).toBe('filled');
 
             // The flatten's own named lots: NOTHING of its fill is attributed
             // to them. Guessing a split off a corrupt row would mis-assign
-            // quantity on the money path, which is worse than not advancing.
+            // quantity on the money path, which is worse than not advancing
             const exitSizes = await store.getExitFillSizes(['key-lot-1', 'key-lot-2']);
             expect(exitSizes.get('key-lot-1')).toBeUndefined();
             expect(exitSizes.get('key-lot-2')).toBeUndefined();
@@ -2908,7 +2908,7 @@ describe('ExecutionImpl.execute', () => {
             // And they are not re-armed either: the throw happens inside
             // `getFlattenAttribution`, so which lots this flatten named is
             // itself unknown. Pinned so the naked residual this leaves is a
-            // recorded consequence of the containment, not a surprise.
+            // recorded consequence of the containment, not a surprise
             expect(broker.getProtectedQty('key-lot-1')).toBeNull();
             expect(broker.getProtectedQty('key-lot-2')).toBeNull();
             expect(residualExposureAlerts.alerts).toEqual([]);
@@ -2937,7 +2937,7 @@ describe('ExecutionImpl.execute() → ingestFills() — the stale-mark case end-
     // A mark `observed_at` 5 minutes STALE relative to `fixedClock` — the
     // exact shape that pre-#1087 stamped the fill early enough to predate
     // the lot's own `opened_at` when this lot is the store's SOLE open
-    // position (making its own `opened_at` the poll's `since` floor).
+    // position (making its own `opened_at` the poll's `since` floor)
     const laggyObservedAt = new Date(NOW.getTime() - 5 * 60_000);
     const marketData: MarketDataService = {
       getBars: vi.fn(),
@@ -2979,7 +2979,7 @@ describe('ExecutionImpl.execute() → ingestFills() — the stale-mark case end-
     const result = await execution.execute(makeGo());
     expect(result.status).toBe('submitted');
     // `execute()`'s own write-ahead — `opened_at` is `fixedClock.now()`,
-    // read strictly BEFORE `broker.submitBracket` is ever called (execute.ts).
+    // read strictly BEFORE `broker.submitBracket` is ever called (execute.ts)
     expect((await store.getPosition('key-aapl-1355'))?.opened_at).toEqual(NOW);
     expect((await store.getPosition('key-aapl-1355'))?.filled_size).toBe(0);
 
@@ -2989,7 +2989,7 @@ describe('ExecutionImpl.execute() → ingestFills() — the stale-mark case end-
     // `opened_at` (the SOLE open position), yet its fill — priced against a
     // mark whose OWN `observed_at` is 5 minutes earlier than that — still
     // lands, because `SimulatedBrokerAdapter` stamps the fill at submit
-    // time, never at the mark's (possibly stale) observation time.
+    // time, never at the mark's (possibly stale) observation time
     const position = await store.getPosition('key-aapl-1355');
     expect(position?.filled_size).toBe(100);
     expect(position?.order_state).toBe('filled');
@@ -3008,7 +3008,7 @@ describe('ExecutionImpl.execute() → ingestFills() — the stale-mark case end-
     // drop it: `SimulatedBrokerAdapter.fetchNewFills`'s `>= since`
     // (simulated-adapter.ts) and Alpaca's `collectFill`'s `filledAt < since`
     // guard, which drops only when STRICTLY earlier
-    // (alpaca-order-normalization.ts) — so a tie sails through both.
+    // (alpaca-order-normalization.ts) — so a tie sails through both
     const { store } = openTestExecutionStore();
     const marketData: MarketDataService = {
       getBars: vi.fn(),
@@ -3058,7 +3058,7 @@ describe('ExecutionImpl.execute() → ingestFills() — the stale-mark case end-
     const fills = await store.getFills('key-aapl-1355');
     expect(fills).toHaveLength(1);
     // The actual tie, not just "not excluded": the booked fill's timestamp
-    // equals `opened_at` exactly.
+    // equals `opened_at` exactly
     expect(fills[0]?.timestamp.getTime()).toBe(opened?.opened_at.getTime());
   });
 });
@@ -3092,7 +3092,7 @@ describe('#1001: submit-time quote and decision price', () => {
       // batch read is the single read, per distinct instrument, wrapped in
       // `MarkRead`'s ok/error envelope exactly as the real service does. Reads
       // `service.getMark` (not the literal above) so an `overrides.getMark`
-      // stub is honoured here too.
+      // stub is honoured here too
       getMarks: async (instruments, asOf) => {
         const marks = new Map<string, MarkRead>();
         for (const instrument of new Set(instruments)) {
@@ -3129,7 +3129,7 @@ describe('#1001: submit-time quote and decision price', () => {
 
   // Hoisted to this describe's scope by #1014's review fix — the
   // Simulated-adapter block below exercises the SAME flatten these two build,
-  // and duplicating them per sub-describe would let the two copies drift.
+  // and duplicating them per sub-describe would let the two copies drift
   function makeExitGo(overrides: Partial<OrderIntent> = {}): VerdictDecision {
     return makeGo({
       idempotency_key: 'key-aapl-1355',
@@ -3222,7 +3222,7 @@ describe('#1001: submit-time quote and decision price', () => {
 
       // The snapshot's OTHER fields are unaffected — only the cost-model half
       // is skipped, and the quote read (which has no second writer to
-      // disagree with) still runs.
+      // disagree with) still runs
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.decision_price).toBe(100);
       expect(position?.quote_bid).toBe(100.1);
@@ -3255,7 +3255,7 @@ describe('#1001: submit-time quote and decision price', () => {
 
       // The pricing that DID happen is the adapter's, and it carries the full
       // breakdown onto the fill — so nothing #1001 needs is lost by skipping
-      // the snapshot's own call.
+      // the snapshot's own call
       const fills = await broker.fetchNewFills(new Date(NOW.getTime() - 1));
       expect(fills[0]?.cost_breakdown).toEqual(modelledCostBreakdown);
     });
@@ -3271,7 +3271,7 @@ describe('#1001: submit-time quote and decision price', () => {
 
       expect(result.status).toBe('submitted');
       // Two: the entry and, since #1301, the protective exit the same bracket
-      // arms — one `MarketState`, two priced events.
+      // arms — one `MarketState`, two priced events
       expect(costModel.fill).toHaveBeenCalledTimes(2);
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
@@ -3279,7 +3279,7 @@ describe('#1001: submit-time quote and decision price', () => {
 
     // #1032 item 2: the snapshot is the second builder of `MarketState` on
     // the real path (the Simulated adapter is the first); a venue configured
-    // on `executionConfig.simulated` must reach the model from here too.
+    // on `executionConfig.simulated` must reach the model from here too
     it('stamps MarketState.venue from executionConfig.simulated on the snapshot pricing', async () => {
       const { store } = openTestExecutionStore();
       const costModel = makeSnapshotCostModel();
@@ -3310,7 +3310,7 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(result.status).toBe('submitted');
       const position = await store.getPosition('key-aapl-1355');
       // order.entry, unrounded — the pre-tick-rounding decision price, never
-      // the wire price a real broker may round differently.
+      // the wire price a real broker may round differently
       expect(position?.decision_price).toBe(100);
       expect(position?.quote_bid).toBe(100.1);
       expect(position?.quote_ask).toBe(100.3);
@@ -3337,7 +3337,7 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(position?.quote_ask).toBeUndefined();
       expect(position?.quote_mid).toBeUndefined();
       expect(position?.quote_observed_at).toBeUndefined();
-      // The cost-model read is independent of the quote read — it still ran.
+      // The cost-model read is independent of the quote read — it still ran
       expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
     });
 
@@ -3357,7 +3357,7 @@ describe('#1001: submit-time quote and decision price', () => {
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.decision_price).toBe(100);
       expect(position?.quote_bid).toBeUndefined();
-      // The independent cost-model try/catch is unaffected by the quote one.
+      // The independent cost-model try/catch is unaffected by the quote one
       expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
     });
 
@@ -3376,10 +3376,10 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(result.status).toBe('submitted');
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.decision_price).toBe(100);
-      // The independent quote try/catch is unaffected by the cost-model one.
+      // The independent quote try/catch is unaffected by the cost-model one
       expect(position?.quote_bid).toBe(100.1);
       expect(position?.modelled_cost_breakdown).toBeUndefined();
-      // #1301: priced in the same try/catch, so it is absent with it.
+      // #1301: priced in the same try/catch, so it is absent with it
       expect(position?.modelled_protective_exit_cost_breakdown).toBeUndefined();
     });
 
@@ -3387,7 +3387,7 @@ describe('#1001: submit-time quote and decision price', () => {
      * #1301: the bracket arms stop/target legs at submit time, so their cost is
      * modelled at submit time too — off the SAME `MarketState`, in the same
      * pass, keeping this one derivation per priced event (#1121 AC6) rather
-     * than a second one at ingest.
+     * than a second one at ingest
      */
     it('prices the protective exit alongside the entry, closing side and market order, on one MarketState', async () => {
       const { store } = openTestExecutionStore();
@@ -3425,7 +3425,7 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(protectiveRequest?.order_type).toBe('market');
       expect(protectiveRequest?.limit_price).toBeUndefined();
       expect(protectiveRequest?.size).toBe(entryRequest?.size);
-      // The same assembled market state, not a second read of the feed.
+      // The same assembled market state, not a second read of the feed
       expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
 
       const position = await store.getPosition('key-aapl-1355');
@@ -3461,7 +3461,7 @@ describe('#1001: submit-time quote and decision price', () => {
       // #826: an exit's cost-model FillRequest prices a market order, not a
       // limit — `order_type: 'market'`, no `limit_price` key at all — since a
       // flatten's `entry`/`stop`/`target` are degenerate placeholders, never
-      // a real limit.
+      // a real limit
       const fillRequestArg = (costModel.fill as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
         order_type: string;
         limit_price?: number;
@@ -3506,7 +3506,7 @@ describe('#1001: submit-time quote and decision price', () => {
       // entry. In production this column would have carried the 0, and the
       // Feedback Loop's live-vs-modelled divergence check would have read a
       // ~100% divergence for every dark-feed flatten. `null` says the one
-      // true thing: no decision price existed for this order.
+      // true thing: no decision price existed for this order
       expect(row?.decision_price).toBeNull();
       expect(row?.quote_bid).toBeNull();
       expect(row?.quote_ask).toBeNull();
@@ -3526,7 +3526,7 @@ describe('#1001: submit-time quote and decision price', () => {
       // real mark read when the exit was decided, which is exactly the "last
       // known mark" #1014's review offers as the honest substitute. So it is
       // kept, not nulled: nulling it too would throw away the only reference
-      // price an exit fill has to be diffed against (#1001's whole point).
+      // price an exit fill has to be diffed against (#1001's whole point)
       const result = await new ExecutionImpl(
         makeInput({
           store,
@@ -3583,7 +3583,7 @@ describe('#1001: submit-time quote and decision price', () => {
           makeInput({ store, broker, costModel, marketData }),
         ).execute(makeExitGo());
 
-        // The whole budget, and not one tick of the 30s stall beyond it.
+        // The whole budget, and not one tick of the 30s stall beyond it
         await vi.advanceTimersByTimeAsync(2_000);
         expect(broker.flattenCalls).toHaveLength(1);
 
@@ -3592,7 +3592,7 @@ describe('#1001: submit-time quote and decision price', () => {
 
         // The acceptance criterion (#1001) still holds for the field that
         // needs no I/O; the sample the stall costs is the quote and the
-        // modelled breakdown, which is the trade #826 already makes.
+        // modelled breakdown, which is the trade #826 already makes
         const row = await store.getFlattenSubmission('key-aapl-1355');
         expect(row?.decision_price).toBe(100);
         expect(row?.quote_bid).toBeNull();
@@ -3600,7 +3600,7 @@ describe('#1001: submit-time quote and decision price', () => {
         expect(row?.quote_mid).toBeNull();
         expect(row?.modelled_cost_breakdown_json).toBeNull();
 
-        // Let the abandoned reads settle so no timer outlives the test.
+        // Let the abandoned reads settle so no timer outlives the test
         await vi.advanceTimersByTimeAsync(30_000);
       } finally {
         vi.useRealTimers();

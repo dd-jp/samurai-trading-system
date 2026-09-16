@@ -63,7 +63,7 @@ import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
 // PR #600 review): sharing the adapter's own fill normalization —
 // `collectFill`'s unpriced-fill refusal included — without importing the
 // adapter back, which would be a runtime cycle (the adapter constructs this
-// class).
+// class)
 import {
   collectFill,
   mapOrderState,
@@ -82,13 +82,13 @@ import {
 interface EmulatedBracket {
   request: NativeBracketRequest;
   phase: BrokerBracketRecord['phase'];
-  /** Null ONLY in `submitting` (#312's write-ahead rule, inherited intact). */
+  /** Null ONLY in `submitting` (#312's write-ahead rule, inherited intact) */
   entryOrderId: string | null;
   stopOrderId: string | null;
   targetOrderId: string | null;
   armedQty: number | null;
   armingQty: number | null;
-  /** Fixes the deterministic leg client-order-id suffix — durable, never bumped mid-episode. */
+  /** Fixes the deterministic leg client-order-id suffix — durable, never bumped mid-episode */
   armAttempt: number;
   /** PROCESS-LOCAL: an arming episode is in flight HERE. See ccxt's original doc. */
   inFlight: boolean;
@@ -125,7 +125,7 @@ export interface AlpacaCryptoLegEmulationDeps {
    * client.
    */
   call: <T>(operation: string, fn: () => Promise<T>) => Promise<T>;
-  /** Where an observed double fill is escalated — see oco-double-fill-alert.ts. */
+  /** Where an observed double fill is escalated — see oco-double-fill-alert.ts */
   doubleFillAlerts: OcoDoubleFillAlertChannel;
 }
 
@@ -161,12 +161,12 @@ export class AlpacaCryptoLegEmulation {
     }
   }
 
-  /** Whether this client order id is an emulated crypto bracket of ours. */
+  /** Whether this client order id is an emulated crypto bracket of ours */
   owns(clientOrderId: string): boolean {
     return this.brackets.has(clientOrderId);
   }
 
-  /** The venue order ids known for an owned bracket, entry first. */
+  /** The venue order ids known for an owned bracket, entry first */
   brokerOrderIds(clientOrderId: string): string[] {
     const bracket = this.brackets.get(clientOrderId);
     if (bracket === undefined) return [];
@@ -233,7 +233,7 @@ export class AlpacaCryptoLegEmulation {
           limit_price: String(order.entry),
           // Pass-through: the Trader already sets crypto TIF to 'gtc'
           // (trader/types.ts DEFAULT config), which is one of the two values
-          // Alpaca accepts for a crypto limit order ('gtc'/'ioc').
+          // Alpaca accepts for a crypto limit order ('gtc'/'ioc')
           time_in_force: order.time_in_force,
           client_order_id: order.client_order_id,
         }),
@@ -257,7 +257,7 @@ export class AlpacaCryptoLegEmulation {
   /**
    * Under emulation only the entry exists at ack time; the leg ids appear
    * when the sweep arms them — reporting three ids up front would be
-   * inventing two the venue has never heard of (ccxt's `ackFor`, unchanged).
+   * inventing two the venue has never heard of (ccxt's `ackFor`, unchanged)
    */
   private ackFor(bracket: EmulatedBracket): BrokerAck {
     return {
@@ -307,7 +307,7 @@ export class AlpacaCryptoLegEmulation {
     // The claim. `stop`/`target` are folded into the journalled request —
     // the contract says they are the lot's own unchanged levels, but the
     // journal records what THIS episode will actually place, and recovery
-    // re-places from the journal.
+    // re-places from the journal
     bracket.request = { ...bracket.request, stop, target };
     bracket.phase = 'arming';
     bracket.armingQty = qty;
@@ -346,7 +346,7 @@ export class AlpacaCryptoLegEmulation {
     let entryId = bracket.entryOrderId;
     if (entryId === null) {
       // A `submitting` write-ahead: the venue may hold the entry under our
-      // client order id even though no id was ever recorded.
+      // client order id even though no id was ever recorded
       const order = await this.deps.call('cancel', () =>
         this.deps.client.getOrderByClientOrderId(clientOrderId),
       );
@@ -361,7 +361,7 @@ export class AlpacaCryptoLegEmulation {
     bracket.phase = 'resolved';
     bracket.armingQty = null;
     // NOT `donePolling`: a leg may have filled in the race this cancel just
-    // lost, and the next sweeps must still observe and book that fill.
+    // lost, and the next sweeps must still observe and book that fill
     this.persist(bracket);
   }
 
@@ -382,11 +382,11 @@ export class AlpacaCryptoLegEmulation {
     let failed = 0;
     // #842: read once for the whole sweep — see `fetchNewFills`' own
     // `observedAt` in alpaca-adapter.ts for the reasoning, which applies here
-    // unchanged.
+    // unchanged
     const observedAt = this.deps.clock.now();
 
     // Snapshot, for the same mid-iteration-mutation reason every other sweep
-    // in this adapter snapshots.
+    // in this adapter snapshots
     for (const bracket of [...this.brackets.values()]) {
       if (bracket.donePolling) continue;
       try {
@@ -437,13 +437,13 @@ export class AlpacaCryptoLegEmulation {
           (targetOrder === null || isTerminal(targetOrder))
         ) {
           // Everything terminal and its fills just (re-)offered: nothing
-          // left to observe until a restart re-derives once more.
+          // left to observe until a restart re-derives once more
           bracket.donePolling = true;
         }
       } catch (error) {
         // Same isolation, same UnpricedFillError bookkeeping (guarded journal
         // write, expected-condition-not-a-failure) as the adapter's bracket/
-        // flatten/re-arm sweeps — see their comments.
+        // flatten/re-arm sweeps — see their comments
         if (error instanceof UnpricedFillError) {
           try {
             this.deps.state.recordUnpricedFill('alpaca', error.observation, this.deps.clock.now());
@@ -495,7 +495,7 @@ export class AlpacaCryptoLegEmulation {
    */
   private async advanceEntry(bracket: EmulatedBracket, entry: AlpacaOrder): Promise<void> {
     // Claim check before any further await — ccxt's rule, kept even though
-    // this sweep is the only driver today.
+    // this sweep is the only driver today
     if (bracket.phase !== 'pending_entry') return;
 
     const state = mapOrderState(entry.status);
@@ -503,7 +503,7 @@ export class AlpacaCryptoLegEmulation {
 
     const filledQty = Number.parseFloat(entry.filled_qty);
     if (!(filledQty > 0)) {
-      // Terminal with nothing filled: no lot exists, nothing to protect.
+      // Terminal with nothing filled: no lot exists, nothing to protect
       bracket.phase = 'resolved';
       this.persist(bracket);
       return;
@@ -511,7 +511,7 @@ export class AlpacaCryptoLegEmulation {
 
     // WRITE-AHEAD: `arming` (with the quantity this episode places for) is
     // durable BEFORE the first leg order — the crash there is recovered by
-    // `resumeArming` in whatever process comes next.
+    // `resumeArming` in whatever process comes next
     bracket.phase = 'arming';
     bracket.armingQty = filledQty;
     bracket.inFlight = true;
@@ -524,7 +524,7 @@ export class AlpacaCryptoLegEmulation {
     }
   }
 
-  /** Finish an arming episode a previous process started — ccxt's `resumeArming`. */
+  /** Finish an arming episode a previous process started — ccxt's `resumeArming` */
   private async resumeArming(bracket: EmulatedBracket): Promise<void> {
     if (bracket.inFlight) return;
 
@@ -540,7 +540,7 @@ export class AlpacaCryptoLegEmulation {
    * Refuse-rather-than-guess recovery, ported intact from ccxt: an
    * inconclusive venue answer throws and leaves the bracket `arming` for the
    * next sweep (or an operator) rather than risking two live protective legs
-   * on one lot.
+   * on one lot
    */
   private async recoverArming(bracket: EmulatedBracket): Promise<void> {
     const qty = bracket.armingQty;
@@ -597,7 +597,7 @@ export class AlpacaCryptoLegEmulation {
     }
 
     // Transport-idempotent cancels (404/422 resolve), so "already gone" costs
-    // nothing while a genuine transport failure still throws out.
+    // nothing while a genuine transport failure still throws out
     await Promise.all(
       [stopOrderId, targetOrderId]
         .filter((id): id is string => id !== null)
@@ -639,7 +639,7 @@ export class AlpacaCryptoLegEmulation {
     );
   }
 
-  /** Places both legs sized to `qty` — never the requested size (spec story 13). */
+  /** Places both legs sized to `qty` — never the requested size (spec story 13) */
   private async armLegs(bracket: EmulatedBracket, qty: number): Promise<void> {
     const [stop, target] = await Promise.all([
       this.placeLeg(bracket, 'stop', qty),
@@ -657,7 +657,7 @@ export class AlpacaCryptoLegEmulation {
     const { request } = bracket;
     // The CLOSING side. `request.side` is the lot's opening/held side both on
     // the first arm and on a re-arm (the re-arm contract passes the HELD
-    // side, which is the same side).
+    // side, which is the same side)
     const exitSide = request.side === 'buy' ? 'sell' : 'buy';
     const symbol = toAlpacaSymbol(request.instrument, request.asset_class);
     const clientOrderId = this.legClientOrderId(bracket, leg);
@@ -674,7 +674,7 @@ export class AlpacaCryptoLegEmulation {
           // is set AT the stop level. The honest cost: a market that gaps
           // through the stop can leave this limit unfilled — the same
           // trade-off any stop-limit carries, chosen over inventing a
-          // slippage allowance the caller never priced.
+          // slippage allowance the caller never priced
           limit_price: String(request.stop),
           time_in_force: 'gtc',
           client_order_id: clientOrderId,
@@ -690,7 +690,7 @@ export class AlpacaCryptoLegEmulation {
         limit_price: String(request.target),
         // 'gtc' on both legs regardless of the entry's TIF: a protective leg
         // must rest until it fires or is cancelled, and 'gtc' is one of the
-        // two values Alpaca accepts for crypto.
+        // two values Alpaca accepts for crypto
         time_in_force: 'gtc',
         client_order_id: clientOrderId,
       }),
@@ -700,14 +700,14 @@ export class AlpacaCryptoLegEmulation {
   /**
    * Deterministic per-episode leg ids — ccxt's scheme unchanged: within one
    * episode the venue's duplicate-client-order-id rejection is the recovery
-   * safety net, across episodes a fresh suffix avoids it.
+   * safety net, across episodes a fresh suffix avoids it
    */
   private legClientOrderId(bracket: EmulatedBracket, leg: 'stop' | 'target'): string {
     const suffix = bracket.armAttempt === 0 ? '' : `:r${bracket.armAttempt}`;
     return `${bracket.request.client_order_id}:${leg}${suffix}`;
   }
 
-  /** The single `arming` → `armed` write, so the two paths cannot diverge. */
+  /** The single `arming` → `armed` write, so the two paths cannot diverge */
   private landArmed(
     bracket: EmulatedBracket,
     stopOrderId: string,
@@ -748,7 +748,7 @@ export class AlpacaCryptoLegEmulation {
     }
 
     const siblingId = stopFilled ? bracket.targetOrderId : bracket.stopOrderId;
-    // Journalled BEFORE the venue call it commits to — the module's one rule.
+    // Journalled BEFORE the venue call it commits to — the module's one rule
     bracket.phase = 'cancelling_sibling';
     this.persist(bracket);
 
@@ -827,12 +827,12 @@ export class AlpacaCryptoLegEmulation {
   }
 }
 
-/** Fully filled at the venue — the only state that takes the OCO edge. */
+/** Fully filled at the venue — the only state that takes the OCO edge */
 function isFilled(order: AlpacaOrder): boolean {
   return mapOrderState(order.status) === 'filled' && Number.parseFloat(order.filled_qty) > 0;
 }
 
-/** Any state the venue will never change again. */
+/** Any state the venue will never change again */
 function isTerminal(order: AlpacaOrder): boolean {
   const state = mapOrderState(order.status);
   return state !== 'submitted' && state !== 'partially_filled';

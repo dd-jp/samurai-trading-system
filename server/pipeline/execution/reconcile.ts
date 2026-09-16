@@ -268,7 +268,7 @@ export const FLATTEN_CANCEL_RETRY_EVERY_MS = 30 * 60 * 1_000;
  */
 export const UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS = 30 * 60 * 1_000;
 
-/** A `broker.getOpenPositions()` answer, or why this pass has none. */
+/** A `broker.getOpenPositions()` answer, or why this pass has none */
 type VenuePositions = { positions: readonly NormalizedPosition[] } | { error: string };
 
 export async function reconcile(input: ReconcileInput): Promise<ReconcileReport> {
@@ -276,7 +276,7 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   const now = clock.now();
 
   // `getOpenPositions()` is every non-terminal lot; the in-flight ones are
-  // the subset a crash can have left disagreeing with the venue.
+  // the subset a crash can have left disagreeing with the venue
   const positions = await store.getOpenPositions();
   const inFlight = positions.filter((position) =>
     IN_FLIGHT_ORDER_STATES.includes(position.order_state),
@@ -290,11 +290,11 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
     if (divergence === null) continue;
 
     divergences.push(divergence);
-    // `undetermined` deliberately wrote nothing, so it is not a correction.
+    // `undetermined` deliberately wrote nothing, so it is not a correction
     if (divergence.action !== 'undetermined') corrected += 1;
   }
 
-  // #519/#526 — see the file doc's "flatten-journal sweep" section.
+  // #519/#526 — see the file doc's "flatten-journal sweep" section
   const unresolvedFlattens = await store.getUnresolvedFlattens();
   for (const row of unresolvedFlattens) {
     const divergence = await reconcileFlatten(input, row, now, positions);
@@ -308,9 +308,9 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   // escalation raised. AFTER the flatten sweep above, deliberately: on the
   // crypto path `resumeFlatten`'s side effect is what re-populates the
   // adapter's process-local worklists a restart emptied, the same ordering
-  // reason `runStartupReconcile` runs before the first `ingestFills()`.
+  // reason `runStartupReconcile` runs before the first `ingestFills()`
   // Symmetric to the flatten sweep in the report too — its markers count in
-  // `checked`, its resolutions in `corrected`.
+  // `checked`, its resolutions in `corrected`
   const residualSweep = await sweepResidualProtection(input);
   for (const divergence of residualSweep.divergences) {
     divergences.push(divergence);
@@ -324,7 +324,7 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   // `positions` — a lot it retires is never one `reconcileLot` above needed
   // to act on (it is not `IN_FLIGHT_ORDER_STATES`) or one
   // `findUnrecordedVenuePositions` below should compare against a venue read
-  // (it has no venue position).
+  // (it has no venue position)
   const wedgedZeroFillSweep = await sweepWedgedZeroFillLots(input);
   for (const divergence of wedgedZeroFillSweep.divergences) {
     divergences.push(divergence);
@@ -334,14 +334,14 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   // Read HERE rather than hoisted above the sweeps: a snapshot taken before
   // the flatten loop is stale by every `resumeFlatten` timeout and every
   // venue cancel that loop spent, and `cancelNeverConfirmedFlatten` takes its
-  // own read after its cancel resolves for exactly that reason (#1500).
+  // own read after its cancel resolves for exactly that reason (#1500)
   divergences.push(
     ...(await findUnrecordedVenuePositions(input, await readVenuePositions(input), positions, now)),
   );
 
   // #1088 — see the file doc's "terminal-row sweep" section. Unconditional:
   // every pass ages out whatever has crossed the cutoff since the last one,
-  // live and control arm alike.
+  // live and control arm alike
   const cutoff = new Date(now.getTime() - TERMINAL_SWEEP_AGE_MS);
   const swept = await store.sweepTerminalPositions(cutoff);
 
@@ -377,7 +377,7 @@ async function reconcileFlatten(
   const { broker, store } = input;
   // `'submitting'` maps onto `'pending'` — the same "written ahead, not yet
   // confirmed" meaning that value already carries for a bracket's write-ahead
-  // (see `ReconcileDivergence`'s widen doc, types/execution.ts).
+  // (see `ReconcileDivergence`'s widen doc, types/execution.ts)
   const storeState: OrderState = row.status === 'submitting' ? 'pending' : 'submitted';
 
   let order: Awaited<ReturnType<typeof broker.resumeFlatten>>;
@@ -391,7 +391,7 @@ async function reconcileFlatten(
     // bracket's `pending` write-ahead, an unresolved flatten is a lot stuck
     // in genuine ambiguity about whether it is still held, which is
     // paging-worthy on its own (#519) — see `FlattenReconcileAlertChannel`'s
-    // doc for why this is not treated as a background diagnostic.
+    // doc for why this is not treated as a background diagnostic
     //
     // `order_state` is left untouched here, and that is what makes it
     // STICKY: a row the venue once confirmed WORKING keeps that answer
@@ -399,14 +399,14 @@ async function reconcileFlatten(
     // "the adapter went quiet" for "the order went away". Such a row is
     // handled by `cancelWedgedFlatten` below on the next pass the adapter
     // CAN answer; while it cannot, the row keeps blocking and the alert is
-    // the whole of the response.
+    // the whole of the response
     //
     // #1500: a row the venue NEVER confirmed (`order_state` still null) has
     // no such later pass to wait for — `resumeFlatten` may throw forever, and
     // no other surface ever writes this row. Past
     // `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` it is taken through
     // `cancelNeverConfirmedFlatten`, which is the ONLY path that releases the
-    // instrument, and does so on venue evidence rather than on age.
+    // instrument, and does so on venue evidence rather than on age
     if (
       row.order_state === null &&
       now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS
@@ -436,7 +436,7 @@ async function reconcileFlatten(
       // landed, the same settlement `reconcileLot` makes for a bracket's
       // `pending` record. Unlike that path there is no lot to mark
       // `rejected` — a flatten writes no `OpenPosition` — so the JOURNAL row
-      // itself is what carries the terminal answer.
+      // itself is what carries the terminal answer
       const reason =
         'reconcile: broker has no order under this client_order_id — the write-ahead never landed';
       await store.resolveFlattenError(row.idempotency_key, reason, now);
@@ -455,13 +455,13 @@ async function reconcileFlatten(
     // gave it once — the venue definitely acked this flatten. A LATER null
     // from `resumeFlatten` is not proof the write-ahead never landed (it
     // provably did); it is the adapter unable to reconfirm an order it
-    // already told us about (aged out of a lookup window, for instance).
+    // already told us about (aged out of a lookup window, for instance)
     // Treating this as `'rejected'` would write a false record — "the
     // write-ahead never landed" — about a flatten that may have filled and
     // closed a lot. So the FIRST such answers leave the journal untouched and
-    // escalate, the same as a genuine `resumeFlatten` throw just above.
+    // escalate, the same as a genuine `resumeFlatten` throw just above
     //
-    // But only up to `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (#1214 review round 2).
+    // But only up to `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (#1214 review round 2)
     // "Left untouched and escalated" is a resolution path only if something
     // else eventually resolves the row, and for this shape nothing did:
     // `fills_swept_at` is the only other thing that ever retires a
@@ -473,7 +473,7 @@ async function reconcileFlatten(
     // row's age and the single current answer it acted on — not a denial count,
     // which nothing here keeps — and the alert is still posted every pass, so
     // forcing the row terminal silences nothing an operator was being told
-    // before.
+    // before
     const age = now.getTime() - row.submitted_at.getTime();
     const provenance =
       `flatten '${row.idempotency_key}' was previously acked by the broker (a durable ` +
@@ -514,24 +514,24 @@ async function reconcileFlatten(
 
   // The venue named an order. `resumeFlatten`'s side effect already
   // re-populated the adapter's own flatten-sweep worklist; what is left is
-  // updating the journal so this row eventually stops being "unresolved".
+  // updating the journal so this row eventually stops being "unresolved"
 
   // #1214 review — the ONE venue answer that must resolve the row here rather
   // than merely be recorded on it. `fills_swept_at` is the only thing that
   // ever bounds a `'submitted'` row (`getUnresolvedFlattens`), and only
-  // `ingestFills()` sets it, only for a flatten that actually produced fills.
+  // `ingestFills()` sets it, only for a flatten that actually produced fills
   // A flatten the venue terminally refused therefore had NOTHING to resolve
   // it: `recordFlattenOrderStateObserved` below leaves `status`/`resolved_at`
   // untouched, so the row stayed unresolved forever — wedging every later
   // flatten on the instrument, both this instrument's daily flatten
   // (`executeExit`'s write-ahead guard) and the #1214 re-flatten walk, across
-  // restarts.
+  // restarts
   //
   // `filled_qty === 0` is load-bearing, not belt-and-braces: a flatten that
   // filled part of the lot and was then cancelled still has fills in flight
   // for `ingestFills()` to sweep, and `resumeFlatten`'s worklist side effect
   // above is what recovers them after a restart. Only a flatten that closed
-  // NOTHING is dead with nothing owing.
+  // NOTHING is dead with nothing owing
   if (TERMINAL_ORDER_STATES.includes(order.order_state) && order.filled_qty === 0) {
     const reason =
       `reconcile: the venue reports this flatten '${order.order_state}' having filled nothing — ` +
@@ -552,7 +552,7 @@ async function reconcileFlatten(
   if (row.status === 'submitting') {
     // The genuine first resolution of this write-ahead's ambiguity —
     // `resolveFlattenSubmitted` is the right write here (sets `resolved_at`,
-    // the same as it does when `executeExit` itself calls it on a clean ack).
+    // the same as it does when `executeExit` itself calls it on a clean ack)
     await store.resolveFlattenSubmitted(
       row.idempotency_key,
       { order_state: order.order_state, broker_order_ids: order.broker_order_ids },
@@ -561,7 +561,7 @@ async function reconcileFlatten(
   } else {
     // Already resolved once; this is a FRESHER answer to a question already
     // settled, not a new ambiguity — `recordFlattenOrderStateObserved`
-    // leaves `resolved_at`/`status` alone (see its own doc, types/store.ts).
+    // leaves `resolved_at`/`status` alone (see its own doc, types/store.ts)
     await store.recordFlattenOrderStateObserved(row.idempotency_key, {
       order_state: order.order_state,
       broker_order_ids: order.broker_order_ids,
@@ -575,19 +575,19 @@ async function reconcileFlatten(
   // row a `markFlattenFillsSwept` it has not delivered, and once the row has
   // sat in that shape past `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` it is not
   // going to: the fills have aged past its `since` floor, so the flatten key
-  // is never iterated again.
+  // is never iterated again
   //
   // Below the record/resolve writes above on purpose, not merely after them:
   // the venue state that motivates the release is written to the row BEFORE
   // any pass can release on it, including for a `'submitting'` row whose ack
   // this is (`resolveFlattenSubmitted` — `broker_order_ids` and `resolved_at`
-  // would otherwise never be written for a row released here).
+  // would otherwise never be written for a row released here)
   //
   // The window starts at the FIRST pass that saw this shape and the same
   // column throttles the verdict's cost — see the constant, and migration
   // 0063. A pass inside the window does nothing at all: no venue read, no
   // page, and the row falls through to the 'adopted' answer it had before
-  // this branch existed.
+  // this branch existed
   if (TERMINAL_ORDER_STATES.includes(order.order_state)) {
     const firstSeen = row.terminal_unswept_checked_at;
     if (firstSeen === null) {
@@ -618,7 +618,7 @@ async function reconcileFlatten(
   // resolution paths that already exist — `filled_qty === 0` resolves the row
   // above, and a partial fill is retired by `markFlattenFillsSwept` once
   // `ingestFills()` applies it — so what finally unblocks the instrument is
-  // always venue evidence plus swept fills, never elapsed time.
+  // always venue evidence plus swept fills, never elapsed time
   //
   // Gated on the FRESH `order.order_state` rather than `row.status`: a
   // `'submitting'` row the venue confirms working is the same hazard and
@@ -626,7 +626,7 @@ async function reconcileFlatten(
   // itself. `BrokerAdapter.cancel` is idempotent BY CONTRACT (already
   // cancelled, filled or unknown all resolve rather than throw), so re-issuing
   // it is safe; `FLATTEN_CANCEL_RETRY_EVERY_MS` is what stops it being issued
-  // every poll.
+  // every poll
   const working = !TERMINAL_ORDER_STATES.includes(order.order_state);
   if (working && now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
     return {
@@ -686,7 +686,7 @@ async function cancelWedgedFlatten(
     'are swept — nothing is re-armed on age alone';
   // Recorded BEFORE the call, and for a failure as well as a success: the
   // throttle bounds what this sweep costs the venue and the operator, so it
-  // must not be escapable by a cancel that throws on every pass.
+  // must not be escapable by a cancel that throws on every pass
   await input.store.markFlattenCancelAttempted(row.idempotency_key, now);
   try {
     await input.broker.cancel(row.idempotency_key, row.instrument);
@@ -797,7 +797,7 @@ async function cancelNeverConfirmedFlatten(
   // can land while the cancel is in flight (and a venue's position view lags
   // its own fill processing), and a pre-cancel snapshot would answer for a book
   // that no longer exists — releasing the row on coverage the venue no longer
-  // has, which is the #516/#1389 over-sell this check exists to refuse.
+  // has, which is the #516/#1389 over-sell this check exists to refuse
   const coverage = await venueCoversStoreHeld(input, row, storePositions);
   if (!coverage.covered) {
     const reason =
@@ -827,7 +827,7 @@ async function cancelNeverConfirmedFlatten(
   };
 }
 
-/** Fire-and-forget, fully swallowed — the alert IS the fallback; see `FlattenReconcileAlertChannel`'s doc. */
+/** Fire-and-forget, fully swallowed — the alert IS the fallback; see `FlattenReconcileAlertChannel`'s doc */
 async function postFlattenReconcileAlert(
   input: ReconcileInput,
   row: UnresolvedFlattenSubmission,
@@ -840,7 +840,7 @@ async function postFlattenReconcileAlert(
       // when the control arm is the one sweeping — see
       // `FlattenReconcileAlert.trace_id` for what makes that hold. The same id
       // the send-failure log below uses, so a failed alert and the alert it
-      // failed to deliver land under one trace.
+      // failed to deliver land under one trace
       trace_id: input.trace_id,
       idempotency_key: row.idempotency_key,
       instrument: row.instrument,
@@ -849,14 +849,14 @@ async function postFlattenReconcileAlert(
     });
   } catch {
     // The reconcile pass this alert reports on already completed — nothing
-    // to undo here, see `ResidualExposureAlert`'s doc for the same posture.
+    // to undo here, see `ResidualExposureAlert`'s doc for the same posture
     // #573: traced locally now — this IS the fallback failing, so without
     // this an unresolved flatten's genuine ambiguity is invisible even to
     // someone reading the log. Fixed, self-authored message, never the
     // channel's own error — the same CREDENTIALS posture
     // `alertResidualExposure`'s own channel-failure catch takes
     // (ingest-fills.ts): a Telegram transport failure quotes the
-    // request it failed on, which can carry a bot token.
+    // request it failed on, which can carry a bot token
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',
@@ -909,7 +909,7 @@ async function judgeTerminalUnsweptFlatten(
       'in the store, and no venue number can say which lot each belongs to. The row keeps ' +
       'blocking: attribute them by hand';
     // Re-armed for the row that stays: the next look — one venue read, one
-    // page — is a window away, not one 15s poll away (migration 0063).
+    // page — is a window away, not one 15s poll away (migration 0063)
     await input.store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
     await postFlattenReconcileAlert(input, row, reason, now);
     return {
@@ -940,7 +940,7 @@ async function judgeTerminalUnsweptFlatten(
   };
 }
 
-/** Held quantity of one instrument's lots on one OPENING side, per lot, never netted across sides. */
+/** Held quantity of one instrument's lots on one OPENING side, per lot, never netted across sides */
 function sumHeld(
   lots: readonly OpenPosition[],
   side: OpenPosition['side'],
@@ -987,13 +987,13 @@ async function venueCoversStoreHeld(
   const longHeld = sumHeld(lots, 'buy', heldByKey);
   const shortHeld = sumHeld(lots, 'sell', heldByKey);
   // A venue reports ONE netted position per instrument, so it can corroborate
-  // the store's held quantity only while the store's lots are all one way.
+  // the store's held quantity only while the store's lots are all one way
   // Lots on BOTH sides net inside the venue's own number, and
   // `heldQuantitiesFor` refuses to pre-sum across lots for that reason
   // (held-quantity.ts) — exactly offsetting sides would otherwise compare 0
   // against 0 and read as coverage on no evidence at all. Keyed on the lots
   // themselves, not on their held sums: an over-closed lot carries a NEGATIVE
-  // held, so summing first would net the two sides right back together.
+  // held, so summing first would net the two sides right back together
   if (lots.some((lot) => lot.side === 'buy') && lots.some((lot) => lot.side === 'sell')) {
     return {
       covered: false,
@@ -1004,10 +1004,10 @@ async function venueCoversStoreHeld(
     };
   }
   // Both sides signed the same way before they are compared:
-  // `NormalizedPosition.qty` carries the venue's direction, `held` never does.
+  // `NormalizedPosition.qty` carries the venue's direction, `held` never does
   // A venue book that has crossed to the other side of the store's — the
   // #516/#1389 over-sell state — must not read as "still holds everything",
-  // which is exactly what comparing magnitudes would say.
+  // which is exactly what comparing magnitudes would say
   const direction = shortHeld > 0 ? -1 : 1;
   const storeHeld = longHeld + shortHeld;
   const venueQty =
@@ -1034,7 +1034,7 @@ async function venueCoversStoreHeld(
   // replacement would be sized off the store's smaller number, but a released
   // row whose fills are missing from the journal, and the PnL and CGT record
   // with them. Coverage is therefore agreement, tested both ways under the one
-  // flatness tolerance.
+  // flatness tolerance
   if (!coversQty(storeHeld, venueQty)) {
     return {
       covered: false,
@@ -1048,7 +1048,7 @@ async function venueCoversStoreHeld(
   // replacement sized off the store cannot over-sell what the store does not
   // hold — but it is coverage on an EMPTY comparison, so the note must not
   // borrow the language of the corroborated case below and claim the venue
-  // confirmed anything about this flatten's fills.
+  // confirmed anything about this flatten's fills
   if (storeHeld === 0) {
     return {
       covered: true,
@@ -1146,7 +1146,7 @@ async function findUnrecordedVenuePositions(
 
   // Compared per INSTRUMENT, not per lot: a venue reports one netted position
   // where the store may hold several lots, so "the store has any open lot for
-  // this instrument" is the only comparison the two shapes support.
+  // this instrument" is the only comparison the two shapes support
   const known = new Set(storePositions.map((position) => position.instrument));
 
   const unrecorded = venuePositions.filter((venuePosition) => !known.has(venuePosition.instrument));
@@ -1154,7 +1154,7 @@ async function findUnrecordedVenuePositions(
 
   return unrecorded.map((venuePosition) => ({
     // No idempotency key exists — this lot was never written under one, which
-    // is precisely the finding.
+    // is precisely the finding
     idempotency_key: '',
     instrument: venuePosition.instrument,
     store_state: 'pending' as const,
@@ -1195,7 +1195,7 @@ async function pageUnrecordedVenuePositions(
       await input.unrecordedVenuePositionAlerts.postUnrecordedVenuePositionAlert({
         // This surface's own id, carrying the `control-arm-` prefix when the
         // control arm is the one scanning — the same field the catalogue's
-        // `page` predicate reads to keep a simulated broker off the phone.
+        // `page` predicate reads to keep a simulated broker off the phone
         trace_id: input.trace_id,
         instrument: venuePosition.instrument,
         qty: venuePosition.qty,
@@ -1204,7 +1204,7 @@ async function pageUnrecordedVenuePositions(
       });
     } catch {
       // Fixed, self-authored message, never the channel's own error — the
-      // CREDENTIALS posture `postFlattenReconcileAlert` above documents.
+      // CREDENTIALS posture `postFlattenReconcileAlert` above documents
       safeLog(input.logger, {
         trace_id: input.trace_id,
         stage: 'execution',
@@ -1251,7 +1251,7 @@ async function reconcileLot(
       // Safe to surface verbatim ON CREDENTIALS: #297's H1 makes every adapter
       // convert what its client threw into a `BrokerError` built only from
       // curated fields. Same posture and same expression as `execute()`'s
-      // submit-failure branch.
+      // submit-failure branch
       //
       // That is NOT the same as "only a `BrokerError` reaches this catch", and
       // #1262 checked: `AlpacaBrokerAdapter.getOrder` does real work OUTSIDE
@@ -1262,7 +1262,7 @@ async function reconcileLot(
       // hostile getter throws from inside `call`'s own catch and delivers
       // whatever IT threw onward. So the render is guarded rather than trusted
       // — a throw here would escape the catch that exists to report the
-      // adapter's silence and would leave the lot with no divergence at all.
+      // adapter's silence and would leave the lot with no divergence at all
       reason: describeThrownSafely(error),
     };
   }
@@ -1272,7 +1272,7 @@ async function reconcileLot(
     // landed. Marking it terminal is what frees the lot from the in-flight
     // set without ever re-submitting it — the bracket cannot be rebuilt from
     // an `OpenPosition` anyway (it carries no entry price or time-in-force),
-    // so a resubmit here would be fabricating an order, not recovering one.
+    // so a resubmit here would be fabricating an order, not recovering one
     await store.updatePositionState(key, { order_state: 'rejected', broker_order_ids: [] });
 
     return {
@@ -1288,12 +1288,12 @@ async function reconcileLot(
 
   if (agrees(position, order)) return null;
 
-  // Broker is the tie-break authority, so its state is adopted wholesale.
+  // Broker is the tie-break authority, so its state is adopted wholesale
   // Only `order_state`/`broker_order_ids` though: `filled_size` stays at
   // whatever the `Fill` rows say, because those rows are the record and
   // `ingestFills()` rebuilds from them. A lot adopted as `filled` here is
   // still non-terminal, so it stays in `getOpenPositions()` and the very next
-  // `ingestFills()` supplies the quantity and price to match.
+  // `ingestFills()` supplies the quantity and price to match
   await store.updatePositionState(key, {
     order_state: order.order_state,
     broker_order_ids: order.broker_order_ids,
@@ -1313,7 +1313,7 @@ async function reconcileLot(
 /**
  * Agreement is on state AND the venue's leg ids: a lot the store believes is
  * `pending` but which the venue acked carries ids the store never recorded,
- * and losing them would leave nothing to cancel the bracket by.
+ * and losing them would leave nothing to cancel the bracket by
  */
 function agrees(
   position: OpenPosition,

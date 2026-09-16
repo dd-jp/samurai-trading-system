@@ -85,7 +85,7 @@
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
 
-/** The same 24h window `LLM_FAILURE_RATE_WINDOW_MS` uses, for the same "how is today going" read. */
+/** The same 24h window `LLM_FAILURE_RATE_WINDOW_MS` uses, for the same "how is today going" read */
 export const GATE_REFUSAL_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -117,11 +117,11 @@ export const GATE_REFUSAL_RATE_THRESHOLD = 0.95;
  */
 export const MIN_DECISIONS_FOR_GATE_REFUSAL_RATE = 20;
 
-/** How often `gate_refusal_rate_check_failed` repeats while the window read keeps failing, matching `CHECK_FAILURE_LOG_EVERY`. */
+/** How often `gate_refusal_rate_check_failed` repeats while the window read keeps failing, matching `CHECK_FAILURE_LOG_EVERY` */
 export const GATE_REFUSAL_CHECK_FAILURE_LOG_EVERY = 20;
 
 export interface GateRefusalWindowCounts {
-  /** Rows in `llm_gate_refusals` over the window (migration 0065). */
+  /** Rows in `llm_gate_refusals` over the window (migration 0065) */
   gate_refused: number;
   /**
    * `debate_log` rows over the window — every debate that RAN, converged or
@@ -132,7 +132,7 @@ export interface GateRefusalWindowCounts {
   debates_logged: number;
 }
 
-/** The one method this guard calls on `SqliteDebateLogStore` — a capability, not a concrete class, the same shape `LlmFailureRateWindowSource` takes. */
+/** The one method this guard calls on `SqliteDebateLogStore` — a capability, not a concrete class, the same shape `LlmFailureRateWindowSource` takes */
 export interface GateRefusalWindowSource {
   getGateRefusalWindowCounts(from: Date, to: Date): GateRefusalWindowCounts;
 }
@@ -140,7 +140,7 @@ export interface GateRefusalWindowSource {
 export interface GateRefusalRateAlert {
   rate: number;
   gate_refused_count: number;
-  /** `gate_refused_count` plus the debates that ran — the denominator of `rate`, named for what it is so no reader mistakes it for every pass attempt. */
+  /** `gate_refused_count` plus the debates that ran — the denominator of `rate`, named for what it is so no reader mistakes it for every pass attempt */
   decision_count: number;
   window_ms: number;
   reported_at: Date;
@@ -164,7 +164,7 @@ export interface LlmGateRefusalSink {
 /**
  * Edge-triggered latch over the refusal ratio, the same posture
  * `LlmFailureRateMonitor` takes: post on the crossing, re-arm on the return,
- * in-memory and restart-clean.
+ * in-memory and restart-clean
  */
 export class GateRefusalRateMonitor {
   #firing = false;
@@ -198,7 +198,7 @@ export class GateRefusalRateMonitor {
     return { alert: true };
   }
 
-  /** Throttles `gate_refusal_rate_check_failed`, matching `LlmFailureRateMonitor.recordCheckFailure`. */
+  /** Throttles `gate_refusal_rate_check_failed`, matching `LlmFailureRateMonitor.recordCheckFailure` */
   recordCheckFailure(): boolean {
     this.#checkFailureStreak += 1;
     return (
@@ -207,7 +207,7 @@ export class GateRefusalRateMonitor {
     );
   }
 
-  /** Resets the check-failure streak so a later, unrelated outage logs its own first occurrence. */
+  /** Resets the check-failure streak so a later, unrelated outage logs its own first occurrence */
   recordCheckSuccess(): void {
     this.#checkFailureStreak = 0;
   }

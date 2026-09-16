@@ -26,7 +26,7 @@ import type {
   SubclassDeploymentCap,
 } from './types.js';
 
-/** A £750 equity leg, so the caps below are ADR-0018 D5's own figures. */
+/** A £750 equity leg, so the caps below are ADR-0018 D5's own figures */
 const EQUITY_LEG = 750;
 const INDEX_CAP = 0.35 * EQUITY_LEG; // 262.50 — D5's "~£260"
 const SINGLE_STOCK_CAP = 0.25 * EQUITY_LEG; // 187.50 — D5's "~£190"
@@ -107,7 +107,7 @@ const portfolioWith = (
   reserved_gross_exposure: Object.values(reserved).reduce((sum, e) => sum + e, 0),
   // `known: true` throughout: an unknown daily P&L is its own rejection
   // (`daily_pnl_unknown:portfolio`), and every assertion here is about which
-  // CAP bound the size, so nothing upstream of the caps may reject first.
+  // CAP bound the size, so nothing upstream of the caps may reject first
   daily_pnl: {
     crypto: { known: true, pct: 0 },
     stocks: { known: true, pct: 0 },
@@ -119,13 +119,13 @@ const portfolioWith = (
 
 const CLOCK: Clock = { now: () => new Date('2026-08-19T14:35:00Z') };
 
-/** Nothing tripped, so no breaker can pre-empt the cap under test. */
+/** Nothing tripped, so no breaker can pre-empt the cap under test */
 const NO_PERSISTED_BREAKERS: PersistedBreakerState[] = [
   { tier: 'portfolio_drawdown', tripped: false, tripped_at: null, reset_at: null, reason: null },
   { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
 ];
 
-/** One entry at $1/share, so `size` reads directly as notional. */
+/** One entry at $1/share, so `size` reads directly as notional */
 const intentFor = (instrument: string, notional: number): OrderIntent => ({
   idempotency_key: `key-${instrument}-${notional}`,
   instrument,
@@ -158,10 +158,10 @@ const decide = (
   intent: OrderIntent,
   exposure: Record<string, number> = {},
   // `null` means "declare no envelope". Not `undefined`, which a default
-  // parameter cannot distinguish from an omitted argument.
+  // parameter cannot distinguish from an omitted argument
   cap: SubclassDeploymentCap | null = DEPLOYMENT_CAP,
   equity: number = PORTFOLIO_EQUITY,
-  /** Submitted-but-unfilled notional (#1019) — see `portfolioWith`. */
+  /** Submitted-but-unfilled notional (#1019) — see `portfolioWith` */
   reserved: Record<string, number> = {},
 ) =>
   new RiskManagerImpl(configWith(cap ?? undefined)).evaluate({
@@ -204,7 +204,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
   it('sizes a 3x single-stock ETP to 25%, a DIFFERENT cap under the same asset_class', () => {
     // Both instruments are `asset_class: 'stocks'`. If the gate were keyed on
     // asset class rather than subclass, these two would get the same envelope
-    // and D5 would be unimplemented while looking implemented.
+    // and D5 would be unimplemented while looking implemented
     const decision = decide(intentFor('3LAP', 10_000));
 
     expect(finalSizeOf(decision)).toBeCloseTo(SINGLE_STOCK_CAP, 6);
@@ -213,10 +213,10 @@ describe('ADR-0018 D5 deployment envelope', () => {
 
   it('resolves the envelope against the equity read of THIS decision, not a frozen amount', () => {
     // The discriminator for #739, and the only assertion a fixed-cash
-    // regression cannot also pass: same intent, same config, two equity reads.
+    // regression cannot also pass: same intent, same config, two equity reads
     // A frozen £262 is 34.9% of a £750 book and 58.2% of a £450 one, so under
     // the old form exposure rises as a fraction of equity exactly as equity
-    // falls and the drawdown bound stops bounding at the first loss.
+    // falls and the drawdown bound stops bounding at the first loss
     const full = decide(intentFor('3USL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY);
     const halved = decide(intentFor('3USL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY / 2);
 
@@ -240,7 +240,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // `buildBracket` sizes a scale_in exactly like an entry because "Risk
     // enforces the exposure cap downstream" (trader/decide.ts). Entry at the
     // full envelope followed by a scale_in at the full envelope is the other
-    // route to double deployment.
+    // route to double deployment
     const scaleIn = { ...intentFor('3USL', 10_000), intent_type: 'scale_in' as const };
     const decision = decide(scaleIn, { '3USL': INDEX_CAP });
 
@@ -262,26 +262,26 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // Three DIFFERENT tickers, not three calls against one instrument: if the
     // gate were counting positions rather than netting notional, nothing
     // here would distinguish it from a "max 2 positions" rule. `'3IGL'` is a
-    // third index_etp_3x ticker with no counterpart elsewhere in this file.
+    // third index_etp_3x ticker with no counterpart elsewhere in this file
     const threeTickerCap: SubclassDeploymentCap = {
       ...DEPLOYMENT_CAP,
       subclass_of: { ...SUBCLASS_OF, '3IGL': 'index_etp_3x' },
     };
 
-    // First entry deploys all but £50 of the £262.50 envelope.
+    // First entry deploys all but £50 of the £262.50 envelope
     const first = decide(intentFor('3USL', INDEX_CAP - 50), {}, threeTickerCap);
     expect(first.status).toBe('approved');
     expect(finalSizeOf(first)).toBeCloseTo(INDEX_CAP - 50, 6);
 
     // A second, DIFFERENT instrument in the same subclass is admitted — but
-    // only for the £50 of room the envelope has left, not its own full cap.
+    // only for the £50 of room the envelope has left, not its own full cap
     const second = decide(intentFor('3UKL', 10_000), { '3USL': INDEX_CAP - 50 }, threeTickerCap);
     expect(second.status).toBe('approved');
     expect(finalSizeOf(second)).toBeCloseTo(50, 6);
     expect(second.binding_constraint).toBe('per_subclass_deployment_cap');
 
     // A third, again DIFFERENT, instrument arrives once the subclass is fully
-    // deployed and is refused outright — never forwarded as a sliver.
+    // deployed and is refused outright — never forwarded as a sliver
     const third = decide(
       intentFor('3IGL', 10_000),
       { '3USL': INDEX_CAP - 50, '3UKL': 50 },
@@ -304,7 +304,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
       // mark` = 0, so before this fix `deployedToSubclass` summed to zero and
       // this second name took the FULL envelope a moment after the first one
       // did — 70% of the book into a subclass measured to hold 23.1%
-      // drawdown at 35%.
+      // drawdown at 35%
       const decision = decide(intentFor('3UKL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY, {
         '3USL': 200,
       });
@@ -326,7 +326,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
       // A `submitted` lot that has taken half its fill contributes its filled
       // half to `exposure_by_instrument` and its remainder to the
       // reservation. Double-counting either half would over-tighten; counting
-      // neither is the original defect.
+      // neither is the original defect
       const decision = decide(
         intentFor('3UKL', 10_000),
         { '3USL': 120 },
@@ -366,7 +366,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
   });
 
   it('leaves exposure in OTHER subclasses out of the netting', () => {
-    // A single-stock holding must not consume the index envelope.
+    // A single-stock holding must not consume the index envelope
     const decision = decide(intentFor('3USL', 10_000), { '3LAP': 180, 'BTC-USD': 500 });
 
     expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
@@ -375,7 +375,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
   it('does not bind on a subclass D5 measured no envelope for', () => {
     // `crypto: null` is "the study covers the two ETP subclasses and nothing
     // else", not a number waiting to be guessed. `per_asset_class_cap.crypto`
-    // still bounds it.
+    // still bounds it
     const decision = decide(intentFor('BTC-USD', 10_000));
 
     expect(finalSizeOf(decision)).toBe(10_000);
@@ -383,7 +383,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
   });
 
   it('is inert when no envelope is declared at all', () => {
-    // The backtest harness and every test predating subclasses.
+    // The backtest harness and every test predating subclasses
     const decision = decide(intentFor('3USL', 10_000), {}, null);
 
     expect(finalSizeOf(decision)).toBe(10_000);
@@ -391,7 +391,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
 
   it('throws on an unclassified instrument rather than sizing unbounded', () => {
     // The alternative to this throw is full deployment. A partly-populated
-    // pool file is a mistake to surface, not one to size around.
+    // pool file is a mistake to surface, not one to size around
     expect(() => decide(intentFor('SPY', 10_000))).toThrow(/SPY has no subclass/);
     expect(() => decide(intentFor('SPY', 10_000))).toThrow(/ADR-0018 D5/);
   });
@@ -400,7 +400,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // `direct-bind.ts`'s `buildRiskStep` catches this to write the `risk_log`
     // row the throw would otherwise leave absent (#726) — it reads
     // `bindingConstraint` directly rather than re-parsing the message, so this
-    // field is load-bearing for that fix, not incidental.
+    // field is load-bearing for that fix, not incidental
     try {
       decide(intentFor('SPY', 10_000));
       expect.unreachable('expected perSubclassDeploymentCap to throw');
@@ -418,7 +418,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // `cap` is total over `InstrumentSubclass` at COMPILE time only, and
     // `subclass_of` is assembled from the pool file at runtime — so this pair
     // is constructible and the type cannot forbid it. The cast is exactly what
-    // an assembled-at-runtime config would produce.
+    // an assembled-at-runtime config would produce
     //
     // What made this worth a throw rather than a `?? 0`: `undefined` did not
     // fail loudly, it failed INVISIBLY. `undefined - deployed` is `NaN`,
@@ -426,7 +426,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // "trims" to `NaN` — and then `NaN < min_viable_size` is false too, so the
     // intent cleared BOTH this gate and the min-viable floor carrying no
     // envelope at all. A silent full deployment is the one outcome D5 exists
-    // to prevent, so the test asserts the throw AND the NaN it replaced.
+    // to prevent, so the test asserts the throw AND the NaN it replaced
     const holed = {
       subclass_of: SUBCLASS_OF,
       cap_fraction_of_equity: {
@@ -441,7 +441,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     expect(() => decide(intentFor('3USL', 10_000), {}, holed)).toThrow(/index_etp_3x/);
 
     // The subclasses that ARE in the record still price normally — one hole
-    // refuses one subclass, it does not disarm the gate.
+    // refuses one subclass, it does not disarm the gate
     expect(finalSizeOf(decide(intentFor('3LAP', 10_000), {}, holed))).toBeCloseTo(
       SINGLE_STOCK_CAP,
       6,
@@ -473,7 +473,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
   it('rejects rather than scaling in when the subclass is already at its envelope', () => {
     // `allowedAdditional` goes NEGATIVE here (0 - 262.5). `trimToAllowed`
     // floors it at 0, and a 0 notional then falls below `min_viable_size` —
-    // so the outcome is a rejection, not a zero-size order sent to a broker.
+    // so the outcome is a rejection, not a zero-size order sent to a broker
     const decision = decide(intentFor('3USL', 10_000), { '3USL': INDEX_CAP });
 
     expect(decision.status).toBe('rejected');
@@ -483,7 +483,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
   it('lets the forced flatten out of a subclass the cap record does not carry', () => {
     // The sharpest edge on the throw above. ADR-0014's flat-by-close reaches
     // this stage as an `exit`, and risk-manager-spec's invariant is that no
-    // gate may block it — a suppressed flatten holds a position overnight.
+    // gate may block it — a suppressed flatten holds a position overnight
     //
     // The throw is on the ENTRY-gate path, which `evaluate` returns before
     // reaching for an exit. That ordering is the whole safety argument, and it
@@ -504,13 +504,13 @@ describe('ADR-0018 D5 deployment envelope', () => {
     expect(decision.status).toBe('approved');
     expect(decision.binding_constraint).toBeNull();
     // Sized at the full residual: an exit trimmed to an envelope is a partial
-    // flatten, which leaves the overnight position the invariant forbids.
+    // flatten, which leaves the overnight position the invariant forbids
     expect(finalSizeOf(decision)).toBe(10_000);
   });
 
   it('is not a Feedback Loop dial', () => {
     // D5 binds regardless of signal quality. A dial would let the loop widen
-    // the envelope in exactly the run where it had learned to be confident.
+    // the envelope in exactly the run where it had learned to be confident
     expect(RISK_THRESHOLD_KEYS).not.toContain('per_subclass_deployment_cap');
     expect(RISK_THRESHOLD_KEYS.some((key) => key.includes('subclass'))).toBe(false);
   });
@@ -524,7 +524,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
   // `PORTFOLIO_EQUITY` would additionally trip `min_viable_size` on this
   // fixture's `capFraction` (calibrated to £750-leg-scale cash figures at
   // £100,000 equity, not at ADR-0018's real 0.35/0.25), which is not what
-  // these tests are about.
+  // these tests are about
   const BOOK = PORTFOLIO_EQUITY;
   const TOLERANCE = 0.05;
 
@@ -533,7 +533,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
   // gates behind that flag (see the describe block below). Defaulting it to
   // `true` here keeps these fixtures exercising that arithmetic directly,
   // as they did before #949; no production caller ever sets it (#949's
-  // currency-mismatch describe block below covers the shipped default).
+  // currency-mismatch describe block below covers the shipped default)
   const capWithCeiling = (
     refuse_above_tolerance = TOLERANCE,
     same_currency_verified = true,
@@ -553,14 +553,14 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
     // This is the "sizes on the account" defect #888 was filed for,
     // reproduced directly against the gate rather than through the
     // composition root: fund 2% past the book and, pre-#888, the cap would
-    // have resolved 2% wider too.
+    // have resolved 2% wider too
     const withinTolerance = BOOK * 1.02; // 2% over, inside the 5% tolerance
 
     const decision = decide(intentFor('3USL', 10_000), {}, capWithCeiling(), withinTolerance);
 
     expect(decision.status).toBe('approved');
     expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
-    // Clamped at the BOOK, not the funded 2%-over figure.
+    // Clamped at the BOOK, not the funded 2%-over figure
     expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
   });
 
@@ -612,7 +612,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
   it('an exit still bypasses the ceiling entirely — the refusal must never be able to trap a flatten', () => {
     // Mirrors the existing "lets the forced flatten out" test above: the
     // throw lives on the entry-gate path, and `evaluate()` returns for an
-    // exit before that path is ever reached.
+    // exit before that path is ever reached
     const flatten = { ...intentFor('3USL', 10_000), intent_type: 'exit' as const };
 
     const decision = decide(flatten, { '3USL': INDEX_CAP }, capWithCeiling(), BOOK * 10);
@@ -632,7 +632,7 @@ describe('#949 — equity_ceiling refuses on currency mismatch, UNCONDITIONALLY,
   // of whether `portfolio.equity` reads above, at, or below `book`. No
   // production caller sets the flag today (see `d5EnvelopeFor`,
   // paper-profile.ts); the describe block above is what exercising it looks
-  // like once a same-currency comparison exists.
+  // like once a same-currency comparison exists
   const BOOK = PORTFOLIO_EQUITY;
 
   const CAP_NO_VERIFICATION: SubclassDeploymentCap = {
@@ -651,7 +651,7 @@ describe('#949 — equity_ceiling refuses on currency mismatch, UNCONDITIONALLY,
   it('refuses at a realistic FX-inflated but genuinely correctly-funded value', () => {
     // The scenario #949 was filed over: a correctly-funded GBP book reads as
     // a numerically LARGER USD figure over Alpaca's API (~1.25-1.35x at
-    // typical GBP/USD rates), which the pre-#949 gate misread as overfunding.
+    // typical GBP/USD rates), which the pre-#949 gate misread as overfunding
     const fxInflatedButCorrect = BOOK * 1.27;
 
     expect(() =>
@@ -676,7 +676,7 @@ describe('#949 — equity_ceiling refuses on currency mismatch, UNCONDITIONALLY,
       expect(typed.bindingConstraint).toBe('per_subclass_deployment_cap:currency_mismatch:3USL');
       expect(typed.bindingConstraint).not.toContain('equity_exceeds_book');
       // The old over-book reason's distinguishing phrase must be absent —
-      // this refusal is diagnosable as a currency problem, not a funding one.
+      // this refusal is diagnosable as a currency problem, not a funding one
       expect(typed.message).not.toMatch(/more than \d+% *above it/);
     }
   });

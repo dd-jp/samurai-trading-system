@@ -54,7 +54,7 @@ export interface TickStatus {
   trace_id: string;
 }
 
-/** One open position with its live unrealized PnL attached (dashboard-spec story 1-2). */
+/** One open position with its live unrealized PnL attached (dashboard-spec story 1-2) */
 export interface PositionRow {
   idempotency_key: string;
   instrument: string;
@@ -65,7 +65,7 @@ export interface PositionRow {
   stop: number;
   target: number;
   order_state: OrderState;
-  /** Current mark used to compute unrealized PnL (never a stale entry value). */
+  /** Current mark used to compute unrealized PnL (never a stale entry value) */
   mark_price: number;
   unrealized_pnl: number;
   opened_at: string;
@@ -79,10 +79,10 @@ export interface PositionRow {
  */
 export type DebateTerminationWire = 'converged' | 'non_converged' | 'latency_truncated';
 
-/** Wire-duplicated `DebateTerminationCause`, same reasoning as the type above. */
+/** Wire-duplicated `DebateTerminationCause`, same reasoning as the type above */
 export type DebateTerminationCauseWire = 'budget' | 'llm_failure';
 
-/** One recent completed debate with per-analyst contributions (story 3). */
+/** One recent completed debate with per-analyst contributions (story 3) */
 export interface DebateRow {
   debate_id: string;
   instrument: string;
@@ -92,7 +92,7 @@ export interface DebateRow {
   /**
    * How this debate resolved (#1396) — absent for a row written before
    * migration 0041, where the server's own `termination` is genuinely
-   * indeterminate rather than merely unprojected.
+   * indeterminate rather than merely unprojected
    */
   termination?: DebateTerminationWire;
   /**
@@ -150,9 +150,9 @@ export interface ArmPerformanceWire {
   arm: TradingArmWire;
   trade_count: number;
   realized_pnl_net: number;
-  /** Fraction of `basis`, not a percentage — 0.0125 is 1.25%. */
+  /** Fraction of `basis`, not a percentage — 0.0125 is 1.25% */
   return_pct: number;
-  /** Fraction of `basis`, peak-to-trough on this arm's realized-PnL series. */
+  /** Fraction of `basis`, peak-to-trough on this arm's realized-PnL series */
   max_drawdown_pct: number;
   /**
    * Passes over this window (#1099) skipped by `control_arm_valuation_refused`
@@ -208,14 +208,14 @@ export type ExitClassDropCountsWire = Readonly<
  * carried onto the wire rather than left as an assumption the panel makes.
  */
 export interface ArmComparisonRow {
-  /** The FL cycle instant, ISO-8601 UTC. */
+  /** The FL cycle instant, ISO-8601 UTC */
   computed_at: string;
   window_from: string;
   window_to: string;
   /**
    * The denominator BOTH arms were divided by — the declared book in the
    * account's currency (`LIVE_BOOK_GBP * SIZING_USD_PER_GBP` today, #1180),
-   * matching `realized_pnl_net` above it.
+   * matching `realized_pnl_net` above it
    */
   basis: number;
   live: ArmPerformanceWire;
@@ -289,7 +289,7 @@ export type OutsideBenchmarkWire = 'spy' | 'sixty_forty';
  * to the denominator instead of the column.
  */
 export interface OutsideBenchmarkRow {
-  /** The FL cycle instant, ISO-8601 UTC. */
+  /** The FL cycle instant, ISO-8601 UTC */
   computed_at: string;
   benchmark: OutsideBenchmarkWire;
   /**
@@ -382,7 +382,7 @@ export type PnlRateSource = 'static_sizing_rate';
 export interface PnlOverallWire {
   /** Cumulative realized `realized_pnl_net` plus current open unrealized, in GBP. Signed. */
   net_gbp: number;
-  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`) — 0.05 is 5%. */
+  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`) — 0.05 is 5% */
   net_pct_of_book: number;
   /** Peak-to-trough fall of the REALIZED series only, as a positive fraction of the declared book. Zero when the series never fell below a prior peak. */
   max_drawdown_pct: number;
@@ -411,9 +411,9 @@ export interface PnlOverallWire {
  * that means on the live arm.
  */
 export interface PnlTodayWire {
-  /** `realized_gbp + unrealized_gbp`, signed. */
+  /** `realized_gbp + unrealized_gbp`, signed */
   net_gbp: number;
-  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`). */
+  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`) */
   net_pct_of_book: number;
   /** Sum of `realized_pnl_net` for trades closed today, in GBP. Signed. */
   realized_gbp: number;
@@ -421,7 +421,7 @@ export interface PnlTodayWire {
   unrealized_gbp: number;
   /** Sum of `fees_total` for trades closed today, in GBP. Always non-negative. */
   costs_gbp: number;
-  /** Trades closed today, this arm. */
+  /** Trades closed today, this arm */
   trade_count: number;
 }
 
@@ -437,7 +437,7 @@ export interface PnlTodayWire {
 export interface PnlHeadlineWire {
   overall: PnlOverallWire;
   today: PnlTodayWire;
-  /** USD per GBP — `SIZING_USD_PER_GBP` (`paper-profile.ts`), the same static rate `ArmComparisonRow.basis` is converted at. */
+  /** USD per GBP — `SIZING_USD_PER_GBP` (`paper-profile.ts`), the same static rate `ArmComparisonRow.basis` is converted at */
   rate_usd_per_gbp: number;
   rate_source: PnlRateSource;
   /**
@@ -445,7 +445,7 @@ export interface PnlHeadlineWire {
    * — `LIVE_BOOK_GBP` (`paper-profile.ts`) — carried for the same reason
    * `rate_usd_per_gbp` is: this figure has already moved once (£1,500 →
    * £1,000, ADR-0015's 2026-08-18 amendment), and a renderer that hard-coded
-   * it would keep stating the old book the moment it moves again (#1620).
+   * it would keep stating the old book the moment it moves again (#1620)
    */
   book_gbp: number;
 }
@@ -513,7 +513,7 @@ export interface FillRow {
   timestamp: string;
 }
 
-/** One verdict/audit_log entry — the go/no-go history (story 5). */
+/** One verdict/audit_log entry — the go/no-go history (story 5) */
 export interface VerdictRow {
   trace_id: string;
   instrument: string;
@@ -611,11 +611,11 @@ export interface RiskCriticRow {
    * The gate that decided it, verbatim from `risk_log` — notably
    * `risk_critic:invalidated` (a measured breach) versus `risk_critic:reject`
    * (the critic's prose), which #997 Q2b keeps distinct precisely so an
-   * operator can see the two disagree.
+   * operator can see the two disagree
    */
   binding_constraint: string | null;
   critic_verdict: 'pass' | 'trim' | 'reject' | 'unavailable' | null;
-  /** The critic's argument text (audit). */
+  /** The critic's argument text (audit) */
   reasoning: string | null;
   /**
    * The measured conditions, or `null` when the row carries none — a pre-fold
@@ -633,7 +633,7 @@ export interface RiskCriticRow {
   created_at: string;
 }
 
-/** Per-analyst weight + rolling attribution (story 6). */
+/** Per-analyst weight + rolling attribution (story 6) */
 export interface AnalystPerformanceRow {
   analyst_id: string;
   weight: number;
@@ -672,9 +672,9 @@ export interface LlmSpendWindow {
   cache_read_input_tokens: number;
   cache_creation_input_tokens: number;
   calls: number;
-  /** Calls whose model was not in the rate table; excluded from `cost_usd`. */
+  /** Calls whose model was not in the rate table; excluded from `cost_usd` */
   unpriced_calls: number;
-  /** What one decision cost and how long its LLM calls took (#326). */
+  /** What one decision cost and how long its LLM calls took (#326) */
   per_debate: LlmPerDebateStats;
 }
 
@@ -690,7 +690,7 @@ export interface LlmSpendWindow {
  * a duration no debate actually experienced.
  */
 export interface LlmPerDebateStats {
-  /** Distinct `debate_id`s with at least one metered call in the window. */
+  /** Distinct `debate_id`s with at least one metered call in the window */
   debates: number;
   /**
    * Calls in the window with no `debate_id`. The honest caveat that travels
@@ -699,7 +699,7 @@ export interface LlmPerDebateStats {
    * the per-debate figures here.
    */
   unattributed_calls: number;
-  /** Median / 95th-percentile USD across debates (unpriced calls contribute 0). */
+  /** Median / 95th-percentile USD across debates (unpriced calls contribute 0) */
   cost_usd_p50: number;
   cost_usd_p95: number;
   /**
@@ -806,9 +806,9 @@ export interface DashboardSnapshot {
   arm: TradingArmWire;
   tick_status: TickStatus | null;
   positions: PositionRow[];
-  /** Recent realized round trips (#940) — most-recently-closed first. */
+  /** Recent realized round trips (#940) — most-recently-closed first */
   closed_trades: ClosedTradeRow[];
-  /** Fills belonging to `closed_trades` above — every leg, entry through exit. */
+  /** Fills belonging to `closed_trades` above — every leg, entry through exit */
   fills: FillRow[];
   debates: DebateRow[];
   verdicts: VerdictRow[];
@@ -1077,7 +1077,7 @@ function fnv1aHex(input: string): string {
  * Exported (not just `CONTRACT_VERSION` below) so a test can prove this
  * mechanism is actually content-sensitive — hash a field list that differs
  * from the real one and assert the output differs — without touching the
- * `DashboardSnapshot` interface itself to do it (mutation evidence, #1316).
+ * `DashboardSnapshot` interface itself to do it (mutation evidence, #1316)
  */
 export function contractVersionOf(fieldNames: readonly string[]): string {
   return fnv1aHex(fieldNames.join(','));

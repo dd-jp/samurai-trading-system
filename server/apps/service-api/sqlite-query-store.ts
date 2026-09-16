@@ -90,7 +90,7 @@ interface DebateLogRow {
   direction: Direction;
   rounds: number;
   created_at: string;
-  /** #1396: `SELECT *` already returned these (migrations 0041/0051); this cast just named them. */
+  /** #1396: `SELECT *` already returned these (migrations 0041/0051); this cast just named them */
   termination: DebateTermination | null;
   termination_cause: DebateTerminationCause | null;
 }
@@ -153,12 +153,12 @@ interface AuditStageRow {
   stage: PipelineStage;
   decision: string;
   timestamp: string;
-  /** NULL for rows written before migration 0013, and for non-tick audit rows. */
+  /** NULL for rows written before migration 0013, and for non-tick audit rows */
   instrument: string | null;
   asset_class: AssetClass | null;
 }
 
-/** `closed_trades` joined with its `debate_log` row, for `getAttribution`'s single-query read. */
+/** `closed_trades` joined with its `debate_log` row, for `getAttribution`'s single-query read */
 interface AttributionRow extends ClosedTradeRow {
   debate_contributions_json: string;
 }
@@ -175,7 +175,7 @@ function fromDebateLogRow(row: DebateLogRow): DebateLog {
     // #1396: NULL on a pre-migration row (indeterminate, not "converged") or
     // a non-truncated row (there is no cause to report) — omitted rather than
     // `undefined` on the domain object (`exactOptionalPropertyTypes`), same
-    // convention as `DebateLog`'s own doc and `buildDebateLog`'s writer side.
+    // convention as `DebateLog`'s own doc and `buildDebateLog`'s writer side
     ...(row.termination === null ? {} : { termination: row.termination }),
     ...(row.termination_cause === null ? {} : { termination_cause: row.termination_cause }),
   };
@@ -220,20 +220,22 @@ const ZERO_METRICS: Omit<MetricsSuite, 'profit_factor' | 'expectancy'> = {
 };
 
 export class SqliteQueryStore implements DashboardQueryStore {
-  /** How far back `getAttribution` looks for closed trades. No home in the schema
+  /**
+   * How far back `getAttribution` looks for closed trades. No home in the schema
    * (`attribution_window_ms` is a `FeedbackConfig` field, not a persisted value) —
-   * taken as a constructor option, defaulting to the fixture's 30 days. */
-  /** #971: the Feedback Loop's own sample store, read (never written) here. */
+   * taken as a constructor option, defaulting to the fixture's 30 days.
+   */
+  /** #971: the Feedback Loop's own sample store, read (never written) here */
   private readonly armComparisons: SqliteArmComparisonSampleStore;
   private readonly outsideBenchmarks: SqliteOutsideBenchmarkSampleStore;
-  /** #1066: the Risk Manager's own critic log, read (never written) here. */
+  /** #1066: the Risk Manager's own critic log, read (never written) here */
   private readonly critics: SqliteRiskCriticStore;
-  /** #1108: the orchestrator's own alert-delivery-failure log, read (never written) here. */
+  /** #1108: the orchestrator's own alert-delivery-failure log, read (never written) here */
   private readonly alertDeliveryLog: SqliteAlertDeliveryLog;
   /**
    * #1140: the cap the orchestrator armed, read (never written) here — the
    * same store class its composition root writes through, so the denominator
-   * on the wire cannot be a second copy of the number this process invented.
+   * on the wire cannot be a second copy of the number this process invented
    */
   private readonly spendCap: SqliteLlmSpendCapStore;
 
@@ -531,7 +533,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
       const contributions = JSON.parse(row.debate_contributions_json) as AnalystContribution[];
       for (const contribution of contributions) {
         // Same correctness figure the Feedback Loop attributes on (#370 left
-        // `creditForContribution` with no tuning knobs to diverge over).
+        // `creditForContribution` with no tuning knobs to diverge over)
         const credit = creditForContribution(contribution, r, direction);
         rollingR.set(
           contribution.analyst_id,
@@ -547,7 +549,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     return summary;
   }
 
-  /** Scoped by `arm`, like `getAttribution` above. */
+  /** Scoped by `arm`, like `getAttribution` above */
   getDailyMetrics(asOf: Date, arm: TradingArm): MetricsSuite {
     const from = new Date(asOf.getTime() - 24 * 60 * 60 * 1000);
     const rows = this.db
@@ -564,7 +566,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
 
   getMark(instrument: string, asOf: Date): Mark {
     // Delegates so there is exactly one place that decides what a mark is and
-    // what a missing one does.
+    // what a missing one does
     return this.getMarks([instrument], asOf).get(instrument) as Mark;
   }
 
@@ -573,10 +575,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
     if (instruments.length === 0) return marks;
 
     // `latest_mark` upserts one row per instrument (no history) — the only
-    // truth available is the latest known mark, regardless of `asOf`.
+    // truth available is the latest known mark, regardless of `asOf`
     //
     // The placeholder list is built from `instruments.length`, never from the
-    // instrument strings themselves, so the values stay bound parameters.
+    // instrument strings themselves, so the values stay bound parameters
     const placeholders = instruments.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
@@ -596,7 +598,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     }
 
     // Per-instrument, in request order, so a missing mark fails exactly as the
-    // old per-position loop did rather than silently rendering a priceless row.
+    // old per-position loop did rather than silently rendering a priceless row
     for (const instrument of instruments) {
       if (!marks.has(instrument)) {
         throw new Error(`SqliteQueryStore.getMark: no mark for instrument "${instrument}"`);
@@ -634,7 +636,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `getArmComparisons` is: the orchestrator writes
    * `outside_benchmark_samples` through `SqliteOutsideBenchmarkSampleStore` and
    * this process reads it, and two hand-written copies of one row mapping is
-   * how a column gets dropped on one side.
+   * how a column gets dropped on one side
    */
   getOutsideBenchmarks(limit: number, asOf: Date): OutsideBenchmarkSample[] {
     return this.outsideBenchmarks.getRecent(limit, asOf);
@@ -647,14 +649,14 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // Never defaulted here: a fallback in this layer is the client's deleted
     // `LLM_SPEND_CAP_USD` moved one process left (#1140). `armedAt` is what
     // lets the wire tell "armed uncapped" apart from "never armed" (#1196) —
-    // see `SqliteLlmSpendCapStore.read`.
+    // see `SqliteLlmSpendCapStore.read`
     const cap = this.spendCap.read();
     return {
       last_24h: this.spendBetween(dayAgo, until),
       last_7d: this.spendBetween(weekAgo, until),
       // Open-ended lower bound rather than a sentinel date: an ISO TEXT
       // comparison against '' is true for every well-formed timestamp, but
-      // relying on that is a trick the next reader has to decode.
+      // relying on that is a trick the next reader has to decode
       all_time: this.spendBetween(null, until),
       cap_usd: cap.budgetUsd,
       cap_armed_at: cap.armedAt,
@@ -707,25 +709,25 @@ export class SqliteQueryStore implements DashboardQueryStore {
     //    (#1592), and like `getVerdictHistory` and `getRiskCritics` (#1318),
     //    which filter on `trace_id`, since `audit_log` has no `arm` column of
     //    its own). This is the source the lanes are built from, so a lane can
-    //    no longer be missing for an instrument whose trace is right there.
-    //  - `current_tick` in the window, LIVE ARM ONLY — see below.
+    //    no longer be missing for an instrument whose trace is right there
+    //  - `current_tick` in the window, LIVE ARM ONLY — see below
     //  - `latest_mark` — one upserted row per instrument the Market Data
     //    Service has PRICED, on demand rather than per tick. It is not the
     //    tick universe and never was; it is here so a priced instrument with
     //    no recent activity reads as an IDLE lane rather than vanishing (a
     //    closed market is the common, correct reason to be quiet). Arm-
-    //    agnostic pricing, present for both arms.
+    //    agnostic pricing, present for both arms
     //
     // No stage filter on the audit arm: any attributed audit row for the
     // named arm means the bot touched that instrument, so it belongs in the
     // universe. Whether it gets a TRACE is `pipelineEvents`' stage filter's
-    // job.
+    // job
     //
     // `active` decides who survives `maxLanes`, not who renders first: a
     // stale priced instrument must never evict an active one at the cap,
     // which is #1319's own failure mode arriving by a different door. The
     // outer ORDER BY restores lane order; wire order is `buildPipelineView`'s
-    // call.
+    // call
     //
     // An instrument has exactly one asset class. `GROUP BY instrument` plus
     // `MIN(asset_class)` is what makes a violation of that render the same way
@@ -733,12 +735,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // aggregate rather than a bare column, so nothing here rests on which row
     // SQLite happens to pick. `MIN` because it also sorts the conflicted lane
     // earliest below, so bad data cannot additionally cost it its lane at the
-    // cap.
+    // cap
     //
     // Arm filter on the `audit_log` leg (#1319, parameterized #1594):
     // `audit_log` carries no `debate_id` column (0001_init.sql, plus 0013's
     // two attribution columns), so unlike `getRiskCritics` there is only the
-    // one discriminator to apply, the same as `getVerdictHistory` (#1318).
+    // one discriminator to apply, the same as `getVerdictHistory` (#1318)
     // Excluded in the `WHERE` clause, ahead of the `GROUP BY`/`ORDER BY ...
     // LIMIT` cut: the other arm's tick-runner pass writes its own attributed
     // rows under a `trace_id` carrying `CONTROL_TRACE_SUFFIX` (`control-
@@ -747,7 +749,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // the tie-break and evict a genuinely named-arm one at the cap instead of
     // merely appearing beside it. This ticket owns only the `audit_log` leg;
     // the sibling `audit_log` query in `pipelineEvents` below carries the same
-    // predicate for its own newest-trace pick (#1326).
+    // predicate for its own newest-trace pick (#1326)
     //
     // `current_tick` LEG IS LIVE-ONLY, STRUCTURALLY, NOT BY FILTER (#1594):
     // the control arm is wired with its own `InMemoryCurrentTickStore`
@@ -764,7 +766,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // entirely for `arm === 'control'`, and `PipelineActivity.live` below is
     // `[]` for the same reason — a table this arm cannot write is not
     // queried on its behalf, matching ADR-0021's 2026-09-15 amendment
-    // ("Control arm: tick status is not persisted").
+    // ("Control arm: tick status is not persisted")
     const auditLegSql = `SELECT DISTINCT instrument, asset_class, 1 AS active FROM audit_log
                WHERE timestamp > ? AND timestamp <= ?
                  AND instrument IS NOT NULL AND asset_class IS NOT NULL
@@ -802,7 +804,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // takes the latest row unconditionally. A crash mid-tick deliberately
     // leaves the row behind (tick-runner.ts: a stale row must be visible, not
     // tidied away), and a lane that showed it forever would report a dead tick
-    // as running until that instrument next completed a tick.
+    // as running until that instrument next completed a tick
     const live: PipelineLiveTick[] =
       arm === 'control'
         ? []
@@ -822,7 +824,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
             // are tick-path. Excluded here rather than widened into
             // `PIPELINE_STAGES`, so the lanes keep meaning "where is the
             // decision", while `getTickStatus` (the telemetry strip's in-flight
-            // indicator) still reports the pass.
+            // indicator) still reports the pass
             .filter((row): row is PipelineTickRow & { stage: PipelineStage } => {
               return row.stage !== 'position_check';
             })
@@ -979,7 +981,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // One trace per instrument — a lane renders exactly one — and the newest
     // wins. Rows arrive oldest-first, because that ordering is load-bearing
     // for the stage sequence within a trace, so a later row simply overwrites
-    // the claim and the last trace seen is the one that survives.
+    // the claim and the last trace seen is the one that survives
     const chosenTrace = new Map<string, string>();
     for (const row of rows) {
       if (row.instrument !== null && laneInstruments.has(row.instrument)) {

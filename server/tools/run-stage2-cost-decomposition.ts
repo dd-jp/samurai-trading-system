@@ -69,7 +69,7 @@ import { makeAssetClass } from './stage2-support.js';
 /**
  * The exact window the committed 2026-08-05 verdict requested, to the
  * millisecond, so the effective window this intersects to — and therefore
- * every fold boundary — matches that run rather than merely resembling it.
+ * every fold boundary — matches that run rather than merely resembling it
  */
 export const PINNED_VERDICT_WINDOW: DateRange = STAGE2_PINNED_WINDOW;
 
@@ -85,7 +85,7 @@ export interface CostDecompositionDeps {
   print?: (line: string) => void;
 }
 
-/** One (config, asset class) pair, scored both ways. */
+/** One (config, asset class) pair, scored both ways */
 export interface CostDecompositionRow {
   config_hash: string;
   asset_class: 'crypto' | 'stocks';
@@ -115,9 +115,9 @@ export interface CostDecompositionResult {
   sensitivity: CostSensitivityPoint[];
 }
 
-/** The grid's score under one scaling of every cost coefficient. */
+/** The grid's score under one scaling of every cost coefficient */
 export interface CostSensitivityPoint {
-  /** Multiplier applied to all four coefficients of both asset classes. */
+  /** Multiplier applied to all four coefficients of both asset classes */
   scale: number;
   passes: number;
   stocks_bps: number;
@@ -179,7 +179,7 @@ export function scaleCostConfig(config: CostConfig, factor: number): CostConfig 
 /**
  * Scales each present rate field of each venue override by `factor` (#1017),
  * and copies rather than aliases so a caller mutating a scaled rung's
- * `venues` cannot reach back into the input `config` it was scaled from.
+ * `venues` cannot reach back into the input `config` it was scaled from
  */
 function scaleVenues(
   venues: NonNullable<CostConfig['venues']>,
@@ -207,7 +207,7 @@ export async function runCostDecomposition(
   const costConfig = deps.costConfig ?? PESSIMISTIC_COST_CONFIG;
 
   // DAILY, stated explicitly (#664): this script decomposes the costs of the
-  // recorded daily verdict runs, so it must keep replaying what they replayed.
+  // recorded daily verdict runs, so it must keep replaying what they replayed
   const store = new Stage2HistoricalStore(deps.polygonClient, {
     timeframe: DEFAULT_STAGE2_TIMEFRAME,
     dbPath: deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
@@ -246,7 +246,7 @@ export async function runCostDecomposition(
 
   // The net pass also captures each replay, in grid order, so costs can be
   // attributed afterwards from the same runs the metrics were computed on
-  // rather than from a third replay that might not be identical.
+  // rather than from a third replay that might not be identical
   const runs: ReplayRunResult[] = [];
   print('Scoring the 12-config grid NET of costs (reproducing the committed verdict)...');
   const net = await runTrialGrid({
@@ -277,7 +277,7 @@ export async function runCostDecomposition(
   // `makeEvaluator` exactly once per pushed result, in grid order, and both
   // passes iterate the same grid over the same asset classes. Asserted rather
   // than assumed, because a misalignment would attribute one config's costs to
-  // another's Sharpe and be invisible in the output.
+  // another's Sharpe and be invisible in the output
   if (net.length !== gross.length || net.length !== runs.length) {
     throw new Error(
       `Cost decomposition: net/gross/replay counts disagree (${net.length}/${gross.length}/` +
@@ -353,7 +353,7 @@ export async function runCostDecomposition(
     });
 
     // Averaged per asset class so the reported rate is the grid's, not one
-    // arbitrarily-chosen config's.
+    // arbitrarily-chosen config's
     const bps = { stocks: [] as number[], crypto: [] as number[] };
     for (const [i, result] of results.entries()) {
       const attribution = await attributeRunCosts(

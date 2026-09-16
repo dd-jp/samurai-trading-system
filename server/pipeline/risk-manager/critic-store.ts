@@ -50,7 +50,7 @@ interface RiskCriticRow {
   max_notional: number | null;
   reasoning: string;
   created_at: string;
-  /** NULL on every row written before the invalidation fold (migration 0040, #994). */
+  /** NULL on every row written before the invalidation fold (migration 0040, #994) */
   conditions_json: string | null;
   dropped_conditions_json: string | null;
 }
@@ -152,7 +152,7 @@ function readConditionsJson(
   return conditions;
 }
 
-/** Absent stays absent: an empty list is written as `[]`, so "never emitted" and "all dropped" stay distinguishable in the row. */
+/** Absent stays absent: an empty list is written as `[]`, so "never emitted" and "all dropped" stay distinguishable in the row */
 function writeJsonList(list: readonly unknown[] | undefined): string | null {
   return list === undefined ? null : JSON.stringify(list);
 }

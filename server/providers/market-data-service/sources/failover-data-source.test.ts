@@ -91,7 +91,7 @@ describe('FailoverDataSource', () => {
 
     // Asserted through `Bar.source`, not through the call count alone: the
     // point of the fallback is that the bars the tick reads carry the vendor
-    // that actually served them.
+    // that actually served them
     expect(bars.map((bar) => bar.source)).toEqual(['polygon']);
     expect(fallback.fetchBars).toHaveBeenCalledWith('SPY', WINDOW, ASOF);
   });
@@ -126,7 +126,7 @@ describe('FailoverDataSource', () => {
   it('propagates the primary error unchanged for an instrument with no fallback leg', async () => {
     // The crypto leg today: ADR-0015's 2026-08-16 amendment took crypto out of
     // Samurai's scope, so no live crypto fallback is wired and a crypto bar
-    // read must behave exactly as it did before this wrapper existed.
+    // read must behave exactly as it did before this wrapper existed
     const alert = vi.fn();
     const source = new FailoverDataSource({
       primary: primarySource({
@@ -167,7 +167,7 @@ describe('FailoverDataSource', () => {
 
   it('serves marks from the primary only, and does NOT fall back on a mark failure', async () => {
     // The load-bearing decision of this class: a mark prices an open position
-    // and arms a stop, so a delayed fallback feed must never serve one.
+    // and arms a stop, so a delayed fallback feed must never serve one
     const fallback = equitiesFallback();
     const source = new FailoverDataSource({
       primary: primarySource({
@@ -221,7 +221,7 @@ describe('FailoverDataSource', () => {
  * orchestrator's `Clock`. Nothing here waits on real time.
  */
 describe('FailoverDataSource — primary circuit breaker (#824)', () => {
-  /** A clock the test steps by hand; mirrors the `SimulatedClock` the live root passes in. */
+  /** A clock the test steps by hand; mirrors the `SimulatedClock` the live root passes in */
   function fakeClock(start = ASOF) {
     let at = start.getTime();
     return {
@@ -232,7 +232,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
     };
   }
 
-  /** A primary whose `fetchBars` fails or succeeds on demand, counting its calls. */
+  /** A primary whose `fetchBars` fails or succeeds on demand, counting its calls */
   function switchablePrimary() {
     let failing = true;
     const fetchBars = vi.fn(async (): Promise<Bar[]> => {
@@ -263,7 +263,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
       now: clock.now,
     });
 
-    // The threshold's worth of failures — each one DID pay the primary.
+    // The threshold's worth of failures — each one DID pay the primary
     for (let i = 0; i < FAILOVER_CIRCUIT_FAILURE_THRESHOLD; i += 1) {
       await source.fetchBars('SPY', WINDOW, ASOF);
     }
@@ -271,7 +271,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
 
     // The rest of the tick, well inside the cooldown. The fallback count
     // rising while the primary count does not is the whole assertion: a bare
-    // "primary not called" would also pass if the reads never happened.
+    // "primary not called" would also pass if the reads never happened
     const fallbackCallsBefore = fallback.fetchBars.mock.calls.length;
     for (let i = 0; i < 5; i += 1) {
       clock.advance(1_000);
@@ -284,7 +284,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
 
   it('opens on the leg, so a stall proven on one instrument spares the next one its timeout', async () => {
     // The per-LEG key, asserted rather than assumed: a per-instrument breaker
-    // would still have paid the primary for every other name in the universe.
+    // would still have paid the primary for every other name in the universe
     const clock = fakeClock();
     const primary = switchablePrimary();
     const source = new FailoverDataSource({
@@ -306,7 +306,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
 
   it('still alerts on an open-circuit read, naming the skip rather than going quiet', async () => {
     // The throttle downstream counts failovers to report the true stall rate;
-    // a silent skip would make a day-long stall look like it ended.
+    // a silent skip would make a day-long stall look like it ended
     const clock = fakeClock();
     const primary = switchablePrimary();
     const events: FailoverEvent[] = [];
@@ -347,12 +347,12 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
     primary.recover();
     clock.advance(FAILOVER_CIRCUIT_COOLDOWN_MS);
 
-    // The probe: primary touched once more, and it answers.
+    // The probe: primary touched once more, and it answers
     const probed = await source.fetchBars('SPY', WINDOW, ASOF);
     expect(probed.map((bar) => bar.source)).toEqual(['alpaca']);
     expect(primary.calls()).toBe(openedAtCalls + 1);
 
-    // Closed — every later read goes to the primary with no further cooldown.
+    // Closed — every later read goes to the primary with no further cooldown
     await source.fetchBars('SPY', WINDOW, ASOF);
     expect(primary.calls()).toBe(openedAtCalls + 2);
   });
@@ -374,7 +374,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
 
     // Four cooldowns of a stall that never lifts: exactly one probe each, so
     // the per-tick primary cost is one read rather than the universe's — and
-    // the door is never welded shut.
+    // the door is never welded shut
     let expected = primary.calls();
     for (let cycle = 0; cycle < 4; cycle += 1) {
       clock.advance(FAILOVER_CIRCUIT_COOLDOWN_MS);
@@ -382,13 +382,13 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
       expected += 1;
       expect(primary.calls()).toBe(expected);
 
-      // Mid-cooldown reads still skip.
+      // Mid-cooldown reads still skip
       clock.advance(FAILOVER_CIRCUIT_COOLDOWN_MS / 2);
       await source.fetchBars('SPY', WINDOW, ASOF);
       expect(primary.calls()).toBe(expected);
     }
 
-    // And it still closes whenever the vendor comes back.
+    // And it still closes whenever the vendor comes back
     primary.recover();
     clock.advance(FAILOVER_CIRCUIT_COOLDOWN_MS);
     const bars = await source.fetchBars('SPY', WINDOW, ASOF);
@@ -398,7 +398,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
   it('cannot stick open on a probe that never settles', async () => {
     // The one hole a `probing` flag has: a hung promise. After a further
     // cooldown the probe is presumed lost and a new one is admitted, so a
-    // single wedged request cannot hold the circuit open for a 14-day soak.
+    // single wedged request cannot hold the circuit open for a 14-day soak
     const clock = fakeClock();
     let hang = false;
     const fetchBars = vi.fn(async (): Promise<Bar[]> => {
@@ -419,20 +419,20 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
     const before = fetchBars.mock.calls.length;
 
     // The probe hangs. `fetchBars` never resolves, so it is deliberately not
-    // awaited — the read is left dangling exactly as it would be in life.
+    // awaited — the read is left dangling exactly as it would be in life
     hang = true;
     clock.advance(FAILOVER_CIRCUIT_COOLDOWN_MS);
     void source.fetchBars('SPY', WINDOW, ASOF);
     await Promise.resolve();
     expect(fetchBars.mock.calls.length).toBe(before + 1);
 
-    // While that one is plausibly still in flight, nobody else probes.
+    // While that one is plausibly still in flight, nobody else probes
     clock.advance(FAILOVER_CIRCUIT_COOLDOWN_MS / 2);
     await source.fetchBars('SPY', WINDOW, ASOF);
     expect(fetchBars.mock.calls.length).toBe(before + 1);
 
     // A whole further cooldown later it is presumed lost and a new probe runs
-    // — also left dangling, since the stalled primary hangs this one too.
+    // — also left dangling, since the stalled primary hangs this one too
     clock.advance(FAILOVER_CIRCUIT_COOLDOWN_MS);
     void source.fetchBars('SPY', WINDOW, ASOF);
     await Promise.resolve();
@@ -456,7 +456,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
     const before = primary.calls();
 
     // An NTP correction (or a rewound simulated clock) an hour backwards must
-    // not pin the breaker open for that hour.
+    // not pin the breaker open for that hour
     clock.advance(-60 * 60 * 1000);
     await source.fetchBars('SPY', WINDOW, ASOF);
     expect(primary.calls()).toBe(before + 1);
@@ -474,7 +474,7 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
     });
 
     // Threshold-minus-one failures, then a success, then threshold-minus-one
-    // again: without the reset the circuit would already be open here.
+    // again: without the reset the circuit would already be open here
     for (let i = 0; i < FAILOVER_CIRCUIT_FAILURE_THRESHOLD - 1; i += 1) {
       await source.fetchBars('SPY', WINDOW, ASOF);
     }
@@ -486,14 +486,14 @@ describe('FailoverDataSource — primary circuit breaker (#824)', () => {
     }
 
     // Every one of those reads reached the primary — the count never reached
-    // the threshold, because the success in the middle cleared it.
+    // the threshold, because the success in the middle cleared it
     const reads = 2 * (FAILOVER_CIRCUIT_FAILURE_THRESHOLD - 1) + 1;
     expect(primary.calls()).toBe(reads);
   });
 
   it('never breaks the circuit for an instrument that has no fallback', async () => {
     // Skipping the primary for an instrument with nowhere to route would turn
-    // a slow read into a guaranteed failure.
+    // a slow read into a guaranteed failure
     const clock = fakeClock();
     const primary = switchablePrimary();
     const source = new FailoverDataSource({

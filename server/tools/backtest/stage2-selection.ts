@@ -42,26 +42,26 @@ import type { DateRange } from './universe.js';
 export interface Stage2Selection {
   config_hash: string;
   asset_class: 'crypto' | 'stocks';
-  /** When the Stage 2 run that produced this was rendered. */
+  /** When the Stage 2 run that produced this was rendered */
   selected_at: Date;
-  /** The sample the backtest ran over — what makes staleness checkable. */
+  /** The sample the backtest ran over — what makes staleness checkable */
   window: DateRange;
   /**
    * The selected config's WHOLE-SAMPLE annualized Sharpe: the number
    * `backtest_reference_sharpe` has always meant, and the one live performance
-   * is compared against for divergence.
+   * is compared against for divergence
    */
   backtest_sharpe: number;
-  /** Mean of the walk-forward test-fold Sharpes — the out-of-sample estimate. */
+  /** Mean of the walk-forward test-fold Sharpes — the out-of-sample estimate */
   oos_sharpe: number;
-  /** The fold Sharpes themselves; `RevalidationSnapshot.walk_forward_sharpe_distribution`. */
+  /** The fold Sharpes themselves; `RevalidationSnapshot.walk_forward_sharpe_distribution` */
   fold_sharpes: number[];
-  /** Null where the verdict refused to compute it (a typed refusal, not a zero). */
+  /** Null where the verdict refused to compute it (a typed refusal, not a zero) */
   pbo: number | null;
   dsr: number | null;
-  /** Distinct trials the search spanned — what DSR was deflated by. */
+  /** Distinct trials the search spanned — what DSR was deflated by */
   n_trials: number;
-  /** The verdict's own overall pass/fail, carried so a reader need not re-derive it. */
+  /** The verdict's own overall pass/fail, carried so a reader need not re-derive it */
   overall_pass: boolean;
 }
 
@@ -97,7 +97,7 @@ export function selectionsFrom(deps: {
     );
     // The verdict already throws on this divergence; skipping rather than
     // throwing again keeps a persistence step from being the thing that fails
-    // a run whose statistics were fine.
+    // a run whose statistics were fine
     if (result === undefined) continue;
 
     selections.push({
@@ -118,7 +118,7 @@ export function selectionsFrom(deps: {
   return selections;
 }
 
-/** The same rule `computeDsr` selects by — highest out-of-sample Sharpe. */
+/** The same rule `computeDsr` selects by — highest out-of-sample Sharpe */
 function bestByOosSharpe(checks: readonly ConfigKillLineCheck[]): ConfigKillLineCheck {
   let best = checks[0] as ConfigKillLineCheck;
   for (const check of checks) {
@@ -127,7 +127,7 @@ function bestByOosSharpe(checks: readonly ConfigKillLineCheck[]): ConfigKillLine
   return best;
 }
 
-/** Null on a typed refusal — never a zero, which would read as a perfect PBO. */
+/** Null on a typed refusal — never a zero, which would read as a perfect PBO */
 function pboFor(verdict: Stage2Verdict, asset_class: 'crypto' | 'stocks'): number | null {
   for (const outcome of verdict.pbo) {
     if ('result' in outcome && outcome.asset_class === asset_class) {
@@ -137,7 +137,7 @@ function pboFor(verdict: Stage2Verdict, asset_class: 'crypto' | 'stocks'): numbe
   return null;
 }
 
-/** Null on a typed refusal — never a zero, which would read as a certainly-insignificant DSR. */
+/** Null on a typed refusal — never a zero, which would read as a certainly-insignificant DSR */
 function dsrFor(verdict: Stage2Verdict, asset_class: 'crypto' | 'stocks'): number | null {
   for (const outcome of verdict.dsr) {
     if ('result' in outcome && outcome.asset_class === asset_class) {

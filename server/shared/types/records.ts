@@ -28,10 +28,10 @@ export interface OrderIntent {
   instrument: string;
   asset_class: AssetClass;
   side: 'buy' | 'sell';
-  /** A reversal is exit-then-fresh-entry, not a single zero-crossing bracket. */
+  /** A reversal is exit-then-fresh-entry, not a single zero-crossing bracket */
   intent_type: 'entry' | 'scale_in' | 'exit';
   size: number;
-  /** Limit/entry price. */
+  /** Limit/entry price */
   entry: number;
   stop: number;
   target: number;
@@ -203,7 +203,7 @@ export interface OrderIntentMetadata {
   conviction: number;
   converged: boolean;
   sizing: {
-    /** After conviction scaling. */
+    /** After conviction scaling */
     base_risk_fraction: number;
     conviction_multiplier: number;
     /**
@@ -215,9 +215,9 @@ export interface OrderIntentMetadata {
      * present means this one had no effect on the intent.
      */
     vol_floor_factor: number;
-    /** 1.0 if converged. */
+    /** 1.0 if converged */
     non_converged_haircut: number;
-    /** 0.5-1.5, or 0.75 no-precedent default. */
+    /** 0.5-1.5, or 0.75 no-precedent default */
     cosine_multiplier: number;
     /**
      * ADR-0018 D3/D5's frozen bracket, as it was resolved for THIS decision
@@ -294,9 +294,9 @@ export interface OrderIntentMetadata {
  * matches "this kind of debate in this kind of market."
  */
 export interface SetupVector {
-  /** conviction, direction, converged, disagreement magnitude. */
+  /** conviction, direction, converged, disagreement magnitude */
   debate_features: number[];
-  /** volatility bucket, trend, key indicators at decision time. */
+  /** volatility bucket, trend, key indicators at decision time */
   market_features: number[];
 }
 
@@ -351,11 +351,11 @@ export type DebateTerminationCause = 'budget' | 'llm_failure';
  * (cross-spec-contracts.md registry #1).
  */
 export interface DebateLog {
-  /** Same deterministic hash Trader/Verdict/FL join on. */
+  /** Same deterministic hash Trader/Verdict/FL join on */
   debate_id: string;
   instrument: string;
   bar_timestamp: Date;
-  /** influence_score, stance, per analyst — read by FL's weight attribution. */
+  /** influence_score, stance, per analyst — read by FL's weight attribution */
   contributions: AnalystContribution[];
   direction: Direction;
   rounds: number;
@@ -421,7 +421,7 @@ export interface DebateLog {
  */
 export interface DebateRoundLogEntry {
   debate_id: string;
-  /** 1-indexed, matching `RoundVerdict.round`. */
+  /** 1-indexed, matching `RoundVerdict.round` */
   round: number;
   direction: Direction;
   confidence: number;
@@ -442,7 +442,7 @@ export interface VerdictLog {
   idempotency_key: string;
   instrument: string;
   status: 'go' | 'no_go';
-  /** The gate that fired; null iff `status === 'go'`. */
+  /** The gate that fired; null iff `status === 'go'` */
   no_go_reason: string | null;
   /**
    * What that gate measured, and the bound it broke (#1111) — signal age for
@@ -478,7 +478,7 @@ export interface VerdictLog {
 export type { OrderState } from '../../../contracts/index.js';
 
 // Also imported, not just re-exported: `export … from` publishes the name
-// without binding it locally, and `OpenPosition` below annotates with it.
+// without binding it locally, and `OpenPosition` below annotates with it
 import type { OrderState } from '../../../contracts/index.js';
 
 /**
@@ -501,7 +501,7 @@ export interface OpenPosition {
   instrument: string;
   asset_class: AssetClass;
   side: 'buy' | 'sell';
-  /** Exits close a lot; they never create one — hence no 'exit' here. */
+  /** Exits close a lot; they never create one — hence no 'exit' here */
   intent_type: 'entry' | 'scale_in';
   requested_size: number;
   /**
@@ -511,15 +511,15 @@ export interface OpenPosition {
    * yet. #83 advances it as fills arrive.
    */
   filled_size: number;
-  /** Zero until the first fill lands, for the same reason as `filled_size`. */
+  /** Zero until the first fill lands, for the same reason as `filled_size` */
   avg_entry_price: number;
-  /** Live protective legs; #83 resizes them to filled qty on partial fill. */
+  /** Live protective legs; #83 resizes them to filled qty on partial fill */
   stop: number;
   target: number;
   order_state: OrderState;
   broker_order_ids: string[];
   opened_at: Date;
-  /** The bar/decision time, carried from the OrderIntent. */
+  /** The bar/decision time, carried from the OrderIntent */
   decision_timestamp: Date;
   /**
    * Carried from the originating `OrderIntentMetadata` (#74). The Trader's
@@ -547,7 +547,7 @@ export interface OpenPosition {
   quote_ask?: number;
   /** (quote_bid + quote_ask) / 2 — a real midpoint of the SAME observed quote. Absent iff the pair is. */
   quote_mid?: number;
-  /** The quote's own timestamp — distinct from `decision_timestamp` and `opened_at` (pipeline latency separates all three). */
+  /** The quote's own timestamp — distinct from `decision_timestamp` and `opened_at` (pipeline latency separates all three) */
   quote_observed_at?: Date;
   /**
    * The modelled cost breakdown captured at submit time, via the same
@@ -727,21 +727,21 @@ export interface Fill {
  */
 export interface ClosedTrade {
   idempotency_key: string;
-  /** Attribution + setup-store join key. */
+  /** Attribution + setup-store join key */
   debate_id: string;
   instrument: string;
   asset_class: AssetClass;
   side: 'buy' | 'sell';
-  /** Avg entry, derived from the entry fills. */
+  /** Avg entry, derived from the entry fills */
   entry: number;
   /**
    * The INITIAL protective stop — the denominator of R, so it must be the
-   * risk the trade was opened against, not a later trailed level.
+   * risk the trade was opened against, not a later trailed level
    */
   stop: number;
-  /** → initial risk = |entry − stop| × filled_size. */
+  /** → initial risk = |entry − stop| × filled_size */
   filled_size: number;
-  /** Net of fees across every leg. */
+  /** Net of fees across every leg */
   realized_pnl_net: number;
   fees_total: number;
   opened_at: Date;

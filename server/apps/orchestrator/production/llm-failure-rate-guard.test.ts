@@ -78,7 +78,7 @@ describe('LlmFailureRateMonitor', () => {
   it('never fires on zero failures, whatever the rate argument claims', () => {
     // Defensive: total===0 makes the real call site pass rate=0, but the
     // latch's own zero-count re-arm must not accidentally treat a stale or
-    // malformed nonzero `rate` as a crossing when the count backing it is 0.
+    // malformed nonzero `rate` as a crossing when the count backing it is 0
     const monitor = new LlmFailureRateMonitor();
     expect(monitor.observe(0.9, true, 0)).toEqual({ alert: false });
   });
@@ -91,10 +91,10 @@ describe('LlmFailureRateMonitor', () => {
       const monitor = new LlmFailureRateMonitor();
 
       // t0: the storm hits. 3 llm_failure of 4 truncations, well over the
-      // floor and threshold — fires once.
+      // floor and threshold — fires once
       expect(monitor.observe(0.75, true, 3)).toEqual({ alert: true });
 
-      // t1: still elevated, same window shape — edge-triggered, stays silent.
+      // t1: still elevated, same window shape — edge-triggered, stays silent
       expect(monitor.observe(0.75, true, 3)).toEqual({ alert: false });
 
       // t2: the storm has mostly aged out of the trailing window. Only 1
@@ -104,12 +104,12 @@ describe('LlmFailureRateMonitor', () => {
       // window never again holds >= MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE
       // llm_failure rows at once. llm_failure count in-window is already 0
       // here (the storm's failing rows aged out ahead of its clean ones) —
-      // the fix clears on that alone, ignoring the sample floor.
+      // the fix clears on that alone, ignoring the sample floor
       expect(monitor.observe(0, false, 0)).toEqual({ alert: false });
 
       // t3: a second, independent storm arrives. Without the t2 clear this
       // would stay silent (latch already held) — proving the re-arm, not
-      // just the clear, is what the fix delivers.
+      // just the clear, is what the fix delivers
       expect(monitor.observe(0.6, true, 3)).toEqual({ alert: true });
     },
   );
@@ -239,7 +239,7 @@ describe('checkLlmFailureRate', () => {
     // this rejected it would become an unhandled rejection, which
     // `installFaultHandlers` (index.ts) treats as fatal and exits the
     // process. A transient DB error in this alerting side channel must
-    // never do that to a process holding open positions.
+    // never do that to a process holding open positions
     await expect(
       checkLlmFailureRate(
         {
@@ -274,7 +274,7 @@ describe('checkLlmFailureRate', () => {
     }
 
     // First failure, then the CHECK_FAILURE_LOG_EVERY-th — two lines out of
-    // CHECK_FAILURE_LOG_EVERY + 1 calls, not one per call.
+    // CHECK_FAILURE_LOG_EVERY + 1 calls, not one per call
     expect(entries).toHaveLength(2);
   });
 
@@ -303,7 +303,7 @@ describe('checkLlmFailureRate', () => {
 
     // Without the reset, the second outage's failure would land at streak
     // count 2 (neither `=== 1` nor a multiple of CHECK_FAILURE_LOG_EVERY) and
-    // stay silent — one line total, not two.
+    // stay silent — one line total, not two
     const failures = entries.filter((entry) => entry.event === 'llm_failure_rate_check_failed');
     expect(failures).toHaveLength(2);
   });

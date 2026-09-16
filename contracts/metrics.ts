@@ -31,11 +31,11 @@ export interface MetricsSuite {
    * system produces).
    */
   sharpe: number;
-  /** Downside-deviation denominator; same Lo-adjusted annualization. */
+  /** Downside-deviation denominator; same Lo-adjusted annualization */
   sortino: number;
-  /** Annualized return / max drawdown. */
+  /** Annualized return / max drawdown */
   calmar: number;
-  /** Worst peak-to-trough decline over the sample, as a positive fraction. */
+  /** Worst peak-to-trough decline over the sample, as a positive fraction */
   max_drawdown: number;
   /**
    * Gross wins / gross losses over the trades. `Number.POSITIVE_INFINITY`
@@ -44,11 +44,11 @@ export interface MetricsSuite {
    * this crosses the wire, where `Infinity` cannot survive `JSON.stringify`.
    */
   profit_factor: number;
-  /** (P_win × AvgWin) − (P_loss × AvgLoss), per trade, net of costs. */
+  /** (P_win × AvgWin) − (P_loss × AvgLoss), per trade, net of costs */
   expectancy: number;
-  /** Sample skew of the return series — a DSR input. */
+  /** Sample skew of the return series — a DSR input */
   skew: number;
-  /** Sample **excess** kurtosis (0 = normal) — a DSR input. */
+  /** Sample **excess** kurtosis (0 = normal) — a DSR input */
   kurtosis: number;
   /**
    * The **non-annualized** Sharpe — mean/stdev of the raw periodic returns,
@@ -77,9 +77,9 @@ export interface MetricsSuite {
    * statistic exists to prevent.
    */
   observations: number;
-  /** Traded notional / average capital over the sample. */
+  /** Traded notional / average capital over the sample */
   turnover: number;
-  /** Fraction of the sample with a position open. */
+  /** Fraction of the sample with a position open */
   exposure: number;
 }
 

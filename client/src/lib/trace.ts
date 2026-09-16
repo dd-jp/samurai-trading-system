@@ -1,7 +1,7 @@
 /**
  * The individual lookups the two join sequences are built from — private to
  * `resolve-trace.ts`, which owns the sequences and the provenance each join
- * carries.
+ * carries
  */
 import type {
   ClosedTradeRow,
@@ -15,7 +15,7 @@ import type {
   VerdictRow,
 } from '@contracts';
 
-/** Matches `trace_id` AND `instrument`; a `trace_id`-only match renders another instrument's lane, cells, outcome and timeline under this one's header (#1205). */
+/** Matches `trace_id` AND `instrument`; a `trace_id`-only match renders another instrument's lane, cells, outcome and timeline under this one's header (#1205) */
 export function laneFor(
   view: PipelineView,
   instrument: string,
@@ -63,7 +63,7 @@ export function traceBelongsToAnotherInstrument(
   );
 }
 
-/** Matches `trace_id` AND `instrument`; a `trace_id`-only match renders another instrument's verdict under this one's header (#1205). */
+/** Matches `trace_id` AND `instrument`; a `trace_id`-only match renders another instrument's verdict under this one's header (#1205) */
 export function verdictFor(
   verdicts: readonly VerdictRow[],
   traceId: string | null,
@@ -74,7 +74,7 @@ export function verdictFor(
     : verdicts.find((row) => row.trace_id === traceId && row.instrument === instrument);
 }
 
-/** Matches `trace_id` AND `instrument`; a looser match mis-attributes a row (#1066). */
+/** Matches `trace_id` AND `instrument`; a looser match mis-attributes a row (#1066) */
 export function riskCriticFor(
   critics: readonly RiskCriticRow[],
   traceId: string | null,

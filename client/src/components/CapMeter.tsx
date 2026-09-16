@@ -8,9 +8,9 @@ export interface CapMeterProps {
   value: number | undefined;
   cap: number | null;
   format: (n: number) => string;
-  /** Tone below the cap; at or above it the meter always reads `bad`. */
+  /** Tone below the cap; at or above it the meter always reads `bad` */
   tone: Exclude<MeterTone, 'bad'>;
-  /** What the note says when the meter cannot be drawn — the caller's own reason. */
+  /** What the note says when the meter cannot be drawn — the caller's own reason */
   emptyState: string;
   trackLabel: (fraction: number, value: number, cap: number) => string;
   footnote: (over: boolean) => ReactNode;

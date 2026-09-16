@@ -162,7 +162,7 @@ export interface TradingCalendar {
   sessionEnd(instant: Date): Date | null;
 }
 
-/** Crypto: 24/7, no session boundaries (spec Module: Ingestion & Sources). */
+/** Crypto: 24/7, no session boundaries (spec Module: Ingestion & Sources) */
 export class AlwaysOpenCalendar implements TradingCalendar {
   isOpen(_instant: Date): boolean {
     return true;
@@ -172,7 +172,7 @@ export class AlwaysOpenCalendar implements TradingCalendar {
     return true;
   }
 
-  /** 00:00 UTC of `instant`'s UTC day — crypto has no close to anchor to. */
+  /** 00:00 UTC of `instant`'s UTC day — crypto has no close to anchor to */
   sessionStart(instant: Date): Date {
     return new Date(
       Date.UTC(instant.getUTCFullYear(), instant.getUTCMonth(), instant.getUTCDate()),
@@ -203,7 +203,7 @@ export class AlwaysOpenCalendar implements TradingCalendar {
  * Exported for `alpaca-session-calendar.ts` (#684): the Alpaca-backed
  * calendar needs the same DST-aware Eastern wall-clock arithmetic this file
  * already built for `UsEquityRegularHoursCalendar`, and re-deriving it there
- * would be a second, driftable copy of the `Intl` fixpoint below.
+ * would be a second, driftable copy of the `Intl` fixpoint below
  */
 export const ET_ZONE = 'America/New_York';
 /**
@@ -265,7 +265,7 @@ export function toZonedTime(instant: Date, zone: string): ZonedInstant {
   const lookup = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((part) => part.type === type)?.value ?? '';
 
-  // Intl renders midnight as '24' in hour12:false; normalize it to 0.
+  // Intl renders midnight as '24' in hour12:false; normalize it to 0
   const hour = Number(lookup('hour')) % 24;
 
   return {
@@ -365,7 +365,7 @@ function zonedCivilFields(instant: Date, zone: string): ZonedCivilFields {
   };
 }
 
-/** `instant`'s zone wall-clock read back as if it were UTC — the DST-aware pivot. */
+/** `instant`'s zone wall-clock read back as if it were UTC — the DST-aware pivot */
 function wallClockAsUtc(instant: Date, zone: string): number {
   const { year, month, day, hour, minute, second } = zonedCivilFields(instant, zone);
 
@@ -378,7 +378,7 @@ export function toCivilDate(instant: Date, zone: string): ZonedCivilDate {
   return { year, month, day };
 }
 
-/** Civil-date arithmetic only — anchored in UTC, so DST never shortens the step. */
+/** Civil-date arithmetic only — anchored in UTC, so DST never shortens the step */
 export function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const previous = new Date(Date.UTC(year, month - 1, day) - MS_PER_DAY);
 
@@ -389,7 +389,7 @@ export function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCiv
   };
 }
 
-/** The mirror of `previousCivilDay`, for the forward walk `sessionEnd` needs. */
+/** The mirror of `previousCivilDay`, for the forward walk `sessionEnd` needs */
 export function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const next = new Date(Date.UTC(year, month - 1, day) + MS_PER_DAY);
 
@@ -400,7 +400,7 @@ export function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDa
   };
 }
 
-/** `2026-12-25` — the key both holiday tables below are written in. */
+/** `2026-12-25` — the key both holiday tables below are written in */
 export function civilDateKey({ year, month, day }: ZonedCivilDate): string {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
@@ -578,7 +578,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
     // reaches this predicate too. The two used to disagree: `isTradingDay`
     // said Thanksgiving had no session while `isOpen` reported 09:30-16:00 on
     // it — the same split-brain the `sessionStart`/`sessionEnd` walks avoid by
-    // asking `isTradingDay` rather than testing the weekend themselves.
+    // asking `isTradingDay` rather than testing the weekend themselves
     if (!this.isTradingDay(instant)) {
       return false;
     }
@@ -594,7 +594,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   /**
    * Keyed on the CIVIL DATE rather than the instant, so the early-close lookup
    * cannot depend on the time of day being asked about — 24 December closes at
-   * 13:00 whether the question is asked at 09:35 or at 15:59.
+   * 13:00 whether the question is asked at 09:35 or at 15:59
    */
   #closeMinutesFor(civilDate: ZonedCivilDate): number {
     const key = civilDateKey(civilDate);
@@ -685,7 +685,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
 
 const LSE_OPEN_MINUTES = 8 * 60; // 08:00 London
 const LSE_CLOSE_MINUTES = 16 * 60 + 30; // 16:30 London
-/** Christmas Eve and New Year's Eve close early; the auction ends 12:30. */
+/** Christmas Eve and New Year's Eve close early; the auction ends 12:30 */
 const LSE_HALF_DAY_CLOSE_MINUTES = 12 * 60 + 30;
 
 /**
@@ -803,7 +803,7 @@ export const LSE_HALF_DAYS = new Set([
   '2027-12-24',
   '2027-12-31',
   // 2028: no entries — 24 and 31 December 2028 both fall on a Sunday, so
-  // neither qualifies (half-days apply only when the date is a weekday).
+  // neither qualifies (half-days apply only when the date is a weekday)
 ]);
 
 /**
@@ -917,7 +917,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     return !WEEKEND.has(toZonedTime(instant, LONDON_ZONE).weekday);
   }
 
-  /** The most recent close at or before `instant` — the accounting boundary. */
+  /** The most recent close at or before `instant` — the accounting boundary */
   sessionStart(instant: Date): Date {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 
@@ -963,7 +963,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   /**
    * Keyed on the CIVIL DATE rather than on the instant, so the half-day lookup
    * cannot depend on the time of day being asked about — the close of
-   * 24 December is 12:30 whether the question is asked at 09:00 or at 16:00.
+   * 24 December is 12:30 whether the question is asked at 09:00 or at 16:00
    */
   #closeMinutesFor(civilDate: ZonedCivilDate): number {
     return LSE_HALF_DAYS.has(civilDateKey(civilDate))
@@ -995,9 +995,9 @@ export class LseRegularHoursCalendar implements TradingCalendar {
  */
 const MINUTES_PER_DAY = 24 * 60;
 
-/** 14:30 London — the US cash open, and the start of the overlap (#706). */
+/** 14:30 London — the US cash open, and the start of the overlap (#706) */
 export const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
-/** 15:45 London — last entry, leaving 40 minutes to the 16:25 flatten (#706). */
+/** 15:45 London — last entry, leaving 40 minutes to the 16:25 flatten (#706) */
 export const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
 
 /**
@@ -1030,7 +1030,7 @@ export function londonEntryWindow(
   // ordering check and yields a window that is silently ALWAYS or NEVER true —
   // the first arms entries for the whole session, the second deletes them, and
   // both look like a working config. Reject the out-of-range value at
-  // construction, where the caller still knows what it meant.
+  // construction, where the caller still knows what it meant
   for (const [name, value] of [
     ['startMinutes', startMinutes],
     ['endMinutes', endMinutes],

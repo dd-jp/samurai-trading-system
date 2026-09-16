@@ -58,7 +58,7 @@ export function describeThrown(error: unknown): string {
     const rendered = JSON.stringify(value);
     if (typeof rendered === 'string') return rendered;
   } catch {
-    // Falls through to String() below.
+    // Falls through to String() below
   }
   return String(value);
 }
@@ -98,7 +98,7 @@ export function describeThrownSafely(error: unknown): string {
   } catch {
     // Same placeholder `logCaughtFailure` below uses for the identical case —
     // one spelling for "the value could not be rendered at all", so a log
-    // line, a divergence reason and an alert body all read the same.
+    // line, a divergence reason and an alert body all read the same
     return '[unrenderable error]';
   }
 }
@@ -119,11 +119,11 @@ export function safeLog(logger: Logger, entry: LogEntry): void {
   try {
     logger.log(entry);
   } catch {
-    // Nothing left to do — see doc comment above.
+    // Nothing left to do — see doc comment above
   }
 }
 
-/** The parts of a `LogEntry` fixed at the call site — everything but the payload. */
+/** The parts of a `LogEntry` fixed at the call site — everything but the payload */
 export type CaughtFailureLogTemplate = LogEntryTemplate;
 
 /**

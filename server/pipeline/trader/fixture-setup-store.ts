@@ -10,7 +10,7 @@ import type { SetupNeighbor, SetupStore, SetupVector } from '../../shared/index.
 export class FixtureSetupStore implements SetupStore {
   private readonly neighbors: SetupNeighbor[];
   private readonly written: Array<{ debateId: string; vector: SetupVector; decidedAt: Date }> = [];
-  /** Setups written but not yet labelled — findNeighbors cannot see these (point-in-time). */
+  /** Setups written but not yet labelled — findNeighbors cannot see these (point-in-time) */
   private readonly pending = new Map<string, { vector: SetupVector; decidedAt: Date }>();
 
   constructor(neighbors: SetupNeighbor[] = []) {
@@ -52,7 +52,7 @@ export class FixtureSetupStore implements SetupStore {
     this.neighbors.push({ vector: entry.vector, r_multiple: rMultiple, closed_at: closedAt });
   }
 
-  /** Test-only accessor for asserting on writes. */
+  /** Test-only accessor for asserting on writes */
   getWritten(): ReadonlyArray<{ debateId: string; vector: SetupVector; decidedAt: Date }> {
     return this.written;
   }

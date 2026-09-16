@@ -50,7 +50,7 @@ export class LoggingFlattenOverfillAlertChannel implements FlattenOverfillAlertC
       // control arms post through this SAME instance, so the id of the surface
       // `ingestFills()` ran on is the only thing in the line that tells a
       // real venue's drop from a simulated broker's. See
-      // `FlattenOverfillWarning.trace_id`.
+      // `FlattenOverfillWarning.trace_id`
       trace_id: warning.trace_id,
       stage: 'execution',
       event: 'flatten_overfill_dropped',

@@ -109,7 +109,7 @@ function makeTradingCalendar(isOpen = true): TradingCalendar {
     isOpen: () => isOpen,
     isTradingDay: () => true,
     sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
-    // #668 — this double predates `sessionEnd`; no test here asks about it.
+    // #668 — this double predates `sessionEnd`; no test here asks about it
     sessionEnd: () => null,
   };
 }
@@ -148,11 +148,11 @@ describe('NotifyingVerdict.decide', () => {
     // no-go on the trade channel, and that predates ADR-0007 (no human in the
     // loop) and ADR-0008 (the cadence). Together they make "every no-go" ~300
     // Telegram messages a day: alert fatigue by construction, and the failure
-    // #342 split the heartbeat chat to avoid.
+    // #342 split the heartbeat chat to avoid
     //
     // The decision is still returned and still written to `verdict_log` by
     // `LoggingVerdict` — this changes what INTERRUPTS someone, not what is
-    // recorded.
+    // recorded
     const notifier = makeNotifier();
     const verdict = new NotifyingVerdict(new VerdictImpl(), notifier);
     const input = makeInput({

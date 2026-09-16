@@ -11,7 +11,7 @@ import type { PositionRow } from '@contracts';
 
 export interface OpenRiskRow {
   position: PositionRow;
-  /** `filled_size × mark_price` — what the position is worth now. */
+  /** `filled_size × mark_price` — what the position is worth now */
   notional: number;
   /**
    * Fraction of the mark price between here and the stop, in the direction

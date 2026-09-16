@@ -131,7 +131,7 @@ const DEFAULT_PACING = { capacity: 2, refillPerSecond: 0.2 } as const;
  */
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
-/** Guards a decompression bomb: 10.5MB observed, 512MB refused. */
+/** Guards a decompression bomb: 10.5MB observed, 512MB refused */
 const MAX_INFLATED_BYTES = 512 * 1024 * 1024;
 
 /**
@@ -150,7 +150,7 @@ const MAX_INFLATED_BYTES = 512 * 1024 * 1024;
  */
 const MAX_MANIFEST_BYTES = 64 * 1024;
 
-/** GKG 2.1 column indices, named once. */
+/** GKG 2.1 column indices, named once */
 const COL = {
   recordId: 0,
   date: 1,
@@ -160,24 +160,24 @@ const COL = {
   tone: 15,
 } as const;
 
-/** The row is unusable below this many columns. */
+/** The row is unusable below this many columns */
 const MIN_COLUMNS = COL.tone + 1;
 
-/** One GKG document that matched the theme watchlist. */
+/** One GKG document that matched the theme watchlist */
 export interface GdeltGkgRecord {
   /** GKGRECORDID, e.g. `20260815153000-0`. Unique within GDELT. */
   native_id: string;
   /**
    * The batch this row was published in — GDELT's knowledge time AND ours,
    * which is why the archive stamps GDELT rows `fidelity: 'live'` even when
-   * backfilled (`mi-archive-store.ts:48`).
+   * backfilled (`mi-archive-store.ts:48`)
    */
   batch_time: Date;
   source_name: string;
   document_url: string;
   /** V1THEMES, split. Retains every theme on the row, not just matched ones. */
   themes: string[];
-  /** V1.5TONE's first field: average tone, roughly [-100, +100], usually ±10. */
+  /** V1.5TONE's first field: average tone, roughly [-100, +100], usually ±10 */
   tone: number;
   /**
    * What the archive stores: the six read columns, tab-joined in column order
@@ -219,9 +219,9 @@ export interface GdeltGkgBatch {
   batch_time: Date;
   /** The timestamped file URL. Recorded so a wider re-derivation can re-fetch. */
   file_url: string;
-  /** Rows matching the watchlist. */
+  /** Rows matching the watchlist */
   records: GdeltGkgRecord[];
-  /** Rows in the file before filtering — lets a caller see the match rate. */
+  /** Rows in the file before filtering — lets a caller see the match rate */
   scanned: number;
 }
 
@@ -229,7 +229,7 @@ export interface GdeltGkgClientOptions {
   baseUrl?: string | undefined;
   fetchImpl?: typeof fetch;
   rateLimiter?: TokenBucket;
-  /** Overrides the watchlist; defaults to `allWatchedThemes()`. */
+  /** Overrides the watchlist; defaults to `allWatchedThemes()` */
   themes?: readonly string[] | undefined;
 }
 
@@ -254,13 +254,13 @@ function parseGdeltStamp(stamp: string): Date | undefined {
   // Range-checked BEFORE `Date.UTC`, because `Date.UTC` normalises rather than
   // rejecting: month 99 rolls forward into a later year and returns a perfectly
   // valid number, so a NaN guard alone never fires and a corrupt stamp becomes a
-  // silently shifted `batch_time` — which is a cursor that skips real batches.
+  // silently shifted `batch_time` — which is a cursor that skips real batches
   if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   if (hour > 23 || minute > 59 || second > 59) return undefined;
   const ms = Date.UTC(year, month - 1, day, hour, minute, second);
   const date = new Date(ms);
   // Catches day 31 in a 30-day month, which the coarse range check above lets
-  // through and `Date.UTC` rolls into the 1st of the next month.
+  // through and `Date.UTC` rolls into the 1st of the next month
   return date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : undefined;
 }
 
@@ -320,14 +320,14 @@ function unzipFirstEntry(buffer: Buffer): string {
   let inflated: Buffer;
   if (method === 8) {
     // Deflate is self-terminating, so running the subarray past this member's
-    // end is harmless — the inflater stops at the stream's end marker.
+    // end is harmless — the inflater stops at the stream's end marker
     inflated = inflateRawSync(body, { maxOutputLength: MAX_INFLATED_BYTES });
   } else if (method === 0) {
     // Stored data is NOT self-terminating: `body` runs to the end of the whole
     // buffer, so returning it verbatim appends the central directory and EOCD to
     // the CSV as binary garbage. The local header's compressed size bounds it.
     // Zero there means the size lives in a trailing data descriptor, which this
-    // decoder does not read — refuse rather than guess.
+    // decoder does not read — refuse rather than guess
     const compressedSize = buffer.readUInt32LE(18);
     if (compressedSize === 0) {
       throw new Error(
@@ -337,7 +337,7 @@ function unzipFirstEntry(buffer: Buffer): string {
     // `subarray` CLAMPS rather than throwing, so a truncated download would
     // yield a short CSV that `parseBatch` reads as a complete batch with rows
     // silently missing — the one failure mode worse than an error here, because
-    // a batch is allowed to be small and nothing downstream could tell.
+    // a batch is allowed to be small and nothing downstream could tell
     if (compressedSize > body.length) {
       throw new Error(
         `GdeltGkgClient: stored zip entry declares ${compressedSize} bytes but only ` +
@@ -363,7 +363,7 @@ function unzipFirstEntry(buffer: Buffer): string {
   // need threading through both public methods to compare), it is CHECKED
   // against the bytes actually inflated rather than a value fetched
   // separately, and `crc32` on a ~10.5MB buffer is sub-millisecond — the
-  // measured cost this item asked to weigh is negligible either way.
+  // measured cost this item asked to weigh is negligible either way
   const actualCrc = crc32(inflated);
   if (actualCrc !== declaredCrc) {
     throw new Error(
@@ -411,7 +411,7 @@ export class GdeltGkgClient {
     }
     // Refused BEFORE `text()` where the server declares a length, mirroring
     // `fetchBatch`'s two-step guard on `MAX_ARCHIVE_BYTES` — see
-    // `MAX_MANIFEST_BYTES` for why neither check is a true streaming bound.
+    // `MAX_MANIFEST_BYTES` for why neither check is a true streaming bound
     const declaredLength = Number(response.headers.get('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > MAX_MANIFEST_BYTES) {
       throw new Error(
@@ -430,7 +430,7 @@ export class GdeltGkgClient {
     // Three lines — export, mentions, gkg — each `size md5 url`. Matching on the
     // suffix rather than the line index: the order is conventional, not
     // contractual, and picking the wrong file would parse a totally different
-    // schema against GKG column indices.
+    // schema against GKG column indices
     for (const line of text.split('\n')) {
       const url = line.trim().split(/\s+/).at(2);
       if (url?.endsWith('.gkg.csv.zip') === true) return this.pinToBaseUrl(url);
@@ -468,7 +468,7 @@ export class GdeltGkgClient {
     // stamp on `.gkg.csv.zip$`, so preserving a `?` would produce a URL this
     // module pins happily and then cannot stamp — the two methods have to agree
     // on what a batch URL looks like. GDELT's batch URLs carry no query, so
-    // there is nothing real to lose.
+    // there is nothing real to lose
     return `${base.protocol}//${base.host}${named.pathname}`;
   }
 
@@ -493,7 +493,7 @@ export class GdeltGkgClient {
     // `url`, not `fileUrl`, in every diagnostic below: the request actually
     // goes to the pinned rewrite — different protocol, query dropped — so
     // citing the pre-pin argument would name a URL we never fetched. This
-    // module's whole point is that the two are different things.
+    // module's whole point is that the two are different things
     const url = this.pinToBaseUrl(fileUrl);
     const batchTime = batchTimeFromUrl(url);
     if (batchTime === undefined) {
@@ -511,7 +511,7 @@ export class GdeltGkgClient {
     // oversized body is never materialised. A missing or lying `content-length`
     // falls through to the post-allocation check below — this bounds the honest
     // case, which is the one that actually threatens us (GDELT publishing a
-    // batch an order of magnitude larger), not a hostile server.
+    // batch an order of magnitude larger), not a hostile server
     const declared = Number(response.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > MAX_ARCHIVE_BYTES) {
       throw new Error(
@@ -529,11 +529,11 @@ export class GdeltGkgClient {
 
     const csv = unzipFirstEntry(buffer);
     // `url`, not `fileUrl`: the batch's recorded provenance must be the URL we
-    // actually downloaded, not the one a manifest suggested.
+    // actually downloaded, not the one a manifest suggested
     return this.parseBatch(csv, batchTime, url);
   }
 
-  /** Convenience: whatever GDELT published most recently. */
+  /** Convenience: whatever GDELT published most recently */
   async fetchLatestBatch(signal?: AbortSignal): Promise<GdeltGkgBatch> {
     return this.fetchBatch(await this.latestBatchUrl(signal), signal);
   }
@@ -565,7 +565,7 @@ export class GdeltGkgClient {
       if (!themes.some((theme) => this.themes.has(theme))) continue;
 
       // V1.5TONE is `tone,positive,negative,polarity,…`; only the first field is
-      // the average tone #556 scores on.
+      // the average tone #556 scores on
       const tone = Number.parseFloat((fields[COL.tone] ?? '').split(',')[0] ?? '');
       if (!Number.isFinite(tone)) continue;
 
@@ -574,7 +574,7 @@ export class GdeltGkgClient {
 
       // Column 1 is the row's own stamp. It equals the file stamp in every
       // sampled batch; the FILE's stamp wins when they disagree, because that
-      // is the one the archive's cursor and the replay window are keyed on.
+      // is the one the archive's cursor and the replay window are keyed on
       records.push({
         native_id: nativeId,
         batch_time: batchTime,

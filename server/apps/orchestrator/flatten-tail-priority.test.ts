@@ -16,7 +16,7 @@ describe('orderHeldFirst (#1390)', () => {
   it('moves held instruments ahead of flat ones, preserving each group order', () => {
     // Mirrors the incident's fixed universe order: QQQ and AAPL already led,
     // but held lots further back (TSLA, META) queued behind flat names ahead
-    // of them (AAPL..META spans several flats in DEFAULT_UNIVERSE).
+    // of them (AAPL..META spans several flats in DEFAULT_UNIVERSE)
     const instruments = at('QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD', 'META');
     const held = new Set(['QQQ', 'TSLA', 'META']);
 
@@ -65,7 +65,7 @@ describe('orderHeldFirst (#1390)', () => {
   it('is stable within the held group when held membership repeats across a wider plan', () => {
     // Matches the ticket's 9-held-of-20 shape closely enough to pin ordering:
     // held members scattered through the fixed order come out in THEIR
-    // original relative order, not resorted.
+    // original relative order, not resorted
     const instruments = at(
       'QQQ',
       'AAPL',
@@ -123,7 +123,7 @@ function tailArrivalOrder(plan: TickPlan): {
   // not an order this helper imposes. A throughput ceiling ("the window
   // allows N tails") is then just the first N entries of this array, applied
   // by the caller AFTER the pass settles, so the ceiling can never leak back
-  // into which instrument gets which turn.
+  // into which instrument gets which turn
   const order: string[] = [];
   const runner: TickRunner = {
     async runInstrument(signal, ctx) {
@@ -173,10 +173,10 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
 
       // Fixed order: QQQ, AAPL, TSLA, NVDA, AMD get the first 5 turns — only
       // the first two are held, matching the incident's own "the two that sat
-      // first in the list are the two that flattened".
+      // first in the list are the two that flattened"
       expect(fixed.order().slice(0, budget)).toEqual(['QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
       expect(fixedHeldReached).toEqual(['QQQ', 'AAPL']);
-      // Held-first: the first 5 turns all go to held instruments.
+      // Held-first: the first 5 turns all go to held instruments
       expect(reorderedHeldReached).toEqual(['QQQ', 'AAPL', 'AMZN', 'NFLX', 'SMCI']);
       expect(reorderedHeldReached.length).toBeGreaterThan(fixedHeldReached.length);
     },
@@ -186,7 +186,7 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
     // 20 instruments, 9 held: the universe is larger than 9, so the tail
     // cannot serve everyone — but held-first ordering means "cannot serve
     // everyone" only ever costs FLAT instruments once the budget covers the
-    // held count.
+    // held count
     const budget = HELD.size;
 
     const reordered = orderHeldFirst(universe, HELD);
@@ -196,7 +196,7 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
     expect(new Set(withFix.order().slice(0, budget))).toEqual(HELD);
 
     // The fixed order, unpatched, misses most of them at the identical
-    // budget — the defect this criterion exists to close.
+    // budget — the defect this criterion exists to close
     const unpatched = tailArrivalOrder({ instruments: universe, tick_time: tickTime });
     await unpatched.pending;
     const unpatchedHeldReached = unpatched
@@ -238,7 +238,7 @@ describe('dispatch order at incident scale, the coordinate control-arm flattens 
       async runInstrument(signal, ctx) {
         // Recorded as the FIRST statement, before any await — this is
         // dispatch order, the coordinate the control arm's own eager,
-        // un-sequenced flatten hook actually runs on.
+        // un-sequenced flatten hook actually runs on
         dispatchOrder.push(signal.asset);
         await ctx.beginPortfolioTail?.();
         return { trace_id: ctx.trace_id, final_stage: 'execution' };
@@ -263,7 +263,7 @@ describe('dispatch order at incident scale, the coordinate control-arm flattens 
       },
     );
 
-    // Every held instrument's dispatch precedes every flat instrument's.
+    // Every held instrument's dispatch precedes every flat instrument's
     const heldDispatchIndices = dispatchOrder
       .map((asset, index) => ({ asset, index }))
       .filter(({ asset }) => HELD.has(asset))
@@ -311,7 +311,7 @@ describe('a held lot flattens without waiting on a blocking flat instrument (#13
     };
 
     // QQQ (held) reordered ahead of AAPL (flat, blocking) even though AAPL
-    // sits first in DEFAULT_UNIVERSE.
+    // sits first in DEFAULT_UNIVERSE
     const plan: TickPlan = {
       instruments: orderHeldFirst(
         [
@@ -334,7 +334,7 @@ describe('a held lot flattens without waiting on a blocking flat instrument (#13
     });
 
     // QQQ's tail settles without ever waiting for AAPL's blocked debate —
-    // observed here by yielding one macrotask while AAPL is still stuck.
+    // observed here by yielding one macrotask while AAPL is still stuck
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(heldReachedTail).toBe(true);
 

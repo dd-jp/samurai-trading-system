@@ -35,7 +35,7 @@ import { Track } from '../Track.tsx';
 
 export interface ReviewTabProps {
   snapshot: WireSnapshot;
-  /** The selected closed trade's `idempotency_key`. */
+  /** The selected closed trade's `idempotency_key` */
   selectedKey: string | null;
   onSelect: (key: string) => void;
 }
@@ -85,7 +85,7 @@ function profitFactorText(pf: MetricsSuiteWire['profit_factor']): string {
       // independent, and this keeps both. The returned words match
       // `'unreadable'` above exactly (review round 2, NIT): raw JSON on an
       // operator's tile would be a second unreadable-looking failure mode
-      // layered on top of the first.
+      // layered on top of the first
       const unreachable: never = pf;
       void unreachable;
       return 'could not be read';
@@ -170,7 +170,7 @@ function armVerdictState(row: ArmComparisonRow): ArmVerdictState {
   // `diverged` ALONE. `divergence_reason` is `null` exactly when `diverged` is
   // false (`contracts/snapshot.ts`), so a divergence carrying no reason is a
   // wire-contract violation — and requiring the reason here rendered it as
-  // "Did not diverge", the one reassurance this panel exists to withhold.
+  // "Did not diverge", the one reassurance this panel exists to withhold
   if (row.diverged) return 'diverged';
   if (isBelowTradeFloor(row)) return 'below-floor';
   return 'ok';
@@ -182,7 +182,7 @@ const ARM_TREND_CLASS: Readonly<Record<ArmVerdictState, string>> = {
   ok: '',
 };
 
-/** The one sentence the sample earns: FL's own divergence reason, the floor, or "did not diverge". */
+/** The one sentence the sample earns: FL's own divergence reason, the floor, or "did not diverge" */
 function ArmVerdict({ row }: { row: ArmComparisonRow }) {
   const state = armVerdictState(row);
   if (state === 'diverged') {
@@ -241,7 +241,7 @@ function RefusedPassNotTracked({ row }: { row: ArmComparisonRow }) {
 /**
  * `dropped/seen (rate)` per exit class for one arm — `null` when this row
  * predates migration 0065, which `CostBasisDrops` below states once for the
- * whole row rather than twice under two arms.
+ * whole row rather than twice under two arms
  */
 function dropSummary(arm: ArmPerformanceWire): string | null {
   const drops = arm.cost_basis_drops;
@@ -251,7 +251,7 @@ function dropSummary(arm: ArmPerformanceWire): string | null {
   const classes = EXIT_CLASSES_WIRE.map((exitClass) => {
     const { kept, dropped } = drops[exitClass];
     const seen = kept + dropped;
-    // No rate for a class nothing closed — `0.0%` would assert one.
+    // No rate for a class nothing closed — `0.0%` would assert one
     const rate = seen === 0 ? 'n/a' : formatPercent(dropped / seen, 1);
     return `${exitClass} ${formatCount(dropped)}/${formatCount(seen)} (${rate})`;
   });
@@ -512,7 +512,7 @@ function TradeRow(props: {
   // Same hook `TraceSections.tsx`'s `DebateSection` sets (#1080's
   // "only one renderer set the data-degraded hook" gap, docs/coding-
   // standards.md) — both renderers of the same `debateDegradedGloss` result
-  // must expose it in the DOM, not just in this row's joined text.
+  // must expose it in the DOM, not just in this row's joined text
   const degraded = debate !== undefined && debateDegradedGloss(debate) !== null;
   return (
     <li>

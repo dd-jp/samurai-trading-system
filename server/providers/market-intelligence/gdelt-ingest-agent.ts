@@ -46,7 +46,7 @@ import {
   type GdeltGkgClient,
 } from './sources/gdelt-gkg-client.js';
 
-/** The archive `source` key for every GDELT row. */
+/** The archive `source` key for every GDELT row */
 export const SOURCE_GDELT = MI_SOURCES.gdeltGkg;
 
 export interface GdeltIngestAgentDeps {
@@ -117,7 +117,7 @@ export class GdeltIngestAgent {
     if (logger !== undefined) safeLog(logger, entry);
   }
 
-  /** `log`, for the two catch blocks whose thrown value IS the diagnostic. */
+  /** `log`, for the two catch blocks whose thrown value IS the diagnostic */
   private logFailure(
     template: LogEntryTemplate,
     error: unknown,
@@ -127,7 +127,7 @@ export class GdeltIngestAgent {
     if (logger !== undefined) logCaughtFailure(logger, template, error, payload);
   }
 
-  /** The later of the persisted write cursor and this process's seen-batch mark. */
+  /** The later of the persisted write cursor and this process's seen-batch mark */
   private effectiveCursor(): Date | undefined {
     const written = this.deps.archive.latestUpdatedAt(SOURCE_GDELT);
     if (written === undefined) return this.seenBatch;
@@ -230,7 +230,7 @@ export class GdeltIngestAgent {
     // fetch. Inside the try below it would have been caught and logged as
     // "GDELT batch fetch failed", which is the wrong cause: nothing was
     // fetched. Left outside, it propagates to `refresh`'s blanket catch, which
-    // logs it under its own name instead.
+    // logs it under its own name instead
     const cursor = this.effectiveCursor();
     let batch: GdeltGkgBatch;
     try {
@@ -243,7 +243,7 @@ export class GdeltIngestAgent {
         // throw, log a second and contradictory "fetch failed" warn for the
         // same cause, and pay a rate-limiter slot on the way. Silent
         // degradation looks identical to a steady stream of fresh batches, so
-        // it is logged rather than inferred.
+        // it is logged rather than inferred
         this.log({
           trace_id,
           stage: 'market_intelligence',
@@ -259,7 +259,7 @@ export class GdeltIngestAgent {
       // Checked BEFORE the download, not after: at a 15-minute tick against a
       // 15-minute publication cadence, a restart or a fast tick will often see
       // the batch it already holds, and re-downloading 3.4MB to discard it is
-      // the whole saving the cursor exists for.
+      // the whole saving the cursor exists for
       if (cursor !== undefined && candidate <= cursor) return false;
       batch = await this.deps.client.fetchBatch(url, signal);
     } catch (error) {
@@ -280,10 +280,10 @@ export class GdeltIngestAgent {
     }
 
     if (batch.records.length === 0) {
-      // Not an error — a 15-minute window genuinely can carry no macro news.
+      // Not an error — a 15-minute window genuinely can carry no macro news
       // Logged with the scan count because a filter that has started matching
       // nothing at all looks identical to a quiet news window from the outside,
-      // and only the ratio tells them apart.
+      // and only the ratio tells them apart
       this.log({
         trace_id,
         stage: 'market_intelligence',
@@ -305,7 +305,7 @@ export class GdeltIngestAgent {
     // when we actually held the bytes. A stamp taken before a fetch that this
     // module's own docs say can stall for up to 90 seconds would assert we knew
     // the news that much earlier than we did — small, but it is lookahead, and
-    // it points the one direction that flatters a backtest.
+    // it points the one direction that flatters a backtest
     const now = this.deps.clock.now();
     const raws: RawArchiveRow[] = batch.records.map((record) => ({
       source: SOURCE_GDELT,
@@ -314,20 +314,20 @@ export class GdeltIngestAgent {
       payload: record.payload,
       ingested_at: now,
       // 'live' even though the row is a batch file: GDELT's batch timestamp IS
-      // the knowledge timestamp, so the row asserts nothing we did not know.
+      // the knowledge timestamp, so the row asserts nothing we did not know
       // `mi-archive-store.ts:48` sets out this distinction — Alpaca backfill is
-      // 'backfill' precisely because its stamp is publisher time.
+      // 'backfill' precisely because its stamp is publisher time
       fidelity: 'live',
     }));
 
-    // Raw rows only, no items — see this module's header.
+    // Raw rows only, no items — see this module's header
     //
     // Inside the try for the same reason the fetch is: `production.ts` calls
     // this as `void refresh(...)`, so anything that escapes here is an unhandled
-    // rejection in a process that is meant to run unattended for fourteen days.
+    // rejection in a process that is meant to run unattended for fourteen days
     // A SQLite write can fail on SQLITE_BUSY or a full disk, and neither is a
     // reason to lose the tick — the cursor is unmoved, so the next poll retries
-    // this same batch.
+    // this same batch
     try {
       this.deps.archive.write(raws, []);
     } catch (error) {

@@ -43,7 +43,7 @@ function market(overrides: Partial<PolymarketMarket> = {}): PolymarketMarket {
   };
 }
 
-/** A 24h hourly series ending `at` NOW, running from `from` to `to`. */
+/** A 24h hourly series ending `at` NOW, running from `from` to `to` */
 function history(from: number, to: number, hours = 24): PolymarketPricePoint[] {
   const points: PolymarketPricePoint[] = [];
   for (let index = 0; index <= hours; index += 1) {
@@ -101,7 +101,7 @@ describe('PolymarketAgent.refresh', () => {
       entity: 'FOMC-2026-09',
       sentiment: 1,
     });
-    // 0.035 delta * 5 = 0.175.
+    // 0.035 delta * 5 = 0.175
     expect(intel[0]?.confidence).toBeCloseTo(0.175, 6);
     expect(intel[0]?.headline).toContain('0.670');
     expect(intel[0]?.headline).toContain('0.705');
@@ -146,7 +146,7 @@ describe('PolymarketAgent.refresh', () => {
     await agent.refresh('t1');
 
     expect(intelFor(store)[0]?.sentiment).toBe(-1);
-    // |delta| = 0.205 -> 1.025, clamped to the 0.95 ceiling.
+    // |delta| = 0.205 -> 1.025, clamped to the 0.95 ceiling
     expect(intelFor(store)[0]?.confidence).toBe(0.95);
   });
 
@@ -166,7 +166,7 @@ describe('PolymarketAgent.refresh', () => {
 
     // `NOW` is on the hour, so this is the one instant at which the two
     // candidate stamps agree — the discriminating case is the mid-bar one
-    // below, and this only pins that nothing shifts the stamp off `now`.
+    // below, and this only pins that nothing shifts the stamp off `now`
     expect(intelFor(store)[0]?.timestamp).toEqual(NOW);
   });
 
@@ -198,7 +198,7 @@ describe('PolymarketAgent.refresh', () => {
       client: {
         fetchEventMarket: async () => market({ updatedAt: new Date('2026-08-17T10:08:00Z') }),
         // A 24h series ending at the mid-bar instant, so the history-span guard
-        // passes against the moving clock rather than against `NOW`.
+        // passes against the moving clock rather than against `NOW`
         fetchPriceHistory: async () =>
           Array.from({ length: 25 }, (_, index) => ({
             at: new Date(midBar.getTime() - (24 - index) * 60 * 60 * 1000),
@@ -212,24 +212,24 @@ describe('PolymarketAgent.refresh', () => {
 
     await expect(agent.refresh('t1')).resolves.toBe(true);
 
-    // Stamped when it was ingested, not backdated to 10:00.
+    // Stamped when it was ingested, not backdated to 10:00
     const stored = store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test');
     expect(stored.last_updated).toEqual(midBar);
 
     // Still 10:11 — same bar, and the count the debate hashes must not have
     // moved. Reading through `getContext` rather than the item is the point:
-    // this is a statement about what the ANALYST sees.
+    // this is a statement about what the ANALYST sees
     expect(
       store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel,
     ).toHaveLength(0);
 
-    // 10:59 — the bar has not closed, so it is still invisible.
+    // 10:59 — the bar has not closed, so it is still invisible
     asOf = new Date('2026-08-17T10:59:59Z');
     expect(
       store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel,
     ).toHaveLength(0);
 
-    // 11:00 — the next bar opens and the item becomes visible, once, for good.
+    // 11:00 — the next bar opens and the item becomes visible, once, for good
     asOf = new Date('2026-08-17T11:00:00Z');
     expect(
       store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').intel,
@@ -253,7 +253,7 @@ describe('PolymarketAgent.refresh', () => {
 
     expect(archive.rawRows(SOURCE_POLYMARKET)).toHaveLength(1);
     // Reads `mi_items`, not the raw table: writing `[]` for the items is the
-    // exact defect #835 fixed, and only an items read can see it.
+    // exact defect #835 fixed, and only an items read can see it
     const archived = archive.itemsKnownAt(POLYMARKET_ASSET_CLASS, NOW, [SOURCE_POLYMARKET]);
     expect(archived).toHaveLength(1);
     expect(archived[0]?.source).toBe(SOURCE_POLYMARKET);
@@ -264,7 +264,7 @@ describe('PolymarketAgent.refresh', () => {
    * `mi_items` foreign-keys `(source, native_id, updated_at)` into
    * `mi_archive_raw`, and the store leaves `PRAGMA foreign_keys` at SQLite's
    * default of OFF — so a drifted key would not throw, it would silently orphan
-   * the item and break the provenance `retrievalEvidence` means (#555).
+   * the item and break the provenance `retrievalEvidence` means (#555)
    */
   it('keys the archived item to its own raw row, so provenance links', async () => {
     const archive = new MiArchiveStore();
@@ -281,7 +281,7 @@ describe('PolymarketAgent.refresh', () => {
     // Asserted against `toArchivedItem` directly, NOT against what
     // `itemsKnownAt` serves: that read selects `asset_class, item_json` and
     // never touches the key columns, so a round-trip assertion would stay
-    // green against a drifted `native_id` and prove nothing.
+    // green against a drifted `native_id` and prove nothing
     const archived = toArchivedItem(served, raw);
     expect(archived.source).toBe(raw.source);
     expect(archived.native_id).toBe(raw.native_id);
@@ -312,7 +312,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(intelFor(store)).toHaveLength(0);
 
     // The bucket is NOT marked, so a transient failure does not buy an hour of
-    // silence.
+    // silence
     await agent.refresh('t2');
     expect(fetchEventMarket).toHaveBeenCalledTimes(2);
   });
@@ -336,7 +336,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(intelFor(store)).toHaveLength(0);
 
     // The bucket is NOT marked, so the next pass re-asks — the same contract
-    // the Gamma-side transport failure above holds to.
+    // the Gamma-side transport failure above holds to
     await agent.refresh('t2');
     expect(fetchEventMarket).toHaveBeenCalledTimes(2);
   });
@@ -376,7 +376,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
   it('escalates a permanently-refused row from info to warn after a day of passes', async () => {
     // The silent-decay hazard: a row parked below the volume floor never
     // contributes and never warns. Measured 2026-08-17, 5 of the 8 shipped rows
-    // sit there, so this is the common case.
+    // sit there, so this is the common case
     const log = vi.fn();
     let at = new Date('2026-08-17T00:00:00Z');
     const store = new MarketIntelligenceStore({ now: () => at });
@@ -478,7 +478,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(archive.refusalStreak(SOURCE_POLYMARKET, ENTRY.id)).toBe(12);
 
     // A brand-new instance, sharing only the archive — the in-memory `#refusals`
-    // map this process never populated.
+    // map this process never populated
     const log = vi.fn();
     const afterRestart = new PolymarketAgent({
       client,
@@ -495,7 +495,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     }
 
     // 24 total passes across the restart, not 12 — the escalation threshold
-    // fires on this pass rather than needing a further 24 in the new process.
+    // fires on this pass rather than needing a further 24 in the new process
     expect(archive.refusalStreak(SOURCE_POLYMARKET, ENTRY.id)).toBe(24);
     const refusal = log.mock.calls
       .map(([entry]) => entry)
@@ -525,7 +525,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(archive.refusalStreak(SOURCE_POLYMARKET, ENTRY.id)).toBe(1);
 
     // The row answers on the second agent — simulating the market recovering
-    // after a restart, not just within the process that saw it refuse.
+    // after a restart, not just within the process that saw it refuse
     const log = vi.fn();
     const afterRestart = new PolymarketAgent({
       client: {
@@ -551,7 +551,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
   it('refuses when the price history does not span a full 24h', async () => {
     // Three hours of history: a large move over it would otherwise land as a
-    // HIGH-confidence signal built on almost no data.
+    // HIGH-confidence signal built on almost no data
     const { agent, store } = agentWith({ history: history(0.4, 0.7, 3) });
 
     await agent.refresh('t1');
@@ -580,10 +580,10 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
   });
 
   it('refuses a row whose bullish outcome is pinned near certainty, before the CLOB call', async () => {
-    // 0.9945 is `us-cpi-annual-hot-tail` as measured on 2026-08-17 (#833).
+    // 0.9945 is `us-cpi-annual-hot-tail` as measured on 2026-08-17 (#833)
     // The history below moves 0.0245 — past the ±0.02 dead band — so without
     // the pinned guard this row WOULD emit an item, and the assertion is not
-    // passing for the trivial reason that nothing moved.
+    // passing for the trivial reason that nothing moved
     const { agent, store, fetchPriceHistory } = agentWith({
       market: market({ outcomePrices: [0.0055, 0.9945], bestBid: 0.99, bestAsk: 0.995 }),
       history: history(0.97, 0.9945),
@@ -593,7 +593,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
 
     expect(intelFor(store)).toHaveLength(0);
     // The guard sits above the price-history fetch, so a pinned row costs no
-    // CLOB call at all.
+    // CLOB call at all
     expect(fetchPriceHistory).not.toHaveBeenCalled();
   });
 
@@ -611,7 +611,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(intelFor(marginal.store)).toHaveLength(0);
 
     // Exactly at the bound: headroom 0.10 is admitted, so the guard cannot be
-    // tightened without this going red either.
+    // tightened without this going red either
     const atBound = agentWith({
       market: market({ outcomePrices: [0.1, 0.9], bestBid: 0.89, bestAsk: 0.9 }),
       history: history(0.86, 0.9),
@@ -625,7 +625,7 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     // constructed the way `production.ts` constructs it — no `table` — so it
     // reads CURATED_MACRO_MARKETS itself. Every shipped row is served the same
     // healthy-but-pinned book; if the guard were not wired to the default
-    // table, all of them would ingest.
+    // table, all of them would ingest
     const store = new MarketIntelligenceStore(clock);
     const fetchPriceHistory = vi.fn(async () => history(0.97, 0.9945));
     const agent = new PolymarketAgent({

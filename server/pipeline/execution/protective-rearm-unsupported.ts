@@ -57,7 +57,7 @@ export class ProtectiveRearmUnsupportedError extends Error {
    * this error crosses no realm today, but a duck-typed check also lets a
    * future adapter's own error hierarchy carry the same meaning without
    * inheriting from this class, and cannot break on a duplicated module
-   * instance.
+   * instance
    */
   readonly protectiveRearmUnsupported = true;
   /**

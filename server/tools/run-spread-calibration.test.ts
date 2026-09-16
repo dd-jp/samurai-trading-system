@@ -81,13 +81,13 @@ describe('the intraday sampling geometry (#875)', () => {
     for (const bucket of SESSION_BUCKETS) {
       const end = bucketSampleEnd(date, bucket.minutesAfterOpen).getTime();
       // The sampled minute is [end - 60s, end), so its START must clear the
-      // opening print and its END must stop short of the bell.
+      // opening print and its END must stop short of the bell
       expect(end - 60_000).toBeGreaterThan(open);
       expect(end).toBeLessThan(close);
     }
   });
 
-  /** One reading a session would be the most flattering point on a U-shaped curve. */
+  /** One reading a session would be the most flattering point on a U-shaped curve */
   it('spreads its buckets across the session rather than sampling one moment', () => {
     const date = new Date('2025-06-11T00:00:00Z');
     const ends = SESSION_BUCKETS.map((b) => bucketSampleEnd(date, b.minutesAfterOpen).getTime());
@@ -118,7 +118,7 @@ describe('CALIBRATED_COST_CONFIG', () => {
   /**
    * The measured finding, pinned so a later edit cannot quietly walk the
    * calibration back toward the fixture: real quoted spreads were 27x (stocks)
-   * and 18x (crypto) narrower than the fixture assumed.
+   * and 18x (crypto) narrower than the fixture assumed
    */
   it('prices spread far below the uncalibrated fixture', () => {
     expect(CALIBRATED_COST_CONFIG.stocks.spreadVolatilityCoefficient).toBeLessThan(
@@ -151,7 +151,7 @@ describe('CALIBRATED_COST_CONFIG', () => {
     expect(CALIBRATED_COST_CONFIG.stocks.commissionRate).toBe(0);
   });
 
-  /** Slippage is an explicit assumption: half of the half-spread. */
+  /** Slippage is an explicit assumption: half of the half-spread */
   it('derives slippage from the measured spread rather than asserting a new number', () => {
     for (const assetClass of ['crypto', 'stocks'] as const) {
       expect(CALIBRATED_COST_CONFIG[assetClass].slippageCoefficient).toBeCloseTo(
@@ -161,7 +161,7 @@ describe('CALIBRATED_COST_CONFIG', () => {
     }
   });
 
-  /** Impact had no measurement basis to revise, so the pessimistic value stands. */
+  /** Impact had no measurement basis to revise, so the pessimistic value stands */
   it('leaves market impact at the pessimistic value', () => {
     expect(CALIBRATED_COST_CONFIG.crypto.impactK).toBe(PESSIMISTIC_COST_CONFIG.crypto.impactK);
     expect(CALIBRATED_COST_CONFIG.stocks.impactK).toBe(PESSIMISTIC_COST_CONFIG.stocks.impactK);
@@ -211,7 +211,7 @@ describe('costConfigFor — the timeframe-keyed cost config (#875)', () => {
     );
   });
 
-  /** Same declared rule as the daily config — half of the half-spread, flagged as an assumption. */
+  /** Same declared rule as the daily config — half of the half-spread, flagged as an assumption */
   it('derives intraday slippage by the daily config own rule rather than a new one', () => {
     expect(CALIBRATED_INTRADAY_COST_CONFIG.stocks.slippageCoefficient).toBeCloseTo(
       CALIBRATED_INTRADAY_COST_CONFIG.stocks.spreadVolatilityCoefficient / 4,
@@ -239,11 +239,11 @@ describe('costConfigFor — the timeframe-keyed cost config (#875)', () => {
   it('carries a Saxo-keyed commission override at ADR-0015:201s 8bps rate', () => {
     expect(CALIBRATED_INTRADAY_COST_CONFIG.venues?.saxo?.commissionRate).toBe(0.0008);
     // The un-keyed default stays 0 (correct for Alpaca) — the override does
-    // not mutate the base asset-class config.
+    // not mutate the base asset-class config
     expect(CALIBRATED_INTRADAY_COST_CONFIG.stocks.commissionRate).toBe(0);
   });
 
-  /** The comparison escape hatch still wins, at every resolution. */
+  /** The comparison escape hatch still wins, at every resolution */
   it('honours SAMURAI_STAGE2_COST_CONFIG=pessimistic at both resolutions', () => {
     for (const timeframe of ['1d', '1m']) {
       expect(costConfigFor(timeframe, { SAMURAI_STAGE2_COST_CONFIG: 'pessimistic' })).toBe(

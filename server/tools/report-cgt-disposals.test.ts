@@ -66,7 +66,7 @@ describe('formatCgtReport', () => {
     expect(text).toContain('UNCONVERTED');
     expect(text).toContain('(none this tax year)');
     // Pinned so a future currency-handling change can't silently narrow this
-    // back to "GBX" only, as happened once already in review round 1.
+    // back to "GBX" only, as happened once already in review round 1
     expect(text).toContain('neither GBP nor a pence sub-unit (GBX/gbx/GBp/p)');
   });
 
@@ -173,7 +173,7 @@ describe('buildCgtReport — the composed read → match → window chain, again
     expect(unconverted).toHaveLength(1);
     expect(unconverted[0].currency).toBe('USD');
     // #1521 round 1 review: the report must say WHY, not just flag the
-    // currency — this fill predates fx_rate_to_gbp_source entirely.
+    // currency — this fill predates fx_rate_to_gbp_source entirely
     expect(unconverted[0].fxRateToGbpSource).toBe('no_rate_stored');
 
     const text = formatCgtReport(

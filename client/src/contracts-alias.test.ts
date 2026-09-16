@@ -20,7 +20,7 @@ import { expect, it } from 'vitest';
 
 it('resolves a value import through the @contracts alias', () => {
   // Asserting on content rather than mere truthiness: an alias pointed at the
-  // wrong module could still yield *something* importable.
+  // wrong module could still yield *something* importable
   expect(PIPELINE_STAGES).toContain('analysts');
   expect(PIPELINE_STAGES).toContain('execution');
   expect(STORE_MODES).toContain('paper');

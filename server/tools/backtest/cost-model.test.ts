@@ -83,7 +83,7 @@ describe('CostModelImpl.fill', () => {
     const smallImpact = small.cost_breakdown.market_impact;
     const largeImpact = large.cost_breakdown.market_impact;
 
-    // 4x size => sqrt(4) = 2x impact, not 4x (linear) or 1x (flat).
+    // 4x size => sqrt(4) = 2x impact, not 4x (linear) or 1x (flat)
     expect(largeImpact / smallImpact).toBeCloseTo(2, 6);
   });
 
@@ -139,7 +139,7 @@ describe('CostModelImpl floors (#1000)', () => {
   it('charges the same amount whether floors is omitted or set to DEFAULT_COST_FLOORS', () => {
     // Regression pin: a config with no `floors` field must behave exactly as
     // the old hard-coded 1bp/1bp constants did — "nothing changes
-    // behaviorally" per #1000's own framing.
+    // behaviorally" per #1000's own framing
     const withoutFloors = new CostModelImpl(OPTIMISTIC_CONFIG);
     const withDefaultFloors = new CostModelImpl({
       ...OPTIMISTIC_CONFIG,
@@ -252,7 +252,7 @@ describe('CostModelImpl venue keying (#1000)', () => {
   it('leaves the venue override commission above the floor unmolested (Saxo real-world case)', () => {
     // ADR-0015:201: Saxo Classic is 8bps/side, no per-order minimum — well
     // above the 1bp structural floor, so the floor should never bind once
-    // the rate is set.
+    // the rate is set
     const config: CostConfig = {
       ...OPTIMISTIC_CONFIG,
       stocks: { ...OPTIMISTIC_CONFIG.stocks, commissionRate: 0 },
@@ -329,7 +329,7 @@ describe('CostModelImpl venue keying (#1000)', () => {
 
     const result = model.fill(fillRequest(), state);
 
-    // slippage = volatility * slippageCoefficient, unaffected by the venue override.
+    // slippage = volatility * slippageCoefficient, unaffected by the venue override
     expect(result.cost_breakdown.slippage).toBeCloseTo(2 * 0.02, 10);
   });
 });

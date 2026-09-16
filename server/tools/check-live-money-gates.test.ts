@@ -66,7 +66,7 @@ describe('checkLiveMoneyGates', () => {
   });
 
   it('is the command the live-boot warning tells the operator to run', () => {
-    // If this script is ever renamed, the operator-facing message goes with it.
+    // If this script is ever renamed, the operator-facing message goes with it
     expect(LIVE_MONEY_GATES_RECHECK_COMMAND).toBe('npm run check:live-gates');
   });
 });

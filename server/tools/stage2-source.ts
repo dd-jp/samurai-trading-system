@@ -62,7 +62,7 @@ export interface Stage2Source {
   client: PolygonClient;
   window: DateRange;
   label: Stage2SourceLabel;
-  /** The bar resolution this run ingests and replays (#664). */
+  /** The bar resolution this run ingests and replays (#664) */
   timeframe: string;
 }
 
@@ -105,7 +105,7 @@ export function resolveStage2Source(env: NodeJS.ProcessEnv = process.env): Stage
       // `HttpPolygonClient`'s option is `apiKey?: string`, which under
       // `exactOptionalPropertyTypes` refuses an explicit `undefined`. Omitting
       // the key entirely is also what makes the client fall back to its own
-      // `process.env` read and produce its own missing-key error message.
+      // `process.env` read and produce its own missing-key error message
       client: new HttpPolygonClient(
         env.POLYGON_API_KEY === undefined ? {} : { apiKey: env.POLYGON_API_KEY },
       ),
@@ -129,7 +129,7 @@ export function resolveStage2Source(env: NodeJS.ProcessEnv = process.env): Stage
 
   // Refused rather than defaulted: a typo silently producing a two-year
   // Polygon run, reported as if it were the ten-year one, is exactly the
-  // failure this switch exists to make visible.
+  // failure this switch exists to make visible
   throw new Error(
     `resolveStage2Source: STAGE2_SOURCE='${requested}' is not recognised. ` +
       "Use 'polygon' (default, 2y) or 'free-stack' (10y).",

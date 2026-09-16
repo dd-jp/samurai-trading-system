@@ -34,11 +34,11 @@ import type { TrialGridResult } from './trial-execution.js';
 import type { DateRange } from './universe.js';
 import type { MinBtlVerdict, PboVerdict } from './validation-types.js';
 
-/** The spec's kill line (docs/research/02-staged-deployment-plan.md). */
+/** The spec's kill line (docs/research/02-staged-deployment-plan.md) */
 export const KILL_LINE = {
-  /** Reject if the out-of-sample (mean across walk-forward test folds) Sharpe is below this. */
+  /** Reject if the out-of-sample (mean across walk-forward test folds) Sharpe is below this */
   minOosSharpe: 0.5,
-  /** Reject if PBO exceeds this — mirrors `overfitting.ts`'s own `PBO_REJECT_THRESHOLD`. */
+  /** Reject if PBO exceeds this — mirrors `overfitting.ts`'s own `PBO_REJECT_THRESHOLD` */
   maxPbo: 0.05,
   /**
    * Reject if the Deflated Sharpe Ratio falls below this.
@@ -55,13 +55,13 @@ export const KILL_LINE = {
   minDsr: 0.95,
 } as const;
 
-/** One config's OOS-Sharpe kill-line check, per asset class. */
+/** One config's OOS-Sharpe kill-line check, per asset class */
 export interface ConfigKillLineCheck {
   config_hash: string;
   asset_class: 'crypto' | 'stocks';
-  /** Mean Sharpe across the walk-forward test folds — the OOS estimate the kill line reads. */
+  /** Mean Sharpe across the walk-forward test folds — the OOS estimate the kill line reads */
   oos_sharpe: number;
-  /** Whole-window (in-sample) Sharpe, reported alongside per the spec's "no cherry-picked number". */
+  /** Whole-window (in-sample) Sharpe, reported alongside per the spec's "no cherry-picked number" */
   window_sharpe: number;
   fold_sharpes: number[];
   passes_oos_sharpe_line: boolean;
@@ -78,30 +78,30 @@ export type NotComputableReason =
   | 'pbo_requires_even_fold_count'
   | 'dsr_variance_term_non_positive';
 
-/** PBO outcome for one asset class (or a global refusal when there's nothing to group). */
+/** PBO outcome for one asset class (or a global refusal when there's nothing to group) */
 export type PboOutcome =
   | { result: PboVerdict; asset_class: 'crypto' | 'stocks' }
   | { error: NotComputableReason; detail: string; asset_class?: 'crypto' | 'stocks' };
 
 /**
  * The deflated Sharpe of the config a researcher would actually have picked,
- * and the trial count it was deflated by.
+ * and the trial count it was deflated by
  */
 export interface DsrResult {
-  /** The selected config — highest OOS Sharpe in its asset class. */
+  /** The selected config — highest OOS Sharpe in its asset class */
   config_hash: string;
-  /** N the Sharpe was deflated by — `ConfigTrialLog.distinctTrialCount()`. */
+  /** N the Sharpe was deflated by — `ConfigTrialLog.distinctTrialCount()` */
   n_distinct_trials: number;
-  /** The non-annualized whole-window Sharpe that was deflated. */
+  /** The non-annualized whole-window Sharpe that was deflated */
   per_period_sharpe: number;
-  /** Return observations in the whole-window sample — DSR's `sampleLen`. */
+  /** Return observations in the whole-window sample — DSR's `sampleLen` */
   observations: number;
-  /** P(the observed Sharpe is not the luckiest of N trials). */
+  /** P(the observed Sharpe is not the luckiest of N trials) */
   dsr: number;
   passes_dsr_line: boolean;
 }
 
-/** DSR outcome for one asset class (or a global refusal when there's nothing to group). */
+/** DSR outcome for one asset class (or a global refusal when there's nothing to group) */
 export type DsrOutcome =
   | { result: DsrResult; asset_class: 'crypto' | 'stocks' }
   | { error: NotComputableReason; detail: string; asset_class?: 'crypto' | 'stocks' };
@@ -110,11 +110,11 @@ export interface Stage2Verdict {
   n_distinct_trials: number;
   min_btl: MinBtlVerdict;
   kill_line_checks: ConfigKillLineCheck[];
-  /** One entry per asset class present in `results` — PBO must be checked separately per class. */
+  /** One entry per asset class present in `results` — PBO must be checked separately per class */
   pbo: PboOutcome[];
-  /** One entry per asset class — DSR deflates the config that class's search would have selected. */
+  /** One entry per asset class — DSR deflates the config that class's search would have selected */
   dsr: DsrOutcome[];
-  /** `true` only if every computable check passed AND nothing was left uncomputed. */
+  /** `true` only if every computable check passed AND nothing was left uncomputed */
   overall_pass: boolean;
 }
 
@@ -238,7 +238,7 @@ function computeDsr(
     } catch (cause) {
       // deflatedSharpe() rejects a non-positive variance term, which real
       // samples can produce (a large Sharpe with strong negative skew). A
-      // refusal is the honest report; a fabricated probability is not.
+      // refusal is the honest report; a fabricated probability is not
       outcomes.push({
         error: 'dsr_variance_term_non_positive',
         asset_class,
@@ -265,7 +265,7 @@ function computeDsr(
   return outcomes;
 }
 
-/** The config this asset class's search would have picked — highest OOS Sharpe. */
+/** The config this asset class's search would have picked — highest OOS Sharpe */
 function bestByOosSharpe(
   checks: readonly ConfigKillLineCheck[],
   asset_class: 'crypto' | 'stocks',
@@ -371,7 +371,7 @@ function computePboFromCscvFolds(results: readonly TrialGridResult[]): PboOutcom
   return outcomes;
 }
 
-/** One config's per-fold OOS Sharpes from its CSCV pass. */
+/** One config's per-fold OOS Sharpes from its CSCV pass */
 function cscvFoldSharpes(row: TrialGridResult): number[] {
   const cscv = row.cscv;
 
@@ -385,7 +385,7 @@ function cscvFoldSharpes(row: TrialGridResult): number[] {
   return cscv.report.splits.map((split) => split.metrics.sharpe);
 }
 
-/** The asset classes present in `results`, in first-seen order. */
+/** The asset classes present in `results`, in first-seen order */
 function assetClassesOf(results: readonly TrialGridResult[]): ('crypto' | 'stocks')[] {
   const seen: ('crypto' | 'stocks')[] = [];
 
@@ -405,5 +405,5 @@ function mean(values: readonly number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-/** Re-exported for callers that only need the MinBTL number (no trial data required). */
+/** Re-exported for callers that only need the MinBTL number (no trial data required) */
 export { minbtl };

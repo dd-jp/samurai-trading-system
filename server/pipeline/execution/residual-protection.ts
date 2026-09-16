@@ -32,7 +32,7 @@ type MarkerInput = Pick<ExecutionInput, 'logger' | 'trace_id'> & { store: Residu
 type AlertInput = Pick<ExecutionInput, 'residualExposureAlerts' | 'logger' | 'trace_id'>;
 // `ResidualReflattenInput` because the unsupported-re-arm branch below calls
 // `reflattenResidual` (#1214) — that is what puts `sessionCalendars` and the
-// flatten journal on this surface, not the re-arm itself.
+// flatten journal on this surface, not the re-arm itself
 type RearmInput = MarkerInput &
   AlertInput &
   ResidualReflattenInput &
@@ -67,7 +67,7 @@ export async function markResidualsUnprotected(
           message: onFailure.message,
         },
         error,
-        { idempotency_key: key, ...(onFailure.payload ?? {}) },
+        { idempotency_key: key, ...onFailure.payload },
       );
     }
   }
@@ -126,7 +126,7 @@ export async function maybeRearmResidual(
       // — Telegram quoting the failed request — not about a local
       // store-driver error, which carries no such transport detail; #297's
       // H1 precedent `reconcileLot` (reconcile.ts) already cites applies the
-      // same way here).
+      // same way here)
       logCaughtFailure(
         input.logger,
         {
@@ -146,27 +146,27 @@ export async function maybeRearmResidual(
       // in hand, untouched by this failure) rather than a smaller,
       // possibly-wrong guess: it can only OVER-state what is genuinely at
       // risk, never under-state it, which is the conservative direction
-      // for an operator deciding whether to go check the venue by hand.
+      // for an operator deciding whether to go check the venue by hand
       // NOT `Number.NaN` — the log-only form of this alert goes through
       // `JSON.stringify` (logger.ts), which silently
       // turns `NaN` into `null`, and a `null` quantity is less legible
       // than an honest upper bound. Never rethrown: see this function's
-      // "Never throws" doc above.
+      // "Never throws" doc above
       //
       // Flagged as an upper bound rather than passed off as the exact
       // residual (#569): without the flag a persistent store outage
       // reads as a stream of confident alerts, and an operator cannot tell
       // an estimate from a measurement. The caught error itself is not
       // forwarded to the ALERT — see `ResidualExposureAlert`'s CREDENTIALS
-      // note — but it IS now in the local log line just above.
+      // note — but it IS now in the local log line just above
       //
       // #549: marked BEFORE the alert — the residual cannot be recomputed
       // right now, which is exactly a "protection not confirmed" state the
-      // sweep must keep retrying with a fresh read.
+      // sweep must keep retrying with a fresh read
       await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
       // #549: the alert-dedup marker records only a delivery the
       // channel ACCEPTED — a swallowed transport failure must leave the
-      // episode un-alerted so the sweep pages again on its next pass.
+      // episode un-alerted so the sweep pages again on its next pass
       if (
         await alertResidualExposure(input, position, position.requested_size, now, {
           residualQtyIsUpperBound: true,
@@ -185,13 +185,13 @@ export async function maybeRearmResidual(
   // happen on the `known` path (the caller already refused to reach here
   // with `filledSize === 0`), but the zero-new-fill path above has no such
   // guarantee — a flatten can, in principle, name a lot whose entry fill is
-  // still outstanding.
+  // still outstanding
   if (filledSize === 0) return;
   // Flat by this fuller read even though the per-poll signal said
   // "not flat": nothing left to protect. #549: a marker
   // `redistributeOneFlatten` set for this lot (off this poll's split
   // arithmetic) is cleared here off the fuller persisted record — flat IS
-  // "nothing left unprotected", confirmed.
+  // "nothing left unprotected", confirmed
   if (isFlat({ filledSize, exitQty })) {
     await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
     return;
@@ -204,12 +204,12 @@ export async function maybeRearmResidual(
   // are poll-scoped, so without this row a crash — or a re-arm failure the
   // process survives — between here and a confirmed re-arm left the residual
   // naked FOREVER: the next poll's `hasFill` dedup empties `newFills`, no
-  // flatten resolves, and `advanceLot` returns early indefinitely.
+  // flatten resolves, and `advanceLot` returns early indefinitely
   // `sweepResidualProtection` (residual-protection-sweep.ts) is what reads
   // it back, on reconcile/fill-sync cadence, and only a CONFIRMED re-arm (or
   // a flat read) clears it. Best-effort, never throwing (this function's own
   // contract): a failed marker write is logged and must not stop the actual
-  // re-arm attempt, which matters more than its bookkeeping.
+  // re-arm attempt, which matters more than its bookkeeping
   await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
 
   // Fail-closed (`executeExit`'s precedent, execute.ts): a non-finite or
@@ -217,7 +217,7 @@ export async function maybeRearmResidual(
   // store's own numbers disagree in a way `QTY_EPSILON_RELATIVE` was not
   // built to absorb. Refusing to hand the broker a garbage quantity and
   // alerting instead is the same posture `executeExit` takes on a
-  // store/venue size mismatch — surface it, never guess.
+  // store/venue size mismatch — surface it, never guess
   if (!(residual > 0) || !Number.isFinite(residual)) {
     if (await alertResidualExposure(input, position, residual, now)) {
       await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
@@ -235,36 +235,36 @@ export async function maybeRearmResidual(
       position.target,
     );
     // #549: protection is now CONFIRMED — the venue acked the re-arm (or the
-    // adapter adopted legs it verified already live) — so the marker clears.
+    // adapter adopted legs it verified already live) — so the marker clears
     // Best-effort: if this write fails the sweep retries a re-arm that is
     // already in place, which every adapter path tolerates (equities
     // adopt-or-place over the lot's derived re-arm wire ids; crypto emulation
-    // retires stale legs before arming; Simulated re-sets the same qty).
+    // retires stale legs before arming; Simulated re-sets the same qty)
     await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
   } catch (error) {
     // The broker's own error is not forwarded to the ALERT — see
     // `ResidualExposureAlert`'s CREDENTIALS note: this channel carries only
     // fields chosen here, never broker error text. Losing the detail there
-    // is fine; an operator reads the alert and checks the venue directly.
+    // is fine; an operator reads the alert and checks the venue directly
     //
     // #573: safe to put in the LOCAL log, though, same as the store-read
     // catch above — #297's H1 (cited by `reconcileLot`, reconcile.ts) makes
     // every broker adapter convert what its client threw into a curated,
     // credential-free error before it is visible here, so the credentialed
-    // original never reaches this catch either.
+    // original never reaches this catch either
     //
     // #1214: some refusals of this call are permanent, so no retry of it can
     // protect this residual — a venue that cannot express an entry-less
     // protective pair at all (Saxo), or a lot that has spent every re-arm wire
     // id the venue will grant it (Alpaca, #1346). The recorded decision (David,
     // 2026-09-08, option 2) is to CLOSE the residual instead — see
-    // residual-reflatten.ts, called below once the failure is traced.
+    // residual-reflatten.ts, called below once the failure is traced
     const unsupported = isProtectiveRearmUnsupported(error);
     logCaughtFailure(
       input.logger,
       // Two whole entries rather than one with a conditional `event`: every
       // logged code must be a bare snake_case literal, greppable from the
-      // source (`log-event-code.test.ts`).
+      // source (`log-event-code.test.ts`)
       unsupported
         ? {
             trace_id: input.trace_id,
@@ -292,7 +292,7 @@ export async function maybeRearmResidual(
     // falls through to the existing #525 escalation below. The marker
     // stays set either way: it clears when the lot reads flat, which is what
     // a filled re-flatten makes true. Never throws (its own contract), so it
-    // cannot break this function's.
+    // cannot break this function's
     if (unsupported) {
       const reflatten = await reflattenResidual(input, position, residual, now);
       if (reflatten.kind === 'submitted') return;
@@ -307,7 +307,7 @@ export async function maybeRearmResidual(
       // record it after — otherwise this second pass pages a second time for
       // a permanent gap the operator was already told about. A store read
       // failure here fails OPEN (falls through to page): missing a page is
-      // the unsafe direction, a noisy duplicate is not (#1447 review).
+      // the unsafe direction, a noisy duplicate is not (#1447 review)
       try {
         if (
           (await input.store.getResidualRearmUnsupportedAlertedAt(position.idempotency_key)) !==
@@ -336,7 +336,7 @@ export async function maybeRearmResidual(
     // is recorded as already-alerted ONLY when the channel accepted the
     // delivery (#549) — so the sweep retries the re-arm on cadence
     // without paging again for a page that actually landed (#342), and DOES
-    // page again for one a transport outage swallowed.
+    // page again for one a transport outage swallowed
     //
     // #1447: a CONFIRMED venue refusal records against its OWN dedup column,
     // not the general one the pre-attempt paths above use — the general
@@ -347,7 +347,7 @@ export async function maybeRearmResidual(
     // paging above; recorded after a successful delivery below — the same
     // check-then-write shape `alertResidualExposureOnce` uses on the sweep
     // surface (residual-protection-sweep.ts), because that surface is the
-    // only other place this dedup exists.
+    // only other place this dedup exists
     if (
       await alertResidualExposure(input, position, residual, now, {
         rearmUnsupported: unsupported,
@@ -438,7 +438,7 @@ export interface ResidualExposureFlags {
   /**
    * `true` only on the path where the fill read failed and `residualQty` is
    * therefore the lot's whole requested size rather than the exact residual
-   * (#569).
+   * (#569)
    */
   residualQtyIsUpperBound?: boolean;
   /**
@@ -501,14 +501,14 @@ export async function alertResidualExposure(
     return true;
   } catch {
     // The redistribution/advance this alert reports on already completed —
-    // see this function's doc comment for why that must not be undone here.
+    // see this function's doc comment for why that must not be undone here
     // #573: this IS the fallback failing, the most severe blind spot this
     // whole file has — a residual is unprotected AND nobody was told, not
     // even locally. Traced with a FIXED, self-authored message rather than
     // the channel's own error (same CREDENTIALS posture as the
     // flatten-overfill channel catch in ingest-fills.ts, `escalateAgedUnpricedFills`'s
     // precedent in alpaca-adapter.ts): a Telegram transport failure
-    // quotes the request it failed on, which can carry a bot token.
+    // quotes the request it failed on, which can carry a bot token
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',

@@ -16,7 +16,7 @@ import {
 const FAKE_KEY = 'test-fake-alpaca-key';
 const FAKE_SECRET = 'test-fake-alpaca-secret';
 
-/** `start`/`end` of the request a `fetch` mock was called with, as epoch ms. */
+/** `start`/`end` of the request a `fetch` mock was called with, as epoch ms */
 function rangeOf(call: unknown): { start: number; end: number } {
   const [url] = call as [string];
   const params = new URL(url).searchParams;
@@ -26,7 +26,7 @@ function rangeOf(call: unknown): { start: number; end: number } {
   };
 }
 
-/** `count` ascending daily bars ending the day before `2026-07-03`. */
+/** `count` ascending daily bars ending the day before `2026-07-03` */
 function dailyBars(count: number): Array<Record<string, number | string>> {
   return Array.from({ length: count }, (_unused, i) => ({
     t: new Date(Date.parse('2026-07-02T00:00:00Z') - (count - 1 - i) * 86_400_000).toISOString(),
@@ -95,7 +95,7 @@ describe('AlpacaHttpDataClient — equities', () => {
     });
     // `partial: 'allow'` because this fixture deliberately returns one bar for
     // a limit of 10 — the request SHAPE is what's under test here, not the
-    // underfetch policy (which has its own describe block below).
+    // underfetch policy (which has its own describe block below)
     const result = await client.getBars(
       'AAPL',
       '1d',
@@ -186,7 +186,7 @@ describe('AlpacaHttpDataClient — equities', () => {
     });
     // `partial: 'allow'`: 30 one-bar pages is a deliberate short read against a
     // limit of 5_000 — the page-cap guard is what's under test, not the
-    // underfetch policy, and widening would change the call count asserted here.
+    // underfetch policy, and widening would change the call count asserted here
     const result = await client.getBars(
       'AAPL',
       '1d',
@@ -201,7 +201,7 @@ describe('AlpacaHttpDataClient — equities', () => {
 
   it('getBars still trips the pagination guard on a genuinely cyclical/malformed next_page_token', async () => {
     // Small `limit` keeps the scaled cap at its MAX_PAGES=25 floor — a token
-    // that never terminates must still be caught.
+    // that never terminates must still be caught
     const bar = { t: '2026-07-01T00:00:00Z', o: 1, h: 1, l: 1, c: 1, v: 1 };
     const fetchMock = vi
       .fn()
@@ -238,7 +238,7 @@ describe('AlpacaHttpDataClient — equities', () => {
     const [url] = fetchMock.mock.calls[0] as [string];
     // `?feed=` since #381 — the mark must come from the same tape as the bars
     // an indicator is computed over. Path asserted separately from the query so
-    // this stays a path test.
+    // this stays a path test
     const parsed = new URL(url);
     expect(`${parsed.origin}${parsed.pathname}`).toBe(
       'https://data.alpaca.markets/v2/stocks/AAPL/quotes/latest',
@@ -270,7 +270,7 @@ describe('AlpacaHttpDataClient — crypto', () => {
       apiSecret: FAKE_SECRET,
     });
     // `partial: 'allow'` — one-bar fixture against a limit of 5; the crypto
-    // request shape is what's under test (see the underfetch describe below).
+    // request shape is what's under test (see the underfetch describe below)
     const result = await client.getBars(
       'BTC-USD',
       '1m',
@@ -298,7 +298,7 @@ describe('AlpacaHttpDataClient — crypto', () => {
       apiSecret: FAKE_SECRET,
     });
     // `partial: 'allow'` — see the sibling test above; the response-key
-    // fallback is what's under test, not the underfetch policy.
+    // fallback is what's under test, not the underfetch policy
     const result = await client.getBars(
       'BTC-USD',
       '1m',
@@ -417,7 +417,7 @@ describe('AlpacaHttpDataClient — API version segment (issue #358)', () => {
     vi.unstubAllGlobals();
   });
 
-  /** The path segment straight after the host — the thing that was wrong. */
+  /** The path segment straight after the host — the thing that was wrong */
   function versionSegmentOf(call: unknown): string {
     const [url] = call as [string];
     return new URL(url).pathname.split('/')[1] as string;
@@ -528,7 +528,7 @@ describe('AlpacaHttpDataClient — equity data feed (#381)', () => {
 
   it('sends the same feed on equity latest quotes as on bars', async () => {
     // A mark from one tape and an ATR from another prices a stop against a
-    // venue the mark never saw.
+    // venue the mark never saw
     const fetchMock = vi
       .fn()
       .mockResolvedValue(jsonResponse({ quote: { t: '2026-07-01T00:00:00Z', ap: 1, bp: 1 } }));
@@ -580,7 +580,7 @@ describe('AlpacaHttpDataClient — equity data feed (#381)', () => {
     // `AlpacaHttpDataClientOptions.feed` documents itself as "Ignored for
     // crypto", and the crypto endpoints take no such parameter. Resolving it
     // for a crypto client would let a typo'd ALPACA_DATA_FEED kill a
-    // crypto-only process over a value it would never send.
+    // crypto-only process over a value it would never send
     const saved = process.env[ALPACA_DATA_FEED_ENV_VAR];
     afterEach(() => {
       if (saved === undefined) delete process.env[ALPACA_DATA_FEED_ENV_VAR];
@@ -604,7 +604,7 @@ describe('AlpacaHttpDataClient — equity data feed (#381)', () => {
       // The fail-fast half, and the reason laziness costs nothing: the throw
       // moves to the client that would actually use the value, so the typo is
       // caught at boot the moment equities enter the universe — never as a
-      // wrong feed, since only `iex`/`sip` resolve at all.
+      // wrong feed, since only `iex`/`sip` resolve at all
       process.env[ALPACA_DATA_FEED_ENV_VAR] = 'sipp';
 
       expect(
@@ -619,7 +619,7 @@ describe('AlpacaHttpDataClient — equity data feed (#381)', () => {
 
     it('a crypto client with a malformed feed still fetches bars', async () => {
       // Construction not throwing is only half the claim; the client must
-      // actually work, and must still send no `feed`.
+      // actually work, and must still send no `feed`
       process.env[ALPACA_DATA_FEED_ENV_VAR] = 'sipp';
       const fetchMock = vi
         .fn()
@@ -654,7 +654,7 @@ describe('AlpacaHttpDataClient — equity data feed (#381)', () => {
 
     it('refuses an unrecognised value rather than forwarding it to the wire', () => {
       // Forwarded, a typo would come back as a query error and read as a data
-      // outage on every equity tick.
+      // outage on every equity tick
       expect(() => resolveAlpacaDataFeed('sipp')).toThrow(ALPACA_DATA_FEED_ENV_VAR);
       expect(() => resolveAlpacaDataFeed('IEX')).toThrow(/iex/);
     });
@@ -793,9 +793,9 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
 
     const first = rangeOf(fetchMock.mock.calls[0]);
     const second = rangeOf(fetchMock.mock.calls[1]);
-    // The retry must reach FURTHER BACK, not merely repeat the same request.
+    // The retry must reach FURTHER BACK, not merely repeat the same request
     expect(second.start).toBeLessThan(first.start);
-    // `asOf` is the point-in-time boundary — widening must never move it.
+    // `asOf` is the point-in-time boundary — widening must never move it
     expect(second.end).toBe(first.end);
     expect(second.end).toBe(ASOF.getTime());
   });
@@ -817,7 +817,7 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
     expect(underfetch.requested).toBe(5);
     expect(underfetch.received).toBe(2);
     expect(underfetch.message).toContain('AAPL');
-    // Bounded: exactly one widened retry, never an unbounded widening loop.
+    // Bounded: exactly one widened retry, never an unbounded widening loop
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -867,7 +867,7 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
     // no retry wrapper anywhere may treat this as retryable — and it must not
     // masquerade as an AlpacaDataProviderError, which would make "Alpaca is
     // broken" and "this symbol is too sparse" indistinguishable in logs and in
-    // `isRetryableAlpacaDataError`'s 5xx branch.
+    // `isRetryableAlpacaDataError`'s 5xx branch
     const error = new AlpacaDataUnderfetchError({
       symbol: 'AAPL',
       timeframe: '1d',
@@ -883,7 +883,7 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
 
   it('returns no bars, and makes no request, for a zero-length window', async () => {
     // `slice(-0)` is `slice(0)` — the whole array. A `lookback: 0` window must
-    // not come back holding every bar in the buffer.
+    // not come back holding every bar in the buffer
     const fetchMock = vi
       .fn()
       .mockResolvedValue(jsonResponse({ bars: dailyBars(5), symbol: 'AAPL' }));
@@ -920,7 +920,7 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
 /**
  * #391: this client and the broker adapter spend ONE per-account budget, so
  * the bucket is shared and market-data calls take the background path — they
- * may be late, but they may not delay an order.
+ * may be late, but they may not delay an order
  */
 describe('AlpacaHttpDataClient — outbound pacing (#391)', () => {
   beforeEach(() => {
@@ -947,7 +947,7 @@ describe('AlpacaHttpDataClient — outbound pacing (#391)', () => {
       .mockResolvedValue(jsonResponse({ bars: dailyBars(1), symbol: 'AAPL' }));
     vi.stubGlobal('fetch', fetchMock);
 
-    // Capacity 3 with 2 reserved: exactly one background call may proceed.
+    // Capacity 3 with 2 reserved: exactly one background call may proceed
     const bucket = new TokenBucket({ capacity: 3, refillPerSecond: 1, reserveForPriority: 2 });
     const subject = client(bucket);
 
@@ -955,7 +955,7 @@ describe('AlpacaHttpDataClient — outbound pacing (#391)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     // The second call has to wait for a refill: only the reserve remains, and
-    // that belongs to the broker.
+    // that belongs to the broker
     let second = false;
     const pending = subject
       .getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 1, 'allow')

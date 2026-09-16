@@ -47,10 +47,10 @@ import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import { JsonLogger } from '../orchestrator/logger.js';
 
-/** The subset of `child_process.spawn` this module uses, so tests can inject. */
+/** The subset of `child_process.spawn` this module uses, so tests can inject */
 export type SpawnFn = (command: string, args: readonly string[]) => ChildProcess;
 
-/** The subset of a spawned child this module observes. */
+/** The subset of a spawned child this module observes */
 export type SupervisedChild = Pick<ChildProcess, 'kill'> & {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   once(event: 'error', listener: (error: Error) => void): void;
@@ -86,15 +86,15 @@ function migrateSharedStore(): void {
 }
 
 export interface SupervisorEffects {
-  /** Defaults to `child_process.spawn` with `stdio: 'inherit'`. */
+  /** Defaults to `child_process.spawn` with `stdio: 'inherit'` */
   spawn?: SpawnFn;
-  /** Defaults to `process.execPath` — the Node binary running the supervisor. */
+  /** Defaults to `process.execPath` — the Node binary running the supervisor */
   execPath?: string;
   /** Where the two entrypoints were built. Defaults to the `dist/` convention. */
   scripts?: { orchestrator: string; dashboard: string };
   /** Node flags applied to each child. Defaults to `--env-file=.env.local`. */
   nodeArgs?: readonly string[];
-  /** Sink for the one thing this module reports: a child dying unrequested. */
+  /** Sink for the one thing this module reports: a child dying unrequested */
   log?: (message: string) => void;
   /**
    * Run once, before either child is spawned. Defaults to
@@ -108,7 +108,7 @@ export interface Supervisor {
   shutdown(signal: NodeJS.Signals): void;
   /**
    * Resolves once BOTH children have exited, with the code to exit on: `0`
-   * only when both exited cleanly during a requested shutdown.
+   * only when both exited cleanly during a requested shutdown
    */
   readonly done: Promise<number>;
 }
@@ -164,7 +164,7 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
   // #1035: the default sink is now structured, so a supervisor line is
   // parseable and stage-filterable like every other line. Still a `(message:
   // string) => void` seam, so every injected `effects.log` in the tests is
-  // unaffected.
+  // unaffected
   const log =
     effects.log ??
     ((message: string) => {
@@ -195,7 +195,7 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
       // throws here instead. On the second child that would return out of
       // this function with the first one already live and no supervisor left
       // holding it: exactly the orphan this module exists to prevent. Ask the
-      // survivors to stop, then let the caller see the original failure.
+      // survivors to stop, then let the caller see the original failure
       shutdown('SIGTERM');
       throw error;
     }
@@ -209,27 +209,27 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
         // promise pending forever and hang `serve` with the other half live,
         // and an unhandled `'error'` would throw out of the supervisor and
         // orphan a child mid-drain — the two failures this module exists to
-        // prevent.
+        // prevent
         let settled = false;
         const settle = (): void => {
           if (settled) return;
           settled = true;
           running.delete(name);
           // Unconditional and idempotent: one half down means both come down,
-          // and the survivor is asked rather than killed so it still drains.
+          // and the survivor is asked rather than killed so it still drains
           // SIGTERM regardless of what took the first child — when it died on
-          // its own there is no signal to relay.
+          // its own there is no signal to relay
           shutdown('SIGTERM');
           resolve();
         };
 
         child.once('exit', (code, signal) => {
           // Read before `settle` calls `shutdown` and flips it, so the first
-          // child's death is judged against the state that preceded it.
+          // child's death is judged against the state that preceded it
           const requested = shuttingDown || (signal !== null && REQUESTED_STOP.has(signal));
 
           // When already settled the `'error'` path has accounted for this
-          // child; its code must not be overwritten.
+          // child; its code must not be overwritten
           if (!settled) {
             if (!requested) {
               // An exit nobody asked for is a failure of `serve` itself,
@@ -238,12 +238,12 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
               // (`kill -TERM` aimed at the orchestrator alone, which drains
               // and returns 0) is still a failure of `serve`, and reporting
               // success while logging "stopping the other" would strand a
-              // `npm run serve || alert` caller with no alert.
+              // `npm run serve || alert` caller with no alert
               exitCode = code === null || code === 0 ? 1 : code;
               log(`${name} exited (${signal ?? `code ${code ?? 'unknown'}`}); stopping the other.`);
             } else if (code !== null && code !== 0 && exitCode === 0) {
               // A requested stop that failed to drain cleanly still has to
-              // reach the shell as a non-zero status.
+              // reach the shell as a non-zero status
               exitCode = code;
             }
           }
@@ -254,7 +254,7 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
         child.once('error', (error) => {
           if (!settled) {
             // Never a requested stop: the process could not be spawned, or a
-            // signal could not be delivered to it.
+            // signal could not be delivered to it
             if (exitCode === 0) exitCode = 1;
             log(`${name} failed: ${error.message}; stopping the other.`);
           }

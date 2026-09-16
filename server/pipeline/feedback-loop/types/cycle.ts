@@ -25,15 +25,15 @@ import type {
  * narrow ports the cycle needs rather than one god-object `SharedStore`.
  */
 export interface DailyCycleInput {
-  /** Wall-clock live, simulated T in replay — the cycle reads time only through this. */
+  /** Wall-clock live, simulated T in replay — the cycle reads time only through this */
   clock: Clock;
-  /** Outcomes to attribute. */
+  /** Outcomes to attribute */
   trades: ClosedTradeStore;
-  /** FL's system-of-record for per-analyst attribution, joined by `debate_id`. */
+  /** FL's system-of-record for per-analyst attribution, joined by `debate_id` */
   debate_log: DebateLogStore;
-  /** The three dials, read and written. */
+  /** The three dials, read and written */
   tuning: TuningStore;
-  /** Where every applied move is recorded. */
+  /** Where every applied move is recorded */
   adjustments: AdjustmentLog;
   config: FeedbackConfig;
   /**
@@ -55,9 +55,9 @@ export interface DailyCycleInput {
    */
 }
 
-/** Shape frozen by feedback-loop-spec.md ("Key Interfaces"). */
+/** Shape frozen by feedback-loop-spec.md ("Key Interfaces") */
 export interface DailyCycleResult {
-  /** Per `analyst_id`, bounded. */
+  /** Per `analyst_id`, bounded */
   weight_updates: Record<string, { from: number; to: number }>;
   /**
    * Strategy params AND risk thresholds, keyed by name — every one of them
@@ -66,7 +66,7 @@ export interface DailyCycleResult {
    * is gone, because nothing is pending and the queue it named never drained.
    */
   param_updates: Record<string, { from: number; to: number; direction: 'tighten' | 'loosen' }>;
-  /** True if the cycle wrote at least one dial. */
+  /** True if the cycle wrote at least one dial */
   applied: boolean;
 }
 
@@ -77,7 +77,7 @@ export interface DailyCycleResult {
  * this event-driven path touches none of the daily cycle's dials/log/config.
  */
 export interface OnTradeCloseInput {
-  /** The cosine setup store FL owns and labels on trade close. */
+  /** The cosine setup store FL owns and labels on trade close */
   setup_store: SetupStore;
 }
 

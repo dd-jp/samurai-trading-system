@@ -263,7 +263,7 @@ function ceilingLooksLikeUnconvertedBookGbp(ceilingUsd: number): boolean {
   );
 }
 
-/** What `liveStartingProfile` returns: the paper profile's shape, plus the ceiling it was built against. */
+/** What `liveStartingProfile` returns: the paper profile's shape, plus the ceiling it was built against */
 export type LiveStartingProfile = ReturnType<typeof buildStartingProfileConfigs> &
   Required<Pick<ProductionConfig, 'mode' | 'capitalCeilingUsd'>>;
 
@@ -285,12 +285,12 @@ export function liveStartingProfile(
   // Re-validated even when passed explicitly: a programmatic caller computing a
   // ceiling from somewhere else must not be able to hand this a NaN. Named as
   // the ARGUMENT, so the message does not blame an environment variable that
-  // may be perfectly well set.
+  // may be perfectly well set
   const ceiling = assertLiveCapitalCeilingUsd(ceilingUsd, 'liveStartingProfile(ceilingUsd)');
 
   // A warn, not a refusal — #511's scope is to make the switch work. The
   // operator asked for live; they are told what they are getting, once, on the
-  // stream a soak actually keeps.
+  // stream a soak actually keeps
   logger?.log({
     trace_id: 'startup',
     stage: 'orchestrator',

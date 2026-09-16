@@ -52,7 +52,7 @@ const NOTABLE_NO_GO_REASONS: ReadonlySet<string> = new Set([
   'timeout',
 ]);
 
-/** Whether this verdict should reach the trade channel. */
+/** Whether this verdict should reach the trade channel */
 export function isNotableVerdict(decision: VerdictDecision): boolean {
   if (decision.status === 'go') return true;
   return decision.no_go_reason !== null && NOTABLE_NO_GO_REASONS.has(decision.no_go_reason);

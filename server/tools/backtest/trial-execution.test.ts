@@ -27,7 +27,7 @@ describe('buildTrialGrid', () => {
 
     expect(grid).toHaveLength(12);
 
-    // fastWindow x slowWindow x the three paired risk:reward presets.
+    // fastWindow x slowWindow x the three paired risk:reward presets
     const expectedPresets = [
       { atrStopMult: 2, atrTargetMult: 3 },
       { atrStopMult: 1.5, atrTargetMult: 2 },
@@ -78,7 +78,7 @@ describe('buildTrialGrid', () => {
 
     expect(pairs).toEqual(new Set(['2:3', '1.5:2', '3:4']));
     // A naive nested loop over stopMults x targetMults would produce 9 pairs,
-    // not 3 — this is the guard against that.
+    // not 3 — this is the guard against that
     expect(pairs.size).toBe(3);
   });
 });
@@ -98,7 +98,7 @@ const WINDOW: DateRange = {
   end: new Date(Date.UTC(2026, 0, 1)),
 };
 
-/** A canned `ReplayRunResult`-shaped stand-in — the fake runner never inspects it. */
+/** A canned `ReplayRunResult`-shaped stand-in — the fake runner never inspects it */
 const FAKE_RUN = {
   trades: {
     closedTrades: async () => [],
@@ -107,7 +107,7 @@ const FAKE_RUN = {
   timeline: { barTimestamps: async () => [] },
 };
 
-/** Records every `run` call and returns a fixed `FAKE_RUN` — orchestration-only fake. */
+/** Records every `run` call and returns a fixed `FAKE_RUN` — orchestration-only fake */
 class RecordingRunner implements ReplayRunner {
   readonly calls: Array<{ config: ProxyStrategyConfig; window: DateRange }> = [];
 
@@ -117,7 +117,7 @@ class RecordingRunner implements ReplayRunner {
   }
 }
 
-/** Records the `EvalOptions` it was called with and returns a canned `EvalReport`. */
+/** Records the `EvalOptions` it was called with and returns a canned `EvalReport` */
 class RecordingEvaluator implements EvalExecutor {
   readonly calls: EvalOptions[] = [];
 
@@ -204,11 +204,11 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
       averageCapital: 10_000,
       configTrialLog: new InMemoryConfigTrialLog(),
       // Alternates per (config, asset class) call, in the order runTrialGrid
-      // makes them (stocks first, then crypto, for each config in turn).
+      // makes them (stocks first, then crypto, for each config in turn)
       makeEvaluator: () => evaluators[evaluatorIndex++ % 2] as EvalExecutor,
     });
 
-    // 12 configs x 2 asset classes = 24 (config, asset class) pairs.
+    // 12 configs x 2 asset classes = 24 (config, asset class) pairs
     expect(results).toHaveLength(24);
     expect(results.filter((result) => result.asset_class === 'stocks')).toHaveLength(12);
     expect(results.filter((result) => result.asset_class === 'crypto')).toHaveLength(12);
@@ -223,7 +223,7 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
     // The point of the callback: the operator-facing "grid sized to N=..." line
     // must be built from the sizing that constrained the search, not from a
     // second computation that merely agrees with it. Asserting the announced
-    // `selected` is exactly what ran is what makes that non-negotiable.
+    // `selected` is exactly what ran is what makes that non-negotiable
     const evaluator = new RecordingEvaluator();
     const { assetClass } = makeAssetClass('stocks', STOCK_PERIODS_PER_YEAR);
     const announced: TrialGridSizing[] = [];
@@ -232,14 +232,14 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
       assetClasses: [assetClass],
       // Deliberately NOT the module `WINDOW`, which is six years and wide
       // enough that the cap never bites: this test is about the sizing, so it
-      // needs a window where the grid is actually cut.
+      // needs a window where the grid is actually cut
       window: { start: new Date(Date.UTC(2020, 0, 1)), end: new Date(Date.UTC(2022, 0, 1)) },
       averageCapital: 10_000,
       configTrialLog: new InMemoryConfigTrialLog(),
       makeEvaluator: () => evaluator,
       announceSizing: (sizing) => {
         // Before, not after: a cap reported once the trials are spent is the
-        // ordering #405 exists to correct.
+        // ordering #405 exists to correct
         expect(evaluator.calls).toHaveLength(0);
         announced.push(sizing);
       },
@@ -387,14 +387,14 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
     });
 
     // Two evaluations per config, but still one replay each: re-running the
-    // replay would give the two passes different trades to score.
+    // replay would give the two passes different trades to score
     expect(evaluator.calls).toHaveLength(24);
     expect(runners).toHaveLength(12);
     expect(evaluator.calls.filter((call) => call.scheme === 'walk_forward')).toHaveLength(12);
     expect(evaluator.calls.filter((call) => call.scheme === 'cscv')).toHaveLength(12);
 
     // Everything except the scheme must match, or the two passes would not be
-    // scoring the same thing.
+    // scoring the same thing
     for (const call of evaluator.calls) {
       expect(call.embargo).toBe(50);
       expect(call.barMs).toBe(86_400_000);
@@ -410,7 +410,7 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
   it('records a CSCV failure as a refusal instead of aborting the grid', async () => {
     // A barren fold makes computeMetrics throw. The walk-forward pass answers
     // the kill line and must still abort the grid; the CSCV pass only feeds
-    // PBO, so losing it is a reportable gap, not a lost gate run.
+    // PBO, so losing it is a reportable gap, not a lost gate run
     const evaluator: EvalExecutor = {
       evaluate: async (options: EvalOptions): Promise<EvalReport> => {
         if (options.scheme === 'cscv') {
@@ -439,7 +439,7 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
     expect(results).toHaveLength(12);
     for (const result of results) {
       expect(result.cscv).toEqual({ error: 'computeMetrics: return series has zero variance' });
-      // The walk-forward pass is untouched — the kill line still has its input.
+      // The walk-forward pass is untouched — the kill line still has its input
       expect(result.report.splits).toHaveLength(5);
     }
   });
@@ -476,9 +476,9 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
   });
 });
 
-// --- Real end-to-end smoke test: actual ReplayDriver + EvalExecutorImpl -----
+// Real end-to-end smoke test: actual ReplayDriver + EvalExecutorImpl
 
-/** Day `i` of 2020, as the bar's close time. */
+/** Day `i` of 2020, as the bar's close time */
 function day(i: number): Date {
   return new Date(Date.UTC(2020, 0, 1) + i * 86_400_000);
 }
@@ -534,7 +534,7 @@ class FixtureRegistry implements InstrumentRegistry {
   }
 }
 
-/** A plausible fill (mid moved a tick adversely) — mirrors replay-driver.test.ts's fixture. */
+/** A plausible fill (mid moved a tick adversely) — mirrors replay-driver.test.ts's fixture */
 class NearMidCostModel implements CostModel {
   fill(request: FillRequest, marketState: MarketState): CostModelResult {
     const sign = request.side === 'buy' ? 1 : -1;
@@ -551,7 +551,7 @@ class NearMidCostModel implements CostModel {
   }
 }
 
-/** Bar timestamps within `window`, ascending — the fixture's own `ReplayTimeline`. */
+/** Bar timestamps within `window`, ascending — the fixture's own `ReplayTimeline` */
 function timelineOf(bars: readonly Bar[]): {
   barTimestamps(window: DateRange): Promise<readonly Date[]>;
 } {
@@ -614,10 +614,10 @@ describe('runTrialGrid — real ReplayDriver + EvalExecutorImpl end to end', () 
     });
 
     // #405: the grid is now sized to what the sample supports BEFORE anything
-    // runs, so the count is MinBTL's cap rather than the full cross-product.
+    // runs, so the count is MinBTL's cap rather than the full cross-product
     // Asserted against `minbtl` rather than a literal, so this states the rule
     // instead of pinning whatever number this fixture's bar span happens to
-    // produce.
+    // produce
     const { limit } = minbtl(window);
     expect(limit).toBeLessThan(buildTrialGrid().length);
     expect(results).toHaveLength(limit * 2);
@@ -629,7 +629,7 @@ describe('runTrialGrid — real ReplayDriver + EvalExecutorImpl end to end', () 
     }
 
     // The evaluator instance used per pair is the default EvalExecutorImpl —
-    // not the fakes above.
+    // not the fakes above
     expect(results.every((result) => typeof result.report.window.sharpe === 'number')).toBe(true);
   });
 });
@@ -676,7 +676,7 @@ describe('sizeTrialGridToSample', () => {
   it('SPREADS the retained configs rather than truncating', () => {
     // Taking the first N would keep every config from one corner of the
     // parameter space and call it a smaller search. It is not smaller, it is
-    // narrower — and chosen by array order rather than by design.
+    // narrower — and chosen by array order rather than by design
     const full = buildTrialGrid();
 
     const sizing = sizeTrialGridToSample(full, windowOfYears(2));
@@ -704,7 +704,7 @@ describe('sizeTrialGridToSample', () => {
     // ~45 trials while the cross-product only asks for 12. A message built from
     // `limit` would announce a 45-config grid and then run 12 — the same
     // reported-vs-actual divergence the callback exists to remove. `selected`
-    // is the only field that tracks what runs in BOTH regimes.
+    // is the only field that tracks what runs in BOTH regimes
     const sizing = sizeTrialGridToSample(buildTrialGrid(), windowOfYears(6));
 
     expect(sizing.limit).toBeGreaterThan(12);
@@ -716,13 +716,13 @@ describe('sizeTrialGridToSample', () => {
     // The `limit < 1` guard's mirror image, and this one is REACHABLE: an
     // empty array falls straight through the `requested <= limit` branch and
     // returns an empty selection, which is the vacuous zero-trial verdict the
-    // guard exists to prevent — arrived at from the other direction.
+    // guard exists to prevent — arrived at from the other direction
     expect(() => sizeTrialGridToSample([], windowOfYears(2))).toThrow(/empty grid/);
   });
 
   it('forwards an explicit expectedAnnualSharpe to the MinBTL cap (#637)', () => {
     // A lower E[SR] shrinks the cap sharply — sizing must reflect the value
-    // actually passed, not the hardcoded default.
+    // actually passed, not the hardcoded default
     const full = buildTrialGrid();
     const window = windowOfYears(5);
 
@@ -742,7 +742,7 @@ describe('sizeTrialGridToSample', () => {
 
   it('is deterministic — the same window always yields the same configs', () => {
     // A reproducible verdict is the whole point of Stage 2: a gate that cannot
-    // be re-run to check it is not evidence.
+    // be re-run to check it is not evidence
     const window = windowOfYears(2);
     const first = sizeTrialGridToSample(buildTrialGrid(), window);
     const second = sizeTrialGridToSample(buildTrialGrid(), window);
@@ -777,7 +777,7 @@ describe('periodsPerYearFor (#664)', () => {
 
   it('refuses a bar longer than the session it would be counted in', () => {
     // A 1-hour stock bar is fine (6.5 a session); a 12-hour one is not, and
-    // silently returning 0.54 bars a year would poison every annualized metric.
+    // silently returning 0.54 bars a year would poison every annualized metric
     expect(() => periodsPerYearFor('stocks', '12h')).toThrow(/longer than the stocks session/);
   });
 });

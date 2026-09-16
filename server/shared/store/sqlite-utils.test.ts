@@ -6,7 +6,7 @@ import {
   toStoredTimestampOrNull,
 } from './sqlite-utils.js';
 
-/** The shape better-sqlite3 throws on a PK collision. */
+/** The shape better-sqlite3 throws on a PK collision */
 function driverError(): Error {
   const error = new Error('UNIQUE constraint failed: open_positions.idempotency_key');
   (error as NodeJS.ErrnoException).code = 'SQLITE_CONSTRAINT_PRIMARYKEY';
@@ -19,7 +19,7 @@ describe('isUniqueConstraintError', () => {
   });
 
   // The stores rethrow a message-bearing wrapper, so callers above a store
-  // never see the code-carrying original (PR #290 review, deepseek).
+  // never see the code-carrying original (PR #290 review, deepseek)
   it('recognizes a constraint error wrapped by a store', () => {
     const wrapped = new Error('SqliteExecutionStore.writeAheadPosition: ...', {
       cause: driverError(),
@@ -51,7 +51,7 @@ describe('the timestamp round-trip (#837 M7)', () => {
     expect(fromStoredTimestamp(toStoredTimestamp(original)).getTime()).toBe(original.getTime());
   });
 
-  // Fixed width is what makes MAX()/BETWEEN over the stored TEXT chronological.
+  // Fixed width is what makes MAX()/BETWEEN over the stored TEXT chronological
   it('renders every timestamp at the same width, so TEXT order is time order', () => {
     const written = [
       new Date('2026-01-02T03:04:05.006Z'),
@@ -68,13 +68,13 @@ describe('the timestamp round-trip (#837 M7)', () => {
   });
 
   // The expanded-year form ("+010000-...") sorts before every ordinary row, so
-  // the width check rejects it rather than letting it poison an ordering query.
+  // the width check rejects it rather than letting it poison an ordering query
   it('refuses a year outside the fixed-width range', () => {
     expect(() => toStoredTimestamp(new Date(Date.UTC(10000, 0, 1)))).toThrow(/fixed-width/);
   });
 
   // Left exactly as `Date.prototype.toISOString` has always thrown it — the
-  // helper adds no wrapping of its own.
+  // helper adds no wrapping of its own
   it('lets an invalid Date throw the RangeError it always threw', () => {
     expect(() => toStoredTimestamp(new Date('not a date'))).toThrow(RangeError);
   });
@@ -88,9 +88,9 @@ describe('the timestamp round-trip (#837 M7)', () => {
   // emits a non-millisecond string — production never reaches the reject
   // branch. Loosening STORED_TIMESTAMP to make the milliseconds group
   // optional (`(\.\d{3})?Z$`) left every other test in this suite and in
-  // `sqlite-shared-store`/`sqlite-setup-store` green — only this test failed.
+  // `sqlite-shared-store`/`sqlite-setup-store` green — only this test failed
   // Mock `toISOString()` to drive a non-millisecond string through the
-  // guard's real entry point and pin that it still rejects.
+  // guard's real entry point and pin that it still rejects
   it('rejects a non-millisecond format even though the input Date is valid', () => {
     const spy = vi.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-08-18T09:30:00Z');
     try {

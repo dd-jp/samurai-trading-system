@@ -94,7 +94,7 @@ export type LoggedAlertId = Exclude<AlertId, UnloggedAlertId>;
 /** The port interface a pipeline stage consumes for `K` — e.g. `BreachAlertChannel`. */
 export type AlertPort<K extends AlertId> = NonNullable<AlertChannelSlots[K]>;
 
-/** What the port's single method is called with — the alert, or the heartbeat's `Date`. */
+/** What the port's single method is called with — the alert, or the heartbeat's `Date` */
 export type AlertOf<K extends AlertId> = AlertPort<K>[keyof AlertPort<K>] extends (
   alert: infer A,
 ) => unknown
@@ -105,7 +105,7 @@ type Delivery<K extends AlertId> =
   | { readonly delivery: 'awaited' }
   | {
       readonly delivery: 'detached';
-      /** The log line for a send that failed — the only trace a detached page leaves. */
+      /** The log line for a send that failed — the only trace a detached page leaves */
       sendFailed(alert: AlertOf<K>, error: unknown): LogEntry;
     };
 
@@ -124,7 +124,7 @@ export type AlertSpec<K extends AlertId> = {
 /**
  * The catalogue as the two adapters read it, one entry at a time: method
  * syntax so each entry's alert-typed methods are assignable here, and the
- * table's own mapped type is what keeps every entry honest.
+ * table's own mapped type is what keeps every entry honest
  */
 interface AnyAlertSpec {
   readonly method: string;
@@ -146,7 +146,7 @@ function pct(value: number): string {
 const EXIT_VALUATION_SEAM_LABEL: Record<ExitValuationDegradedAlert['seam'], string> = {
   risk: 'the Risk stage (sizing and recording the exit)',
   verdict: "the Verdict stage (the `breaker` gate (5)'s fire-time re-check)",
-  // #826 — the exit's OWN mark, one stage earlier than the other two.
+  // #826 — the exit's OWN mark, one stage earlier than the other two
   trader: 'the Trader stage (the exited instrument had no mark at all)',
 };
 
@@ -163,7 +163,7 @@ const PARTLY_VALUED_BOOK_COPY = {
 /**
  * Varied per seam because the two conditions cost different things: #841's
  * seams leave `risk_log`'s portfolio figures understated, while #826's leaves
- * the INTENT's own price fields meaningless.
+ * the INTENT's own price fields meaningless
  */
 const EXIT_VALUATION_SEAM_COPY: Record<
   ExitValuationDegradedAlert['seam'],
@@ -197,7 +197,7 @@ const THRESHOLD_CLAMP_WHERE_LABEL: Record<ThresholdClampAlert['where'], string> 
  * The stage each seam's own lines already carry, so the failed-send line files
  * beside them (#1280): the daily seam runs in `runFeedbackCycle`, whose
  * `feedback_cycle_failed` catch — the very catch that raises this alert — logs
- * `stage: 'feedback-loop'`.
+ * `stage: 'feedback-loop'`
  */
 const THRESHOLD_CLAMP_WHERE_STAGE: Record<ThresholdClampAlert['where'], string> = {
   'live-read': 'risk',
@@ -207,7 +207,7 @@ const THRESHOLD_CLAMP_WHERE_STAGE: Record<ThresholdClampAlert['where'], string> 
 /**
  * What each Trader diagnostic kind means and what it costs while it persists —
  * the operator's first question is "do I have to do something tonight", and
- * the answer differs sharply between a parked book and one bad instrument.
+ * the answer differs sharply between a parked book and one bad instrument
  */
 const TRADER_DIAGNOSTIC_CONSEQUENCE: Record<TraderDiagnosticAlert['diagnostic']['kind'], string> = {
   session_end_absent_on_non_crypto:
@@ -247,7 +247,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     method: 'postHeartbeat',
     delivery: 'awaited',
     // A log line nobody tails is not a dead-man's switch — it is a diary. Fine
-    // for a supervised smoke run, never for an unattended soak (#238).
+    // for a supervised smoke run, never for an unattended soak (#238)
     log: (timestamp) => ({
       trace_id: 'heartbeat',
       stage: 'orchestrator',
@@ -263,7 +263,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     delivery: 'awaited',
     // `error`, not `warn`: an orphaned `go` means a verdict approved a trade
     // and the process died before Execution recorded what happened to it —
-    // the one state that can hide a real position from the system.
+    // the one state that can hide a real position from the system
     log: (orphan) => ({
       trace_id: orphan.trace_id,
       stage: 'orchestrator',
@@ -287,7 +287,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     log: (alert) => ({
       // Not a tick trace: a broker anomaly observed by the fill poll, the same
       // synthetic-trace convention `Heartbeat`/`OrphanVerdictScanner` use for
-      // work that belongs to no pipeline pass.
+      // work that belongs to no pipeline pass
       trace_id: 'unpriced-fill',
       stage: 'execution',
       event: 'unpriced_fill_stuck',
@@ -333,7 +333,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
         : 'a partially-filled flatten left a residual position and re-arming its protective ' +
           'legs failed — the position is unprotected; check the order on the venue by hand',
       // Field by field, so `trace_id` is not repeated inside the payload it
-      // already labels the entry with.
+      // already labels the entry with
       payload: {
         idempotency_key: alert.idempotency_key,
         instrument: alert.instrument,
@@ -354,7 +354,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       // #1214: the two cases need different operator behaviour, so they must
       // not read alike. A failed re-arm is retried by the #549 sweep on cadence
       // and may clear itself; a permanently refused one never will, and the
-      // operator IS the remedy.
+      // operator IS the remedy
       //
       // WHY it is permanent is deliberately not spelled out (#1570): the flag
       // covers a venue that cannot express an entry-less protective pair at all
@@ -362,7 +362,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       // grant it (Alpaca, which never releases a `client_order_id`). Naming
       // only the first made the page false for the second, and what the
       // operator must DO is identical either way. The which-and-why is in the
-      // log line's `trace_id` and the adapter's own error text.
+      // log line's `trace_id` and the adapter's own error text
       const remedyClause = alert.rearm_unsupported
         ? `Lot ${alert.idempotency_key}. Re-arming this lot is PERMANENTLY refused — not a bad ` +
           `minute at the venue — so NOTHING will retry stop ${alert.stop} / target ` +
@@ -382,7 +382,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     method: 'postOcoDoubleFillAlert',
     delivery: 'awaited',
     log: (alert) => ({
-      // Observed by the fill poll, not any one tick — `unpriced-fill`'s convention.
+      // Observed by the fill poll, not any one tick — `unpriced-fill`'s convention
       trace_id: 'oco-double-fill',
       stage: 'execution',
       event: 'oco_double_fill',
@@ -501,7 +501,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       // through this SAME instance, and the `control-arm-` prefix is what
       // names the arm — the startup pass logs `reconcile`/`control-arm-reconcile`,
       // the poll `fill-sync`/`control-arm-fill-sync`. See
-      // `FlattenReconcileAlert.trace_id`.
+      // `FlattenReconcileAlert.trace_id`
       trace_id: alert.trace_id,
       stage: 'execution',
       event: 'flatten_reconcile_unresolved',
@@ -517,7 +517,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       },
     }),
     // Labelled with `trace_id` (#1349): the poll's `reconcile`/`fill-sync`
-    // split otherwise has no operator-visible marker on the page itself.
+    // split otherwise has no operator-visible marker on the page itself
     text: (alert) =>
       `Samurai UNRESOLVED FLATTEN [${alert.trace_id}]: ${alert.instrument} (flatten ` +
       `${alert.idempotency_key}) could not be settled against the venue as of ` +
@@ -531,7 +531,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     method: 'postAnalystSkipAlert',
     delivery: 'awaited',
     log: (alert) => ({
-      // The alert is about a RUN of ticks, so it belongs to none of them.
+      // The alert is about a RUN of ticks, so it belongs to none of them
       trace_id: 'analyst-skip',
       stage: 'analysts',
       event: 'analyst_consecutive_skips',
@@ -547,7 +547,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       },
     }),
     // The reasons are the only thing that distinguishes a bad API key from a
-    // data outage from a market that is genuinely closed.
+    // data outage from a market that is genuinely closed
     text: (alert) => {
       const reasons = alert.failures
         .map((failure) => `- ${failure.analyst_type} (${failure.role}): ${failure.reason}`)
@@ -570,10 +570,10 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     log: (alert) => ({
       // Mixed, so answered at runtime (#1280): the daily kill-line batch keeps
       // the synthetic `feedback-cycle` trace; an `llm_spend_cap` breach is
-      // raised inside a tick by `SqliteSpendCap#refuse` and joins that trace.
+      // raised inside a tick by `SqliteSpendCap#refuse` and joins that trace
       // A third provenance — boot's `startingTotal()`, with no ambient trace —
       // lands on the fallback and is indistinguishable from the daily batch;
-      // `BreachAlert` carries no field to resolve it.
+      // `BreachAlert` carries no field to resolve it
       trace_id: currentTraceId() ?? 'feedback-cycle',
       stage: breachStage(alert),
       event: 'kill_threshold_breach',
@@ -586,7 +586,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     }),
     text: formatBreachAlert,
     // A breach that could not be delivered is itself an operator-visible
-    // event — otherwise the one alert that matters most fails silently.
+    // event — otherwise the one alert that matters most fails silently
     sendFailed: (alert, error) => ({
       trace_id: currentTraceId() ?? 'feedback-cycle',
       stage: breachStage(alert),
@@ -606,7 +606,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     delivery: 'detached',
     // `warn`, not `error`: a dial moved inside limits a human set. Not `info`
     // either: a safety limit widening with nobody asked is the thing an
-    // operator scanning a soak log must not scroll past.
+    // operator scanning a soak log must not scroll past
     log: (notice) => ({
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
@@ -625,7 +625,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       },
     }),
     // Past tense and no call to action: ADR-0013 Decision 2 removed the gate
-    // this used to ask for, and nothing here polls Telegram for a reply.
+    // this used to ask for, and nothing here polls Telegram for a reply
     text: (notice) =>
       `Samurai RISK-THRESHOLD LOOSENED: ${notice.name} ${notice.from} -> ${notice.to}.\n` +
       `Applied ${notice.applied_at.toISOString()} — already in force.\n` +
@@ -634,7 +634,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       'dial_adjustments, which is what you reverse it from. No reply is read here.',
     // `error`: the move is already in force, so a lost notice means the
     // operator's picture of the risk limits is wrong until they read the
-    // adjustment log.
+    // adjustment log
     sendFailed: (notice, error) => ({
       trace_id: 'feedback-cycle',
       stage: 'feedback-loop',
@@ -661,11 +661,11 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       const { diagnostic } = alert;
       // `asset_class` is `undefined` for exactly `control_arm_valuation_refused`
       // (see `TraderDiagnostic.asset_class`), so the parenthetical is omitted
-      // rather than rendering the literal string "undefined".
+      // rather than rendering the literal string "undefined"
       const assetClassSuffix =
         diagnostic.asset_class === undefined ? '' : ` (${diagnostic.asset_class})`;
       // Only `lot_carried_past_session_close` sets `arm` (see
-      // `TraderDiagnosticAlert.arm`); omitted rather than printing "undefined arm".
+      // `TraderDiagnosticAlert.arm`); omitted rather than printing "undefined arm"
       const armSuffix = alert.arm === undefined ? '' : ` [${alert.arm} arm]`;
       return (
         `Samurai TRADER DEGRADED: ${alert.instrument}${assetClassSuffix}${armSuffix} reported ` +
@@ -682,7 +682,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
   miCoverageAlerts: {
     method: 'postCoverageAlert',
     delivery: 'awaited',
-    // `warn` — a counter's severity, not an escalation's (#752 criterion 6).
+    // `warn` — a counter's severity, not an escalation's (#752 criterion 6)
     log: (alert) => ({
       trace_id: alert.trace_id,
       stage: 'analysts',
@@ -722,7 +722,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       'closed on trading, not a live risk exposure. Fix the offending risk_thresholds row.',
     sendFailed: (alert, error) => ({
       // The seam's own id, threaded on the alert (#1280), so this line joins
-      // whichever catch raised it rather than a third taxonomy joining neither.
+      // whichever catch raised it rather than a third taxonomy joining neither
       trace_id: alert.trace_id,
       stage: THRESHOLD_CLAMP_WHERE_STAGE[alert.where],
       event: 'threshold_clamp_alert_send_failed',
@@ -741,11 +741,11 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     delivery: 'awaited',
     // `warn`, not `error`: by the time this is called the fallback vendor has
     // already been asked. What this records is that the run has left its
-    // primary data vendor — a fact an operator needs, not a stage failure.
+    // primary data vendor — a fact an operator needs, not a stage failure
     log: (alert) => ({
       // A single failover on a single fetch belongs to the tick that caused
       // it, matching `production/data-failover.ts`'s catch-line (#1118/#1181);
-      // the constant only outside a tick (#1183).
+      // the constant only outside a tick (#1183)
       trace_id: currentTraceId() ?? 'data-failover',
       stage: 'orchestrator',
       event: 'ohlcv_failover_engaged',
@@ -795,11 +795,11 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     },
     sendFailed: (alert, error) => ({
       // `reportExitValuationDegraded` (direct-bind.ts) already logs this same
-      // failed exit under `context.trace_id`; this joins it (#1183, #1280).
+      // failed exit under `context.trace_id`; this joins it (#1183, #1280)
       trace_id: currentTraceId() ?? 'exit-valuation-degraded',
       // The seam that raised it, not a hardcoded `'risk'` — #826 added a
       // `trader` seam, and a line naming the wrong stage is worse than a
-      // generic one when the operator is grepping for the feed fault.
+      // generic one when the operator is grepping for the feed fault
       stage: alert.seam,
       event: 'exit_valuation_alert_send_failed',
       level: 'error',
@@ -823,7 +823,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     // `error`, not `warn`: unlike an OHLCV failover the fallback here is a
     // DIFFERENT calendar, hand-entered and checked only through
     // `fallback_coverage_end` — and its coverage gaps are the dangerous
-    // direction for a flatten boundary (#684).
+    // direction for a flatten boundary (#684)
     log: (alert) => ({
       trace_id: 'startup',
       stage: 'orchestrator',
@@ -864,7 +864,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     method: 'postArmDivergenceAlert',
     delivery: 'detached',
     // `warn`: a MEASUREMENT the operator acts on with judgement — nothing has
-    // failed, nothing was auto-tightened, no position is unprotected.
+    // failed, nothing was auto-tightened, no position is unprotected
     log: (alert) => {
       const { live, control } = alert.comparison;
       return {
@@ -878,7 +878,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
           LOG_ONLY_CANNOT_PAGE,
         payload: {
           reason: alert.reason,
-          // Both columns for both arms, never a return on its own (doc 12 D4).
+          // Both columns for both arms, never a return on its own (doc 12 D4)
           live_return_pct: live.return_pct,
           live_max_drawdown_pct: live.max_drawdown_pct,
           live_trade_count: live.trade_count,
@@ -895,7 +895,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     // `formatArmComparison` holds at the CLI surface. The convergence caveat
     // travels with the alert: the control is always treated as converged, so a
     // non-converging stretch can PRODUCE this alert on its own, and an
-    // operator acting on a phone notification has to see that in the message.
+    // operator acting on a phone notification has to see that in the message
     text: (alert) => {
       const { live, control } = alert.comparison;
       return (
@@ -936,7 +936,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     method: 'postTickSkipAlert',
     delivery: 'awaited',
     // Named instruments, not just a count: WHICH instruments are stuck decides
-    // whether this is one venue lagging or the whole universe.
+    // whether this is one venue lagging or the whole universe
     log: (alert) => ({
       trace_id: 'tick-skip',
       stage: 'tick-loop',
@@ -1018,7 +1018,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     delivery: 'detached',
     // `warn`, not `error`: nothing has degraded yet — the guard posts this
     // only while the cliff is still ahead; once it is behind, boot REFUSES
-    // outright instead of reaching this channel at all (#1378).
+    // outright instead of reaching this channel at all (#1378)
     log: (alert) => ({
       trace_id: 'startup',
       stage: 'orchestrator',
@@ -1095,7 +1095,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
   // concurrent debates at the shipped gate settings, `production/defaults.ts`)
   // and only their RATIO climbing toward 1 is a fault, so the two conditions
   // need different thresholds and different remedies. Blending them into one
-  // alert is review round 1's F1 (`gate-refusal-rate-guard.ts`).
+  // alert is review round 1's F1 (`gate-refusal-rate-guard.ts`)
   gateRefusalRateAlerts: {
     method: 'postGateRefusalRateAlert',
     delivery: 'awaited',
@@ -1146,7 +1146,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     delivery: 'awaited',
     // #1550: instrument and side come off the payload. The text hardcoded
     // "sold" and "REVERSE" (short), which inverts on a buy-to-close — that
-    // over-runs a closed SHORT and leaves the account long.
+    // over-runs a closed SHORT and leaves the account long
     text: (alert) =>
       `Samurai UNATTRIBUTED FLATTEN FILL: flatten ${alert.flatten_idempotency_key} ` +
       `${alert.side === 'sell' ? 'sold' : 'bought to close'} ${alert.qty} ${alert.instrument} ` +
@@ -1165,13 +1165,13 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     // takes): `control-arm-wiring.ts` builds both arms' `reconcile()` off this
     // same function against a SIMULATED broker, whose book no operator can act
     // on. Without this predicate the control arm's simulated positions would
-    // reach a real phone.
+    // reach a real phone
     page: (alert) => !isControlArmTraceId(alert.trace_id),
     // LOGGED, not in `UNLOGGED_ALERT_IDS`: reconcile.ts writes no line for this
     // condition. The divergence reaches the log at `warn` from a DIFFERENT
     // module (`runPoll`, fill-sync.ts) and only on the poll path, so a log-only
     // stand-in here is the sole record on the startup pass rather than a
-    // duplicate — `flattenReconcileAlerts`' arrangement exactly.
+    // duplicate — `flattenReconcileAlerts`' arrangement exactly
     log: (alert) => ({
       trace_id: alert.trace_id,
       stage: 'execution',
@@ -1223,7 +1223,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     method: 'postSaxoWeeklyReminderAlert',
     delivery: 'awaited',
     // `warn`: nothing has failed, this is a standing reminder Saxo itself
-    // recommends (see saxo-weekly-reminder-alert.ts's module doc).
+    // recommends (see saxo-weekly-reminder-alert.ts's module doc)
     log: (alert) => ({
       trace_id: 'saxo-weekly-reminder',
       stage: 'orchestrator',

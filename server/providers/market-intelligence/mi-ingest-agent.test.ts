@@ -11,7 +11,7 @@ import type { AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-
 
 const NOW = new Date('2026-08-15T12:00:00Z');
 const clock: Clock = { now: () => NOW };
-/** The window `fundamental-analyst.ts` itself asks for (MI_CONTEXT_WINDOW_MS). */
+/** The window `fundamental-analyst.ts` itself asks for (MI_CONTEXT_WINDOW_MS) */
 const WINDOW = 24 * 60 * 60 * 1000;
 
 const ADMITS: SpendCap = {
@@ -47,7 +47,7 @@ function article(overrides: Partial<AlpacaNewsArticle> = {}): AlpacaNewsArticle 
   };
 }
 
-/** Returns a fixed score for every item, in input order. */
+/** Returns a fixed score for every item, in input order */
 function scoringClient(sentiment: 1 | 0 | -1 = 1, confidence = 0.8) {
   const calls: string[] = [];
   return {
@@ -55,7 +55,7 @@ function scoringClient(sentiment: 1 | 0 | -1 = 1, confidence = 0.8) {
     client: {
       async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
         calls.push(request.prompt);
-        // Score every numbered line the prompt contains.
+        // Score every numbered line the prompt contains
         const indices = [...request.prompt.matchAll(/^(\d+)\. /gm)].map((match) =>
           Number(match[1]),
         );
@@ -75,7 +75,7 @@ function newsClient(articles: AlpacaNewsArticle[]) {
   } as unknown as AlpacaNewsClient;
 }
 
-/** A client whose `complete` always throws — the shape a provider outage takes. */
+/** A client whose `complete` always throws — the shape a provider outage takes */
 function failingScoringClient(message = 'llm down') {
   return { complete: async () => Promise.reject(new Error(message)) };
 }
@@ -122,7 +122,7 @@ describe('MiIngestAgent', () => {
   // `fresh.length`), `items` is only what got scored. Regressed once this
   // round when `articles` was briefly wired to `unscored.length`, which is
   // always equal to `items.length` (both are 1:1 maps of the same `pairs`),
-  // collapsing the field into a duplicate.
+  // collapsing the field into a duplicate
   it('logs a wider article count than item count when the fetch returns an article for another instrument', async () => {
     const logger = recordingLogger();
     const { agent } = build(
@@ -154,7 +154,7 @@ describe('MiIngestAgent', () => {
   it('stops the fundamental analyst reporting NO DATA', async () => {
     const { agent, store } = build([article()]);
 
-    /** The one MarketDataService member `fundamental-analyst.ts` reaches for. */
+    /** The one MarketDataService member `fundamental-analyst.ts` reaches for */
     const marketData = {
       getMark: async () => ({
         price: 100,
@@ -187,7 +187,7 @@ describe('MiIngestAgent', () => {
     expect(after.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
     expect(after.direction).toBe('bullish');
     // Real confidence rather than the 0.05 floor that pinned the evidence
-    // average and produced #625's 0.5478 ceiling.
+    // average and produced #625's 0.5478 ceiling
     expect(after.confidence).toBeGreaterThan(0.05);
   });
 
@@ -195,7 +195,7 @@ describe('MiIngestAgent', () => {
     // Refresh is per instrument (the `MarketIntelligenceRefresh` contract), so
     // an article tagged AAPL and NVDA becomes one item for AAPL. Scoring is
     // per entity because a headline can be bullish for one ticker and bearish
-    // for another — asking once per instrument is what keeps that honest.
+    // for another — asking once per instrument is what keeps that honest
     const { agent, store } = build([article({ symbols: ['AAPL', 'NVDA'] })]);
 
     await agent.refresh('t', 'AAPL', 'stocks');
@@ -240,7 +240,7 @@ describe('MiIngestAgent', () => {
 
   it('converts a dash-form crypto id to the wire symbol', async () => {
     // The repo carries crypto as `BTC-USD`; Alpaca expects `BTCUSD`. The same
-    // mismatch made every crypto order reject with 'asset not found' in #585.
+    // mismatch made every crypto order reject with 'asset not found' in #585
     const { agent, news } = build([article({ symbols: ['BTCUSD'] })]);
 
     await agent.refresh('t', 'BTC-USD', 'crypto');
@@ -261,9 +261,9 @@ describe('MiIngestAgent', () => {
 
     await agent.refresh('t', '3USL', 'stocks');
 
-    // Fetched the underlying's wire symbol, not the wrapper's.
+    // Fetched the underlying's wire symbol, not the wrapper's
     expect(news.fetchNews).toHaveBeenCalledWith(['SPY'], expect.any(Date), expect.any(Date));
-    // Filed under the resolved subject, not the traded ticker.
+    // Filed under the resolved subject, not the traded ticker
     expect(store.getContext('stocks', WINDOW, 't').news.map((item) => item.entity)).toEqual([
       'SPY',
     ]);
@@ -294,7 +294,7 @@ describe('MiIngestAgent', () => {
     const { agent, archive, scorer } = build([article()]);
 
     await agent.refresh('t', 'AAPL', 'stocks');
-    // Second poll returns the corrected article.
+    // Second poll returns the corrected article
     (
       agent as unknown as { deps: { newsClient: { fetchNews: () => Promise<unknown> } } }
     ).deps.newsClient.fetchNews = async () => [revised];
@@ -319,7 +319,7 @@ describe('MiIngestAgent', () => {
 
     // No scoring call, no item — the analysts fall back to NO_DATA_MARKER, so
     // "could not afford to look" stays distinguishable from "looked and saw
-    // nothing", the same guarantee `GrokAgent` gives.
+    // nothing", the same guarantee `GrokAgent` gives
     expect(scorer.calls).toHaveLength(0);
     expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
     expect(
@@ -339,7 +339,7 @@ describe('MiIngestAgent', () => {
 
     // `false`, not a throw: an outage degrades the desk to NO DATA, a state the
     // analysts already handle, rather than failing a tick that would otherwise
-    // have traded on the technical analyst alone.
+    // have traded on the technical analyst alone
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
     expect(store.getContext('stocks', WINDOW, 't').news).toEqual([]);
   });
@@ -454,7 +454,7 @@ describe('MiIngestAgent', () => {
    * false` in `refresh` that withheld intelligence with no log line — an
    * operator watching for `mi_ingest_scoring_degraded` would see the outage
    * start, then silence, with no record of the two further refreshes it kept
-   * suppressing.
+   * suppressing
    */
   it('logs when the consecutive-failure streak skips a scoring attempt', async () => {
     const archive = new MiArchiveStore();
@@ -489,7 +489,7 @@ describe('MiIngestAgent', () => {
    * scoring path, so a streak left at 2 by a since-resolved outage survived a
    * refresh with nothing new to score (the `unscored.length === 0` early
    * return) and then wrongly skipped the NEXT refresh that finally had new
-   * work, even though scoring itself never failed a third time.
+   * work, even though scoring itself never failed a third time
    */
   it('does not carry a stale skip cooldown across a refresh with nothing new to score', async () => {
     const archive = new MiArchiveStore();
@@ -512,12 +512,12 @@ describe('MiIngestAgent', () => {
     // all, so `unscored.length === 0` and `refresh` returns early, well
     // before the streak-skip check. A fresh client, not a mutation of `news`
     // above — mutating the shared object's `fetchNews` would still be in
-    // effect below when `news` is restored.
+    // effect below when `news` is restored
     (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
     await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
 
     // New work arrives, and scoring itself has recovered. Without the reset,
-    // the stale streak of 2 would skip this attempt with no LLM call.
+    // the stale streak of 2 would skip this attempt with no LLM call
     const scorer = scoringClient();
     (agent as unknown as { deps: { newsClient: unknown; llmClient: unknown } }).deps.newsClient =
       news;
@@ -559,7 +559,7 @@ describe('MiIngestAgent', () => {
 
     // Mirrors the ticket's premise: paper-profile.ts tickIntervalMs (2 min)
     // against this file's own LOOKBACK_MS (60 min) — a sustained outage stays
-    // inside the lookback window for this many refreshes.
+    // inside the lookback window for this many refreshes
     const TICK_MS = 2 * 60_000;
     const REFRESHES_PER_LOOKBACK_WINDOW = 30;
 
@@ -574,7 +574,7 @@ describe('MiIngestAgent', () => {
     // a range: dropping the `MAX_DEGRADED_SKIP` cap from `degradedSkip` would
     // still satisfy "under 10" (uncapped gives 6, since streak 6's uncapped
     // gap of 16 refreshes doesn't fit before the window ends) — only a pinned
-    // count catches that the cap itself is exercised and load-bearing.
+    // count catches that the cap itself is exercised and load-bearing
     expect(attempts).toBe(7);
   });
 
@@ -614,11 +614,11 @@ describe('MiIngestAgent', () => {
       now = new Date(now.getTime() + TICK_MS);
     };
 
-    // Two straight failures: streak 2, one skip queued (degradedSkip(2) = 1).
+    // Two straight failures: streak 2, one skip queued (degradedSkip(2) = 1)
     await tick();
     await tick();
 
-    // A quiet refresh — nothing to score this cycle, not a resolved outage.
+    // A quiet refresh — nothing to score this cycle, not a resolved outage
     (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
     await agent.refresh('t', 'AAPL', 'stocks');
     now = new Date(now.getTime() + TICK_MS);
@@ -629,7 +629,7 @@ describe('MiIngestAgent', () => {
     // 8 more refreshes, still failing. If the quiet tick had reset `streak`
     // to 0, this would re-run the slow 0,0,1,2,4... climb from scratch and
     // attempt far more than twice more here; preserving `streak` keeps the
-    // climb where the pre-quiet outage left it.
+    // climb where the pre-quiet outage left it
     for (let i = 0; i < 8; i++) {
       await tick();
     }
@@ -674,7 +674,7 @@ describe('MiIngestAgent', () => {
       now = new Date(now.getTime() + TICK_MS);
     };
 
-    // Two straight failures: streak 2, one skip queued.
+    // Two straight failures: streak 2, one skip queued
     await agent.refresh('t', 'AAPL', 'stocks');
     advance();
     await agent.refresh('t', 'AAPL', 'stocks');
@@ -684,7 +684,7 @@ describe('MiIngestAgent', () => {
     // The outage ends for good — no more matching articles for well over a
     // full LOOKBACK_MS (30 refreshes at this 2-min cadence). Each quiet
     // refresh clears `skipRemaining` but, absent decay, `streak` would sit
-    // at 2 forever.
+    // at 2 forever
     (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([]);
     for (let i = 0; i < 30; i++) {
       await agent.refresh('t', 'AAPL', 'stocks');
@@ -693,7 +693,7 @@ describe('MiIngestAgent', () => {
 
     // A single new headline arrives, well past LOOKBACK_MS since the last
     // failure — the streak must have decayed to 0, so this is a fresh
-    // streak-1 blip, not a streak-3 continuation.
+    // streak-1 blip, not a streak-3 continuation
     (agent as unknown as { deps: { newsClient: unknown } }).deps.newsClient = newsClient([
       article(),
     ]);
@@ -703,7 +703,7 @@ describe('MiIngestAgent', () => {
 
     // Streak 1 always retries on the very next refresh (degradedSkip(1) ===
     // 0). Without decay, the stale streak-2 would have carried into this
-    // blip as streak 3 (skip 2), and this refresh would be skipped.
+    // blip as streak 3 (skip 2), and this refresh would be skipped
     await agent.refresh('t', 'AAPL', 'stocks');
     expect(attempts).toBe(4);
   });
@@ -711,13 +711,13 @@ describe('MiIngestAgent', () => {
   /**
    * `MarketIntelligenceStore` is in-memory, so before the archive a soak
    * restart lost every item ingested up to that point and the run silently
-   * measured less than it appeared to.
+   * measured less than it appeared to
    */
   it('hydrate() restores a fresh store from the archive after a restart', async () => {
     const { agent, archive } = build([article()]);
     await agent.refresh('t', 'AAPL', 'stocks');
 
-    // A restart: brand-new store, same archive on disk.
+    // A restart: brand-new store, same archive on disk
     const restarted = new MarketIntelligenceStore(clock);
     const afterRestart = new MiIngestAgent({
       archive,
@@ -747,7 +747,7 @@ describe('MiIngestAgent', () => {
     await agent.refresh('t', 'AAPL', 'stocks');
 
     // Seeded directly, so the assertion cannot pass just because nothing wrote
-    // a Polymarket item in the first place.
+    // a Polymarket item in the first place
     const at = new Date('2026-08-15T11:45:00Z');
     archive.write(
       [
@@ -950,7 +950,7 @@ describe('MiIngestAgent', () => {
     // (`degraded: false`) while still omitting every supplied index, the model
     // must answer with at least one shape-valid entry for an index outside the
     // batch — `isScore` checks shape, not bounds — so neither index 0 nor 1
-    // finds a match in `byIndex`.
+    // finds a match in `byIndex`
     const answersOutOfRangeIndexOnly = {
       async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
         const raw = JSON.stringify({ scores: [{ index: 99, sentiment: 1, confidence: 0.8 }] });

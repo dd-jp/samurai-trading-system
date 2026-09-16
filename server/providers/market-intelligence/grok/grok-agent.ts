@@ -81,7 +81,7 @@ import type { IntelligenceItem } from '../types.js';
  */
 export const GROK_REFRESH_MS = 2 * 60 * 60 * 1000;
 
-/** What one Grok call needs to return, normalised away from the wire shape. */
+/** What one Grok call needs to return, normalised away from the wire shape */
 export interface GrokSentimentClient {
   /**
    * Live X/Twitter sentiment for one instrument. Returns the items and the
@@ -139,7 +139,7 @@ export interface GrokSpendSink {
     trace_id: string;
     stage: string;
     model: string;
-    /** The call's text (#1035); the sink decides whether to persist it. */
+    /** The call's text (#1035); the sink decides whether to persist it */
     prompt?: string | undefined;
     response?: string | undefined;
     usage: {
@@ -148,7 +148,7 @@ export interface GrokSpendSink {
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
     };
-    /** Passed through so the tool half of a provider's bill reaches `cost_usd` (#476). */
+    /** Passed through so the tool half of a provider's bill reaches `cost_usd` (#476) */
     server_tool_calls?: number | undefined;
     latency_ms: number;
     timestamp: Date;
@@ -162,7 +162,7 @@ export interface GrokAgentDeps {
   spendSink: GrokSpendSink;
   clock: Clock;
   logger?: Logger;
-  /** Overridable for tests; defaults to `GROK_REFRESH_MS`. */
+  /** Overridable for tests; defaults to `GROK_REFRESH_MS` */
   refreshMs?: number;
   /**
    * Where retrieved items are persisted for replay (#558) and for the
@@ -306,8 +306,8 @@ export class GrokAgent {
 
     if (this.#buckets.get(instrument) === bucket) return false;
 
-    // Checked BEFORE the call, through the same seam the debate admits against.
-    // A provider that spends first and asks later is outside the ceiling.
+    // Checked BEFORE the call, through the same seam the debate admits against
+    // A provider that spends first and asks later is outside the ceiling
     const verdict = this.#deps.spendCap.check();
     if (!verdict.admitted) {
       this.#deps.logger?.log({
@@ -329,7 +329,7 @@ export class GrokAgent {
 
       // Metered whether or not any items came back: a call that returned
       // nothing still cost money, and a cap that only counts productive calls
-      // is not a cap.
+      // is not a cap
       this.#deps.spendSink.record({
         trace_id,
         stage: 'market_intelligence',
@@ -338,13 +338,13 @@ export class GrokAgent {
         // Undefined for every client we have (see the interface above), but
         // passed through rather than dropped: a provider that bills tool
         // invocations separately from tokens would otherwise be under-counted
-        // by the meter, silently, on every call.
+        // by the meter, silently, on every call
         server_tool_calls: result.server_tool_calls,
         latency_ms: result.latency_ms,
         timestamp: asOf,
         // #1035. Whether these are persisted is the sink's decision
         // (`SqliteLlmSpendStore`'s `captureText`), not this agent's — the
-        // agent's job is to stop discarding them.
+        // agent's job is to stop discarding them
         prompt: result.prompt,
         response: result.raw_text,
       });
@@ -356,7 +356,7 @@ export class GrokAgent {
       // distinguishable from "we looked and saw nothing" once a third case
       // ("we recalled, but never looked") becomes possible. Discarding here,
       // not upstream in the client, means the guard is transport-agnostic:
-      // it fires the same way for any future client, Nous or otherwise.
+      // it fires the same way for any future client, Nous or otherwise
       //
       // Logged on EVERY call with no evidence, not only when it discards a
       // non-empty answer: `NousSentimentClient` reports no evidence on every
@@ -365,7 +365,7 @@ export class GrokAgent {
       // as "could not look" rather than reading identically to "looked and
       // saw nothing" in the logs. `info` when there was nothing to discard,
       // `warn` when real items were dropped — the level itself carries
-      // whether anything was actually lost this call.
+      // whether anything was actually lost this call
       const items = result.retrievalEvidence ? result.items : [];
       if (!result.retrievalEvidence) {
         this.#deps.logger?.log({
@@ -396,26 +396,26 @@ export class GrokAgent {
       });
 
       // Marked only after a SUCCESSFUL call. Marking before would turn one
-      // transient failure into a whole bucket of silence.
+      // transient failure into a whole bucket of silence
       this.#buckets.set(instrument, bucket);
       return true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       // The one failure that is a CONFIGURATION fault rather than an outage,
-      // called out by name (#969).
+      // called out by name (#969)
       //
       // `x_search` runs only on OpenRouter-routed models, and the model is a
       // floating alias — pinning is not on the menu, because the tool 400s on
       // every pinned id. So the alias re-resolving to something unrouted is a
       // live risk, and its symptom is this 400 on every call, forever, with
-      // retries that cannot succeed.
+      // retries that cannot succeed
       //
       // The operator is NOT unalerted when this happens: zero items means
       // empty `social`, and `MiCoverageMonitor` alerts on the FIRST coverage
       // miss. What that alert cannot say is WHY — it reports "no coverage for
       // TSLA", which reads identically to a quiet news hour. This message is
       // what turns that alert into a diagnosis, so it names the cause and the
-      // fix rather than being one more provider error in the stream.
+      // fix rather than being one more provider error in the stream
       const unroutedModel = /search tools are not available|OpenRouter-routed/i.test(detail);
       this.#deps.logger?.log({
         trace_id,
@@ -435,7 +435,7 @@ export class GrokAgent {
           instrument,
           // #1394. This transport does not go through `AnthropicLlmClient`, so
           // it is outside `llm_call_failed`'s count and carries the cause on
-          // its own code instead.
+          // its own code instead
           failure_cause: classifyFailureCause(error),
           ...(unroutedModel ? { unrouted_model: true } : {}),
         },
@@ -480,16 +480,16 @@ export class GrokAgent {
         source: MI_SOURCES.x,
         native_id: projection.status_id,
         // The POST's own time, so a revision ordering compares publication
-        // instants rather than fetch instants.
+        // instants rather than fetch instants
         updated_at: item.timestamp,
         payload: JSON.stringify(projection),
         ingested_at: asOf,
         // `backfill`, not `live`: the timestamp asserted is the post's
         // publication time, so the row claims we would have seen it the
         // instant it published — which is the same guarantee Alpaca's
-        // publisher-dated rows carry, and weaker than GDELT's batch stamp.
+        // publisher-dated rows carry, and weaker than GDELT's batch stamp
         // Claiming `live` here would overstate the lookahead guarantee by up
-        // to a full refresh bucket.
+        // to a full refresh bucket
         fidelity: 'backfill',
       });
 

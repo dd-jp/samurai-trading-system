@@ -4,7 +4,7 @@
  * (dashboard-spec.md "Testing Decisions") — reuses `SqliteExecutionStore` /
  * `SqliteDebateLogStore` where a writer already exists, and raw inserts for
  * tables with no cut-over writer yet (`verdict_log`, `analyst_weights`,
- * `latest_mark`, `current_tick`).
+ * `latest_mark`, `current_tick`)
  */
 import { CONTROL_TRACE_SUFFIX } from '../../apps/orchestrator/control-arm.js';
 import { SqliteAlertDeliveryLog } from '../../apps/orchestrator/index.js';
@@ -96,7 +96,7 @@ function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   };
 }
 
-/** Seed a closed trade through the store's one write path (`applyLotAdvance`). */
+/** Seed a closed trade through the store's one write path (`applyLotAdvance`) */
 function seedClosedTrade(execStore: SqliteExecutionStore, trade: ClosedTrade): Promise<void> {
   return execStore.applyLotAdvance({
     idempotency_key: trade.idempotency_key,
@@ -118,7 +118,7 @@ function makeFill(overrides: Partial<Fill> = {}): Fill {
   };
 }
 
-/** Seed a closed trade AND its fills in one `applyLotAdvance` call (#940). */
+/** Seed a closed trade AND its fills in one `applyLotAdvance` call (#940) */
 function seedClosedTradeWithFills(
   execStore: SqliteExecutionStore,
   trade: ClosedTrade,
@@ -153,7 +153,7 @@ describe('SqliteQueryStore', () => {
     expect(positions[0]).toMatchObject({ idempotency_key: 'key-1', instrument: 'AAPL' });
   });
 
-  // #1592: the arm parameter itself, on real rows from both arms in one table.
+  // #1592: the arm parameter itself, on real rows from both arms in one table
   it('scopes getOpenPositions to the named arm, excluding the other arm entirely', async () => {
     const db = makeDb();
     const liveStore = new SqliteExecutionStore(db, 'live');
@@ -222,7 +222,7 @@ describe('SqliteQueryStore', () => {
     const db = makeDb();
     const debateStore = new SqliteDebateLogStore(db);
     // No `termination`/`termination_cause` override — NULL on the row, same
-    // shape as a debate written before migrations 0041/0051.
+    // shape as a debate written before migrations 0041/0051
     debateStore.writeLog(makeDebateLog({ debate_id: 'debate-pre-migration' }));
 
     const store = new SqliteQueryStore(db);
@@ -312,14 +312,14 @@ describe('SqliteQueryStore', () => {
 
     const store = new SqliteQueryStore(db);
 
-    // Unbounded: only the two live rows come back, newest first.
+    // Unbounded: only the two live rows come back, newest first
     expect(store.getVerdictHistory(10, NOW, 'live').map((v) => v.trace_id)).toEqual([
       'trace-live-1',
       'trace-live-2',
     ]);
 
     // Bounded to 2, with the two most recent rows both control-arm: a
-    // pre-filter LIMIT would return an empty page here.
+    // pre-filter LIMIT would return an empty page here
     expect(store.getVerdictHistory(2, NOW, 'live').map((v) => v.trace_id)).toEqual([
       'trace-live-1',
       'trace-live-2',
@@ -328,7 +328,7 @@ describe('SqliteQueryStore', () => {
     // #1594's mirror: `arm: 'control'` must return exactly the control rows,
     // and the same pre-filter-then-limit ordering holds with the arms
     // reversed — `limit: 2` against two live rows newer than both control
-    // rows must not starve the control page.
+    // rows must not starve the control page
     expect(store.getVerdictHistory(10, NOW, 'control').map((v) => v.trace_id)).toEqual([
       `trace-control-2${CONTROL_TRACE_SUFFIX}`,
       `trace-control-1${CONTROL_TRACE_SUFFIX}`,
@@ -398,7 +398,7 @@ describe('SqliteQueryStore', () => {
       execStore,
       makeClosedTrade({ idempotency_key: 'key-closed-2', realized_pnl_net: -20 }),
     );
-    // Outside the trailing-24h window — must be excluded.
+    // Outside the trailing-24h window — must be excluded
     await seedClosedTrade(
       execStore,
       makeClosedTrade({
@@ -446,7 +446,7 @@ describe('SqliteQueryStore', () => {
    * all) is a DIFFERENT fact from wins-and-no-losses above, and
    * `profitFactor()` must keep answering it with a real, finite `0` — the
    * value `toProfitFactorWire` wraps as `{ kind: 'ratio', value: 0 }`, not
-   * `{ kind: 'no_losses' }`.
+   * `{ kind: 'no_losses' }`
    */
   it('returns a finite 0 for profit_factor on a window with no closed trades at all', () => {
     const db = makeDb();
@@ -496,7 +496,7 @@ describe('SqliteQueryStore', () => {
       window_days: 30,
     });
     // agreement × R. `influence_score` is no longer a factor (#370) — the
-    // fixture's 0.5 influence used to halve this figure.
+    // fixture's 0.5 influence used to halve this figure
     expect(attribution['technical-analyst']?.rolling_r).toBeCloseTo(1);
   });
 
@@ -534,7 +534,7 @@ describe('SqliteQueryStore', () => {
     const execStore = new SqliteExecutionStore(db);
     const debateStore = new SqliteDebateLogStore(db);
 
-    // No `termination` supplied — mirrors a row written before migration 0041.
+    // No `termination` supplied — mirrors a row written before migration 0041
     debateStore.writeLog(makeDebateLog());
     await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
 
@@ -581,10 +581,10 @@ describe('SqliteQueryStore', () => {
     );
 
     const store = new SqliteQueryStore(db, 30);
-    // R = 50 / (5 * 10) = 1 for the live trade.
+    // R = 50 / (5 * 10) = 1 for the live trade
     expect(store.getAttribution(NOW, 'live')['technical-analyst']?.rolling_r).toBeCloseTo(1);
     // R = 999 / (5 * 10) = 19.98 for the control trade — a different value,
-    // proving this came from the control row, not a copy of the live one.
+    // proving this came from the control row, not a copy of the live one
     expect(store.getAttribution(NOW, 'control')['technical-analyst']?.rolling_r).toBeCloseTo(19.98);
   });
 
@@ -607,7 +607,7 @@ describe('SqliteQueryStore', () => {
     expect(store.getAttribution(NOW, 'control')).toEqual({});
   });
 
-  // #940: closed trades and their fills, surfaced for the dashboard.
+  // #940: closed trades and their fills, surfaced for the dashboard
   describe('getRecentClosedTrades / getFillsForTrades (#940)', () => {
     it('reads recent closed trades newest-first, respecting the limit', async () => {
       const db = makeDb();
@@ -640,7 +640,7 @@ describe('SqliteQueryStore', () => {
       expect(store.getRecentClosedTrades(10, NOW, 'live')).toEqual([]);
     });
 
-    // #1592: the arm parameter itself, on real rows from both arms in one table.
+    // #1592: the arm parameter itself, on real rows from both arms in one table
     it('scopes getRecentClosedTrades to the named arm, excluding the other arm entirely', async () => {
       const db = makeDb();
       const liveStore = new SqliteExecutionStore(db, 'live');
@@ -707,14 +707,14 @@ describe('SqliteQueryStore', () => {
     });
   });
 
-  // #1595: the P&L headline's source — unbounded, unlike getRecentClosedTrades.
+  // #1595: the P&L headline's source — unbounded, unlike getRecentClosedTrades
   describe('getAllClosedTrades', () => {
     it('reads every closed trade for the named arm, with no LIMIT truncation', async () => {
       const db = makeDb();
       const execStore = new SqliteExecutionStore(db);
       // One more row than any dashboard list's fixed window (10), which would
       // silently truncate the all-time drawdown if this read used a LIMIT the
-      // way getRecentClosedTrades does.
+      // way getRecentClosedTrades does
       for (let i = 0; i < 11; i++) {
         await seedClosedTrade(
           execStore,
@@ -732,7 +732,7 @@ describe('SqliteQueryStore', () => {
     // The discriminating test the fixture-store's #1595 comment calls out: this
     // is proven at the SQL layer, not just at the call-site-threads-arm layer —
     // a `getAllClosedTrades` that forgot `WHERE arm = ?` would still pass a test
-    // that only checks the parameter is threaded through.
+    // that only checks the parameter is threaded through
     it('scopes to the named arm, excluding the other arm entirely', async () => {
       const db = makeDb();
       const liveStore = new SqliteExecutionStore(db, 'live');
@@ -769,7 +769,7 @@ describe('SqliteQueryStore', () => {
 });
 
 describe('SqliteQueryStore.getLlmSpend', () => {
-  /** Writes straight to `llm_spend`; `SqliteLlmSpendStore` has its own suite. */
+  /** Writes straight to `llm_spend`; `SqliteLlmSpendStore` has its own suite */
   function seedSpend(db: StoreHandle, cost: number | null, at: Date): void {
     db.prepare(
       `INSERT INTO llm_spend (
@@ -785,7 +785,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
 
   // #1140: the denominator the dashboard draws against is the one the
   // orchestrator armed, so a raised budget moves the meter instead of leaving
-  // it measuring against a stale figure.
+  // it measuring against a stale figure
   it('reports the cap the orchestrator armed, whatever it was set to', () => {
     const db = makeDb();
     new SqliteLlmSpendCapStore(db).arm(275, NOW);
@@ -793,7 +793,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
   });
 
   // #1196: an armed-uncapped run still carries a non-null `cap_armed_at` —
-  // that is the field that keeps it from reading the same as never-armed.
+  // that is the field that keeps it from reading the same as never-armed
   it('reports a null cap for an uncapped run, and never a default, but still records that it armed', () => {
     const db = makeDb();
     new SqliteLlmSpendCapStore(db).arm(null, NOW);
@@ -804,7 +804,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
 
   // A store no orchestrator has ever booted against bounds nothing either —
   // the one thing it must not do is invent a denominator, and it must say
-  // it was never armed rather than claiming uncapped (#1196).
+  // it was never armed rather than claiming uncapped (#1196)
   it('reports a null cap and a null cap_armed_at when nothing has armed one', () => {
     const spend = new SqliteQueryStore(makeDb()).getLlmSpend(NOW);
     expect(spend.cap_usd).toBeNull();
@@ -812,7 +812,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
   });
 
   // The additional defect this ticket closes: a $0 cap is the MOST
-  // restrictive state possible and must not collapse into "uncapped".
+  // restrictive state possible and must not collapse into "uncapped"
   it('reports an armed $0 cap as 0, distinct from uncapped or never-armed', () => {
     const db = makeDb();
     new SqliteLlmSpendCapStore(db).arm(0, NOW);
@@ -832,7 +832,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
     const spend = store.getLlmSpend(NOW);
 
     // A fresh DB is the normal first-run state; the tile must render $0.00,
-    // not blow up the whole snapshot.
+    // not blow up the whole snapshot
     expect(spend.last_24h).toEqual({
       cost_usd: 0,
       input_tokens: 0,
@@ -842,7 +842,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
       calls: 0,
       unpriced_calls: 0,
       // No debates means no percentile to report; 0 rather than null so the
-      // tile has something to render without unwrapping (#326).
+      // tile has something to render without unwrapping (#326)
       per_debate: {
         debates: 0,
         unattributed_calls: 0,
@@ -884,7 +884,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
     const window = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h;
     // Both calls are counted and both contribute tokens; only the priced one
     // contributes dollars. `unpriced_calls` is what stops the figure being
-    // read as a complete total.
+    // read as a complete total
     expect(window.calls).toBe(2);
     expect(window.unpriced_calls).toBe(1);
     expect(window.cost_usd).toBeCloseTo(1.5, 10);
@@ -905,7 +905,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
 
 /**
  * Per-DECISION cost and LLM latency (#326) — "what does one decision cost me,
- * and is round 3 earning its latency?".
+ * and is round 3 earning its latency?"
  */
 describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
   function seedCall(
@@ -922,7 +922,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
 
   const AT = new Date(NOW.getTime() - 60 * 60 * 1000);
 
-  /** n debates, each of `calls` identical calls — so a per-debate total is calls x each. */
+  /** n debates, each of `calls` identical calls — so a per-debate total is calls x each */
   function seedDebates(
     db: StoreHandle,
     debates: Array<{ id: string; cost: number; latency: number; calls?: number }>,
@@ -936,24 +936,24 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
 
   it('sums each debate before taking percentiles, so the unit is a decision not a call', () => {
     const db = makeDb();
-    // One debate of four calls at 1000ms / $0.01 each = 4000ms / $0.04.
+    // One debate of four calls at 1000ms / $0.01 each = 4000ms / $0.04
     seedDebates(db, [{ id: 'debate-1', cost: 0.01, latency: 1_000, calls: 4 }]);
 
     const stats = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h.per_debate;
     expect(stats.debates).toBe(1);
     // Per-CALL percentiles would report 1000 / $0.01 here. The distinction is
-    // the entire point of grouping on debate_id.
+    // the entire point of grouping on debate_id
     expect(stats.llm_latency_ms_p50).toBe(4_000);
     expect(stats.cost_usd_p50).toBeCloseTo(0.04, 10);
   });
 
   it('reports a p95 that is above p50 on a long tail rather than collapsing to the median', () => {
     const db = makeDb();
-    // Nine fast debates and one slow one: p50 is fast, p95 is the outlier.
+    // Nine fast debates and one slow one: p50 is fast, p95 is the outlier
     // This is the shape a retried call produces, and the reason the tile shows
     // both. Ten samples, deliberately: nearest rank puts p95 at ceil(0.95 x 10)
     // = 10, the slowest — with twenty it would be the 19th and a single
-    // outlier would (correctly) not move it.
+    // outlier would (correctly) not move it
     const debates = Array.from({ length: 9 }, (_, i) => ({
       id: `fast-${i}`,
       cost: 0.01,
@@ -974,7 +974,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
     const db = makeDb();
     seedDebates(db, [{ id: 'debate-1', cost: 0.02, latency: 2_000 }]);
     // A NULL debate_id folded into the grouping would appear as a second
-    // "debate" — here a huge one — and drag p95 up by construction.
+    // "debate" — here a huge one — and drag p95 up by construction
     seedCall(db, { debate_id: null, cost: 9.99, latency: 900_000, at: AT });
     seedCall(db, { debate_id: null, cost: 9.99, latency: 900_000, at: AT });
 
@@ -982,7 +982,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
     expect(window.per_debate.debates).toBe(1);
     expect(window.per_debate.unattributed_calls).toBe(2);
     expect(window.per_debate.llm_latency_ms_p95).toBe(2_000);
-    // The window TOTAL still includes them — they were really spent.
+    // The window TOTAL still includes them — they were really spent
     expect(window.calls).toBe(3);
     expect(window.cost_usd).toBeCloseTo(20, 10);
   });
@@ -993,7 +993,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
     // would seat a fake instantaneous debate in the sample and drag both
     // percentiles down — the exact failure the nullable column exists to
     // prevent. Two unmeasured debates against two measured ones, so a
-    // COALESCE-to-0 implementation would put p50 at 0 and be unmistakable.
+    // COALESCE-to-0 implementation would put p50 at 0 and be unmistakable
     seedCall(db, { debate_id: 'old-1', cost: 0.01, latency: null, at: AT });
     seedCall(db, { debate_id: 'old-2', cost: 0.01, latency: null, at: AT });
     seedDebates(db, [
@@ -1005,7 +1005,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
     // The pre-0012 debates are still debates and still have a cost...
     expect(stats.debates).toBe(4);
     expect(stats.cost_usd_p50).toBeCloseTo(0.01, 10);
-    // ...but the latency percentiles are taken over [5000, 9000] alone.
+    // ...but the latency percentiles are taken over [5000, 9000] alone
     expect(stats.llm_latency_ms_p50).toBe(5_000);
     expect(stats.llm_latency_ms_p95).toBe(9_000);
   });
@@ -1014,7 +1014,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
     const db = makeDb();
     // A debate straddling the migration: some calls timed, some not. Its
     // latency is a floor, not an unknown, so it stays in the sample with the
-    // calls it did measure rather than being dropped wholesale.
+    // calls it did measure rather than being dropped wholesale
     seedCall(db, { debate_id: 'straddle', cost: 0.01, latency: null, at: AT });
     seedCall(db, { debate_id: 'straddle', cost: 0.01, latency: 3_000, at: AT });
     seedCall(db, { debate_id: 'straddle', cost: 0.01, latency: 4_000, at: AT });
@@ -1031,7 +1031,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
 
     const spend = new SqliteQueryStore(db).getLlmSpend(NOW);
     // A window filter applied to the totals but not to the percentiles is the
-    // kind of drift that makes two numbers on one tile describe different days.
+    // kind of drift that makes two numbers on one tile describe different days
     expect(spend.last_24h.per_debate.debates).toBe(1);
     expect(spend.last_24h.per_debate.llm_latency_ms_p95).toBe(1_000);
     expect(spend.last_7d.per_debate.debates).toBe(2);
@@ -1052,7 +1052,7 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   // global `fetch` would then leak into every later test in this file. The
   // hook runs whether the test passed, failed or threw. Deliberately local
   // rather than `unstubGlobals: true` in vitest.config.ts, which would
-  // change teardown for every file in the suite.
+  // change teardown for every file in the suite
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -1071,7 +1071,7 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
 
   // "up to and including asOf" — not "every", since #1131 added a trailing
   // lower bound alongside the pre-existing upper one; the window tests below
-  // pin that lower bound specifically.
+  // pin that lower bound specifically
   it('counts recorded ALERT-chat failures within the trailing window, up to and including asOf', () => {
     const db = makeDb();
     seedFailure(db, new Date(NOW.getTime() - 1_000));
@@ -1082,10 +1082,10 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   });
 
   // #1131: the count used to have no lower bound, so a failure from months
-  // before `asOf` still counted toward "is the alert channel down" forever.
+  // before `asOf` still counted toward "is the alert channel down" forever
   // Pinned at this layer too (the query-store, not just
   // alert-delivery-log.test.ts's direct unit coverage) because this is the
-  // layer the dashboard wire actually reads through.
+  // layer the dashboard wire actually reads through
   it('excludes an ALERT-chat failure older than the trailing 24h window', () => {
     const db = makeDb();
     seedFailure(db, new Date(NOW.getTime() - 25 * 60 * 60 * 1000));
@@ -1098,7 +1098,7 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   // sends included — but the tile is labeled "Alert channel" and answers "is
   // the alert channel down", so a heartbeat-chat outage must not degrade it
   // (#342's isolation already keeps a heartbeat failure from advancing or
-  // triggering the escalation alert itself; this is the read-side twin).
+  // triggering the escalation alert itself; this is the read-side twin)
   it('excludes a non-alert (heartbeat) chat_id row from the dashboard count', () => {
     const db = makeDb();
     seedFailure(db, NOW, HEARTBEAT_CHAT_ID);
@@ -1119,7 +1119,7 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   // (service-api/index.ts), the same configuration under which the
   // orchestrator never constructs a real Telegram client either — so this is
   // the "no known channel to answer the question about" case, not a bug
-  // being papered over by returning 0.
+  // being papered over by returning 0
   it('returns 0 when no alert chat id is configured, even with matching rows present', () => {
     const db = makeDb();
     seedFailure(db, NOW, ALERT_CHAT_ID);
@@ -1137,7 +1137,7 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   // dashboard poll makes. If the escalation attempt's own failure were ever
   // mistakenly recorded as a second delivery failure (the thing
   // telegram-bot-api-client.test.ts's "swallowed, not recorded as a second
-  // failure" pins from the writer side), this count would overshoot 5.
+  // failure" pins from the writer side), this count would overshoot 5
   it('reads every permanently-failed send through the durable log even when the channel is totally dead, escalation attempts included', async () => {
     const db = makeDb();
     const alertDeliveryLog = new SqliteAlertDeliveryLog(db);
@@ -1160,15 +1160,15 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
     // Waits on the thing the test is about rather than on the clock: six
     // fetches is five awaited sends (`maxAttempts: 1`) plus the one
     // fire-and-forget escalation the 3rd failure fires
-    // (`DELIVERY_FAILURE_ALERT_EVERY` is 3, and 5 % 3 !== 0, so exactly one).
+    // (`DELIVERY_FAILURE_ALERT_EVERY` is 3, and 5 % 3 !== 0, so exactly one)
     // A bare `setTimeout(5)` here was load-flaky and proved nothing; this
     // asserts the escalation was actually attempted, which is the whole
-    // point of expecting 5 rows and not 6 below.
+    // point of expecting 5 rows and not 6 below
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
 
     // `recordFailure` stamps the REAL wall clock (`new Date()`), not the
     // fixture `NOW` above — read forward of it, not at it, or every row
-    // this test just wrote would be filtered out as "in the future".
+    // this test just wrote would be filtered out as "in the future"
     const readAsOf = new Date(Date.now() + 60_000);
     expect(new SqliteQueryStore(db, 30, ALERT_CHAT_ID).getAlertDeliveryFailureCount(readAsOf)).toBe(
       5,
@@ -1178,7 +1178,7 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
 
 describe('percentile', () => {
   it('returns 0 for an empty sample rather than NaN or undefined', () => {
-    // A fresh database has no debates; the tile must render, not crash.
+    // A fresh database has no debates; the tile must render, not crash
     expect(percentile([], 0.5)).toBe(0);
     expect(percentile([], 0.95)).toBe(0);
   });
@@ -1187,14 +1187,14 @@ describe('percentile', () => {
     const sample = [10, 20, 30, 40];
     expect(percentile(sample, 0.5)).toBe(20);
     expect(percentile(sample, 0.95)).toBe(40);
-    // 0.25 x 4 = 1 exactly — the boundary an off-by-one gets wrong.
+    // 0.25 x 4 = 1 exactly — the boundary an off-by-one gets wrong
     expect(percentile(sample, 0.25)).toBe(10);
   });
 
   it('clamps to the ends instead of reading past the array', () => {
     expect(percentile([7], 0.5)).toBe(7);
     expect(percentile([7], 0.95)).toBe(7);
-    // fraction 0 would give rank 0; the smallest observation is the answer.
+    // fraction 0 would give rank 0; the smallest observation is the answer
     expect(percentile([7, 9], 0)).toBe(7);
     expect(percentile([7, 9], 1)).toBe(9);
   });
@@ -1285,7 +1285,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     seedMark(db, 'TSLA', 'stocks');
     seedMark(db, 'BTC-USD', 'crypto');
     // An instrument mid-tick that has no mark yet must still get a lane —
-    // otherwise the one instrument actually doing something is the one missing.
+    // otherwise the one instrument actually doing something is the one missing
     seedTick(db, {
       instrument: 'ETH-USD',
       asset_class: 'crypto',
@@ -1348,15 +1348,15 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       { instrument: 'SPY', asset_class: 'stocks' },
     ]);
     // The lane is not merely present — it carries the trace, which is what
-    // makes the union worth having rather than a wider list of empty chips.
+    // makes the union worth having rather than a wider list of empty chips
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
   });
 
   it('keeps a priced instrument with no recent activity as an idle lane', () => {
     const db = makeDb();
-    // Marked before the previous close and silent since — the stale-stock case.
+    // Marked before the previous close and silent since — the stale-stock case
     // Dropping it would read as "removed from the universe"; the Lobby exists
-    // to say "priced, nothing running".
+    // to say "priced, nothing running"
     seedMark(db, 'TSLA', 'stocks');
     seedAudit(db, {
       trace_id: 'trace-old',
@@ -1377,7 +1377,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     const db = makeDb();
     // Alphabetically ahead of ZETA on both keys, so only the activity ranking
     // can save ZETA from the cap — and evicting the one instrument that is
-    // running is exactly this ticket's failure mode arriving by another door.
+    // running is exactly this ticket's failure mode arriving by another door
     seedMark(db, 'AAPL', 'stocks');
     seedMark(db, 'MSFT', 'stocks');
     seedAudit(db, {
@@ -1436,7 +1436,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
 
   /**
    * The same exclusion with no other source to fall back on: a control-only
-   * instrument must not get a lane at all, not merely lose ties to a live one.
+   * instrument must not get a lane at all, not merely lose ties to a live one
    */
   it('gives no lane to an instrument only the control arm touched', () => {
     const db = makeDb();
@@ -1643,7 +1643,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       expect(activity.live).toEqual([]);
     });
 
-    /** The `arm: 'live'` mirror of the test above: unaffected by the new branch. */
+    /** The `arm: 'live'` mirror of the test above: unaffected by the new branch */
     it('still includes current_tick for arm: "live"', () => {
       const db = makeDb();
       seedTick(db, {
@@ -1670,7 +1670,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     // instrument, or a class that changes between polls — a lane that flips
     // asset class reshuffles the hero under the operator's pointer, and
     // `MIN(asset_class)` is what pins the answer regardless of which row the
-    // query plan reaches first.
+    // query plan reaches first
     seedMark(db, 'AAPL', 'stocks');
     seedTick(db, {
       instrument: 'AAPL',
@@ -1694,7 +1694,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       { instrument: 'AAPL', asset_class: 'crypto' },
     ]);
     // Repeated because the failure this guards is a value that VARIES, which a
-    // single assertion cannot distinguish from a value that is merely lucky.
+    // single assertion cannot distinguish from a value that is merely lucky
     expect(store.getPipelineActivity(10, LOOKBACK_MS, NOW, 'live').universe).toEqual([
       { instrument: 'AAPL', asset_class: 'crypto' },
     ]);
@@ -1733,7 +1733,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       decision: 'quorum_met',
     });
     // `asset_class` is not on `verdict_log` — every event carries the one its
-    // own `audit_log` row names.
+    // own `audit_log` row names
     expect(activity.events[1]?.stage).toBe('verdict');
   });
 
@@ -1782,7 +1782,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
 
     // One lane holds one trace, so fetching every trace in the window would be
     // payload the view cannot use — on a 3-second poll that is the difference
-    // between a bounded read and one that grows with the soak.
+    // between a bounded read and one that grows with the soak
     expect(activity.events.map((e) => e.trace_id)).toEqual(['new']);
   });
 
@@ -1794,7 +1794,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     seedAudit(db, { trace_id: 'stale', stage: 'verdict', decision: 'go', at: minutesBefore(60) });
     // A crash mid-tick deliberately leaves `current_tick` behind
     // (tick-runner.ts). Outside the window it must not read as in-flight, or
-    // the view reports a dead tick as running for as long as the row survives.
+    // the view reports a dead tick as running for as long as the row survives
     seedTick(db, {
       instrument: 'TSLA',
       asset_class: 'stocks',
@@ -1808,7 +1808,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     expect(activity.events).toEqual([]);
     expect(activity.live).toEqual([]);
     // The lanes themselves survive — an instrument with nothing recent is idle,
-    // not absent.
+    // not absent
     expect(activity.universe).toHaveLength(2);
   });
 
@@ -1850,9 +1850,9 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     });
     seedAudit(db, { trace_id: 'trace-1', stage: 'verdict', decision: 'go', at: minutesBefore(2) });
     // The HITL Telegram callback writes to `audit_log` under the SAME
-    // `trace_id` with its own stage name (telegram-bot-api-client.ts:112).
+    // `trace_id` with its own stage name (telegram-bot-api-client.ts:112)
     // `audit_log.stage` is unconstrained TEXT, so nothing but this filter stops
-    // it landing in a lane as a seventh, unrenderable stage.
+    // it landing in a lane as a seventh, unrenderable stage
     seedAudit(db, {
       trace_id: 'trace-1',
       stage: 'verdict.hitl.telegram_callback',
@@ -1875,7 +1875,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(2),
     });
     // Same ISO millisecond for every stage — what a fixed clock produces, and
-    // where an unspecified tie-break would scramble the walk.
+    // where an unspecified tie-break would scramble the walk
     const sameMs = minutesBefore(2);
     for (const stage of ['analysts', 'debate', 'trader', 'risk', 'verdict']) {
       seedAudit(db, { trace_id: 'trace-1', stage, decision: 'ok', at: sameMs });
@@ -1899,7 +1899,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     // `current_tick` row was deleted at tick end and it never reached Verdict,
     // so before migration 0013 nothing in the schema tied it to AAPL and this
     // lane rendered blank — indistinguishable from a closed market. The
-    // instrument on the audit rows is the whole difference.
+    // instrument on the audit rows is the whole difference
     seedAudit(db, {
       trace_id: 'trace-1',
       stage: 'analysts',
@@ -1946,7 +1946,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     // Half-attributed: `audit_log`'s two 0013 columns are independently
     // nullable, and a lane needs both — its asset class is what orders it and
     // what the view renders it as. Guessing one would put a lane on the wire
-    // claiming an asset class no writer ever recorded.
+    // claiming an asset class no writer ever recorded
     seedAudit(db, {
       trace_id: 'half',
       stage: 'verdict',
@@ -1980,7 +1980,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     // Newer, names AAPL, but carries no asset class — so it is not a trace this
     // view can render. "Attributed" must mean the same thing to the trace
     // choice as it does to the universe, or the newest unrenderable row wins
-    // the lane and blanks a real trace sitting in the same window.
+    // the lane and blanks a real trace sitting in the same window
     seedAudit(db, {
       trace_id: 'half',
       stage: 'verdict',
@@ -2129,7 +2129,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts']);
   });
 
-  /** The control-arm mirror of "keeps an instrument's live stage sequence…" above. */
+  /** The control-arm mirror of "keeps an instrument's live stage sequence…" above */
   it("keeps an instrument's control stage sequence when the live arm touched it too", () => {
     const db = makeDb();
     seedMark(db, 'AAPL', 'stocks');
@@ -2170,7 +2170,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
 
 /**
  * `getRiskCritics` (#1066) — the drawer's invalidation section, joined
- * server-side from `risk_log` through `trader_log` to `risk_critic_log`.
+ * server-side from `risk_log` through `trader_log` to `risk_critic_log`
  */
 describe('SqliteQueryStore.getRiskCritics', () => {
   function seedRisk(
@@ -2363,7 +2363,7 @@ describe('SqliteQueryStore.getRiskCritics', () => {
    * Falsifier arm 2's decisions are excluded, like every other read on this
    * store (#753): the control arm calls no model, so its rows carry no critic
    * verdict, and letting them fill this bounded window would starve the live
-   * arm's decisions of it.
+   * arm's decisions of it
    */
   it('excludes control-arm decisions', () => {
     const db = makeDb();
@@ -2381,7 +2381,7 @@ describe('SqliteQueryStore.getRiskCritics', () => {
     });
     // A control decision with NO trader row: the `debate_id` test cannot see
     // this one at all (the join yields NULL), so only the `trace_id` suffix on
-    // the driving table keeps it out.
+    // the driving table keeps it out
     seedRisk(db, {
       trace_id: `trace-2${CONTROL_TRACE_SUFFIX}`,
       instrument: 'AAPL',

@@ -50,9 +50,9 @@ import type { MetricsSuite, Split } from './validation-types.js';
  * `assertCostModelPriced`.
  */
 export interface ReplayTradeSource {
-  /** Closed round-trips with `closed_at` inside `window`, ascending. */
+  /** Closed round-trips with `closed_at` inside `window`, ascending */
   closedTrades(window: DateRange): Promise<readonly ClosedTrade[]>;
-  /** Every fill of one lot, across all legs — the cost-model attestation. */
+  /** Every fill of one lot, across all legs — the cost-model attestation */
   fills(idempotency_key: string): Promise<readonly Fill[]>;
 }
 
@@ -73,16 +73,16 @@ export interface EvalOptions {
   window: DateRange;
   averageCapital: number;
   periodsPerYear: number;
-  /** Passed through to `generateSplits`; `cscv` is the PBO matrix's source. */
+  /** Passed through to `generateSplits`; `cscv` is the PBO matrix's source */
   scheme: SplitScheme;
   embargo: number;
   barMs: number;
 }
 
-/** One split's out-of-sample result: the split evaluated, and its suite. */
+/** One split's out-of-sample result: the split evaluated, and its suite */
 export interface SplitEval {
   split: Split;
-  /** Computed over the split's **test** ranges only — the OOS sample. */
+  /** Computed over the split's **test** ranges only — the OOS sample */
   metrics: MetricsSuite;
 }
 
@@ -100,7 +100,7 @@ export interface EvalReport {
   splits: SplitEval[];
 }
 
-/** Seam: the mined walk-forward/CPCV split + eval-metric executor. */
+/** Seam: the mined walk-forward/CPCV split + eval-metric executor */
 export interface EvalExecutor {
   evaluate(options: EvalOptions): Promise<EvalReport>;
 }

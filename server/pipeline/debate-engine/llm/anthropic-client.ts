@@ -91,7 +91,7 @@ export interface AnthropicMessageRequest {
   messages: Array<{ role: 'user'; content: string }>;
 }
 
-/** The subset of the Messages API response this client reads (text content blocks). */
+/** The subset of the Messages API response this client reads (text content blocks) */
 export interface AnthropicMessageResponse {
   content: Array<{ type: string; text?: string }>;
   /**
@@ -174,7 +174,7 @@ export interface AnthropicMessagesClient {
  * One retried attempt, as reported to `AnthropicLlmClientConfig.onRetryAttempt`
  * (#1080): the shared loop's report plus the identity fields only this client
  * holds, so a log line can name which model, which trace and which debate paid
- * for the attempt that vanished.
+ * for the attempt that vanished
  */
 export interface LlmRetryAttemptReport extends RetryAttemptReport {
   model: string;
@@ -190,7 +190,7 @@ export interface LlmRetryAttemptReport extends RetryAttemptReport {
  */
 export interface LlmCallFailureReport {
   failure_cause: FailureCause;
-  /** The thrown value itself, so the observer can render it as it sees fit. */
+  /** The thrown value itself, so the observer can render it as it sees fit */
   error: unknown;
   model: string;
   trace_id: string | undefined;
@@ -201,7 +201,7 @@ export interface LlmCallFailureReport {
 export interface AnthropicLlmClientConfig {
   model: string;
   max_tokens: number;
-  /** Per-attempt timeout; exceeding this raises `LlmTimeoutError` and may be retried. */
+  /** Per-attempt timeout; exceeding this raises `LlmTimeoutError` and may be retried */
   timeoutMs: number;
   retry: LlmRetryConfig;
   /**
@@ -280,7 +280,7 @@ function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
     const value = context[field as keyof LlmRequestContext];
     // Absent optional fields stay absent rather than serializing as `null` —
     // `JSON.stringify` drops `undefined` values anyway, so this only keeps the
-    // rendered prompt byte-identical to what it was before this indirection.
+    // rendered prompt byte-identical to what it was before this indirection
     if (value !== undefined) {
       promptContext[field] = value;
     }
@@ -379,7 +379,7 @@ function extractText(response: AnthropicMessageResponse): string {
  * Duck-types the injected client's thrown errors into the typed hierarchy
  * (errors.ts) via the Anthropic SDK's conventional `status` field, rather
  * than importing the SDK's own error classes — keeping `AnthropicMessagesClient`
- * a structural interface any provider client can satisfy.
+ * a structural interface any provider client can satisfy
  */
 function classifyProviderError(error: unknown): Error {
   if (
@@ -390,13 +390,13 @@ function classifyProviderError(error: unknown): Error {
     // Passed through rather than duck-typed down to `LlmProviderError`: the
     // refusal's `signal` and `usage` are the only record of what the burned
     // call cost, and re-wrapping would discard both (#1391). A truncation
-    // carries `max_tokens`/`usage` for the same reason (#1394).
+    // carries `max_tokens`/`usage` for the same reason (#1394)
     error instanceof LlmRefusalError ||
     error instanceof LlmTruncatedError ||
     // #1080: an in-flight refusal names a call that was never sent. Duck-typed
     // down to `LlmProviderError` it would be counted as `transport` — a
     // counterfeit gateway fault, and precisely the conflation the gate exists
-    // to remove.
+    // to remove
     error instanceof LlmAdmissionRefusedError
   ) {
     return error;
@@ -433,7 +433,7 @@ export class AnthropicLlmClient implements LlmClient {
     // Checked before the retry loop, not inside it: a request whose signal is
     // already aborted must cost nothing at all. This is the guard that makes
     // "no further LLM calls after the budget fires" (#347) hold even for a
-    // call the round loop had already begun to dispatch.
+    // call the round loop had already begun to dispatch
     if (request.signal?.aborted === true) {
       return Promise.reject(
         this.reportFailure(
@@ -455,7 +455,7 @@ export class AnthropicLlmClient implements LlmClient {
             // Read off the request's own attribution rather than threaded
             // separately: it is the SAME source `recordSpend` bills against,
             // so a retried attempt and the attempt that eventually succeeded
-            // are joinable on `debate_id` without a second convention.
+            // are joinable on `debate_id` without a second convention
             const attribution = request.context.attribution;
             onRetryAttempt({
               ...report,
@@ -468,7 +468,7 @@ export class AnthropicLlmClient implements LlmClient {
       // The ONE place a production LLM failure is guaranteed to be named
       // (#1394). Every caller below this client either swallows the error to
       // fail open or re-renders it in its own words; this fires once, after
-      // the retry budget, before either.
+      // the retry budget, before either
     ).catch((error: unknown) => {
       throw this.reportFailure(request, error);
     });
@@ -476,7 +476,7 @@ export class AnthropicLlmClient implements LlmClient {
 
   /**
    * Returns `error` unchanged — the observer is a side channel, and a throw
-   * from a logger must not turn a classified failure into a different one.
+   * from a logger must not turn a classified failure into a different one
    */
   private reportFailure<T>(request: LlmRequest<T>, error: unknown): unknown {
     const onCallFailed = this.config.onCallFailed;
@@ -493,7 +493,7 @@ export class AnthropicLlmClient implements LlmClient {
       });
     } catch {
       // Same guard `withRetry` puts around `onRetry`: an observer that throws
-      // loses its own line, never the call's real failure.
+      // loses its own line, never the call's real failure
     }
     return error;
   }
@@ -505,7 +505,7 @@ export class AnthropicLlmClient implements LlmClient {
     // `request.prompt` and the context afterwards. A reconstruction is a
     // different artifact: it answers "what would we send now", not "what was
     // this call actually asked", and the second question is the one an
-    // operator has on day six of a soak.
+    // operator has on day six of a soak
     const content = renderMessageContent(request);
     const attribution = request.context.attribution;
     const gateStage = attribution?.gate_stage ?? attribution?.stage;
@@ -518,7 +518,7 @@ export class AnthropicLlmClient implements LlmClient {
     // would newly lose the `llm_spend` row for a billed call — and
     // `SqliteSpendCap` sums that table, so the cap would silently understate
     // by exactly the malformed responses. This restores the pre-#1035
-    // guarantee while still letting the record carry whatever text existed.
+    // guarantee while still letting the record carry whatever text existed
     let rawText = '';
     try {
       rawText = extractText(response);
@@ -532,14 +532,14 @@ export class AnthropicLlmClient implements LlmClient {
       // response text. The ordering argument is unchanged and now cuts twice: a
       // malformed response is exactly the case whose text an operator most
       // wants to read, so capturing it only for well-formed answers would
-      // withhold the evidence precisely when it is needed.
+      // withhold the evidence precisely when it is needed
       this.recordSpend(request, response, latency_ms, content, rawText);
     }
 
     // Below the metering `finally` for the reason the parse gate is: a refused
     // response was still generated and still billed. Above the parse gate
     // because a refusal is not a bad draw — it must not become the retryable
-    // `LlmMalformedResponseError` its empty text would otherwise produce.
+    // `LlmMalformedResponseError` its empty text would otherwise produce
     if (response.stop_reason === 'refusal') {
       throw new LlmRefusalError(
         `LLM refused to answer: ${this.config.model} returned stop_reason="refusal"`,
@@ -612,7 +612,7 @@ export class AnthropicLlmClient implements LlmClient {
     // two coincide; in tests, the many doubles that return a bare `content`
     // capture nothing. Combined with the floor named above — a call that times
     // out or throws never reaches here — the capture's coverage is "every call
-    // that completed and reported usage", which is narrower than "every call".
+    // that completed and reported usage", which is narrower than "every call"
     if (response.usage === undefined) return;
     try {
       this.spendSink.record({
@@ -632,13 +632,13 @@ export class AnthropicLlmClient implements LlmClient {
       // The sink contract says `record` must not throw, and the SQLite
       // implementation honours it — but `LlmSpendSink` is a public interface
       // any caller may implement, so trusting that contract per-implementation
-      // leaves the guarantee one bad sink away from failing a trading call.
-      // Enforced here, at the boundary, where it actually holds.
+      // leaves the guarantee one bad sink away from failing a trading call
+      // Enforced here, at the boundary, where it actually holds
       //
       // Silent by necessity: this class has no logger, and adding one to carry
       // a metering failure would widen a hot constructor for a message the
       // SQLite sink already logs for itself. The observable symptom — a spend
-      // total that stops rising — is on the dashboard either way.
+      // total that stops rising — is on the dashboard either way
     }
   }
 
@@ -673,7 +673,7 @@ export class AnthropicLlmClient implements LlmClient {
         // Abort first, reject second: the point of the ticket is that the
         // request stops, not merely that the caller stops waiting. The same
         // error object is the abort reason, so a wire client that surfaces
-        // `signal.reason` and this race report the identical failure.
+        // `signal.reason` and this race report the identical failure
         timeoutController.abort(expired);
         reject(expired);
       }, this.config.timeoutMs);
@@ -707,11 +707,11 @@ export class AnthropicLlmClient implements LlmClient {
       // A caller-initiated abort surfaces from `fetch` as a generic
       // `AbortError`, which `classifyProviderError` can only call an
       // `LlmProviderError` — i.e. a counterfeit provider fault. Attributed
-      // here instead, where the caller's signal is in scope.
+      // here instead, where the caller's signal is in scope
       if (callerSignal?.aborted === true) {
         // `cause` carries the original: this branch fires on ANY failure that
         // surfaces once the signal is aborted, so a real 429 or 500 racing the
-        // abort would otherwise be silently relabelled and lost.
+        // abort would otherwise be silently relabelled and lost
         throw new LlmCancelledError('LLM call cancelled by caller while in flight', error);
       }
       throw error;

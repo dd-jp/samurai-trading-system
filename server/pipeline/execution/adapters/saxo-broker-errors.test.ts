@@ -34,7 +34,7 @@ describe('isRetryableSaxoBrokerError', () => {
         new SaxoBrokerProviderError('p', 401, undefined, undefined, false, 'GET'),
       ),
     ).toBe(false);
-    // 409 = the duplicate-request guard; retrying inside the window re-earns it.
+    // 409 = the duplicate-request guard; retrying inside the window re-earns it
     expect(
       isRetryableSaxoBrokerError(
         new SaxoBrokerProviderError('p', 409, undefined, undefined, false, 'GET'),
@@ -45,7 +45,7 @@ describe('isRetryableSaxoBrokerError', () => {
 
   it('does not retry a status above the valid HTTP range (#1172)', () => {
     // 599 is the top of the valid 5xx range; 600 cannot be a real HTTP status —
-    // a hostile/broken upstream, not a transient server error to retry against.
+    // a hostile/broken upstream, not a transient server error to retry against
     expect(
       isRetryableSaxoBrokerError(
         new SaxoBrokerProviderError('p', 599, undefined, undefined, false, 'GET'),
@@ -66,7 +66,7 @@ describe('isRetryableSaxoBrokerError', () => {
   // #1223: a transport failure (ECONNRESET, DNS failure, socket hangup) never
   // reaches classifyStatus — it has no `status` at all. Retryability for that
   // shape must follow from the request's HTTP method, not default to either
-  // extreme.
+  // extreme
   describe('status-less transport failures (#1223)', () => {
     it('IS retryable when the failing request was a GET (a safe read)', () => {
       const error = classifySaxoBrokerNetworkError(
@@ -81,7 +81,7 @@ describe('isRetryableSaxoBrokerError', () => {
 
     // This is the money-safety guarantee: a blind retry of a placement whose
     // response was lost can produce a second live order (doc 43). This must
-    // stay false independent of `placeOrder`'s own maxAttempts:1 override.
+    // stay false independent of `placeOrder`'s own maxAttempts:1 override
     it('is NOT retryable when the failing request was a POST (order placement)', () => {
       const error = classifySaxoBrokerNetworkError(
         new Error('socket hang up'),
@@ -94,9 +94,9 @@ describe('isRetryableSaxoBrokerError', () => {
     });
 
     // #1273 does not widen this: it was asked to preserve cancel's existing
-    // timeout retry, not add a status-less retry cancel does not have today.
+    // timeout retry, not add a status-less retry cancel does not have today
     // See `classifySaxoBrokerNetworkError`'s doc comment for why this and the
-    // DELETE-timeout case below are allowed to disagree.
+    // DELETE-timeout case below are allowed to disagree
     it('is NOT retryable when the failing request was a DELETE (cancel is not a safe read)', () => {
       const error = classifySaxoBrokerNetworkError(new Error('ETIMEDOUT'), 'cancelOrder', 'DELETE');
       expect(isRetryableSaxoBrokerError(error)).toBe(false);
@@ -105,7 +105,7 @@ describe('isRetryableSaxoBrokerError', () => {
 
   // #1273: timeout, rate-limit and 5xx retryability now carries the
   // request's verb instead of firing unconditionally. This is the test
-  // #1272 was asked for and did not add.
+  // #1272 was asked for and did not add
   describe('timeout/rate-limit/5xx retryability is verb-aware (#1273)', () => {
     describe('a fetchWithTimeout deadline abort (classifySaxoBrokerNetworkError)', () => {
       it('a POST timeout is NEVER classified retryable', () => {
@@ -123,7 +123,7 @@ describe('isRetryableSaxoBrokerError', () => {
 
       // The preserved behavior: doc 43:33 measured a repeat order-cancel as
       // venue-idempotent (`404 OrderNotFound`), so cancelOrder's existing
-      // timeout retry is kept, not withdrawn, by this ticket.
+      // timeout retry is kept, not withdrawn, by this ticket
       it('a DELETE (cancelOrder) timeout stays retryable (doc 43:33 — repeat cancel is idempotent)', () => {
         const abortError = new DOMException('The operation was aborted', 'TimeoutError');
         const error = classifySaxoBrokerNetworkError(abortError, 'cancelOrder', 'DELETE');

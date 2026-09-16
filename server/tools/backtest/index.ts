@@ -139,11 +139,11 @@ export type {
 } from './eval-types.js';
 export type { FreeStackAggregatesClientOptions } from './free-stack-aggregates-client.js';
 // `maxAlpacaPagesFor` is deliberately NOT re-exported for the same reason
-// `isCryptoSymbol` is not: it has no consumer outside its module.
+// `isCryptoSymbol` is not: it has no consumer outside its module
 // `isCryptoSymbol` is deliberately NOT re-exported: nothing outside this
 // module consumes it, and `docs/coding-standards.md` rules that a barrel entry
 // with no external consumer is dead surface. It stays exported from its own
-// file for its unit test, which is an in-module import.
+// file for its unit test, which is an in-module import
 export { FreeStackAggregatesClient } from './free-stack-aggregates-client.js';
 export type { HttpPolygonClientOptions } from './http-polygon-client.js';
 export { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';

@@ -57,7 +57,7 @@
  */
 
 // The bar grid, from its one defining module — `index.ts` in this directory
-// imports it the same way and states why the barrel is bypassed.
+// imports it the same way and states why the barrel is bypassed
 import {
   DEBATE_BAR_TIMEFRAME_MS,
   floorToBar,
@@ -77,7 +77,7 @@ import {
 /** The archive `source` key this pass reads. Same constant `GdeltIngestAgent` writes under. */
 const SOURCE_GDELT = MI_SOURCES.gdeltGkg;
 
-/** Refuse loudly once, then every Nth consecutive poll — `mi-coverage.ts`'s `shouldAlertAt` convention. */
+/** Refuse loudly once, then every Nth consecutive poll — `mi-coverage.ts`'s `shouldAlertAt` convention */
 export const REFUSAL_LOG_AFTER_CONSECUTIVE = 1;
 
 /**
@@ -97,7 +97,7 @@ export function shouldLogRefusalAt(consecutive: number): boolean {
   return (consecutive - REFUSAL_LOG_AFTER_CONSECUTIVE) % REFUSAL_REPEAT_EVERY === 0;
 }
 
-/** A coverage refusal is an ingestion problem; a quiet hour is the world being quiet. */
+/** A coverage refusal is an ingestion problem; a quiet hour is the world being quiet */
 const REFUSAL_LEVEL: Record<GdeltRefusalReason, 'warn' | 'info'> = {
   baseline_far_end_empty: 'warn',
   baseline_too_sparse: 'warn',
@@ -143,22 +143,22 @@ export interface GdeltScoringPassDeps {
   archive: MiArchiveStore;
   store: MarketIntelligenceStore;
   clock: Clock;
-  /** Which legs to derive for — the universe's asset classes, not every class that exists. */
+  /** Which legs to derive for — the universe's asset classes, not every class that exists */
   assetClasses: readonly AssetClass[];
   logger?: Logger | undefined;
-  /** Overridable so a re-derivation over existing history can change the windows (#556 point 3). */
+  /** Overridable so a re-derivation over existing history can change the windows (#556 point 3) */
   windows?: GdeltWindows | undefined;
 }
 
 export class GdeltScoringPass {
-  /** The debate bar each asset class last EMITTED for; a refusal leaves it unmoved. */
+  /** The debate bar each asset class last EMITTED for; a refusal leaves it unmoved */
   readonly #emittedBar = new Map<AssetClass, number>();
-  /** Consecutive refusals per asset class, reset by an emit or by a change of reason. */
+  /** Consecutive refusals per asset class, reset by an emit or by a change of reason */
   readonly #refusals = new Map<AssetClass, { reason: GdeltRefusalReason; consecutive: number }>();
 
   constructor(private readonly deps: GdeltScoringPassDeps) {}
 
-  /** Logs, absorbing a throw from the logger itself — `gdelt-ingest-agent.ts` has the argument. */
+  /** Logs, absorbing a throw from the logger itself — `gdelt-ingest-agent.ts` has the argument */
   private log(entry: LogEntry): void {
     const logger = this.deps.logger;
     if (logger !== undefined) safeLog(logger, entry);
@@ -191,7 +191,7 @@ export class GdeltScoringPass {
         this.derive(trace_id, asset_class, bar);
       } catch (error) {
         // Per class, not around the loop: one leg's failure must not silently
-        // cost the other leg its aggregate.
+        // cost the other leg its aggregate
         this.logFailure(
           {
             trace_id,
@@ -209,7 +209,7 @@ export class GdeltScoringPass {
     }
   }
 
-  /** One bar's shared clock read and archive slice, each resolved on first use. */
+  /** One bar's shared clock read and archive slice, each resolved on first use */
   private sharedBarRead(): SharedBarRead {
     const windows = this.deps.windows ?? DEFAULT_GDELT_WINDOWS;
     let windowEnd: Date | undefined;
@@ -217,7 +217,7 @@ export class GdeltScoringPass {
 
     // Memoized rather than re-read per class for a second reason beyond the
     // cost: a loop that read the clock twice could straddle a bar boundary and
-    // derive the two legs against different windows.
+    // derive the two legs against different windows
     const end = (): Date =>
       (windowEnd ??= floorToBar(this.deps.clock.now(), DEBATE_BAR_TIMEFRAME_MS));
 
@@ -240,7 +240,7 @@ export class GdeltScoringPass {
     const windowEnd = bar.end();
     // Strictly before `bar.rows()`: a bar every class has already emitted for
     // must cost no archive read at all, which only holds while this guard
-    // returns ahead of the first row read.
+    // returns ahead of the first row read
     if (this.#emittedBar.get(asset_class) === windowEnd.getTime()) return;
 
     const derivation = deriveGdeltAggregate(bar.rows(), { asset_class, windowEnd, windows });

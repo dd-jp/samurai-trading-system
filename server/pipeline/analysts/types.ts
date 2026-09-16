@@ -48,7 +48,7 @@ export interface Signal {
  */
 export const INDICATOR_UNAVAILABLE_COUNTER = 'technical_indicator_unavailable';
 
-/** One indicator kind lost to a short window, with the arithmetic that lost it. */
+/** One indicator kind lost to a short window, with the arithmetic that lost it */
 export interface IndicatorUnavailableEvent {
   trace_id: string;
   analyst_type: string;
@@ -61,11 +61,11 @@ export interface IndicatorUnavailableEvent {
    * the view's `Axis votes: ... over N available axes` line is what reports.
    */
   axis: string;
-  /** The counter's `kind` label — an `IndicatorKind`, or a derived feature name. */
+  /** The counter's `kind` label — an `IndicatorKind`, or a derived feature name */
   kind: string;
-  /** Bars the kind needed. */
+  /** Bars the kind needed */
   required: number;
-  /** Bars the window actually held. */
+  /** Bars the window actually held */
   received: number;
 }
 
@@ -84,7 +84,7 @@ export interface IndicatorUnavailableEvent {
  * or add latency to one.
  */
 export interface AnalystTelemetry {
-  /** Increments `technical_indicator_unavailable{kind}`. */
+  /** Increments `technical_indicator_unavailable{kind}` */
   indicatorUnavailable(event: IndicatorUnavailableEvent): void;
 }
 
@@ -114,7 +114,7 @@ export const NOOP_ANALYST_TELEMETRY: AnalystTelemetry = {
   indicatorUnavailable(): void {
     // Intentionally does nothing — the safe default is silence, not a throw:
     // a counter must never be able to fail a tick (see `AnalystTelemetry`'s
-    // own doc comment).
+    // own doc comment)
   },
 };
 
@@ -124,10 +124,10 @@ export const NOOP_ANALYST_TELEMETRY: AnalystTelemetry = {
  * are applied downstream in the Debate Engine.
  */
 export interface AnalystInput {
-  /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data. */
+  /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data */
   trace_id: string;
   signal: Signal;
-  /** Wall-clock live, simulated T in replay. */
+  /** Wall-clock live, simulated T in replay */
   clock: Clock;
   market_intelligence: MarketIntelligenceStore;
   market_data: MarketDataService;
@@ -220,7 +220,7 @@ export interface Analyst {
  */
 export type AnalystFailureKind = FailureCause;
 
-/** One persona's failure this tick, reason-tagged (analysts-spec.md "Module: Failure Handling"). */
+/** One persona's failure this tick, reason-tagged (analysts-spec.md "Module: Failure Handling") */
 export interface AnalystFailure {
   analyst_type: string;
   role: 'mandatory' | 'optional';
@@ -235,7 +235,7 @@ export interface AnalystFailure {
  * seam (#435), so this result type never needs to carry them.
  */
 export interface AnalystRunResult {
-  /** One per successful applicable analyst; empty if the tick was skipped. */
+  /** One per successful applicable analyst; empty if the tick was skipped */
   views: AnalystView[];
   /**
    * The applicable count before failures — 3 on the equities path Samurai
@@ -243,9 +243,9 @@ export interface AnalystRunResult {
    * of scope per ADR-0014's 2026-08-16 amendment.
    */
   analyst_count: number;
-  /** True if a mandatory analyst failed, blocking the handoff downstream. */
+  /** True if a mandatory analyst failed, blocking the handoff downstream */
   skipped: boolean;
-  /** Every persona failure this tick, reason-tagged. */
+  /** Every persona failure this tick, reason-tagged */
   failures: AnalystFailure[];
 }
 

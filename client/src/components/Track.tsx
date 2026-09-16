@@ -7,7 +7,7 @@ export interface TrackProps {
   /** 0..1 of the track to fill. A non-finite fraction draws nothing. */
   fraction: number;
   tone: MeterTone;
-  /** The accessible name: what the fill measures, with its figure in words. */
+  /** The accessible name: what the fill measures, with its figure in words */
   label: string;
   thick?: boolean;
 }

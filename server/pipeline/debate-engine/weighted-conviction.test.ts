@@ -50,7 +50,7 @@ describe('weightedConvictionFactor', () => {
     // Not approximately. The factor is a ratio of weighted to unweighted
     // agreement, so equal weights make numerator and denominator identical —
     // which is what lets a soak's first fortnight be compared against an
-    // unweighted baseline at all.
+    // unweighted baseline at all
     const seeded = { technical: 1, sentiment: 1, fundamental: 1 };
 
     expect(weightedConvictionFactor(panel, 'bullish', seeded)).toBe(1);
@@ -58,7 +58,7 @@ describe('weightedConvictionFactor', () => {
 
   it('is exactly 1 at any UNIFORM weight, not just 1.0', () => {
     // The seed value is a Feedback Loop config detail; the identity property
-    // must not depend on it being 1.
+    // must not depend on it being 1
     expect(
       weightedConvictionFactor(panel, 'bullish', {
         technical: 0.5,
@@ -97,8 +97,8 @@ describe('weightedConvictionFactor', () => {
   });
 
   it('leaves conviction alone when nobody agrees with the mediator', () => {
-    // `direction` is the mediator's synthesis, not a vote, so this happens.
-    // With no agreement there is nothing for weights to say.
+    // `direction` is the mediator's synthesis, not a vote, so this happens
+    // With no agreement there is nothing for weights to say
     expect(weightedConvictionFactor(panel, 'neutral', { technical: 5 })).toBe(1);
   });
 
@@ -109,7 +109,7 @@ describe('weightedConvictionFactor', () => {
   it('ignores a non-finite or non-positive weight rather than propagating it', () => {
     // A NaN would otherwise make the factor NaN, and NaN * confidence is NaN —
     // which then walks through every conviction comparison downstream, because
-    // every comparison against NaN is false.
+    // every comparison against NaN is false
     const factor = weightedConvictionFactor(panel, 'bullish', {
       technical: Number.NaN,
       sentiment: -1,
@@ -130,7 +130,7 @@ describe('applyAnalystWeights', () => {
 
   it('returns the SAME object at the neutral seed', () => {
     // Identity by reference, so an unweighted run is provably untouched rather
-    // than reconstructed into an equal-looking copy.
+    // than reconstructed into an equal-looking copy
     const original = result(panel);
 
     expect(applyAnalystWeights(original, { technical: 1, sentiment: 1, fundamental: 1 })).toBe(
@@ -153,8 +153,8 @@ describe('applyAnalystWeights', () => {
   });
 
   it('clamps to 1 — a high confidence times a factor above 1 must not exceed the range', () => {
-    // `confidence` is what the Trader's conviction floor and multiplier read.
-    // A value above 1 would flow into sizing arithmetic that has never seen one.
+    // `confidence` is what the Trader's conviction floor and multiplier read
+    // A value above 1 would flow into sizing arithmetic that has never seen one
     const weighted = applyAnalystWeights(result(panel, 0.95), {
       technical: 10,
       sentiment: 10,

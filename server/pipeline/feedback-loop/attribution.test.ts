@@ -31,7 +31,7 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     entry: 100,
     stop: 90,
     filled_size: 10,
-    // initial risk = |100 - 90| * 10 = 100, so realized_pnl_net 200 => R = 2.
+    // initial risk = |100 - 90| * 10 = 100, so realized_pnl_net 200 => R = 2
     realized_pnl_net: 200,
     fees_total: 1,
     opened_at: new Date('2026-07-01T10:00:00Z'),
@@ -157,7 +157,7 @@ describe('creditForContribution — signed by stance-vs-outcome', () => {
 
   it('is exactly agreement × R, so credit survives an all-zero influence debate', () => {
     // The production case: every contribution scores 0 influence. Under the
-    // old formula this collapsed to the shadow term alone.
+    // old formula this collapsed to the shadow term alone
     const contribution = makeContribution({ influence_score: 0 });
     expect(creditForContribution(contribution, 2, 'bullish')).toBe(2);
     expect(creditForContribution(contribution, -1, 'bullish')).toBe(-1);
@@ -165,7 +165,7 @@ describe('creditForContribution — signed by stance-vs-outcome', () => {
 
   it('penalises a wrong analyst at the same magnitude it rewards a right one', () => {
     // Symmetry is the behavioural change #370 makes: shadow credit was
-    // upside-only, so a zero-influence loser used to be floored near 0.
+    // upside-only, so a zero-influence loser used to be floored near 0
     const right = creditForContribution(
       makeContribution({ final_position: 'bullish' }),
       2,
@@ -193,7 +193,7 @@ describe('accumulateCredit — the DebateLog join', () => {
     const credits = accumulateCredit([makeTrade({ debate_id: 'debate-1' })], log);
 
     expect([...credits.keys()].sort()).toEqual(['bear', 'bull']);
-    // Winning long: the bull gains, the bear loses.
+    // Winning long: the bull gains, the bear loses
     expect(credits.get('bull')?.total_credit).toBeGreaterThan(0);
     expect(credits.get('bear')?.total_credit).toBeLessThan(0);
   });

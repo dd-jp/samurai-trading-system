@@ -34,27 +34,27 @@ import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 
-/** The three refusal kinds `#refuse` stamps and escalates (see its doc). */
+/** The three refusal kinds `#refuse` stamps and escalates (see its doc) */
 export type SpendCapRefusalKind = 'budget' | 'corrupt_ledger' | 'read_fault';
 
-/** The answer, with the figures behind it so a refusal can explain itself. */
+/** The answer, with the figures behind it so a refusal can explain itself */
 export type SpendCapVerdict =
   | {
-      /** Admitted: a new debate may proceed. */
+      /** Admitted: a new debate may proceed */
       admitted: true;
-      /** Cumulative `llm_spend.cost_usd` in this database, in USD. */
+      /** Cumulative `llm_spend.cost_usd` in this database, in USD */
       spent_usd: number;
-      /** The ceiling being enforced, in USD. */
+      /** The ceiling being enforced, in USD */
       budget_usd: number;
     }
   | {
-      /** Refused: no new debate may be admitted. */
+      /** Refused: no new debate may be admitted */
       admitted: false;
-      /** Cumulative `llm_spend.cost_usd` in this database, in USD. */
+      /** Cumulative `llm_spend.cost_usd` in this database, in USD */
       spent_usd: number;
-      /** The ceiling being enforced, in USD. */
+      /** The ceiling being enforced, in USD */
       budget_usd: number;
-      /** Operator-readable, safe to log. */
+      /** Operator-readable, safe to log */
       reason?: string;
       /**
        * `'budget'` is the ceiling actually spent, which stays spent until an
@@ -108,7 +108,7 @@ export function spendCapRefusalRemedy(kind: SpendCapRefusalKind): string {
   }
 }
 
-/** The seam the debate step admits against. */
+/** The seam the debate step admits against */
 export interface SpendCap {
   check(): SpendCapVerdict;
 }
@@ -244,7 +244,7 @@ export class SqliteSpendCap implements SpendCap {
     } catch (error) {
       // Fail closed — see the module header. Named as a refusal rather than a
       // thrown error so the tick short-circuits the same way a budget breach
-      // does, instead of surfacing as an unrelated-looking transport fault.
+      // does, instead of surfacing as an unrelated-looking transport fault
       const message = describeThrownSafely(error);
       this.logger?.log({
         // Every `check()` caller runs under an ambient trace id except one:
@@ -252,7 +252,7 @@ export class SqliteSpendCap implements SpendCap {
         // the tick's, and `MiRefreshQueue`'s drain relabels under its own. The
         // exception is `startingTotal()`, which the composition root calls at
         // boot. So the ambient read names whichever caller raised this, and
-        // the constant below is reached from boot alone (#1280).
+        // the constant below is reached from boot alone (#1280)
         trace_id: currentTraceId() ?? 'spend-cap',
         stage: 'debate',
         event: 'llm_spend_cap_read_failed',
@@ -272,7 +272,7 @@ export class SqliteSpendCap implements SpendCap {
     if (!Number.isFinite(spent)) {
       // A non-finite SUM means a corrupt `cost_usd` row. Comparing it would
       // make `spent > budget` false and admit forever, so the guard reads as
-      // enforced while enforcing nothing — this repo's dominant defect shape.
+      // enforced while enforcing nothing — this repo's dominant defect shape
       return this.#refuse('corrupt_ledger', {
         spent_usd: spent,
         budget_usd: this.budgetUsd,
@@ -310,7 +310,7 @@ export class SqliteSpendCap implements SpendCap {
   ): SpendCapVerdict {
     // Stamped on every returned verdict, including the already-announced
     // short-circuit below — a caller reading `kind` off a later, unescalated
-    // refusal must see it too, not only the first one that reached `onBreach`.
+    // refusal must see it too, not only the first one that reached `onBreach`
     const refused: SpendCapVerdict = { admitted: false, ...details, kind };
 
     if (kind === 'budget') {
@@ -325,7 +325,7 @@ export class SqliteSpendCap implements SpendCap {
       this.onBreach?.(refused);
     } catch (error) {
       this.logger?.log({
-        // Same ambient-or-boot shape as `check()`'s fail-closed line above.
+        // Same ambient-or-boot shape as `check()`'s fail-closed line above
         trace_id: currentTraceId() ?? 'spend-cap',
         stage: 'debate',
         event: 'llm_spend_cap_alert_send_failed',

@@ -23,7 +23,7 @@ import type { AnalystView, DebateResult, Direction } from './types.js';
 
 /**
  * Alias of the canonical shared `Logger` shape (shared/types.ts — code-review
- * 2026-08-01, M6), keeping this module's established `LogSink` name.
+ * 2026-08-01, M6), keeping this module's established `LogSink` name
  */
 export type LogSink = Logger;
 
@@ -42,7 +42,7 @@ export interface DebateAnalystFailure {
 export type DebatePersona = 'bull' | 'bear' | 'mediator';
 
 export interface DebateLogger {
-  /** Story 20 / AC: inputs — AnalystViews received and which analysts failed. */
+  /** Story 20 / AC: inputs — AnalystViews received and which analysts failed */
   logInputs(entry: {
     trace_id: string;
     debate_id: string;
@@ -50,7 +50,7 @@ export interface DebateLogger {
     failures: DebateAnalystFailure[];
   }): void;
 
-  /** AC: rounds — what each persona said, when. */
+  /** AC: rounds — what each persona said, when */
   logRound(entry: {
     trace_id: string;
     debate_id: string;
@@ -60,10 +60,10 @@ export interface DebateLogger {
     timestamp: Date;
   }): void;
 
-  /** AC: output — the full DebateResult. */
+  /** AC: output — the full DebateResult */
   logOutput(entry: { trace_id: string; debate_id: string; result: DebateResult }): void;
 
-  /** AC: latency metrics — actual wall-clock time vs budget. */
+  /** AC: latency metrics — actual wall-clock time vs budget */
   logLatency(entry: {
     trace_id: string;
     debate_id: string;
@@ -71,7 +71,7 @@ export interface DebateLogger {
     budget_ms: number;
   }): void;
 
-  /** AC: timeout events — budget exceeded, debate terminated early. */
+  /** AC: timeout events — budget exceeded, debate terminated early */
   logTimeout(entry: {
     trace_id: string;
     debate_id: string;
@@ -80,14 +80,14 @@ export interface DebateLogger {
     reason: string;
   }): void;
 
-  /** AC: analyst failures with reasons. */
+  /** AC: analyst failures with reasons */
   logAnalystFailure(entry: {
     trace_id: string;
     debate_id: string;
     failure: DebateAnalystFailure;
   }): void;
 
-  /** AC: disagreements detected (spec's semantic disagreement detection). */
+  /** AC: disagreements detected (spec's semantic disagreement detection) */
   logDisagreement(entry: {
     trace_id: string;
     debate_id: string;

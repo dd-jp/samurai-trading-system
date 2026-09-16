@@ -81,7 +81,7 @@ describe('startFromEnvironment', () => {
 
   it('rejects an unrecognised SAMURAI_MODE rather than casting it through', async () => {
     // `backtest` auto-approves every HITL gate and `live` spends real money,
-    // so a typo must not reach VerdictImpl/ExecutionImpl as an opaque string.
+    // so a typo must not reach VerdictImpl/ExecutionImpl as an opaque string
     const previous = process.env.SAMURAI_MODE;
     process.env.SAMURAI_MODE = 'papper';
     try {
@@ -101,7 +101,7 @@ describe('startFromEnvironment', () => {
     // TELEGRAM_BOT_TOKEN and the chat ids, SAMURAI_MODE must stay raw. If this
     // ever starts trimming, 'live ' stops being a hard refusal and becomes a
     // real-money path — the opposite direction a "helpful" normalization fix
-    // should ever move this value.
+    // should ever move this value
     const previous = process.env.SAMURAI_MODE;
     process.env.SAMURAI_MODE = 'live ';
     try {
@@ -119,7 +119,7 @@ describe('startFromEnvironment', () => {
   it('lists every transport and stage config as a required injection', () => {
     // Guards against a future field being added to ProductionConfig as a
     // silently-optional dependency: these are the seams with no in-repo
-    // implementation, and the list is the contract.
+    // implementation, and the list is the contract
     expect(REQUIRED_INJECTED_CONFIG).toContain('riskConfig');
     expect(REQUIRED_INJECTED_CONFIG).toContain('verdictConfig');
     expect(REQUIRED_INJECTED_CONFIG).toContain('executionConfig');
@@ -129,7 +129,7 @@ describe('startFromEnvironment', () => {
     // implementation must not stay on this list, or the entrypoint keeps
     // demanding something the composition root can build for itself. These
     // three left the list when #273/#286 (Alpaca HTTP clients) and #276
-    // (AccountStateProvider) landed.
+    // (AccountStateProvider) landed
     expect(REQUIRED_INJECTED_CONFIG).not.toContain('alpacaBrokerClient');
     expect(REQUIRED_INJECTED_CONFIG).not.toContain('alpacaDataClient');
     expect(REQUIRED_INJECTED_CONFIG).not.toContain('accountState');
@@ -146,7 +146,7 @@ describe('startFromEnvironment', () => {
     // same list-and-name mechanism is reused for, because the alternative was
     // an equities-only default resolving on a closed session into an EMPTY
     // tick plan indistinguishable from a healthy no-trade run — see
-    // `startFromEnvironment`'s own doc comment on `REQUIRED_INJECTED_CONFIG`.
+    // `startFromEnvironment`'s own doc comment on `REQUIRED_INJECTED_CONFIG`
     expect(
       [...REQUIRED_INJECTED_CONFIG]
         .filter((key) => key !== 'universe')
@@ -159,7 +159,7 @@ describe('startFromEnvironment', () => {
     // #275 landed a real `TelegramBotApiClient`, so the guard's original text
     // was describing a codebase that no longer exists. An error message that
     // is confidently out of date is worse than a terse one: it sends an
-    // operator looking for work that is already done.
+    // operator looking for work that is already done
     const error = await startFromEnvironment().then(
       resolvedUnexpectedly,
       (e: unknown) => e as Error,
@@ -167,13 +167,13 @@ describe('startFromEnvironment', () => {
 
     expect(error.message).not.toMatch(/still have no implementation/i);
     expect(error.message).toContain('TelegramBotApiClient');
-    // And it points at the way out that now exists.
+    // And it points at the way out that now exists
     expect(error.message).toContain('paperStartingProfile');
   });
 
   it('is satisfied by the checked-in paper profile', () => {
     // The claim the whole ticket rests on: the profile covers the guard
-    // exactly, with nothing left over for the entrypoint to invent.
+    // exactly, with nothing left over for the entrypoint to invent
     const profile = paperStartingProfile('paper');
 
     expect(REQUIRED_INJECTED_CONFIG.filter((key) => profile[key] === undefined)).toEqual([]);
@@ -195,11 +195,11 @@ describe('missingCredentialEnvVars', () => {
     'NOUS_API_KEY',
     'NOUS_BASE_URL',
     // Not required by the pre-flight, but cleared between cases: they can
-    // SATISFY `NOUS_API_KEY`, so one left behind would mask a missing key.
+    // SATISFY `NOUS_API_KEY`, so one left behind would mask a missing key
     'NOUS_DEBATE_API_KEY',
     'NOUS_SENTIMENT_API_KEY',
     // Required only by the `saxo` venue cases below, cleared with the rest so
-    // one left behind cannot mask a missing token.
+    // one left behind cannot mask a missing token
     'SAXO_SIM_ACCESS_TOKEN',
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_CHAT_ID',
@@ -225,7 +225,7 @@ describe('missingCredentialEnvVars', () => {
   it('names every missing credential at once, not one per run', () => {
     // Each client refuses to be built without its own key, but they are
     // constructed in sequence — so without this pre-flight an unconfigured
-    // host learns about exactly one variable per attempt.
+    // host learns about exactly one variable per attempt
     expect(missingCredentialEnvVars({}, 'log-only', 'paper', 'alpaca')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
@@ -237,7 +237,7 @@ describe('missingCredentialEnvVars', () => {
   it('treats an empty value as missing, matching the tracked .env placeholders', () => {
     // `.env` ships `ALPACA_API_KEY=` and `--env-file` turns that into `''`,
     // not `undefined`. Both mean "not configured", and both Alpaca clients
-    // already reject an empty string.
+    // already reject an empty string
     process.env.ALPACA_API_KEY = '';
     process.env.ALPACA_API_SECRET = 'set';
     process.env.NOUS_API_KEY = 'set';
@@ -251,7 +251,7 @@ describe('missingCredentialEnvVars', () => {
     // a variable holding nothing but whitespace is not configured. Without
     // this the two disagree — the pre-flight reports a clean environment and
     // `buildAlertChannels` then throws about the same variable one step later,
-    // defeating the whole point of naming every missing one at once.
+    // defeating the whole point of naming every missing one at once
     process.env.ALPACA_API_KEY = ' ';
     process.env.ALPACA_API_SECRET = '\n';
     process.env.NOUS_API_KEY = 'set';
@@ -285,7 +285,7 @@ describe('missingCredentialEnvVars', () => {
 
   it('still reports the shared key when no per-role key is set either', () => {
     // The reported name is `NOUS_API_KEY` rather than all three, because it is
-    // the one that configures every role at once.
+    // the one that configures every role at once
     process.env.ALPACA_API_KEY = 'set';
     process.env.ALPACA_API_SECRET = 'set';
     process.env.NOUS_BASE_URL = 'set';
@@ -294,7 +294,7 @@ describe('missingCredentialEnvVars', () => {
   });
 
   it('does not let a per-role key substitute for the base URL', () => {
-    // There is no default endpoint in source, so nothing resolves without it.
+    // There is no default endpoint in source, so nothing resolves without it
     process.env.ALPACA_API_KEY = 'set';
     process.env.ALPACA_API_SECRET = 'set';
     process.env.NOUS_SENTIMENT_API_KEY = 'set';
@@ -304,7 +304,7 @@ describe('missingCredentialEnvVars', () => {
 
   it('does not demand credentials for clients the caller injected', () => {
     // A test or a non-Alpaca composition root supplying its own clients must
-    // not be asked for keys it will never use.
+    // not be asked for keys it will never use
     expect(
       missingCredentialEnvVars(
         {
@@ -325,7 +325,7 @@ describe('missingCredentialEnvVars', () => {
     // when `ProductionConfig.broker` is a simulated adapter, and only an
     // injected `accountState` retires that second call site (#1400 made the
     // construction lazy, not absent). Skipping the check on `broker` alone
-    // would move the failure back to a deep stack trace inside construction.
+    // would move the failure back to a deep stack trace inside construction
     expect(
       missingCredentialEnvVars(
         { broker: {} as never, llmClient: {} as never },
@@ -341,14 +341,14 @@ describe('missingCredentialEnvVars', () => {
     // pre-flight keyed the Alpaca pair off that. A Saxo run now builds its own
     // GBP-native funding read, and `buildProductionComponents` constructs the
     // Alpaca wire client lazily — so demanding the pair here would block a boot
-    // on keys for a transport the run never opens (#1400's complaint).
+    // on keys for a transport the run never opens (#1400's complaint)
     process.env.NOUS_API_KEY = 'set';
     process.env.NOUS_BASE_URL = 'set';
     process.env.SAXO_SIM_ACCESS_TOKEN = 'set';
 
     // `dataSource` covers the OTHER half of the pair — Alpaca still serves
     // this run's bars otherwise (#895 owes the LSE mark source), and that half
-    // is a real requirement, not the one under test here.
+    // is a real requirement, not the one under test here
     expect(
       missingCredentialEnvVars({ dataSource: {} as never }, 'log-only', 'paper', 'saxo'),
     ).toEqual([]);
@@ -357,7 +357,7 @@ describe('missingCredentialEnvVars', () => {
   it('demands Alpaca keys again when an injected Saxo client suppresses that read', () => {
     // `startFromEnvironment` builds the funding read only when it also built
     // the client. A caller that injected its own wire client gets neither, so
-    // the account read falls back to Alpaca's and the keys are live again.
+    // the account read falls back to Alpaca's and the keys are live again
     process.env.NOUS_API_KEY = 'set';
     process.env.NOUS_BASE_URL = 'set';
 
@@ -412,7 +412,7 @@ describe('missingCredentialEnvVars', () => {
   it('demands the Telegram variables only under the unattended alerts mode (#322)', () => {
     // The mode is passed in rather than read from `process.env` here on
     // purpose: what this pre-flight reports must not depend on ambient state
-    // that a sibling test could leave behind.
+    // that a sibling test could leave behind
     expect(missingCredentialEnvVars({}, 'telegram', 'paper', 'alpaca')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
@@ -426,7 +426,7 @@ describe('missingCredentialEnvVars', () => {
       'TELEGRAM_BOT_TOKEN',
     );
     // `undefined` — the caller injected every alert channel, so no transport
-    // credential is needed either.
+    // credential is needed either
     expect(missingCredentialEnvVars({}, undefined, 'paper', 'alpaca')).not.toContain(
       'TELEGRAM_BOT_TOKEN',
     );
@@ -437,12 +437,12 @@ describe('missingCredentialEnvVars', () => {
     // without muting escalations. A caller supplying its own channel has
     // already decided where heartbeats go, so demanding the variable would be
     // asking for one this run never reads — the same precision the Alpaca and
-    // Anthropic entries above apply.
+    // Anthropic entries above apply
     expect(
       missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram', 'paper', 'alpaca'),
     ).not.toContain('TELEGRAM_HEARTBEAT_CHAT_ID');
     // ...and the escalation chat is still required: that is the channel the
-    // injected heartbeat does not cover.
+    // injected heartbeat does not cover
     expect(
       missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram', 'paper', 'alpaca'),
     ).toContain('TELEGRAM_CHAT_ID');
@@ -454,7 +454,7 @@ describe('storePathEncodesTradingMode', () => {
   // because it is what decides when the warning STOPS: it is written against
   // the shape #168 asks for, so re-keying the path to mode makes it true and
   // the warning silences itself, rather than someone having to remember to
-  // delete it.
+  // delete it
   it('is false for every NODE_ENV-keyed filename in use today', () => {
     for (const env of ['development', 'test', 'staging', 'production']) {
       expect(storePathEncodesTradingMode(`data/samurai-${env}.sqlite`, 'paper')).toBe(false);
@@ -470,14 +470,14 @@ describe('storePathEncodesTradingMode', () => {
 
   it('does not confuse one mode-keyed file for another', () => {
     // The failure that would matter most: a live process quietly accepting the
-    // paper file as correctly keyed.
+    // paper file as correctly keyed
     expect(storePathEncodesTradingMode('data/samurai-paper.sqlite', 'live')).toBe(false);
     expect(storePathEncodesTradingMode('data/samurai-live.sqlite', 'paper')).toBe(false);
   });
 
   it('reads the filename only, not the directories above it', () => {
     // A developer whose checkout happens to sit under `~/live/...` must not
-    // silence the warning by accident.
+    // silence the warning by accident
     expect(
       storePathEncodesTradingMode('/home/me/live/data/samurai-production.sqlite', 'live'),
     ).toBe(false);
@@ -499,7 +499,7 @@ describe('assertStorePathMatchesMode', () => {
     // `mode: 'live'` on a host whose environment still says `paper` would write
     // live state into the paper database. This was a warn while the path was
     // keyed off NODE_ENV and every filename failed the check; now that it
-    // normally passes, the one case that fails it is already wrong.
+    // normally passes, the one case that fails it is already wrong
     expect(() =>
       assertStorePathMatchesMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'live' }),
     ).toThrow(/cannot start/i);
@@ -519,13 +519,13 @@ describe('assertStorePathMatchesMode', () => {
     expect(error.message).toContain('samurai-paper.sqlite');
     expect(error.message).toContain('SAMURAI_MODE=live');
     // Filename only — the path can carry a home directory, and a startup error
-    // is not the place to disclose one.
+    // is not the place to disclose one
     expect(error.message).not.toContain('/home/me');
   });
 });
 
 describe('buildShutdownHandler', () => {
-  /** Records the effects the handler would have had on the real process. */
+  /** Records the effects the handler would have had on the real process */
   function spyEffects() {
     const exits: number[] = [];
     const errors: string[] = [];
@@ -553,7 +553,7 @@ describe('buildShutdownHandler', () => {
     buildShutdownHandler({ stop: () => drained }, effects)();
     await Promise.resolve();
 
-    // Still draining: exiting here is the mid-pass exit #209 exists to detect.
+    // Still draining: exiting here is the mid-pass exit #209 exists to detect
     expect(exits).toEqual([]);
 
     release();
@@ -575,7 +575,7 @@ describe('buildShutdownHandler', () => {
 
   it('reports the failed drain by message only, never the thrown object', async () => {
     // The startup catch has the same posture: a config-bearing error must not
-    // reach stderr, because the config holds API credentials.
+    // reach stderr, because the config holds API credentials
     const secretive = Object.assign(new Error('drain failed'), { apiKey: 'sk-live-must-not-leak' });
     const { errors, effects } = spyEffects();
 
@@ -583,7 +583,7 @@ describe('buildShutdownHandler', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // Both halves matter: the message must be reported, and only the message.
+    // Both halves matter: the message must be reported, and only the message
     expect(errors.join('')).toMatch(/drain failed/);
     expect(errors.join('')).not.toMatch(/sk-live-must-not-leak/);
   });
@@ -601,7 +601,7 @@ describe('buildShutdownHandler', () => {
           stopCalls++;
           // A re-entrant stop() finds its timers cleared and its loop already
           // released, so it resolves at once — which is exactly how a second
-          // Ctrl-C would exit 0 straight through the first, still-running drain.
+          // Ctrl-C would exit 0 straight through the first, still-running drain
           return stopCalls === 1 ? drained : Promise.resolve();
         },
       },
@@ -624,7 +624,7 @@ describe('buildShutdownHandler', () => {
 });
 
 describe('installFaultHandlers (#714)', () => {
-  /** Captures the handlers instead of attaching them to the real process. */
+  /** Captures the handlers instead of attaching them to the real process */
   function harness() {
     const handlers = new Map<string, (error: unknown) => void>();
     const exits: number[] = [];
@@ -669,7 +669,7 @@ describe('installFaultHandlers (#714)', () => {
       // The constraint this handler exists to hold: it is NOT a swallow. A
       // trading process in an unknown state with open positions must stop —
       // restart-time reconciliation (#209) is built for a death mid-pass;
-      // nothing is built for trading on after an exception nobody saw.
+      // nothing is built for trading on after an exception nobody saw
       const h = harness();
       installFaultHandlers(h.logger, h.effects);
 
@@ -686,7 +686,7 @@ describe('installFaultHandlers (#714)', () => {
 
   it('still exits when the logger itself has no sink left to record on', () => {
     // The escalation `JsonLogger` performs when both its sinks are gone lands
-    // here, so this handler must not be the thing that throws.
+    // here, so this handler must not be the thing that throws
     const h = harness();
     installFaultHandlers(
       {
@@ -703,7 +703,7 @@ describe('installFaultHandlers (#714)', () => {
 
   it('reports by message only, never the thrown object', () => {
     // Same posture as the startup catch and `buildShutdownHandler`: a
-    // config-bearing error must not put credentials on stderr.
+    // config-bearing error must not put credentials on stderr
     const h = harness();
     installFaultHandlers(h.logger, h.effects);
     const secretive = Object.assign(new Error('boom'), { apiKey: 'sk-live-must-not-leak' });
@@ -739,7 +739,7 @@ describe('runEntrypointLogRetention (#1116)', () => {
     return { filePath: join(dir, 'orchestrator.log'), maxBytes: 1000, maxRotatedFiles: 2 };
   }
 
-  /** The whole point of the helper: the swept directory comes from the sink path. */
+  /** The whole point of the helper: the swept directory comes from the sink path */
   it('sweeps the directory holding the configured sink file, and nothing else in it', () => {
     const stale = backdate(join(dir, 'orchestrator-20260101-0000.log'), 100 * ONE_DAY_MS);
     const untouched = backdate(join(dir, '.env.local'), 100 * ONE_DAY_MS);
@@ -782,7 +782,7 @@ describe('runEntrypointLogRetention (#1116)', () => {
   // `isArchivedLogName` refuses to unlink at any age. This is the sweep's
   // OTHER path for it, driven end to end through the real entrypoint helper
   // rather than `sweepStaleLogs` directly, so the env-var derivation
-  // (`SAMURAI_LOG_BARE_TRUNCATE_BYTES`) is covered too.
+  // (`SAMURAI_LOG_BARE_TRUNCATE_BYTES`) is covered too
   it('truncates a bare live-shaped name once it crosses the configured byte threshold', () => {
     const soakBoot = join(dir, 'soak-boot.out');
     writeFileSync(soakBoot, 'x'.repeat(200));
@@ -824,12 +824,12 @@ describe('runEntrypointLogRetention (#1116)', () => {
   // proves the reversal: driven through the real entrypoint helper, with NO
   // env var of any kind set, `soak-boot.out` itself — the one file the
   // ticket names — is bounded automatically, because `bareTruncateNames`
-  // defaults to it and `bareTruncateBytes` defaults on again.
+  // defaults to it and `bareTruncateBytes` defaults on again
   //
   // The fixture is deliberately larger than `DEFAULT_BARE_TRUNCATE_BYTES`
   // (16 MiB, `log-retention.ts`): a small fixture would pass this assertion
   // whether the mechanism ran or not, so it would not actually distinguish
-  // the fix from a regression that silently disables it again.
+  // the fix from a regression that silently disables it again
   it('truncates an oversized soak-boot.out with no configuration at all', () => {
     const soakBoot = join(dir, 'soak-boot.out');
     const oversized = 17 * 1024 * 1024; // > 16 MiB DEFAULT_BARE_TRUNCATE_BYTES
@@ -842,10 +842,10 @@ describe('runEntrypointLogRetention (#1116)', () => {
   });
 
   // The other half of the same reversal: a default-on threshold is only safe
-  // because `bareTruncateNames` still narrows WHICH bare file it can reach.
+  // because `bareTruncateNames` still narrows WHICH bare file it can reach
   // `install.log` is a real macOS system log the round-1 review found
   // matching the old, unscoped predicate — this proves it stays untouched
-  // even with the threshold back to default-on and no config set at all.
+  // even with the threshold back to default-on and no config set at all
   it('leaves a large bare file that is not soak-boot.out untouched by default', () => {
     const other = join(dir, 'install.log');
     const oversized = 17 * 1024 * 1024;
@@ -858,7 +858,7 @@ describe('runEntrypointLogRetention (#1116)', () => {
   });
 
   // The allowlist is additive, not a replacement — an operator's own extra
-  // bare name is reachable ALONGSIDE soak-boot.out, not instead of it.
+  // bare name is reachable ALONGSIDE soak-boot.out, not instead of it
   it('also truncates an operator-added name from SAMURAI_LOG_BARE_TRUNCATE_NAMES', () => {
     const soakBoot = join(dir, 'soak-boot.out');
     const custom = join(dir, 'custom.out');
@@ -897,7 +897,7 @@ describe('runEntrypointLogRetention (#1116)', () => {
     // disabled call fails: a `toContain` on the bare call text passes on
     // `// runEntrypointLogRetention(...)`, which is the exact state this
     // asserts against — the guard runs only under `node index.js`, so no
-    // in-process test can observe the call's effect instead.
+    // in-process test can observe the call's effect instead
     expect(source.slice(guardIndex)).toMatch(/^\s*runEntrypointLogRetention\(/m);
   });
 });
@@ -926,7 +926,7 @@ describe('withSaxoSessionStop', () => {
   /**
    * The drain still sends Saxo requests (flatten, cancel), so the refresher
    * has to outlive it — a source stopped first stops renewing, and a tick that
-   * outlives the refresh lead would drain on an expired bearer.
+   * outlives the refresh lead would drain on an expired bearer
    */
   it('stops the token refresher AFTER the orchestrator has drained, keeping the rest of the surface', async () => {
     const calls: string[] = [];
@@ -951,7 +951,7 @@ describe('withSaxoSessionStop', () => {
    * `buildShutdownHandler` calls `effects.exit(0)` the moment this resolves,
    * so a `stop()` that is not awaited kills the process mid-rotation — and
    * Saxo invalidated the previous refresh token when it issued the one in
-   * flight, so that is a stranded session, not a retry.
+   * flight, so that is a stranded session, not a retry
    */
   it('does not resolve until the token source has finished its own shutdown', async () => {
     let releaseSource = (): void => {};

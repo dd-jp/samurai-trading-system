@@ -1,13 +1,13 @@
 // Follow-up probe for #1080: is Nous concurrency queuing scoped per API key or per account?
-// Same prompt/model as 45-nous-five-model-latency-probe.mjs (anthropic/claude-haiku-4.5 only).
+// Same prompt/model as 45-nous-five-model-latency-probe.mjs (anthropic/claude-haiku-4.5 only)
 // No key values ever printed/logged. Values loaded straight from .env.local into local
-// variables only.
+// variables only
 //
 // Produced doc 45 §1's follow-up table. Originally run from a job-scratch directory outside
 // this repo (`node followup.js`); archived here unchanged except for the CommonJS require() ->
 // ESM import conversion this repo's `"type": "module"` requires. Raw output:
 // docs/research/archive/raw/2026-09-14-nous-per-key-vs-account-probe-results.json,
-// docs/research/archive/raw/2026-09-14-nous-per-key-vs-account-probe-stderr.txt.
+// docs/research/archive/raw/2026-09-14-nous-per-key-vs-account-probe-stderr.txt
 
 import { readFileSync } from 'node:fs';
 
@@ -53,7 +53,7 @@ const MAX_SPEND_USD = 0.1;
 const TIMEOUT_MS = 45_000;
 const MAX_TOKENS = 300;
 
-// --- identical prompt construction to 45-nous-five-model-latency-probe.mjs ---
+// identical prompt construction to 45-nous-five-model-latency-probe.mjs
 
 const SYSTEM_PROMPT = `You are the Trader agent in a multi-agent equities debate pipeline. You are given the views of three analysts (Fundamental, Technical, Sentiment) on a single LSE-listed leveraged ETP, plus recent market context. Weigh the three views, resolve disagreement, and output STRICT JSON only, matching exactly this shape:
 {"stance": "long" | "short" | "flat", "rationale": string, "confidence": number between 0 and 1}

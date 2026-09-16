@@ -12,11 +12,11 @@
  * so there is no reason for every client to reimplement them.
  */
 
-/** Best-effort parse of a `Retry-After` header (seconds, per HTTP spec) into milliseconds. */
+/** Best-effort parse of a `Retry-After` header (seconds, per HTTP spec) into milliseconds */
 export function parseRetryAfterMs(response: Response): number | undefined {
   const header = response.headers.get('retry-after');
   // An empty/whitespace header means "no usable value", not 0 — `Number('')`
-  // is 0, so it must be rejected before the numeric parse.
+  // is 0, so it must be rejected before the numeric parse
   if (header === null || header.trim() === '') return undefined;
   const seconds = Number(header);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
@@ -159,7 +159,7 @@ export async function readErrorDetail(response: Response): Promise<string> {
  */
 export type HttpErrorKind = 'rate-limit' | 'timeout' | 'provider';
 
-/** 429 -> rate-limit, 408/504 -> timeout, everything else -> provider. */
+/** 429 -> rate-limit, 408/504 -> timeout, everything else -> provider */
 export function classifyStatus(status: number): HttpErrorKind {
   if (status === 429) return 'rate-limit';
   if (status === 408 || status === 504) return 'timeout';

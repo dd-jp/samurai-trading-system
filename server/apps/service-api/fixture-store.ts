@@ -19,9 +19,9 @@ import type { PipelineStage } from '../../../contracts/index.js';
 // Imported from the concrete module, not the `debate-engine` barrel: the
 // barrel re-exports `SqliteDebateLogStore`, the Anthropic/Nous LLM clients
 // etc., and a value import of the barrel would drag every one of those
-// runtime dependencies into a fixture module that has none today.
+// runtime dependencies into a fixture module that has none today
 // `computeInfluenceScore` itself has no imports beyond `./types.js`, so this
-// stays a type-only-equivalent, zero-side-effect import.
+// stays a type-only-equivalent, zero-side-effect import
 import { computeInfluenceScore } from '../../pipeline/debate-engine/analyst-contribution.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import {
@@ -162,7 +162,7 @@ const CLOSED_TRADES: ClosedTrade[] = [
     // rows close on `'target'` and `'stop'`, and a protective leg is outside
     // coverage (`modelledCostCharged`, ingest-fills.ts), so the flag is true
     // on the entry leg alone. Round-2 review, finding 7 — wording only, the
-    // value is right either way.
+    // value is right either way
     modelled_cost_charged: true,
   },
   {
@@ -306,7 +306,7 @@ assertStanceLengthsMatchRounds(RECENT_DEBATES);
  * Indexed off the contract these helpers build rather than off `Direction`
  * directly, so a widening of `AnalystContribution` (a nullable final position
  * for an unresolved debate, say) reaches the fixtures as a compile error
- * instead of a signature that silently no longer matches what it constructs.
+ * instead of a signature that silently no longer matches what it constructs
  */
 type Stance = AnalystContribution['stance_during_debate'][number];
 type FinalPosition = AnalystContribution['final_position'];
@@ -555,7 +555,7 @@ const DAILY_METRICS: MetricsSuite = {
   // The DSR inputs (#406). Consistent with `sharpe` above rather than
   // arbitrary: 0.1146 x 15.87 = 1.82, and 252 observations is a year of daily
   // bars — a fixture that contradicted its own Sharpe would be a confusing
-  // thing to develop the dashboard against.
+  // thing to develop the dashboard against
   per_period_sharpe: 0.1146,
   annualization_factor: 15.87,
   observations: 252,
@@ -672,7 +672,7 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         refused_pass_count: 0,
         // #1546: the flatten class dropped where the protective one did not —
         // the asymmetry this column exists to make visible, demoed rather than
-        // flattened to zeros.
+        // flattened to zeros
         cost_basis_drops: {
           protective: { kept: 15, dropped: 0 },
           flatten: { kept: 9, dropped: 3 },
@@ -687,7 +687,7 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         refused_pass_count: 2,
         // The control arm can only ever be kept: `SimulatedBrokerAdapter`
         // prices its own fills, so no leg of a control lot can be missing a
-        // `cost_breakdown`.
+        // `cost_breakdown`
         cost_basis_drops: {
           protective: { kept: 11, dropped: 0 },
           flatten: { kept: 8, dropped: 0 },
@@ -704,7 +704,7 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
     // Predates migrations 0057 (#1483) and 0066 (#1546): `refused_pass_count`
     // and `cost_basis_drops` are `null` on both arms, not `0`/all-zero — the
     // fixture server's demo of the honest historical case a real pre-migration
-    // row reads back as.
+    // row reads back as
     computed_at: new Date(NOW.getTime() - 24 * 3_600_000),
     comparison: {
       from: new Date(NOW.getTime() - 31 * 24 * 3_600_000),
@@ -747,7 +747,7 @@ const FIXTURE_LLM_CAP_USD = 50;
 /**
  * #1196: a fixed, arbitrary past instant standing in for the real
  * orchestrator's arm-at-boot timestamp — armed, not absent, for the same
- * "demo exercises the real state" reason `FIXTURE_LLM_CAP_USD` exists.
+ * "demo exercises the real state" reason `FIXTURE_LLM_CAP_USD` exists
  */
 const FIXTURE_LLM_CAP_ARMED_AT = '2026-08-01T00:00:00.000Z';
 
@@ -833,7 +833,7 @@ const PIPELINE_EVENTS: PipelineStageEvent[] = [
 
   // The live trace's completed stages. Its current stage has no row yet — the
   // audit row is written after the stage returns — which is exactly the state
-  // a `live` cell has to render from.
+  // a `live` cell has to render from
   pipelineEvent('trace-007', 'SPY', 'stocks', 'analysts', 'quorum_met', 6),
 ];
 
@@ -880,18 +880,18 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return CLOSED_TRADES.slice(0, limit);
   }
 
-  /** #1595: same arm-insensitive limitation as `getRecentClosedTrades` above — see its doc. */
+  /** #1595: same arm-insensitive limitation as `getRecentClosedTrades` above — see its doc */
   getAllClosedTrades(_asOf: Date, _arm: TradingArm): ClosedTrade[] {
     return CLOSED_TRADES;
   }
 
-  /** Same "scoped to the named lots" contract as `SqliteQueryStore` — see there. */
+  /** Same "scoped to the named lots" contract as `SqliteQueryStore` — see there */
   getFillsForTrades(idempotencyKeys: readonly string[], _asOf: Date): Fill[] {
     const keys = new Set(idempotencyKeys);
     return FILLS.filter((fill) => keys.has(fill.idempotency_key));
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594) */
   getVerdictHistory(limit: number, _asOf: Date, _arm: TradingArm): VerdictAuditEntry[] {
     return VERDICT_HISTORY.slice(0, limit);
   }
@@ -908,12 +908,12 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...ANALYST_WEIGHTS };
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594) */
   getAttribution(_asOf: Date, _arm: TradingArm): Record<string, AttributionSummary> {
     return { ...ATTRIBUTION };
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594) */
   getDailyMetrics(_asOf: Date, _arm: TradingArm): MetricsSuite {
     return { ...DAILY_METRICS };
   }
@@ -926,7 +926,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...mark };
   }
 
-  /** Same throw-on-missing contract as `getMark`, per instrument in request order. */
+  /** Same throw-on-missing contract as `getMark`, per instrument in request order */
   getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark> {
     return new Map(instruments.map((instrument) => [instrument, this.getMark(instrument, asOf)]));
   }
@@ -989,5 +989,5 @@ export class InMemoryQueryStore implements DashboardQueryStore {
   }
 }
 
-/** Exposed so tests can pin the clock against the same fixtures. */
+/** Exposed so tests can pin the clock against the same fixtures */
 export const FIXTURE_NOW = NOW;

@@ -149,7 +149,7 @@ export async function sweepResidualProtection(
       // outer boundary for the writes it makes on its success paths (the
       // confirm/alert-dedup store writes). The marker's own durability is
       // the recovery: whatever failed, the row is still marked and the next
-      // pass retries it.
+      // pass retries it
       logCaughtFailure(
         input.logger,
         {
@@ -174,12 +174,12 @@ export async function sweepResidualProtection(
         // An IDENTIFIER-only message plus the error's own text. On CREDENTIALS
         // that is `reconcileLot`'s reason: #297's H1 has every adapter convert
         // what its client threw into a curated `BrokerError` before it is
-        // visible, and store errors are this codebase's own curated messages.
+        // visible, and store errors are this codebase's own curated messages
         // On RENDERING it is not — see `describeThrownSafely`'s doc and #1262:
         // this render sits inside a per-lot catch inside the `for` loop above,
         // so a value whose `message`/`toString` throws would abort the WHOLE
         // pass here and leave every later marked lot naked, which is the one
-        // thing this loop's containment exists to prevent.
+        // thing this loop's containment exists to prevent
         reason: `residual-protection sweep failed: ${describeThrownSafely(error)}`,
         escalation: 'residual_sweep_lot_unsettled',
       });
@@ -245,7 +245,7 @@ async function sweepOne(
   }
 
   // Entry fill still outstanding: nothing open to protect yet, nothing to
-  // report — the marker stays for the pass after the entry lands.
+  // report — the marker stays for the pass after the entry lands
   if (filledSize === 0) return null;
 
   // Flat by the persisted record: the residual is gone (a later fill closed
@@ -275,7 +275,7 @@ async function sweepOne(
   // in the page payload and a negative reads as nonsense, so the alert
   // carries the upper-bound `requested_size` with the upper-bound flag, the
   // same shape as the fill-read-failure path above. The divergence reason
-  // below still names the real recomputed value for diagnosis.
+  // below still names the real recomputed value for diagnosis
   if (!(residual > 0) || !Number.isFinite(residual)) {
     await alertResidualExposureOnce(input, row, position.requested_size, now, {
       residualQtyIsUpperBound: true,
@@ -306,15 +306,15 @@ async function sweepOne(
   } catch (error) {
     // #1214: a permanent gap is not a failed retry. Where an ordinary failure
     // is retried on the next pass, this one is REPLACED — the residual is
-    // closed rather than protected, below, per the file doc's own section.
+    // closed rather than protected, below, per the file doc's own section
     const unsupported = isProtectiveRearmUnsupported(error);
     // Every attempt leaves a trace (#608); the PAGE is once per episode —
-    // see the file doc's escalation section.
+    // see the file doc's escalation section
     logCaughtFailure(
       input.logger,
       // Two whole entries rather than one with a conditional `event`: every
       // logged code must be a bare snake_case literal, greppable from the
-      // source (`log-event-code.test.ts`).
+      // source (`log-event-code.test.ts`)
       unsupported
         ? {
             trace_id: input.trace_id,
@@ -344,7 +344,7 @@ async function sweepOne(
     // originating flatten's fills, so the journal gate in `reflattenResidual`
     // can tell "the daily flatten is still in flight" from "it is done and
     // left this residual behind" — which the observing poll, running with its
-    // own flatten row still unswept, cannot.
+    // own flatten row still unswept, cannot
     if (unsupported) {
       const reflatten = await reflattenResidual(input, position, residual, now);
       // #1214 review, finding 4: a pass that finds THIS lot's own re-flatten
@@ -367,9 +367,9 @@ async function sweepOne(
       }
       if (reflatten.kind === 'submitted') {
         // No page: the residual is being CLOSED, and the marker stays until
-        // the fill lands and the lot reads flat (the `isFlat` branch above).
+        // the fill lands and the lot reads flat (the `isFlat` branch above)
         // If the order does not close it, the next pass lands here again and
-        // pages once the attempt budget is spent.
+        // pages once the attempt budget is spent
         return {
           idempotency_key: key,
           instrument: position.instrument,
@@ -405,7 +405,7 @@ async function sweepOne(
       // exhaust its re-arm budget and land here `unsupported` on a LATER
       // pass — a shared value would dedup that transition away as "same
       // state" (#1615), collapsing a page-worthy permanent gap into the
-      // retryable line a prior pass already logged.
+      // retryable line a prior pass already logged
       escalation: unsupported
         ? 'residual_sweep_rearm_unsupported'
         : 'residual_sweep_rearm_retry_failed',
@@ -416,7 +416,7 @@ async function sweepOne(
   // the only thing that may clear the marker. Runs OUTSIDE the try above so
   // a confirm-write failure is the outer containment's `undetermined` (and
   // the next pass's idempotent re-verify), never mistaken for a re-arm
-  // failure.
+  // failure
   await store.confirmResidualProtected(key);
   return {
     idempotency_key: key,
@@ -504,7 +504,7 @@ async function alertResidualExposureOnce(
     if (!recorded) {
       // Another surface recorded the episode's page between this pass's
       // worklist snapshot and now — the durable dedup already held, this
-      // pass's page was the (worst-case) duplicate the doc above accepts.
+      // pass's page was the (worst-case) duplicate the doc above accepts
       safeLog(input.logger, {
         trace_id: input.trace_id,
         stage: 'execution',

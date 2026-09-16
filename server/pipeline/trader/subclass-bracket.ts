@@ -233,7 +233,7 @@ export const D5_SCALE_IN_HEADROOM_RESERVE_FRACTION = 0.1;
  */
 export type SubclassBracketTable = Readonly<Record<InstrumentSubclass, SubclassBracket | null>>;
 
-/** ADR-0018 D3's bracket table and D5's envelope, verbatim. */
+/** ADR-0018 D3's bracket table and D5's envelope, verbatim */
 export const ADR_0018_SUBCLASS_BRACKETS: SubclassBracketTable = {
   index_etp_3x: {
     take_profit_pct: 0.02,

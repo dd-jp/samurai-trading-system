@@ -69,10 +69,10 @@ import type { BarFetcher } from './ohlcv-failover.js';
 export interface SessionNormalizationConfig {
   /** The raw vendor fetcher being wrapped. Its `window.lookback` is a RAW candle count, not the caller's in-session one. */
   fetch: BarFetcher;
-  /** Vendor name, stamped onto every surviving bar as `Bar.source` — the same field `normalizeBars` stamps for the primary. */
+  /** Vendor name, stamped onto every surviving bar as `Bar.source` — the same field `normalizeBars` stamps for the primary */
   source: string;
   asset_class: 'crypto' | 'stocks';
-  /** The SAME calendar the primary source was constructed with; any other value reintroduces the divergence this closes. */
+  /** The SAME calendar the primary source was constructed with; any other value reintroduces the divergence this closes */
   calendar: TradingCalendar;
 }
 
@@ -135,7 +135,7 @@ class SessionNormalizedFetcherSource extends NormalizingDataSource {
     );
   }
 
-  /** Same reason as `fetchLiveObservation`: no mark is ever derived here. */
+  /** Same reason as `fetchLiveObservation`: no mark is ever derived here */
   protected override get markTimeframe(): string {
     throw new Error(
       'Session-normalized fallback fetcher serves BARS ONLY — no backtest mark is derived from it.',

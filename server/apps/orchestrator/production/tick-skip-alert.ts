@@ -29,15 +29,15 @@ import {
   sanitizeLogText,
 } from '../../../shared/index.js';
 
-/** One materially-degraded tick pass, reported once the throttle clears it to fire. */
+/** One materially-degraded tick pass, reported once the throttle clears it to fire */
 export interface TickSkipAlert {
-  /** How many of the planned instruments were skipped this tick. */
+  /** How many of the planned instruments were skipped this tick */
   skipped: number;
-  /** How many instruments the scheduler planned for this tick — see `isMateriallyDegraded`. */
+  /** How many instruments the scheduler planned for this tick — see `isMateriallyDegraded` */
   planned: number;
   /** The skipped instruments by name. WHICH ones matters as much as how many (#669's own reasoning). */
   skipped_instruments: readonly string[];
-  /** How many consecutive ticks have been materially degraded, including this one. */
+  /** How many consecutive ticks have been materially degraded, including this one */
   consecutive_ticks: number;
   reported_at: Date;
 }
@@ -182,7 +182,7 @@ export class TickSkipThrottle {
 }
 
 export interface ReportTickSkipParams {
-  /** The instruments still running from a previous pass — `busy` in `runOnce`. */
+  /** The instruments still running from a previous pass — `busy` in `runOnce` */
   skipped: readonly string[];
   /**
    * `ready.length + busy.length`, NOT `plan.instruments.length` — see

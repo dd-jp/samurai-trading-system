@@ -70,12 +70,12 @@ const UNIVERSE: readonly UniverseInstrument[] = [
   { asset: 'BTC-USD', asset_class: 'crypto', subclass: 'crypto' },
 ];
 
-/** The book, per ADR-0015's 2026-08-18 amendment. */
+/** The book, per ADR-0015's 2026-08-18 amendment */
 const EQUITY = LIVE_BOOK_GBP;
 
 /**
  * The share of a D5 envelope the FIRST tranche takes, per #897 — the rest is
- * the scale-in headroom the tests at the end of the first describe draw on.
+ * the scale-in headroom the tests at the end of the first describe draw on
  */
 const RESERVED = 1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION;
 
@@ -97,7 +97,7 @@ const NO_CORRELATION: CorrelationEstimate = { correlations: {}, insufficient_his
 const portfolioWith = (
   equity: number,
   exposure: Record<string, number>,
-  /** Submitted-but-unfilled notional (#1019) — see `per-subclass-deployment-cap.test.ts`. */
+  /** Submitted-but-unfilled notional (#1019) — see `per-subclass-deployment-cap.test.ts` */
   reserved: Record<string, number> = {},
 ): PortfolioView => ({
   equity,
@@ -124,7 +124,7 @@ const portfolioWith = (
   unvalued_instruments: [],
 });
 
-/** £1/share, so `size` reads directly as notional. */
+/** £1/share, so `size` reads directly as notional */
 const intentFor = (
   instrument: string,
   notional: number,
@@ -202,7 +202,7 @@ const d5InIsolation = (): RiskConfig => ({
   concentration: { cap_fraction_of_equity: 1e6, threshold: 0.7 },
 });
 
-/** `d5InIsolation`, built off `liveShippedConfig()` — for the #888 tests below, which need `equity_ceiling` armed. */
+/** `d5InIsolation`, built off `liveShippedConfig()` — for the #888 tests below, which need `equity_ceiling` armed */
 const d5InIsolationLive = (): RiskConfig => ({
   ...liveShippedConfig(),
   max_position_size_fraction_of_equity: 1e6,
@@ -235,7 +235,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // The 2x itself, asserted where it lived: as an equality between the
     // Trader's named constants and the fractions the composition root hands
     // the gate. Under `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` these differed by
-    // exactly a factor of two, and no test compared them.
+    // exactly a factor of two, and no test compared them
     const caps = shippedConfig().per_subclass_deployment_cap?.cap_fraction_of_equity;
 
     expect(caps?.index_etp_3x).toBe(D5_INDEX_ETP_DEPLOYMENT_FRACTION);
@@ -248,7 +248,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // made every classified paper entry refuse against Alpaca's simulated
     // ~$100,000 balance. `buildStartingProfileConfigs`'s book argument is
     // `undefined` unless a caller supplies one, and `liveStartingProfile`
-    // (live-profile.ts) is the only caller that does.
+    // (live-profile.ts) is the only caller that does
     expect(shippedConfig().per_subclass_deployment_cap?.equity_ceiling).toBeUndefined();
     expect(liveShippedConfig().per_subclass_deployment_cap?.equity_ceiling).toEqual({
       book: LIVE_BOOK_GBP,
@@ -258,7 +258,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // `same_currency_verified`: no FX-rate provider or same-currency broker
     // adapter exists, so `d5EnvelopeFor` leaves it unset and the currency
     // guard stays armed on every real live tick. See the "#949" describe
-    // block below for what that guard does.
+    // block below for what that guard does
     expect(
       liveShippedConfig().per_subclass_deployment_cap?.equity_ceiling?.same_currency_verified,
     ).toBeUndefined();
@@ -274,7 +274,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // exactly what makes the reserved £35 reachable by a later `scale_in`
     // (see the "#897" describe below). Were this rescaled to £315 it would
     // stop witnessing the cap's ceiling at all, and the reserve would look
-    // like a cap change rather than a Trader-side change.
+    // like a cap change rather than a Trader-side change
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350 — the envelope, ABOVE one Trader ask
 
     const decision = decide(d5InIsolation(), intentFor('3USL', intended, 'entry'));
@@ -286,7 +286,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
 
   it('does NOT trim an armed single-stock entry at its full envelope either', () => {
     // Same reading as above: post-#897 one Trader ask tops out at £225, and
-    // the £250 here is the envelope the cap must keep admitting.
+    // the £250 here is the envelope the cap must keep admitting
     const intended = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY; // £250 — the envelope
 
     const decision = decide(d5InIsolation(), intentFor('3LAP', intended, 'entry'));
@@ -299,7 +299,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
   it('still binds a subclass already deployed into — the gate is not disarmed', () => {
     // The agreement above must not be reachable by the cap having stopped
     // binding at all, which is how this ships green and holds nothing. D5's
-    // cap is per SUBCLASS, so an existing position consumes headroom.
+    // cap is per SUBCLASS, so an existing position consumes headroom
     const deployed = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY * 0.5; // £175
 
     const decision = decide(
@@ -324,7 +324,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // `ENTRY_CAP_GATES` and is unconditional once `live_book_ceiling` is
     // set) refuses on currency mismatch before `perSubclassDeploymentCap`'s
     // `equity_ceiling` is ever reached, at ANY equity — including this one,
-    // £1,020 on a £1,000 book, which #888 previously clamped to £350.
+    // £1,020 on a £1,000 book, which #888 previously clamped to £350
     const withinTolerance = LIVE_BOOK_GBP * 1.02; // £1,020 — 2% over, inside the (now unreachable) 5% tolerance
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * withinTolerance;
 
@@ -343,7 +343,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // error is diagnosable as "cannot verify funding", not "you are
     // overfunded" — the misdiagnosis #949 was filed over, since a
     // correctly-funded £1,000 account reads as ~$1,270+ via Alpaca and would
-    // have hit this exact "overfunded" message for being funded correctly.
+    // have hit this exact "overfunded" message for being funded correctly
     const overfunded = 1_500;
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * overfunded;
 
@@ -357,7 +357,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
       expect(error).toBeInstanceOf(Error);
       const message = (error as Error).message;
       expect(message).toMatch(/currency mismatch, cannot verify funding/);
-      // The old over-book reason's distinguishing phrase must be absent.
+      // The old over-book reason's distinguishing phrase must be absent
       expect(message).not.toMatch(/more than \d+% *above it/);
     }
   });
@@ -373,7 +373,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // per-subclass `equity_ceiling` mirror of this is still covered, via
     // `capWithCeiling`'s `same_currency_verified = true` default in
     // per-subclass-deployment-cap.test.ts's "#888" describe block; this is
-    // the account-level counterpart.
+    // the account-level counterpart
     const baseConfig = d5InIsolationLive();
     const baseLiveBookCeiling = baseConfig.live_book_ceiling;
     if (!baseLiveBookCeiling) {
@@ -392,7 +392,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     } catch (error) {
       expect(error).toBeInstanceOf(Error);
       const message = (error as Error).message;
-      // The pre-#949 over-book reason, not the currency-mismatch one.
+      // The pre-#949 over-book reason, not the currency-mismatch one
       expect(message).toMatch(/more than \d+% *above it/);
       expect(message).not.toMatch(/currency mismatch, cannot verify funding/);
       expect((error as { bindingConstraint?: string }).bindingConstraint).toBe(
@@ -408,19 +408,19 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // rejected under `min_viable_size`. David ruled that accidental (option 2
     // on #897) — D5 is an envelope to draw on, not a per-position-and-done
     // budget — and `riskFractionFor` now sizes the first tranche at
-    // `deployment x (1 - headroom_reserve_fraction)`.
+    // `deployment x (1 - headroom_reserve_fraction)`
     //
     // The reserve lives on the TRADER side only. This gate's
     // `cap_fraction_of_equity` is deliberately still the full 0.35, which is
     // exactly what makes the reserved slice reachable here; applying the
     // reserve to the cap as well would move the ceiling down with the entry
-    // and leave nothing to scale into.
+    // and leave nothing to scale into
     //
-    // What this test does NOT cover: `whole_share_sizing`'s one-share floor.
+    // What this test does NOT cover: `whole_share_sizing`'s one-share floor
     // `intentFor` prices every share at £1 (`entry: 1`), so £35 of headroom is
     // 35 whole shares here regardless of what an LSE ETP actually costs. The
     // per-share ceiling the reserve implies is recorded on
-    // `SubclassBracket.headroom_reserve_fraction`, not asserted anywhere.
+    // `SubclassBracket.headroom_reserve_fraction`, not asserted anywhere
     const firstFill = D5_INDEX_ETP_DEPLOYMENT_FRACTION * RESERVED * EQUITY; // £315
     const headroom = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY - firstFill; // £35
 
@@ -431,7 +431,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.status).not.toBe('rejected');
     // Trimmed to the reserved headroom EXACTLY, and by the D5 gate — "not
     // rejected" alone would also pass if the cap had stopped binding at all,
-    // which is the failure the "#800" describe above guards against by name.
+    // which is the failure the "#800" describe above guards against by name
     expect(decision.modifications?.final_size).toBeCloseTo(headroom, 6);
     expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
     expect(headroom).toBeGreaterThan(shippedConfig().min_viable_size);
@@ -442,7 +442,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // #708's rejection of the tranche ladder: once the reserved slice is
     // consumed the envelope is genuinely spent, and a further scale-in trims to
     // zero and is rejected under `min_viable_size` exactly as before. The
-    // reserve buys one tranche of headroom, not an open-ended schedule.
+    // reserve buys one tranche of headroom, not an open-ended schedule
     const full = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350 — first fill plus its top-up
     const ask = D5_INDEX_ETP_DEPLOYMENT_FRACTION * RESERVED * EQUITY;
 
@@ -460,7 +460,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // because it reserves 10% of a smaller envelope. That ordering is why the
     // single-stock row is the one that loses admissibility first as equity
     // falls (boundary £400 against £285.71 — see
-    // `SubclassBracket.headroom_reserve_fraction`).
+    // `SubclassBracket.headroom_reserve_fraction`)
     const firstFill = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * RESERVED * EQUITY; // £225
     const headroom = D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION * EQUITY - firstFill; // £25
 
@@ -485,16 +485,16 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
       // entirely — so nothing exercised the actual shipped live composition
       // root, which calls `buildStartingProfileConfigs(undefined,
       // LIVE_BOOK_GBP)` and therefore defaults to `DEFAULT_UNIVERSE`
-      // (scheduler.ts), which carries NO subclass classification today.
+      // (scheduler.ts), which carries NO subclass classification today
       // `d5EnvelopeFor` returns `undefined` for an unclassified universe
       // (paper-profile.ts), so `per_subclass_deployment_cap` — and with it
-      // `equity_ceiling` — is `undefined` on the real path, proven below.
+      // `equity_ceiling` — is `undefined` on the real path, proven below
       const profile = liveStartingProfile(2_000);
 
       expect(profile.riskConfig.per_subclass_deployment_cap).toBeUndefined();
 
       // Yet the account-level `live_book_ceiling` (this review's fix) is
-      // armed regardless — it does not read `subclass_of` at all.
+      // armed regardless — it does not read `subclass_of` at all
       expect(profile.riskConfig.live_book_ceiling).toEqual({
         book: LIVE_BOOK_GBP,
         refuse_above_tolerance: expect.any(Number),
@@ -505,7 +505,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
       // an instrument `DEFAULT_UNIVERSE` never classifies (SPY), proving the
       // refusal does not depend on the pool file at all. #949 — the reason
       // is now `currency_mismatch`, not `equity_exceeds_book`: see the "#949"
-      // test below for why that distinction is load-bearing at THIS value.
+      // test below for why that distinction is load-bearing at THIS value
       const overfunded = 1_500;
       const spyIntent: OrderIntent = {
         ...intentFor('SPY', 100, 'entry'),
@@ -527,7 +527,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
       ).toThrow(/currency mismatch, cannot verify funding/);
 
       // And an exit is unaffected — the gate lives in `ENTRY_CAP_GATES`,
-      // below the exit early-return, not ahead of it.
+      // below the exit early-return, not ahead of it
       const exitDecision = new RiskManagerImpl(profile.riskConfig).evaluate({
         trace_id: 'trace-888-review-exit',
         intent: { ...spyIntent, intent_type: 'exit' },
@@ -553,8 +553,8 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
       // roughly $1,250-$1,350 over Alpaca's `GET /v2/account` — already past
       // `live_book_ceiling`'s 5% tolerance (£1,050) under a naive same-units
       // comparison, so the PRE-#949 gate would have refused this CORRECTLY
-      // FUNDED account with "your account is overfunded", which is false.
-      // 1,270 sits squarely in that band.
+      // FUNDED account with "your account is overfunded", which is false
+      // 1,270 sits squarely in that band
       const profile = liveStartingProfile(2_000);
       const genuinelyCorrectlyFundedReadAsUsd = 1_270;
       const spyIntent: OrderIntent = {
@@ -582,7 +582,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
         expect(message).toMatch(/currency mismatch, cannot verify funding/);
         // ...NOT as an overfunding one — the old reason's distinguishing
         // phrase, which would have told the operator to re-fund an account
-        // that is already correctly funded, must be absent.
+        // that is already correctly funded, must be absent
         expect(message).not.toMatch(/more than \d+% *above it/);
         expect((error as { bindingConstraint?: string }).bindingConstraint).toBe(
           'live_book_ceiling:currency_mismatch:SPY',
@@ -603,14 +603,14 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
   // `per_asset_cap` too, since both are per-instrument axes even though they
   // cap different claims (deployment vs. exposure). `perAssetExposureCap`
   // (risk-manager/index.ts) now also skips a D5-classified instrument
-  // entirely, via the same `isD5ArmedWithNumericFraction` predicate.
+  // entirely, via the same `isD5ArmedWithNumericFraction` predicate
 
   it('no longer trims a full-envelope D5 ask via the per-trade cap — that cap is EXEMPT for a classified instrument (#886)', () => {
     // The bug this ticket closed: pre-#886, `per_trade_size_cap` returned
     // `config.max_position_size` (5% of equity) for EVERY intent, classified
     // or not, and 5% < 35%/25% meant it always bound ahead of D5. It is now
     // `null` for a D5-classified instrument (`isD5ArmedWithNumericFraction`,
-    // risk-manager/index.ts) regardless of the ask size.
+    // risk-manager/index.ts) regardless of the ask size
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // the full envelope, £350
 
     const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
@@ -625,7 +625,7 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
     // two are not the same claim. But the practical consequence was the same
     // shape #886 fixed, so #932 extended the exemption here too. The entry
     // now lands at D5's own fraction, unmodified, with NO binding constraint
-    // at all — nothing in `ENTRY_CAP_GATES` trims an exactly-full-envelope ask.
+    // at all — nothing in `ENTRY_CAP_GATES` trims an exactly-full-envelope ask
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350
 
     const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
@@ -655,7 +655,7 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
     // `d5EnvelopeFor`'s docstring in paper-profile.ts). A paper run's
     // simulated ~$100,000 balance must remain scale-invariant with this
     // ordering exactly as before #888 — that is the property #888's fix was
-    // designed not to break, and #932's fix does not touch either.
+    // designed not to break, and #932's fix does not touch either
     for (const equity of [200, LIVE_BOOK_GBP, 100_000]) {
       const decision = decide(
         shippedConfig(),
@@ -675,13 +675,13 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
     // `D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG.crypto` is `null` — no measured
     // envelope — so `per_asset_cap` must still bind for it exactly as it
     // always has, proving #932's fix is scoped to a NUMERIC D5 fraction
-    // rather than widening the cap for every classified instrument.
+    // rather than widening the cap for every classified instrument
     //
     // `max_position_size_fraction_of_equity` (5%) is lifted here, and ONLY
     // that: it is tighter than `per_asset_cap_fraction_of_equity` (10%) and
     // sits ahead of it in `ENTRY_CAP_GATES`, so for a NON-exempt instrument it
     // always binds first and `per_asset_cap` could never be observed to bind
-    // at all — true before #932 too, and not the property under test here.
+    // at all — true before #932 too, and not the property under test here
     const perTradeCapLifted: RiskConfig = {
       ...shippedConfig(),
       max_position_size_fraction_of_equity: 1e6,
@@ -714,17 +714,17 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
     // silently at whichever cap was numerically tighter. This is deliberately
     // asymmetric with the paper case: a LIVE account funded 100x its declared
     // book is a real anomaly to refuse; a PAPER account simulated at $100,000
-    // is normal and must not be refused (previous test).
+    // is normal and must not be refused (previous test)
     //
     // **Review fix-up: the throw comes from `liveBookCeiling`, the
     // account-level gate, which sits first in `ENTRY_CAP_GATES` — not from
     // `perSubclassDeploymentCap`'s `equity_ceiling`.** Both are armed here,
     // but `liveBookCeiling` is the one that also covers `DEFAULT_UNIVERSE`
-    // (no classification), which is why it goes first.
+    // (no classification), which is why it goes first
     //
     // #949 — the refusal now fires as `currency_mismatch`, before the
     // 100,000-vs-book comparison is even made; see the "#949" describe block
-    // for why that is the correct reading at every equity, not just this one.
+    // for why that is the correct reading at every equity, not just this one
     const equity = 100_000;
 
     expect(() =>
@@ -739,7 +739,7 @@ describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset
 });
 
 describe('#886 acceptance criterion — an armed D5 entry lands at the intended size through the SHIPPED profile', () => {
-  // Not `d5InIsolation` — the point is that NOTHING is lifted out of the way.
+  // Not `d5InIsolation` — the point is that NOTHING is lifted out of the way
   // `decide.ts:575` stacks `convictionMultiplier x non_converged_haircut x
   // cosine_multiplier` onto D5's fraction, so a real Trader ask is
   // `D5_fraction x M x equity` for M in (0, 1.5], not necessarily the full
@@ -747,7 +747,7 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
   // ceiling (the one cap the describe above shows is still real for this
   // subclass), so this proves the FIX — D5 exempt from `per_trade_size_cap`
   // — at a size the shipped profile actually clears end to end, rather than
-  // proving it only with five other caps manually disabled.
+  // proving it only with five other caps manually disabled
   //
   // **Post-#897 note.** `riskFractionFor` now multiplies by
   // `(1 - headroom_reserve_fraction)`, so a real full-conviction ask is
@@ -756,7 +756,7 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
   // the ask is hand-constructed rather than read off the Trader, and the
   // property is that no cap in the shipped profile trims whatever the Trader
   // asks for. Rescaling `CONVICTION_FACTOR` by the reserve would just pick a
-  // different arbitrary M and prove the same thing.
+  // different arbitrary M and prove the same thing
   const CONVICTION_FACTOR = 0.2;
 
   /**
@@ -796,7 +796,7 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
     // so this equity/anchor split was exactly where the fix mattered most
     // (`#886 — the ordering above is anchor-relative` used to assert the
     // BUG here). There is no boot-time anchor any more for the two to
-    // diverge over — this is now a redundant check on that, not a live risk.
+    // diverge over — this is now a redundant check on that, not a live risk
     const equity = 200; // inside ADR-0017's £100-200 ramp
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * equity; // £14
 
@@ -834,7 +834,7 @@ describe('#886 acceptance criterion — an armed D5 entry lands at the intended 
     // assumed: nothing above changes which cap binds, the approved size is
     // just floored on the way out. `69` and not `70` because
     // `0.35 * 0.2 * 1000` is 69.99999999999999 in IEEE-754 — the floor is
-    // toward less exposure even when the shortfall is a float artefact.
+    // toward less exposure even when the shortfall is a float artefact
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * CONVICTION_FACTOR * EQUITY;
 
     const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'), {}, EQUITY);
@@ -853,7 +853,7 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
   // classifies into the intent's subclass, not just the intent's own
   // instrument, so a SECOND D5-armed instrument in the same subclass shares
   // that envelope rather than getting its own independent 25%. This describe
-  // block covers the concurrent-instrument case.
+  // block covers the concurrent-instrument case
   //
   // Two REAL `single_stock_etp_3x` tickers from the actual pool
   // (lse-etp-pool.ts) rather than the single-instrument-per-subclass
@@ -861,7 +861,7 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
   // `NVD3` (Leverage Shares 3x NVIDIA). `single_stock_etp_3x` is chosen over
   // `index_etp_3x` because its fraction (0.25) keeps every figure below
   // integral on the £1,000 reference book, so `whole_share_sizing` never
-  // bites and no `d5WithoutTheVenueGrid`-style variant is needed.
+  // bites and no `d5WithoutTheVenueGrid`-style variant is needed
   const MULTI_UNIVERSE: readonly UniverseInstrument[] = [
     { asset: '3LTS', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
     { asset: 'NVD3', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
@@ -887,14 +887,14 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
     // strictly greater than `PER_ASSET_CAP`, not merely "not that binding
     // constraint", closes the tautology a size-under-10% fixture would leave
     // open (per this file's own precedent at
-    // `RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity`, above).
+    // `RISK_CAP_EQUITY_FRACTIONS.per_asset_cap_fraction_of_equity`, above)
     //
     // This test does NOT discriminate combined-subclass netting from
     // isolated per-instrument accounting: NVD3's £125 ask fits under £250
     // headroom either way (isolated: NVD3 alone has no prior exposure of its
     // own; combined: £250 envelope - £125 already deployed by 3LTS = £125
     // remaining). Test (b), below, asks for MORE than the true combined
-    // headroom — that is what actually proves netting.
+    // headroom — that is what actually proves netting
     const half = FULL_ENVELOPE / 2; // £125 — 12.5% of equity, over the 10% per-asset ceiling
     expect(half).toBeGreaterThan(PER_ASSET_CAP);
 
@@ -922,10 +922,10 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
     // were the only instrument armed in the subclass. If the two instruments
     // were bounded independently, `NVD3` would land at the full £250
     // (combined 3LTS + NVD3 = £400, 40% of equity — well past the 25%
-    // subclass envelope D5's 41.8% drawdown figure was measured to hold).
+    // subclass envelope D5's 41.8% drawdown figure was measured to hold)
     // `perSubclassDeploymentCap` nets across BOTH instruments instead, so the
     // remaining headroom is £250 (cap) - £150 (already deployed) = £100, and
-    // `NVD3` is trimmed to exactly that — not to its own 25%.
+    // `NVD3` is trimmed to exactly that — not to its own 25%
     const alreadyDeployed = FULL_ENVELOPE * 0.6; // £150
     const askedAsIfAlone = FULL_ENVELOPE; // £250 — what NVD3 would land at if uncapped by the shared envelope
 
@@ -942,7 +942,7 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
     expect(decision.modifications?.final_size).toBeCloseTo(expectedHeadroom, 6);
     // The combined exposure across both instruments, after this fill, is
     // exactly the shared envelope — never the doubled £400 independent
-    // bounding would have allowed.
+    // bounding would have allowed
     expect(alreadyDeployed + (decision.modifications?.final_size ?? 0)).toBeCloseTo(
       FULL_ENVELOPE,
       6,
@@ -961,7 +961,7 @@ describe('#959 — multiple D5-armed instruments in the SAME subclass share one 
     // `binding_constraint` on the returned decision names `min_viable_size`,
     // not `per_subclass_deployment_cap`, because `evaluate()`'s dust-floor
     // check overwrites it once notional is trimmed to zero — matching this
-    // file's existing `#897` precedent above.
+    // file's existing `#897` precedent above
     const eachHalf = FULL_ENVELOPE / 2; // £125 + £125 = £250, the full shared envelope
 
     const decision = decide(

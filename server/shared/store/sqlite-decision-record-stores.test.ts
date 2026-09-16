@@ -79,7 +79,7 @@ describe('SqliteRiskLogStore (#726)', () => {
     // in 0028's CHECK(status IN ('approved', 'rejcted', 'error')) would stay
     // green through every other test in this repo — nothing else writes a
     // 'rejected' row through this store to a real (non-fake) database, and
-    // npm run smoke never produces a rejection either.
+    // npm run smoke never produces a rejection either
     const db = openSharedStore(':memory:');
     const store = new SqliteRiskLogStore(db);
 
@@ -163,7 +163,7 @@ describe('SqliteTraderLogStore exit_reason (#748)', () => {
         | undefined;
       expect(row?.exit_reason).toBe(exit_reason);
       // Pinned so a bind shifted by one place cannot pass: an off-by-one would
-      // put the reason in `skip_reason` and `intent_type` in `exit_reason`.
+      // put the reason in `skip_reason` and `intent_type` in `exit_reason`
       expect(row?.intent_type).toBe('exit');
       expect(row?.skip_reason).toBeNull();
     }
@@ -187,7 +187,7 @@ describe('SqliteTraderLogStore exit_reason (#748)', () => {
 // acceptance criteria says must fail without the fix: before this ticket
 // `TraderDecisionRecord` had no such fields, so a no_trade row was
 // unclassified everywhere — durable record included, not only the process
-// log a join back to `debate_log` was needed to explain.
+// log a join back to `debate_log` was needed to explain
 describe('SqliteTraderLogStore decision_class and reason_detail (#1109)', () => {
   function makeSkipRecord(overrides: Partial<TraderDecisionRecord> = {}): TraderDecisionRecord {
     return {

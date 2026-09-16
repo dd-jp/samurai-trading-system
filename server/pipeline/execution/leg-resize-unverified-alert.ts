@@ -14,10 +14,10 @@
  * text or response body reaches it.
  */
 export interface LegResizeUnverifiedAlert {
-  /** The lot's own `idempotency_key` (the bracket's `client_order_id`). */
+  /** The lot's own `idempotency_key` (the bracket's `client_order_id`) */
   client_order_id: string;
   instrument: string;
-  /** The bracket's journalled size, or `null` when the journal has no request for it. */
+  /** The bracket's journalled size, or `null` when the journal has no request for it */
   requested_qty: number | null;
   filled_qty: number;
   observed_at: Date;

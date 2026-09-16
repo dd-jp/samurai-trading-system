@@ -40,7 +40,7 @@ export interface ClosedTradeRow {
   fees_total: number;
   opened_at: string;
   closed_at: string;
-  /** #793, migration 0031 — see `ClosedTrade.close_reason`. */
+  /** #793, migration 0031 — see `ClosedTrade.close_reason` */
   close_reason: 'stop' | 'target' | 'exit' | ExitReason;
   /**
    * #1121, migration 0049 — see `ClosedTrade.modelled_cost_charged`. Stored as
@@ -52,7 +52,7 @@ export interface ClosedTradeRow {
   modelled_cost_charged: 0 | 1;
 }
 
-/** Widens the stored ISO-8601 timestamps back into `Date`s. */
+/** Widens the stored ISO-8601 timestamps back into `Date`s */
 export function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
   return {
     idempotency_key: row.idempotency_key,

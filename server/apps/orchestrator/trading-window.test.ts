@@ -23,7 +23,7 @@ const UNIVERSE: readonly UniverseInstrument[] = [
   { asset: 'BTC-USD', asset_class: 'crypto' },
 ];
 
-/** A Wednesday, no UK bank holiday, inside British Summer Time. */
+/** A Wednesday, no UK bank holiday, inside British Summer Time */
 const at = (hhmm: string): Date => new Date(`2026-08-19T${hhmm}:00+01:00`);
 
 const clockAt = (instant: Date) => ({ now: () => instant });
@@ -45,7 +45,7 @@ describe('the equity entry window (#706)', () => {
     // 09:00 London is a valid LSE session — and five and a half hours before
     // any US tape exists. Every measurement the brackets rest on is computed
     // on US tape (#656: no free LSE intraday history), so this is the hour
-    // the window exists to refuse.
+    // the window exists to refuse
     expect(stocksFiringAt(at('09:00'))).toBe(false);
   });
 
@@ -55,7 +55,7 @@ describe('the equity entry window (#706)', () => {
 
   it('closes entries at 15:45, leaving 40 minutes to the flatten', () => {
     expect(stocksFiringAt(at('15:44'))).toBe(true);
-    // Half-open at the top, matching `isOpen`: 15:45:00 is already past.
+    // Half-open at the top, matching `isOpen`: 15:45:00 is already past
     expect(stocksFiringAt(at('15:45'))).toBe(false);
     expect(stocksFiringAt(at('16:00'))).toBe(false);
 
@@ -63,13 +63,13 @@ describe('the equity entry window (#706)', () => {
     // composition root installs. On its own it also removes every tick in the
     // flatten span, which switched flat-by-close off — see
     // `production/stocks-tick-window.test.ts`. Asserted here so the two files
-    // cannot drift into disagreeing about what this predicate does.
+    // cannot drift into disagreeing about what this predicate does
     expect(stocksFiringAt(at('16:26'))).toBe(false);
   });
 
   it('narrows rather than opens — a closed venue stays closed', () => {
     // A Saturday inside the window's wall-clock hours. The window must not be
-    // able to authorise a tick the calendar refuses.
+    // able to authorise a tick the calendar refuses
     const saturday = new Date('2026-08-22T14:35:00+01:00');
     expect(stocksFiringAt(saturday)).toBe(false);
   });
@@ -78,7 +78,7 @@ describe('the equity entry window (#706)', () => {
     // #738 removed the always-open exception: `UniverseScheduler` is
     // asset-class-blind, so BTC-USD in `UNIVERSE` above is gated on the SAME
     // LSE calendar + overlap window as `3USL` — present inside the overlap,
-    // absent outside it, exactly like the equity assertions above.
+    // absent outside it, exactly like the equity assertions above
     const cryptoFiringAt = (time: string): boolean =>
       schedulerAt(true)
         .nextTick(clockAt(at(time)))
@@ -97,7 +97,7 @@ describe('the equity entry window (#706)', () => {
     // The reason the window is a scheduler predicate rather than a narrowed
     // calendar. #657 fixed the flatten at close minus 5 minutes resolved
     // through this same object; if installing a 15:45 window moved the close,
-    // the flatten would silently follow it to 15:40.
+    // the flatten would silently follow it to 15:40
     const calendar = new LseRegularHoursCalendar();
     const end = calendar.sessionEnd(at('14:35'));
 
@@ -105,7 +105,7 @@ describe('the equity entry window (#706)', () => {
     // #667). Asserted rather than `!`-ed away: a null here would mean the LSE
     // calendar had stopped bounding the session, which is the failure this
     // test exists to catch, and `.toISOString()` on null throws an unreadable
-    // TypeError instead of naming it.
+    // TypeError instead of naming it
     expect(end).not.toBeNull();
     expect((end as Date).toISOString()).toBe(new Date('2026-08-19T16:30:00+01:00').toISOString());
   });
@@ -114,7 +114,7 @@ describe('the equity entry window (#706)', () => {
 describe('the paper profile actually carries the window', () => {
   // The link most likely to rot. A window with a seam, a factory and seven
   // green unit tests that no composition root installs is this repo's
-  // dominant defect class — a tested mechanism nothing calls.
+  // dominant defect class — a tested mechanism nothing calls
   it('sets stocksTradingWindow, and it is the overlap window', () => {
     const window = paperStartingProfile('paper').stocksTradingWindow;
 
@@ -130,17 +130,17 @@ describe('londonEntryWindow', () => {
     const window = londonEntryWindow();
 
     // The same wall-clock hour sits at two different UTC instants across the
-    // year, and a hand-rolled UTC window would be right for only one of them.
+    // year, and a hand-rolled UTC window would be right for only one of them
     //
-    // 14:35 London: 14:35Z in winter (GMT), 13:35Z in summer (BST).
+    // 14:35 London: 14:35Z in winter (GMT), 13:35Z in summer (BST)
     expect(window(new Date('2026-01-14T14:35:00Z'))).toBe(true);
     expect(window(new Date('2026-08-19T13:35:00Z'))).toBe(true);
 
     // 13:35Z in WINTER is 13:35 London — before the window opens. A window
-    // pinned to the summer offset would wrongly admit it.
+    // pinned to the summer offset would wrongly admit it
     expect(window(new Date('2026-01-14T13:35:00Z'))).toBe(false);
 
-    // 16:00 London, both ways round, is past the last entry.
+    // 16:00 London, both ways round, is past the last entry
     expect(window(new Date('2026-08-19T15:00:00Z'))).toBe(false);
     expect(window(new Date('2026-01-14T16:00:00Z'))).toBe(false);
   });
@@ -159,12 +159,12 @@ describe('londonEntryWindow', () => {
     expect(() => londonEntryWindow(14 * 60 + 30, 1545)).toThrow(/15:45 is 945/);
 
     // The other direction is the mirror: a negative start is always true, so
-    // the window opens before the venue does.
+    // the window opens before the venue does
     expect(() => londonEntryWindow(-60, 15 * 60)).toThrow(/whole minute-of-day/);
     expect(() => londonEntryWindow(14.5 * 60 + 0.5, 15 * 60)).toThrow(/whole minute-of-day/);
 
     // 1440 itself is a legal END — "up to midnight" — and must not be caught
-    // by the bound it sits on.
+    // by the bound it sits on
     expect(() => londonEntryWindow(14 * 60, 24 * 60)).not.toThrow();
   });
 
@@ -172,11 +172,11 @@ describe('londonEntryWindow', () => {
     // Characterisation, not an endorsement — see `stocksTradingWindow`'s
     // docblock in paper-profile.ts. The window is anchored to LONDON
     // wall-clock, and the two countries do not change clocks on the same day:
-    // the US springs forward on the 2nd Sunday of March, the UK on the last.
-    // Between those dates the offset is 4 hours, not 5.
+    // the US springs forward on the 2nd Sunday of March, the UK on the last
+    // Between those dates the offset is 4 hours, not 5
     const window = londonEntryWindow();
 
-    // 2026-03-19 sits in the gap (US on EDT since Mar 8, UK still on GMT).
+    // 2026-03-19 sits in the gap (US on EDT since Mar 8, UK still on GMT)
     // 14:30 London = 14:30Z = 10:30 ET, an hour after the US cash open — so
     // the window's first admitted instant is 60 minutes into the US session,
     // not 0. The pre-open hour is NOT admitted.
@@ -184,11 +184,11 @@ describe('londonEntryWindow', () => {
     expect(window(new Date('2026-03-19T13:35:00Z'))).toBe(false);
 
     // ...and it closes at 15:45 London = 11:45 ET, i.e. 135 minutes past the
-    // US open, past the t0 <= 120 edge of R2's measured entry-offset grid.
+    // US open, past the t0 <= 120 edge of R2's measured entry-offset grid
     expect(window(new Date('2026-03-19T15:44:00Z'))).toBe(true);
 
     // Outside the gap the same wall-clock window is 09:30-10:45 ET: on
-    // 2026-04-16 both are on summer time, so 14:30 London = 13:30Z = 09:30 ET.
+    // 2026-04-16 both are on summer time, so 14:30 London = 13:30Z = 09:30 ET
     expect(window(new Date('2026-04-16T13:30:00Z'))).toBe(true);
   });
 });

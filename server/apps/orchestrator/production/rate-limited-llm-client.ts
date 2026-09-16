@@ -81,7 +81,7 @@ export class RateLimitedLlmClient implements LlmClient {
      * Fixed at construction rather than read per call: `LlmRequest` carries no
      * instrument, and one of these is built per debate (`buildDebatePersonas`
      * is already per-debate state), so the class is known exactly where the
-     * decorator is created and guessing it here would be the invention.
+     * decorator is created and guessing it here would be the invention
      */
     private readonly assetClass: AssetClass,
   ) {}
@@ -104,7 +104,7 @@ export class RateLimitedLlmClient implements LlmClient {
   }
 }
 
-/** The abort reason as text, so the refusal says WHY rather than "aborted". */
+/** The abort reason as text, so the refusal says WHY rather than "aborted" */
 function describeAbort(signal: AbortSignal): string {
   const reason: unknown = signal.reason;
   if (reason instanceof Error) return reason.message;

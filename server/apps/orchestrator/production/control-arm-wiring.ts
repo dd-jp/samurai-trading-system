@@ -118,18 +118,18 @@ export interface ControlArmWiringDeps {
    * one that shipped that way.
    */
   trader: TraderStepDeps;
-  /** The live arm's Risk deps, verbatim, with the breaker fields overridden. */
+  /** The live arm's Risk deps, verbatim, with the breaker fields overridden */
   risk: RiskStepDeps;
-  /** The live arm's Verdict deps, verbatim, with the breaker fields and store overridden. */
+  /** The live arm's Verdict deps, verbatim, with the breaker fields and store overridden */
   verdict: VerdictStepDeps;
-  /** The live arm's Execution deps, verbatim, with the broker and store overridden. */
+  /** The live arm's Execution deps, verbatim, with the broker and store overridden */
   execution: ExecutionStepDeps;
 
-  /** The control arm's own book — a `SqliteExecutionStore` constructed with `arm: 'control'`. */
+  /** The control arm's own book — a `SqliteExecutionStore` constructed with `arm: 'control'` */
   store: ExecutionSharedStore;
-  /** The control arm's own venue — a `SimulatedBrokerAdapter`, never the live one. */
+  /** The control arm's own venue — a `SimulatedBrokerAdapter`, never the live one */
   broker: BrokerAdapter;
-  /** The control arm's own breaker instance, over `InMemoryBreakerStatePersistence`. */
+  /** The control arm's own breaker instance, over `InMemoryBreakerStatePersistence` */
   circuitBreakers: CircuitBreakers;
   breakerState: BreakerStatePersistence;
   /**
@@ -144,14 +144,14 @@ export interface ControlArmWiringDeps {
    * required field makes that omission a compile error.
    */
   accountState: AccountStateProvider;
-  /** Shared with the live arm on purpose: the control prices its fills the same way. */
+  /** Shared with the live arm on purpose: the control prices its fills the same way */
   costModel: CostModel;
   marketData: MarketDataService;
   executionConfig: ExecutionConfig;
   logger: Logger;
 }
 
-/** What the composition root needs back: the tick hook, and the control arm's fill poller. */
+/** What the composition root needs back: the tick hook, and the control arm's fill poller */
 export interface ControlArmWiring {
   /** Bound onto `TickSteps.controlArm`. Runs on every tick, both cadences. */
   controlArm: ControlArmStep;
@@ -168,7 +168,7 @@ export interface ControlArmWiring {
    * omission.
    */
   fillSyncExecution: ReturnType<typeof buildExecutionSurface>;
-  /** The control arm's startup reconcile surface — same reasoning, at boot. */
+  /** The control arm's startup reconcile surface — same reasoning, at boot */
   reconcileExecution: ReturnType<typeof buildExecutionSurface>;
   /**
    * The control arm's own book (`deps.store`, `arm: 'control'`), exposed for
@@ -203,11 +203,11 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // `clock` is NOT overridden below (#1348) — deliberately: one wall clock
     // for both arms, not per-arm state. The alert channels are inherited too;
     // each alert carries its own `trace_id` to name the arm that raised it —
-    // see those alerts' docs.
+    // see those alerts' docs
     //
     // The two things a shadow arm may not share. See `control-arm.ts`: a second
     // arm placing real orders at ADR-0018 D5's 35%/25% envelope doubles
-    // deployment against a £1,000 book, which no ADR authorises.
+    // deployment against a £1,000 book, which no ADR authorises
     broker: deps.broker,
     store: deps.store,
     costModel: deps.costModel,
@@ -222,7 +222,7 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // instance lifetime: this arm gets its own `Execution` built fresh here
     // (`fillSyncExecution` below is distinct from the live root's), so it
     // gets its own throttle too, same as `broker`/`store`/`costModel`/
-    // `marketData`/`config` above.
+    // `marketData`/`config` above
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     // #1550: an OWN throttle, and unlike `filledZeroSizeThrottle` above this
     // one IS guarding against cross-arm leakage. Its key is the bare
@@ -232,13 +232,13 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // the page and leave the other silent for half an hour. The channel is
     // inherited from the spread above and drops the control arm's post on its
     // `page` predicate, so in practice this keeps the LIVE arm's page from
-    // being swallowed by the control arm's scan.
+    // being swallowed by the control arm's scan
     unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
   };
 
   // Per-arm breaker plumbing, spread into all three stage builders exactly as
   // the live root spreads its own `breakerStateDeps` — one object, so a stage
-  // cannot silently end up reading the OTHER arm's book.
+  // cannot silently end up reading the OTHER arm's book
   const breakerOverrides = {
     circuitBreakers: deps.circuitBreakers,
     breakerState: deps.breakerState,
@@ -247,12 +247,12 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // overriding only the first leaves the control valuing its own positions
     // against the LIVE arm's cash and peak equity — its sizing and its
     // drawdown halt would then track the live arm's fills, which is precisely
-    // the independence #753 measures.
+    // the independence #753 measures
     accountState: deps.accountState,
     // Its own per-tick memo. Sharing the live arm's map would not COLLIDE (the
     // control pass runs under a suffixed trace id) but it would fill the live
     // arm's bounded cache with entries the live arm never reads, evicting its
-    // own — a per-tick memo that silently stops memoizing.
+    // own — a per-tick memo that silently stops memoizing
     portfolioSnapshots: new Map<string, PortfolioSnapshot>(),
     getOpenPositions: () => deps.store.getOpenPositions(),
   };
@@ -263,7 +263,7 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // #753: the control arm's `OrderIntent`s carry `arm: 'control'`, which is a
     // HASH INPUT to the idempotency key. Without it the two arms would produce
     // one key on every bar they agree on and Execution would dedupe the second
-    // away — see `computeIdempotencyKey`.
+    // away — see `computeIdempotencyKey`
     arm: 'control',
     getExitFillSizes: (keys) => deps.store.getExitFillSizes(keys),
     // #1389: the in-flight flatten guard must ask the CONTROL book. Left to the
@@ -272,7 +272,7 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // makes the control arm skip its own flatten for that instrument on every
     // later tick and every future close. In a matched control that is every
     // instrument both arms hold, so the falsifier baseline is the arm that
-    // carries lots past the bell.
+    // carries lots past the bell
     getUnresolvedFlattens: () => deps.store.getUnresolvedFlattens(),
     // Deliberately NOT `withOnTradeClose`-wrapped upstream: the control arm
     // writes its setup vectors into the shared `cosine_setups` table under its
@@ -280,7 +280,7 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // setups are inert — `findNeighbors` returns only closed-outcome rows — so
     // the control reads the SAME precedent pool the live arm does (matching the
     // arms' sizing) while contributing nothing to it (leaving the live arm's
-    // learning signal uncontaminated).
+    // learning signal uncontaminated)
   });
 
   const controlSteps: TickSteps = {
@@ -288,7 +288,7 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     trader: traderSteps.trader,
     // The relay and the axis vote — the ONLY two steps that are not the live
     // arm's own. Neither holds an LLM client, a debate engine or a
-    // market-intelligence agent; see `control-arm.ts`.
+    // market-intelligence agent; see `control-arm.ts`
     analysts: buildControlAnalystsStep(relay),
     debate: buildControlDebateStep(relay),
     risk: buildRiskStep({
@@ -327,13 +327,13 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
       ...breakerOverrides,
       // Verdict's `findByKey` gate must see the CONTROL book: pointed at the
       // live store it would look for a control lot among live rows, never find
-      // one, and mis-answer its duplicate check.
+      // one, and mis-answer its duplicate check
       positionStore: deps.store,
     }),
     execution: buildExecutionStep(executionDeps),
-    // No `controlArm` member: the control arm does not control for itself.
+    // No `controlArm` member: the control arm does not control for itself
     // Its absence here is what terminates the recursion, and it is why the
-    // member is optional on `TickSteps`.
+    // member is optional on `TickSteps`
   };
 
   return {

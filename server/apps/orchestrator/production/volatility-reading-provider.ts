@@ -61,9 +61,9 @@ import type { VolatilityReadingProvider } from './direct-bind.js';
 
 export interface VolatilityReadingProviderConfig {
   marketData: MarketDataService;
-  /** The full configured universe — aggregated over unconditionally, not gated on open positions. */
+  /** The full configured universe — aggregated over unconditionally, not gated on open positions */
   universe: readonly UniverseInstrument[];
-  /** Same indicator spec `SimulatedAdapterConfig.volatility_indicator` reads for `MarketState.volatility`. */
+  /** Same indicator spec `SimulatedAdapterConfig.volatility_indicator` reads for `MarketState.volatility` */
   volatility_indicator: IndicatorSpec;
   /**
    * Session calendars per asset class — the same pair `UniverseScheduler`
@@ -76,7 +76,7 @@ export interface VolatilityReadingProviderConfig {
    * exactly like a working system from the outside.
    */
   calendars: Record<AssetClass, TradingCalendar>;
-  /** Failures and empty-class config slips are logged, not silently absorbed (see FAILURE_READING). */
+  /** Failures and empty-class config slips are logged, not silently absorbed (see FAILURE_READING) */
   logger: Logger;
 }
 
@@ -121,7 +121,7 @@ const FAILURE_READING = Number.POSITIVE_INFINITY;
  * every asset-class-shaped list/lookup below (`warnIfClassEmpty` calls,
  * `maxByClass` keys) derives from this instead of repeating the literal
  * union, so widening `AssetClass` can't silently drop a class from the
- * reading.
+ * reading
  */
 const ASSET_CLASSES = ['crypto', 'stocks'] as const satisfies readonly AssetClass[];
 
@@ -142,7 +142,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
     // crypto-only (see NO_READING doc comment above), so logging this on every
     // `getVolatilityReading` call would emit a permanent per-tick warn stream on a
     // risk-gate path, training operators to ignore it. A config slip is still visible
-    // once, at startup.
+    // once, at startup
     for (const asset_class of ASSET_CLASSES) {
       warnIfClassEmpty(config.universe, asset_class, config.logger);
     }
@@ -208,7 +208,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
     const readings = open.map((instrument, index) => {
       // Safe: `settled` was built via `settleWithConcurrency(open, ...)`, so it has
       // exactly one entry per instrument at the same index — `as` avoids a spurious
-      // `noUncheckedIndexedAccess`.
+      // `noUncheckedIndexedAccess`
       const result = settled[index] as PromiseSettledResult<IndicatorValue>;
 
       if (result.status === 'rejected') {
@@ -217,7 +217,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
           // Risk stage (direct-bind.ts's `computeCurrentPortfolioAndBreakers`),
           // so this joins that tick when there is one (#1280) — unlike
           // `warnIfClassEmpty` below, which fires at construction, never
-          // in-tick, and keeps its bare constant.
+          // in-tick, and keeps its bare constant
           trace_id: currentTraceId() ?? 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
           event: 'volatility_indicator_rejected',
@@ -236,7 +236,7 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
       const { value } = result.value;
       if (!Number.isFinite(value)) {
         logger.log({
-          // Same reasoning as the rejected-result branch above.
+          // Same reasoning as the rejected-result branch above
           trace_id: currentTraceId() ?? 'volatility-reading-provider',
           stage: 'volatility-reading-provider',
           event: 'volatility_indicator_non_finite',
@@ -276,7 +276,7 @@ async function settleWithConcurrency<T, R>(
     while (nextIndex < items.length) {
       const index = nextIndex++;
       // Safe: `index` is claimed under the `nextIndex < items.length` guard above, so it's
-      // always in bounds — `as` avoids a spurious `noUncheckedIndexedAccess`.
+      // always in bounds — `as` avoids a spurious `noUncheckedIndexedAccess`
       const item = items[index] as T;
       try {
         const value = await fn(item);
@@ -306,7 +306,7 @@ function sanitizeErrorMessage(message: string): string {
   return redacted.length > MAX_LENGTH ? `${redacted.slice(0, MAX_LENGTH)}…` : redacted;
 }
 
-/** See `NO_READING` doc comment: a config slip should be visible, not silently inert. */
+/** See `NO_READING` doc comment: a config slip should be visible, not silently inert */
 function warnIfClassEmpty(
   universe: readonly UniverseInstrument[],
   asset_class: AssetClass,

@@ -3,7 +3,7 @@
  * The rail's health note (#1166): ALIVE's "polled" word must read the
  * client's own `lastSuccessAt`, not the server's `generated_at` on the
  * snapshot — those are two different clocks, and a stall in one must not
- * read as freshness in the other.
+ * read as freshness in the other
  */
 import type { TradingArmWire } from '@contracts';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -16,14 +16,14 @@ const GENERATED_AT = '2026-08-07T12:00:00.000Z';
 /**
  * Distinct from `GENERATED_AT` on purpose: `test-fixtures.ts` defaults both
  * `generated_at` and `as_of` to the same constant, so a foot assertion made
- * against that default passes whichever of the two fields the foot reads.
+ * against that default passes whichever of the two fields the foot reads
  */
 const SNAPSHOT_AS_OF = '2026-08-07T11:59:40.000Z';
 
 /**
  * A `LiveFeed`, not a `SnapshotFeed`: since #1520 the rail is only ever
  * rendered once a snapshot has landed — the cold start is `App.tsx`'s
- * page-level state — so there is no `snapshot: null` case to construct here.
+ * page-level state — so there is no `snapshot: null` case to construct here
  */
 function makeFeed(overrides: Partial<LiveFeed> = {}): LiveFeed {
   return {
@@ -58,7 +58,7 @@ describe('Rail — poll clock', () => {
     // A re-poll that hands back the same `generated_at` (a stall in the
     // underlying data) but succeeded at a later wall-clock time: the poll
     // clock must move even though the snapshot clock does not, or a live
-    // client on a stalled feed reads as though it had itself gone quiet.
+    // client on a stalled feed reads as though it had itself gone quiet
     rerender(
       <Rail
         feed={makeFeed({ lastSuccessAt: '2026-08-07T12:00:35.000Z' })}
@@ -131,11 +131,11 @@ describe('Rail — contract mismatch (#1316)', () => {
     // these tiles, not whether `snapshot` happens to be present or "look
     // fine". If any block below read off `snapshot` instead of `status`, this
     // test would see the healthy value (a mode pill, a live-tick line, a
-    // providers block) instead of the mismatch reading.
+    // providers block) instead of the mismatch reading
     renderRail(mismatchedFeed({ snapshot: makeSnapshot() }));
 
     const mismatchTiles = screen.getAllByText('unknown — contract mismatch');
-    // Mode, live tick, alert channel, providers, LLM cap, drawdown.
+    // Mode, live tick, alert channel, providers, LLM cap, drawdown
     expect(mismatchTiles.length).toBe(6);
   });
 
@@ -143,7 +143,7 @@ describe('Rail — contract mismatch (#1316)', () => {
     // This is #1316's actual bug, reproduced directly: `AlertDeliveryBlock`
     // alone renders NOTHING for `alert_delivery_failures_24h: 0`, which is
     // indistinguishable from "the field could not be read". During a
-    // mismatch this tile must be visible and explicit instead.
+    // mismatch this tile must be visible and explicit instead
     renderRail(
       mismatchedFeed({
         snapshot: makeSnapshot({ alert_delivery_failures_24h: 0 }),
@@ -163,7 +163,7 @@ describe('Rail — contract mismatch (#1316)', () => {
     // — that absence is fine there. Pinned here so a change that made the
     // mismatch path start reusing `AlertDeliveryBlock` (and so re-absorb the
     // bug) would be caught by the test above, not silently pass because this
-    // file never exercised the healthy 0-failure case.
+    // file never exercised the healthy 0-failure case
     renderRail(makeFeed({ snapshot: makeSnapshot({ alert_delivery_failures_24h: 0 }) }));
 
     expect(screen.queryByText('Alert channel')).toBeNull();
@@ -184,7 +184,7 @@ describe('Rail — contract mismatch (#1316)', () => {
     // ranking is the ONLY thing the rail reads — the `stale` boolean it used
     // to carry alongside `status` is gone, so there is no second input left
     // that could disagree with the word on screen. This pins the outcome that
-    // ranking exists to produce.
+    // ranking exists to produce
     renderRail(mismatchedFeed());
 
     expect(screen.getByText('MISMATCH')).toBeTruthy();
@@ -354,7 +354,7 @@ describe('Rail — drawdown meter', () => {
  * #1593: the arm selector's accessible name carries the selection state
  * itself (AC), not a separate `aria-selected`/`aria-pressed` an operator has
  * to cross-reference — so these tests read names, the same posture the rest
- * of this file's `getByRole(..., { name })` assertions already take.
+ * of this file's `getByRole(..., { name })` assertions already take
  */
 describe('Rail — arm selector', () => {
   it('names Live as selected and Control as not, when arm is live', () => {
@@ -366,7 +366,7 @@ describe('Rail — arm selector', () => {
     expect(screen.queryByRole('button', { name: 'Control arm, selected' })).toBeNull();
 
     // Colour alone never carries selection (dashboard-spec.md:310/:560) — the
-    // selected arm also carries a visible word, not just `.arm-btn-on`.
+    // selected arm also carries a visible word, not just `.arm-btn-on`
     expect(within(liveButton).getByText('· selected')).toBeTruthy();
     expect(
       within(screen.getByRole('button', { name: 'Control arm' })).queryByText('· selected'),
@@ -413,7 +413,7 @@ describe('Rail — arm selector', () => {
  * `InMemoryCurrentTickStore` and never writes `tick_status` — the Live tick
  * tile names that structural absence rather than reading it as "idle" (a
  * quiet moment a control snapshot's `tick_status: null` would otherwise be
- * indistinguishable from).
+ * indistinguishable from)
  */
 describe('Rail — control arm', () => {
   it('names the tick absence as structural rather than reading the control arm as idle', () => {
@@ -463,7 +463,7 @@ describe('Rail — system facts', () => {
    * that independence is worth pinning directly: a `reason` other than
    * `'capped'` (the only one the suite above's default fixture exercises)
    * takes the meter's `emptyState` branch instead of drawing a `Track`, and a
-   * future change to that branch must not walk the tag out with it.
+   * future change to that branch must not walk the tag out with it
    */
   it('still labels the LLM cap tile as system when the cap is uncapped, not drawn as a meter', () => {
     renderRail(

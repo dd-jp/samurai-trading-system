@@ -3,7 +3,7 @@
  * `{Client}TimeoutError`/`{Client}RateLimitError`/`{Client}ProviderError`
  * shape `alpaca-data-errors.ts` uses per transport-layer-spec.md's "Shared
  * Transport Conventions" module, with one deliberate deviation from that
- * module's default `isRetryable` shape: see `isRetryablePolygonBarsError`.
+ * module's default `isRetryable` shape: see `isRetryablePolygonBarsError`
  */
 
 import { classifyStatus, isServerErrorStatus, isTimeoutAbort } from '../../../shared/index.js';
@@ -17,7 +17,7 @@ export class PolygonBarsTimeoutError extends Error {
 
 // No retryAfterMs field: isRetryablePolygonBarsError never treats this class
 // as retryable, so nothing would ever read a stored Retry-After hint — see
-// that predicate's doc comment for why 429 is excluded.
+// that predicate's doc comment for why 429 is excluded
 export class PolygonBarsRateLimitError extends Error {
   constructor(message: string) {
     super(message);
@@ -25,9 +25,9 @@ export class PolygonBarsRateLimitError extends Error {
   }
 }
 
-/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further. */
+/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further */
 export class PolygonBarsProviderError extends Error {
-  /** HTTP status code, when the failure came from a response rather than a network error. */
+  /** HTTP status code, when the failure came from a response rather than a network error */
   readonly status: number | undefined;
 
   constructor(message: string, status?: number) {

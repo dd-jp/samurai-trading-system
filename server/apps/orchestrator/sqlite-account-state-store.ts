@@ -105,7 +105,7 @@ export class SqliteAccountStateStore {
     return this.peakEquity() ?? equity;
   }
 
-  /** The stored mark, or null before the first tick has ever recorded one. */
+  /** The stored mark, or null before the first tick has ever recorded one */
   peakEquity(): number | null {
     const row = this.db
       .prepare('SELECT peak_equity FROM account_state WHERE key = ?')

@@ -360,7 +360,7 @@
  */
 import { type AssetClass, type InstrumentSubclass, isBookCurrency } from '../../shared/index.js';
 
-/** Long/short stance the ETP itself carries — separate from any debate direction. */
+/** Long/short stance the ETP itself carries — separate from any debate direction */
 export type EtpDirection = 'long' | 'short';
 
 /**
@@ -433,11 +433,11 @@ export interface SaxoInstrumentEvidence {
  * fetch.
  */
 export interface RowProvenance {
-  /** ISIN of the ETP, as stated by the issuer/aggregator source below. */
+  /** ISIN of the ETP, as stated by the issuer/aggregator source below */
   readonly isin: string;
-  /** One of the three named issuers: 'Leverage Shares' | 'WisdomTree' | 'GraniteShares'. */
+  /** One of the three named issuers: 'Leverage Shares' | 'WisdomTree' | 'GraniteShares' */
   readonly issuer: string;
-  /** A URL actually fetched or returned by search during this compile, naming ticker/ISIN/currency. */
+  /** A URL actually fetched or returned by search during this compile, naming ticker/ISIN/currency */
   readonly source_url: string;
   /**
    * A trading212.com instrument page confirming T212 lists this ticker.
@@ -452,11 +452,11 @@ export interface RowProvenance {
    * see its own doc.
    */
   readonly t212_source_url?: string;
-  /** ISO date this row was compiled/verified. */
+  /** ISO date this row was compiled/verified */
   readonly verified_on: string;
-  /** What Saxo's own instrument list says about this row — the source of `saxo_tradeable`. */
+  /** What Saxo's own instrument list says about this row — the source of `saxo_tradeable` */
   readonly saxo: SaxoInstrumentEvidence;
-  /** Anything uncertain about this specific row that a reader must not silently trust. */
+  /** Anything uncertain about this specific row that a reader must not silently trust */
   readonly notes?: string;
 }
 
@@ -474,14 +474,14 @@ export interface LseEtpPoolRow {
    * `buildRoutingMap` or any routing lookup — see module doc.
    */
   readonly screening_instrument: string;
-  /** Human-readable name of the thing being tracked (index, basket, or single company). */
+  /** Human-readable name of the thing being tracked (index, basket, or single company) */
   readonly underlying: string;
   /** Leverage multiple, e.g. 3 for a 3x product. Always positive; see `direction` for long/short. */
   readonly leverage: number;
   readonly direction: EtpDirection;
   /** ADR-0018's pricing dimension. Must be one of `KNOWN_SUBCLASSES` — see `assertKnownSubclass`. */
   readonly subclass: InstrumentSubclass;
-  /** ISO 4217-ish currency code of the LSE-listed line this row actually names (may be GBP, GBX, or USD). */
+  /** ISO 4217-ish currency code of the LSE-listed line this row actually names (may be GBP, GBX, or USD) */
   readonly currency: string;
   /**
    * Best-effort determination that Trading 212 LISTS this ticker, from
@@ -695,7 +695,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     // compiled after the 2026-08-30 venue change barred T212 outright
     // (#896/#912), so `false` here means "unevidenced", not "T212 does not
     // list it" — see `t212_isa`'s own doc. `t212_source_url` is omitted for
-    // the same reason rather than filled with a plausible URL nobody fetched.
+    // the same reason rather than filled with a plausible URL nobody fetched
     t212_isa: false,
     saxo_tradeable: true,
     fallback_default: true,
@@ -1083,16 +1083,14 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
         'used here.',
     },
   },
-  // ---------------------------------------------------------------------
   // #813's expansion pass, verified 2026-08-19. Nineteen further rows, each
   // carrying a fetched `source_url` (an AJ Bell LSE instrument page or a
   // justETF profile naming the ISIN and the quoting currency) and a
-  // `t212_source_url` whose page title names issuer, underlying and ticker.
+  // `t212_source_url` whose page title names issuer, underlying and ticker
   // The T212 pages themselves answer HTTP 403 to a programmatic fetch, so
   // the T212 evidence is the search-returned page title — the same standard
   // the eleven rows above were compiled to ("actually fetched OR returned by
-  // a web search during this compile").
-  // ---------------------------------------------------------------------
+  // a web search during this compile")
   {
     lse_ticker: '3LME',
     screening_instrument: 'MSFT',
@@ -1994,7 +1992,7 @@ export function liquidityGateStatus(
   // function did) answers "armed" from `saxo_tradeable`'s raw distinctness
   // instead of from `gateAdmits`'s actual output, which is the wrong
   // question: `liquidityGateStatus([{unverified}, {true}])` reported 'armed'
-  // even though admit-unless-false admits both rows, so nothing is excluded.
+  // even though admit-unless-false admits both rows, so nothing is excluded
   const verifiedCount = pool.filter((row) => row.saxo_tradeable !== 'unverified').length;
   if (pool.length === 0 || verifiedCount === 0) {
     return {

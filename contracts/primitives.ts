@@ -65,12 +65,12 @@ export type AssetClass = 'crypto' | 'stocks';
  */
 export type InstrumentSubclass = 'index_etp_3x' | 'single_stock_etp_3x' | 'crypto';
 
-/** A directional stance — an analyst's, or a debate's conclusion. */
+/** A directional stance — an analyst's, or a debate's conclusion */
 export type Direction = 'bullish' | 'bearish' | 'neutral';
 
 /**
  * The three store modes, as a runtime array because `resolveStoreMode` both
- * validates against it and names it in its error text.
+ * validates against it and names it in its error text
  */
 export const STORE_MODES = ['paper', 'live', 'backtest'] as const;
 

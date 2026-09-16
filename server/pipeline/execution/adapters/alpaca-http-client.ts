@@ -133,7 +133,7 @@ function isFiniteNumericString(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Number(value));
 }
 
-/** Throws a classified, message-bounded `AlpacaBrokerProviderError` for a validation failure. */
+/** Throws a classified, message-bounded `AlpacaBrokerProviderError` for a validation failure */
 function failValidation(context: string, detail: string, body: unknown): never {
   throw new AlpacaBrokerProviderError(
     `Alpaca API error: malformed response body (${context}): ${detail} — ${truncateForError(
@@ -237,7 +237,7 @@ function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
   } = body;
   if (typeof id !== 'string') failValidation(context, 'id must be a string', body);
   // Declared but unread-off-a-response (see doc comment): checked only when
-  // present, never required.
+  // present, never required
   if (client_order_id !== undefined && typeof client_order_id !== 'string') {
     failValidation(context, 'client_order_id must be a string', body);
   }
@@ -272,17 +272,17 @@ function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
   // open while the account was flat), and `resumeFlatten` then threw the same
   // way, so `reconcile()`'s flatten-journal sweep could not repair what the
   // submit had lost. The flatten path could not complete against live Alpaca
-  // at all — `closed_trades` held 0 rows across the whole paper soak.
+  // at all — `closed_trades` held 0 rows across the whole paper soak
   //
   // Verified against a live paper response, 2026-08-26: a filled market sell
-  // returns `"legs": null` alongside `"order_class": ""`.
+  // returns `"legs": null` alongside `"order_class": ""`
   if (legs !== undefined && legs !== null) {
     if (!Array.isArray(legs)) failValidation(context, 'legs must be an array', body);
     for (const leg of legs) validateAlpacaOrderLeg(leg, context, body);
   }
   // Double cast: `isRecord` narrowed `body` to `Record<string, unknown>`, which
   // TS considers too dissimilar to `AlpacaOrder` for a direct assertion — the
-  // fields above are exactly what were checked, so `unknown` first is safe.
+  // fields above are exactly what were checked, so `unknown` first is safe
   return body as unknown as AlpacaOrder;
 }
 
@@ -339,11 +339,11 @@ function validateAlpacaAccount(body: unknown, context: string): AlpacaAccount {
   if (buying_power !== undefined && !isFiniteNumericString(buying_power)) {
     failValidation(context, 'buying_power must be a numeric string', body);
   }
-  // See `validateAlpacaOrder`'s comment on the double cast.
+  // See `validateAlpacaOrder`'s comment on the double cast
   return body as unknown as AlpacaAccount;
 }
 
-/** Which of Alpaca's two trading environments a client is permitted to reach. */
+/** Which of Alpaca's two trading environments a client is permitted to reach */
 export type AlpacaTradingEnvironment = 'paper' | 'live';
 
 /**
@@ -428,7 +428,7 @@ function resolveBaseUrl(environment: AlpacaTradingEnvironment, override?: string
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-/** ~200 req/min (issue #260 research) tolerates a short base delay; capped well under the reconciliation loop's own budget. */
+/** ~200 req/min (issue #260 research) tolerates a short base delay; capped well under the reconciliation loop's own budget */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
 
 /**
@@ -479,12 +479,12 @@ export interface AlpacaHttpBrokerClientOptions {
    * throws rather than overriding `environment`.
    */
   baseUrl?: string;
-  /** Per-attempt network timeout passed to `fetchWithTimeout`. */
+  /** Per-attempt network timeout passed to `fetchWithTimeout` */
   timeoutMs?: number;
   retry?: RetryConfig;
 }
 
-/** Real HTTP broker `AlpacaBrokerClient` against Alpaca's Trading API v2. */
+/** Real HTTP broker `AlpacaBrokerClient` against Alpaca's Trading API v2 */
 export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
@@ -499,14 +499,14 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
 
   constructor(options: AlpacaHttpBrokerClientOptions = {}) {
     // Resolved first: it is what decides WHICH pair of variables the defaults
-    // below read (#511), as well as which host `resolveBaseUrl` returns.
+    // below read (#511), as well as which host `resolveBaseUrl` returns
     const environment = options.environment ?? 'paper';
     const names = ALPACA_CREDENTIAL_ENV_VARS[environment];
     // Whitespace-only counts as absent for an env-sourced value, matching
     // `missingCredentialEnvVars` (orchestrator/index.ts): `--env-file` turns a
-    // placeholder `ALPACA_LIVE_API_KEY=` into `''`, which is "not configured".
+    // placeholder `ALPACA_LIVE_API_KEY=` into `''`, which is "not configured"
     // Only the env default is trimmed — a value the caller passed explicitly is
-    // theirs, and silently rewriting a credential is worse than using it.
+    // theirs, and silently rewriting a credential is worse than using it
     const fromEnv = (name: string): string | undefined => {
       const value = process.env[name]?.trim();
       return value === undefined || value.length === 0 ? undefined : value;
@@ -593,7 +593,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
         // above), and catching it here would just re-wrap it as an identical
         // instance for no benefit — see #509's reviewer note on guarding
         // catch blocks that can themselves throw. There is nothing in this
-        // one worth guarding against.
+        // one worth guarding against
         return validate(parsed, context);
       },
       retry,
@@ -631,7 +631,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     // `type: 'limit'` is a wire-only field, not part of `AlpacaBracketOrderRequest` — the
     // interface's `limit_price` already implies a limit entry, but Alpaca's `POST /v2/orders`
     // still requires the `type` field on the request body itself (#260 research). Adding it
-    // here, not to the interface, keeps the "no interface change" constraint intact.
+    // here, not to the interface, keeps the "no interface change" constraint intact
     return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
@@ -774,7 +774,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     return this.request<AlpacaOrder[]>(
       // `nested=false` so a bracket's legs arrive as their own rows rather than
       // hidden inside the parent: the caller matches on `client_order_id`, and
-      // a nested leg would be unreachable to that match.
+      // a nested leg would be unreachable to that match
       //
       // `direction=asc` against Alpaca's `desc` default, and that is
       // load-bearing at the 500 cap (#1500 review): this is ONE page, not a
@@ -785,7 +785,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       // at the cap are the newest, which this lookup is never about. Paging
       // properly needs an `after` cursor over a timestamp `AlpacaOrder` does
       // not carry; if the open book can ever exceed 500 this needs that
-      // cursor, not a bigger limit (500 is Alpaca's own maximum).
+      // cursor, not a bigger limit (500 is Alpaca's own maximum)
       '/v2/orders?status=open&nested=false&direction=asc&limit=500',
       { method: 'GET' },
       'listOpenOrders',
@@ -804,7 +804,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     } catch (error) {
       // A validation failure has no `status` (`failValidation` never sets
       // one), so it falls through to the rethrow below rather than being
-      // mistaken for "no such order" — only a genuine 404 maps to null.
+      // mistaken for "no such order" — only a genuine 404 maps to null
       if (error instanceof AlpacaBrokerProviderError && error.status === 404) {
         return null;
       }

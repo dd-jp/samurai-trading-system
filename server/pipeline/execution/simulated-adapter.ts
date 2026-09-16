@@ -54,9 +54,9 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
    * apart from `filled` needs the size that was asked for.
    */
   private readonly accepted = new Map<string, NativeBracketRequest>();
-  /** Quantity each lot's protective legs cover, as `ingestFills()` sizes them. */
+  /** Quantity each lot's protective legs cover, as `ingestFills()` sizes them */
   private readonly protectedQty = new Map<string, number>();
-  /** Lots `cancel` has been called for (#429) — the simulation's observable. */
+  /** Lots `cancel` has been called for (#429) — the simulation's observable */
   private readonly cancelled = new Set<string>();
 
   constructor(private readonly input: SimulatedBrokerAdapterInput) {}
@@ -64,8 +64,8 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     const { clock, costModel } = this.input;
 
-    // Broker-native dedup: the second layer behind execute()'s store check.
-    // A duplicate client order id is a venue-side no-op, not a second fill.
+    // Broker-native dedup: the second layer behind execute()'s store check
+    // A duplicate client order id is a venue-side no-op, not a second fill
     if (this.accepted.has(order.client_order_id)) {
       return {
         client_order_id: order.client_order_id,
@@ -81,7 +81,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       instrument: order.instrument,
       side: order.side,
       size: order.size,
-      // The bracket's entry leg is priced at OrderIntent.entry.
+      // The bracket's entry leg is priced at OrderIntent.entry
       order_type: 'limit',
       limit_price: order.entry,
       idempotency_key: order.client_order_id,
@@ -97,14 +97,14 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       price: result.fill_price,
       qty: result.filled_size,
       // Commission is the cash fee; the other components are already
-      // expressed in the adverse fill price (cost-model-backtest-spec.md).
+      // expressed in the adverse fill price (cost-model-backtest-spec.md)
       fee: result.cost_breakdown.commission,
       // A fill's timestamp must never predate the `opened_at` of the lot it
       // belongs to (`ingestFills`'s global `since` floor relies on this,
       // ingest-fills.ts) — so this stamps `now`, not `marketState.timestamp`
-      // (the priced mark's own, possibly-stale observation time, #1087).
+      // (the priced mark's own, possibly-stale observation time, #1087)
       // `now` is still never AHEAD of simulated T: it IS T, the same read
-      // used to build `marketState` above.
+      // used to build `marketState` above
       timestamp: now,
       cost_breakdown: result.cost_breakdown,
     });
@@ -136,7 +136,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     if (order === undefined) return null;
 
     // Summed from the modelled fills, so the report tracks the same events
-    // `fetchNewFills` publishes rather than a second, drifting tally.
+    // `fetchNewFills` publishes rather than a second, drifting tally
     const filledQty = this.fills
       .filter((fill) => fill.client_order_id === clientOrderId && fill.leg === 'entry')
       .reduce((sum, fill) => sum + fill.qty, 0);
@@ -208,7 +208,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     this.protectedQty.set(clientOrderId, qty);
   }
 
-  /** The quantity this lot's protective legs currently cover; null if unarmed. */
+  /** The quantity this lot's protective legs currently cover; null if unarmed */
   getProtectedQty(clientOrderId: string): number | null {
     return this.protectedQty.get(clientOrderId) ?? null;
   }
@@ -240,7 +240,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     const now = this.input.clock.now();
     // A flatten carries no bracket, so the market state is assembled from the
     // instrument alone — `buildMarketState` needs only `instrument` off the
-    // request, and passing a synthetic one keeps the pricing path single.
+    // request, and passing a synthetic one keeps the pricing path single
     const marketState = await this.buildMarketState({ instrument } as NativeBracketRequest, now);
     const result = this.input.costModel.fill(
       {
@@ -254,7 +254,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     );
 
     // Recorded in `accepted` so a repeat is deduped and `getOrder` can answer
-    // for it: a flatten is an order the venue holds like any other.
+    // for it: a flatten is an order the venue holds like any other
     this.accepted.set(clientOrderId, {
       instrument,
       side,
@@ -270,7 +270,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       fee: result.cost_breakdown.commission,
       // #1087: same reasoning as `submitBracket`'s entry fill above — stamp
       // the fill event at submit time, not the priced mark's own
-      // (potentially laggy) observation time.
+      // (potentially laggy) observation time
       timestamp: now,
       cost_breakdown: result.cost_breakdown,
     });
@@ -294,7 +294,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     this.cancelled.add(clientOrderId);
   }
 
-  /** True if `cancel` has been called for this lot — the simulation's observable. */
+  /** True if `cancel` has been called for this lot — the simulation's observable */
   isCancelled(clientOrderId: string): boolean {
     return this.cancelled.has(clientOrderId);
   }
@@ -320,14 +320,14 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     return (
       [...netByInstrument.entries()]
         // A netted-flat instrument is not a position. Reporting it as qty 0
-        // would make reconciliation see a holding where the venue has none.
+        // would make reconciliation see a holding where the venue has none
         .filter(([, qty]) => qty !== 0)
         .map(([instrument, qty]) => ({
           instrument,
           qty,
           side: qty > 0 ? ('buy' as const) : ('sell' as const),
           // The simulation prices every fill individually and keeps no running
-          // average; null is the honest answer rather than a fabricated one.
+          // average; null is the honest answer rather than a fabricated one
           avg_entry_price: null,
         }))
     );
@@ -358,12 +358,12 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       asset_class: mark.asset_class,
       ...(config.venue === undefined ? {} : { venue: config.venue }),
       // When the price was OBSERVED, not when it was requested — already
-      // <= now by MDS's point-in-time contract.
+      // <= now by MDS's point-in-time contract
       timestamp: mark.observed_at,
     };
   }
 
-  /** Entry + the two attached protective legs. */
+  /** Entry + the two attached protective legs */
   private brokerOrderIdsFor(clientOrderId: string): string[] {
     return [`${clientOrderId}:entry`, `${clientOrderId}:stop`, `${clientOrderId}:target`];
   }

@@ -124,7 +124,7 @@ export function writeTokenFile(path: string, record: SaxoTokenFileRecord): void 
     try {
       unlinkSync(temp);
     } catch {
-      // The temp file may never have been created; its absence is the state we want.
+      // The temp file may never have been created; its absence is the state we want
     }
     throw cause;
   }
@@ -150,7 +150,7 @@ function requireSecret(body: Record<string, unknown>, field: string): string {
   return value;
 }
 
-/** Like `requireIso`, but the field is allowed to be absent — see `loggedInAt`'s doc. */
+/** Like `requireIso`, but the field is allowed to be absent — see `loggedInAt`'s doc */
 function optionalIso(body: Record<string, unknown>, field: string): string | undefined {
   const value = body[field];
   if (value === undefined) return undefined;

@@ -18,23 +18,23 @@
  * to.
  */
 
-/** One fill the venue has reported filled, and failed to price, for too long. */
+/** One fill the venue has reported filled, and failed to price, for too long */
 export interface UnpricedFillAlert {
-  /** Which adapter observed it — 'alpaca' today. */
+  /** Which adapter observed it — 'alpaca' today */
   venue: string;
   /** Our idempotency key for the lot, i.e. `open_positions.idempotency_key`. */
   client_order_id: string;
-  /** The venue order id to look up on the broker's own dashboard. */
+  /** The venue order id to look up on the broker's own dashboard */
   broker_fill_id: string;
   leg: 'entry' | 'stop' | 'target' | 'exit';
   instrument: string;
-  /** The quantity the venue claims filled but will not price. */
+  /** The quantity the venue claims filled but will not price */
   qty: number;
-  /** When this fill was first seen unpriced — survives process restarts. */
+  /** When this fill was first seen unpriced — survives process restarts */
   first_seen_at: Date;
-  /** How long it has been unpriced, in ms: `now - first_seen_at`. */
+  /** How long it has been unpriced, in ms: `now - first_seen_at` */
   unpriced_for_ms: number;
-  /** The age-out threshold this breached, so the alert explains itself. */
+  /** The age-out threshold this breached, so the alert explains itself */
   age_out_ms: number;
 }
 

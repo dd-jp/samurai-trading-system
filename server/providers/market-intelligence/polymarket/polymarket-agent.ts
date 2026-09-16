@@ -133,7 +133,7 @@ import type { CuratedMacroMarket } from './curated-markets.js';
 import { CURATED_MACRO_MARKETS } from './curated-markets.js';
 import type { PolymarketMarket, PolymarketPricePoint } from './polymarket-client.js';
 
-/** The `source` on every item and archive row this agent writes. */
+/** The `source` on every item and archive row this agent writes */
 export const SOURCE_POLYMARKET = MI_SOURCES.polymarket;
 
 /**
@@ -163,10 +163,10 @@ export const POLYMARKET_ASSET_CLASS: AssetClass = 'stocks';
  */
 export const POLYMARKET_REFRESH_MS = 60 * 60 * 1000;
 
-/** Below this |delta| the market did not move enough to call a direction. */
+/** Below this |delta| the market did not move enough to call a direction */
 export const DEAD_BAND = 0.02;
 
-/** `|delta| * 5` saturates the 0.95 ceiling at a 0.19 move. */
+/** `|delta| * 5` saturates the 0.95 ceiling at a 0.19 move */
 const CONFIDENCE_SCALE = 5;
 const MIN_CONFIDENCE = 0.05;
 const MAX_CONFIDENCE = 0.95;
@@ -247,7 +247,7 @@ const BASELINE_TOLERANCE_MS = 2 * 60 * 60 * 1000;
  */
 const REFUSAL_WARN_STREAK = 24;
 
-/** How stale the newest history point may be before the series is refused. */
+/** How stale the newest history point may be before the series is refused */
 const MAX_LATEST_POINT_AGE_MS = 3 * 60 * 60 * 1000;
 
 /** The two client calls this agent makes. Structurally satisfied by `PolymarketClient`. */
@@ -269,9 +269,9 @@ export interface PolymarketAgentDeps {
    */
   archive?: MiArchiveStore | undefined;
   logger?: Logger | undefined;
-  /** Overridable for tests; defaults to the reviewed table. */
+  /** Overridable for tests; defaults to the reviewed table */
   table?: readonly CuratedMacroMarket[];
-  /** Overridable for tests; defaults to the derived 1h. */
+  /** Overridable for tests; defaults to the derived 1h */
   refreshMs?: number;
 }
 
@@ -284,7 +284,7 @@ export function floorToPolymarketBucket(at: Date, refreshMs: number = POLYMARKET
   return new Date(Math.floor(at.getTime() / refreshMs) * refreshMs);
 }
 
-/** The three-valued sign the contract carries, with the dead band applied. */
+/** The three-valued sign the contract carries, with the dead band applied */
 export function signOfDelta(delta: number): 1 | 0 | -1 {
   if (delta > DEAD_BAND) return 1;
   if (delta < -DEAD_BAND) return -1;
@@ -299,11 +299,11 @@ export function isPinnedProbability(probability: number): boolean {
   // The tolerance is not decoration: `1 - 0.9` is 0.09999999999999998 in
   // binary floating point, so a bare `<` would refuse a market quoted at
   // exactly the bound. Vendor quotes arrive at two or three decimals, so a
-  // 1e-9 slack cannot admit anything a reviewer would call pinned.
+  // 1e-9 slack cannot admit anything a reviewer would call pinned
   return Math.min(probability, 1 - probability) < MIN_PROBABILITY_HEADROOM - 1e-9;
 }
 
-/** `clamp(|delta| * 5, 0.05, 0.95)` — #504 decision 3, verbatim. */
+/** `clamp(|delta| * 5, 0.05, 0.95)` — #504 decision 3, verbatim */
 export function confidenceOfDelta(delta: number): number {
   return Math.min(MAX_CONFIDENCE, Math.max(MIN_CONFIDENCE, Math.abs(delta) * CONFIDENCE_SCALE));
 }
@@ -311,7 +311,7 @@ export function confidenceOfDelta(delta: number): number {
 /** Why one curated row produced nothing this refresh. `undefined` means it passed. */
 type Refusal = string | undefined;
 
-/** The book-quality half of the fail-closed guard. */
+/** The book-quality half of the fail-closed guard */
 function refuseOnBook(market: PolymarketMarket, now: Date): Refusal {
   if (market.closed) return 'the market is closed';
   if (market.updatedAt === undefined) return 'the market carries no updatedAt stamp';
@@ -332,7 +332,7 @@ function refuseOnBook(market: PolymarketMarket, now: Date): Refusal {
   return undefined;
 }
 
-/** The two endpoints of the delta, or a refusal naming what the series could not support. */
+/** The two endpoints of the delta, or a refusal naming what the series could not support */
 function endpointsOf(
   history: readonly PolymarketPricePoint[],
   now: Date,
@@ -438,7 +438,7 @@ export class PolymarketAgent {
    * for the same reason, `GdeltIngestAgent.log` documents: this is called as
    * `void refresh(...)` from `production.ts`'s own timer, so a throwing logger
    * would surface as an unhandled rejection in a process meant to run
-   * unattended for fourteen days, and #714's fault handler EXITS on those.
+   * unattended for fourteen days, and #714's fault handler EXITS on those
    */
   #log(entry: LogEntry): void {
     const logger = this.#deps.logger;
@@ -500,7 +500,7 @@ export class PolymarketAgent {
     const items: IntelligenceItem[] = [];
     const raws: RawArchiveRow[] = [];
     const archivedItems: ArchivedItem[] = [];
-    /** How many rows produced a usable ANSWER — read, refused, or rotted alike. */
+    /** How many rows produced a usable ANSWER — read, refused, or rotted alike */
     let answered = 0;
 
     for (const entry of this.#table) {
@@ -509,7 +509,7 @@ export class PolymarketAgent {
         market = await this.#deps.client.fetchEventMarket(entry.eventSlug, entry.marketSlug);
       } catch (error) {
         // Transport failure: transient, so it does NOT count as answered and
-        // the bucket stays unmarked, which is what makes the next tick retry.
+        // the bucket stays unmarked, which is what makes the next tick retry
         this.#logFailure(
           {
             trace_id,
@@ -530,7 +530,7 @@ export class PolymarketAgent {
         // Slug rot, and the loudest case in this file. A decayed table degrades
         // to silent zero-ingest — the exact mute-analyst state this source
         // exists to relieve — so it is a warn naming the row to edit, never an
-        // info nobody greps for.
+        // info nobody greps for
         this.#log({
           trace_id,
           stage: 'market_intelligence',
@@ -549,7 +549,7 @@ export class PolymarketAgent {
           },
         });
         // Gamma ANSWERED — with "there is no such market". A decayed table is a
-        // durable state, not an outage, so re-asking inside the hour repeats it.
+        // durable state, not an outage, so re-asking inside the hour repeats it
         answered += 1;
         continue;
       }
@@ -568,7 +568,7 @@ export class PolymarketAgent {
       // every row failed on a TRANSPORT — Gamma's or the CLOB's, see
       // `BuiltRow` — is a vendor outage and must be retried, while a pass in
       // which every row was refused on book quality, or rotted, is a real
-      // answer and re-asking within the hour would only repeat it.
+      // answer and re-asking within the hour would only repeat it
       if (answered > 0) this.#bucket = bucketAt.getTime();
       return false;
     }
@@ -586,13 +586,13 @@ export class PolymarketAgent {
       // the spec's user stories
       // 26/29/30. `archive/mi-sources.ts` now carries the boot policy per
       // source, so both properties hold: the items are archived, and
-      // `HYDRATING_MI_SOURCES` excludes this one from the boot read.
+      // `HYDRATING_MI_SOURCES` excludes this one from the boot read
       this.#deps.archive?.write(raws, archivedItems);
       this.#deps.store.ingest({
         agent_id: SOURCE_POLYMARKET,
         // The envelope stamp, which `MarketIntelligenceStore.ingest` carries
         // but never reads — it filters on the ITEM timestamp. Set to the same
-        // ingest instant the items carry so the two cannot disagree.
+        // ingest instant the items carry so the two cannot disagree
         timestamp: now,
         asset_class: POLYMARKET_ASSET_CLASS,
         items,
@@ -631,7 +631,7 @@ export class PolymarketAgent {
     return true;
   }
 
-  /** One curated row → an item, a logged refusal, or a transport failure. */
+  /** One curated row → an item, a logged refusal, or a transport failure */
   async #buildItem(
     trace_id: string,
     entry: CuratedMacroMarket,
@@ -663,7 +663,7 @@ export class PolymarketAgent {
     // row that is thin AND pinned. Routed through `#refuse` like every other
     // book-quality refusal, so the row still counts as ANSWERED and the
     // bucket marks — this is a durable property of the contract, not an
-    // outage, and re-asking inside the hour would only repeat it.
+    // outage, and re-asking inside the hour would only repeat it
     const probability = market.outcomePrices[outcomeIndex];
     if (probability === undefined || !Number.isFinite(probability)) {
       return this.#refuse(
@@ -715,7 +715,7 @@ export class PolymarketAgent {
     const delta = latest.probability - baseline.probability;
     const item: IntelligenceItem = {
       // Stable per (row, bucket): a replay stepping the same grid rebuilds the
-      // same id, and the archive's natural key absorbs a repeated write.
+      // same id, and the archive's natural key absorbs a repeated write
       id: `${SOURCE_POLYMARKET}:${entry.id}:${bucketAt.toISOString()}`,
       source: SOURCE_POLYMARKET,
       type: 'news',
@@ -723,25 +723,25 @@ export class PolymarketAgent {
       // floors its window end to the debate bar and drops anything stamped
       // past it (#782), and that dropping is the feature, not an obstacle: it
       // is what stops `intel.length` (#1164; this item routes there by
-      // `scope`, not into `news`) moving between two ticks of ONE bar.
+      // `scope`, not into `news`) moving between two ticks of ONE bar
       // `technical-analyst` puts that count verbatim in `key_points`, which is
       // hashed into `debate_id`, so a count that grows mid-bar buys a SECOND
       // paid debate on a bar that already had one (#617, ADR-0008's budget) —
       // and `fundamental-analyst` emits a second, different confidence on the
-      // same bar, which `scale_in_conviction_delta` can turn into an extra lot.
+      // same bar, which `scale_in_conviction_delta` can turn into an extra lot
       //
       // Stamping `bucketAt` backdates the item INTO the already-open bar and
       // re-opens exactly that. The poll timer is 15 minutes at an arbitrary
       // phase and the tick interval is 60s, so an ingest at 10:11 stamped 10:00
-      // is visible to a read at 10:12 and was not visible at 10:05.
+      // is visible to a read at 10:12 and was not visible at 10:05
       // `market-intelligence-spec.md` states the contract this now honours:
       // "an item ingested mid-bar is not visible until the next bar opens" —
       // at most one hour of latency against a 24h window, on a path whose
-      // consumer runs once per bar anyway.
+      // consumer runs once per bar anyway
       //
       // `id` and `native_id` stay keyed to `bucketAt` on purpose: they are the
       // replay/dedup coordinates and must be stable for a replay stepping the
-      // same grid, which a wall-clock instant is not.
+      // same grid, which a wall-clock instant is not
       timestamp: now,
       entity: entry.entity,
       // A curated macro market is evidence for the whole class and for no one
@@ -749,7 +749,7 @@ export class PolymarketAgent {
       // ticker. Without this the item is dropped by `getContext`'s entity
       // filter for every entity-scoped caller (#914) — which is both analysts
       // that read the CONTENT — while still reaching `technical-analyst`,
-      // whose read passes no entity, as a bare `intel.length` (#1164).
+      // whose read passes no entity, as a bare `intel.length` (#1164)
       scope: 'asset_class',
       headline:
         `${entry.label}: ${baseline.probability.toFixed(3)} -> ` +
@@ -767,7 +767,7 @@ export class PolymarketAgent {
       native_id: `${entry.id}:${bucketAt.toISOString()}`,
       // The VENDOR's revision stamp, not ours — `updated_at` orders revisions,
       // `ingested_at` is the visibility gate (`mi-archive-store.ts`). Guarded
-      // as defined by `refuseOnBook` above.
+      // as defined by `refuseOnBook` above
       updated_at: market.updatedAt ?? bucketAt,
       payload: JSON.stringify({
         market: market.payload,
@@ -776,12 +776,12 @@ export class PolymarketAgent {
       }),
       ingested_at: now,
       // 'live' because we fetched it now and stamped it with the bucket we
-      // fetched it in — the row asserts nothing we did not know.
+      // fetched it in — the row asserts nothing we did not know
       fidelity: 'live',
     };
 
     // The row answered, so its refusal streak starts over: the escalation must
-    // fire on a row that is dead, not on one that was quiet last Tuesday.
+    // fire on a row that is dead, not on one that was quiet last Tuesday
     this.#refusals.delete(entry.id);
     this.#deps.archive?.clearRefusalStreak(SOURCE_POLYMARKET, entry.id);
     return { outcome: 'item', item, raw };
@@ -797,7 +797,7 @@ export class PolymarketAgent {
     // first day stays `info`; past a full day of consecutive refusals the row
     // is not quiet, it is dead, and that has to reach the same eyes slug rot
     // does. Measured 2026-08-17: 3 of the 6 curated rows sit below the volume
-    // floor today, so this is the common path, not an edge (see the PR body).
+    // floor today, so this is the common path, not an edge (see the PR body)
     const persistent = streak >= REFUSAL_WARN_STREAK;
     this.#log({
       trace_id,

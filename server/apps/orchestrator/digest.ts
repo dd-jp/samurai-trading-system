@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 
-/** Stable stringify: object keys sorted recursively so digests don't depend on key insertion order. */
+/** Stable stringify: object keys sorted recursively so digests don't depend on key insertion order */
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(',')}]`;

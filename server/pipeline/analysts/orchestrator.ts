@@ -136,7 +136,7 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
  */
 export const DEFAULT_ANALYST_TIMEOUT_MS = 30_000;
 
-/** analysts-spec.md story 19: exactly one retry, so a blip is absorbed without a retry storm. */
+/** analysts-spec.md story 19: exactly one retry, so a blip is absorbed without a retry storm */
 const ATTEMPTS_PER_PERSONA = 2;
 
 /**
@@ -200,7 +200,7 @@ export interface AnalystOrchestratorDeps {
   logger?: Logger;
 }
 
-/** The safe default for `AnalystOrchestratorDeps.sessionCalendars` — see its doc comment. */
+/** The safe default for `AnalystOrchestratorDeps.sessionCalendars` — see its doc comment */
 function defaultSessionCalendars(): Record<AssetClass, TradingCalendar> {
   return {
     crypto: new AlwaysOpenCalendar(),
@@ -208,11 +208,11 @@ function defaultSessionCalendars(): Record<AssetClass, TradingCalendar> {
   };
 }
 
-/** The safe default for `AnalystOrchestratorDeps.logger` — see its doc comment. */
+/** The safe default for `AnalystOrchestratorDeps.logger` — see its doc comment */
 const NOOP_LOGGER: Logger = {
   log(): void {
     // Intentionally does nothing — same posture as `NOOP_ANALYST_TELEMETRY`:
-    // a missing logger must never be able to fail a tick.
+    // a missing logger must never be able to fail a tick
   },
 };
 
@@ -237,7 +237,7 @@ function renderErrorDetail(error: unknown): Record<string, unknown> {
     // while the payload is still being built, before `safeLog`'s own
     // try/catch is ever entered — `logCaughtFailure`'s doc comment describes
     // the same hole. On the late-settlement path the escape would reject a
-    // derived promise nobody holds, which Node 22 turns into process exit.
+    // derived promise nobody holds, which Node 22 turns into process exit
     return { message: '[unrenderable error]' };
   }
 }
@@ -245,7 +245,7 @@ function renderErrorDetail(error: unknown): Record<string, unknown> {
 /**
  * Per field, so one hostile getter costs only its own field: a thrown `stack`
  * must not take the `name`/`message`/`cause` that rendered fine down with it,
- * which is the whole diagnostic value of the line.
+ * which is the whole diagnostic value of the line
  */
 function renderField(render: () => string): string {
   try {
@@ -278,7 +278,7 @@ export interface AnalystOrchestratorOptions {
   timeout_ms?: number;
 }
 
-/** Marker for the timeout path, so the logged reason names it as a timeout rather than an error. */
+/** Marker for the timeout path, so the logged reason names it as a timeout rather than an error */
 class AnalystTimeoutError extends Error {
   constructor(analyst_type: string, timeout_ms: number) {
     super(`${analyst_type} did not answer within ${timeout_ms}ms`);
@@ -323,7 +323,7 @@ async function withTimeout<T>(
           // callback could run. So it is safe — and correct — to attach
           // observers to `work` here, and only here: attaching eagerly at
           // call time would fire on every attempt, not only the abandoned
-          // one this branch already knows was abandoned.
+          // one this branch already knows was abandoned
           //
           // This does not change what `Promise.race` does with `work`'s
           // eventual rejection: `Promise.race` already attaches its own
@@ -331,7 +331,7 @@ async function withTimeout<T>(
           // handled-and-ignored the same way latency-budget.ts's identical
           // situation documents — `onLateSettlement` only lets the caller
           // learn what happened, it is not what prevents an unhandled
-          // rejection.
+          // rejection
           if (onLateSettlement !== undefined) {
             work.then(
               (value) => onLateSettlement({ status: 'fulfilled', value }),
@@ -405,14 +405,14 @@ export class AnalystOrchestrator {
 
     const outcomes = await Promise.all(
       applicable.map(async (persona) => {
-        // One bounded retry, uniform across roles (analysts-spec.md story 19).
+        // One bounded retry, uniform across roles (analysts-spec.md story 19)
         // Every failure mode funnels through here identically — timeout, thrown
         // error, or malformed output surfacing as a throw — differing only in
-        // the reason string (story 20).
+        // the reason string (story 20)
         let lastReason = '';
         // The LAST attempt's kind, not a summary of both: a persona whose first
         // attempt threw and whose retry timed out is a timeout at the point the
-        // stage gave up, which is the one the caller is deciding about.
+        // stage gave up, which is the one the caller is deciding about
         let lastKind: AnalystFailureKind = 'other';
         for (let attempt = 1; attempt <= ATTEMPTS_PER_PERSONA; attempt++) {
           try {
@@ -434,7 +434,7 @@ export class AnalystOrchestrator {
                 // on from this attempt (it lost the race to the deadline
                 // above). Logged only — see `withTimeout`'s doc comment for
                 // why the invariant "a late arrival is logged, never applied"
-                // holds structurally, not by convention.
+                // holds structurally, not by convention
                 safeLog(this.logger, {
                   trace_id,
                   stage: 'analysts',
@@ -471,21 +471,21 @@ export class AnalystOrchestrator {
               // handled analyst failure into a failed tick before any of this
               // loop's own logging runs. This is the same try/catch/placeholder
               // shape `logCaughtFailure` (safe-log.ts) uses for that residual
-              // case.
+              // case
               lastReason = '[unrenderable error]';
             }
             // `AnalystTimeoutError` is named explicitly rather than left to
             // the classifier: it is this class's own deadline, not a provider's
-            // (#1394).
+            // (#1394)
             lastKind =
               error instanceof AnalystTimeoutError ? 'timeout' : classifyFailureCause(error);
             // #1114's cheap half: a genuine (non-timeout) rejection already
             // carries a full `Error` right here, and the line above collapses
             // it to `lastReason`'s bare message — the same loss the ticket
-            // names, just without `withTimeout`'s abandoned-promise problem.
+            // names, just without `withTimeout`'s abandoned-promise problem
             // Logged in addition to, never instead of, the existing
             // `lastReason`/`lastKind` bookkeeping and the error/warn line
-            // `analysts-adapter.ts` builds from it.
+            // `analysts-adapter.ts` builds from it
             if (lastKind !== 'timeout') {
               safeLog(this.logger, {
                 trace_id,
@@ -502,7 +502,7 @@ export class AnalystOrchestrator {
           }
         }
         // The reason says the retry happened, so a log line cannot be read as
-        // "failed once" when the persona actually failed twice.
+        // "failed once" when the persona actually failed twice
         return {
           persona,
           status: 'rejected' as const,
@@ -540,7 +540,7 @@ export class AnalystOrchestrator {
     };
   }
 
-  /** The exact `TickSteps.analysts` shape (orchestrator/types.ts) — empty array = quorum skip. */
+  /** The exact `TickSteps.analysts` shape (orchestrator/types.ts) — empty array = quorum skip */
   async analysts(input: {
     trace_id: string;
     signal: Signal;

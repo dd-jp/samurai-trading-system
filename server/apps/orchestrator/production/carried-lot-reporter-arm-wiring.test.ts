@@ -58,11 +58,11 @@ vi.mock('../fill-sync.js', async (importOriginal) => {
   return { ...actual, startFillSync: startFillSyncSpy };
 });
 
-/** A Wednesday inside British Summer Time, past LSE close (16:30) and past `DEFAULT_TRADER_CONFIG`'s 5-minute grace. */
+/** A Wednesday inside British Summer Time, past LSE close (16:30) and past `DEFAULT_TRADER_CONFIG`'s 5-minute grace */
 const NOW = new Date('2026-08-19T16:40:00+01:00');
 const OPENED_AT = new Date('2026-08-19T14:00:00+01:00');
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s broker, verbatim reasoning: this proof never enters a lot or flattens one. */
+/** `flatten-reconcile-arm-wiring.test.ts`'s broker, verbatim reasoning: this proof never enters a lot or flattens one */
 class AmnesiacFlattenBroker implements BrokerAdapter {
   async submitBracket(): Promise<BrokerAck> {
     throw new Error('AmnesiacFlattenBroker.submitBracket: this wiring proof never enters a lot');
@@ -127,7 +127,7 @@ async function seedCarriedLot(
   await store.writeAheadPosition(position);
 }
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s `StubConfig`, verbatim reasoning. */
+/** `flatten-reconcile-arm-wiring.test.ts`'s `StubConfig`, verbatim reasoning */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
 function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
@@ -193,7 +193,7 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     // Pinned so `equityCalendarFor(config)` resolves to a calendar with a
     // real close — `findCarriedLots` reports nothing against a calendar that
-    // never closes (`AlwaysOpenCalendar`'s `sessionEnd` is null).
+    // never closes (`AlwaysOpenCalendar`'s `sessionEnd` is null)
     tradingCalendar: new LseRegularHoursCalendar(),
     polymarketClient: new PolymarketClient({
       rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
@@ -246,7 +246,7 @@ describe("each arm's carried-lot reporter watches its own book, under its own na
     await orchestrator.start();
 
     expect(startFillSyncSpy).toHaveBeenCalledTimes(2);
-    // #1321's documented ordering: control arm's `startFillSync` call first.
+    // #1321's documented ordering: control arm's `startFillSync` call first
     const controlReport = startFillSyncSpy.mock.calls[0]?.[0]
       .reportCarriedLots as () => Promise<void>;
     const liveReport = startFillSyncSpy.mock.calls[1]?.[0].reportCarriedLots as () => Promise<void>;

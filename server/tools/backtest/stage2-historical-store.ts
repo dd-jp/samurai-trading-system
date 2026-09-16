@@ -32,10 +32,10 @@ import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index
 import type { ReplayTimeline } from './types.js';
 import type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
 
-/** The timeframe every path used before #664 made it a parameter. */
+/** The timeframe every path used before #664 made it a parameter */
 export const DEFAULT_STAGE2_TIMEFRAME = '1d';
 
-/** One Polygon aggregate, timestamped at the bar's open (epoch ms). */
+/** One Polygon aggregate, timestamped at the bar's open (epoch ms) */
 export interface PolygonAggregate {
   t: number;
   o: number;
@@ -45,7 +45,7 @@ export interface PolygonAggregate {
   v: number;
 }
 
-/** The transport seam — a real Polygon/Massive HTTP client, or a test fake. */
+/** The transport seam — a real Polygon/Massive HTTP client, or a test fake */
 export interface PolygonClient {
   /**
    * Aggregates for `symbol` over `window` at `timeframe`, ascending by open
@@ -93,10 +93,10 @@ interface Stage2ListingRow {
  * "re-running is a no-op" would be false forever, just cheaper than before.
  */
 export interface Stage2Coverage {
-  /** The union of every window requested so far — contiguous by construction. */
+  /** The union of every window requested so far — contiguous by construction */
   requestedFrom: Date;
   requestedTo: Date;
-  /** `MIN`/`MAX(open_time)` of what the vendor actually served, if anything. */
+  /** `MIN`/`MAX(open_time)` of what the vendor actually served, if anything */
   firstBar?: Date | undefined;
   lastBar?: Date | undefined;
 }
@@ -162,7 +162,7 @@ function ensureParentDirectory(dbPath: string): void {
  * this ticket exists to avoid.
  */
 export interface Stage2HistoricalStoreOptions {
-  /** `'1d'`, `'1m'`, `'5m'`… — parsed by `timeframeToMs`, so garbage throws here. */
+  /** `'1d'`, `'1m'`, `'5m'`… — parsed by `timeframeToMs`, so garbage throws here */
   timeframe: string;
   /** Scratch SQLite path. `':memory:'` is the test/fixture shape. */
   dbPath?: string;
@@ -199,7 +199,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
   ) {
     // Parsed, not merely stored: `closeTimeOf` would throw later, mid-ingest,
     // after the network spend. `timeframeToMs` throws here on anything this
-    // repo cannot key bars on.
+    // repo cannot key bars on
     timeframeToMs(options.timeframe);
     this.timeframe = options.timeframe;
     const dbPath = options.dbPath ?? ':memory:';
@@ -373,15 +373,15 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     // ONE transaction for the whole page, not one implicit transaction per row
     // (#664). Measured on this branch before the change: a single
     // instrument-year of 1-minute bars — 98,280 rows — took **25.9 seconds** to
-    // persist, because each `run()` outside a transaction commits on its own.
+    // persist, because each `run()` outside a transaction commits on its own
     // Ten years across the four-symbol equity universe is ~4M rows, i.e. ~17
     // HOURS of writing for a backfill whose network side is minutes. Batched,
-    // the same 98,280 rows take well under a second.
+    // the same 98,280 rows take well under a second
     //
     // Invisible at daily resolution — 2,500 rows a symbol committed one at a
     // time is under a second — which is why it survived until intraday made it
     // the binding cost. `better-sqlite3`'s `transaction()` is synchronous and
-    // rolls back on a throw, so a malformed page leaves no half-written series.
+    // rolls back on a throw, so a malformed page leaves no half-written series
     this.db.transaction((rows: PolygonAggregate[]) => {
       for (const aggregate of rows) {
         const openTime = new Date(aggregate.t);
@@ -404,7 +404,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
   /**
    * Point-in-time read: bars for `symbol` with `close_time` inside `window`
    * (inclusive), ascending — the shape `proxySignal` (#242) and the replay
-   * driver (#243) consume directly.
+   * driver (#243) consume directly
    */
   bars(symbol: string, window: DateRange): Bar[] {
     const rows = this.db
@@ -518,7 +518,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
 
     if (rows.length === 0) {
       // Name the cause here rather than let it surface four layers up as
-      // `toReturnSeries: no bars in the sample` (pitfall P3).
+      // `toReturnSeries: no bars in the sample` (pitfall P3)
       const ingested = (
         this.db
           .prepare('SELECT DISTINCT instrument FROM stage2_bars WHERE timeframe = ?')
@@ -542,7 +542,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     return Promise.resolve(rows.map((row) => fromStoredTimestamp(row.close_time)));
   }
 
-  /** `InstrumentRegistry.membershipDuring` — see class doc for the "nothing delisted" posture. */
+  /** `InstrumentRegistry.membershipDuring` — see class doc for the "nothing delisted" posture */
   async membershipDuring(_window: DateRange): Promise<InstrumentListing[]> {
     const rows = this.db
       .prepare('SELECT symbol, delisted_at FROM stage2_listing')

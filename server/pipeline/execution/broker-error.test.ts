@@ -1,6 +1,6 @@
 import { BrokerError, sanitizeBrokerError } from './broker-error.js';
 
-/** A credential the wrapper must never carry forward, in any field. */
+/** A credential the wrapper must never carry forward, in any field */
 const SECRET = 'PKTEST_APIKEY_9f2c';
 
 describe('sanitizeBrokerError', () => {
@@ -33,7 +33,7 @@ describe('sanitizeBrokerError', () => {
 
   it('retains no reference to the original error anywhere on the wrapper', () => {
     // The whole point of the boundary: a curated message with the raw error
-    // still hanging off `cause` leaks the moment anything serializes the error.
+    // still hanging off `cause` leaks the moment anything serializes the error
     const raw = Object.assign(new Error(`boom ${SECRET}`), { status: 500, apiKey: SECRET });
 
     const error = sanitizeBrokerError('alpaca', 'createOrder', raw);
@@ -78,7 +78,7 @@ describe('sanitizeBrokerError', () => {
 // indication of WHY. This block covers the curated `venueMessage` field that
 // closes that gap while keeping the module's credential-safety boundary
 // intact: only a dedicated, allowlisted property is ever read, never the
-// client's own `.message`.
+// client's own `.message`
 describe('sanitizeBrokerError venueMessage (#1003)', () => {
   it('captures a venue diagnostic message exposed on the dedicated venueMessage property', () => {
     const error = sanitizeBrokerError('alpaca', 'submitBracket', {
@@ -140,7 +140,7 @@ describe('sanitizeBrokerError venueMessage (#1003)', () => {
   // durable storage (audit_log) and alert transports via `BrokerError.message`
   // (flatten-reconcile-alert.ts). A control character in that text — an
   // ANSI escape sequence, or an embedded newline that could forge a second
-  // log line — must not survive into either field.
+  // log line — must not survive into either field
   it('strips control characters from venueMessage before it reaches BrokerError.venueMessage or .message', () => {
     const hostile = '\x1b[31mFAKE\x1b[0m symbol is not shortable\nAUDIT_LOG: fake entry injected';
 
@@ -150,7 +150,7 @@ describe('sanitizeBrokerError venueMessage (#1003)', () => {
     });
 
     // Biome forbids control characters in a regex literal, so this checks
-    // by code point rather than matching `/[\x00-\x1f\x7f]/`.
+    // by code point rather than matching `/[\x00-\x1f\x7f]/`
     const hasControlChar = (text: string) =>
       [...text].some((char) => {
         const code = char.codePointAt(0) ?? 0;
@@ -183,7 +183,7 @@ describe('sanitizeBrokerError venueMessage (#1003)', () => {
   // 530 chars for a 500-char cap. If this module's own defense-in-depth cap
   // sits at or below that length, the already-truncated string gets sliced a
   // second time, landing mid-suffix and producing a garbled nested marker
-  // that also misreports the original length.
+  // that also misreports the original length
   it('does not re-truncate a venueMessage already truncated upstream by truncateForError', () => {
     const originalLength = 5000;
     const alreadyTruncated = `${'x'.repeat(500)}… (truncated, ${originalLength} chars total)`;
@@ -194,7 +194,7 @@ describe('sanitizeBrokerError venueMessage (#1003)', () => {
     });
 
     // Passed through unchanged: no second truncation marker, no garbled
-    // nested "… (truncated, …" and the original upstream note is intact.
+    // nested "… (truncated, …" and the original upstream note is intact
     expect(error.venueMessage).toBe(alreadyTruncated);
     expect(error.venueMessage).toContain(`truncated, ${originalLength} chars total`);
     expect(error.venueMessage?.match(/truncated,/g)).toHaveLength(1);

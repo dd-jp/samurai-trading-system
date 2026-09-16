@@ -39,7 +39,7 @@ import type {
  * there is no backoff for `execute()` to read.
  */
 export interface ExecutionConfig {
-  /** Market context the Simulated adapter prices fills against. */
+  /** Market context the Simulated adapter prices fills against */
   simulated: SimulatedAdapterConfig;
 }
 
@@ -51,7 +51,7 @@ export interface ExecutionConfig {
 export interface SimulatedAdapterConfig {
   /** Indicator read for `MarketState.volatility` (e.g. ATR at the bar). */
   volatility_indicator: IndicatorSpec;
-  /** Bars window aggregated into `MarketState.adv` (the liquidity proxy). */
+  /** Bars window aggregated into `MarketState.adv` (the liquidity proxy) */
   adv_window: BarWindow;
   /**
    * Stamped onto every `MarketState` built from this config so
@@ -72,12 +72,12 @@ export interface SimulatedAdapterConfig {
  * surface's type first.
  */
 export interface ExecutionInput {
-  /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data. */
+  /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data */
   trace_id: string;
-  /** Wall-clock live, simulated T in replay. */
+  /** Wall-clock live, simulated T in replay */
   clock: Clock;
   broker: BrokerAdapter;
-  /** Execution is the sole writer of positions/fills/closed-trades. */
+  /** Execution is the sole writer of positions/fills/closed-trades */
   store: SharedStore;
   /**
    * Read only by `execute()`'s submit-time snapshot (#1001, `readSubmitSnapshot`,
@@ -86,9 +86,9 @@ export interface ExecutionInput {
    * (`SimulatedBrokerAdapterInput`), not these.
    */
   costModel: CostModel;
-  /** Same single reader as `costModel`: the quote and `MarketState` inputs of the submit snapshot. */
+  /** Same single reader as `costModel`: the quote and `MarketState` inputs of the submit snapshot */
   marketData: MarketDataService;
-  /** `config.simulated` feeds the submit snapshot's `MarketState`, alongside `marketData`. */
+  /** `config.simulated` feeds the submit snapshot's `MarketState`, alongside `marketData` */
   config: ExecutionConfig;
   /**
    * The #525 fallback — posted only when `ingestFills()` fails to re-arm a
@@ -274,7 +274,7 @@ export type ResidualReflattenInput = Pick<
  * `ingestFills()` (ingest-fills.ts): the fill poll and everything it re-arms
  * through `maybeRearmResidual` (residual-protection.ts), which is where
  * `residualExposureAlerts` is read — and, on a venue that cannot re-arm at
- * all, where `reflattenResidual` is reached (`ResidualReflattenInput`).
+ * all, where `reflattenResidual` is reached (`ResidualReflattenInput`)
  */
 export type FillIngestInput = Pick<
   ExecutionInput,
@@ -323,7 +323,7 @@ export type ReconcileInput = Pick<
  * `sweepResidualProtection()` (residual-protection-sweep.ts): the #549 re-arm
  * retry, and — when the venue cannot re-arm at all — #1214's re-flatten
  * (`ResidualReflattenInput`, which is what puts `sessionCalendars` and the
- * flatten journal on this surface).
+ * flatten journal on this surface)
  */
 export type ResidualSweepInput = Pick<
   ExecutionInput,
@@ -336,7 +336,7 @@ export type ResidualSweepInput = Pick<
 /**
  * `sweepWedgedZeroFillLots()` (wedged-zero-fill-sweep.ts): store evidence
  * only — no `broker` here is the type-level form of that file's "no venue
- * call, ever" rule.
+ * call, ever" rule
  */
 export type WedgedSweepInput = Pick<ExecutionInput, 'trace_id' | 'clock' | 'logger'> & {
   store: PositionReader & LotRetirement;
@@ -345,7 +345,7 @@ export type WedgedSweepInput = Pick<ExecutionInput, 'trace_id' | 'clock' | 'logg
 export interface ExecutionResult {
   status: 'submitted' | 'deduped' | 'rejected' | 'error';
   idempotency_key: string;
-  /** Entry + attached legs; null when nothing reached the broker. */
+  /** Entry + attached legs; null when nothing reached the broker */
   broker_order_ids: string[] | null;
   /**
    * State of the lot after `execute()` returns — usually 'submitted'. Null
@@ -356,7 +356,7 @@ export interface ExecutionResult {
    * branch does). Reporting a state here would be fabricating one.
    */
   order_state: OrderState | null;
-  /** Rejection / error / dedup detail. */
+  /** Rejection / error / dedup detail */
   reason: string | null;
   timestamp: Date;
 }
@@ -443,7 +443,7 @@ export type ReconcileEscalation =
 export interface ReconcileDivergence {
   idempotency_key: string;
   instrument: string;
-  /** What the store believed before reconcile ran. */
+  /** What the store believed before reconcile ran */
   store_state: OrderState;
   /**
    * What the venue says. Null in the two cases where the venue named no
@@ -479,7 +479,7 @@ export interface ReconcileDivergence {
    *   nothing, and this is the one exposure Risk structurally cannot see.
    */
   action: 'adopted' | 'rejected' | 'undetermined' | 'unrecorded';
-  /** Operator-facing detail — the adapter's error on `undetermined`. */
+  /** Operator-facing detail — the adapter's error on `undetermined` */
   reason: string;
   /**
    * Which escalation produced this row, when one did — #1577 named
@@ -549,7 +549,7 @@ export interface ResidualProtectionSweepResult {
   divergences: ReconcileDivergence[];
 }
 
-/** What one `reconcile()` pass examined and corrected. */
+/** What one `reconcile()` pass examined and corrected */
 export interface ReconcileReport {
   /**
    * In-flight (`pending`/`submitted`) lots PLUS unresolved `flatten_submissions`
@@ -557,12 +557,12 @@ export interface ReconcileReport {
    * counted here (#519's `checked`/`corrected` decision) rather than only
    * the former: a startup log reading "checked 0, corrected 3" because three
    * flatten divergences landed uncounted would misstate what the pass
-   * actually visited.
+   * actually visited
    */
   checked: number;
-  /** Lots and flatten rows whose store record reconcile wrote to. */
+  /** Lots and flatten rows whose store record reconcile wrote to */
   corrected: number;
-  /** One entry per lot or flatten row where store and broker disagreed. */
+  /** One entry per lot or flatten row where store and broker disagreed */
   divergences: ReconcileDivergence[];
   /**
    * #1088: terminal, size-0 `open_positions` rows (`rejected`/`cancelled`/
@@ -581,7 +581,7 @@ export interface ReconcileReport {
  * store.
  */
 export interface Execution {
-  /** Acts only on a `go`; records the submission, does not block until filled. */
+  /** Acts only on a `go`; records the submission, does not block until filled */
   execute(verdict: VerdictDecision): Promise<ExecutionResult>;
   /**
    * Advance every live lot on the fills that have landed since it opened:

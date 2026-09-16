@@ -59,7 +59,7 @@ export function makeSpend(overrides: Partial<LlmSpendSummary> = {}): LlmSpendSum
     all_time: spendWindow({ cost_usd: 23.71, calls: 866 }),
     cap_usd: 50,
     // Armed by default: most tests want a normally-booted run. Override to
-    // `null` to exercise the never-armed case (#1196).
+    // `null` to exercise the never-armed case (#1196)
     cap_armed_at: '2026-08-05T14:00:00.000Z',
     ...overrides,
   };
@@ -150,7 +150,7 @@ export function makeDebate(overrides: Partial<DebateRow> = {}): DebateRow {
         // hand-picked value (#624). The client cannot import the server
         // function across the client/server boundary (CLAUDE.md: neither
         // runtime imports the other), so this is derived by hand using the
-        // same "fraction of transitions that changed" rule instead of called.
+        // same "fraction of transitions that changed" rule instead of called
         analyst_id: 'momentum',
         analyst_type: 'technical',
         final_position: 'bullish',
@@ -160,7 +160,7 @@ export function makeDebate(overrides: Partial<DebateRow> = {}): DebateRow {
       {
         // No stance_during_debate recorded, so computeInfluenceScore's own
         // rule (fewer than two recorded rounds -> no transition observable)
-        // gives 0, not a hand-picked non-zero reading (#624).
+        // gives 0, not a hand-picked non-zero reading (#624)
         analyst_id: 'meanrev',
         analyst_type: 'technical',
         final_position: 'bearish',
@@ -242,7 +242,7 @@ const EMPTY_PIPELINE: PipelineView = {
 /**
  * One Feedback Loop comparison of the two arms (#971), non-diverged by default
  * — both columns always present, because `ArmPerformanceWire` has no shape
- * without them (doc 12 D4).
+ * without them (doc 12 D4)
  */
 export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): ArmComparisonRow {
   return {
@@ -259,7 +259,7 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
       refused_pass_count: 0,
       // #1546. Asymmetric on purpose: the live arm drops flattens at a higher
       // rate than protective exits by construction, so a symmetric default
-      // would let a renderer that showed one class twice still pass.
+      // would let a renderer that showed one class twice still pass
       cost_basis_drops: {
         protective: { kept: 16, dropped: 2 },
         flatten: { kept: 8, dropped: 6 },
@@ -281,7 +281,7 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
     divergence_reason: null,
     // #982. Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` (arm-comparison-cycle.ts)
     // — a plain literal here, not an import, because `contracts`/client fixtures
-    // may not reach into `server/`.
+    // may not reach into `server/`
     min_trades_per_arm: 5,
     ...overrides,
   };
@@ -308,7 +308,7 @@ export function makeOutsideBenchmark(
 
 /**
  * The P&L headline (#1595), profitable and drawn-down by default so a test
- * asserting on either sign has a non-degenerate fixture to override from.
+ * asserting on either sign has a non-degenerate fixture to override from
  */
 export function makePnlHeadline(overrides: Partial<PnlHeadlineWire> = {}): PnlHeadlineWire {
   return {
@@ -339,7 +339,7 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     as_of: AS_OF,
     mode: 'paper',
     // Defaulted to 'live' here purely so this fixture keeps satisfying the
-    // widened `WireSnapshot` type.
+    // widened `WireSnapshot` type
     arm: 'live',
     tick_status: null,
     positions: [makePosition()],
@@ -382,7 +382,7 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     // fixture must track whatever `contracts/snapshot.ts` actually computes,
     // the same way a real server's response would, or every test built on
     // this fixture would silently exercise the mismatch path instead of the
-    // healthy one.
+    // healthy one
     contract_version: CONTRACT_VERSION,
     ...overrides,
   };

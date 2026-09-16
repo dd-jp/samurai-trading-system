@@ -21,18 +21,18 @@ function isDirection(value: unknown): value is Direction {
   return typeof value === 'string' && (DIRECTIONS as string[]).includes(value);
 }
 
-/** Structured output every persona returns (spec: "stance + rationale"). */
+/** Structured output every persona returns (spec: "stance + rationale") */
 export interface PersonaResponse {
   stance: Direction;
   rationale: string;
 }
 
-/** Mediator's output additionally signals convergence (spec's hybrid termination). */
+/** Mediator's output additionally signals convergence (spec's hybrid termination) */
 export interface MediatorResponse extends PersonaResponse {
   converged: boolean;
 }
 
-/** What every persona needs: the analyst views under debate, plus tracing/state context. */
+/** What every persona needs: the analyst views under debate, plus tracing/state context */
 export interface PersonaInput {
   trace_id: string;
   /**
@@ -54,7 +54,7 @@ export interface PersonaInput {
   signal?: AbortSignal | undefined;
 }
 
-/** Additional input the mediator arbitrates over (spec: "arbitrates between bull and bear"). */
+/** Additional input the mediator arbitrates over (spec: "arbitrates between bull and bear") */
 export interface MediatorInput extends PersonaInput {
   bullResponse: PersonaResponse;
   bearResponse: PersonaResponse;
@@ -83,7 +83,7 @@ function parsePersonaResponse(
     // `unwrapFencedJson` (#361) tolerates exactly one shape the pinned model
     // emits on every call — a markdown code fence around the object. It is
     // not a prose extractor: a refusal, a preamble, or a truncated response
-    // is handed through untouched and still fails here.
+    // is handed through untouched and still fails here
     parsed = JSON.parse(unwrapFencedJson(rawText));
   } catch {
     return { valid: false, reason: 'malformed persona response: not valid JSON' };
@@ -163,7 +163,7 @@ function buildContext(input: PersonaInput, templateHash: string): LlmRequestCont
  * The Bull persona's static instructions — split out from `runBullPersona`
  * only so `hashPromptTemplate` has something request-invariant to hash;
  * `runBullPersona` joins it with the dynamic analyst-views block exactly as
- * before, so the rendered prompt is unchanged.
+ * before, so the rendered prompt is unchanged
  */
 const BULL_PROMPT_TEMPLATE = [
   'You are the Bull persona in a trading debate. Argue for the optimistic',
@@ -173,7 +173,7 @@ const BULL_PROMPT_TEMPLATE = [
 ].join('\n');
 const BULL_PROMPT_TEMPLATE_HASH = hashPromptTemplate(BULL_PROMPT_TEMPLATE);
 
-/** Bull persona: argues for optimistic interpretation, emphasizes positive signals. */
+/** Bull persona: argues for optimistic interpretation, emphasizes positive signals */
 export async function runBullPersona(
   client: LlmClient,
   input: PersonaInput,
@@ -189,7 +189,7 @@ export async function runBullPersona(
   return response.data;
 }
 
-/** See `BULL_PROMPT_TEMPLATE`'s doc comment — same reasoning, Bear's own text. */
+/** See `BULL_PROMPT_TEMPLATE`'s doc comment — same reasoning, Bear's own text */
 const BEAR_PROMPT_TEMPLATE = [
   'You are the Bear persona in a trading debate. Argue for the pessimistic',
   'interpretation of the following analyst views, emphasizing risks and',
@@ -198,7 +198,7 @@ const BEAR_PROMPT_TEMPLATE = [
 ].join('\n');
 const BEAR_PROMPT_TEMPLATE_HASH = hashPromptTemplate(BEAR_PROMPT_TEMPLATE);
 
-/** Bear persona: argues for pessimistic interpretation, emphasizes risks and downside. */
+/** Bear persona: argues for pessimistic interpretation, emphasizes risks and downside */
 export async function runBearPersona(
   client: LlmClient,
   input: PersonaInput,
@@ -214,7 +214,7 @@ export async function runBearPersona(
   return response.data;
 }
 
-/** See `BULL_PROMPT_TEMPLATE`'s doc comment — same reasoning, Mediator's own text. */
+/** See `BULL_PROMPT_TEMPLATE`'s doc comment — same reasoning, Mediator's own text */
 const MEDIATOR_PROMPT_TEMPLATE = [
   'You are the Mediator persona in a trading debate. Arbitrate between the',
   'Bull and Bear arguments below, evaluate whether material disagreement',
@@ -226,7 +226,7 @@ const MEDIATOR_PROMPT_TEMPLATE_HASH = hashPromptTemplate(MEDIATOR_PROMPT_TEMPLAT
 
 /**
  * Mediator persona: arbitrates between Bull and Bear, evaluates whether
- * material disagreement remains, and signals convergence (spec story 8).
+ * material disagreement remains, and signals convergence (spec story 8)
  */
 export async function runMediatorPersona(
   client: LlmClient,

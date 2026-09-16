@@ -62,7 +62,7 @@ function cycleDateOf(at: Date): string {
 export class SqliteAdjustmentLog implements AdjustmentLog {
   constructor(private readonly db: StoreHandle) {}
 
-  /** Always a new row, status 'applied' — this port method never queues an approval. */
+  /** Always a new row, status 'applied' — this port method never queues an approval */
   append(entry: Adjustment): void {
     this.db
       .prepare(

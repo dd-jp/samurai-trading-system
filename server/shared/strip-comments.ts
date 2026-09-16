@@ -2,7 +2,7 @@
  * Comment stripping for two source-text scanners that must not trip on
  * commentary: `spec-schema-drift.test.ts` (SQL `--` comments in the spec's
  * fenced DDL) and `contracts/boundary.test.ts` (JS/TS `//` and `/* *\/`
- * comments in wire-model source).
+ * comments in wire-model source)
  */
 
 /** Drops everything from `--` to end of line. No block-comment form in SQL DDL. */
@@ -85,7 +85,7 @@ export function stripComments(source: string): string {
       // A comment spanning lines leaves its newlines in place, so a `^`-anchored
       // pattern still sees the same line breaks around it; a single-line comment
       // leaves a space instead of nothing, so the tokens on either side of it
-      // (`import`/*c*/`type`) don't fuse into one word.
+      // (`import`/*c*/`type`) don't fuse into one word
       out += newlines > 0 ? '\n'.repeat(newlines) : ' ';
       i = end + 2;
       continue;

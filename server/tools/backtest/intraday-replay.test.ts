@@ -33,7 +33,7 @@ import type { DateRange, InstrumentListing, InstrumentRegistry } from './univers
 
 const MINUTE_MS = 60_000;
 
-/** Friday and the following Monday — the boundary crossed includes a weekend. */
+/** Friday and the following Monday — the boundary crossed includes a weekend */
 const FRIDAY_CLOSE = new Date('2026-08-14T20:00:00.000Z');
 const MONDAY_CLOSE = new Date('2026-08-17T20:00:00.000Z');
 
@@ -55,7 +55,7 @@ const CONFIG: ProxyStrategyConfig = {
 
 /**
  * `count` one-minute bars ending exactly at `sessionClose`, on a steady uptrend
- * so the dual-SMA signal opens long after warm-up and never turns.
+ * so the dual-SMA signal opens long after warm-up and never turns
  */
 function barsOfTimeframe(
   sessionClose: Date,
@@ -103,7 +103,7 @@ class FixtureRegistry implements InstrumentRegistry {
   }
 }
 
-/** Fills at the requested reference — the replay's own prices stay legible. */
+/** Fills at the requested reference — the replay's own prices stay legible */
 class PassThroughCostModel implements CostModel {
   fill(request: FillRequest, marketState: { mid: number }): CostModelResult {
     return {
@@ -170,7 +170,7 @@ describe('intraday replay across a session boundary (#664)', () => {
     const result = await driver.run(CONFIG, window);
     const trades = await result.trades.closedTrades(window);
 
-    // The run really did step both sessions, or "flat by close" is vacuous.
+    // The run really did step both sessions, or "flat by close" is vacuous
     const stepped = await result.timeline.barTimestamps(window);
     expect(stepped.some((at) => at.getTime() <= FRIDAY_CLOSE.getTime())).toBe(true);
     expect(stepped.some((at) => at.getTime() > FRIDAY_CLOSE.getTime())).toBe(true);
@@ -185,7 +185,7 @@ describe('intraday replay across a session boundary (#664)', () => {
     // And the exit that produced that is the flatten, not a bracket or a signal
     // turn — the fixture's stop/target are 500 ATRs away and the trend never
     // reverses, so a non-flatten close reason here means the flat-by-close rule
-    // did not fire and something else closed the lot by accident.
+    // did not fire and something else closed the lot by accident
     expect(trades.map((trade) => trade.close_reason)).toEqual(trades.map(() => 'flatten'));
     expect(trades.length).toBe(2);
   });
@@ -198,7 +198,7 @@ describe('intraday replay across a session boundary (#664)', () => {
     if (first === undefined) throw new Error('expected a Friday trade');
 
     // The flatten window is [close − 5min, close). The first bar whose OPEN
-    // falls inside it opens at 15:55 and closes at 15:56 ET.
+    // falls inside it opens at 15:55 and closes at 15:56 ET
     expect(first.closed_at.toISOString()).toBe(
       new Date(FRIDAY_CLOSE.getTime() - 4 * MINUTE_MS).toISOString(),
     );
@@ -208,7 +208,7 @@ describe('intraday replay across a session boundary (#664)', () => {
     // time, the 15:59-open bar (close == 16:00) reports MONDAY's close, so it
     // sits outside every flatten window, an entry opens on it, and that lot is
     // only flattened the next session — while the trade COUNT stays 2, so the
-    // count assertion above misses it entirely.
+    // count assertion above misses it entirely
     for (const trade of trades) {
       expect(trade.closed_at.toISOString().slice(0, 10)).toBe(
         trade.opened_at.toISOString().slice(0, 10),
@@ -232,7 +232,7 @@ describe('intraday replay across a session boundary (#664)', () => {
       const sessionEnd = new UsEquityRegularHoursCalendar().sessionEnd(trade.opened_at);
       if (sessionEnd === null) throw new Error('the equity calendar must report a close');
       // `opened_at` is the entry bar's CLOSE time; its open is one minute
-      // earlier, and that is what the window is measured against.
+      // earlier, and that is what the window is measured against
       const openedAtBarOpen = trade.opened_at.getTime() - MINUTE_MS;
       expect(sessionEnd.getTime() - openedAtBarOpen).toBeGreaterThan(5 * MINUTE_MS);
     }
@@ -242,7 +242,7 @@ describe('intraday replay across a session boundary (#664)', () => {
     // A calendar that reports a close nobody's bars ever reach — the shape a
     // real unmodelled early close takes (the hand-entered US tables cover
     // 2026-2027 only; #684). The flatten window never opens, so the lot is
-    // still held when Monday's bars arrive.
+    // still held when Monday's bars arrive
     const blindCalendar: TradingCalendar = {
       isOpen: () => true,
       isTradingDay: () => true,
@@ -263,7 +263,7 @@ describe('intraday replay across a session boundary (#664)', () => {
   it('leaves a 24/7 venue alone — no flatten, and no session assertion', async () => {
     // `AlwaysOpenCalendar.sessionEnd` is `null`, the documented "this venue has
     // no close" answer. Crypto left Samurai's scope (ADR-0015, 2026-08-16), so
-    // #664 must not invent a boundary for it.
+    // #664 must not invent a boundary for it
     const { driver, window } = driverOver(TWO_SESSIONS, {
       sessionCalendar: new AlwaysOpenCalendar(),
       universe: [{ symbol: SYMBOL, asset_class: 'crypto' }],
@@ -272,7 +272,7 @@ describe('intraday replay across a session boundary (#664)', () => {
     const trades = await (await driver.run(CONFIG, window)).trades.closedTrades(window);
 
     // The lot opens on Friday and is still open at the last Monday bar, so it
-    // never becomes a ClosedTrade — which is exactly the pre-#664 behaviour.
+    // never becomes a ClosedTrade — which is exactly the pre-#664 behaviour
     expect(trades).toEqual([]);
   });
 
@@ -299,7 +299,7 @@ describe('intraday replay across a session boundary (#664)', () => {
 
     expect(trades.length).toBe(2);
     expect(trades.map((trade) => trade.close_reason)).toEqual(trades.map(() => 'flatten'));
-    // The last bar of each session — the one closing AT the close.
+    // The last bar of each session — the one closing AT the close
     expect(trades.map((trade) => trade.closed_at.toISOString())).toEqual([
       FRIDAY_CLOSE.toISOString(),
       MONDAY_CLOSE.toISOString(),
@@ -319,7 +319,7 @@ describe('daily replay is untouched by the session-boundary path (#664)', () => 
   /**
    * Daily bars on a sine path — it has to REVERSE, or the dual-SMA rule never
    * turns, no lot ever closes, and comparing two empty trade lists would pass
-   * whatever the session-boundary code did.
+   * whatever the session-boundary code did
    */
   function dailyBars(count: number): Bar[] {
     const bars: Bar[] = [];
@@ -366,7 +366,7 @@ describe('daily replay is untouched by the session-boundary path (#664)', () => 
     // close" is not a question a daily replay can answer — and answering it
     // anyway would reprice every Stage 2 verdict this repo has recorded. The
     // guard is structural (`isDailyTimeframe` in `flattenBoundary`), and this
-    // is the test that goes red if it is removed.
+    // is the test that goes red if it is removed
     expect(a.length).toBeGreaterThan(0);
     expect(a).toEqual(b);
     expect(a.every((trade) => trade.close_reason !== 'flatten')).toBe(true);

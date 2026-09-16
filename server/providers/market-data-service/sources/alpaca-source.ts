@@ -18,9 +18,9 @@ import {
 } from '../trading-calendar.js';
 import { type LiveObservation, NormalizingDataSource } from './normalizing-data-source.js';
 
-/** Alpaca's bar payload, timestamped at the bar's open. */
+/** Alpaca's bar payload, timestamped at the bar's open */
 export interface AlpacaBar {
-  /** RFC-3339 open timestamp. */
+  /** RFC-3339 open timestamp */
   t: string;
   o: number;
   h: number;
@@ -29,13 +29,13 @@ export interface AlpacaBar {
   v: number;
 }
 
-/** Alpaca's latest-quote payload. */
+/** Alpaca's latest-quote payload */
 export interface AlpacaQuote {
-  /** RFC-3339 quote timestamp. */
+  /** RFC-3339 quote timestamp */
   t: string;
-  /** Ask price. */
+  /** Ask price */
   ap: number;
-  /** Bid price. */
+  /** Bid price */
   bp: number;
 }
 
@@ -44,7 +44,7 @@ export interface AlpacaMarketDataClient {
    * `partial` (issue #292) is the caller's short-read policy: omitted or
    * `'error'` means an implementation that CAN detect an under-covered range
    * must fail loudly rather than return fewer than `limit` bars; `'allow'` is
-   * the explicit opt-in for a caller that tolerates a short window.
+   * the explicit opt-in for a caller that tolerates a short window
    */
   getBars(
     symbol: string,
@@ -64,7 +64,7 @@ export interface AlpacaSourceOptions {
    * Ignored for crypto, which is 24/7.
    */
   calendar?: TradingCalendar | undefined;
-  /** Bar granularity backtest marks derive from. */
+  /** Bar granularity backtest marks derive from */
   markTimeframe?: string | undefined;
 }
 

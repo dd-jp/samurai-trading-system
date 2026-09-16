@@ -103,9 +103,9 @@ export const MI_REFRESH_TRACE_ID = 'mi-refresh';
 export const REFUSAL_LOG_EVERY = 20;
 
 export interface MiRefreshQueueDeps {
-  /** The composed agents (`composeMarketIntelligence`), run one instrument at a time. */
+  /** The composed agents (`composeMarketIntelligence`), run one instrument at a time */
   refresher: MarketIntelligenceRefresh;
-  /** Read once per dispatch, on the worker, so no two MI calls race the same total. */
+  /** Read once per dispatch, on the worker, so no two MI calls race the same total */
   spendCap: SpendCap;
   logger?: Logger | undefined;
 }
@@ -113,7 +113,7 @@ export interface MiRefreshQueueDeps {
 interface QueuedRefresh {
   instrument: string;
   assetClass: AssetClass;
-  /** The tick that asked, for the log payload only — never the call's own trace id. */
+  /** The tick that asked, for the log payload only — never the call's own trace id */
   requestedBy: string;
 }
 
@@ -127,17 +127,17 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
    */
   readonly #pending = new Map<string, QueuedRefresh>();
 
-  /** The instrument being refreshed right now, so a re-request cannot queue a duplicate of it. */
+  /** The instrument being refreshed right now, so a re-request cannot queue a duplicate of it */
   #inFlight: string | undefined;
 
-  /** The worker, held as a promise so `stop()` can drain it at shutdown. */
+  /** The worker, held as a promise so `stop()` can drain it at shutdown */
   #worker: Promise<void> | undefined;
 
   #stopped = false;
 
   /**
    * Refusal count per `SpendCapVerdict.kind`, so each kind's log throttle is
-   * independent of every other kind — see `REFUSAL_LOG_EVERY`.
+   * independent of every other kind — see `REFUSAL_LOG_EVERY`
    */
   readonly #refusalsByKind = new Map<SpendCapRefusalKind, number>();
 
@@ -178,12 +178,12 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     return false;
   }
 
-  /** Whether `instrument`'s refresh has run to completion at least once — see `#attempted`. */
+  /** Whether `instrument`'s refresh has run to completion at least once — see `#attempted` */
   refreshAttempted(instrument: string): boolean {
     return this.#attempted.has(instrument);
   }
 
-  /** Instruments waiting plus the one in flight — a diagnostic read, gates nothing. */
+  /** Instruments waiting plus the one in flight — a diagnostic read, gates nothing */
   get depth(): number {
     return this.#pending.size + (this.#inFlight === undefined ? 0 : 1);
   }
@@ -223,7 +223,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     await this.#worker;
   }
 
-  /** Starts the worker if it is not already running; re-arms it if work arrived as it finished. */
+  /** Starts the worker if it is not already running; re-arms it if work arrived as it finished */
   #pump(): void {
     if (this.#worker !== undefined) return;
     // DEFERRED, not called inline, and this is the whole single-worker
@@ -233,9 +233,9 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     // `#worker` is assigned on the next line. A refresher that enqueues from
     // that prefix would re-enter `#pump`, see no worker, and start a second
     // one: two dispatches overlapping, both reading the same pre-spend total
-    // and both admitted, which is the one invariant this class exists for.
+    // and both admitted, which is the one invariant this class exists for
     // Scheduling the drain on a microtask closes the window, because nothing
-    // else can run between here and the assignment below.
+    // else can run between here and the assignment below
     // Under `MI_REFRESH_TRACE_ID`, matching the id `#dispatch` threads
     // explicitly. `AsyncLocalStorage` captures at REGISTRATION, so without
     // this the drain inherits whichever tick's analysts step happened to call
@@ -244,7 +244,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     // would be stamped with an earlier instrument's tick. That is a wrong
     // join, not a missing one. The work is off the tick's critical path
     // (#1085) and `refresh()` returns `false` because no tick waits on it, so
-    // no tick's id is the honest answer here.
+    // no tick's id is the honest answer here
     const worker = Promise.resolve().then(() =>
       runWithTraceId(MI_REFRESH_TRACE_ID, () => this.#drain()),
     );
@@ -252,18 +252,18 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
     // The window between `#drain` seeing an empty queue and this callback is
     // reachable from `refresh()`, and an enqueue landing in it would find
     // `#worker` still set and return without starting anything. Re-checking
-    // here is what keeps that request from being stranded until the next one.
+    // here is what keeps that request from being stranded until the next one
     const rearm = (): void => {
       this.#worker = undefined;
       if (!this.#stopped && this.#pending.size > 0) this.#pump();
     };
     // Both handlers, not just fulfilment: `#drain` is written not to reject,
     // and a queue that could be left permanently holding a settled `#worker`
-    // would silently stop refreshing for the rest of the run if it ever did.
+    // would silently stop refreshing for the rest of the run if it ever did
     void worker.then(rearm, rearm);
   }
 
-  /** Never rejects: every failure mode is caught and logged inside the loop. */
+  /** Never rejects: every failure mode is caught and logged inside the loop */
   async #drain(): Promise<void> {
     while (!this.#stopped && this.#pending.size > 0) {
       const next = this.#pending.values().next();
@@ -276,7 +276,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
       } finally {
         // In `finally`, not after the await: `#dispatch` is written not to
         // throw, but a queue that could strand `#inFlight` on a throw would
-        // silently refuse every later refresh of that instrument.
+        // silently refuse every later refresh of that instrument
         this.#attempted.add(request.instrument);
         this.#inFlight = undefined;
       }
@@ -306,7 +306,7 @@ export class MiRefreshQueue implements MarketIntelligenceRefresh {
       // and both shipped agents catch internally. This is the outermost guard
       // for anything that forgets: an unhandled rejection here would escape
       // into the worker and take the whole queue down with it, which is the
-      // one failure mode a refresh off the critical path can still cause.
+      // one failure mode a refresh off the critical path can still cause
       if (this.deps.logger !== undefined) {
         logCaughtFailure(
           this.deps.logger,

@@ -83,7 +83,7 @@ vi.mock('./direct-bind.js', async (importOriginal) => {
 
 const NOW = new Date('2026-07-20T16:00:00Z');
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s broker, verbatim reasoning. */
+/** `flatten-reconcile-arm-wiring.test.ts`'s broker, verbatim reasoning */
 class AmnesiacFlattenBroker implements BrokerAdapter {
   async submitBracket(): Promise<BrokerAck> {
     throw new Error('AmnesiacFlattenBroker.submitBracket: this wiring proof never enters a lot');
@@ -161,10 +161,10 @@ function onlyArm(captured: readonly TraderStepDeps[], arm: 'live' | 'control'): 
   return only;
 }
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s `StubConfig`, verbatim reasoning. */
+/** `flatten-reconcile-arm-wiring.test.ts`'s `StubConfig`, verbatim reasoning */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s stub config, verbatim. */
+/** `flatten-reconcile-arm-wiring.test.ts`'s stub config, verbatim */
 function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
     db,

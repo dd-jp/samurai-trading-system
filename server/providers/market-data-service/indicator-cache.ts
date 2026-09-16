@@ -8,7 +8,7 @@
  */
 import type { IndicatorSpec, IndicatorValue } from './types.js';
 
-/** Stable serialization: sorted param keys so equal specs always hash equal. */
+/** Stable serialization: sorted param keys so equal specs always hash equal */
 export function buildIndicatorCacheKey(
   instrument: string,
   spec: IndicatorSpec,
@@ -25,7 +25,7 @@ export function buildIndicatorCacheKey(
     sortedParams,
     spec.lookback,
     // #315: two specs differing only in timeframe are different values. Before
-    // the spec carried one, every key described a 1h bar by construction.
+    // the spec carried one, every key described a 1h bar by construction
     spec.timeframe,
     asOf.toISOString(),
   ].join('|');
@@ -49,7 +49,7 @@ export class IndicatorCache {
     const value = this.entries.get(key);
     if (value !== undefined) {
       // LRU touch: Map preserves insertion order, so re-inserting moves the
-      // key to the young end and eviction below always takes the coldest.
+      // key to the young end and eviction below always takes the coldest
       this.entries.delete(key);
       this.entries.set(key, value);
     }

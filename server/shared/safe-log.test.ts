@@ -1,7 +1,7 @@
 /**
  * `safeLog`/`logCaughtFailure`/`describeThrown` (#573) — the guarantee every
  * caller inside error-handling code depends on: nothing here can itself
- * throw, no matter how hostile the logger or the caught value is.
+ * throw, no matter how hostile the logger or the caught value is
  */
 import { recordingLogger } from './recording-logger.js';
 import { describeThrown, describeThrownSafely, logCaughtFailure, safeLog } from './safe-log.js';
@@ -40,7 +40,7 @@ describe('describeThrown', () => {
   // the declared contract; a caller building a template literal from the
   // result (`${lastReason} …`) would then hit whatever `toString`/
   // `Symbol.toPrimitive` the non-string value carries, outside any guard
-  // this function's own callers install around IT.
+  // this function's own callers install around IT
   it('coerces a non-string `message` through the same JSON.stringify/String ladder instead of returning it verbatim', () => {
     const error = new Error('unused');
     Object.defineProperty(error, 'message', {
@@ -60,7 +60,7 @@ describe('describeThrown', () => {
   // these, so a naive `return JSON.stringify(value)` would hand back
   // `undefined` — the same declared-return-type violation the previous test
   // closed for a plain-object `message`, reopened for this narrower set of
-  // values that `JSON.stringify` silently declines instead of rejecting.
+  // values that `JSON.stringify` silently declines instead of rejecting
   it('falls back to String() when JSON.stringify itself returns undefined (a message getter returning undefined)', () => {
     const error = new Error('unused');
     Object.defineProperty(error, 'message', {
@@ -75,7 +75,7 @@ describe('describeThrown', () => {
 
   // The same gap on the plainer, non-`Error` trigger: a bare `throw
   // undefined` / `Promise.reject()` with no argument reaches this function's
-  // non-`Error` branch with `value` already `undefined`, no getter involved.
+  // non-`Error` branch with `value` already `undefined`, no getter involved
   // Before this fix, every one of this shared helper's 18 production call
   // sites (portfolio-view.ts, decide.ts, orchestrator.ts x3,
   // service-api/fault-guard.ts x2, tick-loop.ts x2, direct-bind.ts x7,
@@ -86,7 +86,7 @@ describe('describeThrown', () => {
   // getter case above. It is now repo-wide: `risk-manager/critic.ts` used to
   // declare its own private `describeThrown` (same name, no `JSON.stringify`
   // fallback) that this fix did not reach; #1262 deleted it in favour of
-  // `describeThrownSafely` below.
+  // `describeThrownSafely` below
   it('renders a bare undefined throw as the string "undefined", not the value undefined', () => {
     expect(describeThrown(undefined)).toBe('undefined');
   });
@@ -100,7 +100,7 @@ describe('describeThrownSafely', () => {
   it('returns the placeholder for a value describeThrown itself cannot render', () => {
     // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
     // (defeats the `String()` fallback too) — the residual hole
-    // `describeThrown`'s own doc says it cannot close.
+    // `describeThrown`'s own doc says it cannot close
     const hostile: Record<string, unknown> = {
       [Symbol.toPrimitive]: () => {
         throw new Error('render boom');
@@ -125,7 +125,7 @@ describe('describeThrownSafely', () => {
 
   it('returns the placeholder when `instanceof` itself throws', () => {
     // A `Proxy` with a throwing `getPrototypeOf` trap fails at
-    // `describeThrown`'s very first line, before either render branch.
+    // `describeThrown`'s very first line, before either render branch
     const hostile = new Proxy(
       {},
       {
@@ -196,7 +196,7 @@ describe('logCaughtFailure', () => {
   // throwing sends `describeThrown` to its `String(error)` fallback (the
   // branch its own `JSON.stringify` catch takes), and THAT throws too via
   // `toString`, escaping `describeThrown` entirely. Paired with a throwing
-  // logger, so both of `logCaughtFailure`'s own guards are exercised at once.
+  // logger, so both of `logCaughtFailure`'s own guards are exercised at once
   it("never throws for a value hostile enough to break describeThrown's own fallback, even paired with a throwing logger", () => {
     const hostile = {
       toJSON(): never {
@@ -223,7 +223,7 @@ describe('logCaughtFailure', () => {
     // fallback path), and `String()` on a plain object degrades to
     // `"[object Object]"` rather than throwing — so this is the case
     // `describeThrown` alone already survives, exercised here through the
-    // full `logCaughtFailure` wrapper.
+    // full `logCaughtFailure` wrapper
     const circular: Record<string, unknown> = {};
     circular.self = circular;
 

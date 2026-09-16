@@ -40,7 +40,7 @@ import { SqliteQueryStore } from './sqlite-query-store.js';
 // `console.log`/`console.error` write through `process.stdout`/`process.stderr`
 // the same way a raw write does. See `fault-guard.ts` for the measurement and
 // why the arbitrary-fault handler (installed further down, after boot) is a
-// separate call installed at a separate time.
+// separate call installed at a separate time
 watchDashboardStdout();
 
 /**
@@ -80,33 +80,33 @@ const host = process.env.HOST ?? '127.0.0.1';
 // this is absent — see `bind-guard.ts` for the conjunctive condition. Reading
 // `process.env` here (an entry point) rather than inside `server.ts` follows
 // this repo's env-var convention: composition code takes a config field, not
-// a mid-wiring env read.
+// a mid-wiring env read
 const dashboardCredential = process.env[DASHBOARD_CREDENTIAL_ENV_VAR];
 // Same resolver the orchestrator uses: the dashboard reads the file the
-// orchestrator writes, so the two must not derive its name independently.
+// orchestrator writes, so the two must not derive its name independently
 //
-// #330's open question was how the READER derives a mode it is never told.
+// #330's open question was how the READER derives a mode it is never told
 // The answer is that it does not derive one: `sharedStorePath` reads
 // `SAMURAI_MODE` itself, through `resolveStoreMode`, so both sides resolve the
 // same file from the same variable. A dashboard started without that variable
-// refuses rather than showing a healthy, empty system from the wrong file.
+// refuses rather than showing a healthy, empty system from the wrong file
 //
 // Resolved ONCE here and threaded through everything below (#539): the store
 // path, the Alpaca environment, and the snapshot's `mode` field are three
 // consequences of one variable, and the previous code derived the second of
 // them independently (`process.env.SAMURAI_MODE === 'live'`). One derivation
-// means the page cannot report a mode the database file disagrees with.
+// means the page cannot report a mode the database file disagrees with
 const mode = resolveStoreMode();
 const dbPath = sharedStorePath(mode);
 // #837 M9: the dashboard process is a READER. `'service-api'` declares an empty
 // write set, so any INSERT/REPLACE/UPDATE/DELETE issued in this process — to
 // any table at all — throws in dev/CI, which turns the spec's "service-api is
-// a reader only" from a review convention into an assertion.
+// a reader only" from a review convention into an assertion
 //
 // DML only, and the guard says so itself (write-guard.ts, limit 4): `CREATE`,
 // `DROP` and `ALTER` are not scanned, so this declaration does not prove the
 // process cannot touch the schema. Detection where it plausibly goes wrong,
-// not a sandbox.
+// not a sandbox
 const db = guardedStore(openSharedStore(dbPath), 'service-api');
 // #940: `sharedStorePath` returns a path RELATIVE to the process's working
 // directory (see file header), so two processes started from different
@@ -114,7 +114,7 @@ const db = guardedStore(openSharedStore(dbPath), 'service-api');
 // and the dashboard reads the other, with no error and no visible trace
 // anywhere. Naming the resolved absolute path at boot is the one thing that
 // would have made that mismatch visible instead of merely fixable in
-// hindsight.
+// hindsight
 bootLog('info', 'dashboard_store_resolved', `Samurai dashboard store → ${resolve(dbPath)}`, {
   store_path: resolve(dbPath),
   mode,
@@ -180,7 +180,7 @@ function buildAlpacaClient(): AlpacaHttpBrokerClient | undefined {
     // The constructor throws when the keys are absent. That is fatal for the
     // orchestrator and merely a missing tile here, so it is caught rather than
     // propagated — the operator still gets positions, verdicts and metrics off
-    // the store.
+    // the store
     bootLog('warn', 'dashboard_balance_tile_disabled', 'Alpaca balance tile disabled', {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -298,7 +298,7 @@ installDashboardContinueOnFault();
 
 // Started after the server is listening, and not awaited: the first poll makes
 // two network calls, and holding the page hostage to a slow third party would
-// invert the priority — the store-backed views need no provider at all.
+// invert the priority — the store-backed views need no provider at all
 void providers.start();
 
 bootLog('info', 'dashboard_listening', `Samurai dashboard → ${server.url}`, {

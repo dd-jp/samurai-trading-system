@@ -43,11 +43,11 @@ describe('breachStage (#1280)', () => {
   // Threading the trace made a hardcoded `'feedback-loop'` wrong on the
   // spend-cap caller, whose sibling line in `SqliteSpendCap#refuse` logs under
   // `debate` — an operator grepping that stage for the tick would otherwise
-  // miss the breach entirely.
+  // miss the breach entirely
   it('files a breach under the stage of the caller that raised it', () => {
     expect(breachStage(ALERT)).toBe('debate');
     expect(breachStage(KILL_LINE_ALERT)).toBe('feedback-loop');
-    // Conservative on a list the two current producers never build.
+    // Conservative on a list the two current producers never build
     expect(breachStage(BOTH_ALERT)).toBe('feedback-loop');
   });
 });
@@ -91,7 +91,7 @@ describe('formatBreachAlert (#1343)', () => {
     expect(text).not.toContain(KILL_LINE_MARKER);
     // SqliteSpendCap#refuse covers three sites behind one boolean, one of
     // which (a non-finite cost_usd sum) does NOT clear on its own — so the
-    // text must not promise a fix, or a specific cause, it cannot back up.
+    // text must not promise a fix, or a specific cause, it cannot back up
     expect(text).toContain('debates, market-intelligence refreshes and risk-critic checks');
     expect(text).not.toContain('clear on its own');
     expect(text).not.toContain('unreadable');
@@ -129,7 +129,7 @@ describe('breachLogMessage (#1343)', () => {
     expect(breachLogMessage(ALERT.breaches)).not.toContain(KILL_LINE_MARKER);
     // Same hedge as formatBreachAlert: three refusal sites behind one
     // boolean, one of which does not clear on its own, so the message must
-    // not promise a specific cause or that anything resolves unassisted.
+    // not promise a specific cause or that anything resolves unassisted
     expect(breachLogMessage(ALERT.breaches)).not.toContain('clear on its own');
     expect(breachLogMessage(ALERT.breaches)).toContain(
       'debates, market-intelligence refreshes, risk-critic checks',

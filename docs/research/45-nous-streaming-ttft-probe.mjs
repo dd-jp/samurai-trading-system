@@ -1,18 +1,18 @@
-// Streaming TTFT probe for #1023 (queue-vs-generation decomposition).
+// Streaming TTFT probe for #1023 (queue-vs-generation decomposition)
 //
 // The non-streaming ttfb_ms instrumentation added by #1021 measures header
 // arrival on a buffered response, which #1080's own evidence (ttfb_ms /
 // latency_ms median 1.00 across 62 production calls) already shows equals
-// total latency -- Nous buffers the whole completion before sending bytes.
+// total latency -- Nous buffers the whole completion before sending bytes
 // This probe asks the same question with stream:true, where TTFT is the
-// first content-bearing SSE chunk, not the first response byte.
+// first content-bearing SSE chunk, not the first response byte
 //
 // Reads NOUS_BASE_URL / NOUS_DEBATE_API_KEY from process.env ONLY -- run
 // this with `node --env-file=.env.local <this file>`, the same pattern the
 // orchestrator process itself uses. No key value or .env content is ever
 // printed, logged, or written; the only confirmation of key presence is its
 // length. Response headers are inspectable via `--headers-only` (see below);
-// that path never prints `authorization` or any `cookie`/`set-cookie` header.
+// that path never prints `authorization` or any `cookie`/`set-cookie` header
 //
 // Budget: at most 8 calls total (5 sequential, concurrency 1, then one
 // burst of 3) -- the implementer's brief for #1023 set this cap; the issue
@@ -20,7 +20,7 @@
 // concurrently with this probe, which is why the burst is kept to one and
 // run once rather than swept. `--headers-only` (run separately, once, for
 // review round 1) adds exactly one further sequential call and does not
-// re-run the 8-call probe above.
+// re-run the 8-call probe above
 
 const MODEL = 'anthropic/claude-haiku-4.5';
 const TIMEOUT_MS = 45_000;
@@ -47,7 +47,7 @@ process.stderr.write(
 
 // Same prompt shape as 45-nous-five-model-latency-probe.mjs so TTFT/total
 // numbers here are comparable to that probe's non-streaming p50/max, not a
-// fresh unknown.
+// fresh unknown
 const SYSTEM_PROMPT = `You are the Trader agent in a multi-agent equities debate pipeline. You are given the views of three analysts (Fundamental, Technical, Sentiment) on a single LSE-listed leveraged ETP, plus recent market context. Weigh the three views, resolve disagreement, and output STRICT JSON only, matching exactly this shape:
 {"stance": "long" | "short" | "flat", "rationale": string, "confidence": number between 0 and 1}
 Do not include any text outside the JSON object. Do not use markdown code fences.`;
@@ -56,7 +56,7 @@ Do not include any text outside the JSON object. Do not use markdown code fences
 // cannot separate from queue wait, so the filler bars are seeded rather than
 // Math.random() -- a re-run should build the identical prompt, not a random
 // one of similar shape. The archived 2026-09-14 results predate this seeding
-// and the summary sort below; they came from an unseeded prompt of the same shape.
+// and the summary sort below; they came from an unseeded prompt of the same shape
 function mulberry32(seed) {
   let a = seed;
   return () => {
@@ -107,7 +107,7 @@ const USER_PROMPT = buildUserPrompt();
  * POSTs one streaming chat completion and times three points on the wire:
  * dispatch -> response headers (ttfb, matches #1021's non-streaming metric),
  * dispatch -> first content-bearing SSE chunk (ttft, the thing #1021 could
- * not measure), and dispatch -> stream end (total, matches latency_ms).
+ * not measure), and dispatch -> stream end (total, matches latency_ms)
  */
 async function callOnceStreaming() {
   const controller = new AbortController();
@@ -175,7 +175,7 @@ async function callOnceStreaming() {
               }
             } catch {
               // Not every chunk is guaranteed parseable JSON (keep-alive
-              // comments, partial frames); skip rather than fail the probe.
+              // comments, partial frames); skip rather than fail the probe
             }
           }
         }
@@ -195,7 +195,7 @@ async function callOnceStreaming() {
 // Each field below is that field's own sorted distribution across the ok
 // calls -- ttfb_ms[i]/ttft_ms[i]/total_ms[i]/generation_only_ms[i] are NOT
 // the same call at a shared index i; read `raw` for per-call, row-aligned
-// values.
+// values
 function summarize(label, calls) {
   const ok = calls.filter((c) => c.status === 200 && c.ttftMs !== null);
   const ttft = ok.map((c) => c.ttftMs).sort((a, b) => a - b);

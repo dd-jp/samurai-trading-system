@@ -17,13 +17,13 @@ import type { AdjustmentLog, FeedbackConfig } from './tuning.js';
  * fields the operator sets, not values this module bakes in.
  */
 export interface KillThresholds {
-  /** PBO's own reject line is 0.05 (validation-types.ts `PboVerdict`); this is FL's copy of it. */
+  /** PBO's own reject line is 0.05 (validation-types.ts `PboVerdict`); this is FL's copy of it */
   max_pbo: number;
-  /** Below this, the mean out-of-sample/paper Sharpe across the walk-forward distribution breaches. */
+  /** Below this, the mean out-of-sample/paper Sharpe across the walk-forward distribution breaches */
   min_oos_sharpe: number;
-  /** Below this Deflated Sharpe (a probability), the edge is statistically insignificant. */
+  /** Below this Deflated Sharpe (a probability), the edge is statistically insignificant */
   min_deflated_sharpe: number;
-  /** Fractional drop of live Sharpe below the frozen backtest reference before it counts as divergence. */
+  /** Fractional drop of live Sharpe below the frozen backtest reference before it counts as divergence */
   max_live_backtest_divergence: number;
 }
 
@@ -57,7 +57,7 @@ export interface BreachAlertChannel {
 }
 
 export interface BreachAlert {
-  /** The breach identifiers also written to `MetricsReport.breaches`. */
+  /** The breach identifiers also written to `MetricsReport.breaches` */
   breaches: string[];
   reported_at: Date;
 }
@@ -65,10 +65,10 @@ export interface BreachAlert {
 /**
  * Narrow seam `computeMetrics` (#93) actually consumes — the spec's
  * `FeedbackInput` minus the fields `runDailyCycle` alone needs (`trades`,
- * `debate_log`, `proposals`), same split rationale as `DailyCycleInput`.
+ * `debate_log`, `proposals`), same split rationale as `DailyCycleInput`
  */
 export interface MetricsInput {
-  /** Wall-clock live, simulated T in replay — read only through this. */
+  /** Wall-clock live, simulated T in replay — read only through this */
   clock: Clock;
   /**
    * = the validation library's `MetricsSuite`, already computed by its
@@ -77,23 +77,23 @@ export interface MetricsInput {
    * derive it from raw returns itself (acceptance criterion #1).
    */
   daily: MetricsSuite;
-  /** The frozen selected config's backtest Sharpe — the divergence check's baseline. */
+  /** The frozen selected config's backtest Sharpe — the divergence check's baseline */
   backtest_reference_sharpe: number;
-  /** Present only on the weekly/monthly revalidation cadence. */
+  /** Present only on the weekly/monthly revalidation cadence */
   revalidation?: RevalidationSnapshot;
-  /** The three dials, read and written — auto-tighten writes here on breach. */
+  /** The three dials, read and written — auto-tighten writes here on breach */
   tuning: TuningStore;
-  /** Where every auto-tighten move is recorded, same log `runDailyCycle` appends to. */
+  /** Where every auto-tighten move is recorded, same log `runDailyCycle` appends to */
   adjustments: AdjustmentLog;
   config: FeedbackConfig;
   alerts: BreachAlertChannel;
 }
 
-/** Shape frozen by feedback-loop-spec.md ("Key Interfaces"). */
+/** Shape frozen by feedback-loop-spec.md ("Key Interfaces") */
 export interface MetricsReport {
-  /** = the library's `MetricsSuite`, recomposed — no reimplemented math (acceptance criterion #1). */
+  /** = the library's `MetricsSuite`, recomposed — no reimplemented math (acceptance criterion #1) */
   daily: MetricsSuite;
-  /** The library's DSR/PBO/walk-forward output, recomposed — present only on the periodic cadence. */
+  /** The library's DSR/PBO/walk-forward output, recomposed — present only on the periodic cadence */
   revalidation?: RevalidationSnapshot;
   /** FL-only. e.g. 'pbo_over_max', 'oos_sharpe_under_min'. Never triggers a kill — alert + auto-tighten only. */
   breaches: string[];
@@ -153,8 +153,8 @@ export interface DailyMetricsSource {
 }
 
 export interface DailyMetricsSample {
-  /** Already computed by the validation library — never derived here. */
+  /** Already computed by the validation library — never derived here */
   daily: MetricsSuite;
-  /** Present only on the weekly/monthly revalidation cadence. */
+  /** Present only on the weekly/monthly revalidation cadence */
   revalidation?: RevalidationSnapshot;
 }

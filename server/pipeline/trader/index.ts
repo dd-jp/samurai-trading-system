@@ -40,7 +40,7 @@ export {
 // rest of the module — `resolveSubclassBracket`, `riskFractionFor`, the two
 // types and the error — is consumed only by `decide.ts` and `types.ts` beside
 // it, and a barrel entry for a symbol nothing outside imports is an exported
-// surface nobody asked for.
+// surface nobody asked for
 export {
   ADR_0018_SUBCLASS_BRACKETS,
   D5_INDEX_ETP_DEPLOYMENT_FRACTION,

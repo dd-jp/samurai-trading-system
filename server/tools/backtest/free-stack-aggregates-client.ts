@@ -36,7 +36,7 @@ import type { DateRange } from './universe.js';
 const DEFAULT_ALPACA_BASE_URL = 'https://data.alpaca.markets';
 const DEFAULT_COINBASE_BASE_URL = 'https://api.exchange.coinbase.com';
 
-/** Alpaca's documented per-request ceiling for bars. */
+/** Alpaca's documented per-request ceiling for bars */
 const ALPACA_PAGE_LIMIT = 10_000;
 
 /**
@@ -119,7 +119,7 @@ function requireFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-/** Coinbase candle tuple order is `[time, low, high, open, close, volume]`. */
+/** Coinbase candle tuple order is `[time, low, high, open, close, volume]` */
 function validateCoinbaseCandle(raw: unknown, symbol: string): PolygonAggregate {
   const bad = (): never => {
     throw new Error(
@@ -182,13 +182,13 @@ export interface FreeStackAggregatesClientOptions {
   alpacaSecretKey?: string | undefined;
   alpacaBaseUrl?: string | undefined;
   coinbaseBaseUrl?: string | undefined;
-  /** Injectable for tests — defaults to the global `fetch`. */
+  /** Injectable for tests — defaults to the global `fetch` */
   fetchImpl?: typeof fetch;
-  /** Proactive outbound pacing, shared across both venues. */
+  /** Proactive outbound pacing, shared across both venues */
   rateLimiter?: TokenBucket;
 }
 
-/** A `PolygonClient` backed by Alpaca (equities) and Coinbase (crypto). */
+/** A `PolygonClient` backed by Alpaca (equities) and Coinbase (crypto) */
 export class FreeStackAggregatesClient implements PolygonClient {
   private readonly alpacaKeyId: string;
   private readonly alpacaSecretKey: string;
@@ -203,7 +203,7 @@ export class FreeStackAggregatesClient implements PolygonClient {
     // Checked in the constructor rather than lazily at the first equity
     // request: Stage 2 always ingests the whole MVP universe, so a run that
     // reaches the crypto leg with no equity credentials would fail partway
-    // through an ingest loop that has already spent minutes on Coinbase.
+    // through an ingest loop that has already spent minutes on Coinbase
     if (keyId === undefined || keyId.length === 0) {
       throw new Error(
         'FreeStackAggregatesClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
@@ -226,7 +226,7 @@ export class FreeStackAggregatesClient implements PolygonClient {
 
   /**
    * `timeframe` is required and threaded to the venue (#664) — see
-   * `PolygonClient.fetchAggregates` for why it is not defaulted.
+   * `PolygonClient.fetchAggregates` for why it is not defaulted
    */
   async fetchAggregates(
     symbol: string,
@@ -251,10 +251,10 @@ export class FreeStackAggregatesClient implements PolygonClient {
     // Crypto stays DAILY-ONLY, deliberately (#664). Coinbase does serve 60s
     // granularity, so this is a scope decision and not a capability one:
     // crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment), and
-    // #664 says leave existing crypto paths alone rather than extending them.
+    // #664 says leave existing crypto paths alone rather than extending them
     // Refusing loudly is the honest form of "left alone" — the alternative,
     // silently serving daily candles against an intraday request, would give
-    // a crypto replay a timeframe label its bars do not have.
+    // a crypto replay a timeframe label its bars do not have
     if (timeframe !== '1d') {
       throw new Error(
         `FreeStackAggregatesClient: crypto (${symbol}) is served at '1d' only; got ` +
@@ -317,7 +317,7 @@ export class FreeStackAggregatesClient implements PolygonClient {
     // NOT redundant despite the forward chunk walk (raised in review on
     // #598): Coinbase returns each chunk NEWEST-FIRST, so `Map` insertion
     // order is descending within a chunk. Deleting this sort returns
-    // [300, 200, 100] for the first test's fixture — verified by mutation.
+    // [300, 200, 100] for the first test's fixture — verified by mutation
     return [...byTime.values()].sort((a, b) => a.t - b.t);
   }
 
@@ -328,7 +328,7 @@ export class FreeStackAggregatesClient implements PolygonClient {
   ): Promise<PolygonAggregate[]> {
     // Mapped through the market-data-service's own converter rather than a
     // second local table: '1m' -> '1Min', '1d' -> '1Day'. One mapping, one
-    // place it can be wrong.
+    // place it can be wrong
     const alpacaTimeframe = toAlpacaTimeframe(timeframe);
     const maxPages = maxAlpacaPagesFor(window, timeframe);
     // Keyed by open time for the same reason as the Coinbase leg: Alpaca
@@ -394,13 +394,13 @@ export class FreeStackAggregatesClient implements PolygonClient {
       // A wrong-typed token degrades to "no more pages" rather than throwing,
       // matching `HttpPolygonClient`: Stage 2 is offline tooling, and an early
       // stop shows up as a short series in the printed bar count rather than
-      // silently corrupting one.
+      // silently corrupting one
       pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
     } while (pageToken !== undefined);
 
     // Sorted for the same reason as the Coinbase leg: `sort=asc` is a request
     // parameter, not a guarantee this client verifies, and the store's
-    // contract is ascending.
+    // contract is ascending
     return [...byTime.values()].sort((a, b) => a.t - b.t);
   }
 }

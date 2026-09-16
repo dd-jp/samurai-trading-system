@@ -36,7 +36,7 @@ function request(): LlmRequest<{ stance: string }> {
     },
     parseResponse: (text: string) => {
       // Must not throw: an unparseable draw is a `valid: false`, which the
-      // layer above turns into a retryable `LlmMalformedResponseError`.
+      // layer above turns into a retryable `LlmMalformedResponseError`
       try {
         const parsed = JSON.parse(text) as { stance?: unknown };
         return typeof parsed.stance === 'string'
@@ -78,9 +78,9 @@ function stubFetchWithTiming(
     const response = new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
     const originalJson = response.json.bind(response);
     // `Response.json` is a read-only property in the ambient fetch types, so
-    // a direct `response.json = ...` reassignment doesn't type-check.
+    // a direct `response.json = ...` reassignment doesn't type-check
     // `defineProperty` replaces the own binding at runtime the same way,
-    // without needing a cast to route around the readonly check.
+    // without needing a cast to route around the readonly check
     Object.defineProperty(response, 'json', {
       value: async () => {
         vi.advanceTimersByTime(timing.bodyDelayMs); // additional time to read the body
@@ -136,7 +136,7 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
    * End-to-end join for #1012: `nousChat` measures `ttfb_ms`, and it must
    * survive the trip through `NousMessagesClient.createMessage` and
    * `AnthropicLlmClient.recordSpend` to reach the spend sink — not just the
-   * wire-level shape `nous-chat.test.ts` already covers.
+   * wire-level shape `nous-chat.test.ts` already covers
    */
   it('carries ttfb_ms through to the spend sink, distinct from latency_ms', async () => {
     vi.useFakeTimers();
@@ -185,7 +185,7 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
     // #1394: the class survives the trip through `classifyProviderError`. It
     // did not before — the truncation arrived at every seam downstream as a
     // bare `LlmProviderError`, indistinguishable from a dead API key, so
-    // `truncated` was a taxonomy member nothing could ever produce.
+    // `truncated` was a taxonomy member nothing could ever produce
     expect((error as LlmTruncatedError).max_tokens).toBe(1024);
     expect((error as LlmTruncatedError).usage).toEqual({
       input_tokens: 10,
@@ -215,7 +215,7 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
     expect(error).toBeInstanceOf(LlmRefusalError);
     // AC: the tokens the refused call burned are visible in the log. Nothing
     // meters them — a throw at the wire boundary never reaches `recordSpend` —
-    // so the error is the only surface that carries them.
+    // so the error is the only surface that carries them
     expect((error as LlmRefusalError).usage).toEqual({
       input_tokens: 900,
       output_tokens: 3,
@@ -226,7 +226,7 @@ describe('NousMessagesClient through AnthropicLlmClient', () => {
 
   it('still retries a genuinely malformed sample, which a fresh draw can fix', async () => {
     // The contrast case: without it, "does not retry" could pass because
-    // nothing retries at all.
+    // nothing retries at all
     let call = 0;
     const fetchMock = vi.fn(async () => {
       call += 1;
@@ -268,7 +268,7 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
   /**
    * Resolves each fetch only when the test says so, so "in flight" is
    * observable — and rejects on abort, the way a real `fetch` does, so the
-   * cancellation path reaches the gate's `finally` rather than hanging.
+   * cancellation path reaches the gate's `finally` rather than hanging
    */
   function gatedFetch() {
     const releases: Array<() => void> = [];
@@ -302,7 +302,7 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     // The mutation this kills: drop the gate (or raise the cap) and BOTH calls
-    // are on the wire here.
+    // are on the wire here
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     releases[0]?.();
@@ -327,12 +327,12 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
 
     // The fifth arrives with 3 queued ahead of it: an estimated 4 x 5,800 =
     // 23,200ms of waiting, which fits 28,000 on its own — and then a ~5,800ms
-    // call of its own, which does not (23,200 + 5,800 = 29,000).
+    // call of its own, which does not (23,200 + 5,800 = 29,000)
     const refused = await llm.complete(request()).catch((error: unknown) => error);
 
     expect(refused).toBeInstanceOf(LlmAdmissionRefusedError);
     expect(classifyFailureCause(refused)).toBe('gate_refused');
-    // Never dispatched: a refusal costs no tokens and burns no deadline.
+    // Never dispatched: a refusal costs no tokens and burns no deadline
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     for (let drained = 0; drained < admitted.length; drained += 1) {
@@ -372,7 +372,7 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
 
       const queued = llm.complete(request()).catch((error: unknown) => error);
       // Past the gate's drop at 28,000 - 5,800 = 22,200ms, but short of the
-      // outer race at 28,000 — so the gate is unambiguously what settled it.
+      // outer race at 28,000 — so the gate is unambiguously what settled it
       await vi.advanceTimersByTimeAsync(22_200);
 
       const refused = await queued;
@@ -382,7 +382,7 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // The first call is still holding the slot; drain it through its own
-      // outer timeout so nothing is left pending.
+      // outer timeout so nothing is left pending
       await vi.advanceTimersByTimeAsync(5_800);
       expect(classifyFailureCause(await first)).toBe('timeout');
     } finally {
@@ -394,7 +394,7 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
    * AC3 (#1533): before this fix, `NousMessagesClient` hardcoded
    * `llmStage: 'debate'` on every call, so a risk-critic call refused by the
    * gate logged `llm_gate_refused` with `llm_stage: 'debate'` — indistinguishable
-   * from an actual debate call in the gate's own log lines.
+   * from an actual debate call in the gate's own log lines
    */
   it("carries the request's true stage on the gate's llm_gate_refused log line, not the debate default", async () => {
     const entries: LogEntry[] = [];
@@ -450,7 +450,7 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
     await cancelled.catch(() => undefined);
 
     // The mutation this kills: release the slot on the success path only, and
-    // the gate leaks a permit per cancelled call until nothing can run.
+    // the gate leaks a permit per cancelled call until nothing can run
     const after = await gate.acquire({ budgetMs: 28_000 });
     after.release();
     expect(LlmInFlightRefusedError.name).toBe('LlmInFlightRefusedError');

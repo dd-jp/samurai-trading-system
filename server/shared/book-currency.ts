@@ -19,7 +19,7 @@
  * the module barrel) — it is a legitimate third caller, not a duplicate.
  */
 
-/** The account/book currency every mark and every booked fee is denominated in. */
+/** The account/book currency every mark and every booked fee is denominated in */
 export const BOOK_CURRENCY = 'GBP';
 
 /**
@@ -37,12 +37,12 @@ export const BOOK_CURRENCY = 'GBP';
  */
 const PENCE_CODES: readonly string[] = ['GBX', 'gbx', 'GBp', 'p'];
 
-/** Whether `currency` is a pence sub-unit of `BOOK_CURRENCY` — checked case-sensitively, see `PENCE_CODES`. */
+/** Whether `currency` is a pence sub-unit of `BOOK_CURRENCY` — checked case-sensitively, see `PENCE_CODES` */
 export function isPenceCurrency(currency: string): boolean {
   return PENCE_CODES.includes(currency.trim());
 }
 
-/** Whether `currency` can be carried into the `BOOK_CURRENCY` book without an FX rate: pence, or GBP in any case. */
+/** Whether `currency` can be carried into the `BOOK_CURRENCY` book without an FX rate: pence, or GBP in any case */
 export function isBookCurrency(currency: string): boolean {
   const code = currency.trim();
   return isPenceCurrency(code) || code.toUpperCase() === BOOK_CURRENCY;

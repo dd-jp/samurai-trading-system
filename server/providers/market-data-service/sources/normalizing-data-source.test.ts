@@ -21,9 +21,9 @@ import { InSessionUnderfetchError, RawFetchLimitExceededError } from './normaliz
 
 const HOUR_MS = 3_600_000;
 
-/** Sunday night, US equity session shut — the exact condition #386 was measured under. */
+/** Sunday night, US equity session shut — the exact condition #386 was measured under */
 const SESSION_SHUT = new Date('2026-07-19T23:00:00Z');
-/** Wednesday 14:00 ET, mid-session. */
+/** Wednesday 14:00 ET, mid-session */
 const MID_SESSION = new Date('2026-07-15T18:00:00Z');
 
 /**
@@ -82,7 +82,7 @@ describe('the in-session bar count is what the guarantee is enforced on (#386)',
     const bars = await source.fetchBars('SPY', { timeframe: '1h', lookback: 15 }, SESSION_SHUT);
 
     // Pre-fix this returned 12 — the raw guard was satisfied by out-of-session
-    // bars that normalization then discarded.
+    // bars that normalization then discarded
     expect(bars).toHaveLength(15);
     expect(limits.length).toBeGreaterThan(1);
   });
@@ -108,7 +108,7 @@ describe('the in-session bar count is what the guarantee is enforced on (#386)',
     await source.fetchBars('SPY', { timeframe: '1h', lookback: 15 }, SESSION_SHUT);
 
     // First ask is still `lookback + FORMING_BAR_FETCH_MARGIN` (#362) — the
-    // widening is a response to a measured shortfall, not a standing buffer.
+    // widening is a response to a measured shortfall, not a standing buffer
     expect(limits[0]).toBe(16);
     for (let i = 1; i < limits.length; i++) {
       expect(limits[i]).toBeGreaterThan(limits[i - 1] as number);
@@ -183,11 +183,11 @@ describe('the widen targets the count the caller asked for, not one more', () =>
 
     // 3 of the first 16 raw candles survive, so the rate is 3/16 and the
     // estimate is ceil(15 / 0.1875) = 80. Targeting `lookback + 1` instead
-    // gives ceil(16 / 0.1875) = 86 — six raw candles nobody asked for.
+    // gives ceil(16 / 0.1875) = 86 — six raw candles nobody asked for
     //
     // Asserted on the REQUEST SIZE, deliberately: both values satisfy the
     // caller at attempt 2, so a test that only checked `bars` would pass
-    // either way and pin nothing.
+    // either way and pin nothing
     expect(limits).toEqual([16, 80]);
     expect(bars).toHaveLength(15);
   });
@@ -207,14 +207,14 @@ describe('the retry is bounded, and exhaustion is loud', () => {
 
     // 16 -> 128 -> 512, where 512 is the ceiling (32x the first ask). Pinned
     // exactly: an unbounded widen against a live venue burns the ~200 req/min
-    // budget shared with live order placement.
+    // budget shared with live order placement
     expect(limits).toEqual([16, 128, 512]);
   });
 
   it('stops at the attempt cap when a trickle of in-session bars keeps the estimate small, and throws', async () => {
     // Only the ten most recent candles are ever in session — a shape that
     // makes each widen look nearly sufficient, so the growth estimate stays
-    // small and the ATTEMPT bound (not the ceiling) is what stops it.
+    // small and the ATTEMPT bound (not the ceiling) is what stops it
     const inSessionFrom = SESSION_SHUT.getTime() - 10 * HOUR_MS;
     const trickle: TradingCalendar = {
       isOpen: (instant) => instant.getTime() > inSessionFrom,
@@ -229,7 +229,7 @@ describe('the retry is bounded, and exhaustion is loud', () => {
       source.fetchBars('SPY', { timeframe: '1h', lookback: 15 }, SESSION_SHUT),
     ).rejects.toThrow(InSessionUnderfetchError);
 
-    // Four attempts, well short of the 512 ceiling — the attempt cap binds here.
+    // Four attempts, well short of the 512 ceiling — the attempt cap binds here
     expect(limits).toEqual([16, 32, 64, 128]);
   });
 
@@ -260,7 +260,7 @@ describe('the absolute raw-row cap (#747)', () => {
     // firstRawLimit = 701 (700 + FORMING_BAR_FETCH_MARGIN). 701*32 = 22,432 —
     // above MAX_RAW_LIMIT_ABSOLUTE (20,000) — so the ceiling this widen is
     // bounded by is the absolute cap, not the multiple. A ten-prior-session
-    // 5m RVOL lookback is exactly this shape (issue #747).
+    // 5m RVOL lookback is exactly this shape (issue #747)
     const { client, limits } = recordingClient((limit) => hourlyCandles(SESSION_SHUT, limit));
     const source = new AlpacaDataSource(client, { asset_class: 'stocks', calendar: NEVER_OPEN });
 
@@ -271,7 +271,7 @@ describe('the absolute raw-row cap (#747)', () => {
     // 701 -> 5,608 (8x, nothing survived) -> 20,000 (would-be 44,864 clamped
     // to the absolute cap) -> widen(20,000) also clamps to 20,000, which is
     // <= the current rawLimit, so the loop stops there rather than issuing a
-    // fourth, identical request.
+    // fourth, identical request
     expect(limits).toEqual([701, 5608, 20000]);
     expect(Math.max(...limits)).toBeLessThanOrEqual(20_000);
   });
@@ -283,13 +283,13 @@ describe('the absolute raw-row cap (#747)', () => {
       calendar: new UsEquityRegularHoursCalendar(),
     });
 
-    // lookback 20,000 + FORMING_BAR_FETCH_MARGIN (1) = 20,001 > 20,000.
+    // lookback 20,000 + FORMING_BAR_FETCH_MARGIN (1) = 20,001 > 20,000
     await expect(
       source.fetchBars('SPY', { timeframe: '5m', lookback: 20_000 }, MID_SESSION),
     ).rejects.toThrow(RawFetchLimitExceededError);
 
     // Refused before any request reached the client — never an unbounded
-    // fetch, never a silently truncated one.
+    // fetch, never a silently truncated one
     expect(limits).toEqual([]);
   });
 
@@ -332,7 +332,7 @@ describe("the source's own short-read policy still owns raw scarcity (#292)", ()
   });
 
   it('does not widen when the source returns fewer RAW candles than asked — that is the client’s AlpacaDataUnderfetchError to raise, not a normalization loss', async () => {
-    // Three raw candles for a 16-bar ask: the venue has no more history.
+    // Three raw candles for a 16-bar ask: the venue has no more history
     // Widening cannot conjure bars that do not exist, and the real client
     // already fails loudly on this path (AlpacaDataUnderfetchError) before we
     // ever see it. Two of the three complete at `asOf`; the newest is forming.
@@ -354,7 +354,7 @@ describe("the source's own short-read policy still owns raw scarcity (#292)", ()
     // throwing here would report "the missing bars fell outside a trading
     // session" about an instrument that has no sessions, which is the #358
     // misattribution pointed the other way. Raw scarcity keeps its own,
-    // correctly-named errors one layer up.
+    // correctly-named errors one layer up
     const { client } = recordingClient(() => hourlyCandles(SESSION_SHUT, 5));
     const source = new AlpacaDataSource(client, { asset_class: 'crypto' });
 

@@ -35,7 +35,7 @@ import {
 // all. This is deliberately the ONLY thing this module takes from the debate
 // engine. This module does not re-derive the decision bar — it takes the bar
 // coordinate from `DebateResult`. Do not import `floorToBar` or
-// `DEBATE_BAR_TIMEFRAME_MS` here to recompute it (#687).
+// `DEBATE_BAR_TIMEFRAME_MS` here to recompute it (#687)
 import type { DebateResult } from '../debate-engine/types.js';
 // #1089: the ONE typed dependency this otherwise risk-manager-free module
 // takes, and only for `instanceof` discrimination (coding-standards.md
@@ -44,10 +44,10 @@ import type { DebateResult } from '../debate-engine/types.js';
 // thunk everywhere else in this file; the single call site that inspects
 // what it threw needs to tell a genuine whole-book valuation refusal apart
 // from any OTHER rejection the thunk's implementation might raise (an
-// account-state read failing, say) — see `buildBracket`.
+// account-state read failing, say) — see `buildBracket`
 // `BookValuationError` (#1089), not `StaleMarkError` alone: `readMarks`
 // (portfolio-view.ts) throws it bare on either a stale mark or a failed/
-// omitted mark read, and the base type is what catches both.
+// omitted mark read, and the base type is what catches both
 import { BookValuationError } from '../risk-manager/index.js';
 import { priceBracket, sideFor, sizeBracket, type TradeDirection } from './build-bracket.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
@@ -111,7 +111,7 @@ export function atrIndicatorSpec(lookback: number, timeframe: string): Indicator
     // Passed in rather than defaulted (#315). This spec describes the bars the
     // caller fetched with `config.atr_timeframe`, and a default here would let
     // the two drift — the spec claiming 1h while the ATR was computed on
-    // something else, which reprices every stop without changing a test.
+    // something else, which reprices every stop without changing a test
     timeframe,
     lookback: lookback + 1,
   };
@@ -170,14 +170,14 @@ function atrFor(
 
   // `lookback + 1` bars yield `lookback` true ranges — the arity lives in
   // `minimumBarsFor`, not in a literal here. Skipping the trade is the only
-  // safe answer: a stop cannot be priced off an ATR that does not exist.
+  // safe answer: a stop cannot be priced off an ATR that does not exist
   //
   // The two failures are reported SEPARATELY (#475) because they mean opposite
   // things operationally: a short window is a warm-up or a data gap and is
   // expected early in a soak, while a non-finite ATR on a full window means
   // corrupt bar data and is never expected. Collapsing them to one null — as
   // this did — made the benign case and the alarming one indistinguishable in
-  // `trader_log`.
+  // `trader_log`
   //
   // `minimumBarsFor(spec)` is a configured threshold (#1109) — it derives from
   // `config.atr_lookback` via `atrIndicatorSpec` — so `bars.length` against it
@@ -185,7 +185,7 @@ function atrFor(
   // already covers. Without it "2 bars short" and "13 bars short" are the same
   // row, and the warm-up case this reason exists to distinguish (see #475's
   // comment above) is exactly the one a near-miss vs. a decisive shortfall
-  // would tell apart.
+  // would tell apart
   const minimumBars = minimumBarsFor(spec);
   if (bars.length < minimumBars) {
     return {
@@ -297,13 +297,13 @@ function withinFlattenWindow(
   // Checked here rather than at construction because `TraderConfig` is a plain
   // interface with no validation seam — nothing between the config literal and
   // this comparison inspects the value. Written as `!(x > 0)` so `NaN` fails
-  // too; `x <= 0` would let it through and make the window silently never open.
+  // too; `x <= 0` would let it through and make the window silently never open
   //
   // Zero or negative disables flat-by-close ENTIRELY and quietly: the window
   // never opens, the Trader never flattens, and every position carries
   // overnight against ADR-0014 with nothing in `trader_log` marking it. A
   // safety rule that can be switched off by a plausible-looking config value
-  // has to say so.
+  // has to say so
   //
   // This throw DOES take the direction-flip exit down with it — the same
   // stranding the docblock argues against for a past close. The asymmetry is
@@ -313,11 +313,11 @@ function withinFlattenWindow(
   // running. A non-positive window is a static misconfiguration that cannot
   // become valid at the next tick, and every answer it could produce is a lie
   // about whether ADR-0014 is being enforced — so halting the instrument IS the
-  // correct outcome, not a side effect tolerated to keep the check cheap.
+  // correct outcome, not a side effect tolerated to keep the check cheap
   //
   // In practice nothing should ever reach this: `assertTraderConfigSound` at
   // the composition root refuses the boot. This is the backstop for callers
-  // that never pass through that seam, and there the halt is what you want.
+  // that never pass through that seam, and there the halt is what you want
   if (!(input.config.flatten_before_close_ms > 0)) {
     throw new Error(
       `flatten_before_close_ms must be > 0 (got ${input.config.flatten_before_close_ms}); ` +
@@ -326,7 +326,7 @@ function withinFlattenWindow(
   }
   // #1389, and the same backstop argument one line up: a non-positive grace is
   // a static misconfiguration that restores the forward-only window this
-  // ticket removed, and cannot become valid at the next tick.
+  // ticket removed, and cannot become valid at the next tick
   if (!(input.config.flatten_after_close_ms > 0)) {
     throw new Error(
       `flatten_after_close_ms must be > 0 (got ${input.config.flatten_after_close_ms}); ` +
@@ -343,7 +343,7 @@ function withinFlattenWindow(
     // and a silent one for anything else, which is the whole #698 complaint:
     // an equity calendar that has quietly stopped resolving sessions returns
     // the identical `false` and never flattens, carrying overnight against
-    // ADR-0014 with nothing marking it.
+    // ADR-0014 with nothing marking it
     return {
       within: false,
       enforcing_close: null,
@@ -363,7 +363,7 @@ function withinFlattenWindow(
   const remaining = sessionEnd.getTime() - now.getTime();
 
   // Still before the bell (or a calendar reporting a close already gone, which
-  // this comparison has always swept up and still does — see the docblock).
+  // this comparison has always swept up and still does — see the docblock)
   if (remaining <= input.config.flatten_before_close_ms) {
     return { within: true, enforcing_close: sessionEnd, diagnostic: null };
   }
@@ -373,7 +373,7 @@ function withinFlattenWindow(
   // still enforcing, NOT the session's open. The `>= 0` bound is that contract
   // restated rather than trusted: a calendar answering with a FUTURE close
   // would otherwise produce a negative elapsed that clears the upper bound and
-  // silently widen the grace to the whole session.
+  // silently widen the grace to the whole session
   const priorClose = calendar.sessionStart(now);
   const elapsed = now.getTime() - priorClose.getTime();
   if (elapsed >= 0 && elapsed <= input.config.flatten_after_close_ms) {
@@ -459,7 +459,7 @@ async function buildBracket(
 ): Promise<TraderOutcome> {
   const { clock, config, debate, instrument, marketData, setupStore } = input;
   // #753: absent means the live arm — the arm that existed before the control
-  // did — never "unknown".
+  // did — never "unknown"
   const arm = input.arm ?? 'live';
 
   // THE SIZING READ (#847), resolved HERE — the first thing this function does
@@ -471,7 +471,7 @@ async function buildBracket(
   //     — that throw aborts the tick exactly as the eager read did before
   //     #847, and it is NOT converted into a `skip_reason` there. A read
   //     failure is a fault and must stay audible in `tick-loop.ts`'s
-  //     `error`-level catch (#507).
+  //     `error`-level catch (#507)
   //
   //     #1089: `arm === 'control'` converts ONE specific shape of that
   //     rejection — a genuine whole-book valuation refusal, any
@@ -488,13 +488,13 @@ async function buildBracket(
   //     wrapper type: `readMarks`'s own wrap (portfolio-view.ts) is always
   //     all-`BookValuationError`, but `input.equity()` is opaque and a future
   //     non-valuation `AggregateError` (e.g. a batched sub-read inside
-  //     `sizingEquity`) must not be silently downgraded to a skip.
+  //     `sizingEquity`) must not be silently downgraded to a skip
   //  2. Nothing that does NOT size pays for it or fails on it. `routeDecision`
   //     evaluates flat-by-close before it can ever get here, so a dark mark
-  //     elsewhere in the book no longer suppresses this pass's flatten.
+  //     elsewhere in the book no longer suppresses this pass's flatten
   //
   // Awaited at the TOP rather than at the use site so a future edit cannot
-  // reach the `size` computation on some path that skipped the read.
+  // reach the `size` computation on some path that skipped the read
   let equity: number;
   try {
     equity = await input.equity();
@@ -509,7 +509,7 @@ async function buildBracket(
       // pre-existing #698 mechanism — a `trader_log` write plus a REAL alert
       // transport when one is configured) makes this audible above `warn`,
       // rather than a bespoke log line with no consumer. `asset_class` is
-      // `undefined` here on purpose — see `TraderDiagnostic.asset_class`.
+      // `undefined` here on purpose — see `TraderDiagnostic.asset_class`
       diagnostics.push({
         kind: 'control_arm_valuation_refused',
         asset_class: undefined,
@@ -538,7 +538,7 @@ async function buildBracket(
   // `Promise.all` (and this function, and the tick) down with it, on
   // purpose: opening or adding to a position without a live price is worse
   // than deferring to the next tick, unlike the ONE exit ADR-0014 makes
-  // mandatory (see `readExitPrice`'s docstring for the full posture).
+  // mandatory (see `readExitPrice`'s docstring for the full posture)
   // Stamped onto `decided_at` below (#1190) — Verdict's gate 1 measures signal
   // age from THIS read, not from `DebateLog.created_at` (the debate's own
   // completion instant): `DebateResult` does not expose `created_at`, so
@@ -547,20 +547,20 @@ async function buildBracket(
   // (`LATENCY_BUDGET_MS.stocks`, 60s) that separates debate completion from
   // this call. Read BEFORE `getMark`/`getBars`/the precedent lookup below, so
   // a slow data fetch still counts toward the age Verdict measures — it is
-  // not a cheap timestamp taken after the expensive work is already done.
+  // not a cheap timestamp taken after the expensive work is already done
   const asOf = clock.now();
   const [mark, bars] = await Promise.all([
     marketData.getMark(instrument, asOf),
     marketData.getBars(
       instrument,
-      // CONVERGED width (#757): `recommendedWarmupFor` = `4 x atr_lookback + 1`.
+      // CONVERGED width (#757): `recommendedWarmupFor` = `4 x atr_lookback + 1`
       // Fetching only `atr_lookback + 1` bars — one true range past the seed —
       // leaves `computeIndicator`'s Wilder smoothing loop running ZERO times,
       // so the value becomes a plain mean wearing Wilder's name (the same
       // warm-up gap #722 fixed for `RSI_SPEC`). Measured before adopting the
       // wider window: median relative shift 3.0%, p90 6.9%, near-zero signed
       // bias, against a declared median<=15%/p90<=30% gate — see
-      // `docs/reviews/indicator-characterisation-2026-08-16.md` F1.
+      // `docs/reviews/indicator-characterisation-2026-08-16.md` F1
       //
       // Two tests pin the two halves, and neither pins the other's:
       // `atr-equivalence.test.ts` pins the ALGORITHMIC boundary (plain mean at
@@ -569,13 +569,13 @@ async function buildBracket(
       // width; `decide.test.ts` ("fetches exactly the converged ATR width")
       // pins THIS window, so narrowing the fetch back to the floor — or
       // dropping `atr_timeframe` — fails a test rather than silently
-      // reintroducing the seed.
+      // reintroducing the seed
       //
       // Derived from `atrIndicatorSpec` rather than restated, so the fetch and
       // the spec that documents it cannot drift apart the way #722's
-      // `WARM_START_WINDOWS` had to be fixed separately from `RSI_SPEC`.
+      // `WARM_START_WINDOWS` had to be fixed separately from `RSI_SPEC`
       //
-      // A separate fetch-width margin is applied underneath in fetchBars; see #362.
+      // A separate fetch-width margin is applied underneath in fetchBars; see #362
       {
         timeframe: config.atr_timeframe,
         lookback: recommendedWarmupFor(atrIndicatorSpec(config.atr_lookback, config.atr_timeframe)),
@@ -586,18 +586,18 @@ async function buildBracket(
 
   // FLAT BY CLOSE, the opening half (#668). The router's holding branch closes
   // what is open inside the window; this stops the same window from opening
-  // something new for the next tick to immediately close again.
+  // something new for the next tick to immediately close again
   //
   // Not a nicety: on the live leg the round trip is the whole edge. ADR-0018
   // measures a 3x index ETP at 0.18% against a 2.00% take-profit, so a position
   // opened minutes before the close pays that cost for an exposure with no time
   // left to earn it, and the neutral bracket it was sized under assumes a full
-  // session to resolve in.
+  // session to resolve in
   //
   // Checked AFTER the mark rather than alongside the position branch because
   // the asset class is the MARK's to report — and it is the asset class that
   // picks the calendar, since the crypto and equity legs run different venues
-  // inside one process.
+  // inside one process
   const flattenWindow = withinFlattenWindow(input, mark.asset_class);
   if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
   if (flattenWindow.within) {
@@ -609,7 +609,7 @@ async function buildBracket(
   // `InsufficientBarsError` below `minimumBarsFor(spec)` and `getIndicator`
   // propagates it, so routing through the serving layer would fail loudly on
   // a short window rather than silently repricing stops off an under-seeded
-  // ATR.
+  // ATR
   //
   // What differs is the disposition. `atrFor` catches the shortfall itself and
   // returns null, which `decide()` turns into "skip this instrument this
@@ -618,14 +618,14 @@ async function buildBracket(
   // that routine skip into a thrown tick. Cheap to fix (catch
   // `InsufficientBarsError` at the call site and return null), but it is a
   // behaviour decision about the Trader rather than a mechanical swap, so it
-  // is the remaining step of #315 rather than a line in this one.
+  // is the remaining step of #315 rather than a line in this one
   const atrResult = atrFor(bars, config.atr_lookback, config.atr_timeframe);
   if (atrResult.atr === null) {
     // Only the non-finite half is a diagnostic (#698). `atr_insufficient_bars`
     // is a warm-up or a data gap — expected early in a soak, per `atrFor`'s own
     // comment — and alerting it would fire on day 1 for every instrument, which
-    // is how an operator learns to mute the channel (ADR-0008 §1's lesson).
-    // A non-finite ATR on a FULL window is corrupt bar data and never expected.
+    // is how an operator learns to mute the channel (ADR-0008 §1's lesson)
+    // A non-finite ATR on a FULL window is corrupt bar data and never expected
     if (atrResult.reason === 'atr_not_finite') {
       diagnostics.push({
         kind: 'atr_not_finite',
@@ -645,7 +645,7 @@ async function buildBracket(
   // CryptoLatestQuoteResponse`), so a null `ap`/`bp` on the wire arrives here
   // as a NaN `mark.price` — and NaN then walks through every guard below,
   // because every comparison against it is false. Checked at the inlet rather
-  // than only at `size` so the skip names the input that was bad.
+  // than only at `size` so the skip names the input that was bad
   const entry = mark.price;
   if (!Number.isFinite(entry)) return skip('mark_not_finite');
 
@@ -655,7 +655,7 @@ async function buildBracket(
   // keep the pre-ADR-0018 ATR geometry below. An armed map with this instrument
   // missing THROWS rather than falling back (see `resolveSubclassBracket`);
   // sizing an unclassified name on the other subclass's numbers is the silent
-  // error the ADR's sizing amendment exists to prevent.
+  // error the ADR's sizing amendment exists to prevent
   const bracket = resolveSubclassBracket(instrument, config.subclass_of, config.subclass_brackets);
 
   const priced = priceBracket({ direction, entry, atr, bracket, config });
@@ -664,7 +664,7 @@ async function buildBracket(
 
   // The setup this decision represents, embedded once and used twice: to find
   // precedent now, and — if this intent survives the skip guards below — as
-  // the row the Feedback Loop labels with its realized R on close.
+  // the row the Feedback Loop labels with its realized R on close
   const setupVector = buildSetupVector(debate, { entry, atr, stopDistance, bars });
   const precedent = retrieveCosinePrecedent(setupVector, setupStore, asOf);
 
@@ -682,20 +682,20 @@ async function buildBracket(
   if (sized.sized === null) return skip(sized.skip.reason, sized.skip.reason_detail);
 
   // Written only once every skip guard has passed, so a decision the Trader
-  // itself declined leaves no row.
+  // itself declined leaves no row
   //
   // What this does NOT promise: that every row written here becomes a labelled
   // trade. Risk can trim to a reject, Verdict can say no-go, and the broker can
-  // refuse the order — each leaves a setup no `labelSetup` ever arrives for.
+  // refuse the order — each leaves a setup no `labelSetup` ever arrives for
   // Those rows are inert rather than harmful (`findNeighbors` returns only
   // closed-outcome setups, so an unlabelled row can never influence sizing),
   // and the alternative is worse: the vector is only computable here, at the
   // point the decision is made, so deferring the write to the fill would mean
-  // carrying the embedding through three stages that have no use for it.
+  // carrying the embedding through three stages that have no use for it
   //
   // The write is first-write-wins in the store, which is what makes a
   // re-decided bar — replay, or a crash-restart on the same bar — safe rather
-  // than fatal.
+  // than fatal
   setupStore.writeSetup(debate.debate_id, setupVector, asOf);
 
   const decisionBar = decisionBarFor(debate);
@@ -707,7 +707,7 @@ async function buildBracket(
       // agree they would otherwise produce ONE key and Execution's `findByKey`
       // gate would dedupe the second away — silently, and exactly on the
       // agreeing subset the comparison is most sensitive to. `'live'` hashes
-      // identically to the pre-#753 payload; see `computeIdempotencyKey`.
+      // identically to the pre-#753 payload; see `computeIdempotencyKey`
       idempotency_key: computeIdempotencyKey(
         instrument,
         decisionBar,
@@ -729,7 +729,7 @@ async function buildBracket(
         debate_id: debate.debate_id,
         // #753. Recorded on every intent (never omitted for the live arm), so
         // `trader_log` / `risk_log` rows say which arm decided without anyone
-        // having to infer it from a `debate_id` prefix.
+        // having to infer it from a `debate_id` prefix
         arm,
         conviction: debate.confidence,
         converged: debate.converged,
@@ -896,7 +896,7 @@ async function readExitPrice(
     const lotAssetClass = positions[0]?.asset_class;
     // A discretionary exit, or a lot that cannot even say what asset class it
     // is (nothing constructs one, but an array index is not proof) — both
-    // propagate exactly as they did before #826.
+    // propagate exactly as they did before #826
     if (exitReason !== 'flatten' || lotAssetClass === undefined) throw error;
 
     const reason = describeThrownSafely(error);
@@ -906,7 +906,7 @@ async function readExitPrice(
       // The flatten is already decided; a page that could abort it would
       // reinstate the very suppression this function removes. The composition
       // root logs before it posts (`reportExitValuationDegraded`), so the
-      // durable record does not depend on this call surviving.
+      // durable record does not depend on this call surviving
     }
     return { price: 0, asset_class: lotAssetClass, unpriced: true };
   }
@@ -989,7 +989,7 @@ async function buildFlattenExit(
 ): Promise<TraderOutcome> {
   const exitReason: ExitReason = exitKind.reason;
   // No `marketData` here since #826: the mark read moved into `readExitPrice`,
-  // which owns both the healthy answer and the unpriced degradation.
+  // which owns both the healthy answer and the unpriced degradation
   const { clock, config, exitFillSizes, instrument } = input;
   // #753 — see `buildBracket`'s note. Absent means the live arm.
   const arm = input.arm ?? 'live';
@@ -1001,7 +1001,7 @@ async function buildFlattenExit(
   const closingSide = existingSide === 'buy' ? 'sell' : 'buy';
   // Only filled exposure needs flattening — a lot still `pending`/
   // `submitted` has nothing on the books yet, so an all-pending instrument
-  // has no fill to close and there is nothing to emit.
+  // has no fill to close and there is nothing to emit
   //
   // #568: and only what the VENUE still holds. `filled_size` alone is the
   // ENTRY quantity, which no exit fill reduces, so a partially-flattened lot
@@ -1009,7 +1009,7 @@ async function buildFlattenExit(
   // the venue holds only the residual. `heldQuantitiesFor` subtracts what is
   // already closed — the same derivation `executeExit` re-runs before it
   // submits, and it refuses on exact inequality, so a difference between the
-  // two stops the exit rather than mis-sizing it.
+  // two stops the exit rather than mis-sizing it
   const held = await heldQuantitiesFor(positions, exitFillSizes);
 
   // Fail closed, per lot, BEFORE summing — the same check `executeExit` makes,
@@ -1029,7 +1029,7 @@ async function buildFlattenExit(
   // `buildBracket`'s, see that call's comment for why this and not
   // `DebateLog.created_at`. This exit's own gate 1 read is exempted for
   // `exit_reason: 'flatten'` (`mandatory_flatten`, see verdict/index.ts), so
-  // this timestamp only feeds `trader_log`/observability here, not a gate.
+  // this timestamp only feeds `trader_log`/observability here, not a gate
   const asOf = clock.now();
   const priced = await readExitPrice(input, positions, exitReason, asOf);
 
@@ -1038,7 +1038,7 @@ async function buildFlattenExit(
       // #1389: the MANDATORY flatten is keyed on the session close it enforces,
       // not on a bar — so the same obligation, evaluated on either side of the
       // bell, produces one key and gate 3 dedups across the boundary. See
-      // `computeFlattenIdempotencyKey`.
+      // `computeFlattenIdempotencyKey`
       //
       // #748: the two DISCRETIONARY exits keep the bar coordinate, and the
       // early exit keeps its own `'early_close'` discriminator, so a release
@@ -1061,7 +1061,7 @@ async function buildFlattenExit(
       // All three are the mark, or all three are ZERO when there was no mark
       // to read (#826). Degenerate either way: #83 owns the flatten lifecycle
       // and consults none of them, and `executeExit` submits a market flatten
-      // sized to the held quantity without reading a price at all.
+      // sized to the held quantity without reading a price at all
       entry: priced.price,
       stop: priced.price,
       target: priced.price,
@@ -1070,23 +1070,23 @@ async function buildFlattenExit(
       decided_at: asOf,
       metadata: {
         debate_id: attribution.debate_id,
-        // #753 — see the entry intent's own `arm` note.
+        // #753 — see the entry intent's own `arm` note
         arm,
         exit_reason: exitReason,
         // Spread rather than a plain `unpriced_exit: priced.unpriced` field:
         // `exactOptionalPropertyTypes` is on, and the flag is true-or-absent so
-        // that `=== true` is the only test a reader can write (#826).
+        // that `=== true` is the only test a reader can write (#826)
         ...(priced.unpriced ? { unpriced_exit: true as const } : {}),
-        // #894: the mandatory-flatten marker Verdict's gate-1 exemption reads.
+        // #894: the mandatory-flatten marker Verdict's gate-1 exemption reads
         // Derived from `exitReason` HERE, at the one place an exit intent is
         // constructed, so the two discretionary exits cannot acquire it and no
         // second call site has to be kept in step. Same spread form and the
         // same true-or-absent shape as `unpriced_exit`, for the same
-        // `exactOptionalPropertyTypes` reason.
+        // `exactOptionalPropertyTypes` reason
         ...(exitReason === 'flatten' ? { mandatory_flatten: true as const } : {}),
         // #1497: the per-lot breakdown behind `totalSize` — see this field's
         // doc on `OrderIntentMetadata` for why `executeExit` needs it to catch
-        // a compensating swap the total-only guard cannot see.
+        // a compensating swap the total-only guard cannot see
         lot_held_quantities: held,
         conviction: attribution.conviction,
         converged: attribution.converged,
@@ -1099,7 +1099,7 @@ async function buildFlattenExit(
           // retrieved and no setup is written: the flatten is the consequence of
           // an earlier setup, not a new one to find neighbors for. The field is
           // non-optional (cross-spec-contracts.md registry #1), so it carries
-          // the no-precedent default — which is also the honest reading.
+          // the no-precedent default — which is also the honest reading
           cosine_multiplier: NO_PRECEDENT_MULTIPLIER,
         },
         cosine_precedent: {
@@ -1195,7 +1195,7 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
   exit_held_quantity_diverged: 'input_unusable',
   // The system working, not starving: the close IS in flight. `input_unusable`
   // would fold it in with the fill-record failures above and make a healthy
-  // dedup look like corrupt data.
+  // dedup look like corrupt data
   flatten_in_flight: 'declined_on_signal',
   early_exit_signal_unavailable: 'input_unusable',
   no_position_side: 'input_unusable',
@@ -1274,7 +1274,7 @@ function classifyDecision(
   return isDebateDerivedDecline && debateWasDegraded(debate) ? 'could_not_decide' : baseClass;
 }
 
-/** One detected degradation, with enough context for an operator to act. */
+/** One detected degradation, with enough context for an operator to act */
 export interface TraderDiagnostic {
   kind: TraderDiagnosticKind;
   /**
@@ -1374,7 +1374,7 @@ function skip(
   };
 }
 
-/** A decision that produced an order. */
+/** A decision that produced an order */
 function emit(intent: OrderIntent, atr: number | null): TraderOutcome {
   return {
     intent,
@@ -1416,17 +1416,17 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   // in the sense trader-spec.md means it (same inputs, same output) while still
   // reporting what it noticed. An injected logger would have bought the same
   // diagnostic at the cost of making the decision path side-effecting, which is
-  // the trade #698 itself argues against.
+  // the trade #698 itself argues against
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeDecision(input, diagnostics);
 
   // #1109: classified once here, not at each `skip()` call site — see
-  // `TraderOutcome.decision_class`.
+  // `TraderOutcome.decision_class`
   const decision_class =
     outcome.skip_reason === null ? null : classifyDecision(outcome.skip_reason, input.debate);
 
   // Merged here rather than at each producing site so the skip helper stays a
-  // one-liner and no future skip site can forget the field.
+  // one-liner and no future skip site can forget the field
   return {
     ...outcome,
     decision_class,
@@ -1437,7 +1437,7 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
 /**
  * `decideWithReason`'s routing on current position state (trader-spec.md
  * Module: Position Awareness, tickets #73/#74), with #698's diagnostic
- * accumulator threaded through.
+ * accumulator threaded through
  */
 async function routeDecision(
   input: TraderInput,
@@ -1454,12 +1454,12 @@ async function routeDecision(
 
   // All lots for one instrument are the same side by construction (v1
   // per-lot design: scale_in only adds same-direction, exit flattens before
-  // a fresh entry) — no defensive mixed-side reconciliation.
+  // a fresh entry) — no defensive mixed-side reconciliation
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) return skip('no_position_side');
 
   // FLAT BY CLOSE (#668, ADR-0014) — ahead of EVERY other holding branch, and
-  // the ordering is the load-bearing part.
+  // the ordering is the load-bearing part
   //
   // Below this point the router can decline to act for reasons that are all
   // perfectly good reasons to hold a position through a quiet afternoon and
@@ -1468,24 +1468,24 @@ async function routeDecision(
   // of them and the commonest branch in the whole system — `debate.direction
   // === 'neutral'`, 92 of 94 debates in the soak — silently suppresses the
   // flatten and carries the book overnight. That is the exact failure the rule
-  // exists to prevent, so it is decided first.
+  // exists to prevent, so it is decided first
   //
   // ADR-0007/ADR-0013 removed the human from the trade path, so this must fire
-  // unattended INCLUDING on the days it closes into a loss.
+  // unattended INCLUDING on the days it closes into a loss
   const positionAssetClass = positions[0]?.asset_class;
   if (positionAssetClass !== undefined) {
     const flattenWindow = withinFlattenWindow(input, positionAssetClass);
     // Pushed BEFORE the branch, so the diagnostic survives whichever way it
     // goes: a stale close produces an exit intent, and an equity calendar that
     // has stopped resolving sessions produces `false` and no exit at all — the
-    // second being precisely the silent case #698 was filed for.
+    // second being precisely the silent case #698 was filed for
     if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
     if (flattenWindow.within) {
       // #1389's second guard, and it sits HERE rather than inside
       // `buildFlattenExit` on purpose: that builder also serves the two
       // discretionary exits, and a guard at its top would silently swallow a
       // direction-flip or a decay release whenever a flatten happened to be in
-      // flight — refusing exits the in-flight flatten is not the close for.
+      // flight — refusing exits the in-flight flatten is not the close for
       if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
       return buildExitIntent(input, positions, {
         reason: 'flatten',
@@ -1539,21 +1539,21 @@ export type ExitCheckInput = Pick<
   // #1389: the tick path is where the mandatory flatten is decided, so the
   // in-flight guard has to reach THIS entry point — omitting it here would
   // leave the second flatten unguarded on precisely the path that produces
-  // nearly all of them.
+  // nearly all of them
   | 'unresolvedFlattens'
   // #826: the tick path is where the mandatory flatten is actually decided
   // (`routeExitCheck`'s first branch), so the unpriced-flatten escalation has
   // to reach THIS entry point — omitting it here would leave the degradation
-  // audible only on the once-a-bar decision path.
+  // audible only on the once-a-bar decision path
   | 'onUnpricedFlatten'
   // #753: which arm's book this exit closes. Both arms share this ONE exit
   // entry point — that sharing is the acceptance criterion "both arms share
   // the same exit rule and the same stop, asserted, not configured twice" —
   // so the arm cannot be a property of a second implementation; it has to be
-  // an input to the single one.
+  // an input to the single one
   | 'arm'
 > & {
-  /** The pass's debate-bar coordinate, floored once by the tick runner. */
+  /** The pass's debate-bar coordinate, floored once by the tick runner */
   bar: Date;
 };
 
@@ -1616,7 +1616,7 @@ function classifyExitCheckSkip(skip_reason: TraderSkipReason): TraderDecisionCla
   return SKIP_REASON_CLASS[skip_reason];
 }
 
-/** `checkExitsWithReason`'s routing, with the #698 diagnostic accumulator threaded through. */
+/** `checkExitsWithReason`'s routing, with the #698 diagnostic accumulator threaded through */
 async function routeExitCheck(
   input: ExitCheckInput,
   diagnostics: TraderDiagnostic[],
@@ -1636,7 +1636,7 @@ async function routeExitCheck(
   // Pushed BEFORE the branch, exactly as `routeDecision` does: the diagnostic
   // must survive both a flatten (an emit) and a calendar that has quietly
   // stopped resolving sessions (a skip) — the second is #698's silent case,
-  // and at a 2-minute tick THIS is now the path that reports it most often.
+  // and at a 2-minute tick THIS is now the path that reports it most often
   if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
 
   const mostRecentLot = mostRecentOpenLot(positions);
@@ -1646,19 +1646,19 @@ async function routeExitCheck(
     converged: mostRecentLot.converged,
   };
 
-  // FLAT BY CLOSE FIRST, AND THE ORDER IS THE SAFETY ARGUMENT (#748).
+  // FLAT BY CLOSE FIRST, AND THE ORDER IS THE SAFETY ARGUMENT (#748)
   //
   // The flatten is evaluated on a tick and NOWHERE ELSE — there is no
   // session-end job (orchestrator-spec.md, tick/decision split, constraint 1) —
   // so anything placed ahead of it can cost the book an overnight carry. Put
   // the decay read first and a cold instrument's `InsufficientBarsError`, a
-  // store outage, or any future throw inside it takes out the flatten with it.
+  // store outage, or any future throw inside it takes out the flatten with it
   // Below this line, nothing the early exit does can reach the flatten: it has
-  // already returned.
+  // already returned
   if (flattenWindow.within) {
     // #1389. RETURNS rather than falling through — see `flattenAlreadyInFlight`
     // for why continuing to the decay read below would be the same over-sell by
-    // another name.
+    // another name
     if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
     return buildFlattenExit(input, positions, input.bar, attribution, {
       reason: 'flatten',
@@ -1670,7 +1670,7 @@ async function routeExitCheck(
   // due, and it consults ONLY indicators — no `AnalystView`, no `DebateResult`,
   // no model call. `ExitCheckInput` has no field any of those could arrive
   // through, which is orchestrator-spec.md constraint 4 enforced by the type,
-  // and this change adds none.
+  // and this change adds none
   const decay = await readSignalDecay({
     instrument,
     side: existingSide,
@@ -1685,6 +1685,6 @@ async function routeExitCheck(
   // or close, never open or increase" holds by construction rather than by a
   // second code path agreeing to behave. `buildFlattenExit` sizes to the held
   // quantity, takes the closing side, and emits `intent_type: 'exit'`; there is
-  // no argument to it that could produce anything else.
+  // no argument to it that could produce anything else
   return buildFlattenExit(input, positions, input.bar, attribution, { reason: 'signal_decay' });
 }

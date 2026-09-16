@@ -77,7 +77,7 @@ export const FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS = 60 * 60_000;
 interface ZeroSizeEpisode {
   consecutive: number;
   warned: boolean;
-  /** Epoch ms of the last `warn`/`info` line this episode produced; unused until `warned`. */
+  /** Epoch ms of the last `warn`/`info` line this episode produced; unused until `warned` */
   lastAnnouncedAtMs: number;
 }
 

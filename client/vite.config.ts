@@ -6,14 +6,14 @@ import { defineConfig } from 'vite';
 // (`process.cwd()`): `build:web` invokes this config with
 // `--config client/vite.config.ts` from the repo root, and an implicit root
 // would resolve `index.html` against the wrong directory depending on the
-// caller's cwd.
+// caller's cwd
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig({
   root: appRoot,
   // Relative base so the built bundle is servable straight off disk with no
   // path prefix (dashboard-spec.md, "Structure": "a relative `base` so the
-  // bundle is servable from disk without a path prefix").
+  // bundle is servable from disk without a path prefix")
   base: './',
   plugins: [react()],
   resolve: {
@@ -22,7 +22,7 @@ export default defineConfig({
       // its own directory. Before it existed the components reached backend
       // source directly (`../../../../dashboard/types.ts`), which put server
       // modules in this app's TypeScript program. Keep in step with the
-      // `paths` entry in `tsconfig.json` and the alias in `vitest.config.ts`.
+      // `paths` entry in `tsconfig.json` and the alias in `vitest.config.ts`
       '@contracts': fileURLToPath(new URL('../contracts/index.ts', import.meta.url)),
     },
   },
@@ -30,7 +30,7 @@ export default defineConfig({
     // Outside the Vite `root`, so `emptyOutDir` must be explicit — Vite
     // otherwise warns and refuses to clean a directory it doesn't consider
     // part of the project, and stale hashed assets would accumulate across
-    // builds.
+    // builds
     outDir: fileURLToPath(new URL('../dist/client', import.meta.url)),
     emptyOutDir: true,
   },
@@ -40,11 +40,11 @@ export default defineConfig({
       // server but talks to the real dashboard HTTP server (dashboard-spec.md
       // "Module: HTTP Server") for `/api/snapshot`. Production never proxies
       // — the built bundle and the JSON endpoint are served by the same
-      // `node:http` process.
+      // `node:http` process
       '/api': {
         // Same variable and default the dashboard server itself binds on
         // (server/apps/service-api/index.ts), so a nonstandard port only has to be set
-        // once for both processes.
+        // once for both processes
         target: `http://127.0.0.1:${process.env.PORT ?? 8787}`,
         changeOrigin: true,
       },

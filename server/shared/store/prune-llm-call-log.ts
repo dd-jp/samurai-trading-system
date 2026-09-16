@@ -72,22 +72,22 @@ export function pruneLlmCallLog(db: StoreHandle, maxRows: number): number {
   // `OFFSET maxRows` skips the rows being kept, so the subquery returns the id
   // of the FIRST row past the ceiling — the newest row that must go — and
   // `<=` takes it and everything older. Reads down the `id` primary key index,
-  // so no extra index is needed.
+  // so no extra index is needed
   //
   // The `<=` is paired with this exact offset and the two must move together:
   // `<` with the same offset keeps `maxRows + 1` rows, an off-by-one that
   // would look right in every eyeball review and is pinned by
-  // `keeps the newest rows and drops the rest`.
+  // `keeps the newest rows and drops the rest`
   //
   // NOT `id <= MAX(id) - maxRows`: `id` is `AUTOINCREMENT`, which never reuses
   // a value, so the moment this pruner has run once the ids carry gaps and
-  // that arithmetic deletes rows it was never asked to.
+  // that arithmetic deletes rows it was never asked to
   //
-  // With `maxRows` rows or fewer the subquery finds nothing and yields NULL.
+  // With `maxRows` rows or fewer the subquery finds nothing and yields NULL
   // `id <= NULL` is NULL, which matches no row, so the call is a correct no-op
   // — deliberately falling out of the same statement rather than sitting
   // behind a count-first branch, because the no-op is the common case and a
-  // second query to discover it would be the expensive half.
+  // second query to discover it would be the expensive half
   return db
     .prepare(
       `DELETE FROM llm_call_log

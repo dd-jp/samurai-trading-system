@@ -22,7 +22,7 @@ import type { AnalystSkipKind } from './analysts-decision.js';
 
 export type { AssetClass, InstrumentSubclass };
 
-/** One entry in the configured universe (orchestrator-spec.md story 3). */
+/** One entry in the configured universe (orchestrator-spec.md story 3) */
 export interface UniverseInstrument {
   asset: string;
   asset_class: AssetClass;
@@ -66,7 +66,7 @@ export function subclassOfUniverse(
   );
 }
 
-/** What fires this tick, decided by the Scheduler against the injected clock. */
+/** What fires this tick, decided by the Scheduler against the injected clock */
 export interface TickPlan {
   instruments: UniverseInstrument[];
   /** = clock.now() */
@@ -89,7 +89,7 @@ export interface TickPlan {
   grace_only?: boolean;
 }
 
-/** The Scheduler seam: given a clock and a universe, decide what fires. */
+/** The Scheduler seam: given a clock and a universe, decide what fires */
 export interface Scheduler {
   nextTick(clock: Clock): TickPlan;
 }
@@ -105,10 +105,10 @@ import type { LogEntry, Logger } from '../../shared/index.js';
 // `Logger.log`, so anything building a fake logger against this module needs
 // both. Five call sites were already importing it from here on that
 // assumption and silently getting nothing, because until `tsconfig.test.json`
-// existed no compiler read them.
+// existed no compiler read them
 export type { LogEntry, Logger };
 
-/** shared_store.audit_log writer (#95). */
+/** shared_store.audit_log writer (#95) */
 export interface AuditLog {
   record(entry: {
     trace_id: string;
@@ -165,11 +165,11 @@ export type TickStage =
  * same hour.
  */
 export interface DecisionBar {
-  /** Stable identity for logs: `<open_time ISO>@<timeframe_ms>`. */
+  /** Stable identity for logs: `<open_time ISO>@<timeframe_ms>` */
   id: string;
-  /** The bar's opening boundary — `floorToBar(tick_time, timeframe_ms)`. */
+  /** The bar's opening boundary — `floorToBar(tick_time, timeframe_ms)` */
   open_time: Date;
-  /** The debate-bar grid this bar lives on (`DEBATE_BAR_TIMEFRAME_MS`). */
+  /** The debate-bar grid this bar lives on (`DEBATE_BAR_TIMEFRAME_MS`) */
   timeframe_ms: number;
 }
 
@@ -200,15 +200,15 @@ export interface CurrentTickStore {
 }
 
 export interface TickContext {
-  /** Wall-clock live; the harness's simulated clock in replay. */
+  /** Wall-clock live; the harness's simulated clock in replay */
   clock: Clock;
-  /** Generated at Signal emission, threaded through every stage call in this pass. */
+  /** Generated at Signal emission, threaded through every stage call in this pass */
   trace_id: string;
-  /** Shared structured-logging interface (#95); every stage call logs through it. */
+  /** Shared structured-logging interface (#95); every stage call logs through it */
   logger: Logger;
-  /** shared_store.audit_log writer (#95); one record per stage reached in this pass. */
+  /** shared_store.audit_log writer (#95); one record per stage reached in this pass */
   auditLog: AuditLog;
-  /** shared_store.current_tick writer (#96); upserted before each stage, deleted on completion. */
+  /** shared_store.current_tick writer (#96); upserted before each stage, deleted on completion */
   currentTickStore: CurrentTickStore;
   /**
    * Set only when this tick opens a new debate bar (#743). Present => the
@@ -290,7 +290,7 @@ export interface TickOutcome {
    */
   final_stage?: TickStage;
   verdict_status?: 'go' | 'no_go';
-  /** Only present on a Verdict `go` — Execution is not called otherwise. */
+  /** Only present on a Verdict `go` — Execution is not called otherwise */
   execution_result?: ExecutionResult;
   /**
    * `true` when a TICK-PATH pass's exit check produced an exit intent — the
@@ -428,7 +428,7 @@ export interface TickSteps {
      */
     bar: Date;
   }): Promise<DebateResult>;
-  /** null = skip / no-trade; short-circuits before Risk. */
+  /** null = skip / no-trade; short-circuits before Risk */
   trader(input: {
     trace_id: string;
     instrument: string;
@@ -441,7 +441,7 @@ export interface TickSteps {
     risk_decision: RiskDecision;
     clock: Clock;
   }): Promise<VerdictDecision>;
-  /** Called only on a Verdict `go` (orchestrator-spec.md story 7). */
+  /** Called only on a Verdict `go` (orchestrator-spec.md story 7) */
   execution(verdict: VerdictDecision): Promise<ExecutionResult>;
   /**
    * Falsifier arm 2, run in parallel with this pass (#753) — the mandated

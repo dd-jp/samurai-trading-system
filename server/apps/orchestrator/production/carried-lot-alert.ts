@@ -124,17 +124,17 @@ export interface CarriedLotReporterDeps {
    * window, or silence for one that is not.
    */
   calendar: TradingCalendar;
-  /** `TraderConfig.flatten_after_close_ms` — where the grace ends. */
+  /** `TraderConfig.flatten_after_close_ms` — where the grace ends */
   flattenAfterCloseMs: number;
   /**
    * This arm's open lots and its exit-fill record, bound to ONE store — the
    * held size in the alert is `filled_size` minus what is already closed, and
-   * two stores would report a size the venue does not hold.
+   * two stores would report a size the venue does not hold
    */
   getOpenPositions: () => Promise<OpenPosition[]>;
   getExitFillSizes: (idempotency_keys: readonly string[]) => Promise<Map<string, number>>;
   logger: Logger;
-  /** `trace_id` for this reporter's log lines — per arm, as #1321 requires. */
+  /** `trace_id` for this reporter's log lines — per arm, as #1321 requires */
   traceId: string;
   /**
    * The audible copy. Optional for the reason `TraderDiagnosticAlertChannel`'s
@@ -145,7 +145,7 @@ export interface CarriedLotReporterDeps {
   throttle?: CarriedLotAlertThrottle;
 }
 
-/** One carried lot, as the alert reports it. */
+/** One carried lot, as the alert reports it */
 interface CarriedLot {
   instrument: string;
   asset_class: OpenPosition['asset_class'];
@@ -170,12 +170,12 @@ export async function findCarriedLots(
 ): Promise<CarriedLot[]> {
   // Crypto never closes (`AlwaysOpenCalendar`, #667), so there is no close to
   // have been carried over and #1389 does not apply to it — the same answer
-  // `withinFlattenWindow` and `postCloseFlattenTail` give.
+  // `withinFlattenWindow` and `postCloseFlattenTail` give
   if (deps.calendar.sessionEnd(now) === null) return [];
 
   const missedClose = deps.calendar.sessionStart(now);
   // Still inside the grace: the flatten can and should still fire, and alerting
-  // here would page for a window that is doing its job.
+  // here would page for a window that is doing its job
   if (now.getTime() - missedClose.getTime() <= deps.flattenAfterCloseMs) return [];
 
   const positions = await deps.getOpenPositions();
@@ -205,7 +205,7 @@ export async function findCarriedLots(
 
   // A lot whose exit fills already cover it is closed in substance and is
   // waiting on `ingestFills` to retire the row — reporting it as carried would
-  // page an operator about a position that no longer exists at the venue.
+  // page an operator about a position that no longer exists at the venue
   return [...byInstrument.values()].filter((lot) => lot.held > 0);
 }
 
@@ -253,14 +253,14 @@ export function buildCarriedLotReporter(deps: CarriedLotReporterDeps): () => Pro
         arm: deps.arm,
         // The unit here is a REPORT, not a tick — see the file docblock. One
         // alert per repeat interval, so the count would be a poll number that
-        // means nothing to an operator; the interval is the severity signal.
+        // means nothing to an operator; the interval is the severity signal
         consecutive_ticks: 1,
         reported_at: now,
       };
 
       // Durable first, audible second — `TraderDiagnosticAlertChannel`'s port
       // doc, and the #710 correction that the log must not sit behind the
-      // throttle that gates the channel.
+      // throttle that gates the channel
       deps.logger.log({
         trace_id: deps.traceId,
         stage: 'execution',

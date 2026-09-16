@@ -109,7 +109,7 @@ export class NousMessagesClient implements AnthropicMessagesClient {
           // and MI-scoring calls correctly on the gate's log lines instead of
           // every call reading `'debate'`. `'debate'` remains the default for
           // callers that pass no options at all (test doubles, programmatic
-          // callers), matching this client's pre-#1533 behaviour.
+          // callers), matching this client's pre-#1533 behaviour
           llmStage: options.stage ?? 'debate',
         },
         {
@@ -125,7 +125,7 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       // to `classifyProviderError`, which duck-types on `.status` alone: it
       // would land on `LlmProviderError` — non-retryable either way, but
       // indistinguishable in the log from a dead API key, and with the burned
-      // call's tokens discarded (#1391).
+      // call's tokens discarded (#1391)
       if (error instanceof NousRefusalError) {
         throw new LlmRefusalError(error.message, error.signal, error.usage);
       }
@@ -133,7 +133,7 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       // `classifyProviderError` a truncation lands on `LlmProviderError`,
       // where it is indistinguishable from a dead API key and its
       // `max_tokens`/`usage` are discarded. Not retried either way — see
-      // `LlmTruncatedError`.
+      // `LlmTruncatedError`
       if (error instanceof NousTruncatedError) {
         throw new LlmTruncatedError(error.message, error.model, error.max_tokens, error.usage);
       }
@@ -141,7 +141,7 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       // an in-flight refusal lands on `LlmProviderError` and is counted as
       // `transport` — indistinguishable in the log from a dead gateway, which
       // is exactly the distinction the gate was built to make measurable. No
-      // call was sent, so there are no tokens and no usage to carry.
+      // call was sent, so there are no tokens and no usage to carry
       if (error instanceof LlmInFlightRefusedError) {
         throw new LlmAdmissionRefusedError(error);
       }
@@ -156,10 +156,10 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       // that was requested. `AnthropicLlmClient.recordSpend` prefers this field
       // over its configured model, so an unpriceable echo landing here would
       // record an unpriced row, and an unpriced row does not count against the
-      // spend cap.
+      // spend cap
       model: result.model,
       // #1012: threaded straight through — `nousChat` is the only place that
-      // measures it (see its `ttfb_ms` doc comment).
+      // measures it (see its `ttfb_ms` doc comment)
       ttfb_ms: result.ttfb_ms,
     };
   }

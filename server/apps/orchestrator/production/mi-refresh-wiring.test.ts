@@ -63,7 +63,7 @@ import {
 
 const NOW = new Date('2026-09-03T14:00:00Z');
 
-/** A macrotask turn, so the enqueue-driven worker has run by the time this resolves. */
+/** A macrotask turn, so the enqueue-driven worker has run by the time this resolves */
 function settle(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
@@ -75,7 +75,7 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   return { logger: { log: (entry) => entries.push(entry) }, entries };
 }
 
-/** Spends the whole budget before the run starts, so the cap refuses from the first check. */
+/** Spends the whole budget before the run starts, so the cap refuses from the first check */
 function recordSpend(db: StoreHandle, costUsd: number): void {
   db.prepare(
     `INSERT INTO llm_spend (
@@ -182,7 +182,7 @@ describe('MI refresh wiring (#1085)', () => {
     }
     // Enough for the sentiment agent to build — which is what puts an MI
     // writer, and therefore a queue, on the analyst path at all. No call is
-    // ever made: the cap refuses before dispatch.
+    // ever made: the cap refuses before dispatch
     process.env.NOUS_BASE_URL = 'https://nous.test/v1';
     process.env.NOUS_API_KEY = 'test-fake-nous-key';
   });
@@ -217,7 +217,7 @@ describe('MI refresh wiring (#1085)', () => {
 
     // Kills mutation 2: the refusal exists only because the queue holds the
     // ROOT's `spendCap` and reads it before dispatching. Swap in
-    // `UNCAPPED_SPEND` and this goes red while `spend-cap.test.ts` stays green.
+    // `UNCAPPED_SPEND` and this goes red while `spend-cap.test.ts` stays green
     const refusal = entries.find((entry) => entry.trace_id === MI_REFRESH_TRACE_ID);
     expect(refusal?.level).toBe('warn');
     expect(refusal?.message).toContain('refresh for AAPL not started');
@@ -225,21 +225,21 @@ describe('MI refresh wiring (#1085)', () => {
 
     // Kills mutation 1: this is the SAME instance `stop()` drains, so the
     // analyst stage cannot be driving some other refresher while the exposed
-    // queue sits idle — which is what "wired" has to mean here.
+    // queue sits idle — which is what "wired" has to mean here
     expect(components.marketIntelligenceRefresh?.refreshAttempted('AAPL')).toBe(true);
     expect(components.marketIntelligenceRefresh?.refreshAttempted('TSLA')).toBe(false);
   });
 
   it('drains the queue from the orchestrator own stop, so a refresh cannot outlive the store', async () => {
     // The price of moving the refresh off the tick: the tick drain no longer
-    // covers it, and its archive/store write can land after the store closes.
+    // covers it, and its archive/store write can land after the store closes
     //
     // Through `buildProductionOrchestrator`, NOT the components — the drain is
     // a line inside that `stop()`, and a test calling `queue.stop()` itself
     // would pass with the line deleted (it did, until #1105's review). The
     // observable is the LATCH: the orchestrator's `stop()` is the only thing
     // between an idle queue and a stopped one, and a stopped queue drops a
-    // refresh instead of dispatching it.
+    // refresh instead of dispatching it
     const { logger, entries } = recordingLogger();
     recordSpend(db, 50);
     const orchestrator = buildProductionOrchestrator(
@@ -256,7 +256,7 @@ describe('MI refresh wiring (#1085)', () => {
 
     // Post-stop, so it can only be admitted by a queue the shutdown never
     // reached. Delete the drain line from `stop()` and this dispatches, logs
-    // its refusal, and both assertions go red.
+    // its refusal, and both assertions go red
     await queue?.refresh('tick-after-stop', 'AAPL', 'stocks');
     await settle();
 
@@ -268,5 +268,5 @@ describe('MI refresh wiring (#1085)', () => {
   // already dispatched rather than merely latching — is pinned in
   // `mi-refresh-queue.test.ts`, where a refresher can be held open. It cannot
   // be observed here: the only refresh reachable offline is one the cap
-  // refuses, which completes instantly.
+  // refuses, which completes instantly
 });

@@ -107,7 +107,7 @@ import {
 import type { AnalystView, Direction } from '../pipeline/debate-engine/types.js';
 import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/types.js';
 
-/** Which branch the sentiment/fundamental pair is on for a given debate. */
+/** Which branch the sentiment/fundamental pair is on for a given debate */
 export type DeskShape = 'absent' | 'hydrated-split' | 'hydrated-neutral' | 'hydrated-aligned';
 
 export const DESK_SHAPES: readonly DeskShape[] = [
@@ -117,12 +117,12 @@ export const DESK_SHAPES: readonly DeskShape[] = [
   'hydrated-aligned',
 ];
 
-/** The mediator's verdict relative to the technical analyst's direction. */
+/** The mediator's verdict relative to the technical analyst's direction */
 export type MediatorStance = 'agrees' | 'neutral' | 'opposes';
 
 export const MEDIATOR_STANCES: readonly MediatorStance[] = ['agrees', 'neutral', 'opposes'];
 
-/** `confidenceFrom`'s clamp bounds in both the sentiment and fundamental analysts. */
+/** `confidenceFrom`'s clamp bounds in both the sentiment and fundamental analysts */
 const MI_CONFIDENCE_FLOOR = 0.05;
 const MI_CONFIDENCE_CEILING = 0.95;
 
@@ -135,10 +135,10 @@ const MI_CONFIDENCE_CEILING = 0.95;
  */
 const TECHNICAL_FIXED_KEY_POINTS = 5;
 
-/** Sentiment and fundamental each emit exactly two key points. */
+/** Sentiment and fundamental each emit exactly two key points */
 const MI_ANALYST_KEY_POINTS = 2;
 
-/** One enumerated point of the technical analyst's reachable output. */
+/** One enumerated point of the technical analyst's reachable output */
 export interface LatticePoint {
   direction: Direction;
   confidence: number;
@@ -226,7 +226,7 @@ function filler(count: number, prefix: string): string[] {
   return Array.from({ length: count }, (_, index) => `${prefix} key point ${index + 1}`);
 }
 
-/** The three-analyst stocks desk as production builds it, for one desk shape. */
+/** The three-analyst stocks desk as production builds it, for one desk shape */
 export function buildStocksDesk(point: LatticePoint, shape: DeskShape): AnalystView[] {
   const technical = view(
     'technical',
@@ -249,7 +249,7 @@ export function buildStocksDesk(point: LatticePoint, shape: DeskShape): AnalystV
       // `marketContext.news`, sentiment takes social — so they hydrate
       // independently and the desk can sit with one on each branch. This is
       // the shape the current MI stack most likely produces (`npm run smoke`
-      // serves news items and no social ones).
+      // serves news items and no social ones)
       return [
         technical,
         absent('sentiment'),
@@ -286,7 +286,7 @@ function mediatorVerdict(point: LatticePoint, stance: MediatorStance): Direction
   return point.direction === 'bullish' ? 'bearish' : 'bullish';
 }
 
-/** One measured conviction for one lattice point, desk shape and mediator stance. */
+/** One measured conviction for one lattice point, desk shape and mediator stance */
 export interface ConvictionSample extends LatticePoint {
   shape: DeskShape;
   mediator: MediatorStance;
@@ -305,7 +305,7 @@ export function measureConvictionSamples(floor: number): ConvictionSample[] {
         // direction as its round stance, and `finalPositionFor` falls back to
         // `view.direction`, so an empty list is the same input the live path
         // supplies. The mediator verdict is the third argument, exactly as
-        // `debate-adapter.ts` passes `response.stance`.
+        // `debate-adapter.ts` passes `response.stance`
         const conviction = computeConvictionScore(views, [], mediatorVerdict(point, mediator));
         samples.push({
           ...point,
@@ -315,7 +315,7 @@ export function measureConvictionSamples(floor: number): ConvictionSample[] {
           // The Trader gates on `debate.confidence < conviction_floor`
           // (`decide.ts`), so an exact tie at the floor is NOT skipped — it
           // trades. That strict comparison predates #683 and is deliberately
-          // reproduced rather than corrected here.
+          // reproduced rather than corrected here
           clears: !(conviction < floor),
         });
       }
@@ -462,7 +462,7 @@ export function report(floor: number): string {
 }
 
 // Matches both the built entry point and a `tsx` run of the source, so the
-// report is reachable without a full `npm run build`.
+// report is reachable without a full `npm run build`
 if (/measure-conviction-ceiling\.(js|ts)$/.test(process.argv[1] ?? '')) {
   console.log(report(DEFAULT_TRADER_CONFIG.conviction_floor));
 }

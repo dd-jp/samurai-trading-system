@@ -8,17 +8,17 @@
  * skipped by the soft-signal check, not defaulted to a country.
  */
 const INSTRUMENT_COUNTRY: Record<string, string> = {
-  // Russian ADRs / Russia-exposed instruments.
+  // Russian ADRs / Russia-exposed instruments
   YNDX: 'RU',
   MBT: 'RU',
-  // Middle East-exposed energy majors.
+  // Middle East-exposed energy majors
   ARAMCO: 'SA',
-  // China-exposed instruments.
+  // China-exposed instruments
   BABA: 'CN',
   JD: 'CN',
 };
 
-/** Returns the static country/region code for an instrument, or null if unmapped. */
+/** Returns the static country/region code for an instrument, or null if unmapped */
 export function countryForInstrument(instrument: string): string | null {
   return INSTRUMENT_COUNTRY[instrument] ?? null;
 }

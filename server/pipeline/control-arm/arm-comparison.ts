@@ -144,7 +144,7 @@ export const EXIT_CLASSES = ['protective', 'flatten'] as const;
 
 export type ExitClass = (typeof EXIT_CLASSES)[number];
 
-/** One arm's rows in one exit class: what the cost-basis filter let through, and what it removed. */
+/** One arm's rows in one exit class: what the cost-basis filter let through, and what it removed */
 export interface CostBasisDropCount {
   kept: number;
   dropped: number;
@@ -152,7 +152,7 @@ export interface CostBasisDropCount {
 
 export type ExitClassDropCounts = Readonly<Record<ExitClass, CostBasisDropCount>>;
 
-/** Both arms' per-class counts, produced by the same read the trades come from. */
+/** Both arms' per-class counts, produced by the same read the trades come from */
 export type ArmCostBasisDrops = Readonly<Record<TradingArm, ExitClassDropCounts>>;
 
 /**
@@ -189,7 +189,7 @@ export function exitClassOf(close_reason: ClosedTrade['close_reason']): ExitClas
   }
 }
 
-/** Zero of every class, for an arm with no rows at all in the window. */
+/** Zero of every class, for an arm with no rows at all in the window */
 export function noCostBasisDrops(): ExitClassDropCounts {
   return { protective: { kept: 0, dropped: 0 }, flatten: { kept: 0, dropped: 0 } };
 }
@@ -197,11 +197,11 @@ export function noCostBasisDrops(): ExitClassDropCounts {
 /**
  * Refused passes per arm over one window — the second half of the #1099 read,
  * carried as its own value because it comes from a different table
- * (`trader_log`) than the trades do.
+ * (`trader_log`) than the trades do
  */
 export type ArmRefusedPassCounts = Readonly<Record<TradingArm, number>>;
 
-/** Both arms, over one window, always together. */
+/** Both arms, over one window, always together */
 export interface ArmComparison {
   /**
    * Half-open at the start, on BOTH reads behind this comparison:
@@ -214,7 +214,7 @@ export interface ArmComparison {
   to: Date;
   /**
    * The denominator both arms' percentages are taken against — the SAME number
-   * for both, which is what makes the two `return_pct` figures comparable at all.
+   * for both, which is what makes the two `return_pct` figures comparable at all
    */
   basis: number;
   live: ArmPerformance;
@@ -298,7 +298,7 @@ export function buildArmComparison(input: {
 export interface CumulativePnl {
   /** Cumulative `realized_pnl_net`, net of fees, in account currency. Signed. */
   net: number;
-  /** `net` as a signed fraction of `basis`. */
+  /** `net` as a signed fraction of `basis` */
   return_pct: number;
   /** Peak-to-trough fall of the cumulative series, as a positive fraction of `basis`. Zero when the series never fell below a prior peak. */
   max_drawdown_pct: number;
@@ -334,7 +334,7 @@ export function cumulativePnl(trades: readonly ClosedTrade[], basis: number): Cu
     cumulative += trade.realized_pnl_net;
     // The peak starts at 0, so an arm that is down from its first trade has a
     // real drawdown rather than a zero one — the series' high-water mark is the
-    // capital it started with, not its best trade.
+    // capital it started with, not its best trade
     if (cumulative > peak) peak = cumulative;
     const drawdown = peak - cumulative;
     if (drawdown > maxDrawdown) maxDrawdown = drawdown;
@@ -343,7 +343,7 @@ export function cumulativePnl(trades: readonly ClosedTrade[], basis: number): Cu
   return { net: cumulative, return_pct: cumulative / basis, max_drawdown_pct: maxDrawdown / basis };
 }
 
-/** One arm's slice of `trades` — filters to `arm`, then delegates to `cumulativePnl`. */
+/** One arm's slice of `trades` — filters to `arm`, then delegates to `cumulativePnl` */
 function performanceFor(
   arm: TradingArm,
   trades: readonly (ClosedTrade & { arm?: TradingArm })[],

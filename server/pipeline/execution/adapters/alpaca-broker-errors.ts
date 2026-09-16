@@ -35,16 +35,16 @@ import {
   VenueTimeoutError,
 } from './venue-errors.js';
 
-/** See `HttpMethod` (venue-errors.ts); `AlpacaHttpBrokerClient.request` types `init.method` as this. */
+/** See `HttpMethod` (venue-errors.ts); `AlpacaHttpBrokerClient.request` types `init.method` as this */
 export type AlpacaHttpMethod = HttpMethod;
 
-/** Own classes, not the venue-agnostic bases: `instanceof` and `.name` never cross venues. */
+/** Own classes, not the venue-agnostic bases: `instanceof` and `.name` never cross venues */
 export class AlpacaBrokerTimeoutError extends VenueTimeoutError {}
 export class AlpacaBrokerRateLimitError extends VenueRateLimitError {}
 
-/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further. */
+/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further */
 export class AlpacaBrokerProviderError extends Error {
-  /** HTTP status code, when the failure came from a response rather than a network error. */
+  /** HTTP status code, when the failure came from a response rather than a network error */
   readonly status: number | undefined;
   /**
    * Alpaca's own numeric error code (e.g. `42210000`), when the failure came
@@ -77,7 +77,7 @@ export class AlpacaBrokerProviderError extends Error {
    * JSON-parse failure, and `failValidation`'s malformed-body failure): none
    * of those ever carry a `status`, so `isRetryableAlpacaBrokerError`'s
    * `isServerErrorStatus` gate already excludes them regardless of verb, and
-   * there is nothing for `method` to change about their retryability.
+   * there is nothing for `method` to change about their retryability
    */
   readonly method: AlpacaHttpMethod | undefined;
 
@@ -166,7 +166,7 @@ export function classifyAlpacaBrokerNetworkError(
 ): AlpacaBrokerError {
   // A caller-supplied signal's plain `AbortError` is deliberately NOT a timeout
   // and falls through to the non-retryable ProviderError branch — see
-  // `isTimeoutAbort`.
+  // `isTimeoutAbort`
   const message = error instanceof Error ? error.message : String(error);
   if (isTimeoutAbort(error)) {
     return new AlpacaBrokerTimeoutError(
@@ -177,7 +177,7 @@ export function classifyAlpacaBrokerNetworkError(
   // No `status` on this branch (nothing responded), so `method` is passed for
   // record-keeping only — `isRetryableAlpacaBrokerError`'s `isServerErrorStatus`
   // gate already makes this non-retryable regardless of verb; see
-  // `AlpacaBrokerProviderError.method`'s doc comment.
+  // `AlpacaBrokerProviderError.method`'s doc comment
   return new AlpacaBrokerProviderError(
     `Alpaca network error (${context}): ${message}`,
     undefined,

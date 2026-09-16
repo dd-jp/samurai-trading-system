@@ -39,7 +39,7 @@
  * is for the logger, not this channel.
  */
 
-/** One residual position left without protective legs after a partial flatten. */
+/** One residual position left without protective legs after a partial flatten */
 export interface ResidualExposureAlert {
   /**
    * The `ExecutionInput.trace_id` of the Execution SURFACE this alert was
@@ -66,12 +66,12 @@ export interface ResidualExposureAlert {
    * recording channel and can add `smoke-exit-path` / `smoke-exit-path-restart`.
    */
   trace_id: string;
-  /** The lot's own `idempotency_key` — what `getOpenPositions()`/the store key on. */
+  /** The lot's own `idempotency_key` — what `getOpenPositions()`/the store key on */
   idempotency_key: string;
   instrument: string;
-  /** The lot's held (entry) side — the same side a fresh flatten would need to close. */
+  /** The lot's held (entry) side — the same side a fresh flatten would need to close */
   side: 'buy' | 'sell';
-  /** The quantity left open after the partial flatten, still uncovered by any leg. */
+  /** The quantity left open after the partial flatten, still uncovered by any leg */
   residual_qty: number;
   /**
    * `true` when `residual_qty` is an UPPER BOUND rather than the exact
@@ -105,10 +105,10 @@ export interface ResidualExposureAlert {
    * chosen here, not the error's text — see the CREDENTIALS note below.
    */
   rearm_unsupported: boolean;
-  /** The price levels re-arming was attempted at — the lot's own, unchanged by the resize. */
+  /** The price levels re-arming was attempted at — the lot's own, unchanged by the resize */
   stop: number;
   target: number;
-  /** When the failed re-arm was observed. */
+  /** When the failed re-arm was observed */
   observed_at: Date;
 }
 

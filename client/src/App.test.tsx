@@ -70,7 +70,7 @@ function laneView() {
 
 async function openTab(name: 'Glance' | 'Live' | 'Review') {
   // Awaited: since #1520 the tablist does not exist until the first snapshot
-  // lands — the page is the cold-start state until then.
+  // lands — the page is the cold-start state until then
   fireEvent.click(await screen.findByRole('tab', { name }));
 }
 
@@ -84,7 +84,7 @@ describe('rail', () => {
     // (12:00:00Z, via `makeSnapshot`) while the injected client clock reads a
     // different instant — the poll clock and the snapshot clock must read
     // their own sources rather than coincide because a test happened not to
-    // vary them (#1166).
+    // vary them (#1166)
     renderApp(
       [
         makeSnapshot({
@@ -162,7 +162,7 @@ describe('rail', () => {
   // (#1140's priority order, sharpened by #1196's two new claims it could
   // make from zero information). Since #1520 the page answers this by not
   // rendering the meter at all before the first snapshot, which is the same
-  // claim made one level up.
+  // claim made one level up
   it('does not claim the budget is armed, unarmed, or uncapped before the first poll lands', () => {
     renderApp([HANGS]);
 
@@ -188,7 +188,7 @@ describe('rail', () => {
 
   // #1140: the denominator is the enforcer's, so a raised budget must move the
   // meter — with a client-side constant this test reads $50 whatever the wire
-  // says, which is the defect.
+  // says, which is the defect
   it('draws the meter against the cap the wire carries, not a fixed figure', async () => {
     const spend = makeSpend({ cap_usd: 200 });
     spend.all_time = { ...spend.all_time, cost_usd: 50 };
@@ -213,7 +213,7 @@ describe('rail', () => {
 
   // #1196: an armed-uncapped run (the wire's `cap_usd: null` PLUS a non-null
   // `cap_armed_at`) is a deliberate operator choice, not an absent or unarmed
-  // one — the rail must say so, never "never armed" or "ambiguous".
+  // one — the rail must say so, never "never armed" or "ambiguous"
   it('names the reason instead of drawing a meter when the run is armed uncapped', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null }) })]);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
@@ -231,7 +231,7 @@ describe('rail', () => {
   // `SqliteLlmSpendCapStore.read()`) alongside an intact `cap_armed_at` must
   // not render as "deliberately uncapped" — that claim comes from `cap_usd`
   // being EXPLICITLY `null`, and a malformed `cap_usd` is a different fact
-  // entirely: this client could not read it, not that the wire said so.
+  // entirely: this client could not read it, not that the wire said so
   it('names the cap unreadable, never "deliberately uncapped", when cap_usd is malformed', async () => {
     const spend = { ...makeSpend({ cap_usd: 50 }) };
     // @ts-expect-error simulating a malformed wire value (e.g. corrupted storage)
@@ -252,7 +252,7 @@ describe('rail', () => {
 
   // #1196's core acceptance criterion: "never armed" (no row was ever
   // written) must read differently from "armed uncapped" (a deliberate
-  // operator choice) — collapsing both into the same sentence is the defect.
+  // operator choice) — collapsing both into the same sentence is the defect
   it('names "never armed" distinctly from "armed uncapped", and never claims a budget is merely unconfigured', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null, cap_armed_at: null }) })]);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
@@ -271,7 +271,7 @@ describe('rail', () => {
   // affirmative false claim about enforcement, the same shape of defect
   // #1196 itself fixed one field up. The rail must assert neither "armed"
   // nor "unarmed" for this cell — the one combination nothing tested before
-  // this round.
+  // this round
   it('claims neither armed nor unarmed when cap_usd is null and cap_armed_at is absent entirely', async () => {
     const spend = { ...makeSpend({ cap_usd: null }) };
     // @ts-expect-error simulating a pre-#1196 server's wire shape
@@ -295,7 +295,7 @@ describe('rail', () => {
   // gate on a numeric one. A payload carrying a real cap but missing (not
   // explicitly null) `cap_armed_at` — the shape an older server or a
   // version-skewed deployment would send — must still draw the meter, not
-  // regress to "never armed" and throw the denominator away (review finding).
+  // regress to "never armed" and throw the denominator away (review finding)
   it('draws the meter from a numeric cap even when cap_armed_at is absent from the wire', async () => {
     const spend = { ...makeSpend({ cap_usd: 50 }) };
     // @ts-expect-error simulating an older/mixed-version wire payload
@@ -313,7 +313,7 @@ describe('rail', () => {
 
   // The additional defect found in review: a $0 cap is the MOST restrictive
   // budget possible and must not render as "no budget configured" (the least
-  // restrictive reading) — nor as a silently-healthy meter.
+  // restrictive reading) — nor as a silently-healthy meter
   it('states an armed $0 cap explicitly, never as an unconfigured budget', async () => {
     const spend = makeSpend({ cap_usd: 0 });
     spend.all_time = { ...spend.all_time, cost_usd: 0 };
@@ -363,9 +363,9 @@ describe('rail', () => {
     expect(within(rail).queryByText(/failed to deliver/)).toBeNull();
   });
 
-  // #1108: silence must not read as calm — the rail names the count instead.
+  // #1108: silence must not read as calm — the rail names the count instead
   // #1131: the field and its rendered text both name the 24h window now, so
-  // the tile itself does not overclaim a lifetime total.
+  // the tile itself does not overclaim a lifetime total
   it('surfaces a nonzero alert_delivery_failures_24h count as a degraded channel', async () => {
     renderApp([makeSnapshot({ alert_delivery_failures_24h: 4 })]);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
@@ -396,7 +396,7 @@ describe('cold start (#1520)', () => {
     expect(screen.getByText('WAITING')).toBeTruthy();
     expect(screen.getByText('waiting for the first snapshot')).toBeTruthy();
     // Not a half-rendered dashboard: no rail, no tablist, no empty cards that
-    // an operator could read as a book with nothing in it.
+    // an operator could read as a book with nothing in it
     expect(screen.queryByRole('complementary', { name: 'Rail' })).toBeNull();
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.queryByRole('tabpanel')).toBeNull();
@@ -431,7 +431,7 @@ describe('cold start (#1520)', () => {
     expect(screen.queryByText('waiting for the first snapshot')).toBeNull();
     expect(screen.queryByText('WAITING')).toBeNull();
     // The numbers themselves stay: staleness is a label and a border, never a
-    // disappearance (dashboard-spec.md, "Layout — the Rail").
+    // disappearance (dashboard-spec.md, "Layout — the Rail")
     expect(within(screen.getByLabelText('Open risk')).getByText('SPY')).toBeTruthy();
     expect(within(rail).getByText('snapshot 12:00:00Z')).toBeTruthy();
   });
@@ -661,7 +661,7 @@ describe('degraded stages on the page (#1080)', () => {
     expect(debateRow?.textContent).toContain('before any round completed');
 
     // The no_trade beside it is a genuine decision word and must NOT be
-    // recoloured — the point is telling the two apart, not flagging the pair.
+    // recoloured — the point is telling the two apart, not flagging the pair
     expect(drawer.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
 
@@ -672,14 +672,14 @@ describe('degraded stages on the page (#1080)', () => {
   // matrix carries the drawer's `data-degraded` hook too. The per-word
   // coverage (which decisions gloss, and what they say) lives at the
   // resolver in `lane-cells.test.ts`; this is the DOM wiring proof for the
-  // renderer the drawer test above does not touch.
+  // renderer the drawer test above does not touch
   it('explains a starved sub-budget in the LANE MATRIX too, not only the drawer', async () => {
     renderApp([makeSnapshot({ pipeline: starvedLaneView() })]);
     await openTab('Live');
 
     // aria-label overrides inner text for assistive tech (LiveTab.tsx's
     // button), so the lane's own accessible name has to say "degraded" too —
-    // otherwise the fix is sighted-only.
+    // otherwise the fix is sighted-only
     const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
     const debateCell = qqq.querySelector('[data-stage="debate"]');
     expect(debateCell?.getAttribute('data-degraded')).toBe('true');
@@ -687,7 +687,7 @@ describe('degraded stages on the page (#1080)', () => {
     // The cell paints its decision WORD (dashboard-spec.md:135), not the
     // gloss sentence — a sentence overflows the matrix column. The gloss
     // reaches the surface as `title` and as the non-colour glyph, not as the
-    // cell's visible text.
+    // cell's visible text
     const decisionSpan = debateCell?.querySelector('.lane-decision');
     expect(decisionSpan?.textContent).toContain('budget_exhausted');
     expect(decisionSpan?.textContent).not.toContain('before any round completed');
@@ -703,7 +703,7 @@ describe('degraded stages on the page (#1080)', () => {
   // `audit_log`-only resolution. `budget_exhausted` is written for an escaped
   // LLM failure exactly as it is for a genuine budget expiry, so the drawer
   // could state both answers at once — the Timeline row saying one thing and
-  // the debate section directly beneath it saying another, for one debate.
+  // the debate section directly beneath it saying another, for one debate
   const llmFailureDebate = makeDebate({
     instrument: 'QQQ',
     termination: 'latency_truncated',
@@ -728,7 +728,7 @@ describe('degraded stages on the page (#1080)', () => {
     const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
     const decisionSpan = qqq.querySelector('[data-stage="debate"] .lane-decision');
     // Still the bare word visibly (dashboard-spec.md:135); the cause reaches
-    // the surface through the same `title` the audit gloss already used.
+    // the surface through the same `title` the audit gloss already used
     expect(decisionSpan?.textContent).toContain('budget_exhausted');
     expect(decisionSpan?.textContent).not.toContain(CAUSE);
     expect(decisionSpan?.getAttribute('title')).toContain(CAUSE);
@@ -764,7 +764,7 @@ describe('dashboard token from the URL (#1038)', () => {
   // Pins `inits()[0]`, not `lastInit()`: round 2 finding A found the round-1
   // fix regressed exactly the first poll to unauthenticated while a later,
   // correctly-authenticated poll still landed within `waitFor`'s retry
-  // window — `lastInit()` never caught it.
+  // window — `lastInit()` never caught it
   it('sends the ?token= from a shared link as the very first poll’s Authorization header', async () => {
     window.history.pushState(null, '', '/?token=fixture-dashboard-token');
     const { fetchImpl, inits } = recordingFetch();
@@ -815,7 +815,7 @@ describe('dashboard token from the URL (#1038)', () => {
   // All Cookies, some Chrome privacy settings, privacy extensions) — with no
   // error boundary, an uncaught throw here would blow up render (a white
   // screen). `safeSessionStorage()` catches it and degrades to a no-op
-  // store, so the default no-token path renders instead.
+  // store, so the default no-token path renders instead
   it('renders the default path instead of white-screening when sessionStorage access throws', async () => {
     const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
     Object.defineProperty(window, 'sessionStorage', {
@@ -846,7 +846,7 @@ describe('dashboard token from the URL (#1038)', () => {
   // throw there would both blank the dashboard (thrown out of the lazy
   // initializer, no error boundary) AND lose the URL token that triggered
   // the write. Both halves are asserted: the dashboard renders, and the
-  // first poll still carries the URL token despite the write failing.
+  // first poll still carries the URL token despite the write failing
   it('carries the URL token on the first poll, and does not blank the dashboard, when sessionStorage.setItem throws', async () => {
     const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
     const throwingStore: Pick<Storage, 'getItem' | 'setItem'> = {
@@ -876,9 +876,9 @@ describe('dashboard token from the URL (#1038)', () => {
   });
 
   // Round 2 finding B's other half: `getItem` throwing (not just `setItem`)
-  // must also degrade to the default path rather than blank the dashboard.
+  // must also degrade to the default path rather than blank the dashboard
   // No ?token= here, so `resolveDashboardToken` falls through to the
-  // `storage.getItem` read this store throws on.
+  // `storage.getItem` read this store throws on
   it('renders the default path instead of white-screening when sessionStorage.getItem throws', async () => {
     const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
     const throwingStore: Pick<Storage, 'getItem' | 'setItem'> = {
@@ -919,7 +919,7 @@ describe('dashboard token from the URL (#1038)', () => {
  * numbers would still be on screen instead of the cold start.
  */
 describe('arm selector (#1593)', () => {
-  /** Routes a fake poll by whether its URL asked for the control arm. */
+  /** Routes a fake poll by whether its URL asked for the control arm */
   function fetchByArm(payloads: { live: unknown; control: unknown }): typeof fetch {
     const impl = async (input: unknown): Promise<Response> => {
       const url = typeof input === 'string' ? input : String(input);
@@ -954,7 +954,7 @@ describe('arm selector (#1593)', () => {
     expect(window.location.hash).toBe('#review/control');
     expect(screen.getByText('CONTROL ARM — simulated fills, no money')).toBeTruthy();
 
-    // Round trip back to Live: no second segment, not `#review/live`.
+    // Round trip back to Live: no second segment, not `#review/live`
     fireEvent.click(screen.getByRole('button', { name: 'Live arm' }));
     await waitFor(() => expect(screen.queryByText(/CONTROL ARM/)).toBeNull());
     expect(window.location.hash).toBe('#review');

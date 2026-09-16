@@ -75,12 +75,12 @@ describe('SqliteTuningStore — analyst weights', () => {
       const { db, store } = makeStore(makeClock(NOW));
       store.setAnalystWeight('bull', 1.25);
 
-      // A later boot, with a later clock, trying to seed the same analyst.
+      // A later boot, with a later clock, trying to seed the same analyst
       const laterStore = new SqliteTuningStore(db, makeClock(later));
       expect(laterStore.seedAnalystWeight('bull', 1)).toBe(false);
 
       // `updated_at` matters as much as `weight`: it is the only record of
-      // when the loop last moved this dial, so a no-op seed must not stamp it.
+      // when the loop last moved this dial, so a no-op seed must not stamp it
       expect(db.prepare('SELECT * FROM analyst_weights').all()).toEqual([
         { analyst_id: 'bull', weight: 1.25, updated_at: NOW.toISOString() },
       ]);

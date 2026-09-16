@@ -71,7 +71,7 @@ describe('AnthropicLlmClient', () => {
       // Second argument since #347: the per-call transport options, which
       // always carry a signal (the client's own timeout signal even when the
       // caller supplied none) so a slow call can be aborted rather than left
-      // dangling.
+      // dangling
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -343,7 +343,7 @@ describe('AnthropicLlmClient', () => {
   it('does not retry a refusal the transport itself raised (#1391)', async () => {
     // `NousMessagesClient` translates the wire's `NousRefusalError` here, so
     // `classifyProviderError` must pass the class through rather than laundering
-    // it into `LlmProviderError` and losing the refusal's `usage`.
+    // it into `LlmProviderError` and losing the refusal's `usage`
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockRejectedValue(
         new LlmRefusalError('provider refused', 'finish_reason="content_filter"', {
@@ -371,7 +371,7 @@ describe('AnthropicLlmClient', () => {
     // rather than laundering it into `LlmProviderError`. Two consequences if it
     // does not: the queue state that explains the refusal is lost, and a
     // refusal becomes retryable — the worst possible response, since the budget
-    // that made it unadmittable is only smaller by the time a retry is issued.
+    // that made it unadmittable is only smaller by the time a retry is issued
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockRejectedValue(
         new LlmAdmissionRefusedError({
@@ -449,10 +449,10 @@ describe('AnthropicLlmClient spend metering', () => {
     // Measured once, around the wire call, and passed into the sink — not
     // re-measured there. If these two could disagree, the dashboard's
     // percentiles and the debate logger's budget warning would be describing
-    // different calls.
+    // different calls
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockImplementation(async () => {
-        // Fake timers make the elapsed span exact and non-flaky.
+        // Fake timers make the elapsed span exact and non-flaky
         vi.advanceTimersByTime(2_500);
         return usageResponse('good');
       }),
@@ -510,7 +510,7 @@ describe('AnthropicLlmClient spend metering', () => {
     // Not a made-up placeholder string: 'unattributed' is right for `trace_id`
     // (NOT NULL column) but a debate id that is absent must stay absent, so the
     // dashboard can exclude the call from per-debate percentiles rather than
-    // grouping every stray call into one fictional debate.
+    // grouping every stray call into one fictional debate
     expect(sink.records[0]?.debate_id).toBeUndefined();
     expect(sink.records[0]?.trace_id).toBe('unattributed');
   });
@@ -602,7 +602,7 @@ describe('AnthropicLlmClient spend metering', () => {
     it('classifies every context field as exactly one of prompt or meter', () => {
       // Guards the map's own shape. `satisfies Record<keyof LlmRequestContext,
       // ...>` makes tsc require every key; this makes the VALUES meaningful,
-      // so a typo'd kind cannot quietly behave like "meter" (send nothing).
+      // so a typo'd kind cannot quietly behave like "meter" (send nothing)
       const kinds = Object.values(LLM_CONTEXT_FIELD_KIND);
       expect(kinds.length).toBeGreaterThan(0);
       expect(kinds.every((kind) => kind === 'prompt' || kind === 'meter')).toBe(true);
@@ -619,7 +619,7 @@ describe('AnthropicLlmClient spend metering', () => {
       });
 
       // The envelope's KEY must not appear either: a serialized `"attribution":
-      // {}` would still bill input tokens on every call for nothing.
+      // {}` would still bill input tokens on every call for nothing
       expect(content).not.toContain('attribution');
       expect(content).not.toContain('trace-should-not-ship');
       expect(content).not.toContain('stage-should-not-ship');
@@ -630,7 +630,7 @@ describe('AnthropicLlmClient spend metering', () => {
       // The other direction, and the one a too-eager strip would break: this
       // excludes attribution, not context. `debate_state` is an open record,
       // so its NESTED keys must survive too — a `JSON.stringify` replacer
-      // array would have silently gutted them.
+      // array would have silently gutted them
       const content = await sentContent({
         debate_state: { round: 3, nested: { must_survive: 'yes' } },
       });
@@ -644,7 +644,7 @@ describe('AnthropicLlmClient spend metering', () => {
       // Attribution is meant to be invisible to the model. If threading it
       // changed the prompt at all, every persona's model input would have
       // shifted underneath #326 — a behavioural change smuggled in by an
-      // observability ticket.
+      // observability ticket
       const withAttribution = await sentContent({
         attribution: { trace_id: 'trace-9', stage: 'debate', debate_id: 'debate-xyz' },
       });
@@ -657,7 +657,7 @@ describe('AnthropicLlmClient spend metering', () => {
   it('meters a MALFORMED response too — it was still generated and still billed', async () => {
     // Metering only well-formed responses would understate spend by exactly
     // the calls most likely to be retried, i.e. it would be most wrong when
-    // spend matters most.
+    // spend matters most
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(usageResponse('bad')),
     };
@@ -674,7 +674,7 @@ describe('AnthropicLlmClient spend metering', () => {
 
   it('prefers the model the wire says served the request over the one configured', async () => {
     // A server-side fallback can reroute a refused request to a differently
-    // priced model; billing the requested model would price the wrong one.
+    // priced model; billing the requested model would price the wrong one
     const wire: AnthropicMessagesClient = {
       createMessage: vi
         .fn()
@@ -708,7 +708,7 @@ describe('AnthropicLlmClient spend metering', () => {
 
   it('meters an undefined ttfb_ms rather than inventing one, when the wire client does not report it (#1012)', async () => {
     // Most test doubles in this suite return a response with no `ttfb_ms` —
-    // metering must pass that absence through rather than defaulting it.
+    // metering must pass that absence through rather than defaulting it
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
     };
@@ -725,7 +725,7 @@ describe('AnthropicLlmClient spend metering', () => {
 
   it('records nothing when the wire client returns no usage block', async () => {
     // Most test doubles in this suite return `content` alone; metering must
-    // not invent zeros for them.
+    // not invent zeros for them
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(textResponse('good')),
     };
@@ -743,7 +743,7 @@ describe('AnthropicLlmClient spend metering', () => {
   it('meters a refused response, which the provider still billed (#1391)', async () => {
     // The refusal check sits BELOW the metering `finally`, for the reason the
     // parse gate does: the tokens were generated and charged whether or not the
-    // answer was usable.
+    // answer was usable
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue({
         content: [],
@@ -782,19 +782,19 @@ describe('AnthropicLlmClient spend metering', () => {
     );
 
     // Fake timers are on for this suite, so the backoff must be advanced
-    // explicitly — same pattern as the retry tests above.
+    // explicitly — same pattern as the retry tests above
     const promise = client.complete(request());
     await vi.advanceTimersByTimeAsync(100);
     await promise;
     // Each attempt is separately billed by the provider, so each is separately
-    // metered — collapsing them would understate a retry-heavy run.
+    // metered — collapsing them would understate a retry-heavy run
     expect(sink.records).toHaveLength(2);
   });
 
   it('does not let a throwing sink fail the LLM call (PR #367 review)', async () => {
     // `LlmSpendSink` is a public interface, so the "never throws" contract
     // cannot be trusted per-implementation — a metering side effect must not
-    // be able to abort a completed, already-billed call or trigger a retry.
+    // be able to abort a completed, already-billed call or trigger a retry
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
     };
@@ -841,7 +841,7 @@ describe('AnthropicLlmClient spend metering', () => {
       await expect(
         client.complete({ ...request(), signal: AbortSignal.abort() }),
       ).rejects.toBeInstanceOf(LlmCancelledError);
-      // The point of the ticket: a cancelled request costs nothing.
+      // The point of the ticket: a cancelled request costs nothing
       expect(wire.createMessage).not.toHaveBeenCalled();
     });
 
@@ -915,7 +915,7 @@ describe('AnthropicLlmClient spend metering', () => {
       // False-positive guard: a bare request (no `attribution`, the common
       // shape in this suite's own test doubles) must not surface some
       // invented default here — `NousMessagesClient` is where the 'debate'
-      // default actually lives (#1533).
+      // default actually lives (#1533)
       const wire: AnthropicMessagesClient = {
         createMessage: vi.fn().mockResolvedValue(textResponse('good')),
       };
@@ -946,7 +946,7 @@ describe('AnthropicLlmClient spend metering', () => {
         max_tokens: 1024,
         timeoutMs: 60_000,
         // Retries deliberately ENABLED: a cancellation that classified as
-        // retryable would spend exactly what the cancellation exists to save.
+        // retryable would spend exactly what the cancellation exists to save
         retry: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 10 },
       });
       const controller = new AbortController();
@@ -963,7 +963,7 @@ describe('AnthropicLlmClient spend metering', () => {
     it('keeps the underlying failure as `cause` when relabelling a cancellation', async () => {
       // The relabel branch fires on ANY error that surfaces once the signal is
       // aborted, so a genuine provider failure racing the abort must not be
-      // thrown away — a cost fix is a bad reason to lose an outage's evidence.
+      // thrown away — a cost fix is a bad reason to lose an outage's evidence
       const providerFailure = Object.assign(new Error('rate limited'), { status: 429 });
       const wire: AnthropicMessagesClient = {
         createMessage: vi.fn(
@@ -1012,7 +1012,7 @@ describe('AnthropicLlmClient spend metering', () => {
       await rejects;
 
       // Before #347 a timed-out call was left running — and, since
-      // `LlmTimeoutError` is retryable, was retried underneath itself.
+      // `LlmTimeoutError` is retryable, was retried underneath itself
       expect(seen?.aborted).toBe(true);
     });
 
@@ -1029,7 +1029,7 @@ describe('AnthropicLlmClient spend metering', () => {
 
       await client.complete(request());
 
-      // One leaked 30s timer per LLM call, every call, for the whole soak.
+      // One leaked 30s timer per LLM call, every call, for the whole soak
       expect(vi.getTimerCount()).toBe(0);
     });
   });

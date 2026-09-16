@@ -15,15 +15,15 @@
 import type { TickOutcome } from '../../apps/orchestrator/index.js';
 import type { DateRange } from './universe.js';
 
-/** A request to fill an order against the cost model. */
+/** A request to fill an order against the cost model */
 export interface FillRequest {
   instrument: string;
   side: 'buy' | 'sell';
-  /** Absolute units. */
+  /** Absolute units */
   size: number;
   order_type: 'market' | 'limit';
   limit_price?: number;
-  /** For dedup / join to the order intent. */
+  /** For dedup / join to the order intent */
   idempotency_key: string;
 }
 
@@ -33,7 +33,7 @@ export interface FillRequest {
  * Service; the cost model never fetches this itself.
  */
 export interface MarketState {
-  /** Mid price at the bar. */
+  /** Mid price at the bar */
   mid: number;
   /**
    * Best-effort bid/ask spread estimate from MDS. `null`/`undefined` when
@@ -43,7 +43,7 @@ export interface MarketState {
    * seam by design.
    */
   spread?: number | null;
-  /** Liquidity proxy (bars-volume aggregation) from the MDS ADV helper. */
+  /** Liquidity proxy (bars-volume aggregation) from the MDS ADV helper */
   adv: number;
   /** e.g. ATR or realized vol at the bar. */
   volatility: number;
@@ -58,16 +58,16 @@ export interface MarketState {
    * snapshot) and `ReplayInstrument.venue` (the Stage 2 replay) — #1032 item 2.
    */
   venue?: CostVenue;
-  /** = clock.now(); must be <= now (point-in-time). */
+  /** = clock.now(); must be <= now (point-in-time) */
   timestamp: Date;
 }
 
-/** Transparent breakdown of the adverse cost components. */
+/** Transparent breakdown of the adverse cost components */
 export interface CostBreakdown {
   spread_cost: number;
   commission: number;
   slippage: number;
-  /** sqrt-law term. */
+  /** sqrt-law term */
   market_impact: number;
 }
 
@@ -80,12 +80,12 @@ export interface CostBreakdown {
  * Fill.cost_breakdown = cost_breakdown.
  */
 export interface CostModelResult {
-  /** mid moved adversely by the cost_breakdown components. */
+  /** mid moved adversely by the cost_breakdown components */
   fill_price: number;
-  /** May be < requested size in principle; #87 always fills the full request. */
+  /** May be < requested size in principle; #87 always fills the full request */
   filled_size: number;
   cost_breakdown: CostBreakdown;
-  /** Recorded when slippage stochastic mode is on — not implemented in #87. */
+  /** Recorded when slippage stochastic mode is on — not implemented in #87 */
   seed?: number;
 }
 
@@ -99,14 +99,14 @@ export interface CostModelResult {
 export interface AssetClassCostConfig {
   /**
    * Fallback spread model when `MarketState.spread` is null/undefined:
-   * fallback_spread = volatility * spreadVolatilityCoefficient.
+   * fallback_spread = volatility * spreadVolatilityCoefficient
    */
   spreadVolatilityCoefficient: number;
-  /** Commission as a fraction of notional (size * mid). */
+  /** Commission as a fraction of notional (size * mid) */
   commissionRate: number;
-  /** slippage = volatility * slippageCoefficient (deterministic). */
+  /** slippage = volatility * slippageCoefficient (deterministic) */
   slippageCoefficient: number;
-  /** market_impact = impactK * volatility * sqrt(size / adv). */
+  /** market_impact = impactK * volatility * sqrt(size / adv) */
   impactK: number;
 }
 
@@ -132,9 +132,9 @@ export type CostVenue = 'saxo';
  * rather than merely the current default's behaviour.
  */
 export interface CostFloors {
-  /** Floor on half-spread, as a fraction of `MarketState.mid`. */
+  /** Floor on half-spread, as a fraction of `MarketState.mid` */
   minHalfSpreadRate: number;
-  /** Floor on commission, as a fraction of notional (size * mid). */
+  /** Floor on commission, as a fraction of notional (size * mid) */
   minCommissionRate: number;
 }
 
@@ -172,7 +172,7 @@ export interface CostConfig {
   venues?: Partial<Record<CostVenue, Partial<AssetClassCostConfig>>>;
 }
 
-/** Seam 1 (partial — #87 scope): deterministic, pessimistic fill pricing. */
+/** Seam 1 (partial — #87 scope): deterministic, pessimistic fill pricing */
 export interface CostModel {
   fill(request: FillRequest, marketState: MarketState): CostModelResult;
 }
@@ -184,7 +184,7 @@ export interface CostModel {
  * timeline, it does not build it.
  */
 export interface ReplayTimeline {
-  /** Ascending, de-duplicated bar timestamps within `window` (inclusive). */
+  /** Ascending, de-duplicated bar timestamps within `window` (inclusive) */
   barTimestamps(window: DateRange): Promise<readonly Date[]>;
 }
 

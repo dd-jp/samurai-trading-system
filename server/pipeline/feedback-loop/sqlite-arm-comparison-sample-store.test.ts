@@ -175,7 +175,7 @@ describe('SqliteArmComparisonSampleStore', () => {
   /**
    * A corrupted payload must not abort the dashboard's read of the comparison
    * it describes: the numbers the operator came for still arrive, and the
-   * measurement about them collapses to "not counted".
+   * measurement about them collapses to "not counted"
    */
   it.each([
     ['unparseable JSON', '{not json'],
@@ -205,7 +205,7 @@ describe('SqliteArmComparisonSampleStore', () => {
    * #982: written with a NON-default floor and read back the same value — the
    * default (5) round-trips in the test above too, but only a non-default
    * value can prove the column is actually wired end to end rather than
-   * hardcoded at some hop between `append` and `getRecent`.
+   * hardcoded at some hop between `append` and `getRecent`
    */
   it('round-trips a non-default min_trades_per_arm rather than the module default', () => {
     const db = openSharedStore(':memory:');
@@ -252,7 +252,7 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(store.getRecent(1, new Date(COMPUTED_AT.getTime() + 5 * day))).toHaveLength(1);
   });
 
-  /** One cycle instant is one measurement, never two points on the trend. */
+  /** One cycle instant is one measurement, never two points on the trend */
   it('replaces a re-run of the same cycle instant rather than duplicating it', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteArmComparisonSampleStore(db);
@@ -310,7 +310,7 @@ describe('SqliteArmComparisonSampleStore', () => {
       // `computed_at`, which is the table's primary key. Hoisting this open()
       // out of the helper would make the second insert in `accepts both honest
       // pairs` fail on the PK instead of exercising the `CHECK` — a green test
-      // asserting the wrong constraint.
+      // asserting the wrong constraint
       const db = openSharedStore(':memory:');
       return () =>
         db

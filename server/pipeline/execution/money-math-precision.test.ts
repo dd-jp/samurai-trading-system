@@ -59,11 +59,9 @@ const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
   stocks: new AlwaysOpenCalendar(),
 };
 
-// ---------------------------------------------------------------------------
 // Thresholds. Named, explicit, and asserted against each other below so the
 // ADR's claim ("drift stays far under what the venue rounds to") cannot rot
-// into a vacuous test by someone loosening one number in isolation.
-// ---------------------------------------------------------------------------
+// into a vacuous test by someone loosening one number in isolation
 
 /**
  * Coarsest granularity money is settled at, in USD. ASSUMPTION, not a repo
@@ -102,19 +100,17 @@ const MAX_TOLERATED_QTY_DRIFT_UNITS = 1e-6;
  */
 const MAX_TOLERATED_R_RELATIVE_DRIFT = 1e-11;
 
-/** How tight the stop is in the R workload — 0.1% of entry, ~1000x amplification. */
+/** How tight the stop is in the R workload — 0.1% of entry, ~1000x amplification */
 const TIGHT_STOP_FRACTION = 0.001;
 
-/** Fills the scripted broker releases per poll, so a lot is built over many polls. */
+/** Fills the scripted broker releases per poll, so a lot is built over many polls */
 const FILLS_PER_POLL = 37;
 
-// ---------------------------------------------------------------------------
 // Exact fixed-point oracle. Scale 1e-24: ~13 orders finer than the drift being
-// measured, so the oracle's own truncation cannot be mistaken for drift.
+// measured, so the oracle's own truncation cannot be mistaken for drift
 // Differences are converted to Number only AFTER subtraction in exact space —
 // converting the operands first would round away the very quantity measured
-// (ulp(1e5) is ~1.5e-11, larger than the expected drift).
-// ---------------------------------------------------------------------------
+// (ulp(1e5) is ~1.5e-11, larger than the expected drift)
 
 const SCALE_DIGITS = 24;
 const SCALE = 10n ** BigInt(SCALE_DIGITS);
@@ -153,15 +149,13 @@ function toNumber(a: bigint): number {
   return Number(a) / Number(SCALE);
 }
 
-/** |float − exact|, computed in exact space. */
+/** |float − exact|, computed in exact space */
 function driftOf(actual: number, exact: bigint): number {
   return Math.abs(toNumber(fpOf(actual) - exact));
 }
 
-// ---------------------------------------------------------------------------
 // Workload construction. Fills are authored as decimal strings (what a venue
-// reports) and fed to the pipeline as `Number`, to the oracle as exact fp.
-// ---------------------------------------------------------------------------
+// reports) and fed to the pipeline as `Number`, to the oracle as exact fp
 
 interface DecimalFill {
   price: string;
@@ -176,7 +170,7 @@ const OPENED_AT = new Date('2026-08-04T09:00:00Z');
  * A deterministic tranche ladder: `count` fills whose prices walk in
  * sub-tick steps around `basePrice` and whose sizes vary tranche to tranche,
  * because equal-sized tranches would sum without error and hide the thing
- * being measured.
+ * being measured
  */
 function ladder(
   count: number,
@@ -196,16 +190,16 @@ function ladder(
   const step = fp(priceStep);
   const qty = fp(baseQty);
   return Array.from({ length: count }, (_, i) => {
-    // Prices oscillate rather than trend, so neither average is a plain ramp.
+    // Prices oscillate rather than trend, so neither average is a plain ramp
     const offset = BigInt(((i * offsetStride) % 13) - 6);
     const price = base + step * offset;
-    // Sizes cycle through 1x..4x the base tranche.
+    // Sizes cycle through 1x..4x the base tranche
     const size = qty * BigInt(1 + (i % 4));
     return { price: fpToString(price), qty: fpToString(size), fee: feePerFill };
   });
 }
 
-/** Scaled BigInt → exact decimal string (round-trip partner of `fp`). */
+/** Scaled BigInt → exact decimal string (round-trip partner of `fp`) */
 function fpToString(a: bigint): string {
   const negative = a < 0n;
   const digits = (negative ? -a : a).toString().padStart(SCALE_DIGITS + 1, '0');
@@ -229,7 +223,7 @@ function normalized(fills: readonly DecimalFill[], leg: NormalizedFill['leg'], t
   );
 }
 
-/** Exact Σqty, Σ(price × qty) and Σfee over a tranche ladder. */
+/** Exact Σqty, Σ(price × qty) and Σfee over a tranche ladder */
 function exactTotals(fills: readonly DecimalFill[]): {
   qty: bigint;
   notional: bigint;
@@ -245,9 +239,7 @@ function exactTotals(fills: readonly DecimalFill[]): {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Harness: the real `ingestFills()` path, scripted broker, SQLite store.
-// ---------------------------------------------------------------------------
+// Harness: the real `ingestFills()` path, scripted broker, SQLite store
 
 /**
  * Releases the scripted fills a batch per poll, because the accumulation being
@@ -282,16 +274,16 @@ class ScriptedBroker implements BrokerAdapter {
       .filter((fill) => fill.timestamp.getTime() >= since.getTime());
   }
   async resizeProtectiveLegs(): Promise<void> {}
-  /** #525's re-arm path — this test drives ordinary fills only. */
+  /** #525's re-arm path — this test drives ordinary fills only */
   async rearmProtectiveLegs(): Promise<void> {}
   async getOrder(): Promise<NormalizedOrder | null> {
     return null;
   }
-  /** #519/#526's reconcile-only surface — this test drives fills only. */
+  /** #519/#526's reconcile-only surface — this test drives fills only */
   async resumeFlatten(): Promise<never> {
     throw new Error('ScriptedBroker.resumeFlatten: not part of the fill path');
   }
-  /** #429's intervention path — this test drives fills only. */
+  /** #429's intervention path — this test drives fills only */
   async submitFlatten(): Promise<never> {
     throw new Error('ScriptedBroker.submitFlatten: not part of the fill path');
   }
@@ -360,7 +352,7 @@ function seedPosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
 
 /**
  * Runs one lot end to end: seed → ingest every tranche through the real
- * `ingestFills()` → return the persisted `ClosedTrade`.
+ * `ingestFills()` → return the persisted `ClosedTrade`
  */
 async function runLot(args: {
   entries: readonly DecimalFill[];
@@ -377,11 +369,11 @@ async function runLot(args: {
   ]);
   const execution = new ExecutionImpl(makeInput(broker, store));
   // Poll until the feed is drained — many polls, each re-deriving the lot's
-  // totals from the persisted rows, which is the production access pattern.
+  // totals from the persisted rows, which is the production access pattern
   while (!broker.exhausted) {
     await execution.ingestFills();
   }
-  // One extra poll: a re-poll must ingest nothing and emit no second close.
+  // One extra poll: a re-poll must ingest nothing and emit no second close
   await execution.ingestFills();
 
   const closed = await store.getClosedTrades();
@@ -389,7 +381,7 @@ async function runLot(args: {
   return closed[0] as ClosedTrade;
 }
 
-/** The exact ClosedTrade the same tranches imply, in fixed-point. */
+/** The exact ClosedTrade the same tranches imply, in fixed-point */
 function exactClosedTrade(
   entries: readonly DecimalFill[],
   exits: readonly DecimalFill[],
@@ -412,17 +404,15 @@ function exactClosedTrade(
   };
 }
 
-// ---------------------------------------------------------------------------
-
 describe('money-math precision (ADR-0005)', () => {
   it('keeps the pinned tolerance far under the granularity a venue rounds to', () => {
     // Guards the ADR's actual claim: the tolerance is not merely "some number
-    // below a cent", it is orders of magnitude below one.
+    // below a cent", it is orders of magnitude below one
     expect(MAX_TOLERATED_DRIFT_USD).toBeLessThan(BROKER_ROUNDING_USD / 1e6);
   });
 
   it('holds a BTC-magnitude lot within tolerance across 250 partial fills per leg', async () => {
-    // ~$119,873 with sub-cent tranche prices; 250 in, 250 out.
+    // ~$119,873 with sub-cent tranche prices; 250 in, 250 out
     const entries = ladder(250, '119873.41', '0.07', '0.00071', '0.4137', 7);
     const exits = ladder(250, '121904.29', '0.11', '0.00071', '0.5219', 5);
     const stop = '118000.13';
@@ -433,7 +423,7 @@ describe('money-math precision (ADR-0005)', () => {
     expect(driftOf(trade.entry, exact.entry)).toBeLessThan(MAX_TOLERATED_DRIFT_USD);
     expect(driftOf(trade.fees_total, exact.feesTotal)).toBeLessThan(MAX_TOLERATED_DRIFT_USD);
     expect(driftOf(trade.realized_pnl_net, exact.pnlNet)).toBeLessThan(MAX_TOLERATED_DRIFT_USD);
-    // Quantity is money too — it multiplies every price above.
+    // Quantity is money too — it multiplies every price above
     expect(driftOf(trade.filled_size, exact.filledSize)).toBeLessThan(
       MAX_TOLERATED_QTY_DRIFT_UNITS,
     );
@@ -441,7 +431,7 @@ describe('money-math precision (ADR-0005)', () => {
 
   it('holds a sub-cent crypto lot within tolerance across 250 partial fills per leg', async () => {
     // SHIB-class: 8-dp price, 7-figure tranche sizes — the other end of the
-    // 7-orders-of-magnitude spread #288 names as the risk.
+    // 7-orders-of-magnitude spread #288 names as the risk
     const entries = ladder(250, '0.00001234', '0.00000001', '1250000.5', '0.0217', 7);
     const exits = ladder(250, '0.00001307', '0.00000003', '1250000.5', '0.0231', 5);
     const stop = '0.00001180';
@@ -456,7 +446,7 @@ describe('money-math precision (ADR-0005)', () => {
     expect(driftOf(trade.entry, exact.entry)).toBeLessThan(MAX_TOLERATED_DRIFT_USD);
     expect(driftOf(trade.realized_pnl_net, exact.pnlNet)).toBeLessThan(MAX_TOLERATED_DRIFT_USD);
     // Size here is ~7.8e8 units, where one ulp is already ~1.2e-7: the
-    // threshold below leaves room for a handful of ulps and nothing more.
+    // threshold below leaves room for a handful of ulps and nothing more
     expect(driftOf(trade.filled_size, exact.filledSize)).toBeLessThan(
       MAX_TOLERATED_QTY_DRIFT_UNITS,
     );
@@ -466,7 +456,7 @@ describe('money-math precision (ADR-0005)', () => {
     const entries = ladder(250, '119873.41', '0.07', '0.00071', '0.4137', 7);
     const exits = ladder(250, '121904.29', '0.11', '0.00071', '0.5219', 5);
     // Stop 0.1% under entry: |entry − stop| is ~1/1000th of entry, so any
-    // absolute error in the computed average entry is amplified ~1000x in R.
+    // absolute error in the computed average entry is amplified ~1000x in R
     const stop = fpToString(fp('119873.41') - mulFp(fp('119873.41'), fpOf(TIGHT_STOP_FRACTION)));
 
     const trade = await runLot({ entries, exits, position: { stop: Number(stop) } });
@@ -481,7 +471,7 @@ describe('money-math precision (ADR-0005)', () => {
   it('holds portfolio equity within tolerance across a 7-order-of-magnitude book', async () => {
     // One $100k-price lot and one sub-cent lot in the same sum: the small
     // position's value is the one at risk of being rounded away by the large
-    // one's exponent.
+    // one's exponent
     const positions: OpenPosition[] = [
       seedPosition({
         idempotency_key: 'btc',
@@ -503,7 +493,7 @@ describe('money-math precision (ADR-0005)', () => {
     // this test's whole claim is that the equity it produces came from those
     // marks. If the implementation later starts pricing off bars, an
     // indicator, a spread or ADV, a permissive stub would let it keep
-    // measuring drift against an oracle that no longer describes the code.
+    // measuring drift against an oracle that no longer describes the code
     const notOnThisPath = (method: string) => async (): Promise<never> => {
       throw new Error(`computePortfolioView called ${method}: equity must price off marks only`);
     };
@@ -544,7 +534,7 @@ describe('money-math precision (ADR-0005)', () => {
       consecutive_losses: 0,
       // This test is about float drift in the valuation arithmetic, not about
       // freshness; the stub observes every mark at `NOW`, so any positive
-      // bound passes.
+      // bound passes
       max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     });
 
@@ -561,7 +551,7 @@ describe('money-math precision (ADR-0005)', () => {
     // 0.9999999999999999. Both describe the same fully-exited lot, and a bare
     // `>=` between the two sums declares the lot still open forever — no
     // ClosedTrade, no exit from `getOpenPositions()`. `ingestFills()` compares
-    // with a relative epsilon for exactly this reason.
+    // with a relative epsilon for exactly this reason
     const entries = ['0.3', '0.3', '0.4'].map((qty) => ({ price: '100', qty, fee: '0.1' }));
     const exits = ['0.7', '0.2', '0.1'].map((qty) => ({ price: '110', qty, fee: '0.1' }));
     expect(exits.reduce((sum, f) => sum + Number(f.qty), 0)).toBeLessThan(
@@ -581,11 +571,11 @@ describe('money-math precision (ADR-0005)', () => {
     // pending/submitted lots, so a tolerance that grew to swallow a REAL
     // remainder would strand quantity at the broker with the store believing
     // the lot flat. 1e-9 of the lot is 1000x the 1e-12 tolerance and still
-    // far below any venue's minimum increment — it must read as unfilled.
+    // far below any venue's minimum increment — it must read as unfilled
     const { store } = openTestExecutionStore();
     await store.writeAheadPosition(seedPosition({ requested_size: 1, stop: 95 }));
     const entries = [{ price: '100', qty: '1', fee: '0.1' }];
-    // 1 − 1e-9 exits: a genuine, if small, unfilled remainder.
+    // 1 − 1e-9 exits: a genuine, if small, unfilled remainder
     const exits = [{ price: '110', qty: '0.999999999', fee: '0.1' }];
 
     const broker = new ScriptedBroker([
@@ -597,7 +587,7 @@ describe('money-math precision (ADR-0005)', () => {
     expect(await store.getClosedTrades()).toHaveLength(0);
     const position = await store.getPosition('lot-1');
     expect(position?.order_state).toBe('filled');
-    // Still live: Risk must keep seeing the exposure that is genuinely open.
+    // Still live: Risk must keep seeing the exposure that is genuinely open
     expect((await store.getOpenPositions()).map((p) => p.idempotency_key)).toContain('lot-1');
   });
 
@@ -606,7 +596,7 @@ describe('money-math precision (ADR-0005)', () => {
     // requested at 1.0 and filled 0.7 + 0.2 + 0.1 (float sum
     // 0.9999999999999999) is complete, and a bare `>=` reports it forever as
     // `partially_filled` — a state the rest of the system reads as "the venue
-    // still owes us quantity".
+    // still owes us quantity"
     const { store } = openTestExecutionStore();
     await store.writeAheadPosition(seedPosition({ requested_size: 1, stop: 95 }));
     const entries = ['0.7', '0.2', '0.1'].map((qty) => ({ price: '100', qty, fee: '0.1' }));

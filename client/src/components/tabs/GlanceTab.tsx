@@ -34,7 +34,7 @@ export interface GlanceTabProps {
   equitySamples: readonly EquitySample[];
   ledger: readonly LedgerEntry[];
   verdictsByTrace: ReadonlyMap<string, VerdictRow>;
-  /** Opens the trace on the Live tab. */
+  /** Opens the trace on the Live tab */
   onOpenTrace: (selection: Selection) => void;
 }
 
@@ -112,7 +112,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
   // `.today` moves nothing there and this component would otherwise
   // dereference straight into a shape it never checked. `null` is also what
   // an intermediary that stripped a build failure looks like. Either way it
-  // must read as a named absence, never as £0.00 (AC).
+  // must read as a named absence, never as £0.00 (AC)
   if (pnl == null) {
     return (
       <section className="panel" aria-label="P&L">
@@ -128,7 +128,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
   // `rate_source` is a `Record` lookup, not a formatter call, so an
   // unrecognised value (the same nested-rename skew `isPnlHeadline` guards
   // above, one field `isPnlHeadline` doesn't check) needs its own fallback —
-  // an unguarded lookup would interpolate the literal string "undefined".
+  // an unguarded lookup would interpolate the literal string "undefined"
   const rate = `at ${formatUsd(pnl.rate_usd_per_gbp)}/£, ${PNL_RATE_SOURCE_WORD[pnl.rate_source] ?? UNKNOWN}`;
 
   return (
@@ -209,7 +209,7 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
   // control arm's denominator would render a live-arm-only figure under the
   // control view (dashboard-spec.md's arm selector rule; #1597). The
   // control's own open-position notional above still applies (`positions`
-  // is arm-scoped, #1592), only the "of $equity" denominator is N/A.
+  // is arm-scoped, #1592), only the "of $equity" denominator is N/A
   const equity = isControl ? null : (snapshot.providers.alpaca.balance?.equity ?? null);
   const deployed = deployedNotional(positions);
   return (

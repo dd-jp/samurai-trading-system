@@ -18,7 +18,7 @@
  * phase regardless of how many times the process has restarted.
  */
 
-/** The most recently completed boundary at or before `now`. */
+/** The most recently completed boundary at or before `now` */
 export function currentBoundary(now: Date, intervalMs: number): Date {
   if (intervalMs <= 0) {
     throw new Error(`currentBoundary: intervalMs must be positive, got ${intervalMs}`);
@@ -26,7 +26,7 @@ export function currentBoundary(now: Date, intervalMs: number): Date {
   return new Date(Math.floor(now.getTime() / intervalMs) * intervalMs);
 }
 
-/** The boundary one interval after the one `now` falls in. */
+/** The boundary one interval after the one `now` falls in */
 export function nextBoundary(now: Date, intervalMs: number): Date {
   return new Date(currentBoundary(now, intervalMs).getTime() + intervalMs);
 }

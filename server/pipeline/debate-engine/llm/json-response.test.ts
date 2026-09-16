@@ -68,7 +68,7 @@ describe('unwrapFencedJson', () => {
   it('leaves an UNTERMINATED fence untouched so a truncated response stays a loud failure', () => {
     // max_tokens hit mid-emit: opening fence present, closing fence never
     // arrives. Unwrapping here would hand a half-object to JSON.parse and, in
-    // a laxer parser, could become a fabricated position (#288/#319).
+    // a laxer parser, could become a fabricated position (#288/#319)
     const truncated = '```json\n{\n  "stance": "bullish",\n  "rationale": "Momentum favo';
     expect(unwrapFencedJson(truncated)).toBe(truncated);
     expect(() => JSON.parse(unwrapFencedJson(truncated))).toThrow();
@@ -97,7 +97,7 @@ describe('unwrapFencedJson', () => {
 
   it('ignores a backtick run that is not at the start of a line when finding the close', () => {
     // The closing delimiter must begin a line; an inline ``` inside a string
-    // value must not terminate the payload early.
+    // value must not terminate the payload early
     const inline = '```json\n{"a":"x ``` y"}\n```';
     expect(JSON.parse(unwrapFencedJson(inline))).toEqual({ a: 'x ``` y' });
   });

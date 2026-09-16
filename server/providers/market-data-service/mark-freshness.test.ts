@@ -24,7 +24,7 @@ describe('markAgeMs', () => {
   it('goes negative for a mark observed after the read instant', () => {
     // Not "very fresh" — the venue stamped it ahead of the moment we already
     // held it. Kept signed rather than absolute so `classifyMarkFreshness` can
-    // tell that apart from an old mark.
+    // tell that apart from an old mark
     expect(markAgeMs(markObservedAt('2026-08-15T12:00:30.000Z'), READ_AT)).toBe(-30_000);
   });
 });
@@ -39,7 +39,7 @@ describe('classifyMarkFreshness', () => {
   it('passes a mark exactly at the bound', () => {
     // `>` not `>=`: the bound is the oldest ACCEPTABLE age, which keeps a
     // config of 120_000 from rejecting a mark of exactly two minutes and
-    // makes the boundary readable in a log line.
+    // makes the boundary readable in a log line
     expect(
       classifyMarkFreshness(markObservedAt('2026-08-15T11:58:00.000Z'), READ_AT, 120_000),
     ).toMatchObject({ status: 'fresh' });
@@ -54,7 +54,7 @@ describe('classifyMarkFreshness', () => {
   it('reports a mark observed well after the read instant as a clock disagreement', () => {
     // The case a naive `age > max` check passes: a mark from 20 minutes in the
     // future is not fresh, it is evidence that one of the two clocks is wrong
-    // — including the one every other time comparison in the pass uses.
+    // — including the one every other time comparison in the pass uses
     expect(
       classifyMarkFreshness(markObservedAt('2026-08-15T12:20:00.000Z'), READ_AT, 120_000),
     ).toEqual({
@@ -67,7 +67,7 @@ describe('classifyMarkFreshness', () => {
   // #1111: the forward offset the old coordinate produced was our own elapsed
   // time between the tick's `asOf` and the read. Against `readAt` there is no
   // such offset at any pass duration — these cases are the ticket's
-  // acceptance criterion, run at the magnitudes the soak actually produced.
+  // acceptance criterion, run at the magnitudes the soak actually produced
   describe('pass latency is not a forward offset against the read instant (#1111)', () => {
     it.each([149, 1_083, 55_815, 83_993, 145_000])(
       'passes a mark read %sms into a pass, its own age well inside the bound',
@@ -76,7 +76,7 @@ describe('classifyMarkFreshness', () => {
         const mark = markObservedAt(new Date(READ_AT.getTime() - 50).toISOString());
 
         // Under the pre-#1111 coordinate this is the refusal: the mark is
-        // `passLatencyMs - 50` AHEAD of `asOf`.
+        // `passLatencyMs - 50` AHEAD of `asOf`
         expect(markAgeMs(mark, asOf)).toBeLessThan(0);
 
         expect(classifyMarkFreshness(mark, READ_AT, 900_000)).toMatchObject({ status: 'fresh' });
@@ -118,7 +118,7 @@ describe('classifyMarkFreshness', () => {
     // arrives here as NaN or 0. Silently treating that as "everything is
     // stale" would arm a kill switch nobody configured, and the symptom — no
     // trades, `stale_feed` on every tick — looks like a dead feed rather than
-    // a typo.
+    // a typo
     expect(() =>
       classifyMarkFreshness(markObservedAt('2026-08-15T12:00:00.000Z'), READ_AT, bound),
     ).toThrow(/positive number of milliseconds/);

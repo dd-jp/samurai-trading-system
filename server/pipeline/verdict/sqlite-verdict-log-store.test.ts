@@ -91,7 +91,7 @@ describe('SqliteVerdictLogStore', () => {
     // overwrite it — that would let a later call erase the very `go` row
     // OrphanVerdictScanner depends on. See this file's own doc comment for
     // the full reasoning; this test is what would catch a regression to
-    // `DO UPDATE`.
+    // `DO UPDATE`
     const db = openSharedStore(':memory:');
     const store = new SqliteVerdictLogStore(db);
 

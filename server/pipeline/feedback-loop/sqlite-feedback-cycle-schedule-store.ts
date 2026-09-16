@@ -34,7 +34,7 @@ interface FeedbackCycleScheduleRow {
 export class SqliteFeedbackCycleScheduleStore {
   constructor(private readonly db: StoreHandle) {}
 
-  /** The most recently completed boundary, or `null` before any cycle has ever run. */
+  /** The most recently completed boundary, or `null` before any cycle has ever run */
   lastBoundary(): Date | null {
     return this.readBoundary(SINGLETON_KEY);
   }

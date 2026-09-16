@@ -53,7 +53,7 @@ describe('runBullPersona', () => {
     // Without trace_id/stage/debate_id the spend meter cannot say which
     // decision a persona call was made for, and every per-debate cost figure
     // is NULL-keyed. prompt_template_hash (#1514) is asserted separately
-    // below, since its value depends on this persona's template text.
+    // below, since its value depends on this persona's template text
     expect(client.requests[0]?.context.attribution).toEqual({
       trace_id: 'trace-1',
       stage: 'debate',
@@ -80,7 +80,7 @@ describe('runBullPersona', () => {
     const second = client.requests[1]?.context.attribution?.prompt_template_hash;
     // Same template both times, despite the analyst views (the dynamic,
     // per-call content) differing — the hash identifies the TEMPLATE, not
-    // the rendered prompt.
+    // the rendered prompt
     expect(first).toBe(second);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -193,7 +193,7 @@ describe('markdown-fenced responses (#361)', () => {
     // The nastiest truncation: `max_tokens` lands after the closing brace but
     // before the closing fence. The interior is *parseable*, so a parser that
     // unwrapped an unterminated fence would accept this and hand a position
-    // the model never finished asserting to the Trader (#288/#319 family).
+    // the model never finished asserting to the Trader (#288/#319 family)
     const client = new MockLlmClient();
     client.enqueueText('```json\n{"stance": "bullish", "rationale": "Oversold bounce."}\n');
 

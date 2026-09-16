@@ -223,14 +223,14 @@ export class MarketDataServiceImpl implements MarketDataService {
       // Cache HITS stay silent (#1082 AC3) — a healthy, warmed run logs ~0
       // lines/tick. A hit also clears this exact window's miss streak, so
       // `consecutive_misses` on the next miss counts only the CURRENT run of
-      // failures, not a stale accumulation from before the window recovered.
+      // failures, not a stale accumulation from before the window recovered
       this.consecutiveFetchMisses.delete(this.missCounterKey(instrument, window));
       return cached;
     }
 
     // Backtest replays a single walk and never overlaps calls, so joining an
     // in-flight fetch can only add a map to a path that has nothing to share
-    // — and `cachedBars` already disables itself there for the same reason.
+    // — and `cachedBars` already disables itself there for the same reason
     if (this.mode !== 'backtest') {
       const key = this.inFlightKey(instrument, window, asOf);
       const inFlight = this.inFlightBarFetches.get(key);
@@ -247,7 +247,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     return this.fetchAndStoreBars(instrument, window, asOf);
   }
 
-  /** `getBars`'s miss path, extracted so the in-flight map above wraps exactly one call. */
+  /** `getBars`'s miss path, extracted so the in-flight map above wraps exactly one call */
   private async fetchAndStoreBars(
     instrument: string,
     window: BarWindow,
@@ -262,7 +262,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     // (see the map's own doc comment) — so skip the bump entirely rather
     // than rely on `logFetch`'s later `mode === 'backtest'` short-circuit to
     // make the wasted increment harmless. `0` is never read: `logFetch`
-    // returns before consulting `consecutiveMisses` in backtest mode.
+    // returns before consulting `consecutiveMisses` in backtest mode
     const consecutiveMisses =
       this.mode === 'backtest' ? 0 : this.recordCacheMiss(instrument, window);
     const startedAt = Date.now();
@@ -274,7 +274,7 @@ export class MarketDataServiceImpl implements MarketDataService {
       // fetches that never RETURNED. Log the failed attempt with its elapsed
       // time — a line with duration_ms far past the analyst's 10s deadline is
       // exactly the fetch that stalled it — then rethrow UNCHANGED (AC5: this
-      // observes, it never changes fetch behaviour or outcome).
+      // observes, it never changes fetch behaviour or outcome)
       this.logFetch(instrument, window, 'error', consecutiveMisses, Date.now() - startedAt, error);
       throw error;
     }
@@ -295,18 +295,18 @@ export class MarketDataServiceImpl implements MarketDataService {
     return this.store.readBars(instrument, window.timeframe, asOf, window.lookback);
   }
 
-  /** `${instrument}|${timeframe}|${lookback}|${partial}|${barIndex}` — see `inFlightBarFetches` for why the last two are part of this key. */
+  /** `${instrument}|${timeframe}|${lookback}|${partial}|${barIndex}` — see `inFlightBarFetches` for why the last two are part of this key */
   private inFlightKey(instrument: string, window: BarWindow, asOf: Date): string {
     const partial = window.partial ?? 'error';
     return `${this.missCounterKey(instrument, window)}|${partial}|${this.barIndex(window.timeframe, asOf)}`;
   }
 
-  /** `${instrument}|${timeframe}|${lookback}` — see `consecutiveFetchMisses`'s doc comment for why lookback is part of this key and `barCacheKey` is not reused. */
+  /** `${instrument}|${timeframe}|${lookback}` — see `consecutiveFetchMisses`'s doc comment for why lookback is part of this key and `barCacheKey` is not reused */
   private missCounterKey(instrument: string, window: BarWindow): string {
     return `${instrument}|${window.timeframe}|${window.lookback}`;
   }
 
-  /** Bumps and returns the new consecutive-miss count for this exact (instrument, timeframe, lookback). */
+  /** Bumps and returns the new consecutive-miss count for this exact (instrument, timeframe, lookback) */
   private recordCacheMiss(instrument: string, window: BarWindow): number {
     const key = this.missCounterKey(instrument, window);
     const next = (this.consecutiveFetchMisses.get(key) ?? 0) + 1;
@@ -375,7 +375,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     // backtest run's output with lines this ticket's AC3 volume bound is
     // meant to prevent. Live/paper is the mode #1082's 106 timeouts were
     // observed in, and where a stalled venue fetch is the diagnostic this
-    // exists for.
+    // exists for
     if (this.mode === 'backtest') return;
 
     // Consecutive-miss escalation applies to the `ok` branch only. A thrown
@@ -385,7 +385,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     // healthy key is itself the anomaly. Matches the sibling `logCaughtFailure`
     // sites (`residual-protection-sweep.ts`, `ingest-fills.ts`), which both
     // derive `level` from the failure's own severity, not from an unrelated
-    // counter.
+    // counter
     const level =
       outcome === 'error'
         ? 'warn'
@@ -433,7 +433,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     });
   }
 
-  /** The bar interval `asOf` falls in — the cache's unit of freshness. */
+  /** The bar interval `asOf` falls in — the cache's unit of freshness */
   private barIndex(timeframe: string, asOf: Date): number {
     return Math.floor(asOf.getTime() / timeframeToMs(timeframe));
   }
@@ -543,8 +543,8 @@ export class MarketDataServiceImpl implements MarketDataService {
    */
   async getMark(instrument: string, asOf: Date = this.clock.now()): Promise<Mark> {
     // Repeat live callers inside the TTL serve from the store (A7): the same
-    // freshness argument as the bar-interval skip above, at mark timescale.
-    // Backtest never takes this path — `latest_mark` must stay untouched there.
+    // freshness argument as the bar-interval skip above, at mark timescale
+    // Backtest never takes this path — `latest_mark` must stay untouched there
     if (this.mode === 'live') {
       const fetchedAt = this.lastMarkFetch.get(instrument);
       if (fetchedAt !== undefined && asOf.getTime() - fetchedAt <= this.markTtlMs) {
@@ -619,7 +619,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     // From the SPEC, not the module constant (#315). The constant pinned every
     // caller to 1h, so a non-1h consumer either bypassed this whole serving
     // layer — losing the Tier-1 cache — or, worse, came through anyway and had
-    // its indicator silently computed on the wrong bars.
+    // its indicator silently computed on the wrong bars
     const window: BarWindow = { timeframe: spec.timeframe, lookback: spec.lookback };
     const bars = await this.getBars(instrument, window, asOf);
 
@@ -628,7 +628,7 @@ export class MarketDataServiceImpl implements MarketDataService {
       // Names the TIMEFRAME, not just the instrument (#315). Now that the
       // window comes from the spec, "no bars" is most often "no bars at THAT
       // timeframe" — a spec asking for one nothing ingests fails here, and
-      // without the timeframe in the message it reads as missing data.
+      // without the timeframe in the message it reads as missing data
       throw new Error(
         `No ${spec.timeframe} bars for ${instrument} at or before ${asOf.toISOString()} ` +
           `(indicator '${spec.indicator}', lookback ${spec.lookback})`,

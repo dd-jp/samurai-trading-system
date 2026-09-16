@@ -5,12 +5,12 @@ import { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-de
 const DAY_MS = 24 * 60 * 60 * 1000;
 const START = new Date('2024-01-01T00:00:00.000Z');
 
-/** Day `n` of the fixture window, at midnight. */
+/** Day `n` of the fixture window, at midnight */
 function day(n: number): Date {
   return new Date(START.getTime() + n * DAY_MS);
 }
 
-/** Ten daily bars, days 0-9, inside a ten-day window (day 0 → day 10). */
+/** Ten daily bars, days 0-9, inside a ten-day window (day 0 → day 10) */
 const BARS = Array.from({ length: 10 }, (_, index) => day(index));
 const WINDOW = { start: day(0), end: day(10) };
 const CAPITAL = 100_000;
@@ -51,7 +51,7 @@ function fill(overrides: Partial<Fill> = {}): Fill {
 
 /**
  * Three trades with hand-computable arithmetic: gross wins 800, gross losses
- * 200, three round trips of 2,000 notional each, one day held apiece.
+ * 200, three round trips of 2,000 notional each, one day held apiece
  */
 const TRADES: ClosedTrade[] = [
   closedTrade({
@@ -90,7 +90,7 @@ describe('toTradeSeries', () => {
   it('derives round-trip notional as entry x size x 2', () => {
     const series = toTradeSeries(TRADES, { window: WINDOW, averageCapital: CAPITAL });
 
-    // Hand-computed: 100x10x2, 50x20x2, 200x5x2 — all 2,000.
+    // Hand-computed: 100x10x2, 50x20x2, 200x5x2 — all 2,000
     expect(series.trades.map((trade) => trade.notional)).toEqual([2000, 2000, 2000]);
   });
 
@@ -117,7 +117,7 @@ describe('toReturnSeries', () => {
       periodsPerYear: 365,
     });
 
-    // Hand-computed: 500/100k on bar 1, -200/100k on bar 3, 300/100k on bar 6.
+    // Hand-computed: 500/100k on bar 1, -200/100k on bar 3, 300/100k on bar 6
     expect(series.returns).toEqual([0, 0.005, 0, -0.002, 0, 0, 0.003, 0, 0, 0]);
   });
 
@@ -143,7 +143,7 @@ describe('toReturnSeries', () => {
     );
 
     // Bar 3 is the first bar at or after the close — dating it to bar 2 would
-    // make realized PnL knowable before the close that produced it.
+    // make realized PnL knowable before the close that produced it
     expect(series.returns[2]).toBe(0);
     expect(series.returns[3]).toBeCloseTo(0.005, 12);
   });
@@ -191,7 +191,7 @@ describe('assertCostModelPriced', () => {
   it('rejects a fill with no cost breakdown — some other fill model priced it', () => {
     // Written out without the key rather than as `cost_breakdown: undefined`:
     // an absent breakdown is what a foreign fill model actually produces, and
-    // the repo runs exactOptionalPropertyTypes.
+    // the repo runs exactOptionalPropertyTypes
     const unpriced: Fill = {
       idempotency_key: 'lot-1',
       broker_fill_id: toBrokerFillId('fill-2'),
@@ -203,7 +203,7 @@ describe('assertCostModelPriced', () => {
     };
 
     // A fill without a breakdown did not come from the Simulated adapter, so
-    // the sqrt-law market impact was never applied to it (acceptance criterion 1).
+    // the sqrt-law market impact was never applied to it (acceptance criterion 1)
     expect(() => assertCostModelPriced(closedTrade(), [fill(), unpriced])).toThrow(
       /not priced by CostModel\.fill/,
     );
@@ -215,7 +215,7 @@ describe('assertCostModelPriced', () => {
 });
 
 describe('toReturnSeries bar attribution — binary search equivalence (#289)', () => {
-  /** The implementation this replaced, kept here as the oracle. */
+  /** The implementation this replaced, kept here as the oracle */
   function linearAttribution(bars: readonly Date[], closedAt: Date): number {
     return bars.findIndex((bar) => bar.getTime() >= closedAt.getTime());
   }
@@ -230,7 +230,7 @@ describe('toReturnSeries bar attribution — binary search equivalence (#289)', 
     // millisecond either side of it, and both ends of the range. That covers
     // the tie case the doc comment calls out — a trade closing exactly ON a bar
     // must attribute to THAT bar, not the next one, or realized PnL moves off
-    // the bar on which it became knowable.
+    // the bar on which it became knowable
     const probes: Date[] = [new Date(start - DAY)];
     for (const bar of bars) {
       probes.push(
@@ -270,7 +270,7 @@ describe('toReturnSeries bar attribution — binary search equivalence (#289)', 
   it('still throws for a trade closing after the last bar', () => {
     // The -1 path, which the binary search reaches by running off the end
     // rather than by `findIndex` returning -1. Same outcome, different route,
-    // so it is worth pinning separately.
+    // so it is worth pinning separately
     const closed_at = new Date(bars[bars.length - 1].getTime() + DAY);
 
     expect(() =>

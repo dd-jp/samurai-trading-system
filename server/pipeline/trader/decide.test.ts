@@ -24,7 +24,7 @@ import {
 } from '../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
 // #748: the early exit reads the analyst's own momentum specs, so the tests pin
-// THOSE rather than hand-rebuilt copies that would keep passing on drift.
+// THOSE rather than hand-rebuilt copies that would keep passing on drift
 import { MACD_SPEC, RSI_SPEC } from '../analysts/technical-analyst.js';
 import type { DebateResult } from '../debate-engine/index.js';
 // #1089: `StaleMarkError`/`MarkReadError` are imported for the SAME reason
@@ -32,7 +32,7 @@ import type { DebateResult } from '../debate-engine/index.js';
 // error TYPE, not merely `arm === 'control'`, requires throwing the real
 // shapes rather than a look-alike `Error`. `MarkReadError` pins the second
 // failure shape a code-review pass 2 caught: `readMarks` (portfolio-view.ts)
-// also throws bare on a failed/omitted mark READ, not only a stale one.
+// also throws bare on a failed/omitted mark READ, not only a stale one
 import { MarkReadError, StaleMarkError } from '../risk-manager/index.js';
 import {
   atrIndicatorSpec,
@@ -44,7 +44,7 @@ import {
 import { FixtureSetupStore } from './fixture-setup-store.js';
 // Imported so the #687 cases can state WHICH bar the key must be on, rather
 // than only comparing two `decide()` calls against each other — two calls that
-// re-derive the same wrong bar agree with one another perfectly.
+// re-derive the same wrong bar agree with one another perfectly
 import { computeFlattenIdempotencyKey, computeIdempotencyKey } from './idempotency-key.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';
@@ -63,7 +63,7 @@ class ManualClock implements Clock {
 
 const INSTRUMENT = 'AAPL';
 const DECISION_BAR = new Date('2026-07-15T10:00:00Z');
-/** The next hour on the debate's grid — bar N+1 to `DECISION_BAR`'s N (#687). */
+/** The next hour on the debate's grid — bar N+1 to `DECISION_BAR`'s N (#687) */
 const NEXT_BAR = new Date('2026-07-15T11:00:00Z');
 const ENTRY_PRICE = 100;
 const EQUITY = 100_000;
@@ -92,7 +92,7 @@ function bars(count: number, trueRange: number): Bar[] {
   });
 }
 
-/** Serves a fixed bar window and mark — the Trader's only data dependency. */
+/** Serves a fixed bar window and mark — the Trader's only data dependency */
 class FixtureMarketData implements MarketDataService {
   /**
    * The window `decide` last ASKED for. Recorded, not just ignored, because
@@ -214,7 +214,7 @@ function debateResult(overrides: Partial<DebateResult> = {}): DebateResult {
     // #687: the bar the Debate stage floored and hashed into `debate_id`. Equal
     // to `DECISION_BAR` by default so every key expectation below is unchanged
     // — but it now comes from the DEBATE, not from flooring the clock, which is
-    // what the straddle cases at the end of this suite turn on.
+    // what the straddle cases at the end of this suite turn on
     bar_timestamp: DECISION_BAR,
     read: true,
     ...overrides,
@@ -232,7 +232,7 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     config: DEFAULT_TRADER_CONFIG,
     positionState: async () => [],
     // #568: no exit fill on record for any lot — "missing is absent", so held
-    // quantity is `filled_size`, which is what every pre-#568 case here means.
+    // quantity is `filled_size`, which is what every pre-#568 case here means
     exitFillSizes: async () => new Map<string, number>(),
     unresolvedFlattens: async () => [],
     setupStore: new FixtureSetupStore(),
@@ -240,7 +240,7 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     // ET), ten hours from the 16:00 ET close, so every pre-#668 case here sits
     // far outside the flatten window and is unaffected. The flat-by-close cases
     // below move the clock instead of swapping the calendar, which is what makes
-    // them exercise the boundary the production path actually resolves.
+    // them exercise the boundary the production path actually resolves
     sessionCalendars: {
       crypto: new AlwaysOpenCalendar(),
       stocks: new UsEquityRegularHoursCalendar(),
@@ -383,7 +383,7 @@ describe('decide — asset-class risk scaling', () => {
   it('sizes crypto more conservatively than stocks at equal conviction', async () => {
     // ATR, entry, conviction, and equity are identical across the two runs —
     // only asset_class differs — so nothing but the risk multiplier can
-    // account for the difference.
+    // account for the difference
     const stocks = await decide(
       traderInput({ marketData: new FixtureMarketData(bars(15, 2), 'stocks') }),
     );
@@ -426,7 +426,7 @@ describe('decide — per-asset-class time in force', () => {
   it('reads the value off the intent asset class, not a fixed field', async () => {
     // Swap the two values and the stamped result must swap too. A resolver
     // that ignored `asset_class` — or one left reading a flat field — answers
-    // identically for both and fails here.
+    // identically for both and fails here
     const config = configWith({ time_in_force: { crypto: 'day', stocks: 'gtc' } });
     const stocks = await decide(
       traderInput({ config, marketData: new FixtureMarketData(bars(15, 2), 'stocks') }),
@@ -452,7 +452,7 @@ describe('decide — volatility', () => {
 
   it('bounds the stop by the volatility floor when ATR is ultra-low', async () => {
     // ATR 0.02 sits far below the floor of 0.002 x 100 = 0.2, so the floor
-    // governs the stop and caps how large ultra-low vol can inflate size.
+    // governs the stop and caps how large ultra-low vol can inflate size
     const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(15, 0.02)) }));
     if (!intent) throw new Error('expected an intent');
 
@@ -481,19 +481,19 @@ describe('decide — ATR bar window (#304, #757)', () => {
     // Until #757 this fetched exactly `atr_lookback + 1` bars — one true
     // range past the seed, so `computeIndicator`'s `atr` smoothing loop ran
     // ZERO times in production and the value was a plain mean wearing
-    // Wilder's name (the same warm-up gap #722 fixed for `RSI_SPEC`).
+    // Wilder's name (the same warm-up gap #722 fixed for `RSI_SPEC`)
     // Measured before adopting (median relative shift 3.0%, p90 6.9% against
     // a declared median<=15%/p90<=30% gate,
     // `docs/reviews/indicator-characterisation-2026-08-16.md` F1) and cleared
     // it, so the fetch now asks for `recommendedWarmupFor` instead — see
     // `atr-equivalence.test.ts` for the algorithmic half (still pinned at the
     // historical `atr_lookback + 1` width, which is no longer what production
-    // requests).
+    // requests)
     //
     // The assertion here is on the REQUEST, not the resulting ATR: the
     // fixture serves its 15 bars whatever it is asked for, so the value
     // computed on this path is not the one production would see. The
-    // request width is the only half a fixture can pin.
+    // request width is the only half a fixture can pin
     const marketData = new FixtureMarketData(bars(15, 2));
 
     await decide(traderInput({ marketData, config: configWith({ atr_lookback: 7 }) }));
@@ -506,9 +506,9 @@ describe('decide — ATR bar window (#304, #757)', () => {
 
   it('fails loudly if getBars serves a descending window, rather than mispricing the stop', async () => {
     // Trader stopped re-sorting defensively when #304 moved ATR to MDS, so
-    // ascending order became a trusted contract of `MarketDataService.getBars`.
+    // ascending order became a trusted contract of `MarketDataService.getBars`
     // Trust without enforcement is a silent misprice: reversed bars yield a
-    // plausible ATR, not an error, and every stop sized from it is wrong.
+    // plausible ATR, not an error, and every stop sized from it is wrong
     // `computeIndicator` asserts the order, so a broken source costs one
     // logged tick (production.ts's tick loop catches it) instead of live
     // money. This pins that Trader's path really is covered by that assertion.
@@ -524,7 +524,7 @@ describe('decide — ATR bar window (#304, #757)', () => {
     // of `marketData.getIndicator`: `IndicatorSpec` has no timeframe, so
     // `getIndicator` would pin ATR to its hardcoded 1h whatever this config
     // says (#315). That justification is only worth anything if a non-1h
-    // timeframe actually reaches the fetch — which is what this asserts.
+    // timeframe actually reaches the fetch — which is what this asserts
     const marketData = new FixtureMarketData(bars(15, 2));
 
     await decide(traderInput({ marketData, config: configWith({ atr_timeframe: '15m' }) }));
@@ -563,7 +563,7 @@ describe('decide — skip paths', () => {
   });
 
   it('returns null rather than placing a dust order below the minimum viable notional', async () => {
-    // Equity 100 yields a notional of 9.375, just under the 10 minimum.
+    // Equity 100 yields a notional of 9.375, just under the 10 minimum
     const intent = await decide(traderInput({ equity: async () => 100 }));
 
     expect(intent).toBeNull();
@@ -583,7 +583,7 @@ describe('decide — skip paths', () => {
     // produced a NaN that defeated every downstream guard (`stopDistance <=
     // 0` and the min-notional check are both false against NaN) and reached
     // an emitted intent; either way the skip has to happen before an intent
-    // is built.
+    // is built
     const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(0, 2)) }));
 
     expect(intent).toBeNull();
@@ -596,7 +596,7 @@ describe('decide — skip paths', () => {
     // downstream of `atrFor`: `Math.max(NaN, volFloor)` is NaN,
     // `stopDistance <= 0` is false against NaN, and `size * entry <
     // min_viable_notional` is false too. Without the finiteness check this
-    // emits a live OrderIntent with NaN size, stop AND target.
+    // emits a live OrderIntent with NaN size, stop AND target
     const corrupt = bars(15, 2);
     // biome-ignore lint/style/noNonNullAssertion: fixed-length fixture built two lines above.
     corrupt[7]!.high = Number.NaN;
@@ -611,12 +611,12 @@ describe('decide — skip paths', () => {
     // NOT defended: the ATR is fine and the bars are fine, but the QUOTE is
     // corrupt. `AlpacaHttpDataClient` casts the wire body
     // (`as CryptoLatestQuoteResponse`) without validating that `ap`/`bp` are
-    // numbers, so a null field arrives here as a NaN `mark.price`.
+    // numbers, so a null field arrives here as a NaN `mark.price`
     //
     // NaN then defeats the same three guards the ATR comment lists —
     // `Math.max(atr, NaN)` is NaN, `stopDistance <= 0` is false, `size *
     // entry < min_viable_notional` is false — and lands in an EMITTED intent
-    // whose entry, stop AND target are all NaN.
+    // whose entry, stop AND target are all NaN
     const intent = await decide(
       traderInput({ marketData: new FixtureMarketData(bars(15, 2), 'stocks', Number.NaN) }),
     );
@@ -629,7 +629,7 @@ describe('decide — skip paths', () => {
     // read, so a malformed broker response reaches sizing the same way a
     // malformed quote reaches pricing. `size` is the choke point every
     // numeric input funnels through — guarding it covers this case and any
-    // later one, which the per-input `entry` check alone would not.
+    // later one, which the per-input `entry` check alone would not
     const intent = await decide(traderInput({ equity: async () => Number.NaN }));
 
     expect(intent).toBeNull();
@@ -637,7 +637,7 @@ describe('decide — skip paths', () => {
 
   it('skips one bar short of the ATR width and trades at exactly that width (#319)', async () => {
     // Both sides of the boundary `atrFor` now sits on, in one test because
-    // neither half means anything alone.
+    // neither half means anything alone
     //
     // The SKIP side is the behaviour change #319 bought. This used to trade
     // on TWO bars: `computeIndicator`'s `atr` divides by `seedRanges.length`,
@@ -650,7 +650,7 @@ describe('decide — skip paths', () => {
     // instrument at exactly `atr_lookback + 1` bars yields exactly
     // `atr_lookback` true ranges, which is a genuine ATR(14), and must still
     // trade. It produces the same intent as the default fixture because
-    // `bars()` gives every candle an identical true range.
+    // `bars()` gives every candle an identical true range
     const { atr_lookback } = DEFAULT_TRADER_CONFIG;
 
     const oneShort = await decide(
@@ -675,7 +675,7 @@ describe('decide — determinism & idempotency', () => {
 
   it('keys on the decision bar, not wall-clock, so a re-run of the same bar dedupes', async () => {
     // The crash-restart case: the same bar re-decided at a later wall-clock
-    // moment must produce the same key, or Execution would place a second order.
+    // moment must produce the same key, or Execution would place a second order
     const first = await decide(traderInput({ clock: new ManualClock(DECISION_BAR) }));
     const rerun = await decide(
       traderInput({ clock: new ManualClock(new Date('2026-07-15T10:42:31Z')) }),
@@ -729,14 +729,14 @@ describe('decide — determinism & idempotency', () => {
     expect(first?.idempotency_key).toBeDefined();
     expect(sameBarLater?.idempotency_key).toBe(first?.idempotency_key);
     // And the coordinate is the bar itself, which is what makes it the same
-    // value `debate_id` hashes.
+    // value `debate_id` hashes
     expect(sameBarLater?.decision_timestamp).toEqual(DECISION_BAR);
 
     // #1190: `decided_at` is the opposite of `decision_timestamp` on this
     // axis — it tracks each tick's own wall clock rather than the shared bar,
     // which is what lets Verdict's staleness gate tell these two ticks apart
     // even though their bar coordinate, and therefore their idempotency key,
-    // is identical.
+    // is identical
     expect(first?.decided_at).toEqual(new Date('2026-07-15T10:00:03.187Z'));
     expect(sameBarLater?.decided_at).toEqual(new Date('2026-07-15T10:45:11.902Z'));
     expect(sameBarLater?.decided_at).not.toEqual(first?.decided_at);
@@ -790,7 +790,7 @@ describe('decide — determinism & idempotency', () => {
     expect(sameBarLater?.decision_timestamp).toEqual(DECISION_BAR);
 
     // #1190: the exit's own `decided_at` tracks each tick's wall clock too,
-    // same as the entry path above.
+    // same as the entry path above
     expect(first?.decided_at).toEqual(new Date('2026-07-15T10:00:03.187Z'));
     expect(sameBarLater?.decided_at).toEqual(new Date('2026-07-15T10:45:11.902Z'));
   });
@@ -805,7 +805,7 @@ describe('decide — determinism & idempotency', () => {
         // #687: the bar comes from the DEBATE now, so a genuinely new bar is a
         // new DEBATE. Moving only the clock would no longer be a new bar — it
         // would be the same debate re-decided late, which is precisely the
-        // straddle this ticket stopped mis-keying.
+        // straddle this ticket stopped mis-keying
         debate: debateResult({
           debate_id: 'debate-next-bar',
           bar_timestamp: NEXT_BAR,
@@ -841,10 +841,10 @@ describe('decide — determinism & idempotency', () => {
 
     const straddled = await decide(
       traderInput({
-        // Bar N — the debate started here and is logged here.
+        // Bar N — the debate started here and is logged here
         debate: debateResult({ bar_timestamp: DECISION_BAR }),
         marketData: lateTick,
-        // Bar N+1 — the LLM round-trips crossed the boundary.
+        // Bar N+1 — the LLM round-trips crossed the boundary
         clock: new ManualClock(new Date('2026-07-15T11:07:42.310Z')),
       }),
     );
@@ -914,7 +914,7 @@ describe('decide — determinism & idempotency', () => {
   /**
    * And the suppression the key space exists for is intact: a TRUE duplicate —
    * the same bar's decision re-run at a later wall-clock moment, which is the
-   * crash-replay case — still collapses onto one key.
+   * crash-replay case — still collapses onto one key
    */
   it('#687: a true duplicate of the same bar still computes one key', async () => {
     const replayed = new FixtureMarketData(bars(15, 2));
@@ -923,7 +923,7 @@ describe('decide — determinism & idempotency', () => {
     const first = await decide(traderInput());
     const replay = await decide(
       traderInput({
-        // Same debate, same bar — a re-decide, not a new decision.
+        // Same debate, same bar — a re-decide, not a new decision
         debate: debateResult({ bar_timestamp: DECISION_BAR }),
         marketData: replayed,
         clock: new ManualClock(new Date('2026-07-15T10:58:03.941Z')),
@@ -940,7 +940,7 @@ describe('decide — determinism & idempotency', () => {
     // separate, independently tunable knob (the window the ATR is measured
     // over), and tying the order-dedup coordinate to a risk-tuning setting
     // would be #616 inverted: a finer grid collapses several decision bars onto
-    // one key, and the suppressed orders look exactly like skips.
+    // one key, and the suppressed orders look exactly like skips
     const fine = await decide(traderInput({ config: configWith({ atr_timeframe: '15m' }) }));
     const coarse = await decide(traderInput());
 
@@ -1155,7 +1155,7 @@ describe('decide — flat by close (#668)', () => {
     // mark read fails outright (feed timeout, unknown symbol) or the batch
     // response omits it — a DIFFERENT shape from `StaleMarkError`, and the
     // original `StaleMarkError`-only narrowing missed it, leaving one such
-    // lot able to crash the control pass exactly like the original incident.
+    // lot able to crash the control pass exactly like the original incident
     const outcome = await decideWithReason(
       traderInput({
         clock: new ManualClock(OUTSIDE_WINDOW),
@@ -1179,7 +1179,7 @@ describe('decide — flat by close (#668)', () => {
     // Narrowed by error TYPE, not merely by `arm === 'control'`: this pins
     // that a plain `Error` from the same thunk is NOT downgraded to a skip on
     // the control arm — it must stay audible in `tick-loop.ts`'s `#507`
-    // catch exactly as it does on the live arm.
+    // catch exactly as it does on the live arm
     await expect(
       decideWithReason(
         traderInput({
@@ -1201,7 +1201,7 @@ describe('decide — flat by close (#668)', () => {
     // thunk, and a future non-valuation `AggregateError` (e.g. a batched
     // sub-read inside `sizingEquity`) must still propagate as a fault on
     // the control arm, not get silently downgraded to a skip because it
-    // happens to share the wrapper type.
+    // happens to share the wrapper type
     await expect(
       decideWithReason(
         traderInput({
@@ -1317,7 +1317,7 @@ describe('decide — flat by close (#668)', () => {
   });
 
   it('flattens the LSE leg at ITS 16:30 London close', async () => {
-    // 16:26 London in July (BST) = 15:26 UTC, inside the 15:25 window.
+    // 16:26 London in July (BST) = 15:26 UTC, inside the 15:25 window
     const outcome = await decideWithReason(
       traderInput({
         clock: new ManualClock(new Date('2026-07-15T15:26:00Z')),
@@ -1355,12 +1355,12 @@ describe('decide — flat by close (#668)', () => {
    * both the calendar map and the config are injected.
    */
   it('flattens rather than holding when the calendar reports a close already past', async () => {
-    // CHARACTERISATION, not a regression guard — and deliberately kept as one.
+    // CHARACTERISATION, not a regression guard — and deliberately kept as one
     // This passes against the pre-#691 code too, because `remaining <= window`
     // was already true for every negative `remaining`. What it pins is that
     // flattening is the INTENDED answer here rather than an accident of the
     // comparison, so a later "tidy-up" that makes a past close return false —
-    // or throw, which was this change's first cut — fails a test that says why.
+    // or throw, which was this change's first cut — fails a test that says why
     const pastClose = new Date('2026-07-15T19:00:00Z');
     const stuckCalendar = {
       isOpen: () => true,
@@ -1384,7 +1384,7 @@ describe('decide — flat by close (#668)', () => {
   it('opens nothing new while the calendar reports a close already past', async () => {
     // The same answer read on the entry path: "inside the window" means open
     // nothing. Together with the flatten above this is what makes a
-    // permanently-wrong calendar park the book flat and stop, rather than loop.
+    // permanently-wrong calendar park the book flat and stop, rather than loop
     const pastClose = new Date('2026-07-15T19:00:00Z');
     const stuckCalendar = {
       isOpen: () => true,
@@ -1415,7 +1415,7 @@ describe('decide — flat by close (#668)', () => {
     // deleted the kind, because past the bell the window now works against a
     // past close BY DESIGN and the alert would fire every session on every
     // held instrument. The ANSWER is what mattered and it is unchanged: be
-    // flat.
+    // flat
     const pastClose = new Date('2026-07-15T19:00:00Z');
     const stuckCalendar = {
       isOpen: () => true,
@@ -1442,7 +1442,7 @@ describe('decide — flat by close (#668)', () => {
     // crypto and a broken calendar for anything else, and both returned the
     // identical `false` with nothing marking the difference — so an equity leg
     // whose calendar had stopped resolving sessions never flattened and carried
-    // overnight against ADR-0014.
+    // overnight against ADR-0014
     const muteCalendar = {
       isOpen: () => true,
       isTradingDay: () => true,
@@ -1459,7 +1459,7 @@ describe('decide — flat by close (#668)', () => {
     );
 
     // Unchanged behaviour: no session end means not inside the window, so the
-    // holding path falls through to its ordinary neutral skip.
+    // holding path falls through to its ordinary neutral skip
     expect(outcome.intent).toBeNull();
     expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual([
       'session_end_absent_on_non_crypto',
@@ -1467,7 +1467,7 @@ describe('decide — flat by close (#668)', () => {
   });
 
   it('stays silent when CRYPTO has no session end, which is the intended answer (#698)', async () => {
-    // `AlwaysOpenCalendar` returns null by design — a venue that never closes.
+    // `AlwaysOpenCalendar` returns null by design — a venue that never closes
     // Alerting on it would fire on every crypto tick forever, which is how an
     // operator learns to mute a channel that also carries breach alerts
     // (ADR-0008 §1). The diagnostic is keyed to the ASSET CLASS for this reason.
@@ -1483,7 +1483,7 @@ describe('decide — flat by close (#668)', () => {
 
   it('leaves diagnostics empty on an ordinary healthy decision (#698)', async () => {
     // The case that must stay quiet, and the one that would make the channel
-    // useless if it did not: the overwhelmingly common tick.
+    // useless if it did not: the overwhelmingly common tick
     const outcome = await decideWithReason(traderInput());
 
     expect(outcome.intent).not.toBeNull();
@@ -1508,7 +1508,7 @@ describe('decide — flat by close (#668)', () => {
     );
 
     // Unchanged behaviour: a stop cannot be priced off an ATR that does not
-    // exist, so the tick still skips — it is now merely audible while doing it.
+    // exist, so the tick still skips — it is now merely audible while doing it
     expect(outcome.intent).toBeNull();
     expect(outcome.skip_reason).toBe('atr_not_finite');
     expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(['atr_not_finite']);
@@ -1521,7 +1521,7 @@ describe('decide — flat by close (#668)', () => {
     // `routeDecision` answers `neutral_direction_while_flat` before any calendar
     // is consulted. A calendar that has stopped resolving sessions is therefore
     // invisible until a position exists — which is exactly the tick where it
-    // starts to cost something.
+    // starts to cost something
     //
     // Left as-is deliberately: the asset class is not on `TraderInput` and is
     // reached through `getMark`, so covering this path means adding a vendor
@@ -1550,7 +1550,7 @@ describe('decide — flat by close (#668)', () => {
     // Zero is the dangerous value, not negative: it reads like "no offset" and
     // is what someone reaches for to "turn the window off", when what it
     // actually turns off is ADR-0014's flat-by-close rule entirely — silently,
-    // and only visibly as positions carrying overnight.
+    // and only visibly as positions carrying overnight
     await expect(
       decide(
         traderInput({
@@ -1586,7 +1586,7 @@ describe('decide — flat by close (#668)', () => {
    */
   it('keys a same-bar entry and the mandatory flatten separately (#686)', async () => {
     // 19:50 and 19:56 UTC both floor to the 19:00 bar; only 19:56 is inside the
-    // 5-minute flatten window, so the entry is legal and so is the flatten.
+    // 5-minute flatten window, so the entry is legal and so is the flatten
     const entry = await decide(
       traderInput({
         clock: new ManualClock(OUTSIDE_WINDOW),
@@ -1666,7 +1666,7 @@ describe('decide — position-aware branching (#74)', () => {
 
     expect(intent).not.toBeNull();
     expect(intent?.intent_type).toBe('exit');
-    // Closing a long is a sell, flattening the combined filled exposure of every lot.
+    // Closing a long is a sell, flattening the combined filled exposure of every lot
     expect(intent?.side).toBe('sell');
     expect(intent?.size).toBe(75);
   });
@@ -1676,7 +1676,7 @@ describe('decide — position-aware branching (#74)', () => {
   // that no exit fill ever reduces. Sizing the next exit off it sold the
   // original quantity into a venue holding only the residual — 4 short of a
   // 10-lot flattened by 4 is a REVERSE position, with no lot, no bracket and
-  // no protective leg.
+  // no protective leg
   it('sizes an exit to what the venue still holds after a partial flatten, not the original filled size', async () => {
     const partiallyFlattened = openPosition({ side: 'buy', filled_size: 10 });
     const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
@@ -1685,7 +1685,7 @@ describe('decide — position-aware branching (#74)', () => {
       traderInput({
         debate,
         positionState: async () => [partiallyFlattened],
-        // 4 of the 10 already closed by an earlier partial flatten.
+        // 4 of the 10 already closed by an earlier partial flatten
         exitFillSizes: async () => new Map([[partiallyFlattened.idempotency_key, 4]]),
       }),
     );
@@ -1697,7 +1697,7 @@ describe('decide — position-aware branching (#74)', () => {
   it('holds (null) rather than exiting a lot whose exit fills already cover it', async () => {
     // Flat at the venue but not yet marked terminal — the close lands on the
     // next `ingestFills()` poll. There is nothing left to sell in between, so
-    // emitting an exit here would be the same oversell in miniature.
+    // emitting an exit here would be the same oversell in miniature
     const fullyExited = openPosition({ side: 'buy', filled_size: 10 });
     const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
 
@@ -1762,7 +1762,7 @@ describe('decide — position-aware branching (#74)', () => {
       opened_at: new Date('2026-07-14T10:00:00Z'),
     });
     // Rose past the older lot's conviction (0.5) but not past the newer
-    // lot's (0.7) by the required delta — should hold, not scale_in.
+    // lot's (0.7) by the required delta — should hold, not scale_in
     const debate = debateResult({ direction: 'bullish', confidence: 0.75, converged: true });
 
     const intent = await decide(
@@ -1797,7 +1797,7 @@ describe('decide — cosine precedent wiring (#432)', () => {
     // `decide` runs the same path in live and in replay (ADR-0003), and a
     // crash-restart re-decides the bar it died on. `debate_id` is a hash of the
     // debate's inputs, so the second pass writes the same key; a store that
-    // threw there would take the tick down.
+    // threw there would take the tick down
     const setupStore = new FixtureSetupStore();
 
     await decide(traderInput({ setupStore }));
@@ -1845,7 +1845,7 @@ describe('decide — cosine precedent wiring (#432)', () => {
   it('sizes UP off a profitable precedent instead of taking the 0.75x haircut', async () => {
     // The neighbor is the vector this exact setup produces, so similarity is
     // 1.0 by construction — taken from a first run rather than hand-built, so
-    // the test cannot drift away from the real feature layout.
+    // the test cannot drift away from the real feature layout
     const probe = new FixtureSetupStore();
     const baseline = await decide(traderInput({ setupStore: probe }));
     const vector = probe.getWritten()[0]?.vector;
@@ -1856,7 +1856,7 @@ describe('decide — cosine precedent wiring (#432)', () => {
     ]);
     const intent = await decide(traderInput({ setupStore: withPrecedent }));
 
-    // r_multiple 2 saturates the multiplier to its 1.5x bound.
+    // r_multiple 2 saturates the multiplier to its 1.5x bound
     expect(intent?.metadata.sizing.cosine_multiplier).toBe(1.5);
     expect(intent?.metadata.cosine_precedent).toEqual({
       neighbor_count: 1,
@@ -1864,7 +1864,7 @@ describe('decide — cosine precedent wiring (#432)', () => {
       no_precedent: false,
     });
     // Applied, not merely recorded — multiplicative stacking is a spec
-    // invariant, so the size must move with the multiplier.
+    // invariant, so the size must move with the multiplier
     expect(intent?.size).toBeCloseTo((baseline?.size ?? 0) * (1.5 / 0.75), 10);
   });
 
@@ -1924,13 +1924,13 @@ describe('decideWithReason — named skip reasons (#475)', () => {
 
     expect(outcome.skip_reason).toBe('below_conviction_floor');
     // Null, not the ATR: the skip fired before any ATR was computed. "How far
-    // did it get" is half the value of the row.
+    // did it get" is half the value of the row
     expect(outcome.atr).toBeNull();
   });
 
   it('too few bars to compute an ATR', async () => {
     // Benign — a warm-up or a data gap, expected early in a soak, and
-    // deliberately distinct from a non-finite ATR, which never is.
+    // deliberately distinct from a non-finite ATR, which never is
     const outcome = await decideWithReason(
       traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }),
     );
@@ -1970,7 +1970,7 @@ describe('decideWithReason — named skip reasons (#475)', () => {
 
   it('reversing out of a position that has no filled size yet', async () => {
     // The opposite-side path reaches the exit builder, which has nothing to
-    // flatten because the lot is still pending at the venue.
+    // flatten because the lot is still pending at the venue
     const outcome = await decideWithReason(
       traderInput({
         debate: debateResult({ direction: 'bearish' }),
@@ -1988,7 +1988,7 @@ describe('decideWithReason — named skip reasons (#475)', () => {
   // total that looks benign. Here it would suppress the exit the sibling
   // genuinely needs, and `executeExit`'s loud refusal never runs because no
   // order is emitted for it to refuse, so this reason is what makes it
-  // visible at all.
+  // visible at all
   it('reports the divergence, not a flat-lot skip, when a lot records more closed than it ever opened', async () => {
     const overExited = openPosition({
       idempotency_key: 'lot-over-exited',
@@ -2006,7 +2006,7 @@ describe('decideWithReason — named skip reasons (#475)', () => {
         debate: debateResult({ direction: 'bearish', confidence: 0.9, converged: true }),
         positionState: async () => [overExited, sibling],
         // 14 closed against an entry of 10 → held -4, which nets the
-        // sibling's real +4 to exactly zero.
+        // sibling's real +4 to exactly zero
         exitFillSizes: async () => new Map([['lot-over-exited', 14]]),
       }),
     );
@@ -2017,7 +2017,7 @@ describe('decideWithReason — named skip reasons (#475)', () => {
 
   it('reports no reason at all when an order was produced', async () => {
     // The other half of the contract: a successful decision must not carry a
-    // skip reason, or a soak query counting skips would double-count trades.
+    // skip reason, or a soak query counting skips would double-count trades
     const outcome = await decideWithReason(traderInput());
 
     expect(outcome.intent).not.toBeNull();
@@ -2036,7 +2036,7 @@ describe('decideWithReason — named skip reasons (#475)', () => {
   it('reports the scale_in ATR, not a stale one from the entry path', async () => {
     // `buildBracket` serves entry AND scale_in, and the reported `atr` must be
     // the one THIS call priced its stop from. Pinned with a different true
-    // range from the default fixture so a stale or defaulted value cannot pass.
+    // range from the default fixture so a stale or defaulted value cannot pass
     const outcome = await decideWithReason(
       traderInput({
         marketData: new FixtureMarketData(bars(15, 6)),
@@ -2047,7 +2047,7 @@ describe('decideWithReason — named skip reasons (#475)', () => {
 
     expect(outcome.intent?.intent_type).toBe('scale_in');
     expect(outcome.atr).toBe(6);
-    // And it is genuinely the stop's input: stop distance = atr_k (2) x 6.
+    // And it is genuinely the stop's input: stop distance = atr_k (2) x 6
     expect(outcome.intent?.entry).toBeDefined();
     expect((outcome.intent?.entry ?? 0) - (outcome.intent?.stop ?? 0)).toBeCloseTo(12, 10);
   });
@@ -2055,7 +2055,7 @@ describe('decideWithReason — named skip reasons (#475)', () => {
   it('is the same decision `decide` makes, projected', async () => {
     // `decide` is a wrapper over this, so the two cannot drift. If it ever
     // stops being a projection, this fails rather than the pair silently
-    // disagreeing.
+    // disagreeing
     const input = traderInput({ debate: debateResult({ confidence: 0.1 }) });
 
     expect(await decide(input)).toBeNull();
@@ -2102,7 +2102,7 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
   it('classifies a flat-side neutral as could_not_decide when the debate timed out with some rounds completed', async () => {
     // #1080's `timed_out_partial`: the budget still fired, so the read is no
     // more trustworthy than the zero-round case — a partial debate is not a
-    // completed one.
+    // completed one
     const outcome = await decideWithReason(
       traderInput({
         debate: debateResult({
@@ -2140,7 +2140,7 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     // still be treated as a starved read, not a genuine decline. Before
     // `debateWasDegraded` consulted `read`, this exact fixture classified as
     // `declined_on_signal` — the mutation evidence for this test is that
-    // regression.
+    // regression
     const outcome = await decideWithReason(
       traderInput({
         debate: debateResult({
@@ -2195,7 +2195,7 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     // `debate.confidence` next. Without checking the debate's health at every
     // `declined_on_signal` reason, this row would read as the Trader having
     // genuinely declined a low-conviction signal, when the debate that
-    // produced the confidence figure never finished.
+    // produced the confidence figure never finished
     const outcome = await decideWithReason(
       traderInput({
         debate: debateResult({
@@ -2217,9 +2217,9 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     // above, `session_closing` fires purely off `withinFlattenWindow`'s
     // clock/calendar read — it would fire identically against a fully
     // converged debate — so a starved debate must not flip it to
-    // `could_not_decide` the way a genuine `declined_on_signal` reason does.
+    // `could_not_decide` the way a genuine `declined_on_signal` reason does
     // Reachable because `below_conviction_floor` is checked first: this needs
-    // a confidence at or above the floor inside the flatten window.
+    // a confidence at or above the floor inside the flatten window
     const outcome = await decideWithReason(
       traderInput({
         clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
@@ -2240,7 +2240,7 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     // Same carve-out as the `timed_out` case above, pinned separately for
     // `read: false`: `session_closing` decides off the clock/calendar, never
     // off the debate, so it must not flip to `could_not_decide` on this
-    // override either.
+    // override either
     const outcome = await decideWithReason(
       traderInput({
         clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
@@ -2277,7 +2277,7 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
 
     expect(outcome.skip_reason).toBe('below_min_notional');
     // A near-miss and a decisive refusal both read `below_min_notional`; only
-    // the compared value tells them apart.
+    // the compared value tells them apart
     expect(outcome.reason_detail).toEqual({
       compared_value: EXPECTED_SIZE * ENTRY_PRICE,
       threshold: 1_000_000,
@@ -2302,7 +2302,7 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
   it('carries no reason_detail on a skip that has no threshold to compare', async () => {
     // `atr_not_finite` (unlike `atr_insufficient_bars`, below) has nothing
     // configured to compare against — a non-finite ATR on a full window is
-    // corrupt bar data, not a value read against a threshold.
+    // corrupt bar data, not a value read against a threshold
     const corrupt = bars(15, 2).map((bar, index) =>
       index === 7 ? { ...bar, high: Number.NaN } : bar,
     );
@@ -2317,14 +2317,14 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     // own priced input, not a debate read) — but only `atr_insufficient_bars`
     // (below) carries a `reason_detail`. That contrast, not `decision_class`
     // alone, is what lets an operator tell this corrupt-data row apart from
-    // the benign warm-up one without pattern-matching `skip_reason` strings.
+    // the benign warm-up one without pattern-matching `skip_reason` strings
     expect(outcome.decision_class).toBe('input_unusable');
   });
 
   it('carries the compared value and the threshold on an insufficient-bars decline', async () => {
     // #1109: `minimumBarsFor(spec)` derives from the configured
     // `atr_lookback`, so this is a fourth numeric-gate site — "2 bars short"
-    // and "13 bars short" must not read as the same row.
+    // and "13 bars short" must not read as the same row
     const outcome = await decideWithReason(
       traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }),
     );
@@ -2339,10 +2339,10 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
     // Pinned `input_unusable` deliberately, not `could_not_decide`: this is a
     // benign warm-up/data-gap case (#475), but folding it into
     // `could_not_decide` would corrupt that class's #1109 acceptance-criterion
-    // count (pinned to #1080's 41 debate timeouts) with routine warm-up ticks.
+    // count (pinned to #1080's 41 debate timeouts) with routine warm-up ticks
     // See `TraderDecisionClass`'s doc for the full argument; `reason_detail`
     // above is the row-level signal that this is the benign case, not the
-    // class.
+    // class
     expect(outcome.decision_class).toBe('input_unusable');
   });
 
@@ -2377,15 +2377,15 @@ describe('decideWithReason — decision class and reason detail (#1109)', () => 
  */
 describe('checkExitsWithReason — the tick-path exit entry point (#743)', () => {
   // Same US-equity geometry as the flat-by-close suite above: close 20:00 UTC,
-  // `flatten_before_close_ms` 5 min, so 19:56 is inside the window.
+  // `flatten_before_close_ms` 5 min, so 19:56 is inside the window
   const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
   const OUTSIDE_WINDOW = new Date('2026-07-15T15:00:00Z');
   // Deliberately NOT the bar the clock would floor to (19:56 floors to 19:00):
   // the runner floored this pass's bar once and passed it down, and re-deriving
   // it from the clock in here is the #687 defect shape one seam down. The key
-  // assertion below fails if the implementation re-floors.
+  // assertion below fails if the implementation re-floors
   const TICK_BAR = new Date('2026-07-15T18:00:00Z');
-  /** 2026-07-15 is EDT, so `UsEquityRegularHoursCalendar` closes 16:00 ET. */
+  /** 2026-07-15 is EDT, so `UsEquityRegularHoursCalendar` closes 16:00 ET */
   const SESSION_CLOSE = new Date('2026-07-15T20:00:00Z');
 
   /**
@@ -2455,7 +2455,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
     expect(outcome.intent?.side).toBe('sell');
     expect(outcome.intent?.size).toBe(10);
     // There is no debate on a tick pass; the attribution is read off the open
-    // lot — the decision this exit is a consequence of.
+    // lot — the decision this exit is a consequence of
     expect(outcome.intent?.metadata.debate_id).toBe('debate-existing');
     expect(outcome.intent?.metadata.conviction).toBe(0.6);
   });
@@ -2464,9 +2464,9 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
     const outcome = await checkExitsWithReason(exitInput());
 
     // The obligation is one session close, not one bar — so neither the passed
-    // bar (18:00) nor a clock re-floor (19:56 -> 19:00) may appear in the key.
+    // bar (18:00) nor a clock re-floor (19:56 -> 19:00) may appear in the key
     // A bar coordinate is what let a flatten decided at 19:59:56 and the retry
-    // at 20:00:06 hash differently and both reach the venue (#1389).
+    // at 20:00:06 hash differently and both reach the venue (#1389)
     expect(outcome.intent?.idempotency_key).toBe(
       computeFlattenIdempotencyKey(exitInput().instrument, SESSION_CLOSE),
     );
@@ -2486,7 +2486,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
    * the coordinate that makes the two sides of the bell one obligation.
    */
   describe('the grace past the bell (#1389)', () => {
-    /** `flatten_after_close_ms` defaults to 5 minutes — see `TraderConfig`. */
+    /** `flatten_after_close_ms` defaults to 5 minutes — see `TraderConfig` */
     const INSIDE_GRACE = new Date('2026-07-15T20:04:00Z');
     const PAST_GRACE = new Date('2026-07-15T20:06:00Z');
 
@@ -2502,9 +2502,9 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
 
     it('keys the post-bell flatten to the SAME close the in-window one enforced', async () => {
       // `sessionEnd(now)` before the bell and `sessionStart(now)` after it name
-      // one instant, which is what lets gate 3 dedupe ACROSS the boundary.
+      // one instant, which is what lets gate 3 dedupe ACROSS the boundary
       // Reading `sessionEnd` on both sides yields tomorrow's close past the
-      // bell, the keys diverge, and the lot is flattened twice.
+      // bell, the keys diverge, and the lot is flattened twice
       const before = await checkExitsWithReason(exitInput());
       const after = await checkExitsWithReason(exitInput({ clock: new ManualClock(INSIDE_GRACE) }));
 
@@ -2518,7 +2518,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
       // AC 2: the flatten must not be a fresh order every tick. The bound is
       // asserted as a COUNT rather than a spot check, because a `now`-derived
       // or lot-anchored coordinate passes any single-instant comparison and
-      // fails this one immediately.
+      // fails this one immediately
       const keys = new Set<string>();
       for (
         let at = SESSION_CLOSE.getTime() - 5 * 60_000;
@@ -2539,7 +2539,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
       const outcome = await checkExitsWithReason(exitInput({ clock: new ManualClock(PAST_GRACE) }));
 
       // No flatten, and no crash: the lot falls through to the ordinary decay
-      // read, which is what the carried-lot alert exists to make audible.
+      // read, which is what the carried-lot alert exists to make audible
       expect(outcome.intent?.metadata.exit_reason).not.toBe('flatten');
     });
   });
@@ -2566,7 +2566,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
     it('does NOT fall through to the decay release when it skips', async () => {
       // Falling through would size the same over-sell off the same stale held
       // quantities and label it `signal_decay`, which is worse than the bug it
-      // replaces: the row would not even say "flatten".
+      // replaces: the row would not even say "flatten"
       const decayed = marketDataWithLiveSignal();
       decayed.indicatorReads.set('rsi', 40);
       decayed.indicatorReads.set('macd_histogram', -0.5);
@@ -2608,7 +2608,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
     );
 
     expect(outcome.intent?.metadata.debate_id).toBe('debate-newer');
-    // ...while the SIZE still flattens the whole book, both lots.
+    // ...while the SIZE still flattens the whole book, both lots
     expect(outcome.intent?.size).toBe(15);
   });
 
@@ -2637,7 +2637,7 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
   const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
   const OUTSIDE_WINDOW = new Date('2026-07-15T15:00:00Z');
   const TICK_BAR = new Date('2026-07-15T18:00:00Z');
-  /** 2026-07-15 is EDT, so `UsEquityRegularHoursCalendar` closes 16:00 ET. */
+  /** 2026-07-15 is EDT, so `UsEquityRegularHoursCalendar` closes 16:00 ET */
   const SESSION_CLOSE = new Date('2026-07-15T20:00:00Z');
 
   const MOMENTUM_BULLISH = { rsi: 60, macd: 0.5 };
@@ -2695,7 +2695,7 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
 
   it('releases a decayed SHORT — decay is read against the HELD side, not the market', async () => {
     // Bullish momentum supports a long and contradicts a short. The same read
-    // must therefore hold one and release the other.
+    // must therefore hold one and release the other
     const bullish = marketDataWithMomentum(MOMENTUM_BULLISH);
 
     const shortOutcome = await checkExitsWithReason(
@@ -2731,11 +2731,11 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
 
     expect(outcome.intent?.intent_type).toBe('exit');
     // Opposite the held side — an intent that could OPEN or INCREASE would be
-    // on the held side, and `buildFlattenExit` cannot produce one.
+    // on the held side, and `buildFlattenExit` cannot produce one
     expect(outcome.intent?.side).toBe('sell');
-    // Exactly the held quantity, never more: 10 + 4.
+    // Exactly the held quantity, never more: 10 + 4
     expect(outcome.intent?.size).toBe(14);
-    // Degenerate legs: an exit carries no new risk and opens no bracket.
+    // Degenerate legs: an exit carries no new risk and opens no bracket
     expect(outcome.intent?.stop).toBe(outcome.intent?.entry);
     expect(outcome.intent?.target).toBe(outcome.intent?.entry);
   });
@@ -2759,7 +2759,7 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     );
 
     // Same tape, same position, two configs, opposite answers — which is only
-    // possible if the threshold is read from config.
+    // possible if the threshold is read from config
     expect(DEFAULT_TRADER_CONFIG.early_exit.momentum_release_at).toBe(-1);
     expect(atDefault.intent).toBeNull();
     expect(atDefault.skip_reason).toBe('signal_still_supports_position');
@@ -2778,14 +2778,14 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     await checkExitsWithReason(exitInput({ marketData }));
 
     // The named, priced subset — and the whole of it. A third read here is a
-    // per-tick cost this change did not price.
+    // per-tick cost this change did not price
     //
     // The ORDER is asserted, not incidental. `cachedBars` rejects a hit on
     // `rows.length < window.lookback` before it consults the per-interval fetch
     // record, so the widest window has to go first or the second call misses on
     // depth and issues a second upstream fetch. MACD's warm-up is 112 bars and
     // RSI's is 57; reversing these two lines doubles the network cost this
-    // change priced at one fetch per bar interval.
+    // change priced at one fetch per bar interval
     expect(MACD_SPEC.lookback).toBeGreaterThan(RSI_SPEC.lookback);
     expect(requested).toEqual([MACD_SPEC.indicator, RSI_SPEC.indicator]);
   });
@@ -2805,7 +2805,7 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     expect(flatten.intent?.metadata.exit_reason).toBe('flatten');
     expect(decay.intent?.metadata.exit_reason).toBe('signal_decay');
     expect(flip.intent?.metadata.exit_reason).toBe('direction_flip');
-    // Distinct values, not one reason wearing three names.
+    // Distinct values, not one reason wearing three names
     expect(
       new Set([
         flatten.intent?.metadata.exit_reason,
@@ -2822,13 +2822,13 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     );
 
     // Same instrument, same bar, two different keys — otherwise Execution's
-    // `findByKey` suppresses whichever came second, which is the flatten (#686).
+    // `findByKey` suppresses whichever came second, which is the flatten (#686)
     expect(decay.intent?.idempotency_key).toBe(
       computeIdempotencyKey(INSTRUMENT, TICK_BAR, 'early_close'),
     );
     // #1389 widened the separation: the two are now in different key SPACES
     // (`{instrument, bar, side}` vs `{instrument, session_close, side}`), not
-    // merely different `side` discriminators within one.
+    // merely different `side` discriminators within one
     expect(flatten.intent?.idempotency_key).toBe(
       computeFlattenIdempotencyKey(INSTRUMENT, SESSION_CLOSE),
     );
@@ -2849,7 +2849,7 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     const outcome = await checkExitsWithReason(exitInput({ marketData: cold }));
 
     // NOT released on a read nobody could take, and NOT folded into the
-    // healthy-hold reason.
+    // healthy-hold reason
     expect(outcome.intent).toBeNull();
     expect(outcome.skip_reason).toBe('early_exit_signal_unavailable');
   });
@@ -2866,7 +2866,7 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
   });
 
   // ── Flat-by-close is unaffected. The three cases below are the ticket's
-  // highest-stakes line: the flatten is evaluated on a tick and nowhere else.
+  // highest-stakes line: the flatten is evaluated on a tick and nowhere else
   it('flattens inside the window even when the decay read THROWS — the flatten is decided first', async () => {
     const broken = marketDataWithMomentum({
       rsi: new Error('market data store unavailable'),
@@ -3003,7 +3003,7 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
   const TICK_BAR = new Date('2026-07-15T18:00:00Z');
   const STALL = 'alpaca: request timed out after 3 attempts';
 
-  /** The live shape of the outage: bars still answer, the mark does not. */
+  /** The live shape of the outage: bars still answer, the mark does not */
   class MarkStalledMarketData extends FixtureMarketData {
     override async getMark(): Promise<Mark> {
       throw new Error(STALL);
@@ -3013,7 +3013,7 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
   function stalled(): MarkStalledMarketData {
     const marketData = new MarkStalledMarketData(bars(15, 2));
     // Momentum that still SUPPORTS a long, so nothing here reaches the early
-    // exit by accident — the flatten window is the only thing that fires.
+    // exit by accident — the flatten window is the only thing that fires
     marketData.indicatorReads.set('rsi', 60);
     marketData.indicatorReads.set('macd_histogram', 0.5);
     return marketData;
@@ -3042,12 +3042,12 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
     expect(outcome.intent?.intent_type).toBe('exit');
     expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
     expect(outcome.intent?.side).toBe('sell');
-    // Sized to the HELD quantity — the number that never needed a price.
+    // Sized to the HELD quantity — the number that never needed a price
     expect(outcome.intent?.size).toBe(10);
-    // Asset class off the open lot, which is what the position was opened as.
+    // Asset class off the open lot, which is what the position was opened as
     expect(outcome.intent?.asset_class).toBe('stocks');
     // The three price fields are zero and flagged as meaningless, rather than
-    // carrying a stale or invented number a later reader would trust.
+    // carrying a stale or invented number a later reader would trust
     expect(outcome.intent?.entry).toBe(0);
     expect(outcome.intent?.stop).toBe(0);
     expect(outcome.intent?.target).toBe(0);
@@ -3058,7 +3058,7 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
    * #1357 — `unpriced_exit` and `mandatory_flatten` are asserted separately
    * everywhere else in this suite; nothing pins that a single mark-read
    * failure produces an intent carrying both, which is what Verdict's
-   * three-gate skip (`verdict/index.ts`'s #826/#894 exemptions) depends on.
+   * three-gate skip (`verdict/index.ts`'s #826/#894 exemptions) depends on
    */
   it('carries both `unpriced_exit` and `mandatory_flatten` on the same intent', async () => {
     const outcome = await checkExitsWithReason(exitInput());
@@ -3149,7 +3149,7 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
           clock: new ManualClock(OUTSIDE_WINDOW),
           marketData: stalled(),
           // Holding long while the debate resolves short: the flip exit, which
-          // the debate decides rather than the clock.
+          // the debate decides rather than the clock
           debate: debateResult({ direction: 'bearish', confidence: 0.9 }),
           positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
         }),
@@ -3195,7 +3195,7 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
           clock: new ManualClock(OUTSIDE_WINDOW),
           marketData: stalled(),
           // Same-direction, conviction risen materially — routeDecision's
-          // scale_in branch, not direction_flip or the conviction-gated skip.
+          // scale_in branch, not direction_flip or the conviction-gated skip
           debate: debateResult({ direction: 'bullish', confidence: 0.775, converged: true }),
           positionState: async () => [
             openPosition({ side: 'buy', filled_size: 10, conviction: 0.6 }),

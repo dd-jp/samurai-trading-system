@@ -50,15 +50,15 @@ export interface SeedAnalystWeightsInput {
   /**
    * The weights dial from the live `FeedbackConfig`, for its band — not for
    * its `max_step`, which bounds a tuning step and has nothing to say about
-   * where an untuned analyst starts.
+   * where an untuned analyst starts
    */
   dial: TunableDial;
 }
 
 export interface SeedAnalystWeightsResult {
-  /** Ids given a fresh neutral row by this call, in input order. */
+  /** Ids given a fresh neutral row by this call, in input order */
   seeded: string[];
-  /** Ids left exactly as the store had them, in input order. */
+  /** Ids left exactly as the store had them, in input order */
   existing: string[];
 }
 
@@ -72,13 +72,13 @@ export function seedAnalystWeights(input: SeedAnalystWeightsInput): SeedAnalystW
   // (`tanh(0) === 0`), or the first cycles are a drift back to the middle
   // rather than a response to evidence. Derived, never the 1.0 the paper
   // profile's `[0.5, 1.5]` band makes it — re-centring the band must move the
-  // seed with it.
+  // seed with it
   const neutral = bandMidpoint(input.dial);
 
   const seeded: string[] = [];
   const existing: string[] = [];
   // Deduped so a persona list that names an analyst twice cannot report it
-  // twice — or, worse, count a row this same call just wrote as pre-existing.
+  // twice — or, worse, count a row this same call just wrote as pre-existing
   const seen = new Set<string>();
 
   for (const analyst_id of input.analyst_ids) {
@@ -91,7 +91,7 @@ export function seedAnalystWeights(input: SeedAnalystWeightsInput): SeedAnalystW
     // first-write-wins in one statement, so there is no window between
     // "is it there?" and "write it" for a concurrently-booting process to
     // tune a weight inside. The boolean is the store's own answer to which
-    // side this id fell on.
+    // side this id fell on
     if (input.tuning.seedAnalystWeight(analyst_id, neutral)) {
       seeded.push(analyst_id);
     } else {

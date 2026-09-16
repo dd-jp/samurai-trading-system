@@ -15,7 +15,7 @@ export interface DateRange {
   end: Date;
 }
 
-/** One instrument's point-in-time listing status over the replay window. */
+/** One instrument's point-in-time listing status over the replay window */
 export interface InstrumentListing {
   symbol: string;
   /**
@@ -37,7 +37,7 @@ export interface InstrumentRegistry {
   membershipDuring(window: DateRange): Promise<InstrumentListing[]>;
 }
 
-/** Thrown when the configured universe has had delisted/removed names dropped. */
+/** Thrown when the configured universe has had delisted/removed names dropped */
 export class SurvivorshipViolationError extends Error {
   constructor(readonly missing: readonly string[]) {
     super(

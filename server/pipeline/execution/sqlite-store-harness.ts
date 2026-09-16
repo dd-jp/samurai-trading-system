@@ -31,7 +31,7 @@ import {
 import { SqliteExecutionStore } from './sqlite-shared-store.js';
 import type { FlattenSubmissionWriteAhead } from './types.js';
 
-/** Row shape for `TestExecutionStore.getFlattenSubmission` — a read the production port never needs. */
+/** Row shape for `TestExecutionStore.getFlattenSubmission` — a read the production port never needs */
 export interface FlattenSubmissionRow {
   idempotency_key: string;
   instrument: string;
@@ -44,20 +44,20 @@ export interface FlattenSubmissionRow {
   reason: string | null;
   submitted_at: string;
   resolved_at: string | null;
-  /** JSON `string[]` — NULL for a row written before migration 0020 (#517). */
+  /** JSON `string[]` — NULL for a row written before migration 0020 (#517) */
   lot_idempotency_keys: string | null;
-  /** JSON `number[]`, positionally parallel to the keys — NULL before migration 0021 (#571). */
+  /** JSON `number[]`, positionally parallel to the keys — NULL before migration 0021 (#571) */
   lot_held_quantities: string | null;
-  /** NULL until `markFlattenFillsSwept` runs — migration 0023 (#519/#526). */
+  /** NULL until `markFlattenFillsSwept` runs — migration 0023 (#519/#526) */
   fills_swept_at: string | null;
-  /** #1001, migration 0037 — the raw submit-time snapshot columns, unparsed. */
+  /** #1001, migration 0037 — the raw submit-time snapshot columns, unparsed */
   decision_price: number | null;
   quote_bid: number | null;
   quote_ask: number | null;
   quote_mid: number | null;
   quote_observed_at: string | null;
   modelled_cost_breakdown_json: string | null;
-  /** Migration 0050, #1124 — which arm's store wrote this row. */
+  /** Migration 0050, #1124 — which arm's store wrote this row */
   arm: 'live' | 'control';
 }
 
@@ -68,7 +68,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
   // `SqliteExecutionStore`'s own default) keeps compiling unchanged — added
   // only so a test can put a 'control'-arm store on the SAME `testDb` a
   // 'live' one already writes to, to compare the two arms' closed_trades
-  // rows from one shared table the way `SqliteArmComparisonSource` does.
+  // rows from one shared table the way `SqliteArmComparisonSource` does
   constructor(
     private readonly testDb: StoreHandle,
     arm: TradingArm = 'live',
@@ -170,7 +170,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
    * pass (#1088), so logging every call (including a 0-row no-op) would
    * turn `writeLog` from "what this pass durably changed" into "what this
    * pass merely invoked", breaking every existing `writeLog` assertion that
-   * predates this mechanism.
+   * predates this mechanism
    */
   override async sweepTerminalPositions(cutoff: Date): Promise<number> {
     const swept = await super.sweepTerminalPositions(cutoff);
@@ -187,7 +187,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return abandoned;
   }
 
-  /** Raw read of the #549 marker columns (migration 0024) — production reads them only via `getUnprotectedResidualLots`. */
+  /** Raw read of the #549 marker columns (migration 0024) — production reads them only via `getUnprotectedResidualLots` */
   async getResidualProtectionMarker(
     idempotency_key: string,
   ): Promise<{ unprotected_since: string | null; alerted_at: string | null } | null> {
@@ -223,7 +223,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return row === undefined ? null : row.alerted_at;
   }
 
-  /** Every state, including terminal — what `getOpenPositions()` deliberately excludes. */
+  /** Every state, including terminal — what `getOpenPositions()` deliberately excludes */
   async getPosition(idempotency_key: string): Promise<OpenPosition | null> {
     const row = this.testDb
       .prepare('SELECT * FROM open_positions WHERE idempotency_key = ?')
@@ -245,7 +245,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return rows.map(fromClosedTradeRow);
   }
 
-  /** Raw read of the flatten journal (#508 review, PR #516) — production never reads this back. */
+  /** Raw read of the flatten journal (#508 review, PR #516) — production never reads this back */
   async getFlattenSubmission(idempotency_key: string): Promise<FlattenSubmissionRow | null> {
     const row = this.testDb
       .prepare('SELECT * FROM flatten_submissions WHERE idempotency_key = ?')

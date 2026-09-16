@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
  * strip comments: both stylesheets QUOTE the forms under test in prose — the
  * App.css header names `rgba(56, 225, 255, 0.06)` as the shape it replaced —
  * and a rule that cannot tell an example from a declaration would either fail
- * on documentation or force the documentation to stop being specific.
+ * on documentation or force the documentation to stop being specific
  */
 function read(name: string): string {
   return readFileSync(new URL(name, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -33,7 +33,7 @@ function read(name: string): string {
 const TOKENS = read('./tokens.css');
 const APP = read('./App.css');
 
-/** `--x-rgb: <value>;` declarations, as [name, value] pairs. */
+/** `--x-rgb: <value>;` declarations, as [name, value] pairs */
 function channelDeclarations(css: string): [string, string][] {
   return [...css.matchAll(/(--[a-z-]+-rgb):\s*([^;]+);/g)].map((m) => [
     m[1] as string,
@@ -41,7 +41,7 @@ function channelDeclarations(css: string): [string, string][] {
   ]);
 }
 
-/** Every `--x-rgb` a stylesheet REFERENCES, however it is referenced. */
+/** Every `--x-rgb` a stylesheet REFERENCES, however it is referenced */
 function channelReferences(css: string): Set<string> {
   return new Set([...css.matchAll(/var\((--[a-z-]+-rgb)\)/g)].map((m) => m[1] as string));
 }
@@ -51,7 +51,7 @@ describe('colour channel tokens', () => {
 
   it('declares every channel token as three space-separated 0-255 integers', () => {
     // Not a loose "contains three numbers" check: the comma form is exactly
-    // the mistake this test exists to catch, so the pattern rejects it.
+    // the mistake this test exists to catch, so the pattern rejects it
     expect(declared.length).toBeGreaterThan(0);
     for (const [name, value] of declared) {
       expect(`${name}: ${value}`).toMatch(/^--[a-z-]+-rgb: \d{1,3} \d{1,3} \d{1,3}$/);
@@ -64,7 +64,7 @@ describe('colour channel tokens', () => {
 
   it('declares every channel token that either stylesheet references', () => {
     // A reference to an undeclared token is the same silent failure by another
-    // route: `var(--typo-rgb)` resolves to nothing and the declaration drops.
+    // route: `var(--typo-rgb)` resolves to nothing and the declaration drops
     const names = new Set(declared.map(([name]) => name));
     for (const referenced of [...channelReferences(TOKENS), ...channelReferences(APP)]) {
       expect(names.has(referenced)).toBe(true);
@@ -73,7 +73,7 @@ describe('colour channel tokens', () => {
 
   it('uses the slash form everywhere a channel token carries an alpha', () => {
     // `rgb(var(--cyan-rgb), 0.06)` parses as legacy rgb() with too few
-    // arguments and is dropped just as quietly as a comma-separated triplet.
+    // arguments and is dropped just as quietly as a comma-separated triplet
     for (const match of APP.matchAll(/rgb\(var\((--[a-z-]+-rgb)\)([^)]*)\)/g)) {
       const tail = (match[2] as string).trim();
       expect(tail === '' || /^\/ [0-9.]+$/.test(tail)).toBe(true);
@@ -84,13 +84,13 @@ describe('colour channel tokens', () => {
     // The single-sourcing this refactor bought: a palette change is one edit in
     // tokens.css. Black drop shadows and the one opaque chip background have no
     // token counterpart and are listed explicitly rather than pattern-excused,
-    // so adding a new literal fails here instead of quietly growing the set.
+    // so adding a new literal fails here instead of quietly growing the set
     const literals = [...APP.matchAll(/rgba\((\d{1,3}), (\d{1,3}), (\d{1,3}),[^)]*\)/g)].map(
       (m) => `${m[1]} ${m[2]} ${m[3]}`,
     );
     // v3 writes every colour through a token; the allow-list is what an
     // earlier stylesheet needed for shadows and is kept so a future literal
-    // has to be argued in here rather than slipped in.
+    // has to be argued in here rather than slipped in
     for (const literal of literals) {
       expect(['0 0 0', '13 20 38']).toContain(literal);
     }

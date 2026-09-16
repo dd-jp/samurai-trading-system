@@ -4,7 +4,7 @@ import { withRetry, worstCaseFetchMs } from './retry.js';
 
 const CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 };
 
-/** A generic retryable failure carrying an optional `Retry-After`-style hint. */
+/** A generic retryable failure carrying an optional `Retry-After`-style hint */
 class RetryableError extends Error {
   readonly retryAfterMs: number | undefined;
 
@@ -25,8 +25,8 @@ describe('withRetry (generic)', () => {
     // observes is a draw, not a constant. Pinning the draw to 1 makes the
     // observed delay the jitter window's UPPER BOUND — which is exactly the
     // deterministic schedule these tests were written against, so each
-    // exact-delay assertion below now reads as "never waits longer than this".
-    // The jitter itself is exercised by its own test, which re-pins the draw.
+    // exact-delay assertion below now reads as "never waits longer than this"
+    // The jitter itself is exercised by its own test, which re-pins the draw
     vi.spyOn(Math, 'random').mockReturnValue(1);
   });
 
@@ -93,7 +93,7 @@ describe('withRetry (generic)', () => {
     // Full jitter: the delay is a uniform draw from [0, capped], so half a
     // draw is half the window. Asserting through the timer (rather than
     // exporting the private `backoffDelayMs`) keeps the test on the observable
-    // behaviour — when the retry actually fires.
+    // behaviour — when the retry actually fires
     vi.mocked(Math.random).mockReturnValue(0.5);
     const fn = vi
       .fn()
@@ -102,7 +102,7 @@ describe('withRetry (generic)', () => {
 
     const promise = withRetry(fn, CONFIG, isRetryable);
 
-    // Window is 100ms; the 0.5 draw fires at 50ms, well before the ceiling.
+    // Window is 100ms; the 0.5 draw fires at 50ms, well before the ceiling
     await vi.advanceTimersByTimeAsync(49);
     expect(fn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -113,13 +113,13 @@ describe('withRetry (generic)', () => {
 
   it('de-correlates concurrent callers: independent draws produce different delays', async () => {
     // The thundering-herd property the jitter exists for — asserted against
-    // the real RNG, since a mocked one cannot show independence.
+    // the real RNG, since a mocked one cannot show independence
     vi.mocked(Math.random).mockRestore();
     const delays = new Set<number>();
 
     for (let i = 0; i < 20; i++) {
       // Fake timers advance the clock to each timer's firing time, so the gap
-      // between the two attempts IS the delay the loop chose.
+      // between the two attempts IS the delay the loop chose
       const attemptTimes: number[] = [];
       const fn = () => {
         attemptTimes.push(Date.now());
@@ -137,7 +137,7 @@ describe('withRetry (generic)', () => {
     }
 
     // 20 identical gaps across independent draws would mean the backoff is
-    // still deterministic.
+    // still deterministic
     expect(delays.size).toBeGreaterThan(1);
   });
 
@@ -152,13 +152,13 @@ describe('withRetry (generic)', () => {
 
     const promise = withRetry(fn, config, isRetryable);
 
-    // First retry delay: 100ms (base * 2^0).
+    // First retry delay: 100ms (base * 2^0)
     await vi.advanceTimersByTimeAsync(99);
     expect(fn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(fn).toHaveBeenCalledTimes(2);
 
-    // Second retry delay: 200ms (base * 2^1).
+    // Second retry delay: 200ms (base * 2^1)
     await vi.advanceTimersByTimeAsync(199);
     expect(fn).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
@@ -178,11 +178,11 @@ describe('withRetry (generic)', () => {
 
     const promise = withRetry(fn, config, isRetryable);
 
-    // First retry delay: 100ms (base * 2^0, under the cap).
+    // First retry delay: 100ms (base * 2^0, under the cap)
     await vi.advanceTimersByTimeAsync(100);
     expect(fn).toHaveBeenCalledTimes(2);
 
-    // Second retry delay would be 200ms uncapped; the 150ms cap fires it earlier.
+    // Second retry delay would be 200ms uncapped; the 150ms cap fires it earlier
     await vi.advanceTimersByTimeAsync(149);
     expect(fn).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
@@ -193,7 +193,7 @@ describe('withRetry (generic)', () => {
 
   it('honors retryAfterMs on a retryable error, overriding the computed backoff', async () => {
     // Computed backoff for attempt 1 would be 100ms; the hint says wait 500ms instead
-    // (under CONFIG.maxDelayMs of 1000ms, so it isn't clamped).
+    // (under CONFIG.maxDelayMs of 1000ms, so it isn't clamped)
     const fn = vi
       .fn()
       .mockRejectedValueOnce(new RetryableError('rate limited', 500))
@@ -210,7 +210,7 @@ describe('withRetry (generic)', () => {
   });
 
   it('clamps a retryAfterMs hint that exceeds maxDelayMs', async () => {
-    // CONFIG.maxDelayMs is 1000ms; a provider hint of 5000ms must not bypass it.
+    // CONFIG.maxDelayMs is 1000ms; a provider hint of 5000ms must not bypass it
     const fn = vi
       .fn()
       .mockRejectedValueOnce(new RetryableError('rate limited', 5_000))
@@ -266,7 +266,7 @@ describe('withRetry (generic)', () => {
  * #1080: the loop was silent, and that silence is what made a 30s timed-out
  * attempt inside a 60s debate budget unmeasurable — it appears in no log line
  * and, because `AnthropicLlmClient` meters only attempts that RETURN, in no
- * `llm_spend` row either.
+ * `llm_spend` row either
  */
 describe('withRetry retry observer (#1080)', () => {
   beforeEach(() => {
@@ -284,7 +284,7 @@ describe('withRetry retry observer (#1080)', () => {
     const boom = new RetryableError('slow');
     // Three attempts configured, all failing: attempts 1 and 2 are retried and
     // must be reported; attempt 3's error is rethrown to the caller, which can
-    // log it itself, so reporting it here would double-count.
+    // log it itself, so reporting it here would double-count
     const fn = vi.fn().mockRejectedValue(boom);
 
     const promise = withRetry(fn, CONFIG, isRetryable, (report) => reports.push(report));
@@ -297,7 +297,7 @@ describe('withRetry retry observer (#1080)', () => {
     expect(reports.map((report) => report.maxAttempts)).toEqual([3, 3]);
     expect(reports.map((report) => report.error)).toEqual([boom, boom]);
     // The delay the loop is about to sleep, not one it already slept: full
-    // jitter pinned to its upper bound, doubling per attempt to the cap.
+    // jitter pinned to its upper bound, doubling per attempt to the cap
     expect(reports.map((report) => report.delay_ms)).toEqual([100, 200]);
   });
 
@@ -321,7 +321,7 @@ describe('withRetry retry observer (#1080)', () => {
     expect(reports).toHaveLength(1);
     // 1,000ms of attempt 1 — the backoff and attempt 2's own 2,000ms are not
     // part of it. The cumulative figure is recoverable by summing these; the
-    // per-attempt one is not recoverable from a cumulative total.
+    // per-attempt one is not recoverable from a cumulative total
     expect(reports[0]?.elapsed_ms).toBe(1_000);
   });
 
@@ -340,7 +340,7 @@ describe('withRetry retry observer (#1080)', () => {
   it('lets the provider error through when the observer itself throws', async () => {
     // This loop is on the path of every LLM and HTTP call in the system. A
     // telemetry sink that fails must not convert a recoverable timeout into an
-    // unclassified crash.
+    // unclassified crash
     const fn = vi.fn().mockRejectedValueOnce(new RetryableError('slow')).mockResolvedValue('ok');
 
     const promise = withRetry(fn, CONFIG, isRetryable, () => {
@@ -358,7 +358,7 @@ describe('worstCaseFetchMs', () => {
     // 3 attempts against ALPACA_BARS_RETRY_CONFIG-shaped config: 3 timeouts,
     // and backoff caps for attempts 1 and 2 only (min(250*2^0,4000)=250,
     // min(250*2^1,4000)=500) — attempt 3 is the last and is not followed by a
-    // sleep.
+    // sleep
     const config: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
     expect(worstCaseFetchMs(10_000, config)).toBe(3 * 10_000 + 250 + 500);
   });
@@ -370,7 +370,7 @@ describe('worstCaseFetchMs', () => {
 
   it('caps each backoff term at maxDelayMs once the exponential curve exceeds it', () => {
     const config: RetryConfig = { maxAttempts: 4, baseDelayMs: 1_000, maxDelayMs: 1_500 };
-    // Uncapped terms would be 1000, 2000, 4000; capped: 1000, 1500, 1500.
+    // Uncapped terms would be 1000, 2000, 4000; capped: 1000, 1500, 1500
     expect(worstCaseFetchMs(0, config)).toBe(1_000 + 1_500 + 1_500);
   });
 });

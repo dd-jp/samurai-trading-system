@@ -278,7 +278,7 @@ import type { Logger } from './types.js';
  * Sized against the sink's own module doc ("why did it do that on day 6"):
  * the sweep must not have already dropped the opening days of a completed
  * 14-day soak (#238) by the time anyone goes looking, so the window is wider
- * than the soak itself rather than equal to it.
+ * than the soak itself rather than equal to it
  */
 export const DEFAULT_LOG_RETENTION_DAYS = 30;
 
@@ -286,7 +286,7 @@ export const DEFAULT_LOG_RETENTION_DAYS = 30;
  * Matches `DEFAULT_MAX_BYTES` in `rotating-file-sink.ts`: the size already
  * treated as "big enough to rotate" for the one file this module's sibling
  * manages is a defensible size for "big enough to reclaim" on the bare names
- * nothing manages at all (#1206).
+ * nothing manages at all (#1206)
  */
 export const DEFAULT_BARE_TRUNCATE_BYTES = 16 * 1024 * 1024;
 
@@ -313,7 +313,7 @@ const ENV_LOG_RETENTION_KEEP = 'SAMURAI_LOG_RETENTION_KEEP';
 const ENV_LOG_BARE_TRUNCATE_BYTES = 'SAMURAI_LOG_BARE_TRUNCATE_BYTES';
 const ENV_LOG_BARE_TRUNCATE_NAMES = 'SAMURAI_LOG_BARE_TRUNCATE_NAMES';
 
-/** A `RotatingFileSink` generation: `orchestrator.log.1`. */
+/** A `RotatingFileSink` generation: `orchestrator.log.1` */
 const ROTATED_GENERATION = /^.+\.log\.\d+$/;
 
 /**
@@ -339,7 +339,7 @@ export function isArchivedLogName(name: string): boolean {
   return ROTATED_GENERATION.test(name) || DATESTAMPED_ARTEFACT.test(name);
 }
 
-/** A `.log`/`.out` name, whatever else it is — the only extensions this module ever touches. */
+/** A `.log`/`.out` name, whatever else it is — the only extensions this module ever touches */
 const LOG_SHAPED_NAME = /\.(?:log|out)$/;
 
 /**
@@ -362,7 +362,7 @@ export function isBareLogName(name: string): boolean {
  * Malformed values are refused at startup rather than defaulted, matching
  * `fileSinkConfigFromEnvironment` and `miArchiveRetentionDaysFromEnvironment`:
  * this is retention policy, and a window nobody chose is worse than a
- * refusal that names the variable.
+ * refusal that names the variable
  */
 export function logRetentionDaysFromEnvironment(env: NodeJS.ProcessEnv = process.env): number {
   return positiveIntegerFromEnv(
@@ -472,7 +472,7 @@ export function logRetentionKeepNamesFromEnvironment(
   return names;
 }
 
-/** Enough of `fs.Stats` to identify an open descriptor's target file. */
+/** Enough of `fs.Stats` to identify an open descriptor's target file */
 export interface FileIdentity {
   dev: number;
   ino: number;
@@ -481,7 +481,7 @@ export interface FileIdentity {
 export interface LogRetentionOptions {
   /** Directory swept. Never recursed into, and no entry outside it is ever touched. */
   directory: string;
-  /** A file is stale once it has gone unmodified this long. */
+  /** A file is stale once it has gone unmodified this long */
   maxAgeMs: number;
   /**
    * Paths never removed regardless of age — the caller's own active sink
@@ -489,7 +489,7 @@ export interface LogRetentionOptions {
    * absolute forms of the same path match.
    */
   protectedPaths?: readonly string[];
-  /** Basenames in `directory` the operator has taken out of the sweep. */
+  /** Basenames in `directory` the operator has taken out of the sweep */
   keepNames?: readonly string[];
   /**
    * Disk bytes (`stat.blocks * 512`, NOT `stat.size` — see the module doc)
@@ -521,11 +521,11 @@ export interface LogRetentionOptions {
    * pointing a real sweep at the repo root.
    */
   cwd?: () => string;
-  /** Seam for tests: stands in for `fstatSync(1)` / `fstatSync(2)`. */
+  /** Seam for tests: stands in for `fstatSync(1)` / `fstatSync(2)` */
   activeDescriptors?: () => readonly FileIdentity[];
-  /** Seam for tests: stands in for `rmSync`. */
+  /** Seam for tests: stands in for `rmSync` */
   remove?: (path: string) => void;
-  /** Seam for tests: stands in for `truncateSync(path, 0)`. */
+  /** Seam for tests: stands in for `truncateSync(path, 0)` */
   truncate?: (path: string) => void;
 }
 
@@ -543,7 +543,7 @@ export interface LogRetentionResult {
    * operation, not a durable total.
    */
   bytesReclaimed: number;
-  /** Bare log-shaped names truncated rather than removed (#1206). */
+  /** Bare log-shaped names truncated rather than removed (#1206) */
   filesTruncated: number;
   /**
    * Set when the sweep declined to look at `directory` at all. Present only
@@ -561,7 +561,7 @@ function defaultActiveDescriptors(): readonly FileIdentity[] {
       identities.push({ dev: stat.dev, ino: stat.ino });
     } catch {
       // Closed descriptor (EBADF) or one this platform can't stat — nothing
-      // to compare candidate files against, not a reason to stop sweeping.
+      // to compare candidate files against, not a reason to stop sweeping
     }
   }
   return identities;
@@ -617,7 +617,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
   try {
     entries = readdirSync(root, { withFileTypes: true });
   } catch {
-    return result; // Missing or unreadable logs/ — nothing to sweep.
+    return result; // Missing or unreadable logs/ — nothing to sweep
   }
 
   for (const entry of entries) {
@@ -625,7 +625,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     // target — so a symlink (even one pointing outside `directory`) is
     // neither a file nor a directory here and is skipped rather than
     // resolved and followed. This is what keeps the sweep inside `directory`
-    // with no path ever leaving it, structurally rather than by convention.
+    // with no path ever leaving it, structurally rather than by convention
     if (!entry.isFile()) continue;
     if (keepSet.has(entry.name)) continue;
 
@@ -637,7 +637,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
       try {
         stat = statSync(path);
       } catch {
-        continue; // Vanished between listing and stat — not this sweep's problem.
+        continue; // Vanished between listing and stat — not this sweep's problem
       }
 
       if (liveIdentities.some((id) => id.dev === stat.dev && id.ino === stat.ino)) continue;
@@ -646,7 +646,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
       try {
         remove(path);
       } catch {
-        continue; // Permission error, already gone, or a platform quirk — tolerated by design.
+        continue; // Permission error, already gone, or a platform quirk — tolerated by design
       }
 
       result.filesRemoved += 1;
@@ -656,13 +656,13 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
 
     // Bare log-shaped name (#1206): no age or liveness gate — unlike the
     // branch above, `truncate` never orphans a writer's descriptor, so disk
-    // allocation alone decides eligibility among ELIGIBLE names (below).
+    // allocation alone decides eligibility among ELIGIBLE names (below)
     // `bareTruncateBytes === undefined` disables this path outright, matching
     // every version of this sweep before #1206. `truncateNameSet` is the
     // separate narrowing that keeps `isBareLogName`'s blast radius to files
     // this process actually knows about (#1281 review, round 2) — `.log`/
     // `.out` shape alone would match `install.log` as readily as
-    // `soak-boot.out`.
+    // `soak-boot.out`
     if (
       bareTruncateBytes === undefined ||
       !isBareLogName(entry.name) ||
@@ -675,7 +675,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     try {
       stat = statSync(path);
     } catch {
-      continue; // Vanished between listing and stat — not this sweep's problem.
+      continue; // Vanished between listing and stat — not this sweep's problem
     }
 
     // Gated on DISK ALLOCATION (`stat.blocks`), not apparent length
@@ -690,14 +690,14 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     // is what actually goes back to (near) zero after a truncate, cycle over
     // cycle — verified interactively on macOS APFS (deployment), and by the
     // "does not re-truncate" regression test below passing on Linux ext4 in
-    // this PR's own CI (`ubuntu-latest`, `.github/workflows/ci.yml`).
+    // this PR's own CI (`ubuntu-latest`, `.github/workflows/ci.yml`)
     const allocatedBytes = stat.blocks * STAT_BLOCK_BYTES;
     if (allocatedBytes <= bareTruncateBytes) continue;
 
     try {
       truncate(path);
     } catch {
-      continue; // Permission error, already gone, or a platform quirk — tolerated by design.
+      continue; // Permission error, already gone, or a platform quirk — tolerated by design
     }
 
     result.filesTruncated += 1;

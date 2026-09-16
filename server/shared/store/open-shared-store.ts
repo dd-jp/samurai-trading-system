@@ -60,7 +60,7 @@ export { STORE_MODES, type StoreMode } from '../../../contracts/index.js';
 
 // Also imported, not just re-exported: `export … from` publishes the names
 // without binding them locally, and `resolveStoreMode` below both reads the
-// array at runtime and annotates with the type.
+// array at runtime and annotates with the type
 import { STORE_MODES, type StoreMode } from '../../../contracts/index.js';
 
 /**
@@ -160,7 +160,7 @@ function assertNoStrandedLegacyStore(path: string): void {
   // guard looking for a file that is no longer what a pre-#330 deployment
   // wrote. It throws on an unrecognised NODE_ENV, which is not a reason to
   // fail a start whose own path resolved fine — an environment this guard
-  // cannot name simply has no legacy file to strand.
+  // cannot name simply has no legacy file to strand
   let legacy: string;
   try {
     legacy = legacyStorePath();
@@ -205,7 +205,7 @@ function ensureParentDirectory(dbPath: string): void {
 export function openSharedStore(dbPath: string): StoreHandle {
   ensureParentDirectory(dbPath);
   const db = new BetterSqlite3(dbPath);
-  // WAL is a no-op on an in-memory DB; SQLite ignores it rather than failing.
+  // WAL is a no-op on an in-memory DB; SQLite ignores it rather than failing
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = FULL');
   db.pragma('foreign_keys = ON');

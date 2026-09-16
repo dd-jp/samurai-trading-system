@@ -14,7 +14,7 @@ const clock: Clock = { now: () => NOW };
 
 const BATCH_URL = 'http://data.gdeltproject.org/gdeltv2/20260815153000.gkg.csv.zip';
 const BATCH_TIME = new Date('2026-08-15T15:30:00Z');
-/** The next 15-minute batch file — a newer cursor stamp, same records. */
+/** The next 15-minute batch file — a newer cursor stamp, same records */
 const LATER_BATCH_URL = 'http://data.gdeltproject.org/gdeltv2/20260815154500.gkg.csv.zip';
 
 function record(overrides: Partial<GdeltGkgRecord> = {}): GdeltGkgRecord {
@@ -91,7 +91,7 @@ describe('GdeltIngestAgent', () => {
 
     // Unlike Alpaca, whose stamp is publisher time and whose backfill must be
     // marked 'backfill' to avoid asserting we saw an article the instant it
-    // published (mi-archive-store.ts:48).
+    // published (mi-archive-store.ts:48)
     expect(archive.rawRows(SOURCE_GDELT)[0]?.fidelity).toBe('live');
     archive.close();
   });
@@ -106,7 +106,7 @@ describe('GdeltIngestAgent', () => {
     // partial baseline yields a large toneDelta off almost no data — which
     // `confidence = f(|toneDelta|)` would then read as HIGH confidence, on day
     // one of the soak. The archive has to lead the signal by a full window, so
-    // this half writes bytes and emits nothing.
+    // this half writes bytes and emits nothing
     expect(archive.itemsKnownAt('stocks', NOW, [SOURCE_GDELT])).toEqual([]);
     expect(archive.itemsKnownAt('crypto', NOW, [SOURCE_GDELT])).toEqual([]);
     archive.close();
@@ -123,7 +123,7 @@ describe('GdeltIngestAgent', () => {
     await expect(agent.refresh()).resolves.toBe(false);
     // The cursor is checked against the URL's stamp before the fetch: at a
     // 15-minute tick on a 15-minute publication cadence, re-downloading 3.4MB
-    // to discard it is exactly what this avoids.
+    // to discard it is exactly what this avoids
     expect(client.fetchBatch).toHaveBeenCalledTimes(1);
     expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(1);
     archive.close();
@@ -162,13 +162,13 @@ describe('GdeltIngestAgent', () => {
 
     // A 3.4MB download over a residential link times out routinely. A throw
     // here would take down a tick that would otherwise have traded on the
-    // technical analyst alone.
+    // technical analyst alone
     await expect(agent.refresh()).resolves.toBe(false);
     expect(archive.rawRows(SOURCE_GDELT)).toEqual([]);
     expect(logger.entries).toContainEqual(expect.objectContaining({ level: 'warn' }));
     // The cursor is only advanced by a successful write, so a mid-publication
     // 404 or a truncated download leaves it where it was and the next poll
-    // retries the same batch rather than skipping it forever.
+    // retries the same batch rather than skipping it forever
     expect(archive.latestUpdatedAt(SOURCE_GDELT)).toBeUndefined();
 
     const retry = new GdeltIngestAgent({ archive, client: stubClient({}), clock });
@@ -183,21 +183,21 @@ describe('GdeltIngestAgent', () => {
     async () => {
       const archive = new MiArchiveStore();
       archive.close(); // Simulates shutdown racing a stray poll: the store is
-      // already closed by the time `effectiveCursor()` reads it.
+      // already closed by the time `effectiveCursor()` reads it
       const logger = collectingLogger();
       const client = stubClient({});
       const agent = new GdeltIngestAgent({ archive, client, clock, logger });
 
       // Behaviour is unchanged — still resolves false, still does not crash —
       // but the earlier structure caught this in the fetch try/catch and
-      // logged the fetch's message, blaming a request that never happened.
+      // logged the fetch's message, blaming a request that never happened
       await expect(agent.refresh()).resolves.toBe(false);
       const warns = logger.entries.filter((entry) => entry.level === 'warn');
       expect(warns).toHaveLength(1);
       expect(warns[0]?.message).not.toMatch(/GDELT batch fetch failed/);
       expect(warns[0]?.message).toMatch(/outside the fetch\/write paths/);
       // The client must never have been reached: the cursor read happens
-      // before the network call, closed store or not.
+      // before the network call, closed store or not
       expect(client.latestBatchUrl).not.toHaveBeenCalled();
     },
   );
@@ -219,7 +219,7 @@ describe('GdeltIngestAgent', () => {
 
     // `production.ts` calls this as `void refresh(...)` with no
     // `unhandledRejection` handler for this call site — a throwing clock must
-    // degrade the same way a failed fetch does, not reject.
+    // degrade the same way a failed fetch does, not reject
     await expect(agent.refresh()).resolves.toBe(false);
     expect(archive.rawRows(SOURCE_GDELT)).toEqual([]);
     const warns = logger.entries.filter((entry) => entry.level === 'warn');
@@ -253,7 +253,7 @@ describe('GdeltIngestAgent', () => {
     await expect(agent.refresh()).resolves.toBe(false);
     // A quiet news window and a filter that has silently stopped matching look
     // identical from the outside; only the scanned-vs-archived ratio separates
-    // them, so the empty case has to log rather than return in silence.
+    // them, so the empty case has to log rather than return in silence
     expect(logger.entries.some((entry) => /matched no watched themes/.test(entry.message))).toBe(
       true,
     );
@@ -270,11 +270,11 @@ describe('GdeltIngestAgent', () => {
 
     // `production.ts` fires this as `void refresh(...)`, so a rejection here is
     // an unhandled rejection in a process meant to run unattended for fourteen
-    // days — the write has to degrade exactly like a failed fetch does.
+    // days — the write has to degrade exactly like a failed fetch does
     await expect(agent.refresh()).resolves.toBe(false);
     expect(logger.entries).toContainEqual(expect.objectContaining({ level: 'warn' }));
 
-    // The cursor never moved, so the batch is retried rather than lost.
+    // The cursor never moved, so the batch is retried rather than lost
     expect(archive.latestUpdatedAt(SOURCE_GDELT)).toBeUndefined();
     const retry = new GdeltIngestAgent({ archive, client: stubClient({}), clock });
     await expect(retry.refresh()).resolves.toBe(true);
@@ -299,7 +299,7 @@ describe('GdeltIngestAgent', () => {
 
     // A stalled 3.4MB download outlasting the 5-minute interval would otherwise
     // have the next tick start a second poll beside it, pass the same cursor
-    // check (the first has not written yet) and re-download the same batch.
+    // check (the first has not written yet) and re-download the same batch
     const first = agent.refresh();
     await expect(agent.refresh()).resolves.toBe(false);
     expect(client.fetchBatch).toHaveBeenCalledTimes(1);
@@ -307,7 +307,7 @@ describe('GdeltIngestAgent', () => {
     release();
     await expect(first).resolves.toBe(true);
     // And the guard clears: a later poll is not locked out forever. It returns
-    // false on the cursor now, having actually asked GDELT what the latest is.
+    // false on the cursor now, having actually asked GDELT what the latest is
     await expect(agent.refresh()).resolves.toBe(false);
     expect(client.latestBatchUrl).toHaveBeenCalledTimes(2);
     archive.close();
@@ -323,7 +323,7 @@ describe('GdeltIngestAgent', () => {
 
     // The archive cursor is derived from WRITTEN rows, so a zero-match batch
     // leaves it unmoved — without a separate seen-batch mark, every poll for
-    // the next 15 minutes re-downloads and re-parses the same ~3.4MB file.
+    // the next 15 minutes re-downloads and re-parses the same ~3.4MB file
     expect(client.fetchBatch).toHaveBeenCalledTimes(1);
     archive.close();
   });
@@ -343,7 +343,7 @@ describe('GdeltIngestAgent', () => {
 
     // With no stamp the skip-if-held check cannot run and every poll downloads
     // the full batch. That degradation is indistinguishable from a healthy
-    // stream of fresh batches unless it says so.
+    // stream of fresh batches unless it says so
     expect(
       logger.entries.some(
         (entry) => entry.level === 'warn' && /no readable timestamp/.test(entry.message),
@@ -372,14 +372,14 @@ describe('GdeltIngestAgent', () => {
     });
 
     // Clearing the interval stops the NEXT poll, not this one — whose archive
-    // write would otherwise land after the store is closed.
+    // write would otherwise land after the store is closed
     expect(drained).toBe(false);
     release();
     await Promise.all([polling, draining]);
     expect(drained).toBe(true);
     expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(1);
 
-    // Idle when nothing is running, rather than hanging.
+    // Idle when nothing is running, rather than hanging
     await expect(agent.whenIdle()).resolves.toBeUndefined();
     archive.close();
   });
@@ -393,13 +393,13 @@ describe('GdeltIngestAgent', () => {
       // Real GdeltGkgClient + real TokenBucket, not the stub the other tests
       // use — a mock `latestBatchUrl` would happily "accept" a signal argument
       // it never looks at, which would prove nothing about the actual wiring
-      // from GdeltIngestAgent through GdeltGkgClient into TokenBucket.acquire.
+      // from GdeltIngestAgent through GdeltGkgClient into TokenBucket.acquire
       //
       // The refill rate is nowhere near real: with capacity 1 and one token
       // already spent, the next acquire needs a token that takes roughly
       // 2,700 hours to mint. If `whenIdle` did not abort the wait, this test
       // would hang until vitest's per-test timeout killed it — there is no
-      // fake-timer trick used here, the abort itself is what has to be fast.
+      // fake-timer trick used here, the abort itself is what has to be fast
       const rateLimiter = new TokenBucket({ capacity: 1, refillPerSecond: 0.0001 });
       await rateLimiter.acquire();
       const client = new GdeltGkgClient({
@@ -415,12 +415,12 @@ describe('GdeltIngestAgent', () => {
       const polling = agent.refresh();
       // No `await` between `refresh()` and `whenIdle()`: the poll has not had
       // a chance to run past `rateLimiter.acquire()` yet, which is exactly the
-      // "parked on a token" state #702 is about.
+      // "parked on a token" state #702 is about
       await agent.whenIdle();
 
       // Settles to `false` — the abort lands in `poll`'s own catch, same as
       // any other fetch failure, not a hang and not a rejection out of
-      // `refresh()`.
+      // `refresh()`
       await expect(polling).resolves.toBe(false);
       expect(archive.rawRows(SOURCE_GDELT)).toEqual([]);
       expect(
@@ -450,7 +450,7 @@ describe('GdeltIngestAgent', () => {
     // thing under test. A second agent over the same archive does NOT do this:
     // it reads the same persisted cursor, skips the download, and the write is
     // never reached — the assertion then passes on the first refresh's rows
-    // alone, testing nothing.
+    // alone, testing nothing
     const laterClient = stubClient({
       url: LATER_BATCH_URL,
       batch: batch(rows, LATER_BATCH_URL),
@@ -458,7 +458,7 @@ describe('GdeltIngestAgent', () => {
     const later = new GdeltIngestAgent({ archive, client: laterClient, clock });
 
     await expect(later.refresh()).resolves.toBe(true);
-    // The download must actually have happened, or this is the vacuous test again.
+    // The download must actually have happened, or this is the vacuous test again
     expect(laterClient.fetchBatch).toHaveBeenCalledOnce();
     expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(2);
     archive.close();
@@ -467,7 +467,7 @@ describe('GdeltIngestAgent', () => {
   it('stamps ingested_at after the download, not before it', async () => {
     // `ingested_at` is the visibility gate replay filters on. Stamping it at the
     // top of the poll would claim we held the bytes before the (up to 90-second)
-    // download finished — lookahead, in the direction that flatters a backtest.
+    // download finished — lookahead, in the direction that flatters a backtest
     const archive = new MiArchiveStore();
     let ticks = 0;
     const advancing: Clock = {
@@ -478,7 +478,7 @@ describe('GdeltIngestAgent', () => {
     };
     const client = stubClient({});
     client.fetchBatch.mockImplementation(async () => {
-      // A slow download: the clock moves while it runs.
+      // A slow download: the clock moves while it runs
       advancing.now();
       return batch([record()]);
     });
@@ -488,7 +488,7 @@ describe('GdeltIngestAgent', () => {
 
     const row = archive.rawRows(SOURCE_GDELT)[0];
     // Strictly after the reading taken during the download, so it cannot have
-    // been captured before the fetch began.
+    // been captured before the fetch began
     expect(row?.ingested_at.getTime()).toBeGreaterThan(NOW.getTime() + 60_000);
     archive.close();
   });
@@ -502,7 +502,7 @@ describe('GdeltIngestAgent', () => {
     await expect(agent.refresh()).resolves.toBe(false);
 
     // Not fetched: `fetchBatch` needs the same stamp for `batch_time` and would
-    // throw, producing a second warn blaming the network for a URL-format fault.
+    // throw, producing a second warn blaming the network for a URL-format fault
     expect(client.fetchBatch).not.toHaveBeenCalled();
     const warns = logger.entries.filter((entry) => entry.level === 'warn');
     expect(warns).toHaveLength(1);
@@ -515,7 +515,7 @@ describe('GdeltIngestAgent', () => {
     const throwing: Logger = {
       log: () => {
         // What a `JsonLogger` with no sink left to record on looks like (#714),
-        // and what any injected `Logger` is free to do.
+        // and what any injected `Logger` is free to do
         throw new Error('EPIPE');
       },
     } as unknown as Logger;
@@ -527,7 +527,7 @@ describe('GdeltIngestAgent', () => {
     });
 
     // Rejecting here would surface as an unhandled rejection in the orchestrator
-    // and take down a fourteen-day unattended run.
+    // and take down a fourteen-day unattended run
     await expect(agent.refresh()).resolves.toBe(true);
     expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(1);
     archive.close();

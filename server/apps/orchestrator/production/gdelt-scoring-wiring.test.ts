@@ -59,7 +59,7 @@ import {
 } from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-09-03T12:34:00Z');
-/** `floorToBar(NOW)` on the 1h debate grid. */
+/** `floorToBar(NOW)` on the 1h debate grid */
 const BAR = new Date('2026-09-03T12:00:00Z');
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -74,7 +74,7 @@ function payload(tone: number): string {
   return PROJECTED_COLUMNS.map((column) => columns[column] ?? '').join('\t');
 }
 
-/** 24 populated baseline buckets at tone 0, then a signal hour at tone 2. */
+/** 24 populated baseline buckets at tone 0, then a signal hour at tone 2 */
 function seededArchive(): MiArchiveStore {
   const archive = new MiArchiveStore();
   const rows: RawArchiveRow[] = [];
@@ -183,7 +183,7 @@ describe('GDELT scoring wiring (#1086)', () => {
     components.gdeltScoringPass?.run('wiring');
 
     // The read `fundamental-analyst.ts` performs — entity-scoped, through the
-    // store the root handed the analyst step.
+    // store the root handed the analyst step
     const context = components.marketIntelligence.getContext(
       'stocks',
       24 * HOUR_MS,
@@ -210,13 +210,13 @@ describe('GDELT scoring wiring (#1086)', () => {
     components.gdeltScoringPass?.run('wiring');
 
     // The seeded archive carries a MACRO theme, which is on BOTH watchlists —
-    // so a pass built over every AssetClass would emit a crypto aggregate too.
+    // so a pass built over every AssetClass would emit a crypto aggregate too
     // The stocks leg derived, so the pass ran at all…
     expect(entries.some((entry) => entry.message.includes('derived GDELT macro aggregate'))).toBe(
       true,
     );
     // …and no line, emitted or refused, belongs to a leg the universe has no
-    // instrument in.
+    // instrument in
     for (const entry of entries) {
       expect(entry.payload).not.toMatchObject({
         source: MI_SOURCES.gdeltGkg,

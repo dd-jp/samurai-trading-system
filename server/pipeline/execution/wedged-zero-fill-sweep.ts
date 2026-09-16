@@ -113,7 +113,7 @@ import type { ReconcileDivergence, WedgedSweepInput } from './types.js';
  */
 export const WEDGED_ZERO_FILL_ABANDON_AFTER_MS = 24 * 60 * 60 * 1_000;
 
-/** What one pass of the #1186 sweep examined and retired. */
+/** What one pass of the #1186 sweep examined and retired */
 export interface WedgedZeroFillSweepResult {
   checked: number;
   divergences: ReconcileDivergence[];
@@ -168,7 +168,7 @@ export async function sweepWedgedZeroFillLots(
         // the worklist read and this write, exactly what the WHERE-guard
         // exists to detect: the lot un-wedged itself, and the next
         // `advanceLot`/reconcile pass already owns whatever state it is in
-        // now.
+        // now
         const stillWedged = (await store.getOpenPositions()).some(
           (open) => open.idempotency_key === position.idempotency_key && isWedgedZeroFillLot(open),
         );

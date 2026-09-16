@@ -34,7 +34,7 @@ export const UNRECORDED_VENUE_POSITION_REPAGE_EVERY_MS = 30 * 60_000;
  * restart is the safe direction to be wrong in.
  */
 export class UnrecordedVenuePositionThrottle {
-  /** instrument -> epoch ms of the last page it produced. */
+  /** instrument -> epoch ms of the last page it produced */
   readonly #lastPagedAtMs = new Map<string, number>();
 
   /**

@@ -127,7 +127,7 @@ export class SqliteTuningStore implements TuningStore {
   seedRiskThreshold(name: string, value: number): boolean {
     // Seeding is a write like any other (#638) — the composition root's static
     // config reaches the live table through here, so an unclamped seed would
-    // re-open at startup exactly what `setRiskThreshold` refuses at runtime.
+    // re-open at startup exactly what `setRiskThreshold` refuses at runtime
     assertThresholdWithinBounds(name, value, 'SqliteTuningStore.seedRiskThreshold');
     const result = this.db
       .prepare(

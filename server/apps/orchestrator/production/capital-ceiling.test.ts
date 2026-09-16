@@ -11,7 +11,7 @@ describe('toCapitalCeilingUsd', () => {
     ['Infinity', Number.POSITIVE_INFINITY],
     ['-Infinity', Number.NEGATIVE_INFINITY],
     // Finite, so a finiteness-only check let these through — and `Math.min`
-    // would clamp every size in the run to zero or below (#569 review).
+    // would clamp every size in the run to zero or below (#569 review)
     ['zero', 0],
     ['negative', -1_000],
   ])('refuses %s — `Math.min` would otherwise size off it silently (#569)', (_label, value) => {

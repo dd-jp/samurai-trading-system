@@ -191,7 +191,7 @@ interface ParsedStatusUrl {
 
 /**
  * Decomposes a permalink into the fields the archive projection and the
- * recency filter both need, or `null` if it is not one.
+ * recency filter both need, or `null` if it is not one
  */
 export function parseStatusUrl(url: string): ParsedStatusUrl | null {
   const withoutQuery = url.split(/[?#]/)[0] ?? '';
@@ -227,7 +227,7 @@ export interface XSearchClientOptions {
   baseUrl: string;
   /** Defaults to `X_SEARCH_MODEL`. Overridable so a future routed alias needs no code change. */
   model?: string;
-  /** Clamped to `[1, MAX_SEARCH_RESULTS_CEILING]`. */
+  /** Clamped to `[1, MAX_SEARCH_RESULTS_CEILING]` */
   maxSearchResults?: number;
   /**
    * How far back a post may be and still count as this bucket's news.
@@ -306,21 +306,21 @@ export class XSearchClient implements GrokSentimentClient {
         // "N citations came back, how many calls was that at most?" — it is
         // not a 10x10 multiplier, and it does not authorise anything. If the
         // model issues several searches the provider reports them and the
-        // reported count wins, which is the only number that matches the bill.
+        // reported count wins, which is the only number that matches the bill
         maxServerToolCalls: this.#maxSearchResults,
         gate: this.#gate,
         // The gate budget bounds wait + call: `clampCallToBudget` shrinks the
         // network timeout by however long the wait already took (#1533),
         // closing the gap #1080 review round 1 finding 6 left open (worst
         // case used to be wait + full `timeoutMs`, their sum, not
-        // `this.#timeoutMs`).
+        // `this.#timeoutMs`)
         gateBudgetMs: this.#timeoutMs,
         clampCallToBudget: true,
         // Declared, because a retrieval call is nothing like a debate call: it
         // runs the provider's own search loop, measured at 5–26 s against a
         // debate call's ~13 s. A caller queued behind one that estimated its
         // wait at 13 s would be admitted into a deadline it cannot make. The
-        // measured figure, not `this.#timeoutMs` — see the constant.
+        // measured figure, not `this.#timeoutMs` — see the constant
         expectedCallMs: MEASURED_RETRIEVAL_CALL_MS,
         llmStage: 'market_intelligence_retrieval',
       },
@@ -335,7 +335,7 @@ export class XSearchClient implements GrokSentimentClient {
             max_search_results: this.#maxSearchResults,
             // Day-granular on the wire — see the module header. Sent anyway to
             // narrow what the provider searches; the real window is enforced
-            // below, on the results.
+            // below, on the results
             from_date: isoDate(windowStart),
             to_date: isoDate(asOf),
           },
@@ -361,7 +361,7 @@ export class XSearchClient implements GrokSentimentClient {
       server_tool_calls: result.server_tool_calls,
       // Whether the TOOL RAN, which is what #485 asks. Not "did any item
       // survive" — see the module header on why collapsing those two would
-      // destroy the "looked and saw nothing" case.
+      // destroy the "looked and saw nothing" case
       retrievalEvidence: result.citations.length > 0,
       latency_ms: Date.now() - started,
     };
@@ -386,7 +386,7 @@ export class XSearchClient implements GrokSentimentClient {
       parsed = JSON.parse(content);
     } catch {
       // Recover a fenced or prose-wrapped object before giving up — the same
-      // salvage `NousSentimentClient` does, for the same reason.
+      // salvage `NousSentimentClient` does, for the same reason
       const match = content.match(/\{[\s\S]*\}/);
       if (match === null) return this.#unreadable(context.instrument);
       try {
@@ -401,7 +401,7 @@ export class XSearchClient implements GrokSentimentClient {
     // escapes this method entirely — turning "a shape we cannot read" into an
     // exception, which is the one thing the parse-to-zero contract above
     // promises not to do. A primitive (`5`, `"text"`) would not throw, but it
-    // is equally unreadable, so both are refused by the same check.
+    // is equally unreadable, so both are refused by the same check
     if (typeof parsed !== 'object' || parsed === null) {
       return this.#unreadable(context.instrument);
     }
@@ -411,7 +411,7 @@ export class XSearchClient implements GrokSentimentClient {
 
     // Keyed by status id, not by raw URL string: the same post cited as
     // `x.com/u/status/1` and `www.x.com/u/status/1?s=20` is one post, and a
-    // string-keyed set would let the second slip past as a different citation.
+    // string-keyed set would let the second slip past as a different citation
     const cited = new Map<string, string>();
     for (const citation of citations) {
       const parsedUrl = parseStatusUrl(citation.url);
@@ -434,7 +434,7 @@ export class XSearchClient implements GrokSentimentClient {
       // is a well-formed array whose element throws on the first field read in
       // `#toItem`. One malformed element must cost that element, not the whole
       // response — a model that returns nine good items and one null should
-      // yield nine, not an exception.
+      // yield nine, not an exception
       if (typeof raw !== 'object' || raw === null) {
         unreadableItems += 1;
         continue;
@@ -451,7 +451,7 @@ export class XSearchClient implements GrokSentimentClient {
       if (outcome === null) continue;
       // One item per post within a call. The provider can cite the same post
       // twice; ingest-level dedupe catches it across calls, this catches it
-      // within one.
+      // within one
       if (seen.has(outcome.id)) continue;
       seen.add(outcome.id);
       items.push(outcome);
@@ -499,7 +499,7 @@ export class XSearchClient implements GrokSentimentClient {
   ): IntelligenceItem | 'unevidenced' | 'stale' | null {
     // Every field validated. A `sentiment` of 2, or a confidence of 1.4, would
     // otherwise flow straight into the analysts' arithmetic and skew a
-    // direction on a value the type system says cannot exist.
+    // direction on a value the type system says cannot exist
     if (typeof raw.headline !== 'string' || raw.headline.trim() === '') return null;
     if (raw.sentiment !== 1 && raw.sentiment !== 0 && raw.sentiment !== -1) return null;
     if (typeof raw.confidence !== 'number' || !Number.isFinite(raw.confidence)) return null;
@@ -510,14 +510,14 @@ export class XSearchClient implements GrokSentimentClient {
 
     // THE GATE. The model's URL is used only to LOOK UP a citation; the stored
     // `url` is the citation's. A post the tool never returned cannot be cited
-    // into existence by the model typing its permalink.
+    // into existence by the model typing its permalink
     const evidenced = cited.get(claimed.statusId);
     if (evidenced === undefined) return 'unevidenced';
 
-    // Recency, enforced here because `from_date`/`to_date` cannot express it.
+    // Recency, enforced here because `from_date`/`to_date` cannot express it
     // The upper bound is the response's own timestamp: a post cannot postdate
     // the answer that cites it, and one that appears to is a decode or clock
-    // fault, not a scoop.
+    // fault, not a scoop
     const postedAt = claimed.postedAt;
     if (postedAt < context.windowStart || postedAt > context.responseAt) return 'stale';
 
@@ -525,13 +525,13 @@ export class XSearchClient implements GrokSentimentClient {
       // Stable across calls and derived from the post itself, which is what
       // makes ingest-level dedupe possible. `NousSentimentClient`'s
       // `grok:<instrument>:<asOf>:<index>` changes every call by construction,
-      // so no two calls could ever be recognised as carrying the same post.
+      // so no two calls could ever be recognised as carrying the same post
       id: `x:${claimed.statusId}`,
       source: 'x',
       type: 'sentiment',
       // The POST's time, not the fetch's. It is what the store's window filter
       // should see, and what makes the archive replayable on the real
-      // publication axis.
+      // publication axis
       timestamp: postedAt,
       entity: context.instrument,
       headline: raw.headline,
@@ -557,7 +557,7 @@ export class XSearchClient implements GrokSentimentClient {
   }
 }
 
-/** `YYYY-MM-DD`, the only granularity `x_search` accepts. */
+/** `YYYY-MM-DD`, the only granularity `x_search` accepts */
 function isoDate(at: Date): string {
   return at.toISOString().slice(0, 10);
 }

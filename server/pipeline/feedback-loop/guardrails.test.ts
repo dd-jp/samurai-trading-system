@@ -27,7 +27,7 @@ describe('boundedStep', () => {
   });
 
   it('pulls a value already outside the band back inside — the hard band wins', () => {
-    // An operator narrowed the band after the value was written.
+    // An operator narrowed the band after the value was written
     expect(boundedStep(2, 2, makeDial())).toBe(0.9);
   });
 });
@@ -57,7 +57,7 @@ describe('moveDirection', () => {
 describe('applyGuardrail', () => {
   it('bounds a loosening and labels it — no gate, since #736 removed it', () => {
     const outcome = applyGuardrail(0.5, 0.9, makeDial({ tighten_is: 'decrease' }));
-    // No `gated` key at all: the outcome shape cannot express a wait-for-a-human.
+    // No `gated` key at all: the outcome shape cannot express a wait-for-a-human
     expect(outcome).toEqual({ to: 0.55, direction: 'loosen' });
   });
 
@@ -67,7 +67,7 @@ describe('applyGuardrail', () => {
   });
 
   it('reports the direction of the BOUNDED move, not the raw target', () => {
-    // Target is far past the ceiling; the bounded move is still a loosening.
+    // Target is far past the ceiling; the bounded move is still a loosening
     const outcome = applyGuardrail(0.5, 99, makeDial({ tighten_is: 'decrease' }));
     expect(outcome.to).toBeCloseTo(0.55, 10);
     expect(outcome.direction).toBe('loosen');
@@ -75,7 +75,7 @@ describe('applyGuardrail', () => {
 
   it('flattens a move the hard band cannot honour to a no-op', () => {
     // Already at the ceiling, asked to loosen further: the hard band wins, and
-    // a move of zero is not a loosening.
+    // a move of zero is not a loosening
     const outcome = applyGuardrail(0.9, 99, makeDial({ tighten_is: 'decrease' }));
     expect(outcome).toEqual({ to: 0.9, direction: 'tighten' });
   });

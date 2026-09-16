@@ -21,7 +21,7 @@ describe('resolveTrade', () => {
         // A same-instrument decoy: an instrument-only guess would land here
         // too, so debate?.debate_id below only holds if the join is truly
         // keyed on debate_id — the assertion is what makes debateJoin's
-        // 'exact: true' label falsifiable, not the label itself.
+        // 'exact: true' label falsifiable, not the label itself
         debates: [
           makeDebate({ debate_id: 'decoy', instrument: 'SPY' }),
           makeDebate({ debate_id: 'd1', instrument: 'SPY' }),
@@ -125,7 +125,7 @@ describe('resolveTrace', () => {
         // debate_id differs from 'spy-newest' so an exact join would resolve
         // to a different row than today's instrument-only fallback does —
         // the debate?.debate_id assertion below is what makes debateJoin's
-        // 'exact: false' label falsifiable, not the label check itself.
+        // 'exact: false' label falsifiable, not the label check itself
         risk_critics: [
           makeRiskCritic({ trace_id: 'trace-spy', instrument: 'SPY', debate_id: 'spy-older' }),
         ],
@@ -207,25 +207,25 @@ describe('resolveTrace', () => {
       pipeline: makeView([doneThrough('SPY', 'trace-1', 'execution', { outcome: 'go' })]),
       // A trace_id-only match on verdictFor would find this row too — it
       // exists so the verdict conjunction is exercised the same way the lane
-      // conjunction is, not just the lane.
+      // conjunction is, not just the lane
       verdicts: [makeVerdict({ trace_id: 'trace-1', instrument: 'SPY' })],
     });
     // A Selection naming AAPL but pinning SPY's trace_id must not resolve
     // SPY's lane, or SPY's verdict, under an AAPL header — the mismatch must
-    // surface as "no trace", not as someone else's trace.
+    // surface as "no trace", not as someone else's trace
     const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
     expect(detail.lane).toBeUndefined();
     expect(detail.cells).toBeNull();
     expect(detail.verdict).toBeUndefined();
     // The trace is live in the window under SPY, not aged out — and its id
-    // must not leak into AAPL's TraceDetail unvalidated (#1267).
+    // must not leak into AAPL's TraceDetail unvalidated (#1267)
     expect(detail.absence.lane).toBe('wrong_instrument');
     expect(detail.traceId).toBeNull();
   });
 
   it('names a mismatch by its verdict alone, when the lane has already left the window (#1267)', () => {
     const snapshot = makeSnapshot({
-      // No lane at all carries trace-1 — only a verdict attests it, under SPY.
+      // No lane at all carries trace-1 — only a verdict attests it, under SPY
       pipeline: makeView([doneThrough('SPY', 'trace-2', 'execution', { outcome: 'go' })]),
       verdicts: [makeVerdict({ trace_id: 'trace-1', instrument: 'SPY' })],
     });
@@ -246,10 +246,10 @@ describe('resolveTrace', () => {
 
   // Unlike the arms above, the lanes arm has no test where a lane is its ONLY
   // attestation: #1205's test above pairs its lane with a verdict decoy, so
-  // removing the lanes arm outright still passes there via the verdict arm.
+  // removing the lanes arm outright still passes there via the verdict arm
   // This isolates it — no verdict, no risk-critic, no tick_status — so the
   // lanes arm itself (not its dead `!== instrument` conjunct, see trace.ts's
-  // docstring) is not left at zero coverage.
+  // docstring) is not left at zero coverage
   it('names a mismatch by its lane alone, with no verdict, risk-critic or tick_status attesting it', () => {
     const snapshot = makeSnapshot({
       pipeline: makeView([doneThrough('SPY', 'trace-1', 'trader')]),
@@ -373,7 +373,7 @@ describe('laneDebate', () => {
       ],
     });
     // Identity, not equality: the matrix and the drawer disagree the moment
-    // they reach two different rows, whatever either then renders.
+    // they reach two different rows, whatever either then renders
     expect(laneDebate(snapshot, lane)).toBe(
       resolveTrace(snapshot, { instrument: 'SPY', traceId: null }).debate,
     );

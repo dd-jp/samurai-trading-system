@@ -24,7 +24,7 @@ function orderContextLines(riskDecision: RiskDecision): string[] {
   ];
 }
 
-/** Formats the final go/no-go result for the trade channel (verdict-spec story 14). */
+/** Formats the final go/no-go result for the trade channel (verdict-spec story 14) */
 export function formatDecisionMessage(
   decision: VerdictDecision,
   riskDecision: RiskDecision,

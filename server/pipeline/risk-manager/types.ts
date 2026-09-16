@@ -162,7 +162,7 @@ export interface PortfolioView {
   reserved_gross_exposure: number;
   /**
    * Replaces the former single `daily_pnl_pct: number`, which was Alpaca's
-   * blended `last_equity` figure on an unverified boundary (GAP-8, #332).
+   * blended `last_equity` figure on an unverified boundary (GAP-8, #332)
    */
   daily_pnl: DailyPnlByClass;
   consecutive_losses: number;
@@ -204,9 +204,9 @@ export interface PortfolioView {
 export type SessionBasis =
   | {
       readonly known: true;
-      /** Portfolio equity at this class's session open — the denominator. */
+      /** Portfolio equity at this class's session open — the denominator */
       readonly open_equity: number;
-      /** Realized PnL net of fees, for this class, since that open. */
+      /** Realized PnL net of fees, for this class, since that open */
       readonly realized_pnl: number;
     }
   | { readonly known: false; readonly reason: string };
@@ -233,7 +233,7 @@ export interface SessionBasisByClass {
  * behaviour is unchanged; only its visibility is.
  */
 export interface CorrelationEstimate {
-  /** Keyed by the OTHER instrument; value is its correlation with the intent's instrument. */
+  /** Keyed by the OTHER instrument; value is its correlation with the intent's instrument */
   correlations: Record<string, number>;
   /**
    * Held instruments dropped from `correlations` because the PAIR's
@@ -297,18 +297,18 @@ export interface RiskConfig {
    * a D5-classified instrument unchanged.
    */
   per_asset_cap_fraction_of_equity: number;
-  /** Max total notional exposure per asset-class bucket, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  /** Max total notional exposure per asset-class bucket, as a FRACTION OF EQUITY resolved at evaluate time (#886) */
   per_asset_class_cap_fraction_of_equity: { crypto: number; stocks: number };
-  /** Max total gross notional exposure across the portfolio, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  /** Max total gross notional exposure across the portfolio, as a FRACTION OF EQUITY resolved at evaluate time (#886) */
   portfolio_gross_cap_fraction_of_equity: number;
-  /** v2 dynamic concentration check (#50) — caps combined exposure across the intent's instrument and every instrument correlated with it. */
+  /** v2 dynamic concentration check (#50) — caps combined exposure across the intent's instrument and every instrument correlated with it */
   concentration: {
-    /** Max combined notional exposure across the intent's instrument and everything correlated with it, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+    /** Max combined notional exposure across the intent's instrument and everything correlated with it, as a FRACTION OF EQUITY resolved at evaluate time (#886) */
     cap_fraction_of_equity: number;
-    /** |correlation| at/above which another instrument counts as concentrated risk with this one. */
+    /** |correlation| at/above which another instrument counts as concentrated risk with this one */
     threshold: number;
   };
-  /** Below this notional, a trimmed intent is dust and must be rejected. */
+  /** Below this notional, a trimmed intent is dust and must be rejected */
   min_viable_size: number;
   /**
    * Quantise an APPROVED entry size to whole shares (#941). Mirrors
@@ -419,9 +419,9 @@ export interface RiskConfig {
    * strength of that read, and never on the strength of a configured rate.
    */
   live_book_ceiling?: {
-    /** The declared book (`LIVE_BOOK_GBP`), in GBP. */
+    /** The declared book (`LIVE_BOOK_GBP`), in GBP */
     book: number;
-    /** Same semantics as `SubclassDeploymentCap['equity_ceiling'].refuse_above_tolerance`. */
+    /** Same semantics as `SubclassDeploymentCap['equity_ceiling'].refuse_above_tolerance` */
     refuse_above_tolerance: number;
     /** See the currency-mismatch paragraph above. Absent/`false` refuses to arm outright. */
     same_currency_verified?: boolean;
@@ -596,7 +596,7 @@ export interface SubclassDeploymentCap {
 export type InvalidationObservable =
   | { kind: 'indicator'; spec: IndicatorSpec }
   | { kind: 'mark' }
-  /** Latest bar's volume over the mean of the preceding bars in the window. */
+  /** Latest bar's volume over the mean of the preceding bars in the window */
   | { kind: 'bars'; window: BarWindow; measure: 'volume_ratio' };
 
 /**
@@ -641,17 +641,17 @@ export interface EvaluatedCondition {
  * fire" and hides for a month.
  */
 export type InvalidationDropReason =
-  /** Not a readable condition object: blank id, non-finite threshold, unknown comparator, no rationale. */
+  /** Not a readable condition object: blank id, non-finite threshold, unknown comparator, no rationale */
   | 'unparseable'
-  /** The `kind` is not one the Risk step can read deterministically at decision time. */
+  /** The `kind` is not one the Risk step can read deterministically at decision time */
   | 'unknown_observable'
-  /** The named indicator is not in the Market Data Service's `INDICATOR_KINDS` registry. */
+  /** The named indicator is not in the Market Data Service's `INDICATOR_KINDS` registry */
   | 'unknown_indicator'
-  /** `spec.lookback` (indicator) or `window.lookback` (bars) exceeds `MAX_INVALIDATION_LOOKBACK` — refused before it can trigger an unbounded market-data read (#994 review, PR #1067). */
+  /** `spec.lookback` (indicator) or `window.lookback` (bars) exceeds `MAX_INVALIDATION_LOOKBACK` — refused before it can trigger an unbounded market-data read (#994 review, PR #1067) */
   | 'lookback_too_large'
-  /** The threshold is outside the observable's declared range, so the predicate is permanently true or permanently false. */
+  /** The threshold is outside the observable's declared range, so the predicate is permanently true or permanently false */
   | 'threshold_out_of_range'
-  /** The condition would fire when the thesis is WORKING rather than failing. */
+  /** The condition would fire when the thesis is WORKING rather than failing */
   | 'direction_incoherent'
   /** Beyond the 5-condition ceiling. Only the ceiling is enforced — a short list is recorded, never dropped. */
   | 'over_cap';
@@ -664,14 +664,16 @@ export interface DroppedCondition {
   reason: InvalidationDropReason;
 }
 
-/** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts (built by #957) and consumed here as pre-built data.
+/**
+ * The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts (built by #957) and consumed here as pre-built data.
  *
  * `unavailable` is what a failed critic call PERSISTS (fail-open, per ADR-0003 §Consequences): the mechanical steps remain the safety net. It is
  * never handed to `evaluate()` — both producers map it back to `undefined`, so the decision keeps its explicit `risk_critic: skipped` reason and a
- * backtest replays the same "no verdict" input the live run had. `evaluate()` still handles the value defensively, since `RiskInput` is a public seam. */
+ * backtest replays the same "no verdict" input the live run had. `evaluate()` still handles the value defensively, since `RiskInput` is a public seam.
+ */
 export interface RiskCriticVerdict {
   verdict: 'pass' | 'trim' | 'reject' | 'unavailable';
-  /** Only meaningful for `trim`: the notional the critic argues this intent should be capped at. */
+  /** Only meaningful for `trim`: the notional the critic argues this intent should be capped at */
   max_notional: number | null;
   /** The critic's argument text (audit). Surfaces on `RiskDecision.reasons`. */
   reasoning: string;
@@ -698,23 +700,25 @@ export interface RiskCriticVerdict {
   dropped_conditions?: DroppedCondition[];
 }
 
-/** Persisted critic row, keyed by `debate_id` — joined with `debate_log` and `cosine_setups` (#162). */
+/** Persisted critic row, keyed by `debate_id` — joined with `debate_log` and `cosine_setups` (#162) */
 export interface RiskCriticLog {
   debate_id: string;
   verdict: RiskCriticVerdict;
   created_at: Date;
 }
 
-/** Port for the `debate_id`-keyed critic log. `SqliteRiskCriticStore` (critic-store.ts, migration 0032) is the production implementation — durable and
+/**
+ * Port for the `debate_id`-keyed critic log. `SqliteRiskCriticStore` (critic-store.ts, migration 0032) is the production implementation — durable and
  * cross-process because ADR-0003 §2's replay-from-log means a `backtest` run reads what a `live`/`paper` run wrote; `InMemoryRiskCriticStore` beside it
- * serves tests and a root with no shared store. */
+ * serves tests and a root with no shared store.
+ */
 export interface RiskCriticStore {
   writeVerdict(entry: RiskCriticLog): void;
   getByDebateId(debate_id: string): RiskCriticLog | undefined;
 }
 
 export interface RiskInput {
-  /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data. */
+  /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data */
   trace_id: string;
   intent: OrderIntent;
   clock: Clock;
@@ -728,7 +732,7 @@ export interface RiskInput {
    * each call so a restart can reconstruct `CircuitBreakers` exactly.
    */
   next_breaker_state: PersistedBreakerState[];
-  /** Pairwise correlation of the intent's instrument vs held instruments (#50); pre-computed by correlation.ts. */
+  /** Pairwise correlation of the intent's instrument vs held instruments (#50); pre-computed by correlation.ts */
   correlation: CorrelationEstimate;
   /**
    * WorldMonitor CII soft signal (#205), keyed by country/region code.
@@ -759,7 +763,7 @@ export interface RiskInput {
 
 export interface RiskDecision {
   status: 'approved' | 'rejected';
-  /** Possibly trimmed; present iff approved. */
+  /** Possibly trimmed; present iff approved */
   order_intent: OrderIntent | null;
   modifications: {
     original_size: number;
@@ -768,7 +772,7 @@ export interface RiskDecision {
   } | null;
   /** Which check step trimmed/killed the intent, e.g. 'per_asset_class_cap', 'circuit_breaker:portfolio'. */
   binding_constraint: string | null;
-  /** Machine tags + human text (audit). */
+  /** Machine tags + human text (audit) */
   reasons: string[];
   /**
    * Advisory-only tags, e.g. 'macro_risk_flag:RU' from the CII soft signal
@@ -777,12 +781,12 @@ export interface RiskDecision {
    */
   warnings: string[];
   risk_snapshot: {
-    /** Per instrument / class / portfolio. */
+    /** Per instrument / class / portfolio */
     exposure: Record<string, number>;
     drawdown_pct: number;
     armed_breakers: string[];
   };
-  /** Echo of `RiskInput.next_breaker_state` (#203) — the caller persists this to the `breaker_state` table so a restart survives a tripped breaker. */
+  /** Echo of `RiskInput.next_breaker_state` (#203) — the caller persists this to the `breaker_state` table so a restart survives a tripped breaker */
   next_breaker_state: PersistedBreakerState[];
 }
 

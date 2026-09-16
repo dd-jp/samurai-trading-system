@@ -41,17 +41,17 @@ describe('isStoreWriteGuardEnabled', () => {
     // PR #1048 review: the overrides are deliberately asymmetric. `off` is
     // always safe (it can only cost detection); `on` reaching a live run would
     // put this module's SQL parser on the order path, which is exactly what
-    // "off in production" exists to prevent.
+    // "off in production" exists to prevent
     expect(isStoreWriteGuardEnabled({ samuraiMode: 'live', override: 'on' })).toBe(false);
     expect(
       isStoreWriteGuardEnabled({ nodeEnv: 'production', samuraiMode: 'live', override: 'on' }),
     ).toBe(false);
     // …but it still wins over a production BUILD that is not live-money, which
-    // is the case the escape hatch is for.
+    // is the case the escape hatch is for
     expect(
       isStoreWriteGuardEnabled({ nodeEnv: 'production', samuraiMode: 'paper', override: 'on' }),
     ).toBe(true);
-    // `off` keeps beating everything, live included.
+    // `off` keeps beating everything, live included
     expect(isStoreWriteGuardEnabled({ samuraiMode: 'live', override: 'off' })).toBe(false);
   });
 
@@ -102,7 +102,7 @@ describe('writeTargetTables', () => {
   });
 
   // The upsert tail is the single most common shape in this repo's stores, and
-  // a naive `\bUPDATE\s+(\w+)` reads its target as the literal `SET`.
+  // a naive `\bUPDATE\s+(\w+)` reads its target as the literal `SET`
   it('does not read the upsert tail as a second target', () => {
     expect(
       writeTargetTables(
@@ -160,7 +160,7 @@ describe('writeTargetTables', () => {
 
   // Fail OPEN, not closed: the guard runs at prepare() time and some stores
   // prepare in their constructor, so an unparseable statement must not turn
-  // into a boot failure over a shape the parser did not anticipate.
+  // into a boot failure over a shape the parser did not anticipate
   it('yields nothing when a write verb has no parseable target', () => {
     expect(writeTargetTables('UPDATE')).toEqual([]);
     expect(writeTargetTables('INSERT INTO (a) VALUES (1)')).toEqual([]);
@@ -174,7 +174,7 @@ describe('STAGE_OWNED_TABLES', () => {
     // The runtime half. The compile-time half is the
     // `Record<StoreOwnerStage, …>` annotation on the declaration itself, which
     // fails `npm run typecheck` in BOTH directions (verified by experiment — see
-    // that binding's doc comment).
+    // that binding's doc comment)
     expect(Object.keys(STAGE_OWNED_TABLES).sort()).toEqual([...STORE_OWNER_STAGES].sort());
   });
 
@@ -213,7 +213,7 @@ describe('STAGE_OWNED_TABLES', () => {
 describe('guardedStore', () => {
   const SEEN_AT = '2026-09-03T00:00:00.000Z';
 
-  /** A minimal write to a table Execution owns, used by the transaction tests. */
+  /** A minimal write to a table Execution owns, used by the transaction tests */
   function insertUnpricedFill(store: StoreHandle, fillId: string): void {
     store
       .prepare(

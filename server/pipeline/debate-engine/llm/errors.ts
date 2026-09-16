@@ -39,7 +39,7 @@ export class LlmTimeoutError extends Error {
 }
 
 export class LlmRateLimitError extends Error {
-  /** Provider-supplied hint for how long to wait, if one was given. */
+  /** Provider-supplied hint for how long to wait, if one was given */
   readonly retryAfterMs: number | undefined;
 
   constructor(message: string, retryAfterMs?: number) {
@@ -53,7 +53,7 @@ export class LlmRateLimitError extends Error {
  * The raw response didn't match what the caller's `parseResponse` expected
  * (debate-engine-spec.md story 11's semantic detection and the mediator's
  * synthesis both depend on structured output — a prose-only reply is a
- * malformed response for their purposes, not a client bug).
+ * malformed response for their purposes, not a client bug)
  */
 export class LlmMalformedResponseError extends Error {
   readonly reason: string;
@@ -110,7 +110,7 @@ export class LlmAdmissionRefusedError extends Error {
   }
 }
 
-/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further. */
+/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further */
 export class LlmProviderError extends Error {
   constructor(message: string) {
     super(message);
@@ -166,7 +166,7 @@ export class LlmCancelledError extends Error {
  * fabricated position — see `json-response.ts`'s stated design.
  */
 export class LlmRefusalError extends Error {
-  /** The wire field that signalled the refusal, so the log names its evidence rather than a guess. */
+  /** The wire field that signalled the refusal, so the log names its evidence rather than a guess */
   readonly signal: string;
   /**
    * Tokens the refused call billed, when the transport could see them. Absent
@@ -203,7 +203,7 @@ export class LlmRefusalError extends Error {
 export class LlmTruncatedError extends Error {
   readonly model: string;
   readonly max_tokens: number;
-  /** Tokens the provider billed for the truncated call, when the transport could see them. */
+  /** Tokens the provider billed for the truncated call, when the transport could see them */
   readonly usage: { input_tokens: number; output_tokens: number } | undefined;
 
   constructor(

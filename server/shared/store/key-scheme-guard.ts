@@ -94,14 +94,14 @@ export function isWedgedZeroFillLot(
   );
 }
 
-/** A lot still in flight whose key predates the #686 derivation. */
+/** A lot still in flight whose key predates the #686 derivation */
 export interface StaleKeySchemeLot {
   idempotency_key: string;
   instrument: string;
   order_state: string;
 }
 
-/** Non-terminal lots still carrying a pre-#686 key, oldest first. */
+/** Non-terminal lots still carrying a pre-#686 key, oldest first */
 export function findStaleKeySchemeLots(db: Database): StaleKeySchemeLot[] {
   const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
 

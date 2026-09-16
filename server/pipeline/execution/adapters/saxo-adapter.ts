@@ -94,7 +94,7 @@ import type {
 } from './saxo-client.js';
 import { type SaxoQuoteUnit, saxoCashPerShare, saxoQuotedPrice } from './saxo-price-unit.js';
 
-/** Measured on SIM 2026-09-05: identical placements 17 s apart both landed; inside the window the second earned 409 (doc 43). */
+/** Measured on SIM 2026-09-05: identical placements 17 s apart both landed; inside the window the second earned 409 (doc 43) */
 const SAXO_DUPLICATE_WINDOW_MS = 15_000;
 
 /**
@@ -271,7 +271,7 @@ interface DormantDeferRecord {
   readonly lastAlertedAtMs: number;
 }
 
-/** `dormantDefer`'s namespace for the refusal counter — see that map's doc. */
+/** `dormantDefer`'s namespace for the refusal counter — see that map's doc */
 function refusedKey(externalReference: string): string {
   return `refused:${externalReference}`;
 }
@@ -283,7 +283,7 @@ function refusedKey(externalReference: string): string {
  * for this reference (`lastAlertedAtMs === 0`) or at least
  * `DORMANT_DEFER_ALERT_REPEAT_EVERY_MS` of wall-clock time has passed since
  * the last one (the pager-facing repeat, time-based by design — see that
- * constant's own doc).
+ * constant's own doc)
  */
 function dueForDormantDeferAlert(
   consecutive: number,
@@ -330,17 +330,17 @@ export interface SaxoInstrumentRef extends SaxoQuoteUnit {
    * compute cash from this field alone (#1302, see saxo-price-unit.ts).
    */
   readonly currency: string;
-  /** `PriceCurrency`: `GBX` on a pence line whose `currency` is `GBP` (doc 44 §2.1). */
+  /** `PriceCurrency`: `GBX` on a pence line whose `currency` is `GBP` (doc 44 §2.1) */
   readonly price_currency: string | undefined;
 }
 
-/** LSE ticker <-> Saxo Uic, both ways: orders go out by Uic, positions come back by Uic. */
+/** LSE ticker <-> Saxo Uic, both ways: orders go out by Uic, positions come back by Uic */
 export interface SaxoInstrumentResolver {
   resolve(lseTicker: string): SaxoInstrumentRef | undefined;
   lseTickerFor(uic: number): string | undefined;
 }
 
-/** The slice of an `LseEtpPoolRow` the resolver needs — structural so the pool module is not imported into the execution stage. */
+/** The slice of an `LseEtpPoolRow` the resolver needs — structural so the pool module is not imported into the execution stage */
 export interface SaxoResolvablePoolRow {
   readonly lse_ticker: string;
   readonly provenance: {
@@ -445,7 +445,7 @@ export interface SaxoBrokerAdapterInput {
    * REQUIRED, no logging default: the only signal a partial entry fill
    * leaves (see `resizeProtectiveLegs`), so a silent stand-in here would be
    * the "tested mechanism nothing calls" defect class this repo keeps
-   * refiling — same reason Alpaca's `unpricedFillAlerts` refuses one.
+   * refiling — same reason Alpaca's `unpricedFillAlerts` refuses one
    */
   legResizeAlerts: LegResizeUnverifiedAlertChannel;
   /**
@@ -473,7 +473,7 @@ export interface SaxoBrokerAdapterInput {
 
 interface BracketRecord {
   instrument: string;
-  /** `undefined` for a bracket journalled without its request (ids only). */
+  /** `undefined` for a bracket journalled without its request (ids only) */
   size: number | undefined;
 }
 
@@ -495,7 +495,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   private readonly legResizeAlerts: LegResizeUnverifiedAlertChannel;
   private readonly dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;
   private readonly priceUnitAlerts: UnresolvedPriceUnitAlertChannel;
-  /** Warmed from the journal so a restart keeps sweeping fills. */
+  /** Warmed from the journal so a restart keeps sweeping fills */
   private readonly brackets = new Map<string, BracketRecord>();
   private readonly flattens = new Map<string, FlattenRecord>();
   /**
@@ -588,7 +588,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       Uic: ref.uic,
       // GTC, not the entry's duration: a related order only activates on the
       // entry's fill and dies with the master's cancel, so a Day leg would
-      // buy nothing except a naked position if flat-by-close ever misses.
+      // buy nothing except a naked position if flat-by-close ever misses
       OrderDuration: { DurationType: 'GoodTillCancel' as const },
       ManualOrder: false as const,
       ExternalReference: legReference(wireReference, suffix),
@@ -963,13 +963,13 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       // alone is exactly the UNVERIFIED read `lookup` exists to avoid
       // (#1215 round 1). Declining to adopt leaves the legs for the next
       // `reconcile()` pass (#921 runs every poll) to settle against the
-      // audit trail.
+      // audit trail
       if (adopted !== null) throw cause;
       // The open list forgets an order the instant it stops being open —
       // not just on cancel, also on a fill, which for a Market flatten can
       // land inside the same duplicate window as this retry. The audit
       // trail still carries it, so it is adopted in its own state rather
-      // than reported as a failed flatten (#1217).
+      // than reported as a failed flatten (#1217)
       const latest = await this.latestActivityFor(externalReference, PLACEMENT_LOOKBACK_MS);
       if (latest === undefined) throw cause;
       return adopt(fromActivity(latest, externalReference), externalReference);
@@ -1115,7 +1115,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     // unfilled, but no probe has ever produced that row — a RESTING master
     // keeps its legs nested inside `RelatedOpenOrders`, not top-level here —
     // so it is not proof either; `lookup` corroborates it against the audit
-    // trail before cancelling anything.
+    // trail before cancelling anything
     const legs = legRows(open, externalReference);
     const [first] = legs;
     if (first === undefined) return null;
@@ -1257,12 +1257,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     this.dormantDefer.delete(externalReference);
   }
 
-  /** Clears the refusal count once `cancel` reaches a settled answer for this reference. */
+  /** Clears the refusal count once `cancel` reaches a settled answer for this reference */
   private clearRefusedDefer(externalReference: string): void {
     this.dormantDefer.delete(refusedKey(externalReference));
   }
 
-  /** Every audit-trail row for `externalReference` inside `lookbackMs`, unordered. */
+  /** Every audit-trail row for `externalReference` inside `lookbackMs`, unordered */
   private async activitiesFor(
     externalReference: string,
     lookbackMs: number,
@@ -1342,7 +1342,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       // off `open.legs` here — rather than the role-deduped
       // `orderIdList(open.ids)` — matches `clearLegs`' own behavior on the
       // mirror branch and does not silently drop a duplicate row under one
-      // leg's reference (#1215 round 3).
+      // leg's reference (#1215 round 3)
       if (open.kind === 'legs') {
         const verdict = await this.corroborateActivatedLegs(externalReference, lookbackMs);
         if (verdict.kind === 'expired') {
@@ -1362,7 +1362,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         // `FillAmount` has no cross-row idempotency behind it (this adapter's
         // ~15s retry window, doc 43), so duplicate fill rows under one wire
         // reference must not be allowed to report a fill larger than the
-        // order itself (#1574).
+        // order itself (#1574)
         return verdict.filledQty === undefined || verdict.filledQty <= 0
           ? open
           : {
@@ -1511,7 +1511,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     if (fillRows.length > 0) {
       // Summed, not read off one row: `FillAmount` is per-event (see this
       // function's own doc), so a partial fill split across several activity
-      // rows would under-report at any single row's amount (#1563).
+      // rows would under-report at any single row's amount (#1563)
       return {
         kind: 'confirmed',
         filledQty: fillRows.reduce((sum, row) => sum + (row.FillAmount ?? 0), 0),
@@ -1531,7 +1531,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * `externalReference` here is the actual wire value observed on an
    * activity row — the one place this adapter must go from a Saxo reference
    * back to a `client_order_id` (#1510), so it is the one place that reads
-   * `wireReferences` rather than deriving forward with `saxoExternalReference`.
+   * `wireReferences` rather than deriving forward with `saxoExternalReference`
    */
   private attribute(
     externalReference: string | undefined,
@@ -1564,7 +1564,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
 }
 
 interface OrderIds {
-  /** Absent when only the protective legs are still open — the entry is no longer a venue order. */
+  /** Absent when only the protective legs are still open — the entry is no longer a venue order */
   entry?: string;
   stop?: string;
   target?: string;
@@ -1603,7 +1603,7 @@ interface LookedUpActivatedLegsOrder {
 
 type LookedUpOrder = LookedUpMasterOrder | LookedUpActivatedLegsOrder;
 
-/** `findOpen`'s signal for a related-order pair found `NotWorking` with no master — see `lookup`. */
+/** `findOpen`'s signal for a related-order pair found `NotWorking` with no master — see `lookup` */
 interface DormantLegs {
   readonly dormant: readonly SaxoOpenOrder[];
 }
@@ -1615,7 +1615,7 @@ function isDormantLegs(result: LookedUpOrder | DormantLegs): result is DormantLe
 /**
  * `corroborateDormantLegs`' reading of the master's audit row: the entry
  * filled, the master died without filling (`latest` absent when no row ties
- * the legs to any known order at all), or the trail has not settled yet.
+ * the legs to any known order at all), or the trail has not settled yet
  */
 type DormantVerdict =
   | { kind: 'filled'; latest: SaxoOrderActivity }
@@ -1659,7 +1659,7 @@ function dormantLegsUncorroborated(externalReference: string): SaxoBrokerProvide
   return new SaxoBrokerProviderError(reason, undefined, 'DormantLegsUncorroborated', reason);
 }
 
-/** The bracket's protective legs as their own `listOpenOrders` rows, master excluded. */
+/** The bracket's protective legs as their own `listOpenOrders` rows, master excluded */
 function legRows(open: readonly SaxoOpenOrder[], clientOrderId: string): SaxoOpenOrder[] {
   const wireReference = saxoExternalReference(clientOrderId);
   return open.filter(
@@ -1672,7 +1672,7 @@ function legRows(open: readonly SaxoOpenOrder[], clientOrderId: string): SaxoOpe
 /**
  * `Status === 'NotWorking'` — still UNVERIFIED as "never activated" (see
  * `SaxoOpenOrderStatus`): doc 43 round 2 showed a fill leaves top-level legs
- * `Working`, so no fill produces the row this reads.
+ * `Working`, so no fill produces the row this reads
  */
 function isNeverActivated(order: SaxoOpenOrder): boolean {
   return order.Status === 'NotWorking';
@@ -1694,7 +1694,7 @@ function adopt(existing: LookedUpOrder, externalReference: string): Placed {
   if (DEAD_STATES.has(state)) {
     // Carried as `venueMessage` so `sanitizeBrokerError` keeps it: the text
     // is composed here from our own reference and the venue's order id, not
-    // copied from a response body, so the H1 boundary has nothing to strip.
+    // copied from a response body, so the H1 boundary has nothing to strip
     const reason =
       `Saxo already holds '${externalReference}' in state '${state}' (order ` +
       `${existing.normalized.broker_order_ids.join(',') || 'unknown'}); refusing to adopt a dead ` +
@@ -1704,7 +1704,7 @@ function adopt(existing: LookedUpOrder, externalReference: string): Placed {
   return { ids: existing.ids, order_state: state };
 }
 
-/** Builds a `LookedUpOrder` from the master's own audit-trail row (`lookup`'s no-open-order fallback). */
+/** Builds a `LookedUpOrder` from the master's own audit-trail row (`lookup`'s no-open-order fallback) */
 function fromActivity(activity: SaxoOrderActivity, externalReference: string): LookedUpOrder {
   return {
     kind: 'master',
@@ -1723,7 +1723,7 @@ function fromActivity(activity: SaxoOrderActivity, externalReference: string): L
 /**
  * A dormant leg pair whose master audit row came back filled (`lookup`) —
  * uses the legs' real order ids, unlike `fromActivity`, which has no
- * related-order ids to offer.
+ * related-order ids to offer
  */
 function legsFilled(
   legs: readonly SaxoOpenOrder[],
@@ -1830,11 +1830,11 @@ function activityState(activity: SaxoOrderActivity): NormalizedOrder['order_stat
   switch (activity.Status) {
     // MEASURED on SIM 2026-09-10 (#1216, doc 43): the venue writes
     // `FinalFill` on a full fill and never `Filled`, so `Filled` alone read
-    // every real fill as `partially_filled` through the default branch.
+    // every real fill as `partially_filled` through the default branch
     // `Filled` stays because nothing measures its ABSENCE from every venue
     // path — only that this one does not use it. A partial fill's own
     // status string is still unmeasured; the default branch below reads it
-    // off `FillAmount`, which is measured.
+    // off `FillAmount`, which is measured
     case 'FinalFill':
     case 'Filled':
       return 'filled';
@@ -1847,7 +1847,7 @@ function activityState(activity: SaxoOrderActivity): NormalizedOrder['order_stat
   }
 }
 
-/** A booked fill still in the VENUE's price unit — cash only after `toCashFill`. */
+/** A booked fill still in the VENUE's price unit — cash only after `toCashFill` */
 interface QuotedFill {
   client_order_id: string;
   broker_fill_id: string;

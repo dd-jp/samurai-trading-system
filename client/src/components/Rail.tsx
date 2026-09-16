@@ -24,7 +24,7 @@ export const TABS: readonly { id: Tab; label: string }[] = [
   { id: 'review', label: 'Review' },
 ];
 
-/** The two arms the rail's selector can switch between (#1593). */
+/** The two arms the rail's selector can switch between (#1593) */
 export const ARMS: readonly { id: TradingArmWire; label: string }[] = [
   { id: 'live', label: 'Live' },
   { id: 'control', label: 'Control' },
@@ -43,7 +43,7 @@ export interface RailProps {
   feed: LiveFeed;
   tab: Tab;
   onTab: (tab: Tab) => void;
-  /** Which arm's feed the rail — and everything downstream of it — is showing. */
+  /** Which arm's feed the rail — and everything downstream of it — is showing */
   arm: TradingArmWire;
   onArm: (arm: TradingArmWire) => void;
 }
@@ -122,7 +122,7 @@ export const HEALTH: {
 } = {
   // Ranked ahead of every other state in `useSnapshot.ts`'s `deriveStatus` —
   // see that function's doc comment for why a contract mismatch must outrank
-  // staleness rather than merely being folded into it.
+  // staleness rather than merely being folded into it
   'contract-mismatch': {
     word: 'MISMATCH',
     note: ({ error }) => error ?? 'served bundle disagrees with the server contract',
@@ -138,7 +138,7 @@ export const HEALTH: {
     rendersHealthTiles: true,
     // The cold-start page is the whole screen, so it is already unmissable;
     // announcing it as a live region would re-read the page a reader has
-    // just landed on.
+    // just landed on
     announce: false,
   },
   stale: {
@@ -493,7 +493,7 @@ function capReasonOf(
   // malformed wire value no code path in this repo *arms*, but the type is a
   // bare `number`) falling through to `'capped'` would hand `CapMeter` a `''`
   // empty state for a cap it still refuses to draw against (advisor review,
-  // #1196).
+  // #1196)
   if (capUsd <= 0) return 'zero';
   return 'capped';
 }
@@ -502,22 +502,22 @@ const CAP_EMPTY_STATE: Readonly<Record<Exclude<CapReason, 'capped' | 'zero'>, st
   unknown: 'no spend figure on this snapshot — meter not drawable',
   // Distinct from `ambiguous`: this is a malformed/untrustworthy `cap_usd`
   // itself, not a missing discriminator for an otherwise-explicit `null`
-  // (review round 3's MAJOR) — asserts nothing about arming or intent.
+  // (review round 3's MAJOR) — asserts nothing about arming or intent
   unreadable: 'LLM spend cap on this snapshot could not be read — meter not drawable',
   // Distinct from `uncapped`: nothing may be enforcing anything here, which
-  // is the opposite of an operator's deliberate choice (#1196).
+  // is the opposite of an operator's deliberate choice (#1196)
   'never-armed': 'LLM spend cap was never armed — meter not drawable',
   uncapped: 'LLM spend is deliberately uncapped — meter not drawable',
   // Asserts NEITHER "armed" nor "unarmed" — a pre-#1196 server (or a
   // malformed cap_armed_at this client could not trust) leaves this wire
   // silent on arming state, and the honest reading is that silence, not a
-  // guess in either direction (review round 2).
+  // guess in either direction (review round 2)
   ambiguous: 'no trustworthy arming record on this snapshot — meter not drawable',
 };
 
 // Never "no LLM budget configured": $0 (or a malformed negative) is a
 // configured, maximally restrictive budget, not an absent one — and the
-// actual figure is named rather than a hardcoded "$0" (#1196).
+// actual figure is named rather than a hardcoded "$0" (#1196)
 function zeroCapEmptyState(capUsd: number): string {
   return `LLM spend cap is ${formatUsd(capUsd)} — meter not drawable`;
 }
@@ -531,7 +531,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
   // through as `null` still draws no meter and shows the same em-dash
   // denominator CapMeter already renders for `null` (`CapMeter.tsx`). Only
   // `capReasonOf` below needs the raw three-valued `cap` to tell
-  // "unreadable" apart from "the wire explicitly said no cap".
+  // "unreadable" apart from "the wire explicitly said no cap"
   const capForMeter = cap ?? null;
   const armedAt = capArmedAtOf(snapshot);
   const spendKnown = spent !== undefined && Number.isFinite(spent);
@@ -541,7 +541,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
   const windows = snapshot.llm_spend;
   // A $0 cap with any recorded spend is already breached, but `CapMeter`
   // never divides by a cap `<= 0` (0/0 and x/0 are both unjustifiable), so
-  // this is stated directly rather than left for a fabricated `over` flag.
+  // this is stated directly rather than left for a fabricated `over` flag
   const zeroCapBreached = reason === 'zero' && spendKnown && (spent ?? 0) > 0;
   return (
     <CapMeter
@@ -630,7 +630,7 @@ function drawdownValueOf(metrics: MetricsSuiteWire): number | undefined {
 const DRAWDOWN_EMPTY_STATE: Readonly<Record<Exclude<DrawdownReason, 'drawn'>, string>> = {
   // Says the figure could not be read — never "no daily suite yet", which
   // would be an affirmative claim that nothing has run, made about a suite
-  // that did (#1264).
+  // that did (#1264)
   unreadable: 'daily suite drawdown figure could not be read — meter not drawable',
 };
 
@@ -680,14 +680,14 @@ export function Rail(props: RailProps) {
   const mismatched = status === 'contract-mismatch';
   // Read off `status`, not off a `stale` boolean carried beside it (#1520):
   // inside the rail the two were the same reading, and the second one existed
-  // only to cover the cold-start window the page-level gate now owns.
+  // only to cover the cold-start window the page-level gate now owns
   const stale = status === 'stale';
   // The tile gate, not `mismatched`: this is the field #1520 must set on any
   // new `HEALTH` entry, so a state that also shouldn't trust `snapshot` gets
   // caught by the compiler rather than falling through to the healthy
   // branch by default. `mismatched` above stays a literal check because it
   // drives ONLY this state's own visual styling (`rail-mismatch`,
-  // `data-contract-mismatch`), not the six tiles' render gate.
+  // `data-contract-mismatch`), not the six tiles' render gate
   const renderHealthTiles = HEALTH[status].rendersHealthTiles;
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const next = tabForKey(event.key, tab);
@@ -723,7 +723,6 @@ export function Rail(props: RailProps) {
         </div>
       </nav>
       <nav className="rail-tabs" aria-label="Tabs">
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: no click handler here — the key handler implements the tablist arrow-key contract for the tab buttons inside. */}
         <div role="tablist" aria-orientation="vertical" onKeyDown={onTabKey}>
           {TABS.map((entry) => (
             <button
@@ -790,7 +789,7 @@ export function Rail(props: RailProps) {
         <span>snapshot {formatClockUtc(snapshot.as_of)}</span>
         {/* Not a duplicate of HealthBlock's visible "polled" note: this one
             renders in every health state, so it still reaches a screen reader
-            once the visible note has switched to STALE's "last update" line. */}
+            once the visible note has switched to STALE's "last update" line */}
         {lastSuccessAt !== null && (
           <span className="visually-hidden">
             Last successful poll {formatClockUtc(lastSuccessAt)}

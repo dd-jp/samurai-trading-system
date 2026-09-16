@@ -45,7 +45,7 @@ export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): Metr
 
   // The DSR inputs (#406). `per_period_sharpe` is the statistic
   // `deflatedSharpe()` is defined against; `sharpe` below is it times
-  // `annualization`, so the two can never disagree about the same sample.
+  // `annualization`, so the two can never disagree about the same sample
   const per_period_sharpe = mean / stdev;
 
   return {
@@ -106,7 +106,7 @@ function loAnnualizationFactor(r: readonly number[], periodsPerYear: number): nu
   return periodsPerYear / Math.sqrt(varianceOfSum);
 }
 
-/** ρ_k, via the biased autocovariance estimator — see loAnnualizationFactor. */
+/** ρ_k, via the biased autocovariance estimator — see loAnnualizationFactor */
 function autocorrelation(r: readonly number[], lag: number): number {
   const mean = average(r);
   const deviations = r.map((value) => value - mean);
@@ -134,7 +134,7 @@ function autocorrelation(r: readonly number[], lag: number): number {
 /**
  * Downside deviation about a zero target: only returns below the target
  * contribute, but the sum is divided by the full n (Sortino's convention) so
- * a strategy is not rewarded for having few, deep losses.
+ * a strategy is not rewarded for having few, deep losses
  */
 function downsideDeviation(r: readonly number[]): number {
   let sum = 0;
@@ -146,14 +146,14 @@ function downsideDeviation(r: readonly number[]): number {
   return Math.sqrt(sum / r.length);
 }
 
-/** Geometric, so the compounding a real account experiences is respected. */
+/** Geometric, so the compounding a real account experiences is respected */
 function annualizedReturn(r: readonly number[], periodsPerYear: number): number {
   let equity = 1;
   for (const value of r) {
     equity *= 1 + value;
   }
 
-  // A wipeout has no real annualized return; -100% is the honest report.
+  // A wipeout has no real annualized return; -100% is the honest report
   if (equity <= 0) {
     return -1;
   }
@@ -161,7 +161,7 @@ function annualizedReturn(r: readonly number[], periodsPerYear: number): number 
   return equity ** (periodsPerYear / r.length) - 1;
 }
 
-/** Worst peak-to-trough decline of the compounded equity curve, as a positive fraction. */
+/** Worst peak-to-trough decline of the compounded equity curve, as a positive fraction */
 function maxDrawdown(r: readonly number[]): number {
   let equity = 1;
   let peak = 1;
@@ -280,13 +280,13 @@ function exposure(trades: TradeSeries): number {
   return held / windowMs;
 }
 
-/** Sample skew, g1 = m3 / m2^1.5 — the moment estimator the DSR is defined against. */
+/** Sample skew, g1 = m3 / m2^1.5 — the moment estimator the DSR is defined against */
 function skew(r: readonly number[]): number {
   const m2 = centralMoment(r, 2);
   return m2 === 0 ? 0 : centralMoment(r, 3) / m2 ** 1.5;
 }
 
-/** **Excess** kurtosis: m4 / m2² − 3, so a normal sample reports 0. */
+/** **Excess** kurtosis: m4 / m2² − 3, so a normal sample reports 0 */
 function excessKurtosis(r: readonly number[]): number {
   const m2 = centralMoment(r, 2);
   return m2 === 0 ? 0 : centralMoment(r, 4) / m2 ** 2 - 3;

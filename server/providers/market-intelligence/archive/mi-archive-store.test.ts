@@ -7,7 +7,7 @@ import type { IntelligenceItem } from '../types.js';
 import { type ArchivedItem, MiArchiveStore, type RawArchiveRow } from './mi-archive-store.js';
 import { MI_SOURCES } from './mi-sources.js';
 
-/** Every read in this file that is not specifically about source filtering. */
+/** Every read in this file that is not specifically about source filtering */
 const ALL_SOURCES = Object.values(MI_SOURCES);
 
 const T0 = new Date('2026-08-15T10:00:00Z');
@@ -62,7 +62,7 @@ describe('MiArchiveStore', () => {
     expect(read[0]?.headline).toBe('Apple beats on revenue');
     expect(read[0]?.sentiment).toBe(1);
     // JSON has no Date type; the store's window filter compares Dates, so a
-    // string here would silently make every window comparison false.
+    // string here would silently make every window comparison false
     expect(read[0]?.timestamp).toBeInstanceOf(Date);
   });
 
@@ -142,7 +142,7 @@ describe('MiArchiveStore', () => {
 
       // Both revisions are held, so a replay at T0 sees the original and a
       // replay after the correction sees both — rather than the correction
-      // retroactively rewriting what was knowable earlier.
+      // retroactively rewriting what was knowable earlier
       expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toHaveLength(1);
       expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)[0]?.headline).toBe(
         'Apple beats on revenue',
@@ -167,7 +167,7 @@ describe('MiArchiveStore', () => {
    * `hasScoredItem` (scoring-eligibility dedup) are deliberately independent
    * gates — a degraded batch archives the raw bytes without a scored item, so
    * the row must read `hasItem: true, hasScoredItem: false` until a later
-   * refresh actually scores it.
+   * refresh actually scores it
    */
   describe('hasScoredItem', () => {
     it('is false before anything is written', () => {
@@ -403,7 +403,7 @@ describe('MiArchiveStore', () => {
       const rows = seeded().rawRowsBetween(MI_SOURCES.gdeltGkg, hour(0), hour(2));
 
       // `c` sits exactly on the exclusive end, so consecutive windows tile
-      // without counting it twice; `d` is another source in range.
+      // without counting it twice; `d` is another source in range
       expect(rows.map((row) => row.native_id)).toEqual(['a', 'b']);
     });
 
@@ -419,7 +419,7 @@ describe('MiArchiveStore', () => {
       store.close();
 
       // A separate readonly handle, for the reason the purge plan test states:
-      // the class's own connection is private and EXPLAIN never executes.
+      // the class's own connection is private and EXPLAIN never executes
       const db = new BetterSqlite3(dbPath, { readonly: true });
       const plan = (
         db
@@ -435,7 +435,7 @@ describe('MiArchiveStore', () => {
       db.close();
 
       // Without the index the planner falls back to the PRIMARY KEY autoindex,
-      // which can only narrow to the source — 168k rows on the paper archive.
+      // which can only narrow to the source — 168k rows on the paper archive
       expect(plan).toContain('idx_mi_archive_raw_source_updated');
       expect(plan).not.toContain('SCAN');
     });

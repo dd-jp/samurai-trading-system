@@ -156,7 +156,7 @@ export function proxySignal(
   // The CONVERGED window (#857), sliced from the spec's own lookback rather
   // than from a literal, so this and `replay-driver.ts`'s matching call and
   // its warm-up gate cannot drift apart. It was `slice(-(atrWindow + 1))`
-  // until #857 — see `proxyAtrSpec`.
+  // until #857 — see `proxyAtrSpec`
   const atrSpec = proxyAtrSpec(config, timeframe);
   const atrValue = computeIndicator(bars.slice(-atrSpec.lookback) as Bar[], atrSpec);
 

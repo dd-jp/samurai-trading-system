@@ -5,10 +5,10 @@
  * resolution are not ticketed under epic #52 and are not implemented here.
  */
 // The bar grid, imported from its one defining module rather than restated
-// here (`decide.ts`: "the grid now has exactly one statement in the system").
+// here (`decide.ts`: "the grid now has exactly one statement in the system")
 // `debate-log-store.ts` is imported directly instead of the debate-engine
 // barrel so this provider does not pull the engine's module graph; the file
-// itself has only type imports.
+// itself has only type imports
 import {
   DEBATE_BAR_TIMEFRAME_MS,
   floorToBar,
@@ -58,11 +58,11 @@ const STALENESS_THRESHOLD_MS: Record<AssetClass, number> = {
   stocks: 30_000,
 };
 
-/** Spec: "Throttle: max 1 update per minute per subscriber". */
+/** Spec: "Throttle: max 1 update per minute per subscriber" */
 const SUBSCRIBER_THROTTLE_MS = 60_000;
-/** Spec: "If analyst is slow to process (callback takes > 5s), log warning". */
+/** Spec: "If analyst is slow to process (callback takes > 5s), log warning" */
 const SLOW_CALLBACK_MS = 5_000;
-/** Spec: "If analyst callback fails repeatedly (3 times), remove subscription and alert". */
+/** Spec: "If analyst callback fails repeatedly (3 times), remove subscription and alert" */
 const MAX_SLOW_CALLBACKS = 3;
 
 /**
@@ -103,7 +103,7 @@ function latestClassWideRestatementOnly(
     // window differ only by a re-derivation, and the newer one is the current
     // description of it. Stated because the tie-break has to be TOTAL for the
     // replay determinism #1086 AC2 asserts — `stored` is in ingest order, so
-    // this makes the survivor a function of the ingest sequence alone.
+    // this makes the survivor a function of the ingest sequence alone
     if (held === undefined || item.timestamp.getTime() >= held.timestamp.getTime()) {
       latest.set(key, item);
     }
@@ -118,7 +118,7 @@ function latestClassWideRestatementOnly(
  * of `news`/`social` — macro, GDELT-GKG and Polymarket items all set `scope:
  * 'asset_class'` (gdelt-scorer.ts, polymarket-agent.ts) and are evidence for
  * the whole asset class, not for one instrument, so they must not be counted
- * as per-ticker news/sentiment observations.
+ * as per-ticker news/sentiment observations
  */
 function isClassWide(item: IntelligenceItem): boolean {
   return item.scope === 'asset_class';
@@ -161,20 +161,20 @@ export class MarketIntelligenceStore {
     // DEDUPED BY ITEM ID (#969). This used to append unconditionally, which
     // was safe only because every producer emitted call-unique ids: the old
     // sentiment client's `grok:<instrument>:<asOf>:<index>` could not collide
-    // with itself by construction.
+    // with itself by construction
     //
     // Real retrieval breaks that. `x_search`'s date filter is DAY-granular
     // while the refresh bucket is two hours, so consecutive buckets return
     // overlapping posts as a matter of course — and `sentiment-analyst.ts`
     // averages `social` wholesale, so an un-deduped post votes once per bucket
     // it survives in. A post that stayed relevant for six hours would count
-    // three times, which reads as three people agreeing.
+    // three times, which reads as three people agreeing
     //
     // Keyed on the item id rather than on content because the id is now
     // derived from the observation itself (`x:<statusId>`), which is what
     // makes cross-call identity meaningful. `mi-sources.ts` names this same
     // missing dedupe as the mechanism that would compound a boot replay, so
-    // this is also what makes `hydrate` safe for an item-writing source.
+    // this is also what makes `hydrate` safe for an item-writing source
     //
     // The key is (asset_class, entity, id), NOT the id alone (review round 2,
     // #1055). This store is shared across the whole universe, and an X status
@@ -183,13 +183,13 @@ export class MarketIntelligenceStore {
     // it for whichever instrument was ingested first and silently drop it for
     // the second. That is a real loss, not a duplicate avoided: the two are
     // different observations about different instruments that happen to share
-    // a source post, and the analyst reads them per entity.
+    // a source post, and the analyst reads them per entity
     //
     // What the key still catches is the case it was added for — the SAME post
     // for the SAME instrument arriving again in the next bucket, because
-    // `x_search`'s date filter is day-granular while the bucket is two hours.
+    // `x_search`'s date filter is day-granular while the bucket is two hours
     // Widening the key does not weaken that, because both components are
-    // constant across those repeats.
+    // constant across those repeats
     const admitted: IntelligenceItem[] = [];
     for (const item of intelligence.items) {
       const key = `${intelligence.asset_class}\u0000${item.entity}\u0000${item.id}`;
@@ -332,7 +332,7 @@ export class MarketIntelligenceStore {
       // callers #914 narrowed. This does not re-open #914's defect — an item
       // filed against a ticker is still returned only for that ticker, and
       // `mi-coverage.ts` keys on `entity`, so a class-wide item still counts
-      // as coverage for nothing.
+      // as coverage for nothing
       .filter(
         (item) => entity === undefined || item.scope === 'asset_class' || item.entity === entity,
       );
@@ -388,7 +388,7 @@ export class MarketIntelligenceStore {
    * Delivers the just-ingested items to subscribers of this asset class, as
    * a MarketContext scoped to those items only (not the full history) — the
    * "new context event" the acceptance criteria describes, distinct from
-   * getContext's windowed query semantics.
+   * getContext's windowed query semantics
    */
   private notifySubscribers(assetClass: AssetClass, newItems: IntelligenceItem[]): void {
     const subscribers = this.subscriptions.filter((sub) => sub.asset_class === assetClass);
@@ -464,7 +464,7 @@ export class MarketIntelligenceStore {
 
 // The deterministic ingestion path (map #552) — the writer that actually fills
 // `MarketIntelligenceStore`, replacing a retrieval design that ingests `[]` by
-// construction.
+// construction
 export {
   type ArchivedItem,
   type ArchiveFidelity,
@@ -509,7 +509,7 @@ export {
 export { MiIngestAgent, type MiIngestAgentDeps, wireSymbol } from './mi-ingest-agent.js';
 // The Polymarket macro/event path (#504) — an `intel` writer (#1164: routed
 // there by `scope`, not filed as `news`), added for the measured LSE-ETP
-// coverage hole rather than for an empty bucket.
+// coverage hole rather than for an empty bucket
 export {
   CURATED_MACRO_MARKETS,
   type CuratedMacroMarket,
@@ -540,7 +540,7 @@ export {
   type GdeltGkgRecord,
   // Exported here, not just from the module: a stored `payload` is a projection,
   // and anything re-parsing one has to read its shape from this constant rather
-  // than assume GKG column order.
+  // than assume GKG column order
   PROJECTED_COLUMNS,
 } from './sources/gdelt-gkg-client.js';
 export {

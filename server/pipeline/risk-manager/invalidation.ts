@@ -97,10 +97,10 @@ export const MAX_INVALIDATION_LOOKBACK = 1000;
 /** `binding_constraint` for a hard-reject on a measured breach. DISTINCT from `risk_critic:reject` (#997 Q2b). */
 export const INVALIDATED_BINDING_CONSTRAINT = 'risk_critic:invalidated';
 
-/** Cap on any single audit string kept from the model's output. */
+/** Cap on any single audit string kept from the model's output */
 const MAX_RAW_CHARS = 200;
 
-/** The one runtime list of the union `types.ts` declares — the union is the source, this is its checkable form. */
+/** The one runtime list of the union `types.ts` declares — the union is the source, this is its checkable form */
 const COMPARATORS: readonly InvalidationComparator[] = ['<', '<=', '>', '>='];
 type Comparator = InvalidationComparator;
 
@@ -115,9 +115,9 @@ const INDICATOR_KIND_SET: ReadonlySet<string> = new Set<string>(INDICATOR_KINDS)
  * would make adding a member to `INDICATOR_KINDS` a trade-blocking event.
  */
 type FalsifyingDirection =
-  /** Price-like and momentum: falsified by moving AGAINST the intent's side. */
+  /** Price-like and momentum: falsified by moving AGAINST the intent's side */
   | 'opposite_side'
-  /** Participation: falsified by THINNING, regardless of side. */
+  /** Participation: falsified by THINNING, regardless of side */
   | 'downward_only';
 
 const INDICATOR_DIRECTION: Partial<Record<IndicatorKind, FalsifyingDirection>> = {
@@ -129,7 +129,7 @@ const INDICATOR_DIRECTION: Partial<Record<IndicatorKind, FalsifyingDirection>> =
 interface ThresholdRange {
   min: number;
   max: number;
-  /** `true` when `min` itself is not an admissible threshold (a mark of 0 is not a price). */
+  /** `true` when `min` itself is not an admissible threshold (a mark of 0 is not a price) */
   exclusive_min?: boolean;
 }
 
@@ -204,7 +204,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== '';
 }
 
-/** The result of validating one emission: what survived, and what did not and why. */
+/** The result of validating one emission: what survived, and what did not and why */
 export interface ValidatedConditions {
   accepted: InvalidationCondition[];
   dropped: DroppedCondition[];
@@ -255,7 +255,7 @@ function readBarWindow(value: unknown): BarWindow | 'unparseable' | 'lookback_to
   if (typeof value !== 'object' || value === null) return 'unparseable';
   const window = value as { timeframe?: unknown; lookback?: unknown };
   if (!isNonEmptyString(window.timeframe)) return 'unparseable';
-  // Two bars minimum: the ratio needs a latest bar AND a baseline to divide by.
+  // Two bars minimum: the ratio needs a latest bar AND a baseline to divide by
   if (!isPositiveInteger(window.lookback) || window.lookback < 2) return 'unparseable';
   if (window.lookback > MAX_INVALIDATION_LOOKBACK) return 'lookback_too_large';
   return { timeframe: window.timeframe, lookback: window.lookback };
@@ -296,7 +296,7 @@ function readObservable(
 
   // Anything else — including the 2026-08-05 proposal's `mi_context`, which
   // this fold deliberately does not carry — binds to no service the Risk step
-  // can read at decision time.
+  // can read at decision time
   return 'unknown_observable';
 }
 
@@ -418,7 +418,7 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
 
     // The ceiling is applied LAST, so a surplus condition that would have been
     // dropped on its own merits is recorded with the real reason rather than
-    // hidden behind `over_cap`.
+    // hidden behind `over_cap`
     if (accepted.length >= MAX_INVALIDATION_CONDITIONS) {
       dropped.push(drop(id, element, 'over_cap'));
       continue;
@@ -500,7 +500,7 @@ function isObservable(value: unknown): value is InvalidationObservable {
     // case before it ever inspects `lookback`, `timeframe`, or `params`, so
     // all three have to be re-checked independently here: registry drift may
     // not smuggle an oversized lookback, a missing timeframe, or a malformed
-    // params map past the read-time safety checks.
+    // params map past the read-time safety checks
     if (spec === 'unknown_indicator') {
       const rawSpec = observable.spec as {
         lookback?: unknown;
@@ -536,7 +536,7 @@ function isInvalidationCondition(value: unknown): value is InvalidationCondition
   );
 }
 
-/** A well-formed, MEASURED entry: a readable condition, a state in the tri-state union, and `observed` null iff `unevaluable`. */
+/** A well-formed, MEASURED entry: a readable condition, a state in the tri-state union, and `observed` null iff `unevaluable` */
 function isEvaluatedCondition(value: unknown): value is EvaluatedCondition {
   if (typeof value !== 'object' || value === null) return false;
   const evaluated = value as Partial<EvaluatedCondition>;
@@ -587,7 +587,7 @@ export function readPersistedConditions(parsed: unknown): EvaluatedCondition[] |
   // (critic-store.ts) writes "nothing emitted" as NULL and "everything
   // dropped at validation time" as `[]` specifically so the two stay
   // distinguishable in the row; collapsing `[]` to `undefined` here would
-  // erase that distinction on read even though nothing was malformed.
+  // erase that distinction on read even though nothing was malformed
   if (parsed.length === 0) return [];
   const survivors = parsed.filter(isEvaluatedCondition);
   return survivors.length === 0 ? undefined : survivors;
@@ -597,7 +597,7 @@ export function readPersistedConditions(parsed: unknown): EvaluatedCondition[] |
  * Parses a persisted `dropped_conditions` list, ALL-OR-NOTHING (unlike
  * `readPersistedConditions` above): this column is audit-only, with zero
  * enforcement effect either way, so a malformed element voids the whole list
- * rather than being salvaged element-wise.
+ * rather than being salvaged element-wise
  */
 export function readPersistedDroppedConditions(parsed: unknown): DroppedCondition[] | undefined {
   return readListStrict(parsed, isDroppedCondition);
@@ -607,7 +607,7 @@ export interface EvaluateConditionsInput {
   conditions: readonly InvalidationCondition[];
   instrument: string;
   marketData: MarketDataService;
-  /** Point-in-time read for every lookup — never wall-clock. */
+  /** Point-in-time read for every lookup — never wall-clock */
   asOf: Date;
   /**
    * The producer's own budget, shared with the LLM call in front of it.
@@ -651,22 +651,22 @@ async function observe(
         if (latest === undefined) return null;
         const mean = baseline.reduce((total, bar) => total + bar.volume, 0) / baseline.length;
         // A zero baseline has no ratio to report — an untraded window is a data
-        // gap, not a falsified thesis.
+        // gap, not a falsified thesis
         if (!isFiniteNumber(mean) || mean === 0) return null;
         const ratio = latest.volume / mean;
         return isFiniteNumber(ratio) ? ratio : null;
       }
     }
   } catch {
-    // Every read failure is a data gap, which fails OPEN as `unevaluable`.
+    // Every read failure is a data gap, which fails OPEN as `unevaluable`
     // Swallowed rather than propagated on purpose: this runs in front of an
     // order the tick is waiting on, and a market-data outage must degrade the
-    // checklist, not take the risk stage down.
+    // checklist, not take the risk stage down
     return null;
   }
 }
 
-/** Resolves to `null` — a data gap, hence `unevaluable` — as soon as the budget expires, whether or not the read ever answers. */
+/** Resolves to `null` — a data gap, hence `unevaluable` — as soon as the budget expires, whether or not the read ever answers */
 async function withinDeadline(
   read: Promise<number | null>,
   signal: AbortSignal | undefined,
@@ -779,7 +779,7 @@ export function invalidationReasons(verdict: RiskCriticVerdict): string[] {
   const reasons: string[] = [];
   // Every field read below is `bounded()`-ed rather than trusted: these two
   // lists can arrive from a hand-written or corrupted `risk_critic_log` row,
-  // and a reason line must never be the thing that throws inside `evaluate()`.
+  // and a reason line must never be the thing that throws inside `evaluate()`
   for (const dropped of verdict.dropped_conditions ?? []) {
     const entry = (dropped ?? {}) as Partial<DroppedCondition>;
     reasons.push(
