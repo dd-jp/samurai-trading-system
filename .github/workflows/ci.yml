@@ -47,6 +47,33 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run lint
 
+      # Blocking: enforces the client/server/contracts split CLAUDE.md states as an
+      # invariant ("neither runtime imports the other; both import contracts/").
+      # Zero violations at the time this gate was added, so it starts strict rather
+      # than as a backlog someone has to triage first.
+      - name: Fallow architecture boundaries
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run fallow:boundaries -- --format github-annotations --quiet
+
+      # Advisory: dead code, duplication, and design-system drift findings across
+      # the whole repo, not just this PR's diff. continue-on-error keeps these off
+      # the merge gate until the existing backlog (22 circular deps, 16 unused
+      # type exports, ...) is triaged; the annotations still surface on the PR.
+      - name: Fallow dead code (advisory)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        continue-on-error: true
+        run: npm run fallow:dead-code -- --format github-annotations --quiet
+
+      - name: Fallow duplication (advisory)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        continue-on-error: true
+        run: npm run fallow:dupes -- --format github-annotations --quiet
+
+      - name: Fallow design-system drift (advisory)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        continue-on-error: true
+        run: npm run fallow:css -- --format github-annotations --quiet
+
       - name: Typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run typecheck
