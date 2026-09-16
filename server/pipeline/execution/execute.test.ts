@@ -20,6 +20,13 @@ function hostileThrownValue(): Record<string, unknown> {
   return hostile;
 }
 
+/** Throws `message` when `condition` is false — a setup precondition, not a test assertion */
+function invariant(condition: boolean, message: string): void {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
 import type { TradingCalendar } from '../../providers/market-data-service/index.js';
 import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import type { AssetClass } from '../../shared/index.js';
@@ -2237,23 +2244,37 @@ describe('ExecutionImpl.execute', () => {
           const first = await execution.execute(
             makeExitGo({ idempotency_key: 'key-exit-1', size: 15 }),
           );
-          expect(first.status).toBe('submitted');
+          invariant(
+            first.status === 'submitted',
+            `expected the first exit to submit, got ${first.status}`,
+          );
           await execution.ingestFills();
           now = new Date(now.getTime() + 60_000);
 
-          // The precondition, asserted rather than assumed: lot 1 holds 6 of
+          // The precondition, checked rather than assumed: lot 1 holds 6 of
           // its 10, lot 2 still holds all 5, and both are open
-          expect((await store.getExitFillSizes(['key-lot-1', 'key-lot-2'])).get('key-lot-1')).toBe(
-            firstFlattenQty,
+          const lot1ExitFillSize = (await store.getExitFillSizes(['key-lot-1', 'key-lot-2'])).get(
+            'key-lot-1',
           );
-          expect(await store.getOpenPositions()).toHaveLength(2);
+          invariant(
+            lot1ExitFillSize === firstFlattenQty,
+            `expected key-lot-1's exit fill size to be ${firstFlattenQty}, got ${lot1ExitFillSize}`,
+          );
+          const openPositions = await store.getOpenPositions();
+          invariant(
+            openPositions.length === 2,
+            `expected 2 open positions, got ${openPositions.length}`,
+          );
 
           const second = await execution.execute(
             makeExitGo({ idempotency_key: 'key-exit-2', size: 11 }),
           );
           // The guard passes on 6 + 5 — this is a correctly sized exit, which
           // is what made the mis-split so quiet
-          expect(second.status).toBe('submitted');
+          invariant(
+            second.status === 'submitted',
+            `expected the second exit to submit, got ${second.status}`,
+          );
 
           return { execution, broker };
         }

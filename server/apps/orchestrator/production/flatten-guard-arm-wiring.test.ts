@@ -153,10 +153,11 @@ async function seedUnresolvedFlatten(
  */
 function onlyArm(captured: readonly TraderStepDeps[], arm: 'live' | 'control'): TraderStepDeps {
   const matches = captured.filter((deps) => (deps.arm ?? 'live') === arm);
-  expect(matches).toHaveLength(1);
   const [only] = matches;
-  if (only === undefined) {
-    throw new Error(`no ${arm}-arm buildTraderSteps call was captured`);
+  if (matches.length !== 1 || only === undefined) {
+    throw new Error(
+      `expected exactly one ${arm}-arm buildTraderSteps call, captured ${matches.length}`,
+    );
   }
   return only;
 }

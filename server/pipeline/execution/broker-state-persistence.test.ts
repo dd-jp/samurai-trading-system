@@ -570,17 +570,14 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
     return { inMemory, sqlite };
   }
 
-  function assertBothOrder(
+  function bothOrders(
     stores: { inMemory: InMemoryBrokerStateStore; sqlite: SqliteBrokerStateStore },
     venue: BrokerVenue,
-    expected: readonly string[],
-  ): void {
-    expect(stores.inMemory.loadUnpricedFills(venue).map((row) => row.client_order_id)).toEqual([
-      ...expected,
-    ]);
-    expect(stores.sqlite.loadUnpricedFills(venue).map((row) => row.client_order_id)).toEqual([
-      ...expected,
-    ]);
+  ): { inMemory: string[]; sqlite: string[] } {
+    return {
+      inMemory: stores.inMemory.loadUnpricedFills(venue).map((row) => row.client_order_id),
+      sqlite: stores.sqlite.loadUnpricedFills(venue).map((row) => row.client_order_id),
+    };
   }
 
   it('orders distinct rows by monotonic seenAt, identically on both stores', () => {
@@ -605,7 +602,10 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
       },
     ]);
 
-    assertBothOrder(stores, 'alpaca', ['lot-1', 'lot-2', 'lot-3']);
+    expect(bothOrders(stores, 'alpaca')).toEqual({
+      inMemory: ['lot-1', 'lot-2', 'lot-3'],
+      sqlite: ['lot-1', 'lot-2', 'lot-3'],
+    });
   });
 
   it('orders by first_seen_at, not insertion order, when seenAt is non-monotonic, identically on both stores', () => {
@@ -624,7 +624,10 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
       },
     ]);
 
-    assertBothOrder(stores, 'alpaca', ['lot-early', 'lot-late']);
+    expect(bothOrders(stores, 'alpaca')).toEqual({
+      inMemory: ['lot-early', 'lot-late'],
+      sqlite: ['lot-early', 'lot-late'],
+    });
   });
 
   it('breaks a first_seen_at tie by physical insertion order, identically on both stores', () => {
@@ -640,7 +643,10 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
       { venue: 'alpaca', clientOrderId: 'lot-apple', brokerFillId: 'bf-3', seenAt: tie },
     ]);
 
-    assertBothOrder(stores, 'alpaca', ['lot-zebra', 'lot-mango', 'lot-apple']);
+    expect(bothOrders(stores, 'alpaca')).toEqual({
+      inMemory: ['lot-zebra', 'lot-mango', 'lot-apple'],
+      sqlite: ['lot-zebra', 'lot-mango', 'lot-apple'],
+    });
   });
 
   it('leaves a re-observed row at its original tiebreak position, identically on both stores', () => {
@@ -655,7 +661,10 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
       { venue: 'alpaca', clientOrderId: 'lot-zebra', brokerFillId: 'bf-z', seenAt: tie },
     ]);
 
-    assertBothOrder(stores, 'alpaca', ['lot-zebra', 'lot-apple']);
+    expect(bothOrders(stores, 'alpaca')).toEqual({
+      inMemory: ['lot-zebra', 'lot-apple'],
+      sqlite: ['lot-zebra', 'lot-apple'],
+    });
   });
 
   it('keeps each venue in its own order when two venues are interleaved, identically on both stores', () => {
@@ -689,7 +698,13 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
       },
     ]);
 
-    assertBothOrder(stores, 'alpaca', ['alpaca-1', 'alpaca-zebra', 'alpaca-apple']);
-    assertBothOrder(stores, 'saxo', ['saxo-1', 'saxo-2']);
+    expect(bothOrders(stores, 'alpaca')).toEqual({
+      inMemory: ['alpaca-1', 'alpaca-zebra', 'alpaca-apple'],
+      sqlite: ['alpaca-1', 'alpaca-zebra', 'alpaca-apple'],
+    });
+    expect(bothOrders(stores, 'saxo')).toEqual({
+      inMemory: ['saxo-1', 'saxo-2'],
+      sqlite: ['saxo-1', 'saxo-2'],
+    });
   });
 });
