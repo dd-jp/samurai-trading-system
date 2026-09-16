@@ -33,5 +33,19 @@
     "@fontsource/ibm-plex-sans",
     "react",
     "react-dom"
+  ],
+  "usedClassMembers": [
+    "shouldAlert",
+    "anchorEquity",
+    "protectiveRearmUnsupported",
+    "prices_own_fills",
+    "ageFlattenHeldQuantities",
+    "getPosition",
+    "countAllPositions",
+    "getClosedTrades",
+    "countAllFlattenSubmissions",
+    "dueFor",
+    "fetchEventMarket",
+    "fetchPriceHistory"
   ]
 }
