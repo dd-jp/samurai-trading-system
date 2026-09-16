@@ -93,6 +93,10 @@ So the rule is structural rather than a reminder to be careful:
 
 Comments here carry *reasons* — that is an asset (ruled in `docs/reviews/code-quality-2026-08-05.md`) and must stay. But keep the invariant sentence and drop the how-it-got-here essay: ticket archaeology ("#322 changed X, then #342 …" — 144 issue refs in `production.ts` alone as of 2026-08-06) belongs to git and GitHub. Cite a ticket when it names *why the invariant holds*, not to narrate history. Test: if deleting the sentence loses no constraint on future edits, delete it.
 
+## Why-comments state each fact once
+
+A long why-comment (decision + evidence + residual risk, e.g. `fault-guard.ts`'s #764 header) is legitimate and should stay long enough to carry its reasoning — the rule above is about *what kind* of content survives, not length. Separately: each individual claim appears once. Don't restate a point already made, in hedge form, later in the same comment ("that is the discriminating fact, not X by itself"). Test: if two sentences assert the same thing in different words, delete one.
+
 ## A section-header comment is an unextracted function
 
 `// Step 3: per-asset exposure cap.` or `// --- Dial 2 ---` over a block — especially a bare `{ }` scope introduced just to contain locals — is a function that wasn't extracted. Extract it; the function name replaces the comment, and the numbering becomes call order. (Origin: `risk-manager/index.ts` `evaluate`, 8 numbered steps in 192 lines.)
