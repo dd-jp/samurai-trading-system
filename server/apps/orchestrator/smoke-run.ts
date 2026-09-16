@@ -2318,26 +2318,16 @@ class BreakablePipe implements StdoutStream {
 }
 
 /**
- * The logging-fault scenario (#714) — the pre-soak gate's fourth leg.
- *
- * A soak dies from a closed terminal only in production, never in a unit test,
- * and the two mechanisms that stop it (`watchStdoutErrors` and
- * `installFaultHandlers`) live at the entrypoint, which nothing else in this
- * gate exercises. Wiring a mechanism means adding its enforcement assertion
- * here (#430), so this drives BOTH against a REAL `RotatingFileSink` on disk
- * and reads the resulting file back — the effect, not the construction.
- *
- * The file goes to a temp directory, removed afterwards: like the `:memory:`
- * store, a gate must leave no artefacts in the checkout, and in particular
- * must not create the `logs/` a real soak writes to.
+ * #714 — a soak dies from a closed terminal only in production, never in a
+ * unit test; `watchStdoutErrors`/`installFaultHandlers` live at the
+ * entrypoint, which nothing else in this gate exercises. Uses a temp
+ * directory, removed afterwards, so the gate leaves no artefacts behind.
  */
 function runLoggerResilienceScenario(): LoggerResilienceEvidence {
   const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-'));
   try {
     const filePath = join(directory, 'orchestrator.log');
     const stdout = new BreakablePipe();
-    // The REAL entrypoint builder, so a regression that stops subscribing to
-    // stdout errors, or stops opening the file, fails this run
     const logger = buildEntrypointLogger(
       { filePath, maxBytes: 1024 * 1024, maxRotatedFiles: 1 },
       stdout,
@@ -2363,8 +2353,6 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
       (line) => line.message === 'after the pipe died',
     ).length;
 
-    // The other half of the rule: with no sink able to hold the report, the
-    // logger must NOT degrade quietly
     let escalatedWhenNothingCouldRecord = false;
     const deadStdout = new BreakablePipe();
     deadStdout.throwOn = new Error('EBADF');
@@ -2381,8 +2369,6 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
     }
     const lastResortTraceOnStderr = stderrLines.some((line) => line.includes('nowhere to go'));
 
-    // And the composition root's fault net: an unhandled fault is recorded
-    // durably and exits, rather than being shrugged off
     const exits: number[] = [];
     const handlers = new Map<string, (error: unknown) => void>();
     installFaultHandlers(logger, {
@@ -2408,19 +2394,13 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
   }
 }
 
-/**
- * #714. A real file sink in a temp directory, independent of the store and the
- * clock. What it gates is a soak that dies on day three because someone closed
- * its terminal: no unit test exercises the entrypoint's stdout `'error'`
- * subscription or its fault net.
- */
+/** #714 — no unit test exercises the entrypoint's stdout 'error' subscription or its fault net */
 const loggerResilienceProbe: Probe<'loggerResilience'> = {
   run() {
     return runLoggerResilienceScenario();
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #714 — the logging-fault mechanisms, asserted on their durable effects
     const logging = evidence;
     if (!logging.stdoutRetired || logging.linesAfterStdoutDeath === 0) {
       failures.push(
