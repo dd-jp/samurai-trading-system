@@ -5430,16 +5430,7 @@ const DEFAULT_SMOKE_DEADLINE_MS = 30_000;
 const FILL_GRACE_MS = 2_000;
 /** Store-polling granularity for the two waits below */
 const OBSERVE_INTERVAL_MS = 25;
-/**
- * #1028 — the two arms `readSmokeObservations().positions` can ever carry a
- * row for. Not an incidental default: falsifier arm 2 (control) is mandated
- * to run in parallel with the live arm from the first soak day (ADR-0014
- * amendment 2, ADR-0017 §Consequences), and this composition root wires it
- * unconditionally (`production.ts`'s `controlArm` step) — there is no smoke
- * config that runs `live` alone. Used below to compute how many `open_positions`
- * rows a transacting run must produce before the post-tick wait can trust the
- * readback is fully drained, rather than just nonempty.
- */
+/** #1028 — falsifier arm 2 (control) is mandated to run alongside live from the first soak day (ADR-0014 amendment 2). */
 const SMOKE_TRADING_ARMS: readonly TradingArm[] = ['live', 'control'];
 
 /** Polls the store until `done` or the deadline — never a fixed sleep */
@@ -5457,10 +5448,8 @@ export interface SmokeRunResult {
 }
 
 /**
- * Starts the real entrypoint assembly over fixtures, runs a bounded number of
- * ticks, drains, and evaluates the gate.
- *
- * Every dependency below goes in through a documented `ProductionConfig`
+ * Starts the real entrypoint assembly over fixtures, runs a bounded number of ticks, drains, and
+ * evaluates the gate. Every dependency below goes in through a documented `ProductionConfig`
  * override; none of it is a branch inside the composition root.
  */
 export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunResult> {
@@ -5469,18 +5458,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   const fillPollIntervalMs = options.fillPollIntervalMs ?? DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS;
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? DEFAULT_SMOKE_DEADLINE_MS;
-  // Plain `JsonLogger` (stdout), never `buildEntrypointLogger()`: that one
-  // opens the rotating file sink and creates `logs/`, and a gate should leave
-  // no artefacts behind. The store is `:memory:` for the same reason — no
-  // `data/*.sqlite` to clean up, and no chance of a smoke run polluting a real
-  // paper run's history
-  // #1049: every line the run logs passes through the recorder, so the
-  // fill-sync loop's swallowed rejections reach the gate. Forwarding is
-  // unconditional — the operator still sees every line
+  // Plain JsonLogger, never buildEntrypointLogger(): that opens a rotating file sink and
+  // creates logs/, and a gate should leave no artefacts. Store is :memory: for the same reason.
+  // #1049: every logged line passes through the recorder so swallowed fill-sync rejections reach the gate
   const fillSyncFailures = new FillSyncFailureRecorder(options.logger ?? new JsonLogger());
-  // #1082: chained on top, same unconditional-forwarding shape — every line
-  // still reaches the operator, and this recorder additionally counts
-  // `market_data_fetch` lines for the gate below
+  // #1082: chained on top, same unconditional-forwarding shape, additionally counting market_data_fetch lines
   const marketDataFetch = new MarketDataFetchRecorder(fillSyncFailures);
   const logger: Logger = marketDataFetch;
   const db = openSharedStore(':memory:');
@@ -5499,12 +5481,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       },
     );
 
-    // The one instance this module has to build rather than reach through the
-    // root: `SimulatedBrokerAdapter` needs a `MarketDataService` at
-    // construction, and the broker is itself a constructor input to
-    // `buildProductionOrchestrator`, so the root's own instance does not exist
-    // yet. Same data source, same store, same 'live' mode the root derives for
-    // `mode: 'paper'` — so the two instances cannot disagree about a fixture
+    // Built here, not reached through the root: SimulatedBrokerAdapter needs a MarketDataService
+    // at construction but is itself a constructor input to buildProductionOrchestrator
     const marketDataForBroker = new MarketDataServiceImpl(
       dataSource,
       clock,
@@ -5518,42 +5496,21 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       config: profile.executionConfig.simulated,
     });
     const alpacaBrokerClient = new UnreachableAlpacaClient();
-    // Built here rather than left to the composition root for one reason: the
-    // gate has to READ it afterwards (#388). Same config the root would have
-    // used — `profile.rateLimiterConfig` — so this override changes who holds
-    // the reference, not what the limiter permits
+    // Built here, not left to the composition root: the gate has to READ it afterwards (#388)
     const llmRateLimiter = new RateLimiter(clock, profile.rateLimiterConfig);
-    // #576: the tick loop's own residual-exposure channel, recorded rather
-    // than left at the `loggingAlertChannel('residualExposureAlerts')` default — the
-    // gate has to see whether the SIX-STAGE run ever posted one too, not
-    // only the exit-path harness below
+    // #576: recorded rather than left at the log-only default, so the gate can see whether the
+    // six-stage run itself ever posted one, not only the exit-path harness below
     const tickLoopResidualAlerts = new RecordingResidualExposureAlertChannel(
       loggingAlertChannel('residualExposureAlerts', logger),
     );
-    // Hoisted out of the config below for `llmRateLimiter`'s reason: the gate
-    // has to READ it afterwards to report how many macro rows the run actually
-    // archived. In-memory, as the config comment below explains.
     const smokeMiArchive = new MiArchiveStore();
     seedSmokeGdeltBaseline(smokeMiArchive);
 
-    // Every `ALERT_CHANNEL_FIELDS` member (alert-transport.ts), typed as
-    // `Required<AlertChannels>` so a future field added to `AlertChannelSlots`
-    // (production/config.ts) and to `ALERT_CHANNEL_FIELDS` fails `npm run
-    // typecheck` HERE, at the smoke run's own injection site, if this object
-    // is not updated to match — rather than waiting for a developer to
-    // notice `SAMURAI_ALERTS` is suddenly demanded of a clean checkout
-    // (#803's regression: a twelfth channel, `miCoverageAlerts`, landed
-    // without this injection, and only `alert-transport.ts`'s own
-    // exhaustiveness check caught the missing FIELD — nothing caught the
-    // missing INJECTION here, because `resolveAlertsMode`'s all-or-nothing
-    // exemption is a runtime property this object satisfies by construction,
-    // not one TypeScript enforced before this line existed)
-    //
-    // Log-only throughout: this run is attended and offline by definition
-    // `verdictAlerts`/`traderDiagnosticAlerts` are bare no-ops rather than
-    // log-only stand-ins because their real implementations already
-    // log everything they'd otherwise duplicate (see each field's inline
-    // history below `git blame` before #803 folded them into this object)
+    // Typed `Required<AlertChannels>` so a field added to `AlertChannelSlots` fails typecheck
+    // HERE if this object isn't updated to match (#803's regression: a channel landed without
+    // this injection and nothing caught it). Log-only throughout except where noted: a few
+    // ports' real implementations already log at `error` before consulting them, so a logging
+    // stand-in here would double-emit — those get a bare no-op instead.
     const smokeAlertChannels = {
       heartbeatChannel: loggingAlertChannel('heartbeatChannel', logger),
       orphanAlerts: loggingAlertChannel('orphanAlerts', logger),
@@ -5564,145 +5521,33 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       analystSkipAlerts: loggingAlertChannel('analystSkipAlerts', logger),
       // #576: recorded, not just logged — see `tickLoopResidualAlerts` above
       residualExposureAlerts: tickLoopResidualAlerts,
-      // The six-stage tick loop above never reaches a flatten (no exit
-      // intent is ever driven through it — see `runExitPathScenarios`'s own
-      // file doc for why), so there is nothing here for the gate to read
-      // back; a plain log-only instance is enough
       flattenReconcileAlerts: loggingAlertChannel('flattenReconcileAlerts', logger),
       verdictAlerts: { notify: async () => {} },
-      // A bare no-op rather than a log-only stand-in, deliberately:
-      // `postTraderDiagnosticAlert` (direct-bind.ts) writes every diagnostic
-      // to the log at `error` BEFORE it consults the port, so a logging
-      // instance here would emit each condition twice. Swallowing nothing —
-      // measured rather than assumed: a counting stub in this slot records
-      // zero diagnostics across a full smoke run. Matters because
-      // `ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS` is 1, so a first diagnostic
-      // alerts immediately and a silent no-op would eat it; re-measure
-      // rather than trust this line if the offline calendar or the fixture
-      // bars ever change
+      // Bare no-op: postTraderDiagnosticAlert already logs at `error` before consulting the port
       traderDiagnosticAlerts: { postTraderDiagnosticAlert: async () => {} },
-      // #752 — the twelfth `ALERT_CHANNEL_FIELDS` member
       miCoverageAlerts: loggingAlertChannel('miCoverageAlerts', logger),
-      // #766 — the thirteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
-      // same reason as `traderDiagnosticAlerts` above: both catch sites this
-      // port serves already log at `error` before consulting it, so a
-      // logging instance here would emit each trip twice. Nothing in this
-      // run trips the live-read or daily-cycle clamp (the composition root's
-      // own `risk_thresholds` seed and kill lines are the shipped in-bound
-      // values), so this slot is never exercised here — see
-      // `runThresholdClampScenario`/`probeExitBypassesLiveClamp` for the
-      // actual enforcement probe, which drives the real classes directly
+      // #766 — see `runThresholdClampScenario`/`probeExitBypassesLiveClamp` for the real probe
       thresholdClampAlerts: { postThresholdClampAlert: () => {} },
-      // #562 — the fourteenth `ALERT_CHANNEL_FIELDS` member. Log-only like
-      // the rest of this attended, offline run. Nothing here fails over: the
-      // smoke run's data source is a fixture, so the failover wrapper the
-      // composition root builds is never reached with a throwing primary —
-      // see production.test.ts's composition-root case for the exercise that
-      // does reach it
       dataFailoverAlerts: loggingAlertChannel('dataFailoverAlerts', logger),
-      // #841 — the fifteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op for
-      // the same reason as `thresholdClampAlerts` above: both seams that
-      // raise it (the risk and verdict binds in direct-bind.ts) write an
-      // `error`-level line before consulting the port. Never exercised in
-      // this run — the fixture data source values every held instrument —
-      // so the enforcement evidence is direct-bind.test.ts's degraded-exit
-      // cases, not this slot
       exitValuationAlerts: { postExitValuationDegradedAlert: () => {} },
-      // #684 — the sixteenth `ALERT_CHANNEL_FIELDS` member. This run injects
-      // `tradingCalendar: new AlwaysOpenCalendar()` directly (below), so
-      // `resolveUsEquitySessionCalendar` never runs and this slot is never
-      // exercised — a log-only stand-in is enough, same posture as
-      // `dataFailoverAlerts` above
       calendarFallbackAlerts: loggingAlertChannel('calendarFallbackAlerts', logger),
-      // #971 — the seventeenth `ALERT_CHANNEL_FIELDS` member. Log-only like the
-      // rest of this attended, offline run
-      //
-      // Since #1110 this slot IS reached from the orchestrator here: a virgin
-      // `feedback_cycle_schedule` catches up on its first boundary inside
-      // `start()` (see `paperStartingProfile('paper')`'s `feedback` block
-      // above), so the real daily cycle — and therefore this channel, if the
-      // arms diverge — runs during this run, not just seconds-long-and-never
-      // `feedbackCycleScheduleWrittenProbe`'s `feedback_cycle_schedule.last_boundary`
-      // assertion is what proves that reach on every run,
-      // regardless of whether this run's fixtures happen to diverge
-      //
-      // What this run's short fixture window does NOT reliably exercise is
-      // divergence itself — `runArmComparisonProbe`, run after
-      // `orchestrator.stop()` below, drives the real `runArmComparisonCycle`
-      // again over the complete tape for that. That the composition root
-      // RESOLVES this slot at all is additionally held by `satisfies
-      // Required<AlertChannels>` on this object plus `production.test.ts`'s
-      // "arm comparison runs on the daily feedback cycle" pair, which drive
-      // `buildProductionOrchestrator`'s own timer under fake timers to a
-      // divergent outcome — the one thing this offline run cannot guarantee
+      // Since #1110 this IS reached here: feedback_cycle_schedule catches up on its first
+      // boundary inside start(); feedbackCycleScheduleWrittenProbe asserts that reach
       armDivergenceAlerts: loggingAlertChannel('armDivergenceAlerts', logger),
-      // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
-      // same reason as `traderDiagnosticAlerts` above: overlapping tick
-      // passes are unreachable in an offline smoke run — everything here
-      // settles well inside one `tickIntervalMs`, so the reentrancy guard
-      // (#669) never has anything to report as busy, let alone a materially
-      // degraded pass, and this slot is never exercised here. The real
-      // enforcement evidence is `production.test.ts`'s `startTickLoop` suite,
-      // which drives multi-tick busy/degraded sequences under fake timers,
-      // PLUS `production.test.ts`'s "tickSkipAlerts is wired by the
-      // composition root (#1084)" suite, which proves `config.tickSkipAlerts`
-      // actually reaches a real `buildProductionOrchestrator` tick loop
-      // rather than only a directly-called `startTickLoop` — the one thing a
-      // seconds-long smoke run cannot
       tickSkipAlerts: { postTickSkipAlert: async () => {} },
-      // #1155 — the nineteenth `ALERT_CHANNEL_FIELDS` member. Log-only like
-      // the rest of this attended, offline run: `runPromptTierWarningScenario`
-      // below drives the real wiring — `SqliteLlmSpendStore.record`,
-      // `crossesPromptTier`, the throttle, and this port — end to end on its
-      // own composition root and its own cold `:memory:` store, the same
-      // pattern `runRiskCriticScenario`/`runDataFailoverScenario` use for a
-      // mechanism the six-stage tick loop above cannot exercise for real
+      // #1155 — runPromptTierWarningScenario below drives this port's real wiring end to end
       promptTierAlerts: loggingAlertChannel('promptTierAlerts', logger),
-      // #1378. This run injects `tradingCalendar: new AlwaysOpenCalendar()`
-      // directly (below), so `assertLseCalendarCoverage`'s
-      // `LseRegularHoursCalendar` gate never fires and this slot is never
-      // exercised — a log-only stand-in is enough, same posture as
-      // `calendarFallbackAlerts` above
       lseCalendarCoverageAlerts: loggingAlertChannel('lseCalendarCoverageAlerts', logger),
-      // #1396. No debate runs long enough in the smoke fixture to accumulate
-      // a real rate — log-only is enough, same posture as the other channels
-      // above that this run never exercises
       llmFailureRateAlerts: loggingAlertChannel('llmFailureRateAlerts', logger),
-      // #1533. Same posture, same reason: the smoke fixture's gate refuses
-      // nothing, so no window here can reach `GATE_REFUSAL_RATE_THRESHOLD`
       gateRefusalRateAlerts: loggingAlertChannel('gateRefusalRateAlerts', logger),
-      // #1400 — the Saxo adapter's three, plus #1524's two. This run is
-      // Alpaca/simulated-broker only (`SAMURAI_BROKER` is never read here,
-      // the same posture as `SAMURAI_MODE`), so no Saxo adapter or reminder
-      // timer exists to post any of them and these slots are never
-      // exercised. Log-only stand-ins, same posture as
-      // `lseCalendarCoverageAlerts` above; the venue's own refusals and
-      // wiring are held by `saxo-venue.test.ts` and
-      // `saxo-composition-root.test.ts`
+      // Saxo adapter slots — this run is Alpaca/simulated-broker only, so never exercised
       legResizeAlerts: loggingAlertChannel('legResizeAlerts', logger),
       dormantLegsAlerts: loggingAlertChannel('dormantLegsAlerts', logger),
       priceUnitAlerts: loggingAlertChannel('priceUnitAlerts', logger),
-      // No log-only form (UNLOGGED_ALERT_IDS): `lose()` already logs
-      // `saxo_session_lost` at `error` before consulting this port, same
-      // posture as `nonSterlingFeeAlerts` below
       saxoSessionLostAlerts: { postSaxoSessionLostAlert: () => {} },
       saxoWeeklyReminderAlerts: loggingAlertChannel('saxoWeeklyReminderAlerts', logger),
-      // #1465 — the twenty-fifth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
-      // same reason as `traderDiagnosticAlerts`/`thresholdClampAlerts` above:
-      // this port has deliberately no log-only form (its caller already
-      // writes an `error`-level line first), and the condition itself —
-      // a broker reporting a fee outside book currency — cannot be provoked
-      // by this offline run's Simulated adapter, which never sets
-      // `fee_currency` at all. Real enforcement evidence is
-      // `ingest-fills.test.ts`'s "#1465" suite, which drives the alert end to
-      // end against a scripted broker
       nonSterlingFeeAlerts: { postNonSterlingFeeAlert: async () => {} },
       unattributedFlattenFillAlerts: { postUnattributedFlattenFillAlert: async () => {} },
-      // #1550 — log-only, NOT a bare no-op: this port has a log form
-      // (reconcile.ts writes no `error` line of its own), so the posture is
-      // `flattenReconcileAlerts`' above, not `nonSterlingFeeAlerts`'. The
-      // tick loop's venue is the Simulated adapter, whose book is derived from
-      // the same store, so nothing here can be unrecorded
       unrecordedVenuePositionAlerts: loggingAlertChannel('unrecordedVenuePositionAlerts', logger),
     } satisfies Required<AlertChannels>;
 
