@@ -661,7 +661,7 @@ export interface CheckOptions {
 /**
  * Reachable as `null` only via the `files` option (the default file set is always `.md` or
  * `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
- * `filesScanned` stays a fact about files this run actually extracted citations from.
+ * `filesScanned` stays a fact about files this run actually extracted citations from
  */
 function extractorFor(
   file: string,

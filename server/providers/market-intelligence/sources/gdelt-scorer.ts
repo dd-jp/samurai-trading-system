@@ -218,7 +218,7 @@ interface GdeltWindowTones {
 /**
  * Rows outside the two windows are ignored, so a caller may pass a wider slice
  * than it needs; rows at or after `windowEnd` are ignored too, which is what
- * keeps the open bar out of the read.
+ * keeps the open bar out of the read
  */
 function collectGdeltWindowTones(
   rows: readonly RawArchiveRow[],

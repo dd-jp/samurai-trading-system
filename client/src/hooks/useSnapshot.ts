@@ -777,7 +777,7 @@ async function attemptPollFetch(deps: {
  * Returns the new `lastSuccessMs` on a snapshot that landed, `null` on
  * anything that isn't a fresh, trustworthy snapshot (a discarded stale
  * response or a contract mismatch) — `poll()` only advances its own
- * `lastSuccessMs` on non-null.
+ * `lastSuccessMs` on non-null
  */
 async function resolveSnapshotResponse(
   response: Response,

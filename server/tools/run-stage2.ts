@@ -337,7 +337,7 @@ export function universeFor(timeframe: string): readonly string[] {
  * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
  * today, but this function's structural parameter type cannot state that, and
  * a store that ever returned bars unordered would silently mis-narrow the
- * window rather than fail.
+ * window rather than fail
  */
 function firstAndLastBar(
   bars: readonly { close_time: Date }[],
