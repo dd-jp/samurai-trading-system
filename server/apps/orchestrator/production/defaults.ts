@@ -456,13 +456,10 @@ export function buildAlpacaDataSource(
   const single = classes.length === 1 ? classes[0] : undefined;
   if (single !== undefined) {
     const override = config.dataSourceAssetClass;
-    // A `dataSourceAssetClass` that CONTRADICTS the universe is refused, not
-    // obeyed. Obeying it is the same misroute the mixed-universe branch below
-    // throws on — an all-equity universe forced to `'crypto'` sends every bars
-    // request to `/v1beta3/crypto/us/...` and 404s silently (#358) — and this
-    // function's whole premise is that the market-data wiring cannot disagree
-    // with the tick plan. The override stays useful for the case it was added
-    // for: an EMPTY universe, which asserts nothing to contradict
+    // A dataSourceAssetClass that CONTRADICTS the universe is refused, not
+    // obeyed — obeying it would send every request to the wrong API root and
+    // 404 silently (#358). Stays useful for an EMPTY universe, which asserts
+    // nothing to contradict.
     if (override !== undefined && present.length > 0 && override !== single) {
       throw new Error(
         `Orchestrator cannot start: ProductionConfig.dataSourceAssetClass is '${override}', but ` +
@@ -494,20 +491,10 @@ export function buildAlpacaDataSource(
 }
 
 /**
- * Defers construction of the underlying source to the first read (#981).
- *
- * The benchmark path must not be able to fail a boot. `AlpacaHttpDataClient`'s
- * constructor throws when `ALPACA_API_KEY`/`ALPACA_API_SECRET` are absent, and
- * on the LSE cutover (#751) the live universe needs NO Alpaca client at all —
- * `buildAlpacaDataSource` returns the LSE mark source before ever building
- * one. Constructing a stocks client eagerly for a SECONDARY, read-only,
- * context-only measurement would therefore make a missing benchmark credential
- * take the whole trading loop down, which inverts #636's own ordering (an
- * outside benchmark can never raise a verdict).
- *
- * Deferred, the same absence surfaces where it belongs: as one benchmark
- * landing in `OutsideBenchmarkCycleResult.unmeasured` with the client's own
- * message, logged at `warn`, with the trading path untouched.
+ * Defers construction to first read (#981) — `AlpacaHttpDataClient`'s constructor
+ * throws without credentials, and the LSE cutover (#751) needs no Alpaca client
+ * at all for the live universe. Deferred, a missing benchmark credential surfaces
+ * as one unmeasured benchmark, not a down trading loop (#636).
  */
 class LazyDataSource implements DataSource {
   private delegate: DataSource | undefined;
@@ -529,80 +516,27 @@ class LazyDataSource implements DataSource {
 }
 
 /**
- * The market-data source for the OUTSIDE BENCHMARKS (#981, under #636) — and
- * deliberately not the one the live trading path uses.
- *
- * ## Why this exists at all
- *
- * It takes no `universe` and no `ProductionConfig`. That is the whole point,
- * and it is a correctness property rather than a style preference:
- * `buildAlpacaDataSource` is universe-derived end to end, and the moment #751
- * puts LSE tickers into the configured universe it returns `LseMarkDataSource`
- * EXCLUSIVELY. That source refuses `'SPY'` on purpose — SPY is a
- * `screening_instrument` in `lse-etp-pool.ts`, the US underlying a 3x LSE ETP
- * tracks, and marking the wrapper off the underlying is inadmissible (#734), so
- * the substitution is refused at the source rather than warned about.
- *
- * Routing the benchmarks through that same seam would therefore mean: on the
- * day the live universe becomes LSE-only, every SPY and AGG lookup throws
- * `NonTradeableInstrumentError`, `runOutsideBenchmarkCycle` catches it
- * per-benchmark, and BOTH benchmarks (60/40 has a SPY leg too) go permanently
- * `unmeasured` — with the panel reading "Absent, not zero", nothing crashing,
- * and nobody noticing. #636 requires FL to keep computing an outside benchmark
- * on its own cadence regardless of what the live universe is doing, so the
- * benchmark series needs a path that is *provably* independent of it. Hence a
- * separate builder with no universe in its signature, not a conditional branch
- * inside the universe-derived one.
- *
- * The signature takes no session calendar either, for the same reason: the live
- * one is `equityCalendarFor(config)`, which is LSE in live mode, and passing it
- * would smuggle the live configuration back in — see the call below.
- *
- * ## Why a fixed stocks root is right
- *
- * SPY and AGG are ordinary US-listed instruments on Alpaca's `/v2/stocks` root
- * (verified 2026-09-01 on the free-tier `iex` feed this repo defaults to), and
- * they are REFERENCE SERIES, never order targets — no venue restriction (ADR-0016's
- * GBP LSE ETP rule) reaches them, because nothing ever places an order against
- * a benchmark. `config.alpacaDataClient` is deliberately NOT consulted: it is a
- * single-asset-class wire client whose path root is fixed at construction, so a
- * crypto-rooted one would send SPY to `/v1beta3/crypto/us/...` and 404 silently
- * (#358). A caller who wants control injects `dataClient` here, or replaces the
- * whole port via `ProductionConfig.benchmarkSeriesSource`.
+ * The market-data source for OUTSIDE BENCHMARKS (#981, under #636) — deliberately
+ * separate from the live trading path. Takes no universe/config/calendar: the
+ * moment #751 puts LSE tickers into the live universe, `buildAlpacaDataSource`
+ * would route SPY through the LSE mark source, which refuses it (#734) — this
+ * builder must stay provably independent of that.
  */
 export function buildBenchmarkDataSource(options: {
   /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient` */
   rateLimiter?: TokenBucket;
-  /**
-   * A STOCKS-rooted wire client. Omitted in production, where the default
-   * stocks client is built on first read; supplied by tests, which must not
-   * need Alpaca credentials to prove the routing.
-   */
+  /** A STOCKS-rooted wire client. Omitted in production (built on first read); supplied by tests. */
   dataClient?: AlpacaMarketDataClient;
 }): DataSource {
   return new LazyDataSource(() =>
     createDataSource({
       kind: 'alpaca',
       client: options.dataClient ?? buildDefaultAlpacaDataClient('stocks', options.rateLimiter),
-      // NO `calendar`, deliberately — `AlpacaDataSource` then defaults to
-      // `UsEquityRegularHoursCalendar`, the session SPY and AGG actually
-      // trade in. The live path's calendar is `equityCalendarFor(config)`,
-      // which returns `LseRegularHoursCalendar` in live mode, so accepting
-      // one would re-couple this builder to the live configuration through
-      // the back door — the independence would hold for the signature only
-      // `NormalizingDataSource` resolves session boundaries and holidays
-      // against whatever calendar it is handed, and `LSE_HOLIDAYS` is not the
-      // US table, so US bars normalized on a London session is simply the
-      // wrong normalization for these instruments — and this is not merely
-      // theoretical: `LSE_HOLIDAYS` and `US_HOLIDAYS` (trading-calendar.ts)
-      // disagree on several civil dates (MLK Day, Washington's Birthday,
-      // Juneteenth, Independence Day, Labor Day and Thanksgiving are
-      // US-only; Easter Monday, the Early May and Summer bank holidays and
-      // the Boxing Day substitute are LSE-only), each one a `daily` bar
-      // `isTradingDay` would keep under one calendar and drop under the
-      // other. The signature simply has no `calendar` parameter
-      // to pass, so this coupling cannot recur no matter which calendar the
-      // live path is on — closed structurally, not by empirical agreement
+      // NO calendar, deliberately — AlpacaDataSource then defaults to
+      // UsEquityRegularHoursCalendar, the session SPY/AGG actually trade in.
+      // Accepting one would re-couple this to the live path's calendar
+      // (LseRegularHoursCalendar in live mode) through the back door; the
+      // signature has none, so the coupling can't recur structurally.
       asset_class: 'stocks',
     }),
   );

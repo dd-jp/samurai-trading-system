@@ -2480,23 +2480,11 @@ export interface LogRetentionEvidence {
 }
 
 /**
- * The #1116 retention-sweep scenario — the pre-soak gate's leg for `logs/`
- * housekeeping.
- *
- * Driven through `runEntrypointLogRetention`, the exported boot helper the
- * `import.meta.url` guard in `index.ts` calls, so the ARGUMENT DERIVATION is
- * covered too — which directory `dirname(SAMURAI_LOG_FILE)` picks, and which
- * paths are protected — and not just the sweep it delegates to. The guard
- * itself is unreachable from any in-process caller; `index.test.ts` asserts
- * on its source that the call is still there.
- *
- * The `FileSinkConfig` is built literally rather than through
- * `fileSinkConfigFromEnvironment`, and `env` is passed explicitly: both
- * default to the real `logs/` a soak is writing to, and a gate must never run
- * the sweep against that, nor let an operator's shell perturb its window.
- *
- * The directory goes to `os.tmpdir()`, removed afterwards: like the other
- * scenarios above, a gate must leave no artefacts in the checkout.
+ * #1116 — driven through `runEntrypointLogRetention`, the exported boot
+ * helper `index.ts` calls, so argument derivation is covered too. The
+ * `FileSinkConfig` and `env` are both built literally rather than read from
+ * the real environment, since a gate must never run this sweep against the
+ * actual `logs/` a soak is writing to.
  */
 function runLogRetentionScenario(): LogRetentionEvidence {
   const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-retention-'));
@@ -2505,17 +2493,12 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     const stalePath = join(directory, 'orchestrator-20260101-0000.log');
     const freshPath = join(directory, 'orchestrator-20260904-0000.log');
     const activePath = join(directory, 'orchestrator.log');
-    // Archival-shaped, so `protectedPaths` — not the name rule — is the only
-    // thing keeping it, which is what makes the assertion on it falsifiable
+    // Archival-shaped, so `protectedPaths` alone is what keeps it, not the name rule
     const rotatedPath = `${activePath}.1`;
-    // The `service-api.log` shape: undated, bare, and quietly held open by a
-    // sibling process for weeks at a time
+    // The service-api.log shape: undated, bare, held open by a sibling process for weeks
     const liveShapedPath = join(directory, 'service-api.log');
     const nonLogPath = join(directory, '.env.local');
-    // #1206, round 2: the one file the ticket names, oversized so it crosses
-    // `DEFAULT_BARE_TRUNCATE_BYTES` (16 MiB) — this is what proves the
-    // default-on threshold plus the default name allowlist actually reach it
-    // in a real process, with no env var set for either
+    // #1206: oversized to cross DEFAULT_BARE_TRUNCATE_BYTES (16 MiB) with no env var set
     const soakBootPath = join(directory, 'soak-boot.out');
     for (const path of [
       stalePath,
@@ -2536,10 +2519,6 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     }
     utimesSync(freshPath, recentSeconds, recentSeconds);
 
-    // The REAL boot helper, not a stand-in, so a regression that stops
-    // deleting stale files, starts deleting live-shaped or non-log ones,
-    // stops honouring `protectedPaths`, or derives the wrong directory from
-    // the sink config fails this run
     const result = runEntrypointLogRetention(
       { filePath: activePath, maxBytes: 1_000_000, maxRotatedFiles: 1 },
       { log: () => {} },
@@ -2567,12 +2546,6 @@ const logRetentionProbe: Probe<'logRetention'> = {
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #1116 — the logs/ retention sweep, asserted on its durable effects: a
-    // stale file actually gone, a fresh one and an explicitly protected one
-    // actually surviving. `bytesReclaimed` is aspirational rather than exact
-    // when another process still holds a removed file open, but it is not
-    // aspirational here — the fixture is single-process — so a mutation that
-    // drops the byte accounting on an otherwise-correct removal is caught too
     const retention = evidence;
     if (!retention.staleFileRemoved) {
       failures.push(
@@ -2624,30 +2597,19 @@ const logRetentionProbe: Probe<'logRetention'> = {
   },
 };
 
-/**
- * What the #764 entrypoint fault guards observed, per entrypoint. Every field
- * is an EFFECT of driving the REAL exported guard functions
- * (`service-api/fault-guard.ts`, `supervisor/fault-guard.ts`) against a fake
- * shaped like the async-`'error'`-only pipe #714 measured — not "the function
- * exists".
- */
 export interface EntrypointFaultGuardEvidence {
   entries: {
     name: 'service-api' | 'supervisor';
-    /** The stdout fault was reported on stderr — not silently absorbed */
     faultReportedOnStderr: boolean;
-    /** An arbitrary uncaught fault was reported and the process was NOT told to exit */
     continuesOnArbitraryFault: boolean;
   }[];
 }
 
 /**
- * A stdout/stderr stand-in with the same "throw when nothing subscribed"
- * trick as `BreakablePipe.breakPipe` above (#714): a mutation that stops
- * calling `watchStdoutErrors` on either stream inside `watchDashboardStdout` /
- * `watchSupervisorStdout` makes this throw, which aborts `npm run smoke` loudly
- * rather than passing the gate silently. Also implements `write`, since the
- * same object stands in for stderr (the reporting channel) as well as stdout.
+ * The same "throw when nothing subscribed" trick as `BreakablePipe.breakPipe`
+ * (#714): a mutation that stops calling `watchStdoutErrors` inside
+ * `watchDashboardStdout`/`watchSupervisorStdout` makes this throw, aborting
+ * `npm run smoke` loudly instead of passing silently.
  */
 class NoListenerBreakablePipe {
   private listener?: (error: Error) => void;
@@ -2671,16 +2633,10 @@ class NoListenerBreakablePipe {
 }
 
 /**
- * The #764 entrypoint fault-guard scenario — the pre-soak gate's fifth leg,
- * alongside #714's `runLoggerResilienceScenario` above.
- *
- * #714 fixed the unguarded-stdout class for the orchestrator only, and
- * captured — rather than fixed — the same class on the service-api and
- * supervisor entrypoints. #764 fixes those two, with a DIFFERENT
- * arbitrary-fault decision from the orchestrator's (continue, not stop — see
- * each `fault-guard.ts`'s own doc for the reasoning). This drives the REAL
- * exported functions from both modules, exactly as `runLoggerResilienceScenario`
- * drives the real `buildEntrypointLogger` rather than a stand-in.
+ * #764 — #714 fixed the unguarded-stdout class for the orchestrator only;
+ * this fixes it for service-api and supervisor, whose arbitrary-fault
+ * decision is CONTINUE rather than the orchestrator's STOP (see each
+ * fault-guard.ts's own doc for the reasoning).
  */
 function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
   function probe(

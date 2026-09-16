@@ -1,16 +1,7 @@
 /**
- * Trader core decision — DebateResult -> OrderIntent bracket (tickets #73,
- * #74). See docs/specs/trader-spec.md (Module: Trader Core, Module: Position
- * Sizing, Module: Side Derivation, Module: Non-Convergence & Skip Policy,
- * Module: Position Awareness).
- *
- * Mechanical and deterministic: no LLM, no hidden state. The same code path
- * runs live and in replay; only the injected Clock and the data behind
- * MarketDataService differ.
- *
- * Cosine precedent retrieval (#75) is wired in here — removing this wiring
- * silently reverts every intent to the no-precedent default, a permanent
- * 0.75x haircut on every position the system takes.
+ * Trader core decision — DebateResult -> OrderIntent bracket. Mechanical and
+ * deterministic: no LLM, no hidden state. Same code path live and in replay;
+ * only the injected Clock and MarketDataService's data differ.
  */
 import {
   type Bar,
@@ -28,26 +19,13 @@ import {
   type OrderIntent,
   totalHeldQuantity,
 } from '../../shared/index.js';
-// docs/coding-standards.md's type-only carve-out: a bare `import type` is
-// erased at compile time, so routing this through the debate-engine barrel
-// would manufacture a real import path — pulling the whole engine's module
-// graph into the Trader — to satisfy a need that has no runtime graph at
-// all. This is deliberately the ONLY thing this module takes from the debate
-// engine. This module does not re-derive the decision bar — it takes the bar
-// coordinate from `DebateResult`. Do not import `floorToBar` or
-// `DEBATE_BAR_TIMEFRAME_MS` here to recompute it (#687)
+// Type-only import (erased at compile time), so this doesn't pull the whole
+// debate-engine module graph into the Trader. Do not import `floorToBar` or
+// `DEBATE_BAR_TIMEFRAME_MS` to re-derive the bar — take it from `DebateResult` (#687).
 import type { DebateResult } from '../debate-engine/index.js';
-// #1089: the ONE typed dependency this otherwise risk-manager-free module
-// takes, and only for `instanceof` discrimination (coding-standards.md
-// "Typed errors only where a caller branches" — the same posture
-// `DuplicatePositionError` models). `TraderInput.equity` stays an opaque
-// thunk everywhere else in this file; the single call site that inspects
-// what it threw needs to tell a genuine whole-book valuation refusal apart
-// from any OTHER rejection the thunk's implementation might raise (an
-// account-state read failing, say) — see `buildBracket`
-// `BookValuationError` (#1089), not `StaleMarkError` alone: `readMarks`
-// (portfolio-view.ts) throws it bare on either a stale mark or a failed/
-// omitted mark read, and the base type is what catches both
+// #1089: the one typed dependency this otherwise risk-manager-free module
+// takes, only for `instanceof` discrimination — see `buildBracket`'s use of
+// it to tell a whole-book valuation refusal apart from any other rejection.
 import { BookValuationError } from '../risk-manager/index.js';
 import { priceBracket, sideFor, sizeBracket, type TradeDirection } from './build-bracket.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
@@ -70,10 +48,7 @@ import type {
 /**
  * The lot to attribute a position-level decision to when several are open on
  * the same instrument — most recently OPENED wins. Exported (#1128) so
- * `direct-bind.ts`'s own attribution for an exit-check skip uses this exact
- * selection rather than a second, independently-maintained copy of it that
- * could silently drift from this one. Requires a non-empty array, same as
- * the two call sites below.
+ * `direct-bind.ts` shares this selection instead of a copy that could drift.
  */
 export function mostRecentOpenLot(positions: readonly OpenPosition[]): OpenPosition {
   return positions.reduce((latest, lot) => (lot.opened_at > latest.opened_at ? lot : latest));
@@ -81,37 +56,23 @@ export function mostRecentOpenLot(positions: readonly OpenPosition[]): OpenPosit
 
 /**
  * The exact `IndicatorSpec` Trader asks the Market Data Service for. Exported
- * so `atr-equivalence.test.ts` can pin THIS spec rather than a hand-rebuilt
- * copy of it — a duplicate would keep passing if the real one drifted, which
- * is the whole failure mode that test exists to catch. Module-internal: it is
- * deliberately not re-exported from `trader/index.js`.
+ * so `atr-equivalence.test.ts` can pin this spec instead of a hand-rebuilt
+ * copy that could drift. Not re-exported from `trader/index.js`.
  *
  * `params.period` is pinned explicitly rather than left to
- * `computeIndicator`'s `params.period ?? spec.lookback` fallback — with
- * `spec.lookback` being the BAR-WINDOW width (see below, matching
- * `DEFAULT_VOLATILITY_INDICATOR`), that fallback would silently make this an
- * off-by-one ATR(`lookback`+1-ish) rather than the intended ATR(`lookback`).
- *
- * `lookback` sits on the CONVERGED warm-up (`recommendedWarmupFor` =
- * `4 x lookback + 1`), not the `lookback + 1` arity floor (#757,
- * `docs/reviews/indicator-characterisation-2026-08-16.md` F1 — the same
- * warm-up gap #722 fixed for `RSI_SPEC`). This field is metadata only for
- * `computeIndicator` (which reads `bars.length` and `params.period`, not
- * `spec.lookback`) — the value that actually matters is the bar window
- * `atrFor`'s caller fetches, which is derived from this same function via
- * `recommendedWarmupFor(atrIndicatorSpec(...))` at the call site in
- * `buildBracket`. Keeping both derived from one function is what stops the
- * spec's declared width and the actual fetch width from drifting apart the
- * way #722 had to fix for `WARM_START_WINDOWS`.
+ * `computeIndicator`'s `?? spec.lookback` fallback, which would silently
+ * off-by-one the ATR since `spec.lookback` is the bar-window width, not the
+ * period. `lookback` here is the CONVERGED warm-up (#757), derived via
+ * `recommendedWarmupFor(atrIndicatorSpec(...))` at the `buildBracket` call
+ * site so the spec's declared width and the actual fetch width can't drift
+ * apart the way #722 had to fix for `WARM_START_WINDOWS`.
  */
 export function atrIndicatorSpec(lookback: number, timeframe: string): IndicatorSpec {
   const floor: IndicatorSpec = {
     indicator: 'atr',
     params: { period: lookback },
-    // Passed in rather than defaulted (#315). This spec describes the bars the
-    // caller fetched with `config.atr_timeframe`, and a default here would let
-    // the two drift — the spec claiming 1h while the ATR was computed on
-    // something else, which reprices every stop without changing a test
+    // Passed in rather than defaulted (#315) — a default here could let the
+    // spec's timeframe drift from the bars the caller actually fetched.
     timeframe,
     lookback: lookback + 1,
   };
@@ -120,44 +81,17 @@ export function atrIndicatorSpec(lookback: number, timeframe: string): Indicator
 
 /**
  * Average true range for the stop, computed by the Market Data Service's
- * indicator registry rather than by Trader (ticket #304 — #65 landed the
- * registry, which retired the private copy Trader carried while #65 was
- * open). Indicator maths lives in exactly one place now, so the
- * "N bars yield N-1 true ranges" seeding rule cannot be fixed in one
- * implementation and left wrong in the other.
+ * indicator registry, not by Trader (#304) — indicator maths lives in one
+ * place so the "N bars yield N-1 true ranges" rule can't be fixed in one
+ * implementation and left wrong in another.
  *
- * Returns null on any ATR that cannot size a stop. BOTH guards below are
- * load-bearing, and they cover different failures:
- *
- * - Too little history. Since #319 `computeIndicator` THROWS
- *   (`InsufficientBarsError`) rather than answering a short-window mean
- *   labelled ATR(`lookback`), so the length check is what keeps Trader on its
- *   existing skip path instead of letting that throw kill the tick. It asks
- *   `minimumBarsFor` — the module that owns the arity — rather than restating
- *   a number here, so the two cannot drift apart; a hardcoded `< 2` was the
- *   old check, and it let 3 bars through as an "ATR(14)" computed from two
- *   true ranges, which is a mispriced stop, not a rough one.
- *   Deliberately a pre-check and not a `try`/`catch`: catching would also have
- *   to be narrow enough to re-throw `computeIndicator`'s ascending-order
- *   error, which `production.ts` means to surface as a forfeited tick.
- * - Corrupt bar data (one non-numeric high/low) poisons a true range on an
- *   otherwise well-sized window and returns NaN. Nothing about the window's
- *   LENGTH catches that, so `Number.isFinite` is still the only thing standing
- *   between Trader and a NaN intent on a full-width window.
- *
- * NaN must not be allowed downstream at all: it passes straight through
- * `Math.max`, the `stopDistance <= 0` check and the min-notional check (every
- * comparison against NaN is false) and lands in an EMITTED OrderIntent with
- * NaN size, stop and target. Verified, not assumed — reverting
- * `Number.isFinite` reproduces exactly that intent in the "returns null when
- * the computed ATR is not finite" test.
- *
- * Bars are consumed in the order `getBars` returns them — ascending by
- * close_time, which is the documented contract of
- * `MarketDataService.getBars`, the interface Trader is actually injected, and
- * which `computeIndicator` enforces by throwing on a misordered window. Do
- * not re-sort here — that check belongs at the one place every indicator
- * computation passes through, not in every consumer of it.
+ * Returns null on any ATR that cannot size a stop. Two independent guards:
+ * too little history (a pre-check against `minimumBarsFor`, not a
+ * `try`/`catch`, since `computeIndicator` throws `InsufficientBarsError` and
+ * a catch would also have to re-throw its ascending-order error unmodified),
+ * and corrupt bar data producing a NaN true range that the length check
+ * can't see. NaN must never reach an emitted `OrderIntent` — every downstream
+ * comparison against NaN is false, so it would pass every guard silently.
  */
 function atrFor(
   bars: Bar[],
@@ -168,24 +102,10 @@ function atrFor(
   | { atr: null; reason: TraderSkipReason; reason_detail: TraderReasonDetail | null } {
   const spec = atrIndicatorSpec(lookback, timeframe);
 
-  // `lookback + 1` bars yield `lookback` true ranges — the arity lives in
-  // `minimumBarsFor`, not in a literal here. Skipping the trade is the only
-  // safe answer: a stop cannot be priced off an ATR that does not exist
-  //
-  // The two failures are reported SEPARATELY (#475) because they mean opposite
-  // things operationally: a short window is a warm-up or a data gap and is
-  // expected early in a soak, while a non-finite ATR on a full window means
-  // corrupt bar data and is never expected. Collapsing them to one null — as
-  // this did — made the benign case and the alarming one indistinguishable in
-  // `trader_log`
-  //
-  // `minimumBarsFor(spec)` is a configured threshold (#1109) — it derives from
-  // `config.atr_lookback` via `atrIndicatorSpec` — so `bars.length` against it
-  // is the fourth numeric-gate site, alongside the three `TraderReasonDetail`
-  // already covers. Without it "2 bars short" and "13 bars short" are the same
-  // row, and the warm-up case this reason exists to distinguish (see #475's
-  // comment above) is exactly the one a near-miss vs. a decisive shortfall
-  // would tell apart
+  // Arity lives in `minimumBarsFor`, not a literal here. The two failure
+  // reasons are reported SEPARATELY (#475): a short window is an expected
+  // warm-up/data gap, while a non-finite ATR on a full window means corrupt
+  // bar data — collapsing them made the two indistinguishable in `trader_log`.
   const minimumBars = minimumBarsFor(spec);
   if (bars.length < minimumBars) {
     return {
