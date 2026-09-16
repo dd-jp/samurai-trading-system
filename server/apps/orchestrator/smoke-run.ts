@@ -1050,11 +1050,9 @@ function exitPathOrder(
         cosine_multiplier: 1,
       },
       cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
-      // #793: `executeExit` now refuses to write ahead without one — this
-      // harness has no debate/trader run behind it, so a fixed 'flatten'
-      // stands in; it exercises the exit path's mechanics (cancel-then-
-      // submit, attribution, `ClosedTrade`), not which of the three reasons
-      // fired
+      // #793: `executeExit` refuses to write ahead without an exit_reason;
+      // this harness has no debate/trader run behind it, so a fixed
+      // 'flatten' stands in for whichever of the three reasons fired.
       ...(intentType === 'exit' ? { exit_reason: 'flatten' as const } : {}),
     },
   };
@@ -1075,40 +1073,22 @@ function approvedRiskDecision(order: OrderIntent): RiskDecision {
 }
 
 /**
- * The gate config the exit-path harness drives the REAL Verdict with (#894).
- *
- * This harness used to fabricate its own `go` (`exitPathVerdict`), which is
- * how #894 stayed invisible in the one place a flatten is driven to the
- * broker: a hand-built `go` cannot be refused by a gate, so the smoke run
- * proved the exit MECHANICS and said nothing about whether a flatten survives
- * the stage above them.
- *
- * Every dial is the paper profile's own **by construction** — spread from
- * `buildStartingProfileConfigs`, not re-typed, so a retune of the shipped
- * profile cannot leave this harness silently testing a config nothing runs.
- * There is exactly one override, and it is spelled out below.
+ * Drives the exit-path harness through the REAL `VerdictImpl` (#894) instead
+ * of a hand-built `go`, which could not be refused by a gate. Spread from
+ * `buildStartingProfileConfigs` so a retune of the shipped profile can't
+ * leave this harness silently testing a config nothing runs; the one
+ * override (`max_mark_age`) exists because `FixtureDataSource` serves a
+ * single fixed-timestamp mark while this harness advances its own clock.
  */
 const EXIT_PATH_VERDICT_CONFIG: VerdictConfig = {
   ...buildStartingProfileConfigs().verdictConfig,
-  /**
-   * The ONE override. `FixtureDataSource` is constructed with a single
-   * `SMOKE_RUN_INSTANT` mark, so every mark it serves carries that one fixed
-   * timestamp while this harness advances its clock between phases. Mark
-   * freshness is therefore a property of the fixture here, not of the code
-   * under test, and `market-data-service`'s own suite owns that gate. The
-   * staleness, drift, dedup, calendar and breaker gates all run exactly as
-   * the paper profile ships them.
-   */
   max_mark_age: { crypto: 24 * 60 * 60_000, stocks: 24 * 60 * 60_000 },
 };
 
 /**
- * The REAL `VerdictImpl` decision for `order` — what `execute()` then acts on.
- *
- * A `no_go` throws rather than being returned: every scenario here is
- * constructed to pass every gate, so a refusal is the harness having lost a
- * precondition (or a gate having changed), and the smoke run must say which
- * reason fired rather than quietly submitting nothing.
+ * A `no_go` throws rather than being returned: every scenario here is built
+ * to pass every gate, so a refusal means a lost precondition or a changed
+ * gate, and the run should say which reason fired rather than submit nothing.
  */
 async function exitPathVerdict(
   order: OrderIntent,
@@ -1124,9 +1104,6 @@ async function exitPathVerdict(
     risk_decision: approvedRiskDecision(order),
     clock: deps.clock,
     marketData: deps.marketData,
-    // Crypto instruments (`EXIT_PATH_INSTRUMENTS`), so the `market_closed`
-    // gate (4) does not consult this at all; the always-open calendar is
-    // what the rest of this run uses
     tradingCalendar: new AlwaysOpenCalendar(),
     positionStore: deps.positionStore,
     breakers: {
@@ -1149,7 +1126,6 @@ async function exitPathVerdict(
   return decision;
 }
 
-/** Throws with the harness step named, rather than letting a silent no-op reach the gate */
 function assertSubmitted(result: ExecutionResult, step: string): void {
   if (result.status !== 'submitted') {
     throw new Error(
@@ -1159,149 +1135,73 @@ function assertSubmitted(result: ExecutionResult, step: string): void {
   }
 }
 
-/** What `evaluateSmokeGate` needs from the exit-path harness beyond the store */
 export interface ExitPathEvidence {
-  /** `ExitPathBrokerAdapter.callSequence` — the #516 ordering evidence */
   brokerCallSequence: readonly string[];
-  /** Every residual-exposure alert posted anywhere during the run (harness + tick loop) */
   residualAlerts: readonly ResidualExposureAlert[];
-  /**
-   * Scenario 1's lot (#508/#517): named so the gate can check THIS lot
-   * specifically reached `closed`, not merely that the aggregate
-   * `closed_trades` count is nonzero. Scoped for the same reason the #571
-   * check below is scoped to its own two lots — an aggregate-only check
-   * would keep passing if scenario 1 alone regressed (e.g. a reintroduced
-   * #517 misattribution on ETH-USD) as long as scenario 3 still closed its
-   * two lots, since the aggregate count would stay nonzero either way.
-   */
+  /** Scoped to scenario 1's own lot (#508/#517), not an aggregate count that could hide a regression here */
   fullExit: { lotKey: string };
-  /** Scenario 2's residual (#525): what was expected vs. what the broker actually protected. */
   partialFlatten: {
     idempotencyKey: string;
     expectedResidual: number;
     protectedQty: number | null;
   };
-  /** Scenario 3's two lots (#571): named here so the gate can check neither is phantom-open */
+  /** Scoped to scenario 3's own two lots (#571), so neither being phantom-open is independently checkable */
   twoLotFlatten: { lotKeys: readonly string[] };
   /**
-   * Scenario 4's crash-restart (#519, #526): the lot the gate checks reached
-   * `closed`, the flatten's OWN idempotency key (`ReconcileDivergence`s key
-   * off the flatten, never the lot — a flatten writes no `OpenPosition`), and
-   * the `ReconcileReport` the RESTARTED `Execution` produced — what proves
-   * `reconcile()`'s flatten sweep, not merely `ingestFills()`, is what
-   * recovered it
+   * `flattenKey` (not `lotKey`) because `ReconcileDivergence` keys off the
+   * flatten — a flatten writes no `OpenPosition`. `reconcileReport` proves
+   * the restarted `reconcile()`'s flatten sweep recovered it, not merely
+   * `ingestFills()` (#519, #526).
    */
   crashRestart: { lotKey: string; flattenKey: string; reconcileReport: ReconcileReport };
-  /** Every flatten-reconcile alert posted anywhere during the run — a healthy scenario 4 posts none */
   flattenReconcileAlerts: readonly FlattenReconcileAlert[];
   /**
-   * Scenario 5 (#549): a partial flatten whose OBSERVING-POLL re-arm failed
-   * (scripted, one-shot), so the durable marker (migration 0024) + the
-   * restarted `reconcile()`'s residual-protection sweep are the ONLY path
-   * back to protection. The gate checks the sweep re-armed the residual
-   * (`protectedQty`), settled the marker (`markerCleared`), reported it
-   * (`sweepDivergenceAction: 'adopted'`, `sweepDivergenceReason` naming the
-   * #549 sweep specifically), and paged exactly once for the whole episode —
-   * the observing poll's inline alert, never a second from the sweep (#342).
+   * Scenario 5 (#549): a one-shot scripted re-arm failure, so the durable
+   * marker (migration 0024) plus the restarted `reconcile()` sweep are the
+   * only path back to protection.
    */
   residualSweep: {
     lotKey: string;
     expectedResidual: number;
     protectedQty: number | null;
-    /** `open_positions.residual_unprotected_since IS NULL` after the restarted sweep */
     markerCleared: boolean;
-    /** The restarted reconcile()'s divergence for the LOT's own key, if any */
     sweepDivergenceAction: ReconcileDivergence['action'] | undefined;
     /**
-     * The SAME divergence's own `reason` text (#1285 B2) — read off the SAME
-     * lookup as `sweepDivergenceAction` (`findSweepDivergence`, below), never
-     * a second `.find()` over `lotKey`. A second, independent lookup would
-     * let a wrong-key mutation at one call site alone still satisfy this
-     * check with the OTHER call site's correct key — see `findSweepDivergence`'s
-     * doc for the measured case (scenario 4's flatten divergence is also
-     * `action: 'adopted'`, so `sweepDivergenceAction` alone cannot tell a
-     * wrong-key substitution from the real thing; only `sweepOne`'s own
-     * re-arm reason text — `'... by the #549 sweep'`, residual-protection-
-     * sweep.ts — can).
+     * Read off the SAME `findSweepDivergence` lookup as `sweepDivergenceAction`
+     * (see its doc) — scenario 4's flatten divergence is also `action:
+     * 'adopted'`, so only this reason text distinguishes a genuine #549
+     * sweep from a wrong-key substitution.
      */
     sweepDivergenceReason: string | undefined;
   };
   /**
-   * #1088: a `rejected`, `filled_size = 0` row seeded with a `decision_timestamp`
-   * already past `TERMINAL_SWEEP_AGE_MS` (reconcile.ts) — the durable effect
-   * `sweepTerminalPositions` exists to produce. Named separately from
-   * `crashRestart` above: that scenario's `ReconcileReport` proves the
-   * FLATTEN sweep ran, which is a different mechanism (#519/#526) reading a
-   * different table (`flatten_submissions`) than this one reads
-   * (`open_positions`), so a regression in either must be caught on its own.
+   * #1088: a terminal row seeded past `TERMINAL_SWEEP_AGE_MS`. Kept separate
+   * from `crashRestart` — that proves the flatten sweep (#519/#526) over
+   * `flatten_submissions`; this proves `sweepTerminalPositions` over
+   * `open_positions`, a different mechanism and table.
    */
   terminalSweep: {
     seededKey: string;
-    /** `true` = the seeded row is STILL in `open_positions` after the restarted `reconcile()` — a failure */
+    /** true = the seeded row is still present after the restarted reconcile() — a failure */
     rowPresentAfterSweep: boolean;
-    /** The restarted reconcile()'s own `swept` count, read the same pass */
     swept: number;
   };
 }
 
 /**
- * The #549 sweep's own divergence for ONE lot, picked out of a restarted
- * reconcile()'s full `divergences` list — every scenario's flatten/lot
- * shares that one list, so this is a lookup by key, not "the first entry" or
- * "any entry at all". Returns the whole divergence, not just its `action`
- * (#1285 B2, see below), so both fields callers need come off ONE lookup —
- * a wrong-key mutation at one call site cannot leave a second, correctly-
- * keyed lookup elsewhere still satisfying whatever check reads the field the
- * mutated call site did not touch.
+ * The #549 sweep's own divergence for one lot, by key (every scenario shares
+ * one `divergences` list). Returns the whole divergence rather than just
+ * `.action` so both fields callers need come off one lookup — a wrong-key
+ * mutation at one call site can't leave a second, correctly-keyed lookup
+ * elsewhere still passing (#1285 B2: scenario 4's flatten divergence is also
+ * `action: 'adopted'`, so only `.reason` — `sweepOne`'s re-arm text —
+ * distinguishes a genuine #549 sweep from a wrong-key substitution).
  *
- * Pulled out of `runExitPathScenarios` (#1285) so it has a unit test that
- * does not also have to stand up the rest of the exit-path harness.
- * Measurement (#1228/#1285) found `.action` alone is the ENTIRE runtime
- * discriminator for scenario 5 (#549): of `ExitPathEvidence.residualSweep`'s
- * fields, an in-process heal of the deliberately-failed re-arm (an extra
- * `ingestFills()` ahead of the restart — see `PostSweepScenarioContext`
- * above) takes `maybeRearmResidual`'s mark-unprotected -> rearmProtectiveLegs
- * -> confirm-protected path (ingest-fills.ts). A genuine restart-sweep heal
- * takes a DIFFERENT path — `sweepOne` (residual-protection-sweep.ts): the
- * marker is already set (no mark-unprotected write), and a confirmed re-arm
- * clears it via `store.confirmResidualProtected` directly, never
- * `bestEffortMarkerWrite`. The two paths share no MARKER-WRITING path (#1285
- * N5, round-2 review corrects the earlier "share no code" framing here,
- * which was false: `residual-protection-sweep.ts` imports
- * `heldQuantityFromFills`/`isFlat` from `shared/held-quantity.ts`, so that arithmetic
- * IS shared code) — what they share is only those two exported helpers,
- * which `sweepOne` deliberately calls fresh off the persisted fill record
- * rather than trusting any cached figure, "so the two surfaces cannot
- * disagree about flatness" — which is exactly why they leave the same `markerCleared`,
- * `protectedQty`, and alert-count footprint and only THIS lookup, keyed on
- * which code path's divergence list entry it is, tells them apart. `.action`
- * returning `undefined` because the restarted reconcile() found nothing left
- * to sweep is the discriminator #1285 measured.
- *
- * `.action` alone is not sufficient, though (#1285 B2, round 1 review): a
- * wrong-key mutation at this lookup's call site can read a DIFFERENT
- * scenario's divergence whose `action` also happens to be `'adopted'` —
- * measured concretely by substituting scenario 4's `crashRestartLot.exitKey`
- * for scenario 5's `residualSweep.lotKey`: `reconcileFlatten`
- * (reconcile.ts) reports that lot's flatten as `action: 'adopted'` too, with
- * `reason: "flatten journal said '...'; broker reports '...'"`. `.action`
- * cannot tell that apart from `sweepOne`'s own `'adopted'`, but `.reason`
- * can: `sweepOne`'s re-arm branch (residual-protection-sweep.ts) reports
- * `"protective legs re-armed for residual … by the #549 sweep — ..."`, which
- * no flatten-reconcile divergence text can produce. `evaluateSmokeGate`'s
- * #549 section checks `.reason` for exactly that.
- *
- * `.find` (first match), never `.findLast`, deliberately (#1285 N2, round-2
- * review): `reconcile()` (reconcile.ts) pushes this lot's real #549-sweep
- * divergence, if any, well before it appends `findUnrecordedVenuePositions`'s
- * results — which carry `idempotency_key: ''` — LAST in the same list. An
- * empty string is a substring and a suffix of every key, so under a
- * containment-family predicate (the very mutants the `===` unit tests below
- * pin against) `.findLast` would land on that trailing `''`-keyed sentinel
- * instead of this lot's own entry. `.find` forecloses that structurally, not
- * just because today's fixture happens to produce one match: it stays the
- * first (and normally only) match even if a future scenario adds a second
- * divergence for this same key ahead of it in the list.
+ * `.find`, never `.findLast` (#1285 N2): `findUnrecordedVenuePositions`
+ * appends entries keyed `idempotency_key: ''` last in the same list, and an
+ * empty string is a substring/suffix of every key, so `.findLast` under a
+ * containment predicate would land on that sentinel instead of this lot's
+ * own entry.
  */
 export function findSweepDivergence(
   divergences: readonly ReconcileDivergence[],
@@ -1310,12 +1210,7 @@ export function findSweepDivergence(
   return divergences.find((divergence) => divergence.idempotency_key === lotKey);
 }
 
-/**
- * Drives the exit-path scenarios documented above against `db`, using `clock`
- * (advanced deterministically between phases — see `SimulatedClock.advanceTo`)
- * and the given cost/execution config. Returns everything `evaluateSmokeGate`
- * needs that is not itself a store row.
- */
+/** Drives the exit-path scenarios documented above; returns what `evaluateSmokeGate` needs beyond a store row */
 async function runExitPathScenarios(input: {
   db: StoreHandle;
   clock: SimulatedClock;
