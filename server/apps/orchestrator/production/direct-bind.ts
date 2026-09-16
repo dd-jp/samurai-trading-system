@@ -273,11 +273,12 @@ export interface TraderStepDeps extends BreakerStateDeps {
  * absolute-dollar figures `riskCapsFor` (deleted) once derived from a ceiling
  * at profile-build time — and `risk-manager/index.ts` multiplies them against
  * live `portfolio.equity` at EVALUATE time, not against this function's
- * clamped return. They therefore track a funded account's real balance
- * directly and DO widen with it: #1135 (open) is exactly this gap — the
- * generic per-asset/per-class/gross/concentration caps resolve against raw
- * broker equity, not the #1112-corrected sizing ceiling this function
- * enforces.
+ * clamped return. On live that is still the book: `liveBookCeiling` refuses
+ * every entry once equity exceeds 1.05x the book, before these caps run
+ * (#1135, retired on that ground). On paper they multiply the simulated
+ * account and DO widen with it, by design; #1604 owns what that does to the
+ * control arm, and #1603 owns the fractions themselves resolving below
+ * ADR-0018 D5 on live.
  *
  * **Applied here and NOT inside `computePortfolioView`**, which is the tempting
  * shortcut and would be wrong: that same `equity` is the denominator of
