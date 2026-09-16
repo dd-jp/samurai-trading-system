@@ -1038,6 +1038,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * not know refuses (throws) rather than guessing, and the caller's #525
    * fallback alert fires — the contract's required posture.
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the walk's advance invariant ("advancing past an index means its order is not resting", enforced in both directions), the live-preferred-over-settled adoption order, and the three independent size bounds (qty, sizedAboveSettled, entryFilledQty) are each individually documented as load-bearing — two prior restructurings (#1570 review's early-return, commits 4ea06cba and df222403) were tried and reverted as live-money bugs, so a fresh extraction here repeats a mistake this function's own history already made
   async rearmProtectiveLegs(
     clientOrderId: string,
     instrument: string,
@@ -1579,6 +1580,31 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
+   * The shared isolation shape for all three per-order sweeps below (bracket,
+   * flatten, rearm): an `UnpricedFillError` is a MODELLED, EXPECTED condition
+   * (#298 — the age-out and `escalateAgedUnpricedFills` exist for exactly
+   * this), not a failure, so it is journaled and NOT counted unless the
+   * journal write itself throws (#524 review, deepseek — see the original
+   * bracket-loop comment this consolidates). Returns the count to add to the
+   * caller's own failure tally (0 or 1), rather than mutating it directly, so
+   * each sweep keeps its own named counter for the `AggregateError` message
+   * above.
+   */
+  private recordSweepError(error: unknown, failures: unknown[]): number {
+    if (error instanceof UnpricedFillError) {
+      try {
+        this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+        return 0;
+      } catch (stateError) {
+        failures.push(stateError);
+        return 1;
+      }
+    }
+    failures.push(error);
+    return 1;
+  }
+
+  /**
    * The bracket half of `fetchNewFills`'s sweep. Snapshot, as #297 already
    * did for `CcxtBrokerAdapter.syncBrackets` (M3): the `getOrder` below
    * awaits inside this loop, and a Map iterator DOES visit entries inserted
@@ -1631,42 +1657,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // Skipped, not swallowed: this bracket contributes nothing to THIS
         // sweep and is retried on the next one. That is the same shape as an
         // order the venue has not reported yet, and `ingestFills()` dedups on
-        // `broker_fill_id`, so re-polling costs nothing
-        if (error instanceof UnpricedFillError) {
-          // Durable, and stamped with the FIRST sighting: this is the clock the
-          // age-out runs on, and it has to survive the restart that a 14-day
-          // unattended soak will contain several of
-          //
-          // Guarded, because this runs INSIDE the per-bracket catch: a throw
-          // from the journal here would escape the isolation entirely and abort
-          // the account's whole sweep — turning one venue anomaly into the
-          // stop-outs-for-everyone starvation this loop exists to prevent
-          //
-          // NEITHER `failures.push(error)` NOR `bracketFailures += 1` runs for
-          // an UnpricedFillError itself (#524 review, deepseek) — it is a
-          // MODELLED, EXPECTED condition (#298's whole reason for existing:
-          // the age-out clock just above, and the eventual alert through
-          // `escalateAgedUnpricedFills` -> the `unpricedFillAlerts` port), not a
-          // failure, which is exactly what this catch's OWN first comment
-          // already says ("skipped, not swallowed... retried on the next
-          // one"). Counting it here contradicted that: `failures.length > 0`
-          // below is what decides whether a `fills`-less call THROWS, so one
-          // unpriced fill — on a poll where nothing else happened to produce
-          // a fill — silently caused the exact "stop-outs-for-everyone"
-          // abort this isolation exists to prevent, for EVERY bracket in the
-          // sweep, not just the unpriced one. A journal-write failure
-          // (`stateError`, below) is a genuinely different, new failure and
-          // still counts
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            bracketFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          bracketFailures += 1;
-        }
+        // `broker_fill_id`, so re-polling costs nothing. Bookkeeping shared
+        // with the flatten/rearm sweeps below — see `recordSweepError`'s doc
+        bracketFailures += this.recordSweepError(error, failures);
       }
     }
     return bracketFailures;
@@ -1768,29 +1761,17 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.flattenSubmittedAt.delete(clientOrderId);
         }
       } catch (error) {
-        // Same isolation, same UnpricedFillError bookkeeping, and (#524
-        // review, deepseek) the SAME non-counting of an UnpricedFillError
-        // itself as a failure, as the bracket loop above — see its comments
-        // for the full reasoning, which applies unchanged here. Getting this
-        // right matters at least as much here as there: an unpriced flatten
-        // fill on a poll where no bracket produced one either would
-        // otherwise abort the WHOLE sweep, brackets included, not just the
-        // flatten. Note what this means for the prune above: a fill this
-        // catch reaches for is, by construction, one `collectFill` never
-        // finished normalizing, so the `mapOrderState`/`delete` line is never
-        // reached for it — an unpriced flatten is retried next poll, same as
-        // an unpriced bracket, never pruned mid-unpriced
-        if (error instanceof UnpricedFillError) {
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            flattenFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          flattenFailures += 1;
-        }
+        // Same isolation and bookkeeping as the bracket loop above (see
+        // `recordSweepError`'s doc). Getting this right matters at least as
+        // much here as there: an unpriced flatten fill on a poll where no
+        // bracket produced one either would otherwise abort the WHOLE sweep,
+        // brackets included, not just the flatten. Note what this means for
+        // the prune above: a fill this catch reaches for is, by construction,
+        // one `collectFill` never finished normalizing, so the
+        // `mapOrderState`/`delete` line is never reached for it — an unpriced
+        // flatten is retried next poll, same as an unpriced bracket, never
+        // pruned mid-unpriced
+        flattenFailures += this.recordSweepError(error, failures);
       }
     }
     return flattenFailures;
@@ -1846,19 +1827,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.rearmedLegs.delete(lotKey);
         }
       } catch (error) {
-        // Same isolation and UnpricedFillError bookkeeping as the bracket
-        // and flatten loops above
-        if (error instanceof UnpricedFillError) {
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            rearmFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          rearmFailures += 1;
-        }
+        // Same isolation and bookkeeping as the bracket and flatten loops
+        // above (see `recordSweepError`'s doc)
+        rearmFailures += this.recordSweepError(error, failures);
       }
     }
     return rearmFailures;
