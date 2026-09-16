@@ -47,6 +47,7 @@
     "fallow:dead-code": "fallow dead-code",
     "fallow:dupes": "fallow dupes",
     "fallow:css": "fallow health --css",
+    "fallow:guard": "fallow guard",
     "precommit": "npm run knip && npm run lint:fix && npm run typecheck && npm run test:local",
     "place-soak-position": "tsx --env-file=.env.local server/tools/place-soak-position.ts",
     "saxo:login": "tsx --env-file=.env.local server/tools/saxo-login.ts"
