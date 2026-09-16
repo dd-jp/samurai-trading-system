@@ -1,16 +1,8 @@
 /**
- * Offline end-to-end smoke run — the pre-soak gate. Runs the real entrypoint
- * assembly (`startFromEnvironment` -> `buildProductionOrchestrator`) over
- * fixtures and a simulated broker; NOT a substitute for the credentialed
- * wiring-validated bar (ADR-0004 §5) since it never touches Alpaca.
- *
- * Not reachable from the real entrypoint by omission: separate module/npm
- * script, `mode` hard-coded to `'paper'`, the Alpaca client throws on every
- * method, and alerting is injected as log-only rather than read from env.
- *
- * The clock is a `SimulatedClock` frozen at `SMOKE_RUN_INSTANT` — load-bearing,
- * not just tidy: a running wall clock would date every modelled fill before
- * the lot's `opened_at` and it would never be ingested.
+ * Offline end-to-end smoke run — the pre-soak gate. Runs the real entrypoint assembly over
+ * fixtures and a simulated broker; NOT a substitute for the credentialed wiring bar (ADR-0004 §5).
+ * The clock is a `SimulatedClock` frozen at `SMOKE_RUN_INSTANT`: a running wall clock would date
+ * every modelled fill before the lot's `opened_at` and it would never be ingested.
  */
 import {
   existsSync,
@@ -243,14 +235,7 @@ function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
 /** The seed above, plus the one canned batch row `smokeGdeltClient`'s theme filter keeps — named so the fixture and gate stay one fact, not two. */
 export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
 
-/**
- * The asset classes the scoring pass derives for on a smoke run: one
- * aggregate each. Derived from `SMOKE_TEST_UNIVERSE` rather than a literal so
- * a universe change cannot silently turn a correct run red. Only the CRYPTO
- * leg is exercised end-to-end here (`SMOKE_TEST_UNIVERSE` is BTC-USD alone,
- * deliberately, since crypto bypasses `UniverseScheduler`'s calendar gate);
- * the equities leg's derivation is covered by `gdelt-scoring-pass.test.ts` only.
- */
+/** Derived from `SMOKE_TEST_UNIVERSE` rather than a literal so a universe change can't silently turn a correct run red. */
 const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
   ...new Set(SMOKE_TEST_UNIVERSE.map((instrument) => instrument.asset_class)),
 ];
@@ -258,16 +243,12 @@ const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
 export const SMOKE_GDELT_EXPECTED_AGGREGATES = SMOKE_GDELT_ASSET_CLASSES.length;
 
 /**
- * A GDELT client serving one canned batch, over a real deflate zip — built
- * rather than mocked so the gate exercises the WHOLE decode path offline.
- * Two rows, one carrying a watched theme and one not, so the archived count
- * is 1 and a filter that has stopped filtering shows up as 2. The
- * `lastupdate.txt` fixture is GDELT's real three-line shape (export /
- * mentions / gkg), not a one-line stub, so a client regression to "parse
- * line N" would still be caught here.
+ * Serves one canned batch over a real deflate zip, built rather than mocked, so the gate
+ * exercises the whole decode path offline. Two rows (one watched theme, one not) so the
+ * archived count is 1 and a filter that stopped filtering shows up as 2.
  */
 function smokeGdeltClient(): GdeltGkgClient {
-  // Fifteen minutes before `SMOKE_RUN_INSTANT` — must be NEWER than `seedSmokeGdeltBaseline`'s rows or the fetcher's cursor skips the download.
+  // Must be NEWER than seedSmokeGdeltBaseline's rows or the fetcher's cursor skips the download
   const stamp = '20260804114500';
   const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
   const lastupdate = [
@@ -319,11 +300,9 @@ function smokeGdeltClient(): GdeltGkgClient {
 const SMOKE_POLYMARKET_EXPECTED_ITEMS = 1;
 
 /**
- * A REAL `PolymarketClient` behind a fake `fetchImpl`, not a hand-rolled fake
- * returning parsed objects — Gamma serialises `outcomes`/`outcomePrices`/
- * `clobTokenIds` as JSON-encoded STRINGS, and that decode is most of what
- * this client is. Event payloads are derived from `CURATED_MACRO_MARKETS`
- * rather than restating slugs, so the two cannot drift.
+ * A REAL `PolymarketClient` behind a fake `fetchImpl`, not a hand-rolled fake: Gamma serialises
+ * `outcomes`/`outcomePrices`/`clobTokenIds` as JSON-encoded strings, and that decode is most of
+ * what this client is.
  */
 function smokePolymarketClient(): PolymarketClient {
   const [healthy, thin] = CURATED_MACRO_MARKETS;
@@ -373,14 +352,10 @@ function smokePolymarketClient(): PolymarketClient {
 }
 
 /**
- * The instant the whole run is frozen at — clock, bars, mark and quote alike.
- * A fixed literal so two runs produce identical fixtures and decisions. NOT
- * inside US equity regular hours (measured) — this run injects its own
- * `AlwaysOpenCalendar` override rather than depending on real session hours,
- * since `UniverseScheduler` gates every instrument, crypto included. The
- * exact-hour alignment is load-bearing for the Polymarket gate: items are
- * stamped at the ingest instant and `getContext()` floors its window end to
- * the debate bar, so nudging this off the hour silently zeroes served intel.
+ * The instant the whole run is frozen at. NOT inside US equity regular hours (measured) — this
+ * run injects `AlwaysOpenCalendar` instead. The exact-hour alignment is load-bearing for the
+ * Polymarket gate: `getContext()` floors its window to the debate bar, so nudging this off the
+ * hour silently zeroes served intel.
  */
 export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 
@@ -388,15 +363,9 @@ export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
 
 /**
- * The fixture bar series, per timeframe. Each count is a floor forced by a
- * downstream consumer, not a round number: `5m` x 60 clears `RSI_SPEC`'s
- * converged warm-up (57) by three; `1h` x 60 clears the Trader's ATR stop and
- * volatility breaker's own converged warm-up the same way; `1m` x 60 serves
- * the Analysts' short-timeframe reads; `1d` x 40 clears the widest daily
- * consumers (ADV window 20, correlation window 30) with headroom.
- * Short-changing any of these degrades a stage silently rather than failing
- * loud, which is what the gate below exists to catch — `smoke-run.test.ts`
- * pins these against the profile's own lookbacks.
+ * Each count is a floor forced by a downstream consumer, not a round number (e.g. `5m` x 60
+ * clears `RSI_SPEC`'s converged warm-up of 57 by three). `smoke-run.test.ts` pins these against
+ * the profile's own lookbacks.
  */
 const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: number }[] = [
   { timeframe: '5m', count: 60, stepMs: 5 * 60 * 1_000 },
@@ -409,40 +378,10 @@ const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: num
 const SMOKE_MARK_PRICE = 160;
 
 /**
- * One cycle of the fixture's close-to-close moves: three down bars, then four
- * up, netting `+5` every seven bars and ending on an up bar.
- *
- * **A rising series is not enough — it has to rise with pullbacks.** The
- * technical analyst reads `bullish` only when the last close is above its
- * SMA(14) AND RSI(14) is under 70 (`technical-analyst.ts` `directionFrom`), and
- * a monotonic ramp has no down bars at all, so its RSI is exactly 100: the
- * analyst returns `neutral`, "overbought", on the strongest possible uptrend.
- * These pullbacks put RSI at **68.52** and the close above its SMA, which is
- * what the analyst actually needs.
- *
- * That was **63.16** until #722 re-pointed `RSI_SPEC` from the 15-bar
- * fabrication floor to the converged `recommendedWarmupFor` of 57, which is the
- * repricing that ticket accepted. The cycle is deliberately NOT re-tuned to
- * restore the old number: 63.16 was a warm-up artefact, and fitting the fixture
- * to reproduce it would be preserving exactly what #722 removed.
- *
- * **The margin to the overbought gate is now 1.48 points, not 6.84.** Wilder's
- * smoothing weights this pattern's recent up-bars more heavily than the plain
- * mean did, so the fixture sits closer to 70 than it used to; a future edit to
- * `SMOKE_CLOSE_CYCLE` that adds any upward bias can push it over, at which
- * point the analyst reads `neutral`/"overbought" and the gate fails with
- * nothing traded. That failure is loud, which is why the thin margin is
- * recorded rather than padded.
- *
- * Only the `5m` series feeds it (#742 moved `technical-analyst.ts`'s
- * `INDICATOR_TIMEFRAME` from `1h` to `5m`), and 60 bars clears the 57 the spec
- * asks for by three. `buildTrendingCloses` depends only on `count`/`lastClose`,
- * not `timeframe`, so the `5m` series carries the identical close values the
- * `1h` series used to (including RSI's exact 68.52/1.48-point margin above) —
- * the move did not require retuning this cycle.
- * `1d` x 40 does NOT clear it, which costs nothing today because no RSI reads
- * daily bars — but it is why the count below is a floor forced by a consumer
- * rather than a round number.
+ * Three down bars then four up, netting +5 every seven bars — a rising series is not enough,
+ * it must rise WITH pullbacks or RSI(14) hits exactly 100 and the analyst reads `neutral`
+ * "overbought" instead of `bullish`. This cycle yields RSI 68.52, only 1.48 points below the
+ * 70 gate — a future edit adding upward bias can push it over and fail the run silently-loud.
  */
 const SMOKE_CLOSE_CYCLE: readonly number[] = [-2, -2, -3, 3, 3, 3, 3];
 
@@ -456,15 +395,12 @@ export function buildTrendingCloses(count: number, lastClose: number): number[] 
   closes[count - 1] = lastClose;
 
   for (let step = 1; step < count; step += 1) {
-    // `((x % n) + n) % n` — a bare `%` goes negative once `step` passes the
-    // cycle length, which silently reads past the end of the array
+    // `((x % n) + n) % n`: a bare `%` goes negative once `step` passes the cycle length
     const delta = SMOKE_CLOSE_CYCLE[(((length - step) % length) + length) % length];
     const next = closes[count - step];
     if (delta === undefined || next === undefined) {
-      // Unreachable after the guarded modulo, and thrown rather than defaulted:
-      // substituting a price here would quietly produce a fixture whose exact
-      // closes the calendar/RSI assertions are pinned to, turning an indexing
-      // bug into a wrong-but-plausible series
+      // Unreachable after the guarded modulo; thrown rather than defaulted so an indexing bug
+      // can't quietly produce a wrong-but-plausible fixture the RSI assertions are pinned to
       throw new Error(`buildTrendingCloses: no close or delta at step ${step} of ${count}`);
     }
     closes[count - 1 - step] = next - delta;
@@ -474,26 +410,10 @@ export function buildTrendingCloses(count: number, lastClose: number): number[] 
 }
 
 /**
- * A rising fixture series with pullbacks, ending just under `SMOKE_MARK_PRICE`.
- *
- * The trend is deliberate and is what lets the run reach a `go` at all: the
- * Analysts have to agree directionally for `computeConvictionScore`'s
- * consensus term to clear `traderConfig.conviction_floor` (0.55 via
- * `DEFAULT_TRADER_CONFIG`), and a flat or noisy series produces a split view
- * set, a sub-floor conviction and a `trader: no_trade` short-circuit. Same
- * shape as the `composed tick chain (integration)` fixtures in
- * `production.test.ts`, re-anchored to `SMOKE_RUN_INSTANT`.
- *
- * **This series used to be a monotonic ramp**, which pinned RSI at 100 and made
- * the technical analyst read `neutral` — so the run's only directional
- * participant was the mediator, and the `go` came through the mediator-override
- * branch #625 exists to close rather than through a desk that agreed. The
- * comment claimed analyst agreement while the fixture never produced it. See
- * `SMOKE_CLOSE_CYCLE`.
- *
- * The `+/- 2` high/low band around each close gives a true range of at least 4
- * and a non-degenerate ATR, so the Trader's stop distance (`atr_k * ATR`) is a
- * real number rather than a floor artefact.
+ * A rising fixture series with pullbacks, ending just under `SMOKE_MARK_PRICE`. The trend is
+ * what lets the run reach a `go` at all: the Analysts must agree directionally to clear
+ * `traderConfig.conviction_floor`, or a flat/noisy series short-circuits to `trader: no_trade`.
+ * See `SMOKE_CLOSE_CYCLE` for why it isn't a monotonic ramp.
  */
 export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Bar[] {
   return SMOKE_BAR_SERIES.flatMap(({ timeframe, count, stepMs }) => {
@@ -551,13 +471,7 @@ export class ConstantResponseLlmClient implements LlmClient {
   }
 }
 
-/**
- * Injected rather than composed: the only in-repo `AccountStateProvider`
- * (`BrokerAccountStateProvider`) makes a network call, which is out of bounds
- * here. All four values are the "healthy account" case deliberately — a
- * tripped circuit breaker halts entries the same way a real no-trade decision
- * would, making the two indistinguishable at a glance.
- */
+/** Injected: the only in-repo `AccountStateProvider` makes a network call, out of bounds here. */
 export class FixedAccountStateProvider implements AccountStateProvider {
   constructor(private readonly equity: number = 100_000) {}
 
@@ -567,8 +481,7 @@ export class FixedAccountStateProvider implements AccountStateProvider {
     daily_basis: SessionBasisByClass;
     consecutive_losses: number;
   }> {
-    // Deliberately `known`, not unknown — an unknown figure arms
-    // `daily_pnl_unknown` and would make a healthy smoke run look degraded.
+    // `known: true`, not unknown — an unknown figure arms daily_pnl_unknown and looks degraded
     const flat = { known: true, open_equity: this.equity, realized_pnl: 0 } as const;
 
     return {
@@ -581,12 +494,9 @@ export class FixedAccountStateProvider implements AccountStateProvider {
 }
 
 /**
- * `buildProductionComponents` resolves the Alpaca client eagerly, before it
- * knows `broker`/`accountState` are both overridden, and its constructor
- * throws without `ALPACA_API_KEY` — so a credential-free run must inject
- * something here even though it should never be called. Throws rather than
- * stubbing an answer, so a future wiring change that does reach it fails
- * loudly instead of silently exercising a fabricated Alpaca.
+ * `buildProductionComponents` resolves the Alpaca client eagerly and its constructor throws
+ * without `ALPACA_API_KEY`, so a credential-free run must inject something here even though it
+ * should never be called. Throws rather than stubbing an answer, so a wiring regression is loud.
  */
 export class UnreachableAlpacaClient implements AlpacaBrokerClient {
   reached = false;
@@ -647,24 +557,9 @@ export class UnreachableAlpacaClient implements AlpacaBrokerClient {
 }
 
 /**
- * The exit path (#576). The entry-path run above cannot honestly reach an
- * `exit` intent (the fixture's fixed uptrend never makes Debate resolve
- * bearish), so this harness composes Execution directly via
- * `buildExecutionSurface` — the same production binding helper
- * `buildProductionComponents` uses — with hand-built `VerdictDecision`s fed
- * to `ExecutionImpl.execute()`/`.ingestFills()`.
- *
- * One instrument per scenario, so no scenario's lots leak into another's
- * `heldLots` filter (`getOpenPositions()` filters by instrument alone):
- * 1. `fullExit` — assert `closed` + cancel-before-flatten ordering (#508/#516/#517).
- * 2. `partialFlatten` — a partial fill; assert the residual is re-armed (#525).
- * 3. `twoLot` — a lot with a prior partial exit plus a fresh lot, flattened
- *    together; assert neither is left phantom-open (#571).
- * 4. `crashRestart` — a flatten whose fill isn't ingested before a restart;
- *    assert `reconcile()`'s sweep resolves it to `closed` (#519, #526).
- * 5. `residualSweep` — a partial flatten whose re-arm fails once, then a
- *    restart; assert the durable residual-protection marker (migration 0024)
- *    plus `reconcile()`'s sweep re-arm it and page exactly once (#549).
+ * The exit path (#576). The entry-path run above can't honestly reach an `exit` intent, so this
+ * harness composes Execution directly via `buildExecutionSurface` with hand-built
+ * `VerdictDecision`s. One instrument per scenario so lots don't leak across `heldLots` filters.
  */
 const EXIT_PATH_INSTRUMENTS = {
   fullExit: 'ETH-USD',
