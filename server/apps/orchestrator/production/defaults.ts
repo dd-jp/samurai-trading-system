@@ -316,7 +316,7 @@ export function buildDefaultAlpacaBrokerClient(
  * No mode branch: Alpaca serves market data from one host for paper and live
  * alike, so there's no money-safety decision here
  */
-export function buildDefaultAlpacaDataClient(
+function buildDefaultAlpacaDataClient(
   assetClass: 'crypto' | 'stocks',
   /**
    * The account's shared outbound bucket (#391). Optional so existing callers/tests

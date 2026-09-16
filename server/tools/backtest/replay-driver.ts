@@ -147,7 +147,7 @@ const DEFAULT_ADV_WINDOW = 20;
  * `TRADER_CONFIG_DEFAULTS.flatten_before_close_ms` (server/pipeline/trader/
  * types.ts). Restated rather than imported — see `flattenBeforeCloseMs`.
  */
-export const DEFAULT_FLATTEN_BEFORE_CLOSE_MS = 5 * 60 * 1_000;
+const DEFAULT_FLATTEN_BEFORE_CLOSE_MS = 5 * 60 * 1_000;
 
 /**
  * Where this bar sits relative to its session's close (#664).

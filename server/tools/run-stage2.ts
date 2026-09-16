@@ -249,7 +249,7 @@ export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
  * window, and re-exported here so `run-stage2-cost-decomposition.ts` and
  * `ingest-tiingo-history.ts` keep importing it from where they always have.
  */
-export { STAGE2_FREE_STACK_WINDOW, STAGE2_PINNED_WINDOW } from './stage2-source.js';
+export { STAGE2_PINNED_WINDOW } from './stage2-source.js';
 
 /**
  * Where a DIRECT run keeps its ingested bars (#495).
