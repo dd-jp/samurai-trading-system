@@ -969,16 +969,10 @@ async function routeDecision(
 }
 
 /**
- * The Trader's EXIT-ONLY entry point (#743) — what the tick path runs.
- *
- * A `Pick` of `TraderInput`, not a new bag of dependencies: everything here is
- * the same seam the decision path already injects, minus `debate` (there is
- * none on a tick pass, by construction — that absence is the "exits must not
- * read analyst output" constraint stated in the type), minus the sizing
- * inputs (`equity`, `setupStore`) an exit never uses, plus the `bar` the
- * runner floored once for this pass — the coordinate the exit's idempotency
- * key dedupes on, inherited rather than re-derived here for the same reason
- * `decisionBarFor` inherits the debate's (#616/#687).
+ * The Trader's EXIT-ONLY entry point (#743) — what the tick path runs. A
+ * `Pick` of `TraderInput`, minus `debate` (none on a tick pass — the "exits
+ * must not read analyst output" constraint) and the sizing inputs, plus the
+ * `bar` the runner floored once for this pass.
  */
 export type ExitCheckInput = Pick<
   TraderInput,
@@ -991,20 +985,13 @@ export type ExitCheckInput = Pick<
   | 'positionState'
   | 'exitFillSizes'
   // #1389: the tick path is where the mandatory flatten is decided, so the
-  // in-flight guard has to reach THIS entry point — omitting it here would
-  // leave the second flatten unguarded on precisely the path that produces
-  // nearly all of them
+  // in-flight guard must reach this entry point.
   | 'unresolvedFlattens'
-  // #826: the tick path is where the mandatory flatten is actually decided
-  // (`routeExitCheck`'s first branch), so the unpriced-flatten escalation has
-  // to reach THIS entry point — omitting it here would leave the degradation
-  // audible only on the once-a-bar decision path
+  // #826: the tick path is where the mandatory flatten is decided, so the
+  // unpriced-flatten escalation must reach this entry point too.
   | 'onUnpricedFlatten'
-  // #753: which arm's book this exit closes. Both arms share this ONE exit
-  // entry point — that sharing is the acceptance criterion "both arms share
-  // the same exit rule and the same stop, asserted, not configured twice" —
-  // so the arm cannot be a property of a second implementation; it has to be
-  // an input to the single one
+  // #753: both arms share this one exit entry point, so the arm is an input
+  // to it rather than a property of a second implementation.
   | 'arm'
 > & {
   /** The pass's debate-bar coordinate, floored once by the tick runner */
@@ -1012,30 +999,11 @@ export type ExitCheckInput = Pick<
 };
 
 /**
- * Evaluates the position-facing exits for one instrument, in this order:
- *
- * 1. Is a lot held at all?
- * 2. Is the flat-by-close window (#668, ADR-0014) open for its venue? If so,
- *    the same flatten intent the decision path would build — held quantities,
- *    degenerate stop/target, `'close'`-side idempotency key on `input.bar`.
- * 3. Has the held side's signal DECAYED (#748)? If so, the same builder emits
- *    the same shape of exit, distinguished by `metadata.exit_reason:
- *    'signal_decay'` and by an `'early_close'` idempotency-key discriminator.
- *
- * **The order is a safety property, not a style choice.** The flatten is
- * evaluated on a tick and nowhere else, so it is decided before anything that
- * can throw or decline. See the comment at the branch itself.
- *
- * What it deliberately does NOT evaluate: entries, scale-ins, and the
- * direction-flip exit — all of those are answers to "what does the debate
- * say", which is a decision-path question and runs once per debate bar. This
- * function consults no `AnalystView` and no `DebateResult` and makes no model
- * call; its exit attribution comes off the most recent open lot and its decay
- * read comes off the indicator registry.
- *
- * Mirrors `decideWithReason`'s shape (an outcome plus collected diagnostics)
- * so the adapter that writes `trader_log` and escalates diagnostics treats
- * both entry points identically.
+ * Evaluates the position-facing exits for one instrument: held at all? flat-
+ * by-close window open (#668)? signal decayed (#748)? The order is a safety
+ * property — the flatten must be decided before anything that can throw or
+ * decline. Consults no `AnalystView`/`DebateResult`; exit attribution comes
+ * off the most recent open lot. Mirrors `decideWithReason`'s shape.
  */
 export async function checkExitsWithReason(input: ExitCheckInput): Promise<TraderOutcome> {
   const diagnostics: TraderDiagnostic[] = [];
@@ -1051,20 +1019,9 @@ export async function checkExitsWithReason(input: ExitCheckInput): Promise<Trade
 
 /**
  * `classifyDecision`'s counterpart for the tick-path exit entry point
- * (#1109). `ExitCheckInput` carries no `DebateResult` by construction, so
- * `routeExitCheck` (and the `buildExitIntent` helper it shares with
- * `routeDecision`) can only produce a skip that reads position/mark/fill
- * state — never `neutral_direction_while_flat` or
- * `holding_neutral_or_non_converged`, the two `SKIP_REASON_CLASS` entries
- * `classifyDecision` overrides using a debate this entry point does not have.
- *
- * A plain `SKIP_REASON_CLASS` lookup, not a branch on those two reasons:
- * this runs on the exit-cadence / flat-by-close path (~30 calls/bar/
- * instrument, the mandatory flatten among them), where nothing may throw.
- * `SKIP_REASON_CLASS` being a `Record` over the FULL `TraderSkipReason`
- * union already gives the same compile-time guarantee a runtime assertion
- * would — a twentieth reason added there without a class here is a compile
- * error — without a runtime path that can take the flatten down with it.
+ * (#1109). `ExitCheckInput` carries no `DebateResult`, so this is a plain
+ * `SKIP_REASON_CLASS` lookup rather than a branch — nothing here may throw,
+ * since the mandatory flatten runs through this path.
  */
 function classifyExitCheckSkip(skip_reason: TraderSkipReason): TraderDecisionClass {
   return SKIP_REASON_CLASS[skip_reason];
@@ -1087,10 +1044,7 @@ async function routeExitCheck(
   if (positionAssetClass === undefined) return skip('no_position_side');
 
   const flattenWindow = withinFlattenWindow(input, positionAssetClass);
-  // Pushed BEFORE the branch, exactly as `routeDecision` does: the diagnostic
-  // must survive both a flatten (an emit) and a calendar that has quietly
-  // stopped resolving sessions (a skip) — the second is #698's silent case,
-  // and at a 2-minute tick THIS is now the path that reports it most often
+  // Pushed before the branch, exactly as `routeDecision` does.
   if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
 
   const mostRecentLot = mostRecentOpenLot(positions);
@@ -1120,11 +1074,8 @@ async function routeExitCheck(
     });
   }
 
-  // The indicator-based early exit (#748). Reached only when the flatten is not
-  // due, and it consults ONLY indicators — no `AnalystView`, no `DebateResult`,
-  // no model call. `ExitCheckInput` has no field any of those could arrive
-  // through, which is orchestrator-spec.md constraint 4 enforced by the type,
-  // and this change adds none
+  // The indicator-based early exit (#748), reached only when the flatten is
+  // not due; consults only indicators, no model call.
   const decay = await readSignalDecay({
     instrument,
     side: existingSide,
@@ -1135,10 +1086,7 @@ async function routeExitCheck(
   if (decay.verdict === 'signal_unavailable') return skip('early_exit_signal_unavailable');
   if (decay.verdict === 'holds') return skip('signal_still_supports_position');
 
-  // A release, built by the SAME builder the flatten uses — so "can only reduce
-  // or close, never open or increase" holds by construction rather than by a
-  // second code path agreeing to behave. `buildFlattenExit` sizes to the held
-  // quantity, takes the closing side, and emits `intent_type: 'exit'`; there is
-  // no argument to it that could produce anything else
+  // Same builder the flatten uses, so "can only reduce or close" holds by
+  // construction, not by a second code path agreeing to behave.
   return buildFlattenExit(input, positions, input.bar, attribution, { reason: 'signal_decay' });
 }
