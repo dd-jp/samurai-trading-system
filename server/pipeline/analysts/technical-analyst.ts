@@ -1,68 +1,30 @@
 /**
- * Technical analyst persona (ticket #70, restructured by #745) — see
- * docs/specs/analysts-spec.md "Module: Analyst Roles & Input Model": primary =
- * price/indicators (Market Data Service); context = last-N-candles + volume
- * (always). Mandatory, applies to both crypto and stocks (Technical never sits
- * out an asset class, unlike Fundamental).
+ * Technical analyst persona: stateless pure function of its `AnalystInput`.
+ * Mandatory for both asset classes (unlike Fundamental). Rolling features are
+ * computed by the Market Data Service, never here, except participation
+ * (no registry kind exists for it — see `PARTICIPATION_LOOKBACK`).
  *
- * A stateless pure function of its `AnalystInput` — no module-level mutable
- * state, no wall-clock reads, no caching. Rolling features (SMA/RSI/MACD/ADX/
- * Donchian/squeeze) are computed by the Market Data Service, never here
- * (analysts-spec.md "analysts stay stateless ... never compute or cache them
- * myself"). The one exception is the participation read, which has no registry
- * kind to delegate to; see `PARTICIPATION_LOOKBACK`.
+ * Reasoning is a deterministic indicator rule, not an LLM call, by spec:
+ * indicators feed the debate, the debate decides.
  *
- * Reasoning is a deterministic indicator rule, not an LLM call — and as of the
- * 2026-08-16 amendment to analysts-spec.md ("Where the LLM belongs") that is
- * the SPECIFIED end state rather than a waypoint. A model deciding whether RSI
- * 72 is overbought is arithmetic with a threshold wearing a nondeterministic,
- * per-call-billed coat; indicators feed the debate, the debate decides.
- * `analyst-prompt-cost.test.ts` asserts it rather than trusting it.
+ * # One vote per axis
  *
- * # One vote per axis (#745)
- *
- * The analyst reads five axes — trend, momentum, volatility-as-gate,
- * participation, structure — and emits AT MOST ONE vote per axis. That rule is
- * the whole design: it is what stops two correlated oscillators (RSI and the
- * MACD histogram both being momentum) outvoting a single trend read, and it is
- * the rule that justified cutting #744's indicator batch from ten kinds to
- * five. Two indicators on one axis combine into one vote before the vote is
- * counted (`momentumVote`), never after.
- *
- * `confidence = |net| / availableAxes`, capped at `LOW_CONVICTION_CAP` when the
- * volatility gate says the tape is not trending (ADX below `ADX_TREND_FLOOR`)
- * or is coiled (`bb_kc_squeeze` below `SQUEEZE_ON_BELOW`).
+ * Five axes — trend, momentum, volatility-as-gate, participation, structure —
+ * each emit AT MOST ONE vote, so two correlated oscillators (RSI and MACD,
+ * both momentum) cannot outvote a single trend read. `confidence = |net| /
+ * availableAxes`, capped at `LOW_CONVICTION_CAP` when the volatility gate says
+ * the tape is not trending or is coiled.
  *
  * # Core vs enrichment
  *
- * This analyst is `role: 'mandatory'`: a throw here forfeits the whole
- * instrument for the tick as a `quorum_skip` (`AnalystOrchestrator.runAnalysts`
- * returns an empty view set, `SequentialTickRunner` short-circuits). At six
- * indicator reads with warm-ups from 15 bars (~70 minutes of 5m tape) to 112
- * (~9 hours, several sessions), that would be six independent ways to lose a
- * tick and a cold start that trades nothing until the LONGEST warm-up cleared.
- *
- * So the reads are split:
- *
- * - **CORE** — the trend pair (`SMA_SPEC` + the last close), `RSI_SPEC`,
- *   `ATR_PCT_SPEC`. Fail loud, exactly as before: no pre-check, no catch. A
- *   core kind short of bars still forfeits the instrument, because a technical
- *   view with no trend and no momentum read is not a degraded view, it is no
- *   view.
- * - **ENRICHMENT** — `MACD_SPEC`, `ADX_SPEC`, `DONCHIAN_SPEC`, `SQUEEZE_SPEC`
- *   and the participation read. Bar sufficiency is PRE-CHECKED against the
- *   already-fetched 5m window before the call is made; the call is additionally
- *   wrapped in a catch narrowed to `InsufficientBarsError` ALONE. An
- *   unavailable axis leaves the vote denominator entirely (it is NOT counted
- *   as a zero vote), renders an explicit line naming what the kind needed and
- *   what it had, and increments `technical_indicator_unavailable{kind}`.
- *
- * The catch is narrow on purpose and a broad one would be a defect, not a
- * simplification: `assertAscending` throws a deliberately-fatal bare `Error`
- * meaning "this feed is misordered", which must keep propagating and forfeit
- * the tick rather than be absorbed into a silent degrade. That is the whole
- * reason `InsufficientBarsError` is a typed class (see its doc comment in
- * `indicators.ts`) and `technical-axes.test.ts` pins the propagation.
+ * `role: 'mandatory'`: a throw here forfeits the whole instrument for the tick.
+ * **CORE** (trend pair, RSI, ATR%) fails loud — no pre-check, no catch, since
+ * a technical view missing trend/momentum is no view at all. **ENRICHMENT**
+ * (MACD, ADX, Donchian, squeeze, participation) is pre-checked against the
+ * already-fetched window and its call is caught narrowly for
+ * `InsufficientBarsError` alone — an unavailable axis leaves the vote
+ * denominator entirely rather than counting as a zero vote. The catch stays
+ * narrow so a misordered-feed `Error` still propagates and forfeits the tick.
  */
 
 import {
@@ -82,18 +44,10 @@ import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AnalystTelemetry, AssetClass } from './types.js';
 
 /**
- * Issue #742: the technical read moves from 1h to 5m. At period 14, a 1h
- * SMA/RSI is a 2.3-session lookback on a position that must be flat by
- * close (ADR-0014) — a signal about a different holding period than the one
- * being traded. 1h is retained separately, below, as always-on CONTEXT
- * (`CONTEXT_TIMEFRAME`), not as an input to direction/confidence.
- *
- * Deliberately NOT moved in this change (per #742): `trader/decide.ts`'s
- * `atrIndicatorSpec` timeframe (`TraderConfig.atr_timeframe`) and
- * `production/defaults.ts`'s `DEFAULT_VOLATILITY_INDICATOR`. Those feed the
- * stop and halt paths; bundling them would make this signal-horizon
- * experiment inseparable from a risk-parameter change. #745 does not move them
- * either, for the same reason.
+ * 5m, not 1h: at period 14 a 1h SMA/RSI is a 2.3-session lookback on a
+ * position that must be flat by close (ADR-0014). `trader/decide.ts`'s
+ * `atrIndicatorSpec` and `DEFAULT_VOLATILITY_INDICATOR` deliberately stay on
+ * their own timeframe — those feed the stop/halt paths, a separate concern.
  */
 const INDICATOR_TIMEFRAME = '5m';
 /** 1h read retained as context only — never feeds direction/confidence */
@@ -104,23 +58,11 @@ const CONTEXT_CANDLE_LOOKBACK = 20;
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The one shared 5m warm-up every 5m spec below relies on. `run()` fetches this
- * window FIRST and awaits it, so the store holds >= this many 5m bars before
- * any spec is requested; each spec's own (smaller) lookback is then served by
- * `MarketDataServiceImpl`'s `cachedBars` route 1 (same instrument+timeframe,
- * already fetched this bar interval) instead of issuing its own source fetch —
- * ONE fetch and six store reads per tick, not six fetches.
- *
- * 260 covers the widest spec below (`MACD_SPEC`, 112 bars at 12/26/9) with
- * more than 2x margin. `technical-axes.test.ts` pins `WARMUP_5M >=` every
- * spec's lookback, because the collapse degrades SILENTLY when it does not
- * hold: `cachedBars` misses on `rows.length < window.lookback` and the tick
- * quietly starts paying six fetches.
- *
- * The 1m-fetch "large limit" warning documented in `alpaca-http-client.ts` does
- * not transfer here: that warning is about `DataSource.fetchBars`' own
- * pagination search widening past its buffer at large `limit`, and 260 5m bars
- * is well under a percent of any request budget mentioned there.
+ * The one shared 5m warm-up every 5m spec below relies on — fetched once by
+ * `run()` so each spec's own smaller lookback is served from the store rather
+ * than issuing its own fetch (one fetch and six store reads, not six fetches).
+ * 260 covers `MACD_SPEC`'s 112-bar warm-up with 2x margin; `technical-axes.test.ts`
+ * pins `WARMUP_5M >=` every spec's lookback since the collapse degrades silently otherwise.
  */
 export const WARMUP_5M = 260;
 
@@ -128,46 +70,18 @@ export const WARMUP_5M = 260;
 const BARS_PER_SESSION_5M = 78;
 
 /**
- * The SEPARATE, WIDER 5m window `computeRvol` needs (#797), and why it cannot
- * reuse `WARMUP_5M`.
- *
- * RVOL's baseline is the same clock-time bucket across the prior
- * `RVOL_SESSION_WINDOW` (10) sessions, so it needs those ten sessions PLUS the
- * current one present in the bars it is handed. `WARMUP_5M` is 260 bars ≈ 3.3
- * sessions — feeding it to `computeRvol` would return `insufficient_sessions`
- * on every tick forever, which is a caller in name only. Twelve sessions
- * (`RVOL_SESSION_WINDOW + 2`) rather than the bare eleven, so ONE half-day or
- * holiday inside the window does not drop the count below ten priors and
- * degrade the line for a fortnight.
- *
- * **Cost, stated rather than hand-waved.** This is a second `getBars` call per
- * instrument per tick, sequenced AFTER the shared `WARMUP_5M` read (never
- * `Promise.all`-ed with it or with the core reads — two concurrent source
- * fetches for the same instrument+timeframe would race on the store write).
- * On a cold store it costs one extra HTTP fetch: `MarketDataServiceImpl`'s
- * `cachedBars` route 1 misses when the store cannot return `lookback` rows, so
- * a 936-row ask is not satisfied by the 260-row fetch that preceded it. Once
- * the store holds >= `RVOL_5M_LOOKBACK` bars for the instrument, route 1 hits
- * (same instrument+timeframe, already fetched this bar interval) and the
- * steady-state cost returns to ONE fetch per instrument per tick.
- *
- * Within the raw-fetch caps by construction, not by luck: 936 + the forming-bar
- * margin is far under `normalizing-data-source.ts`'s `MAX_RAW_LIMIT_ABSOLUTE`
- * (20,000), the absolute row cap #747 shipped for EXACTLY this request shape —
- * its doc comment names `computeRvol`'s "lookback in the hundreds" as the case
- * it exists to bound. `alpaca-http-client.ts`'s large-`limit` warning does not
- * bite either, but the reasoning is NOT inherited from `WARMUP_5M`'s ("well
- * under a percent"), because 936 is 3.6x that: at `BUFFER_MULTIPLIER` 8 the
- * widened search window is ~26 calendar days, ~18 equity sessions, ~1.4k raw
- * 5m rows — two `PAGE_SIZE` (1,000) pages, and comfortably inside
- * `RETRY_MAX_ROWS` (25,000).
+ * The SEPARATE, WIDER 5m window `computeRvol` needs — cannot reuse `WARMUP_5M`
+ * (260 bars ≈ 3.3 sessions) since RVOL needs the prior `RVOL_SESSION_WINDOW`
+ * (10) sessions plus the current one, or it returns `insufficient_sessions`
+ * forever. Twelve sessions rather than eleven so one half-day/holiday doesn't
+ * drop the count below ten priors. Fetched as a second `getBars` call,
+ * sequenced after the shared warm-up read (never `Promise.all`-ed with it —
+ * two concurrent fetches for the same instrument+timeframe would race on the
+ * store write); costs one extra HTTP fetch cold, none once the store warms.
  */
 export const RVOL_5M_LOOKBACK = (RVOL_SESSION_WINDOW + 2) * BARS_PER_SESSION_5M;
 
-/**
- * `sma` reads the closes directly, so an SMA(14) is exactly 14 bars: the
- * `params.period ?? lookback` fallback resolves to 14 and needs no `+ 1`.
- */
+/** `sma` reads the closes directly, so an SMA(14) is exactly 14 bars — the `params.period ?? lookback` fallback needs no `+ 1`. */
 export const SMA_SPEC: IndicatorSpec = {
   indicator: 'sma',
   params: {},
@@ -175,15 +89,10 @@ export const SMA_SPEC: IndicatorSpec = {
   lookback: INDICATOR_LOOKBACK,
 };
 /**
- * The ARITY floor this spec used to sit on: `INDICATOR_LOOKBACK + 1`, with
- * `params.period` pinned rather than left to the `?? lookback` fallback — the
- * same shape `trader/decide.ts`'s `atrIndicatorSpec` and `production.ts`'s
- * `DEFAULT_VOLATILITY_INDICATOR` carry, for the same reason. `rsi` consumes
- * the first bar only to seed the previous close, so N bars yield N-1 changes:
- * this used to ask for 14 bars and get an RSI averaged over 13 changes but
- * divided by 14 — presented in `key_points` as "RSI(14)". Issue #319 made that
- * throw instead of lying. Leaving `params` empty and bumping only `lookback`
- * would have silently made this an RSI(15), which is why the period is pinned.
+ * The arity floor: `INDICATOR_LOOKBACK + 1`, with `params.period` pinned
+ * rather than left to the `?? lookback` fallback. `rsi` consumes the first bar
+ * only to seed the previous close, so N bars yield N-1 changes — leaving
+ * `params` empty and bumping only `lookback` would silently make this an RSI(15).
  */
 const RSI_FLOOR_SPEC: IndicatorSpec = {
   indicator: 'rsi',
@@ -193,63 +102,32 @@ const RSI_FLOOR_SPEC: IndicatorSpec = {
 };
 
 /**
- * RSI(14) over a CONVERGED warm-up — `recommendedWarmupFor` = `4 x period + 1`
- * = 57 bars — rather than the `minimumBarsFor` floor of 15 (#722).
- *
- * At the floor, `changes.slice(period)` is empty, so `rsi`'s Wilder smoothing
- * loop ran ZERO times and the value the debate read was the simple-mean seed:
- * Cutler's RSI wearing Wilder's name. That is not an alternative convention,
- * it is a warm-up artefact — the number was a function of where the window
- * happened to start. Measured against a converged 200-bar warm-up on the same
- * bar it moved a median 4.6 RSI points, p90 12.0, and flipped the 70/30
- * overbought/oversold classification on 18% of bars
- * (`docs/reviews/indicator-characterisation-2026-08-16.md` F2). Adopting the
- * recommendation reprices every technical opinion in the system at once; that
- * is a knowing, accepted cost, decided on #722 rather than a side effect.
- *
- * Derived from `recommendedWarmupFor` rather than written as 57, so the spec
- * cannot drift away from the function that justifies it. `minimumBarsFor` is
- * still 15 and is deliberately unchanged: it is the fabrication floor, and a
- * cold instrument that holds only 20 bars still gets a (less-warm) RSI rather
- * than no view at all.
- *
- * Exported for the same reason `atrIndicatorSpec` is (#304): so the goldens and
- * `rsi-warmup.test.ts` pin THIS spec rather than a hand-rebuilt copy that would
- * keep passing if the real one drifted.
+ * RSI(14) over a CONVERGED warm-up (`recommendedWarmupFor` = `4 x period + 1`
+ * = 57 bars), not the `minimumBarsFor` floor of 15. At the floor, `rsi`'s
+ * Wilder smoothing loop ran zero times and the value was the simple-mean
+ * seed — measured to move a median 4.6 RSI points vs. a converged warm-up and
+ * flip the overbought/oversold classification on 18% of bars. Derived from
+ * `recommendedWarmupFor` rather than a literal so the spec cannot drift from
+ * the function that justifies it; exported so goldens pin this spec directly.
  */
 export const RSI_SPEC: IndicatorSpec = {
   ...RSI_FLOOR_SPEC,
   lookback: recommendedWarmupFor(RSI_FLOOR_SPEC),
 };
 
-/**
- * Puts a spec on its CONVERGED warm-up rather than its arity floor — the #722
- * decision, applied once per spec instead of restated per spec.
- *
- * Derived from `recommendedWarmupFor` rather than written as a number so a spec
- * cannot drift away from the function that justifies it (the mistake #722 had
- * to correct in `rsi-warmup.test.ts`). For the multi-parameter kinds the
- * incoming `lookback` is ignored by the registry entirely; see their specs.
- */
+/** Puts a spec on its CONVERGED warm-up rather than its arity floor, applied once instead of restated per spec. */
 function onRecommendedWarmup(spec: IndicatorSpec): IndicatorSpec {
   return { ...spec, lookback: recommendedWarmupFor(spec) };
 }
 
 /**
- * ATR as a percentage of price (#745) — CORE, because it is the volatility
- * gate's magnitude read and the gate renders on every view. Its arity is
- * `period + 1` = 15 bars, the same floor `RSI_SPEC` sits on, so making it core
- * costs the cold start nothing: an instrument warm enough for RSI is warm
- * enough for this.
- *
- * Sits on the converged warm-up for the same reason `RSI_SPEC` does — ATR is
- * Wilder-smoothed, so the floor would report the plain-mean seed.
- *
- * NOT the same spec as `trader/decide.ts`'s `atrIndicatorSpec` or
- * `DEFAULT_VOLATILITY_INDICATOR`, and deliberately not shared with them: those
- * price stops and trip the volatility breaker, this one renders a band into a
- * prompt. #745's scope discipline is explicit that the risk-path specs do not
- * move.
+ * ATR as a percentage of price — CORE, since it is the volatility gate's
+ * magnitude read and the gate renders on every view. Same arity floor as
+ * `RSI_SPEC` (15 bars), so making it core costs the cold start nothing, and
+ * the same converged-warm-up reasoning applies (ATR is Wilder-smoothed).
+ * Deliberately NOT shared with `trader/decide.ts`'s `atrIndicatorSpec` or
+ * `DEFAULT_VOLATILITY_INDICATOR` — those price stops and trip the volatility
+ * breaker; this one only renders a band into a prompt.
  */
 export const ATR_PCT_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'atr_pct',
@@ -264,30 +142,19 @@ const MACD_SLOW = 26;
 const MACD_SIGNAL = 9;
 
 /**
- * MACD histogram (#744/#745) — ENRICHMENT, and the widest spec in the file:
- * `minimumBarsFor` is `max(12, 26) + 9 - 1` = 34 bars and the converged warm-up
- * is 112 (~9 hours of 5m tape, i.e. more than one session). That width is
- * exactly why it cannot be core: making it so would mean a fresh instrument
- * traded nothing for a session and a half.
+ * MACD histogram — ENRICHMENT, and the widest spec in the file: converged
+ * warm-up is 112 bars (~9 hours, more than one session), which is exactly why
+ * it cannot be core — a fresh instrument would trade nothing for a session and a half.
  */
 export const MACD_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'macd_histogram',
   params: { fast: MACD_FAST, slow: MACD_SLOW, signal: MACD_SIGNAL },
   timeframe: INDICATOR_TIMEFRAME,
-  // Placeholder: `macd_histogram`'s arity and warm-up are functions of
-  // fast/slow/signal ALONE (`indicators.ts` `requiredIntParam` — this kind
-  // never falls back to `spec.lookback`), so `onRecommendedWarmup` replaces
-  // this before any consumer sees it. Stated rather than left at 0, which
-  // would read as a meaningful zero-length window
+  // Placeholder: `macd_histogram`'s arity/warm-up are functions of fast/slow/signal alone; `onRecommendedWarmup` replaces this before any consumer sees it.
   lookback: MACD_SLOW,
 });
 
-/**
- * ADX(14) — ENRICHMENT, and it feeds the CONFIDENCE CAP rather than a vote.
- * That is the axis exception #744's cut list already names: DI+/DI- are not
- * exposed as kinds precisely because ADX here answers "is there a trend to
- * have an opinion about", not "which way".
- */
+/** ADX(14) — ENRICHMENT, feeds the CONFIDENCE CAP rather than a vote: it answers "is there a trend to have an opinion about", not "which way". */
 export const ADX_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'adx',
   params: { period: INDICATOR_LOOKBACK },
@@ -317,7 +184,7 @@ export const SQUEEZE_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'bb_kc_squeeze',
   params: { bb_period: BB_PERIOD, bb_mult: BB_MULT, kc_period: KC_PERIOD, kc_mult: KC_MULT },
   timeframe: INDICATOR_TIMEFRAME,
-  // Placeholder, replaced below — same reason as `MACD_SPEC`'s
+  // Placeholder, replaced below — same reason as `MACD_SPEC`'s.
   lookback: BB_PERIOD,
 });
 
@@ -342,84 +209,18 @@ const ADX_TREND_FLOOR = 20;
 const SQUEEZE_ON_BELOW = 1;
 
 /**
- * The cap the gate applies. 0.40 is the issue's number, taken as given rather
- * than searched — see `AXIS_WEIGHTS`.
- *
- * **It is a DAMPER, not a veto (#870).** The cap binds on the ANALYST's
- * confidence, and `computeConvictionScore` then combines it with the
- * mediator's stance and the evidence average. On the all-absent desk —
- * sentiment and fundamental both `NO_DATA_MARKER`, the shape every recorded
- * soak debate ran on — conviction is `0.5 + 0.2c` in the capped confidence
- * `c`, so a capped 0.40 yields **0.58**, above the 0.55 floor. Measured by
- * `server/tools/measure-conviction-ceiling.ts` (#756) and pinned end to end in
- * `../trader/gated-tape-conviction.test.ts`.
- *
- * What the cap is worth, stated shape by shape rather than as one sentence,
- * because no single sentence covers all of them:
- *
- * - **All-absent desk:** a gated tape clears the floor **only** with an
- *   agreeing mediator (0.58); neutral gives 0.43 and opposing 0.28.
- * - **Hydrated-aligned desk:** the cap does not prevent entry at **any**
- *   mediator stance — two MI analysts at 0.95 carry the evidence average, and
- *   even an opposing mediator lands at 0.6533. That desk is not "technicals
- *   alone", so this is not a hole in the intent; it is the reason the intent
- *   could never have been enforced by capping a conviction either.
- * - **Everywhere:** `conviction_floor` is read twice in the Trader, once as
- *   the gate and once through `convictionMultiplier`, so the cap's real effect
- *   is on SIZE. `(0.58 − 0.55)/0.45 ≈ 6.7%` of ADR-0018 D5's deployment
- *   envelope is the **CEILING, not the value**: the cap only binds from raw
- *   confidence 0.40 up, and a weaker gated read deploys less. At `raw = 1/3`
- *   conviction is 0.5667 and the index bracket deploys about £12.96 of the
- *   £1,000 book; at `raw = 0.25` conviction is exactly the floor, the
- *   multiplier is 0 and `decide` skips at `below_min_notional`. Gated
- *   deployment therefore spans **0 → ~6.7%** — at most about a fifth of what
- *   the same axis votes deploy with ADX above the trend floor.
- *
- * **Two conditions those numbers hold under**, both carried from
- * `measure-conviction-ceiling.ts`: `routeDecision` skips at
- * `neutral_direction_while_flat` BEFORE the floor is ever consulted (265 of
- * 268 recorded skips in #625's data), so clearing the floor is necessary and
- * not sufficient; and `applyAnalystWeights` rescales the conviction the Trader
- * gates on by a factor that is exactly 1 only while every `analyst_weights`
- * row still sits at 1.0, which a feedback loop that has started moving weights
- * would change.
- *
- * **Lowering the value would enforce #745's intent — and is David's call, not
- * a defect fix.** On the absent desk the intent needs the CAP under 0.25, and
- * that is reachable: a 0.24 cap yields `0.5 + 0.2(0.24) = 0.548` and the
- * entry is refused. What it costs is directional strength: it would bind on
- * every non-zero point of the four-axis lattice (weights all 1, votes in
- * {-1, 0, 1}, `availableAxes` in {2, 3, 4}, so the non-zero values of
- * `|net| / availableAxes` are {0.25, 1/3, 0.5, 2/3, 0.75, 1}) and collapse
- * every non-zero read to one constant. 0.40 already collapses 4 of those 6
- * points, so this is a difference of degree, not of kind — and a sub-0.25 cap
- * would sit a hundredth under a `conviction_floor` that #756 item 1 still has
- * open and blocked on soak data. Barring a gated tape outright is a product
- * decision.
- *
- * **Resolved 2026-08-26 (#870): the value stays 0.40, mechanism unchanged.**
- * David's ruling — the mechanism is fine, #745's stated intent was overstated.
- * "A gated tape should not carry an entry on technicals alone" means alone —
- * no other analyst signal AND no mediator agreement — not "even with a
- * concurring mediator". The all-absent-desk 0.58 case above clears the floor
- * only because a mediator independently agreed; that is not the cap failing,
- * it is the cap doing exactly what a damper (not a veto) does. #745's
- * docstring is corrected by this note rather than by lowering the cap.
+ * The gate's confidence cap. A DAMPER, not a veto: it bounds the analyst's
+ * own confidence, but a gated tape can still clear the conviction floor if
+ * the mediator independently agrees — that is the cap working as intended,
+ * not a hole in it (David's ruling, resolved; value and mechanism unchanged).
  */
 export const LOW_CONVICTION_CAP = 0.4;
 
 /**
- * How many 5m bars the participation read spans. 20 bars is ~100 minutes,
- * matched to `DONCHIAN_PERIOD` so the two intraday-range axes describe the same
- * stretch of tape.
- *
- * Participation is the one axis with NO registry kind behind it: #744 added
- * five kinds and none of them reads volume. It is therefore computed here, from
- * the 5m bars this analyst has already fetched — stateless, pure, and with
- * direct precedent in the 1h context line, which has averaged volume in this
- * file since #70. A `volume_ratio` (or signed-volume) indicator kind belongs in
- * the registry beside the other five; that is a registry change and out of
- * #745's scope, noted rather than smuggled in.
+ * How many 5m bars the participation read spans, matched to `DONCHIAN_PERIOD`
+ * so the two intraday-range axes describe the same stretch of tape.
+ * Participation is the one axis with NO registry kind behind it, so it is
+ * computed here directly from the already-fetched bars.
  */
 export const PARTICIPATION_LOOKBACK = 20;
 
@@ -438,16 +239,10 @@ const STRUCTURE_LOWER = 0.3;
 export type TechnicalAxis = 'trend' | 'momentum' | 'volatility' | 'participation' | 'structure';
 
 /**
- * The axes that produce a vote, and therefore the axes that can appear in
- * `availableAxes`.
- *
- * `volatility` is deliberately absent. The issue names it "volatility-as-GATE"
- * and separately specifies the 0.40 cap on ADX/squeeze: if the gate also voted,
- * ADX and the squeeze would move confidence twice — once through the numerator
- * and again through the cap — and a flat, coiled tape could end up with a
- * HIGHER `|net| / availableAxes` than a trending one purely by widening the
- * denominator. So the gate modulates and never votes, and `availableAxes` tops
- * out at four.
+ * The axes that produce a vote. `volatility` is deliberately absent — it is a
+ * GATE, and if it also voted, ADX/squeeze would move confidence twice (once
+ * through the numerator, again through the cap), letting a flat, coiled tape
+ * outscore a trending one purely by widening the denominator.
  */
 export const VOTING_AXES: readonly TechnicalAxis[] = [
   'trend',
@@ -457,22 +252,11 @@ export const VOTING_AXES: readonly TechnicalAxis[] = [
 ];
 
 /**
- * Per-axis weights, EQUAL and UNFITTED.
- *
- * Equal because ADR-0018 D4 caps the selection budget and a weight chosen by
- * outcome is a fitted parameter — the same reasoning that keeps
- * `recommendedWarmupFor`'s `4 x period + 1` a conventional figure rather than a
- * searched one. Every threshold in this file (70/30, 20, 1, 0.40, 0.55, 0.7)
- * is conventional or given by the issue for the same reason.
- *
- * This does NOT disable the Feedback Loop. Its bounded post-trade adjustment of
- * per-ANALYST weights inside hard floors and ceilings is its specified job and
- * is untouched here — `CONTEXT.md` already excludes that tuning from the edge
- * claim. What is forbidden is STARTING from fitted weights.
- *
- * Present as a constant rather than implied by the arithmetic so "equal and
- * unfitted" is an artifact a test can assert on and a later change has to
- * edit deliberately.
+ * Per-axis weights, EQUAL and UNFITTED — a weight chosen by outcome is a
+ * fitted parameter, which ADR-0018 D4's selection-budget cap forbids
+ * starting from. Does NOT disable the Feedback Loop's separate, bounded
+ * post-trade weight adjustment. Kept as a constant, not implied by the
+ * arithmetic, so a later change has to edit it deliberately.
  */
 export const AXIS_WEIGHTS: Readonly<Record<TechnicalAxis, number>> = {
   trend: 1,
@@ -523,25 +307,14 @@ function round4(value: number): number {
   return Number(value.toFixed(4));
 }
 
-/**
- * TREND — the close/SMA pair, CORE.
- *
- * One vote from the pair, not one per member: "close" and "SMA(14)" are two
- * readings of one axis, and counting them separately is exactly the correlated
- * double-vote this design forbids.
- */
+/** TREND — the close/SMA pair, CORE. One vote from the pair, not one per member — counting separately is the correlated double-vote this design forbids. */
 function trendVote(lastClose: number, sma: number): AxisVote {
   if (lastClose > sma) return 1;
   if (lastClose < sma) return -1;
   return 0;
 }
 
-/**
- * MOMENTUM's RSI half. Extremes vote ZERO, not with the move: RSI 72 is not
- * "more bullish", it is a stretched tape, which is the reading the previous
- * `directionFrom` already took (`rsi < RSI_OVERBOUGHT` gated the bullish
- * branch) and #745 keeps.
- */
+/** MOMENTUM's RSI half. Extremes vote ZERO, not with the move — RSI 72 is a stretched tape, not "more bullish". */
 function rsiVote(rsi: number): AxisVote {
   if (rsi >= RSI_OVERBOUGHT || rsi <= RSI_OVERSOLD) return 0;
   if (rsi > 50) return 1;
@@ -557,20 +330,12 @@ function macdVote(histogram: number): AxisVote {
 }
 
 /**
- * THE one-vote-per-axis rule, in code. RSI and the MACD histogram are both
- * momentum oscillators and are strongly correlated; two agreeing bullish
- * oscillators must produce ONE bullish vote, not two, or momentum quietly
- * outweighs trend and structure combined.
- *
- * Agreement is required for a non-zero vote: `sign(rsi + macd)` is 0 when they
- * disagree (+1 and -1), and passes the non-zero one through when the other is
- * neutral. Disagreeing oscillators are genuinely no signal on this axis — that
- * is information, and it is different from the axis being unavailable, which is
- * why it stays IN the denominator as a zero vote.
- *
- * `macd === undefined` is the enrichment-unavailable case: momentum still
- * votes, on RSI alone. Momentum is a CORE axis (RSI is core), so it is never
- * dropped from the denominator.
+ * THE one-vote-per-axis rule, in code. RSI and MACD are correlated momentum
+ * oscillators, so two agreeing bullish reads must produce ONE bullish vote,
+ * not two: `sign(rsi + macd)` is 0 when they disagree, passes the non-zero one
+ * through when the other is neutral. `macd === undefined` (enrichment
+ * unavailable) still votes on RSI alone — momentum is CORE and never drops
+ * from the denominator.
  */
 export function momentumVote(rsi: number, macd: number | undefined): AxisVote {
   const fromRsi = rsiVote(rsi);
@@ -587,53 +352,14 @@ function structureVote(donchianPos: number): AxisVote {
 
 /**
  * PARTICIPATION: the share of the window's PARTICIPATING volume (up-bars and
- * down-bars, doji excluded) that traded on up-bars.
- *
- * `null` when nothing participated — every bar in the window a doji, or zero
- * volume throughout. That is the halted/auction-flat shape #725 already handled
- * in `rsi`, and it is answered the same way: no fabricated 0.5 dressed as a
- * measurement, an explicit "no reading" the caller renders as a zero vote.
- *
- * #790 — kept as an in-analyst derivation, NOT migrated into
- * `market-data-service`'s `INDICATOR_KINDS` registry. Considered and rejected:
- * a `compute: (bars, spec) => number` registry kind is a TOTAL function — it
- * cannot return the `null` above, only a number. Folding the halted/flat case
- * into the registry's usual degenerate-denominator convention (RSI 50,
- * `donchian_pos` 0.5) would make `assessAxes` render "balanced" for a window
- * that never traded, which is exactly the fabrication class `null` exists to
- * avoid — and this string reaches the debate prompt (`analyst-prompt-cost.test.ts`),
- * so it isn't cosmetic. A registry kind plus an analyst-side pre-check that
- * re-derives "did anything participate" before trusting the registry's answer
- * was also considered; it would just duplicate this loop's own arithmetic to
- * decide whether to call it, buying golden-fixture coverage at the cost of a
- * second implementation of the same walk. Not worth it for a function this
- * shape and this small — recording the decision per #790's own escape hatch
- * rather than shipping a golden fixture that exists only to re-prove
- * `up === down === 0`.
- *
- * The 3x-ETP volume caveat (`market-data-service/types.ts`'s doc comment on
- * `INDICATOR_KINDS`, echoed in `rvol.ts`) applies here exactly as it does to
- * `computeSessionVwap` above: `participationBars` is sliced from
- * `technicalBars`, itself fetched for `signal.asset` — the leveraged ETP on
- * the live equity leg, not its liquid US underlying. This function's volume
- * reads are therefore market-maker/wrapper flow, not informed flow, same as
- * every other volume-derived read in this file. NOT enforced (no routing to
- * an underlying happens here) for the same reason `rvol.ts` documents its own
- * gap rather than papering over it: routing needs a screening/underlying
- * instrument identity (#749) this codebase does not have yet. Recorded, not
- * silently absent.
- *
- * Reconciled with #747's `computeRvol`, deliberately NOT sharing a
- * definition: RVOL is unsigned magnitude — today's volume in a clock-time
- * bucket over the MEDIAN of the same bucket across the last 10 sessions,
- * answering "is more volume trading right now than usually does" — and it
- * needs a `TradingCalendar` to find that bucket, which is exactly why it
- * can't be a pure `(bars, spec)` registry kind either (`rvol.ts`'s own doc
- * comment). `upVolumeShare` is signed direction — of the volume that DID
- * participate this window, what fraction traded on up-bars, answering "when
- * volume showed up, which side was it on." Different questions, different
- * inputs (a calendar vs. none), complementary rather than duplicate; no
- * shared definition was used, and none should be.
+ * down-bars, doji excluded) that traded on up-bars. `null` when nothing
+ * participated — never a fabricated 0.5 dressed as a measurement. Kept as an
+ * in-analyst derivation rather than a registry indicator kind, since a
+ * registry `compute` is a total function and cannot return `null`.
+ * Volume here is market-maker/wrapper flow on a leveraged ETP, same caveat as
+ * `rvolLine` below, and deliberately does NOT share a definition with
+ * `computeRvol` — RVOL is unsigned magnitude against a session baseline,
+ * this is a signed split of the volume that did participate.
  */
 function upVolumeShare(bars: Bar[]): number | null {
   let up = 0;
@@ -662,20 +388,10 @@ function directionOf(net: number): Direction {
 
 /**
  * Reads one ENRICHMENT indicator, or reports why it could not be read.
- *
- * Two guards, on purpose:
- *
- * 1. A PRE-CHECK against the already-fetched 5m window, so the ordinary
- *    cold-start case costs no throw at all and the numbers in the rendered
- *    unavailability line (`required`/`received`) are the real ones.
- * 2. A catch narrowed to `InsufficientBarsError` ALONE, for the case the
- *    pre-check cannot see — the service's own window, filtered by `asOf`, is
- *    the authority on how many bars actually reach `computeIndicator`.
- *
- * The catch is `instanceof InsufficientBarsError` and RETHROWS anything else.
- * A bare `catch` here would swallow `assertAscending`'s deliberately-fatal
- * "this feed is misordered" `Error` and turn a broken data feed into a quietly
- * narrower debate — the failure this whole typed-error split exists to prevent.
+ * Pre-checks against the already-fetched window (so the ordinary cold-start
+ * case costs no throw), then catches `InsufficientBarsError` ALONE and
+ * rethrows anything else — a bare catch would swallow a misordered-feed
+ * `Error` and turn a broken data feed into a quietly narrower debate.
  */
 async function readEnrichment(
   input: AnalystInput,
@@ -699,27 +415,16 @@ async function readEnrichment(
 }
 
 /**
- * Names the KIND that could not be read, and the axis it feeds — not "this axis
- * is gone", because for two of the five that would be false. An unreadable
- * `macd_histogram` leaves momentum voting on RSI alone, and `adx`/
- * `bb_kc_squeeze` feed a gate that never votes at all. Only participation and
- * structure actually leave the denominator when their kind is unreadable, and
- * the `Axis votes: ... over N available axes` line is what reports that.
+ * Names the KIND that could not be read, and the axis it feeds — not "this
+ * axis is gone", since an unreadable `macd_histogram` leaves momentum voting
+ * on RSI alone. Only participation and structure actually leave the
+ * denominator when unreadable.
  */
 function unavailableLine(axis: string, kind: string, required: number, received: number): string {
   return `Unavailable: ${kind} (${axis} axis) needed ${required} bars, had ${received}`;
 }
 
-/**
- * Reports one unavailable axis: the counter, then the rendered line.
- *
- * The counter is `technical_indicator_unavailable{kind}` and is emitted through
- * `AnalystTelemetry`, which the production composition root wires to the
- * logger (`production.ts`). `AnalystInput.telemetry` is REQUIRED (#790, a
- * no-op default when there is no real sink) so this call is never guarded —
- * `production.test.ts` still asserts the COMPOSITION ROOT wires the LOGGING
- * sink specifically, not merely that some sink was supplied.
- */
+/** Reports one unavailable axis: the `technical_indicator_unavailable{kind}` counter, then the rendered line. `AnalystInput.telemetry` is required, so this call is never guarded. */
 function recordUnavailable(
   input: AnalystInput,
   telemetry: AnalystTelemetry,
@@ -854,32 +559,19 @@ function capReasonsFor(enrichment: EnrichmentReads): string[] {
 }
 
 function confidenceFor(net: number, availableAxes: number, capReasons: string[]): number {
-  // `availableAxes` is never 0: trend and momentum are core, so both are always
-  // present by the time this runs. Guarded anyway rather than divided blindly —
-  // a NaN confidence would reach a live sizing multiplier
+  // `availableAxes` is never 0 (trend/momentum are core) but guarded anyway — a NaN confidence would reach a live sizing multiplier.
   const raw = availableAxes === 0 ? 0 : Math.abs(net) / availableAxes;
   return round4(capReasons.length > 0 ? Math.min(raw, LOW_CONVICTION_CAP) : raw);
 }
 
 /**
- * Turns the reads into votes, a direction and a confidence — the whole decision
- * rule, as a pure function so the tests can drive it directly instead of
- * through a market-data double.
- *
+ * Turns the reads into votes, a direction and a confidence, as a pure function.
  * `confidence = |net| / availableAxes`. An UNAVAILABLE axis leaves the
- * denominator entirely; it is never counted as a zero vote, because those two
- * are different claims: "participation says nothing" is evidence of balance,
- * "participation is unreadable" is an absence of evidence, and averaging the
- * second into the first silently dilutes every real vote. A cold instrument
- * with only trend and momentum readable and both bullish therefore reports
- * confidence 1.0 on 2 axes, not 0.5 on 4.
- *
- * The shrink has ONE mechanism and this function is all of it: an axis with no
- * readable input never gets a `readings` entry, so it is absent from the
- * numerator and the denominator alike. It deliberately takes no list of
- * unavailable axes — a second input that the arithmetic did not consult would
- * read as the thing enforcing the shrink while enforcing nothing. The caller
- * owns the unavailability lines and the counters; this owns the arithmetic.
+ * denominator entirely rather than counting as a zero vote — "unreadable" and
+ * "reads as balanced" are different claims, and averaging the first into the
+ * second would silently dilute every real vote. Takes no separate list of
+ * unavailable axes: an axis with no readable input simply never gets a
+ * `readings` entry, so numerator and denominator both drop it the same way.
  */
 export function assessAxes(core: CoreReads, enrichment: EnrichmentReads): AxisAssessment {
   const readings: AxisReading[] = [];
@@ -936,65 +628,19 @@ function gateLine(
 }
 
 /**
- * The RVOL `key_points` line (#797) — INFORMATIONAL ONLY, and that is the
- * recorded decision, not an omission.
+ * The RVOL `key_points` line — INFORMATIONAL ONLY, a recorded decision, not an
+ * omission. RVOL feeds NO vote (absent from `TechnicalAxis`/`VOTING_AXES`,
+ * rendered from the view alone, byte-identical `direction`/`net`/`confidence`
+ * with and without it) — adding a vote would be a design change to a
+ * live-money debate path, not a wiring change, and is the owner's call.
  *
- * ## Option 1 of the three #797 put up, and why
- *
- * #797 offered (1) an informational line, (2) a new axis or a second reading
- * on the participation axis, (3) reconciling RVOL with the participation axis.
- * This is **option 1**. RVOL feeds NO vote: it is absent from `TechnicalAxis`,
- * absent from `VOTING_AXES`, and never reaches `assessAxes` — it is rendered
- * from the returned view alone, so `direction`, `net`, `availableAxes` and
- * `confidence` are byte-identical with and without it
- * (`technical-rvol.test.ts` asserts exactly that).
- *
- * Option 2 was NOT taken, and deliberately: #745's rule is ONE VOTE PER AXIS,
- * and that rule is what justified cutting #744's indicator batch from ten
- * kinds to five. Adding a vote — a sixth axis, or a second reading folded into
- * participation — is a design change to a live-money debate path, not a wiring
- * change. It would need the rule reconciled explicitly rather than quietly
- * widened, and that is the owner's call. Same reason `computeSessionVwap`
- * (#746) is informational above.
- *
- * Option 3 is ADOPTED, not overturned — and it is already written down at
- * `upVolumeShare`'s doc comment above ("Reconciled with #747's `computeRvol`,
- * deliberately NOT sharing a definition"). RVOL is unsigned magnitude against
- * a baseline; `upVolumeShare` is a signed directional split of the volume that
- * did participate. Different questions, different inputs (a calendar vs.
- * none). That judgement stands; this call site consumes it rather than
- * re-deciding it, and shares its volume-caveat posture below.
- *
- * ## The volume caveat (#744), enforced rather than merely documented
- *
- * On a 3x leveraged ETP, volume is market-maker and wrapper flow, not informed
- * flow — so RVOL there measures the wrapper, not the tape, which is close to
- * meaningless for what RVOL is supposed to measure. #749 has since landed
- * `screening_instrument` (the liquid US underlying) as a named identity, so
- * the question "is this instrument a wrapper" is now ANSWERABLE here, and
- * `screeningInstrumentFor` answers it.
- *
- * What is NOT possible from this analyst's inputs is FETCHING the underlying's
- * bars, and that limit is structural rather than an oversight:
- * `AssetClassRoutingDataSource#routeFor` throws a bare `Error` for any
- * instrument absent from `assetClassOf`, which `production/defaults.ts` builds
- * from `ProductionConfig.universe` alone — and #749's pool is deliberately not
- * wired into any running profile's universe (that is #751's job, gated on
- * #800). So `market_data.getBars(screening_instrument, ...)` would throw
- * inside a `role: 'mandatory'` analyst and forfeit the whole tick as a
- * `quorum_skip`. THAT is the recorded deviation, and it is recorded HERE, at
- * the call site, per #797's own acceptance criterion.
- *
- * The deviation is bounded and self-announcing rather than silent:
- *
- * - Today's configured universes hold only liquid US instruments (SPY, QQQ,
- *   AAPL, TSLA), for which the traded instrument IS the informed instrument
- *   and no caveat is owed. `screeningInstrumentFor` returns `null` and the
- *   line carries no caveat, because there is nothing to caveat.
- * - The moment #751 wires ETP lines into a universe, `screeningInstrumentFor`
- *   returns a real underlying and this line RENDERS the caveat into the debate
- *   prompt itself, naming the wrapper, the informed instrument, and this
- *   ticket. Nobody has to remember to revisit it; the prompt says so.
+ * Volume on a leveraged ETP is market-maker/wrapper flow, not informed flow.
+ * Fetching the actual informed (screening) instrument's bars is not possible
+ * from this analyst's inputs — routing there would throw inside this
+ * mandatory analyst and forfeit the tick — so today's caveat is dormant
+ * (`screeningInstrumentFor` returns `null` for the current liquid-US
+ * universe) but self-announcing: the moment a wrapped instrument enters the
+ * universe, this line renders the caveat straight into the debate prompt.
  */
 export function rvolLine(
   instrument: string,
@@ -1033,11 +679,7 @@ export const technicalAnalyst: Analyst = {
       lookback: CONTEXT_CANDLE_LOOKBACK,
     };
 
-    // Awaited BEFORE the reads below, on purpose (#742): this is the shared 5m
-    // warm-up fetch. Every 5m spec's own getIndicator call is then served from
-    // the store instead of triggering its own DataSource.fetchBars — and, as of
-    // #745, it is ALSO the window the enrichment pre-checks count against, so
-    // the availability decision and the data are the same read
+    // Awaited before the reads below: the shared 5m warm-up fetch every spec's own getIndicator call is then served from.
     const technicalBars = await input.market_data.getBars(signal.asset, technicalWindow, asOf);
 
     const lastCandle = technicalBars.at(-1);
@@ -1047,8 +689,7 @@ export const technicalAnalyst: Analyst = {
       );
     }
 
-    // CORE. No pre-check, no catch: a short window here forfeits the instrument
-    // for the tick, exactly as it did before #745
+    // CORE. No pre-check, no catch: a short window here forfeits the instrument for the tick.
     const [candles, sma, rsi, atrPct, marketContext] = await Promise.all([
       input.market_data.getBars(signal.asset, contextWindow, asOf),
       input.market_data.getIndicator(signal.asset, SMA_SPEC, asOf),
@@ -1084,8 +725,7 @@ export const technicalAnalyst: Analyst = {
       return undefined;
     };
 
-    // Order matters only for the rendered line order, which follows the axis
-    // order the summary reports
+    // Order matters only for the rendered line order, which follows the axis order the summary reports.
     const macd = readValue(macdRead, 'momentum', 'macd_histogram');
     const participationBars = technicalBars.slice(-PARTICIPATION_LOOKBACK);
     let participation: number | null | undefined;
@@ -1112,25 +752,8 @@ export const technicalAnalyst: Analyst = {
       { macd, adx, squeeze, donchian, participation },
     );
 
-    // #746 — session-anchored VWAP, informational only: no vote, no cap, no
-    // change to `assessAxes`'s arithmetic. Reuses `technicalBars` (the same
-    // shared 5m warm-up window every core/enrichment read above is served
-    // from) rather than issuing its own fetch. `input.calendar` is resolved
-    // by the orchestrator per `signal.asset_class`
-    // (`AnalystOrchestratorDeps.sessionCalendars`); not caught here, on
-    // purpose — a calendar that cannot answer at all (`TradingCalendar`'s
-    // documented throw) is exactly as fatal to this mandatory analyst as a
-    // misordered bar feed, and containment is the same tick-loop backstop
-    // `computeIndicator`'s own doc comment traces
-    //
-    // Computed on `signal.asset` — the traded instrument, which on the live
-    // equity leg is the leveraged ETP, not its liquid US underlying. #744's
-    // volume caveat applies here exactly as it would to a registry indicator
-    // kind: this instrument's volume is market-maker/wrapper flow, not
-    // informed flow. Routing this at the underlying instead would need a
-    // screening/underlying-instrument identity this codebase does not have —
-    // see `session-features.ts`'s doc comment for why that gap is recorded
-    // rather than papered over
+    // Session-anchored VWAP, informational only: no vote, no cap, no change to `assessAxes`'s arithmetic.
+    // Reuses `technicalBars` rather than issuing its own fetch; a calendar that cannot answer is as fatal as a misordered bar feed.
     const session = computeSessionVwap(technicalBars, input.calendar, asOf);
     const sessionLine =
       session.vwap === null
@@ -1138,16 +761,8 @@ export const technicalAnalyst: Analyst = {
         : `Session VWAP (${INDICATOR_TIMEFRAME}): ${session.vwap} — price ${lastCandle.close} is ` +
           `${(session.distance_from_vwap as number) >= 0 ? '+' : ''}${session.distance_from_vwap} from it`;
 
-    // #797 — RVOL, informational only: no vote, no cap, no change to
-    // `assessAxes`'s arithmetic. See `rvolLine`'s doc comment for the recorded
-    // decision (option 1 of three), the one-vote-per-axis reasoning, and the
-    // recorded volume-caveat deviation
-    //
-    // A SEPARATE, WIDER window than `technicalBars` — see `RVOL_5M_LOOKBACK`
-    // for why 260 bars cannot serve it and for the per-tick fetch cost. Awaited
-    // on its own rather than joined into either `Promise.all` above: both of
-    // those already read this instrument+timeframe, and two concurrent source
-    // fetches for one (instrument, timeframe) race on the store write
+    // RVOL, informational only — see `rvolLine`'s doc comment. A SEPARATE, WIDER window than `technicalBars` (see `RVOL_5M_LOOKBACK`),
+    // awaited on its own since a concurrent fetch for the same instrument+timeframe would race on the store write.
     const rvolBars = await input.market_data.getBars(
       signal.asset,
       { timeframe: INDICATOR_TIMEFRAME, lookback: RVOL_5M_LOOKBACK },
@@ -1156,12 +771,7 @@ export const technicalAnalyst: Analyst = {
     const rvol = computeRvol(rvolBars, input.calendar, asOf);
     const rvolText = rvolLine(signal.asset, rvol, screeningInstrumentFor(signal.asset));
 
-    // No fallback numeric here on purpose: an empty context read has no
-    // volume to average, and reporting "avg volume 0" would be a fabricated
-    // claim about the tape, not an approximation (the same fabrication class
-    // #319 made computeIndicator throw on rather than silently answer)
-    // `direction`/`confidence` never depend on this string, so an absent 1h
-    // context degrades the prose only, never the decision
+    // No fallback numeric on purpose: reporting "avg volume 0" for an empty read would be a fabricated claim, not an approximation.
     const contextLine =
       candles.length === 0
         ? `Context (${CONTEXT_TIMEFRAME}): unavailable`
