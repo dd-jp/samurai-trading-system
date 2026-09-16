@@ -1,17 +1,4 @@
-/**
- * Orchestrator domain types & seams — see docs/specs/orchestrator-spec.md
- * (Module: Scheduler, Module: Tick Runner), epic #60.
- *
- * Ticket #94 shipped the core wiring (TickSteps, TickRunner, TickStage).
- * Ticket #88 (backtest harness) needs the seam to drive replay; the harness
- * calls the Orchestrator's tick loop with a different injected clock
- * (cost-model-backtest-spec.md's "same code path" guarantee).
- *
- * Ticket #95 wires `Logger` / `AuditLog` through `TickContext` (both
- * required — every stage call in a pass must log and audit-record). Ticket
- * #96 adds `CurrentTickStore` to `TickContext` (the disposable per-instrument
- * progress row) and the dead-man's-switch heartbeat (heartbeat.ts).
- */
+/** Orchestrator domain types & seams. */
 import type { Signal } from '../../pipeline/analysts/index.js';
 import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/index.js';
 import type { ExecutionResult } from '../../pipeline/execution/index.js';
@@ -27,34 +14,18 @@ export interface UniverseInstrument {
   asset: string;
   asset_class: AssetClass;
   /**
-   * ADR-0018's pricing dimension, sourced from the LSE-ETP pool file.
-   *
-   * Optional because the universe predates it: the smoke universe, the
-   * backtest fixtures and every existing profile name instruments without
-   * one, and a required field would break them all to express something they
-   * do not use.
-   *
-   * The one thing that reads this field today is `d5EnvelopeFor`
-   * (paper-profile.ts), which SKIPS unclassified rows when building
-   * `SubclassDeploymentCap.subclass_of` — deliberately, so a partly-populated
-   * pool file still arms the gate. The refusal then happens where the money
-   * actually moves: `perSubclassDeploymentCap` throws for an intent whose own
-   * instrument has no subclass, rather than sizing it with no envelope. Read
-   * the gate, not this field, for what a missing subclass costs.
+   * ADR-0018's pricing dimension. Optional because most existing profiles
+   * predate it; `perSubclassDeploymentCap` throws for an intent whose own
+   * instrument is unclassified rather than sizing it with no envelope.
    */
   subclass?: InstrumentSubclass;
 }
 
 /**
- * Instrument -> subclass, from the universe — the ONE derivation of the
- * classification (#739), moved here from `paper-profile.ts` in #752 so
- * `production.ts` can read it too without creating a `production.ts` <->
- * `paper-profile.ts` import cycle (`paper-profile.ts` already imports types
- * FROM `production.ts`). `paper-profile.ts` re-exports this rather than
- * redefining it, so the Risk Manager's D5 gate, the Trader's frozen bracket,
- * and #752's per-subclass coverage counter all read the SAME map — three
- * independently built maps would be three places for an instrument to be
- * classified differently.
+ * The ONE derivation of instrument -> subclass; lives here (not
+ * `paper-profile.ts`) to avoid a `production.ts` <-> `paper-profile.ts`
+ * import cycle. Callers must share this map, not rebuild their own — three
+ * independently built maps is three places to classify an instrument differently.
  */
 export function subclassOfUniverse(
   universe: readonly UniverseInstrument[],
@@ -72,19 +43,9 @@ export interface TickPlan {
   /** = clock.now() */
   tick_time: Date;
   /**
-   * True when this tick was admitted ONLY because `postCloseFlattenWindow`
-   * said so — `isOpen`/`stocksTradingWindow` said shut (#1499). Keyed on the
-   * ADMISSION, not on `instruments.length`: a grace-admitted tick over an
-   * EMPTY configured universe still carries `grace_only: true`, with
-   * `instruments: []`. Absent (never `false`) on every other plan — a window
-   * tick (`isOpen` true) and a fully-closed tick (neither predicate true)
-   * both omit it, per this file's `exactOptionalPropertyTypes` convention.
-   *
-   * Consumed by `runTickPlan`, which must not ask the decision gate to claim
-   * a bar for a grace-only plan: the US close sits on the 1h debate-bar grid,
-   * so an unconditional claim would open a fresh decision bar and run a full
-   * Analysts + Debate pass after the venue is already shut, for a pass whose
-   * only possible outcome is the Trader's `skip('session_closing')`.
+   * True only when admitted via `postCloseFlattenWindow` (venue otherwise
+   * shut). `runTickPlan` must not claim a decision bar for such a tick — the
+   * only possible outcome past close is `skip('session_closing')`.
    */
   grace_only?: boolean;
 }
@@ -94,18 +55,10 @@ export interface Scheduler {
   nextTick(clock: Clock): TickPlan;
 }
 
-/**
- * Shared structured-logging interface; trace_id threads every line (#95).
- * Canonical shape lives in `shared/types.ts` (code-review 2026-08-01, M6);
- * re-exported here so orchestrator-internal imports keep working.
- */
 import type { LogEntry, Logger } from '../../shared/index.js';
 
-// `LogEntry` travels with `Logger`, not separately: it is the argument type of
-// `Logger.log`, so anything building a fake logger against this module needs
-// both. Five call sites were already importing it from here on that
-// assumption and silently getting nothing, because until `tsconfig.test.json`
-// existed no compiler read them
+// `LogEntry` re-exported alongside `Logger`: it is the argument type of
+// `Logger.log`, so a fake logger built against this module needs both.
 export type { LogEntry, Logger };
 
 /** shared_store.audit_log writer (#95) */
@@ -117,30 +70,17 @@ export interface AuditLog {
     input_digest: string;
     output_digest: string;
     timestamp: Date;
-    /**
-     * Which instrument this trace belonged to (migration 0013). Optional
-     * because the retired HITL callback path recorded under an existing
-     * `trace_id` with no `Signal` in scope; absent means "not attributable",
-     * never "no instrument".
-     */
+    /** Absent means "not attributable", never "no instrument". */
     instrument?: string;
     asset_class?: AssetClass;
   }): void;
 }
 
 /**
- * The stage a pass reached before terminating (successfully or by
- * short-circuit).
- *
- * `'position_check'` (#743) is the tick path's own stage: the mark/flatten
- * evaluation that runs on EVERY tick, ahead of — and on most ticks instead
- * of — the decision chain. Bracket exits rest at the venue and are never
- * evaluated here. It is the terminal stage of the
- * most common pass in the system (roughly 29 of every 30 at a 2-minute tick
- * against a 60-minute debate bar), and it must be distinguishable from a
- * decision pass that declined to trade, or a healthy exit-only tick reads as a
- * no-trade decision and the trade count looks wrong
- * (orchestrator-spec.md, "The tick/decision split").
+ * The stage a pass reached before terminating. `'position_check'` is the
+ * tick path's own stage (the exit check that runs on most ticks instead of
+ * the decision chain) — kept distinguishable from a decision pass that
+ * declined to trade, or a healthy exit-only tick reads as a no-trade one.
  */
 export type TickStage =
   | 'position_check'
