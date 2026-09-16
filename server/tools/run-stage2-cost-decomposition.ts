@@ -322,9 +322,7 @@ async function sweepCostSensitivity(
   return sensitivity;
 }
 
-async function runCostDecomposition(
-  deps: CostDecompositionDeps,
-): Promise<CostDecompositionResult> {
+async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDecompositionResult> {
   const print = deps.print ?? console.log;
   const requested = deps.window ?? PINNED_VERDICT_WINDOW;
   const costConfig = deps.costConfig ?? PESSIMISTIC_COST_CONFIG;

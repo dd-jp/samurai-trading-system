@@ -391,9 +391,7 @@ function printFittedCoefficients(
   print(`  crypto: ${fitted.crypto.toFixed(4)}   (fixture: 0.5)`);
 }
 
-async function runSpreadCalibration(
-  deps: SpreadCalibrationDeps = {},
-): Promise<SpreadCalibration> {
+async function runSpreadCalibration(deps: SpreadCalibrationDeps = {}): Promise<SpreadCalibration> {
   const print = deps.print ?? console.log;
   const window = deps.window ?? CALIBRATION_WINDOW;
   const keyId = process.env.ALPACA_API_KEY;
