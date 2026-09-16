@@ -227,19 +227,15 @@ function validateAlpacaOrderLeg(raw: unknown, context: string, body: unknown): v
  * `validateAlpacaOrder` under the cyclomatic-complexity gate; same
  * fail-fast-via-`failValidation` behavior as before, same order.
  */
-function validateAlpacaOrderCoreFields(body: Record<string, unknown>, context: string): void {
-  const {
-    id,
-    client_order_id,
-    symbol,
-    side,
-    qty,
-    order_class,
-    status,
-    filled_qty,
-    filled_avg_price,
-    filled_at,
-  } = body;
+/**
+ * The first half of `validateAlpacaOrderCoreFields`'s fields — `id` through
+ * `order_class`. Split from the fill-triad half below purely to keep this
+ * function itself under the cyclomatic-complexity gate; each check is
+ * independent and fail-fast via `failValidation`, so splitting the sequence
+ * anywhere preserves the same order the combined function ran them in.
+ */
+function validateAlpacaOrderIdentityFields(body: Record<string, unknown>, context: string): void {
+  const { id, client_order_id, symbol, side, qty, order_class } = body;
   if (typeof id !== 'string') failValidation(context, 'id must be a string', body);
   // Declared but unread-off-a-response (see doc comment): checked only when
   // present, never required
@@ -258,6 +254,11 @@ function validateAlpacaOrderCoreFields(body: Record<string, unknown>, context: s
   if (order_class !== undefined && typeof order_class !== 'string') {
     failValidation(context, 'order_class must be a string', body);
   }
+}
+
+function validateAlpacaOrderCoreFields(body: Record<string, unknown>, context: string): void {
+  validateAlpacaOrderIdentityFields(body, context);
+  const { status, filled_qty, filled_avg_price, filled_at } = body;
   if (typeof status !== 'string') failValidation(context, 'status must be a string', body);
   if (!isFiniteNumericString(filled_qty)) {
     failValidation(context, 'filled_qty must be a numeric string', body);
