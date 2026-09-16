@@ -250,6 +250,7 @@ export class RiskManagerImpl implements RiskManager {
    * and the critic review. The ordering IS the spec's step numbering — each
    * gate's own doc says what it caps.
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: ordered gate pipeline — the sequence of early returns IS the spec's step numbering (see doc above), each one placed deliberately relative to the others; extracting risks silently reordering a gate
   evaluate(input: RiskInput): RiskDecision {
     const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
 
