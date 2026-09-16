@@ -276,32 +276,7 @@ export function buildAnalystsStep(
 
     const result = await orchestrator.runAnalysts(trace_id, signal, clock, bar);
 
-    if (logger !== undefined && result.failures.length > 0) {
-      const mandatoryFailed = result.failures.some((failure) => failure.role === 'mandatory');
-      // Sanitized once, used for both the message and the payload — the raw
-      // `result.failures` array is never logged wholesale
-      const safe = result.failures.map((failure: AnalystFailure) => ({
-        analyst_type: failure.analyst_type,
-        role: failure.role,
-        reason: sanitizeLogText(failure.reason),
-        kind: failure.kind,
-      }));
-      const detail = safe
-        .map((failure) => `${failure.analyst_type} (${failure.role}): ${failure.reason}`)
-        .join('; ');
-      logger.log({
-        trace_id,
-        stage: 'analysts',
-        event: 'analyst_panel_degraded',
-        level: mandatoryFailed ? 'error' : 'warn',
-        message: mandatoryFailed
-          ? `analysts: ${signal.asset} quorum NOT met — mandatory analyst failed, no trade is ` +
-            `possible this tick: ${detail}`
-          : `analysts: ${signal.asset} optional analyst failed, tick continues on a smaller ` +
-            `panel: ${detail}`,
-        payload: { instrument: signal.asset, failures: safe },
-      });
-    }
+    logAnalystFailures(logger, trace_id, signal.asset, result.failures);
 
     // #431. The tick boundary is here, not inside `runAnalysts`, which knows
     // nothing about consecutive ticks — `result.skipped` is this tick's answer
@@ -314,31 +289,93 @@ export function buildAnalystsStep(
       options.skipKinds?.set(trace_id, skipKind);
     }
 
-    if (result.skipped) {
-      const count = (consecutiveSkips.get(signal.asset) ?? 0) + 1;
-      consecutiveSkips.set(signal.asset, count);
-      if (shouldAlertAt(count)) {
-        await postSkipAlert(options.skipAlerts, logger, trace_id, {
-          instrument: signal.asset,
-          consecutive_skips: count,
-          failures: result.failures.map((failure) => ({
-            analyst_type: failure.analyst_type,
-            role: failure.role,
-            reason: sanitizeLogText(failure.reason),
-            kind: failure.kind,
-          })),
-          reported_at: clock.now(),
-        });
-      }
-    } else {
-      // A single good tick clears the run: the alert is about CONSECUTIVE
-      // skips, so an intermittent failure must not accumulate its way to an
-      // alert over a week of otherwise healthy ticks
-      consecutiveSkips.delete(signal.asset);
-    }
+    await recordSkipOutcome(
+      consecutiveSkips,
+      options,
+      logger,
+      trace_id,
+      signal.asset,
+      result,
+      clock,
+    );
 
     return result.views;
   };
+}
+
+// Split out of `buildAnalystsStep`'s returned closure purely to keep its
+// cognitive complexity down — a pure logging side effect over `result`, with
+// no ordering dependency on anything else in the tick
+function logAnalystFailures(
+  logger: Logger | undefined,
+  trace_id: string,
+  instrument: string,
+  failures: readonly AnalystFailure[],
+): void {
+  if (logger === undefined || failures.length === 0) return;
+
+  const mandatoryFailed = failures.some((failure) => failure.role === 'mandatory');
+  // Sanitized once, used for both the message and the payload — the raw
+  // `failures` array is never logged wholesale
+  const safe = failures.map((failure) => ({
+    analyst_type: failure.analyst_type,
+    role: failure.role,
+    reason: sanitizeLogText(failure.reason),
+    kind: failure.kind,
+  }));
+  const detail = safe
+    .map((failure) => `${failure.analyst_type} (${failure.role}): ${failure.reason}`)
+    .join('; ');
+  logger.log({
+    trace_id,
+    stage: 'analysts',
+    event: 'analyst_panel_degraded',
+    level: mandatoryFailed ? 'error' : 'warn',
+    message: mandatoryFailed
+      ? `analysts: ${instrument} quorum NOT met — mandatory analyst failed, no trade is ` +
+        `possible this tick: ${detail}`
+      : `analysts: ${instrument} optional analyst failed, tick continues on a smaller ` +
+        `panel: ${detail}`,
+    payload: { instrument, failures: safe },
+  });
+}
+
+// Split out of `buildAnalystsStep`'s returned closure purely to keep its
+// cognitive complexity down. Must run AFTER the skipKind set above (see that
+// call site's #1080 comment) — the caller preserves that by calling this
+// immediately after, not by anything internal to this function
+async function recordSkipOutcome(
+  consecutiveSkips: Map<string, number>,
+  options: AnalystsStepOptions,
+  logger: Logger | undefined,
+  trace_id: string,
+  instrument: string,
+  result: { skipped: boolean; failures: readonly AnalystFailure[] },
+  clock: { now(): Date },
+): Promise<void> {
+  if (!result.skipped) {
+    // A single good tick clears the run: the alert is about CONSECUTIVE
+    // skips, so an intermittent failure must not accumulate its way to an
+    // alert over a week of otherwise healthy ticks
+    consecutiveSkips.delete(instrument);
+    return;
+  }
+
+  const count = (consecutiveSkips.get(instrument) ?? 0) + 1;
+  consecutiveSkips.set(instrument, count);
+  if (!shouldAlertAt(count)) return;
+
+  await postSkipAlert(options.skipAlerts, logger, trace_id, {
+    instrument,
+    consecutive_skips: count,
+    failures: result.failures.map((failure) => ({
+      analyst_type: failure.analyst_type,
+      role: failure.role,
+      reason: sanitizeLogText(failure.reason),
+      kind: failure.kind,
+    })),
+    reported_at: clock.now(),
+  });
 }
 
 const SKIP_CADENCE = { after: ALERT_AFTER_CONSECUTIVE_SKIPS, every: ALERT_REPEAT_EVERY_SKIPS };

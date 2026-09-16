@@ -557,6 +557,59 @@ function buildSaxoSessionWiring(deps: {
   return { saxoTokenSource, saxoWeeklyReminder, saxoClient };
 }
 
+async function buildSaxoBrokerIfNeeded(deps: {
+  injected: Partial<ProductionConfig>;
+  venue: BrokerVenue;
+  mode: ProductionConfig['mode'];
+  db: StoreHandle;
+  logger: Logger;
+  clock: ProductionConfig['clock'];
+  alertChannels: ReturnType<typeof buildAlertChannels>;
+  accountFunding: ProductionConfig['accountFunding'];
+  saxoWireClient: Parameters<typeof buildSaxoBroker>[0]['client'];
+}): Promise<ProductionConfig['broker']> {
+  const {
+    injected,
+    venue,
+    mode,
+    db,
+    logger,
+    clock,
+    alertChannels,
+    accountFunding,
+    saxoWireClient,
+  } = deps;
+  if (venue !== 'saxo' || injected.broker !== undefined) return undefined;
+
+  return buildSaxoBroker({
+    mode,
+    universe: injected.universe ?? [],
+    accountState: injected.accountState,
+    ...(accountFunding === undefined ? {} : { accountFunding }),
+    db,
+    logger,
+    clock,
+    // The alert channels the adapter REQUIRES and has no default for
+    // Resolved the same way the composition root resolves its own:
+    // caller first, then `SAMURAI_ALERTS`' transport, then the log-only
+    // stand-in — so a `telegram` run pages a phone and a `log-only` one
+    // is explicitly attended, never silent by omission
+    legResizeAlerts:
+      injected.legResizeAlerts ??
+      alertChannels.legResizeAlerts ??
+      loggingAlertChannel('legResizeAlerts', logger),
+    dormantLegsAlerts:
+      injected.dormantLegsAlerts ??
+      alertChannels.dormantLegsAlerts ??
+      loggingAlertChannel('dormantLegsAlerts', logger),
+    priceUnitAlerts:
+      injected.priceUnitAlerts ??
+      alertChannels.priceUnitAlerts ??
+      loggingAlertChannel('priceUnitAlerts', logger),
+    ...(saxoWireClient === undefined ? {} : { client: saxoWireClient }),
+  });
+}
+
 async function buildSaxoBrokerWiring(deps: {
   injected: Partial<ProductionConfig>;
   venue: BrokerVenue;
@@ -582,33 +635,17 @@ async function buildSaxoBrokerWiring(deps: {
   const accountFunding = injected.accountFunding ?? saxoAccountFunding;
   const saxoWireClient = injected.saxoBrokerClient ?? saxoClient;
 
-  const saxoBroker =
-    venue === 'saxo' && injected.broker === undefined
-      ? await buildSaxoBroker({
-          mode,
-          universe: injected.universe ?? [],
-          accountState: injected.accountState,
-          ...(accountFunding === undefined ? {} : { accountFunding }),
-          db,
-          logger,
-          clock,
-          // Alert channels the adapter requires with no default: caller
-          // first, then `SAMURAI_ALERTS`' transport, then the log-only stand-in
-          legResizeAlerts:
-            injected.legResizeAlerts ??
-            alertChannels.legResizeAlerts ??
-            loggingAlertChannel('legResizeAlerts', logger),
-          dormantLegsAlerts:
-            injected.dormantLegsAlerts ??
-            alertChannels.dormantLegsAlerts ??
-            loggingAlertChannel('dormantLegsAlerts', logger),
-          priceUnitAlerts:
-            injected.priceUnitAlerts ??
-            alertChannels.priceUnitAlerts ??
-            loggingAlertChannel('priceUnitAlerts', logger),
-          ...(saxoWireClient === undefined ? {} : { client: saxoWireClient }),
-        })
-      : undefined;
+  const saxoBroker = await buildSaxoBrokerIfNeeded({
+    injected,
+    venue,
+    mode,
+    db,
+    logger,
+    clock,
+    alertChannels,
+    accountFunding,
+    saxoWireClient,
+  });
 
   // #1400 round 1: the venue picks the CALENDAR too. Left unset, a Saxo run
   // would gate entries on New York and carry ~4.5h overnight past a 16:30
@@ -687,6 +724,59 @@ async function verifyFundingCurrency(
   });
   assertSameCurrencyFunding(sameCurrency);
   return sameCurrency;
+}
+
+/**
+ * Merges the resolved startup values into the `ProductionConfig` the
+ * composition root builds from — precedence order matches the spread order
+ * `startFromEnvironment` used inline before this was pulled out: `injected`
+ * overrides the resolved alert channels, and the resolved Saxo/currency/risk
+ * fields only apply when the caller did not already supply their own
+ */
+function resolveProductionConfig(deps: {
+  injected: Partial<ProductionConfig>;
+  alertChannels: ReturnType<typeof buildAlertChannels> | Record<string, never>;
+  accountFunding: ProductionConfig['accountFunding'];
+  sameCurrency: SameCurrencyVerdict | undefined;
+  declaredRiskConfig: ProductionConfig['riskConfig'] | undefined;
+  saxoBroker: ProductionConfig['broker'];
+  saxoCalendar: ProductionConfig['tradingCalendar'];
+  logger: Logger;
+  db: StoreHandle;
+  miArchive: MiArchiveStore;
+  clock: ProductionConfig['clock'];
+  mode: ProductionConfig['mode'];
+}): ProductionConfig {
+  const {
+    injected,
+    alertChannels,
+    accountFunding,
+    sameCurrency,
+    declaredRiskConfig,
+    saxoBroker,
+    saxoCalendar,
+    logger,
+    db,
+    miArchive,
+    clock,
+    mode,
+  } = deps;
+
+  return {
+    ...alertChannels,
+    ...(injected as ProductionConfig),
+    ...(accountFunding === undefined ? {} : { accountFunding }),
+    ...(sameCurrency === undefined || declaredRiskConfig === undefined
+      ? {}
+      : { riskConfig: armSameCurrencyCeilings(declaredRiskConfig, sameCurrency) }),
+    ...(saxoBroker === undefined ? {} : { broker: saxoBroker }),
+    ...(saxoCalendar === undefined ? {} : { tradingCalendar: saxoCalendar }),
+    logger,
+    db,
+    miArchive,
+    clock,
+    mode,
+  };
 }
 
 /**
@@ -778,21 +868,22 @@ export async function startFromEnvironment(
   const declaredRiskConfig = injected.riskConfig;
   const sameCurrency = await verifyFundingCurrency(venue, accountFunding, logger);
 
-  const orchestrator = buildProductionOrchestrator({
-    ...alertChannels,
-    ...(injected as ProductionConfig),
-    ...(accountFunding === undefined ? {} : { accountFunding }),
-    ...(sameCurrency === undefined || declaredRiskConfig === undefined
-      ? {}
-      : { riskConfig: armSameCurrencyCeilings(declaredRiskConfig, sameCurrency) }),
-    ...(saxoBroker === undefined ? {} : { broker: saxoBroker }),
-    ...(saxoCalendar === undefined ? {} : { tradingCalendar: saxoCalendar }),
-    logger,
-    db,
-    miArchive,
-    clock,
-    mode,
-  });
+  const orchestrator = buildProductionOrchestrator(
+    resolveProductionConfig({
+      injected,
+      alertChannels,
+      accountFunding,
+      sameCurrency,
+      declaredRiskConfig,
+      saxoBroker,
+      saxoCalendar,
+      logger,
+      db,
+      miArchive,
+      clock,
+      mode,
+    }),
+  );
 
   const started =
     saxoTokenSource === undefined

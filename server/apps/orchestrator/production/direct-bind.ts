@@ -241,6 +241,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
   // for why "differs from the last written reason" alone can't bound volume
   const exitSkipThrottle = new ExitSkipWriteThrottle();
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: statement order is individually documented as load-bearing — the equity read is captured eagerly and its failure deferred (#847, not laziness), the trader_log write happens for a null intent too (#328) and BEFORE the diagnostics escalation (the durable record must land before the audible copy), and exitSkipThrottle.clearEpisode must run on this path too, not only exitCheck's (#1128 round 3) — extraction risks silently reordering one of these
   const trader: TickSteps['trader'] = async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is the same portfolio OBSERVATION Risk gates
     // against this tick — memoized per trace so the two stages can't see two
@@ -372,66 +373,16 @@ export function buildTraderSteps(deps: TraderStepDeps): {
           ),
       });
 
-    // A fired flatten IS a decision and is recorded like one — an exit is never volume noise
-    if (intent !== null) {
-      deps.traderLog?.write({
-        trace_id,
-        instrument,
-        debate_id: intent.metadata.debate_id,
-        intent_type: intent.intent_type,
-        exit_reason: intent.metadata.exit_reason ?? null,
-        skip_reason: null,
-        decision_class: null,
-        reason_detail: null,
-        sizing: intent.metadata.sizing,
-        cosine_precedent: intent.metadata.cosine_precedent,
-        atr: null,
-        entry: intent.entry,
-        stop: intent.stop,
-        size: intent.size,
-        created_at: clock.now(),
-      });
-      // #1128: cleared here rather than on the next observation, since a
-      // position can close and reopen in one tick gap with no exit-check
-      // ever observing it flat in between
-      exitSkipThrottle.clearEpisode(instrument);
-    } else if (skip_reason === 'no_open_position') {
-      // #1128: no lot open means no debate to attribute a row to
-      // (`trader_log.debate_id` is NOT NULL), but it's still an episode
-      // boundary, same as a fired exit above
-      exitSkipThrottle.clearEpisode(instrument);
-    } else if (skip_reason !== null) {
-      // #1128: change-only for most reasons — #743 measured ~30 exit-check
-      // calls per bar per instrument, and a row per call would bury the
-      // decision records under a flat/held instrument repeating its answer
-      let wrote = false;
-      if (exitSkipThrottle.shouldWrite(instrument, skip_reason)) {
-        // Every other exit-path skip fires with at least one lot open (see
-        // `no_open_position` above for the one exception)
-        const debate_id = mostRecentDebateId(positions, instrument);
-        if (debate_id !== null) {
-          deps.traderLog?.write({
-            trace_id,
-            instrument,
-            debate_id,
-            intent_type: null,
-            exit_reason: null,
-            skip_reason,
-            decision_class,
-            reason_detail,
-            sizing: null,
-            cosine_precedent: null,
-            atr,
-            entry: null,
-            stop: null,
-            size: null,
-            created_at: clock.now(),
-          });
-          wrote = true;
-        }
-      }
-      exitSkipThrottle.record(instrument, skip_reason, wrote);
-    }
+    recordExitCheckOutcome(deps, exitSkipThrottle, positions, {
+      trace_id,
+      instrument,
+      clock,
+      intent,
+      skip_reason,
+      decision_class,
+      reason_detail,
+      atr,
+    });
 
     escalateTraderDiagnostics(
       deps,
@@ -447,11 +398,120 @@ export function buildTraderSteps(deps: TraderStepDeps): {
 }
 
 /**
- * The #698/#710 diagnostic reporting, shared by both Trader step bindings.
- * Every diagnostic feeds the throttle (even non-alerting ones, since
- * `observe` is what clears a run), but the log writes on EVERY observation
- * while the alert is throttled separately (#710) — they used to be one call,
- * and the log inherited the alert's throttle and went quiet for 7 ticks in 8.
+ * Split out of `exitCheck` purely to keep its cognitive complexity down. The
+ * three branches are mutually exclusive outcomes of one `checkExitsWithReason`
+ * call, not an ordered sequence — each one clears/records the throttle for
+ * its own case independently of the others; see the inline comments for why
+ * each branch's own bookkeeping is shaped the way it is.
+ */
+function recordExitCheckOutcome(
+  deps: TraderStepDeps,
+  exitSkipThrottle: ExitSkipWriteThrottle,
+  positions: readonly OpenPosition[],
+  tick: {
+    trace_id: string;
+    instrument: string;
+    clock: Clock;
+    intent: Awaited<ReturnType<typeof checkExitsWithReason>>['intent'];
+    skip_reason: Awaited<ReturnType<typeof checkExitsWithReason>>['skip_reason'];
+    decision_class: Awaited<ReturnType<typeof checkExitsWithReason>>['decision_class'];
+    reason_detail: Awaited<ReturnType<typeof checkExitsWithReason>>['reason_detail'];
+    atr: Awaited<ReturnType<typeof checkExitsWithReason>>['atr'];
+  },
+): void {
+  const { trace_id, instrument, clock, intent, skip_reason, decision_class, reason_detail, atr } =
+    tick;
+
+  // A fired flatten IS a decision and is recorded like one, attributed to
+  // the debate that opened the lot, on every occurrence — an exit is never
+  // volume noise
+  if (intent !== null) {
+    deps.traderLog?.write({
+      trace_id,
+      instrument,
+      debate_id: intent.metadata.debate_id,
+      intent_type: intent.intent_type,
+      exit_reason: intent.metadata.exit_reason ?? null,
+      skip_reason: null,
+      decision_class: null,
+      reason_detail: null,
+      sizing: intent.metadata.sizing,
+      cosine_precedent: intent.metadata.cosine_precedent,
+      atr: null,
+      entry: intent.entry,
+      stop: intent.stop,
+      size: intent.size,
+      created_at: clock.now(),
+    });
+    // #1128 (review round 1): the exit just fired, so this instrument's
+    // skip-episode is over. Cleared HERE rather than left for the next
+    // `no_open_position` observation, because a position can close and
+    // reopen inside one tick gap with no exit-check ever observing the
+    // instrument flat in between
+    exitSkipThrottle.clearEpisode(instrument);
+  } else if (skip_reason === 'no_open_position') {
+    // #1128: no lot is open, so there is no lot — and no debate — to
+    // attribute a row to, and `trader_log.debate_id` is `NOT NULL`
+    // (migration 0016). This never writes, but it IS an episode boundary
+    // exactly like a fired exit above: a position that goes flat by
+    // reconciliation rather than through this exitCheck's own intent still
+    // clears here, so a lot reopened with the same first skip reason as
+    // before is a new episode, not a suppressed repeat
+    exitSkipThrottle.clearEpisode(instrument);
+  } else if (skip_reason !== null) {
+    // #1128: `classifyExitCheckSkip`'s `decision_class` used to be computed
+    // and thrown away here. Durable now, but CHANGE-ONLY for most reasons —
+    // #743 measured ~30 exit-check calls per bar per instrument (2-minute
+    // tick, 1h bar; tick-runner.ts's own count is "~29 of 30 passes" idle),
+    // and a row per call would bury the decision records the table exists
+    // to hold under a flat/held instrument repeating its last tick's
+    // answer
+    let wrote = false;
+    if (exitSkipThrottle.shouldWrite(instrument, skip_reason)) {
+      // Every other exit-path skip fires with at least one lot open, so its
+      // debate_id is always derivable here (see `no_open_position` above
+      // for the one reason that is not)
+      const debate_id = mostRecentDebateId(positions, instrument);
+      if (debate_id !== null) {
+        deps.traderLog?.write({
+          trace_id,
+          instrument,
+          debate_id,
+          intent_type: null,
+          exit_reason: null,
+          skip_reason,
+          decision_class,
+          reason_detail,
+          sizing: null,
+          cosine_precedent: null,
+          atr,
+          entry: null,
+          stop: null,
+          size: null,
+          created_at: clock.now(),
+        });
+        wrote = true;
+      }
+    }
+    exitSkipThrottle.record(instrument, skip_reason, wrote);
+  }
+}
+
+/**
+ * The #698/#710 diagnostic reporting, shared verbatim by both Trader step
+ * bindings (#743).
+ *
+ * Every diagnostic is fed to the throttle, not only the ones that alert:
+ * `observe` is what CLEARS a run, so skipping the call on a healthy tick
+ * would leave a recovered condition counting from where it left off.
+ *
+ * The two halves are throttled differently (#710). The LOG is written for
+ * every observation, because it is the durable record and a condition
+ * present on every tick must appear on every tick; the ALERT is throttled,
+ * because it lands in the chat that also carries kill-threshold breaches
+ * (ADR-0008 §1). These were one call until the #710 review, which meant the
+ * log inherited the alert's throttle and went quiet for seven ticks in
+ * eight while this file's own docblock promised it never did.
  */
 function escalateTraderDiagnostics(
   deps: TraderStepDeps,
@@ -967,11 +1027,18 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       return verdict === undefined ? dryRun : evaluateWith(verdict);
     }
 
-    // #726: `perSubclassDeploymentCap` throws rather than returning a
-    // decision (deliberately, per its own doc comment), which skips the
-    // `riskLog.write` below. This writes that row from the catch, naming the
-    // unresolved subclass, then re-throws unchanged so #507's catch still
-    // sees it
+    // #726: `perSubclassDeploymentCap` (risk-manager/index.ts) is the only
+    // entry gate that throws rather than returning a decision — deliberately,
+    // per that gate's own doc comment, so a half-populated pool file cannot
+    // look like a quiet market with no setups. But a throw skips the
+    // `riskLog.write` below entirely, so the refused instrument left NO
+    // `risk_log` row at all, only the durable-but-separate `audit_log` row
+    // and log line #507's catch in `tick-loop.ts` produces one level up
+    // This is the fix: write the row HERE, from the catch, naming the
+    // unresolved subclass when the error is the one this gate throws — then
+    // RE-THROW UNCHANGED. The throw itself must still reach #507's catch;
+    // this only adds a durable record beside it, it does not replace it
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: guarded the same way #507's own side effects are guarded (tick-loop.ts) — the riskLog write is wrapped so a write failure cannot replace the original error before it reaches #507's catch (the outer `throw error;` must always run), and clampAlertSent is a one-shot latch that must not double-post — extraction risks separating either guard from the write/throw it protects
     function recordRiskEvaluationError(error: unknown): void {
       const binding_constraint =
         error instanceof PerSubclassCapUnresolvableError
