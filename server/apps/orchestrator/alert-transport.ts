@@ -66,6 +66,7 @@ export const ALERT_CHANNEL_FIELDS = [
  * @knipignore never imported by name — the guard is its type, not a value
  * any caller reads. See knip.json's `tags`.
  */
+// fallow-ignore-next-line unused-export
 export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
   [K in Exclude<keyof AlertChannelSlots, (typeof ALERT_CHANNEL_FIELDS)[number]>]: never;
 } = {};

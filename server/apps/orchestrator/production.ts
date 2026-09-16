@@ -249,7 +249,6 @@ export {
   buildAlpacaDataSource,
   buildBenchmarkDataSource,
   buildDefaultAlpacaBrokerClient,
-  buildDefaultAlpacaDataClient,
   buildDefaultLlmClient,
   DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_FEEDBACK_INTERVAL_MS,
