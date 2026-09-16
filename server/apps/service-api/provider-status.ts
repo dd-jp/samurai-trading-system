@@ -233,6 +233,10 @@ export class ProviderStatusPoller implements ProviderStatusReader {
     this.timer.unref?.();
   }
 
+  // Never called in production (only by tests); #1675 tracks whether
+  // service-api's shutdown path should call it or the lifecycle should be
+  // removed entirely
+  // fallow-ignore-next-line unused-class-member
   stop(): void {
     if (this.timer !== undefined) {
       clearInterval(this.timer);

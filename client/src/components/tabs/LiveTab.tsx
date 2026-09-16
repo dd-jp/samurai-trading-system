@@ -187,7 +187,7 @@ function OrderSection({ position, fills }: { position: PositionRow; fills: reado
   );
 }
 
-function TraceDrawer(props: LiveTabProps) {
+function TraceDrawer(props: Pick<LiveTabProps, 'snapshot' | 'selection'>) {
   const { snapshot, selection } = props;
   if (selection === null) {
     return (
@@ -256,7 +256,7 @@ export function LiveTab(props: LiveTabProps) {
   return (
     <div className="live">
       <LaneList {...props} />
-      <TraceDrawer {...props} />
+      <TraceDrawer snapshot={props.snapshot} selection={props.selection} />
     </div>
   );
 }
