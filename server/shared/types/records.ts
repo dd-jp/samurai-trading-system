@@ -60,7 +60,7 @@ export type ExitReason =
   /** The debate resolved opposite to the held side. Decision path only. */
   | 'direction_flip';
 
-export interface OrderIntentMetadata {
+interface OrderIntentMetadata {
   /** Deterministic hash(instrument + bar + AnalystView set); non-optional at every hop (registry #1) */
   debate_id: string;
   /**

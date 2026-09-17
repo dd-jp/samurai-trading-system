@@ -608,7 +608,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       inFlight = true;
       const controller = new AbortController();
       controllers.add(controller);
-      const doFetch = optionsRef.current.fetchImpl ?? globalThis.fetch;
+      const doFetch = optionsRef.current.fetchImpl ?? globalThis.fetch.bind(globalThis);
 
       const release = createReleaser(controllers, controller, (value) => {
         inFlight = value;
