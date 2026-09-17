@@ -72,7 +72,7 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 
 | Tool | Choice | Why |
 |------|--------|-----|
-| Dead-code / unused-export detection | knip, advisory `npm run knip` only | [#1625](https://github.com/dd-jp/samurai-trading-system/issues/1625): adopted to target the `no-caller-defect-pattern` (tested mechanisms nothing calls). Needs an explicit `entry` list (`knip.json`) — this repo's `tsc`-then-run-`dist` scripts and `tsx`-run CLIs aren't reachable by knip's default inference. Not wired into `npm run smoke`, CI, or any implementer gate ([#1633](https://github.com/dd-jp/samurai-trading-system/issues/1633)); gate promotion is a separate, later decision. |
+| Dead-code / unused-export / unused-dependency detection | fallow, gated in CI and `precommit` (`fallow:boundaries`, `fallow:dead-code`, `fallow:dupes`, `fallow:css`, `fallow:guard`) | [#1625](https://github.com/dd-jp/samurai-trading-system/issues/1625) adopted knip to target the `no-caller-defect-pattern` (tested mechanisms nothing calls); knip removed in favor of fallow, which covers the same unused-file/export/dependency findings via `fallow dead-code` (including `--unused-deps`) plus duplication, complexity, and boundary checks knip never had. `.fallowrc.json`'s `entry` list carries over knip's `entry` needs (`tsc`-then-run-`dist` scripts and `tsx`-run CLIs aren't reachable by default inference). |
 
 ## Dashboard (operator view)
 
