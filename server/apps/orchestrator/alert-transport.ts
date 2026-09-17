@@ -62,9 +62,6 @@ export const ALERT_CHANNEL_FIELDS = [
  *
  * Exported, not a throwaway local: the guard lives entirely in this binding's
  * TYPE, so an "unused local" cleanup would silently remove it.
- *
- * @knipignore never imported by name — the guard is its type, not a value
- * any caller reads. See knip.json's `tags`.
  */
 // fallow-ignore-next-line unused-export
 export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
