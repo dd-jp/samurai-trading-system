@@ -486,7 +486,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
               // the same sweep row `runPoll`'s `report.divergences` loop
               // above already routed through that function (reconcile()
               // merges sweep divergences in — see `ReconcileDivergence.kind`'s
-              // doc) — pre-existing duplicate logging, not introduced here.
+              // doc) — pre-existing duplicate logging, not introduced here
               // `reconcileDivergenceLevel()` never
               // demotes a sweep row either way (`kind !== 'bracket'`), so
               // this inline split and that function agree on every case; it
