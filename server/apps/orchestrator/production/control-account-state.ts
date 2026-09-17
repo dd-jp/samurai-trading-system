@@ -113,8 +113,9 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
   /**
    * The anchor, resolved on first use and cached for the life of the process.
    *
-   * Cached on the instance, not re-read: a live-arm figure must be read
-   * once, at boot, and never again on a decision path.
+   * Cached on the instance and not re-read even though the resolver is
+   * idempotent: a live-arm figure must be read once, at boot, and never
+   * again on a decision path.
    */
   private async book(asOf: Date): Promise<number> {
     if (this.#book === null) {

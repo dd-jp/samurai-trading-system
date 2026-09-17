@@ -155,9 +155,8 @@ async function retryOrRethrow(
  * `onRetry` (#1080) is called once per attempt that is actually retried —
  * after `isRetryable` accepts the error and while attempts remain, before the
  * backoff is slept. It is NOT called for the final failing attempt, whose
- * error the caller sees and can log itself; the point is the attempts a caller
- * never learns about. Optional, so every existing call site is unchanged and
- * simply reports nothing.
+ * error the caller sees and can log itself. Optional, so every existing call
+ * site is unchanged and simply reports nothing.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,

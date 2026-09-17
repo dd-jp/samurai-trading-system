@@ -79,8 +79,7 @@
  * below, since 0.95 still clears the measured 0.85 with 10pp of margin and
  * changing a shipped alert threshold on a single 75-minute window is not
  * warranted. What this measurement rules out is treating 0.667/0.90 as the
- * ceiling of normal operation — MI call frequency, not just instrument count,
- * is a lever on where the healthy ratio actually sits.
+ * ceiling of normal operation.
  */
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
