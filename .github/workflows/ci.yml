@@ -48,21 +48,17 @@ jobs:
           args: --boundary-violations
           auto-changed-since: false
 
-      # Blocking, whole repo (not just this PR's diff): the existing backlog at the
-      # time this gate was flipped on was 5 unused exports, 16 unused type exports,
-      # 13 unused class members, 5 devDependencies used in production, 22 circular
-      # dependencies, and 1 unused component prop. That backlog must be cleared
-      # before this step passes on any PR.
       - name: Fallow dead code
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run fallow:dead-code -- --format github-annotations --quiet
 
-      # Advisory: duplication and design-system drift findings across the whole
-      # repo, not just this PR's diff. continue-on-error keeps these off the merge
-      # gate; the annotations still surface on the PR.
+      # Findings still surface as annotations, but neither step below can
+      # actually fail on them today: dupes only fails past --threshold
+      # (unset, so 0 = no limit) and health --css's hotspots/refactoring
+      # targets are advisory-only by design (never gate an exit code). This
+      # step still catches the action itself erroring.
       - name: Fallow duplication (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        continue-on-error: true
         uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
         with:
           command: dupes
@@ -70,7 +66,6 @@ jobs:
 
       - name: Fallow design-system drift (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        continue-on-error: true
         uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
         with:
           command: health
