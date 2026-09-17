@@ -1,9 +1,8 @@
 /**
- * The real `AccountStateProvider` (#276) — closes the seam `direct-bind.ts`
- * declared and nothing implemented. See docs/specs/transport-layer-spec.md
- * ("Module: AccountStateProvider", stories 23-25).
+ * The real `AccountStateProvider` — closes the seam `direct-bind.ts` declared
+ * and nothing implemented.
  *
- * Not one data source but four narrow ones, exactly as the spec splits them:
+ * Not one data source but four narrow ones:
  *
  * | Field | Source |
  * |---|---|
@@ -12,39 +11,30 @@
  * | `daily_basis` | locally persisted per-class session snapshots (`session_equity`) + `closed_trades` |
  * | `consecutive_losses` | walked backwards through the existing `ClosedTrade` store — no new ledger |
  *
- * ## GAP-8 resolved: the daily figure is local now (#332)
+ * ## The daily figure is local, not Alpaca's blended equity
  *
- * This provider used to return Alpaca's single blended `equity`/`last_equity`
- * figure, with a one-shot `warn` naming the assumption. That is gone.
+ * One blended account figure carries ONE reset boundary, and this portfolio
+ * has two: UTC-day semantics for crypto and market-day for stocks. So the
+ * boundary is one this system owns — `TradingCalendar.sessionStart`, asked
+ * per class — and the denominator is a locally persisted snapshot of equity
+ * at that boundary (`session_equity`). `cash` and `equity` still come from
+ * `GET /v2/account`; only the *daily* figure became local.
  *
- * The problem was never the arithmetic, it was the boundary: one blended
- * account figure carries ONE reset boundary, and this portfolio has two —
- * risk-manager-spec.md asks for UTC-day semantics for crypto and market-day for
- * stocks. Worse, per #260 Alpaca's actual reset boundary was never verified
- * against a live account, and `SMOKE_TEST_UNIVERSE` is BTC-USD, so the first
- * paper run sat precisely on the ambiguous side.
+ * This provider deliberately stops one step short of the percentage. It
+ * emits a `SessionBasis` — the open-equity denominator and the realized
+ * numerator — and `computePortfolioView` adds the unrealized mark-to-market
+ * term and divides, because it has already fetched the marks for its
+ * exposure math and they must not be fetched twice.
  *
- * So the boundary is now one this system owns — `TradingCalendar.sessionStart`
- * (#331), asked per class — and the denominator is a locally persisted snapshot
- * of equity at that boundary (`session_equity`, migration 0009). `cash` and
- * `equity` still come from `GET /v2/account`; only the *daily* figure became
- * local.
- *
- * This provider deliberately stops one step short of the percentage. It emits a
- * `SessionBasis` — the open-equity denominator and the realized numerator — and
- * `computePortfolioView` adds the unrealized mark-to-market term and divides,
- * because it has already fetched the marks for its exposure math and #332
- * requires they not be fetched twice.
- *
- * ## Why the funding read is a port and not an Alpaca client (#1509)
+ * ## Why the funding read is a port and not an Alpaca client
  *
  * Everything below the first two lines of `getAccountState` — the high-water
  * mark, the per-class session boundaries, the loss streak — is venue-neutral
  * and was never Alpaca-specific. Only `cash`/`equity` came from a broker.
  * Saxo needs the same machinery over `GET /port/v1/balances/me`, and a second
  * copy of ~200 lines of session-boundary logic is how the two drift. So the
- * funding read is injected as `AccountFundingSource` and the provider is named
- * for the role, not the vendor.
+ * funding read is injected as `AccountFundingSource` and the provider is
+ * named for the role, not the vendor.
  */
 import type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
 import type { SessionBasis, SessionBasisByClass } from '../../../pipeline/risk-manager/index.js';
@@ -66,8 +56,8 @@ export interface ClosedTradeReader {
  * One funding read from a venue's own ledger.
  *
  * `currency` is what the VENUE reports the account is denominated in, never a
- * constant picked from the venue's identity — #949's currency-mismatch guard
- * is armed by comparing it against the declared book currency, so a hard-coded
+ * constant picked from the venue's identity — the currency-mismatch guard is
+ * armed by comparing it against the declared book currency, so a hard-coded
  * value here would launder the assumption it exists to catch.
  */
 export interface AccountFunding {
@@ -76,11 +66,8 @@ export interface AccountFunding {
   /**
    * Checked once at boot, not per tick, and only on the Saxo venue —
    * `startFromEnvironment` refuses to start a `SAMURAI_BROKER=saxo` run whose
-   * account answers anything but `LIVE_BOOK_CURRENCY`
-   * (`assertSameCurrencyFunding`, #1509), whether the source is the one it
-   * built or one the caller injected. That is the venue whose book is declared
-   * in GBP (ADR-0015); an Alpaca run's funding is USD by construction
-   * (`ALPACA_ACCOUNT_CURRENCY`) and is not compared.
+   * account answers anything but `LIVE_BOOK_CURRENCY`. An Alpaca run's
+   * funding is USD by construction and is not compared.
    *
    * `getAccountState` therefore reads only `cash` and `equity`, deliberately:
    * a per-tick throw here would kill a running process over a fact that
@@ -94,12 +81,9 @@ export interface AccountFundingSource {
 }
 
 /**
- * Alpaca `GET /v2/account`, which `AlpacaAccount` models as `cash`/`equity`
- * only — the response carries no currency this boundary parses, and the
- * account is USD (live-money-gates.ts's #949 paragraph states it as the
- * standing reason the GBP book cannot be sized off this read). Declared as a
- * constant here so that fact is one greppable place rather than an assumption
- * spread across the risk manager.
+ * Alpaca `GET /v2/account` carries no currency field; the account is USD.
+ * Declared as a constant here so that fact is one greppable place rather
+ * than an assumption spread across the risk manager.
  */
 const ALPACA_ACCOUNT_CURRENCY = 'USD';
 
@@ -121,14 +105,14 @@ export interface BrokerAccountStateProviderInput {
   store: SqliteAccountStateStore;
   sessionEquity: SqliteSessionEquityStore;
   /**
-   * The append-only daily equity series (#345, migration 0011).
+   * The append-only daily equity series.
    *
-   * REQUIRED, not optional, and that is the point of the ticket. A return
-   * series cannot be backfilled — equity that was never recorded on the day is
-   * gone — so a deployment that quietly composed this provider without a series
-   * writer would spend the whole soak looking healthy and end it with nothing to
-   * compute metrics from. An optional field makes that omission invisible; a
-   * required one makes it a compile error.
+   * REQUIRED, not optional: a return series cannot be backfilled — equity
+   * that was never recorded on the day is gone — so a deployment that
+   * quietly composed this provider without a series writer would spend the
+   * whole soak looking healthy and end it with nothing to compute metrics
+   * from. An optional field makes that omission invisible; a required one
+   * makes it a compile error.
    *
    * Written on the `portfolio` boundary only (see `sessionBasisFor`).
    */
@@ -136,10 +120,10 @@ export interface BrokerAccountStateProviderInput {
   closedTrades: ClosedTradeReader;
   logger: Logger;
   /**
-   * Session boundaries per asset class (#331). Two calendars, not one: the
-   * whole point of #332 is that crypto resets at 00:00 UTC and stocks at the
-   * prior 16:00 ET close, and a single injected calendar would silently
-   * measure a weekend's crypto PnL from Friday afternoon.
+   * Session boundaries per asset class. Two calendars, not one: crypto
+   * resets at 00:00 UTC and stocks at the prior 16:00 ET close, and a single
+   * injected calendar would silently measure a weekend's crypto PnL from
+   * Friday afternoon.
    */
   calendars: { crypto: TradingCalendar; stocks: TradingCalendar };
   /**
@@ -208,9 +192,9 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
 
   /**
    * The session boundary for a key. `portfolio` shares the crypto calendar
-   * because #332 specifies the portfolio-level figure as the UTC one — the
-   * account holds crypto that never stops trading, so a 16:00 ET anchor would
-   * leave overnight crypto moves stranded outside the portfolio's own day.
+   * because the account holds crypto that never stops trading, so a 16:00 ET
+   * anchor would leave overnight crypto moves stranded outside the
+   * portfolio's own day.
    *
    * A consequence worth naming rather than mistaking for a bug: the `crypto`
    * and `portfolio` rows always carry identical `open_equity`/`open_at`. They
@@ -237,12 +221,12 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
    * alone, so the open is captured once per session rather than drifting
    * forward on every tick.
    *
-   * Whether the resulting snapshot counts as a real session open is a separate
-   * question from whether it is current, and it is answered once — at write
-   * time, from `startedAt` — then persisted. #332 treats BOTH "no row at all"
-   * and "a restart with the boundary already passed" as cold starts; the second
-   * arrives here as an ordinary stale-row advance, and only `startedAt` tells
-   * it apart from the healthy case.
+   * Whether the resulting snapshot counts as a real session open is a
+   * separate question from whether it is current, and it is answered once —
+   * at write time, from `startedAt` — then persisted. Both "no row at all"
+   * and "a restart with the boundary already passed" are cold starts; the
+   * second arrives here as an ordinary stale-row advance, and only
+   * `startedAt` tells it apart from the healthy case.
    */
   private sessionBasisFor(key: SessionEquityKey, equity: number, asOf: Date): SessionBasis {
     const sessionStart = this.calendarFor(key).sessionStart(asOf);
@@ -254,23 +238,20 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     const observedAtBoundary =
       stored !== null && this.input.startedAt.getTime() <= sessionStart.getTime();
 
-    // #345 — the same boundary, sampled into a series instead of over itself
+    // The same boundary, sampled into a series instead of over itself —
+    // `portfolio` only. `stocks` rides the 16:00 ET close, which skips
+    // weekends/holidays, so its boundaries aren't evenly spaced and a Sharpe
+    // annualized over them is wrong by construction; `crypto` shares UTC
+    // midnight with `portfolio` and would duplicate every row. So the series
+    // is anchored to the portfolio-level UTC day, evenly spaced per step
     //
-    // `portfolio` only. The three keys share this method but not this concern:
-    // `stocks` rides the 16:00 ET close, which skips weekends and holidays, so
-    // its consecutive boundaries are not evenly spaced and a Sharpe annualized
-    // over them is wrong by construction. `crypto` is the same UTC midnight as
-    // `portfolio` and would duplicate every row (the two keys always carry
-    // identical `open_equity`/`open_at` — see `calendarFor`). So the series is
-    // anchored to the portfolio-level UTC day, exactly 86,400,000 ms per step
-    //
-    // Attempted on EVERY tick rather than only inside the advance branch below,
-    // and idempotent because `append` is `DO NOTHING` on conflict. Tying it to
-    // the advance would lose a day in the one case that matters most: a process
-    // that comes up mid-session finds `session_equity` already current for this
-    // session, takes no advance, and would leave a hole in the series that can
-    // never be filled. A late sample flagged `observed_at_boundary = 0` is worth
-    // more than a gap — the gap breaks the spacing of everything after it
+    // Attempted on EVERY tick, not only inside the advance branch below, and
+    // idempotent because `append` is `DO NOTHING` on conflict. Tying it to
+    // the advance would lose a day in the case that matters most: a process
+    // that comes up mid-session finds `session_equity` already current,
+    // takes no advance, and would leave a hole in the series that can never
+    // be filled. A late sample flagged `observed_at_boundary = 0` is worth
+    // more than a gap
     if (key === 'portfolio') {
       this.input.dailyEquity.append(sessionStart, equity, asOf, observedAtBoundary);
     }
@@ -344,14 +325,9 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
       if (firstTime) {
         this.input.logger.log({
           // Every `getAccountState` caller sits on a per-instrument decision
-          // path inside `TickRunner.runInstrument`'s `runWithTraceId` — the
-          // live arm's Risk stage (direct-bind.ts's
-          // `computeCurrentPortfolioAndBreakers`/`degradedPortfolioForExit`)
-          // and the control arm's book-anchor resolver, which reaches this
-          // through `ControlAccountStateProvider` (control-account-state.ts),
-          // alike. So this joins that tick (#1280); none of them runs at boot,
-          // which is why the constant is a fallback rather than a case
-          // anything reaches
+          // path, so this joins that tick; none of them runs at boot, which
+          // is why the constant is a fallback rather than a case anything
+          // reaches
           trace_id: currentTraceId() ?? 'account-state',
           stage: 'orchestrator',
           event: 'daily_pnl_unknown',
@@ -427,9 +403,8 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
  * denominator, and NaN propagates through both without ever failing a
  * comparison — the breaker would simply never trip.
  *
- * This is the whole boundary. `getAccount()` has exactly one consumer — the
- * two calls above — so every string Alpaca sends passes through here before
- * it can reach the store or the breakers (PR #301 review, deepseek).
+ * This is the whole boundary: every string Alpaca sends passes through here
+ * before it can reach the store or the breakers.
  */
 function parseMoney(raw: unknown, field: string): number {
   const value = toFiniteNumber(raw);

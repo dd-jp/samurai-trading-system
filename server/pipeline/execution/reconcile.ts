@@ -57,41 +57,36 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   );
 
   const divergences: ReconcileDivergence[] = [];
-  let corrected = 0;
 
   for (const position of inFlight) {
     const divergence = await reconcileLot(input, position);
-    if (divergence === null) continue;
-
-    divergences.push(divergence);
-    // `undetermined` deliberately wrote nothing, so it is not a correction
-    if (divergence.action !== 'undetermined') corrected += 1;
+    if (divergence !== null) divergences.push(divergence);
   }
 
   // #519/#526 — see the file doc's "flatten-journal sweep" section
   const unresolvedFlattens = await store.getUnresolvedFlattens();
   for (const row of unresolvedFlattens) {
-    const divergence = await reconcileFlatten(input, row, now, positions);
-    divergences.push(divergence);
-    if (divergence.action !== 'undetermined') corrected += 1;
+    divergences.push(await reconcileFlatten(input, row, now, positions));
   }
 
   // #549 — residual-protection sweep, run AFTER the flatten sweep: on the crypto path `resumeFlatten`'s
   // side effect repopulates the adapter's process-local worklists a restart emptied first (same ordering
   // as `runStartupReconcile` running before `ingestFills()`)
   const residualSweep = await sweepResidualProtection(input);
-  for (const divergence of residualSweep.divergences) {
-    divergences.push(divergence);
-    if (divergence.action !== 'undetermined') corrected += 1;
-  }
+  divergences.push(...residualSweep.divergences);
 
   // #1186 — wedged-zero-fill sweep, store-evidence-only (no broker call): a lot it retires is never one
   // `reconcileLot` needed to act on or `findUnrecordedVenuePositions` should compare against a venue read
   const wedgedZeroFillSweep = await sweepWedgedZeroFillLots(input);
-  for (const divergence of wedgedZeroFillSweep.divergences) {
-    divergences.push(divergence);
-    if (divergence.action !== 'undetermined') corrected += 1;
-  }
+  divergences.push(...wedgedZeroFillSweep.divergences);
+
+  // `undetermined` deliberately wrote nothing, so it is not a correction
+  // Snapshotted HERE, before `findUnrecordedVenuePositions` below: that scan
+  // only ever REPORTS (#429's "nothing was written: adopting it would mean
+  // inventing the bracket, stop and debate_id it has none of"), so its
+  // 'unrecorded' rows must never inflate this count even though their action
+  // is not literally 'undetermined'
+  const corrected = divergences.filter((divergence) => divergence.action !== 'undetermined').length;
 
   // Read HERE, not hoisted above the sweeps: a snapshot taken earlier is stale by every timeout/cancel
   // those sweeps spent (#1500) — same reason `cancelNeverConfirmedFlatten` re-reads after its own cancel
@@ -121,6 +116,7 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
  * Always returns a divergence (never `null`): every row handed here is, by construction, one the store
  * doesn't yet consider settled.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each branch below resolves a distinct venue-evidence shape (never-landed, terminally-refused, wedged-working, resolved-then-fresher-answer) and several are explicitly ordered relative to their store writes (see "on purpose, not merely after" below) — extracting a branch risks reordering a write relative to a return that hazard depends on
 async function reconcileFlatten(
   input: ReconcileInput,
   row: UnresolvedFlattenSubmission,

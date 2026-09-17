@@ -14,6 +14,15 @@ Read this on every session start.
 - **Status:** Implemented and under test — all twelve charted components built, ~2900 tests, end-to-end offline run green (`npm run smoke`). Paper soak has run. Not yet cleared: one real Alpaca paper tick (ADR-0004 §5).
 - **Language:** TypeScript (Node 22+). Resolved in [ADR-0001](docs/adr/0001-technical-foundation-hybrid.md) — no hard dependency on the Python repos mined for patterns.
 
+## Code Comments
+
+David has 15 years of professional experience — code does not need narration. This tightens the global comment rule (`~/.claude/CLAUDE.md`) for this repo specifically: bias toward zero comments, not "fewer."
+
+- Never write a comment that explains what a file, function, or block does. The code already says that; a comment repeating it is noise to re-read on every future pass.
+- Comment only when skipping it would lose information the code cannot express on its own: a non-obvious invariant a future edit could silently break, a workaround tied to a specific external bug or constraint, a cited source for a magic number, or a decision that looks wrong without the reason behind it.
+- If removing a comment loses nothing a future editor needs, delete it — including comments already in the codebase, not just ones about to be added.
+- Precedent: 2026-09-17, David stripped 62 lines of narration comments from `.github/workflows/ci.yml` (commit `effde735`) that had accumulated across prior sessions — every step had a "why this exists" paragraph, most of them restating what the step name already said.
+
 ## Docs Convention
 
 Read/Write these as the project evolves:

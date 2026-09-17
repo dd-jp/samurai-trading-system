@@ -16,6 +16,7 @@
     "no-comment-slop/no-trailing-comment": "error",
     "no-comment-slop/multiline-jsdoc-format": "error",
     "no-comment-slop/no-trailing-period": "error",
+    "no-comment-slop/max-comment-lines": ["error", { "max": 6 }],
     "complexity": ["error", { "max": 20 }],
     "no-restricted-imports": [
       "error",

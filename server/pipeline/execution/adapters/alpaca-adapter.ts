@@ -576,6 +576,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * its take-profit (no separate leg), the row it writes ends up with
    * `target_order_id` holding the OCO's own parent id, not a bracket-shaped leg id.
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the walk's advance invariant ("advancing past an index means its order is not resting", enforced in both directions), the live-preferred-over-settled adoption order, and the three independent size bounds (qty, sizedAboveSettled, entryFilledQty) are each individually documented as load-bearing — two prior restructurings (#1570 review's early-return) were tried and reverted as live-money bugs, so a fresh extraction here repeats a mistake this function's own history already made
   async rearmProtectiveLegs(
     clientOrderId: string,
     instrument: string,
@@ -901,6 +902,25 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
+   * Shared by the bracket/flatten/rearm sweeps below: an `UnpricedFillError` is a MODELLED, EXPECTED
+   * condition (#298), not a failure, so it is journaled and NOT counted unless the journal write itself
+   * throws (#524 review). Returns the count to add to the caller's own failure tally (0 or 1).
+   */
+  private recordSweepError(error: unknown, failures: unknown[]): number {
+    if (error instanceof UnpricedFillError) {
+      try {
+        this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+        return 0;
+      } catch (stateError) {
+        failures.push(stateError);
+        return 1;
+      }
+    }
+    failures.push(error);
+    return 1;
+  }
+
+  /**
    * Bracket half of the sweep. Snapshots `this.brackets` at entry (#290)
    * since a Map iterator visits entries inserted mid-iteration, and a
    * bracket submitted during this sweep must not be drained by a stale
@@ -948,21 +968,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // Skipped, not swallowed — this bracket is retried next sweep, same
         // as an order the venue hasn't reported yet; `ingestFills()` dedups
         // on `broker_fill_id` so re-polling costs nothing
-        if (error instanceof UnpricedFillError) {
-          // #524/#298: unpriced is MODELLED, not a failure — counting it here
-          // would abort the whole sweep over one unpriced fill. A journal-write
-          // failure recording it (`stateError` below) is a real failure and
-          // still counts
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            bracketFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          bracketFailures += 1;
-        }
+        bracketFailures += this.recordSweepError(error, failures);
       }
     }
     return bracketFailures;
@@ -1012,20 +1018,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         }
       } catch (error) {
         // Same isolation/UnpricedFillError bookkeeping as the bracket loop
-        // above — an unpriced flatten fill never reaches the
-        // `mapOrderState`/`delete` line, so it's retried next poll, never
+        // above (`recordSweepError`) — an unpriced flatten fill never reaches
+        // the `mapOrderState`/`delete` line, so it's retried next poll, never
         // pruned mid-unpriced
-        if (error instanceof UnpricedFillError) {
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            flattenFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          flattenFailures += 1;
-        }
+        flattenFailures += this.recordSweepError(error, failures);
       }
     }
     return flattenFailures;
@@ -1072,19 +1068,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.rearmedLegs.delete(lotKey);
         }
       } catch (error) {
-        // Same isolation and UnpricedFillError bookkeeping as the bracket
-        // and flatten loops above
-        if (error instanceof UnpricedFillError) {
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            rearmFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          rearmFailures += 1;
-        }
+        // Same isolation and bookkeeping as the bracket and flatten loops
+        // above (see `recordSweepError`'s doc)
+        rearmFailures += this.recordSweepError(error, failures);
       }
     }
     return rearmFailures;

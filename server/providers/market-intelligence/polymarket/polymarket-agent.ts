@@ -1,120 +1,68 @@
 /**
- * The Polymarket macro/event ingestion agent (#504, decisions from wayfinder
- * research #481 and `docs/research/23-polymarket-source.md`).
+ * The Polymarket macro/event ingestion agent.
  *
- * ## Why a SECOND source feeding `fundamental`
+ * ## Why a second source feeding `fundamental`
  *
- * `MiIngestAgent` (`type: 'news'`, the Alpaca/Benzinga wire) already writes
- * `news`. This agent is not the first writer feeding `fundamental` and does
- * not exist to fill an empty bucket — its items route to `intel`, not `news`
- * (#1164, by `scope`), and `fundamental-analyst.ts` folds the two together.
- * It exists because `news`'s coverage has a measured hole: **Alpaca News
- * returns 0 items for 3USL / 3LDE / SGLN** against 5 each for
- * AAPL/SPY/BTCUSD (#552, quoted in `docs/specs/market-intelligence-spec.md`).
- * The live universe is exactly those LSE ETPs (ADR-0016), so `fundamental` —
- * mandatory for stocks — has a `news` writer that returns nothing for every
- * instrument Samurai can actually trade. A 3x FTSE ETP has no company news;
- * what moves it is macro.
+ * `MiIngestAgent` (Alpaca/Benzinga) already writes `news`; this agent's items
+ * route to `intel` instead, and `fundamental-analyst.ts` folds the two
+ * together. It exists because `news` has a measured coverage hole: Alpaca
+ * News returns 0 items for the live LSE-ETP universe (ADR-0016). A 3x FTSE
+ * ETP has no company news; what moves it is macro.
  *
- * ## Why macro markets and NOT the price ladders
+ * ## Why macro markets and not the price ladders
  *
- * A short-dated binary on an asset's own price is a deterministic function of
- * that asset's spot and short-dated vol. Arbitrageurs price it OFF spot, so it
- * carries no independent information about spot — and `technical-analyst`
- * already reads the same bars. The Debate Engine sizes trades on apparent
- * analyst agreement, so ingesting a price ladder would double-count price
- * while looking like a second opinion. `P(Fed holds in September)` is not
- * derivable from any bar we hold; that is the whole adopt case.
+ * A short-dated binary on an asset's own price is a deterministic function
+ * of that asset's spot and short-dated vol — arbitrageurs price it off spot,
+ * so it carries no independent information `technical-analyst` doesn't
+ * already have, and ingesting it would double-count price while looking
+ * like a second opinion. `P(Fed holds in September)` is not derivable from
+ * any bar we hold.
  *
- * ## The signal is the 24h CHANGE, never the level
+ * ## The signal is the 24h change, never the level
  *
- * A Fed-hike probability parked at 0.295 for a week is not news; 0.295 → 0.44
- * in a day is. So `sentiment = sign(delta)` with a ±0.02 dead band and
- * `confidence = clamp(|delta| * 5, 0.05, 0.95)`, measured on the token of the
- * outcome the curated table annotates as bullish for equities.
+ * A probability parked at 0.295 for a week is not news; 0.295 → 0.44 in a
+ * day is. So `sentiment = sign(delta)` with a `DEAD_BAND`, and
+ * `confidence = clamp(|delta| * 5, 0.05, 0.95)`.
  *
  * ## Fail-closed, with one deliberate exception
  *
- * No ingest on: a rotted slug, a failed fetch, a closed market, a stale vendor
- * stamp, an absent book, a spread past the bound, volume or liquidity below
- * the floor, a bullish leg pinned so near 0 or 1 that it cannot carry a 24h
- * delta (`MIN_PROBABILITY_HEADROOM`, #833), or a price history that does not
- * span a full 24h. In every one of those cases the analysts report
- * `NO_DATA_MARKER`, which keeps "we could not look" distinguishable from "we
- * looked and saw nothing" — the #463/#474/#485 line.
- *
- * The **exception, stated because it looks like a violation of that rule**: a
- * delta inside the dead band DOES emit an item, at `sentiment: 0,
- * confidence: 0.05`. #504's decision 7 bans synthesising a neutral item for
- * the five could-not-look cases it enumerates; it does not ban reporting a
- * market we successfully read that genuinely did not move. Decision 3's
- * `clamp(|delta|*5, 0.05, 0.95)` floor only has meaning if delta≈0 produces
- * an item at all. "We looked and it did not move" is real information and is
- * not the same claim as "we could not look".
+ * No ingest on a rotted slug, a failed fetch, a closed market, a stale
+ * vendor stamp, a thin book, a pinned probability (`MIN_PROBABILITY_HEADROOM`),
+ * or a price history that does not span a full 24h — the analysts report
+ * `NO_DATA_MARKER`, keeping "could not look" distinguishable from "looked
+ * and saw nothing". The exception: a delta inside the dead band still emits
+ * an item at `sentiment: 0, confidence: 0.05` — "looked and it did not move"
+ * is real information, not the same claim as "could not look".
  *
  * ## The history-span guard is the one worth not deleting
  *
  * `confidence = f(|delta|)`, so a market minted three hours ago that moved
- * 0.30 over those three hours would land as a HIGH-confidence signal built on
- * almost no data — verbatim the defect `gdelt-ingest-agent.ts`'s header
- * refuses to ship, in the same shape. The baseline point must sit within
- * `BASELINE_TOLERANCE_MS` of exactly 24h ago or nothing is emitted.
+ * 0.30 in that window would land as a high-confidence signal built on
+ * almost no data. The baseline point must sit within `BASELINE_TOLERANCE_MS`
+ * of exactly 24h ago or nothing is emitted.
  *
- * ## Three known limitations, none of them fixed here
+ * ## Three known limitations, none fixed here
  *
- * **1. This does NOT close the LSE-ETP coverage hole.** `hasCoverageFor`
- * (`production/mi-coverage.ts`) matches `item.entity === instrument`, and
- * these items are filed under macro series names (`FOMC-2026-09`), never
- * tickers. `MiCoverageMonitor.degraded` will read exactly as it does today.
- * Setting `entity` to a ticker would light the counter up without the item
- * saying anything about that ticker — gaming the metric, and it would break
- * one-item-per-event too.
- *
- * **2. One direction for a whole asset class.** These items are `scope:
- * 'asset_class'`, so every one reaches every `stocks` debate — including
- * SGLN, where a rising recession probability is plausibly BULLISH while it is
- * bearish for 3USL. `IntelligenceItem` has no per-instrument direction to
- * express that with. (Before #1086 this read "`getContext` filters by
- * `asset_class` alone", which #914's entity narrowing had already made false:
- * the items were reaching no content-reading analyst at all.)
- *
- * **3. Time-axis vote inflation — now bounded, not by design.**
- * `MarketIntelligenceStore.ingest` does no dedup by `id` and `directionFrom`
- * is an unweighted mean of signs, so at an hourly cadence one curated row
- * ingests up to 24 items into the analysts' 24h window. What holds the vote
- * to one is `latestClassWideRestatementOnly` (`index.ts`), which keys
- * class-wide items on `(source, entity, type)` and serves only the latest —
- * so the read collapses the repeats even though the store keeps them.
- * Narrowing `scope` here would restore the inflation.
- *
- * Archiving the items (#835) does not change this, and does not make replay
- * of this source clean: a replay reading `mi_items` back replays the same
- * hourly repetition, because the inflation is in what was ingested, not in
- * what was stored. What #835 fixed is that the rows exist to be read at all.
- *
- * It is uniform WITHIN this source, so it does not skew one curated row
- * against another. It is **not** uniform across the combined `news` + `intel`
- * evidence `fundamental-analyst.ts` folds together (#1164), and saying so
- * would be false: `directionFrom` averages over every item in that combined
- * array, and the other writer (`MiIngestAgent`, Alpaca/Benzinga, `news`) is
- * not replayed hourly. On a universe where Alpaca does return items — the ~5
- * each it
- * returns for AAPL/SPY (#552) — a handful of curated rows replayed hourly
- * reach ~72 items in the same 24h window, so the mean is roughly 14:1 this
- * source's, on DIRECTION as well as vote count, and on the confidence the
- * Debate Engine sizes against. It is only harmless on the live LSE-ETP
- * universe (ADR-0016), where Alpaca contributes 0 and there is nothing to
- * drown out. Recorded rather than solved here because the dedup belongs in
- * `MarketIntelligenceStore.ingest`, not in one source.
+ * 1. **Does not close the LSE-ETP coverage hole.** `hasCoverageFor` matches
+ *    `item.entity === instrument`, but these items are filed under macro
+ *    series names, never tickers.
+ * 2. **One direction for a whole asset class.** Items are `scope:
+ *    'asset_class'`, reaching every `stocks` debate even where a factor is
+ *    bullish for one instrument and bearish for another — `IntelligenceItem`
+ *    has no per-instrument direction to express that.
+ * 3. **Time-axis vote inflation, bounded but not by design.** The store does
+ *    no dedup by `id`, so an hourly cadence ingests up to 24 items per
+ *    curated row into the 24h window; `latestClassWideRestatementOnly`
+ *    (`index.ts`) collapses the repeats on read. This is uniform within this
+ *    source but not against Alpaca's non-replayed `news` items — harmless
+ *    only because Alpaca contributes 0 on the live LSE-ETP universe. The fix
+ *    belongs in `MarketIntelligenceStore.ingest`, not here.
  *
  * ## No spend plumbing, and no Convergence Engine
  *
- * `GrokAgent`'s `spendCap`/`spendSink` are absent on purpose: this path makes
- * no LLM call and costs £0, and zero-cost rows in `llm_spend` would only make
- * ADR-0008's ledger harder to read. `MarketContext.conflicts` was deleted by
- * #1164, not given a producer: `grok` writes `social` and this writes `intel`
- * (routed by `scope`, #1086/#1164), disjoint buckets read by different
- * analysts, so there was never anything to converge.
+ * No `spendCap`/`spendSink`: this path makes no LLM call and costs £0.
+ * `grok` writes `social` and this writes `intel` — disjoint buckets read by
+ * different analysts, so there was never anything to converge.
  */
 
 import type {
@@ -137,29 +85,19 @@ import type { PolymarketMarket, PolymarketPricePoint } from './polymarket-client
 export const SOURCE_POLYMARKET = MI_SOURCES.polymarket;
 
 /**
- * The one asset class these items are ingested under.
- *
- * ONE batch, not two. #481's resolution said `crypto` + `stocks`, because
- * `getContext` filters by asset class alone and a macro item is relevant to
- * both. Crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment), so
- * the second batch would now be ingested for debates that never run. #504's
- * rewritten body strikes it; this follows the issue, not the older comment.
+ * The one asset class these items are ingested under. One batch, not two —
+ * crypto left Samurai's scope, so a second batch would be ingested for
+ * debates that never run.
  */
 export const POLYMARKET_ASSET_CLASS: AssetClass = 'stocks';
 
 /**
- * The refresh interval, and the bucket the cache keys on.
- *
- * One hour = 1/24th of the analysts' 24h context window. DERIVED from
- * staleness, not from cost — unlike `GROK_REFRESH_MS`, which is a cost
- * fraction, because this path is free.
- *
- * It also happens to equal `DEBATE_BAR_TIMEFRAME_MS`, and that coincidence
- * bounds the visibility latency rather than removing it: items are stamped at
- * the ingest instant (see `#buildItem`) and `getContext` floors its window end
- * to the bar, so at most one refresh's worth of item waits for the next bar to
- * open. An earlier draft of this comment claimed the bucket floor made the
- * stamp land ON that bar — it did, and that was the #782 defect, not the fix.
+ * The refresh interval, and the bucket the cache keys on. One hour = 1/24th
+ * of the analysts' 24h context window — derived from staleness, not cost,
+ * since this path is free. It also happens to equal
+ * `DEBATE_BAR_TIMEFRAME_MS`, which bounds visibility latency to at most one
+ * refresh's worth rather than removing it, since `getContext` floors its
+ * window end to the bar.
  */
 const POLYMARKET_REFRESH_MS = 60 * 60 * 1000;
 
@@ -173,61 +111,26 @@ const MAX_CONFIDENCE = 0.95;
 
 /**
  * The headroom `min(p, 1 - p)` a tracked outcome must have to be a signal
- * source at all (#833).
+ * source at all. A contract pinned near 0 or 1 cannot arithmetically carry a
+ * `DEAD_BAND`-sized delta, so it would emit `sentiment: 0, confidence: 0.05`
+ * every hour forever — not a neutral observation but a permanent zero vote
+ * that dilutes `directionFrom`'s unweighted mean against every row that did
+ * move. A refused row casts no vote at all.
  *
- * **Why any bound.** `sentiment = sign(delta)` with a ±`DEAD_BAND` dead band,
- * and a delta inside the band still EMITS — deliberately, #504 decision 7, and
- * that emit is not in question here. But a contract pinned at 0.9945 has
- * 0.0055 of room on the upside: it cannot carry a +0.02 delta arithmetically,
- * and a −0.02 delta is a repricing of a near-settled question rather than the
- * ordinary daily movement the delta is meant to read. So it emits
- * `sentiment: 0, confidence: 0.05` every hour, forever. That is not a neutral
- * observation, it is a permanent zero vote: `directionFrom`
- * (`pipeline/analysts/fundamental-analyst.ts`) takes an UNWEIGHTED mean of
- * sentiments and `confidenceFrom` an unweighted mean of confidences, so a
- * pinned row dilutes both means of every row that did move. A refused row
- * casts no vote at all — that asymmetry is the whole fix.
- *
- * **Why 0.10 and not some other number.** Derived from the confidence formula,
- * not from the two rows it happens to exclude: the smallest delta that says
- * anything is `DEAD_BAND`, and `|delta| * CONFIDENCE_SCALE` saturates at
- * `MAX_CONFIDENCE`. Requiring a row to be able to express at least MID-RANGE
- * confidence in BOTH directions gives
- * `((MIN_CONFIDENCE + MAX_CONFIDENCE) / 2) / CONFIDENCE_SCALE = 0.10`. Below
- * that, the constrained direction can only ever emit near the confidence floor
- * or nothing at all.
- *
- * The stricter alternative — full saturation headroom, 0.19 — was rejected on
- * margin, not on which rows it drops. Probed live on 2026-08-18, all six
- * curated rows: 0.715, 0.765, 0.755, 0.800, 0.925, 0.725. Both bounds exclude
- * exactly the same row (`us-recession-2026`, headroom 0.075), so the margin is
- * the only discriminator — and 0.19 leaves `fed-2027-01` (0.800) with 0.010 of
- * it and `fed-2026-10` (0.765) with 0.045, so ordinary drift on a healthy
- * series would evict it. At 0.10 those margins are 0.100 and 0.135.
- *
- * This is a RUNTIME guard and not the build-time table filter #833 proposed,
- * because `p` is a live quote — there is no curation-time value to test. The
- * guard applies to every curated row on every pass, so a row that drifts into
- * the pin later, or a future row added while pinned, is caught without anyone
- * remembering this rule.
+ * 0.10 is derived from the confidence formula: requiring a row to express at
+ * least mid-range confidence in both directions gives
+ * `((MIN_CONFIDENCE + MAX_CONFIDENCE) / 2) / CONFIDENCE_SCALE`. This is a
+ * runtime guard, not a build-time table filter, because `p` is a live quote
+ * that can drift into the pin after curation.
  */
 const MIN_PROBABILITY_HEADROOM = 0.1;
 
-/**
- * Book-quality floors. Markets measured at 0.298 (`U.K. Annual Inflation
- * 2026`) and 0.97 (`Bitcoin ETF Flows`) spreads are exactly what these refuse:
- * a probability read off a book that wide is not a price, it is a guess with a
- * bid/ask around it.
- */
+/** Book-quality floors: a probability read off a book this wide is not a price, it is a guess with a bid/ask around it */
 const MAX_SPREAD = 0.05;
 const MIN_VOLUME_24H_USD = 100;
 const MIN_LIQUIDITY_USD = 5_000;
 
-/**
- * How stale the vendor's own revision stamp may be. Measured stamps were under
- * 4 minutes old (#481 §5); 6 hours is far past anything healthy and only fires
- * on a market that has genuinely stopped updating.
- */
+/** How stale the vendor's own revision stamp may be — far past anything healthy, fires only on a market that has genuinely stopped updating */
 const MAX_UPDATED_AGE_MS = 6 * 60 * 60 * 1000;
 
 /** The delta's lookback. Matches the analysts' context window by construction. */
@@ -261,11 +164,10 @@ export interface PolymarketAgentDeps {
   store: MarketIntelligenceStore;
   clock: Clock;
   /**
-   * The MI archive, when this run has one. Both the raw bytes and the derived
-   * items are written (#835); `archive/mi-sources.ts` is what keeps the items
-   * from being re-ingested at boot. Also where each curated row's consecutive-
-   * refusal streak is persisted (#1120) — `#nextRefusalStreak` reads it back
-   * so a restart resumes an escalation instead of restarting it at 1.
+   * The MI archive, when this run has one. Both the raw bytes and the
+   * derived items are written; also where each curated row's
+   * consecutive-refusal streak is persisted, so a restart resumes an
+   * escalation instead of restarting it at 1 (see `#nextRefusalStreak`).
    */
   archive?: MiArchiveStore | undefined;
   logger?: Logger | undefined;
@@ -362,20 +264,12 @@ function endpointsOf(
 }
 
 /**
- * What one curated row produced this pass, and — the part that matters —
- * whether it ANSWERED.
- *
- * `refused` is an answer: the vendor was reachable and the book was thin, the
- * slug rotted, or the series was too short. Re-asking inside the hour would
- * only repeat it, so the bucket is marked.
- *
- * `transport-failed` is not an answer, and it is a distinct case from `refused`
- * rather than a shade of it. Gamma and the CLOB are INDEPENDENT endpoints, so a
- * pass can read every market from Gamma and reach no price history at all; if
- * the Gamma read alone credited the row, that outage would mark the bucket and
- * suppress the retry for the rest of the hour. Whichever transport failed, the
- * answer is the same one the Gamma-side throw already gets: contribute nothing,
- * leave the bucket unmarked, let the next pass re-ask.
+ * What one curated row produced this pass, and whether it answered.
+ * `refused` is an answer (vendor reachable, book thin, slug rotted, series
+ * too short) so the bucket is marked. `transport-failed` is not, and is kept
+ * distinct: Gamma and the CLOB are independent endpoints, so a pass can read
+ * every market from Gamma yet reach no price history — that must leave the
+ * bucket unmarked so the next pass retries, same as a Gamma-side throw.
  */
 type BuiltRow =
   | { outcome: 'item'; item: IntelligenceItem; raw: RawArchiveRow }
@@ -383,20 +277,11 @@ type BuiltRow =
   | { outcome: 'transport-failed' };
 
 /**
- * The archive row for one built item, keyed off the RAW row rather than
- * re-derived (#835).
- *
+ * Keys the archive row off the RAW row rather than re-deriving the key.
  * `mi_items` declares `(source, native_id, updated_at)` as a foreign key into
- * `mi_archive_raw`, and the store does not turn `PRAGMA foreign_keys` on — so a
- * key that drifted from its raw row would not throw, it would silently orphan
- * the item and break exactly the provenance `retrievalEvidence` now means
- * (#555). Reading the triple off `raw` makes drift impossible rather than
- * merely tested for.
- *
- * Exported so the drift itself is testable: a test that only reads back what
- * `itemsKnownAt` serves cannot see the key columns at all (that read selects
- * `asset_class, item_json` and nothing else), so it would stay green against a
- * drifted `native_id`.
+ * `mi_archive_raw` with `PRAGMA foreign_keys` off, so a drifted key would
+ * silently orphan the item instead of throwing. Exported so the drift is
+ * testable — `itemsKnownAt`'s own read never selects the key columns.
  */
 export function toArchivedItem(item: IntelligenceItem, raw: RawArchiveRow): ArchivedItem {
   return {
@@ -416,12 +301,9 @@ export class PolymarketAgent {
   #current: Promise<boolean> | undefined;
   /**
    * Consecutive book-quality refusals per curated row — see `#refuse`.
-   *
-   * In-memory only; the archive (when present) is the durable copy (#1120)
-   * that survives this map resetting on every restart. `#nextRefusalStreak`
-   * reads the archive on this map's first miss for a row so the count picked
-   * up here continues an escalation the archive was already tracking rather
-   * than restarting it at 1.
+   * In-memory only; resets on restart. `#nextRefusalStreak` reads the
+   * archive on this map's first miss for a row so a restart continues an
+   * escalation the archive was already tracking rather than restarting it at 1.
    */
   readonly #refusals = new Map<string, number>();
   readonly #deps: PolymarketAgentDeps;
@@ -435,11 +317,9 @@ export class PolymarketAgent {
   }
 
   /**
-   * Logs, absorbing a throw from the logger itself — the same contract, and
-   * for the same reason, `GdeltIngestAgent.log` documents: this is called as
-   * `void refresh(...)` from `production.ts`'s own timer, so a throwing logger
-   * would surface as an unhandled rejection in a process meant to run
-   * unattended for fourteen days, and #714's fault handler EXITS on those
+   * Absorbs a throw from the logger itself: called as `void refresh(...)`
+   * from `production.ts`'s timer, so a throwing logger would surface as an
+   * unhandled rejection, and the process's fault handler exits on those
    */
   #log(entry: LogEntry): void {
     const logger = this.#deps.logger;
@@ -453,13 +333,9 @@ export class PolymarketAgent {
 
   /**
    * One refresh of the whole curated table, if its bucket has rolled over.
-   *
-   * Returns whether anything was ingested. **Never throws** — market
-   * intelligence is an optional input, so a vendor outage must degrade the
-   * desk to `NO_DATA_MARKER` rather than take down a run.
-   *
-   * Concurrent calls do not stack: a call made while a pass is in flight
-   * returns `false` rather than starting a second one.
+   * **Never throws** — a vendor outage must degrade the desk to
+   * `NO_DATA_MARKER` rather than take down a run. A call made while a pass
+   * is in flight returns `false` rather than starting a second one.
    */
   async refresh(trace_id = 'polymarket'): Promise<boolean> {
     if (this.#current !== undefined) return false;
@@ -508,8 +384,7 @@ export class PolymarketAgent {
     try {
       market = await this.#deps.client.fetchEventMarket(entry.eventSlug, entry.marketSlug);
     } catch (error) {
-      // Transport failure: transient, so it does NOT count as answered and
-      // the bucket stays unmarked, which is what makes the next tick retry
+      // Transient, so it does not count as answered; bucket stays unmarked
       this.#logFailure(
         {
           trace_id,
@@ -527,10 +402,9 @@ export class PolymarketAgent {
     }
 
     if (market === undefined) {
-      // Slug rot, and the loudest case in this file. A decayed table degrades
-      // to silent zero-ingest — the exact mute-analyst state this source
-      // exists to relieve — so it is a warn naming the row to edit, never an
-      // info nobody greps for
+      // A decayed table degrades to silent zero-ingest — the mute-analyst
+      // state this source exists to relieve — so this warns naming the row
+      // to edit rather than logging at info
       this.#log({
         trace_id,
         stage: 'market_intelligence',
@@ -548,8 +422,7 @@ export class PolymarketAgent {
           market_slug: entry.marketSlug,
         },
       });
-      // Gamma ANSWERED — with "there is no such market". A decayed table is a
-      // durable state, not an outage, so re-asking inside the hour repeats it
+      // A decayed table is a durable state, not an outage, so it counts as answered
       return { answered: true };
     }
 
@@ -581,35 +454,22 @@ export class PolymarketAgent {
     }
 
     if (items.length === 0) {
-      // The bucket is marked only when SOMETHING answered: a pass in which
-      // every row failed on a TRANSPORT — Gamma's or the CLOB's, see
-      // `BuiltRow` — is a vendor outage and must be retried, while a pass in
-      // which every row was refused on book quality, or rotted, is a real
-      // answer and re-asking within the hour would only repeat it
+      // Marked only when something answered: all-transport-failed (see
+      // `BuiltRow`) is a vendor outage to retry, not a real answer to cache
       if (answered > 0) this.#bucket = bucketAt.getTime();
       return false;
     }
 
     try {
-      // Raw bytes AND the derived items (#835). This wrote `[]` for the items
-      // because `MiIngestAgent.hydrate()` reloaded archived items
-      // source-agnostically at startup, so an archived item here would have a
-      // restart re-serve a trailing-window statistic as if it were current —
-      // and, since `MarketIntelligenceStore.ingest` does no dedup by `id`,
-      // compound the time-axis inflation limitation 3 records. That bought the
-      // boot property by giving up replay: this source could not be replayed as
-      // items at all, and its `intel` (#1164; `news` before it) contribution
-      // vanished on restart with nothing on disk to rebuild it from, against
-      // the spec's user stories
-      // 26/29/30. `archive/mi-sources.ts` now carries the boot policy per
-      // source, so both properties hold: the items are archived, and
-      // `HYDRATING_MI_SOURCES` excludes this one from the boot read
+      // Archives both raw bytes and derived items so a restart can hydrate
+      // without re-serving a trailing-window statistic as current: this
+      // source is excluded from `HYDRATING_MI_SOURCES`'s boot read, so
+      // hydration comes only from the archive, not from `store.ingest` below
       this.#deps.archive?.write(raws, archivedItems);
       this.#deps.store.ingest({
         agent_id: SOURCE_POLYMARKET,
-        // The envelope stamp, which `MarketIntelligenceStore.ingest` carries
-        // but never reads — it filters on the ITEM timestamp. Set to the same
-        // ingest instant the items carry so the two cannot disagree
+        // `MarketIntelligenceStore.ingest` carries this but filters on the
+        // item timestamp instead — set equal so the two cannot disagree
         timestamp: now,
         asset_class: POLYMARKET_ASSET_CLASS,
         items,
@@ -674,13 +534,9 @@ export class PolymarketAgent {
       return this.#refuse(trace_id, entry, 'the bullish outcome has no CLOB token id', now);
     }
 
-    // #833. Above the price-history fetch on purpose: a pinned row can never
-    // produce a signal, so the CLOB call is wasted, and running the check
-    // AFTER `refuseOnBook` keeps every existing refusal reason unchanged for a
-    // row that is thin AND pinned. Routed through `#refuse` like every other
-    // book-quality refusal, so the row still counts as ANSWERED and the
-    // bucket marks — this is a durable property of the contract, not an
-    // outage, and re-asking inside the hour would only repeat it
+    // Checked above the price-history fetch: a pinned row can never produce a
+    // signal, so the CLOB call would be wasted. Routed through `#refuse` so it
+    // still counts as answered — a pinned contract is a durable state, not an outage
     const probability = market.outcomePrices[outcomeIndex];
     if (probability === undefined || !Number.isFinite(probability)) {
       return this.#refuse(
@@ -736,37 +592,17 @@ export class PolymarketAgent {
       id: `${SOURCE_POLYMARKET}:${entry.id}:${bucketAt.toISOString()}`,
       source: SOURCE_POLYMARKET,
       type: 'news',
-      // `now`, the INGEST INSTANT — never the floored bucket. `getContext`
-      // floors its window end to the debate bar and drops anything stamped
-      // past it (#782), and that dropping is the feature, not an obstacle: it
-      // is what stops `intel.length` (#1164; this item routes there by
-      // `scope`, not into `news`) moving between two ticks of ONE bar
-      // `technical-analyst` puts that count verbatim in `key_points`, which is
-      // hashed into `debate_id`, so a count that grows mid-bar buys a SECOND
-      // paid debate on a bar that already had one (#617, ADR-0008's budget) —
-      // and `fundamental-analyst` emits a second, different confidence on the
-      // same bar, which `scale_in_conviction_delta` can turn into an extra lot
-      //
-      // Stamping `bucketAt` backdates the item INTO the already-open bar and
-      // re-opens exactly that. The poll timer is 15 minutes at an arbitrary
-      // phase and the tick interval is 60s, so an ingest at 10:11 stamped 10:00
-      // is visible to a read at 10:12 and was not visible at 10:05
-      // `market-intelligence-spec.md` states the contract this now honours:
-      // "an item ingested mid-bar is not visible until the next bar opens" —
-      // at most one hour of latency against a 24h window, on a path whose
-      // consumer runs once per bar anyway
-      //
-      // `id` and `native_id` stay keyed to `bucketAt` on purpose: they are the
-      // replay/dedup coordinates and must be stable for a replay stepping the
-      // same grid, which a wall-clock instant is not
+      // `now`, the ingest instant — never `bucketAt`. Stamping the bucket would
+      // backdate the item into an already-open bar, letting a mid-bar count
+      // change and buy a second debate on a bar that already had one. `id`
+      // and `native_id` stay keyed to `bucketAt` since those are replay/dedup
+      // coordinates and must be stable across a replay of the same grid
       timestamp: now,
       entity: entry.entity,
-      // A curated macro market is evidence for the whole class and for no one
+      // A curated macro market is evidence for the whole class, not one
       // instrument: `entry.entity` is a series name (`FOMC-2026-09`), never a
-      // ticker. Without this the item is dropped by `getContext`'s entity
-      // filter for every entity-scoped caller (#914) — which is both analysts
-      // that read the CONTENT — while still reaching `technical-analyst`,
-      // whose read passes no entity, as a bare `intel.length` (#1164)
+      // ticker, so without this scope it would be dropped by every
+      // entity-scoped caller's filter
       scope: 'asset_class',
       headline:
         `${entry.label}: ${baseline.probability.toFixed(3)} -> ` +
@@ -782,9 +618,7 @@ export class PolymarketAgent {
     const raw: RawArchiveRow = {
       source: SOURCE_POLYMARKET,
       native_id: `${entry.id}:${bucketAt.toISOString()}`,
-      // The VENDOR's revision stamp, not ours — `updated_at` orders revisions,
-      // `ingested_at` is the visibility gate (`mi-archive-store.ts`). Guarded
-      // as defined by `refuseOnBook` above
+      // The vendor's revision stamp, not ours — `ingested_at` is the visibility gate
       updated_at: market.updatedAt ?? bucketAt,
       payload: JSON.stringify({
         market: market.payload,
@@ -792,13 +626,10 @@ export class PolymarketAgent {
         latest: { at: latest.at.toISOString(), p: latest.probability },
       }),
       ingested_at: now,
-      // 'live' because we fetched it now and stamped it with the bucket we
-      // fetched it in — the row asserts nothing we did not know
       fidelity: 'live',
     };
 
-    // The row answered, so its refusal streak starts over: the escalation must
-    // fire on a row that is dead, not on one that was quiet last Tuesday
+    // The row answered, so its refusal streak resets rather than escalating
     this.#refusals.delete(entry.id);
     this.#deps.archive?.clearRefusalStreak(SOURCE_POLYMARKET, entry.id);
     return { outcome: 'item', item, raw };
@@ -808,13 +639,9 @@ export class PolymarketAgent {
     const streak = this.#nextRefusalStreak(entry.id);
     this.#refusals.set(entry.id, streak);
     this.#deps.archive?.recordRefusalStreak(SOURCE_POLYMARKET, entry.id, streak, reason, now);
-    // A row parked below the book-quality floors forever is functionally a
-    // rotted row: it never contributes, and nobody greps `info`. One refusal is
-    // routine (a quiet hour on a market that trades around a print), so the
-    // first day stays `info`; past a full day of consecutive refusals the row
-    // is not quiet, it is dead, and that has to reach the same eyes slug rot
-    // does. Measured 2026-08-17: 3 of the 6 curated rows sit below the volume
-    // floor today, so this is the common path, not an edge (see the PR body)
+    // One refusal is routine (a quiet hour on a market that trades around a
+    // print) and stays `info`; past a full day of consecutive refusals the
+    // row is functionally dead and must reach the same eyes slug rot does
     const persistent = streak >= REFUSAL_WARN_STREAK;
     this.#log({
       trace_id,
@@ -834,12 +661,9 @@ export class PolymarketAgent {
   }
 
   /**
-   * The next streak value for `id` (#1120). Continues the in-memory count on
-   * a hit; on this process's first refusal for `id` it falls back to what the
-   * archive already had persisted rather than 0, which is what makes the
-   * escalation resume after a restart instead of restarting at 1 — the exact
-   * failure that let a permanently-dead row read as merely occasional on a
-   * soak that bounces more than once a day.
+   * The next streak value for `id`. On this process's first refusal for `id`
+   * it falls back to the archive's persisted count rather than 0, so an
+   * escalation resumes across a restart instead of restarting at 1.
    */
   #nextRefusalStreak(id: string): number {
     const inMemory = this.#refusals.get(id);

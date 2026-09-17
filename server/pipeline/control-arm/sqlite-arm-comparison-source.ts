@@ -1,20 +1,13 @@
 /**
- * The one read behind #753's comparison report: both arms' closed trades, over
- * one window, in one query.
- *
- * **One query, not two, and that is the point.** Doc 12 gate 4's exact-window
- * requirement is a correctness condition — two arms measured over different
- * windows are not a comparison — and the cheapest way to break it is to run a
- * live query and a control query that drift apart by an edit. A single
- * `WHERE closed_at > ? AND closed_at <= ?` with the arm SELECTED rather than
- * filtered makes the shared window structural: there is no second window to get
+ * The one read behind the comparison report: both arms' closed trades,
+ * over one window, in one query — not two, since a live query and a
+ * control query risk drifting into different windows by an edit. The arm
+ * is SELECTED rather than filtered, so there is no second window to get
  * wrong.
  *
- * It is also the reason this reader exists at all rather than the report reusing
- * `SqliteClosedTradeStore`. That store is the Feedback Loop's, and it is scoped
- * to `arm = 'live'` on purpose (#753) — the loop must not tune the live system on
- * the control's outcomes. A reader that returns both arms is a different question
- * with a different answer, so it is a different reader.
+ * Exists separately from `SqliteClosedTradeStore` because that store is
+ * scoped to `arm = 'live'` on purpose — the Feedback Loop must not tune
+ * the live system on the control's outcomes.
  */
 import type { ClosedTrade, TradingArm } from '../../shared/index.js';
 import {
@@ -31,17 +24,14 @@ import type {
 } from './arm-comparison.js';
 import { exitClassOf, noCostBasisDrops } from './arm-comparison.js';
 
-/** A closed trade plus the arm that produced it (migration 0033) */
+/** A closed trade plus the arm that produced it */
 export type ArmedClosedTrade = ClosedTrade & { arm: TradingArm };
 
 /**
- * One window's read, whole: the rows that survived the filters below AND what
- * the cost-basis filter removed on the way (#1546).
- *
- * Returned together, from ONE query, for the module header's reason. A second
- * method taking its own `from`/`to` would be a second window to get wrong —
- * `getRefusedPassCountsBetween` is separate only because it reads a different
- * table, which is not an excuse available here.
+ * One window's read, whole: the rows that survived the filters below AND
+ * what the cost-basis filter removed on the way. Returned together, from
+ * ONE query, for the module header's reason — a second method taking its
+ * own `from`/`to` would be a second window to get wrong.
  */
 export interface ClosedTradeWindow {
   trades: ArmedClosedTrade[];
@@ -50,20 +40,14 @@ export interface ClosedTradeWindow {
 
 /**
  * The `trader_log.skip_reason` values that mean "this arm could not even
- * attempt the pass", by the arm that can produce them (#1099).
- *
- * `trader_log` carries no `arm` column — migration 0033 added one to
- * `closed_trades`, `open_positions` and (0050) `flatten_submissions`, never
- * here — so attribution runs through the reason itself. That is sound rather
- * than a workaround: `buildBracket` (decide.ts) converts a `BookValuationError`
- * into `control_arm_valuation_refused` only under `arm === 'control'` and
- * rethrows on the live arm, so the string identifies the arm by construction.
- *
- * The live arm's list is empty and that is the true count, not a placeholder: a
- * live-arm valuation failure stays a fault that aborts the tick (decide.ts's
- * `throw error`), so it never reaches `trader_log` as a skip at all. If that
- * ever stops being true, adding the reason here is all this module needs — the
- * count is per-arm end to end — but nothing enforces that the entry is made.
+ * attempt the pass", by the arm that can produce them. `trader_log`
+ * carries no `arm` column, so attribution runs through the reason itself:
+ * `buildBracket` (decide.ts) converts a `BookValuationError` into
+ * `control_arm_valuation_refused` only under `arm === 'control'` and
+ * rethrows on the live arm, so the string identifies the arm by
+ * construction. The live arm's empty list is the true count, not a
+ * placeholder — a live-arm valuation failure aborts the tick instead of
+ * reaching `trader_log` as a skip.
  */
 const REFUSED_PASS_SKIP_REASONS: Readonly<Record<TradingArm, readonly string[]>> = {
   live: [],
@@ -81,15 +65,13 @@ export class SqliteArmComparisonSource {
 
   /**
    * Every closed trade in the window, both arms, half-open at the start so
-   * consecutive windows partition the timeline exactly as the Feedback Loop's
-   * daily cycle does — plus, from the same rows, what the cost-basis filter
-   * dropped per arm and exit class (#1546).
-   *
-   * The counts are taken AFTER `oneSizingRegime` and BEFORE
-   * `modelledCostCharged`, which is the only position that answers the question
-   * asked: rows from an incomparable sizing regime are not part of this
-   * window's population at all, so counting them as "dropped by the cost-basis
-   * filter" would attribute one filter's removals to another.
+   * consecutive windows partition the timeline exactly as the Feedback
+   * Loop's daily cycle does — plus what the cost-basis filter dropped per
+   * arm and exit class. Counts are taken after `oneSizingRegime` and
+   * before `modelledCostCharged`: rows from an incomparable sizing regime
+   * are not part of this window's population, so counting them as
+   * "dropped by the cost-basis filter" would misattribute one filter's
+   * removals to another.
    */
   getClosedTradeWindowBetween(from: Date, to: Date): ClosedTradeWindow {
     const rows = this.db
@@ -119,24 +101,16 @@ export class SqliteArmComparisonSource {
   }
 
   /**
-   * Passes each arm REFUSED in the same window — one instrument-pass per row,
-   * not one per tick (#1099).
+   * Passes each arm REFUSED in the same window — one instrument-pass per
+   * row, not one per tick, since `trader_log`'s primary key is
+   * `(trace_id, instrument)` and the decision path writes unconditionally.
+   * Same half-open window as `getClosedTradeWindowBetween`, so consecutive
+   * windows partition refusals the same way.
    *
-   * `trader_log`'s primary key is `(trace_id, instrument)` and the decision
-   * path writes unconditionally with `ON CONFLICT DO NOTHING`
-   * (sqlite-decision-record-stores.ts), so a tick that refused six instruments
-   * contributes six — which is the granularity #1089's six dead passes were
-   * counted at.
-   *
-   * The same half-open window as `getClosedTradeWindowBetween`, over a column
-   * written through the same `toStoredTimestamp`, so consecutive windows
-   * partition refusals exactly as they partition trades.
-   *
-   * These counts are NOT commensurable with `ArmPerformance.trade_count` as a
-   * ratio: `modelledCostCharged` and `oneSizingRegime` above drop closed trades
-   * this query has no analogue for, so a window can report refusals against a
-   * `trade_count` those filters gutted. They answer "was the arm able to act",
-   * not "what fraction of its passes traded".
+   * NOT commensurable with `ArmPerformance.trade_count` as a ratio: the
+   * filters above drop closed trades this query has no analogue for. This
+   * answers "was the arm able to act", not "what fraction of its passes
+   * traded".
    */
   getRefusedPassCountsBetween(from: Date, to: Date): ArmRefusedPassCounts {
     const reasons = [...REFUSED_PASS_ARM_BY_SKIP_REASON.keys()];
@@ -165,162 +139,32 @@ export class SqliteArmComparisonSource {
 }
 
 /**
- * #1121 AC5, migration 0049: drops any row whose fee was never brought onto
- * the two arms' shared cost basis — unconditionally, not only when a window
- * mixes 0 and 1 rows, unlike `oneSizingRegime` just below.
+ * Drops any row whose fee was never brought onto the two arms' shared cost
+ * basis — unconditionally, unlike `oneSizingRegime` below, because a live
+ * row missing this cost is not "consistently scaled wrong" the way an
+ * all-NULL sizing window is; it's a `return_pct` carrying the exact bias
+ * this filter exists to remove, so there is no reading of an all-dropped
+ * window that is safe to keep.
  *
- * That is a deliberate divergence from the sizing-regime precedent, not an
- * oversight. `oneSizingRegime` tolerates a PURE pre-cutover window because
- * every row in it shared the same wrong scale — the ratios inside that
- * window still meant something, just not against a post-cutover window.
- * This column has no such case: a live row with `modelled_cost_charged = 0`
- * is missing a cost the matched control paid on every trade it ever wrote,
- * so a window built entirely from such rows is not "consistently scaled
- * wrong" the way an all-NULL sizing window was — it is a return_pct with the
- * exact bias #1121 exists to remove, whether or not anything newer sits next
- * to it. There is no reading of an all-0 window that is safe to keep.
+ * This filter is NOT outcome-blind. A protective-leg exit needs only its
+ * entry submission's capture, while a flatten exit needs that same
+ * capture AND the flatten's — so the surviving live population is
+ * enriched in protective-leg exits relative to flattens, direction and
+ * size unestablished (it depends on the flatten capture's failure rate
+ * and the return split between exit types). It can also gut the live
+ * arm's `trade_count` to 0, both from the historic backfill and from an
+ * ongoing failed `captureSubmitSnapshot`.
  *
- * Also unlike `oneSizingRegime`, this never throws on a mix: the historic
- * rows are KNOWN wrong, not two legitimate regimes an operator chose between
- * (that guard's #949/#1180 currency case), so there is nothing to escalate —
- * dropping them is the whole remedy.
+ * Tracked rather than blocked: `countCostBasisDrops` below measures the
+ * per-arm, per-exit-class kept/dropped counts every window
+ * (`ArmPerformance.cost_basis_drops`), and `evaluateArmDivergence` floors
+ * each arm's trade count so a heavily-gutted arm reads as no verdict
+ * rather than a confident one off a skewed sample — a coupling, not a
+ * bound on the bias.
  *
- * This can gut the live arm's `trade_count` to 0, and for TWO reasons that
- * read identically from here. The historic one is migration 0049's backfill:
- * every live row closed before #1121 stamps 0. The ONGOING one is that the
- * writer derives the column per lot (`closedTrade()`, ingest-fills.ts) from
- * whether that lot's covered legs actually carry a `cost_breakdown` — the
- * submit-time snapshot is nullable, so a lot whose `captureSubmitSnapshot`
- * failed closes with 0 under the fixed code too. A window of entirely
- * post-fix live closes can therefore be gutted; this filter is not "one-armed
- * historic cleanup".
- *
- * `oneSizingRegime`'s doc claims its filter "cannot preferentially gut one
- * arm" because both arms' stores share one `capitalCeilingUsd` cutover
- * instant. That property does NOT hold here, in either regime: the backfill
- * stamps 0 by `arm`, and only the live arm reaches the nullable-snapshot path
- * at all (a Simulated fill always carries its own breakdown). The filter is
- * one-armed by construction on the historic rows and one-armed in practice on
- * the ongoing ones.
- *
- * What stops a GUTTED arm reading as a skewed one is the floor, not luck:
- * `evaluateArmDivergence` (arm-comparison-cycle.ts) floors each arm's trade
- * count at `min_trades_per_arm` before calling a divergence, so a gutted arm
- * reads as NO VERDICT. The floor is doing more work than a one-off cleanup
- * would need, because the ongoing exclusion never ends. It is NOT a bound on
- * the bias in an arm that clears it — see "WHY IT IS TRACKED RATHER THAN
- * BLOCKING" below — and it is certainly not a claim that the exclusion is
- * outcome-blind. It is not, and the earlier version of this comment claiming
- * so was wrong (#1121 review round 2, finding 1).
- *
- * THE EXCLUSION SELECTS ON EXIT TYPE, through the SUBMISSION count rather than
- * through a veto — and #1301's fix does not remove that. `closedTrade()`'s
- * `modelledCostCharged` now covers every leg (#1301 widened it once a
- * protective leg had a modelled estimate at all), but coverage was never the
- * operative term: each covered leg needs a successful, best-effort
- * `captureSubmitSnapshot`, and a protective leg's estimate comes from the
- * ENTRY submission's capture, the same one its entry legs already needed. So a
- * lot that exits on a protective leg still stamps 1 on the entry capture
- * alone, while a lot that exits on a flatten needs that SAME capture AND the
- * flatten's. The requirement is strictly weaker for protective-leg exits, so
- * their drop rate is WEAKLY lower — equal exactly when the FLATTEN capture
- * never fails, which is the condition that matters: an entry capture that
- * fails hits both exit types identically and does not equalize anything. The
- * surviving live population is therefore enriched in protective-leg exits. The
- * veto `closedTrade()` refuses is genuinely refused; the selection arrives
- * anyway, by the back door.
- *
- * IT IS NOW MEASURED PER WINDOW, which is #1546's answer to it.
- * `countCostBasisDrops` below counts kept and dropped rows per arm and per exit
- * class off the SAME rows this filter runs on, and
- * `ArmPerformance.cost_basis_drops` carries them to every reader
- * (`formatArmComparison`, the FL sample — `armDivergenceAlerts`
- * (alert-catalogue.ts) does not render this field). A reader can
- * therefore take the per-class drop RATE this comment could previously only
- * name in the abstract, and #1412 can weight or bound the selection term
- * against it instead of assuming it away. What is NOT done is equalizing the
- * requirement: charging a flatten leg off the entry's protective estimate when
- * the flatten's own capture failed would change `realized_pnl_net` on the live
- * arm and add a second money-path use of one submission's `MarketState`, which
- * is David's 2026-09-14 Option 1 ruling (and #1121 AC6) to reopen, not this
- * reader's.
- *
- * The counts are NOT the rate on their own. `dropped / (kept + dropped)` per
- * class is a per-window sample and can be 0/0; and a dropped row's cause is
- * still not separable here between a failed capture and a pre-migration-0037
- * lot that never had a snapshot to fail. The round-2 soak read (live rows,
- * `fills.cost_breakdown_json IS NOT NULL`) found both flatten-exit lots
- * stamping 0 and the single `stop` lot stamping 1 — the asymmetry's existence,
- * not its size. What the column adds is the denominator that read lacked.
- *
- * DIRECTION IS NOT ESTABLISHED. Two terms act on the surviving live rows, and
- * neither their net sign nor their ordering by size follows from anything
- * here — not even that they oppose, which needs both signs (#1121 review
- * round 5, finding 1; the earlier version of this paragraph claimed all
- * three).
- *
- * - The SELECTION term has no established sign. Coverage excludes `'stop'`
- *   AND `'target'`, so what survives is enriched in bracket exits of both
- *   kinds — the losses and the wins together, not the losses alone. Whether
- *   that raises or lowers the surviving mean against the flatten population's
- *   is unmeasured. The earlier "those are the losers" was
- *   `modelledCostCharged`'s narrow claim about STOPS — true there, where the
- *   subject is a veto on stops — carried unchanged onto a referent widened to
- *   stop/target, where it is false.
- * - The #1301 UNDER-CHARGE term is CLOSED for lots opened after migration
- *   0061. A protective leg now carries its own submit-time modelled estimate
- *   (`open_positions.modelled_protective_exit_cost_breakdown_json`) and
- *   `chargeTopUpTo` has something to top the adapter's report up to, so the
- *   whole-exit-commission bias under an adapter reporting `fee: 0` is gone.
- *   It still applies to every row written BEFORE that migration, which is
- *   every live row the soak this filter runs over produced.
- *
- * "Net conservative" still cannot be claimed, on either side of that
- * migration. Below it, the reasoning is unchanged: if the flatten capture
- * never fails, the selection term is exactly zero while the under-charge is a
- * whole commission, so the net bias is UP — flattering the live edge. Above
- * it, the under-charge term is zero and the selection term is whatever it is,
- * sign unestablished, so the net is simply the selection term with no
- * counterweight. Ordering anything still needs the two numbers this comment
- * does not have: the flatten capture's failure rate (`flatten_submissions`
- * rows with a null `modelled_cost_breakdown_json`, restricted to
- * post-migration-0037 rows so a failed capture is separable from a
- * pre-migration one) and the surviving bracket population's mean return split
- * by stop versus target.
- *
- * WHY IT IS TRACKED RATHER THAN BLOCKING — two statements, neither leaning on
- * the other, and neither a bound on the bias:
- *
- * - #1121 does not create this residual. The missing modelled cost for a
- *   protective leg predates this column and is #1301's; what #1121 adds is
- *   the filter that makes the resulting selection VISIBLE, which is why it is
- *   tracked there rather than hidden here.
- * - The floor stops a GUTTED live arm from producing a verdict at all, and
- *   the drop rate that would make the selection term large is the same drop
- *   rate that empties the live arm toward `min_trades_per_arm`
- *   (`MIN_TRADES_PER_ARM_FOR_DIVERGENCE = 5`, arm-comparison-cycle.ts — the
- *   value the cycle actually passes; migration 0035 is where the recorded
- *   COLUMN came from, not where the operative number lives). At high trade
- *   volume those come apart — an arm can clear
- *   the floor on a heavily selected population. So this is a coupling, not a
- *   bound, and no bound is claimed.
- *
- * HOW #1301 LANDED. David ruled on 2026-09-14 for Option 1 — price the
- * protective legs at submit, off the entry's own `MarketState`, keeping one
- * derivation per priced event (#1121 AC6) — over giving the control arm a
- * bracket-exit path. That removes the under-charge outright and leaves the
- * drop differential exactly as it was, for the reason this comment anticipated:
- * a charge priced off the ENTRY snapshot needs no capture of its own, so
- * protective exits still need the entry captures alone and flattens still need
- * one more. The differential is a deliberate residual of the chosen option,
- * and #1546 answered it by MEASURING it rather than removing it — see "IT IS
- * NOW MEASURED PER WINDOW" above.
- *
- * The floor covers the AUTOMATED reader only. `tools/report-arm-comparison.ts`
- * has no floor — it prints `trade_count` per arm to an operator, who would
- * otherwise read a gutted `live 0` as "the live arm closed nothing". That
- * report carries a live-side note naming this filter as a cause; the two must
- * stay in step.
+ * The floor covers the automated reader only —
+ * `tools/report-arm-comparison.ts` has no floor and carries its own note
+ * on this filter, which must stay in step with this one.
  */
 function modelledCostCharged<Row extends { modelled_cost_charged: 0 | 1 }>(
   rows: readonly Row[],
@@ -329,20 +173,17 @@ function modelledCostCharged<Row extends { modelled_cost_charged: 0 | 1 }>(
 }
 
 /**
- * #1546: what `modelledCostCharged` above kept and removed, per arm and per
- * exit class, over the rows it is about to run on.
+ * What `modelledCostCharged` above kept and removed, per arm and per exit
+ * class, over the rows it is about to run on. Counted from the SAME
+ * array rather than a second `GROUP BY` query, so the counts and the
+ * trades cannot describe different windows, and so they see exactly what
+ * the filter sees, including the `oneSizingRegime` removals that happened
+ * first.
  *
- * Counted from the SAME array rather than from a second `GROUP BY` query, so
- * the counts and the trades cannot describe different windows — the property
- * this module's header calls a correctness condition. It also means the counts
- * see exactly what the filter sees, including the `oneSizingRegime` removals
- * that happened first.
- *
- * A NULL `arm` counts as `'live'`, matching `buildArmComparison`'s own reading
- * of the column: every row written before falsifier arm 2 existed was the live
- * arm's (migration 0033's default). A control row can only ever land in
- * `kept` — `SimulatedBrokerAdapter` prices its own fills — and the zero in
- * `control.*.dropped` is the true count, not a placeholder.
+ * A NULL `arm` counts as `'live'`, matching `buildArmComparison`'s own
+ * reading of the column — every row written before the control arm
+ * existed was the live arm's. A control row can only ever land in `kept`;
+ * the zero in `control.*.dropped` is a true count, not a placeholder.
  */
 function countCostBasisDrops(
   rows: readonly {
@@ -366,53 +207,25 @@ function countCostBasisDrops(
 }
 
 /**
- * #1112 AC5, migration 0045: the mechanism the column exists for. Without
- * this, `sizing_capital_ceiling` is written on every row and read by nobody
- * — the exact "tested mechanism nothing calls" pattern this repo keeps
- * reintroducing.
+ * The mechanism `sizing_capital_ceiling` exists for — without this filter
+ * the column is written on every row and read by nobody.
  *
- * Two mixes, two answers, because they are not the same event.
+ * NULL alongside a declared ceiling is a cutover, not an unknown: every
+ * row written before the ceiling column existed was sized against the
+ * paper broker's funded equity, a KNOWN-WRONG scale (~100x), so those
+ * rows are dropped rather than refused — refusing would produce no
+ * comparison at all for the first window after the cutover, since both
+ * callers window backwards from now on a fixed `window_ms`. The drop is
+ * visible downstream: `evaluateArmDivergence` floors `trade_count` per
+ * arm, so a window gutted by this drop yields no verdict rather than a
+ * confident one off a handful of rows. The filter cannot preferentially
+ * gut one arm — both arms' stores are constructed from the same
+ * `config.capitalCeilingUsd` in one composition root.
  *
- * **NULL alongside a ceiling is the #1112 cutover, and it is dropped, not
- * refused.** Every row written before migration 0045 was sized against the
- * paper broker's funded equity (~$100,000) rather than the declared book, so
- * a NULL row is not an unknown scale — it is a KNOWN-WRONG one, ~100x. The
- * daily cycle (production.ts) and `npm run report:arms` both window backwards
- * from now on a fixed `window_ms`, so the first window after this migration
- * ships necessarily straddles the cutover; refusing it would produce no
- * comparison at all for a full window, exactly when #1112's corrected sizing
- * first becomes observable, and "narrow the window" is not an instruction an
- * automated caller can act on. Averaging a known-wrong scale into
- * `return_pct` is worse than excluding it, and the drop is visible downstream:
- * it lands in each arm's `trade_count`, which `evaluateArmDivergence`
- * (arm-comparison-cycle.ts) floors PER ARM at `min_trades_per_arm` before it
- * will call a divergence — so a window gutted by this filter yields no
- * verdict and no alert rather than a confident one off two rows. The sample
- * itself is still computed and persisted every cycle; a reader wanting the
- * dropped count must diff it against the raw table.
- *
- * The filter cannot preferentially gut one arm: both arms'
- * `SqliteExecutionStore`s are constructed in the same composition root from
- * the same `config.capitalCeilingUsd`, so the cutover boundary falls at one
- * instant across both.
- *
- * **Two distinct non-null ceilings still throw.** That is an operator moving
- * `LIVE_BOOK_GBP` or `SAMURAI_LIVE_MAX_CAPITAL_USD` mid-window — no row in
- * the window is known-wrong, so there is nothing to drop, and picking a
- * winner between two legitimately-declared books is a judgement this reader
- * has no basis to make. The throw is caught one frame up in both callers'
- * composition roots (production.ts's daily-cycle try/catch; a CLI tool's
- * uncaught exit) — loud, but not fatal to the process.
- *
- * `sizing_capital_ceiling` carries no currency suffix (#949): it is whatever
- * value `ProductionConfig.capitalCeilingUsd` held when a row was written, so
- * "different regimes" here means "different declared-ceiling VALUES", not
- * necessarily different currencies. #1180's FX conversion would have been
- * exactly that third case — pre-conversion `1000` rows against converted
- * `1270` rows, throwing on every straddling window even though the book never
- * moved — so it shipped migration 0052 to normalize the stamp instead. This
- * guard could not have told that apart from a real mid-window book change;
- * the fix belongs in the writer's history, not in a special case here.
+ * Two distinct NON-NULL ceilings still throw: that means an operator
+ * moved the declared book mid-window, no row is known-wrong, and picking
+ * a winner between two legitimately-declared books is not this reader's
+ * call to make.
  */
 function oneSizingRegime<Row extends { sizing_capital_ceiling: number | null }>(
   rows: readonly Row[],

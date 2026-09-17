@@ -1,29 +1,19 @@
 /**
- * Client-side token bucket — the outbound half of rate-limit resilience
- * (CLAUDE.md "Key Constraints": rate-limit resilient). `withRetry` in
- * `./retry.ts` handles the 429 *after* the venue has already rejected us; this
- * exists so we stop issuing the call that earns the 429 in the first place.
+ * Client-side token bucket — the outbound half of rate-limit resilience.
+ * `withRetry` handles the 429 after the venue has already rejected us;
+ * this exists so we stop issuing the call that earns the 429 in the first
+ * place — a rate-limited `createOrder` can leave a filled lot unprotected
+ * for the backoff, or indefinitely if the key gets banned.
  *
- * That distinction matters for a broker adapter specifically: a rate-limited
- * `createOrder` is not a free retry. A venue that throttles a protective-leg
- * placement leaves a filled lot unprotected for the length of the backoff, and
- * a venue that bans the key outright leaves it unprotected indefinitely.
- * Pacing ourselves is the only control we own on that failure mode.
+ * Dependency-free and clock-injectable, like the rest of this codebase's
+ * `Clock` usage — a bucket reading wall-clock directly can't be tested
+ * without sleeping through real seconds.
  *
- * Deliberately dependency-free and clock-injectable: the same reason the rest
- * of this codebase takes a `Clock` — a bucket that reads wall-clock directly
- * cannot be tested without sleeping through real seconds.
- *
- * #1083: throttling was completely silent — a caller parked here for eight
- * seconds and one served instantly produced the same (nonexistent) trace, so
- * a starved fetch could be neither confirmed nor ruled out as an explanation
- * for a session's timeouts. `TokenBucketTelemetry` closes that gap with an
- * OPTIONAL wait-observed log line; see `take()`, `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`,
- * `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` and the per-lane
- * `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`/`_BACKGROUND_MS`
- * for what gets logged, when, and how often. It does not change what
- * `acquire()`/`acquireBackground()` resolve on or when — observation only,
- * never a second control on pacing.
+ * `TokenBucketTelemetry` is an OPTIONAL wait-observed log line (see
+ * `take()` and the `TOKEN_BUCKET_WAIT_LOG_*` constants) so a starved fetch
+ * can be confirmed or ruled out as an explanation for a session's
+ * timeouts. Observation only — it never changes what `acquire()`/
+ * `acquireBackground()` resolve on or when.
  */
 
 import { safeLog } from '../safe-log.js';
@@ -37,20 +27,13 @@ export interface TokenBucketConfig {
   /** Steady-state rate the bucket sustains once the burst is spent */
   refillPerSecond: number;
   /**
-   * Tokens `acquireBackground()` may not spend, reserved for `acquire()`
-   * (#391).
-   *
-   * Exists because ONE bucket now paces two consumers with very different
-   * urgency against a single per-account budget: order placement and market
-   * data. Splitting them into two buckets cannot be safe — the limit belongs
-   * to the account, so two independent buckets re-create exactly the
-   * over-subscription this closes. But a shared bucket with no reserve lets a
-   * six-instrument bar sweep drain it and park an order behind the refill,
-   * and a delayed protective leg is the failure mode this whole module
-   * exists to avoid.
-   *
-   * Defaults to 0, which is exactly today's behaviour for every venue with a
-   * single consumer (ccxt, ibkr) — the reserve is inert unless configured.
+   * Tokens `acquireBackground()` may not spend, reserved for `acquire()`.
+   * One bucket paces two consumers of very different urgency (order
+   * placement and market data) against a single per-account budget —
+   * splitting into two buckets would re-create the over-subscription this
+   * closes, but a shared bucket with no reserve lets a bar sweep drain it
+   * and park an order behind the refill. Defaults to 0, today's behaviour
+   * for every venue with a single consumer.
    */
   reserveForPriority?: number;
 }
@@ -59,147 +42,78 @@ export interface TokenBucketConfig {
 type TokenBucketLane = 'priority' | 'background';
 
 /**
- * Optional wait-observed telemetry (#1083). A bucket built without this
- * argument behaves exactly as before — no import, no log line, nothing to
- * wire — which is why every pre-#1083 call site still compiles unchanged.
+ * Optional wait-observed telemetry. A bucket built without this argument
+ * behaves exactly as before — no import, no log line — so every
+ * pre-existing call site still compiles unchanged.
  */
 export interface TokenBucketTelemetry {
   logger: Logger;
   /**
-   * Which bucket this is, e.g. `'alpaca'` — the venue/consumer label a reader
-   * would use to tell two buckets' waits apart, not the class name (every
-   * bucket is a `TokenBucket`, so that would tell them nothing).
+   * Which bucket this is, e.g. `'alpaca'` — the venue/consumer label a
+   * reader would use to tell two buckets' waits apart, not the class name.
    */
   name: string;
 }
 
 /**
- * A wait shorter than this is ordinary contention among concurrent callers on
- * a shared bucket — e.g. two callers racing an almost-full bucket, the loser
- * waiting out a single token's refill — and logging every one of those would
- * make a healthy run noisy rather than legible. Above it, on the fastest
- * bucket wired in production today (Alpaca, 2 tok/s — half a second per
- * token), the caller has waited longer than two tokens'-worth of refill,
- * which one concurrent rival no longer explains: it is either a real burst
- * queue or the priority reserve holding a background caller back (#391) —
- * exactly the case #1083 needs made visible. Named rather than inlined so a
- * reader can find the number without re-deriving it, and so a future,
- * slower-refilling venue does not have to reason about a magic `1_000`.
+ * A wait shorter than this is ordinary contention among concurrent callers
+ * on a shared bucket, and logging every one would make a healthy run
+ * noisy. Above it, on the fastest bucket wired in production (Alpaca, 2
+ * tok/s), the caller has waited longer than two tokens' refill, which one
+ * concurrent rival no longer explains — a real burst queue or the
+ * priority reserve holding a background caller back.
  */
 export const TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS = 1_000;
 
 /**
- * #1435: severity alone (#1383, `token_bucket_wait` moved to `info`) does not
- * move the event's raw line count — only the threshold does, and raising it
- * is out of scope for the reason #1383 didn't touch it either (it would hide
- * genuine starvation, the whole point of #1083). This is the cardinality
- * lever instead: at most one announcement per lane per window; crossings
- * inside the window are counted and folded into the next announcement
- * (`suppressed_since_last`/`max_suppressed_wait_ms` in `logIfMaterialWait`)
- * rather than dropped silently.
+ * A cardinality lever, not a severity change: at most one announcement per
+ * lane per window, with crossings inside the window folded into the next
+ * announcement (`suppressed_since_last`/`max_suppressed_wait_ms` in
+ * `logIfMaterialWait`) rather than dropped silently.
  *
- * Sized off #1383's own reference 20h soak (2102 structured lines, of which
- * `token_bucket_wait` was 414 — token-bucket.test.ts's "414/2102" comment).
- * Held to a self-consistent 5% AC (#1383's own, unmet for this event and
- * deferred here): with the 414 raw lines replaced by `x` announcements, the
- * total line count becomes `1090 + x` (1504 projected post-#1383 total minus
- * the 414 this change replaces), so clearing 5% requires `x <= 0.05*(1090+x)`,
- * i.e. `x <= ~57.37`, so `x <= 57`. Windowed PER LANE (not per bucket — a
- * burst on one lane must not swallow the other's first announcement, see
- * `logIfMaterialWait`), so the worst case per lane over a 20h (1200min) soak
- * is one announcement at t=0 plus one per full window thereafter:
- * `floor(1200 / 45) + 1 = 27`; two lanes make the worst case per bucket
- * instance `2 * 27 = 54` — PLUS one more line per crossing that hits the
- * per-lane catastrophic bound (`TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`
- * / `_BACKGROUND_MS`), which bypasses this window entirely and is not bounded
- * by `W` (see those constants' docblock for why the extra term `C` stays
- * small — such crossings are rare by construction). `54 + C <= 57` needs
- * `C <= 3`; a bypass still calls `waitAnnounce.set` for its lane exactly like
- * a windowed announcement does, so it resets that lane's window rather than
- * adding an extra window-driven line on top — `C` is genuinely additive, not
- * double-counted against the 54. `logIfMaterialWait`'s `catastrophic_bypass`
- * payload field exists to make `C` countable against this bound from a real
- * soak's structured log, since this derivation is a projection, not a
- * re-measurement: no raw soak log survives to replay the real clustering of
- * waits, only the aggregate counts above.
+ * Sized to hold a 5% share of a 20h soak's structured log lines — see
+ * `token-bucket.test.ts`'s "414/2102" comment for the reference counts
+ * and the full worst-case derivation. Windowed PER LANE, not per bucket,
+ * so a burst on one lane can't swallow the other's first announcement.
  *
- * The budget assumes ONE telemetry-wired bucket lives per process — still true
- * for every long-lived process today, but no longer by absence: `production.ts`
- * builds the shared `'alpaca'` bucket and `saxo-venue.ts`'s
- * `buildSaxoRateLimiter` builds the `'saxo'` one (#1400), and the venues are
- * MUTUALLY EXCLUSIVE per process — `SAMURAI_BROKER` selects exactly one
- * adapter, so the two buckets are never telemetry-wired at once. That
- * exclusivity is what this budget now rests on; a run holding both venues
- * would need the worst-case note below. `place-soak-position.ts`'s one-shot `AlpacaBrokerAdapter`
- * construction falls back to that same telemetry-wired `'alpaca'` bucket
- * shape (no `rateLimiter` passed in), but it is a short-lived CLI tool
- * process, not a second concurrent holder alongside `production.ts` — the
- * "one bucket per process" assumption this budget rests on is unaffected. If
- * a live process ever holds two telemetry-wired buckets AT ONCE, the worst
- * case doubles per bucket and this budget needs re-deriving.
+ * Assumes ONE telemetry-wired bucket per process — true today because
+ * `SAMURAI_BROKER` selects exactly one adapter, so the Alpaca and Saxo
+ * buckets are never both wired at once. A process holding two at once
+ * would double this budget and needs re-deriving.
  */
 export const TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS = 45 * 60_000;
 
 /**
- * Independent of the repeat window above: a wait this long IS the module
- * header's motivating failure (the unprotected-filled-lot case), not
- * ordinary contention, and folding it into a later announcement — or losing
- * it outright if no later crossing on the same lane ever arrives before the
- * process exits — defeats the reason #1083 exists. Always announced, window
- * or not; the window still absorbs everything under this line.
+ * Independent of the repeat window: a wait this long IS the module
+ * header's motivating failure (unprotected filled lot), not ordinary
+ * contention, so it is ALWAYS announced, never folded — losing it would
+ * defeat the reason this telemetry exists.
  *
- * #1435 round 2: a single shared bound across both lanes was unreachable for
- * `priority` on the live Alpaca config (`DEFAULT_VENUE_PACING.alpaca`:
- * `capacity: 41`, `refillPerSecond: 2.0`, `reserveForPriority: 21`) and
- * wrong-headed for `background` — so the bound is now per lane.
- *
- * `priority`'s `needed` is always 1 (see `acquire()`) and `reserveForPriority`
- * only constrains `background`'s draw, not `priority`'s — so from a drained
- * bucket (41 concurrent priority callers having just emptied it, the same
- * cold-start burst `venue-pacing.ts` sizes `capacity` for), each further
- * concurrent `priority` racer costs another `1 / refillPerSecond * 1000 =
- * 500ms` (mirrors the repeat-window race construction already used in
- * `token-bucket.test.ts`).
- * Reaching 8s from there needs ~16 further concurrent `priority` callers on
- * top of the 2 that open the repeat window — a number this module does not
- * try to pin exactly (the only real caller pattern found, `fetchNewFills` in
- * `alpaca-adapter.ts`, issues its `getOrder` polls through a sequential
- * `for...of` loop, not `Promise.all`, so this bound does not lean on any
- * specific concurrent-caller count actually being reached in practice — only
- * on 8s being reachable in principle, which the construction above shows).
- * Chosen to equal the module header's own motivating "eight seconds" example
- * rather than an arbitrary multiple, so a priority wait that trips this IS,
- * by the header's own framing, the failure #1083 exists to surface.
+ * Per-lane rather than shared: a single bound was unreachable for
+ * `priority` on the live Alpaca config and wrong-headed for `background`.
+ * Chosen to equal the module header's own "eight seconds" example, so a
+ * priority wait that trips this is, by that framing, the failure this
+ * telemetry exists to surface.
  */
 export const TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS =
   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS * 8;
 
 /**
- * `background`'s `needed` is always `1 + reserveForPriority` (see
- * `acquireBackground()`), so on the live Alpaca config a `background` caller
- * racing from a fully drained bucket already waits `22 / 2.0 * 1000 =
- * 11000ms` for the FIRST grant, then +500ms per further concurrent racer
- * (linear, not multiplicative — granting removes only 1 of the 22 needed) —
- * 20 concurrent racers lands at ~20.5s. That is `background`'s BY-DESIGN
- * worst case (#391: it is the lane allowed to wait so `priority` does not),
- * not starvation, so its bound stays well above it — unlike `priority`'s,
- * this bound is not reachable from ordinary contention and a soak crossing
- * it really is exceptional. Left at 30x the material-wait threshold, its
- * original (shared-lane) value; round 2 found no reason to move it. Because
- * `background` waits carry no protective urgency (#391's whole point — a
- * late bar fetch costs nothing an order fill would), a `background`
- * suppressed-then-lost crossing under this bound is accepted, not a defect:
- * unlike `priority`, `background` has no unprotected-fill failure mode for
- * `logIfMaterialWait`'s never-fold guarantee to protect.
+ * `background`'s by-design worst case is far higher than `priority`'s (it
+ * is the lane allowed to wait so `priority` does not), so this bound sits
+ * well above ordinary contention — a soak crossing it is genuinely
+ * exceptional. `background` waits carry no protective urgency (a late bar
+ * fetch costs nothing an order fill would), so a suppressed-then-lost
+ * crossing under this bound is accepted, unlike `priority`'s never-fold
+ * guarantee.
  */
 export const TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS =
   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS * 30;
 
 /**
- * In-memory, per lane, per bucket instance — not restart-clean the way
- * `FilledZeroSizeThrottle`'s header declares itself to be. A crossing
- * suppressed here and never followed by a later same-lane crossing before
- * process exit is never announced; nothing flushes it on shutdown.
+ * In-memory, per lane, per bucket instance — not restart-clean. A
+ * crossing suppressed here and never followed by a later same-lane
+ * crossing before process exit is never announced.
  */
 interface LaneWaitAnnounce {
   lastAnnouncedAtMs: number;
@@ -224,39 +138,32 @@ export class TokenBucket {
   }
 
   /**
-   * Resolves when this caller owns a token — immediately if one is available,
-   * otherwise after enough time has passed to mint one.
+   * Resolves when this caller owns a token — immediately if one is
+   * available, otherwise after enough time has passed to mint one.
    *
-   * The re-check LOOP is the whole correctness argument, not a stylistic
-   * choice. Adapters issue concurrent calls (`Promise.all` over two protective
-   * legs, overlapping lifecycle polls), so several `acquire()`s can be parked
-   * on an empty bucket at once. Computing a wait once and consuming on wake
-   * would let every parked caller consume the SAME single refilled token and
-   * fire together — precisely the burst the bucket exists to prevent. Waking,
-   * re-refilling and re-testing means the loser of the race simply waits
-   * again.
+   * The re-check LOOP is the whole correctness argument: several
+   * `acquire()`s can park on an empty bucket at once, and computing a
+   * wait once and consuming on wake would let every parked caller consume
+   * the SAME refilled token and fire together — the exact burst this
+   * bucket exists to prevent.
    *
-   * `signal` (#702) is for a caller that may be ABANDONED rather than waited
-   * out — a shutdown draining `GdeltIngestAgent`, specifically. A parked
-   * `acquire()` has done no work and ordered nothing yet, unlike a request
-   * already in flight, so aborting it costs nothing and is the whole point:
-   * see `GdeltGkgClient` for why the signal stops HERE and is not threaded
-   * into the request that follows.
+   * `signal` is for a caller that may be ABANDONED rather than waited out
+   * (a shutdown draining an ingest agent) — a parked `acquire()` has done
+   * no work yet, so aborting it costs nothing.
    */
   async acquire(signal?: AbortSignal): Promise<void> {
     await this.take(0, 'priority', signal);
   }
 
   /**
-   * Like `acquire()`, but leaves `reserveForPriority` tokens untouched (#391).
+   * Like `acquire()`, but leaves `reserveForPriority` tokens untouched.
+   * For the consumer that can afford to wait (market data), so a burst of
+   * bar fetches cannot park an order behind the refill — a background
+   * caller on a drained bucket waits for the reserve to be re-minted ON
+   * TOP of its own token, which is the intended cost.
    *
-   * For the consumer that can afford to wait — market data — so that a burst
-   * of bar fetches cannot park an order behind the refill. A background caller
-   * on a drained bucket waits for the reserve to be re-minted ON TOP of its
-   * own token, which is the intended cost: data is late, orders are not.
-   *
-   * No `signal` parameter: nothing today abandons a background market-data
-   * fetch on shutdown, so it would be plumbing nothing calls.
+   * No `signal` parameter: nothing today abandons a background
+   * market-data fetch on shutdown.
    */
   async acquireBackground(): Promise<void> {
     await this.take(this.config.reserveForPriority ?? 0, 'background');
@@ -264,11 +171,10 @@ export class TokenBucket {
 
   private async take(reserve: number, lane: TokenBucketLane, signal?: AbortSignal): Promise<void> {
     const needed = 1 + reserve;
-    // Wall-clock start, not a flag: most calls never park at all, and reading
-    // `this.now()` once up front costs nothing on that (overwhelmingly common)
-    // path. Uses the SAME injected clock as `refill()` deliberately — a
-    // second, unrelated clock here could disagree with it under a faked timer
-    // and turn an instant grant into a phantom logged wait
+    // Wall-clock start, not a flag: most calls never park, so reading
+    // `this.now()` once costs nothing on that common path. Uses the SAME
+    // injected clock as `refill()` — a second clock here could disagree
+    // under a faked timer and turn an instant grant into a phantom wait
     const startedAt = this.now();
     while (true) {
       signal?.throwIfAborted();
@@ -287,59 +193,33 @@ export class TokenBucket {
   }
 
   /**
-   * #1083. `undefined` telemetry (every call site that hasn't wired it), a
-   * wait under the threshold, and — #1435 — a threshold-crossing wait under
-   * the announcing lane's own catastrophic bound
-   * (`TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS`/`_BACKGROUND_MS`)
-   * inside its repeat window are all silent by design; see
-   * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` for why the second is a floor and
-   * not a lower one, and `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for the
-   * third. The third case is not lost, only folded into the next
-   * announcement for that lane (`suppressed_since_last`/
-   * `max_suppressed_wait_ms` below) — cardinality reduction, not information
-   * destruction. A catastrophic wait (at or past the lane's own bound) is
-   * NEVER folded, window or not — see those constants' docblocks for why,
-   * including why `background`'s bypass is still accepted to be losable
-   * (its bound sits above its own by-design worst case, unlike
-   * `priority`'s). `payload.catastrophic_bypass` marks which path produced a
-   * given announcement, so a soak's structured log can count real bypasses
-   * (`C` in `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS`'s line-budget
-   * derivation) separately from ordinary windowed ones (`x` there).
+   * Silent by design: `undefined` telemetry, a wait under the threshold,
+   * or a threshold-crossing wait under the lane's own catastrophic bound
+   * inside its repeat window (folded into the next announcement instead
+   * of lost — see `suppressed_since_last`/`max_suppressed_wait_ms`
+   * below). A catastrophic wait is NEVER folded, window or not.
    *
-   * Folding attributes a suppressed wait's magnitude to the announcing call's
-   * `trace_id`/tick, not the tick it actually happened on — the fold has no
-   * per-suppressed-event timestamp to attribute with. Accepted: the
-   * alternative is a timestamped log line per suppressed occurrence, which is
-   * the exact cardinality this repeat window exists to bound.
+   * Folding attributes a suppressed wait's magnitude to the announcing
+   * call's `trace_id`/tick, not the tick it actually happened on — there
+   * is no per-suppressed-event timestamp to attribute with; the
+   * alternative is a timestamped line per occurrence, the exact
+   * cardinality this window exists to bound.
    *
-   * The event name is `token_bucket_wait`, chosen to survive a grep that a
-   * bare `token` or a bare `429` cannot: an LLM `input_tokens` field
-   * substring-matches the former, and a digit run substring-matches the
-   * latter — both were false positives that made a real session's throttling
-   * unanswerable (#1083's own motivating search).
+   * Event name `token_bucket_wait`, chosen to survive a grep a bare
+   * `token` or `429` cannot (an LLM `input_tokens` field and any digit
+   * run both false-positive on those).
    *
-   * `waitedMs` is a `this.now()` delta, the same injected clock `refill()`
-   * uses (deliberately, per `take()`'s comment) rather than a monotonic
-   * `performance.now()` — so under the real `Date.now` default, a backward
-   * wall-clock step mid-wait can make a genuine wait compute small or
-   * negative. The threshold check right below is what that actually hits:
-   * a negative or shrunk `waitedMs` fails `>= TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`
-   * the same as a short real wait would, so the line is silently dropped
-   * rather than logged with a nonsense value. Accepted: an NTP step is rare
-   * enough, and losing one line to it is a smaller cost than a `wait_ms`
-   * field a reader has to distrust on every line. The same backward-step
-   * case can also delay the window's own re-announcement by making `nowMs`
-   * read earlier than it should — same acceptance, same rarity.
+   * `waitedMs` uses the same injected clock as `refill()`, so a backward
+   * wall-clock step mid-wait can compute a small or negative wait — which
+   * then fails the threshold check and is silently dropped rather than
+   * logged with a nonsense value. Accepted: rare, and cheaper than a
+   * `wait_ms` field readers have to distrust.
    *
-   * Runs AFTER `take()` has already decremented `this.tokens` (the caller has
-   * been granted its token by the time this is called) and `take()` is
-   * `async`, so a synchronous throw from `this.telemetry.logger.log` here
-   * would otherwise become a REJECTED `acquire()`/`acquireBackground()` for a
-   * caller pacing already granted — an observation-only mechanism turning
-   * into a spurious order-submit failure on the production broker path if a
-   * custom or buggy `Logger` throws. `safeLog` (shared/safe-log.ts, #573) is
-   * exactly this guarantee already extracted once for the identical reason at
-   * three other call sites — reused rather than a fourth local try/catch.
+   * Runs AFTER `take()` has already granted the token, so a synchronous
+   * throw from a custom `Logger` must not become a rejected
+   * `acquire()`/`acquireBackground()` for a caller already paced —
+   * `safeLog` is this same guarantee reused, not a fourth local
+   * try/catch.
    */
   private logIfMaterialWait(lane: TokenBucketLane, waitedMs: number): void {
     if (this.telemetry === undefined) return;
@@ -360,10 +240,8 @@ export class TokenBucket {
       prior.maxSuppressedWaitMs = Math.max(prior.maxSuppressedWaitMs, roundedWaitMs);
       return;
     }
-    // A bypass (a catastrophic wait announced while still inside the window)
-    // is the only case that reaches here with `prior` defined AND still
-    // inside the window — see `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for why
-    // this still resets the window rather than adding a second line
+    // A bypass (a catastrophic wait announced while still inside the
+    // window) still resets the window rather than adding a second line
     const catastrophicBypass =
       prior !== undefined &&
       nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS;
@@ -375,18 +253,14 @@ export class TokenBucket {
       maxSuppressedWaitMs: 0,
     });
     safeLog(this.telemetry.logger, {
-      // The enclosing tick when there is one, so a pacing wait joins to the
-      // stage that waited; `'token-bucket'` only outside one. Deliberately
-      // not derived from `lane` — see shared/trace-context.ts. This is the
-      // ANNOUNCING call's tick, not necessarily the folded waits' — see
-      // `logIfMaterialWait`'s docblock for why that mis-attribution is
-      // accepted
+      // The enclosing tick when there is one, so a pacing wait joins the
+      // stage that waited; this is the ANNOUNCING call's tick, not
+      // necessarily the folded waits' (see doc above)
       trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
       event: 'token_bucket_wait',
-      // #1383: pacing under a working bucket is expected behaviour, not a
-      // fault to page on — `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` above is what
-      // still keeps genuine starvation visible
+      // Pacing under a working bucket is expected behaviour, not a fault
+      // to page on
       level: 'info',
       message:
         `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
@@ -407,15 +281,11 @@ export class TokenBucket {
   }
 
   /**
-   * `delay`, but abandoned the instant `signal` fires instead of ridden out
-   * (#702).
-   *
-   * Deliberately local rather than a change to `delay` itself: every OTHER
-   * caller of `delay` in this codebase is a backoff or pacing wait with no
-   * signal to plumb, and `delay`'s own doc comment records that as
-   * intentional. Re-checked with `signal.aborted` before racing the timer,
-   * because a signal already aborted before this call will never fire another
-   * `'abort'` event to listen for.
+   * `delay`, but abandoned the instant `signal` fires instead of ridden
+   * out. Deliberately local rather than a change to `delay` itself: every
+   * other caller of `delay` here is a backoff/pacing wait with no signal
+   * to plumb. Re-checked with `signal.aborted` before racing the timer,
+   * because an already-aborted signal never fires another `'abort'` event.
    */
   private waitOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
     if (signal === undefined) return delay(ms);

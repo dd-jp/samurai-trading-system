@@ -37,10 +37,10 @@ import type {
   NormalizedFill,
 } from './types.js';
 
-/** #1087: a lot adopted as filled/partially_filled with `filled_size` still zero — `advanceLot` has nothing to advance and would otherwise warn in silence */
+/** A lot adopted as filled/partially_filled with `filled_size` still zero — `advanceLot` has nothing to advance and would otherwise warn in silence */
 export const FILLED_WITH_ZERO_SIZE = 'filled position has zero filled_size' as const;
 
-/** #1383: distinct message from the warn side, so a filter on it doesn't mistake this all-clear for another occurrence */
+/** Distinct message from the warn side, so a filter on it doesn't mistake this all-clear for another occurrence */
 export const FILLED_ZERO_SIZE_CLEARED =
   'a lot previously warned zero-filled-size has advanced past zero' as const;
 
@@ -60,12 +60,49 @@ export const FEE_CURRENCY_NOT_BOOK_CURRENCY =
 export const UNATTRIBUTED_FLATTEN_FILL =
   'flatten fill booked against an already-closed lot — its closed trade understates the sale' as const;
 
-/** The #1506 persist itself failing: the fill is NOT booked, and will be retried next poll */
+/** The persist itself failing: the fill is NOT booked, and will be retried next poll */
 export const UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED =
   'failed to book a flatten fill against an already-closed lot' as const;
 
 /** A flatten split is `leg: 'exit'`, which has no submit-time cost estimate to read */
 const NO_MODELLED_LOT_COSTS: ModelledLotCosts = { entry: null, protectiveExit: null };
+
+async function markSweptFlattens(
+  input: FillIngestInput,
+  flattenNamedLots: ReadonlyMap<string, ReadonlySet<string>>,
+  failedLotKeys: ReadonlySet<string>,
+  now: Date,
+  failures: ContainedFailure[],
+): Promise<void> {
+  for (const [flattenKey, lotKeys] of flattenNamedLots) {
+    if ([...lotKeys].some((lotKey) => failedLotKeys.has(lotKey))) continue;
+    try {
+      await input.store.markFlattenFillsSwept(flattenKey, now);
+    } catch (error) {
+      // Not correctness-critical like a 'flatten-attribution'/'lot-advance'
+      // failure: a missed mark just leaves the row unswept, still found by
+      // `getUnresolvedFlattens()` on the next `reconcile()` pass. Logged at
+      // `warn`, not `error`, and still travels in `failures` so it is named
+      // in the AggregateError if a correctness-critical failure also occurred
+      // this poll — but on its own it does not reject the poll's promise
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          event: 'flatten_sweep_mark_failed',
+          level: 'warn',
+          message:
+            'markFlattenFillsSwept failed — the row stays unswept and will be found again by ' +
+            "the next reconcile() pass (SharedStore.getUnresolvedFlattens()'s own designed recovery)",
+        },
+        error,
+        { flatten_key: flattenKey },
+      );
+      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, instrument: null, error });
+    }
+  }
+}
 
 export async function ingestFills(input: FillIngestInput): Promise<void> {
   const { clock, broker, store } = input;
@@ -74,7 +111,7 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
   if (positions.length === 0) return;
 
   // GLOBAL floor keyed on `opened_at` alone, never per-lot: a per-lot floor
-  // can raise past an earlier fill still in flight and under-fetch it (#838)
+  // can raise past an earlier fill still in flight and under-fetch it
   const since = earliest(positions.map((position) => position.opened_at));
   const fills = await broker.fetchNewFills(since);
 
@@ -89,16 +126,16 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
     else bucket.push(fill);
   }
 
-  // #517: a flatten submits under its OWN idempotency key, so its fill would
+  // A flatten submits under its OWN idempotency key, so its fill would
   // otherwise sit in a `byLot` bucket the loop below never reads; this
   // redistributes it into the closed lot(s)' own buckets first
   const failures: ContainedFailure[] = [];
   const flattenNamedLots = await redistributeFlattenFills(input, byLot, positions, failures);
-  // Flat union of every lot named by any flatten this poll (#525)
-  const flattenTargetedLots = new Set<string>();
-  for (const lotKeys of flattenNamedLots.values()) {
-    for (const lotKey of lotKeys) flattenTargetedLots.add(lotKey);
-  }
+  // The flat union `advanceLot`'s per-lot re-arm check reads — a lot named
+  // by ANY flatten this poll, independent of which one
+  const flattenTargetedLots = new Set(
+    Array.from(flattenNamedLots.values()).flatMap((lotKeys) => [...lotKeys]),
+  );
 
   for (const position of positions) {
     // Every lot is independent work: whether one lot's store write or broker
@@ -123,35 +160,11 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
   }
 
   // Mark a flatten swept only once every lot it named durably advanced —
-  // never unconditionally on redistribution succeeding (#519/#526)
+  // never unconditionally on redistribution succeeding
   const failedLotKeys = new Set(
     failures.filter((failure) => failure.scope === 'lot-advance').map((failure) => failure.key),
   );
-  for (const [flattenKey, lotKeys] of flattenNamedLots) {
-    if ([...lotKeys].some((lotKey) => failedLotKeys.has(lotKey))) continue;
-    try {
-      await input.store.markFlattenFillsSwept(flattenKey, now);
-    } catch (error) {
-      // Not correctness-critical: a missed mark leaves the row unswept,
-      // which `getUnresolvedFlattens()`/`reconcile()` already recovers —
-      // so this alone does not reject the poll's promise (#519/#526)
-      logCaughtFailure(
-        input.logger,
-        {
-          trace_id: input.trace_id,
-          stage: 'execution',
-          event: 'flatten_sweep_mark_failed',
-          level: 'warn',
-          message:
-            'markFlattenFillsSwept failed — the row stays unswept and will be found again by ' +
-            "the next reconcile() pass (SharedStore.getUnresolvedFlattens()'s own designed recovery)",
-        },
-        error,
-        { flatten_key: flattenKey },
-      );
-      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, instrument: null, error });
-    }
-  }
+  await markSweptFlattens(input, flattenNamedLots, failedLotKeys, now, failures);
 
   // Reported once every unit of work has run; 'flatten-sweep-mark' alone
   // does not reject the poll (see its catch above)
@@ -162,9 +175,9 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
 
 /** One unit of work a poll could not complete; held so one lot's failure never aborts the rest */
 interface ContainedFailure {
-  /** 'flatten-sweep-mark' alone is not correctness-critical (#519/#526/#603) */
+  /** 'flatten-sweep-mark' alone is not correctness-critical */
   scope: 'flatten-attribution' | 'lot-advance' | 'flatten-sweep-mark';
-  /** Never the failure's message or column content — `throwContainedFailures` writes this to `audit_log` (#507) */
+  /** Never the failure's message or column content — `throwContainedFailures` writes this to `audit_log` */
   key: string;
   /** The lot's instrument when cheaply known; `null` for a flatten-keyed scope */
   instrument: string | null;
@@ -191,10 +204,10 @@ function throwContainedFailures(failures: readonly ContainedFailure[]): void {
 }
 
 /**
- * Routes a flatten's fill(s) back to the lot(s) it closed (#517). Never
- * throws — a failed bucket is left un-redistributed (fail-closed) and
- * reported via `failures`. Returns every lot key named, including a
- * zero-share lot, since the caller's re-arm check needs it (#525).
+ * Routes a flatten's fill(s) back to the lot(s) it closed. Never throws — a
+ * failed bucket is left un-redistributed (fail-closed) and reported via
+ * `failures`. Returns every lot key named, including a zero-share lot, since
+ * the caller's re-arm check needs it.
  */
 async function redistributeFlattenFills(
   input: FillIngestInput,
@@ -214,7 +227,7 @@ async function redistributeFlattenFills(
     // a lot's own bucket — the existing path
     if (positionKeys.has(clientOrderId)) continue;
 
-    // Fail-closed (#575): named-lot set is recorded only on SUCCESS, so a
+    // Fail-closed: named-lot set is recorded only on SUCCESS, so a
     // failed bucket can't make `advanceLot` re-arm off an incomplete fill
     const targetedByThisFlatten = new Set<string>();
     try {
@@ -240,7 +253,19 @@ async function redistributeFlattenFills(
   return flattenNamedLots;
 }
 
-/** All-or-nothing: either completes, or leaves `byLot` exactly as found (see the `byLot.delete` at the end) */
+/**
+ * One flatten bucket's redistribution, whole: read the journal row, record the
+ * lot(s) it named into `namedLots`, split its raw fill(s) across
+ * them in `byLot`, and consume the bucket. Extracted so the caller's loop is
+ * one unit of work under one `try` rather than a hundred lines punctuated by
+ * section headers.
+ *
+ * All-or-nothing within the poll: it either completes or leaves `byLot`
+ * exactly as it found it (see the `byLot.delete` at the end), which is what
+ * makes the caller's containment a clean skip rather than a partial write.
+ * `namedLots` is the caller's per-bucket set, discarded on a throw.
+ */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: all-or-nothing contract over byLot — split, over-fill-warn, persist-unattributed, mark-residuals-unprotected, delete-last are each ordering-critical (see inline comments); extracting risks silently reordering a step relative to the final byLot.delete
 async function redistributeOneFlatten(
   input: FillIngestInput,
   byLot: Map<string, NormalizedFill[]>,
@@ -265,19 +290,19 @@ async function redistributeOneFlatten(
   const lotKeys = attribution.lot_idempotency_keys;
 
   // Recorded before the split runs, so a lot with ZERO share of this raw
-  // fill (a sibling absorbed it all) still gets the re-arm check (#525)
+  // fill (a sibling absorbed it all) still gets the re-arm check
   for (const lotKey of lotKeys) namedLots.add(lotKey);
 
   const rawFills = byLot.get(clientOrderId);
-  // Safe despite reading like a hazard (#575): `namedLots` is already
-  // populated, but nothing is half-consumed yet (split hasn't started), so
-  // this return leaves `byLot` untouched, same as any other early exit
+  // Safe despite reading like a hazard: `namedLots` is already populated,
+  // but nothing is half-consumed yet (split hasn't started), so this return
+  // leaves `byLot` untouched, same as any other early exit
   if (rawFills === undefined) return;
 
-  // Each named lot's FIXED share of THIS flatten, off the write-ahead row
-  // (#571) — must be STABLE (recomputes identically every poll) and
-  // EXIT-AWARE (held quantity, not entry total); pre-migration-0021 rows
-  // fall back to the old entry-total split instead of failing
+  // Each named lot's FIXED share of THIS flatten, off the write-ahead row —
+  // must be STABLE (recomputes identically every poll) and EXIT-AWARE (held
+  // quantity, not entry total); pre-migration-0021 rows fall back to the old
+  // entry-total split instead of failing
   const journalledHeld = attribution.lot_held_quantities;
   const totalShare =
     journalledHeld === null
@@ -294,10 +319,10 @@ async function redistributeOneFlatten(
   }
   for (const { attributed, leftover } of split.outcomes) {
     // `leftover > 0`: a genuine venue over-fill past what the named lots
-    // HELD (#571) — dropped (no safe lot to hand it to), but not silent (#527)
+    // HELD — dropped (no safe lot to hand it to), but not silent
     if (leftover > 0) {
       // Dedup on `attributed`'s derived ids so this doesn't re-warn every
-      // poll forever on the same re-offered over-fill (#527)
+      // poll forever on the same re-offered over-fill
       let alreadyWarned = false;
       try {
         for (const { idempotency_key, broker_fill_id } of attributed) {
@@ -324,9 +349,9 @@ async function redistributeOneFlatten(
             observed_at: input.clock.now(),
           });
         } catch {
-          // #573: logged with a FIXED, self-authored message, never the
-          // channel's own error — a Telegram failure can quote a URL
-          // carrying a bot token
+          // Logged with a FIXED, self-authored message, never the channel's
+          // own error — a Telegram failure can quote a URL carrying a bot
+          // token
           safeLog(input.logger, {
             trace_id: input.trace_id,
             stage: 'execution',
@@ -342,8 +367,8 @@ async function redistributeOneFlatten(
     }
   }
 
-  // AFTER the over-fill loop: #527's `alreadyWarned` check tests `hasFill`
-  // on the ids this writes, so booking first would suppress the first-ever
+  // AFTER the over-fill loop: its `alreadyWarned` check tests `hasFill` on
+  // the ids this writes, so booking first would suppress the first-ever
   // warning for a fill that both over-fills and names a closed lot
   for (const [lotKey, splitFills] of unattributed) {
     await persistUnattributedSplits(
@@ -356,10 +381,10 @@ async function redistributeOneFlatten(
     );
   }
 
-  // Durable "residual observed, protection not confirmed" marker (#549),
-  // written before any `applyLotAdvance` this poll runs so a crash before
-  // the re-arm confirms still leaves this lot findable by the sweep
-  // Best-effort: a failed write only narrows #549's crash coverage, logged
+  // Durable "residual observed, protection not confirmed" marker, written
+  // before any `applyLotAdvance` this poll runs so a crash before the re-arm
+  // confirms still leaves this lot findable by the sweep. Best-effort: a
+  // failed write only narrows this crash coverage, logged
   await markResidualsUnprotected(
     input,
     [...split.remaining].filter(([, unclosed]) => unclosed > 0).map(([lotKey]) => lotKey),
@@ -381,10 +406,10 @@ async function redistributeOneFlatten(
 
 /**
  * Books a split whose named lot is a TERMINAL lot the venue sold against,
- * already gone from `positions` (#1506) — the ordinary per-position loop
- * will never see it again. A failed write is NOT swallowed: it's pushed to
- * `failures`, since retiring the journal row here would lose the fill
- * permanently (`since`'s floor excludes it from all recovery).
+ * already gone from `positions` — the ordinary per-position loop will never
+ * see it again. A failed write is NOT swallowed: it's pushed to `failures`,
+ * since retiring the journal row here would lose the fill permanently
+ * (`since`'s floor excludes it from all recovery).
  */
 async function persistUnattributedSplits(
   input: FillIngestInput,
@@ -395,7 +420,7 @@ async function persistUnattributedSplits(
   failures: ContainedFailure[],
 ): Promise<void> {
   const { store } = input;
-  // #842's no-lookahead filter, the one `advanceLot` applies to every fill it
+  // The no-lookahead filter, the one `advanceLot` applies to every fill it
   // books. A split dated after the poll's clock is left for a later poll
   // rather than booked early, which only the backtest clock can produce
   const now = input.clock.now();
@@ -471,7 +496,7 @@ async function persistUnattributedSplits(
       });
     } catch {
       // Channel's own error discarded, never logged — a transport failure
-      // can quote a URL carrying a bot token (#573)
+      // can quote a URL carrying a bot token
       safeLog(input.logger, {
         trace_id: input.trace_id,
         stage: 'execution',
@@ -488,7 +513,7 @@ async function persistUnattributedSplits(
 
 /**
  * Pre-migration-0021 fallback split, blind to exits already recorded
- * against the lot (#571). Wind-down path only.
+ * against the lot. Wind-down path only.
  */
 async function entryTotalShares(
   store: FillIngestInput['store'],
@@ -584,15 +609,15 @@ async function handleLotWithNoNewFills(
 ): Promise<void> {
   // A flatten can name this lot and resolve this poll while handing it ZERO
   // share, with its legs already cancelled by the same `executeExit` call —
-  // the re-arm check has to happen here since nothing else runs (#525)
+  // the re-arm check has to happen here since nothing else runs
   if (flattenTargetedThisPoll) {
     await maybeRearmResidual(input, position, now);
   }
 
   // A lot `reconcile()` just adopted as filled/partially_filled but whose
-  // fill was never ingested lands here silently otherwise (#1087). `stuck_ms`
-  // (vs. `consecutive`-throttled re-announcement) tells a poll or two of
-  // Alpaca propagation lag apart from an hours-long genuinely wedged lot
+  // fill was never ingested lands here silently otherwise. `stuck_ms` (vs.
+  // `consecutive`-throttled re-announcement) tells a poll or two of Alpaca
+  // propagation lag apart from an hours-long genuinely wedged lot
   if (isWedgedZeroFillLot(position)) {
     const { announce, consecutive } = input.filledZeroSizeThrottle.observe(
       position.idempotency_key,
@@ -618,7 +643,7 @@ async function handleLotWithNoNewFills(
 }
 
 /**
- * `flattenTargetedThisPoll` (#525) is true when a flatten named this lot and
+ * `flattenTargetedThisPoll` is true when a flatten named this lot and
  * resolved this poll, independent of whether `fills` is non-empty
  */
 async function advanceLot(
@@ -661,7 +686,7 @@ async function advanceLot(
   const filledSize = totalQty(entryFills);
   // No entry fill yet — persist the rows alone. Deliberately NOT `clear()`ed:
   // restarting the wedge streak here would re-arm a `warn` that should stay
-  // a quiet `info`-cadence wedge (#1087, #1383)
+  // a quiet `info`-cadence wedge
   if (filledSize === 0) {
     await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
     return;
@@ -782,16 +807,16 @@ async function cumulativeTopUp(
 }
 
 /**
- * Enumerates fields rather than spreading, to keep `qty_is_cumulative`
- * (#842) out of the persisted row. `modelledLotCosts` fallback CHARGES the
- * modelled commission via `max(fill.fee, fallbackCostBreakdown.commission)`
- * — a top-up, not an addition, since the venue's own fee is the same
- * commission once Saxo is the adapter (#1121).
+ * Enumerates fields rather than spreading, to keep `qty_is_cumulative` out
+ * of the persisted row. `modelledLotCosts` fallback CHARGES the modelled
+ * commission via `max(fill.fee, fallbackCostBreakdown.commission)` — a
+ * top-up, not an addition, since the venue's own fee is the same commission
+ * once Saxo is the adapter.
  */
 /**
- * Posts to `input.nonSterlingFeeAlerts` AFTER `safeLog`, never instead of it
- * (#1465). Second param is the two fields read, not an `OpenPosition` —
- * `persistUnattributedSplits` books against a lot with none to pass (#1550).
+ * Posts to `input.nonSterlingFeeAlerts` after `safeLog`, never instead of
+ * it. Second param is the two fields read, not an `OpenPosition` —
+ * `persistUnattributedSplits` books against a lot with none to pass.
  */
 async function warnOnNonSterlingFee(
   input: FillIngestInput,
@@ -815,8 +840,8 @@ async function warnOnNonSterlingFee(
     event: 'fee_currency_not_book_currency',
     level: 'error',
     message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
-    // #1521: rides this existing line rather than a second one — a non-book
-    // fee currency and a missing conversion rate are the same fact
+    // Rides this existing line rather than a second one — a non-book fee
+    // currency and a missing conversion rate are the same fact
     payload: {
       ...alert,
       fx_rate_to_gbp: fill.fx_rate_to_gbp,
@@ -868,18 +893,17 @@ function toFill(
       : fallbackCostBreakdown !== undefined
         ? { cost_breakdown: fallbackCostBreakdown }
         : {}),
-    // #793: UNLIKE `qty_is_cumulative`, this one IS persisted (see
+    // Unlike `qty_is_cumulative`, this one IS persisted (see
     // `NormalizedFill.exit_reason`'s doc)
     ...(fill.exit_reason === undefined ? {} : { exit_reason: fill.exit_reason }),
-    // #1001: also persisted, unlike `qty_is_cumulative` — see
+    // Also persisted, unlike `qty_is_cumulative` — see
     // `Fill.flatten_idempotency_key`'s doc
     ...(fill.flatten_idempotency_key === undefined
       ? {}
       : { flatten_idempotency_key: fill.flatten_idempotency_key }),
-    // #1220: carried through verbatim, never converted — see
-    // `Fill.fee_currency`'s doc
+    // Carried through verbatim, never converted — see `Fill.fee_currency`'s doc
     ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
-    // #1521: same posture as `fee_currency` above
+    // Same posture as `fee_currency` above
     ...(fill.fx_rate_to_gbp === undefined ? {} : { fx_rate_to_gbp: fill.fx_rate_to_gbp }),
     ...(fill.fx_rate_to_gbp_source === undefined
       ? {}

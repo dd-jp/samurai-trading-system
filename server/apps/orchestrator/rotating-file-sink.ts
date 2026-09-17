@@ -1,108 +1,44 @@
 /**
- * Durable, size-rotated file sink for the structured log (#325) — see
- * docs/specs/orchestrator-spec.md story 11 ("I want to own the log sink
- * (stdout + rotated file), so that log retention/rotation is configured once,
- * not per stage"), the half #95 deliberately deferred.
+ * Durable, size-rotated file sink for the structured log.
  *
- * ## Why this exists
+ * `audit_log` persists `input_digest`/`output_digest` only — it proves a
+ * stage ran but reconstructs no value. Everything diagnostic (LLM warn
+ * lines, latency-budget overruns, alert-transport failures, fill-sync
+ * errors) exists *only* as a structured log line, and before this file that
+ * line went to stdout and nowhere else — lost on any unattended run without
+ * a shell redirect.
  *
- * `audit_log` persists `input_digest`/`output_digest` only: it can prove a
- * stage ran and that its I/O hashed to X, and can reconstruct no value at all.
- * Everything diagnostic — LLM warn lines, latency-budget overruns,
- * session-open-equity cold-start warnings, alert-transport failures, fill-sync
- * errors — exists *only* as a structured log line. Before this file that line
- * went to stdout and nowhere else, so a `npm run orchestrator` run without a
- * shell redirect discarded it. "Why did it do that on day 6" is the single
- * question the 14-day soak (#238) exists to answer, and it was unanswerable.
+ * Hand-rolled rather than `pino`+`pino-roll`: every stage already logs
+ * through the shared `Logger` interface, so pino would arrive as a second
+ * logging abstraction wrapped by the first, not as the logger. What's
+ * actually needed is one `write(line)` byte sink.
  *
- * ## Hand-rolled, not a dependency
+ * Failure modes a naive rotator gets wrong, handled here: partial
+ * `writeSync`s (loop drains the buffer), byte counting by `Buffer.byteLength`
+ * not `String.length` (log lines are not ASCII-guaranteed), rotation racing
+ * a write (everything here is synchronous/single-threaded), a failed
+ * rotation growing the file forever (it degrades the sink instead), and a
+ * missing generation from a hand-deleted file (`renameSync` ENOENT is
+ * skipped, not fatal). The file is created `0o600`, its directory `0o700`.
  *
- * ~150 lines against `pino` + `pino-roll`. ADR-0001's posture is minimal hard
- * dependencies, and the concrete reason the library does not earn its place
- * here is that it would not *replace* anything: every stage logs through the
- * shared `Logger` interface (shared/types.ts), so pino would arrive as a
- * second logging abstraction wrapped by the first, not as the logger. What is
- * actually needed is one `write(line)` byte sink. See
- * docs/techstack.md § Logging.
+ * Synchronous by design, not a tick-latency problem: measured at ~2.8µs per
+ * write and ~5ms per rotation on the deployment target, both a small
+ * fraction of the tick/debate budget. More importantly, an async or
+ * worker-based sink loses buffered lines exactly when the process dies —
+ * and the lines immediately before a crash are the ones this log exists to
+ * answer for. Trading a few guaranteed microseconds for the risk of losing
+ * the most valuable records is the wrong trade here.
  *
- * ## The failure modes a hand-rolled rotator gets wrong, and what is done here
+ * Any I/O failure — at construction or mid-run — flips the sink to
+ * `degraded` permanently, reporting once through `onFailure`; it never
+ * retries, since retrying means a per-tick syscall storm against a
+ * filesystem that's already unhappy. It never throws, since a logging call
+ * sits inside every tick and a full disk must not end the run.
  *
- * - **Partial writes.** `writeSync` may write fewer bytes than asked. The
- *   write loop advances an offset until the buffer is drained.
- * - **Byte counting.** The size counter and the rotation threshold use
- *   `Buffer.byteLength`, never `String.length` — log lines carry LLM prose and
- *   are not ASCII-guaranteed, and a UTF-16-code-unit counter under-counts
- *   multi-byte text and lets the file grow past its cap.
- * - **Rotation racing an in-flight write.** Everything here is synchronous and
- *   single-threaded: a rotation cannot interleave with a `writeSync`.
- * - **Unbounded growth when rotation silently fails.** A failed rotation is a
- *   failure like any other — it degrades the sink and reports, rather than
- *   being swallowed and leaving the active file to grow forever.
- * - **Missing generations.** `renameSync` on an absent path throws ENOENT, so
- *   the shift loop skips generations that are not there (an operator deleting
- *   `.1` by hand mid-soak must not take the sink down).
- * - **Permissions.** The file is created `0o600` and its directory `0o700`.
- *   Log payloads are the most detailed record this process keeps; they are not
- *   for a shared host's other accounts. (Modes apply at creation only — an
- *   existing file's permissions are the operator's.)
- *
- * ## Why synchronous, and why that is not a tick-latency problem
- *
- * Raised in review on #349 and answered with measurements rather than a
- * rewrite, so it does not have to be re-litigated. On the deployment target
- * (Node 26, darwin/arm64, 461-byte lines — a real orchestrator log line):
- *
- * | case | cost |
- * | --- | --- |
- * | steady-state write, mean | **2.8 µs** (p50 2.2 µs, p99 6.8 µs; ~344k lines/sec) |
- * | rotation write at the shipped 16 MiB × 10 policy | 2.5 ms mean, 4.7 ms worst |
- * | 20 log lines in a tick | 0.056 ms |
- * | 1000 log lines in a tick | 2.8 ms |
- *
- * Against `DEFAULT_TICK_INTERVAL_MS` (60 s), `LATENCY_BUDGET_MS.crypto` (30 s)
- * and the Alpaca broker client's own 10 s request timeout, a realistic tick
- * spends **0.0004%** of the debate budget in this sink. The expensive case —
- * the close + 10-rename shift + reopen — costs ~5 ms and fires once per 16 MiB,
- * which at soak volumes is roughly once a day: about eleven times across the
- * whole 14-day run.
- *
- * It also does not introduce a synchronous write; it doubles one. `JsonLogger`
- * already called `process.stdout.write` per line, measured at 2.75 µs against
- * this sink's 2.63 µs — the same syscall to the same kind of destination.
- *
- * The affirmative argument matters more than the cost, though: **an async or
- * worker-based sink loses buffered lines exactly when the process dies.** This
- * log exists to answer "why did it do that on day 6" (#238), and the lines
- * immediately before a crash are the ones that answer it. Trading a guaranteed
- * few microseconds for the possibility of losing precisely the most valuable
- * records in the file is the wrong trade for this component. `fs/promises` or a
- * worker thread would buy latency this application has in enormous surplus, at
- * the cost of durability it has none to spare of.
- *
- * (Benchmark was one-off and deliberately not committed: a timing assertion is
- * exactly the kind of test that goes flaky in CI. Numbers are in #349.)
- *
- * ## Degradation
- *
- * Any I/O failure — at construction or mid-run — flips the sink to `degraded`,
- * reports **once** through `onFailure`, and from then on the sink is a no-op
- * that touches the filesystem never again. It does not throw, ever, because a
- * logging call sits inside every tick and a full disk must not end the run.
- *
- * Permanent rather than retry-on-next-write, deliberately: retrying means a
- * per-tick syscall storm against a filesystem that is already unhappy, and a
- * degrade report that either repeats forever or lies about the state. The cost
- * is that a *transient* failure loses file logging until restart, and the
- * report says exactly that rather than implying recovery.
- *
- * ## Retention and UK CGT
- *
- * The retention window here is short on purpose. These files are the
- * *diagnostic* record, not the *trade* record: every signal, order and fill is
- * persisted in SQLite (`audit_log`, `verdict_log`, execution/fill tables),
- * which is what CLAUDE.md's "log every signal, every fill" and HMRC CGT
- * record-keeping actually rest on. Nothing about the disposal history depends
- * on a file being rotated away here.
+ * The retention window here is short on purpose: these files are the
+ * *diagnostic* record, not the *trade* record — every signal, order and
+ * fill is persisted in SQLite, which is what HMRC CGT record-keeping
+ * actually rests on.
  */
 import {
   closeSync,
@@ -164,30 +100,22 @@ export interface RotatingFileSinkOptions extends FileSinkConfig {
 /**
  * The sink configuration for this run, from the environment.
  *
- * A sane default is deliberate here, and is *not* in tension with #322's
- * "a dangerous degraded mode gets no silent default" precedent: `SAMURAI_ALERTS`
- * has no default because the degraded value (log-only) is the one that makes an
- * unattended run silently unsafe. A log file path has no dangerous value — the
- * dangerous state is the *absence* of a file, which is what defaulting fixes.
- * So the variables are optional and the default is on.
+ * A sane default is deliberate here, unlike `SAMURAI_ALERTS`'s no-default
+ * rule: a log file path has no dangerous value — the dangerous state is the
+ * *absence* of a file, which is what defaulting fixes.
  *
- * Malformed values throw rather than falling back, matching `parseMode` and
- * `sharedStorePath`: a typo'd `SAMURAI_LOG_MAX_BYTES` that silently became
- * 16 MiB is a retention policy nobody chose. Runtime I/O failures are the
- * thing that degrades; configuration errors fail fast.
+ * Malformed values throw rather than falling back: a typo'd
+ * `SAMURAI_LOG_MAX_BYTES` that silently became 16 MiB is a retention policy
+ * nobody chose. Runtime I/O failures are the thing that degrades;
+ * configuration errors fail fast.
  */
 export function fileSinkConfigFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): FileSinkConfig {
   // `nonEmpty` on the path, not just on the integers, and the trim is not
-  // cosmetic — raised in review on #349. `Number(' ')` is `0`, and `0` is a
-  // *legal* value for `SAMURAI_LOG_MAX_FILES` meaning "keep nothing". So a
-  // stray space — a misconfigured compose file, a quoted-empty shell
-  // variable, a copy-paste — would have silently switched retention from ten
-  // generations to none, which is exactly the "retention window nobody chose"
-  // that the validator refuses on every other malformed input. It would not
-  // have been caught by `SAMURAI_LOG_MAX_BYTES` either being wrong, because
-  // that one has `min = 1` and so already rejects `0`
+  // cosmetic: `Number(' ')` is `0`, and `0` is a *legal* value for
+  // `SAMURAI_LOG_MAX_FILES` meaning "keep nothing" — a stray space would
+  // silently switch retention from ten generations to none
   const purpose = "the durable log sink's rotation policy (#325)";
   return {
     filePath: nonEmpty(env[ENV_FILE]) ?? DEFAULT_LOG_FILE,
@@ -211,10 +139,8 @@ export function fileSinkConfigFromEnvironment(
 /**
  * An append-only, size-rotated line sink. Synchronous by design: a structured
  * log line written the instant it is produced survives the crash it is
- * describing, which a buffered async sink does not. See the module doc
- * ("Why synchronous, and why that is not a tick-latency problem") for the
- * measured cost — 2.8 µs a line, 0.0004% of the crypto debate budget for a
- * realistic tick.
+ * describing, which a buffered async sink does not. See the module doc for
+ * the measured cost.
  */
 export class RotatingFileSink {
   private readonly options: RotatingFileSinkOptions;
@@ -293,11 +219,8 @@ export class RotatingFileSink {
     // `maxRotatedFiles` copies of the same lines
     //
     // Nothing explicitly deletes the oldest generation: POSIX `rename(2)`
-    // replaces an existing destination atomically, so the final shift
-    // (`.maxRotatedFiles-1` → `.maxRotatedFiles`) *is* the eviction. An
-    // explicit `rmSync` here was verified redundant by mutation-testing the
-    // retention cap — removing it left the bound intact — and redundant
-    // filesystem calls in a rotation path are a place for bugs to hide
+    // replaces an existing destination atomically, so the final shift IS
+    // the eviction
     for (let generation = maxRotatedFiles - 1; generation >= 1; generation -= 1) {
       const from = `${filePath}.${generation}`;
       // renameSync throws ENOENT on a missing source; a hand-deleted
@@ -335,29 +258,23 @@ export class RotatingFileSink {
   /**
    * Reports the degradation, and swallows a failure to report it.
    *
-   * Raised in review on #349, and not theoretical: the shipped `onFailure` is
-   * `warnOnStdout` (logger.ts), and stdout can be dead — routine for a
-   * long-running process someone attached to and detached from, or one whose
-   * supervisor closed the pipe. Without this catch, `attempt`'s handler for a
-   * *file* failure would itself throw, straight out of `write()` and into a
-   * tick. (Measured for #714: on a *pipe* that failure is asynchronous — an
-   * `'error'` event, not a throw from `write` — so this catch covers the
-   * synchronous stdio case, a file or TTY stdout, and `watchStdoutErrors`
-   * covers the other.)
+   * Not theoretical: the shipped `onFailure` is `warnOnStdout`, and stdout
+   * can be dead — routine for a long-running process someone attached to and
+   * detached from, or one whose supervisor closed the pipe. Without this
+   * catch, `attempt`'s handler for a *file* failure would itself throw,
+   * straight out of `write()` and into a tick.
    *
-   * There is nowhere left to escalate at that point: the file sink is gone and
-   * the stream that reports on it is gone too. The only correct behaviour is
-   * to keep trading. `failed` is already set, so nothing retries.
+   * There is nowhere left to escalate at that point: the file sink is gone
+   * and the stream that reports on it is gone too. The only correct
+   * behaviour is to keep trading. `failed` is already set, so nothing retries.
    */
   private report(message: string): void {
     try {
       this.options.onFailure?.(message);
     } catch {
       // Both sinks are broken. Losing THIS message is strictly better than
-      // losing the run here — this class's one hard guarantee is that IT never
-      // throws into a tick. What happens next is `JsonLogger`'s call, not this
-      // one's: with nothing left able to record, its next `log` propagates
-      // rather than continuing blind (#714)
+      // losing the run here — this class's one hard guarantee is that IT
+      // never throws into a tick
     }
   }
 }
@@ -365,21 +282,14 @@ export class RotatingFileSink {
 /**
  * `writeSync` may write fewer bytes than asked; drain the buffer.
  *
- * **The zero-progress guard is the important line.** Raised in review on #349:
- * a `writeSync` that returns 0 without throwing — a stuck descriptor, an
- * exotic device — never advances `offset`, and this loop spins forever. That
- * failure is uniquely bad here: `attempt` cannot catch it because nothing is
- * thrown, so the sink never degrades, the tick never completes, and the
- * dead-man's-switch heartbeat (#96) cannot fire because the process is not
- * dead, just wedged inside a log call. A trading process hung mid-tick with
- * open positions is the worst outcome in this file.
- *
- * Converting it to a throw hands it to `attempt`, which is the machinery that
- * already knows what to do: retire the sink, warn on stdout, keep trading. The
- * guard costs one comparison per iteration; being wrong without it costs the
- * run. `writeSync` returning 0 for a non-empty buffer should be impossible on
- * a regular file, and "should be impossible" is not a reason to spin forever
- * if it happens.
+ * **The zero-progress guard is the important line.** A `writeSync` that
+ * returns 0 without throwing — a stuck descriptor, an exotic device — never
+ * advances `offset`, and this loop would spin forever. `attempt` cannot
+ * catch that because nothing is thrown, so the sink never degrades and the
+ * tick never completes: a trading process hung mid-tick with open positions
+ * is the worst outcome in this file. Converting it to a throw hands it to
+ * `attempt`'s machinery instead: retire the sink, warn on stdout, keep
+ * trading.
  *
  * `write` is injectable purely so that path is testable without a wedged
  * filesystem.

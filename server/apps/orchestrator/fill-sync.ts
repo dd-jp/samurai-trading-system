@@ -381,6 +381,31 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
   const lastReconcileAction = new Map<string, string>();
 
   /**
+   * Shared by both dedup maps above: log a divergence only on first observation or a state transition,
+   * then forget any key this pass didn't report, so a later distinct episode logs afresh. `logDivergence`
+   * must stay synchronous — the call sites sit inside `runPoll`'s own try/catch, not this helper's loop.
+   */
+  function logDedupedDivergences(
+    divergences: readonly ReconcileDivergence[],
+    lastAction: Map<string, string>,
+    dedupKey: (divergence: ReconcileDivergence) => string,
+    logDivergence: (divergence: ReconcileDivergence) => void,
+  ): void {
+    const reportedThisPass = new Set<string>();
+    for (const divergence of divergences) {
+      const key = dedupKey(divergence);
+      reportedThisPass.add(key);
+      const dedupState = reconcileDedupState(divergence);
+      if (lastAction.get(key) === dedupState) continue;
+      lastAction.set(key, dedupState);
+      logDivergence(divergence);
+    }
+    for (const key of lastAction.keys()) {
+      if (!reportedThisPass.has(key)) lastAction.delete(key);
+    }
+  }
+
+  /**
    * One pass: `reconcile()`, then the fill poll, then the #549
    * residual-protection sweep.
    *
@@ -402,26 +427,21 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
   const runPoll = async (): Promise<void> => {
     try {
       const report = await deps.execution.reconcile();
-      const reportedThisPass = new Set<string>();
-      for (const divergence of report.divergences) {
-        const dedupKey = divergence.idempotency_key || divergence.instrument;
-        reportedThisPass.add(dedupKey);
-        const dedupState = reconcileDedupState(divergence);
-        // Repeat pass, same state: already logged — see `lastReconcileAction`
-        if (lastReconcileAction.get(dedupKey) === dedupState) continue;
-        lastReconcileAction.set(dedupKey, dedupState);
-        deps.logger.log({
-          trace_id: deps.reconcileTraceId,
-          stage: 'execution',
-          event: 'reconcile_divergence',
-          level: reconcileDivergenceLevel(divergence),
-          message: 'reconcile divergence',
-          payload: { ...divergence },
-        });
-      }
-      for (const key of lastReconcileAction.keys()) {
-        if (!reportedThisPass.has(key)) lastReconcileAction.delete(key);
-      }
+      logDedupedDivergences(
+        report.divergences,
+        lastReconcileAction,
+        (divergence) => divergence.idempotency_key || divergence.instrument,
+        (divergence) => {
+          deps.logger.log({
+            trace_id: deps.reconcileTraceId,
+            stage: 'execution',
+            event: 'reconcile_divergence',
+            level: reconcileDivergenceLevel(divergence),
+            message: 'reconcile divergence',
+            payload: { ...divergence },
+          });
+        },
+      );
       // #1088: same trace `runStartupReconcile` logs above — the sweep is
       // not a divergence and runs on every pass, so it needs its own
       // operator-visible line, logged only when it deleted something
@@ -452,35 +472,31 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
     } finally {
       try {
         const sweep = await deps.execution.sweepResidualProtection();
-        const reportedThisPass = new Set<string>();
-        for (const divergence of sweep.divergences) {
-          reportedThisPass.add(divergence.idempotency_key);
-          const dedupState = reconcileDedupState(divergence);
-          // Repeat pass, same state: already logged — see `lastSweepAction`
-          if (lastSweepAction.get(divergence.idempotency_key) === dedupState) continue;
-          lastSweepAction.set(divergence.idempotency_key, dedupState);
-          deps.logger.log({
-            trace_id: deps.fillSyncTraceId,
-            stage: 'execution',
-            event: 'residual_sweep_divergence',
-            // Deliberately its own plain 2-way split, not
-            // `reconcileDivergenceLevel()`. This is a SECOND log line for
-            // the same sweep row `runPoll`'s `report.divergences` loop
-            // above already routed through that function (reconcile()
-            // merges sweep divergences in — see `ReconcileDivergence.kind`'s
-            // doc) — pre-existing duplicate logging (#1122 review round 3),
-            // not introduced here. `reconcileDivergenceLevel()` never
-            // demotes a sweep row either way (`kind !== 'bracket'`), so
-            // this inline split and that function agree on every case; it
-            // just doesn't call it a second time to reach the same answer
-            level: divergence.action === 'undetermined' ? 'warn' : 'info',
-            message: 'residual-protection sweep divergence',
-            payload: { ...divergence },
-          });
-        }
-        for (const key of lastSweepAction.keys()) {
-          if (!reportedThisPass.has(key)) lastSweepAction.delete(key);
-        }
+        logDedupedDivergences(
+          sweep.divergences,
+          lastSweepAction,
+          (divergence) => divergence.idempotency_key,
+          (divergence) => {
+            deps.logger.log({
+              trace_id: deps.fillSyncTraceId,
+              stage: 'execution',
+              event: 'residual_sweep_divergence',
+              // Deliberately its own plain 2-way split, not
+              // `reconcileDivergenceLevel()`. This is a SECOND log line for
+              // the same sweep row `runPoll`'s `report.divergences` loop
+              // above already routed through that function (reconcile()
+              // merges sweep divergences in — see `ReconcileDivergence.kind`'s
+              // doc) — pre-existing duplicate logging, not introduced here
+              // `reconcileDivergenceLevel()` never
+              // demotes a sweep row either way (`kind !== 'bracket'`), so
+              // this inline split and that function agree on every case; it
+              // just doesn't call it a second time to reach the same answer
+              level: divergence.action === 'undetermined' ? 'warn' : 'info',
+              message: 'residual-protection sweep divergence',
+              payload: { ...divergence },
+            });
+          },
+        );
       } catch (sweepError) {
         deps.logger.log({
           trace_id: deps.fillSyncTraceId,

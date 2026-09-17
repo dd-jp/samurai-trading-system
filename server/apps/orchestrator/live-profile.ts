@@ -1,5 +1,5 @@
 /**
- * The **live starting profile** (#511) — what `SAMURAI_MODE=live` boots on.
+ * The **live starting profile** — what `SAMURAI_MODE=live` boots on.
  *
  * `paperStartingProfile` refuses `live` and always will: its notional caps are
  * fractions of an ASSUMED $100,000 paper balance, which is not a statement
@@ -7,78 +7,52 @@
  * half of that refusal — the same profile expressed against a ceiling the
  * operator declared out loud, in `SAMURAI_LIVE_MAX_CAPITAL_USD`.
  *
- * ## This ticket makes the switch WORK. It does not throw it.
- *
- * Per the `live-money-graduation` posture, go-live waits on paper metrics. The
- * dials below are the paper soak's dials; retuning them from real observations
- * is #238's follow-up and explicitly out of this ticket's scope. What is in
- * scope is that the switch is provably wired before anyone reaches for it,
- * rather than discovered to be broken on the day it matters.
- *
- * ## What a live run inherits UNTUNED, enumerated
+ * This makes the switch work; it does not tune it. Per the
+ * `live-money-graduation` posture, go-live waits on paper metrics, and
+ * retuning these dials from real observations is separate follow-up work.
  *
  * `buildStartingProfileConfigs` is shared with the paper profile deliberately
- * (a copy would drift, and the live copy is the one nobody exercises). Only the
- * six notional caps are re-anchored. Everything else is inherited verbatim, and
- * these are the values that most deserve a second look before real money:
+ * (a copy would drift, and the live copy is the one nobody exercises). Only
+ * the six notional caps are re-anchored; everything else is inherited
+ * verbatim. Values that most deserve a second look before real money:
  *
- * - **`breakerConfig.volatility.baseline`** — set to `1_000_000` price units to
- *   be deliberately INERT, because no paper run has ever produced an ATR
- *   distribution to calibrate it against. The soft volatility entry-halt tier
- *   therefore does not fire. Harmless on paper; on live money it means one of
- *   the breaker tiers is decoration.
- * - **`verdictConfig.drift_tolerance_pct`** — "a fraction nobody has yet
- *   observed against a real fill", in the paper profile's own words.
- * - **`breakerConfig.daily_loss_pct` / `max_consecutive_losses`** — `UNSOURCED`.
- * - **`riskConfig.cii_threshold`** — inert regardless (ADR-0002 parks the
+ * - `breakerConfig.volatility.baseline` is deliberately INERT — no paper run
+ *   has ever produced an ATR distribution to calibrate it against, so the
+ *   soft volatility entry-halt tier does not fire.
+ * - `verdictConfig.drift_tolerance_pct` and `breakerConfig.daily_loss_pct` /
+ *   `max_consecutive_losses` are unsourced fractions, not measured ones.
+ * - `riskConfig.cii_threshold` is inert regardless (ADR-0002 parks the
  *   WorldMonitor provider), so the geopolitical signal is absent, not quiet.
- * - **`tickIntervalMs` (2 min) and `llmBudgetUsd` ($50)** — `llmBudgetUsd` is
- *   sized for a 14-day $50 paper soak under ADR-0008, not for a run trying to
- *   make money. Not unsafe, but not a live budget either.
+ * - `tickIntervalMs` (2 min) and `llmBudgetUsd` ($50) are sized for a 14-day
+ *   $50 paper soak under ADR-0008, not for a run trying to make money. The
+ *   2-minute cadence reached live by inheritance through the shared builder
+ *   rather than a live-specific decision, though it is intended (ADR-0014's
+ *   tick/decision split needs it so an exit is never up to 15 minutes
+ *   stale); spend does not scale with it since the decision path runs once
+ *   per debate bar, not once per tick.
+ * - `stocksTradingWindow` now gates every live stocks tick, by the same
+ *   inheritance — an operator reading this profile for "when does live
+ *   trade" must read that field, not the market calendar alone.
+ * - `verdictConfig.automation_level: auto` (ADR-0007), in paper AND live —
+ *   there is no human gate. The caps and breakers are the whole stop.
  *
- *   **`tickIntervalMs` needs its own reading, and this line previously gave the
- *   wrong one — it said 15 min.** It is 2 min, and live did not choose that:
- *   #670 scoped the cadence step to paper, and live inherited it through
- *   `buildStartingProfileConfigs`, which is the same shared builder. The change
- *   is intended (ADR-0014's tick/decision split needs a 2-minute tick so an
- *   exit is never up to 15 minutes stale), but it reached live as a
- *   consequence rather than a decision, and this docblock is the one artifact
- *   an operator reads to know what live does. At 2 min the $50 budget also
- *   buys ~7.5x fewer days than it did at 15 min if spend scaled with ticks —
- *   it does not, because the decision path runs once per debate bar, not once
- *   per tick, which is exactly what the split exists to guarantee.
- * - **`stocksTradingWindow`** — new, and it now gates every live stocks tick.
- *   Arrived by the same inheritance as the cadence above. An operator reading
- *   this profile for "when does live trade" must read that field, not the
- *   market calendar alone.
- * - **`verdictConfig.automation_level: auto`** — ADR-0007, in paper AND live.
- *   There is no human gate. The caps and breakers are the whole stop.
+ * The capital ceiling is a ceiling, not a target: `SAMURAI_LIVE_MAX_CAPITAL_USD`
+ * bounds the run; it does not fund it. Sizing takes `min(ceiling, account
+ * equity)` at the one place equity enters a size (`buildTraderStep`,
+ * production/direct-bind.ts) — never off equity alone, because a funded
+ * account would otherwise silently widen the run past what was declared.
  *
- * ## The capital ceiling is a ceiling, not a target
- *
- * `SAMURAI_LIVE_MAX_CAPITAL_USD` bounds the run; it does not fund it. Sizing
- * takes `min(ceiling, account equity)` at the one place equity enters a size
- * (`buildTraderStep`, production/direct-bind.ts) — so a $200,000 account with a
- * $2,000 ceiling sizes off $2,000, and a $500 account with a $2,000 ceiling
- * sizes off $500. Never off equity alone: that is the whole point, because a
- * funded account would otherwise silently widen the run past what was declared.
- *
- * **#886 made the six notional caps equity-relative, resolved against
- * `portfolio.equity` at evaluate time — the same pattern D5 already used.**
- * That retired the STATIC-cap limit this section used to describe (the six
- * caps used to be derived from the ceiling once at boot, and were therefore
- * looser than intended whenever equity sat below it). It also means the Risk
- * Manager's caps now scale with REAL, unclamped account equity, not with the
- * ceiling: `sizingEquity` (direct-bind.ts) clamps equity only at the Trader's
- * sizing inlet, deliberately, so the drawdown/loss breakers still observe the
- * true account. D5 has always worked this way — its envelope is 35%/25% of
- * real equity regardless of any declared ceiling — and the other five caps
- * now match it rather than being an exception. **Consequence, stated rather
- * than hidden:** on an account funded ABOVE the declared ceiling, the Risk
- * Manager's caps are no longer bounded by the ceiling at all; the ceiling's
- * only remaining effect is on the Trader's ASK via `sizingEquity`. Declaring
- * a ceiling at or below what the account actually holds is what a capital cap
- * means in the first place, and remains the mitigation.
+ * The six notional caps are equity-relative, resolved against
+ * `portfolio.equity` at evaluate time — the same pattern D5 already used —
+ * so the Risk Manager's caps scale with REAL, unclamped account equity, not
+ * with the ceiling: `sizingEquity` (direct-bind.ts) clamps equity only at
+ * the Trader's sizing inlet, so the drawdown/loss breakers still observe the
+ * true account. Consequence, stated rather than hidden: on an account
+ * funded ABOVE the declared ceiling, the Risk Manager's caps are no longer
+ * bounded by the ceiling at all; the ceiling's only remaining effect is on
+ * the Trader's ASK via `sizingEquity`. Declaring a ceiling at or below what
+ * the account actually holds is what a capital cap means in the first
+ * place, and remains the mitigation.
  */
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import type { Logger } from '../../shared/index.js';
@@ -97,68 +71,54 @@ import type { ProductionConfig } from './production.js';
  * message, a doc comment and a credential pre-flight, and a typo in any of them
  * would send an operator looking for a variable that does not exist.
  *
- * **This is DECLARED in the account's currency, and #1180 left it that way
- * deliberately.** `LIVE_BOOK_GBP` (paper-profile.ts) — the £1,000 ADR-0015's
- * 2026-08-18 amendment declares — is a GBP figure; this ceiling is whatever
- * number the operator typed, compared by `min(ceiling, equity)` at
- * `sizingEquity` against `portfolio.equity` as the broker returns it. #1180
- * converted the one place a GBP CONSTANT reached that comparison (paper's
- * `capitalCeilingUsd`, now `LIVE_BOOK_SIZING_USD`); this path has no constant
- * to convert, because the value is the operator's own and is asked for in the
- * account's currency by name.
+ * Declared in the account's currency, deliberately: `LIVE_BOOK_GBP`
+ * (paper-profile.ts) is a GBP figure, but this ceiling is whatever number
+ * the operator typed, compared by `min(ceiling, equity)` at `sizingEquity`
+ * against `portfolio.equity` as the broker returns it — the value is the
+ * operator's own and is asked for in the account's currency by name.
  *
- * What that leaves the operator: an operator who means "match the £1,000
- * book" must type the CONVERTED figure — `LIVE_BOOK_SIZING_USD` is that
- * number at `SIZING_USD_PER_GBP`, and a live run's boot log
- * (`sizing_capital_ceiling_resolved`, production.ts) records this ceiling as
- * declared rather than derived precisely so the two are never confused.
- * Converting here instead would mean silently redenominating a number the
- * operator chose, which is the last thing that may happen to the one figure
- * they assert personally.
+ * An operator who means "match the £1,000 book" must type the CONVERTED
+ * figure — `LIVE_BOOK_SIZING_USD` is that number at `SIZING_USD_PER_GBP`,
+ * and a live run's boot log (`sizing_capital_ceiling_resolved`,
+ * production.ts) records this ceiling as declared rather than derived
+ * precisely so the two are never confused. Converting here instead would
+ * mean silently redenominating a number the operator chose.
  *
- * The two risk-manager guards #888's fix introduced (`liveBookCeiling` and
- * `equity_ceiling`, risk-manager/index.ts) still refuse to compare their GBP
- * `book` against USD equity — permanently by design, not pending this
- * ticket; see `same_currency_verified` (risk-manager/types.ts) for why a
- * static rate cannot arm a percentage-point funding test.
+ * The two risk-manager guards (`liveBookCeiling` and `equity_ceiling`,
+ * risk-manager/index.ts) still refuse to compare their GBP `book` against
+ * USD equity — permanently by design; see `same_currency_verified`
+ * (risk-manager/types.ts) for why a static rate cannot arm a
+ * percentage-point funding test.
  */
 export const LIVE_MAX_CAPITAL_ENV_VAR = 'SAMURAI_LIVE_MAX_CAPITAL_USD';
 
 /**
- * The smallest ceiling this function still refuses below — kept as a floor on
- * the DECLARED CEILING itself, not on live equity.
+ * The smallest ceiling this function still refuses below — a floor on the
+ * DECLARED CEILING itself, not on live equity.
  *
- * **#886 changed what this floor does and does not protect against, and that
- * needs saying rather than leaving this comment describing the pre-#886
- * mechanism.** Before #886, `max_position_size` was 5% of the ceiling, so a
- * ceiling below `min_viable_notional / 0.05` guaranteed `per_trade_size_cap`
- * trimmed every entry below the dust floor — this function's exact job.
- * `max_position_size_fraction_of_equity` now resolves against LIVE EQUITY at
- * evaluate time, not the ceiling, so that specific failure mode has moved:
- * it now depends on whether EQUITY (not the declared ceiling) clears
- * `min_viable_notional / max_position_size_fraction_of_equity` (~£200 at
- * today's fractions) — and nothing enforces that at boot, because equity is
- * observed, not declared. A live account funded inside ADR-0017's £100–200
- * ramp can still boot, spend LLM budget and reject every unclassified entry
- * as dust, ceiling notwithstanding (`d5-trader-cap-agreement.test.ts` asserts
- * this rather than leaving it for a soak to find).
+ * `max_position_size_fraction_of_equity` resolves against LIVE EQUITY at
+ * evaluate time, not the ceiling, so this floor no longer guarantees
+ * `per_trade_size_cap` clears the dust floor — that now depends on whether
+ * EQUITY clears `min_viable_notional / max_position_size_fraction_of_equity`
+ * (~£200 at today's fractions), which nothing enforces at boot because
+ * equity is observed, not declared. A live account funded inside
+ * ADR-0017's £100–200 ramp can still boot, spend LLM budget and reject
+ * every unclassified entry as dust, ceiling notwithstanding
+ * (`d5-trader-cap-agreement.test.ts` asserts this rather than leaving it
+ * for a soak to find).
  *
- * This function is retained anyway, for a narrower and still-valid reason:
- * `sizingEquity` (direct-bind.ts) clamps the Trader's ask to
- * `min(ceiling, equity)`, so a pathologically small ceiling still forces a
- * pathologically small ask regardless of real equity. Refused rather than
- * clamped up to a workable figure: a ceiling is the one number in this system
- * the operator is asserting personally, and quietly raising it is the last
- * thing that may happen to it.
+ * Retained anyway for a narrower reason: `sizingEquity` (direct-bind.ts)
+ * clamps the Trader's ask to `min(ceiling, equity)`, so a pathologically
+ * small ceiling still forces a pathologically small ask regardless of real
+ * equity. Refused rather than clamped up to a workable figure: a ceiling is
+ * the one number in this system the operator is asserting personally.
  *
- * **A function, not a `const`, and the reason is load-bearing rather than
- * stylistic.** `orchestrator/index.ts` re-exports this module and is itself
- * imported from `cost-model-backtest/trial-execution.ts`, so there is an import
- * cycle through the barrel. A module-level `const` computed from
- * `RISK_CAP_EQUITY_FRACTIONS` evaluates while `paper-profile.ts`'s body has not
- * run yet on some entry paths, and reads `undefined` — which is not a type
- * error and would surface as a `NaN` floor that accepts every ceiling. Deferred
- * to call time, the value is always the real one.
+ * A function, not a `const`: `orchestrator/index.ts` re-exports this module
+ * and is itself imported from `cost-model-backtest/trial-execution.ts`, an
+ * import cycle through the barrel. A module-level `const` computed from
+ * `RISK_CAP_EQUITY_FRACTIONS` can evaluate while `paper-profile.ts`'s body
+ * has not run yet on some entry paths, reading `undefined` — a `NaN` floor
+ * that accepts every ceiling. Deferred to call time, the value is always real.
  */
 export function minLiveCapitalCeilingUsd(): number {
   return (
@@ -203,13 +163,13 @@ export function resolveLiveCapitalCeilingUsd(
  * The same bounds as `resolveLiveCapitalCeilingUsd`, applied to a number that
  * did not come from the environment.
  *
- * Split from the parse (#511 review) for one reason: `liveStartingProfile`
- * accepts an injected ceiling, and re-validating it by round-tripping through
- * the env parser produced a message blaming `SAMURAI_LIVE_MAX_CAPITAL_USD` for
- * a value that variable never held. `source` is what the caller is asked to
- * fix, so the message names the real culprit either way. It is a variable name
- * or an argument name — never a credential, and the ceiling itself is not
- * secret, so quoting it back is what makes a typo visible.
+ * Split from the parse for one reason: `liveStartingProfile` accepts an
+ * injected ceiling, and re-validating it by round-tripping through the env
+ * parser produced a message blaming `SAMURAI_LIVE_MAX_CAPITAL_USD` for a
+ * value that variable never held. `source` is what the caller is asked to
+ * fix, so the message names the real culprit either way — never a
+ * credential, and the ceiling itself is not secret, so quoting it back is
+ * what makes a typo visible.
  */
 function assertLiveCapitalCeilingUsd(value: number, source: string): CapitalCeilingUsd {
   const ceiling = toCapitalCeilingUsd(value, source);
@@ -231,7 +191,7 @@ function assertLiveCapitalCeilingUsd(value: number, source: string): CapitalCeil
 
 /**
  * How close a declared ceiling may sit to `LIVE_BOOK_GBP`'s bare number
- * before it looks unconverted (#1441). A distinct binding from
+ * before it looks unconverted. A distinct binding from
  * `D5_BOOK_REFUSE_ABOVE_TOLERANCE` (paper-profile.ts) on purpose: that one
  * bounds how far funded EQUITY may drift from the book before a Risk
  * Manager guard refuses; this bounds how close a DECLARED CEILING may sit to
@@ -243,18 +203,16 @@ const CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE = 0.05;
 
 /**
  * True when a declared USD ceiling sits close enough to `LIVE_BOOK_GBP`'s
- * bare number to be more likely a typo than a coincidence (#1441) — the one
- * input #1180's fix does not touch. See `LIVE_MAX_CAPITAL_ENV_VAR`'s docblock
- * above for why the ceiling is never converted for the operator.
+ * bare number to be more likely a typo than a coincidence. See
+ * `LIVE_MAX_CAPITAL_ENV_VAR`'s docblock above for why the ceiling is never
+ * converted for the operator.
  *
- * **USD-account premise, still current.** This only makes sense while the
- * live account is USD-denominated (Alpaca). #1400 wired a Saxo adapter into
- * the composition root, but it did not move this premise: the venue is opt-in
- * (`SAMURAI_BROKER`, unset means Alpaca) and refuses `live` outright, so every
- * run that reaches this function is still a USD one. Revisit when — and only
- * when — a GBP-native venue can actually reach live: on that path
- * `LIVE_BOOK_GBP`'s bare number is the correct figure, not a plausible typo,
- * and warning on it would be warning on a right answer.
+ * USD-account premise, still current: this only makes sense while the live
+ * account is USD-denominated (Alpaca). The Saxo venue is opt-in
+ * (`SAMURAI_BROKER`, unset means Alpaca) and refuses `live` outright, so
+ * every run that reaches this function is still a USD one. Revisit when a
+ * GBP-native venue can actually reach live — on that path `LIVE_BOOK_GBP`'s
+ * bare number is the correct figure, not a plausible typo.
  */
 function ceilingLooksLikeUnconvertedBookGbp(ceilingUsd: number): boolean {
   return (
@@ -288,9 +246,8 @@ export function liveStartingProfile(
   // may be perfectly well set
   const ceiling = assertLiveCapitalCeilingUsd(ceilingUsd, 'liveStartingProfile(ceilingUsd)');
 
-  // A warn, not a refusal — #511's scope is to make the switch work. The
-  // operator asked for live; they are told what they are getting, once, on the
-  // stream a soak actually keeps
+  // A warn, not a refusal: the operator asked for live; they are told what
+  // they are getting, once, on the stream a soak actually keeps
   logger?.log({
     trace_id: 'startup',
     stage: 'orchestrator',
@@ -327,11 +284,11 @@ export function liveStartingProfile(
   }
 
   return {
-    // #888 — `LIVE_BOOK_GBP` is passed through explicitly here, and ONLY
-    // here: this is the one caller for whom the declared book is the account
-    // being sized. `paperStartingProfile` calls `buildStartingProfileConfigs`
-    // with no book, deliberately, so D5's ceiling never clamps Alpaca's
-    // simulated paper balance. See `d5EnvelopeFor`'s docstring (paper-profile.ts).
+    // `LIVE_BOOK_GBP` is passed through explicitly here, and ONLY here: this
+    // is the one caller for whom the declared book is the account being
+    // sized. `paperStartingProfile` calls `buildStartingProfileConfigs` with
+    // no book, deliberately, so D5's ceiling never clamps Alpaca's simulated
+    // paper balance. See `d5EnvelopeFor`'s docstring (paper-profile.ts).
     ...buildStartingProfileConfigs(undefined, LIVE_BOOK_GBP),
     mode: 'live',
     capitalCeilingUsd: ceiling,

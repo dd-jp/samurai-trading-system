@@ -1,65 +1,31 @@
 /**
- * GDELT GKG 2.1 — the 15-minute macro tone fetcher (#556, map #552).
+ * GDELT GKG 2.1 — the 15-minute macro tone fetcher. A 3x FTSE ETP has no
+ * company news (the Benzinga wire returns zero items for it); what moves it
+ * is macro, which is this module's job.
  *
- * ## Why GDELT, and why the GKG files rather than the DOC API
+ * Fetches the 15-minute GKG batch files rather than GDELT's DOC API: the DOC
+ * API is undocumented, unversioned and rate-limited with no stability
+ * contract, while GKG batches are flat files at a deterministic timestamped
+ * URL, published on a fixed cadence, permanently retrievable.
  *
- * `alpaca-news-client.ts` documents its own measured hole: the Benzinga wire
- * returns **zero items for 3USL, 3LDE and SGLN**, the LSE-listed ETPs
- * [ADR-0016](../../../../docs/adr/0016-universe-leveraged-etps-ungated.md)
- * actually trades. A 3x FTSE ETP has no company news; what moves it is macro.
- * That is this module's job.
+ * Format verified against a live batch rather than the codebook: the zip
+ * carries exactly one deflate entry, so `inflateRawSync` past the local
+ * header is sufficient with no zip library dependency. The header's CRC-32
+ * is checked against the inflated bytes (`unzipFirstEntry`) — chosen over
+ * the manifest's md5, which travels the same untrusted channel
+ * `pinToBaseUrl` already refuses to trust.
  *
- * #556 banned the GDELT **DOC API** in production: it is an undocumented,
- * unversioned, rate-limited query endpoint with no stability contract. The
- * 15-minute **GKG batch files** are the opposite — flat files at a
- * deterministic timestamped URL, published on a fixed cadence, permanently
- * retrievable. That permanence is what lets `gdelt-themes.ts` filter at fetch
- * without destroying re-derivability.
+ * Does not score, aggregate, or emit an `IntelligenceItem` — it returns
+ * records, and `GdeltIngestAgent` archives the bytes; tone scoring lives in
+ * `gdelt-scorer.ts`.
  *
- * ## Format, verified against a live batch rather than the codebook
- *
- * `lastupdate.txt` returns three `size md5 url` lines (export / mentions /
- * gkg); we take the gkg one. The zip carries **exactly one deflate entry**
- * (verified: EOCD entry count 1, method 8), so `inflateRawSync` past the local
- * header is sufficient and pulls in no dependency — the repo has no zip library
- * and this did not justify adding one. The header's name and extra-field
- * lengths are **read**, not assumed: they were 22 and 28 in the sampled batch
- * and both are variable. The header's CRC-32 is checked against the inflated
- * bytes (`unzipFirstEntry`) — this module's byte-integrity control, chosen
- * over the manifest's md5 because the manifest is the untrusted channel
- * `pinToBaseUrl` already refuses to trust; see the check site for the fuller
- * argument.
- *
- * The TSV carries 27 columns. The four this reads: `0` GKGRECORDID, `1`
- * V2.1DATE, `7` V1THEMES (semicolon-delimited), `15` V1.5TONE (comma-delimited,
- * tone first). Columns 3 and 4 (source name, document URL) are carried through
- * for provenance. Those six are what gets archived — see `payload` on
- * `GdeltGkgRecord` for the measured storage reason and why re-derivability
- * survives the projection.
- *
- * ## What this module does NOT do
- *
- * It does not score, aggregate, or emit an `IntelligenceItem`. It returns
- * records; `GdeltIngestAgent` archives the bytes. Tone windowing and the
- * `sign(toneDelta)` scoring #556 specified live in `gdelt-scorer.ts`, which
- * reads them back out of the archive (#1086) — kept apart on purpose, see
- * that agent's header for why the archive has to lead the signal by a full
- * baseline window.
- *
- * ## Shutdown, and why the abort signal stops at the rate limiter (#702)
- *
- * `latestBatchUrl` and `fetchBatch` both accept an optional `AbortSignal`, but
- * it is threaded ONLY into `this.rateLimiter.acquire(signal)`, never into the
- * request itself. That is a deliberate asymmetry, not a partial job: a poll
- * parked on the token bucket has done no work and ordered nothing, so
- * abandoning it costs nothing; a poll already mid-request is the one whose
- * archive write `GdeltIngestAgent.whenIdle`'s drain exists to order, so it is
- * left to settle on its own (bounded, as before, by
- * `AbortSignal.timeout(REQUEST_TIMEOUT_MS)`). Composing the shutdown signal
- * into the request's own signal via `AbortSignal.any` would abort that
- * download too — `fetch` cannot distinguish "waiting for headers" from
- * "streaming the body", so there is no way to compose the two signals without
- * losing the distinction the whole design turns on.
+ * `latestBatchUrl`/`fetchBatch`'s `AbortSignal` is threaded ONLY into
+ * `this.rateLimiter.acquire(signal)`, never into the request itself: a poll
+ * parked on the token bucket can be abandoned for free, but a poll already
+ * mid-request is the one whose archive write `GdeltIngestAgent.whenIdle`'s
+ * drain exists to order, so it is left to settle on its own. `fetch` cannot
+ * distinguish "waiting for headers" from "streaming the body", so composing
+ * the two signals would abort an in-flight download too.
  */
 
 import { crc32, inflateRawSync } from 'node:zlib';
@@ -67,43 +33,32 @@ import { TokenBucket } from '../../../shared/index.js';
 import { allWatchedThemes } from './gdelt-themes.js';
 
 /**
- * HTTPS, not the plain HTTP that `lastupdate.txt` itself advertises.
- *
- * GDELT is open data with no credentials to leak, so the usual argument for TLS
- * does not apply — but this feed reaches an analyst and therefore an order. Over
- * plain HTTP an on-path attacker rewrites `lastupdate.txt` and chooses both the
- * bytes we score and the host we fetch them from. GDELT serves the identical
- * files over TLS, so the mitigation costs nothing.
+ * HTTPS, not the plain HTTP `lastupdate.txt` itself advertises. GDELT is
+ * open data with no credentials to leak, but this feed reaches an analyst
+ * and therefore an order — over plain HTTP an on-path attacker rewrites
+ * `lastupdate.txt` and chooses both the bytes we score and the host we
+ * fetch from. GDELT serves the identical files over TLS, so this costs nothing.
  */
 const DEFAULT_BASE_URL = 'https://data.gdeltproject.org/gdeltv2';
 
 /**
- * How long any single GDELT request may stall before it is abandoned.
- *
- * A 3.4MB download over a residential link is slow but not this slow. Without a
- * timeout a half-open connection sits until the OS TCP timeout — minutes to
- * tens of minutes — holding a poll open across many 15-minute ticks. Failing at
- * 90s and retrying on the next tick loses one batch; hanging loses the day's.
+ * How long any single GDELT request may stall before it is abandoned. A
+ * 3.4MB download is slow but not this slow — without a timeout a half-open
+ * connection sits until the OS TCP timeout (minutes), holding a poll open
+ * across many ticks. Failing at 90s loses one batch; hanging loses the day's.
  */
 const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
  * The request options every GDELT fetch shares: a timeout, and a refusal to
- * follow redirects.
- *
- * `redirect: 'error'` is what keeps `pinToBaseUrl` meaningful. That method is
- * this module's cited byte-integrity control — it refuses a manifest naming a
- * host we did not configure — but `fetch` follows 3xx by default, so a single
- * redirect from the pinned host re-targets the download anywhere and the pin
- * never sees it. Checking the host of a URL we then let the server rewrite is
- * a control that reads as present and is not. GDELT serves these files
- * directly, so a redirect is a change of behaviour worth failing on rather
- * than absorbing.
+ * follow redirects. `redirect: 'error'` is what keeps `pinToBaseUrl`
+ * meaningful — `fetch` follows 3xx by default, so a single redirect from the
+ * pinned host would re-target the download anywhere the pin never sees.
  *
  * Built per call, never hoisted to a module constant: `AbortSignal.timeout`
- * starts counting when it is CREATED, so one shared signal would begin at
- * import and every request after the first 90 seconds of process life would
- * abort instantly.
+ * starts counting when CREATED, so one shared signal would begin at import
+ * and every request after the first 90 seconds of process life would abort
+ * instantly.
  */
 function requestInit(): RequestInit {
   return { redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
@@ -116,18 +71,11 @@ function requestInit(): RequestInit {
 const DEFAULT_PACING = { capacity: 2, refillPerSecond: 0.2 } as const;
 
 /**
- * Refuse a response larger than this rather than parsing it.
- *
- * A sampled batch is 3.4MB compressed / 10.5MB raw. 64MB is ~19x the observed
- * compressed size, so anything above it is a mis-routed response rather than a
- * batch. Enforced twice: against `content-length` before `arrayBuffer()`, which
- * bounds the allocation whenever the server declares a length, and against the
- * materialised buffer after, which catches a missing or understated header.
- * Note what even that does NOT do — a server streaming an undeclared body still
- * allocates it in full before the second check fires. Closing that would need a
- * streaming read with a running byte count; `MAX_INFLATED_BYTES` is the guard
- * that refuses before allocating, because `inflateRawSync` enforces it
- * internally.
+ * Refuse a response larger than this rather than parsing it. A sampled
+ * batch is 3.4MB compressed; 64MB is ~19x that, so anything above it is a
+ * mis-routed response. Enforced against `content-length` before
+ * `arrayBuffer()`, and again against the materialised buffer after, to
+ * catch a missing or understated header.
  */
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -135,18 +83,10 @@ const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_INFLATED_BYTES = 512 * 1024 * 1024;
 
 /**
- * Refuse a `lastupdate.txt` response larger than this rather than parsing it.
- *
- * `response.text()` in `latestBatchUrl` is otherwise this module's only
- * uncapped read — the batch path caps twice (`content-length`, then the
- * materialised buffer), and this mirrors that shape. The manifest is three
- * `size md5 url` lines in practice (a few hundred bytes), so 64KB is
- * generous; nothing enforces the three-line shape, hence the cap. Note what
- * this does NOT do, the same admitted limit `MAX_ARCHIVE_BYTES` carries:
- * `response.text()` still materialises the whole body before the post-read
- * check can fire, whatever the header claims. Refusing the RESULT is enough
- * to stop an oversized manifest being parsed; a true streaming bound would
- * need a running byte count, which three lines of text does not justify.
+ * Refuse a `lastupdate.txt` response larger than this rather than parsing
+ * it — mirrors the batch path's two-step guard (`content-length`, then the
+ * materialised buffer). The manifest is three `size md5 url` lines in
+ * practice (a few hundred bytes), so 64KB is generous.
  */
 const MAX_MANIFEST_BYTES = 64 * 1024;
 
@@ -180,23 +120,12 @@ export interface GdeltGkgRecord {
   /** V1.5TONE's first field: average tone, roughly [-100, +100], usually ±10 */
   tone: number;
   /**
-   * What the archive stores: the six read columns, tab-joined in column order
-   * (`PROJECTED_COLUMNS`), NOT the verbatim 27-column line.
-   *
-   * This is a measured deviation from #554's "store the vendor's bytes
-   * untouched", taken on evidence. Against a real batch, 200 of 797 rows match
-   * the watchlist (25.1%) and a full GKG line averages **14.9KB** — almost all
-   * of it the V2ENHANCED* columns nothing here reads. At 96 batches a day that
-   * is **~4.0GB over a 14-day soak**, on the MacBook running the live system.
-   * The projection is ~1.1KB a row: **~288MB** for the same run.
-   *
-   * Re-derivability survives intact, which is the only reason this is
-   * acceptable. `native_id` carries the batch stamp as its prefix
-   * (`20260815153000-23`), so the exact source file URL is reconstructible from
-   * any stored row, and GDELT keeps every batch permanently retrievable at that
-   * deterministic URL — the same permanence `gdelt-themes.ts` leans on to
-   * justify filtering at fetch. The dropped columns are re-fetchable in full;
-   * they are not lost, just not carried.
+   * What the archive stores: the six read columns, tab-joined in column
+   * order (`PROJECTED_COLUMNS`), NOT the verbatim 27-column line — a full
+   * GKG line averages ~14.9KB (almost all V2ENHANCED* columns nothing here
+   * reads) versus ~1.1KB for the projection. Re-derivability survives
+   * intact: `native_id` carries the batch stamp as its prefix, so the source
+   * file is reconstructible and the dropped columns are re-fetchable.
    */
   payload: string;
 }
@@ -252,9 +181,8 @@ function parseGdeltStamp(stamp: string): Date | undefined {
     number,
   ];
   // Range-checked BEFORE `Date.UTC`, because `Date.UTC` normalises rather than
-  // rejecting: month 99 rolls forward into a later year and returns a perfectly
-  // valid number, so a NaN guard alone never fires and a corrupt stamp becomes a
-  // silently shifted `batch_time` — which is a cursor that skips real batches
+  // rejecting: a corrupt stamp would otherwise silently roll forward into a
+  // valid but wrong date — a cursor that skips real batches
   if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   if (hour > 23 || minute > 59 || second > 59) return undefined;
   const ms = Date.UTC(year, month - 1, day, hour, minute, second);
@@ -276,26 +204,18 @@ export function batchTimeFromUrl(fileUrl: string): Date | undefined {
 }
 
 /**
- * The FIRST entry of the zip, which for a GKG batch is the only entry.
- *
- * It reads the local file header and stops; it does not read the end-of-central-
- * directory record, so it cannot and does not verify the archive holds exactly
- * one member — a two-entry archive would inflate member one and ignore the rest.
- * That is a deliberate limit, not an oversight: a GDELT batch that grew a second
- * member would mean the format changed, and the column-count guard in
- * `parseBatch` (`MIN_COLUMNS`) is what actually catches a changed schema. Naming
- * it `unzipFirstEntry` keeps the code honest about which of those two things is
- * true; an earlier docblock here claimed a rejection this function never made.
+ * The FIRST entry of the zip, which for a GKG batch is the only entry. Reads
+ * the local file header and stops — it does not verify the archive holds
+ * exactly one member, since a GDELT batch that grew a second member would
+ * mean the format changed, and `parseBatch`'s `MIN_COLUMNS` guard is what
+ * actually catches a changed schema.
  */
 /**
  * General-purpose bit flag bit 3: "sizes and CRC-32 are in a trailing data
  * descriptor, not the local header". When set, the local header's CRC-32
- * field is 0 by construction and would fail every real batch if compared naively —
- * this decoder does not read the trailing descriptor, so a set bit 3 has to
- * be refused explicitly rather than silently compared against a meaningless
- * zero. Confirmed unset against a live batch fetched 2026-08-17 (general
- * purpose flag `0x0000`); GDELT's files are static and not streamed, so this
- * is not expected to fire, but nothing upstream enforces it.
+ * field is 0 by construction and would fail every real batch if compared
+ * naively, so a set bit has to be refused explicitly. Confirmed unset
+ * against a live batch.
  */
 const DATA_DESCRIPTOR_FLAG = 0x0008;
 
@@ -324,10 +244,9 @@ function unzipFirstEntry(buffer: Buffer): string {
     inflated = inflateRawSync(body, { maxOutputLength: MAX_INFLATED_BYTES });
   } else if (method === 0) {
     // Stored data is NOT self-terminating: `body` runs to the end of the whole
-    // buffer, so returning it verbatim appends the central directory and EOCD to
-    // the CSV as binary garbage. The local header's compressed size bounds it.
-    // Zero there means the size lives in a trailing data descriptor, which this
-    // decoder does not read — refuse rather than guess
+    // buffer, so returning it verbatim appends the central directory and EOCD
+    // as binary garbage. The local header's compressed size bounds it; zero
+    // there means the size is in a trailing descriptor this decoder can't read
     const compressedSize = buffer.readUInt32LE(18);
     if (compressedSize === 0) {
       throw new Error(
@@ -335,9 +254,8 @@ function unzipFirstEntry(buffer: Buffer): string {
       );
     }
     // `subarray` CLAMPS rather than throwing, so a truncated download would
-    // yield a short CSV that `parseBatch` reads as a complete batch with rows
-    // silently missing — the one failure mode worse than an error here, because
-    // a batch is allowed to be small and nothing downstream could tell
+    // otherwise yield a short CSV `parseBatch` reads as complete with rows
+    // silently missing — worse than an error, since a batch is allowed to be small
     if (compressedSize > body.length) {
       throw new Error(
         `GdeltGkgClient: stored zip entry declares ${compressedSize} bytes but only ` +
@@ -351,19 +269,11 @@ function unzipFirstEntry(buffer: Buffer): string {
     );
   }
 
-  // The byte-integrity check this module's own docs name as its job (#713 item
-  // 3). The manifest's md5 (`lastupdate.txt`, `size md5 url`) was considered
-  // instead and declined: it travels the SAME channel `pinToBaseUrl` already
-  // treats as untrusted — a manifest that could name a hostile host could name
-  // a matching hostile md5 just as easily, so verifying it adds nothing over
-  // the host pin. Transit corruption is TLS's job (AEAD), not this module's.
-  // The zip local header's CRC-32 is a better fit: it costs nothing extra to
-  // wire in (no plumbing across `latestBatchUrl`/`fetchBatch`, unlike the
-  // manifest md5, which is fetched in a separate call from the batch and would
-  // need threading through both public methods to compare), it is CHECKED
-  // against the bytes actually inflated rather than a value fetched
-  // separately, and `crc32` on a ~10.5MB buffer is sub-millisecond — the
-  // measured cost this item asked to weigh is negligible either way
+  // This module's byte-integrity check. The manifest's md5 was considered
+  // and declined: it travels the SAME channel `pinToBaseUrl` already treats
+  // as untrusted, so a hostile manifest could name a matching hostile md5
+  // too. The zip's own CRC-32 is checked against the bytes actually inflated
+  // instead
   const actualCrc = crc32(inflated);
   if (actualCrc !== declaredCrc) {
     throw new Error(
@@ -390,7 +300,7 @@ function parseGkgLine(
   if (!lineThemes.some((theme) => themes.has(theme))) return null;
 
   // V1.5TONE is `tone,positive,negative,polarity,…`; only the first field is
-  // the average tone #556 scores on
+  // the average tone this module scores on
   const tone = Number.parseFloat((fields[COL.tone] ?? '').split(',')[0] ?? '');
   if (!Number.isFinite(tone)) return null;
 
@@ -425,14 +335,9 @@ export class GdeltGkgClient {
   }
 
   /**
-   * The URL of the most recent GKG batch.
-   *
-   * No credentials anywhere in this module — GDELT is open data, so unlike the
-   * Alpaca client there is nothing to check in the constructor.
-   *
-   * `signal` (#702) bounds only the rate-limiter wait, not the request that
-   * follows — see the class doc for why the two are treated differently on
-   * shutdown.
+   * The URL of the most recent GKG batch. `signal` bounds only the
+   * rate-limiter wait, not the request that follows — see the class doc for
+   * why the two are treated differently on shutdown.
    */
   async latestBatchUrl(signal?: AbortSignal): Promise<string> {
     await this.rateLimiter.acquire(signal);
@@ -443,8 +348,7 @@ export class GdeltGkgClient {
       );
     }
     // Refused BEFORE `text()` where the server declares a length, mirroring
-    // `fetchBatch`'s two-step guard on `MAX_ARCHIVE_BYTES` — see
-    // `MAX_MANIFEST_BYTES` for why neither check is a true streaming bound
+    // `fetchBatch`'s two-step guard on `MAX_ARCHIVE_BYTES`
     const declaredLength = Number(response.headers.get('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > MAX_MANIFEST_BYTES) {
       throw new Error(
@@ -460,10 +364,8 @@ export class GdeltGkgClient {
           'ceiling — refusing to parse it.',
       );
     }
-    // Three lines — export, mentions, gkg — each `size md5 url`. Matching on the
-    // suffix rather than the line index: the order is conventional, not
-    // contractual, and picking the wrong file would parse a totally different
-    // schema against GKG column indices
+    // Three lines — export, mentions, gkg. Matched on suffix rather than line
+    // index: the order is conventional, not contractual
     for (const line of text.split('\n')) {
       const url = line.trim().split(/\s+/).at(2);
       if (url?.endsWith('.gkg.csv.zip') === true) return this.pinToBaseUrl(url);
@@ -474,14 +376,11 @@ export class GdeltGkgClient {
   }
 
   /**
-   * Confines a URL named by `lastupdate.txt` to the host we configured.
-   *
-   * The manifest names an absolute URL, so whoever serves the manifest chooses
-   * the download host — and over plain HTTP that is anyone on the path. The host
-   * must match `baseUrl`'s, and the returned URL is rebuilt on `baseUrl`'s
-   * origin so a manifest that still advertises `http://` (GDELT's does) is
-   * fetched over TLS anyway. Only the origin is replaced; the path, and with it
-   * the batch stamp the cursor reads, is the vendor's.
+   * Confines a URL named by `lastupdate.txt` to the host we configured. The
+   * manifest names an absolute URL, so whoever serves it chooses the
+   * download host — over plain HTTP that's anyone on the path. Only the
+   * origin is replaced (so a manifest still advertising `http://` is fetched
+   * over TLS anyway); the path, and with it the batch stamp, is the vendor's.
    */
   private pinToBaseUrl(fileUrl: string): string {
     const base = new URL(this.baseUrl);
@@ -497,36 +396,26 @@ export class GdeltGkgClient {
           'refusing to download a batch from a host we did not configure.',
       );
     }
-    // The query string is dropped, not carried. `batchTimeFromUrl` anchors its
-    // stamp on `.gkg.csv.zip$`, so preserving a `?` would produce a URL this
-    // module pins happily and then cannot stamp — the two methods have to agree
-    // on what a batch URL looks like. GDELT's batch URLs carry no query, so
-    // there is nothing real to lose
+    // Query string dropped, not carried: `batchTimeFromUrl` anchors its stamp
+    // on `.gkg.csv.zip$`, so preserving a `?` would produce a URL this pins
+    // happily and then can't stamp. GDELT's batch URLs carry no query anyway.
     return `${base.protocol}//${base.host}${named.pathname}`;
   }
 
   /**
-   * Downloads, inflates, parses and theme-filters one batch file.
-   *
-   * `signal` (#702), same shape as `latestBatchUrl`: it can abandon this call
-   * while it is parked on the rate limiter, but once the download itself is
-   * under way `signal` is not consulted again. `GdeltIngestAgent.whenIdle`
-   * relies on that: a poll that has actually started downloading is worth
-   * letting finish, because its archive write is the thing the shutdown drain
-   * exists to order — see that class's header and `TokenBucket.acquire`'s doc
-   * comment for the fuller argument. Composing `signal` into the request's own
-   * `AbortSignal.timeout` (via `AbortSignal.any`) was considered and rejected
-   * for exactly that reason: it would cancel a download that is already
-   * mid-flight, which is the one state #702 says must be left alone.
+   * Downloads, inflates, parses and theme-filters one batch file. `signal`
+   * can abandon this call while parked on the rate limiter, but once the
+   * download is under way it is not consulted again —
+   * `GdeltIngestAgent.whenIdle` relies on a started download being left to
+   * finish, since its archive write is what the shutdown drain exists to
+   * order. Composing `signal` into the request's own timeout (`AbortSignal.any`)
+   * was rejected for the same reason: it would cancel a mid-flight download.
    */
   async fetchBatch(fileUrl: string, signal?: AbortSignal): Promise<GdeltGkgBatch> {
-    // Pinned here as well as in `latestBatchUrl`, because this method is public
-    // and a caller that assembled a URL some other way must not reach a host we
-    // never configured. Re-pinning an already-pinned URL is a no-op.
-    // `url`, not `fileUrl`, in every diagnostic below: the request actually
-    // goes to the pinned rewrite — different protocol, query dropped — so
-    // citing the pre-pin argument would name a URL we never fetched. This
-    // module's whole point is that the two are different things
+    // Pinned here too, since this method is public and a caller-assembled URL
+    // must not reach a host we never configured. Re-pinning is a no-op.
+    // `url`, not `fileUrl`, in every diagnostic below: the request goes to
+    // the pinned rewrite, so citing the pre-pin argument would be wrong
     const url = this.pinToBaseUrl(fileUrl);
     const batchTime = batchTimeFromUrl(url);
     if (batchTime === undefined) {
@@ -540,11 +429,9 @@ export class GdeltGkgClient {
         `GdeltGkgClient: ${url} returned HTTP ${response.status} ${response.statusText}.`,
       );
     }
-    // Refused BEFORE `arrayBuffer()` where the server declares a length, so the
-    // oversized body is never materialised. A missing or lying `content-length`
-    // falls through to the post-allocation check below — this bounds the honest
-    // case, which is the one that actually threatens us (GDELT publishing a
-    // batch an order of magnitude larger), not a hostile server
+    // Refused BEFORE `arrayBuffer()` where the server declares a length, so
+    // an oversized body is never materialised. A missing/lying header falls
+    // through to the post-allocation check below
     const declared = Number(response.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > MAX_ARCHIVE_BYTES) {
       throw new Error(
@@ -572,17 +459,12 @@ export class GdeltGkgClient {
   }
 
   /**
-   * Exported through the class so the parser is testable without a fetch.
-   *
-   * A malformed row is SKIPPED, not thrown on — the opposite of
-   * `AlpacaNewsClient.validateArticle`, and deliberately so. There, one bad
-   * article means a broken vendor contract on a small, fully-structured page.
-   * Here a batch is ~800 rows of scraped worldwide text where a stray tab or an
-   * unparseable tone is routine, and failing the batch would discard 799 good
-   * rows over one. What comes back is `scanned` — rows SEEN, not rows skipped
-   * (skipped is `scanned - records.length`) — so a caller wiring the
-   * silently-rejecting-filter alarm compares the two rather than logging one as
-   * if it were the other.
+   * Exported through the class so the parser is testable without a fetch. A
+   * malformed row is SKIPPED, not thrown on — unlike
+   * `AlpacaNewsClient.validateArticle`, since a batch is ~800 rows of scraped
+   * text where a stray tab or unparseable tone is routine, and failing the
+   * batch would discard 799 good rows over one. `scanned` is rows SEEN, not
+   * skipped (skipped is `scanned - records.length`).
    */
   parseBatch(csv: string, batchTime: Date, fileUrl: string): GdeltGkgBatch {
     const records: GdeltGkgRecord[] = [];
