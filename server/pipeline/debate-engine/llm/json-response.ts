@@ -1,4 +1,3 @@
-
 export const BARE_JSON_INSTRUCTION = [
   'Output the raw JSON object only: no markdown code fence, no ``` characters,',
   'no preamble, and no commentary after the closing brace.',

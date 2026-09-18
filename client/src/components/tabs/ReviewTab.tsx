@@ -249,29 +249,27 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
             both arms · basis {formatUsd(latest.basis)}
           </p>
           <ArmVerdict row={latest} />
-          {
-            comparisons.length > 1 ? (
-              <ul className="arm-trend">
-                {comparisons.map((row) => {
-                  const state = armVerdictState(row);
-                  return (
-                    <li key={row.computed_at} className={ARM_TREND_CLASS[state]}>
-                      <span className="mono muted">{formatDateUtc(row.computed_at)}</span>
-                      <span className="mono">
-                        live {formatPercent(row.live.return_pct, 2)} /{' '}
-                        {formatPercent(row.live.max_drawdown_pct, 2)} dd
-                      </span>
-                      <span className="mono">
-                        control {formatPercent(row.control.return_pct, 2)} /{' '}
-                        {formatPercent(row.control.max_drawdown_pct, 2)} dd
-                      </span>
-                      {state === 'below-floor' ? <span>below floor</span> : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null
-          }
+          {comparisons.length > 1 ? (
+            <ul className="arm-trend">
+              {comparisons.map((row) => {
+                const state = armVerdictState(row);
+                return (
+                  <li key={row.computed_at} className={ARM_TREND_CLASS[state]}>
+                    <span className="mono muted">{formatDateUtc(row.computed_at)}</span>
+                    <span className="mono">
+                      live {formatPercent(row.live.return_pct, 2)} /{' '}
+                      {formatPercent(row.live.max_drawdown_pct, 2)} dd
+                    </span>
+                    <span className="mono">
+                      control {formatPercent(row.control.return_pct, 2)} /{' '}
+                      {formatPercent(row.control.max_drawdown_pct, 2)} dd
+                    </span>
+                    {state === 'below-floor' ? <span>below floor</span> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
           <p className="muted small">
             The control has no debate rounds, so it always trades where the indicator fires; the
             live arm can decline to. Read return and drawdown together — the wire reports both.

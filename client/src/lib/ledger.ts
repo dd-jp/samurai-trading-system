@@ -1,4 +1,3 @@
-
 import type { PipelineLane, PipelineOutcome, PipelineStage, PipelineView } from '@contracts';
 
 export type SettledOutcome = 'go' | 'no_go' | 'stopped' | 'quorum_skip';

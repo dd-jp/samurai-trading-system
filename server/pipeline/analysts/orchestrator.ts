@@ -1,4 +1,3 @@
-
 import {
   AlwaysOpenCalendar,
   type MarketDataService,
@@ -52,8 +51,7 @@ function defaultSessionCalendars(): Record<AssetClass, TradingCalendar> {
 }
 
 const NOOP_LOGGER: Logger = {
-  log(): void {
-  },
+  log(): void {},
 };
 
 function renderErrorDetail(error: unknown): Record<string, unknown> {

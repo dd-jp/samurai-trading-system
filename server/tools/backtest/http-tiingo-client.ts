@@ -1,4 +1,3 @@
-
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
 

@@ -45,8 +45,7 @@ export class StaticSaxoTokenSource implements SaxoTokenSource {
     return { status: 'unrefreshable' };
   }
 
-  async stop(): Promise<void> {
-  }
+  async stop(): Promise<void> {}
 }
 
 export interface SaxoRefreshTimers {

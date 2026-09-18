@@ -1,4 +1,3 @@
-
 import type { BarWindow } from '../../providers/market-data-service/index.js';
 import type { IntelligenceItem } from '../../providers/market-intelligence/index.js';
 import { resolveMiSubject } from '../../providers/universe-pool/index.js';

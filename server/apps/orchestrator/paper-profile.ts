@@ -20,7 +20,7 @@ import type { InstrumentSubclass } from '../../shared/index.js';
 import { type CostConfig, SAXO_COMMISSION_RATE } from '../../tools/backtest/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
 import { toCapitalCeilingUsd } from './production/capital-ceiling.js';
-import { type DailyMetricsConfig, type ProductionConfig } from './production/config.js';
+import type { DailyMetricsConfig, ProductionConfig } from './production/config.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
 import { DEFAULT_FEEDBACK_INTERVAL_MS } from './production/defaults.js';

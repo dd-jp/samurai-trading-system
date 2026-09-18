@@ -1,4 +1,3 @@
-
 import type { OpenPosition } from '../../shared/index.js';
 import { describeThrownSafely, logCaughtFailure, safeLog } from '../../shared/index.js';
 import { UnresolvedFlattenForInstrumentError } from './sqlite-shared-store.js';

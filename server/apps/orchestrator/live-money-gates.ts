@@ -1,4 +1,3 @@
-
 export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: string }[] = [
   {
     issue: 895,

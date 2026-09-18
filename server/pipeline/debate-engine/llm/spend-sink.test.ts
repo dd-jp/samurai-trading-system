@@ -1,4 +1,3 @@
-
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { LogEntry } from '../../../shared/types.js';
 import type { PromptTierAlert, PromptTierAlertChannel } from './prompt-tier-alert.js';

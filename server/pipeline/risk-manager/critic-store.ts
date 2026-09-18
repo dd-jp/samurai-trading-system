@@ -1,4 +1,3 @@
-
 import { currentTraceId, type Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';

@@ -209,9 +209,7 @@ describe('runDailyCycle — attribution into weights', () => {
 describe('runDailyCycle — bounded steps (acceptance criterion #4)', () => {
   it('cannot swing a weight past its bounded step on a single catastrophic trade', () => {
     const { input, tuning } = makeHarness({
-      trades: openClosedTradeStore([
-        makeTrade({ realized_pnl_net: -5000 }),
-      ]),
+      trades: openClosedTradeStore([makeTrade({ realized_pnl_net: -5000 })]),
       config: makeConfig({ weights: makeDial({ max_step: 0.05 }) }),
     });
 

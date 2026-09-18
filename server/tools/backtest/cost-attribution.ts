@@ -1,4 +1,3 @@
-
 import type { ClosedTrade, Fill } from '../../shared/index.js';
 import type { ReplayTradeSource } from './eval-types.js';
 import type { DateRange } from './universe.js';

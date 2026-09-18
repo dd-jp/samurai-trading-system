@@ -1,4 +1,3 @@
-
 import type { AlpacaBrokerClient } from '../../pipeline/execution/adapters/alpaca-client.js';
 import { fetchWithTimeout } from '../../shared/index.js';
 

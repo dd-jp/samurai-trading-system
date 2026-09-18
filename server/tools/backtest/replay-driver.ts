@@ -1,4 +1,3 @@
-
 import type { Bar, TradingCalendar } from '../../providers/market-data-service/index.js';
 import {
   computeIndicator,

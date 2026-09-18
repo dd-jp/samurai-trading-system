@@ -1,4 +1,3 @@
-
 export interface ResidualExposureAlert {
   trace_id: string;
   idempotency_key: string;

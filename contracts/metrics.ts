@@ -1,4 +1,3 @@
-
 export interface MetricsSuite {
   sharpe: number;
   sortino: number;

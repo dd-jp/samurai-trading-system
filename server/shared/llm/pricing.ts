@@ -1,4 +1,3 @@
-
 export interface ModelRate {
   input: number;
   output: number;

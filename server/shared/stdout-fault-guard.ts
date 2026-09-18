@@ -1,4 +1,3 @@
-
 export interface StdoutStream {
   on(event: 'error', listener: (error: Error) => void): unknown;
 }
@@ -14,8 +13,7 @@ export function watchStdoutErrors(stdout: StdoutStream, onFault: (error: Error) 
 export function guardedWrite(stream: ErrorStream, line: string): void {
   try {
     stream.write(line);
-  } catch {
-  }
+  } catch {}
 }
 
 export type ProcessFault = 'uncaughtException' | 'unhandledRejection';

@@ -7,8 +7,7 @@ export function describeThrown(error: unknown): string {
   try {
     const rendered = JSON.stringify(value);
     if (typeof rendered === 'string') return rendered;
-  } catch {
-  }
+  } catch {}
   return String(value);
 }
 
@@ -23,8 +22,7 @@ export function describeThrownSafely(error: unknown): string {
 export function safeLog(logger: Logger, entry: LogEntry): void {
   try {
     logger.log(entry);
-  } catch {
-  }
+  } catch {}
 }
 
 export type CaughtFailureLogTemplate = LogEntryTemplate;

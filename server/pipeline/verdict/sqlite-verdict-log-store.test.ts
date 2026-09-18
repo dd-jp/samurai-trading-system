@@ -1,4 +1,3 @@
-
 import type { VerdictLog } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { SqliteVerdictLogStore } from './sqlite-verdict-log-store.js';

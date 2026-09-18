@@ -37,9 +37,7 @@ describe('getContributionsForAttribution', () => {
   it('joins by debate_id and returns the completed debate contributions', () => {
     const store = new InMemoryDebateLogStore();
     const result = makeResult();
-    store.writeLog(
-      buildDebateLog(result, 'BTC-USD', new Date('2026-07-14T09:00:08Z')),
-    );
+    store.writeLog(buildDebateLog(result, 'BTC-USD', new Date('2026-07-14T09:00:08Z')));
 
     expect(getContributionsForAttribution(store, 'debate-1')).toEqual(result.contributions);
   });

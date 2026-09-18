@@ -1,4 +1,3 @@
-
 export interface UnrecordedVenuePositionAlert {
   trace_id: string;
   instrument: string;

@@ -1,4 +1,3 @@
-
 import type { AssetClass } from './primitives.js';
 
 export const PIPELINE_STAGES = [
@@ -12,12 +11,7 @@ export const PIPELINE_STAGES = [
 
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
-export type PipelineCellState =
-  | 'done'
-  | 'live'
-  | 'stopped'
-  | 'skipped'
-  | 'not_reached';
+export type PipelineCellState = 'done' | 'live' | 'stopped' | 'skipped' | 'not_reached';
 
 export interface PipelineCell {
   stage: PipelineStage;
@@ -69,13 +63,7 @@ export function isDegradedDecision(decision: string | null): decision is Degrade
   return decision !== null && Object.hasOwn(DEGRADED_DECISIONS, decision);
 }
 
-export type PipelineOutcome =
-  | 'go'
-  | 'no_go'
-  | 'stopped'
-  | 'quorum_skip'
-  | 'in_flight'
-  | 'idle';
+export type PipelineOutcome = 'go' | 'no_go' | 'stopped' | 'quorum_skip' | 'in_flight' | 'idle';
 
 export interface PipelineLane {
   instrument: string;

@@ -52,8 +52,7 @@ export function composeMarketIntelligence(
       for (const agent of present) {
         try {
           if (await agent.refresh(trace_id, instrument, assetClass)) refreshed = true;
-        } catch {
-        }
+        } catch {}
       }
       return refreshed;
     },

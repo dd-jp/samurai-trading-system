@@ -1,4 +1,3 @@
-
 export interface ExitValuationDegradedAlert {
   instrument: string;
   seam: 'risk' | 'verdict' | 'trader';

@@ -1,4 +1,3 @@
-
 export { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
 export type {
   AlpacaAccount,

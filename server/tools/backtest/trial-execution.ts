@@ -1,4 +1,3 @@
-
 import { isDailyTimeframe, timeframeToMs } from '../../providers/market-data-service/index.js';
 import { digest } from '../../shared/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';

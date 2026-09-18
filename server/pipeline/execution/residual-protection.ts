@@ -1,4 +1,3 @@
-
 import type { Fill, OpenPosition } from '../../shared/index.js';
 import { heldQuantityFromFills, isFlat, logCaughtFailure, safeLog } from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';

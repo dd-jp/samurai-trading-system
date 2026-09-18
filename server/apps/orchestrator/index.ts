@@ -812,8 +812,7 @@ export function installFaultHandlers(
     );
     try {
       effects.stderr(`orchestrator ${fault}: ${message}\n`);
-    } catch {
-    }
+    } catch {}
     effects.exit(1);
   };
 

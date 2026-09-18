@@ -1,4 +1,3 @@
-
 import type { Bar, MarketDataService } from '../../providers/market-data-service/index.js';
 import {
   breachedConditions,

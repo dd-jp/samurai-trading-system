@@ -1,4 +1,3 @@
-
 import type { TradingCalendar } from './trading-calendar.js';
 import type { Bar } from './types.js';
 

@@ -1,4 +1,3 @@
-
 import { readFileSync } from 'node:fs';
 
 function loadEnvValue(envFilePath, key) {

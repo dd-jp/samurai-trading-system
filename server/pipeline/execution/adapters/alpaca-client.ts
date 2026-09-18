@@ -1,4 +1,3 @@
-
 export interface AlpacaOrderLeg {
   id: string;
   type: 'limit' | 'stop';

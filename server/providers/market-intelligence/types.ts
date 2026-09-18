@@ -1,4 +1,3 @@
-
 import type { AssetClass } from '../../shared/index.js';
 
 export type { AssetClass };

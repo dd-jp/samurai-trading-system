@@ -1,4 +1,3 @@
-
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Bar, BarWindow } from '../index.js';
 
@@ -18,8 +17,7 @@ export type FailoverAlerter = (event: FailoverEvent) => void;
 function safeAlert(alert: FailoverAlerter, event: FailoverEvent): void {
   try {
     alert(event);
-  } catch {
-  }
+  } catch {}
 }
 
 export interface OhlcvFailoverConfig {

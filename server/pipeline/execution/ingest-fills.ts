@@ -1,4 +1,3 @@
-
 import type { Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
   BOOK_CURRENCY,

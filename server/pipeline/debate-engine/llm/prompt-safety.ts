@@ -1,4 +1,3 @@
-
 const OPEN_TAG = '<untrusted_analyst_data>';
 const CLOSE_TAG = '</untrusted_analyst_data>';
 

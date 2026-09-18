@@ -1,4 +1,3 @@
-
 import type { RetryConfig } from '../../shared/index.js';
 import {
   describeThrownSafely,
@@ -87,8 +86,7 @@ async function classifyCalendarResponseError(
   let bodyText = '';
   try {
     bodyText = truncateForError(await response.text());
-  } catch {
-  }
+  } catch {}
   return new AlpacaCalendarFetchError(
     `Alpaca calendar request failed (${context}): ${response.status} ` +
       `${response.statusText} ${bodyText}`,

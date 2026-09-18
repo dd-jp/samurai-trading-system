@@ -1,4 +1,3 @@
-
 import type { BrokerFillId, Fill } from '../../shared/index.js';
 import { QTY_EPSILON_RELATIVE, toBrokerFillId } from '../../shared/index.js';
 import type { NormalizedFill } from './types.js';

@@ -61,8 +61,7 @@ export function writeTokenFile(path: string, record: SaxoTokenFileRecord): void 
   } catch (cause) {
     try {
       unlinkSync(temp);
-    } catch {
-    }
+    } catch {}
     throw cause;
   }
 }

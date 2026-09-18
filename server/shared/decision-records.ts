@@ -1,4 +1,3 @@
-
 import type { ExitReason } from './types.js';
 
 export interface TraderDecisionRecord {

@@ -1,4 +1,3 @@
-
 export const UNKNOWN = '—';
 const MINUS = '−';
 

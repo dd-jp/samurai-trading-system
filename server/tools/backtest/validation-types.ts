@@ -1,4 +1,3 @@
-
 import type { DateRange } from './universe.js';
 
 export interface ReturnSeries {

@@ -1,4 +1,3 @@
-
 import type { ExitClassWire, PnlOverallWire } from '../../../contracts/index.js';
 import { CONTRACT_VERSION, EXIT_CLASSES_WIRE } from '../../../contracts/index.js';
 import type { ExitClass } from '../../pipeline/control-arm/index.js';

@@ -1,4 +1,3 @@
-
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type {
   SaxoAssetType,

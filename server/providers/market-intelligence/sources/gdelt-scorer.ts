@@ -1,4 +1,3 @@
-
 import type { AssetClass } from '../../../shared/index.js';
 import type { RawArchiveRow } from '../archive/mi-archive-store.js';
 import { MI_SOURCES } from '../archive/mi-sources.js';

@@ -1,4 +1,3 @@
-
 export interface Bar {
   instrument: string;
   timeframe: string;

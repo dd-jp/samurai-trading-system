@@ -1,4 +1,3 @@
-
 import { closeTimeOf, isDailyTimeframe } from './timeframe.js';
 import type { TradingCalendar } from './trading-calendar.js';
 import type { Bar, Mark } from './types.js';

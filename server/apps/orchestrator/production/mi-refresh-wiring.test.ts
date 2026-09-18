@@ -195,5 +195,4 @@ describe('MI refresh wiring (#1085)', () => {
     expect(queue?.depth).toBe(0);
     expect(entries.find((entry) => entry.trace_id === MI_REFRESH_TRACE_ID)).toBeUndefined();
   });
-
 });

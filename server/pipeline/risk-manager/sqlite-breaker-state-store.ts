@@ -1,4 +1,3 @@
-
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestampOrNull, toStoredTimestampOrNull } from '../../shared/store/index.js';
 import type { PersistedBreakerState } from './types.js';

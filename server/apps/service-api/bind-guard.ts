@@ -1,4 +1,3 @@
-
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', '::1']);
 
 export function isLoopbackHost(host: string): boolean {

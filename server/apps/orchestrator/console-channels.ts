@@ -1,4 +1,3 @@
-
 import type { AnalystTelemetry, IndicatorUnavailableEvent } from '../../pipeline/analysts/index.js';
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import type {

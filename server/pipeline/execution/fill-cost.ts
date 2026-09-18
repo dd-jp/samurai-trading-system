@@ -1,4 +1,3 @@
-
 import type { Fill, OpenPosition } from '../../shared/index.js';
 
 export function chargeTopUpTo(venueFee: number, modelledCommission: number | undefined): number {

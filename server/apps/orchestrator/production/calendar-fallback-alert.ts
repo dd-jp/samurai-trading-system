@@ -1,4 +1,3 @@
-
 export interface CalendarFallbackAlert {
   reason: string;
   fallback_coverage_end: string;

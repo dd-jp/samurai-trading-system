@@ -1,4 +1,3 @@
-
 import type {
   BrokerAdapter,
   ExecutionConfig,
@@ -366,8 +365,7 @@ function escalateTraderDiagnostics(
       diagnostic,
       consecutive_ticks,
       reported_at: clock.now(),
-    }).catch(() => {
-    });
+    }).catch(() => {});
   }
 }
 

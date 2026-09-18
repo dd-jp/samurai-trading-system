@@ -1,4 +1,3 @@
-
 import type { DateRange } from './universe.js';
 import type { Split } from './validation-types.js';
 

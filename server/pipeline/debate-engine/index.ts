@@ -1,4 +1,3 @@
-
 export type { DebateRoundLogEntry } from '../../shared/index.js';
 export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions, computeInfluenceScore } from './analyst-contribution.js';

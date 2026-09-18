@@ -1,4 +1,3 @@
-
 export type AssetClass = 'crypto' | 'stocks';
 
 export type InstrumentSubclass = 'index_etp_3x' | 'single_stock_etp_3x' | 'crypto';

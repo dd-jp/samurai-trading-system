@@ -1,4 +1,3 @@
-
 import type { MetricsSuite, ReturnSeries, TradeSeries } from './validation-types.js';
 
 export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): MetricsSuite {

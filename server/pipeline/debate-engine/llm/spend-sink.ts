@@ -1,4 +1,3 @@
-
 import type { Logger } from '../../../shared/index.js';
 import { maskAndCap } from '../../../shared/index.js';
 import {

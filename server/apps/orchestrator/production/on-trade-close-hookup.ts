@@ -1,4 +1,3 @@
-
 import type { LotAdvance, SharedStore } from '../../../pipeline/execution/index.js';
 import type { OnTradeCloseInput } from '../../../pipeline/feedback-loop/index.js';
 import { onTradeClose } from '../../../pipeline/feedback-loop/index.js';

@@ -1,4 +1,3 @@
-
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/index.js';

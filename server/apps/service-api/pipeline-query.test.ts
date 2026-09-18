@@ -1,4 +1,3 @@
-
 import { PIPELINE_STAGES } from '../../../contracts/index.js';
 import { buildPipelineView } from './pipeline-query.js';
 import type { PipelineActivity, PipelineLiveTick, PipelineStageEvent } from './types.js';

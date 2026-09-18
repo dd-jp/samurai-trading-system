@@ -1,4 +1,3 @@
-
 export class ProtectiveRearmUnsupportedError extends Error {
   readonly protectiveRearmUnsupported = true;
   readonly venue: string;

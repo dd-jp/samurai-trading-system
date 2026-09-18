@@ -1,4 +1,3 @@
-
 export interface ThresholdClampAlert {
   trace_id: string;
   where: 'live-read' | 'daily-kill-line-check';

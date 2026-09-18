@@ -12,8 +12,7 @@ export function watchDashboardStdout(
   stdout: StdoutStream = process.stdout,
   stderr: StdoutStream & ErrorStream = process.stderr,
 ): void {
-  watchStdoutErrors(stderr, () => {
-  });
+  watchStdoutErrors(stderr, () => {});
 
   let reported = false;
   watchStdoutErrors(stdout, (error) => {

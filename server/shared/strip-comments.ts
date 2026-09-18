@@ -1,4 +1,3 @@
-
 export function stripLineComments(sql: string): string {
   return sql
     .split('\n')

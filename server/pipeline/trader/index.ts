@@ -1,4 +1,3 @@
-
 export { NO_PRECEDENT_MULTIPLIER } from './cosine-precedent.js';
 export {
   checkExitsWithReason,

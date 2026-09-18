@@ -382,7 +382,6 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
 });
 
 describe('#886 fixed per_trade_size_cap for D5 instruments; #932 fixed per_asset_cap — neither cap trims a full-envelope D5 ask any more', () => {
-
   it('no longer trims a full-envelope D5 ask via the per-trade cap — that cap is EXEMPT for a classified instrument (#886)', () => {
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY;
 

@@ -1,4 +1,3 @@
-
 import { describeThrownSafely, logCaughtFailure } from '../../shared/index.js';
 import { isWedgedZeroFillLot } from '../../shared/store/index.js';
 import type { ReconcileDivergence, WedgedSweepInput } from './types.js';

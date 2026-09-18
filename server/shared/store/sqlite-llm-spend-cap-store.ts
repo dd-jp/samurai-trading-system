@@ -1,4 +1,3 @@
-
 import type { StoreHandle } from './open-shared-store.js';
 import { toStoredTimestamp } from './sqlite-utils.js';
 

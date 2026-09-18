@@ -1,4 +1,3 @@
-
 import type { SaxoTradingEnvironment } from '../../../pipeline/execution/index.js';
 import { readTokenFile } from '../../../pipeline/execution/index.js';
 import type { ZonedCivilDate } from '../../../providers/market-data-service/index.js';

@@ -1,4 +1,3 @@
-
 import type { PipelineStage } from '../../../contracts/index.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import { computeInfluenceScore } from '../../pipeline/debate-engine/index.js';

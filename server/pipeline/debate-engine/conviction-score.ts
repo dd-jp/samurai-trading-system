@@ -1,4 +1,3 @@
-
 import { NO_DATA_MARKER } from '../../shared/index.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import type { AnalystView, Direction } from './types.js';

@@ -147,8 +147,7 @@ function defaultActiveDescriptors(): readonly FileIdentity[] {
     try {
       const stat = fstatSync(fd);
       identities.push({ dev: stat.dev, ino: stat.ino });
-    } catch {
-    }
+    } catch {}
   }
   return identities;
 }

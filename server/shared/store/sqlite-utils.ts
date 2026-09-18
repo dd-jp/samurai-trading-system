@@ -1,4 +1,3 @@
-
 export function isUniqueConstraintError(error: unknown): boolean {
   for (let current: unknown = error; current instanceof Error; current = current.cause) {
     if ((current as NodeJS.ErrnoException).code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {

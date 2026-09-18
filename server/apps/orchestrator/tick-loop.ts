@@ -140,8 +140,7 @@ export async function runTickPlan(
         try {
           const currentTick = config.currentTickStore.get(instrument.asset);
           crashedStage = currentTick?.trace_id === trace_id ? currentTick.stage : undefined;
-        } catch {
-        }
+        } catch {}
         safeLog(config.logger, {
           trace_id,
           stage: 'tick-loop',

@@ -1,4 +1,3 @@
-
 import type {
   MarketDataService,
   TradingCalendar,
@@ -31,8 +30,7 @@ export interface AnalystTelemetry {
 }
 
 export const NOOP_ANALYST_TELEMETRY: AnalystTelemetry = {
-  indicatorUnavailable(): void {
-  },
+  indicatorUnavailable(): void {},
 };
 
 export interface AnalystInput {

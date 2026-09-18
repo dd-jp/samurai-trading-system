@@ -1,4 +1,3 @@
-
 import { classifyStatus, isServerErrorStatus, isTimeoutAbort } from '../../../shared/index.js';
 
 export class PolygonBarsTimeoutError extends Error {

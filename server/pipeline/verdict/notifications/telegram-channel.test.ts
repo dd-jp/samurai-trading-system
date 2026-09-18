@@ -84,4 +84,3 @@ describe('TelegramChannel.notify', () => {
     expect(text).toContain('Verdict: GO');
   });
 });
-

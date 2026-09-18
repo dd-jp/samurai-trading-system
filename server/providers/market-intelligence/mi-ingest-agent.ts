@@ -1,4 +1,3 @@
-
 import type { LlmClient, SpendCap } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../shared/index.js';
 import { resolveMiSubject } from '../universe-pool/index.js';

@@ -1,4 +1,3 @@
-
 import { type AnthropicUsage, rateFor } from './pricing.js';
 
 const MAX_ERROR_BODY_CHARS = 500;

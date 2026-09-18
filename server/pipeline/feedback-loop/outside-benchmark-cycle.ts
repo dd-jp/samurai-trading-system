@@ -1,4 +1,3 @@
-
 import { describeThrownSafely } from '../../shared/index.js';
 import {
   BENCHMARK_COMPOSITION,

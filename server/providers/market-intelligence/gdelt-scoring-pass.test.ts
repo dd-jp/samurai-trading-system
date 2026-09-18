@@ -1,4 +1,3 @@
-
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { MiArchiveStore, type RawArchiveRow } from './archive/mi-archive-store.js';

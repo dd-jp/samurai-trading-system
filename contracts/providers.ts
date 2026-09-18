@@ -1,4 +1,3 @@
-
 export type ProviderState =
   | 'ok'
   | 'unauthorized'

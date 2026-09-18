@@ -1,4 +1,3 @@
-
 export function parseRetryAfterMs(response: Response): number | undefined {
   const header = response.headers.get('retry-after');
   if (header === null || header.trim() === '') return undefined;

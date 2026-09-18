@@ -1,4 +1,3 @@
-
 import { TokenBucket } from '../../../shared/index.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
