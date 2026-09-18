@@ -49,7 +49,8 @@
     "fallow:guard": "fallow guard",
     "precommit": "npm run lint:fix && npm run typecheck && npm run test:local && npm run fallow:boundaries && npm run fallow:dead-code && npm run fallow:dupes && npm run fallow:css && files=$(git diff --cached --name-only --diff-filter=ACM); [ -z \"$files\" ] || npm run fallow:guard -- $files",
     "place-soak-position": "tsx --env-file=.env.local server/tools/place-soak-position.ts",
-    "saxo:login": "tsx --env-file=.env.local server/tools/saxo-login.ts"
+    "saxo:login": "tsx --env-file=.env.local server/tools/saxo-login.ts",
+    "arch:viewer": "tsx server/tools/arch-viewer.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
