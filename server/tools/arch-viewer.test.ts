@@ -1,11 +1,17 @@
 import {
+  accentColorForModule,
+  badgeForStats,
   buildArchViewerData,
   buildDiagram,
   buildModuleEdges,
   buildTree,
+  computeModuleLayers,
+  computeModuleStats,
+  computeRealModules,
   cycleModuleEdgeKeys,
   type GraphLink,
   type GraphNode,
+  type ModuleEdge,
   moduleKeyForPath,
   parseImportCycles,
   parseSourceLocationLine,
@@ -97,6 +103,7 @@ describe('buildModuleEdges', () => {
     { id: 'b', label: 'b', source_file: 'server/shared/b.ts' },
     { id: 'c', label: 'c', source_file: 'server/pipeline/c.ts' },
   ];
+  const realModules = new Set(['server/pipeline', 'server/shared']);
 
   it('aggregates cross-module links by module pair and drops same-module links', () => {
     const links: GraphLink[] = [
@@ -104,7 +111,7 @@ describe('buildModuleEdges', () => {
       { source: 'c', target: 'b', relation: 'imports' },
       { source: 'a', target: 'c', relation: 'calls' },
     ];
-    const edges = buildModuleEdges(nodes, links, new Set());
+    const edges = buildModuleEdges(nodes, links, new Set(), realModules);
     expect(edges).toHaveLength(1);
     expect(edges[0]).toMatchObject({ from: 'server/pipeline', to: 'server/shared', weight: 2 });
     expect(edges[0]!.relations).toEqual({ imports: 2 });
@@ -112,13 +119,40 @@ describe('buildModuleEdges', () => {
 
   it('flags an edge as a cycle when its key is in the cycle set', () => {
     const links: GraphLink[] = [{ source: 'a', target: 'b', relation: 'imports' }];
-    const edges = buildModuleEdges(nodes, links, new Set(['server/pipeline\u0000server/shared']));
+    const edges = buildModuleEdges(
+      nodes,
+      links,
+      new Set(['server/pipeline\u0000server/shared']),
+      realModules,
+    );
     expect(edges[0]!.cycle).toBe(true);
   });
 
   it('ignores links touching nodes with no source_file', () => {
     const linksToDangling: GraphLink[] = [{ source: 'a', target: 'ghost', relation: 'imports' }];
-    expect(buildModuleEdges(nodes, linksToDangling, new Set())).toEqual([]);
+    expect(buildModuleEdges(nodes, linksToDangling, new Set(), realModules)).toEqual([]);
+  });
+
+  it('drops edges touching a module key that has no real, further-nested module', () => {
+    const pseudoNodes: GraphNode[] = [
+      { id: 'a', label: 'a', source_file: 'server/pipeline/a.ts' },
+      { id: 'x', label: 'x', source_file: 'client/vite.config.ts' },
+    ];
+    const links: GraphLink[] = [{ source: 'a', target: 'x', relation: 'imports' }];
+    const edges = buildModuleEdges(pseudoNodes, links, new Set(), new Set(['server/pipeline']));
+    expect(edges).toEqual([]);
+  });
+});
+
+describe('computeRealModules', () => {
+  it('keeps a module key only when some file nests further under it', () => {
+    const nodes: GraphNode[] = [
+      { id: 'a', label: 'a', source_file: 'server/pipeline/a.ts' },
+      { id: 'b', label: 'b', source_file: 'client/vite.config.ts' },
+    ];
+    const real = computeRealModules(nodes, ['server/pipeline', 'client/vite.config.ts']);
+    expect(real.has('server/pipeline')).toBe(true);
+    expect(real.has('client/vite.config.ts')).toBe(false);
   });
 });
 
@@ -202,10 +236,92 @@ describe('safeId', () => {
   });
 });
 
+describe('computeModuleStats', () => {
+  it('counts distinct files, symbols and external-neighbor degree per module', () => {
+    const nodes: GraphNode[] = [
+      { id: 'a', label: 'a', source_file: 'server/pipeline/a.ts' },
+      { id: 'b', label: 'b', source_file: 'server/pipeline/b.ts' },
+      { id: 'c', label: 'c', source_file: 'server/shared/c.ts' },
+    ];
+    const edges: ModuleEdge[] = [
+      { from: 'server/pipeline', to: 'server/shared', weight: 1, relations: {}, cycle: false },
+    ];
+    const stats = computeModuleStats(nodes, ['server/pipeline', 'server/shared'], edges);
+    expect(stats.get('server/pipeline')).toEqual({
+      fileCount: 2,
+      externalDegree: 1,
+      internalSymbols: 2,
+    });
+    expect(stats.get('server/shared')).toEqual({
+      fileCount: 1,
+      externalDegree: 1,
+      internalSymbols: 1,
+    });
+  });
+});
+
+describe('badgeForStats', () => {
+  it('rates high external degree or a huge symbol count as complex', () => {
+    expect(badgeForStats({ fileCount: 2, externalDegree: 4, internalSymbols: 10 })).toBe('complex');
+    expect(badgeForStats({ fileCount: 2, externalDegree: 0, internalSymbols: 2001 })).toBe(
+      'complex',
+    );
+  });
+
+  it('rates low degree and few symbols as simple', () => {
+    expect(badgeForStats({ fileCount: 2, externalDegree: 1, internalSymbols: 10 })).toBe('simple');
+  });
+
+  it('falls back to moderate otherwise', () => {
+    expect(badgeForStats({ fileCount: 5, externalDegree: 2, internalSymbols: 500 })).toBe(
+      'moderate',
+    );
+  });
+});
+
+describe('computeModuleLayers', () => {
+  it('layers a DAG by longest dependency chain via Kahn on non-cycle edges', () => {
+    const modules = ['app', 'pipeline', 'shared'];
+    const edges: ModuleEdge[] = [
+      { from: 'app', to: 'pipeline', weight: 1, relations: {}, cycle: false },
+      { from: 'pipeline', to: 'shared', weight: 1, relations: {}, cycle: false },
+    ];
+    const layers = computeModuleLayers(modules, edges);
+    expect(layers.get('app')).toBe(0);
+    expect(layers.get('pipeline')).toBe(1);
+    expect(layers.get('shared')).toBe(2);
+  });
+
+  it('places modules stuck in a residual cycle among non-cycle-marked edges into one trailing layer', () => {
+    // Not flagged `cycle: true` (that set comes from parseImportCycles, and
+    // isn't guaranteed to catch every module-level cyclic pair) — this is the
+    // case Kahn's algorithm itself can't resolve: in-degree never reaches 0
+    const modules = ['app', 'a', 'b'];
+    const edges: ModuleEdge[] = [
+      { from: 'a', to: 'b', weight: 1, relations: {}, cycle: false },
+      { from: 'b', to: 'a', weight: 1, relations: {}, cycle: false },
+    ];
+    const layers = computeModuleLayers(modules, edges);
+    expect(layers.get('app')).toBe(0);
+    expect(layers.get('a')).toBe(1);
+    expect(layers.get('b')).toBe(1);
+  });
+});
+
+describe('accentColorForModule', () => {
+  it('is deterministic for the same module key', () => {
+    expect(accentColorForModule('server/pipeline')).toBe(accentColorForModule('server/pipeline'));
+  });
+
+  it('returns a color from the fixed palette', () => {
+    expect(accentColorForModule('server/pipeline')).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
 describe('buildDiagram', () => {
-  it('places every module and draws an edge with a clipped, non-degenerate line', () => {
+  it('places every module and draws an edge with a card and a bezier path', () => {
     const modules = ['server/pipeline', 'server/shared'];
-    const edges = [
+    const edges: ModuleEdge[] = [
       {
         from: 'server/pipeline',
         to: 'server/shared',
@@ -214,18 +330,39 @@ describe('buildDiagram', () => {
         cycle: false,
       },
     ];
-    const { svgInner, moduleAnchors } = buildDiagram(modules, edges);
+    const stats = computeModuleStats(
+      [
+        { id: 'a', label: 'a', source_file: 'server/pipeline/a.ts' },
+        { id: 'b', label: 'b', source_file: 'server/shared/b.ts' },
+      ],
+      modules,
+      edges,
+    );
+    const { diagramHtml, moduleAnchors } = buildDiagram(modules, edges, stats, {
+      'server/pipeline': 'The trading pipeline.',
+    });
     expect(moduleAnchors.sort()).toEqual(['server/pipeline', 'server/shared']);
-    expect(svgInner).toContain('data-module="server/pipeline"');
-    expect(svgInner).toContain('<line');
+    expect(diagramHtml).toContain('data-module="server/pipeline"');
+    expect(diagramHtml).toContain('class="card-desc">The trading pipeline.');
+    expect(diagramHtml).toContain('<title>server/pipeline -&gt; server/shared');
+    // No entry for server/shared: no fabricated description line, not even an empty one
+    const sharedIdx = diagramHtml.indexOf('data-module="server/shared"');
+    expect(diagramHtml.slice(sharedIdx, sharedIdx + 400)).not.toContain('card-desc');
   });
 
   it('skips edges whose endpoint module is missing from the layout', () => {
-    const { svgInner } = buildDiagram(
+    const stats = computeModuleStats(
+      [{ id: 'a', label: 'a', source_file: 'server/pipeline/a.ts' }],
+      ['server/pipeline'],
+      [],
+    );
+    const { diagramHtml } = buildDiagram(
       ['server/pipeline'],
       [{ from: 'server/pipeline', to: 'ghost-module', weight: 1, relations: {}, cycle: false }],
+      stats,
+      {},
     );
-    expect(svgInner).not.toContain('<line');
+    expect(diagramHtml).not.toContain('<title>');
   });
 });
 

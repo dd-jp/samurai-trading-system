@@ -19,6 +19,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export interface GraphNode {
   id: string;
@@ -123,21 +124,37 @@ export function cycleModuleEdgeKeys(cycles: string[][]): Set<string> {
   return keys;
 }
 
+// A two-segment path under server/client is only a real module if some file
+// nests further under it — otherwise it's a loose file (client/vite.config.ts)
+// wearing a module's path shape, same trap as the root-level loose-file case
+export function computeRealModules(nodes: GraphNode[], candidates: string[]): Set<string> {
+  const sourceFiles = nodes.map((n) => n.source_file).filter((f): f is string => f !== undefined);
+  const real = new Set<string>();
+  for (const mod of candidates) {
+    const prefix = `${mod}/`;
+    if (sourceFiles.some((f) => f.startsWith(prefix))) real.add(mod);
+  }
+  return real;
+}
+
 // Root-level loose files (README.md, package.json, ...) aren't modules — only directories are
 function resolveModulePair(
   srcFile: string | undefined,
   tgtFile: string | undefined,
+  realModules: Set<string>,
 ): [string, string] | undefined {
   if (!srcFile?.includes('/') || !tgtFile?.includes('/')) return undefined;
   const from = moduleKeyForPath(srcFile);
   const to = moduleKeyForPath(tgtFile);
-  return from === to ? undefined : [from, to];
+  if (from === to || !realModules.has(from) || !realModules.has(to)) return undefined;
+  return [from, to];
 }
 
 export function buildModuleEdges(
   nodes: GraphNode[],
   links: GraphLink[],
   cycleKeys: Set<string>,
+  realModules: Set<string>,
 ): ModuleEdge[] {
   const fileById = new Map<string, string>();
   for (const node of nodes) {
@@ -146,7 +163,11 @@ export function buildModuleEdges(
 
   const agg = new Map<string, ModuleEdge>();
   for (const link of links) {
-    const pair = resolveModulePair(fileById.get(link.source), fileById.get(link.target));
+    const pair = resolveModulePair(
+      fileById.get(link.source),
+      fileById.get(link.target),
+      realModules,
+    );
     if (!pair) continue;
     const [from, to] = pair;
 
@@ -325,89 +346,286 @@ export function safeId(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '-');
 }
 
+export interface ModuleStats {
+  fileCount: number;
+  externalDegree: number;
+  internalSymbols: number;
+}
+
+export function computeModuleStats(
+  nodes: GraphNode[],
+  modules: string[],
+  edges: ModuleEdge[],
+): Map<string, ModuleStats> {
+  const fileSets = new Map<string, Set<string>>();
+  const symbolCounts = new Map<string, number>();
+  for (const mod of modules) {
+    fileSets.set(mod, new Set());
+    symbolCounts.set(mod, 0);
+  }
+  for (const node of nodes) {
+    if (!node.source_file?.includes('/')) continue;
+    const mod = moduleKeyForPath(node.source_file);
+    const files = fileSets.get(mod);
+    if (!files) continue;
+    files.add(node.source_file);
+    symbolCounts.set(mod, (symbolCounts.get(mod) ?? 0) + 1);
+  }
+
+  const neighbors = new Map<string, Set<string>>();
+  for (const mod of modules) neighbors.set(mod, new Set());
+  for (const edge of edges) {
+    neighbors.get(edge.from)?.add(edge.to);
+    neighbors.get(edge.to)?.add(edge.from);
+  }
+
+  const stats = new Map<string, ModuleStats>();
+  for (const mod of modules) {
+    stats.set(mod, {
+      fileCount: fileSets.get(mod)?.size ?? 0,
+      externalDegree: neighbors.get(mod)?.size ?? 0,
+      internalSymbols: symbolCounts.get(mod) ?? 0,
+    });
+  }
+  return stats;
+}
+
+export type ComplexityBadge = 'simple' | 'moderate' | 'complex';
+
+// Heuristic, not a claimed match to any other tool's methodology — bucketed on
+// external fan-out/fan-in (distinct neighbor modules) and internal symbol count
+export function badgeForStats(stats: ModuleStats): ComplexityBadge {
+  if (stats.externalDegree >= 4 || stats.internalSymbols > 2000) return 'complex';
+  if (stats.externalDegree <= 1 && stats.internalSymbols < 50) return 'simple';
+  return 'moderate';
+}
+
+// Kahn's algorithm over non-cycle edges only — a module graph legitimately
+// contains cycles (rendered red), so longest-path layering has no well-defined
+// answer on the full edge set. A module never reached this way (every edge
+// touching it is part of a cycle) lands together in one trailing layer
+export function computeModuleLayers(modules: string[], edges: ModuleEdge[]): Map<string, number> {
+  const nonCycleEdges = edges.filter((e) => !e.cycle);
+  const adjacency = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+  for (const mod of modules) {
+    adjacency.set(mod, []);
+    inDegree.set(mod, 0);
+  }
+  for (const edge of nonCycleEdges) {
+    if (!adjacency.has(edge.from) || !inDegree.has(edge.to)) continue;
+    adjacency.get(edge.from)!.push(edge.to);
+    inDegree.set(edge.to, (inDegree.get(edge.to) ?? 0) + 1);
+  }
+
+  const remaining = new Map(inDegree);
+  const layer = new Map<string, number>();
+  const visited = new Set<string>();
+  let frontier = modules
+    .filter((m) => (inDegree.get(m) ?? 0) === 0)
+    .sort((a, b) => a.localeCompare(b));
+  let layerIndex = 0;
+  while (frontier.length > 0) {
+    for (const mod of frontier) {
+      layer.set(mod, layerIndex);
+      visited.add(mod);
+    }
+    const next = new Set<string>();
+    for (const mod of frontier) {
+      for (const to of adjacency.get(mod) ?? []) {
+        if (visited.has(to)) continue;
+        const d = (remaining.get(to) ?? 0) - 1;
+        remaining.set(to, d);
+        if (d <= 0) next.add(to);
+      }
+    }
+    frontier = [...next].sort((a, b) => a.localeCompare(b));
+    layerIndex++;
+  }
+
+  const unlayered = modules.filter((m) => !visited.has(m)).sort((a, b) => a.localeCompare(b));
+  if (unlayered.length > 0) {
+    for (const mod of unlayered) layer.set(mod, layerIndex);
+  }
+  return layer;
+}
+
+const ACCENT_PALETTE = [
+  '#e0736b',
+  '#e0a561',
+  '#dfd06a',
+  '#8fce7a',
+  '#6fc2b4',
+  '#6ba7db',
+  '#a894e8',
+  '#e08cc9',
+];
+
+export function accentColorForModule(mod: string): string {
+  let hash = 0;
+  for (let i = 0; i < mod.length; i++) hash = (hash * 31 + mod.charCodeAt(i)) >>> 0;
+  return ACCENT_PALETTE[hash % ACCENT_PALETTE.length]!;
+}
+
+const CARD_W = 240;
+const CARD_H = 136;
+const GAP_X = 40;
+const GAP_Y = 64;
+const MARGIN = 40;
+
+interface CardAnchor {
+  x: number;
+  y: number;
+}
+
+function bezierPoint(p0: CardAnchor, p1: CardAnchor, p2: CardAnchor, p3: CardAnchor): CardAnchor {
+  return {
+    x: 0.125 * p0.x + 0.375 * p1.x + 0.375 * p2.x + 0.125 * p3.x,
+    y: 0.125 * p0.y + 0.375 * p1.y + 0.375 * p2.y + 0.125 * p3.y,
+  };
+}
+
+// Fixed card geometry (never post-render DOM measurement) keeps this a pure,
+// unit-tested function rather than pushing anchor math into client-side JS
+function edgeAnchors(
+  from: CardAnchor,
+  to: CardAnchor,
+): { start: CardAnchor; end: CardAnchor; c1: CardAnchor; c2: CardAnchor } {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.abs(dy) >= Math.abs(dx)) {
+    const start =
+      dy >= 0 ? { x: from.x, y: from.y + CARD_H / 2 } : { x: from.x, y: from.y - CARD_H / 2 };
+    const end = dy >= 0 ? { x: to.x, y: to.y - CARD_H / 2 } : { x: to.x, y: to.y + CARD_H / 2 };
+    const midY = (start.y + end.y) / 2;
+    return { start, end, c1: { x: start.x, y: midY }, c2: { x: end.x, y: midY } };
+  }
+  const start =
+    dx >= 0 ? { x: from.x + CARD_W / 2, y: from.y } : { x: from.x - CARD_W / 2, y: from.y };
+  const end = dx >= 0 ? { x: to.x - CARD_W / 2, y: to.y } : { x: to.x + CARD_W / 2, y: to.y };
+  const midX = (start.x + end.x) / 2;
+  return { start, end, c1: { x: midX, y: start.y }, c2: { x: midX, y: end.y } };
+}
+
 interface DiagramLayout {
-  svgInner: string;
+  diagramHtml: string;
   moduleAnchors: string[];
 }
 
-export function buildDiagram(modules: string[], edges: ModuleEdge[]): DiagramLayout {
-  const sorted = [...modules].sort((a, b) => a.localeCompare(b));
-  const cols = Math.max(1, Math.ceil(Math.sqrt(sorted.length)));
-  const boxW = 190;
-  const boxH = 48;
-  const gapX = 60;
-  const gapY = 70;
-  const margin = 30;
+interface LayoutResult {
+  centers: Map<string, CardAnchor>;
+  width: number;
+  height: number;
+}
 
-  const centers = new Map<string, { x: number; y: number }>();
-  sorted.forEach((mod, i) => {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    centers.set(mod, {
-      x: margin + col * (boxW + gapX) + boxW / 2,
-      y: margin + row * (boxH + gapY) + boxH / 2,
+function layoutModules(modules: string[], edges: ModuleEdge[]): LayoutResult {
+  const layerOf = computeModuleLayers(modules, edges);
+  const byLayer = new Map<number, string[]>();
+  for (const mod of modules) {
+    const l = layerOf.get(mod) ?? 0;
+    const arr = byLayer.get(l) ?? [];
+    arr.push(mod);
+    byLayer.set(l, arr);
+  }
+  const layerGroups = [...byLayer.entries()].sort(([a], [b]) => a - b);
+  for (const [, arr] of layerGroups) arr.sort((a, b) => a.localeCompare(b));
+
+  const maxCols = Math.max(1, ...layerGroups.map(([, arr]) => arr.length));
+  const width = MARGIN * 2 + maxCols * CARD_W + (maxCols - 1) * GAP_X;
+  const height =
+    MARGIN * 2 + layerGroups.length * CARD_H + Math.max(0, layerGroups.length - 1) * GAP_Y;
+
+  const centers = new Map<string, CardAnchor>();
+  layerGroups.forEach(([, rowModules], rowIdx) => {
+    const rowWidth = rowModules.length * CARD_W + (rowModules.length - 1) * GAP_X;
+    const rowStartX = MARGIN + (width - MARGIN * 2 - rowWidth) / 2;
+    rowModules.forEach((mod, colIdx) => {
+      centers.set(mod, {
+        x: rowStartX + colIdx * (CARD_W + GAP_X) + CARD_W / 2,
+        y: MARGIN + rowIdx * (CARD_H + GAP_Y) + CARD_H / 2,
+      });
     });
   });
 
-  const width = margin * 2 + cols * boxW + (cols - 1) * gapX;
-  const rows = Math.ceil(sorted.length / cols);
-  const height = margin * 2 + rows * boxH + (rows - 1) * gapY;
+  return { centers, width, height };
+}
 
-  function clip(cx: number, cy: number, ux: number, uy: number): { x: number; y: number } {
-    const halfW = boxW / 2;
-    const halfH = boxH / 2;
-    const tx = ux !== 0 ? halfW / Math.abs(ux) : Number.POSITIVE_INFINITY;
-    const ty = uy !== 0 ? halfH / Math.abs(uy) : Number.POSITIVE_INFINITY;
-    const t = Math.min(tx, ty);
-    return { x: cx + ux * t, y: cy + uy * t };
-  }
+function renderEdge(edge: ModuleEdge, from: CardAnchor, to: CardAnchor): string {
+  const { start, end, c1, c2 } = edgeAnchors(from, to);
+  const strokeWidth = Math.min(6, Math.max(1, Math.round(Math.log2(edge.weight + 1))));
+  const color = edge.cycle ? '#e0736b' : '#4fa3c8';
+  const mid = bezierPoint(start, c1, c2, end);
+  const relations = Object.entries(edge.relations)
+    .map(([rel, count]) => `${rel}×${count}`)
+    .join(', ');
+  return (
+    `<path d="M${start.x.toFixed(1)},${start.y.toFixed(1)} C${c1.x.toFixed(1)},${c1.y.toFixed(1)} ${c2.x.toFixed(1)},${c2.y.toFixed(1)} ${end.x.toFixed(1)},${end.y.toFixed(1)}" ` +
+    `fill="none" stroke="${color}" stroke-width="${strokeWidth}" marker-end="url(#arrow)" opacity="0.75">` +
+    `<title>${escapeXml(edge.from)} -&gt; ${escapeXml(edge.to)} (weight ${edge.weight}${edge.cycle ? ', in an import cycle' : ''}): ${escapeXml(relations)}</title>` +
+    `</path>` +
+    `<text x="${mid.x.toFixed(1)}" y="${mid.y.toFixed(1)}" text-anchor="middle" class="edge-weight">${edge.weight}</text>`
+  );
+}
 
-  const lines: string[] = [];
+function renderCard(
+  mod: string,
+  center: CardAnchor,
+  stats: ModuleStats,
+  description: string | undefined,
+): string {
+  const anchorId = `tree-mod-${safeId(mod)}`;
+  const badge = badgeForStats(stats);
+  const accent = accentColorForModule(mod);
+  const x0 = center.x - CARD_W / 2;
+  const y0 = center.y - CARD_H / 2;
+  return (
+    `<div class="module-card" data-target="${anchorId}" data-module="${escapeXml(mod)}" ` +
+    `style="left:${x0.toFixed(1)}px;top:${y0.toFixed(1)}px;width:${CARD_W}px;height:${CARD_H}px;--accent:${accent}">` +
+    `<div class="card-title">${escapeXml(mod)}</div>` +
+    (description ? `<div class="card-desc">${escapeXml(description)}</div>` : '') +
+    `<div class="card-footer"><span class="file-count">${stats.fileCount} file${stats.fileCount === 1 ? '' : 's'}</span>` +
+    `<span class="badge badge-${badge}">${badge}</span></div>` +
+    `</div>`
+  );
+}
+
+export function buildDiagram(
+  modules: string[],
+  edges: ModuleEdge[],
+  stats: Map<string, ModuleStats>,
+  descriptions: Record<string, string>,
+): DiagramLayout {
+  const { centers, width, height } = layoutModules(modules, edges);
+
+  const edgeMarkup: string[] = [];
   for (const edge of edges) {
     const from = centers.get(edge.from);
     const to = centers.get(edge.to);
     if (!from || !to) continue;
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    const ux = dx / dist;
-    const uy = dy / dist;
-    const start = clip(from.x, from.y, ux, uy);
-    const end = clip(to.x, to.y, -ux, -uy);
-    const strokeWidth = Math.min(8, Math.max(1, Math.round(Math.log2(edge.weight + 1))));
-    const relations = Object.entries(edge.relations)
-      .map(([rel, count]) => `${rel}×${count}`)
-      .join(', ');
-    const color = edge.cycle ? '#e05252' : '#4fa3c8';
-    lines.push(
-      `<line x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" ` +
-        `stroke="${color}" stroke-width="${strokeWidth}" marker-end="url(#arrow)" opacity="0.75">` +
-        `<title>${escapeXml(edge.from)} -&gt; ${escapeXml(edge.to)} (weight ${edge.weight}${edge.cycle ? ', in an import cycle' : ''}): ${escapeXml(relations)}</title>` +
-        `</line>`,
-    );
+    edgeMarkup.push(renderEdge(edge, from, to));
   }
 
-  const boxes: string[] = [];
+  const cards: string[] = [];
   const moduleAnchors: string[] = [];
-  for (const mod of sorted) {
-    const c = centers.get(mod)!;
-    const anchorId = `tree-mod-${safeId(mod)}`;
+  const emptyStats: ModuleStats = { fileCount: 0, externalDegree: 0, internalSymbols: 0 };
+  for (const mod of modules) {
+    const c = centers.get(mod);
+    if (!c) continue;
     moduleAnchors.push(mod);
-    boxes.push(
-      `<g class="module-box" data-target="${anchorId}" data-module="${escapeXml(mod)}">` +
-        `<rect x="${(c.x - boxW / 2).toFixed(1)}" y="${(c.y - boxH / 2).toFixed(1)}" width="${boxW}" height="${boxH}" rx="6"></rect>` +
-        `<text x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${escapeXml(mod)}</text>` +
-        `</g>`,
-    );
+    cards.push(renderCard(mod, c, stats.get(mod) ?? emptyStats, descriptions[mod]));
   }
 
-  const svgInner =
-    `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
+  const svg =
+    `<svg class="edges" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
     `<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">` +
     `<path d="M0,0 L0,6 L9,3 z" fill="#4fa3c8"></path></marker></defs>` +
-    `${lines.join('')}${boxes.join('')}</svg>`;
+    `${edgeMarkup.join('')}</svg>`;
 
-  return { svgInner, moduleAnchors };
+  const diagramHtml =
+    `<div class="diagram-canvas" style="position:relative;width:${width}px;height:${height}px;">` +
+    `${svg}${cards.join('')}</div>`;
+
+  return { diagramHtml, moduleAnchors };
 }
 
 function escapeXml(value: string): string {
@@ -427,11 +645,16 @@ function escapeXml(value: string): string {
   });
 }
 
+export interface ModuleDescriptionEntry {
+  description: string;
+  fileCountAtGeneration: number;
+}
+
 export interface ArchViewerData {
   builtAtCommit?: string;
   generatedAt: string;
   moduleEdges: ModuleEdge[];
-  diagramSvg: string;
+  diagramHtml: string;
   moduleAnchors: string[];
   tree: TreeNode;
 }
@@ -440,24 +663,33 @@ export function buildArchViewerData(
   graph: GraphJson,
   reportText: string,
   readSourceLines: (sourceFile: string) => string[] | undefined,
+  descriptions: Record<string, ModuleDescriptionEntry> = {},
 ): ArchViewerData {
   const cycles = parseImportCycles(reportText);
   const cycleKeys = cycleModuleEdgeKeys(cycles);
-  const moduleEdges = buildModuleEdges(graph.nodes, graph.links, cycleKeys);
-  const modules = [
+  const candidates = [
     ...new Set(
       graph.nodes
         .filter((n) => n.source_file?.includes('/'))
         .map((n) => moduleKeyForPath(n.source_file!)),
     ),
   ];
-  const { svgInner, moduleAnchors } = buildDiagram(modules, moduleEdges);
+  const realModules = computeRealModules(graph.nodes, candidates);
+  const modules = candidates.filter((m) => realModules.has(m));
+  const moduleEdges = buildModuleEdges(graph.nodes, graph.links, cycleKeys, realModules);
+  const stats = computeModuleStats(graph.nodes, modules, moduleEdges);
+  const descByModule: Record<string, string> = {};
+  for (const mod of modules) {
+    const entry = descriptions[mod];
+    if (entry) descByModule[mod] = entry.description;
+  }
+  const { diagramHtml, moduleAnchors } = buildDiagram(modules, moduleEdges, stats, descByModule);
   const tree = buildTree(graph.nodes, graph.links, readSourceLines);
 
   return {
     generatedAt: new Date().toISOString(),
     moduleEdges,
-    diagramSvg: svgInner,
+    diagramHtml,
     moduleAnchors,
     tree,
   };
@@ -475,10 +707,19 @@ const HTML_SHELL = `<!doctype html>
   #panel { width: 420px; border-left: 1px solid #2a323d; padding: 16px; overflow: auto; background: #161b22; }
   h1 { font-size: 16px; margin: 0 0 12px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: #8b96a5; margin: 20px 0 8px; }
-  #diagram { margin-bottom: 24px; }
-  .module-box rect { fill: #1c2530; stroke: #3a4552; cursor: pointer; }
-  .module-box:hover rect { stroke: #4fa3c8; }
-  .module-box text { fill: #d8dee6; font-size: 11px; pointer-events: none; }
+  #diagram { margin-bottom: 24px; overflow: auto; }
+  .diagram-canvas { position: relative; }
+  .edges { position: absolute; top: 0; left: 0; pointer-events: none; }
+  .edge-weight { fill: #8a95a4; font-size: 10px; }
+  .module-card { position: absolute; box-sizing: border-box; background: #1c2530; border: 1px solid #2a323d; border-left: 4px solid var(--accent, #4fa3c8); border-radius: 8px; padding: 10px 12px; cursor: pointer; overflow: hidden; }
+  .module-card:hover { border-color: #4fa3c8; }
+  .card-title { font-family: Georgia, ui-serif, serif; font-size: 14px; color: #d8dee6; margin: 0 0 6px; }
+  .card-desc { font-size: 11px; line-height: 1.4; color: #8a95a4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0 0 8px; }
+  .card-footer { display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #8a95a4; }
+  .badge { padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.03em; font-size: 9px; }
+  .badge-simple { background: #1e3a2a; color: #8fce7a; }
+  .badge-moderate { background: #3a331e; color: #dfd06a; }
+  .badge-complex { background: #3a1e1e; color: #e0736b; }
   details { margin-left: 14px; }
   summary { cursor: pointer; padding: 2px 0; }
   summary:hover { color: #4fa3c8; }
@@ -560,7 +801,7 @@ function buildTreeDom(node, anchorSet) {
   return details;
 }
 
-document.getElementById('diagram').innerHTML = ARCH_DATA.diagramSvg;
+document.getElementById('diagram').innerHTML = ARCH_DATA.diagramHtml;
 document.getElementById('diagram').addEventListener('click', function (e) {
   const el = e.target.closest('[data-target]');
   if (!el) return;
@@ -601,6 +842,14 @@ function makeSourceReader(repoRoot: string): (sourceFile: string) => string[] | 
   };
 }
 
+// Ships beside the script, not in repoRoot — it's static data authored once
+// for this tool, not something that varies per checkout
+function loadDescriptions(): Record<string, ModuleDescriptionEntry> {
+  const descPath = fileURLToPath(new URL('./arch-viewer-descriptions.json', import.meta.url));
+  if (!existsSync(descPath)) return {};
+  return JSON.parse(readFileSync(descPath, 'utf8')) as Record<string, ModuleDescriptionEntry>;
+}
+
 function run(repoRoot: string): void {
   const graphPath = join(repoRoot, 'graphify-out', 'graph.json');
   const reportPath = join(repoRoot, 'graphify-out', 'GRAPH_REPORT.md');
@@ -609,7 +858,12 @@ function run(repoRoot: string): void {
 
   const graph = readGraph(graphPath);
   const reportText = existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : '';
-  const data = buildArchViewerData(graph, reportText, makeSourceReader(repoRoot));
+  const data = buildArchViewerData(
+    graph,
+    reportText,
+    makeSourceReader(repoRoot),
+    loadDescriptions(),
+  );
 
   writeFileSync(outDataPath, `const ARCH_DATA = ${JSON.stringify(data)};\n`);
   writeFileSync(outHtmlPath, HTML_SHELL);

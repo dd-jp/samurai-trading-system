@@ -1,0 +1,46 @@
+{
+  "server/pipeline": {
+    "description": "The six-stage trading pipeline — Analysts, Debate, Trader, Risk, Verdict, Execution — plus the post-trade feedback loop that adjusts analyst weights and risk thresholds.",
+    "fileCountAtGeneration": 275
+  },
+  "server/apps": {
+    "description": "The three long-running processes: orchestrator (ticks the pipeline), service-api (serves the dashboard), supervisor (process lifecycle and restart).",
+    "fileCountAtGeneration": 179
+  },
+  "server/providers": {
+    "description": "External data sources behind stable interfaces — market data (OHLCV/indicators), universe pool selection, and market intelligence (news/sentiment).",
+    "fileCountAtGeneration": 99
+  },
+  "server/shared": {
+    "description": "Cross-cutting utilities imported by nearly every server module — logging, clocks, trace context, digests, and the store abstraction.",
+    "fileCountAtGeneration": 143
+  },
+  "server/tools": {
+    "description": "Standalone CLI scripts run via npm — backtests, cost/CGT reports, live-money gate checks, the arch viewer itself.",
+    "fileCountAtGeneration": 83
+  },
+  "contracts": {
+    "description": "The wire model shared by server and client — pipeline stages, snapshots, metrics, provider types — owned by neither runtime, imported by both.",
+    "fileCountAtGeneration": 10
+  },
+  "client/src": {
+    "description": "The Rail v3 dashboard — the live-trading UI: tabs, lanes, verdict rows, trace and trade detail drawers.",
+    "fileCountAtGeneration": 51
+  },
+  "client/public": {
+    "description": "Static assets served as-is by the client build.",
+    "fileCountAtGeneration": 1
+  },
+  "docs": {
+    "description": "ADRs, research, specs, wayfinder maps, and review reports — the project's decision record and domain glossary.",
+    "fileCountAtGeneration": 200
+  },
+  "e2e": {
+    "description": "Playwright end-to-end suite for the dashboard, run against the real built server over a fixture store.",
+    "fileCountAtGeneration": 8
+  },
+  ".github": {
+    "description": "CI workflow definitions.",
+    "fileCountAtGeneration": 1
+  }
+}
