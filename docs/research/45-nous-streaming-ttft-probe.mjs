@@ -1,26 +1,3 @@
-// Streaming TTFT probe for #1023 (queue-vs-generation decomposition)
-//
-// The non-streaming ttfb_ms instrumentation added by #1021 measures header
-// arrival on a buffered response, which #1080's own evidence (ttfb_ms /
-// latency_ms median 1.00 across 62 production calls) already shows equals
-// total latency -- Nous buffers the whole completion before sending bytes
-// This probe asks the same question with stream:true, where TTFT is the
-// first content-bearing SSE chunk, not the first response byte
-//
-// Reads NOUS_BASE_URL / NOUS_DEBATE_API_KEY from process.env ONLY -- run
-// this with `node --env-file=.env.local <this file>`, the same pattern the
-// orchestrator process itself uses. No key value or .env content is ever
-// printed, logged, or written; the only confirmation of key presence is its
-// length. Response headers are inspectable via `--headers-only` (see below);
-// that path never prints `authorization` or any `cookie`/`set-cookie` header
-//
-// Budget: at most 8 calls total (5 sequential, concurrency 1, then one
-// burst of 3) -- the implementer's brief for #1023 set this cap; the issue
-// itself does not state one. A paper soak runs against the same Nous account
-// concurrently with this probe, which is why the burst is kept to one and
-// run once rather than swept. `--headers-only` (run separately, once, for
-// review round 1) adds exactly one further sequential call and does not
-// re-run the 8-call probe above
 
 const MODEL = 'anthropic/claude-haiku-4.5';
 const TIMEOUT_MS = 45_000;
@@ -45,18 +22,10 @@ process.stderr.write(
   `NOUS_BASE_URL present (len=${BASE_URL.length}), NOUS_DEBATE_API_KEY present (len=${API_KEY.length}).\n`,
 );
 
-// Same prompt shape as 45-nous-five-model-latency-probe.mjs so TTFT/total
-// numbers here are comparable to that probe's non-streaming p50/max, not a
-// fresh unknown
 const SYSTEM_PROMPT = `You are the Trader agent in a multi-agent equities debate pipeline. You are given the views of three analysts (Fundamental, Technical, Sentiment) on a single LSE-listed leveraged ETP, plus recent market context. Weigh the three views, resolve disagreement, and output STRICT JSON only, matching exactly this shape:
 {"stance": "long" | "short" | "flat", "rationale": string, "confidence": number between 0 and 1}
 Do not include any text outside the JSON object. Do not use markdown code fences.`;
 
-// Prompt-token count drives the prefill term §2.3 of doc 45 says this probe
-// cannot separate from queue wait, so the filler bars are seeded rather than
-// Math.random() -- a re-run should build the identical prompt, not a random
-// one of similar shape. The archived 2026-09-14 results predate this seeding
-// and the summary sort below; they came from an unseeded prompt of the same shape
 function mulberry32(seed) {
   let a = seed;
   return () => {
@@ -103,10 +72,6 @@ function buildUserPrompt() {
 
 const USER_PROMPT = buildUserPrompt();
 
-// Mutates `state` (chunkCount, contentLength, finishReason, ttftMs) from one
-// SSE "event" (the lines between a `\n\n` pair) -- split out of the reader
-// loop below purely to keep callOnceStreaming's branch count readable, same
-// per-line skip/parse rules as before
 function applySseEvent(rawEvent, dispatchedAt, state) {
   for (const line of rawEvent.split('\n')) {
     if (!line.startsWith('data:')) continue;
@@ -123,15 +88,10 @@ function applySseEvent(rawEvent, dispatchedAt, state) {
         if (state.ttftMs === null) state.ttftMs = performance.now() - dispatchedAt;
       }
     } catch {
-      // Not every chunk is guaranteed parseable JSON (keep-alive
-      // comments, partial frames); skip rather than fail the probe
     }
   }
 }
 
-// Drains the SSE body, applying each complete event as it arrives. Returns
-// {chunkCount, contentLength, finishReason, ttftMs} -- `totalMs` is stamped
-// by the caller once this resolves, matching the original inline timing
 async function readSseBody(res, dispatchedAt) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -150,12 +110,6 @@ async function readSseBody(res, dispatchedAt) {
   return state;
 }
 
-/**
- * POSTs one streaming chat completion and times three points on the wire:
- * dispatch -> response headers (ttfb, matches #1021's non-streaming metric),
- * dispatch -> first content-bearing SSE chunk (ttft, the thing #1021 could
- * not measure), and dispatch -> stream end (total, matches latency_ms)
- */
 async function callOnceStreaming() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -213,10 +167,6 @@ async function callOnceStreaming() {
   return { status, ttfbMs, ttftMs, totalMs, chunkCount, contentLength, finishReason, errorMsg };
 }
 
-// Each field below is that field's own sorted distribution across the ok
-// calls -- ttfb_ms[i]/ttft_ms[i]/total_ms[i]/generation_only_ms[i] are NOT
-// the same call at a shared index i; read `raw` for per-call, row-aligned
-// values
 function summarize(label, calls) {
   const ok = calls.filter((c) => c.status === 200 && c.ttftMs !== null);
   const ttft = ok.map((c) => c.ttftMs).sort((a, b) => a - b);
@@ -234,11 +184,6 @@ function summarize(label, calls) {
   };
 }
 
-/**
- * One call, headers only: does Nous expose any server-side timing telemetry
- * (a queue-depth, admission, or processing-time header)? Never prints
- * `authorization` or any `cookie`/`set-cookie` header -- see SENSITIVE_HEADERS.
- */
 async function probeResponseHeaders() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

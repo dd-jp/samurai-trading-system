@@ -86,7 +86,7 @@ On the literature: prediction markets are well-established as calibrated aggrega
 
 The ticket asks whether a probability maps cleanly onto the existing contract. **It does not map cleanly.** It maps workably, with a lossy step that must be chosen deliberately.
 
-**(a) `sentiment: 1 | 0 | -1` discards the magnitude.** `IntelligenceItem.sentiment` is a three-valued int (`server/providers/market-intelligence/types.ts:40`). A 0.65 probability collapses to `1` and 0.51 collapses to `1` identically. The magnitude survives only if it is carried in `confidence`.
+**(a) `sentiment: 1 | 0 | -1` discards the magnitude.** `IntelligenceItem.sentiment` is a three-valued int (`server/providers/market-intelligence/types.ts:23`). A 0.65 probability collapses to `1` and 0.51 collapses to `1` identically. The magnitude survives only if it is carried in `confidence`.
 
 **(b) The level is the wrong quantity anyway; the *change* is the signal.** A Fed-cut probability parked at 0.485 for a week is not news. A move from 0.485 to 0.30 in a day is. Since CLOB `/prices-history` returns minute-granularity series for free (§5), computing a 24 h delta costs nothing. Proposed mapping:
 

@@ -1,5 +1,5 @@
 // Deletes all comments from source files, except behavior-changing directive
-// comments (lint suppressions, ts-directives, triple-slash references).
+// comments (lint suppressions, ts-directives, triple-slash references)
 // Run from repo root: node <this-file> [--dry-run]
 'use strict';
 
@@ -11,7 +11,7 @@ const { parseSync } = require('oxc-parser');
 const DRY_RUN = process.argv.includes('--dry-run');
 
 const EXTS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'];
-const EXCLUDE = [':!:docs/research/archive/**'];
+const EXCLUDE = [':!:docs/research/archive/**', ':!:server/tools/__fixtures__/path-citations/**'];
 
 const DIRECTIVE_RE =
   /^[!*\s]*@?(eslint-disable|eslint-enable|oxlint-disable|oxlint-enable|biome-ignore|prettier-ignore|ts-ignore|ts-expect-error|ts-nocheck|istanbul ignore|c8 ignore|v8 ignore|vitest-environment|<reference\b)/i;
@@ -64,12 +64,12 @@ function stripFile(filePath) {
 
     if (wholeLineComment && restOfLineBlank) {
       // Own-line comment: drop the whole line (including its newline) so no
-      // blank line is left behind.
+      // blank line is left behind
       start = lineStart;
       end = nextNewline < out.length ? nextNewline + 1 : nextNewline;
     } else {
       // Trailing comment: drop it and any trailing whitespace back to the
-      // last non-space char, keep the code and the newline.
+      // last non-space char, keep the code and the newline
       while (start > lineStart && /[ \t]/.test(out[start - 1])) start -= 1;
     }
     out = out.slice(0, start) + out.slice(end);
@@ -88,7 +88,6 @@ const files = listFiles();
 let filesChanged = 0;
 let totalRemoved = 0;
 let totalKept = 0;
-const failed = [];
 
 for (const f of files) {
   const abs = path.resolve(f);
@@ -102,4 +101,3 @@ console.log(`files scanned: ${files.length}`);
 console.log(`files changed: ${filesChanged}`);
 console.log(`comments removed: ${totalRemoved}`);
 console.log(`directive comments kept: ${totalKept}`);
-if (failed.length) console.log(`failed: ${failed.length}`);

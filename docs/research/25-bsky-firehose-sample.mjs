@@ -1,4 +1,3 @@
-// Longer Jetstream sample: rate + qualitative check on whether hits are finance-related
 const SECONDS = Number(process.argv[2] || 600);
 const TICKERS =
   'AAPL AMD AMZN ARM BABA COIN EWY GOOG KWEB META MRNA MSFT MSTR NFLX NIO NVDA PLTR PYPL QQQ RACE SPY TSLA UBER VT XLE XYZ'.split(
@@ -17,7 +16,6 @@ const AMBIGUOUS = new Set([
   'EWY',
   'UBER',
 ]);
-// Words that suggest an actual markets post rather than incidental use of the word
 const FIN =
   /\b(STOCK|STOCKS|SHARES|TICKER|EARNINGS|NASDAQ|NYSE|BULLISH|BEARISH|PORTFOLIO|INVEST|INVESTING|TRADED|TRADING|MARKET CAP|SHORT SELL|CALLS|PUTS|DIVIDEND|VALUATION|SP500|S&P)\b/;
 
@@ -40,7 +38,6 @@ function parseJetstreamEvent(ev) {
   }
 }
 
-// null when this event isn't a create of an app.bsky.feed.post -- callers skip it
 function extractPostRecord(d) {
   const rec = d?.commit?.record;
   if (d?.commit?.operation !== 'create' || !rec || rec.$type !== 'app.bsky.feed.post') return null;
@@ -83,7 +80,6 @@ ws.onerror = (e) => console.error('WS ERROR', e.message || String(e));
 setTimeout(() => {
   const secs = (Date.now() - started) / 1000;
   const perDay = Math.round((posts / secs) * 86400);
-  // Rule of three: with k observed in n, 95% upper bound on rate ~ (k+3)/n for small k
   const ub = (k) => ((k + 3) / posts) * perDay;
   console.log(
     JSON.stringify(

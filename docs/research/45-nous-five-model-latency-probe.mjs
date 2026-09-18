@@ -1,14 +1,3 @@
-// Nous inference API latency probe for #1080. No repo files touched, no keys printed.
-// Loads NOUS_BASE_URL / NOUS_DEBATE_API_KEY straight out of the repo's .env.local
-// (values held only in local variables here, never logged) instead of shell-sourcing
-// it, since some unrelated values in that file are not safe for `source` (unquoted ~)
-//
-// Produced the §1 five-model table in doc 45. Originally run from a job-scratch
-// directory outside this repo (`node probe.js`); archived here unchanged except for
-// the CommonJS require() -> ESM import conversion this repo's `"type": "module"`
-// requires, and dropping an unused `path` import. Raw output:
-// docs/research/archive/raw/2026-09-14-nous-five-model-latency-probe-results.json,
-// docs/research/archive/raw/2026-09-14-nous-five-model-latency-probe-stderr.txt
 
 import { readFileSync } from 'node:fs';
 
@@ -49,8 +38,6 @@ const MAX_SPEND_USD = 0.25;
 const TIMEOUT_MS = 45_000;
 const MAX_TOKENS = 300;
 
-// prompt construction: ~1,600 input tokens, debate-persona shaped
-
 const SYSTEM_PROMPT = `You are the Trader agent in a multi-agent equities debate pipeline. You are given the views of three analysts (Fundamental, Technical, Sentiment) on a single LSE-listed leveraged ETP, plus recent market context. Weigh the three views, resolve disagreement, and output STRICT JSON only, matching exactly this shape:
 {"stance": "long" | "short" | "flat", "rationale": string, "confidence": number between 0 and 1}
 Do not include any text outside the JSON object. Do not use markdown code fences.`;
@@ -88,8 +75,6 @@ function buildUserPrompt() {
 }
 
 const USER_PROMPT = buildUserPrompt();
-
-// HTTP call
 
 async function callOnce(modelId) {
   const controller = new AbortController();
