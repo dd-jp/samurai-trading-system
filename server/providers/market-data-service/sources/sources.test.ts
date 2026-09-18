@@ -10,10 +10,6 @@ import { type AlpacaBar, AlpacaDataSource, type AlpacaMarketDataClient } from '.
 const WINDOW: BarWindow = { timeframe: '1h', lookback: 10 };
 const ASOF = new Date('2026-07-15T18:00:00Z');
 
-/**
- * Two candles at 14:00 and 15:00 UTC (10:00/11:00 ET — both in session),
- * closing at 15:00 and 16:00
- */
 const ALPACA_BARS: AlpacaBar[] = [
   { t: '2026-07-15T14:00:00Z', o: 100, h: 105, l: 99, c: 104, v: 11 },
   { t: '2026-07-15T15:00:00Z', o: 104, h: 108, l: 103, c: 107, v: 12 },
@@ -91,7 +87,6 @@ describe('marks', () => {
 
     const mark = await source.fetchMark('AAPL', new Date('2026-07-15T15:30:00Z'), 'backtest');
 
-    // The 15:00-close bar, not the live 999 quote
     expect(mark.price).toBe(104);
     expect(mark.observed_at).toEqual(new Date('2026-07-15T15:00:00Z'));
   });
@@ -181,13 +176,9 @@ describe("the window's short-read policy reaches the source client (#292)", () =
       { asset_class: 'stocks' },
     );
 
-    // `WINDOW.lookback + 1`, not `WINDOW.lookback` (issue #362): the raw
-    // fetch is widened by `FORMING_BAR_FETCH_MARGIN` so a forming candle
-    // dropped by `completedBars` still leaves `WINDOW.lookback` completed
     await source.fetchBars('AAPL', { ...WINDOW, partial: 'allow' }, ASOF);
     expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback + 1, 'allow');
 
-    // Unset means "no opt-in" — the client applies its own fail-loud default
     await source.fetchBars('AAPL', WINDOW, ASOF);
     expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback + 1, undefined);
   });

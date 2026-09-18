@@ -1,16 +1,3 @@
-/**
- * SQLite-backed `AuditLog` over the `audit_log` table (#193, #201) — replaces
- * the earlier in-memory double now that the shared store exists. See
- * docs/specs/shared-sqlite-store-spec.md
- * ("Orchestrator" schema section) and docs/specs/orchestrator-spec.md
- * (Module: Structured Logging & Audit Spine).
- *
- * `audit_log` has no PK — a tick can legitimately reach the same stage twice
- * across retries — so `getByTraceId` orders by `timestamp, rowid`: SQLite's
- * tie-break for equal `timestamp`s is otherwise unspecified, and a fixed test
- * clock puts multiple stages at the same ISO millisecond (the same reason
- * `SqliteExecutionStore.getFills` orders by `rowid`).
- */
 
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
@@ -23,14 +10,6 @@ export interface AuditLogEntry {
   input_digest: string;
   output_digest: string;
   timestamp: Date;
-  /**
-   * Which instrument this trace belonged to (migration 0013).
-   *
-   * Optional because not every audit row comes from a tick: the retired HITL
-   * callback path recorded under an existing `trace_id` with no `Signal` in
-   * scope, and those rows persist. A missing value means "not attributable",
-   * never "no instrument" — readers must not treat it as a lane.
-   */
   instrument?: string;
   asset_class?: AssetClass;
 }
@@ -42,7 +21,6 @@ interface AuditLogRow {
   input_digest: string;
   output_digest: string;
   timestamp: string;
-  /** NULL for rows written before migration 0013, and for non-tick audit rows */
   instrument: string | null;
   asset_class: AssetClass | null;
 }
@@ -69,7 +47,6 @@ export class SqliteAuditLog implements AuditLog {
       );
   }
 
-  /** `SELECT * FROM audit_log WHERE trace_id = ? ORDER BY timestamp, rowid` (orchestrator-spec.md). */
   getByTraceId(trace_id: string): AuditLogEntry[] {
     const rows = this.db
       .prepare('SELECT * FROM audit_log WHERE trace_id = ? ORDER BY timestamp, rowid')

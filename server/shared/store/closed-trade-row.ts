@@ -1,32 +1,7 @@
-/**
- * The `closed_trades` row shape and its mapper, in one place.
- *
- * Previously hand-copied into three modules — `dashboard/sqlite-query-store.ts`,
- * `feedback-loop/sqlite-closed-trade-store.ts` and
- * `execution/sqlite-store-harness.ts` — whose `fromClosedTradeRow` bodies were
- * byte-identical (md5 `995699e4…`). Consolidated per the code-quality audit's
- * M2; `sqlite-shared-store.ts` already gestured at this move in a comment.
- *
- * **`ClosedTradeRow` is deliberately NOT `ClosedTrade`.** The row is what SQLite
- * hands back — `opened_at`/`closed_at` are ISO-8601 TEXT. The domain record has
- * them as `Date`. Collapsing the two would push string-vs-Date confusion into
- * every consumer, so the boundary stays explicit and `fromClosedTradeRow` is the
- * only crossing.
- *
- * Execution is `closed_trades`' sole writer (shared-sqlite-store-spec.md,
- * cross-spec §4). Nothing here writes; this module is the read shape only.
- */
 
 import type { ClosedTrade, ExitReason } from '../types/records.js';
 import { fromStoredTimestamp } from './sqlite-utils.js';
 
-/**
- * One `closed_trades` row exactly as `better-sqlite3` returns it.
- *
- * `asset_class` is spelled as the inlined union rather than the `AssetClass`
- * alias so this module stays a leaf — `shared/types.ts` defines `AssetClass` as
- * precisely `'crypto' | 'stocks'`, so the two spellings are the same type.
- */
 export interface ClosedTradeRow {
   idempotency_key: string;
   debate_id: string;
@@ -40,19 +15,10 @@ export interface ClosedTradeRow {
   fees_total: number;
   opened_at: string;
   closed_at: string;
-  /** #793, migration 0031 — see `ClosedTrade.close_reason` */
   close_reason: 'stop' | 'target' | 'exit' | ExitReason;
-  /**
-   * #1121, migration 0049 — see `ClosedTrade.modelled_cost_charged`. Stored as
-   * SQLite's 0/1 INTEGER; widened to `boolean` by `fromClosedTradeRow`. Every
-   * SELECT that feeds this mapper must list the column: it is `NOT NULL` in the
-   * table, so a query that omits it hands the mapper `undefined` and silently
-   * reports a charged row as uncharged.
-   */
   modelled_cost_charged: 0 | 1;
 }
 
-/** Widens the stored ISO-8601 timestamps back into `Date`s */
 export function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
   return {
     idempotency_key: row.idempotency_key,

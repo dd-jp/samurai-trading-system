@@ -1,14 +1,3 @@
-/**
- * `NousSentimentClient` — the first unit test this wire client has ever had.
- * `XaiGrokClient`, which it replaces, was the only wire client in the repo
- * without one; its parse-salvage and field-validation paths were exercised
- * only indirectly, through a fake in `grok-agent.test.ts`.
- *
- * Both paths are load-bearing. The salvage decides whether a fenced answer
- * counts as data or as an outage, and the validation is the only thing between
- * a model inventing `sentiment: 2` and that value reaching the analysts'
- * arithmetic as a direction the type system says cannot exist.
- */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
@@ -75,9 +64,6 @@ describe('NousSentimentClient', () => {
       sentiment: 1,
       confidence: 0.7,
     });
-    // `cache_read_input_tokens` present and zero: `nousChat` now reports the
-    // cache line rather than dropping it (#969), and no cache hit is a real
-    // zero rather than an unknown
     expect(result.usage).toEqual({
       input_tokens: 40,
       output_tokens: 60,
@@ -86,8 +72,6 @@ describe('NousSentimentClient', () => {
   });
 
   it('reports an empty list as zero items, not as a failure', async () => {
-    // "Nothing is being said about this" is a real answer, and the prompt asks
-    // for it explicitly rather than letting the model invent filler
     stubContent('{"items":[]}');
 
     const result = await client().fetchSentiment('BTC-USD', AS_OF);
@@ -97,8 +81,6 @@ describe('NousSentimentClient', () => {
 
   describe('salvage', () => {
     it('recovers an answer wrapped in a markdown fence', async () => {
-      // The failure that broke the debate path on the previously pinned model
-      // (#361): the JSON is correct, the fence is not
       stubContent(`\`\`\`json\n${ONE_ITEM}\n\`\`\``);
 
       const result = await client().fetchSentiment('BTC-USD', AS_OF);
@@ -115,9 +97,6 @@ describe('NousSentimentClient', () => {
     });
 
     it('reports zero items and warns when nothing can be salvaged', async () => {
-      // Zero reaches the analysts as NO_DATA_MARKER — the same degradation as
-      // an outage, which is correct: an answer we cannot read is not an answer
-      // The warn is what stops it looking free; the call was still billed
       const logger = recordingLogger();
       stubContent('I am unable to help with that request.');
 
@@ -165,8 +144,6 @@ describe('NousSentimentClient', () => {
     });
 
     it('keeps the valid items when only some are malformed', async () => {
-      // Partial rejection, not all-or-nothing: one bad row must not discard
-      // the signal that came back with it
       stubContent(
         JSON.stringify({
           items: [
@@ -200,11 +177,6 @@ describe('NousSentimentClient', () => {
   });
 
   it('never claims retrieval evidence, because chat/completions cannot carry it (#485)', async () => {
-    // GrokAgent's fail-closed guard trusts this flag to decide whether to
-    // ingest. If this client ever answered `true` here, it would be lying
-    // about what `chat/completions` structurally cannot provide — no
-    // citations, no tool step — and un-retrieved recall would reach the
-    // analysts as signal again
     stubContent(ONE_ITEM);
 
     const result = await client().fetchSentiment('BTC-USD', AS_OF);
@@ -214,8 +186,6 @@ describe('NousSentimentClient', () => {
   });
 
   it('propagates a provider failure rather than reporting a silent zero', async () => {
-    // `GrokAgent.refresh` catches this and marks no bucket, so a transient
-    // outage does not buy four hours of silence. Swallowing it here would.
     const fetchMock = vi.fn(
       async () =>
         ({
@@ -231,10 +201,6 @@ describe('NousSentimentClient', () => {
   });
 
   it('reports a refusal as zero items, carrying what the refused call billed (#1391)', async () => {
-    // The opposite of the transient above, and deliberately so. `GrokAgent`
-    // meters and marks the bucket on a RETURN; a throw skips both, so a
-    // refusal thrown from here would go unmetered and re-issue the identical
-    // prompt every tick until the bucket rolled
     const logger = recordingLogger();
     stubContent('', { choices: [{ message: { content: '' }, finish_reason: 'content_filter' }] });
 

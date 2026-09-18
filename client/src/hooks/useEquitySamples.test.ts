@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #1141: equity sampling was previously reachable only by rendering `<App/>`.
- * Pinned here directly against the hook: the dedupe on an unchanged poll, the
- * non-finite guard, the absent-balance skip, and the `MAX_EQUITY_SAMPLES` cap.
- */
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { at } from '../lib/test-support.ts';

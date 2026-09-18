@@ -1,23 +1,3 @@
-/**
- * #753 acceptance criterion 3: *the control's entry decision comes from the
- * deterministic axis vote thresholded; no model output can reach it.*
- *
- * Two halves, and both are tested here:
- *
- * 1. **A pure function of the axis vote** — same views, same bar, same result,
- *    bullish and bearish, and nothing but the technical view can influence it.
- * 2. **"Thresholded" is the TRADER's job, not this module's.** The direction
- *    and confidence pass through unmodified, so the conviction floor that gates
- *    the control is literally the same `TraderConfig` field that gates the live
- *    arm — see `decide.test.ts`. A threshold applied here would be a second
- *    entry gate the live arm does not have, which is the drift #753's "asserted,
- *    not configured twice" forbids.
- *
- * The subclass axis (index vs single-stock ETP) is exercised because the ticket
- * names it: the decision is subclass-INDEPENDENT by design — the subclass picks
- * the bracket one stage down, in `resolveSubclassBracket`, from the same frozen
- * ADR-0018 D3 table both arms read.
- */
 import type { AnalystView } from '../debate-engine/index.js';
 import {
   AXIS_VOTE_ANALYST_TYPE,
@@ -54,17 +34,9 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
 
     expect(decision?.direction).toBe(direction);
     expect(decision?.confidence).toBe(confidence);
-    // Not rounded, not floored, not clamped: the Trader's conviction floor is
-    // the ONE threshold on this path, and it is the live arm's
     expect(decision?.bar_timestamp).toEqual(BAR);
   });
 
-  /**
-   * The subclass does not enter the entry decision at all. Both a 3x index ETP
-   * and a 3x single-stock ETP with the same axis vote produce the same decision;
-   * the +2.00%/−2.16% vs +6.00%/−6.25% split is applied downstream by
-   * `resolveSubclassBracket`, from the table the live arm reads.
-   */
   it('is subclass-independent — the bracket split happens downstream, from the shared table', () => {
     const views = [view({ direction: 'bearish', confidence: 0.6 })];
 
@@ -114,12 +86,6 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
     ).toBeNull();
   });
 
-  /**
-   * `converged: true` and `rounds_completed: 0` are load-bearing, not cosmetic.
-   * `converged: false` would apply `non_converged_haircut` to the control's size
-   * and would stop `routeDecision` scaling in or flipping a held position — two
-   * differences in sizing and routing that a matched control may not have.
-   */
   it('reports a unanimous, zero-round, zero-latency decision with no contributions', () => {
     const decision = controlArmDecision({ instrument: '3LUS', views: [view()], bar: BAR });
 
@@ -135,7 +101,6 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
     const decision = controlArmDecision({ instrument: '3LUS', views: [view()], bar: BAR });
 
     expect(decision?.debate_id.startsWith(CONTROL_DEBATE_ID_PREFIX)).toBe(true);
-    // A real `computeDebateId` output is bare 64-hex; this is not
     expect(/^[0-9a-f]{64}$/.test(decision?.debate_id ?? '')).toBe(false);
   });
 
@@ -157,12 +122,6 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
     expect(new Set(ids).size).toBe(4);
   });
 
-  /**
-   * The structural half of "no model output can reach it": this module's import
-   * graph. A pure function cannot be handed a client it does not import, so the
-   * guarantee is a property of the code's shape rather than of a runtime check
-   * someone could delete.
-   */
   it('imports no LLM client, debate engine runtime or mediator — types only', async () => {
     const { readFile } = await import('node:fs/promises');
     const source = await readFile(new URL('./axis-vote-decision.ts', import.meta.url), 'utf8');
@@ -170,7 +129,6 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
     const importLines = source
       .split('\n')
       .filter((line) => /^import\s/.test(line) || /^\s+from\s+'/.test(line));
-    // Exactly two: `node:crypto`, and a TYPE-ONLY import from debate-engine
     expect(
       importLines.some((line) => line.includes("import { createHash } from 'node:crypto'")),
     ).toBe(true);
@@ -180,7 +138,6 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
       ),
     ).toBe(true);
     expect(importLines).toHaveLength(2);
-    // And no value import of anything that could carry a model call
     expect(/import\s+\{[^}]*\}\s+from\s+'.*llm/i.test(source)).toBe(false);
     expect(source).not.toMatch(/\bawait\b/);
   });

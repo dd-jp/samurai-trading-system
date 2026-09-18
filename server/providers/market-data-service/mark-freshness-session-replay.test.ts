@@ -1,26 +1,3 @@
-/**
- * #1111 AC7 — the 2026-09-04 paper session's own refusals, replayed.
- *
- * Every `(instrument, observed_at, forward_offset_ms)` triple below is lifted
- * verbatim from the `StaleMarkError` messages in that session's
- * `logs/orchestrator.log` (and the 2026-09-03 one before it): 67 distinct
- * refusals, 5020ms to 144576ms "ahead" of the tick's `asOf`. Not one carries a
- * POSITIVE age — the whole population is the artifact, none of it an aged
- * mark, which is why the count attributable to forward offset is the count
- * itself.
- *
- * The reconstruction shares `readAt` across every row, matching production:
- * `PortfolioAccountingInput.clock` values one whole book in a single read, not
- * one instant per mark. `readAt = asOf + OBSERVED_PASS_DURATION_MS`, so each
- * row's real `forwardOffsetMs` sets `asOf` and therefore its own measured age
- * at `readAt` — this is not vacuous over `forwardOffsetMs`: raising a row's
- * offset past `OBSERVED_PASS_DURATION_MS + MARK_CLOCK_SKEW_TOLERANCE_MS`
- * pushes that mark's still-`ahead` gap past tolerance and the row refuses
- * again (between the two, it goes `ahead`-but-tolerated instead).
- * `OBSERVED_PASS_DURATION_MS` is one fixed pass duration applied to rows
- * spanning ~15 distinct ticks across two days — an assumed worst case, not a
- * per-tick measurement; see its own doc below.
- */
 import { describe, expect, it } from 'vitest';
 import {
   classifyMarkFreshness,
@@ -29,18 +6,8 @@ import {
 } from './mark-freshness.js';
 import type { Mark } from './types.js';
 
-/** `max_mark_age.stocks` (paper-profile.ts) — the bound these marks were judged against */
 const STOCKS_BOUND_MS = 15 * 60_000;
 
-/**
- * `asOf` to `readAt` for the whole pass. 145,000ms is not a per-tick
- * measurement — it is the worst-case gap cited in `portfolio-view.ts`'s
- * `clock` doc ("145s in the 2026-09-04 paper session", the same session this
- * file replays), applied here as one assumed pass duration across every row
- * even though the rows span ~15 distinct ticks over two days. It is larger
- * than every `forwardOffsetMs` here (max 144,576ms), so every reconstructed
- * `readAt` still lands at or after `observed_at`.
- */
 const OBSERVED_PASS_DURATION_MS = 145_000;
 
 const SESSION_REFUSALS: [instrument: string, observedAt: string, forwardOffsetMs: number][] = [
@@ -117,16 +84,12 @@ function markObservedAt(iso: string): Mark {
   return { price: 100, observed_at: new Date(iso), source: 'alpaca', asset_class: 'stocks' };
 }
 
-/** The tick's frozen `asOf`, reconstructed from the logged `(observed_at, forwardOffsetMs)` pair */
 function asOfFor(observedAt: string, forwardOffsetMs: number): Date {
   return new Date(new Date(observedAt).getTime() - forwardOffsetMs);
 }
 
 describe('the 2026-09-04 session’s valuation refusals, replayed (#1111)', () => {
   it('every one of them was a forward offset past the old tolerance, not an aged mark', () => {
-    // Non-vacuity for the case below: each row really did refuse under the
-    // pre-#1111 coordinate, and refused for being AHEAD rather than for being
-    // old
     for (const [, observedAt, forwardOffsetMs] of SESSION_REFUSALS) {
       const asOf = asOfFor(observedAt, forwardOffsetMs);
       expect(markAgeMs(markObservedAt(observedAt), asOf)).toBe(-forwardOffsetMs);

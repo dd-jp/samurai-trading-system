@@ -83,9 +83,6 @@ describe('buildAnalystsStep', () => {
     }
 
     it('hands the runner the cause of the skip it just returned', async () => {
-      // The narrowing to `views` is what threw the reasons away; this carries
-      // back the one bit the audit row needs, keyed on the pass that produced
-      // it so concurrent instruments cannot read each other's
       const skipKinds = new AnalystSkipKindRelay();
       await run(buildAnalystsStep(skippingOrchestrator('timeout'), undefined, { skipKinds }));
 
@@ -117,10 +114,6 @@ describe('buildAnalystsStep', () => {
     });
 
     it('records the kind even when the alert transport throws', async () => {
-      // The alert fires on the second consecutive skip and is deliberately
-      // allowed to fail without taking the tick down. The audit row's reason
-      // must not be collateral damage from that: the runner reads the relay
-      // immediately after this step returns
       const skipKinds = new AnalystSkipKindRelay();
       const step = buildAnalystsStep(skippingOrchestrator('timeout'), undefined, {
         skipKinds,
@@ -158,14 +151,6 @@ describe('buildAnalystsStep', () => {
     expect(result).toEqual([]);
   });
 
-  /**
-   * Issue #358 item 4. The crypto-endpoint outage was invisible for exactly one
-   * reason: `runAnalysts` collected a per-persona `failures` list and this
-   * adapter threw it away, so the tick log showed `analysts: quorum_skip` at
-   * `info` and nothing else — a hard, total data outage rendered
-   * indistinguishable from a considered no-trade. The failure reasons have to
-   * reach the operator's log.
-   */
   describe('failure surfacing (issue #358)', () => {
     function captureLogger(): { logger: Logger; entries: LogEntry[] } {
       const entries: LogEntry[] = [];
@@ -198,7 +183,6 @@ describe('buildAnalystsStep', () => {
       expect(entry.level).toBe('error');
       expect(entry.stage).toBe('analysts');
       expect(entry.trace_id).toBe('trace-9');
-      // The operator has to be able to read the cause out of the line itself
       expect(entry.message).toContain('BTC-USD');
       expect(entry.message).toContain('technical');
       expect(entry.message).toContain('http 404');
@@ -251,21 +235,6 @@ describe('buildAnalystsStep', () => {
       expect(entries).toEqual([]);
     });
 
-    /**
-     * PR #360 review thread. `failure.reason` is an upstream-controlled string:
-     * `classifyAlpacaDataResponse` bakes the provider's RESPONSE BODY into the
-     * message, and `classifyAlpacaDataNetworkError` bakes an arbitrary
-     * `error.message` in with no cap at all. No live path puts a credential
-     * there today (Alpaca authenticates by header, never by URL; the Telegram
-     * token — the one credential this system carries IN a URL — is unreachable
-     * from an analyst, which depends only on MarketDataService and the
-     * in-memory MarketIntelligenceStore). But "no path today" is not a property
-     * this log line should depend on, so the reason is bounded and known
-     * credential-carrying syntaxes are masked before it is written.
-     *
-     * Mirrors the `TelegramBotApiClient` "never leaks the bot token" tests
-     * rather than introducing a second convention.
-     */
     describe('credential safety (PR #360 review)', () => {
       const FAKE_BOT_TOKEN = '1234567:test-fake-bot-token-AAHrandomlookingsuffix';
 
@@ -296,7 +265,6 @@ describe('buildAnalystsStep', () => {
         const serialized = JSON.stringify(entries);
         expect(serialized).not.toContain(FAKE_BOT_TOKEN);
         expect(serialized).toContain('[REDACTED]');
-        // Still says which analyst died and that it was a network error
         expect(serialized).toContain('technical');
         expect(serialized).toContain('network error');
       });
@@ -359,11 +327,6 @@ describe('buildAnalystsStep', () => {
         expect(serialized).toContain('boom');
       });
 
-      /**
-       * The guard must not undo item 4. A real mandatory-analyst failure — the
-       * exact string the live paper run produced — has to survive intact, or we
-       * are back to a quorum skip with no stated cause.
-       */
       it('leaves a real indicator-width failure completely untouched', async () => {
         const { logger, entries } = captureLogger();
         const realReason =
@@ -392,13 +355,6 @@ describe('buildAnalystsStep', () => {
       });
     });
 
-    /**
-     * #431, analysts-spec.md story 25. The retry absorbs a blip; this is what
-     * catches the condition the retry cannot fix — a bad key, a data outage, a
-     * rate-limit wall — where every tick skips and, before this, nothing said
-     * so. The heartbeat keeps beating throughout, and at ADR-0008's 15-minute
-     * cadence one skipped tick per beat looks like a working system.
-     */
     describe('consecutive-skip alert (#431)', () => {
       function skipping() {
         return vi.fn(async () => ({
@@ -469,7 +425,6 @@ describe('buildAnalystsStep', () => {
         const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
         const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
 
-        // 2 fires, then every ALERT_REPEAT_EVERY_SKIPS after: 2 and 10
         for (let i = 0; i < 10; i++) await tick(step);
 
         expect(posted.map((alert) => alert.consecutive_skips)).toEqual([2, 10]);
@@ -477,9 +432,6 @@ describe('buildAnalystsStep', () => {
 
       it('resets the run on a healthy tick, so intermittent failures never accumulate', async () => {
         const { posted, channel } = recordingChannel();
-        // ONE step, whose orchestrator's answer changes between calls — the
-        // counter lives in the step's closure, so a second `buildAnalystsStep`
-        // would start from zero and prove nothing about the reset
         let skips = true;
         const runAnalysts = vi.fn(async () =>
           skips
@@ -501,7 +453,6 @@ describe('buildAnalystsStep', () => {
           },
         );
 
-        // skip, recover, skip, recover, skip — never two in a row, never an alert
         for (const skipping of [true, false, true, false, true]) {
           skips = skipping;
           await tick(step);
@@ -509,8 +460,6 @@ describe('buildAnalystsStep', () => {
 
         expect(posted).toEqual([]);
 
-        // And the counter really is back at zero: two in a row now alerts at 2,
-        // not at some accumulated total
         skips = true;
         await tick(step);
         expect(posted.map((alert) => alert.consecutive_skips)).toEqual([2]);
@@ -521,7 +470,6 @@ describe('buildAnalystsStep', () => {
         const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
         const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
 
-        // One skip each: a fleet-wide blip is not two skips on one instrument
         await tick(step, 'BTC-USD');
         await tick(step, 'ETH-USD');
 
@@ -575,13 +523,6 @@ describe('buildAnalystsStep', () => {
         expect(undelivered[0]?.level).toBe('error');
       });
 
-      // #1280. The undelivered-alert line runs inside the analysts step, which
-      // `TickRunner` wraps in `runWithTraceId` — and which holds `trace_id` as
-      // a parameter besides. Pinned against the tick's OWN `analyst_panel_
-      // degraded` line rather than a literal, so the assertion is that the two
-      // join, which is the property the field is read for. Any constant in the
-      // field breaks the equality on the first tick; a wrong-tick id breaks it
-      // on the second, whose trace differs
       it('logs an undelivered alert under the tick that raised it, not a category label', async () => {
         const failing = {
           postAnalystSkipAlert: async () => {
@@ -647,12 +588,6 @@ describe('buildAnalystsStep', () => {
     });
   });
 
-  /**
-   * #752: the coverage check is wired at the tick boundary, not merely
-   * declared. Verifying by call, not by inspection — a `coverage` option
-   * that this adapter never reached would be exactly this repo's dominant
-   * defect class (a tested mechanism nothing calls).
-   */
   describe('market-intelligence coverage (#752)', () => {
     function passingOrchestrator(): AnalystOrchestrator {
       const runAnalysts = vi.fn(async () => ({
@@ -758,10 +693,6 @@ describe('composeMarketIntelligence (#969)', () => {
   }
 
   it('runs every agent, because they write different buckets', async () => {
-    // The defect this exists to prevent: the composition root used to bind
-    // ONE agent, so with the news path available the sentiment agent — the
-    // only `social` writer — was never called at all. A retrieving client
-    // nothing calls is this repo's characteristic bug, not a new one
     const calls: string[] = [];
 
     const composed = composeMarketIntelligence([
@@ -774,8 +705,6 @@ describe('composeMarketIntelligence (#969)', () => {
   });
 
   it('keeps going when one agent fails', async () => {
-    // One provider's outage must not empty the other's bucket, and must not
-    // fail a tick that would otherwise have traded
     const calls: string[] = [];
 
     const composed = composeMarketIntelligence([
@@ -788,8 +717,6 @@ describe('composeMarketIntelligence (#969)', () => {
   });
 
   it('returns undefined when there is nothing to run', () => {
-    // `undefined` is the honest "no writer" state the analysts step already
-    // handles — not a no-op refresher that would look like a working one
     expect(composeMarketIntelligence([undefined, undefined])).toBeUndefined();
   });
 

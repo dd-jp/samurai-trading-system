@@ -1,18 +1,3 @@
-/**
- * #1543 — the cold-store first pass, measured rather than inherited.
- *
- * The ticket reports "~70s of bar sweep against a 30,000ms deadline". Both
- * numbers have moved (see the arithmetic block at the bottom of this file),
- * but the shape has not: a first pass against an EMPTY store reaches the venue
- * for every distinct (timeframe, lookback) it asks for, where the deadline
- * `production.ts` derives is sized against the far smaller WARM count.
- *
- * These cases drive the REAL `technicalAnalyst.run` through the REAL
- * `MarketDataServiceImpl` against a genuinely empty `SqliteMarketDataStore`,
- * and count what reaches the `DataSource`. Nothing here asserts a hand-derived
- * window list — the counts come out of the analyst's own fetch pattern, which
- * is the only thing that can tell the truth about a cold pass.
- */
 import {
   RVOL_5M_LOOKBACK,
   technicalAnalyst,
@@ -50,15 +35,10 @@ const INSTRUMENT = 'SPY';
 const SIGNAL: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
 const UNIVERSE: readonly UniverseInstrument[] = [{ asset: INSTRUMENT, asset_class: 'stocks' }];
 
-/** A 5m/1h/1d boundary all at once, so no fixture bar straddles `ASOF` */
 const ASOF = new Date('2026-06-16T20:00:00.000Z');
 
 const MINUTE_MS = 60_000;
 
-/**
- * Deeper than `RVOL_5M_LOOKBACK` on 5m and than any 1h/1d consumer, so a miss
- * below is the CACHE missing, never the fixture running out of history
- */
 const FIXTURE_DEPTH: Record<string, { count: number; widthMs: number }> = {
   '5m': { count: RVOL_5M_LOOKBACK + 64, widthMs: 5 * MINUTE_MS },
   '1h': { count: 120, widthMs: 60 * MINUTE_MS },
@@ -105,7 +85,6 @@ function fixtureBars(): Bar[] {
   return bars;
 }
 
-/** Records every window that actually reaches the source — a store hit is silent */
 class CountingDataSource implements DataSource {
   readonly windows: string[] = [];
   constructor(private readonly inner: DataSource) {}
@@ -128,7 +107,6 @@ interface Harness {
   logger: SilentLogger;
 }
 
-/** A cold store and a fresh service — the state a just-booted process is in */
 function coldHarness(): Harness {
   const clock = new ManualClock(ASOF);
   const source = new CountingDataSource(
@@ -168,14 +146,6 @@ describe('the cold-store first pass (#1543)', () => {
 
     await runTechnicalPass(harness);
 
-    // Measured, not quoted: `service.ts`'s own AC3 comment records EIGHT
-    // windows from a `npm run smoke` run, but that fixture cannot serve the
-    // deeper 5m windows, so its narrower specs missed on row COUNT rather
-    // than on freshness. Against history deep enough to satisfy every
-    // window — which is what a real cold venue is — the narrow 5m specs
-    // collapse onto the shared warm-up through `cachedBars` route 1 and the
-    // genuinely distinct cold sweep is smaller. It is still more than the
-    // warm count the analyst deadline is derived from, which is the defect
     expect(distinct(harness.source.windows)).toEqual([
       `1h/${20}`,
       `5m/${WARMUP_5M}`,
@@ -203,12 +173,6 @@ describe('the cold-store first pass (#1543)', () => {
   });
 
   it('bounds the first pass to one fetch per timeframe even when a bar interval rolls before the tick', async () => {
-    // The prefetch cannot freeze time: a 5m bar closes between boot and the
-    // first tick, and `cachedBars`' freshness routes correctly refuse the
-    // stored window. What the prefetch still buys is DEPTH — the refreshed
-    // 5m fetch lands once and every WIDER 5m window is then served off the
-    // prefetched rows through route 1, so the deep 936-row crawl stays off
-    // the tick path and the sweep is the warm shape, not the cold one
     const harness = coldHarness();
     await prefetchBars({
       marketData: harness.marketData,
@@ -258,17 +222,6 @@ describe('the prefetch window list is the max per timeframe over the first pass 
 });
 
 describe('what the cold sweep costs against the derived deadline (#1543 premise)', () => {
-  /**
-   * The ticket's two headline numbers are both stale, and the correction
-   * belongs on the record rather than being patched around. The deadline is
-   * not a 30,000ms literal any more — #1542 made the composition root derive
-   * it from the RESOLVED pacing — and the cold sweep is not eight windows per
-   * instrument once the venue has depth to serve the narrow specs from
-   * (measured above: three). What the ticket reports survives both
-   * corrections, because the gap is not in the drain term at all: the
-   * derivation budgets the queue plus exactly ONE bounded fetch, and a cold
-   * pass runs its venue fetches SERIALLY.
-   */
   it('budgets one bounded fetch where the measured cold pass runs three, two of them serial', async () => {
     const universeSize = 20;
     const fetchBoundMs = worstCaseFetchMs(ALPACA_BARS_TIMEOUT_MS, ALPACA_BARS_RETRY_CONFIG);
@@ -281,19 +234,12 @@ describe('what the cold sweep costs against the derived deadline (#1543 premise)
     const harness = coldHarness();
     await runTechnicalPass(harness);
 
-    // `technical-analyst.ts` awaits the shared 5m warm-up BEFORE the RVOL
-    // read (its own doc says why: two concurrent fetches for the same
-    // instrument+timeframe would race the store write), so these two are
-    // strictly sequential, and the deadline has room for one of them
     expect(harness.source.windows.at(0)).toBe(`5m/${WARMUP_5M}`);
     expect(harness.source.windows.at(-1)).toBe(`5m/${RVOL_5M_LOOKBACK}`);
 
     const coldWorstCaseMs = deadlineMs + fetchBoundMs;
     expect(coldWorstCaseMs).toBeGreaterThan(deadlineMs);
 
-    // A warm pass is what the deadline was derived against, and the prefetch
-    // is what makes the first pass one: zero venue fetches, hence zero
-    // unbudgeted serial round trips
     const warm = coldHarness();
     await prefetchBars({
       marketData: warm.marketData,
@@ -341,7 +287,6 @@ describe('prefetchBars fail-soft per (instrument, window) pair', () => {
     });
 
     expect(result).toEqual({ warmed: 3, failed: 1 });
-    // Every pair was attempted — the one failure did not short-circuit the loop
     expect(calls).toEqual(['SPY/5m/10', 'SPY/1h/20', 'QQQ/5m/10', 'QQQ/1h/20']);
 
     const failureEntry = logger.entries.find(

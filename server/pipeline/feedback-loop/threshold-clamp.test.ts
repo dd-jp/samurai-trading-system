@@ -1,11 +1,3 @@
-/**
- * #638 acceptance, Feedback-Loop half.
- *
- * ADR-0013's threat model is not an operator fat-fingering a config file — it
- * is this loop walking a dial by itself, with nobody in the path once #736
- * removes the loosen gate. So the WRITE DOOR is guarded (both `TuningStore`
- * implementations) as well as the kill lines the loop evaluates against.
- */
 import type { Clock } from '../../shared/index.js';
 import { ThresholdBoundViolationError } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
@@ -54,8 +46,6 @@ describe.each([
     const store = make();
 
     expect(() => store.setRiskThreshold('max_pbo', 0.5)).toThrow(ThresholdBoundViolationError);
-    // And the refusal LEAVES NO ROW: a rejected loosening must not land half
-    // way, or the next read picks up the value the write door just refused
     expect(store.getRiskThresholds()).toEqual({});
   });
 

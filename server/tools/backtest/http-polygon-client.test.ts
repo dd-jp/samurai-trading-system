@@ -1,8 +1,3 @@
-// `venuePacingEnvVars` is deliberately off the `shared/index.js` barrel
-// (internal to `venue-pacing.ts` and its own test — see that barrel's
-// comment), so this test imports it directly to insulate the default-bucket
-// assertions below from whatever `SAMURAI_PACING_POLYGON_*` an operator's
-// shell or `.env.local` happens to have set
 import { venuePacingEnvVars } from '../../shared/http/venue-pacing.js';
 import { resolvePolygonPacing, TokenBucket } from '../../shared/index.js';
 import { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
@@ -19,12 +14,6 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-/**
- * A bucket that never makes a test wait: every scenario in this file except
- * the pacing describe block below is exercising something other than
- * pacing, and a slow/parked `acquire()` would either time out the test or
- * force it onto fake timers it doesn't otherwise need
- */
 function unlimitedBucket(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
 }
@@ -177,11 +166,6 @@ describe('HttpPolygonClient', () => {
     );
   });
 
-  // Wire validation (issue #509). Before this ticket `results` was cast
-  // straight to `RawPolygonAggregate[]` with no shape check at all — a
-  // truncated or wrong-typed row would seed Stage 2's offline scratch store
-  // with a `NaN`/`undefined` bar. Every case here asserts a throw, never a
-  // structurally-wrong object making it into `out`
   describe('wire validation (#509)', () => {
     it('rejects a truncated aggregate missing required fields', async () => {
       const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [{ t: 1, o: 1 }] }));
@@ -276,38 +260,12 @@ describe('HttpPolygonClient', () => {
   });
 });
 
-/**
- * #510: the free-tier ceiling (5 calls/min) is fired against by a
- * `TokenBucket`, not just documented in a comment. `describe`s below are
- * split by whether they exercise the constructor's OWN default (proving the
- * production code path — every real call site constructs `new
- * HttpPolygonClient()` with no `rateLimiter` override, so a bucket that only
- * works when injected would be the exact "tested in isolation, nothing
- * calls it" defect this batch's reviewers keep catching) or an injected
- * bucket (proving `fetchAggregates` actually awaits `acquire()` rather than
- * merely holding a reference to one).
- */
 describe('HttpPolygonClient free-tier pacing (#510)', () => {
   const window: DateRange = {
     start: new Date(Date.UTC(2021, 0, 1)),
     end: new Date(Date.UTC(2021, 0, 10)),
   };
 
-  // The "default bucket" test below constructs `HttpPolygonClient` with no
-  // `rateLimiter`, deliberately, to prove the constructor's own default —
-  // the only pacing path any real call site takes — actually works. That
-  // default reads live `process.env`, so an ambient `SAMURAI_PACING_POLYGON_*`
-  // (a developer's shell, an `--env-file`) would otherwise make this test's
-  // pass/fail depend on the operator's config rather than the checked-in
-  // default. Clearing and restoring them scopes the test to what it claims
-  // to test
-  //
-  // Only `SAMURAI_PACING_POLYGON_*` needs clearing here (not
-  // Alpaca/ccxt/IBKR too) — `resolvePolygonPacing()` reads exclusively that
-  // namespace (#510/#520, third review cycle), so an ambient Alpaca/IBKR
-  // override cannot affect anything constructed in this describe block. See
-  // 'is unaffected by a malformed UNRELATED venue override' below, which
-  // asserts that isolation directly rather than assuming it
   const polygonEnvVars = Object.values(venuePacingEnvVars('polygon'));
   const previousEnv = new Map<string, string | undefined>();
 
@@ -330,9 +288,6 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
 
   it('acquires from the injected bucket before firing the request, not just holding it', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [] }));
-    // Starts empty (0 of 1 capacity) so the very first call must wait for a
-    // token — proving `fetchAggregates` calls `acquire()`, not merely stores
-    // the bucket unused (the defect this file's #510 comment above guards)
     const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
     await bucket.acquire();
 
@@ -348,15 +303,6 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
   });
 
   it('paces a burst of more than 5 calls through the default bucket rather than firing them at once', async () => {
-    // No `rateLimiter` override: this is the constructor's OWN default,
-    // `resolvePolygonPacing()` — the path every real call site
-    // (`run-stage2.ts`, `run-stage2-cost-decomposition.ts`,
-    // `run-spread-calibration.ts`) actually takes. Expectations are derived
-    // from `resolvePolygonPacing()` itself, rather than the checked-in numbers
-    // hard-coded again here, so this test proves "the client is paced by
-    // whatever ops config says" — the actual acceptance criterion — instead
-    // of merely reproducing today's `DEFAULT_POLYGON_PACING` values (already
-    // covered by `venue-pacing.test.ts`) a second time
     const { capacity, refillPerSecond } = resolvePolygonPacing();
     const stepMs = 1_000 / refillPerSecond;
 
@@ -368,12 +314,9 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
       Array.from({ length: burst }, (_, i) => client.fetchAggregates(`SYM${i}`, window, '1d')),
     );
 
-    // The bucket starts full at `capacity`: that many calls fire for free
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchImpl).toHaveBeenCalledTimes(capacity);
 
-    // The rest are paced one token's worth of refill apart — a burst fired
-    // all at once would have called `fetchImpl` all 6 times already
     for (let called = capacity + 1; called <= burst; called++) {
       await vi.advanceTimersByTimeAsync(stepMs);
       expect(fetchImpl).toHaveBeenCalledTimes(called);
@@ -382,20 +325,6 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
     await pending;
   });
 
-  /**
-   * Third review cycle on #520/#510. Earlier versions of this PR folded
-   * Polygon into `VENUE_KEYS`/`resolveVenuePacing()`, wrapped with extra
-   * error context, so a malformed `SAMURAI_PACING_ALPACA_*` override —
-   * a venue this Polygon-only client never touches — threw with a message
-   * explaining why. That fixed the SYMPTOM (an unhelpful error) but not the
-   * DEFECT: `production.ts`, the live composition root, would also have
-   * validated `SAMURAI_PACING_POLYGON_*` and built a bucket it never uses —
-   * a Stage-2-only typo failing orchestrator boot during the unattended
-   * soak (#238), with nobody watching. The fix is isolation, not a better
-   * message: `resolvePolygonPacing()` never reads Alpaca/ccxt/IBKR vars at
-   * all, so this construction does not merely fail with a clearer error —
-   * it does not fail.
-   */
   it('is unaffected by a malformed UNRELATED venue override — no coupling in either direction', () => {
     const previous = process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC;
     process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC = 'not-a-number';

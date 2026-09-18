@@ -145,7 +145,6 @@ describe('SqliteAdjustmentLog — pending-approval lifecycle', () => {
     expect(db.prepare('SELECT status FROM dial_adjustments WHERE id = ?').get(id)).toEqual({
       status: 'rejected',
     });
-    // A rejected row is not a resolved Adjustment — it never applied
     expect(log.getEntries()).toEqual([]);
   });
 

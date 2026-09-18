@@ -14,7 +14,6 @@ class FixedClock implements Clock {
   }
 }
 
-/** Like FixedClock, but the current time can be advanced mid-test */
 class MutableClock implements Clock {
   constructor(private at: Date) {}
   now(): Date {
@@ -139,12 +138,6 @@ describe('MarketIntelligenceStore.getContext', () => {
 
     const liveClock = new SystemClock();
     const liveStore = new MarketIntelligenceStore(liveClock);
-    // Re-anchor both items relative to the live clock's DEBATE BAR, not to raw
-    // now — since #782 the window ends at `floorToBar(asOf)`, so "after asOf"
-    // means after the bar's opening boundary. Anchoring to raw now would put
-    // BOTH items past the window end at any wall-clock moment inside a bar,
-    // and the test would assert the arithmetic of a rolling window this store
-    // deliberately no longer has
     const bar = floorToBar(liveClock.now(), DEBATE_BAR_TIMEFRAME_MS);
     liveStore.ingest(
       envelope([
@@ -158,16 +151,6 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(liveContext.news.map((item) => item.id)).toEqual(['in-range']);
   });
 
-  /**
-   * #782. The item counts are hashed into `debate_id` (via the technical
-   * analyst's `key_points`) and drive `fundamental`/`sentiment` confidence, so
-   * a count that moves between two ticks of ONE debate bar defeats the #617
-   * same-bar short-circuit and hands the Trader a second confidence sample.
-   *
-   * The fixture is the leak exactly: with a rolling window the item is 23h31m
-   * old at 14:01 (inside a 24h window) and 24h10m old at 14:40 (outside it).
-   * Floored to the 14:00 bar, both reads measure the same 24h.
-   */
   it('holds the item counts steady across two ticks inside one debate bar', () => {
     const clock = new MutableClock(new Date('2026-07-14T14:01:00Z'));
     const store = new MarketIntelligenceStore(clock);
@@ -183,11 +166,6 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(secondTick.news.map((item) => item.id)).toEqual(firstTick.news.map((item) => item.id));
   });
 
-  /**
-   * #782, the other half: an item ingested MID-bar must not appear until the
-   * next bar opens either. Same reason — the counts have to be a function of
-   * the bar, and an arrival is as much a change as an expiry.
-   */
   it('does not surface an item ingested mid-bar until the next bar opens', () => {
     const clock = new MutableClock(new Date('2026-07-14T14:01:00Z'));
     const store = new MarketIntelligenceStore(clock);
@@ -205,37 +183,18 @@ describe('MarketIntelligenceStore.getContext', () => {
     ]);
   });
 
-  /**
-   * #811. The claim lands at 13:59:5x (the gate floors it to the 13:00 bar);
-   * the analyst read that consumes it does not execute until 14:00:05, after
-   * the wall clock has already ticked into the 14:00 bar. Before #811,
-   * `getContext` floored a SECOND, independent read of `clock.now()` — so this
-   * pass's MI window would land on the 14:00 bar while the debate it feeds
-   * stays keyed to 13:00, and the two disagree about which bar they belong to.
-   *
-   * The item sits just inside the 13:00-bar window and just outside the
-   * 14:00-bar window, so the two derivations are falsifiable by inclusion: if
-   * `getContext` ever re-floors `asOf` instead of using the passed `bar`, the
-   * item drops out and this test goes red.
-   */
   it('inherits the claimed decision bar instead of re-deriving one on a straddle (#811)', () => {
     const clock = new MutableClock(new Date('2026-07-14T13:59:55Z'));
     const store = new MarketIntelligenceStore(clock);
     const window = 5 * 60_000;
 
-    // Claimed while the wall clock was still inside the 13:00 bar — the same
-    // derivation `DebateBarDecisionGate.claim` performs (floorToBar(asOf))
     const claimedBar = floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS);
     expect(claimedBar).toEqual(new Date('2026-07-14T13:00:00Z'));
 
-    // In the [12:55, 13:00] window the CLAIMED bar implies; NOT in the
-    // [13:55, 14:00] window a fresh floor of 14:00:05 would imply
     store.ingest(
       envelope([newsItem({ id: 'claimed-bar-item', timestamp: new Date('2026-07-14T12:59:00Z') })]),
     );
 
-    // The clock ticks past the hour boundary before the analyst read runs —
-    // the straddle #811 is filed against
     clock.advanceTo(new Date('2026-07-14T14:00:05Z'));
 
     const context = store.getContext('stocks', window, 'trace-1', claimedBar);
@@ -243,13 +202,6 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(context.news.map((item) => item.id)).toEqual(['claimed-bar-item']);
   });
 
-  /**
-   * #914. Before this, `getContext` filtered on `asset_class` only, so every
-   * instrument in a class read the same class-wide bag — an item genuinely
-   * about AAPL diluted (or, worse, silently stood in for) a read that should
-   * have been about TSLA. The optional `entity` param scopes the read to one
-   * instrument's own items, matching `IntelligenceItem.entity`.
-   */
   it('scopes to one entity when an entity filter is passed, leaving the rest of the class-wide bag out', () => {
     const asOf = new Date('2026-07-14T09:00:00Z');
     const store = new MarketIntelligenceStore(new FixedClock(asOf));
@@ -268,13 +220,6 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(tslaContext.news.map((item) => item.id)).toEqual(['tsla-item']);
   });
 
-  /**
-   * A class-wide item survives an entity-scoped read. Aimed at the EFFECT the
-   * `scope` field exists for, not at the field: a macro item is filed under a
-   * series name no ticker equals, so without the carve-out #914's filter drops
-   * it from both analysts that read the content. #1164: class-wide items are
-   * routed to `intel`, not `news` — `news` stays entity-scoped evidence only.
-   */
   it('admits a class-wide item past an entity-scoped read via intel, and still keeps other entities out of news', () => {
     const asOf = new Date('2026-07-14T09:00:00Z');
     const store = new MarketIntelligenceStore(new FixedClock(asOf));
@@ -320,12 +265,6 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(context.news).toEqual([]);
   });
 
-  /**
-   * #1086 review: a class-wide item is a trailing statistic re-derived every
-   * bar, so N of them in one read are N restatements of one measurement, not
-   * N observations — and `fundamental-analyst.ts` averages `intel` unweighted
-   * (#1164: class-wide items live in `intel`, not `news`)
-   */
   it('serves only the LATEST class-wide item per source, entity and type', () => {
     const asOf = new Date('2026-07-14T09:00:00Z');
     const store = new MarketIntelligenceStore(new FixedClock(asOf));
@@ -338,8 +277,6 @@ describe('MarketIntelligenceStore.getContext', () => {
         timestamp: new Date(at),
       });
 
-    // Ingested oldest-first, so a "keep the first seen" collapse would serve
-    // the stale one and pass a count-only assertion
     store.ingest(
       envelope([
         macro('bar-07', '2026-07-14T07:00:00Z'),
@@ -360,9 +297,6 @@ describe('MarketIntelligenceStore.getContext', () => {
     const series = (entity: string, id: string): IntelligenceItem =>
       newsItem({ id, source: 'polymarket', entity, scope: 'asset_class' });
 
-    // One source may file several macro series under different names
-    // (`polymarket-agent.ts` does); those are different evidence, not
-    // restatements of each other
     store.ingest(envelope([series('FED-RATES', 'rates'), series('CPI', 'cpi')]));
 
     const context = store.getContext('stocks', 60_000, 'trace-1', undefined, 'SPY');
@@ -387,12 +321,6 @@ describe('MarketIntelligenceStore.getContext', () => {
     expect(context.news.map((item) => item.id).sort()).toEqual(['first', 'second']);
   });
 
-  /**
-   * #1164: `scope: 'asset_class'` is the sole routing predicate between
-   * `news`/`social` and `intel` — macro, GDELT-GKG and Polymarket items all
-   * set it (gdelt-scorer.ts, polymarket-agent.ts) and previously landed in
-   * `news` undifferentiated from per-ticker evidence
-   */
   it('routes a class-wide item to intel and excludes it from news, leaving an entity-scoped item in news', () => {
     const store = new MarketIntelligenceStore(new FixedClock(new Date('2026-07-14T09:00:00Z')));
     store.ingest(
@@ -439,18 +367,11 @@ describe('MarketIntelligenceStore.ingest dedupe (#969)', () => {
     return newsItem({ id: 'x:1234567890', source: 'x', type: 'sentiment', ...overrides });
   }
 
-  /** The `social` bucket for one entity, at a window wide enough to hold it */
   function social(s: MarketIntelligenceStore, entity: string): IntelligenceItem[] {
     return s.getContext('stocks', 60 * 60_000, 'trace-1', undefined, entity).social;
   }
 
   it('drops the SAME post repeated for the SAME instrument', () => {
-    // The case dedupe was added for. `x_search`'s date filter is day-granular
-    // while the bucket is two hours, so consecutive buckets return overlapping
-    // posts by construction — and `sentiment-analyst.ts` averages `social`
-    // wholesale, so an un-deduped post votes once per bucket it survives in
-    // A post that stayed relevant for six hours would read as three people
-    // agreeing
     const s = store();
 
     s.ingest(envelope([socialItem()]));
@@ -460,12 +381,6 @@ describe('MarketIntelligenceStore.ingest dedupe (#969)', () => {
   });
 
   it('KEEPS the same post ingested as evidence for a different instrument', () => {
-    // Review round 2 (#1055). An X status id carries no entity, and this store
-    // is shared across the whole universe — so a post mentioning two names is
-    // retrieved once for each, and an id-only key would admit it for whichever
-    // was ingested first and silently drop it for the second. Those are two
-    // different observations that happen to share a source post, and the
-    // analyst reads them per entity, so the second is a real loss
     const s = store();
 
     s.ingest(envelope([socialItem({ entity: 'AAPL' })]));
@@ -476,13 +391,6 @@ describe('MarketIntelligenceStore.ingest dedupe (#969)', () => {
   });
 
   it('does not notify subscribers again for an item it just dropped', () => {
-    // A duplicate must not reach a subscriber either: push delivery is the
-    // other consumer of the same batch, and a dedupe that only filtered the
-    // store would leave it double-counting
-    //
-    // Asserted as "the second ingest adds nothing" rather than as an absolute
-    // count, because delivery is throttled and the throttle is not this
-    // test's subject
     const s = store();
     let notifications = 0;
     s.subscribe('stocks', () => {
@@ -509,7 +417,6 @@ describe('MarketIntelligenceStore staleness', () => {
   });
 
   it('flags an asset stale once its last update exceeds the asset class threshold', () => {
-    // stocks threshold is 30s; last item is 31s before asOf
     const asOf = new Date('2026-07-14T09:00:31Z');
     const store = new MarketIntelligenceStore(new FixedClock(asOf));
     store.ingest(envelope([newsItem({ timestamp: new Date('2026-07-14T09:00:00Z') })], 'stocks'));
@@ -521,7 +428,6 @@ describe('MarketIntelligenceStore staleness', () => {
   });
 
   it('does not flag an asset as stale within the asset class threshold', () => {
-    // crypto threshold is 5s; last item is 4s before asOf
     const asOf = new Date('2026-07-14T09:00:04Z');
     const store = new MarketIntelligenceStore(new FixedClock(asOf));
     store.ingest(envelope([newsItem({ timestamp: new Date('2026-07-14T09:00:00Z') })], 'crypto'));
@@ -545,8 +451,6 @@ describe('MarketIntelligenceStore staleness', () => {
       ),
     );
 
-    // Small window (last 1s) that excludes both items from `news`, but last_updated
-    // still reflects 'newer' since it looks at all ingested history, not just the window
     const context = store.getContext('stocks', 1_000, 'trace-1');
 
     expect(context.news).toEqual([]);
@@ -619,7 +523,6 @@ describe('MarketIntelligenceStore.subscribe', () => {
     expect(received).toHaveLength(1);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    // Throwing subscriber was removed — a second ingest only reaches the surviving subscriber
     clock.advanceTo(new Date('2026-07-14T09:02:00Z'));
     store.ingest(envelope([newsItem({ id: 'second', timestamp: clock.now() })], 'stocks'));
 
@@ -630,8 +533,6 @@ describe('MarketIntelligenceStore.subscribe', () => {
   it('removes a subscription after 3 slow (>5s) callback invocations and alerts', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    // Each callback invocation reads performance.now() twice (start, end);
-    // stub a 6-second (>5s) elapsed duration for every call
     let tick = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => {
       tick += 1;
@@ -652,7 +553,6 @@ describe('MarketIntelligenceStore.subscribe', () => {
     expect(warnSpy).toHaveBeenCalledTimes(3);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    // Subscription was removed — a 4th ingest delivers nothing further
     clock.advanceTo(new Date(clock.now().getTime() + 61_000));
     store.ingest(envelope([newsItem({ id: 'slow-3', timestamp: clock.now() })], 'stocks'));
 

@@ -6,11 +6,6 @@ function report(config_hash: string, seed = 1): BacktestReport {
   return { config_hash, seed, tick_outcomes: [], lookahead_audit: 'passed' };
 }
 
-/**
- * The trial-count discipline is a property of the `ConfigTrialLog` port;
- * `InMemoryConfigTrialLog` is its one implementation (#1156 deleted the
- * SQLite-backed one as unwired)
- */
 const LOG_IMPLEMENTATIONS: Array<[string, () => ConfigTrialLog]> = [
   ['InMemoryConfigTrialLog', () => new InMemoryConfigTrialLog()],
 ];
@@ -30,19 +25,12 @@ describe.each(LOG_IMPLEMENTATIONS)('%s', (_name, makeLog) => {
     expect(makeLog().distinctTrialCount()).toBe(0);
   });
 
-  /**
-   * The load-bearing rule (spec: "N = number of DISTINCT configs evaluated for
-   * selection — not the number of runs"). If a re-run incremented N, N would
-   * grow without bound and DSR/PBO/MinBTL would start failing healthy
-   * strategies for reasons unrelated to overfitting.
-   */
   it('does not increment N when the same config is re-run', () => {
     const log = makeLog();
 
     log.recordTrial('config-a', report('config-a'));
     expect(log.distinctTrialCount()).toBe(1);
 
-    // Same config, evaluated again — a re-run, not a new selection search
     log.recordTrial('config-a', report('config-a'));
     log.recordTrial('config-a', report('config-a'));
 
@@ -55,15 +43,9 @@ describe.each(LOG_IMPLEMENTATIONS)('%s', (_name, makeLog) => {
     log.recordTrial('config-a', report('config-a', 1));
     log.recordTrial('config-a', report('config-a', 2));
 
-    // The seed is not part of the config identity — config_hash is
     expect(log.distinctTrialCount()).toBe(1);
   });
 
-  /**
-   * FL's periodic revalidation monitors one frozen, already-selected config: it
-   * *reads* the selection-N and never appends. From this log's side, the
-   * property is that reading N is free of side effects.
-   */
   it('does not increment N when N is read, however often', () => {
     const log = makeLog();
     log.recordTrial('config-a', report('config-a'));

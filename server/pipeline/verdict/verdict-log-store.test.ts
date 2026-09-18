@@ -144,11 +144,3 @@ describe('buildVerdictLog', () => {
   });
 });
 
-// No `InMemoryVerdictLogStore` describe block here (#302 review pass,
-// kimi-3-review): the class was deleted from verdict-log-store.ts as dead
-// code once dropping `getByTraceId` (#306) left it with zero consumers and
-// its remaining test asserting only `Map.set` doesn't throw. See
-// verdict-log-store.ts's doc comment for the full reasoning
-// `SqliteVerdictLogStore` (the production implementation) is covered in
-// sqlite-verdict-log-store.test.ts; `LoggingVerdict`'s write-through
-// behavior is covered in logging-verdict.test.ts via a port-shaped fake

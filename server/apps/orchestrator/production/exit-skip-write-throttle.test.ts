@@ -1,9 +1,3 @@
-/**
- * #1128 review round 1 — the write-gate math extracted out of
- * `direct-bind.ts`'s `exitCheck` closure, pinned directly rather than only
- * through `direct-bind.test.ts`'s full-pipeline tests (same reasoning as
- * `filled-zero-size-throttle.test.ts`)
- */
 import { describe, expect, it } from 'vitest';
 import { ExitSkipWriteThrottle } from './exit-skip-write-throttle.js';
 import { ALERT_REPEAT_EVERY_DIAGNOSTICS } from './trader-diagnostic-alert.js';
@@ -52,10 +46,6 @@ describe('ExitSkipWriteThrottle', () => {
       wrote.push(shouldWrite);
       throttle.record('AAA', 'exit_held_quantity_diverged', shouldWrite);
     }
-    // Onset (tick 0) writes; ticks 1..ALERT_REPEAT_EVERY_DIAGNOSTICS-1 stay
-    // quiet; tick ALERT_REPEAT_EVERY_DIAGNOSTICS writes again — the budget
-    // is the sole gate for a reason that never stops being "the same as last
-    // tick," so this is pinned directly against the constant, not a literal
     const expected = Array.from(
       { length: ALERT_REPEAT_EVERY_DIAGNOSTICS + 1 },
       (_, i) => i === 0 || i === ALERT_REPEAT_EVERY_DIAGNOSTICS,
@@ -74,29 +64,11 @@ describe('ExitSkipWriteThrottle', () => {
       wrote.push(shouldWrite);
       throttle.record('AAA', reason, shouldWrite);
     }
-    // Each reason gets its OWN per-reason repeat budget (see the class doc):
-    // reason A last written at tick 0 is eligible again once
-    // ALERT_REPEAT_EVERY_DIAGNOSTICS ticks have passed for A specifically,
-    // independent of how many B-ticks happened in between. Under period-1
-    // alternation, A occupies the even indices and B the odd ones, so both
-    // budgets clear on the same two-tick pair every
-    // ALERT_REPEAT_EVERY_DIAGNOSTICS ticks: indices 0,1 (onset), then
-    // ALERT_REPEAT_EVERY_DIAGNOSTICS, ALERT_REPEAT_EVERY_DIAGNOSTICS + 1,
-    // and so on. "Two writes per window" is THIS TEST'S instance of the
-    // general bound (writes-per-window scales with the number of distinct
-    // reasons cycling, not a fixed two) — see the N=4 case below
     const expected = wrote.map((_, i) => i % ALERT_REPEAT_EVERY_DIAGNOSTICS <= 1);
     expect(wrote).toEqual(expected);
   });
 
   it('bounds an N-reason period-1 cycle to N writes per repeat-budget window, not a fixed two (review round 3, finding 1)', () => {
-    // The budget is keyed on skip_reason (see `shouldWrite`), not on the
-    // instrument alone, so cycling through more distinct reasons raises the
-    // bound proportionally: N reasons cycling period-1 give N writes per
-    // ALERT_REPEAT_EVERY_DIAGNOSTICS-tick window, each reason's own budget
-    // clearing independently of the others. Four reasons is chosen because
-    // it divides ALERT_REPEAT_EVERY_DIAGNOSTICS (8) evenly, giving an exact
-    // "N ones then (budget-N) zeros" repeating pattern to pin against
     const throttle = new ExitSkipWriteThrottle();
     const reasons = [
       'neutral_direction_while_flat',
@@ -114,8 +86,6 @@ describe('ExitSkipWriteThrottle', () => {
     }
     const expected = wrote.map((_, i) => i % ALERT_REPEAT_EVERY_DIAGNOSTICS < reasons.length);
     expect(wrote).toEqual(expected);
-    // The decisive point: four reasons produce more than the "two" the
-    // two-reason tests above show — the bound is N, not a constant
     expect(wrote.filter(Boolean).length).toBe(
       reasons.length * Math.ceil(ticks / ALERT_REPEAT_EVERY_DIAGNOSTICS),
     );
@@ -123,13 +93,6 @@ describe('ExitSkipWriteThrottle', () => {
   });
 
   it('bounds a dwell-2 (holds each reason two ticks) oscillation between two reasons the same way a naive change detector would miss', () => {
-    // The gap this closes: an earlier version of this throttle counted
-    // consecutive tick-over-tick CHANGES to detect flapping, which resets to
-    // 0 every time a reason repeats the tick right before it — so any dwell
-    // of 2+ ticks per reason never accumulated a streak and wrote on every
-    // single switch, unbounded (e.g. an intermittent InsufficientBarsError
-    // producing A,A,B,B,A,A,...). The per-reason budget here bounds it
-    // regardless of dwell length
     const throttle = new ExitSkipWriteThrottle();
     const reasons = ['below_conviction_floor', 'below_min_notional'] as const;
     const ticks = 2 * ALERT_REPEAT_EVERY_DIAGNOSTICS + 4;
@@ -140,20 +103,11 @@ describe('ExitSkipWriteThrottle', () => {
       wrote.push(shouldWrite);
       throttle.record('AAA', reason, shouldWrite);
     }
-    // Onset writes reason A (index 0); reason B's own onset writes at index
-    // 2 (its first appearance); both budgets clear
-    // ALERT_REPEAT_EVERY_DIAGNOSTICS ticks after THEIR OWN last write, so
-    // the next writes land at index ALERT_REPEAT_EVERY_DIAGNOSTICS (A) and
-    // ALERT_REPEAT_EVERY_DIAGNOSTICS + 2 (B), and so on — every switch is
-    // NOT a write, unlike the unbounded naive design this replaced
     const expected = wrote.map((_, i) => {
       const r = i % ALERT_REPEAT_EVERY_DIAGNOSTICS;
       return r === 0 || r === 2;
     });
     expect(wrote).toEqual(expected);
-    // The decisive bound: at most `reasons.length` writes per repeat-budget
-    // window (two, here — see the N=4 case above for the general form), not
-    // one per switch (which would be ~ticks/2 for this dwell)
     expect(wrote.filter(Boolean).length).toBeLessThanOrEqual(
       reasons.length * Math.ceil(ticks / ALERT_REPEAT_EVERY_DIAGNOSTICS),
     );

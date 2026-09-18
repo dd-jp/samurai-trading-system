@@ -1,21 +1,3 @@
-/**
- * Session-anchored VWAP and distance-from-VWAP (#746).
- *
- * Two concerns, kept in one file because they are the two acceptance-criteria
- * traps the issue names:
- *
- * 1. `computeSessionVwap` itself — the arithmetic, the session filter, and
- *    the `null` cases (no session to anchor to, no bars yet, zero volume).
- * 2. The PURITY BOUNDARY — `computeIndicator` must stay a zero-dependency
- *    pure function of `(bars, spec)` with no way for a `TradingCalendar` to
- *    reach it, enforced two ways rather than only documented: a compile-time
- *    check (`@ts-expect-error` on a third, calendar argument) and a
- *    source-scan that fails if `indicators.ts` ever imports
- *    `trading-calendar.ts`.
- *
- * Every test here injects an explicit `TradingCalendar` — none reads the
- * ambient clock or a module-level default.
- */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { computeIndicator } from './indicators.js';
@@ -49,11 +31,6 @@ function bar(closeTime: Date, overrides: Partial<Bar> = {}): Bar {
 
 describe('computeSessionVwap', () => {
   it('returns null for both fields under AlwaysOpenCalendar — a real answer, not a midnight anchor (#746)', () => {
-    // 2026-07-15 is a Wednesday; nothing calendar-special about it. The point
-    // is that AlwaysOpenCalendar.sessionStart(asOf) returns a REAL, non-null
-    // 00:00 UTC value (it is an accounting anchor, not "no session") — so if
-    // this module gated on sessionStart instead of sessionEnd, it would
-    // fabricate a midnight-anchored VWAP here. It must not.
     const asOf = new Date('2026-07-15T12:00:00Z');
     const bars = [
       bar(new Date('2026-07-15T00:05:00Z')),
@@ -62,8 +39,6 @@ describe('computeSessionVwap', () => {
     ];
     const calendar = new AlwaysOpenCalendar();
 
-    // Sanity: the trap this test guards against is real — sessionStart alone
-    // would NOT signal "no session"
     expect(calendar.sessionStart(asOf)).toBeInstanceOf(Date);
     expect(calendar.sessionEnd(asOf)).toBeNull();
 
@@ -73,14 +48,6 @@ describe('computeSessionVwap', () => {
   });
 
   it('anchors to sessionStart and computes a volume-weighted average over only in-session bars', () => {
-    // 2026-07-15 14:00 UTC = 10:00 ET, mid-session. `sessionStart` is the
-    // ACCOUNTING boundary — the most recent close AT OR BEFORE `asOf` — which
-    // mid-session is YESTERDAY's 16:00 ET close (20:00 UTC July 14), not
-    // today's 09:30 ET open. That is still the right filter boundary: no bar
-    // exists between yesterday's close and today's open (#66's ingestion
-    // gate), so every bar with `close_time > sessionStart` is a bar of
-    // TODAY's session regardless of which boundary `sessionStart` itself
-    // resolves to — see the module's own doc comment
     const calendar = new UsEquityRegularHoursCalendar();
     const asOf = new Date('2026-07-15T14:00:00Z');
     const sessionStart = calendar.sessionStart(asOf);
@@ -97,8 +64,6 @@ describe('computeSessionVwap', () => {
 
     const result = computeSessionVwap([priorSessionBar, ...inSessionBars], calendar, asOf);
 
-    // typical prices: (102+98+100)/3=100, (104+100+102)/3=102
-    // vwap = (100*10 + 102*30) / 40 = (1000 + 3060) / 40 = 101.5
     expect(result.vwap).toBeCloseTo(101.5, 8);
     expect(result.distance_from_vwap).toBeCloseTo(102 - 101.5, 8);
   });
@@ -139,12 +104,6 @@ describe('computeSessionVwap', () => {
   });
 });
 
-/**
- * The purity boundary: `computeIndicator` must remain calendar-free.
- * Enforced two ways, and each is verified to be load-bearing (not merely
- * present) — see the PR description for the mutation that was run against
- * each.
- */
 describe('computeIndicator stays pure and calendar-free (#746)', () => {
   it('rejects a third (calendar) argument at compile time', () => {
     const calendar = new AlwaysOpenCalendar();
@@ -152,9 +111,6 @@ describe('computeIndicator stays pure and calendar-free (#746)', () => {
     const spec: IndicatorSpec = { indicator: 'sma', params: {}, timeframe: '5m', lookback: 1 };
 
     // @ts-expect-error — computeIndicator's signature is exactly (bars, spec).
-    // A third argument, even a real TradingCalendar, must fail `tsc`. If this
-    // directive ever goes unused, the signature has been widened to accept a
-    // calendar and this test — not just this comment — is what catches it
     computeIndicator(bars, spec, calendar);
   });
 

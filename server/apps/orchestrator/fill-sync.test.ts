@@ -63,14 +63,10 @@ describe('runStartupReconcile', () => {
 
     const divergences = logger.entries.filter((e) => e.message === 'reconcile divergence');
     expect(divergences.map((e) => e.level)).toEqual(['info', 'warn']);
-    // `undetermined` is the one an operator has to look at: the adapter could
-    // not answer, so the lot is neither adopted nor freed
     expect(divergences[1]?.payload).toMatchObject({ action: 'undetermined' });
   });
 
   it('propagates a reconcile failure instead of swallowing it', async () => {
-    // Trading against a store that still disagrees with the venue is exactly
-    // what reconcile exists to prevent, so start() must not continue
     const execution = makeExecution({
       reconcile: vi.fn().mockRejectedValue(new Error('store unreadable')),
     });
@@ -80,9 +76,6 @@ describe('runStartupReconcile', () => {
     ).rejects.toThrow('store unreadable');
   });
 
-  // #1088: the sweep runs unconditionally on every reconcile() pass but is
-  // not a divergence, so it needed its own trace — otherwise a DELETE
-  // against open_positions happened with nothing anywhere to show it
   it('logs the terminal-row sweep count when it deleted rows, and not otherwise', async () => {
     const logger = makeLogger();
     const execution = makeExecution({
@@ -143,9 +136,6 @@ describe('startFillSync', () => {
     await sync.stop();
   });
 
-  // The reason this loop is a self-scheduling setTimeout and not setInterval:
-  // two concurrent passes would both read getOpenPositions() and both call
-  // resizeProtectiveLegs, racing on a mid-fill lot's protective quantity
   it('never overlaps two polls when one runs longer than the interval', async () => {
     let active = 0;
     let maxActive = 0;
@@ -169,13 +159,8 @@ describe('startFillSync', () => {
     await vi.advanceTimersByTimeAsync(20_000);
 
     expect(maxActive).toBe(1);
-    // Several polls actually ran — otherwise `maxActive === 1` would pass
-    // vacuously on a loop that only ever fired once
-    // 6s per cycle (1s gap + 5s poll): polls begin at t=1s, 7s, 13s, 19s
     expect(execution.ingestFills).toHaveBeenCalledTimes(4);
 
-    // Drain with the clock still moving: stop() awaits the in-flight poll,
-    // which needs fake time to finish
     const stopping = sync.stop();
     await vi.advanceTimersByTimeAsync(10_000);
     await stopping;
@@ -203,7 +188,6 @@ describe('startFillSync', () => {
     expect(logger.entries).toContainEqual(
       expect.objectContaining({ message: 'fill poll failed', level: 'error' }),
     );
-    // The run continues: a transient venue failure costs one poll, not the run
     expect(execution.ingestFills).toHaveBeenCalledTimes(2);
 
     await sync.stop();
@@ -226,7 +210,6 @@ describe('startFillSync', () => {
       fillSyncTraceId: 'test-fill-sync',
     });
 
-    // Enter a poll, then stop mid-flight
     await vi.advanceTimersByTimeAsync(1_000);
     expect(finished).toBe(false);
 
@@ -234,14 +217,9 @@ describe('startFillSync', () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await stopping;
 
-    // Abandoning here could cut between writeFill and updatePositionFill
     expect(finished).toBe(true);
   });
 
-  // #549: the sweep-in-finally control flow, pinned. A rejecting poll is the
-  // case the sweep exists FOR (a failed poll is exactly what can leave a
-  // residual's re-arm unconfirmed), so it must still run — and its own
-  // throw is contained to a log line, never allowed to mask the poll's error
   describe('the residual-protection sweep leg (#549)', () => {
     it('still runs the sweep when ingestFills rejects, and the logged poll failure is the INGEST error', async () => {
       const logger = makeLogger();
@@ -288,8 +266,6 @@ describe('startFillSync', () => {
 
       await vi.advanceTimersByTimeAsync(2_000);
 
-      // Both failures surfaced, each under its own line — the sweep's throw
-      // did not replace the poll's error, and vice versa
       expect(logger.entries).toContainEqual(
         expect.objectContaining({
           message: 'residual-protection sweep failed',
@@ -304,7 +280,6 @@ describe('startFillSync', () => {
           payload: { error: 'venue unreachable' },
         }),
       );
-      // And the loop survived to poll again
       expect(execution.ingestFills).toHaveBeenCalledTimes(2);
 
       await sync.stop();
@@ -343,8 +318,6 @@ describe('startFillSync', () => {
       const divergenceLines = logger.entries.filter(
         (entry) => entry.message === 'residual-protection sweep divergence',
       );
-      // Pass 1 logs the warn; pass 2 (same lot, same state) is deduped; pass
-      // 3's transition to adopted logs the info; pass 4 reports nothing
       expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'info']);
       expect(divergenceLines[0]?.payload).toMatchObject({ action: 'undetermined' });
       expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted' });
@@ -352,12 +325,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1615: `sweepResidualProtection`'s six push sites all share
-    // `action: 'undetermined'` and `kind: 'sweep'`; before this fix
-    // `lastSweepAction` compared bare `action` alone, so a lot that moved
-    // between two of them (a garbage-residual pass, then a genuinely
-    // unsupported re-arm) would have deduped the second as "same state" and
-    // never logged it
     it('logs two different residual-sweep escalations on the same lot as distinct episodes, not deduped as one', async () => {
       const logger = makeLogger();
       const base = {
@@ -407,11 +374,6 @@ describe('startFillSync', () => {
     });
   });
 
-  // #921: `reconcile()` moves from startup-only to also running on every
-  // recurring poll, before that poll's `ingestFills()` — the same ordering
-  // rationale `runStartupReconcile` establishes at startup (this module's
-  // top-of-file doc), now repeated on cadence so a lost ack between polls
-  // does not sit unrecovered until the next restart
   describe('the periodic reconcile leg (#921)', () => {
     it("calls reconcile() on every poll, before that poll's ingestFills()", async () => {
       const callSequence: string[] = [];
@@ -465,8 +427,6 @@ describe('startFillSync', () => {
           payload: { error: 'venue unreachable during reconcile' },
         }),
       );
-      // No 'fill poll failed' line — ingestFills itself did not throw, and the
-      // reconcile failure must not masquerade as one
       expect(logger.entries).not.toContainEqual(
         expect.objectContaining({ message: 'fill poll failed' }),
       );
@@ -474,16 +434,8 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1351: an unguarded render of `reconcileError` sits ahead of BOTH
-    // `ingestFills()` and the `finally`-wrapped #549 sweep in `runPoll`'s
-    // first block — a throw there skips them entirely, defeating the sweep's
-    // own comment that it must run "even when the poll itself failed, and
-    // ESPECIALLY then."
     it('an unrenderable reconcile() failure still runs ingestFills and the residual-protection sweep', async () => {
       const logger = makeLogger();
-      // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
-      // (defeats the `String()` fallback too) — same shape as the #1262
-      // tick-loop hostile value
       const hostile: Record<string, unknown> = {
         [Symbol.toPrimitive]: () => {
           throw new Error('render boom');
@@ -504,8 +456,6 @@ describe('startFillSync', () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
 
-      // The durable artifacts: both the pass's ingest and the #549 sweep ran,
-      // not just "nothing threw"
       expect(execution.ingestFills).toHaveBeenCalledTimes(1);
       expect(execution.sweepResidualProtection).toHaveBeenCalledTimes(1);
       expect(logger.entries).toContainEqual(
@@ -558,10 +508,6 @@ describe('startFillSync', () => {
       const divergenceLines = logger.entries.filter(
         (entry) => entry.message === 'reconcile divergence',
       );
-      // Pass 1 logs the warn; pass 2 (same key, same state) is deduped; pass
-      // 3's transition to a bracket adopt reaching `filled` logs at debug
-      // (#1122 — FilledZeroSizeThrottle already watches this exact condition
-      // independently); pass 4 reports nothing
       expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'debug']);
       expect(divergenceLines[0]?.payload).toMatchObject({ action: 'undetermined' });
       expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted' });
@@ -569,10 +515,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1577: `action` alone collapsed `cancelWedgedFlatten`'s escalated cancel
-    // onto the benign flatten adopt one pass earlier — both are
-    // `action: 'adopted'`, differing only in `reason`, so the escalation
-    // never reached the log once the benign line had already deduped it
     it('logs the wedged-flatten cancel escalation even though it shares action: adopted with the benign adopt already logged for the episode', async () => {
       const logger = makeLogger();
       const benignAdopted = {
@@ -624,12 +566,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1585: `cancelNeverConfirmedFlatten`'s three blocking outcomes share
-    // `action: 'undetermined'` with the SAME row's own prior-pass state (a
-    // `resumeFlatten` throw before the age bound is also `undetermined`) — the
-    // exact shape #1577 fixed for `cancelWedgedFlatten`'s `adopted -> adopted`,
-    // just on `undetermined` instead. Without a distinguishing `escalation`
-    // these dedup away and never get their own line
     it("logs a never-confirmed-flatten escalation even though it shares action: undetermined with the row's own prior state", async () => {
       const logger = makeLogger();
       const priorUndetermined = {
@@ -681,10 +617,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1585's round-1-noted separate minor: a boolean can tell "escalated" from
-    // "not", but not WHICH escalation — a cancel that failed and a later cancel
-    // that succeeded but found coverage short are different operator facts,
-    // both `action: 'undetermined'`, and both must log even back-to-back
     it('logs two different never-confirmed-flatten escalations on the same row as distinct episodes', async () => {
       const logger = makeLogger();
       const base = {
@@ -733,11 +665,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1609: `sweepWedgedZeroFillLots`'s two independent push sites — the
-    // SQL-guard shape mismatch and the store-write `catch` block — share
-    // `action: 'undetermined'` AND `kind: 'sweep'`, the same collision shape
-    // #1585 fixed for the never-confirmed-flatten trio, just on a sweep row
-    // instead of a flatten row
     it('logs two different wedged-zero-fill sweep escalations on the same lot as distinct episodes', async () => {
       const logger = makeLogger();
       const base = {
@@ -833,14 +760,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // Pins the OTHER terminal-adjacent broker_state the narrowing predicate
-    // must also demote — `'filled'` is covered by "logs a reconcile
-    // divergence on first observation..." above; a mutant
-    // that swapped `'partially_filled'` for `'cancelled'` in
-    // `reconcileDivergenceLevel` would leave that test green (it never
-    // exercises `'partially_filled'`) while silently excluding every
-    // partial-fill adopt from FilledZeroSizeThrottle's backstop, since
-    // getOpenPositions() excludes `'cancelled'` rows (#1122 review round 1)
     it("demotes a bracket adopt whose broker_state is 'partially_filled' to debug — the throttle still watches it", async () => {
       const logger = makeLogger();
       const partiallyFilledAdopted = {
@@ -877,11 +796,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // The empty-string collision this dedup must not fall into:
-    // `findUnrecordedVenuePositions` reports every unrecorded position with
-    // `idempotency_key: ''`, so a naive dedup keyed on that field alone would
-    // treat every such divergence as the SAME episode and mask all but the
-    // first. Keying on `idempotency_key || instrument` keeps them distinct.
     it("does not collapse two different unrecorded-venue-position divergences (both idempotency_key: '') onto one dedup slot", async () => {
       const logger = makeLogger();
       const unrecordedAapl = {
@@ -914,9 +828,6 @@ describe('startFillSync', () => {
       const divergenceLines = logger.entries.filter(
         (entry) => entry.message === 'reconcile divergence',
       );
-      // Pass 1: AAPL logs once. Pass 2: AAPL is the same episode (deduped),
-      // but TSLA is a genuinely NEW divergence sharing the same empty
-      // idempotency_key, and must log despite that collision
       expect(divergenceLines).toHaveLength(2);
       expect(
         divergenceLines.map((entry) => (entry.payload as { instrument: string }).instrument),
@@ -925,11 +836,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1506: the shape `findUnrecordedVenuePositions` raises means the VENUE
-    // holds a position no open lot explains — exposure invisible to Risk's
-    // caps, with no backstop detector anywhere else, which is the argument
-    // for raising the level rather than the one this docblock used to give
-    // for leaving it at `info` alongside `rejected`
     it('warns on an unrecorded venue position, and leaves a rejected divergence at info', async () => {
       const logger = makeLogger();
       const unrecorded = {
@@ -975,10 +881,6 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
-    // #1088: the sweep runs unconditionally on every periodic reconcile()
-    // pass but is not a divergence, so it needed its own trace at this call
-    // site too — otherwise a DELETE against open_positions happened on every
-    // poll cadence with nothing anywhere to show it
     it('logs the terminal-row sweep count on a poll that deleted rows, and not on one that did not', async () => {
       const logger = makeLogger();
       const execution = makeExecution({
@@ -1027,13 +929,6 @@ describe('startFillSync', () => {
   });
 });
 
-// #1321: both arms drove this SAME loop's log lines under one hardcoded
-// `trace_id`, so a control-arm reconcile divergence and a live-arm one were
-// indistinguishable in `logs/orchestrator.log` — the exact confusion that
-// made #1124 read as one arm racing itself. These tests drive two loops
-// side by side (one per arm) against a SHARED logger and assert their lines
-// carry different `trace_id`s — a test asserting only the constant's value
-// would stay green even with both arms wired to the same literal
 describe('per-arm trace ids (#1321)', () => {
   it('runStartupReconcile stamps the caller-supplied traceId, not a shared default', async () => {
     const logger = makeLogger();
@@ -1071,7 +966,6 @@ describe('per-arm trace ids (#1321)', () => {
       .filter((e) => e.message === 'reconcile divergence')
       .map((e) => e.trace_id);
     expect(divergenceTraceIds).toEqual(['live-arm-reconcile', 'control-arm-reconcile']);
-    // The point of the ticket: the two calls must not collapse onto one id
     expect(divergenceTraceIds[0]).not.toEqual(divergenceTraceIds[1]);
   });
 
@@ -1125,22 +1019,18 @@ describe('per-arm trace ids (#1321)', () => {
       const divergenceEntries = logger.entries.filter((e) => e.message === 'reconcile divergence');
       const failedPollEntries = logger.entries.filter((e) => e.message === 'fill poll failed');
 
-      // One divergence per loop, and each one carries THAT loop's own
-      // reconcile trace id — not the other loop's, and not a shared default
       expect(divergenceEntries).toHaveLength(2);
       expect(divergenceEntries.map((e) => e.trace_id).sort()).toEqual([
         'control-arm-reconcile',
         'live-arm-reconcile',
       ]);
 
-      // Same for the fill-poll failure lines, under the fill-sync trace id
       expect(failedPollEntries).toHaveLength(2);
       expect(failedPollEntries.map((e) => e.trace_id).sort()).toEqual([
         'control-arm-fill-sync',
         'live-arm-fill-sync',
       ]);
 
-      // Nothing from either loop lands on the OTHER loop's trace id
       const liveEntries = logger.entries.filter(
         (e) => e.trace_id === 'live-arm-reconcile' || e.trace_id === 'live-arm-fill-sync',
       );

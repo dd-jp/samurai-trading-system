@@ -68,9 +68,6 @@ describe('truncateForError', () => {
   });
 
   it('backs off the cut rather than splitting a surrogate pair (finding 8)', () => {
-    // 500 'x' chars puts an emoji's high surrogate exactly at index 499 — the
-    // cut point — so an unguarded slice would keep the high surrogate and
-    // drop its low surrogate, leaving a lone (invalid) surrogate on disk
     const oversized = `${'x'.repeat(499)}😀${'y'.repeat(10)}`;
     const result = truncateForError(oversized);
     const kept = result.slice(0, result.indexOf('…'));

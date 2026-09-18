@@ -1,68 +1,13 @@
-/**
- * Gross-vs-net cost decomposition for a replay run.
- *
- * Diagnostic for the Stage 2 kill verdict of 2026-08-05
- * (docs/research/archive/2026-08-05-stage2-verdict-first-real-run.md): 22 of 24
- * (config, asset class) pairs posted a negative out-of-sample Sharpe under
- * `PESSIMISTIC_COST_CONFIG`, at a turnover of 115–556 and an exposure of ~0.9,
- * with no config's profit factor above 1.14. Two very different diagnoses fit
- * that shape — a signal with no information in it, or a real-but-thin gross
- * edge churned hard enough that pessimistic costs eat it — and they point at
- * completely different fixes. This module separates them.
- *
- * ## Why the decomposition is EXACT, not an approximation
- *
- * The replay's trade path does not depend on costs at all. `ReplayDriver`
- * takes its entry decision from `proxySignal(bars, config)`, its stop and
- * target from that same signal, its exit from `exitOf(lot, bar, signal)` —
- * which reads only the bar's OHLC against those levels — and its size from
- * `capitalPerTrade / bar.close`. Every one of those is a pure function of the
- * bars and the strategy config. `CostModel.fill` is called only to PRICE the
- * two legs; nothing reads `fill_price` back into a decision, so not even the
- * √-law impact term (`sqrt(size / adv)`) can feed back through `size`.
- *
- * So the same trades, at the same timestamps, in the same sizes, would be
- * taken by a frictionless run — and adding the modeled costs back gives that
- * frictionless run's PnL exactly. This is not "costs held roughly constant";
- * it is an algebraic identity, and `cost-attribution.test.ts` proves it by
- * replaying one config twice (priced and zero-cost) and asserting the
- * reconstruction matches trade-for-trade.
- *
- * The identity itself, from `CostModelImpl.fill`
- * (`fill_price = mid + sign × (half_spread + slippage + market_impact)`) and
- * `ReplayDriver.closeLot` (`realized_pnl_net = (exit − entry) × size × dir −
- * fees_total`), for a long:
- *
- *     entry = mid_e + A_e,  exit = mid_x − A_x     where A = spread+slip+impact
- *     net   = (mid_x − mid_e) × size − (A_e + A_x) × size − fees_total
- *     gross = net + (A_e + A_x) × size + fees_total
- *
- * A short flips both signs and lands on the same add-back, which is why this
- * needs no per-side branch.
- *
- * ## The units trap
- *
- * Three of `CostBreakdown`'s four fields are PER-UNIT price offsets
- * (`spread_cost` is the half-spread, `slippage`, `market_impact`); `commission`
- * is already an absolute currency amount (`rate × size × mid`). Multiplying
- * the commission by quantity a second time is the easy error here and inflates
- * the add-back silently, so the two are summed separately below and pinned by
- * a hand-computed fixture in the test.
- */
 
 import type { ClosedTrade, Fill } from '../../shared/index.js';
 import type { ReplayTradeSource } from './eval-types.js';
 import type { DateRange } from './universe.js';
 
-/** What one round-trip paid, split by the cost model's four components */
 export interface TradeCostAttribution {
-  /** Half-spread, in currency: `Σ legs qty × spread_cost` */
   spread: number;
-  /** Already absolute in `CostBreakdown` — summed, never multiplied by qty */
   commission: number;
   slippage: number;
   market_impact: number;
-  /** The full add-back: `spread + commission + slippage + market_impact` */
   total: number;
 }
 
@@ -74,15 +19,6 @@ const ZERO_ATTRIBUTION: TradeCostAttribution = {
   total: 0,
 };
 
-/**
- * Sums every modeled cost across a lot's legs.
- *
- * Throws on a fill with no `cost_breakdown` rather than treating it as free:
- * an unpriced leg would understate the add-back and make the gross number look
- * closer to the net one than it is — biasing this diagnostic toward "costs are
- * not the problem", the exact conclusion it exists to test. Same reasoning as
- * `assertCostModelPriced`, which the eval path applies to the same fills.
- */
 export function attributeTradeCost(
   fills: readonly Fill[],
   idempotency_key: string,
@@ -117,33 +53,13 @@ export function attributeTradeCost(
   };
 }
 
-/** Per-run cost totals, alongside the notional they were charged against */
 export interface RunCostAttribution extends TradeCostAttribution {
   trades: number;
-  /** Round-trip traded notional, `Σ entry × filled_size × 2` — matches `toTradeSeries` */
   notional: number;
-  /** `total / notional`, in basis points: the all-in round-trip cost rate */
   bps_of_notional: number;
-  /**
-   * Mean per-fill adverse price move as a multiple of the volatility input the
-   * cost model priced it from, or `undefined` when it cannot be recovered.
-   *
-   * The cost model sets `slippage = volatility × slippageCoefficient`, so the
-   * ATR it saw is `slippage / slippageCoefficient` — exact, given the same
-   * coefficient the run was priced with. Reported because a cost expressed in
-   * currency hides whether it is plausible, while a cost expressed against the
-   * ATR the strategy sets its 3–4 ATR targets from does not: an adverse move
-   * approaching an ATR per fill is a miscalibrated cost fixture, not a market.
-   */
   mean_adverse_move_in_atr?: number;
 }
 
-/**
- * Sums each fill's adverse move as a multiple of the ATR the cost model
- * priced it from (see `mean_adverse_move_in_atr`), across one trade's fills.
- * Returns the running total and count so the caller can accumulate across
- * trades and divide once at the end.
- */
 function sumAdverseMoveInAtr(
   fills: readonly Fill[],
   slippageCoefficient: number,
@@ -163,11 +79,6 @@ function sumAdverseMoveInAtr(
   return { adverseInAtr, pricedFills };
 }
 
-/**
- * Totals one run's costs. `slippageCoefficient` is optional and used only to
- * recover the ATR multiple; omit it and that field is simply absent rather
- * than guessed.
- */
 export async function attributeRunCosts(
   source: ReplayTradeSource,
   window: DateRange,
@@ -191,14 +102,6 @@ export async function attributeRunCosts(
       market_impact: totals.market_impact + cost.market_impact,
       total: totals.total + cost.total,
     };
-    // Round-trip notional approximated as entry × size × 2, i.e. exit notional
-    // is assumed equal to entry notional. `ClosedTrade` carries no exit price
-    // (`server/shared/types.ts` — entry, stop, filled_size, realized_pnl_net, but
-    // no exit), so the exact `entry × size + exit × size` is not derivable
-    // here. This only feeds `bps_of_notional`, a denominator for presenting
-    // cost magnitude, and the error is second-order: it is the trade's own
-    // return on one of two legs. Trades that moved far enough for that to
-    // matter are exactly the ones whose cost-in-bps is least load-bearing
     notional += trade.entry * trade.filled_size * 2;
 
     if (slippageCoefficient !== undefined && slippageCoefficient > 0) {
@@ -217,22 +120,6 @@ export async function attributeRunCosts(
   };
 }
 
-/**
- * The same replay, re-presented with every trade's PnL gross of modeled costs.
- *
- * A wrapper rather than a second replay or a new metrics path, so the gross
- * numbers come out of the SAME `EvalExecutorImpl` — same walk-forward
- * boundaries, same embargo, same Lo annualization, same fold Sharpes. That is
- * what makes a gross out-of-sample Sharpe comparable to the 0.5 kill line the
- * Stage 2 verdict is defined on; a window-level gross Sharpe computed off to
- * one side would not be.
- *
- * `fills` is passed straight through, un-zeroed. The eval path runs
- * `assertCostModelPriced` over them, and that attestation must keep meaning
- * what it says — these ARE cost-model-priced fills, and the run they came from
- * really did pay these costs. The gross view is a subtraction applied to the
- * PnL, not a claim that the fills were free.
- */
 export class GrossOfCostsTradeSource implements ReplayTradeSource {
   constructor(private readonly inner: ReplayTradeSource) {}
 
@@ -248,9 +135,6 @@ export class GrossOfCostsTradeSource implements ReplayTradeSource {
         return {
           ...trade,
           realized_pnl_net: trade.realized_pnl_net + cost.total,
-          // Gross of costs means gross of fees too — leaving `fees_total`
-          // populated would describe a trade whose PnL ignores fees while its
-          // own record still reports them
           fees_total: 0,
         };
       }),

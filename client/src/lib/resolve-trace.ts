@@ -1,22 +1,3 @@
-/**
- * The two join sequences the drawers are built on, resolved once each.
- *
- * The wire carries no single "trace record": a lane, a debate, a verdict, a
- * Risk decision, a position and its fills are separate lists keyed
- * differently, and the sequence that walks them is the client's own domain
- * knowledge. It ran inline in the two drawers until #1139, where the only way
- * to test a join was to render a React tree — the least-tested layer of the
- * client, and exactly where #1066-class mis-attribution lives.
- *
- * `resolveTrade` runs the harder direction: a closed trade reaches its stage
- * record ONLY by finding the Risk decision keyed to its debate and recovering
- * a `trace_id` from that row. Nothing else on the wire bridges the two, so a
- * trade whose critic row has aged out of the recent-decisions window has no
- * trace at all — `absence.trace` says which of the two silences it is.
- *
- * `trace.ts` holds the individual lookups; it is this module's private
- * implementation, not an interface any component reaches through.
- */
 import type {
   ClosedTradeRow,
   DebateRow,
@@ -42,20 +23,13 @@ import {
   verdictFor,
 } from './trace.ts';
 
-/**
- * How a joined row was found. `exact` is not free: only the instrument
- * fallback is approximate, so `{ by: 'instrument', exact: true }` does not
- * type-check and no resolver can pass a guess off as a key match.
- */
 type JoinProvenance =
   | { by: 'debate_id'; exact: true }
   | { by: 'trace_id'; exact: true }
   | { by: 'instrument'; exact: false };
 
-/** A `DebateRow` carries no `trace_id`, so a live lane's debate can only be approximate */
 export type DebateJoin = Extract<JoinProvenance, { by: 'debate_id' | 'instrument' }>;
 
-/** Both routes to a Risk decision are exact key matches; neither falls back */
 export type RiskCriticJoin = Extract<JoinProvenance, { by: 'debate_id' | 'trace_id' }>;
 
 const BY_DEBATE_ID: Extract<JoinProvenance, { by: 'debate_id' }> = { by: 'debate_id', exact: true };
@@ -67,7 +41,6 @@ const BY_INSTRUMENT: Extract<JoinProvenance, { by: 'instrument' }> = {
 
 export interface Selection {
   instrument: string;
-  /** `null` selects the instrument's current lane; a trace id pins one trace */
   traceId: string | null;
 }
 
@@ -75,7 +48,6 @@ export interface TraceDetail {
   instrument: string;
   traceId: string | null;
   lane: PipelineLane | undefined;
-  /** `null` when there is no trace to draw a timeline from — `absence.lane` says why */
   cells: readonly ResolvedCell[] | null;
   verdict: VerdictRow | undefined;
   riskCritic: RiskCriticRow | undefined;
@@ -86,7 +58,6 @@ export interface TraceDetail {
   fills: readonly FillRow[];
   settled: SettledOutcome | null;
   inFlight: boolean;
-  /** `wrong_instrument`: the selection's trace id is attested — on a lane, a verdict, a risk-critic row, or `tick_status` — under a DIFFERENT instrument (#1267), even once that attestation has itself left the lane window. Distinct from `aged_out`: this trace was never this instrument's to begin with, not merely no-longer-live. */
   absence: { lane: 'aged_out' | 'idle' | 'none' | 'wrong_instrument' | null };
 }
 
@@ -101,7 +72,6 @@ export interface TradeDetail {
   cells: readonly ResolvedCell[] | null;
   verdict: VerdictRow | undefined;
   fills: readonly FillRow[];
-  /** `unreachable`: no critic row named the debate. `aged_out`: the trace left the window. */
   absence: { trace: 'unreachable' | 'aged_out' | null };
 }
 
@@ -112,30 +82,6 @@ function cellsOf(
   return lane === undefined || lane.trace_id === null ? null : resolveLaneCells(lane, debate);
 }
 
-/**
- * The debate a lane's cells are resolved against — the one join the lane
- * matrix needs without the rest of `resolveTrace`'s sequence, on `tradeDebate`'s
- * precedent.
- *
- * By INSTRUMENT, and matching `resolveTrace`'s own `latestDebateFor` call
- * deliberately rather than lazily: `DebateRow` carries no `trace_id` (the
- * column exists — migration 0015 — but is unprojected), so an exact join here
- * beside the drawer's approximate one would manufacture a fresh disagreement
- * instead of closing #1428's. `resolve-trace.test.ts` pins the two to the same
- * row by identity — for both arms, since #1597 review round 1.
- *
- * Takes the SNAPSHOT, not a bare debates array: `snapshot.debates` is always
- * the LIVE arm's rows (the control arm never writes `debate_log`,
- * `contracts/snapshot.ts`'s `arm` doc comment), so joining it by instrument
- * alone while viewing a control lane would decorate that lane's `debate` cell
- * with the live arm's actual debate for the same instrument. The guard lives
- * HERE, beside the join it protects, rather than at the call site (round 1's
- * finding) — a bare-array signature let `LiveTab.tsx` filter the array itself
- * and left this function, and any future caller, free to reproduce the leak.
- * `resolveTrace`'s own `snapshot.arm === 'control'` guard on its matching
- * join is deliberately mirrored rather than shared, so the two can be read
- * (and tested) independently while still agreeing on every snapshot.
- */
 export function laneDebate(
   snapshot: Pick<WireSnapshot, 'arm' | 'debates'>,
   lane: PipelineLane,
@@ -157,14 +103,9 @@ function laneAbsence(
   return lane.trace_id === null ? 'idle' : null;
 }
 
-/** Every row the Live drawer shows for one selected lane or pinned trace */
 export function resolveTrace(snapshot: WireSnapshot, selection: Selection): TraceDetail {
   const { instrument } = selection;
   const lane = laneFor(snapshot.pipeline, instrument, selection.traceId);
-  // A trace_id that fails the instrument-conjoined join above but is
-  // attested — on a lane, a verdict, a risk-critic row, or the in-flight
-  // tick_status — under some other instrument is a mismatched Selection, not
-  // an aged-out trace (#1267): the id must not leak into TraceDetail either
   const wrongInstrument =
     lane === undefined &&
     selection.traceId !== null &&
@@ -178,19 +119,6 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
     );
   const traceId = wrongInstrument ? null : (selection.traceId ?? lane?.trace_id ?? null);
   const position = openPositionFor(snapshot.positions, instrument);
-  // One row for both the timeline's degraded `debate` cell and the debate
-  // section beneath it — the drawer cannot state two causes for one debate
-  // if it only ever reads one row (#1428)
-  //
-  // `snapshot.debates` is NOT arm-scoped on the wire (#1594's doc comment,
-  // `contracts/snapshot.ts`) — the control arm never writes `debate_log`, so
-  // this array is always the live arm's debates, matched by INSTRUMENT alone
-  // (`latestDebateFor`). Reading it while viewing the control arm would
-  // attribute the live arm's actual LLM debate to a control lane trading the
-  // same instrument, which is exactly the leak dashboard-spec.md's "no
-  // component shows a figure from the other arm" forbids (#1597). The
-  // control arm structurally has no debate at all, so the join is skipped
-  // outright rather than filtered
   const debate =
     snapshot.arm === 'control' ? undefined : latestDebateFor(snapshot.debates, instrument);
   return {
@@ -211,10 +139,6 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
   };
 }
 
-/**
- * The one join a Review row needs, without the rest of `resolveTrade`'s
- * sequence: a table of N rows would otherwise re-run all of it per poll
- */
 export function tradeDebate(
   debates: readonly DebateRow[],
   trade: ClosedTradeRow,
@@ -222,16 +146,12 @@ export function tradeDebate(
   return debateById(debates, trade.debate_id);
 }
 
-/** Every row the Review drawer shows for one closed trade, or `null` if it has left the window */
 export function resolveTrade(snapshot: WireSnapshot, idempotencyKey: string): TradeDetail | null {
   const trade = closedTradeByKey(snapshot.closed_trades, idempotencyKey);
   if (trade === undefined) return null;
   const riskCritic = riskCriticForDebate(snapshot.risk_critics ?? [], trade.debate_id);
   const traceId = riskCritic?.trace_id ?? null;
   const lane = traceId === null ? undefined : laneFor(snapshot.pipeline, trade.instrument, traceId);
-  // The Review drawer reaches its debate exactly, by `debate_id`, so its
-  // timeline is reconciled against that row rather than the instrument's
-  // latest — the same row `DebateSection` and `whyTaken` already render
   const debate = debateById(snapshot.debates, trade.debate_id);
   const cells = cellsOf(lane, debate);
   return {

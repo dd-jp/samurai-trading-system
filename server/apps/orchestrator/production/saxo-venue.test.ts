@@ -1,8 +1,3 @@
-/**
- * #1400 — the composition root's Saxo venue seam. Every case here is about
- * the seam being REACHABLE and REFUSING correctly; the adapter's own order
- * semantics are `saxo-adapter.test.ts`'s.
- */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,7 +26,6 @@ import {
 
 const silentLogger: Logger = { log: () => undefined };
 
-/** Every checked-in sterling line quotes in pence with a 0.01 factor (doc 44 §2.1) */
 function penceDetails(uic: number, assetType: SaxoAssetType): SaxoInstrumentDetails {
   return {
     Uic: uic,
@@ -100,7 +94,6 @@ describe('saxoTradeableUniverse', () => {
     for (const instrument of universe) {
       expect(instrument.asset_class).toBe('stocks');
     }
-    // Never a US screening proxy: those are what the analysts read, never what is routed
     expect(universe.map((instrument) => instrument.asset)).not.toContain('QQQ');
   });
 
@@ -185,10 +178,6 @@ describe('buildSaxoBroker', () => {
   });
 });
 
-/**
- * #1523 — which bearer a Saxo run authenticates with. Every case reads a
- * sandboxed token path; the operator's real saved session is never touched.
- */
 describe('buildSaxoTokenSource', () => {
   const APP_CREDENTIALS = {
     SAXO_SIM_APP_KEY: 'app-key-fixture',
@@ -277,12 +266,6 @@ describe('buildSaxoTokenSource', () => {
     void source.stop();
   });
 
-  /**
-   * The no-caller check (#1523): `start()` primes the session at BOOT, so the
-   * state is known before the first order rather than on it. Asserted through
-   * the log line, because a state read here would prime it itself and the test
-   * would pass on a `start()` nothing calls.
-   */
   it('primes the session at boot and says so, without any request being made', () => {
     savedSession();
     const logger = recordingLogger();
@@ -309,19 +292,10 @@ describe('buildSaxoTokenSource', () => {
 
     buildSaxoTokenSource('sim', logger, { env: APP_CREDENTIALS, tokenPath });
 
-    // The refresher's own `saxo_session_lost` line, emitted at BOOT because
-    // `start()` primed it — before that call it appeared only once something
-    // asked for a bearer
     const lost = logger.entries.find((entry) => entry.event === 'saxo_session_lost');
     expect(lost?.message).toMatch(/npm run saxo:login -- --env sim/);
   });
 
-  /**
-   * A live session on a SIM boot must not be spent: the refresh would rotate
-   * (and so invalidate) the live refresh token against the SIM gateway, which
-   * cannot honour it — the operator would lose the live session to a run that
-   * was never entitled to it
-   */
   it('refuses a saved session written for the OTHER gateway', async () => {
     writeFileSync(
       tokenPath,

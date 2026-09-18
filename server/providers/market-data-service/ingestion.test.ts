@@ -62,7 +62,6 @@ describe('normalizeBars', () => {
   });
 
   it('never produces a stock bar outside trading hours', () => {
-    // 13:30 UTC = 09:30 ET open (EDT). Pre-market, in-session, and after-close.
     const bars = normalizeBars(
       [
         candle('2026-07-15T12:00:00Z', 1),
@@ -83,8 +82,6 @@ describe('normalizeBars', () => {
   });
 
   it('admits daily stock bars, which open at midnight outside the session', () => {
-    // A '1d' bar timestamped at 00:00 ET would be dropped by an intraday
-    // session check; it must be judged on whether the day trades at all
     const bars = normalizeBars([candle('2026-07-15T04:00:00Z', 100)], {
       ...STOCK_CONTEXT,
       timeframe: '1d',

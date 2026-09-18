@@ -14,10 +14,6 @@ describe('currentBoundary', () => {
   });
 
   it('is epoch-anchored, not anchored to an arbitrary process start time — two different restarts a day apart land on the same phase', () => {
-    // Two instants a day apart both floor to a UTC midnight, without either
-    // one being handed in as a reference point. An interval anchored to
-    // "when the process booted" could not do this: it would need that boot
-    // instant as an extra argument, and every restart would shift the phase
     const day1 = new Date('2026-08-01T09:00:00.000Z');
     const day2 = new Date('2026-08-02T09:00:00.000Z');
     const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -34,10 +30,6 @@ describe('currentBoundary', () => {
 
 describe('nextBoundary', () => {
   it('is exactly one interval after currentBoundary, not one interval after `now`', () => {
-    // `now` is 1ms before the boundary that closes at `midnight` — one
-    // interval after THAT boundary, not one interval after `now` itself,
-    // which is the distinction that makes catch-up land on the boundary
-    // just missed rather than drifting a few ms into the next one
     const now = new Date('2026-08-01T23:59:59.999Z');
     const DAY_MS = 24 * 60 * 60 * 1_000;
     expect(nextBoundary(now, DAY_MS)).toEqual(new Date('2026-08-02T00:00:00.000Z'));

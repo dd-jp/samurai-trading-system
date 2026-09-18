@@ -1,13 +1,3 @@
-/**
- * #638 acceptance, Risk-Manager half: every guarded breaker threshold set past
- * its line, asserting the system REFUSES rather than runs with it.
- *
- * Two seams, and the second is the one that matters. The constructor check is
- * boot-time; `resolveRiskConfig` is the LIVE path — `RiskManagerImpl.evaluate()`
- * re-reads the `risk_thresholds` table on every call, so a value written
- * between two ticks binds on the second one without passing through startup
- * again. A boot-only clamp would constrain nothing the Feedback Loop does.
- */
 import type { Clock } from '../../shared/index.js';
 import { GUARDED_THRESHOLD_BOUNDS, ThresholdBoundViolationError } from '../../shared/index.js';
 import type { BreakerConfig, BreakerEvalInput } from './breakers.js';
@@ -15,7 +5,6 @@ import { CircuitBreakers } from './breakers.js';
 import { RISK_THRESHOLD_KEYS, resolveRiskConfig } from './risk-thresholds.js';
 import type { DailyPnlByClass, PortfolioView, RiskConfig } from './types.js';
 
-/** Every class at the same known figure — the daily-loss breaker reads `portfolio` */
 function pnl(pct: number): DailyPnlByClass {
   const known = { known: true, pct } as const;
   return { crypto: known, stocks: known, portfolio: known };
@@ -59,9 +48,6 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
   });
 
   it('refuses the 0.95/0.90 pair the relative width check accepts', () => {
-    // The pre-existing guard is an ORDERING test only: 0.90 is strictly below
-    // 0.95, so it passes, and leaves a drawdown breaker that never fires. This
-    // is the exact hole the absolute clamp exists to close
     expect(
       () =>
         new CircuitBreakers(
@@ -70,16 +56,10 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
             auto_rearm: { recovery_drawdown_pct: 0.9, max_days_tripped: 5 },
           }),
         ),
-      // Both edges are out, and both are named — an operator fixing only the
-      // one the error happened to mention first would boot straight into the
-      // second refusal
     ).toThrow(/max_drawdown_pct[\s\S]*recovery_drawdown_pct/);
   });
 
   it('refuses to construct when recovery_drawdown_pct is past its ceiling', () => {
-    // recovery_drawdown_pct's ceiling is MEASURED_DRAWDOWN_ENVELOPE (0.418,
-    // #729/#798). max_drawdown_pct is set within ITS OWN ceiling (0.45,
-    // #925) so only the recovery edge is the thing under test here
     expect(
       () =>
         new CircuitBreakers(
@@ -99,9 +79,6 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
       expect(GUARDED_THRESHOLD_BOUNDS.recovery_drawdown_pct.max).toBeLessThan(
         GUARDED_THRESHOLD_BOUNDS.max_drawdown_pct.max as number,
       );
-      // And specifically: the ceiling sits above #798's accepted 41.8%
-      // single-stock envelope, which recovery_drawdown_pct.max (the
-      // re-measured MEASURED_DRAWDOWN_ENVELOPE) now equals
       expect(GUARDED_THRESHOLD_BOUNDS.max_drawdown_pct.max as number).toBeGreaterThan(0.418);
     },
   );
@@ -110,9 +87,6 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
     'cannot fire on a single-stock position at its accepted 41.8% envelope (#729/#798), ' +
       'the same discipline this file already applies to the ceiling itself (#925)',
     () => {
-      // Mirrors the shipped paper-profile.ts breaker config (max_drawdown_pct:
-      // 0.44), not an arbitrary fixture — the point is that the ACTUAL shipped
-      // trip does not fire on the strategy working as designed
       const breakers = new CircuitBreakers(
         makeBreakerConfig({
           max_drawdown_pct: 0.44,
@@ -181,10 +155,6 @@ describe('resolveRiskConfig — the LIVE read path (#638)', () => {
   });
 
   it('refuses a stored breaker row past its line, even though it is never applied', () => {
-    // `max_drawdown_pct` is deliberately NOT in `RISK_THRESHOLD_KEYS`, so this
-    // row changes no cap. It still stops the process: a stored value that
-    // crosses a bright line means something in the system tried to cross it,
-    // and ignoring the row would leave that silent
     expect(RISK_THRESHOLD_KEYS).not.toContain('max_drawdown_pct');
 
     expect(() => resolveRiskConfig(makeRiskConfig(), { max_drawdown_pct: 0.95 })).toThrow(
@@ -205,8 +175,6 @@ describe('resolveRiskConfig — the LIVE read path (#638)', () => {
   });
 
   it('leaves the six tunable caps unguarded — they carry no research bright line', () => {
-    // Guarding a notional cap would be inventing a limit no document states,
-    // and would freeze the Feedback Loop's only working dials
     expect(() =>
       resolveRiskConfig(makeRiskConfig(), {
         max_position_size_fraction_of_equity: 10 ** 9,

@@ -1,20 +1,3 @@
-/**
- * Offline smoke-run tests (#350).
- *
- * Two things are being protected here, and they are different in kind:
- *
- * 1. **The gate is a gate.** `evaluateSmokeGate` is pure over observations, so
- *    every "the pipeline did not transact" branch is exercised directly rather
- *    than by contriving a broken process. A gate that passes when nothing
- *    transacted is worse than no gate, so each failure mode gets its own case.
- * 2. **The fake mode stays unreachable from the real entrypoint** (#293/#320/
- *    #324) — the orchestrator barrel must not carry any of it, and the Alpaca
- *    wire client must refuse every call.
- *
- * The end-to-end case really does start the composition root, run the loop on
- * real timers and drain it. It is the only test in the suite that does, which
- * is the whole point of the ticket.
- */
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
 import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
 import { noCostBasisDrops } from '../../pipeline/control-arm/index.js';
@@ -65,27 +48,14 @@ import {
   untoleratedFillSyncFailures,
 } from './smoke-run.js';
 
-/** Both sticky tiers persisted untripped — what a healthy run leaves in `breaker_state` (B1) */
 const BOTH_TIERS = [
   { tier: 'portfolio_drawdown', tripped: 0 },
   { tier: 'kill_switch', tripped: 0 },
 ];
 
-/**
- * A healthy exit path (#576) — every check `evaluateSmokeGate` runs against
- * `options.exitPath` passes against this shape unmodified. `twoLotFlatten`
- * defaults to no lot keys (vacuously satisfied — nothing to check) rather
- * than fabricating positions that would also have to exist in whatever
- * `SmokeObservations` the test under it supplies; tests that actually
- * exercise the phantom-open check pass their own `positions` AND their own
- * `twoLotFlatten` override together.
- */
 function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvidence {
   return {
     brokerCallSequence: ['cancel:lot-1', 'submitFlatten:lot-1-exit'],
-    // #549: scenario 5 scripts ONE re-arm failure, so a healthy run carries
-    // exactly its one inline alert — the gate now scopes the "no alerts"
-    // check to every OTHER lot and requires exactly one for this one
     residualAlerts: [
       {
         trace_id: 'fill-sync',
@@ -100,17 +70,9 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
         observed_at: SMOKE_RUN_INSTANT,
       },
     ],
-    // Matches `transactedObservations()`'s 'idem-exit-1' position (closed) —
-    // the fixture pairing the scoped #508/#517 check reads
     fullExit: { lotKey: 'idem-exit-1' },
     partialFlatten: { idempotencyKey: 'lot-partial', expectedResidual: 0, protectedQty: 0 },
     twoLotFlatten: { lotKeys: [] },
-    // #519/#526: matches `transactedObservations()`'s 'idem-crash-restart-1'
-    // position (closed) — the fixture pairing the scoped check reads, same
-    // convention as `fullExit` above. `reconcileReport` names the flatten's
-    // OWN key (never the lot's — a flatten writes no `OpenPosition`) with
-    // `action: 'adopted'`, the clean-settle outcome a deterministic offline
-    // broker always produces
     crashRestart: {
       lotKey: 'idem-crash-restart-1',
       flattenKey: 'idem-crash-restart-1-exit',
@@ -133,8 +95,6 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
       },
     },
     flattenReconcileAlerts: [],
-    // #549: scenario 5's healthy outcome — the restarted sweep re-armed the
-    // residual, cleared the marker, and reported it
     residualSweep: {
       lotKey: 'lot-sweep',
       expectedResidual: 6,
@@ -145,8 +105,6 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
         'protective legs re-armed for residual 6 by the #549 sweep — ' +
         'residual-protection marker cleared',
     },
-    // #1088: scenario 6's healthy outcome — the seeded terminal row is gone
-    // after the restarted reconcile()'s sweep
     terminalSweep: {
       seededKey: 'smoke-terminal-sweep-target',
       rowPresentAfterSweep: false,
@@ -156,7 +114,6 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
   };
 }
 
-/** A fully transacted run — the shape every failure case below mutates one field of */
 function transactedObservations(): SmokeObservations {
   return {
     ticks: [
@@ -203,8 +160,6 @@ function transactedObservations(): SmokeObservations {
         order_state: 'filled',
         arm: 'live',
       },
-      // #753: falsifier arm 2's own lot over the same tape, on the same tick
-      // A distinct key, because `arm` is a hash input to the idempotency key
       {
         idempotency_key: 'idem-1-control',
         instrument: 'BTC-USD',
@@ -215,9 +170,6 @@ function transactedObservations(): SmokeObservations {
         order_state: 'filled',
         arm: 'control',
       },
-      // #576: scenario 1's closed lot — paired with `healthyExitPath()`'s
-      // `fullExit.lotKey` default and the `closedTrades`/`flattenSubmissions`
-      // rows above, all keyed on the same 'idem-exit-1'
       {
         idempotency_key: 'idem-exit-1',
         instrument: 'ETH-USD',
@@ -228,9 +180,6 @@ function transactedObservations(): SmokeObservations {
         order_state: 'closed',
         arm: 'live',
       },
-      // #519/#526: scenario 4's crash-restart lot — paired with
-      // `healthyExitPath()`'s `crashRestart.lotKey` default, same convention
-      // as `idem-exit-1` above
       {
         idempotency_key: 'idem-crash-restart-1',
         instrument: 'DOGE-USD',
@@ -243,7 +192,6 @@ function transactedObservations(): SmokeObservations {
       },
     ],
     fills: [{ idempotency_key: 'idem-1', leg: 'entry', price: 161, qty: 31.25, fee: 13 }],
-    // #576: no longer always empty — see `SmokeObservations.closedTrades`'s doc
     closedTrades: [
       { idempotency_key: 'idem-exit-1', realized_pnl_net: 42, close_reason: 'exit', arm: 'live' },
     ],
@@ -255,7 +203,6 @@ function transactedObservations(): SmokeObservations {
     polymarketRowsArchived: 1,
     polymarketItemsArchived: 1,
     polymarketIntelItems: 1,
-    // #430 — one per wired mechanism. A healthy run has all of them.
     cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
     riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
     analystWeights: [{ analyst_id: 'technical' }],
@@ -265,21 +212,10 @@ function transactedObservations(): SmokeObservations {
   };
 }
 
-/**
- * A limiter that saw the run — the shape a healthy process produces (#388).
- * REQUIRED by `evaluateSmokeGate`, not optional: see that option's doc for the
- * mutation that made it so.
- */
 function meteredSnapshot() {
   return { crypto: { debatesUsed: 1, llmCallsUsed: 4 } };
 }
 
-/**
- * A healthy crypto-emulation drive (#586) — every check `evaluateSmokeGate`
- * runs against `options.cryptoEmulation` passes against this shape
- * unmodified: the lot was journalled as crypto, both legs got venue ids, the
- * OCO edge completed, and both fills came back through the sweep
- */
 function healthyCryptoEmulation(
   overrides: Partial<CryptoEmulationEvidence> = {},
 ): CryptoEmulationEvidence {
@@ -297,7 +233,6 @@ function healthyCryptoEmulation(
   };
 }
 
-/** `healthyGateOptions`'s own overrides shape — named so the group helpers below can share it */
 interface HealthyGateOptionOverrides {
   minTicks?: number;
   alpacaWireClientReached?: boolean;
@@ -325,7 +260,6 @@ interface HealthyGateOptionOverrides {
   publishedLlmCapArmedAt?: string | null;
 }
 
-/** The arm-comparison/benchmark/spend-cadence slice of `healthyGateOptions`'s defaults */
 function healthyGateOptionsGroupA(overrides: HealthyGateOptionOverrides) {
   return {
     fillSync: overrides.fillSync ?? healthyFillSync(),
@@ -336,7 +270,6 @@ function healthyGateOptionsGroupA(overrides: HealthyGateOptionOverrides) {
   };
 }
 
-/** The exit-path/crypto-emulation/resilience slice of `healthyGateOptions`'s defaults */
 function healthyGateOptionsGroupB(overrides: HealthyGateOptionOverrides) {
   return {
     exitPath: overrides.exitPath ?? healthyExitPath(),
@@ -349,7 +282,6 @@ function healthyGateOptionsGroupB(overrides: HealthyGateOptionOverrides) {
   };
 }
 
-/** The data-source/risk-critic/failure-cause slice of `healthyGateOptions`'s defaults */
 function healthyGateOptionsGroupC(overrides: HealthyGateOptionOverrides) {
   return {
     dataFailover: overrides.dataFailover ?? healthyDataFailover(),
@@ -361,20 +293,12 @@ function healthyGateOptionsGroupC(overrides: HealthyGateOptionOverrides) {
   };
 }
 
-/**
- * `SmokeEvidence.llmSpendCap` for a healthy run. Each field uses `'key' in
- * overrides` rather than `??`, deliberately: it distinguishes an override
- * that is explicitly `undefined`/`null` from one that was never passed, which
- * a `??` fallback cannot (#1140/#1196).
- */
 function healthyLlmSpendCap(overrides: HealthyGateOptionOverrides): SmokeEvidence['llmSpendCap'] {
   return {
-    // #1140: healthy means the published cap IS the run's configured budget
     publishedCapUsd:
       'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
     configuredBudgetUsd:
       'configuredLlmBudgetUsd' in overrides ? overrides.configuredLlmBudgetUsd : 50,
-    // #1196: healthy means a real run armed, so `armed_at` is non-null
     capArmedAt:
       'publishedLlmCapArmedAt' in overrides
         ? (overrides.publishedLlmCapArmedAt ?? null)
@@ -382,7 +306,6 @@ function healthyLlmSpendCap(overrides: HealthyGateOptionOverrides): SmokeEvidenc
   };
 }
 
-/** `evaluateSmokeGate`'s options for a fully healthy run — the base every test below mutates */
 function healthyGateOptions(overrides: HealthyGateOptionOverrides = {}): SmokeEvidence {
   return {
     ...healthyGateOptionsGroupA(overrides),
@@ -403,12 +326,6 @@ function healthyGateOptions(overrides: HealthyGateOptionOverrides = {}): SmokeEv
   };
 }
 
-/**
- * What `runArmComparisonProbe` (#971) reports on a healthy run: both arms
- * derived, a sample persisted with both drawdowns, and no divergence — the
- * smoke tape is seconds long and the control arm's intents round to zero
- * shares, so the trade-count floor keeps divergence out of reach here
- */
 function healthyArmComparison(
   overrides: Partial<ArmComparisonEvidence> = {},
 ): ArmComparisonEvidence {
@@ -439,15 +356,9 @@ function healthyArmComparison(
   };
 }
 
-/** The window a healthy arm comparison covers, and therefore the benchmarks' */
 const ARM_WINDOW_FROM = new Date('2026-08-02T00:00:00.000Z');
 const ARM_WINDOW_TO = new Date('2026-09-01T00:00:00.000Z');
 
-/**
- * What `runOutsideBenchmarkProbe` (#981) reports on a healthy run: both
- * benchmarks measured and persisted, both columns finite, and every persisted
- * window equal to the arm comparison's
- */
 function healthyOutsideBenchmarks(
   overrides: Partial<OutsideBenchmarkEvidence> = {},
 ): OutsideBenchmarkEvidence {
@@ -461,39 +372,18 @@ function healthyOutsideBenchmarks(
   };
 }
 
-/**
- * What `FillSyncFailureRecorder` reports on a healthy run (#1049): the
- * fill-sync poll never rejected. Scenario 5's scripted re-arm failure surfaces
- * as a residual-exposure alert (gated above), never as a poll rejection, so
- * the healthy shape is empty rather than a tolerated entry.
- */
 function healthyFillSync(
   overrides: Partial<FillSyncFailureEvidence> = {},
 ): FillSyncFailureEvidence {
   return { failures: [], ...overrides };
 }
 
-/**
- * What `MarketDataFetchRecorder` reports on a healthy run (#1082): at least
- * one `market_data_fetch` line, guaranteed by the cold `:memory:` store's
- * first bar fetch through the composition root's primary `marketData`
- * instance
- */
 function healthyMarketDataFetch(
   overrides: Partial<MarketDataFetchEvidence> = {},
 ): MarketDataFetchEvidence {
   return { fetchCount: 1, traceIds: ['trace-1'], ...overrides };
 }
 
-/**
- * What `runRiskCriticScenario` reports when the composition root wires
- * check-pipeline step 7's producer (#957) AND the invalidation half measures
- * the fixture feed (#994).
- *
- * A `pass` verdict carrying one condition the evaluator measured as
- * `breached`, which `evaluate()` then rejects under `risk_critic:invalidated`
- * — the outcome `SmokeLlmClient`'s fixture pins deterministically.
- */
 function healthyRiskCritic(overrides: Partial<RiskCriticEvidence> = {}): RiskCriticEvidence {
   return {
     loggedVerdicts: ['pass'],
@@ -504,13 +394,6 @@ function healthyRiskCritic(overrides: Partial<RiskCriticEvidence> = {}): RiskCri
   };
 }
 
-/**
- * What `runPromptTierWarningScenario` (#1155) reports when
- * `SqliteLlmSpendStore.record` is wiring `crossesPromptTier` into a real
- * throttle and a real alert channel: two consecutive crossing calls on the
- * same model wrote both spend rows, priced at the tier rate, and produced
- * exactly one alert
- */
 function healthyPromptTierWarning(
   overrides: Partial<PromptTierWarningEvidence> = {},
 ): PromptTierWarningEvidence {
@@ -522,13 +405,6 @@ function healthyPromptTierWarning(
   };
 }
 
-/**
- * What `runFilledZeroSizeWedgeScenario` (#1125) reports when its own
- * dedicated broker/harness surface wedges a lot through the real
- * `ingestFills()`/throttle path: exactly one warning, at the throttle's
- * first threshold (`ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` consecutive polls),
- * naming the scenario's own lot with a positive `stuck_ms`
- */
 function healthyFilledZeroSizeWedge(
   overrides: Partial<FilledZeroSizeWedgeEvidence> = {},
 ): FilledZeroSizeWedgeEvidence {
@@ -538,12 +414,6 @@ function healthyFilledZeroSizeWedge(
         idempotency_key: 'smoke-filled-zero-size-wedge',
         instrument: 'AAPL',
         order_state: 'filled',
-        // Hardcoded, not `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`, on purpose
-        // (#1125 review) — importing the constant here would make a mutation
-        // that changes it (e.g. 3 -> 4) pass this unit suite silently,
-        // leaving `npm run test`'s only coverage of that mutation the 19 tests
-        // across `filled-zero-size-throttle.test.ts` and friends that already
-        // catch it. Do not "tidy" this into a reference to the constant.
         consecutive: 3,
         stuck_ms: 3_600_000,
       },
@@ -552,7 +422,6 @@ function healthyFilledZeroSizeWedge(
   };
 }
 
-/** What `runAnalystFailureCauseScenario` (#1114) reports when the cause-logging mechanism is wired */
 function healthyAnalystFailureCause(
   overrides: Partial<AnalystFailureCauseEvidence> = {},
 ): AnalystFailureCauseEvidence {
@@ -572,7 +441,6 @@ function healthyAnalystFailureCause(
   };
 }
 
-/** What `runDataFailoverScenario` (#562) reports when the root builds a FailoverDataSource */
 function healthyDataFailover(overrides: Partial<DataFailoverEvidence> = {}): DataFailoverEvidence {
   return {
     storedSources: FAILOVER_IN_SESSION_OPEN_TIMES.map(() => 'polygon'),
@@ -594,7 +462,6 @@ function healthyDataFailover(overrides: Partial<DataFailoverEvidence> = {}): Dat
   };
 }
 
-/** What `runDataSourceFactoryScenario` (#1151) reports when both surviving arms are reached */
 function healthyDataSourceFactory(
   overrides: Partial<DataSourceFactoryEvidence> = {},
 ): DataSourceFactoryEvidence {
@@ -606,7 +473,6 @@ function healthyDataSourceFactory(
   };
 }
 
-/** What `runEntrypointFaultGuardScenario` (#764) reports when both entrypoints are wired */
 function healthyEntrypointFaultGuards(
   overrides: Partial<EntrypointFaultGuardEvidence['entries'][number]>[] = [],
 ): EntrypointFaultGuardEvidence {
@@ -627,7 +493,6 @@ function healthyEntrypointFaultGuards(
   };
 }
 
-/** What `runThresholdClampScenario` reports when every #638 seam refuses */
 function healthyThresholdClamp(
   overrides: Partial<ThresholdClampEvidence> = {},
 ): ThresholdClampEvidence {
@@ -643,7 +508,6 @@ function healthyThresholdClamp(
   };
 }
 
-/** What `runApprovalFallbackScenario` reports when the fallback refuses correctly (#1152) */
 function healthyApprovalFallback(
   overrides: Partial<ApprovalFallbackEvidence> = {},
 ): ApprovalFallbackEvidence {
@@ -654,7 +518,6 @@ function healthyApprovalFallback(
   };
 }
 
-/** What `runLoggerResilienceScenario` reports when both #714 mechanisms hold */
 function healthyLoggerResilience(
   overrides: Partial<LoggerResilienceEvidence> = {},
 ): LoggerResilienceEvidence {
@@ -670,7 +533,6 @@ function healthyLoggerResilience(
   };
 }
 
-/** What `runLogRetentionScenario` reports when the #1116 sweep behaves correctly */
 function healthyLogRetention(overrides: Partial<LogRetentionEvidence> = {}): LogRetentionEvidence {
   return {
     staleFileRemoved: true,
@@ -692,12 +554,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.passed).toBe(true);
   });
 
-  /**
-   * #576: no longer the #82/#83 exception it used to be — the exit-path
-   * harness (`runExitPathScenarios`) round-trips a lot to flat on every
-   * healthy run, so an empty `closed_trades` is now a real defect, not an
-   * expected offline limitation
-   */
   it('fails when no ClosedTrade was ever recorded', () => {
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), closedTrades: [] },
@@ -720,9 +576,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when the Trader produced an intent but risk_log is empty (#328)', () => {
-    // A rejected intent never reaches Verdict, so with this unwired a
-    // rejection has no durable record anywhere — which is why the check is
-    // anchored on the Trader having written, not on a trade having happened
     const observations = transactedObservations();
     observations.riskDecisions = [];
 
@@ -733,9 +586,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('does not demand a trader_log row when no debate resolved (#328)', () => {
-    // The anchor that keeps the check honest: a run where nothing debated never
-    // reached the Trader, so demanding a row would fail for a reason that is
-    // not the one this check exists to catch. Same anchoring as cosine_setups.
     const observations = transactedObservations();
     observations.debates = [];
     observations.traderDecisions = [];
@@ -747,9 +597,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when the GDELT poller archived nothing — the no-caller shape (#556)', () => {
-    // 0 is the defect this repo keeps producing: a fully-built, fully-tested
-    // component that the composition root never calls. Printing the count in
-    // the report catches nothing on its own; the gate has to fail on it
     const observations = transactedObservations();
     observations.gdeltRowsArchived = 0;
 
@@ -770,8 +617,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when Polymarket archived raw bytes but no items (#835)', () => {
-    // The regression #835 fixed: `write(raws, [])` leaves the raw count healthy
-    // and the source unreplayable as items
     const observations = transactedObservations();
     observations.polymarketItemsArchived = 0;
 
@@ -782,8 +627,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when Polymarket fetched but nothing reached the intel bucket (#504)', () => {
-    // The half an archive count cannot see: rows written, items invisible to
-    // the analyst that the whole source exists to feed
     const observations = transactedObservations();
     observations.polymarketIntelItems = 0;
 
@@ -794,9 +637,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when the GDELT theme filter stopped filtering (#556)', () => {
-    // The canned batch is two rows, one watched. 2 means the filter matched
-    // both — the archive would then be taking the whole world's news at 14.9KB
-    // a row, which is the other half of what this observation exists to catch
     const observations = transactedObservations();
     observations.gdeltRowsArchived = 2;
 
@@ -813,11 +653,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures[0]).toContain('completed 2 of 5 expected ticks');
   });
 
-  /**
-   * The headline condition #350 names: this is exactly what the real binary
-   * does today against a 401ing market-data feed. If this case ever passes,
-   * the gate is decoration.
-   */
   it('fails when every tick short-circuited at Analysts', () => {
     const observations: SmokeObservations = {
       ...transactedObservations(),
@@ -839,15 +674,6 @@ describe('evaluateSmokeGate', () => {
     );
   });
 
-  /**
-   * #753, expressed as a gate condition: the live arm transacted and every
-   * other observation is green, while `open_positions` holds no control row at
-   * all. That is `TickSteps.controlArm` left unbound in the composition root —
-   * which is not a compile error, because the member is optional — and it is
-   * the state a whole soak would run in, producing a live track with no matched
-   * control. Nothing else in this gate, and no unit of the control arm, can see
-   * it.
-   */
   it('fails when the live arm transacted but falsifier arm 2 left no row (#753)', () => {
     const observations = transactedObservations();
     const gate = evaluateSmokeGate(
@@ -862,13 +688,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes("`arm = 'control'`"))).toBe(true);
   });
 
-  /**
-   * The other half of #753's wiring: `arm` must be a HASH INPUT to the
-   * idempotency key, not merely a recorded label. Sharing a key means
-   * Execution's `findByKey` gate drops the control order on exactly the bars
-   * the two arms agree on — a bias in the comparison, invisible everywhere
-   * else because both arms still look busy.
-   */
   it('fails when a control lot shares an idempotency key with a live lot (#753)', () => {
     const observations = transactedObservations();
     const gate = evaluateSmokeGate(
@@ -887,12 +706,6 @@ describe('evaluateSmokeGate', () => {
     ).toBe(true);
   });
 
-  /**
-   * The #364 defect, expressed as a gate condition: every other observation
-   * in a run like this is green — ticks reached Debate, a `go` was recorded,
-   * a lot filled — and `debate_log` is still empty, because the store had no
-   * caller. Nothing else in this gate could see that.
-   */
   it('fails when a debate ran but no debate_log row was written (#364)', () => {
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), debates: [] },
@@ -903,16 +716,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
   });
 
-  /**
-   * The #1081 defect, expressed as a gate condition: a `debate_log` row
-   * exists — #364's check passes — but its `termination` is NULL, meaning
-   * `buildDebateLog` stopped classifying the row. A truncated debate would
-   * again be indistinguishable from a genuinely non-converged one, which is
-   * exactly the ambiguity #1081 closes. Deleting the `termination` assignment
-   * from an otherwise-healthy observation set is what this test proves the
-   * gate catches — mirroring the "prove the assertion can fail" standard
-   * PR #390 was reviewed against.
-   */
   it('fails when a debate_log row has no termination classification (#1081)', () => {
     const observations = transactedObservations();
     const gate = evaluateSmokeGate(
@@ -937,13 +740,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('NULL termination'))).toBe(false);
   });
 
-  /**
-   * The #388 defect, expressed as a gate condition, and the exact mirror of
-   * the #364 case above: every observation is green — a debate resolved, a row
-   * was written, a lot filled — while the rate limiter metered zero LLM calls,
-   * because it is constructed beside the LLM path rather than in it. No table
-   * records this, so nothing else in this gate could see it.
-   */
   it('fails when debates resolved but the rate limiter metered no LLM call (#388)', () => {
     const gate = evaluateSmokeGate(transactedObservations(), {
       ...healthyGateOptions(),
@@ -981,7 +777,6 @@ describe('evaluateSmokeGate', () => {
   it('fails when a class meters more LLM calls than its per-debate worst case (#581)', () => {
     const gate = evaluateSmokeGate(transactedObservations(), {
       ...healthyGateOptions(),
-      // 5 calls for one crypto debate: one above the 1-round worst case of 4
       llmRateLimiterSnapshot: { crypto: { debatesUsed: 1, llmCallsUsed: 5 } },
     });
 
@@ -990,8 +785,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('does not demand metering from a run that never debated — that fails as #364 instead', () => {
-    // Ordering matters for the operator: a run with no debates must be told
-    // the debate never happened, not that the limiter saw nothing
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), debates: [] },
       { ...healthyGateOptions(), llmRateLimiterSnapshot: {} },
@@ -1001,9 +794,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(false);
   });
 
-  // #638 — the in-code threshold clamp. Each of these fails the gate on its
-  // own: ADR-0013 leaves the numeric thresholds as the only stop, so any seam
-  // that accepts an out-of-bound value is the whole control gone
   it('fails when the LIVE risk_thresholds read accepted an out-of-bound value', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1080,7 +870,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('shipped paper breaker'))).toBe(true);
   });
 
-  // #766
   it('fails when a tripped live-read clamp does not leave the exit path bypassing it', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1095,8 +884,6 @@ describe('evaluateSmokeGate', () => {
     );
   });
 
-  // #1152 — the composition root's approvals fallback must refuse rather
-  // than fabricate consent if Verdict's HITL gate (6) is ever reached
   it('fails when the approvals fallback answers instead of refusing', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1126,9 +913,6 @@ describe('evaluateSmokeGate', () => {
     );
   });
 
-  // #714 — the logging-fault mechanisms. Each of these fails the gate on its
-  // own, because each is a different way for an unattended soak to end or to
-  // go quietly blind
   it('fails when a dead stdout pipe stopped the run instead of degrading it', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1169,8 +953,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when the no-sink escalation left no trace on stderr', () => {
-    // The throw is swallowed inside a tick by design (#573), so stderr is the
-    // only thing standing between that ordering and a run trading blind
     const gate = evaluateSmokeGate(
       transactedObservations(),
       healthyGateOptions({
@@ -1183,8 +965,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when an unhandled fault was shrugged off rather than recorded and exited', () => {
-    // The constraint that matters most: a blanket swallow at the composition
-    // root would leave a live-money process trading in an unknown state
     const gate = evaluateSmokeGate(
       transactedObservations(),
       healthyGateOptions({
@@ -1196,10 +976,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('unknown state'))).toBe(true);
   });
 
-  // #1116 — the logs/ retention sweep. Each of these fails the gate on its
-  // own, same basis as #714's above: a sweep that doesn't remove stale files
-  // leaves unbounded growth on an always-on host, and one that removes live
-  // ones destroys evidence of a run in progress
   it('fails when the retention sweep did not remove a stale file', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1288,16 +1064,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('0 bytes reclaimed'))).toBe(true);
   });
 
-  // #764 — the service-api and supervisor entrypoint fault guards, on the
-  // same "each check fails the gate on its own" basis as #714's above
-  //
-  // There is no test here for "stdout error subscription did not degrade a
-  // destroyed pipe": that outcome is not a boolean the gate reads, it is
-  // `NoListenerBreakablePipe.breakPipe` throwing inside
-  // `runEntrypointFaultGuardScenario` and aborting the whole smoke run before
-  // `evaluateSmokeGate` is ever called — proven directly by the mutation
-  // table in the #764 PR description, not by a fixture flag here
-
   it('fails when an entrypoint stdout fault was not reported on stderr', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1353,9 +1119,6 @@ describe('evaluateSmokeGate', () => {
   });
 
   it('fails when a staleness no-go recorded no measurement (#1111)', () => {
-    // The column is written by `buildVerdictLog` for exactly these two gates;
-    // a NULL here means that projection stopped happening and the row is back
-    // to naming a gate without the number behind it
     const observations = transactedObservations();
     const gate = evaluateSmokeGate(
       {
@@ -1428,11 +1191,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('open_positions'))).toBe(true);
   });
 
-  /**
-   * The fill only lands on the fill-sync poll, never on the tick that
-   * submitted — so this is the one branch that proves `ingestFills()` is
-   * actually scheduled rather than merely wired
-   */
   it('fails when the order was submitted but no fill was ever ingested', () => {
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), fills: [] },
@@ -1443,11 +1201,6 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('ingestFills'))).toBe(true);
   });
 
-  /**
-   * `startTickLoop` catches and logs whatever a tick throws, so a run that
-   * reached the network would otherwise fail for a downstream symptom and never
-   * name the cause. This turns it into its own named failure.
-   */
   it('fails when anything reached the Alpaca wire client, even if everything else transacted', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1575,12 +1328,6 @@ describe('evaluateSmokeGate — market-data fetch telemetry (#1082)', () => {
     expect(gate.failures).toEqual([]);
   });
 
-  /**
-   * The mutation this gate exists to catch: dropping `runWithTraceId` from
-   * `SequentialTickRunner.runInstrument` leaves the fetch count untouched and
-   * every site's fallback is a legal return, so the count check above still
-   * passes and only the join fails
-   */
   it('fails when every fetch fell back to the category label instead of a tick trace', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -1756,22 +1503,7 @@ describe('buildSmokeFixtureBars', () => {
   const bars = buildSmokeFixtureBars();
   const countFor = (timeframe: string) => bars.filter((bar) => bar.timeframe === timeframe).length;
 
-  /**
-   * #319's `computeIndicator` minimum-length guard rejects a window shorter
-   * than `period + 1` (ATR spends its first bar seeding `previousClose`). The
-   * consumers here are `traderConfig.atr_lookback` (14),
-   * `DEFAULT_VOLATILITY_INDICATOR` / `executionConfig.simulated.volatility_indicator`
-   * (ATR(14) — HARD floor still `period + 1` = 15; both now ask for the
-   * converged warm-up of 57, `recommendedWarmupFor`, #757 — a SOFT floor,
-   * same shape as `RSI_SPEC`'s), `adv_window` ({'1d', 20}) and
-   * `correlationConfig` ({'1d', 30}, min_bars 20). A fixture that stopped
-   * clearing any of these would not fail loudly — it would degrade a stage
-   * into skipping, which is the failure the gate exists to catch. Pinned
-   * here so it fails as a test instead.
-   */
   it('supplies more bars than every lookback the paper profile reads', () => {
-    // #742: RSI_SPEC/SMA_SPEC read '5m' now; '1h' remains the Trader's ATR
-    // timeframe (unchanged) and the technical analyst's context read
     expect(countFor('5m')).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
     expect(countFor('1h')).toBeGreaterThanOrEqual(15);
     expect(countFor('1m')).toBeGreaterThanOrEqual(15);
@@ -1787,12 +1519,6 @@ describe('buildSmokeFixtureBars', () => {
   });
 
   it('trends upward, so the analysts agree and conviction clears the floor', () => {
-    // #742: the technical analyst's read moved from '1h' to '5m'; this test
-    // now filters the '5m' series, which is what `SMA_SPEC`/`RSI_SPEC`
-    // actually read in production. `buildTrendingCloses` depends only on
-    // `count`/`lastClose`, not `timeframe`, so the '5m' series carries the
-    // same close values the '1h' series always has — the RSI/margin figures
-    // quoted below (68.52, 1.48 points) are unchanged by the move
     const fiveMinute = bars
       .filter((bar) => bar.timeframe === '5m')
       .sort((a, b) => a.close_time.getTime() - b.close_time.getTime());
@@ -1801,29 +1527,13 @@ describe('buildSmokeFixtureBars', () => {
     if (first === undefined || last === undefined) throw new Error('no 5m fixture bars');
 
     expect(last.close).toBeGreaterThan(first.close);
-    // A non-degenerate true range, so the Trader's ATR stop is a real distance
-    // rather than a volatility-floor artefact
     expect(last.high - last.low).toBeGreaterThan(0);
 
-    // "Trends upward" was the whole assertion here, and it was too weak to
-    // catch what it was for: the previous monotonic ramp trended upward AND
-    // made the technical analyst read `neutral`, because a series with no down
-    // bars has RSI exactly 100 and `directionFrom` treats >= 70 as overbought
-    // The desk therefore never agreed, and the run's only directional
-    // participant was the mediator. Assert the analyst's own rule instead.
-    //
-    // The REAL specs, not rebuilt literals (#722): this used to hand-build
-    // `lookback: 15` while feeding it all 60 hourly bars, so it agreed with the
-    // analyst only by accident and would have gone on passing had the fixture
-    // stopped clearing the spec's warm-up. Slicing by `RSI_SPEC.lookback` also
-    // makes the fixture-depth requirement an assertion rather than a comment
     expect(fiveMinute.length).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
     const sma = computeIndicator(fiveMinute.slice(-SMA_SPEC.lookback), SMA_SPEC);
     const rsi = computeIndicator(fiveMinute.slice(-RSI_SPEC.lookback), RSI_SPEC);
 
     expect(last.close).toBeGreaterThan(sma);
-    // 68.52 under the converged warm-up, against 63.16 under the old floor —
-    // still bullish, with 1.48 points of headroom to the overbought gate
     expect(rsi).toBeLessThan(70);
     expect(rsi).toBeGreaterThan(50);
   });
@@ -1866,12 +1576,6 @@ describe('ConstantResponseLlmClient', () => {
 });
 
 describe('UnreachableAlpacaClient', () => {
-  /**
-   * The tripwire, not a stub: the composition root builds the Alpaca wire
-   * client eagerly, but with `broker` and `accountState` both overridden it has
-   * no call sites. If that ever changes, the smoke run must fail loudly rather
-   * than quietly exercise a fabricated Alpaca.
-   */
   it('refuses every method rather than pretending to answer', async () => {
     const client = new UnreachableAlpacaClient();
 
@@ -1901,14 +1605,6 @@ describe('FixedAccountStateProvider', () => {
 });
 
 describe('smoke-mode containment (#293/#320/#324)', () => {
-  /**
-   * The safety property the ticket asks for in one assertion: it must be
-   * impossible for `npm run orchestrator` to select fixtures or the simulated
-   * broker. `smoke-run.ts` is a leaf — nothing on the shipped entrypoint's
-   * import graph reaches it, and nothing on the package's export surface names
-   * it. Re-exporting any of it from the barrel would make it reachable, so
-   * that is what this guards.
-   */
   it('keeps every smoke symbol off the orchestrator barrel', async () => {
     const barrel = await import('./index.js');
     const exported = Object.keys(barrel);
@@ -1930,15 +1626,6 @@ describe('smoke-mode containment (#293/#320/#324)', () => {
 });
 
 describe('runSmoke (end-to-end, real composition root)', () => {
-  /**
-   * The only test that starts the real process assembly: `startFromEnvironment`
-   * -> `buildProductionOrchestrator`, real `setTimeout` tick loop, real fill
-   * poll, real shutdown drain, real SQLite round-trip. Everything else in this
-   * suite is a unit test around it.
-   *
-   * Real timers on purpose — fake timers would replace exactly the mechanism
-   * under test. Kept to one tick with tight intervals so it stays quick.
-   */
   it('drives one instrument through all six stages and ingests the fill', {
     timeout: 30_000,
   }, async () => {
@@ -1965,37 +1652,20 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       'execution',
     ]);
 
-    // The observable effects, not the log lines
     expect(result.observations.verdicts.map((verdict) => verdict.status)).toContain('go');
     const sixStageLots = result.observations.positions.filter(
       (position) => position.instrument === 'BTC-USD' && position.arm === 'live',
     );
     expect(sixStageLots).toHaveLength(1);
-    // #753 — falsifier arm 2 ran on the SAME tick, over the same tape, and left
-    // its own lot in the same book, distinguishable by a real column rather
-    // than inferred. Distinct idempotency keys prove `arm` is a hash input:
-    // without that, Execution's `findByKey` would have deduped the control lot
-    // away on exactly the bars the two arms agree on
     const controlLots = result.observations.positions.filter(
       (position) => position.instrument === 'BTC-USD' && position.arm === 'control',
     );
     expect(controlLots).toHaveLength(1);
     expect(controlLots[0]?.idempotency_key).not.toEqual(sixStageLots[0]?.idempotency_key);
     expect(result.observations.fills.some((fill) => fill.leg === 'entry')).toBe(true);
-    // Reachable only through the fill-sync poll: the lot advanced past
-    // `submitted` because `ingestFills()` ran, not because `execute()` said so
     expect(sixStageLots[0]?.order_state).toBe('filled');
     expect(sixStageLots[0]?.filled_size).toBeGreaterThan(0);
 
-    // #576 — the exit path, driven by `runExitPathScenarios` against the same
-    // store: scenario 1 closes one lot, scenario 2 leaves its lot open with a
-    // protected residual (not closed — that is the point), scenario 3 closes
-    // both of its lots, (#519/#526) scenario 4 closes its own lot too — via
-    // the RESTARTED Execution's reconcile() + ingestFills(), not the original
-    // one — and (#549) scenario 5 leaves its lot open like scenario 2's, its
-    // residual re-armed by the restarted sweep. 1 + 0 + 2 + 1 + 0 = 4
-    // `ClosedTrade`s; 6 `flatten_submissions` rows (one per exit call across
-    // the five scenarios), every one resolved
     expect(result.observations.closedTrades).toHaveLength(4);
     expect(result.observations.flattenSubmissions).toHaveLength(6);
     expect(result.observations.flattenSubmissions.every((row) => row.status === 'submitted')).toBe(
@@ -2003,16 +1673,6 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     );
   });
 
-  /**
-   * #1049 — the recorder is WIRED, not merely built: the same fault #1048's
-   * measurement used (Execution's owned-table set without `fills`, so the
-   * sole-writer guard rejects every `ingestFills` write) must flip the gate
-   * to FAIL through `runSmoke` itself, naming the fill-sync line. A
-   * `fillSync: { failures: [] }` regression in `runSmoke` leaves every other
-   * `runSmoke` case green and only this one red. `guardedStore` reads
-   * `STAGE_OWNED_TABLES` at construction, so the swap has to precede the run
-   * and is restored whatever the outcome.
-   */
   it('fails the gate through the real run when every ingestFills poll rejects (#1049)', {
     timeout: 30_000,
   }, async () => {
@@ -2039,11 +1699,6 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     }
   });
 
-  /**
-   * Determinism: the issue asks for responses "stable run-to-run". Two runs
-   * over the same frozen instant must price and size the lot identically —
-   * anything else means something is reading the wall clock or the network.
-   */
   it('is deterministic across runs', { timeout: 40_000 }, async () => {
     const options = {
       ticks: 1,
@@ -2060,25 +1715,10 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(second.observations.verdicts.map((verdict) => verdict.status)).toEqual(
       first.observations.verdicts.map((verdict) => verdict.status),
     );
-    // #576: the exit-path harness's fixed fractions and fixed clock steps
-    // must reproduce identically too — a flaky ClosedTrade count would mean
-    // something in the harness reads real wall-clock time
     expect(second.observations.closedTrades).toEqual(first.observations.closedTrades);
     expect(second.observations.flattenSubmissions).toEqual(first.observations.flattenSubmissions);
   });
 
-  /**
-   * The counterpart to the passing case above, on the same observation shape:
-   * a run that reaches nothing but `quorum_skip` — the exact state a
-   * credential-less real run reaches today — must trip every downstream
-   * requirement, not just the Analysts one. Five distinct failures, because
-   * five different things did not happen.
-   *
-   * The end-to-end version of this is a manual mutation (starve
-   * `buildSmokeFixtureBars`, rebuild, run `npm run smoke`, observe exit 1) and is
-   * recorded in the PR body — it cannot be expressed here without giving
-   * `runSmoke` a seam whose only purpose would be to weaken the run.
-   */
   it('goes red on the quorum-skip run the real binary produces today', () => {
     const observations: SmokeObservations = {
       ticks: [{ trace_id: 't', stages: [{ stage: 'analysts', decision: 'quorum_skip' }] }],
@@ -2104,9 +1744,6 @@ describe('runSmoke (end-to-end, real composition root)', () => {
 
     const gate = evaluateSmokeGate(
       observations,
-      // The fetch telemetry joins to this fixture's own tick: the run below
-      // is about an EMPTY STORE, not about traces, and a mismatched trace
-      // here would add an unrelated failure to the count
       healthyGateOptions({
         minTicks: 1,
         marketDataFetch: healthyMarketDataFetch({ traceIds: ['t'] }),
@@ -2114,16 +1751,6 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     );
 
     expect(gate.passed).toBe(false);
-    // Eight since #430 added the seeded-mechanism checks, plus three since
-    // #576 made `closed_trades`/`flatten_submissions` unconditional
-    // requirements AND scoped the #508/#517 check to scenario 1's own lot:
-    // an empty `positions` table means that lookup finds nothing either,
-    // plus one since #519/#526 scoped its own crash-restart check to
-    // scenario 4's lot the same way — an empty `positions` table means THAT
-    // lookup finds nothing either. Every other exit-path-SPECIFIC check
-    // (ordering, residual, phantom-open, the reconcile-divergence half of
-    // the #519/#526 check) stays healthy (see `healthyGateOptions`) — this
-    // test is about the STORE being empty, not about the exit path
     expect(gate.failures).toHaveLength(12);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
@@ -2143,18 +1770,6 @@ describe('runSmoke (end-to-end, real composition root)', () => {
   });
 });
 
-/**
- * #430 — the composition-root assertions, one per wired mechanism.
- *
- * The repo's dominant defect class is a complete, tested mechanism with no
- * production caller. Per-ticket fixes have not stopped it, because each
- * instance is individually correct code and the gap is always at the
- * composition root, where unit tests cannot see it.
- *
- * These tests are the mutation proof the issue asks for: each one deletes a
- * mechanism's EFFECT from an otherwise-healthy run and confirms the gate goes
- * red. A check that cannot fail is the defect it is meant to catch.
- */
 describe('evaluateSmokeGate — one assertion per wired mechanism (#430)', () => {
   function gateFor(observations: SmokeObservations) {
     return evaluateSmokeGate(observations, healthyGateOptions());
@@ -2168,8 +1783,6 @@ describe('evaluateSmokeGate — one assertion per wired mechanism (#430)', () =>
   });
 
   it('does not demand a setup from a run that never debated — that fails as #364 instead', () => {
-    // Naming the real cause rather than a downstream symptom, the same way the
-    // rate-limiter check hangs off `debates.length`
     const gate = gateFor({ ...transactedObservations(), debates: [], cosineSetups: [] });
 
     expect(gate.failures.some((failure) => failure.includes('cosine_setups'))).toBe(false);
@@ -2208,20 +1821,10 @@ describe('evaluateSmokeGate — one assertion per wired mechanism (#430)', () =>
   });
 
   it('passes only when every mechanism left its own evidence', () => {
-    // The conjunction is the point: each row is written by exactly one
-    // mechanism, so no single wiring can carry another's check
     expect(gateFor(transactedObservations()).passed).toBe(true);
   });
 });
 
-/**
- * #576 — one case per exit-path invariant, the same convention #430 above
- * uses: each test mutates exactly one piece of evidence off an otherwise
- * healthy run and confirms the gate names the right one. These are the
- * checks `runExitPathScenarios`' real end-to-end evidence has to satisfy
- * (see `runSmoke`'s test above) — here each is pinned in isolation, the same
- * way every other branch in this file is.
- */
 describe('evaluateSmokeGate — exit path (#576)', () => {
   function gateFor(exitPath: Partial<ExitPathEvidence>) {
     return evaluateSmokeGate(
@@ -2244,20 +1847,9 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     );
   });
 
-  /**
-   * The gap an aggregate-only `closed_trades.length === 0` check would miss:
-   * scenario 3 alone closes two lots, so a regression confined to scenario
-   * 1 (e.g. a reintroduced #517 fill-misattribution on its instrument)
-   * would leave `closedTrades` nonzero and the aggregate check green. The
-   * `fullExit` evidence is scoped to scenario 1's own lot for exactly this
-   * reason — mirroring the #571 check's per-lot scoping below.
-   */
   it("fails when scenario 1's own lot never closed, even though other lots did (#508/#517)", () => {
     const observations = {
       ...transactedObservations(),
-      // 'idem-exit-1' (scenario 1's lot) regresses to 'partially_filled';
-      // 'idem-1' is untouched and `closedTrades` still carries its one row
-      // from a DIFFERENT scenario — the aggregate signal alone would pass
       positions: transactedObservations().positions.map((position) =>
         position.idempotency_key === 'idem-exit-1'
           ? { ...position, order_state: 'partially_filled' }
@@ -2290,7 +1882,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
   });
 
   it('fails when a submitFlatten call has no cancel call recorded before it (#516)', () => {
-    // The reverse of the healthy sequence — cancel AFTER, not before
     const gate = gateFor({
       brokerCallSequence: ['submitFlatten:lot-1-exit', 'cancel:lot-1'],
     });
@@ -2356,8 +1947,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     expect(gate.failures.some((failure) => failure.includes('re-arm failed'))).toBe(true);
   });
 
-  // #549 — the residual-protection sweep's own enforcement branches, each
-  // pinned in isolation the same way every other exit-path check above is
   describe('the residual-protection sweep (#549)', () => {
     it("fails when the restarted reconcile() named no divergence for scenario 5's lot — the marker or the sweep is unwired", () => {
       const gate = gateFor({
@@ -2451,13 +2040,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       ).toBe(true);
     });
 
-    // #1285 N3 (round-2 review): B2's fix binds the match to the literal
-    // `'by the #549 sweep'` suffix, which any lot's real re-arm produces —
-    // so a wrong-key lookup landing on a DIFFERENT lot's genuine re-arm
-    // (not just another mechanism's divergence) would still pass. Narrowing
-    // the match to include this lot's own `expectedResidual` closes that:
-    // this fixture's reason names the #549 sweep but for residual 99, not
-    // this lot's 6, so it must still fail
     it("fails when an 'adopted' divergence names the #549 sweep but for a DIFFERENT residual — a wrong-key lookup landing on another lot's real re-arm (#1285 N3)", () => {
       const gate = gateFor({
         residualSweep: {
@@ -2503,12 +2085,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
   });
 
-  // #1088 — the terminal-row sweep's own enforcement branch. The mutation
-  // this kills: deleting `sweepTerminalPositions`'s call from `reconcile()`
-  // (or narrowing/breaking its predicate) leaves scenario 6's seeded row in
-  // `open_positions` forever — nothing else in the gate would notice, since
-  // every other check reads `getOpenPositions()`, which already excluded a
-  // terminal row from its view whether or not the sweep ever ran
   describe('the terminal-row sweep (#1088)', () => {
     it('fails when the seeded terminal row survives the restarted reconcile()', () => {
       const gate = gateFor({
@@ -2540,10 +2116,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     const observations = {
       ...transactedObservations(),
       positions: [
-        // #753: the control arm's lot from the same run. Present in every
-        // positions fixture because the gate now requires falsifier arm 2 to
-        // have produced a row whenever a tick reached Execution — a fixture
-        // without one is a run with no matched control
         {
           idempotency_key: 'lot-control',
           instrument: 'AVAX-USD',
@@ -2571,7 +2143,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           requested_size: 10,
           filled_size: 10,
           avg_entry_price: 160,
-          // Never reached 'closed' — the #571 regression shape
           order_state: 'partially_filled',
           arm: 'live' as const,
         },
@@ -2594,10 +2165,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     const observations = {
       ...transactedObservations(),
       positions: [
-        // #753: the control arm's lot from the same run. Present in every
-        // positions fixture because the gate now requires falsifier arm 2 to
-        // have produced a row whenever a tick reached Execution — a fixture
-        // without one is a run with no matched control
         {
           idempotency_key: 'lot-control',
           instrument: 'AVAX-USD',
@@ -2640,9 +2207,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     expect(gate.failures.some((failure) => failure.includes('lot-older, lot-newer'))).toBe(false);
   });
 
-  // #586 — the crypto-emulation checks. Each mutates one field of a healthy
-  // evidence shape, naming a distinct way the emulation can stop being wired
-  // while every other observation stays green
   it('fails when no emulated-leg journal row exists for the crypto lot (#586)', () => {
     const gate = evaluateSmokeGate(
       transactedObservations(),
@@ -2704,9 +2268,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe('the OHLCV failover (#562)', () => {
     it('fails when the composition root read threw instead of failing over', () => {
-      // The mutation this check exists to catch: delete
-      // `buildFailoverDataSource` from production.ts and the primary's throw
-      // reaches the caller. No unit test of the wrapper can see that.
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({
@@ -2757,9 +2318,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe('createDataSource reached from the composition root (#1151)', () => {
     it('fails when a factory-resolved source refused to build or read', () => {
-      // The mutation this exists to catch: break an arm of `createDataSource`
-      // and `buildAlpacaDataSource` throws at boot. Before #1151 wired the
-      // factory in, the same mutation changed nothing at all
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({
@@ -2787,9 +2345,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
 
     it('fails when the LSE arm persisted another vendor, so the mark path is not the one kept', () => {
-      // The #734 arm is the one this ticket KEPT while deleting ccxt and ibkr
-      // A row stamped by anything else means the live equity leg's mark came
-      // from a substitute source, which #734 refuses outright
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({
@@ -2820,9 +2375,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
 
     it('fails when nothing was persisted for the dashboard panel to read', () => {
-      // The mutation this catches: drop the `samples.append(sample)` line, or
-      // migration 0034, and the panel shows "no comparison computed yet"
-      // forever while every unit test stays green
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ armComparison: healthyArmComparison({ persistedRows: 0 }) }),
@@ -2880,8 +2432,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
           armComparison: healthyArmComparison({
             comparison: {
               ...healthy.comparison,
-              // The #1180 regression exactly: the ceiling converts and the
-              // basis stays at the raw GBP book
               basis: LIVE_BOOK_GBP,
             },
           }),
@@ -2892,13 +2442,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
       expect(gate.failures.join(' ')).toContain('divided both arms by');
     });
 
-    /**
-     * The gate branch above reads evidence, so it holds for whatever basis the
-     * caller reports; this is the half that pins what the shipped probe
-     * actually passes to `runArmComparisonCycle` (#1180). Over an empty store
-     * — a zero-trade comparison is a real measurement, which is why the probe
-     * needs no fixture trades here.
-     */
     it('drives the shipped cycle at the converted sizing ceiling (#1180)', () => {
       const db = openSharedStore(':memory:');
       try {
@@ -2911,11 +2454,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe('the daily feedback cycle schedule (#1110)', () => {
     it('fails when the composition root never wrote a schedule row', () => {
-      // The mutation this catches: delete `scheduleFeedbackCycle` (or its
-      // call site in `start()`) from production.ts. `armComparison` and
-      // `outsideBenchmarks` above stay green throughout, because both are
-      // read from probes that call the shipped cycle functions DIRECTLY —
-      // this is the one check that can only pass if the real timer ran
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ feedbackCycleScheduleWritten: false }),
@@ -2936,12 +2474,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe('the sizing capital ceiling stamp (#1112)', () => {
     it('fails when a BTC-USD row carries a ceiling other than the configured one', () => {
-      // The mutation this catches: pass a literal, or another store's
-      // ceiling, into `new SqliteExecutionStore(...)` in production.ts
-      // instead of `config.capitalCeilingUsd`. Every other check in the gate
-      // stays green — the Trader still sizes and the position still fills —
-      // because the wrong wire is in the STAMP, not in the sizing arithmetic
-      // itself, and a null check alone would pass it
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ sizingCeiling: { allMatchConfiguredCeiling: false } }),
@@ -2964,8 +2496,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
 
     it('names the absent row as no-evidence rather than a broken wire', () => {
-      // #1112 review: reading only `open_positions` failed a run whose only
-      // BTC-USD lot had already closed, and blamed the config wire for it
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ sizingCeiling: { rows: 0, allMatchConfiguredCeiling: false } }),
@@ -2986,10 +2516,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe("the dashboard's LLM cap (#1140)", () => {
     it('fails when the published cap is not the budget this run armed', () => {
-      // The mutation this catches: drop `publishedSpendCap.arm(...)` from
-      // production.ts and let the row a previous run left stand. The cap still
-      // enforces at 275, the wire still carries a number, and the rail draws
-      // its meter against 50
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ publishedLlmCapUsd: 50, configuredLlmBudgetUsd: 275 }),
@@ -3023,9 +2549,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe("the dashboard's LLM cap_armed_at (#1196)", () => {
     it('fails when a booted run reports cap_armed_at: null', () => {
-      // The mutation this catches: `SqliteQueryStore.getLlmSpend` (or
-      // `SqliteLlmSpendCapStore.read`) stops reading `armed_at`, so a run that
-      // manifestly booted and armed reports the wire's "never armed" shape
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ publishedLlmCapArmedAt: null }),
@@ -3056,15 +2579,10 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
       expect(gate.passed).toBe(false);
       expect(gate.failures.join(' ')).toContain('measured nothing');
-      // The reasons travel with the failure, so an operator is not left to
-      // guess between "the vendor was down" and "the cycle is unwired"
       expect(gate.failures.join(' ')).toContain('series unavailable');
     });
 
     it('fails when nothing was persisted for the panel to read', () => {
-      // The mutation this catches: drop `samples.append(...)`, or migration
-      // 0036, and the panel shows "not measured yet" forever while every unit
-      // test stays green
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ outsideBenchmarks: healthyOutsideBenchmarks({ persistedRows: 0 }) }),
@@ -3087,9 +2605,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
 
     it('fails when a benchmark was measured over a window of its own', () => {
-      // The invariant #636 turns on, and the one that would rot silently: give
-      // the benchmark cycle its own `window_ms` and every unit test still
-      // passes while the panel quietly compares two different periods
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({
@@ -3111,9 +2626,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe('the risk critic (#957)', () => {
     it('fails when no risk_critic_log row was written for a viable entry', () => {
-      // The mutation this check exists to catch, verified by hand: delete the
-      // `critic:` line from `buildProductionComponents` and `npm run smoke` goes
-      // red here, while every unit test stays green
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ riskCritic: healthyRiskCritic({ loggedVerdicts: [] }) }),
@@ -3144,9 +2656,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe('the prompt-tier crossing warning (#1155)', () => {
     it('fails when no alert fired for two consecutive crossings on the same model', () => {
-      // THE MUTATION THIS CATCHES: delete the `crossesPromptTier(...)` call
-      // (or its dispatch) from `SqliteLlmSpendStore.record` — the exact
-      // silent-2.5x-step state #1155 was filed against
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ promptTierWarning: healthyPromptTierWarning({ alertsFired: 0 }) }),
@@ -3157,9 +2666,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
 
     it('fails when both consecutive crossings alert — the throttle is not suppressing a repeat', () => {
-      // THE MUTATION THIS CATCHES: remove the `PromptTierCrossingThrottle`
-      // consultation and dispatch on every crossing unconditionally — a
-      // retrieval-heavy model would then page on every single call
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({ promptTierWarning: healthyPromptTierWarning({ alertsFired: 2 }) }),
@@ -3198,9 +2704,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
   describe('the analyst failure-cause logging (#1114)', () => {
     it('fails when the probe itself produced no genuine (non-timeout) rejection', () => {
-      // A broken probe (both legs answering, or the failure coming back as a
-      // timeout) must not read as a healthy mechanism — this names the probe,
-      // not the mechanism, as the thing to fix
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({
@@ -3213,12 +2716,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
 
     it('fails when a genuine rejection happened and nothing was logged at debug', () => {
-      // The mutation this check exists to catch, verified by hand: delete
-      // `logger` from `production.ts`'s `new AnalystOrchestrator({...})` and
-      // the orchestrator falls back to its internal NOOP_LOGGER — a
-      // legitimate default for every caller EXCEPT the one composition root
-      // this check is aimed at, which is why the fallback cannot be a type
-      // error and has to be caught here instead
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({
@@ -3231,9 +2728,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     });
 
     it('fails when the recorded debug lines carry no rendered cause', () => {
-      // The mutation this check exists to catch: strip `renderErrorDetail`'s
-      // fields out of the payload (or stop calling it) and the line still
-      // fires, just with nothing #1114 asked for in it
       const gate = evaluateSmokeGate(
         transactedObservations(),
         healthyGateOptions({
@@ -3297,28 +2791,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
   });
 });
 
-// #1285: measurement (inserting `await ctx.execution.ingestFills()` between
-// `runResidualSweepScenario` and the restart, per #1228's own claim) found
-// that of the `residualSweep` checks in `evaluateSmokeGate` (#549 section
-// above), only `sweepDivergenceAction === undefined` actually fires when the
-// residual heals in-process instead of via the restarted sweep — the other
-// checks read a healed-in-process residual as indistinguishable from a
-// genuinely swept one. `findSweepDivergence` (smoke-run.ts, just above
-// `runExitPathScenarios`) is that discriminator: it returns the whole
-// divergence, not just `.action`, because `.action` alone has its own gap
-// (#1285 B2, round-1 review) — a wrong-key substitution at this function's
-// ONE call site can read a different scenario's divergence whose `.action`
-// also happens to be `'adopted'` (e.g. a flatten-reconcile divergence). The
-// gate closes that gap by also checking `.reason` off the SAME lookup
-// result, so — unlike the extraction's original claim — the wrong-key call
-// site IS now covered: substituting the wrong key at `findSweepDivergence`'s
-// call site fails `npm run smoke`'s gate (`sweepDivergenceReason` does not name
-// the #549 sweep), because both fields the gate checks come off the one
-// lookup this function performs. Pinned here, top-level and never through
-// `gateFor`/`evaluateSmokeGate`, against a hand-built divergence list, so
-// that weakening the lookup itself fails a standalone unit test — visibly
-// outside the "evaluateSmokeGate — exit path" suite — rather than only
-// scenario 5's own gate checks
 describe('findSweepDivergence (#1285)', () => {
   function divergence(overrides: Partial<ReconcileDivergence>): ReconcileDivergence {
     return {
@@ -3353,20 +2825,6 @@ describe('findSweepDivergence (#1285)', () => {
     expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 
-  // #1285 N1 (round-1, then round-2 review): naming this suite "matches the
-  // key exactly" over-claimed — none of the cases below actually pin exact
-  // equality against every containment-family mutant of `===`; each pins
-  // exactly one direction. Round-1 covered the CONTAINS/prefix family
-  // (`.includes`/`.startsWith`, both directions); round-2's mutation battery
-  // found the SUFFIX/`.endsWith` family (both directions) still survived
-  // undetected — none of the three original decoys, nor round-1's added
-  // substring case, is a suffix of the lot key or has the lot key as a
-  // suffix. A second round-2 pass then found a fifth gap: none of these five
-  // decoys shares the lot key's exact LENGTH, so a `.length === .length`
-  // mutant (dropping the content comparison entirely) survives all of them
-  // too — the decoy below closes that. Each `it` in this block is named for
-  // the one direction/property it actually pins; only `===` survives all
-  // five together
   it('does not match a decoy key that starts with the lot key (lot key is its prefix)', () => {
     const divergences = [
       divergence({ idempotency_key: 'smoke-exit-sweep-lot-2', action: 'adopted' }),
@@ -3381,16 +2839,6 @@ describe('findSweepDivergence (#1285)', () => {
     expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 
-  // #1285 N1 (round-2 review): the two suffix-direction mutants —
-  // `divergence.idempotency_key.endsWith(lotKey)` and
-  // `lotKey.endsWith(divergence.idempotency_key)` — need TWO separate decoys
-  // to kill, not one: a decoy with the lot key as a trailing substring only
-  // makes the FIRST mutant a false positive (the decoy is longer, so the lot
-  // key can never end with it), and a decoy that is itself a trailing
-  // substring of the lot key only makes the SECOND a false positive (the
-  // decoy is shorter, so it can never end with the longer lot key). Verified
-  // by mutation (see the PR/commit for the transcript): a single decoy of
-  // either shape leaves the other `.endsWith` mutant undetected
   it('does not match a decoy key that ends with the lot key', () => {
     const divergences = [
       divergence({ idempotency_key: 'x-smoke-exit-sweep-lot', action: 'adopted' }),
@@ -3413,14 +2861,6 @@ describe('findSweepDivergence (#1285)', () => {
     expect(findSweepDivergence(divergences, 'smoke-exit-sweep-lot')).toBeUndefined();
   });
 
-  // #1285 N2 (round-2 review): `.find` (first match), never `.findLast`, is
-  // load-bearing, not an arbitrary choice — see `findSweepDivergence`'s own
-  // doc (smoke-run.ts) for the structural reason: `reconcile()` appends
-  // `findUnrecordedVenuePositions`'s `idempotency_key: ''` entries LAST, and
-  // an empty string is a substring/suffix of every key, so `.findLast` paired
-  // with any containment-family predicate would land on that trailing
-  // sentinel instead of this lot's own divergence. This fixture pins `.find`
-  // directly: with two divergences sharing one key, the FIRST must win
   it('returns the first divergence when the key appears more than once, not the last', () => {
     const divergences = [
       divergence({ idempotency_key: 'smoke-exit-sweep-lot', action: 'adopted', reason: 'first' }),

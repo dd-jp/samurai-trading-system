@@ -32,9 +32,6 @@ function seed(
   trade: ClosedTrade,
   arm: TradingArm,
   sizingCapitalCeiling: number | null,
-  // #1121 AC5: defaults to 1 (the post-fix / control-arm-always-correct
-  // state) so every pre-existing call site — none of which is about this
-  // ticket — keeps exercising the row shape it already did
   modelledCostCharged: 0 | 1 = 1,
 ): void {
   db.prepare(
@@ -128,19 +125,6 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1112 AC5 re
     expect(source.getClosedTradeWindowBetween(from, to).trades).toHaveLength(2);
   });
 
-  /**
-   * #1180: the conversion of the sizing inlet would otherwise have made every
-   * window straddling it read as two declared ceilings — pre-conversion rows
-   * at the raw GBP book, post-conversion rows at `LIVE_BOOK_SIZING_USD` —
-   * and this guard would throw on a book that never moved. Migration 0052
-   * normalizes the older stamp, and this asserts that through the real reader
-   * rather than against the migration's own UPDATE: it is the throw here that
-   * the backfill exists to prevent.
-   *
-   * Built on a raw DB migrated to 51 and then forward, because a store opened
-   * at HEAD applies 0052 before a pre-conversion row can exist to be
-   * normalized.
-   */
   it('does not throw over a window straddling the #1180 conversion, once 0052 has run', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverVersion = 51;
@@ -217,11 +201,6 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1121 AC5 co
     );
     const source = new SqliteArmComparisonSource(db);
 
-    // A PURE pre-#1121 window: every row shares the same defect, the way a
-    // pure pre-#1112 window shares one wrong sizing scale — but unlike that
-    // case, this one is not a benign consistent view. It must still empty,
-    // not merely "not throw and pass through" the way `oneSizingRegime`
-    // would for an all-null sizing window
     expect(source.getClosedTradeWindowBetween(from, to).trades).toEqual([]);
   });
 
@@ -255,13 +234,6 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1121 AC5 co
 });
 
 describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1546 per-exit-class drop counts', () => {
-  /**
-   * The measurement #1546 exists for: the exclusion is not even-handed across
-   * exit classes, so a single "N rows dropped" figure cannot answer whether the
-   * surviving population is selected. A protective close needs one successful
-   * submit-time capture and a flatten close needs two, so the flatten class is
-   * expected to carry the higher rate — and only a per-class count can show it.
-   */
   it('counts kept and dropped rows per arm and per exit class', () => {
     const db = openSharedStore(':memory:');
     let clock = 0;
@@ -286,8 +258,6 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1546 per-ex
     add('live-flatten-kept', 'live', 'flatten', 1);
     add('live-flatten-dropped-1', 'live', 'flatten', 0);
     add('live-flatten-dropped-2', 'live', 'signal_decay', 0);
-    // The legacy pre-migration-0031 spelling of a flatten, which must not fall
-    // into the protective bucket
     add('live-legacy-exit-dropped', 'live', 'exit', 0);
     add('control-stop-kept', 'control', 'stop', 1);
     add('control-flatten-kept', 'control', 'direction_flip', 1);
@@ -306,8 +276,6 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1546 per-ex
         flatten: { kept: 1, dropped: 0 },
       },
     });
-    // The counts describe the population the trades were taken from: every kept
-    // row above is one of these, and nothing dropped is
     expect(trades.map((trade) => trade.idempotency_key).sort()).toEqual([
       'control-flatten-kept',
       'control-stop-kept',
@@ -317,12 +285,6 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1546 per-ex
     ]);
   });
 
-  /**
-   * The counts are taken AFTER `oneSizingRegime` and BEFORE the cost-basis
-   * filter. A row from the incomparable sizing regime is not part of this
-   * window's population at all, so attributing its removal to the cost-basis
-   * filter would overstate the exclusion this measurement is about.
-   */
   it('does not count a row the sizing-regime filter removed as a cost-basis drop', () => {
     const db = openSharedStore(':memory:');
     seed(
@@ -428,14 +390,11 @@ describe('SqliteArmComparisonSource.getRefusedPassCountsBetween — #1099', () =
       skip_reason: 'control_arm_valuation_refused',
       created_at: new Date('2026-07-17T23:59:59.999Z'),
     });
-    // Exactly `from`: excluded, so consecutive windows partition the timeline
-    // exactly as `getClosedTradeWindowBetween` does
     seedTraderLog(db, {
       trace_id: 'at-from:control',
       skip_reason: 'control_arm_valuation_refused',
       created_at: from,
     });
-    // Exactly `to`: included, same half-open rule
     seedTraderLog(db, {
       trace_id: 'at-to:control',
       skip_reason: 'control_arm_valuation_refused',

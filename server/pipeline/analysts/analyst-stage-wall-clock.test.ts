@@ -1,19 +1,3 @@
-/**
- * #1104 — `ANALYST_STAGE_WALL_CLOCK_MS` still describes the stage it names.
- *
- * The constant exists because `paper-profile.ts`'s pass-duration arithmetic and
- * `paper-profile.test.ts` each used to restate the same product by hand. A
- * constant restating an arithmetic identity would be untestable; what is
- * testable, and what those consumers actually depend on, is that the stage's
- * OBSERVED worst case equals it — which holds only while the personas fan out
- * concurrently and each takes at most `ATTEMPTS_PER_PERSONA` deadlines. Make the
- * fan-out sequential, add an attempt, or add a backoff between attempts, and the
- * consumers' arithmetic goes wrong silently; these tests go red instead.
- *
- * Every assertion is on a settlement FLAG rather than on an awaited result, so a
- * regression that makes the stage slower fails on the expectation that names it
- * instead of hanging until vitest's own timeout.
- */
 
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
@@ -30,7 +14,6 @@ const ASOF = new Date('2026-09-14T14:00:00Z');
 const CLOCK: Clock = { now: () => ASOF };
 const SIGNAL = { asset: 'QQQ', asset_class: 'stocks' } as const;
 
-/** Never settles, so every attempt can only end at the deadline */
 function stallingAnalyst(analyst_type: string): Analyst {
   return {
     analyst_type,

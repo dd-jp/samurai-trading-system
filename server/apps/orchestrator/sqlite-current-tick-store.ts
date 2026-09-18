@@ -1,17 +1,3 @@
-/**
- * SQLite-backed `CurrentTickStore` over the `current_tick` table (#193, #201)
- * — replaces the earlier in-memory double now that the shared store exists.
- * See docs/specs/shared-sqlite-store-spec.md ("Orchestrator" schema section) and
- * docs/specs/orchestrator-spec.md (Module: Tick Runner).
- *
- * `upsert` is `INSERT ... ON CONFLICT(instrument) DO UPDATE`, not a plain
- * INSERT guarded against the PK like `SqliteSetupStore`/`SqliteExecutionStore`
- * do: those stores treat a duplicate key as a caller bug. Here the port
- * contract is the opposite — a stale row from a crashed prior tick is meant
- * to be safely clobbered by the next upsert (orchestrator-spec.md's
- * "disposable, best-effort" framing) — so silently overwriting is correct,
- * not a bug to guard against.
- */
 
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';

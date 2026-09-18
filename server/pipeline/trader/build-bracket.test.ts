@@ -1,13 +1,3 @@
-/**
- * The bracket arithmetic on its own, with no reads around it. The worked
- * example every ATR-geometry size below is pinned to, under
- * `DEFAULT_TRADER_CONFIG` with ATR = 2 and entry = 100:
- *   stop distance  = atr_k (2) x ATR (2)                        = 4
- *   conviction     = (0.775 - 0.55) / (1 - 0.55)                = 0.5
- *   base risk      = max_risk_per_trade (0.01) x 1.0 x 0.5      = 0.005
- *   risk fraction  = 0.005 x 1 (converged) x 0.75 (no precedent) = 0.00375
- *   size           = 100_000 x 0.00375 / 4                       = 93.75
- */
 import {
   type PricedBracket,
   priceBracket,

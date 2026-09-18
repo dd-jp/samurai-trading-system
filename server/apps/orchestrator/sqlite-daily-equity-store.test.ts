@@ -20,8 +20,6 @@ describe('SqliteDailyEquityStore', () => {
     const { path, cleanup } = tempPath();
     try {
       const store = new SqliteDailyEquityStore(openSharedStore(path));
-      // Written out of order on purpose: the reader differences adjacent rows,
-      // so it must sort rather than trust insertion order
       store.append(DAY_2, 101_000, new Date('2026-08-02T00:01:00.000Z'), true);
       store.append(DAY_1, 100_000, new Date('2026-08-01T09:30:00.000Z'), false);
 
@@ -49,9 +47,6 @@ describe('SqliteDailyEquityStore', () => {
     try {
       const store = new SqliteDailyEquityStore(openSharedStore(path));
       store.append(DAY_1, 100_000, new Date('2026-08-01T00:01:00.000Z'), true);
-      // Same session, hours later, after the account moved. Overwriting here
-      // would turn the daily OPEN into a rolling intraday sample and the series
-      // would stop being a daily series at all
       store.append(DAY_1, 88_000, new Date('2026-08-01T15:00:00.000Z'), true);
 
       expect(store.all()).toHaveLength(1);
@@ -66,15 +61,10 @@ describe('SqliteDailyEquityStore', () => {
     try {
       new SqliteDailyEquityStore(openSharedStore(path)).append(DAY_1, 100_000, DAY_1, true);
 
-      // A brand-new handle onto the same file, as a restarted process gets
-      // A return series cannot be backfilled: if a restart lost the history,
-      // every soak would begin again from zero observations and the kill-lines
-      // could never accumulate a usable sample
       const reopened = new SqliteDailyEquityStore(openSharedStore(path));
       expect(reopened.all()).toHaveLength(1);
       expect(reopened.all()[0]?.equity).toBe(100_000);
 
-      // And the restarted process must not clobber the genuine open it finds
       reopened.append(DAY_1, 71_000, new Date('2026-08-01T18:00:00.000Z'), false);
       expect(reopened.all()[0]?.equity).toBe(100_000);
       expect(reopened.all()[0]?.observed_at_boundary).toBe(true);
@@ -87,9 +77,6 @@ describe('SqliteDailyEquityStore', () => {
     const { path, cleanup } = tempPath();
     try {
       const store = new SqliteDailyEquityStore(openSharedStore(path));
-      // NaN propagates through the mean and stdev into every ratio, and then
-      // compares false against every kill threshold — the lines would stop
-      // firing silently rather than fail
       expect(() => store.append(DAY_1, Number.NaN, DAY_1, true)).toThrow(/must be finite/);
       expect(store.all()).toEqual([]);
     } finally {

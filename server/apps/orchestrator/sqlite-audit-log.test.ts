@@ -1,11 +1,3 @@
-/**
- * `SqliteAuditLog` (#193, #201) — direct unit coverage over its own
- * `:memory:` DB. tick-runner.test.ts exercises the same store as driven by
- * `SequentialTickRunner`, but only ever under one fixed clock, so every row
- * in a trace shares an identical timestamp there and only proves the
- * `rowid` tie-break; this file also varies the timestamp to prove the
- * `ORDER BY timestamp` half of the acceptance criterion.
- */
 import { openSharedStore } from '../../shared/store/index.js';
 import { type AuditLogEntry, SqliteAuditLog } from './sqlite-audit-log.js';
 

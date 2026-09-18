@@ -14,9 +14,6 @@ const names = (instruments: readonly Named[]): string[] => instruments.map((i) =
 
 describe('orderHeldFirst (#1390)', () => {
   it('moves held instruments ahead of flat ones, preserving each group order', () => {
-    // Mirrors the incident's fixed universe order: QQQ and AAPL already led,
-    // but held lots further back (TSLA, META) queued behind flat names ahead
-    // of them (AAPL..META spans several flats in DEFAULT_UNIVERSE)
     const instruments = at('QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD', 'META');
     const held = new Set(['QQQ', 'TSLA', 'META']);
 
@@ -63,9 +60,6 @@ describe('orderHeldFirst (#1390)', () => {
   });
 
   it('is stable within the held group when held membership repeats across a wider plan', () => {
-    // Matches the ticket's 9-held-of-20 shape closely enough to pin ordering:
-    // held members scattered through the fixed order come out in THEIR
-    // original relative order, not resorted
     const instruments = at(
       'QQQ',
       'AAPL',
@@ -97,33 +91,10 @@ describe('orderHeldFirst (#1390)', () => {
   });
 });
 
-/**
- * Reproduces the 2026-09-08 incident (#1390's own measured table) at the
- * `runTickPlan` seam: `DEFAULT_UNIVERSE`'s 20 names, the same 9 held
- * positions the incident recorded (QQQ, AAPL, AMZN, NFLX, SMCI, PLTR, MSTR,
- * RIOT, UBER — positions 1, 2, 7, 11, 13, 14, 16, 18, 20).
- *
- * `TailSequencer` grants tails STRICTLY in plan order regardless of
- * completion order (`tick-loop.ts`'s "tail order is plan order" invariant,
- * already pinned by `phase-split.test.ts`). `tailArrivalOrder` below lets
- * every instrument run to completion and simply RECORDS that granted order;
- * a throughput ceiling ("the window only fits N tails before it closes") is
- * then the first N entries of that recording, sliced off AFTER the pass
- * settles. Gating turns inside the runner itself was tried and rejected: a
- * synchronous budget check racing every worker's initial dispatch saw every
- * instrument as "under budget" before any tail had actually settled, since
- * `max_concurrent_instruments` here equals the universe size and no worker's
- * own check can observe another's still-pending turn.
- */
 function tailArrivalOrder(plan: TickPlan): {
   pending: Promise<TickOutcome[]>;
   order: () => string[];
 } {
-  // Records the TRUE order tails are granted in, per the invariant above —
-  // not an order this helper imposes. A throughput ceiling ("the window
-  // allows N tails") is then just the first N entries of this array, applied
-  // by the caller AFTER the pass settles, so the ceiling can never leak back
-  // into which instrument gets which turn
   const order: string[] = [];
   const runner: TickRunner = {
     async runInstrument(signal, ctx) {
@@ -171,22 +142,14 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
         .slice(0, budget)
         .filter((asset) => HELD.has(asset));
 
-      // Fixed order: QQQ, AAPL, TSLA, NVDA, AMD get the first 5 turns — only
-      // the first two are held, matching the incident's own "the two that sat
-      // first in the list are the two that flattened"
       expect(fixed.order().slice(0, budget)).toEqual(['QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD']);
       expect(fixedHeldReached).toEqual(['QQQ', 'AAPL']);
-      // Held-first: the first 5 turns all go to held instruments
       expect(reorderedHeldReached).toEqual(['QQQ', 'AAPL', 'AMZN', 'NFLX', 'SMCI']);
       expect(reorderedHeldReached.length).toBeGreaterThan(fixedHeldReached.length);
     },
   );
 
   it('acceptance criterion 4 — a universe larger than the tail can serve still flattens every held lot, once throughput covers the held count', async () => {
-    // 20 instruments, 9 held: the universe is larger than 9, so the tail
-    // cannot serve everyone — but held-first ordering means "cannot serve
-    // everyone" only ever costs FLAT instruments once the budget covers the
-    // held count
     const budget = HELD.size;
 
     const reordered = orderHeldFirst(universe, HELD);
@@ -195,8 +158,6 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
 
     expect(new Set(withFix.order().slice(0, budget))).toEqual(HELD);
 
-    // The fixed order, unpatched, misses most of them at the identical
-    // budget — the defect this criterion exists to close
     const unpatched = tailArrivalOrder({ instruments: universe, tick_time: tickTime });
     await unpatched.pending;
     const unpatchedHeldReached = unpatched
@@ -207,27 +168,6 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
   });
 });
 
-/**
- * Round-1 review finding 3: `flatten-tail throughput at incident scale`
- * above measures order at `beginPortfolioTail` GRANT time — the live arm's
- * `TailSequencer` order. The control arm's own flatten (`control-arm.ts`'s
- * hook) never takes a tail turn at all (#1040 — it writes to its own shadow
- * book, not the live one) and instead runs eagerly, synchronously ahead of
- * any tail wait, the moment `SequentialTickRunner.runInstrument` is invoked
- * for that instrument (`tick-runner.ts`'s tick path calls `steps.controlArm`
- * before the live exit check's own `beginPortfolioTail` await). So the
- * control arm's ordering is governed by DISPATCH order — when
- * `TickRunner.runInstrument` is first called for an instrument
- * (`tick-loop.ts`'s cursor-fed `worker()` loop) — not by the tail turnstile.
- *
- * At full concurrency (`max_concurrent_instruments === plan.instruments.length`)
- * every worker starts synchronously in plan order before any of them yields
- * (each worker's first `await` is its own `runInstrument` call), so dispatch
- * order is deterministically the plan's own order. This test pins THAT order
- * directly, at the incident's own scale, to show held-first reordering
- * governs the control arm's flatten ordering too — not only the live arm's
- * tail.
- */
 describe('dispatch order at incident scale, the coordinate control-arm flattens use (#1390)', () => {
   it("held-first reordering puts every held instrument's runInstrument call ahead of every flat one", async () => {
     const HELD = new Set(['QQQ', 'AAPL', 'AMZN', 'NFLX', 'SMCI', 'PLTR', 'MSTR', 'RIOT', 'UBER']);
@@ -236,9 +176,6 @@ describe('dispatch order at incident scale, the coordinate control-arm flattens 
 
     const runner: TickRunner = {
       async runInstrument(signal, ctx) {
-        // Recorded as the FIRST statement, before any await — this is
-        // dispatch order, the coordinate the control arm's own eager,
-        // un-sequenced flatten hook actually runs on
         dispatchOrder.push(signal.asset);
         await ctx.beginPortfolioTail?.();
         return { trace_id: ctx.trace_id, final_stage: 'execution' };
@@ -263,7 +200,6 @@ describe('dispatch order at incident scale, the coordinate control-arm flattens 
       },
     );
 
-    // Every held instrument's dispatch precedes every flat instrument's
     const heldDispatchIndices = dispatchOrder
       .map((asset, index) => ({ asset, index }))
       .filter(({ asset }) => HELD.has(asset))
@@ -278,15 +214,6 @@ describe('dispatch order at incident scale, the coordinate control-arm flattens 
   });
 });
 
-/**
- * Acceptance criterion 3: the exit path's tail latency does not depend on
- * debate latency. `tick-runner.ts`'s tick/decision split already guarantees
- * the exit check itself never calls `debate` (`SequentialTickRunner tick
- * pass (#743)`, `tick-runner.test.ts`) — what is new here is the SEQUENCING
- * half: with held-first ordering, a held instrument's tail is granted before
- * any flat instrument's, so it can never be made to wait on a flat
- * instrument's debate call even when that call never resolves.
- */
 describe('a held lot flattens without waiting on a blocking flat instrument (#1390)', () => {
   it('reaches its tail even when a flat instrument ahead of it in the universe is stuck in debate', async () => {
     let debateBlocked: () => void = () => {};
@@ -298,9 +225,6 @@ describe('a held lot flattens without waiting on a blocking flat instrument (#13
     const runner: TickRunner = {
       async runInstrument(signal: { asset: string }, ctx: TickContext): Promise<TickOutcome> {
         if (signal.asset === 'AAPL') {
-          // Stands in for a flat instrument's decision pass stuck mid-debate
-          // — never resolves within this test, simulating #1080/#1380's
-          // saturation. It never reaches `beginPortfolioTail`.
           await debateGate;
           return { trace_id: ctx.trace_id, final_stage: 'debate' };
         }
@@ -310,8 +234,6 @@ describe('a held lot flattens without waiting on a blocking flat instrument (#13
       },
     };
 
-    // QQQ (held) reordered ahead of AAPL (flat, blocking) even though AAPL
-    // sits first in DEFAULT_UNIVERSE
     const plan: TickPlan = {
       instruments: orderHeldFirst(
         [
@@ -333,8 +255,6 @@ describe('a held lot flattens without waiting on a blocking flat instrument (#13
       decisionGate: new DebateBarDecisionGate(),
     });
 
-    // QQQ's tail settles without ever waiting for AAPL's blocked debate —
-    // observed here by yielding one macrotask while AAPL is still stuck
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(heldReachedTail).toBe(true);
 

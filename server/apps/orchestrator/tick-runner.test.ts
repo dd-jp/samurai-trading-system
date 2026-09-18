@@ -15,24 +15,12 @@ const CLOCK: Clock = { now: () => NOW };
 const TRACE_ID = 'trace-aapl-1400';
 const SIGNAL: Signal = { asset: 'AAPL', asset_class: 'stocks' };
 
-/**
- * The decision bar a gate would grant at NOW (14:00 is bar-aligned on the 1h
- * grid, so the bar's open IS the tick instant)
- */
 const DECISION_BAR = {
   id: `${NOW.toISOString()}@3600000`,
   open_time: NOW,
   timeframe_ms: 3_600_000,
 };
 
-/**
- * A fresh no-op logger + a SQLite audit log + SQLite current_tick store, each
- * over its own `:memory:` DB, so rows never leak across tests.
- *
- * Carries `decision_bar` by default (#743): the pre-split tests in this file
- * all exercise the decision chain, which now only runs on a granted claim.
- * Tick-path tests pass `{ decision_bar: undefined }` to strip it.
- */
 function makeCtx(overrides: { decision_bar?: TickContext['decision_bar'] } = {}): TickContext {
   const db = openSharedStore(':memory:');
   const decision_bar = 'decision_bar' in overrides ? overrides.decision_bar : DECISION_BAR;
@@ -72,8 +60,6 @@ function makeDebate(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 1200,
     direction: 'bullish',
     debate_id: 'debate-1',
-    // #687: NOW is bar-aligned, so this is the bar the Trader now inherits
-    // instead of flooring a clock read of its own
     bar_timestamp: NOW,
     read: true,
     ...overrides,
@@ -178,12 +164,9 @@ function makeExecutionResult(): ExecutionResult {
   };
 }
 
-/** Fake steps for the full happy path; override one to exercise a short-circuit */
 function makeSteps(overrides: Partial<TickSteps> = {}): TickSteps {
   const intent = makeIntent();
   return {
-    // Tick-path exits: null = no position to flatten. Decision-chain tests
-    // never reach this step (their ctx carries `decision_bar`)
     exitCheck: vi.fn(async () => null),
     analysts: vi.fn(async () => [makeView()]),
     debate: vi.fn(async () => makeDebate()),
@@ -271,11 +254,6 @@ describe('SequentialTickRunner.runInstrument', () => {
   });
 
   it('short-circuits at Analysts when the view set is empty (quorum skip), but still evaluates the flatten (#785)', async () => {
-    // #785: a quorum skip has no Trader entry point of its own to carry the
-    // flatten, so it runs the exit check itself instead of skipping flatten
-    // evaluation for the tick. Debate/Trader/Execution stay unreachable —
-    // the flatten reaches the broker through Risk/Verdict/Execution's shared
-    // tail, never through the debate chain
     const steps = makeSteps({ analysts: vi.fn(async () => []) });
 
     const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
@@ -283,21 +261,11 @@ describe('SequentialTickRunner.runInstrument', () => {
     expect(steps.debate).not.toHaveBeenCalled();
     expect(steps.trader).not.toHaveBeenCalled();
     expect(steps.execution).not.toHaveBeenCalled();
-    // No exit was due (the default `exitCheck` fake returns null), so the
-    // pass ends at the exit check, not at 'analysts'
     expect(steps.exitCheck).toHaveBeenCalledTimes(1);
     expect(outcome).toEqual({ trace_id: TRACE_ID, final_stage: 'position_check' });
   });
 
   it('names the cause of a quorum skip when the analysts step reports one (#1080)', async () => {
-    // The whole defect: `views.length === 0` is all the runner can see, so a
-    // starved 10s analyst deadline and a quiet market wrote the same word at
-    // the same level. The kind comes back through the optional step hook, and
-    // it has to reach BOTH the log line's level and the `audit_log` decision —
-    // an operator reads the first and the dashboard drawer glosses the second
-    // The concrete store, held by the test so the recorded row can be read
-    // back: the log line and the `audit_log` decision come from one variable
-    // in `record`, but the dashboard reads only the second
     const auditLog = new SqliteAuditLog(openSharedStore(':memory:'));
     const ctx = { ...makeCtx(), auditLog };
     const steps = makeSteps({
@@ -320,10 +288,6 @@ describe('SequentialTickRunner.runInstrument', () => {
   });
 
   it('keeps the undifferentiated quorum_skip when no cause is reported', async () => {
-    // The control arm's analysts step relays views and holds no failures of
-    // its own, and the backtest has no production adapter — in both, a skip
-    // genuinely has no cause to name, and inventing one would be worse than
-    // the word they already write
     const ctx = makeCtx();
     const steps = makeSteps({ analysts: vi.fn(async () => []) });
 
@@ -338,8 +302,6 @@ describe('SequentialTickRunner.runInstrument', () => {
   });
 
   it('does not ask for a skip cause on a pass that produced views', async () => {
-    // Reads are destructive, so an unconditional read would consume the entry
-    // a genuinely skipped pass is about to need
     const steps = makeSteps({ analystSkipKind: vi.fn(() => undefined) });
 
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
@@ -379,13 +341,6 @@ describe('SequentialTickRunner.runInstrument', () => {
     expect(steps.trader).toHaveBeenCalledWith(expect.objectContaining({ instrument: 'AAPL' }));
   });
 
-  /**
-   * #811. `steps.analysts` used to receive no bar at all — `MarketIntelligenceStore.getContext`
-   * floored a second, independent read of the clock, which could disagree with the gate's bar on
-   * a straddle. The gate's `decision_bar.open_time` is the single derivation for this pass; this
-   * pins that the runner threads it onto the analysts step unchanged, the same value `debate`
-   * receives as its own `bar`.
-   */
   it("threads the gate's decision bar onto the analysts step, unchanged and matching debate's bar (#811)", async () => {
     const steps = makeSteps();
 
@@ -454,10 +409,6 @@ describe('SequentialTickRunner.runInstrument', () => {
 
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
 
-    // Migration 0013. Asserted on the RUNNER rather than only on the store,
-    // because the store happily accepts a row without them: this is the caller
-    // that has to pass them, and until it did, every tick that short-circuited
-    // before Verdict was attributable to no instrument at all
     const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
     expect(rows).not.toHaveLength(0);
     expect(
@@ -532,8 +483,6 @@ describe('SequentialTickRunner.runInstrument', () => {
 
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
 
-    // Each stage observes the row already marked with its own name, upserted
-    // just before that stage was called
     expect(seen).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
     expect(store.get('AAPL')).toBeUndefined();
   });
@@ -583,19 +532,10 @@ describe('SequentialTickRunner.runInstrument', () => {
       'boom',
     );
 
-    // The row is left exactly as it was before the throw — a stale progress
-    // indicator, safely overwritten by the next tick's upsert, not cleared
     expect(store.get('AAPL')).toMatchObject({ stage: 'debate', instrument: 'AAPL' });
   });
 });
 
-/**
- * #303: before this, `RiskDecision.warnings` had no production reader at all —
- * it rode along inside the `info` payload of the risk stage line and nothing
- * ever raised it. This is the consumer that observes it, and it is the reason
- * the correlation warm-up gap is now visible to an operator rather than
- * merely representable.
- */
 describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)', () => {
   function warnEntries(ctx: TickContext) {
     const log = ctx.logger.log as ReturnType<typeof vi.fn>;
@@ -626,11 +566,6 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     });
   });
 
-  /**
-   * `advisory: true` is the field a generic log pipeline filters on. Level
-   * alone is not enough: a monitor that pages on `level:warn` has no other way
-   * to tell an advisory apart from a stuck fill or a kill-threshold breach.
-   */
   it('marks the line advisory so a monitor paging on level:warn can exclude it by field', async () => {
     const intent = makeIntent();
     const steps = makeSteps({
@@ -646,12 +581,6 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warnEntries(ctx)[0].payload).toMatchObject({ advisory: true });
   });
 
-  /**
-   * A `correlation_warmup:` tag names one side of a PAIR, and the side short
-   * on history may be this tick's own instrument. Without the intent's
-   * instrument on the line, `correlation_warmup:MSFT` reads as "MSFT is new"
-   * when the truth may be "AAPL is new and MSFT is fine".
-   */
   it('names the tick instrument on the line, so a pair-scoped tag is not read as peer-scoped', async () => {
     const intent = makeIntent();
     const steps = makeSteps({
@@ -685,12 +614,6 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warns[0].message).toContain('correlation_warmup:BTC-USD');
   });
 
-  /**
-   * The reader is warning-agnostic, not correlation-specific. `macro_risk_flag`
-   * has been produced since #205 and, like the warm-up tag, had no reader — it
-   * rode along in the risk stage's `info` payload. This pins that the same fix
-   * surfaces it, so the claim is checked rather than assumed.
-   */
   it('surfaces a CII macro_risk_flag through the same reader (#205, unraised until now)', async () => {
     const intent = makeIntent();
     const steps = makeSteps({
@@ -708,18 +631,6 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warns[0].message).toContain('macro_risk_flag:RU');
   });
 
-  /**
-   * The #381 day-1 soak, costed. `DEFAULT_TICK_INTERVAL_MS` is 60s, so six
-   * instruments repeating a warn every tick is ~8,640 warn lines a day — and
-   * with `min_bars: 20` on a `1d` timeframe the condition does not clear
-   * inside a 14-day run, so that is essentially the whole soak's warn volume.
-   * An operator who sees thousands of identical warns stops reading warns,
-   * and then misses the stuck fill. Same defect #362 fixed at startup.
-   *
-   * So the warn marks a CHANGE, not a state. The state itself is already in
-   * the log every tick: `record('risk', ...)` writes the whole `RiskDecision`,
-   * `warnings` included, to its `info` payload. Nothing is lost by going quiet.
-   */
   it('warns once per instrument on first sight, then stays quiet while the warning set is unchanged', async () => {
     const intent = makeIntent();
     const universe = ['SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'];
@@ -732,26 +643,17 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     const ctx = makeCtx();
     const runner = new SequentialTickRunner(steps);
 
-    // Three ticks over the whole universe — 18 instrument-passes
     for (let tick = 0; tick < 3; tick++) {
       for (const asset of universe) {
         await runner.runInstrument({ asset, asset_class: 'stocks' }, ctx);
       }
     }
 
-    // Six warns, not eighteen: one per instrument, on its first sight
     const warns = warnEntries(ctx);
     expect(warns).toHaveLength(universe.length);
     expect(warns.map((entry) => entry.payload.instrument).sort()).toEqual([...universe].sort());
   });
 
-  /**
-   * `insufficient_history` follows `Object.keys(exposure_by_instrument)`, whose
-   * insertion order follows `getOpenPositions()`'s `ORDER BY opened_at` — no
-   * tiebreak, and the order shifts whenever a position closes and reopens. An
-   * order-sensitive signature would read a reordering as a change and re-fire,
-   * defeating the suppression outright. The set is what matters, not its order.
-   */
   it('treats a reordered but identical warning set as unchanged', async () => {
     const intent = makeIntent();
     let warnings = ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'];
@@ -805,12 +707,6 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warns[1].payload.warnings).toEqual(['correlation_warmup:MSFT']);
   });
 
-  /**
-   * If the warn simply stopped, an operator would have no positive
-   * confirmation that coverage completed — only an absence, which is
-   * indistinguishable from the reader having broken. One transition line
-   * closes that. It is `info`, not `warn`: good news must never page.
-   */
   it('confirms at info when the warnings clear, rather than just going silent', async () => {
     const intent = makeIntent();
     let warnings = ['correlation_warmup:MSFT'];
@@ -869,7 +765,6 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     current = 'TSLA';
     await runner.runInstrument({ asset: 'TSLA', asset_class: 'stocks' }, ctx);
 
-    // Same warning text, different instruments — both must be raised
     expect(warnEntries(ctx).map((entry) => entry.payload.instrument)).toEqual(['AAPL', 'TSLA']);
   });
 
@@ -879,29 +774,16 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     await new SequentialTickRunner(makeSteps()).runInstrument(SIGNAL, ctx);
 
     expect(warnEntries(ctx)).toEqual([]);
-    // ...and the one-line-per-stage invariant is untouched on the quiet path
     expect(ctx.logger.log).toHaveBeenCalledTimes(6);
   });
 });
 
-/**
- * The tick/decision split (#743): a ctx WITHOUT `decision_bar` is a tick pass
- * — the exit check and, on an intent, the Risk → Verdict → Execution tail.
- * Nothing else.
- */
-/**
- * An in-process exit intent, named by WHY it exists (#748). The runner reads
- * `metadata.exit_reason` to decide which flag to stamp and what to write into
- * the audit row, so a test fixture that omitted it would exercise a shape no
- * Trader entry point can produce.
- */
 function exitIntent(reason: 'flatten' | 'signal_decay'): OrderIntent {
   const base = makeIntent({ intent_type: 'exit', side: 'sell' });
   return { ...base, metadata: { ...base.metadata, exit_reason: reason } };
 }
 
 describe('SequentialTickRunner tick pass (#743)', () => {
-  /** Steps whose decision chain is UNREACHABLE — analysts and debate throw */
   function tickOnlySteps(overrides: Partial<TickSteps> = {}): TickSteps {
     return makeSteps({
       analysts: vi.fn(async () => {
@@ -926,9 +808,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
     expect(outcome.final_stage).toBe('position_check');
     expect(outcome.flatten_fired).toBeUndefined();
     expect(steps.exitCheck).toHaveBeenCalledTimes(1);
-    // The structural half of the assertion: the exit branch CANNOT read
-    // analyst views or debate output because those steps never ran — they
-    // throw if touched, and `TickSteps.exitCheck`'s input carries neither
     expect(steps.analysts).not.toHaveBeenCalled();
     expect(steps.debate).not.toHaveBeenCalled();
     expect(steps.trader).not.toHaveBeenCalled();
@@ -937,7 +816,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
     const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
     expect(rows.map((row) => row.stage)).toEqual(['position_check']);
     expect(rows[0]?.decision).toBe('no_exit_due');
-    // Terminal return: the progress row is cleared, not left stale
     expect(ctx.currentTickStore.get('AAPL')).toBeUndefined();
   });
 
@@ -952,8 +830,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
 
     const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
 
-    // HAZARD 1 of #743 (the 2f22033 defect shape): the flatten must reach the
-    // broker from the CHEAP path — no analysts, no debate, no decision claim
     expect(outcome.final_stage).toBe('execution');
     expect(outcome.flatten_fired).toBe(true);
     expect(outcome.execution_result?.status).toBe('submitted');
@@ -971,9 +847,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
   });
 
   it('hands the exit check the tick bar on the debate grid', async () => {
-    // 14:41:07 floors to 14:00 on the 1h debate grid — the SAME grid the
-    // decision gate claims on, so a tick-pass flatten and a decision-pass
-    // flatten inside one bar key their idempotent exits to one coordinate
     const midBar = new Date('2026-07-15T14:41:07Z');
     const steps = tickOnlySteps();
     const ctx = { ...makeCtx({ decision_bar: undefined }), clock: { now: () => midBar } };
@@ -999,7 +872,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
     expect(outcome.flatten_fired).toBe(true);
   });
 
-  // ── #748: the indicator-based early exit rides the SAME cheap path. ──────
   it('fires an INDICATOR-BASED EARLY EXIT on a tick that performs no analyst run', async () => {
     const exit = exitIntent('signal_decay');
     const steps = tickOnlySteps({
@@ -1011,10 +883,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
 
     const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
 
-    // The acceptance criterion, asserted rather than assumed: the release
-    // reached the broker on a pass where the analyst step would have THROWN if
-    // anything had touched it, and the debate step likewise. An early exit that
-    // needed either could not have completed this pass at all
     expect(outcome.final_stage).toBe('execution');
     expect(outcome.early_exit_fired).toBe(true);
     expect(outcome.flatten_fired).toBeUndefined();
@@ -1023,7 +891,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
     expect(steps.trader).not.toHaveBeenCalled();
 
     const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
-    // Named apart from a flatten in the audit spine, not merged into it
     expect(rows[0]?.decision).toBe('signal_decay');
   });
 
@@ -1043,15 +910,6 @@ describe('SequentialTickRunner tick pass (#743)', () => {
   });
 });
 
-/**
- * #1113: `no_exit_due` was 51% of a soak's log lines by itself — one line per
- * instrument per tick for the ~29-of-30 passes with nothing to report. Every
- * value it carried is already durable elsewhere: `audit_log.decision` is
- * cleartext (unlike `input_digest`/`output_digest`), and `record()` writes
- * both from the one call, so the row survives regardless of what the log
- * line does. A REAL exit must not follow it down — `flatten`, `signal_decay`,
- * and the unreached `exit_reason`-less fallback all stay at `info`.
- */
 describe('SequentialTickRunner tick pass logging level (#1113)', () => {
   function recordLines(ctx: TickContext) {
     const log = ctx.logger.log as ReturnType<typeof vi.fn>;
@@ -1072,8 +930,6 @@ describe('SequentialTickRunner tick pass logging level (#1113)', () => {
       message: 'position_check: no_exit_due',
     });
 
-    // The volume this ticket exists to cut is the log line — the audit row
-    // this same `record()` call writes is unaffected by the level change
     const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
     expect(rows.map((row) => row.stage)).toEqual(['position_check']);
     expect(rows[0]?.decision).toBe('no_exit_due');
@@ -1120,12 +976,6 @@ describe('SequentialTickRunner tick pass logging level (#1113)', () => {
   });
 
   it('keeps an exit intent with no exit_reason at info — the whitelist is on the decision word, not on "any exit"', async () => {
-    // Not reachable through `buildFlattenExit`/the early-exit builder in
-    // production (both always set `exit_reason`), but the field is optional
-    // in the TYPE, so `recordLevel` must not derive 'debug' from "position_check
-    // and not a real exit_reason" — only from the exact decision word
-    // 'no_exit_due'. Guards against the inverted, wrong-direction form of the
-    // whitelist
     const exit: OrderIntent = {
       ...exitIntent('flatten'),
       metadata: { ...exitIntent('flatten').metadata },
@@ -1150,14 +1000,6 @@ describe('SequentialTickRunner tick pass logging level (#1113)', () => {
   });
 });
 
-/**
- * #785: a quorum-skipped decision pass has no Trader entry point of its own
- * to carry the flatten (the Trader's routing is what evaluates it on every
- * OTHER pass, per `decide.ts` #668), so it must run the exit check itself
- * rather than return at `final_stage: 'analysts'` having evaluated nothing.
- * Flat-by-close (ADR-0014) is load-bearing: the cheap path must be ABLE to
- * flatten, not merely usually not need to.
- */
 describe('SequentialTickRunner quorum-skip flatten (#785)', () => {
   function quorumSkipSteps(overrides: Partial<TickSteps> = {}): TickSteps {
     return makeSteps({
@@ -1182,12 +1024,6 @@ describe('SequentialTickRunner quorum-skip flatten (#785)', () => {
 
     const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
-    // MUTATION DISCRIMINATOR (#785 acceptance: "revert either guard and a
-    // named test fails"): reverting the quorum-skip branch to its pre-#785
-    // shape (`return { trace_id, final_stage: 'analysts' }` without calling
-    // `runExitCheckPass`) makes `steps.exitCheck` never get called and
-    // `final_stage` come back as `'analysts'` instead of `'execution'` —
-    // this assertion fails under that reversion
     expect(outcome.final_stage).toBe('execution');
     expect(outcome.flatten_fired).toBe(true);
     expect(steps.exitCheck).toHaveBeenCalledTimes(1);
@@ -1209,10 +1045,6 @@ describe('SequentialTickRunner quorum-skip flatten (#785)', () => {
   });
 
   it('hands the exit check the GATE bar, not a fresh clock re-floor', async () => {
-    // The gate claimed 13:00's bar; the clock has since moved into 14:00's
-    // The exit check must key to 13:00 — the gate's own derivation — not a
-    // second, independently-floored bar (#687/#743's "one derivation per
-    // pass" reasoning, extended to the quorum-skip's exit check)
     const claimedOpen = new Date('2026-07-15T13:00:00Z');
     const steps = quorumSkipSteps();
     const ctx = makeCtx({
@@ -1229,12 +1061,6 @@ describe('SequentialTickRunner quorum-skip flatten (#785)', () => {
   });
 });
 
-/**
- * #743's bar-identity assertion: on a decision pass the gate's bar is the
- * single source, and a `DebateResult` disagreeing with it must be LOUD —
- * the downstream failure mode (an intent suppressed as a duplicate) is
- * otherwise indistinguishable from a healthy no-trade tick
- */
 describe('SequentialTickRunner decision bar identity (#743)', () => {
   function warnLines(ctx: TickContext): string[] {
     return (ctx.logger.log as ReturnType<typeof vi.fn>).mock.calls
@@ -1244,10 +1070,6 @@ describe('SequentialTickRunner decision bar identity (#743)', () => {
   }
 
   it('passes the GATE bar down to the debate step, not a clock re-floor', async () => {
-    // The gate claimed 13:00's bar; by the time this pass runs, the clock is
-    // in 14:00's. A runner that re-floors `clock.now()` hands the debate
-    // 14:00 and passes anyway when the two agree — this ctx is built so they
-    // do not (#687's straddle, at the runner seam)
     const claimedOpen = new Date('2026-07-15T13:00:00Z');
     const steps = makeSteps({
       debate: vi.fn(async () => makeDebate({ bar_timestamp: claimedOpen })),
@@ -1278,7 +1100,6 @@ describe('SequentialTickRunner decision bar identity (#743)', () => {
     expect(warns).toHaveLength(1);
     expect(warns[0]).toContain(NOW.toISOString());
     expect(warns[0]).toContain(divergedBar.toISOString());
-    // Observable, not fatal: the pass proceeds and downstream gates refuse
     expect(outcome.final_stage).toBe('execution');
   });
 
@@ -1301,16 +1122,6 @@ describe('SequentialTickRunner decision bar identity (#743)', () => {
   });
 });
 
-/**
- * #921 gap 4: the mandatory-exit's `ExecutionResult` flows through the same
- * `record()` helper as every other stage, which hardcoded `level: 'info'`
- * regardless of `decision` — so an execution failure (the very failure mode
- * #921's resilience gaps are about) used to log exactly like a routine
- * status update, with nothing to page an operator. Scoped tightly: only
- * `stage === 'execution' && decision === 'error'` escalates; every other
- * stage — including ones whose OWN decision is a routine "refused" outcome
- * (Risk `rejected`, Verdict `no_go`) — must keep logging at `info`.
- */
 describe('SequentialTickRunner.runInstrument — execution stage error log level (#921)', () => {
   function recordLines(ctx: TickContext) {
     const log = ctx.logger.log as ReturnType<typeof vi.fn>;
@@ -1396,30 +1207,7 @@ describe('SequentialTickRunner.runInstrument — execution stage error log level
   });
 });
 
-/**
- * The phase split's runner half (#1040): the pass waits for its turn at the
- * first portfolio READ, and only there.
- *
- * That point is not the same on the two paths, and the difference is the whole
- * point of these tests. On the decision path the head is Analysts + Debate —
- * the 93-96% of wall time that touches no portfolio state — and the tail opens
- * at Trader, which sizes against equity. On the tick path the EXIT CHECK is
- * head too: it skips `snapshotForTick` deliberately, because an exit sizes to
- * the held quantity and never to equity (#743), so a tick pass that produces
- * no intent must never take a turn at all. Since ~29 of 30 passes are exactly
- * that, gating the exit check itself would queue almost every pass behind
- * every instrument ahead of it for nothing — and would make a flatten wait
- * behind a full LLM decision pass inside a five-minute window.
- *
- * `tick-loop.test.ts` and `phase-split.test.ts` own the other half (that turns
- * are granted in plan order).
- */
 describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#1040)', () => {
-  /**
-   * A ctx whose turnstile records when it was entered, relative to the stages.
-   * The recorded array doubles as the COUNT of entries, which is what proves a
-   * null-intent tick pass never takes a turn.
-   */
   function ctxWithTurnstile(
     order: string[],
     overrides: { decision_bar?: TickContext['decision_bar'] } = {},
@@ -1489,10 +1277,6 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
       ctxWithTurnstile(order, { decision_bar: undefined }),
     );
 
-    // The COMMON case — ~29 of 30 passes. It reads no portfolio state and
-    // writes nothing, so it has no tail to order and must not hold the queue
-    // for the instruments behind it. `toEqual` here is also a count assertion:
-    // 'turnstile' appears zero times
     expect(order).toEqual(['exitCheck']);
     expect(outcome.final_stage).toBe('position_check');
   });
@@ -1524,9 +1308,6 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
       ctxWithTurnstile(order, { decision_bar: undefined }),
     );
 
-    // The exit check runs OUTSIDE the turn (it reads no portfolio state); the
-    // turn is taken only once an intent exists that will reach Risk, which
-    // does read one
     expect(order).toEqual(['exitCheck', 'turnstile', 'risk', 'verdict', 'execution']);
     expect(outcome.final_stage).toBe('execution');
   });
@@ -1544,17 +1325,12 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
       },
     });
 
-    // #785's path: the quorum skip falls through to the same exit check, and
-    // it inherits the same rule — no intent, no turn
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctxWithTurnstile(order));
 
     expect(order).toEqual(['analysts', 'exitCheck']);
   });
 
   it('runs the whole pass when no turnstile is supplied (backtest, smoke, control arm)', async () => {
-    // Absent means "run now": a caller with one pass in flight has no siblings
-    // to order against, and every existing caller of `runInstrument` outside
-    // `runTickPlan` is exactly that
     const steps = makeSteps();
     const ctx = makeCtx();
     expect(ctx.beginPortfolioTail).toBeUndefined();
@@ -1566,15 +1342,7 @@ describe('SequentialTickRunner.runInstrument — the portfolio-tail turnstile (#
   });
 });
 
-/**
- * #1080. Both sub-budgets on the decision path degrade to a no-trade, and
- * until this the debate one degraded to the word `neutral` — the same word a
- * converged debate writes when the panel genuinely finds nothing. The
- * dashboard renders `audit_log.decision` verbatim, so the row asserted here is
- * the whole legibility path.
- */
 describe('SequentialTickRunner degraded-debate legibility (#1080)', () => {
-  /** `enforceLatencyBudget`'s fallback: no synthesis, no rounds, neutral, zero */
   function starvedDebate(): DebateResult {
     return makeDebate({
       synthesis: 'Debate terminated before any round completed; no synthesis available.',
@@ -1599,8 +1367,6 @@ describe('SequentialTickRunner degraded-debate legibility (#1080)', () => {
     const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
     const debateRow = rows.find((row) => row.stage === 'debate');
     expect(debateRow?.decision).toBe('budget_exhausted');
-    // The trader row is unchanged — a no_trade is still a no_trade. What the
-    // pair now says is WHY, which is the distinction #1080 is about
     expect(rows.find((row) => row.stage === 'trader')?.decision).toBe('no_trade');
   });
 
@@ -1618,8 +1384,6 @@ describe('SequentialTickRunner degraded-debate legibility (#1080)', () => {
     );
     const debateLine = logged.find((entry) => entry.message === 'debate: budget_exhausted');
     expect(debateLine?.level).toBe('warn');
-    // Everything else stays at info: a soak log where routine stages shout is
-    // a soak log nobody reads
     expect(logged.find((entry) => entry.message === 'analysts: quorum_met')?.level).toBe('info');
     expect(logged.find((entry) => entry.message === 'trader: no_trade')?.level).toBe('info');
   });

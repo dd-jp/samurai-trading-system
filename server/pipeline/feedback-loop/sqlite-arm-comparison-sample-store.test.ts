@@ -49,12 +49,6 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(read).toEqual(makeSample());
   });
 
-  /**
-   * #1099/#1483. `append` must persist each arm's `refused_pass_count`, not
-   * just carry it in memory — this is the mutation the migration exists to
-   * catch: drop either bound parameter from `append`'s `.run(...)` call and
-   * this fails (`toBe(3)`/`toBe(9)` reads back `null` instead).
-   */
   it('round-trips each arm refused_pass_count independently', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteArmComparisonSampleStore(db);
@@ -66,13 +60,6 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(read?.comparison.control.refused_pass_count).toBe(9);
   });
 
-  /**
-   * A row written before migration 0057 has no value in either column — a raw
-   * `INSERT` that omits them, simulating that legacy row exactly as it exists
-   * on disk today. Reading it back must produce `null`, never a fabricated
-   * `0`: `0` would assert "no refusals in this window" for a quantity this row
-   * never measured, which is the silence #1099/#1483 exist to break.
-   */
   it('reads back null, not 0, for a pre-migration row that never stored the count', () => {
     const db = openSharedStore(':memory:');
     db.prepare(
@@ -103,11 +90,6 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(read?.comparison.control.refused_pass_count).toBeNull();
   });
 
-  /**
-   * #1546, migration 0066. Every count is distinct and no two arms or classes
-   * share a value, so a swapped bound parameter or a swapped arm in `fromRow`
-   * fails rather than passing on symmetry.
-   */
   it('round-trips each arm per-exit-class cost_basis_drops independently', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteArmComparisonSampleStore(db);
@@ -134,12 +116,6 @@ describe('SqliteArmComparisonSampleStore', () => {
     });
   });
 
-  /**
-   * A row written before migration 0066 stored no counts. It must read back
-   * `null`, never `noCostBasisDrops()` — an all-zero table asserts "FL counted
-   * this window and nothing was excluded", which for this row is a claim no
-   * cycle ever made. Same distinction as `refused_pass_count`'s NULL above.
-   */
   it('reads back null cost_basis_drops for a pre-migration-0065 row', () => {
     const db = openSharedStore(':memory:');
     db.prepare(
@@ -172,11 +148,6 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(read?.comparison.live.refused_pass_count).toBe(3);
   });
 
-  /**
-   * A corrupted payload must not abort the dashboard's read of the comparison
-   * it describes: the numbers the operator came for still arrive, and the
-   * measurement about them collapses to "not counted"
-   */
   it.each([
     ['unparseable JSON', '{not json'],
     ['a class missing', '{"protective":{"kept":1,"dropped":0}}'],
@@ -201,12 +172,6 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(read?.comparison.control.cost_basis_drops).toEqual(noCostBasisDrops());
   });
 
-  /**
-   * #982: written with a NON-default floor and read back the same value — the
-   * default (5) round-trips in the test above too, but only a non-default
-   * value can prove the column is actually wired end to end rather than
-   * hardcoded at some hop between `append` and `getRecent`
-   */
   it('round-trips a non-default min_trades_per_arm rather than the module default', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteArmComparisonSampleStore(db);
@@ -252,7 +217,6 @@ describe('SqliteArmComparisonSampleStore', () => {
     expect(store.getRecent(1, new Date(COMPUTED_AT.getTime() + 5 * day))).toHaveLength(1);
   });
 
-  /** One cycle instant is one measurement, never two points on the trend */
   it('replaces a re-run of the same cycle instant rather than duplicating it', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteArmComparisonSampleStore(db);
@@ -297,20 +261,8 @@ describe('SqliteArmComparisonSampleStore', () => {
     ).toThrow(/NOT NULL/i);
   });
 
-  /**
-   * The `diverged`/`divergence_reason` invariant is enforced by migration
-   * 0034's table `CHECK`, not by caller discipline. Both directions are
-   * unrepresentable: an escalation with no sentence to show the operator, and a
-   * sentence claiming the control won attached to a verdict that says it did
-   * not.
-   */
   describe('the divergence invariant is a schema constraint', () => {
     function insertDivergence(diverged: number, reason: string | null): () => void {
-      // A FRESH store per call, deliberately: every insert below uses the same
-      // `computed_at`, which is the table's primary key. Hoisting this open()
-      // out of the helper would make the second insert in `accepts both honest
-      // pairs` fail on the PK instead of exercising the `CHECK` — a green test
-      // asserting the wrong constraint
       const db = openSharedStore(':memory:');
       return () =>
         db
@@ -346,15 +298,6 @@ describe('SqliteArmComparisonSampleStore', () => {
   });
 });
 
-/**
- * #1483: `InMemoryArmComparisonSampleStore` and `SqliteArmComparisonSampleStore`
- * must return the SAME shape for the same input, including `refused_pass_count`
- * — a caller that passed against one and failed against the other would be
- * exactly the substitutability gap this ticket closes. Both stores under
- * test, one assertion body, run against each. A sibling of, not nested inside,
- * `describe('SqliteArmComparisonSampleStore', ...)` above — this exercises two
- * implementations, not one.
- */
 describe.each<[string, () => ArmComparisonSampleStore]>([
   [
     'SqliteArmComparisonSampleStore',

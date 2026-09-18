@@ -9,34 +9,6 @@ function makeConfig(overrides: Partial<RateLimiterConfig['default']> = {}): Rate
   };
 }
 
-/**
- * `reserve` is TOTAL over `AssetClass` — it returns a `ReserveResult` for every
- * value the type admits and never throws.
- *
- * This is not a general robustness test; it is the specific guarantee
- * `buildDebateStep` relies on to call `reserve` OUTSIDE its try/catch (PR #390
- * review). `SequentialTickRunner` does not catch a stage throw, so anything
- * that throws there discards the whole tick pass rather than one instrument —
- * the exact failure the refusal path is designed to avoid. If `reserve` could
- * throw on a reachable input, that protection would sit one line too late.
- *
- * The case worth pinning hardest is an asset class with no `perAssetClass`
- * entry, because a wrong asset class reaching this path is not hypothetical:
- * mutation M11 (`tick-runner` hard-coding `asset_class: 'crypto'`) was exactly
- * that, and it survived a green suite. What these tests establish is that such
- * a value FALLS BACK to `default` rather than throwing — which is also why M11
- * was silent rather than loud.
- */
-/**
- * The construction-time preconditions that make `reserve`'s totality ENFORCED
- * rather than merely documented (PR #390 review).
- *
- * Each case below is one of the three shapes that were empirically found to
- * make `reserve` throw mid-debate. They are all total, permanent
- * misconfigurations, so the right time to fail is boot — loudly, before any
- * timer exists — not the first debate, where a throw reads as "this instrument
- * silently never trades" for the length of a 14-day soak.
- */
 describe('RateLimiter refuses a misconfigured budget at construction', () => {
   const clock = new SimulatedClock(start);
 
@@ -53,7 +25,6 @@ describe('RateLimiter refuses a misconfigured budget at construction', () => {
   });
 
   it('refuses a clock that does not return a Date', () => {
-    // Would otherwise throw on `clock.now().getTime()` at the first debate
     expect(
       () => new RateLimiter({ now: () => undefined } as unknown as SimulatedClock, makeConfig()),
     ).toThrow(/must return a Date/);
@@ -69,11 +40,6 @@ describe('RateLimiter refuses a misconfigured budget at construction', () => {
     ).toThrow(/perAssetClass\.stocks\.windowMs/);
   });
 
-  /**
-   * `windowMs: 0` is the dangerous one: `currentWindow`'s
-   * `now - windowStart < windowMs` is never true, so every call mints a fresh
-   * window and the limiter enforces NOTHING while reading as configured
-   */
   it('refuses windowMs: 0, which would silently disable enforcement', () => {
     expect(() => new RateLimiter(clock, makeConfig({ windowMs: 0 }))).toThrow(
       /default\.windowMs must be a finite positive number/,
@@ -117,8 +83,6 @@ describe('RateLimiter.reserve is total over AssetClass', () => {
       perAssetClass: { crypto: { windowMs: 60_000, maxLlmCalls: 99, maxDebates: 99 } },
     });
 
-    // `stocks` has no entry. It must be governed by `default` (maxDebates 3),
-    // not error and not inherit crypto's 99
     expect(limiter.reserve('stocks', 4)).toEqual({ granted: true });
     limiter.reserve('stocks', 4);
     limiter.reserve('stocks', 4);
@@ -131,8 +95,6 @@ describe('RateLimiter.reserve is total over AssetClass', () => {
       perAssetClass: { crypto: { windowMs: 60_000, maxLlmCalls: 99, maxDebates: 99 } },
     });
 
-    // Shares `currentWindow` with `reserve`, and runs INSIDE the debate via
-    // `RateLimitedLlmClient` — a throw here would fail the debate mid-flight
     expect(() => limiter.recordCall('stocks')).not.toThrow();
     expect(limiter.snapshot().stocks?.llmCallsUsed).toBe(1);
   });
@@ -154,7 +116,6 @@ describe('RateLimiter', () => {
     limiter.recordCall('crypto');
     limiter.recordCall('crypto');
 
-    // 2 calls used, 8 remain — a further worst-case-8 reservation should fit exactly
     const result = limiter.reserve('crypto', 8);
 
     expect(result).toEqual({ granted: true });
@@ -187,7 +148,6 @@ describe('RateLimiter', () => {
       reason: 'LLM call budget insufficient for crypto: 0/3 used, 4 needed for worst case',
     });
 
-    // Rejection must not consume any debate-count budget either
     const followUp = limiter.reserve('crypto', 3);
     expect(followUp).toEqual({ granted: true });
   });

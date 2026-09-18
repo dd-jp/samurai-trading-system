@@ -16,7 +16,6 @@ const BASE_CONFIG: ProxyStrategyConfig = {
   allowShort: true,
 };
 
-/** Builds `count` daily bars whose close moves by `step` each bar, starting at `start` */
 function buildTrendingBars(count: number, start: number, step: number): Bar[] {
   const bars: Bar[] = [];
   let close = start;
@@ -41,11 +40,6 @@ function buildTrendingBars(count: number, start: number, step: number): Bar[] {
   return bars;
 }
 
-/**
- * `count` rising bars whose true range varies bar to bar (#857) — the seed
- * mean and the Wilder recurrence disagree on this series, which is what makes
- * a convergence assertion falsifiable
- */
 function buildVariedBars(count: number): Bar[] {
   const bars: Bar[] = [];
   for (let i = 0; i < count; i++) {
@@ -68,11 +62,6 @@ function buildVariedBars(count: number): Bar[] {
   return bars;
 }
 
-/**
- * Wilder's ATR, hand-rolled so the assertions above compare the production
- * path against an independent recurrence rather than against
- * `computeIndicator` calling itself
- */
 function wilderAtr(bars: readonly Bar[], period: number): number {
   const trueRanges: number[] = [];
   for (let i = 1; i < bars.length; i++) {
@@ -94,7 +83,6 @@ function wilderAtr(bars: readonly Bar[], period: number): number {
   return value;
 }
 
-/** Builds `count` perfectly flat bars (every OHLC field identical) — fast SMA == slow SMA */
 function buildFlatBars(count: number, price: number): Bar[] {
   const bars: Bar[] = [];
   for (let i = 0; i < count; i++) {
@@ -195,24 +183,14 @@ describe('the replay ATR spec (#857)', () => {
   it('asks for the converged warm-up while keeping the period at atrWindow', () => {
     const spec = proxyAtrSpec(BASE_CONFIG, '1d');
 
-    // The width dial, `4 * period + 1` — not the `period + 1` arity floor the
-    // two call sites used until #857, at which `trueRanges.slice(period)` is
-    // empty and the Wilder loop never runs
     expect(spec.lookback).toBe(4 * BASE_CONFIG.atrWindow + 1);
 
-    // And the PERIOD is pinned explicitly. `periodOf` falls back to
-    // `spec.lookback` when `params.period` is absent, so leaving it off would
-    // turn a 17-bar warm-up on ATR(4) into ATR(17) — a different indicator,
-    // not a wider warm-up. `atrIndicatorSpec` records this off-by-one having
-    // shipped once already
     expect(spec.params.period).toBe(BASE_CONFIG.atrWindow);
     expect(spec.indicator).toBe('atr');
     expect(spec.timeframe).toBe('1d');
   });
 
   it('makes the caller warm-up wide enough to fill that window', () => {
-    // Three sites have to agree on this width or the convergence is half
-    // inert; `proxyWarmupBars` is the one place it is stated
     expect(proxyWarmupBars(BASE_CONFIG, '1d')).toBeGreaterThanOrEqual(
       proxyAtrSpec(BASE_CONFIG, '1d').lookback,
     );
@@ -220,9 +198,6 @@ describe('the replay ATR spec (#857)', () => {
   });
 
   it('folds the smoothing loop — the stop is derived from a converged ATR, not the seed mean', () => {
-    // Ranges that VARY bar to bar. `buildTrendingBars` has a constant true
-    // range, so seed and converged agree on it to the last bit and a test
-    // built on it would pass with the defect in place
     const bars = buildVariedBars(40);
     const signal = proxySignal(bars, BASE_CONFIG, '1d');
     expect(signal.direction).not.toBe('flat');
@@ -234,7 +209,6 @@ describe('the replay ATR spec (#857)', () => {
       wilderAtr(bars.slice(-(4 * BASE_CONFIG.atrWindow + 1)), BASE_CONFIG.atrWindow),
       7,
     );
-    // The pre-#857 value, which this must no longer be
     expect(
       Math.abs(
         impliedAtr - wilderAtr(bars.slice(-(BASE_CONFIG.atrWindow + 1)), BASE_CONFIG.atrWindow),

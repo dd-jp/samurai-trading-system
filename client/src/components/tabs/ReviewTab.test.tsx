@@ -63,14 +63,6 @@ describe('summary cards', () => {
     expect(within(benchmarks).getByText(/secondary context, not the control/)).toBeTruthy();
   });
 
-  /**
-   * #1180: `basis` is the declared book in the ACCOUNT's currency now, not GBP,
-   * and the sigil is the only thing on screen that says which. A `£` here would
-   * print a USD figure behind a pound sign — the same denomination mismatch the
-   * ticket fixed at the sizing inlet, re-introduced at the one place an operator
-   * reads the denominator. The absence assertion is the half that fails on a
-   * revert: `formatUsd` gives the digits either way.
-   */
   it('renders the arm-comparison basis in the account currency, not GBP (#1180)', () => {
     renderReview(makeSnapshot());
     const arms = screen.getByRole('region', { name: 'Arm comparison' });
@@ -96,12 +88,6 @@ describe('summary cards', () => {
     expect(screen.queryByText(/Did not diverge/)).toBeNull();
   });
 
-  /**
-   * #1099/#1483: a `0` refused count renders nothing (there is nothing to
-   * report), a positive count is shown, and `null` (a sample from before
-   * migration 0057) gets its own note — collapsing `null` into `0` would read
-   * as "no refusals" for a window this row never actually measured
-   */
   it('renders nothing for a refused_pass_count of 0', () => {
     const row = makeArmComparison();
     renderReview(makeSnapshot({ arm_comparison: [row] }));
@@ -117,11 +103,6 @@ describe('summary cards', () => {
     expect(within(arms).getByText(/4 refused/)).toBeTruthy();
   });
 
-  /**
-   * #1483: `null` is a ROW-level fact (both arms null together, never mixed
-   * — a real pre-0057 row has neither column), so the note must appear
-   * exactly ONCE per row, not once per arm
-   */
   it('names a pre-migration null refused_pass_count rather than reading it as 0, once per row', () => {
     const row = makeArmComparison();
     row.live = { ...row.live, refused_pass_count: null };
@@ -131,24 +112,15 @@ describe('summary cards', () => {
     expect(within(arms).getAllByText(/refusals not tracked for this cycle/)).toHaveLength(1);
   });
 
-  /**
-   * #1546. The panel is the dashboard's only reader of migration 0065's two
-   * columns, so without these the persisted counts would be this repo's
-   * dominant defect — a measurement nothing consumes.
-   */
   it('shows each arm its own per-exit-class drop rate', () => {
     renderReview(makeSnapshot({ arm_comparison: [makeArmComparison()] }));
     const arms = screen.getByRole('region', { name: 'Arm comparison' });
 
-    // live: 2 of 18 protective, 6 of 14 flatten. control: none of either.
     expect(within(arms).getByText(/Live arm protective 2\/18 \(11\.1%\)/)).toBeTruthy();
     expect(within(arms).getByText(/flatten 6\/14 \(42\.9%\)/)).toBeTruthy();
     expect(within(arms).getByText(/Control protective 0\/12 \(0\.0%\)/)).toBeTruthy();
   });
 
-  /**
-   * A class nothing closed has no rate to report, and `0.0%` would assert one
-   */
   it('reads a class with nothing closed as n/a rather than a zero drop rate', () => {
     const row = makeArmComparison();
     row.live = {
@@ -164,12 +136,6 @@ describe('summary cards', () => {
     expect(within(arms).getByText(/flatten 0\/0 \(n\/a\)/)).toBeTruthy();
   });
 
-  /**
-   * Unlike the refused count, an all-zero exclusion is rendered rather than
-   * suppressed: "nothing was excluded from this window" is the reading #1412
-   * needs, and a block that vanished when it held would be indistinguishable
-   * from a row that predates the measurement
-   */
   it('still renders the exclusion block when nothing was dropped', () => {
     const row = makeArmComparison();
     const none = {
@@ -185,7 +151,6 @@ describe('summary cards', () => {
     expect(within(arms).queryByText(/not counted for this cycle/)).toBeNull();
   });
 
-  /** Pre-migration-0065 rows say so, exactly once, rather than reading as zero */
   it('names an uncounted pre-migration cycle rather than drawing it as no exclusions', () => {
     const row = makeArmComparison();
     row.live = { ...row.live, cost_basis_drops: null };
@@ -209,21 +174,10 @@ describe('summary cards', () => {
     expect(screen.getByText(/has not computed a comparison yet/)).toBeTruthy();
     expect(screen.getByText(/has not measured an outside benchmark yet/)).toBeTruthy();
     expect(screen.getByText(/No analyst weights on this snapshot/)).toBeTruthy();
-    // #1597: the "neither is a hit rate" footnote is unconditional on the
-    // live arm — it explains the Feedback Loop's own vocabulary regardless of
-    // whether any row has been attributed yet — so an empty attribution cycle
-    // must not silently drop it along with the (control-only) analyst rows
     expect(screen.getByText(/wire carries no per-analyst accuracy/)).toBeTruthy();
   });
 });
 
-/**
- * The three `profit_factor` states this ticket exists to keep distinct
- * (#1270): a flawless window (wins, no losses) must read as the good state
- * it is, never as the same em dash `formatFixed` renders for genuinely
- * missing data; a window with no closed trades at all keeps its current
- * finite-zero reading and must not be confused with either
- */
 describe('profit factor tile', () => {
   it('reads "no losing trades" for a flawless window, not an em dash', () => {
     renderReview(makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'no_losses' } }) }));
@@ -255,11 +209,6 @@ describe('profit factor tile', () => {
     expect(within(metrics).getByText('could not be read')).toBeTruthy();
   });
 
-  // The card's "no metrics on this snapshot" empty state went with #1520: it
-  // was reachable only through a null SNAPSHOT (`metrics` is required and
-  // non-nullable on the wire), which is now the page-level cold start. What
-  // must stay distinct is the pair below — a flawless window against an
-  // unreadable figure — since both are suites that DID run
   it('renders "no losing trades" differently from an unreadable profit factor', () => {
     const { unmount } = renderReview(
       makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'no_losses' } }) }),
@@ -274,11 +223,6 @@ describe('profit factor tile', () => {
   });
 
   it('renders rather than throws on a kind the type system does not admit (review round 1, MINOR)', () => {
-    // Not reachable through `toWireSnapshot` — `profitFactorOf` maps every
-    // input to one of the three known kinds — but `profitFactorText`'s
-    // `default` arm must not crash the whole tab if a future caller ever
-    // hands it something it doesn't recognise. `main.tsx` mounts with no
-    // error boundary, so a throw here is a white screen, not a bad tile
     const bogus = { kind: 'bogus' } as unknown as ReturnType<typeof makeMetrics>['profit_factor'];
     expect(() =>
       renderReview(makeSnapshot({ metrics: makeMetrics({ profit_factor: bogus }) })),
@@ -336,9 +280,6 @@ describe('closed trades', () => {
     );
     const row = screen.getByRole('button', { name: /SPY/ });
     expect(within(row).getByText(/degraded — an LLM call failed outright/)).toBeTruthy();
-    // Same `data-degraded` hook `TraceSections.tsx`'s `DebateSection` sets —
-    // both renderers of the shared gloss must expose it in the DOM, not just
-    // in this row's joined text (docs/coding-standards.md's #1080 entry)
     expect(row.querySelector('[data-degraded="true"]')).toBeTruthy();
   });
 
@@ -482,12 +423,6 @@ describe('closed trades', () => {
   });
 });
 
-/**
- * #1597: the control arm structurally cannot have an analyst-weights read
- * (`AnalystsCard`'s doc comment) or a debate ("why it was taken", the Risk
- * critic's verdict sub-line) — each names its own absence rather than
- * rendering the live arm's figures, or a blank
- */
 describe('control arm', () => {
   it('names the analyst-weights absence instead of the live arm’s weights', () => {
     renderReview(makeSnapshot({ arm: 'control', analysts: [makeAnalyst({ weight: 0.9 })] }));
@@ -506,8 +441,6 @@ describe('control arm', () => {
         closed_trades: [
           makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1', instrument: 'SPY' }),
         ],
-        // Same instrument as the closed trade — proves the row is skipped by
-        // arm, not merely absent from this fixture
         debates: [makeDebate({ debate_id: 'd1', instrument: 'SPY', direction: 'bullish' })],
       }),
     );
@@ -537,8 +470,6 @@ describe('control arm', () => {
     const drawer = screen.getByRole('complementary', { name: 'Trade detail' });
     expect(within(drawer).getByText('Control arm: no LLM debate — not applicable')).toBeTruthy();
     expect(within(drawer).getByText('Control arm: no LLM critic — not applicable')).toBeTruthy();
-    // The control's own Risk decision (binding constraint, conditions) is
-    // real and still renders normally — only the critic verdict is N/A
     expect(within(drawer).getByText(/no binding constraint — no gate named one/)).toBeTruthy();
   });
 });

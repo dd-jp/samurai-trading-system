@@ -1,10 +1,3 @@
-/**
- * `SqliteCurrentTickStore` lifecycle (#96 acceptance criterion: "Unit test:
- * current_tick row lifecycle (create -> update per stage -> delete on
- * completion)"; #201 replaces the in-memory double with the real store).
- * Exercises the store in isolation; tick-runner.test.ts covers the same
- * lifecycle as driven by `SequentialTickRunner`.
- */
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
 import type { CurrentTick } from './types.js';

@@ -1,38 +1,3 @@
-/**
- * Stage 2 gross-vs-net cost decomposition.
- *
- * Answers the one question the 2026-08-05 Stage 2 kill left open
- * (docs/research/archive/2026-08-05-stage2-verdict-first-real-run.md, "Turnover,
- * not necessarily signal"): is a negative out-of-sample Sharpe in 22 of 24
- * (config, asset class) pairs a signal with no information in it, or a thin
- * gross edge churned 115–556 times over and eaten by `PESSIMISTIC_COST_CONFIG`?
- *
- * The two diagnoses point at different fixes, and — more expensively — at
- * different answers to whether buying deeper Polygon history is worth it. So
- * this runs the identical 12-config grid twice over the identical replay:
- * once scored net of modeled costs (reproducing the committed verdict) and
- * once scored gross of them (`GrossOfCostsTradeSource`).
- *
- * **The gross figures are not a "what if costs were lower" fantasy.** The
- * replay's trade path is provably cost-independent — entries, exits, stops,
- * targets and sizes are pure functions of bars and strategy config, and
- * nothing reads a fill price back into a decision. Adding modeled costs back
- * therefore reconstructs a genuinely frictionless run exactly;
- * `cost-attribution.test.ts` proves it by replaying against a zero-cost model
- * and comparing trade-for-trade.
- *
- * **Both sides go through the same `EvalExecutorImpl`** — same walk-forward
- * boundaries, same 50-bar embargo, same Lo annualization — and the gross OOS
- * Sharpe is built by the same `killLineChecks` as the net one. Anything less
- * would produce a gross number that is not comparable to the 0.5 kill line the
- * Stage 2 gate is defined on.
- *
- * **The window is pinned, not `new Date()`-relative.** `defaultFiveYearWindow`
- * moves every day, which would silently shift the effective window and stop
- * this decomposition lining up with the numbers in the committed verdict.
- *
- * Usage: `POLYGON_API_KEY=... node dist/server/tools/run-stage2-cost-decomposition.js`
- */
 import {
   attributeRunCosts,
   type CostConfig,
@@ -66,26 +31,16 @@ import {
 } from './run-stage2.js';
 import { makeAssetClass } from './stage2-support.js';
 
-/**
- * The exact window the committed 2026-08-05 verdict requested, to the
- * millisecond, so the effective window this intersects to — and therefore
- * every fold boundary — matches that run rather than merely resembling it
- */
 const PINNED_VERDICT_WINDOW: DateRange = STAGE2_PINNED_WINDOW;
 
 interface CostDecompositionDeps {
   polygonClient: PolygonClient;
   window?: DateRange;
-  /**
-   * Scratch SQLite path. Defaults to a FILE rather than `:memory:` so a re-run
-   * reuses the ingested bars instead of re-pulling six symbols from Polygon.
-   */
   dbPath?: string;
   costConfig?: CostConfig;
   print?: (line: string) => void;
 }
 
-/** One (config, asset class) pair, scored both ways */
 interface CostDecompositionRow {
   config_hash: string;
   asset_class: 'crypto' | 'stocks';
@@ -103,64 +58,20 @@ interface CostDecompositionRow {
 interface CostDecompositionResult {
   window: DateRange;
   rows: CostDecompositionRow[];
-  /**
-   * The discriminator, stated as a count rather than left to the reader: how
-   * many pairs clear the 0.5 kill line once costs are removed. A grid that
-   * fails net and also fails gross has no edge to defend; one that passes
-   * gross and fails net is a cost problem.
-   */
   passes_gross: number;
   passes_net: number;
-  /** How the grid scores as the cost fixture is scaled down. See `COST_SCALES`. */
   sensitivity: CostSensitivityPoint[];
 }
 
-/** The grid's score under one scaling of every cost coefficient */
 interface CostSensitivityPoint {
-  /** Multiplier applied to all four coefficients of both asset classes */
   scale: number;
   passes: number;
   stocks_bps: number;
   crypto_bps: number;
 }
 
-/**
- * The sensitivity ladder. `1` reproduces the committed verdict; `0` is the
- * gross case already computed. The rungs between exist because "gross beats
- * net" alone does not say how MUCH cheaper the fixture would have to be for
- * the grid to survive — which is the number that decides whether calibrating
- * the cost model is worth doing before anything else.
- */
 const COST_SCALES = [1, 0.5, 0.25, 0.1, 0.05] as const;
 
-/**
- * Scales every cost coefficient of both asset classes by `factor`.
- *
- * Note this is NOT exactly linear in the resulting charge: `CostModelImpl`
- * applies a structural 1bp floor beneath the half-spread and the commission,
- * so far enough down the ladder the floor starts binding and the realized cost
- * stops falling proportionally. That is a property of the model, deliberately
- * preserved here rather than modeled around — each rung is re-run against the
- * real cost model instead of extrapolated arithmetically, so the reported bps
- * are what the model actually charged.
- *
- * `floors` (#1000) is carried through UNSCALED, not dropped: a floor is a
- * structural minimum, not a cost coefficient — scaling it down the ladder
- * would defeat the thing it exists to enforce (Principle 1) rather than
- * measure sensitivity of it. `venues` (#1000) rate-field overrides, by
- * contrast, ARE scaled (#1017) — each present field of a venue override
- * (e.g. `{ saxo: { commissionRate } }`) is exactly the same kind of fact as
- * `stocks.commissionRate`/`crypto.commissionRate`, and leaving it unscaled
- * would silently under-measure cost sensitivity for that venue at every rung
- * below `factor: 1`. `PESSIMISTIC_COST_CONFIG` (this file's own default) sets
- * neither `floors` nor `venues`, so the default caller sees no behaviour
- * change from either rule.
- *
- * Copied, not aliased, same as every other field this function returns: a
- * caller mutating a scaled rung's `floors`/`venues` must not reach back into
- * the input `config` it was scaled from — `scaleVenues` below does that
- * per-venue-object copy (and scale) for `venues`.
- */
 export function scaleCostConfig(config: CostConfig, factor: number): CostConfig {
   const scale = (c: CostConfig['crypto']): CostConfig['crypto'] => ({
     spreadVolatilityCoefficient: c.spreadVolatilityCoefficient * factor,
@@ -176,11 +87,6 @@ export function scaleCostConfig(config: CostConfig, factor: number): CostConfig 
   };
 }
 
-/**
- * Scales each present rate field of each venue override by `factor` (#1017),
- * and copies rather than aliases so a caller mutating a scaled rung's
- * `venues` cannot reach back into the input `config` it was scaled from
- */
 function scaleVenues(
   venues: NonNullable<CostConfig['venues']>,
   factor: number,
@@ -211,13 +117,6 @@ async function ingestSymbols(
   }
 }
 
-/**
- * The three arrays are aligned by construction — `runTrialGrid` calls
- * `makeEvaluator` exactly once per pushed result, in grid order, and both
- * passes iterate the same grid over the same asset classes. Asserted rather
- * than assumed, because a misalignment would attribute one config's costs to
- * another's Sharpe and be invisible in the output
- */
 async function buildDecompositionRows(
   net: readonly TrialGridResult[],
   gross: readonly TrialGridResult[],
@@ -299,8 +198,6 @@ async function sweepCostSensitivity(
       },
     });
 
-    // Averaged per asset class so the reported rate is the grid's, not one
-    // arbitrarily-chosen config's
     const bps = { stocks: [] as number[], crypto: [] as number[] };
     for (const [i, result] of results.entries()) {
       const attribution = await attributeRunCosts(
@@ -327,8 +224,6 @@ async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDe
   const requested = deps.window ?? PINNED_VERDICT_WINDOW;
   const costConfig = deps.costConfig ?? PESSIMISTIC_COST_CONFIG;
 
-  // DAILY, stated explicitly (#664): this script decomposes the costs of the
-  // recorded daily verdict runs, so it must keep replaying what they replayed
   const store = new Stage2HistoricalStore(deps.polygonClient, {
     timeframe: DEFAULT_STAGE2_TIMEFRAME,
     dbPath: deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
@@ -362,9 +257,6 @@ async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDe
     ),
   ];
 
-  // The net pass also captures each replay, in grid order, so costs can be
-  // attributed afterwards from the same runs the metrics were computed on
-  // rather than from a third replay that might not be identical
   const runs: ReplayRunResult[] = [];
   print('Scoring the 12-config grid NET of costs (reproducing the committed verdict)...');
   const net = await runTrialGrid({
@@ -391,11 +283,6 @@ async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDe
       }),
   });
 
-  // The three arrays are aligned by construction — `runTrialGrid` calls
-  // `makeEvaluator` exactly once per pushed result, in grid order, and both
-  // passes iterate the same grid over the same asset classes. Asserted rather
-  // than assumed, because a misalignment would attribute one config's costs to
-  // another's Sharpe and be invisible in the output
   if (net.length !== gross.length || net.length !== runs.length) {
     throw new Error(
       `Cost decomposition: net/gross/replay counts disagree (${net.length}/${gross.length}/` +

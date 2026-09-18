@@ -1,83 +1,6 @@
-/**
- * The account-wide cap on outbound Nous calls in flight from this process
- * (#1080), with FIFO queueing and admission control.
- *
- * ## Why an ACCOUNT-wide cap and not a per-client one
- *
- * The 2026-09-14 probe (`/tmp` run record quoted in #1080) measured
- * `anthropic/claude-haiku-4.5` through Nous at p50 5,764 ms with one call in
- * flight and 18,912 ms / max 25,687 ms in a burst of four — the same prompt
- * and the same answer length, so the inflation is queueing, not work. The
- * follow-up split a three-call burst across three separate Nous API keys and
- * it was equal-or-worse than sending all three on one key (one call timed out
- * outright), which places the queue at the ACCOUNT, not the key. A per-client
- * limiter would therefore cap nothing: the debate's personas, the
- * disagreement pass, the risk critic, MI scoring and the Grok sentiment
- * refresh all land in the same upstream queue.
- *
- * That is why `nousChat` and `nousResponses` take a gate as a REQUIRED
- * option. They are the only two functions in this repo that build a Nous URL,
- * so a gate they cannot be called without is a cap no future caller can
- * forget — the alternative (an optional field, or a module-level singleton a
- * caller may not reach) is this repo's dominant defect class, a mechanism
- * nothing calls.
- *
- * ## Admission control, not just queueing
- *
- * A pure semaphore converts contention into waiting, and waiting inside a
- * per-call deadline is exactly the failure #1080 measured: 32 of 40 debates on
- * 2026-09-14 died on a single `LLM call exceeded 28000ms`, with the debate's
- * own 112,000 ms budget never binding. So a caller that could not both wait
- * AND make its call inside its own remaining budget is refused up front,
- * cheaply and legibly (`llm_gate_refused`, `FailureCause` `gate_refused`),
- * rather than admitted into a call it cannot finish. Two refusal reasons,
- * because they answer different questions:
- *
- *  - `admission` — refused on arrival, because the queue in front of it plus
- *    its own expected call already outran its budget. No slot was consumed.
- *  - `queue_deadline` — admitted to the queue on an estimate that proved
- *    optimistic, and the room its own call needs ran out while it was still
- *    waiting. The estimate is a model; this is the backstop for when the
- *    model is wrong.
- *
- * ## The predicate, and why it includes the call itself
- *
- * `estimatedWaitMs + expectedCallMs >= budgetMs`, and symmetrically the queue
- * timer fires at `budgetMs - expectedCallMs` rather than at `budgetMs`. A
- * check on the wait ALONE (what round 1 of #1080's review found here) admits a
- * caller that the estimator itself predicts will finish past its deadline: at
- * cap 1 against the debate client's 28,000 ms budget it would admit a caller
- * estimating a 26,000 ms wait (one call in flight plus one queued, at the
- * shipped 13,000 ms expectation), which then burns a full billed call and is
- * recorded as a provider `timeout` — the exact signature the gate exists to
- * remove. With the call's own duration in the predicate that third caller is
- * refused instead: 26,000 + 13,000 >= 28,000. The grant path
- * carries no second check by design: the timer above guarantees that any
- * waiter still queued when its room runs out is dropped, so a granted waiter
- * always has at least one expected call's worth of budget left.
- *
- * The estimate is deliberately crude — total expected work ahead, divided by
- * `maxInFlight` — and deliberately conservative-high: it assumes every
- * in-flight call has only just started. An over-estimate refuses a call that
- * might have squeaked through; an under-estimate admits one that will burn a
- * full deadline and produce nothing. #1080's measurement is that the second
- * mistake is the expensive one, which is also why the durations are per
- * CALLER (`LlmInFlightRequest.expectedCallMs`) rather than one constant: an X
- * retrieval call was measured at 5–26 s, and a debate call queued behind one
- * must not estimate its wait as though a 13 s debate call were ahead of it.
- *
- * A caller declares what its call is EXPECTED to take, never its timeout. The
- * two are different numbers and substituting one for the other degenerates
- * this predicate: a caller whose `budgetMs` and `expectedCallMs` are both its
- * timeout satisfies `wait + call >= budget` for every non-zero wait, so it is
- * refused whenever anything else holds a permit and runs only when the gate
- * is idle. `budgetMs - expectedCallMs` IS a caller's tolerance for waiting;
- * equality means it will not wait at all.
- */
 
 import type { Logger } from '../types.js';
 
-/** A held slot. `release()` is idempotent — a double release would corrupt the in-flight count. */
 export interface LlmInFlightSlot {
   release(): void;
 }
@@ -110,30 +33,9 @@ export class LlmInFlightRefusedError extends Error {
 }
 
 export interface LlmInFlightRequest {
-  /**
-   * The caller's remaining deadline for the WHOLE call, gate wait included.
-   * The gate spends it against an ESTIMATE of the call (see
-   * `expectedCallMs`), not a guarantee: it refuses a caller whose wait plus
-   * expected call would not fit, and drops a queued caller once too little of
-   * the budget is left for the call itself. It does NOT shorten the network
-   * timeout of a call it admits — the wire timeout still bounds the call, so
-   * a call that runs far past its estimate can still overrun this budget.
-   *
-   * Omitted means "wait as long as it takes", which is right for a caller with
-   * no clock of its own and wrong for every caller inside a latency budget.
-   */
   budgetMs?: number | undefined;
-  /**
-   * How long THIS caller's own call is expected to take once it is dispatched.
-   * Defaults to the gate's `expectedCallMs`, which is calibrated on debate
-   * calls; a caller in a different weight class (X retrieval, measured at
-   * 5–26 s against a debate call's ~13 s) must say so, or every caller queued
-   * behind it under-estimates its wait.
-   */
   expectedCallMs?: number | undefined;
-  /** The caller's existing cancellation. An abort while queued drops the waiter; the slot it never held is not released. */
   signal?: AbortSignal | undefined;
-  /** For the log line only — `debate`, `market_intelligence_sentiment`, ... */
   llmStage?: string | undefined;
 }
 
@@ -143,23 +45,12 @@ export interface LlmInFlightGate {
 
 const NO_OP_SLOT: LlmInFlightSlot = { release: () => undefined };
 
-/**
- * The pass-through. What every unit test and every programmatic caller with
- * no account contention to manage passes; production wires a real gate at the
- * composition root.
- */
 export const UNGATED_LLM_IN_FLIGHT: LlmInFlightGate = {
   acquire: () => Promise.resolve(NO_OP_SLOT),
 };
 
 export interface NousAccountInFlightGateOptions {
   maxInFlight: number;
-  /**
-   * Default per-call wall time, used ONLY to estimate queue waits for the
-   * admission check, and only for callers that do not declare their own
-   * `LlmInFlightRequest.expectedCallMs`. See the module header for the
-   * measurement.
-   */
   expectedCallMs: number;
   logger?: Logger | undefined;
 }
@@ -175,11 +66,6 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
   readonly #expectedCallMs: number;
   readonly #logger: Logger | undefined;
   readonly #waiters: Waiter[] = [];
-  /**
-   * One entry per call in flight, holding what that call said it would take.
-   * The array IS the in-flight count — a separate counter could disagree with
-   * it, and the estimate below reads both.
-   */
   readonly #inFlightCallMs: number[] = [];
 
   constructor(options: NousAccountInFlightGateOptions) {
@@ -188,9 +74,6 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
         `NousAccountInFlightGate: maxInFlight must be a positive integer, got ${options.maxInFlight}`,
       );
     }
-    // Zero or negative would make every estimate 0 and silently disable
-    // admission control, leaving only the `queue_deadline` backstop — the
-    // mechanism-that-does-nothing shape this file exists to avoid
     if (!Number.isFinite(options.expectedCallMs) || options.expectedCallMs <= 0) {
       throw new Error(
         `NousAccountInFlightGate: expectedCallMs must be a positive number of milliseconds, got ${options.expectedCallMs}`,
@@ -204,9 +87,6 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
   acquire(request: LlmInFlightRequest = {}): Promise<LlmInFlightSlot> {
     const signal = request.signal;
     if (signal?.aborted === true) {
-      // Rejected with the caller's own reason, not a gate error: this call was
-      // cancelled, and relabelling it `gate_refused` would put a deliberate
-      // teardown in the bucket #1080 measures contention with
       return Promise.reject(signal.reason);
     }
 
@@ -274,9 +154,6 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
         grant: () => {
           detach();
           const waitMs = Date.now() - enqueuedAt;
-          // Resolved BEFORE the log line: the slot is already counted in
-          // flight, so a logger that throws between the two would leave the
-          // permit held by nobody and this promise never settled
           resolve(this.#take(callMs));
           this.#logger?.log({
             trace_id: 'llm',
@@ -290,7 +167,6 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
               'but NOT in `ttfb_ms` — the difference between those two is this number',
             payload: {
               wait_ms: waitMs,
-              /** What was ALREADY queued when this call arrived — 0 for the first waiter */
               queue_depth: queueDepth,
               in_flight: this.#inFlightCallMs.length,
               max_in_flight: this.#maxInFlight,
@@ -327,19 +203,11 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
       this.#waiters.push(waiter);
       signal?.addEventListener('abort', onAbort, { once: true });
       if (budgetMs !== undefined) {
-        // The last moment a grant would still be useful, NOT the budget itself:
-        // a waiter granted with less than its own call left would dispatch a
-        // call that is already over deadline
         timer = setTimeout(() => waiter.drop(), Math.max(0, budgetMs - callMs));
       }
     });
   }
 
-  /**
-   * Total expected work ahead of a new arrival — every in-flight call assumed
-   * to have only just started — served `maxInFlight` at a time. See the module
-   * header for why the conservative direction is the right one.
-   */
   #estimateWaitMs(): number {
     const ahead = [
       ...this.#inFlightCallMs,

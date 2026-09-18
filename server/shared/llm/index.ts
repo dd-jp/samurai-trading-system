@@ -1,13 +1,3 @@
-/**
- * The provider-facing half of the LLM stack, shared because both callers need
- * it: the debate engine (`debate-engine/llm/nous-messages-client.ts`) and the
- * market-intelligence sentiment agent
- * (`market-intelligence/grok/nous-sentiment-client.ts`).
- *
- * `pricing.ts` lives here rather than under `debate-engine/` for the same
- * reason — the spend cap is cross-surface, and `nous-config.ts` reads the rate
- * table at startup to refuse a model this system cannot price.
- */
 
 export type {
   LlmInFlightGate,

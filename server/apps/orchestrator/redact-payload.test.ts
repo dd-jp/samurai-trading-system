@@ -1,19 +1,3 @@
-/**
- * Central payload redaction (#1035).
- *
- * The load-bearing test here is the first one in `formatLogLine integration`.
- * The rejected implementation — running `sanitizeLogText` over the SERIALIZED
- * string — produces `{"auth":[REDACTED]"scheme":"basic"}}` for that payload,
- * because the pattern's value class excludes `"` and `}` but not `{`. That is
- * an unparseable line on a format whose whole contract is one JSON object per
- * line, so it breaks every reader an operator reaches for mid-incident. These
- * assert the property that rules that implementation out, not merely that
- * something got redacted.
- *
- * Kept in its own file rather than appended to `logger.test.ts` because the
- * walker is its own module with its own bounds, and the integration cases
- * below are the seam between the two.
- */
 import { describe, expect, it } from 'vitest';
 import type { LogEntry } from '../../shared/index.js';
 import { formatLogLine, JsonLogger, type StdoutStream } from './logger.js';
@@ -28,9 +12,6 @@ const ENTRY: LogEntry = {
 
 describe('redactPayload', () => {
   it('replaces a credential key wholesale, whatever the value type', () => {
-    // Rule 1's reason for existing: as prose, a bare token under `api_key` has
-    // no assignment syntax around it, so `maskCredentials` cannot see it
-    // Structure is the only place that information exists
     expect(redactPayload({ api_key: 'PKabc123' })).toEqual({ api_key: '[REDACTED]' });
     expect(redactPayload({ auth: { scheme: 'basic', value: 'x' } })).toEqual({
       auth: '[REDACTED]',
@@ -42,9 +23,6 @@ describe('redactPayload', () => {
   });
 
   it('covers the compound credential key spellings, which rule 2 cannot see', () => {
-    // A bare token under `access_token` has no assignment syntax around it, so
-    // `maskCredentials` never matches it — the key name is the only evidence
-    // there is. These are the spellings a provider SDK actually uses.
     for (const key of [
       'access_token',
       'refresh_token',
@@ -60,29 +38,18 @@ describe('redactPayload', () => {
   });
 
   it('covers vendor-prefixed camelCase names sanitizeLogText cannot reach as prose', () => {
-    // alpacaSecretKey/polygonApiKey have no client/access/refresh prefix, so
-    // none of sanitize-log-text.ts's named-compound patterns match them as
-    // free text — this structural check is what actually closes that gap
     expect(redactPayload({ alpacaSecretKey: 'skFAKE0000' })).toEqual({
       alpacaSecretKey: '[REDACTED]',
     });
     expect(redactPayload({ polygonApiKey: 'skFAKE0000' })).toEqual({
       polygonApiKey: '[REDACTED]',
     });
-    // alpacaKeyId (round-2 review, F1): the literal sibling of alpacaSecretKey
-    // in the same options object (free-stack-aggregates-client.ts,
-    // stage2-source.ts, run-spread-calibration.ts) — a key id is not a
-    // secret by itself, but paired with alpacaSecretKey in the same log line
-    // it identifies which credential pair failed, so it's redacted too
     expect(redactPayload({ alpacaKeyId: 'AKFAKE0000' })).toEqual({
       alpacaKeyId: '[REDACTED]',
     });
   });
 
   it('leaves pagination cursors readable', () => {
-    // Why the key list enumerates compounds instead of suffix-matching
-    // `token`: these are cursors, not secrets, and they are exactly what a
-    // reader needs when a paged provider fetch stalls part-way
     expect(
       redactPayload({ next_page_token: 'CAESBQ', pageToken: 'abc', max_tokens: 1_024 }),
     ).toEqual({ next_page_token: 'CAESBQ', pageToken: 'abc', max_tokens: 1_024 });
@@ -112,8 +79,6 @@ describe('redactPayload', () => {
   });
 
   it('renders an Error as masked text rather than an empty object', () => {
-    // `JSON.stringify(new Error('x'))` is `{}` — the message, which is exactly
-    // the free text worth masking and worth reading, would be lost entirely
     expect(redactPayload({ cause: new Error('upstream: Bearer sk-ant-leaked') })).toEqual({
       cause: 'Error: upstream: [REDACTED]',
     });
@@ -132,16 +97,10 @@ describe('redactPayload', () => {
 
     const out = redactPayload(wide) as Record<string, unknown>;
     expect(JSON.stringify(out)).toContain('REDACTION_TRUNCATED');
-    // The bound has to cut the OUTPUT, not just stop recursing. Mapping every
-    // remaining sibling to the marker would keep all 5,000 entries and put a
-    // 5,000-key object on a log line — bounding nothing that matters
     expect(Object.keys(out).length).toBeLessThan(2_100);
   });
 
   it('bounds a very wide ARRAY too, in work and in line length', () => {
-    // Sibling iteration was the hole: recursion into `walk` was bounded from
-    // the start, but `value.map(...)` still visited every element of a huge
-    // array and emitted one entry per element
     const wide = Array.from({ length: 50_000 }, () => 'v');
 
     const out = redactPayload(wide) as unknown[];
@@ -173,11 +132,6 @@ describe('formatLogLine integration', () => {
   });
 
   it('survives a cyclic payload, which used to throw out of JSON.stringify', () => {
-    // Before #1035 this threw UNCAUGHT — and `formatLogLine` is what
-    // `degradationLine` builds on, so the throw landed on the both-sinks-dead
-    // path that writes the run's last trace. The depth bound absorbs it: the
-    // cycle is cut at MAX_DEPTH and the line is emitted, which is strictly
-    // better than losing the payload to the guard
     const cyclic: Record<string, unknown> = { stage: 'trader' };
     cyclic.self = cyclic;
 
@@ -189,10 +143,6 @@ describe('formatLogLine integration', () => {
   });
 
   it('degrades the payload, not the line, when it cannot be serialized at all', () => {
-    // `JSON.stringify` throws a TypeError on a BigInt, and the walker passes
-    // primitives through untouched — so this is a payload that survives
-    // redaction and still cannot go on the wire. The guard must cost the
-    // payload and keep the line
     const line = formatLogLine({ ...ENTRY, payload: { size: 1n } });
 
     expect(() => parse(line)).not.toThrow();
@@ -205,9 +155,6 @@ describe('formatLogLine integration', () => {
   });
 
   it('still writes a parseable #714 degradation notice when both sinks are gone', () => {
-    // `degradationLine` bypasses the walker entirely. This pins that the
-    // bypass did not change the notice's shape, and that the last-resort
-    // stderr write still happens before the throw
     const stdout: StdoutStream = {
       write() {
         throw new Error('EBADF');
@@ -221,11 +168,6 @@ describe('formatLogLine integration', () => {
       write: (line: string) => stderrLines.push(line),
     });
 
-    // Throws the ORIGINAL stdio error, not the no-sink message: with no file
-    // sink there is nothing durable to record the degradation on, so
-    // `writeToStdout` rethrows rather than degrading. `logger.ts`'s module doc
-    // states this ordering — the point here is that the last-resort stderr
-    // notice is written BEFORE the throw, and is parseable
     expect(() => logger.log(ENTRY)).toThrow(/EBADF/);
     expect(stderrLines.join('')).toContain('"log_file_sink":"degraded"');
     expect(stderrLines.join('')).toContain('#714');

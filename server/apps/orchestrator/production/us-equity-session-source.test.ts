@@ -29,9 +29,6 @@ describe('resolveUsEquitySessionCalendar', () => {
     const client: AlpacaCalendarClient = {
       fetchCalendar: vi.fn(async () => [
         { date: '2026-08-18', open: '09:30', close: '16:00' },
-        // An early close NOT present in the hand-entered US_EARLY_CLOSE_DAYS —
-        // proving this comes from the fetched table, not the table #684
-        // replaces
         { date: '2026-08-19', open: '09:30', close: '13:00' },
       ]),
     };
@@ -40,8 +37,6 @@ describe('resolveUsEquitySessionCalendar', () => {
     const calendar = await resolveUsEquitySessionCalendar({ logger, now: () => NOW, client });
 
     expect(calendar).toBeInstanceOf(AlpacaEquitySessionCalendar);
-    // The flatten boundary computes against the venue's actual close on the
-    // early-close day — 13:00 ET = 17:00 UTC in August (EDT)
     expect(calendar.isOpen(new Date('2026-08-19T16:59:00Z'))).toBe(true);
     expect(calendar.isOpen(new Date('2026-08-19T17:00:00Z'))).toBe(false);
     expect(calendar.sessionEnd(new Date('2026-08-19T14:00:00Z'))?.toISOString()).toBe(
@@ -82,8 +77,6 @@ describe('resolveUsEquitySessionCalendar', () => {
 
     expect(calendar).toBeInstanceOf(UsEquityRegularHoursCalendar);
 
-    // The alert/refusal is ASSERTED, not merely logged: a distinct channel
-    // call, not just a grep over log entries
     expect(alertChannel.alerts).toHaveLength(1);
     expect(alertChannel.alerts[0]?.reason).toMatch(/ENOTFOUND/);
     expect(alertChannel.alerts[0]?.reported_at).toEqual(NOW);
@@ -140,9 +133,6 @@ describe('resolveUsEquitySessionCalendar', () => {
       alertChannel: recordingAlertChannel(),
     });
 
-    // The fallback hand table (#684) throws rather than guessing a normal
-    // close for a date past its own checked coverage — the dangerous
-    // direction is unreachable even on the degraded path
     expect(() => calendar.isOpen(new Date('2028-03-14T15:00:00Z'))).toThrow(
       /past the hand-entered table/,
     );

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { installSupervisorContinueOnFault, watchSupervisorStdout } from './fault-guard.js';
 
-/** Async-`'error'`-only stand-in for `process.stdout` — see stdout-fault-guard.test.ts */
 class FakeStdout {
   private listener?: (error: Error) => void;
   on(_event: 'error', listener: (error: Error) => void): this {
@@ -19,12 +18,6 @@ class FakeStdout {
   }
 }
 
-/**
- * Same shape as `FakeStdout`, plus `write` — stands in for `process.stderr`,
- * which is both the reporting channel and (per the module doc's "Both
- * streams, not just stdout") a stream that must itself have an `'error'`
- * listener so a dead stderr degrades instead of reaching `uncaughtException`
- */
 class FakeStderr {
   private listener?: (error: Error) => void;
   readonly lines: string[] = [];

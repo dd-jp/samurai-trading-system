@@ -1,11 +1,3 @@
-/**
- * Which Saxo gateway a run talks to, and the environment variables that name
- * it. Its own module (#1523) so the token layer — `saxo-oauth.ts`,
- * `saxo-token-file.ts`, `saxo-token-source.ts` — can depend on it without
- * importing `saxo-http-client.ts`, which imports the token source back.
- * `saxo-http-client.ts` re-exports all three names, so existing callers are
- * unaffected.
- */
 export type SaxoTradingEnvironment = 'sim' | 'live';
 
 export const SAXO_CREDENTIAL_ENV_VARS: Readonly<

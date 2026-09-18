@@ -1,17 +1,3 @@
-/**
- * #1518's export: every CGT disposal on the live Saxo GIA equity book, for
- * one UK tax year, matched same-day → 30-day → Section 104 — `npm run
- * report:cgt`.
- *
- * NOT TAX ADVICE. This is a recordkeeping aid, not a filing. Every figure
- * must be verified against the operator's own broker contract notes before
- * use in a Self Assessment return — see `docs/cgt-disposal-matching.md`.
- *
- * Opens the store read-only (`openReadOnlyCgtStore`), unlike
- * `report-arm-comparison.ts`'s `openSharedStore` — this report must never
- * take a write handle on the live-money store or run migrations against it
- * (review round 1, check 4), so a schema gap is refused by name instead.
- */
 import { isAbsolute, resolve } from 'node:path';
 import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
 import {
@@ -36,26 +22,11 @@ function gbp(value: number): string {
   return value.toFixed(2);
 }
 
-/**
- * The current UK tax year's start year (`ukTaxYearLabel`'s inverse), the
- * default when `--tax-year` is not given
- */
 export function currentTaxYearStartYear(now: Date): number {
   const label = ukTaxYearLabel(now);
   return Number(label.slice(0, 4));
 }
 
-/**
- * Parses `--tax-year 2025-26`; rejects anything that is not two consecutive
- * years, and (review round 1, finding 3) anything before the tax year
- * `ANNUAL_EXEMPT_AMOUNT_GBP` is sourced for — an earlier year used a
- * different Annual Exempt Amount this report does not have on file, and
- * printing the current constant under an earlier year's heading would be a
- * confidently wrong figure on a document headed for HMRC. Delegates that
- * check to `assertTaxYearIsSourced` rather than re-deriving the same
- * condition here, so the CLI and `cgtReportForTaxYear` cannot drift apart on
- * where the cutoff is.
- */
 export function parseTaxYearStartYear(argv: readonly string[], now: Date): number {
   const index = argv.indexOf('--tax-year');
   if (index === -1) return currentTaxYearStartYear(now);
@@ -73,13 +44,6 @@ export function parseTaxYearStartYear(argv: readonly string[], now: Date): numbe
   return startYear;
 }
 
-/**
- * Refuses a non-live store rather than printing a paper/backtest run's fills
- * under a heading that reads as the operator's real tax position (review
- * round 1, finding 16) — every other integrity fault this report can hit
- * throws rather than mis-reporting, and a misfiled paper report handed to an
- * accountant would be the worst version of that failure
- */
 export function assertLiveMode(mode: string): void {
   if (mode !== 'live') {
     throw new Error(
@@ -94,12 +58,6 @@ export interface CgtReportResult {
   unconverted: UnconvertedCgtFill[];
 }
 
-/**
- * Composes the whole read → match → window chain once, so a production
- * caller exists for it (this project's dominant defect class is a tested
- * mechanism nothing calls) and so a test can exercise the composed chain
- * against `:memory:` without going through `isMain`
- */
 export function buildCgtReport(db: StoreHandle, startYear: number): CgtReportResult {
   const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
   const disposals = matchDisposals(legs);
@@ -109,13 +67,6 @@ export function buildCgtReport(db: StoreHandle, startYear: number): CgtReportRes
   };
 }
 
-/**
- * The report, as text. The store mode/path line, the disclaimer, and the
- * unconverted-fills section are all unconditional — a paper-mode store's
- * rows are not CGT events at all, an accountant needs to see what is NOT
- * covered as clearly as what is, and a report that silently dropped a
- * fill it could not price in sterling would be worse than a refusal.
- */
 export function formatCgtReport(
   report: CgtTaxYearReport,
   unconverted: readonly UnconvertedCgtFill[],
@@ -210,9 +161,6 @@ if (isMain) {
   const mode = resolveStoreMode();
   assertLiveMode(mode);
   const dbPath = sharedStorePath(mode);
-  // Same resolution the orchestrator uses, for the reason `report-arm-
-  // comparison.ts` gives: a report that opened a different database than the
-  // running process writes would be confidently wrong rather than empty
   assertStorePathMatchesMode({ dbPath, mode });
   const db = openReadOnlyCgtStore(dbPath);
 

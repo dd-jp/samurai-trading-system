@@ -11,18 +11,6 @@ function makeLogger(): Logger & { entries: LogEntry[] } {
   return { entries, log: (entry: LogEntry) => entries.push(entry) };
 }
 
-/**
- * Direct unit coverage on `assertLseCalendarCoverage` itself, bypassing
- * `buildProductionComponents`. This is what proves the guard's boundary
- * decision is `calendar.coversCloseFor(now)`, not a re-derived comparison
- * against `LSE_TABLE_COVERAGE_END` — every test in production.test.ts uses
- * the real `LseRegularHoursCalendar`, where the two currently agree, so
- * none of them can tell a guard that calls `coversCloseFor` apart from one
- * that silently re-derives the same answer another way. Overriding the
- * public method on a real instance (rather than a duck-typed object) is
- * required here: `LseRegularHoursCalendar` carries private class fields, so
- * TypeScript's structural typing for it is effectively nominal.
- */
 describe('assertLseCalendarCoverage delegates the boundary decision to coversCloseFor', () => {
   it('throws when coversCloseFor is false, even for a date on or before LSE_TABLE_COVERAGE_END', () => {
     const calendar = new LseRegularHoursCalendar();
@@ -53,8 +41,6 @@ describe('assertLseCalendarCoverage delegates the boundary decision to coversClo
   it('posts the horizon alert with the real coverage_end and a non-negative days_remaining', () => {
     const calendar = new LseRegularHoursCalendar();
     const posted: LseCalendarCoverageAlert[] = [];
-    // 30 civil days before LSE_TABLE_COVERAGE_END, derived rather than a bare
-    // literal so extending the table doesn't strand this test at a stale gap
     const now = new Date(
       new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`).getTime() - 30 * 86_400_000,
     );
@@ -79,12 +65,6 @@ describe('assertLseCalendarCoverage delegates the boundary decision to coversClo
   });
 
   it('does not post when coversCloseFor disagrees with LSE_TABLE_COVERAGE_END and the raw comparison would be negative', () => {
-    // A calendar whose coversCloseFor says "covered" past the real
-    // LSE_TABLE_COVERAGE_END (never true for the real calendar today, but
-    // exactly the shape a future subclass or a test double could produce)
-    // must not be able to post a negative days_remaining — that would
-    // violate LseCalendarCoverageAlert's documented invariant. Removing the
-    // `daysRemaining >= 0` check in assertLseCalendarCoverage turns this red
     const calendar = new LseRegularHoursCalendar();
     calendar.coversCloseFor = () => true;
     const posted: LseCalendarCoverageAlert[] = [];

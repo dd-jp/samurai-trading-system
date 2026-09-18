@@ -107,7 +107,6 @@ function makePersistedBreakerState(): PersistedBreakerState[] {
   ];
 }
 
-// Caps set high enough by default that no step trims unless a test lowers one
 function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
   return {
     max_position_size_fraction_of_equity: 10,
@@ -161,13 +160,6 @@ describe('RiskManagerImpl.evaluate — exits', () => {
   });
 
   it('carries an unpriced flatten through with its flag and zeroed prices intact (#826)', () => {
-    // Risk sits BETWEEN the stage that sets `unpriced_exit` (Trader) and the
-    // only stage that reads it (Verdict, which skips its drift and stale-feed
-    // gates for such an intent). Both ends are tested at their own seam, so
-    // without this the middle hop is the one thing nothing pins: an edit that
-    // rebuilt the intent here instead of returning it verbatim would drop the
-    // flag, leave both suites green, and silently reinstate the `!(entry > 0)`
-    // no_go that strands a position through the close
     const manager = new RiskManagerImpl(makeConfig());
     const intent = makeIntent({
       intent_type: 'exit',
@@ -185,23 +177,13 @@ describe('RiskManagerImpl.evaluate — exits', () => {
     expect(decision.order_intent?.metadata.unpriced_exit).toBe(true);
     expect(decision.order_intent?.entry).toBe(0);
     expect(decision.order_intent).toEqual(intent);
-    // The size an exit fills is the held quantity, never a price-derived one
     expect(decision.modifications?.final_size).toBe(100);
   });
 });
 
 describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
-  // A stand-in for the run's actual Saxo-tradeable set — `saxoTradeableUniverse()`'s
-  // asset list, not `asset_class`. See `RiskConfig.long_only_instruments`'s
-  // doc comment for why `asset_class === 'stocks'` alone is the wrong
-  // discriminator: it also catches the Alpaca paper universe below
   const saxoConfig = () => makeConfig({ long_only_instruments: new Set(['3LUS']) });
 
-  // The SIM trace's own intent shape (docs/research/44-saxo-data-surface.md
-  // §6.7): control arm, instrument 3LUS, `sell, size 1`, no open lot. Verdict
-  // refused that tick on `stale_feed` before Execution ever saw it — this
-  // suite is what refuses the SAME intent shape at Risk, unconditionally,
-  // rather than relying on a feed staleness that will not always be there
   it('refuses a sell entry with no held lot on a Saxo-venue instrument', () => {
     const manager = new RiskManagerImpl(saxoConfig());
     const input = makeInput({
@@ -220,9 +202,6 @@ describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
     expect(decision.binding_constraint).toBe('long_only_book');
     expect(decision.reasons.join(' ')).toMatch(/3LUS/);
     expect(decision.reasons.join(' ')).toMatch(/#1511/);
-    // "with no held lot" is the true, load-bearing fact for an entry — this
-    // is the row a reviewer reads to confirm the refusal reason is honest
-    // about position state, not just present
     expect(decision.reasons.join(' ')).toMatch(/with no held lot/);
     expect(decision.order_intent).toBeNull();
   });
@@ -241,9 +220,6 @@ describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
     const decision = manager.evaluate(input);
 
     expect(decision.binding_constraint).toBe('long_only_book');
-    // A scale_in has a held lot by construction, so the reason must not
-    // claim "no held lot" here — that would misstate position state on the
-    // exact case this test covers
     expect(decision.reasons.join(' ')).not.toMatch(/with no held lot/);
   });
 
@@ -288,13 +264,6 @@ describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
     expect(manager.evaluate(input).status).toBe('approved');
   });
 
-  // Round-1 review finding (MAJOR): `asset_class === 'stocks'` also matches
-  // the Alpaca paper universe, which trades no Saxo venue and was never named
-  // in David's decision — the running 14-day paper soak measured ~2/3 of its
-  // bearish entry intents removed on BOTH arms by that mistake. This pins the
-  // fix: an instrument absent from `long_only_instruments` (the config never
-  // set at all is the default — `makeConfig()` with no override — reproducing
-  // every shipped Alpaca run) is never refused, regardless of asset_class
   it('does not refuse a sell entry on an Alpaca-paper stocks instrument — not in long_only_instruments', () => {
     const manager = new RiskManagerImpl(makeConfig());
     const input = makeInput({
@@ -315,10 +284,6 @@ describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
 
 describe('RiskManagerImpl.evaluate — a partly-valued book (#841)', () => {
   it('refuses an ENTRY sized against a book with an unvalued position in it', () => {
-    // The composition root only ever asks for a degraded view on the exit
-    // path, but "no degraded view reaches an entry" must be a property of the
-    // gate rather than of one call site — every cap below reads an absent
-    // instrument as zero exposure and would allow a larger entry for it
     const manager = new RiskManagerImpl(makeConfig());
     const input = makeInput({
       intent: makeIntent({ intent_type: 'entry' }),
@@ -438,9 +403,6 @@ describe('RiskManagerImpl.evaluate — circuit-breaker gate', () => {
   });
 
   it('blocks a new entry on an unknown daily figure, but still lets the exit out (#333)', () => {
-    // The end-to-end shape of decision 5, through the real `CircuitBreakers`
-    // rather than a hand-set `BreakerState`: an unknown daily figure has to
-    // stop new risk without trapping the account in what it already holds
     const unknown = { known: false, reason: 'no session-open equity observed' } as const;
     const breakers = new CircuitBreakers({
       daily_loss_pct: 0.05,
@@ -463,8 +425,6 @@ describe('RiskManagerImpl.evaluate — circuit-breaker gate', () => {
     const entry = manager.evaluate(makeInput({ breakers }));
     expect(entry.status).toBe('rejected');
     expect(entry.binding_constraint).toBe('circuit_breaker:portfolio');
-    // The reason travels with the rejection — an operator must be able to tell
-    // "we do not know the daily figure" from "the daily loss limit was hit"
     expect(entry.reasons.join(' ')).toContain('daily_pnl_unknown:portfolio');
 
     const exit = manager.evaluate(
@@ -512,7 +472,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
     const decision = manager.evaluate(input);
 
-    // Allowed additional = 12,000 - 5,000 = 7,000 -> size 70
     expect(decision.order_intent?.size).toBe(70);
     expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
   });
@@ -528,7 +487,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
     const decision = manager.evaluate(input);
 
-    // Allowed additional = 8,000 - 3,000 = 5,000 -> size 50
     expect(decision.order_intent?.size).toBe(50);
     expect(decision.binding_constraint).toBe('per_asset_class_exposure_cap');
   });
@@ -544,7 +502,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
     const decision = manager.evaluate(input);
 
-    // Allowed additional = 6,000 - 2,000 = 4,000 -> size 40
     expect(decision.order_intent?.size).toBe(40);
     expect(decision.binding_constraint).toBe('portfolio_gross_exposure_cap');
   });
@@ -561,18 +518,10 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
     const decision = manager.evaluate(input);
 
-    // Allowed additional = 9,000 - 4,000 (existing MSFT, AAPL has none) = 5,000 -> size 50
     expect(decision.order_intent?.size).toBe(50);
     expect(decision.binding_constraint).toBe('concentration_correlation_cap');
   });
 
-  /**
-   * #1019 — the same four caps, stated against SUBMITTED exposure instead of
-   * filled. Each pairs with the filled-exposure case directly above it and
-   * asserts the identical allowance, which is the whole claim: a gate must
-   * not care whether the exposure ahead of it has come back from the venue
-   * yet, only that it has been committed.
-   */
   describe('in-flight reservations count as deployed (#1019)', () => {
     it('trims to the per-asset exposure cap against an in-flight order on the same name', () => {
       const manager = new RiskManagerImpl(makeConfig({ per_asset_cap_fraction_of_equity: 0.12 }));
@@ -663,7 +612,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
       const decision = manager.evaluate(input);
 
-      // 12,000 - (3,000 filled + 2,000 in flight) = 7,000 -> size 70
       expect(decision.order_intent?.size).toBe(70);
     });
 
@@ -719,16 +667,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
     });
   });
 
-  /**
-   * #1568 — the specific in-flight shape #1019 above did not cover: a lot
-   * `saxo-adapter.ts`'s `adopt` acks `filled`/`partially_filled` at submit
-   * time with `filled_size` still 0. Unlike the `#1019` cases above, this
-   * portfolio is produced by the REAL `computePortfolioView`, not a hand-built
-   * fixture — the point being proven is that the reservation `portfolio-view.ts`
-   * now computes for this shape actually reaches a SECOND instrument's caps,
-   * not merely that `evaluate` trusts whatever `reserved_exposure_by_instrument`
-   * it is handed (already proven above).
-   */
   describe('adopted zero-fill lot reaches a second instrument’s caps (#1568)', () => {
     function makeMarketData(prices: Record<string, number>): MarketDataService {
       const getMark = vi.fn(
@@ -771,8 +709,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
         avg_entry_price: 0,
         stop: 95,
         target: 110,
-        // Saxo's `adopt` returning the venue's own state verbatim on a
-        // lookup hit — the ack this ticket is about
         order_state: 'filled',
         broker_order_ids: ['order-1'],
         opened_at: fixedClock.now(),
@@ -800,15 +736,11 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
         max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
       });
 
-      // AAPL never advances `exposure_by_instrument` (filled_size is still 0)
-      // — the reservation is the ONLY place this lot's notional shows up
       expect(portfolio.exposure_by_instrument.AAPL ?? 0).toBe(0);
       expect(portfolio.reserved_exposure_by_instrument.AAPL).toBe(10_000);
       expect(portfolio.reserved_exposure_by_class.stocks).toBe(10_000);
       expect(portfolio.reserved_gross_exposure).toBe(10_000);
 
-      // A second, DIFFERENT instrument's gross cap, evaluated against this
-      // same portfolio before any `ingestFills()` pass has run
       const manager = new RiskManagerImpl(
         makeConfig({ portfolio_gross_cap_fraction_of_equity: 0.15 }),
       );
@@ -819,9 +751,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
         }),
       );
 
-      // Cap allows 15,000; AAPL's 10,000 reservation leaves 5,000 -> size 50
-      // Without #1568's fix, AAPL's reservation reads 0 and MSFT gets the
-      // full 100
       expect(decision.order_intent?.size).toBe(50);
       expect(decision.binding_constraint).toBe('portfolio_gross_exposure_cap');
     });
@@ -851,7 +780,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
       portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000 } }),
-      // MSFT omitted entirely — insufficient overlapping return history
       correlation: makeCorrelation({ correlations: {} }),
     });
 
@@ -873,7 +801,6 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
     const decision = manager.evaluate(input);
 
-    // Allowed additional is negative, floored at 0 notional -> rejected as dust, never a negative size
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('min_viable_size');
   });
@@ -939,14 +866,6 @@ describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
   });
 
   it('#740: a size refusal is distinguishable from a conviction (risk-critic) refusal — different binding_constraint tags on otherwise-identical rejected decisions', () => {
-    // A post-mortem reading `risk_log` alone must be able to tell "the desk
-    // was full / the residual was dust" from "the signal itself was judged
-    // weak" — the two have opposite remedies (widen the envelope vs distrust
-    // the debate) and a shared tag would erase the distinction. This asserts
-    // it on the ACTUAL `RiskDecision` shape `direct-bind.ts`'s `buildRiskStep`
-    // spreads verbatim into the persisted `risk_log` row (see that module's
-    // `deps.riskLog?.write({ ..., binding_constraint: decision.binding_constraint, ... })`),
-    // not against the in-memory `reasons` array alone
     const sizeConfig = makeConfig({
       per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.0005 },
       min_viable_size: 100,
@@ -1117,12 +1036,6 @@ describe('RiskManagerImpl.evaluate — CII soft signal (#205)', () => {
   });
 });
 
-/**
- * #303: the concentration check still treats an uncovered pair as "not
- * correlated" — nothing about sizing moves. What changes is that the decision
- * now SAYS so, so an absent correlation is no longer indistinguishable from a
- * measured zero.
- */
 describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () => {
   it('warns for each held instrument with insufficient overlapping history', () => {
     const manager = new RiskManagerImpl(makeConfig());
@@ -1150,11 +1063,6 @@ describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () =
     expect(decision.warnings).toEqual([]);
   });
 
-  /**
-   * The distinction that #303 exists to draw: a measured 0.0 and an
-   * un-measurable pair both leave the concentration check inert, but only one
-   * of them is evidence of diversification
-   */
   it('distinguishes a measured near-zero correlation from an unmeasurable pair', () => {
     const manager = new RiskManagerImpl(makeConfig());
     const measured = manager.evaluate(
@@ -1174,14 +1082,9 @@ describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () =
 
     expect(measured.warnings).toEqual([]);
     expect(unmeasurable.warnings).toEqual(['correlation_warmup:MSFT']);
-    // ...and the sizing outcome is identical: this warning trims nothing
     expect(measured.order_intent?.size).toBe(unmeasurable.order_intent?.size);
   });
 
-  /**
-   * #381's six-instrument widening on day 1 of the soak: every pair uncovered.
-   * The portfolio must not read as silently diversified.
-   */
   it('flags every peer of a six-instrument day-1 portfolio rather than reading as diversified', () => {
     const manager = new RiskManagerImpl(
       makeConfig({ concentration: { cap_fraction_of_equity: 0.09, threshold: 0.7 } }),
@@ -1198,10 +1101,8 @@ describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () =
     const decision = manager.evaluate(input);
 
     expect(decision.status).toBe('approved');
-    // Unchanged behaviour: nothing trims, because nothing is KNOWN correlated
     expect(decision.binding_constraint).toBeNull();
     expect(decision.order_intent?.size).toBe(100);
-    // ...but the blindness is now stated rather than implied by an empty map
     expect(decision.warnings).toEqual(peers.map((p) => `correlation_warmup:${p}`));
   });
 
@@ -1247,18 +1148,7 @@ describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () =
   });
 });
 
-/**
- * #433 — the enforcement, not the construction.
- *
- * `autoTighten` moved every risk threshold toward its guardrail bound on a
- * kill-line breach, `AdjustmentLog` recorded it, and `RiskManagerImpl` went on
- * evaluating against a `RiskConfig` frozen at construction. So the system's
- * defensive response to "the edge may be gone" changed nothing about what it
- * would trade. After ADR-0007 removed the human gate, that was one of the few
- * self-defence mechanisms left.
- */
 describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
-  /** A `risk_thresholds` table whose contents a test can move between calls */
   function liveThresholds(initial: Record<string, number> = {}) {
     const thresholds = { ...initial };
     return {
@@ -1272,22 +1162,16 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
   it('binds the tightened cap, not the constructor one', () => {
     const { source, tighten } = liveThresholds();
     const manager = new RiskManagerImpl(makeConfig(), source);
-    // Default intent is 100 x $100 = $10,000 notional, well under the
-    // 1,000,000 default cap
     expect(manager.evaluate(makeInput()).modifications?.final_size).toBe(100);
 
     tighten('max_position_size_fraction_of_equity', 0.05);
     const decision = manager.evaluate(makeInput());
 
     expect(decision.modifications?.final_size).toBe(50);
-    // `binding_constraint` names the CHECK STEP, not the config field — the
-    // tuning key is `max_position_size_fraction_of_equity`, the step is `per_trade_size_cap`
     expect(decision.binding_constraint).toBe('per_trade_size_cap');
   });
 
   it('picks up a tightening applied BETWEEN two evaluations', () => {
-    // The property a constructor-frozen config cannot have, stated directly:
-    // the Feedback Loop tightens once a day, and the next tick must feel it
     const { source, tighten } = liveThresholds();
     const manager = new RiskManagerImpl(makeConfig(), source);
 
@@ -1319,7 +1203,6 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
 
     const decision = manager.evaluate(makeInput());
 
-    // per_asset_cap_fraction_of_equity (3,000, static) binds before max_position_size_fraction_of_equity (5,000, live)
     expect(decision.modifications?.final_size).toBe(30);
     expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
   });
@@ -1341,8 +1224,6 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
   });
 
   it('ignores a corrupt row rather than letting it disable the cap', () => {
-    // NaN compares false against every notional, so applying one would turn a
-    // cap into no cap at all — the opposite of what a tightening means
     const { source } = liveThresholds({ max_position_size_fraction_of_equity: Number.NaN });
     const manager = new RiskManagerImpl(
       makeConfig({ max_position_size_fraction_of_equity: 0.05 }),
@@ -1374,13 +1255,6 @@ describe('RiskManagerImpl.evaluate — risk-critic skip record (review 2026-08-0
   });
 
   it('#957: a critic trim below the dust floor is still attributable to the critic in `reasons`', () => {
-    // `applyCritic` runs AFTER the pre-quantisation `min_viable_size` check, so
-    // a trim to dust falls through to the post-quantisation floor and the
-    // `binding_constraint` names THAT — the critic's decision reaches the log
-    // as what looks like a grid artifact. The producer (#957) cannot prevent
-    // this: it has no view of `config.min_viable_size`. Pinning the behaviour
-    // instead of re-plumbing the ordering, because `reasons` still carries the
-    // trim verbatim and a post-mortem can attribute it there
     const decision = new RiskManagerImpl(makeConfig({ min_viable_size: 100 })).evaluate(
       makeInput({
         critic: { verdict: 'trim', max_notional: 50, reasoning: 'headline risk into the close' },
@@ -1414,9 +1288,6 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
   });
 
   it('hard-rejects a MEASURED breach even when the prose verdict says pass', () => {
-    // #997 Q2b: the producer reports facts and never overwrites the verdict —
-    // `evaluate()` holds the authority. The persisted row therefore keeps what
-    // the model actually said, and the two rejection causes stay separable
     const decision = new RiskManagerImpl(makeConfig()).evaluate(
       makeInput({
         critic: {
@@ -1434,10 +1305,6 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
   });
 
   it('rejects on a breach with every OTHER producer failed open — the mechanical steps are clean', () => {
-    // The scenario the mechanism exists for: the book is well inside every cap,
-    // the correlation estimate has no history, no CII score is known, and the
-    // trade would sail through. The measured predicate is the only thing that
-    // stops it
     const decision = new RiskManagerImpl(makeConfig()).evaluate(
       makeInput({
         cii: {},
@@ -1472,10 +1339,6 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
   });
 
   it('keeps risk_critic:reject for a PROSE reject, and still records the condition states', () => {
-    // Ordering: the summary is pushed before the prose branch acts, so a prose
-    // reject that returns early still carries the audit. `invalidated` is then
-    // reached only when the prose did NOT itself reject — precisely the
-    // disagreement case worth counting
     const decision = new RiskManagerImpl(makeConfig()).evaluate(
       makeInput({
         critic: {
@@ -1510,16 +1373,6 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
   });
 
   it('replays a PRE-FOLD verdict — no `conditions` field — to the same DECISION, plus one reason line', () => {
-    // #997 Q3's acceptance criterion, stated precisely. The comparison that
-    // matters is against the decision the code made BEFORE the fold existed,
-    // not against a post-fold sibling — two post-fold inputs agreeing proves
-    // only that absence and emptiness share a code path
-    //
-    // So: frozen expectations. Status, size and binding constraint are
-    // UNCHANGED, which is what a backtest spanning the fold date depends on
-    // `reasons` gains exactly one line — `no_conditions` — and that addition
-    // is deliberate: a replayed row that enforces nothing must say so rather
-    // than look like a checked one
     const preFold: RiskCriticVerdict = {
       verdict: 'pass',
       max_notional: null,
@@ -1530,8 +1383,6 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
 
     const preFoldReasons = decision.reasons.filter((reason) => reason !== NO_CONDITIONS_REASON);
     expect(decision.status).toBe('approved');
-    // Frozen: the decision this input produced BEFORE the fold shipped —
-    // untrimmed, unconstrained, and with no reason line of its own
     expect(decision.binding_constraint).toBeNull();
     expect(decision.modifications).toEqual({
       original_size: 100,
@@ -1539,7 +1390,6 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
       stop_tightened: false,
     });
     expect(decision.order_intent?.size).toBe(makeInput().intent.size);
-    // Exactly one line is added, and it is the `no_conditions` one
     expect(decision.reasons).toEqual([NO_CONDITIONS_REASON]);
     expect(preFoldReasons).toEqual([]);
   });
@@ -1547,11 +1397,6 @@ describe('RiskManagerImpl.evaluate — invalidation conditions (#994, per #997)'
 
 describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#766)', () => {
   it('approves an exit even when the live risk_thresholds table has an out-of-bound row', () => {
-    // max_pbo's bound is 0.05 (threshold-bounds.ts) — 0.5 is a bright-line
-    // crossing, and resolveRiskConfig throws on it for an ENTRY. Before #766
-    // that resolve ran ahead of the exit bypass below, so it threw for an
-    // exit too — stranding the flatten/exit path behind a corrupt threshold
-    // row (ADR-0014's flat-by-close invariant)
     const manager = new RiskManagerImpl(makeConfig(), {
       getRiskThresholds: () => ({ max_pbo: 0.5 }),
     });
@@ -1562,8 +1407,6 @@ describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#
   });
 
   it('still refuses an ENTRY when the live risk_thresholds table has an out-of-bound row', () => {
-    // The other half: a probe that only checked the exit above could not
-    // tell a working clamp from one that stopped enforcing anything at all
     const manager = new RiskManagerImpl(makeConfig(), {
       getRiskThresholds: () => ({ max_pbo: 0.5 }),
     });
@@ -1572,10 +1415,6 @@ describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#
   });
 
   it("leaves an exit's cii_threshold-driven warnings unchanged whether or not the table is consulted", () => {
-    // The no-op argument the fix's own doc comment makes: cii_threshold is
-    // not in RISK_THRESHOLD_KEYS, so resolveRiskConfig never touches it —
-    // skipping the resolve for an exit changes nothing about what an exit
-    // decides
     const withoutSource = new RiskManagerImpl(makeConfig({ cii_threshold: 70 })).evaluate(
       makeInput({ intent: makeIntent({ intent_type: 'exit' }) }),
     );
@@ -1587,17 +1426,6 @@ describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#
   });
 });
 
-/**
- * #941 second site. The Trader floors the size it PROPOSES, but every cap gate
- * here trims a notional and the approved size is re-derived by dividing — so a
- * whole-share entry comes back fractional the moment any gate binds, and
- * Alpaca refuses the bracket (`422 42210000 fractional orders must be simple
- * orders`) exactly as it did before the Trader was fixed.
- *
- * The worked example throughout: 100 shares at 100 against 100_000 of equity,
- * i.e. 10_000 of notional, trimmed by a position cap to 7_145 — which divides
- * to 71.45, deliberately fractional.
- */
 describe('whole-share sizing (#941)', () => {
   const trimmingConfig = (whole: boolean) =>
     makeConfig({ max_position_size_fraction_of_equity: 0.07145, whole_share_sizing: whole });
@@ -1607,7 +1435,6 @@ describe('whole-share sizing (#941)', () => {
 
     expect(decision.status).toBe('approved');
     expect(decision.order_intent?.size).toBe(71);
-    // Never 72: rounding up would restore exposure the cap gate just removed
     expect(decision.modifications?.final_size).toBe(71);
     expect(decision.modifications?.original_size).toBe(100);
   });
@@ -1625,10 +1452,6 @@ describe('whole-share sizing (#941)', () => {
   });
 
   it('returns an untrimmed size verbatim rather than round-tripping it through the notional', () => {
-    // Not a hypothetical: `3 * 0.35 / 0.35` evaluates to 2.9999999999999996 in
-    // IEEE-754 double, so a floor over the round-trip turns 3 whole shares
-    // into 2 on a path where NOTHING trimmed. A penny-priced entry is the
-    // live shape of this — ADR-0016's universe is LSE ETPs
     const decision = new RiskManagerImpl(
       makeConfig({ whole_share_sizing: true, min_viable_size: 0.1 }),
     ).evaluate(makeInput({ intent: makeIntent({ size: 3, entry: 0.35, stop: 0.3, target: 0.4 }) }));
@@ -1638,9 +1461,6 @@ describe('whole-share sizing (#941)', () => {
   });
 
   it('rejects a trim that leaves less than one whole share', () => {
-    // 240 of notional at an entry of 300 is 0.8 shares. `min_viable_size` is
-    // 10 here and cannot catch it — the notional is comfortably viable and the
-    // ORDER is still unsubmittable
     const decision = new RiskManagerImpl(
       makeConfig({
         max_position_size_fraction_of_equity: 0.0024,
@@ -1668,10 +1488,6 @@ describe('whole-share sizing (#941)', () => {
   });
 
   it('re-tests the dust floor on the QUANTISED notional, not the pre-floor one', () => {
-    // 110 of trimmed notional at an entry of 60 is 1.83 shares, which clears a
-    // min_viable_size of 100 — and floors to 1 share, i.e. 60, which does not.
-    // Flooring only ever reduces, so a grid can turn a viable order into a
-    // sub-viable one after the first check has already passed
     const decision = new RiskManagerImpl(
       makeConfig({
         max_position_size_fraction_of_equity: 0.0011,
@@ -1713,9 +1529,6 @@ describe('whole-share sizing (#941)', () => {
   });
 
   it('never quantises an exit', () => {
-    // ADR-0014's flat-by-close rides the exit path, and an exit is sized from
-    // what actually filled. Flooring a residual would strand a fraction of a
-    // position overnight
     const decision = new RiskManagerImpl(makeConfig({ whole_share_sizing: true })).evaluate(
       makeInput({ intent: makeIntent({ intent_type: 'exit', size: 10.5 }) }),
     );

@@ -1,8 +1,3 @@
-/**
- * Integration coverage for #66: an instrument round-trips from a source's
- * native payload, through ingestion normalization, out of
- * `MarketDataServiceImpl.getBars` — the path a real consumer takes
- */
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { formingCandleClient } from './forming-candle-client.js';
@@ -27,7 +22,6 @@ class ManualClock implements Clock {
 
 const ASOF = new Date('2026-07-15T18:00:00Z');
 
-/** AAPL on Alpaca, including pre-market and after-hours bars */
 const ALPACA_ROWS: AlpacaBar[] = [
   { t: '2026-07-15T12:00:00Z', o: 190, h: 191, l: 189, c: 190.5, v: 100 },
   { t: '2026-07-15T14:00:00Z', o: 190.5, h: 193, l: 190, c: 192, v: 900 },
@@ -85,11 +79,6 @@ describe('stock round-trip: Alpaca payload -> ingestion -> getBars', () => {
 });
 
 describe('swapping DataSource is a config change, not a code change', () => {
-  /**
-   * The same AAPL session bar as `ALPACA_ROWS`, quoted in GBX so the LSE
-   * source's pence conversion has something to do — 19_200 GBX is 192 GBP,
-   * which is what a consumer must see whichever arm served it
-   */
   const lseClient: LseMarkClient = {
     vendor: 'fake-lse-vendor',
     getBars: async () => ({
@@ -118,7 +107,6 @@ describe('swapping DataSource is a config change, not a code change', () => {
     tradeable: new Set(['LQQ3']),
   };
 
-  /** The consumer: depends on the port only, and never names a source */
   async function readCloses(service: MarketDataServiceImpl, instrument: string): Promise<number[]> {
     const bars = await service.getBars(instrument, { timeframe: '1h', lookback: 10 }, ASOF);
     return bars.map((bar) => bar.close);
@@ -162,9 +150,6 @@ describe('cold start: first tick with an empty store (#362)', () => {
   const COLD_ASOF = new Date('2026-07-15T18:30:00Z');
 
   it('produces a usable sma(14) on the very first tick, no "needs 14 but received 13"', async () => {
-    // formingCandleClient: a cold, empty store has nothing else to fall back
-    // on, so a fetch that lands one bar short surfaces immediately as
-    // `InsufficientBarsError` instead of self-healing on a later tick
     const service = new MarketDataServiceImpl(
       new AlpacaDataSource(formingCandleClient(COLD_ASOF), { asset_class: 'crypto' }),
       new ManualClock(COLD_ASOF),
@@ -182,10 +167,6 @@ describe('cold start: first tick with an empty store (#362)', () => {
   });
 
   it('still refuses a window that is genuinely short, not just short by the forming bar', async () => {
-    // A source that always returns exactly 5 bars, whatever `limit` asked
-    // for — a genuinely sparse instrument, not a forming-candle artifact
-    // The #319 guard must still throw here: the fetch-width fix must not
-    // paper over a real shortfall
     const sparseClient: AlpacaMarketDataClient = {
       getBars: async (): Promise<AlpacaBar[]> =>
         Array.from({ length: 5 }, (_, i) => ({

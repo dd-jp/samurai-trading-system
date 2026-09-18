@@ -1,14 +1,3 @@
-/**
- * The one fan-out behind `MarketDataService.getMarks` (#289 H8).
- *
- * `DataSource` exposes no batch `fetchMark`, so every implementation of the
- * batch read is the same three decisions over a per-instrument read: dedup the
- * request, attempt every instrument even after one has failed, and turn a
- * throw into a `MarkRead` rather than letting it reject the batch. Written
- * once here so `MarketDataServiceImpl` and every test double that composes a
- * `getMark` cannot drift apart on the partial-failure policy — which is the
- * whole property `computePortfolioView` depends on.
- */
 import type { Mark, MarkRead } from './types.js';
 
 export async function collectMarks(

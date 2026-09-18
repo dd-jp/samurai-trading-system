@@ -1,12 +1,3 @@
-/**
- * `LseMarkDataSource` (#734).
- *
- * Every fixture below is a hand-written payload — no network call, in CI or
- * out of it. The numbers are shaped after the real payloads probed for
- * `docs/research/34-lse-mark-source-options.md` (LQQ3 in GBp at ~31,240 pence,
- * 3USL in USD), because the currency traps this class exists to refuse are
- * traps that the real venue actually sets.
- */
 import { describe, expect, it } from 'vitest';
 import { buildRoutingMap, LSE_ETP_POOL } from '../../universe-pool/index.js';
 import {
@@ -24,7 +15,6 @@ import {
 const TRADEABLE = new Set(buildRoutingMap().keys());
 const SCREENING = new Set(LSE_ETP_POOL.map((row) => row.screening_instrument));
 
-/** A minute inside an LSE session: 2026-08-18 is a Tuesday; 10:00 London = 09:00Z */
 const IN_SESSION = new Date('2026-08-18T09:00:00.000Z');
 
 interface FakeClientOptions {
@@ -77,8 +67,6 @@ describe('toBookCurrency', () => {
   });
 
   it("does not mistake 'GBp' for 'GBP' — the 100x trap", () => {
-    // The whole reason pence are tested before pounds: these two codes differ
-    // by one character's case and by a factor of 100
     expect(toBookCurrency(100, 'GBp', 'LQQ3', 'v')).toBe(1);
     expect(toBookCurrency(100, 'GBP', 'LQQ3', 'v')).toBe(100);
   });
@@ -109,7 +97,6 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
       await expect(source.fetchMark(screening, IN_SESSION, 'live')).rejects.toThrow(
         NonTradeableInstrumentError,
       );
-      // The refusal happens BEFORE any vendor call — nothing was even asked
       expect(client.calls).toEqual([]);
     },
   );
@@ -121,17 +108,6 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
     );
   });
 
-  /**
-   * `production.ts`'s `benchmarkMarketDataStore` doc argues the two
-   * `SqliteMarketDataStore` writers (the live universe path and the outside
-   * benchmarks' own path) are disjoint on `'SPY'`/`'AGG'` rows ONLY because
-   * this source refuses both instruments before any write can reach the
-   * store. The benchmark path reads via `getDailyCloses`, which resolves to
-   * `fetchRawCandles`/`fetchBars` — the BARS path, not the mark path — so the
-   * invariant that actually protects the store must be pinned there, not
-   * just on `fetchMark`. Pin both so a future pool/config change can't
-   * silently reopen the collision the doc argues is closed.
-   */
   it('refuses SPY and AGG on the mark path — the pair the outside-benchmark store-disjointness argument depends on', async () => {
     const source = sourceWith(fakeClient());
     await expect(source.fetchMark('SPY', IN_SESSION, 'live')).rejects.toThrow(
@@ -179,10 +155,6 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
   });
 
   it('refuses construction for a pool row whose DECLARED currency is not GBP', () => {
-    // The check that a uniform fake cannot make: each row's own declared
-    // currency, straight off the checked-in pool. Eight of the eleven declare
-    // USD (doc 34 §3.2), so a source built over the whole pool must refuse —
-    // and must refuse HERE, not on the first live read
     const declared = new Map(LSE_ETP_POOL.map((row) => [row.lse_ticker, row.currency]));
     expect(
       () =>
@@ -197,8 +169,6 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
         row.currency,
       ]),
     );
-    // If this is ever empty the pool has no markable line at all, which is a
-    // louder finding than a failing assertion
     expect(markable.size).toBeGreaterThan(0);
     expect(
       () =>
@@ -226,8 +196,6 @@ describe('LseMarkDataSource — marks', () => {
     const mark = await source.fetchMark('LQQ3', IN_SESSION, 'live');
 
     expect(mark.price).toBeCloseTo(312.4, 10);
-    // observed_at is the VENDOR's stamp, not the request time — this is the
-    // field #641 and #640 gate on
     expect(mark.observed_at).toEqual(observed);
     expect(mark.asset_class).toBe('stocks');
     expect(mark.source).toBe('fake-lse-vendor');
@@ -327,15 +295,10 @@ describe('LseMarkDataSource — bars', () => {
     expect(bars).toHaveLength(1);
     expect(bars[0]?.open).toBeCloseTo(312.0, 10);
     expect(bars[0]?.close).toBeCloseTo(312.4, 10);
-    // Volume is a share count, not a price. Converting it would be wrong.
     expect(bars[0]?.volume).toBe(4_200);
   });
 
   it('gates bars on the LSE session, not the US one', async () => {
-    // 13:00 London (12:00Z) is inside the LSE session; a 07:00Z candle is
-    // BEFORE the 08:00 London open and must be dropped by normalization. The
-    // US calendar would keep neither/both differently — that is the bug this
-    // guards
     const source = sourceWith(
       fakeClient({
         bars: {

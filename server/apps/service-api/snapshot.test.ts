@@ -1,11 +1,3 @@
-/**
- * `buildSnapshot` (dashboard snapshot seam) acceptance: asserts on the
- * JSON-serializable projection given a fake `DashboardQueryStore`, not on
- * real store/server behavior (dashboard-spec.md "Testing Decisions").
- *
- * Also asserts the read-only contract is structural: the fake store exposes
- * no setters, and the snapshot function calls only get-* methods.
- */
 
 import type { ExitClassWire, PnlOverallWire } from '../../../contracts/index.js';
 import { CONTRACT_VERSION, EXIT_CLASSES_WIRE } from '../../../contracts/index.js';
@@ -27,15 +19,6 @@ import type {
   VerdictAuditEntry,
 } from './types.js';
 
-/**
- * #1546: `contracts/` may import from neither runtime (CLAUDE.md), so
- * `ExitClassWire` duplicates the server's `ExitClass` the way `TradingArmWire`
- * duplicates `TradingArm`. These two assignments make the duplication a
- * COMPILE error to break rather than a comment to remember — one direction
- * each, so adding a class on either side alone fails here, and `buildSnapshot`
- * carries whole `ArmPerformance` values across on a spread that would
- * otherwise let a server-only class through untyped.
- */
 const _serverExitClassesReachTheWire: readonly ExitClassWire[] = EXIT_CLASSES;
 const _wireExitClassesExistOnTheServer: readonly ExitClass[] = EXIT_CLASSES_WIRE;
 
@@ -148,9 +131,6 @@ const EMPTY_SPEND_WINDOW = {
   cache_creation_input_tokens: 0,
   calls: 0,
   unpriced_calls: 0,
-  // Added by #326 (per-decision cost/latency percentiles). The fixture never
-  // followed the type, so every assertion in this file was checking a spend
-  // window shape the dashboard had stopped producing
   per_debate: {
     debates: 0,
     unattributed_calls: 0,
@@ -191,9 +171,6 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
 
   return {
     ...store,
-    // Defaults to delegating to whatever `getMark` the test supplied, so the
-    // many tests that control the mark that way keep controlling it now that
-    // `buildSnapshot` reads marks in a batch
     getMarks:
       overrides.getMarks ??
       ((instruments, asOf) =>
@@ -242,7 +219,6 @@ describe('buildSnapshot', () => {
     expect(typeof snap.generated_at).toBe('string');
     expect(snap.positions[0]?.opened_at).toBe(AS_OF.toISOString());
     expect(snap.debates[0]?.created_at).toBe(AS_OF.toISOString());
-    // JSON-serializable end-to-end: no Date instances survive the boundary
     expect(() => JSON.stringify(snap)).not.toThrow();
   });
 
@@ -264,12 +240,6 @@ describe('buildSnapshot', () => {
   });
 
   it('projects each analyst per-round stance onto the wire, in order (#427/#599)', () => {
-    // The stances differ from each other AND end somewhere the final position
-    // alone cannot reconstruct, so this fails both ways the strip can be
-    // wrong: a dropped projection, and a fabricated flat line derived from
-    // `final_position`. `stance_during_debate` is OPTIONAL on `DebateRow`, so
-    // dropping the projection still compiles — this assertion is the only
-    // guard against that
     const contributions: AnalystContribution[] = [
       {
         analyst_id: 'technical-analyst',
@@ -299,8 +269,6 @@ describe('buildSnapshot', () => {
       'neutral',
       'bullish',
     ]);
-    // The analyst that never moved is the control: identical `final_position`,
-    // a different history, and the wire must keep them distinguishable
     expect(snap.debates[0]?.contributions[1]?.stance_during_debate).toEqual([
       'bullish',
       'bullish',
@@ -309,9 +277,6 @@ describe('buildSnapshot', () => {
   });
 
   it('leaves stance_during_debate absent for a debate_log row that recorded none', () => {
-    // `contributions` is `JSON.parse` output: a row written without the field
-    // yields `undefined` here, and the strip's empty state ("no per-round
-    // stance recorded") is the honest rendering of that — never a flat line
     const legacy = [
       {
         analyst_id: 'technical-analyst',
@@ -329,9 +294,6 @@ describe('buildSnapshot', () => {
   });
 
   it('omits the whole stance list when any element is not a Direction', () => {
-    // A corrupted `contributions_json` row. Dropping only the bad element
-    // would render this three-round debate as a confident two-round history;
-    // the whole field goes, so the strip states it has nothing to show
     const corrupt = [
       {
         analyst_id: 'technical-analyst',
@@ -364,21 +326,12 @@ describe('buildSnapshot', () => {
   });
 
   it('projects the injected run mode verbatim, never a default (#539)', () => {
-    // Both directions, because the failure that matters is asymmetric: a
-    // page that says "paper" during a live run is how an operator watches
-    // real money believing it is simulated
     expect(buildSnapshot(fakeStore(), AS_OF, 'live', 'live').mode).toBe('live');
     expect(buildSnapshot(fakeStore(), AS_OF, 'paper', 'live').mode).toBe('paper');
     expect(buildSnapshot(fakeStore(), AS_OF, 'backtest', 'live').mode).toBe('backtest');
   });
 
-  // #1592: the snapshot's own arm scoping — which arm's positions/closed
-  // trades it carries, and that it names that arm on the wire
   describe('arm scoping (#1592)', () => {
-    // "no ?arm= given defaults to live" is a fact about the HTTP layer
-    // (server.ts's parseArmParam, covered by server.test.ts) — buildSnapshot
-    // itself takes arm as a required parameter with no default, so this only
-    // checks that the 'live' case stamps correctly, same as 'control' below
     it('stamps the requested arm on the snapshot when it is live', () => {
       const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
       expect(snap.arm).toBe('live');
@@ -424,10 +377,6 @@ describe('buildSnapshot', () => {
     });
   });
 
-  // #1594: the remaining reads' own arm scoping. Mirrors the #1592 block
-  // above — a store that records which arm each method was called with,
-  // proving `buildSnapshot` forwards its own `arm` parameter rather than
-  // hardcoding 'live' at any of these five call sites
   describe('arm scoping for the remaining reads (#1594)', () => {
     it('passes the requested arm to getVerdictHistory, getRiskCritics, getAttribution, getDailyMetrics and getPipelineActivity', () => {
       const seenArms: Record<string, string> = {};
@@ -476,20 +425,12 @@ describe('buildSnapshot', () => {
     expect(snap.verdicts).toEqual([]);
     expect(snap.analysts).toEqual([]);
     expect(snap.tick_status).toBeNull();
-    // Every field but `profit_factor` crosses `buildSnapshot` unchanged
-    // (#1270); `profit_factor` is wrapped into `ProfitFactorWire`
     expect(snap.metrics).toEqual({
       ...METRICS,
       profit_factor: { kind: 'ratio', value: METRICS.profit_factor },
     });
   });
 
-  /**
-   * The bug this ticket fixes, proven at the serialization boundary — a test
-   * that only inspected `snap.metrics.profit_factor` as an in-process object
-   * would not catch it, because `Number.POSITIVE_INFINITY` survives in
-   * memory and only dies in `JSON.stringify` (AC4)
-   */
   it('carries a window with wins and no losses through JSON.stringify as no_losses, never as null (#1270)', () => {
     const snap = buildSnapshot(
       fakeStore({
@@ -583,9 +524,6 @@ describe('buildSnapshot', () => {
       outcome: 'quorum_skip',
       started_at: AS_OF.toISOString(),
     });
-    // The lanes cross the wire with the tables, not on a second poll — a
-    // `Date` surviving here would break the same JSON boundary the rest of
-    // the snapshot maintains
     expect(() => JSON.stringify(snap)).not.toThrow();
   });
 
@@ -600,8 +538,6 @@ describe('buildSnapshot', () => {
 
     buildSnapshot(store, AS_OF, 'paper', 'live');
 
-    // This read rides a 3-second poll; an unbounded one would degrade the
-    // whole dashboard as the audit log grows through a 14-day soak
     expect(asked).toEqual({
       maxLanes: PIPELINE_MAX_LANES,
       lookbackMs: PIPELINE_LOOKBACK_MS,
@@ -609,13 +545,6 @@ describe('buildSnapshot', () => {
     });
   });
 
-  // #1108: the count of permanently-undeliverable alert sends rides this same
-  // payload, so an operator reading the dashboard can tell the alert channel
-  // is down instead of reading silence as calm. `asOf` is the upper bound of
-  // the store's trailing window (#1131), not the only bound — the window's
-  // lower edge lives inside `getAlertDeliveryFailureCount` itself and is
-  // covered by sqlite-query-store.test.ts and alert-delivery-log.test.ts, not
-  // here, since this fake's return value is a plain injected number
   it('projects the alert delivery failure count, bounded above by the same asOf', () => {
     let asked: Date | null = null;
     const store = fakeStore({
@@ -631,22 +560,12 @@ describe('buildSnapshot', () => {
     expect(asked).toEqual(AS_OF);
   });
 
-  // #1316: the running server's own stamp of its wire shape, so a client
-  // polling it (`useSnapshot.ts`) can tell a served-bundle-vs-server skew
-  // apart from a healthy read. Always this process's OWN compiled-in
-  // constant — never read off the store — because the whole mechanism this
-  // field exists for is detecting a REBUILD, and `server.ts` serves
-  // `dist/client/` per request without a restart, so only a value baked into
-  // the running process (not the store, which does not change on rebuild)
-  // can move when that happens
   it("stamps the snapshot with the server's own CONTRACT_VERSION, regardless of the store", () => {
     const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
 
     expect(snap.contract_version).toBe(CONTRACT_VERSION);
   });
 
-  // #1140: the enforced cap rides the same payload as the spend it bounds, so
-  // the rail's denominator is the enforcer's rather than a client constant
   it("carries the store's LLM cap onto the wire, uncapped included", () => {
     const spend = fakeStore().getLlmSpend(AS_OF);
 
@@ -663,9 +582,6 @@ describe('buildSnapshot', () => {
     ).toBeNull();
   });
 
-  // #1196: `cap_armed_at` is the only thing that tells "armed uncapped" apart
-  // from "never armed" once `cap_usd` is null, so it has to ride the wire
-  // untouched too, not just `cap_usd`
   it("carries the store's cap_armed_at onto the wire, null included", () => {
     const spend = fakeStore().getLlmSpend(AS_OF);
 
@@ -682,8 +598,6 @@ describe('buildSnapshot', () => {
     ).toBeNull();
   });
 
-  // #940: closed trades and their fills appear on the wire — the surface the
-  // dashboard never had before, for a trade that entered, filled and flattened
   describe('closed trades and fills (#940)', () => {
     it('projects a closed trade onto the wire with entry/exit price, PnL, fees and close_reason', () => {
       const trade = makeClosedTrade({
@@ -726,9 +640,6 @@ describe('buildSnapshot', () => {
       const trade = makeClosedTrade({ idempotency_key: 'K1', side: 'buy', filled_size: 10 });
       const store = fakeStore({
         getRecentClosedTrades: () => [trade],
-        // Two exit-leg fills at different prices — a real partial exit — so a
-        // naive "first fill" read would get this wrong; only the qty-weighted
-        // average is correct
         getFillsForTrades: () => [
           makeFill({ idempotency_key: 'K1', leg: 'entry', price: 100, qty: 10 }),
           makeFill({ idempotency_key: 'K1', leg: 'stop', price: 104, qty: 4 }),
@@ -738,7 +649,6 @@ describe('buildSnapshot', () => {
 
       const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
-      // (104*4 + 106*6) / 10 = 105.2
       expect(snap.closed_trades[0]?.exit_price).toBeCloseTo(105.2);
     });
 
@@ -759,8 +669,6 @@ describe('buildSnapshot', () => {
 
       const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
-      // grossPnl = -69.3 + 1.8 = -67.5; delta = -67.5/15 = -4.5;
-      // sell => exit = entry - delta = 495.6 - (-4.5) = 500.1
       expect(snap.closed_trades[0]?.exit_price).toBeCloseTo(500.1);
     });
 
@@ -794,10 +702,6 @@ describe('buildSnapshot', () => {
     });
 
     it('asks for fills scoped to exactly the closed trades just read, not an independent window', () => {
-      // #940 review: a separately-bounded "recent fills" query can starve an
-      // older closed trade of its fills once open-position churn fills the
-      // window with entry-leg noise. `buildSnapshot` must instead ask for
-      // fills BY the closed-trade keys it already has
       const trades = [
         makeClosedTrade({ idempotency_key: 'K-old' }),
         makeClosedTrade({ idempotency_key: 'K-new' }),
@@ -817,13 +721,6 @@ describe('buildSnapshot', () => {
     });
   });
 
-  /**
-   * #971 — the Feedback Loop's matched-control comparison reaches the wire.
-   *
-   * The projection is read-and-convert, never a second computation: FL owns the
-   * derivation (#636), and a `buildSnapshot` that recomputed it would put a
-   * number on the panel that FL never saw and never alerted on.
-   */
   describe('arm comparison (#971)', () => {
     const COMPUTED_AT = new Date('2026-07-19T11:00:00.000Z');
 
@@ -852,9 +749,6 @@ describe('buildSnapshot', () => {
           cost_basis_drops: null,
         },
       },
-      // A non-default floor (7, not `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`'s 5)
-      // deliberately — #982's projection must carry whatever value the sample
-      // actually recorded, not echo the module default at some hop
       divergence: { diverged: false, reason: null, min_trades_per_arm: 7 },
     };
 
@@ -904,7 +798,6 @@ describe('buildSnapshot', () => {
       expect(snap.arm_comparison[0]?.divergence_reason).toBe('control ahead on both columns');
     });
 
-    /** Empty is a required field holding an empty array, never an absent one */
     it('emits an empty array when FL has computed no comparison', () => {
       const snap = buildSnapshot(
         fakeStore({ getArmComparisons: () => [] }),
@@ -917,12 +810,6 @@ describe('buildSnapshot', () => {
       expect('arm_comparison' in snap).toBe(true);
     });
 
-    /**
-     * #1483: a sample computed before migration 0057 reads back
-     * `refused_pass_count: null` on both arms — the projection must carry that
-     * `null` onto the wire rather than coercing it to `0`, which would assert
-     * "no refusals" for a quantity this row never measured
-     */
     it('projects a pre-migration refused_pass_count as null, not 0', () => {
       const snap = buildSnapshot(
         fakeStore({
@@ -948,7 +835,6 @@ describe('buildSnapshot', () => {
   });
 
   describe('P&L headline (#1595)', () => {
-    /** A required literal `pnl.overall` cannot be constructed without a drawdown */
     it('cannot construct a PnlOverallWire missing max_drawdown_pct — the compile-time half of "never return-only"', () => {
       // @ts-expect-error — max_drawdown_pct is required, not optional.
       const returnOnly: PnlOverallWire = {
@@ -1014,12 +900,6 @@ describe('buildSnapshot', () => {
       expect(snap.pnl.book_gbp).toBe(LIVE_BOOK_GBP);
     });
 
-    /**
-     * If this starts failing because `buildPnlHeadline` gained
-     * `modelledCostCharged`/`oneSizingRegime` filtering, that is a deliberate
-     * reversal of #1616's resolution (`PnlOverallWire`'s header,
-     * contracts/snapshot.ts) — update the docs alongside the test
-     */
     it('counts a row the arm-comparison panel would drop for modelled_cost_charged: false', () => {
       const trades = [
         makeClosedTrade({ idempotency_key: 'charged', realized_pnl_net: 40 }),
@@ -1037,25 +917,11 @@ describe('buildSnapshot', () => {
       expect(snap.pnl.overall.net_gbp).toBeCloseTo(50 / SIZING_USD_PER_GBP);
     });
 
-    /**
-     * The other #1616 axis, `oneSizingRegime`, can't be pinned by a runtime
-     * assertion the way the cost axis above is: `ClosedTrade` carries no
-     * `sizing_capital_ceiling` field at all, which is exactly why full parity
-     * isn't implemented. That absence is the load-bearing fact, so pin it at
-     * compile time — if a future change adds the field, this starts failing
-     * ("unused @ts-expect-error"), which is the signal to revisit #1616.
-     */
     it('has no sizing_capital_ceiling field on ClosedTrade for oneSizingRegime to filter on', () => {
       // @ts-expect-error ClosedTrade carries no sizing_capital_ceiling — see PnlOverallWire's header (#1616)
       makeClosedTrade({ sizing_capital_ceiling: 100 });
     });
 
-    /**
-     * The BST-boundary discriminator: 2026-07-16T00:30 local London time (BST,
-     * UTC+1) is 2026-07-15T23:30Z — the PREVIOUS UTC calendar day. A plain
-     * `toISOString().slice(0, 10)` day boundary would file this trade under
-     * "2026-07-15" and drop it out of `asOf`'s ("2026-07-16") today window.
-     */
     it('counts a 00:30 BST close on the London day it happened on, not the UTC day', () => {
       const asOf = new Date('2026-07-16T10:00:00Z');
       const trades = [
@@ -1075,12 +941,6 @@ describe('buildSnapshot', () => {
       expect(snap.pnl.today.costs_gbp).toBeCloseTo(1 / SIZING_USD_PER_GBP);
     });
 
-    /**
-     * The GMT control case: outside BST, London and UTC agree, so a close on
-     * `asOf`'s own UTC calendar day counts as today with no shift needed — and
-     * a close on the PREVIOUS UTC day is correctly excluded, proving the
-     * mechanism doesn't over-shift when there is no offset to apply
-     */
     it('counts a winter close on its UTC-equal London day, and excludes the prior day', () => {
       const asOf = new Date('2026-01-16T18:00:00Z');
       const trades = [
@@ -1101,7 +961,6 @@ describe('buildSnapshot', () => {
 
       expect(snap.pnl.today.trade_count).toBe(1);
       expect(snap.pnl.today.realized_gbp).toBeCloseTo(12 / SIZING_USD_PER_GBP);
-      // Both trades still count toward all-time
       expect(snap.pnl.overall.trade_count).toBe(2);
     });
 
@@ -1199,9 +1058,6 @@ describe('buildSnapshot', () => {
 
       expect(snap.risk_critics).toHaveLength(1);
       const row = snap.risk_critics[0];
-      // The binding constraint is carried verbatim: `risk_critic:invalidated`
-      // (a measured breach) and `risk_critic:reject` (the critic's prose) are
-      // distinct facts (#997 Q2b), and the wire must not blur them
       expect(row?.binding_constraint).toBe('risk_critic:invalidated');
       expect(row?.critic_verdict).toBe('pass');
       expect(row?.conditions).toEqual([
@@ -1220,8 +1076,6 @@ describe('buildSnapshot', () => {
           comparator: '<',
           threshold: 45,
           state: 'unevaluable',
-          // Null, never 0: `unevaluable` means the read failed, and a zero
-          // there would be a measurement that never happened
           observed: null,
           rationale: 'momentum gone',
         },
@@ -1269,12 +1123,6 @@ describe('buildSnapshot', () => {
       ]);
     });
 
-    /**
-     * A row written before #994's fold has no conditions column at all
-     * (migration 0040 backfilled nothing) and never will. It must serialize as
-     * `null` — not as an absent field, which `JSON.stringify` would produce
-     * from `undefined` — and it must not throw.
-     */
     it('serializes a pre-fold verdict as null conditions rather than an absent field', () => {
       const store = fakeStore({
         getRiskCritics: () => [
@@ -1314,7 +1162,6 @@ describe('buildSnapshot', () => {
       expect(snap.risk_critics[0]?.debate_id).toBeNull();
     });
 
-    /** Empty is a required field holding an empty array, never an absent one */
     it('emits an empty array when no Risk decision is on record', () => {
       const snap = buildSnapshot(fakeStore({ getRiskCritics: () => [] }), AS_OF, 'paper', 'live');
 
@@ -1337,8 +1184,6 @@ describe('buildSnapshot', () => {
 
     const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
-    // #413's idle frame, end to end: a closed market is the common case, and
-    // the lanes must still be there to say so
     expect(snap.pipeline.lanes.map((l) => l.outcome)).toEqual(['idle', 'idle']);
     expect(snap.pipeline.live_trace_id).toBeNull();
   });

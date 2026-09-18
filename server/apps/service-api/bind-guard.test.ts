@@ -1,10 +1,3 @@
-/**
- * TDD for #887: the dashboard's bind guard must refuse a non-loopback `HOST`
- * unless a credential is configured — and must NOT refuse the default
- * loopback bind just because no credential exists, since that default is
- * every `npm run dashboard` invocation today. Written before `bind-guard.ts`
- * existed; see that file's header for the full design rationale (ADR-0019).
- */
 import {
   assertBindAllowed,
   DASHBOARD_CREDENTIAL_ENV_VAR,
@@ -19,8 +12,6 @@ describe('isLoopbackHost', () => {
   });
 
   it('rejects `localhost` — a hostname to resolve, not a literal loopback address', () => {
-    // Deliberate, not an oversight: see bind-guard.ts's LOOPBACK_HOSTS comment
-    // for why the allowlist is addresses only
     expect(isLoopbackHost('localhost')).toBe(false);
   });
 
@@ -71,10 +62,6 @@ describe('assertBindAllowed — the throwing half wired into createDashboardServ
   });
 
   it('names the offending host and the env var to set, and nothing else identifying', () => {
-    // The refusal message must be operator-legible (what's wrong, how to fix
-    // it) without ever interpolating a credential value — there is no code
-    // path where it could, since the message text below is fixed and never
-    // reads `credential`
     expect(() => assertBindAllowed('0.0.0.0', undefined)).toThrow(/0\.0\.0\.0/);
     expect(() => assertBindAllowed('0.0.0.0', undefined)).toThrow(
       new RegExp(DASHBOARD_CREDENTIAL_ENV_VAR),

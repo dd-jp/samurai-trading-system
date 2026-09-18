@@ -1,15 +1,3 @@
-/**
- * #1222: `SaxoBrokerAdapter.call()` used to acquire one pacing token per
- * PUBLIC OPERATION, but `submitBracket`/`cancel` fan out to several upstream
- * Saxo HTTP requests each (`listOpenOrders` + `listOrderActivities` +
- * `placeOrder`; `listOpenOrders` + `cancelOrder`). Against a
- * bucket configured 2 capacity / 1 per second, that let real request bursts
- * outrun the pacing config.
- *
- * These tests wire the real `SaxoHttpBrokerClient` (mocked `fetch`) into
- * `SaxoBrokerAdapter` and assert one pacing token per actual upstream
- * request, not per operation.
- */
 import { TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
@@ -24,7 +12,6 @@ import {
 } from './saxo-adapter.js';
 import { SaxoHttpBrokerClient } from './saxo-http-client.js';
 
-/** The wire value the adapter sends for `'key-3usl-0930'`'s bracket master / a leg — see #1510 */
 function wireRef(clientOrderId = 'key-3usl-0930', leg?: 'stop' | 'target'): string {
   const base = saxoExternalReference(clientOrderId);
   return leg === undefined ? base : `${base}:${leg}`;
@@ -98,11 +85,6 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-/**
- * Routed by path suffix + verb rather than call order, so the fixture
- * doesn't have to predict the client's internal request sequence — only
- * what each endpoint returns
- */
 function routedFetch(openOrders: readonly unknown[]): ReturnType<typeof vi.fn> {
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat method+path dispatch, one branch per mocked endpoint
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -153,13 +135,6 @@ function noopPriceUnitAlerts(): UnresolvedPriceUnitAlertChannel {
   return { async postUnresolvedPriceUnitAlert() {} };
 }
 
-/**
- * Builds an adapter over the REAL `SaxoHttpBrokerClient` (mocked `fetch`),
- * with `rateLimiter.acquire`/`acquireBackground` spied so a test can count
- * tokens issued per lane rather than only requests made — the two diverged
- * under the pre-#1222 defect, and #1419 splits that single count into the
- * priority/background lanes the client's call sites now classify into
- */
 function makeWiredAdapter(openOrders: readonly unknown[]) {
   const fetchMock = routedFetch(openOrders);
   vi.stubGlobal('fetch', fetchMock);
@@ -194,9 +169,6 @@ describe('Saxo per-request pacing (#1222)', () => {
   it('submitBracket acquires one token per upstream request (listOpenOrders + listOrderActivities + placeOrder), not one per operation — split across the background/priority lanes (#1419)', async () => {
     const { adapter, fetchMock, acquireSpy, acquireBackgroundSpy } = makeWiredAdapter([]);
 
-    // Warm up account-identity resolution (memoised on the client) so the
-    // assertions below count only submitBracket's own requests, not the
-    // one-time /port/v1/accounts/me lookup a cold client would also pay
     await adapter.getOrder('warmup', '3USL');
     fetchMock.mockClear();
     acquireSpy.mockClear();
@@ -205,11 +177,6 @@ describe('Saxo per-request pacing (#1222)', () => {
     await adapter.submitBracket(makeBracket());
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    // The defect: `SaxoBrokerAdapter.call()` acquired exactly one token for
-    // the whole operation regardless of how many requests `fn()` issued —
-    // this is the assertion a per-operation-accounting mutant fails
-    // listOpenOrders + listOrderActivities are background (#1419); placeOrder
-    // (and the identity lookup gating it, already warm here) is priority
     expect(acquireBackgroundSpy).toHaveBeenCalledTimes(2);
     expect(acquireSpy).toHaveBeenCalledTimes(1);
     expect(acquireSpy.mock.calls.length + acquireBackgroundSpy.mock.calls.length).toBe(
@@ -217,11 +184,6 @@ describe('Saxo per-request pacing (#1222)', () => {
     );
   });
 
-  // Two requests, not the four this asserted before #1216: `cancel` now
-  // DELETEs the master alone and lets the venue cancel the related orders
-  // with it (doc 43:33), so a three-leg bracket costs `listOpenOrders` + one
-  // `cancelOrder`. Two still discriminates the per-operation mutant, which
-  // acquires one token however many requests `fn()` issues
   it('cancel of a three-leg bracket acquires one token per upstream request (listOpenOrders + cancelOrder on the master), not one per operation — split across the background/priority lanes (#1419)', async () => {
     const { adapter, fetchMock, acquireSpy, acquireBackgroundSpy } =
       makeWiredAdapter(BRACKET_OPEN_ORDERS);
@@ -234,8 +196,6 @@ describe('Saxo per-request pacing (#1222)', () => {
     await adapter.cancel('key-3usl-0930', '3USL');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    // listOpenOrders is background; cancelOrder (and its identity lookup,
-    // already warm here) is priority
     expect(acquireBackgroundSpy).toHaveBeenCalledTimes(1);
     expect(acquireSpy).toHaveBeenCalledTimes(1);
     expect(acquireSpy.mock.calls.length + acquireBackgroundSpy.mock.calls.length).toBe(

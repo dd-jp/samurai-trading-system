@@ -1,78 +1,10 @@
-/**
- * Fill cost accounting shared by every path that turns a venue fill into a
- * persisted `Fill` row — `toFill` and `cumulativeTopUp` (ingest-fills.ts) for
- * entry and protective (stop/target) legs, `splitFlattenFills`
- * (flatten-attribution.ts) for flatten legs.
- * Pure: how the modelled estimate is prorated and how the venue's reported fee
- * is topped up to it, with nothing about where either number came from.
- */
 
 import type { Fill, OpenPosition } from '../../shared/index.js';
 
-/**
- * #1121: the charge a real-broker fill carries — the venue's own reported fee
- * TOPPED UP to the modelled commission, never stacked on top of it.
- *
- * `venueFee + max(0, modelled − venueFee)`, i.e. `max(venueFee, modelled)`,
- * never `venueFee + modelled` — the two numbers are the same commission.
- * `venueFee + modelled` is correct only for a commission-free venue, which is
- * an Alpaca-paper accident, not a property of the mechanism: `saxo-adapter.ts`
- * reports `price * qty * SAXO_COMMISSION_RATE` and `paper-profile.ts` prices
- * the modelled estimate from the SAME `SAXO_COMMISSION_RATE` constant, so
- * adding them would charge the live arm 2x — with no venue check, no
- * `fee === 0` precondition, and no test that could see it.
- *
- * `max` rather than "defer to the venue whenever it reports anything": a venue
- * that reports a small NON-commission fee (a regulatory or exchange charge)
- * would otherwise suppress the whole modelled commission and put the arms back
- * on different cost bases, which is the defect this ticket exists to close.
- *
- * WHAT `max` COSTS (#1121). `max` treats the venue's report and the model's estimate
- * as two measurements of ONE commission. Where a venue charge is genuinely
- * ADDITIONAL to commission, `max` absorbs it instead of adding it: a levy
- * smaller than the modelled commission is charged nothing extra, and a levy
- * LARGER than it displaces the modelled commission entirely. The alternative
- * (`venueFee + modelled`) has the mirror failure and a worse one — it
- * double-charges the commission itself on every Saxo fill, which is this
- * ticket's whole defect. `max` is chosen on the venues actually in play, not
- * as a general truth: Alpaca paper reports `fee: 0`; `saxo-adapter.ts`'s
- * reported `fee` is commission-only; ADR-0015 records no per-order minimum;
- * SDRT is structurally exempt on the ETFs/ETCs this book trades; and the PTM
- * levy's £10,000 order threshold is unreachable at a £1,000 book. Add a venue
- * with an additive levy and this function is the place that has to change.
- *
- * SCOPE OF "CHARGED ONCE". This is a PER-FILL rule, and it does not aggregate
- * to a per-lot equality, because `max` is applied to each slice separately and
- * `Σ max(aᵢ, bᵢ) ≥ max(Σa, Σb)`. Over a lot's fills the total charge is
- * bounded by `[max(Σvenue, Σmodelled), Σvenue + Σmodelled]`, hitting the lower
- * bound only when one side dominates slice by slice. Both bounds follow from
- * `max(a, b) ≥ a, b` and `max(a, b) ≤ a + b` on non-negative inputs, which the
- * two call sites guarantee (`Math.max(0, …)` on the cumulative top-up;
- * `rawFill.fee * share` with a non-negative venue fee on the flatten split).
- * The gap is real, not hypothetical, wherever the venue's per-increment fee
- * crosses the modelled share: 100 shares filled 50/50 against a modelled 1.0
- * with venue increments 0.7 then 0.3 charges `0.7 + 0.5 = 1.2`, not 1.0. On
- * the cumulative path that is synthetic today (it is Alpaca-only and Alpaca
- * reports 0); on `redistributeOneFlatten`'s multi-raw-fill split it is
- * reachable under Saxo, whose fee tracks each execution's fill price while the
- * modelled share tracks quantity alone. The magnitude there is bps of bps, so
- * the money is negligible — it is the invariant that has to be stated
- * honestly, not the arithmetic that has to change.
- */
 export function chargeTopUpTo(venueFee: number, modelledCommission: number | undefined): number {
   return modelledCommission === undefined ? venueFee : Math.max(venueFee, modelledCommission);
 }
 
-/**
- * #1001: scales every component of a modelled cost breakdown by `share` — the
- * same linear approximation `redistributeOneFlatten`'s `fee: rawFill.fee *
- * share` already makes for the flatten split, extended to the OTHER money
- * this snapshot carries. Not physically exact for `market_impact` (the
- * cost model's own √-law term is nonlinear in size), but consistent with the
- * existing precedent rather than inventing a second approximation scheme, and
- * still strictly better than attaching the UNSCALED snapshot to every fill a
- * single modelled estimate happens to cover.
- */
 export function prorateCostBreakdown(
   breakdown: NonNullable<Fill['cost_breakdown']>,
   share: number,
@@ -85,38 +17,17 @@ export function prorateCostBreakdown(
   };
 }
 
-/**
- * A submit-time modelled breakdown plus the size it was priced against —
- * `toFill`'s fallback source for a leg the venue reports no breakdown for,
- * prorated by that fill's share of `requestedSize`. Both breakdowns a lot
- * carries have this shape (#1001's entry estimate, #1301's protective-exit
- * one); `requestedSize` is the same denominator for both, since
- * `captureSubmitSnapshot` prices each against the lot's whole `order.size`.
- */
 export interface ModelledLegCost {
   breakdown: NonNullable<Fill['cost_breakdown']>;
   requestedSize: number;
 }
 
-/**
- * #1001: the `'entry'` leg's estimate, `OpenPosition.modelled_cost_breakdown`.
- * `null` when the lot carries none (pre-migration-0037 row, or the submit-time
- * capture failed) — `toFill` then leaves `cost_breakdown` unset, exactly as
- * before that ticket.
- */
 function modelledEntryCostFor(position: OpenPosition): ModelledLegCost | null {
   return position.modelled_cost_breakdown === undefined
     ? null
     : { breakdown: position.modelled_cost_breakdown, requestedSize: position.requested_size };
 }
 
-/**
- * #1301: the `'stop'`/`'target'` legs' estimate,
- * `OpenPosition.modelled_protective_exit_cost_breakdown` — one breakdown for
- * both legs, since they are OCO and price identically (see
- * `captureSubmitSnapshot`'s doc). `null` on a pre-migration-0061 row and
- * whenever the entry's is null too: the pair is priced under one try/catch.
- */
 function modelledProtectiveExitCostFor(position: OpenPosition): ModelledLegCost | null {
   return position.modelled_protective_exit_cost_breakdown === undefined
     ? null
@@ -126,17 +37,6 @@ function modelledProtectiveExitCostFor(position: OpenPosition): ModelledLegCost 
       };
 }
 
-/**
- * Both of a lot's submit-time estimates, read together — what `toFill` selects
- * from by the fill's own leg. Carried as one value so a caller cannot pass the
- * entry's estimate where the protective one belongs: the two are structurally
- * identical, and under today's cost model numerically identical on the
- * component that is actually spent, so nothing downstream could catch the swap.
- *
- * `'exit'` (flatten) legs are absent by design — their estimate is the
- * flatten's OWN submit-time capture, prorated per lot by `splitFlattenFills`
- * (flatten-attribution.ts), not anything the entry submission priced.
- */
 export interface ModelledLotCosts {
   entry: ModelledLegCost | null;
   protectiveExit: ModelledLegCost | null;

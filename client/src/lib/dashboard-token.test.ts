@@ -1,7 +1,3 @@
-/**
- * TDD for #1038's client-side token acquisition — pure boundary checks, no
- * DOM. `App.test.tsx` covers the wiring (URL scrub + header on a real poll).
- */
 import { describe, expect, it } from 'vitest';
 import {
   DASHBOARD_TOKEN_STORAGE_KEY,

@@ -1,14 +1,3 @@
-/**
- * SQLite-backed `MarketDataStore` over the `bars` / `latest_mark` tables
- * (#194) — the real store behind `MarketDataServiceImpl`'s Tier-2 bulk cache
- * and live mark table. See docs/specs/shared-sqlite-store-spec.md ("Market
- * Data Service" schema section) and docs/specs/market-data-service-spec.md
- * ("Module: Caching", "Module: Marks").
- *
- * `bars.close_time` is stored as ISO-8601 UTC TEXT, matching
- * `SqliteSetupStore`'s convention — `close_time <= ?` is a canonical string
- * comparison.
- */
 
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
@@ -35,12 +24,6 @@ interface LatestMarkRow {
 export class SqliteMarketDataStore implements MarketDataStore {
   constructor(private readonly db: StoreHandle) {}
 
-  /**
-   * `INSERT OR IGNORE` on the `(instrument, timeframe, open_time)` PK: a
-   * re-ingested bar is silently a no-op rather than a duplicate row or a
-   * thrown constraint error — the append-only history stays append-only
-   * under retries
-   */
   appendBars(bars: readonly Bar[]): void {
     const insert = this.db.prepare(
       `INSERT OR IGNORE INTO bars
@@ -48,9 +31,6 @@ export class SqliteMarketDataStore implements MarketDataStore {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
-    // One transaction per batch: better-sqlite3 otherwise wraps every run()
-    // in its own implicit transaction, an fsync per bar — ~100x slower on
-    // bulk backfills (code-review 2026-08-01, H9)
     this.db.transaction(() => {
       for (const bar of bars) {
         insert.run(
@@ -69,11 +49,6 @@ export class SqliteMarketDataStore implements MarketDataStore {
     })();
   }
 
-  /**
-   * Point-in-time bulk read: most recent `lookback` bars with
-   * `close_time <= asOf`, ascending — matching `completedBars`' ordering so
-   * this is a drop-in Tier-2 tier for the same callers
-   */
   readBars(instrument: string, timeframe: string, asOf: Date, lookback: number): Bar[] {
     const rows = this.db
       .prepare(
@@ -103,7 +78,6 @@ export class SqliteMarketDataStore implements MarketDataStore {
       .reverse();
   }
 
-  /** One row per instrument — overwrites, since `latest_mark` holds only the current price */
   upsertLatestMark(instrument: string, mark: Mark): void {
     this.db
       .prepare(

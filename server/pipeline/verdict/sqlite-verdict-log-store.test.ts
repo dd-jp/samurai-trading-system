@@ -1,10 +1,3 @@
-/**
- * `SqliteVerdictLogStore` (#302) — direct unit coverage over its own
- * `:memory:` DB. Assertions read the table with raw SQL (matching
- * `orphan-verdict-scan.test.ts`'s precedent) rather than through a
- * store-level getter — this store deliberately has none; see its doc
- * comment for why.
- */
 
 import type { VerdictLog } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
@@ -86,12 +79,6 @@ describe('SqliteVerdictLogStore', () => {
   });
 
   it('a repeated trace_id does not throw, but the ORIGINAL row wins (first-write-wins, not last)', () => {
-    // Append-only per the port's doc comment (server/shared/types/ports.ts):
-    // a second write for a trace_id that already has a row must not
-    // overwrite it — that would let a later call erase the very `go` row
-    // OrphanVerdictScanner depends on. See this file's own doc comment for
-    // the full reasoning; this test is what would catch a regression to
-    // `DO UPDATE`
     const db = openSharedStore(':memory:');
     const store = new SqliteVerdictLogStore(db);
 

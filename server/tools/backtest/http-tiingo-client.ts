@@ -1,29 +1,3 @@
-/**
- * Tiingo historical-aggregates client (review 2026-08-06 A2).
- *
- * The Polygon key is deliberately on the free tier (2-year depth), and the
- * 5-year history Stage 2's MinBTL gate needs is a ONE-TIME fetch into the
- * persistent scratch store — Tiingo's free tier serves decades of EOD data,
- * so the depth entitlement is free here rather than a $29-49/mo Polygon SKU.
- *
- * Implements the `PolygonClient` port (`fetchAggregates`) so
- * `Stage2HistoricalStore` consumes it unchanged — the port's name is
- * vendor-stained but its shape ("daily aggregates for a symbol over a
- * window") is not, and both vendors satisfy it.
- *
- * **Endpoints.** Equities: `GET /tiingo/daily/{ticker}/prices` with
- * `startDate`/`endDate`, using the split/dividend-ADJUSTED fields
- * (`adjOpen`..`adjVolume`) to match Polygon's `adjusted=true` bars already
- * in the store. Crypto: `GET /tiingo/crypto/prices?tickers={t}` with
- * `resampleFreq=1day` — raw fields; crypto has no corporate actions.
- *
- * **Auth.** `Authorization: Token ${TIINGO_API_KEY}` header — same
- * keep-the-key-out-of-URLs posture as `HttpPolygonClient`.
- *
- * **Pacing.** Free tier allows ~50 requests/hour; one request covers a
- * symbol's whole window (no pagination at daily scale), so the 6-symbol
- * universe is 6 requests. 2s spacing is politeness, not budget math.
- */
 
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
@@ -31,7 +5,6 @@ import type { DateRange } from './universe.js';
 const DEFAULT_BASE_URL = 'https://api.tiingo.com';
 const MIN_REQUEST_SPACING_MS = 2_000;
 
-/** Equities response row — adjusted fields carry the split/dividend-corrected series */
 interface TiingoDailyRow {
   date: string;
   adjOpen: number;
@@ -41,7 +14,6 @@ interface TiingoDailyRow {
   adjVolume: number;
 }
 
-/** Crypto response: one entry per requested ticker, bars under `priceData` */
 interface TiingoCryptoEntry {
   ticker: string;
   priceData: {
@@ -54,27 +26,21 @@ interface TiingoCryptoEntry {
   }[];
 }
 
-/** `BTC-USD` -> `btcusd`, Tiingo's crypto ticker format. Equities pass through unchanged. */
 export function toTiingoCryptoTicker(symbol: string): string {
   return symbol.replace('-', '').toLowerCase();
 }
 
-/** `YYYY-MM-DD`, per Tiingo's `startDate`/`endDate` query format */
 function toTiingoDate(date: Date): string {
   return date.toISOString().split('T')[0] as string;
 }
 
 export interface HttpTiingoClientOptions {
-  /** Defaults to `process.env.TIINGO_API_KEY`. Never logged or thrown into an error message. */
   apiKey?: string;
   baseUrl?: string;
-  /** Injectable for tests — defaults to the global `fetch` */
   fetchImpl?: typeof fetch;
-  /** Milliseconds between requests. Defaults to polite spacing; tests pass 0. */
   minRequestSpacingMs?: number;
 }
 
-/** Real HTTP Tiingo client behind the `PolygonClient` aggregates port */
 export class HttpTiingoClient implements PolygonClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -96,12 +62,6 @@ export class HttpTiingoClient implements PolygonClient {
     this.minRequestSpacingMs = options.minRequestSpacingMs ?? MIN_REQUEST_SPACING_MS;
   }
 
-  /**
-   * DAILY ONLY, and it refuses rather than silently serving daily (#664) — see
-   * `HttpPolygonClient.fetchAggregates` for the same reasoning. This client
-   * exists for crypto daily history, and crypto left Samurai's scope on
-   * 2026-08-16 (ADR-0015 amendment), so it gains no intraday path.
-   */
   async fetchAggregates(
     symbol: string,
     window: DateRange,
@@ -164,7 +124,6 @@ export class HttpTiingoClient implements PolygonClient {
     return response.json();
   }
 
-  /** Sleeps out the remainder of the spacing window since the last request */
   private async paceRequest(): Promise<void> {
     const wait = this.lastRequestAt + this.minRequestSpacingMs - Date.now();
     if (wait > 0) {

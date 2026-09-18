@@ -40,10 +40,6 @@ function captureLogger(): { logger: Logger; entries: LogEntry[] } {
 }
 
 describe('GATE_REFUSAL_RATE_THRESHOLD', () => {
-  // The placeholder's whole justification (#1533, calibration deferred to
-  // #1427) is that it clears the DESIGNED refusal ratio `(N - 2) / N` at the
-  // widths this system runs. Pinned so a future edit that lowers it below a
-  // shipped baseline fails here rather than in a soak
   it.each([
     { instruments: 6, baseline: 4 / 6 },
     { instruments: 20, baseline: 18 / 20 },
@@ -127,8 +123,6 @@ describe('checkGateRefusalRate', () => {
     ]);
   });
 
-  // The designed steady state (production/defaults.ts): two of six concurrent
-  // instruments admitted, four refused, all day. Volume alone must not page.
   it('stays silent at the designed four-of-six ratio at soak volume', async () => {
     const { channel, posted } = capturingChannel();
     await checkGateRefusalRate(

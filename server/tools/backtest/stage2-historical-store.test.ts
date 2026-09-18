@@ -9,7 +9,6 @@ import { assertSurvivorshipFree } from './universe.js';
 
 const DAY_MS = 86_400_000;
 
-/** A fake `PolygonClient` returning `count` daily aggregates starting at `startMs` */
 function fakeClient(bySymbol: Record<string, PolygonAggregate[]>): PolygonClient {
   return {
     async fetchAggregates(symbol) {
@@ -45,7 +44,6 @@ describe('Stage2HistoricalStore', () => {
     expect(first?.close).toBe(100);
     expect(first?.instrument).toBe('SPY');
     expect(first?.timeframe).toBe('1d');
-    // close_time is open_time + 1 day, never trusted from the source
     expect(first?.close_time.getTime()).toBe((first?.open_time.getTime() ?? 0) + DAY_MS);
   });
 
@@ -84,7 +82,6 @@ describe('Stage2HistoricalStore', () => {
     const store = new Stage2HistoricalStore({ fetchAggregates }, { timeframe: '1d' });
     const fullWindow = { start: new Date(start), end: new Date(start + fullDays * DAY_MS) };
 
-    // First ingest covers only the recent tail; the deeper request must refetch
     await store.ingest('SPY', {
       start: new Date(start + (fullDays - shortDays) * DAY_MS),
       end: new Date(start + fullDays * DAY_MS),
@@ -138,18 +135,11 @@ describe('Stage2HistoricalStore', () => {
   });
 
   describe('timelineFor — the per-asset-class scope (#420)', () => {
-    /**
-     * The defect this closes: stock and crypto daily bars close at different
-     * UTC times, so the unscoped union is close to their *sum*. A stock replay
-     * driven off it steps every crypto bar too, and the return series gets a
-     * zero in each of those slots.
-     */
     async function twoClassStore(): Promise<{
       store: Stage2HistoricalStore;
       window: { start: Date; end: Date };
     }> {
       const start = Date.UTC(2020, 0, 1);
-      // Crypto closes 12h off the stock close, so no timestamp coincides
       const client = fakeClient({
         SPY: aggregates(3, start, 100),
         QQQ: aggregates(3, start, 200),
@@ -172,8 +162,6 @@ describe('Stage2HistoricalStore', () => {
       const stocks = await store.timelineFor(['SPY', 'QQQ']).barTimestamps(window);
       const crypto = await store.timelineFor(['BTC-USD']).barTimestamps(window);
 
-      // 3 stock closes + 3 crypto closes, none coinciding — the union really is
-      // the sum, which is exactly why the unscoped timeline was wrong
       expect(union).toHaveLength(6);
       expect(stocks).toHaveLength(3);
       expect(crypto).toHaveLength(3);
@@ -183,7 +171,6 @@ describe('Stage2HistoricalStore', () => {
     it('de-duplicates across symbols within the scope and returns ascending times', async () => {
       const { store, window } = await twoClassStore();
 
-      // SPY and QQQ share all three close times
       const stocks = await store.timelineFor(['SPY', 'QQQ']).barTimestamps(window);
 
       expect(stocks).toHaveLength(3);
@@ -201,7 +188,6 @@ describe('Stage2HistoricalStore', () => {
         .timelineFor(['SPY'])
         .barTimestamps({ start: new Date(start), end: new Date(start + DAY_MS + 1) });
 
-      // Only the first bar closes inside a window ending just after day 1
       expect(narrow).toHaveLength(1);
     });
 
@@ -214,8 +200,6 @@ describe('Stage2HistoricalStore', () => {
     it('names the un-ingested symbol instead of failing four layers up', async () => {
       const { store, window } = await twoClassStore();
 
-      // Without this, the failure surfaces as `toReturnSeries: no bars in the
-      // sample` with no clue which symbol was missing (pitfall P3)
       await expect(store.timelineFor(['ETH-USD']).barTimestamps(window)).rejects.toThrow(
         /Never ingested: \[ETH-USD\]/,
       );
@@ -278,13 +262,11 @@ describe('Stage2HistoricalStore', () => {
 describe('ingest reuses what is already stored instead of re-fetching (#495)', () => {
   const START = Date.UTC(2020, 0, 1);
 
-  /** A client that records every window it was asked for */
   function recordingClient(bars: PolygonAggregate[]) {
     const asked: DateRange[] = [];
     const client: PolygonClient = {
       async fetchAggregates(_symbol, window) {
         asked.push(window);
-        // A real vendor serves only what falls inside the requested range
         return bars.filter(({ t }) => t >= window.start.getTime() && t <= window.end.getTime());
       },
     };
@@ -301,15 +283,11 @@ describe('ingest reuses what is already stored instead of re-fetching (#495)', (
 
     await store.ingest('SPY', window);
 
-    // Pre-#495 this was 2 — the full window re-fetched, deduped only on write
     expect(vendor.asked).toHaveLength(1);
     expect(store.bars('SPY', window)).toHaveLength(5);
   });
 
   it("stays a no-op even though no daily bar opens at the window's intraday end", async () => {
-    // The shape `STAGE2_PINNED_WINDOW` actually has: an end at 18:17, while
-    // bars open at midnight. Coverage inferred from stored bars alone would
-    // see a permanent tail gap here and re-request on every run
     const window = {
       start: new Date(START),
       end: new Date(START + 4 * DAY_MS + 65_827_694),
@@ -329,16 +307,12 @@ describe('ingest reuses what is already stored instead of re-fetching (#495)', (
     const store = new Stage2HistoricalStore(vendor.client, { timeframe: '1d' });
     const first = { start: new Date(START), end: new Date(START + 4 * DAY_MS) };
     const extended = { start: new Date(START), end: new Date(START + 9 * DAY_MS) };
-    // `bars()` filters on close_time (open + 1 day), so a read that ends with
-    // the last bar's OPEN would drop it
     const readAll = { start: new Date(START), end: new Date(START + 10 * DAY_MS) };
 
     await store.ingest('SPY', first);
     await store.ingest('SPY', extended);
 
     expect(vendor.asked).toHaveLength(2);
-    // Starts at the last stored bar, not at the window start: the whole point
-    // is that the first four days are never asked for twice
     expect(vendor.asked[1]?.start.getTime()).toBe(START + 4 * DAY_MS);
     expect(vendor.asked[1]?.end.getTime()).toBe(extended.end.getTime());
     expect(store.bars('SPY', readAll)).toHaveLength(10);
@@ -356,8 +330,6 @@ describe('ingest reuses what is already stored instead of re-fetching (#495)', (
 
     await store.ingest('SPY', earlier);
 
-    // A tail-only cache would have called this covered and served 5 bars
-    // forever — silent truncation moved from the vendor into the cache
     expect(vendor.asked[1]?.start.getTime()).toBe(START);
     expect(store.bars('SPY', readAll)).toHaveLength(10);
   });
@@ -368,7 +340,6 @@ describe('ingest reuses what is already stored instead of re-fetching (#495)', (
     const client: PolygonClient = {
       async fetchAggregates(_symbol, window) {
         asked.push(window);
-        // The bar at START is provisional on the first read and settles later
         return [{ t: START, o: 100, h: 100, l: 100, c: close, v: 1 }].filter(
           ({ t }) => t >= window.start.getTime() && t <= window.end.getTime(),
         );
@@ -382,7 +353,6 @@ describe('ingest reuses what is already stored instead of re-fetching (#495)', (
 
     const bars = store.bars('SPY', { start: new Date(START), end: new Date(START + 2 * DAY_MS) });
     expect(bars).toHaveLength(1);
-    // INSERT OR IGNORE would have kept 100 here, forever
     expect(bars[0]?.close).toBe(137);
   });
 
@@ -412,7 +382,6 @@ describe('ingest reuses what is already stored instead of re-fetching (#495)', (
     const window = { start: new Date(START), end: new Date(START + 10 * DAY_MS) };
     const vendor = recordingClient(aggregates(5, START, 100));
 
-    // `nested/` does not exist: SQLite creates the file, never the directory
     await new Stage2HistoricalStore(vendor.client, { timeframe: '1d', dbPath }).ingest(
       'SPY',
       window,
@@ -464,16 +433,9 @@ describe('uncoveredRanges', () => {
   });
 });
 
-/**
- * #664: the store now ingests, stores and serves ONE timeframe, and every read
- * is scoped to it. The table is shared — its PRIMARY KEY already carries
- * `timeframe` — so the risk was never a collision on write; it was that reads
- * ignored the column and would have served the UNION of two resolutions.
- */
 describe('Stage2HistoricalStore — timeframe scoping (#664)', () => {
   const start = Date.UTC(2026, 7, 14, 13, 30);
 
-  /** `count` one-minute aggregates from `startMs` */
   function minuteAggregates(
     count: number,
     startMs: number,
@@ -514,8 +476,6 @@ describe('Stage2HistoricalStore — timeframe scoping (#664)', () => {
     const dbPath = join(dir, 'bars.sqlite');
     const window = { start: new Date(start), end: new Date(start + 5 * DAY_MS) };
 
-    // Same instrument, same open time, two resolutions — the one case the
-    // PRIMARY KEY permits and an unscoped read would silently merge
     const daily = new Stage2HistoricalStore(fakeClient({ SPY: aggregates(3, start, 100) }), {
       timeframe: '1d',
       dbPath,
@@ -533,8 +493,6 @@ describe('Stage2HistoricalStore — timeframe scoping (#664)', () => {
     expect(daily.bars('SPY', window).every((bar) => bar.timeframe === '1d')).toBe(true);
     expect(minute.bars('SPY', window).every((bar) => bar.timeframe === '1m')).toBe(true);
 
-    // The timelines too — a replay steps THESE, so an unscoped one would
-    // interleave 30 minute closes into a 3-bar daily replay
     expect(await daily.barTimestamps(window)).toHaveLength(3);
     expect(await minute.barTimestamps(window)).toHaveLength(30);
     expect(await daily.timelineFor(['SPY']).barTimestamps(window)).toHaveLength(3);
@@ -553,9 +511,6 @@ describe('Stage2HistoricalStore — timeframe scoping (#664)', () => {
 
     const minute = new Stage2HistoricalStore(fakeClient({}), { timeframe: '1m', dbPath });
 
-    // The diagnostic lists what is ingested AT THIS TIMEFRAME. Listing the
-    // daily SPY rows here would tell a reader the symbol is present when the
-    // replay they asked for has nothing to step
     await expect(minute.timelineFor(['SPY']).barTimestamps(window)).rejects.toThrow(
       /Never ingested: \[SPY\]/,
     );
@@ -604,9 +559,6 @@ describe('Stage2HistoricalStore — timeframe scoping (#664)', () => {
   });
 
   it('reads bars through the (instrument, timeframe, close_time) index, not a table scan', async () => {
-    // Minute resolution is ~390x the rows per instrument-day, and every read
-    // here filters on `close_time`, which is NOT a prefix of the PRIMARY KEY
-    // (that is on `open_time`). Without the index these are full scans.
     const dir = mkdtempSync(join(tmpdir(), 'stage2-plan-'));
     const dbPath = join(dir, 'bars.sqlite');
     const store = new Stage2HistoricalStore(

@@ -117,7 +117,6 @@ function makeTradingCalendar(isOpen = true): TradingCalendar {
     isOpen: () => isOpen,
     isTradingDay: () => true,
     sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
-    // #668 — this double predates `sessionEnd`; no test here asks about it
     sessionEnd: () => null,
   };
 }
@@ -178,11 +177,6 @@ describe('VerdictImpl.decide — staleness gate', () => {
   });
 
   it('records the signal age it measured and the bound it broke (#1111)', async () => {
-    // The gate that actually produced the 2026-09-04 session's `staleness`
-    // rows. Its measurement is the OPINION's age — a different quantity from
-    // `stale_feed`'s, under a name that reads alike — and the row carried
-    // neither number, so telling a near miss from an hour-old debate meant
-    // joining back to `debate_log` by hand
     const verdict = new VerdictImpl();
     const decision = await verdict.decide(
       makeInput({
@@ -195,11 +189,6 @@ describe('VerdictImpl.decide — staleness gate', () => {
     expect(decision.no_go_detail).toEqual({ measured_ms: 60 * 60_000, bound_ms: 30 * 60_000 });
   });
 
-  // #1190: `decision_timestamp` is the 1h DEBATE BAR, not the instant the
-  // decision was made — a decision late in its bar used to measure as old as
-  // the bar itself, no matter how fresh it actually was. These three pin the
-  // fix at the exact numbers from the 2026-09-04 session's UBER case: a tick
-  // at bar+61min, against the shipped 15-minute `max_signal_age.stocks`
   describe('decided_at vs the bar-floored decision_timestamp (#1190)', () => {
     const BAR = new Date('2026-07-15T13:00:00Z');
     const SHIPPED_CONFIG = makeConfig({
@@ -277,8 +266,6 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
   it('no-go with stale_feed when the mark was observed past max_mark_age', async () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
-      // Signal decided seconds ago (the default intent), priced off a mark
-      // observed 20 minutes ago against a 15-minute stocks bound
       marketData: makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 20 * 60_000) })),
     });
 
@@ -290,9 +277,6 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
   });
 
   it('is a DIFFERENT gate from staleness — a fresh decision on a dead feed', async () => {
-    // The whole reason this gate exists. `max_signal_age.stocks` is 30 minutes
-    // here and the decision is seconds old, so `staleness` (gate 1) passes
-    // cleanly; only the FEED is stale. Before #641 this trade was placed.
     const verdict = new VerdictImpl();
     const decision = await verdict.decide(
       makeInput({
@@ -307,9 +291,6 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
   });
 
   it('reads the bound for the intent’s own asset class', async () => {
-    // 5 minutes old: past the 2-minute crypto bound, inside the 15-minute
-    // stocks one. Same mark, same config, opposite verdicts — which is what
-    // makes the per-class shape load-bearing rather than decorative
     const verdict = new VerdictImpl();
     const staleMark = makeMark({ observed_at: new Date(NOW.getTime() - 5 * 60_000) });
 
@@ -326,10 +307,6 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
   });
 
   it('runs BEFORE the drift gate, so a dead feed is not misreported as drift', async () => {
-    // Both conditions hold at once: the mark is 20 minutes old AND 5% away
-    // from the entry. Ordering decides which cause the operator is told, and
-    // `drift` would send them looking at a market that moved rather than at a
-    // feed that stopped
     const verdict = new VerdictImpl();
     const decision = await verdict.decide(
       makeInput({
@@ -343,10 +320,6 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
   });
 
   it('no-go with stale_feed when the mark is observed AHEAD of our clock', async () => {
-    // Not "extremely fresh". A future observation means our clock and the
-    // venue's disagree, and every other time comparison in this pass — signal
-    // age, the flatten window — is computed against the clock we just caught
-    // being wrong
     const verdict = new VerdictImpl();
     const decision = await verdict.decide(
       makeInput({
@@ -359,12 +332,7 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
     expect(decision.no_go_reason).toBe('stale_feed');
   });
 
-  // #1111: `now` is taken before `getMark` is issued and the fetch has no
-  // failover and a ~30s retry budget, so a stalled vendor puts the two
-  // instants minutes apart. Freshness is judged at the instant the mark came
-  // BACK — a slow fetch must not read as a clock disagreement
   describe('freshness is judged at the read instant, not the gate instant (#1111)', () => {
-    /** A clock that jumps forward by `fetchMs` once the mark has been fetched */
     function slowFetchClock(fetchMs: number): Clock {
       let issued = false;
       return {
@@ -384,8 +352,6 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
         makeInput({
           config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
           clock: slowFetchClock(83_993),
-          // Stamped a beat before the read returned — 83s AHEAD of the gate's
-          // own `now`, which is what the pre-#1111 coordinate refused on
           marketData: makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() + 83_793) })),
         }),
       );
@@ -438,16 +404,10 @@ describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
       }),
     );
 
-    // Recoverable from the row alone: the instrument is already a
-    // `verdict_log` column, so what was missing is how far past the bound the
-    // mark was
     expect(decision.no_go_detail).toEqual({ measured_ms: 20 * 60_000, bound_ms: 15 * 60_000 });
   });
 
   it('passes a fresh mark through to the later gates', async () => {
-    // Non-vacuity: the same harness with an in-bound mark reaches the end of
-    // the chain, so the cases above fail for the reason they name rather than
-    // because this input never produced a `go` at all
     const verdict = new VerdictImpl();
     const decision = await verdict.decide(
       makeInput({
@@ -474,18 +434,7 @@ describe('VerdictImpl.decide — drift gate', () => {
     expect(decision.no_go_reason).toBe('drift');
   });
 
-  /**
-   * #381's core: `drift_tolerance` used to be an ABSOLUTE price distance, and
-   * the checked-in paper value was 500 — sized for a six-figure BTC-USD.
-   *
-   * These cases are written so that the old shape and the new one give
-   * OPPOSITE answers, rather than merely re-asserting the new one. Revert
-   * `verdict/index.ts`'s `drift` gate (2) to `drift > config.drift_tolerance`
-   * with 500 and the first case goes green-to-red: a $200 equity 25% away
-   * from its entry would have been executed on.
-   */
   describe('per-asset-class fractional tolerance (#381)', () => {
-    /** The paper profile's own value, so this tests the shipped calibration */
     const PAPER_PCT = { crypto: 0.005, stocks: 0.005 };
 
     it('fires on a $200 equity that the old absolute 500 could never have caught', async () => {
@@ -493,8 +442,6 @@ describe('VerdictImpl.decide — drift gate', () => {
       const entry = 200;
       const price = 250;
 
-      // The old shape, stated as an executable fact rather than a claim: 50 is
-      // nowhere near 500, so the absolute gate would have passed this through
       expect(Math.abs(price - entry)).toBeLessThan(500);
 
       const input = makeInput({
@@ -514,9 +461,6 @@ describe('VerdictImpl.decide — drift gate', () => {
     it("preserves BTC-USD's calibration: 0.5% of a six-figure entry still passes", async () => {
       const verdict = new VerdictImpl();
       const entry = 100_000;
-      // $400 of drift — inside the old absolute 500 AND inside 0.5% of entry,
-      // so the instrument that HAD a calibration keeps the same answer. This
-      // is the half of the change that must NOT move
       const input = makeInput({
         risk_decision: makeRiskDecision({
           order_intent: makeIntent({
@@ -536,8 +480,6 @@ describe('VerdictImpl.decide — drift gate', () => {
 
     it('reads the fraction from the order asset class, not a single global number', async () => {
       const verdict = new VerdictImpl();
-      // Same entry and same drift for both classes; only the dial differs. A
-      // gate that ignored `asset_class` would answer identically twice
       const config = makeConfig({ drift_tolerance_pct: { crypto: 0.5, stocks: 0.001 } });
       const marketData = makeMarketData(makeMark({ price: 110 }));
 
@@ -570,10 +512,6 @@ describe('VerdictImpl.decide — drift gate', () => {
 
     it('fails closed on a non-positive entry rather than computing a zero tolerance', async () => {
       const verdict = new VerdictImpl();
-      // `entry * pct` is 0 here, which would reject everything — but a
-      // NEGATIVE entry would invert the comparison into a gate that passes on
-      // unbounded drift. Both are refused by the same explicit guard, so the
-      // safe answer does not depend on which side of zero the bad value is
       const input = makeInput({
         risk_decision: makeRiskDecision({ order_intent: makeIntent({ entry: 0 }) }),
         marketData: makeMarketData(makeMark({ price: 0 })),
@@ -588,21 +526,9 @@ describe('VerdictImpl.decide — drift gate', () => {
   });
 });
 
-/**
- * The staleness/market-open interaction the paper profile said to "re-check
- * rather than assume" before widening the universe to equities (#381).
- *
- * The claim under test is not "stale equity orders are rejected" — everything
- * rejects them. It is WHICH gate rejects them, because the two gates catch
- * different situations and only one of them can catch the dangerous one.
- */
 describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)', () => {
   it('rejects a stale overnight equity signal on STALENESS, not market_closed', async () => {
     const verdict = new VerdictImpl();
-    // Decided in yesterday's session, evaluated against a shut market: both
-    // gates would fire, and `staleness` (gate 1) runs first, so this is the
-    // reason an operator reads in the soak log. Pinned so the ordering is a
-    // decision rather than a surprise
     const input = makeInput({
       risk_decision: makeRiskDecision({
         order_intent: makeIntent({
@@ -620,16 +546,8 @@ describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)',
 
   it('leaves market_closed to catch the case staleness cannot: a FRESH mark, shut session', async () => {
     const verdict = new VerdictImpl();
-    // The tick that started at 15:59 ET and reached Verdict after the close
-    // The mark is seconds old, so the staleness bound has nothing to say — and
-    // this is exactly the input that would otherwise be submitted into a
-    // closed market. `allow_extended_hours: false` is what makes the calendar
-    // authoritative here
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        // `decision_timestamp` no longer drives gate 1 (#1190) — kept here at
-        // its usual fresh default alongside it; `decided_at` (default, 5 min
-        // before NOW) is what actually keeps `staleness` from firing first
         order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:59:30Z') }),
       }),
       tradingCalendar: makeTradingCalendar(false),
@@ -643,10 +561,6 @@ describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)',
 
   it('gives an equity signal far more headroom than one debate can consume', async () => {
     const verdict = new VerdictImpl();
-    // `LATENCY_BUDGET_MS.stocks` bounds a debate at 60s and `decided_at`
-    // (#1190) is read once that debate has already resolved, so the
-    // pipeline that produces the signal cannot approach a 15-minute bound
-    // 10 minutes — an order of magnitude past that budget — still passes
     const input = makeInput({
       config: makeConfig({ max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 } }),
       risk_decision: makeRiskDecision({
@@ -709,11 +623,6 @@ describe('VerdictImpl.decide — market-open gate', () => {
     expect(decision.status).toBe('go');
   });
 
-  // #1388: a flatten decided inside ADR-0014's window and verdicted after the
-  // close was refused `market_closed` on ordinary Trader->Risk->Verdict
-  // latency alone (measured on the live paper store — 19:59:56.454Z decided,
-  // 20:00:06.125Z refused). Mirrors gate 1's #894 exemption exactly: same
-  // marker, same "acts on the clock, not an opinion" reasoning
   it('exempts a mandatory flat-by-close flatten from market_closed (#1388)', async () => {
     const verdict = new VerdictImpl();
     const flatten = makeIntent();
@@ -735,9 +644,6 @@ describe('VerdictImpl.decide — market-open gate', () => {
     expect(decision.no_go_reason).toBeNull();
   });
 
-  // The exemption is scoped to the marker, not to `intent_type: 'exit'` —
-  // a discretionary exit is acting on an opinion, same as an entry, and
-  // stays refused exactly like one
   it('still refuses market_closed for a discretionary exit without the marker (#1388)', async () => {
     const verdict = new VerdictImpl();
     const flatten = makeIntent();
@@ -1050,7 +956,6 @@ describe('VerdictImpl.decide — gate ordering', () => {
       risk_decision: makeRiskDecision({
         order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }),
       }),
-      // Every other gate would pass cleanly
       marketData: makeMarketData(makeMark({ price: 100 })),
       tradingCalendar: makeTradingCalendar(true),
       positionStore: makePositionStore(false),
@@ -1065,17 +970,6 @@ describe('VerdictImpl.decide — gate ordering', () => {
   });
 });
 
-/**
- * #826 — the unpriced mandatory flatten.
- *
- * `buildFlattenExit` (trader/decide.ts) emits a flat-by-close exit with a zero
- * entry/stop/target, flagged `metadata.unpriced_exit`, when the instrument's
- * own mark could not be read during an Alpaca stall. Verdict is the choke
- * point for that decision: the `drift` gate (2) refuses any intent whose
- * entry is not positive, so without this the Trader's degradation would be
- * undone one stage later and the flatten would still be missed — this repo's
- * dominant defect class (a mechanism nothing reaches) wearing a new hat.
- */
 describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
   function unpricedFlatten(overrides: Partial<OrderIntent> = {}): OrderIntent {
     const base = makeIntent();
@@ -1094,8 +988,6 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
   function inputFor(intent: OrderIntent, overrides: Partial<VerdictInput> = {}): VerdictInput {
     return makeInput({
       risk_decision: makeRiskDecision({ order_intent: intent }),
-      // `auto` because the flatten must not wait on a human — ADR-0007 removed
-      // that gate, and the HITL path would otherwise decide these cases
       config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
       ...overrides,
     });
@@ -1120,9 +1012,6 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
   });
 
   it('goes even against a feed so stale every other intent would be refused', async () => {
-    // The condition that actually holds during the stall: whatever the feed
-    // says, if it says anything, is old. `stale_feed` must not reappear as the
-    // reason the flatten did not go out
     const verdict = new VerdictImpl();
     const stale = makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 60 * 60_000) }));
 
@@ -1153,12 +1042,6 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
     expect(decision.no_go_reason).toBe('breaker');
   });
 
-  /**
-   * The scoping assertion. The skip is keyed on the FLAG, not on
-   * `intent_type === 'exit'` and not on a zero entry — an exit that carries a
-   * real price is still drift-gated, and an unflagged zero-entry intent (which
-   * nothing should produce) is still refused.
-   */
   it('leaves a normally-priced exit fully gated', async () => {
     const verdict = new VerdictImpl();
     const priced = unpricedFlatten({ entry: 100, stop: 100, target: 100 });
@@ -1168,7 +1051,6 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
     const decision = await verdict.decide(
       inputFor(
         { ...priced, metadata },
-        // 40% away from the intent's entry, far outside the 1% tolerance
         { marketData: makeMarketData(makeMark({ price: 140 })) },
       ),
     );
@@ -1189,25 +1071,7 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
   });
 });
 
-/**
- * #894 — the mandatory flatten and the `staleness` gate (1).
- *
- * The end-to-end proof lives in
- * `apps/orchestrator/production/flat-by-close-to-execution.test.ts`, which is
- * what the defect required: these unit cases could not have found it, because
- * every intent here is handed a `decision_timestamp` this file chose. What
- * they own instead is the exemption's NARROWNESS — that nothing but the
- * mandatory flatten acquires it.
- */
 describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => {
-  /**
-   * Older than `max_signal_age.stocks` (30 min here) by the bar-floor margin.
-   * Stamped on BOTH `decision_timestamp` and `decided_at` (#1190 gave those
-   * two different meanings): the mandatory-flatten cases below need the
-   * exemption itself to be what saves them, and the discretionary/entry
-   * cases need a genuinely stale `decided_at`, since a stale
-   * `decision_timestamp` alone no longer trips gate 1.
-   */
   const STALE_AT = new Date(NOW.getTime() - 56 * 60_000);
 
   function staleExit(overrides: Partial<OrderIntent> = {}): OrderIntent {
@@ -1288,15 +1152,6 @@ describe('VerdictImpl.decide — mandatory flatten and staleness (#894)', () => 
   });
 });
 
-/**
- * #1357 — the two exemptions stacked, on one intent, driven through Verdict.
- *
- * `unpricedFlatten()` above never carries `mandatory_flatten` and inherits
- * `makeIntent()`'s fresh `decided_at`, so #826's suite exercises skipping the
- * two price gates but not the three-gate stack `buildFlattenExit` actually
- * produces (`exit_reason: 'flatten'` sets both markers together — see the
- * file header's "THE TWO STACK, ONE WAY"). This drives that shape.
- */
 describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #894 stacked)', () => {
   const STALE_AT = new Date(NOW.getTime() - 56 * 60_000);
 
@@ -1306,10 +1161,6 @@ describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #89
       ...base,
       intent_type: 'exit',
       side: 'sell',
-      // Both fields stamped stale (#1190): gate 1 reads `decided_at`, so a
-      // stale `decision_timestamp` alone would leave the `mandatory_flatten`
-      // exemption below unexercised — the "not refused for staleness" case
-      // would pass whether or not the exemption code path ran at all
       decision_timestamp: STALE_AT,
       decided_at: STALE_AT,
       entry: 0,
@@ -1341,17 +1192,6 @@ describe('VerdictImpl.decide — stale AND unpriced mandatory flatten (#826, #89
     expect(decision.status).toBe('go');
   });
 
-  /**
-   * A stale mark would trip `stale_feed` first inside `#priceGates`, were
-   * the gates to run at all, so it can never reach the `drift` branch —
-   * that made the third name in the original single-case version of this
-   * test unfalsifiable. This fixture uses a fresh mark instead, with the
-   * entry an unpriced flatten always carries (0), which is exactly what
-   * would trip `drift`'s `!(entry > 0)` guard (`#priceGates`, below the
-   * `stale_feed` check) if #826 did not skip `#priceGates` for this intent
-   * outright — under production code, `#priceGates` never runs for this
-   * intent, so neither the stale nor the fresh mark is ever consulted.
-   */
   it('is not refused for drift when the mark is fresh but the intent carries no entry price', async () => {
     const verdict = new VerdictImpl();
     const fresh = makeMarketData(makeMark({ observed_at: NOW }));

@@ -51,13 +51,6 @@ describe('SqliteSetupStore.writeSetup', () => {
     });
   });
 
-  /**
-   * First-write-wins since #432, where `decide()` became the caller. A repeat
-   * write is a re-decided bar — replay, or a crash-restart on the same bar —
-   * and killing the tick over a row that already holds the same values is the
-   * wrong answer. `debate_id` is a hash of the debate's inputs, so the second
-   * write's vector is identical to the first's by construction.
-   */
   it('ignores a duplicate write for the same debate rather than throwing', () => {
     const { db, store } = makeStore();
     store.writeSetup('debate-1', VECTOR, DECIDED_AT);
@@ -149,7 +142,6 @@ describe('SqliteSetupStore.findNeighbors', () => {
 
     const justBefore = new Date(CLOSED_AT.getTime() - 1);
     expect(store.findNeighbors(VECTOR, justBefore)).toEqual([]);
-    // Inclusive at the boundary, matching the fixture's `<=`
     expect(store.findNeighbors(VECTOR, CLOSED_AT)).toHaveLength(1);
   });
 

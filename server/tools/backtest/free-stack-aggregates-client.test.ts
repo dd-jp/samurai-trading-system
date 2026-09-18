@@ -9,13 +9,6 @@ import type { DateRange } from './universe.js';
 const FAKE_KEY = 'test-fake-alpaca-key';
 const FAKE_SECRET = 'test-fake-alpaca-secret';
 
-/**
- * A REAL `Response`, not a cast object literal — `docs/coding-standards.md`
- * ("Test stubs must type-check without casts") rules that a cast fixture can
- * silently disable the very check the test exists for. Node's global
- * `Response` costs nothing here and gives the client the same
- * `ok`/`status`/`json()` semantics production sees.
- */
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -23,7 +16,6 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/** A `fetch`-shaped stub built without a cast, recording the URLs it is called with */
 function recordingFetch(handler: (url: string, call: number) => Response): {
   fetchImpl: typeof fetch;
   calls: string[];
@@ -50,7 +42,6 @@ function client(fetchImpl: typeof fetch): FreeStackAggregatesClient {
   });
 }
 
-/** Coinbase candle tuple order: `[time, low, high, open, close, volume]` */
 function candle(epochSeconds: number, close: number): number[] {
   return [epochSeconds, close - 1, close + 1, close, close, 100];
 }
@@ -62,7 +53,6 @@ const WINDOW: DateRange = {
 
 describe('FreeStackAggregatesClient — crypto via Coinbase', () => {
   it('maps Coinbase candle tuples to aggregates in ascending time order', async () => {
-    // Coinbase returns newest-first; the store's contract is ascending
     const { fetchImpl } = recordingFetch(() =>
       jsonResponse([
         candle(1_704_240_000, 300),
@@ -79,8 +69,6 @@ describe('FreeStackAggregatesClient — crypto via Coinbase', () => {
   });
 
   it('pages past the 300-candle per-request cap and de-duplicates overlap', async () => {
-    // Both pages carry the same bar to prove overlap is de-duplicated, which a
-    // forward-walking chunk boundary produces
     const { fetchImpl, calls } = recordingFetch((_url, call) =>
       call === 1
         ? jsonResponse([candle(1_704_153_600, 200), candle(1_704_067_200, 100)])
@@ -148,9 +136,6 @@ describe('FreeStackAggregatesClient — equities via Alpaca', () => {
   });
 
   it('de-duplicates bars repeated across pages', async () => {
-    // Alpaca documents non-overlapping pages, but the Coinbase leg already
-    // de-duplicates and a silently doubled bar would skew every metric
-    // downstream rather than failing loudly. Review finding on PR #598.
     const { fetchImpl } = recordingFetch((_url, call) =>
       call === 1
         ? jsonResponse({
@@ -232,11 +217,6 @@ describe('FreeStackAggregatesClient — routing', () => {
   });
 
   it('never issues a zero-length final chunk', async () => {
-    // Reviewer read `while (cursor <= endMs)` as producing one extra
-    // zero-width request per run. It does not — the loop breaks when
-    // `chunkEnd >= endMs`, which the min() makes true on the last chunk. This
-    // pins that, since the failure it would cause (a spurious request whose
-    // response the venue defines) is invisible in the bar count
     const { fetchImpl, calls } = recordingFetch(() => jsonResponse([]));
 
     await client(fetchImpl).fetchAggregates(
@@ -276,10 +256,6 @@ describe('FreeStackAggregatesClient — routing', () => {
   });
 });
 
-/**
- * #664. The client requested `timeframe: '1Day'` unconditionally; ADR-0014's
- * intraday horizon needs the caller's resolution to reach the wire.
- */
 describe('FreeStackAggregatesClient — intraday (#664)', () => {
   it('asks Alpaca for the requested resolution, not always 1Day', async () => {
     const { fetchImpl, calls } = recordingFetch(() => jsonResponse({ bars: { SPY: [] } }));
@@ -304,7 +280,6 @@ describe('FreeStackAggregatesClient — intraday (#664)', () => {
     await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW, '1m')).rejects.toThrow(
       /crypto \(BTC-USD\) is served at '1d' only/,
     );
-    // And it refuses BEFORE spending a request
     expect(calls).toHaveLength(0);
   });
 
@@ -314,20 +289,12 @@ describe('FreeStackAggregatesClient — intraday (#664)', () => {
       end: new Date('2026-01-04T00:00:00.000Z'),
     };
 
-    // Ten years of DAILY bars is one page; the floor governs
     expect(maxAlpacaPagesFor(tenYears, '1d')).toBe(200);
 
-    // Ten years of MINUTE bars is ~5.3M bars of elapsed time, ~526 pages at the
-    // 10,000-bar page limit — a fixed 200 would have thrown on a legitimate
-    // backfill, turning #656's measured 10.6 years of free 1-minute history
-    // into an error
     expect(maxAlpacaPagesFor(tenYears, '1m')).toBeGreaterThan(526);
   });
 
   it("paces every page through the shared bucket, at or under Alpaca's 200/min", async () => {
-    // The Basic plan allows 200 requests/minute. `acquire()` is awaited once per
-    // page on both legs, so a deep intraday backfill is paced by the same
-    // mechanism a daily one was — #664 item 4 wanted no second limiter
     let acquired = 0;
     const bucket = {
       acquire: async () => {

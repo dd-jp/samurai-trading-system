@@ -8,21 +8,12 @@ export interface CapMeterProps {
   value: number | undefined;
   cap: number | null;
   format: (n: number) => string;
-  /** Tone below the cap; at or above it the meter always reads `bad` */
   tone: Exclude<MeterTone, 'bad'>;
-  /** What the note says when the meter cannot be drawn — the caller's own reason */
   emptyState: string;
   trackLabel: (fraction: number, value: number, cap: number) => string;
   footnote: (over: boolean) => ReactNode;
 }
 
-/**
- * The one capped-meter shape both the rail's LLM-spend and drawdown blocks
- * draw from: a value against a cap, a fill fraction, and a tone that turns
- * `bad` once the fraction reaches 1. Callers own everything domain-specific
- * — the empty-state wording, the accessible label, the footnote — so two
- * meters can read differently without recomputing the threshold twice.
- */
 export function CapMeter({
   dataField,
   heading,

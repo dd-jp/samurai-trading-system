@@ -1,8 +1,3 @@
-/**
- * Shared SQLite store (#193) — see docs/specs/shared-sqlite-store-spec.md.
- * `openSharedStore(dbPath)` is the injectable handle; components receive it by
- * constructor injection and own their own tables.
- */
 export { type ClosedTradeRow, fromClosedTradeRow } from './closed-trade-row.js';
 export { type FillRow, fromFillRow } from './fill-row.js';
 export {

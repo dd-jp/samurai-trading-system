@@ -20,12 +20,10 @@ function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
   };
 }
 
-/** A response that never settles within the test — simulates a straggler */
 function neverResolves(): Promise<AnalystView> {
   return new Promise(() => {});
 }
 
-/** A response that resolves after `ms` of (fake) wall-clock time */
 function resolvesAfter(ms: number, view: AnalystView): Promise<AnalystView> {
   return new Promise((resolve) => {
     setTimeout(() => resolve(view), ms);
@@ -101,8 +99,6 @@ describe('collectAnalystViews', () => {
     expect(result.views).toHaveLength(2);
     expect(result.failures).toHaveLength(0);
     expect(result.expected_count).toBe(2);
-    // #347: the per-analyst timeout timer is cleared once the analyst answers
-    // It used to be left pending — one unfired timer per analyst per tick
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -204,7 +200,6 @@ describe('collectAnalystViews', () => {
       {
         analyst_id: 'analyst-sentiment-1',
         analyst_type: 'sentiment',
-        // Deliberately malformed for the test — missing every AnalystView field but analyst_id
         response: Promise.resolve({
           analyst_id: 'analyst-sentiment-1',
         } as unknown as AnalystView),
@@ -215,7 +210,6 @@ describe('collectAnalystViews', () => {
     await vi.advanceTimersByTimeAsync(0);
     const result = await resultPromise;
 
-    // 1/2 valid == exactly 50% quorum boundary — met
     expect(result.quorum_met).toBe(true);
     expect(result.views).toHaveLength(1);
     expect(result.failures).toEqual([
@@ -256,9 +250,6 @@ describe('collectAnalystViews', () => {
   });
 
   it('records a hostile rejection as an error outcome instead of rejecting the whole collection (#1262)', async () => {
-    // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
-    // (defeats the `String()` fallback too) — the value `describeThrown`'s own
-    // doc says it cannot render on its own
     const hostile: Record<string, unknown> = {
       [Symbol.toPrimitive]: () => {
         throw new Error('render boom');
@@ -283,12 +274,6 @@ describe('collectAnalystViews', () => {
     await vi.advanceTimersByTimeAsync(0);
     const result = await resultPromise;
 
-    // Before the guard, rendering the hostile value threw INSIDE the
-    // `onRejected` handler, replacing the recorded `RaceOutcome` with a fresh
-    // rejection that `Promise.all` propagated — so the healthy analyst's view
-    // was lost with it and `collectAnalystViews` rejected rather than
-    // resolving. Both halves are asserted: the collection completed with the
-    // good view, AND the failure is on the record
     expect(result.views.map((view) => view.analyst_id)).toEqual(['analyst-sentiment-1']);
     expect(result.quorum_met).toBe(true);
     expect(result.failures).toEqual([

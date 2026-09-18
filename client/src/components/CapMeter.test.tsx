@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * The shared shape behind the rail's spend and drawdown meters. Fraction and
- * tone-threshold behaviour is asserted here, once, so neither caller has to
- * re-prove it.
- */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { CapMeter } from './CapMeter.tsx';

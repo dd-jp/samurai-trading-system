@@ -1,19 +1,3 @@
-/**
- * One-time 5-year history ingest via Tiingo (review 2026-08-06 A2) —
- * `npm run ingest-history`.
- *
- * Fills the persistent Stage-2 scratch store (`data/stage2-bars.sqlite`)
- * with the pinned 5-year window for the MVP universe, from Tiingo's free
- * tier instead of a paid Polygon depth SKU. Idempotent twice over: the
- * store's `INSERT OR IGNORE` dedups per bar, and `ingest`'s warm-cache
- * check skips the fetch entirely once the window is covered — so re-running
- * this after the first success costs zero API calls.
- *
- * After this has run once, `node dist/server/tools/run-stage2.js` reads the same
- * file and its own (free-tier, 2-year-capped) Polygon ingest finds nothing
- * to add — the 5-year MinBTL verdict becomes computable without any Polygon
- * entitlement.
- */
 import {
   DEFAULT_STAGE2_TIMEFRAME,
   HttpTiingoClient,
@@ -34,8 +18,6 @@ export interface IngestHistoryDeps {
 
 export async function ingestTiingoHistory(deps: IngestHistoryDeps): Promise<void> {
   const print = deps.print ?? console.log;
-  // DAILY, stated explicitly (#664): this script backfills crypto daily
-  // history, which is the only resolution `HttpTiingoClient` serves
   const store = new Stage2HistoricalStore(deps.client, {
     timeframe: DEFAULT_STAGE2_TIMEFRAME,
     dbPath: deps.dbPath,

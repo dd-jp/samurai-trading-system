@@ -1,43 +1,3 @@
-/**
- * #894 — THE MANDATORY FLATTEN, TICK TO BROKER.
- *
- * The coverage gap that hid the defect: `verdict/index.test.ts` hands every
- * intent a freshly-minted `decision_timestamp`, `smoke-run.ts` fabricated its
- * own `go` for the exit scenarios, and NOTHING drove a tick-decided flatten
- * through Verdict into Execution. So the `staleness` gate (1) `no_go`'d every
- * flat-by-close flatten in production while ~2900 tests stayed green.
- *
- * The arithmetic these cases pin: the tick path stamps `decision_timestamp` to
- * the DECISION BAR (`floorToBar(now, DEBATE_BAR_TIMEFRAME_MS)`, 1h — applied at
- * `tick-runner.ts`'s `runExitCheckPass(...)` call), while ADR-0014's flatten
- * window opens only `flatten_before_close_ms` (5 min) before the session close.
- * The signal is therefore tens of minutes old the moment the flatten is
- * decided, against a 15-minute `max_signal_age.stocks` — and the age depends on
- * where the venue's close sits inside the hour, which is why BOTH closes are
- * exercised here rather than one standing in for the other.
- *
- * Deliberately built on a HEALTHY mark. #891's `unpriced_exit` bypass skips the
- * two PRICE gates, so running these against a stalled feed would exercise two
- * exemptions at once and stop isolating which gate refused. A normally-priced
- * flatten is refused by the `staleness` gate (1) alone, which is both the
- * cleaner proof and the larger blast radius: the defect never needed a
- * degraded feed.
- *
- * The configs are the SHIPPED ones (`buildStartingProfileConfigs`), not local
- * fixtures — a test that invented its own `max_signal_age` would pass against a
- * bound nobody runs.
- *
- * **#1190 moved what gate 1 reads.** The arithmetic above is `decision_timestamp`'s
- * — still true of that field, and still what makes it useless as a staleness
- * coordinate, but no longer what the `staleness` gate measures. Gate 1 now
- * reads `OrderIntent.decided_at`, `clock.now()` read fresh when `buildFlattenExit`
- * builds the intent, so an ordinary run of this harness (one clock shared by
- * every stage) always hands Verdict a `decided_at` of age zero — the
- * `mandatory_flatten` exemption is never actually exercised by that path. The
- * `verdictDelayMs` case below gives the Verdict/Execution stages a later clock
- * than the Trader stage so `decided_at` is genuinely stale by the time gate 1
- * runs, which is the only way this file can still prove the exemption matters.
- */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../../pipeline/debate-engine/index.js';
 import {
@@ -65,12 +25,6 @@ import {
   buildVerdictStep,
 } from './direct-bind.js';
 
-/**
- * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
- * nothing in this file turns on the residual re-flatten's session gate, and a
- * shut venue would stand that path down for a reason none of these tests are
- * about.
- */
 const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
   crypto: new AlwaysOpenCalendar(),
   stocks: new AlwaysOpenCalendar(),
@@ -79,7 +33,6 @@ const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
 const TRACE_ID = 'trace-894';
 const INSTRUMENT = 'AAPL';
 const HELD_SIZE = 50;
-/** A Tuesday, and a trading day on both venues */
 const SESSION_DAY = new Date('2026-07-28T12:00:00Z');
 
 const PROFILE = buildStartingProfileConfigs();
@@ -103,7 +56,6 @@ function makeBars(at: Date, count: number) {
   });
 }
 
-/** A healthy feed: every mark is observed at the caller's own `asOf` */
 function makeMarketData(at: Date) {
   const getMark = vi.fn(async (_instrument: string, asOf: Date) => ({
     price: 100,
@@ -172,7 +124,6 @@ function heldLot(openedAt: Date): OpenPosition {
   };
 }
 
-/** Records the venue calls `executeExit` makes; every other surface is inert */
 function makeBroker() {
   return {
     submitBracket: vi.fn(async () => ({ order_state: 'submitted', broker_order_ids: ['o1'] })),
@@ -189,76 +140,29 @@ function makeBroker() {
 interface Venue {
   readonly name: string;
   readonly calendar: TradingCalendar;
-  /** The signal age the bar floor produces at this venue's flatten window */
   readonly expectedSignalAgeMinutes: number;
 }
 
 interface DriveFlattenOptions {
-  /**
-   * Advances the clock the Risk/Verdict/Execution stages see past the one the
-   * Trader stage decided on, so `decided_at` (stamped at Trader build time) is
-   * stale by the time gate 1 runs — production bounds this gap far under
-   * 15 min (Risk Critic <=10s), so this is a fixture-only exercise of the
-   * `mandatory_flatten` exemption, not a reachable production scenario
-   */
   readonly verdictDelayMs?: number;
-  /**
-   * Bypasses gate 4 (market-open) so a `verdictDelayMs` large enough to also
-   * cross `sessionEnd` is refused (if at all) by `staleness` alone — the same
-   * isolate-one-gate posture the file header uses for the healthy-mark choice
-   */
   readonly allowExtendedHours?: boolean;
-  /**
-   * #1389: where the DECISION clock sits relative to `sessionEnd`. Negative is
-   * inside ADR-0014's pre-close window (the default, `−4 min`); positive is
-   * after the bell, inside `flatten_after_close_ms`. This is the knob the
-   * post-bell cases turn — `verdictDelayMs` moves only the Verdict/Execution
-   * clock and so cannot reach the Trader's own window read at all.
-   */
   readonly decisionOffsetMs?: number;
-  /**
-   * Reuse a previous drive's store, so a second flatten of the SAME lot sees
-   * the first drive's `flatten_submissions` and `positions` rows. Without it
-   * every drive gets a virgin `:memory:` store and gate 3 has nothing to
-   * dedupe against.
-   */
   readonly session?: FlattenSession;
-  /**
-   * Stubs the Trader's in-flight guard (`TraderInput.unresolvedFlattens`).
-   * Defaults to the real store read, which is what production binds.
-   *
-   * The cross-boundary dedup case stubs it EMPTY on purpose: after a first
-   * drive submits, the store holds a `submitted`-and-unswept row, the guard
-   * fires, and no intent reaches Verdict — so the key coordinate that case
-   * exists to prove would never be exercised. Neutralizing one of the two
-   * guards is how the other one gets asserted.
-   */
   readonly unresolvedFlattens?: () => Promise<readonly { readonly instrument: string }[]>;
 }
 
-/** A store shared across drives — see `DriveFlattenOptions.session` */
 interface FlattenSession {
   readonly db: ReturnType<typeof openSharedStore>;
   readonly store: SqliteExecutionStore;
 }
 
-/**
- * The whole chain for one venue: tick exit-check -> Risk -> Verdict ->
- * Execution, wired through the SAME `build*Step` bindings production composes
- */
 async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
   const sessionEnd = venue.calendar.sessionEnd(SESSION_DAY);
-  // `null` is `AlwaysOpenCalendar`'s answer (#667's ruling in the type system);
-  // both venue calendars here resolve a close, and a null would mean the case
-  // is no longer testing a flatten window at all
   if (sessionEnd === null) throw new Error(`${venue.name}: calendar resolved no session close`);
-  // Inside ADR-0014's window (close - 5 min), one minute clear of the edge so
-  // the case cannot turn on a boundary comparison it is not about
   const now = new Date(sessionEnd.getTime() + (opts.decisionOffsetMs ?? -4 * 60_000));
   const decisionClock: Clock = { now: () => now };
   const verdictNow = new Date(now.getTime() + (opts.verdictDelayMs ?? 0));
   const verdictClock: Clock = { now: () => verdictNow };
-  // Exactly what `tick-runner.ts` hands `runExitCheckPass`
   const bar = floorToBar(now, DEBATE_BAR_TIMEFRAME_MS);
 
   const session: FlattenSession =
@@ -285,7 +189,6 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
     mode: 'paper' as const,
     breakerState: { save: () => {} },
     portfolioSnapshots: new Map(),
-    // Required-but-nullable since #957: this harness runs step 7 producerless
     critic: undefined,
   };
 
@@ -294,8 +197,6 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
     config: PROFILE.traderConfig,
     setupStore: new FixtureSetupStore(),
     getExitFillSizes: (keys: readonly string[]) => store.getExitFillSizes(keys),
-    // #1389's second guard, bound to the SAME store the lots came from — see
-    // `DriveFlattenOptions.unresolvedFlattens` for why one case stubs it
     getUnresolvedFlattens: opts.unresolvedFlattens ?? (() => store.getUnresolvedFlattens()),
     sessionCalendars,
   });
@@ -360,10 +261,7 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
 }
 
 const VENUES: readonly Venue[] = [
-  // 2026-07-28 is EDT: the US regular close is 16:00 New York = 20:00Z, the
-  // window opens 19:55, and the decision bar floors to 19:00
   { name: 'US', calendar: new UsEquityRegularHoursCalendar(), expectedSignalAgeMinutes: 56 },
-  // BST: 16:30 London = 15:30Z, window opens 15:25, bar floors to 15:00
   { name: 'LSE', calendar: new LseRegularHoursCalendar(), expectedSignalAgeMinutes: 26 },
 ];
 
@@ -377,12 +275,6 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
       it('carries a bar-floored decision_timestamp older than max_signal_age', async () => {
         const { intent, now, bar } = await driveFlatten(venue);
 
-        // The premise, asserted rather than assumed: if this stops being true
-        // the cases below stop testing `decision_timestamp`'s own bar
-        // arithmetic and nothing would say so. `decision_timestamp` still
-        // drives idempotency and `OpenPosition` persistence (#1190 left it
-        // alone) — this is no longer the `staleness` gate's premise, which is
-        // `decided_at` (see the "stale decided_at" case below)
         expect(intent.metadata.exit_reason).toBe('flatten');
         expect(intent.decision_timestamp).toEqual(bar);
         const signalAgeMs = now.getTime() - intent.decision_timestamp.getTime();
@@ -393,12 +285,6 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
       it('is not refused by Verdict, and submits a flatten at the venue', async () => {
         const { intent, verdict, execution, broker } = await driveFlatten(venue);
 
-        // Fails on main (pre-#894) with `no_go` / `staleness` — the original
-        // defect, stated. Post-#1190 this alone no longer exercises the
-        // `mandatory_flatten` exemption: `decided_at` is stamped fresh by this
-        // harness's single shared clock regardless of the exemption, so this
-        // case would pass even without it. See the "stale decided_at" case
-        // below for the one that still catches the exemption's removal
         expect(verdict.no_go_reason).toBeNull();
         expect(verdict.status).toBe('go');
         expect(execution.status).toBe('submitted');
@@ -413,14 +299,10 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
       it('marks the intent as the mandatory flatten, and only that intent', async () => {
         const { intent } = await driveFlatten(venue);
 
-        // The exemption's narrowing mechanism: a typed marker set by
-        // `buildFlattenExit` for `exit_reason: 'flatten'` alone
         expect(intent.metadata.mandatory_flatten).toBe(true);
       });
 
       it('is not refused by Verdict when decided_at goes stale mid-pipeline (#1190)', async () => {
-        // allow_extended_hours bypasses gate 4 so a delay past max_signal_age
-        // is refused (if at all) by `staleness` alone — see DriveFlattenOptions
         const { intent, verdictNow, verdict, execution, broker } = await driveFlatten(venue, {
           verdictDelayMs: PROFILE.verdictConfig.max_signal_age.stocks + 60_000,
           allowExtendedHours: true,
@@ -429,9 +311,6 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
         const signalAgeMs = verdictNow.getTime() - intent.decided_at.getTime();
         expect(signalAgeMs).toBeGreaterThan(PROFILE.verdictConfig.max_signal_age.stocks);
 
-        // Deleting the `mandatory_flatten` exemption at verdict/index.ts's
-        // gate 1 makes this fail with `no_go` / `staleness` — the case the
-        // two above no longer catch
         expect(verdict.no_go_reason).toBeNull();
         expect(verdict.status).toBe('go');
         expect(execution.status).toBe('submitted');
@@ -446,20 +325,6 @@ describe('#894: a mandatory flat-by-close flatten reaches the broker', () => {
   }
 });
 
-/**
- * #1388 — THE MANDATORY FLATTEN ALSO SURVIVES A VERDICT PASS AFTER THE CLOSE.
- *
- * #894 fixed gate 1 (`staleness`); it left gate 4 (`market_closed`)
- * unconditional, which ADR-0014's own amendment called correct — "a shut
- * venue cannot fill". True of a flatten that reaches Verdict hours late; not
- * true of one that reaches it TEN SECONDS late, which is what the live paper
- * store measured: decided at 19:59:56.454Z (inside the window), refused
- * `market_closed` at 20:00:06.125Z. `driveFlatten`'s `verdictDelayMs` already
- * gives Verdict/Execution a later clock than Trader/Risk decided on (#1190) —
- * reused here to push that clock PAST `sessionEnd` too, reproducing the gap
- * measured in production, driven through the real `VerdictImpl.decide`
- * (`buildVerdictStep`) and the real US/LSE calendars.
- */
 describe('#1388: a mandatory flatten verdicted after the close still reaches Execution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -468,10 +333,6 @@ describe('#1388: a mandatory flatten verdicted after the close still reaches Exe
   for (const venue of VENUES) {
     describe(`${venue.name} close`, () => {
       it('is not refused by Verdict when verdicted 10s after the bell, and submits at the venue', async () => {
-        // Decided 4 min before the close (driveFlatten's fixed offset); a
-        // 4m10s verdict delay lands Verdict/Execution 10s AFTER sessionEnd —
-        // the #1388 shape — while staying far under max_signal_age.stocks
-        // (15 min), so gate 1 is not what would refuse this if gate 4 were
         const { verdictNow, sessionEnd, verdict, execution, broker, intent } = await driveFlatten(
           venue,
           { verdictDelayMs: 4 * 60_000 + 10_000 },
@@ -491,16 +352,6 @@ describe('#1388: a mandatory flatten verdicted after the close still reaches Exe
     });
   }
 
-  /**
-   * The other half of the edge (AC2): an ENTRY intent, evaluated after the
-   * close with the same production `VerdictImpl`/real US calendar, still
-   * produces `market_closed` — asserted in this same file so the exemption's
-   * narrowness is visible next to the case it exempts. Built directly against
-   * `buildVerdictStep` rather than through the debate-driven trader step:
-   * nothing about gate 4 depends on how an entry was decided, only on the
-   * fact that it carries no `mandatory_flatten` marker, which `buildFlattenExit`
-   * never writes for one.
-   */
   it('still refuses an entry with market_closed after the close — the exemption does not widen to entries', async () => {
     const venue = VENUES[0];
     const sessionEnd = venue.calendar.sessionEnd(SESSION_DAY);
@@ -572,22 +423,6 @@ describe('#1388: a mandatory flatten verdicted after the close still reaches Exe
   });
 });
 
-/**
- * #1389 — THE MANDATORY FLATTEN SURVIVES THE BELL ITSELF.
- *
- * #894 and #1388 both moved a gate DOWNSTREAM of the Trader. This one is about
- * the Trader's own window: `withinFlattenWindow` resolved it from
- * `TradingCalendar.sessionEnd`, which every conforming calendar answers
- * strictly forward, so one instant past the bell the window pointed at
- * TOMORROW's close, `within` was false, and a held lot fell through to the
- * holding branches with no flatten intent produced at all. On 2026-09-08 seven
- * control lots carried overnight exactly this way — a single tick's Trader
- * arrivals ran 19:58:27 to 20:02:02, and the lots reached after 20:00:00Z were
- * refused by the WINDOW, not by any gate.
- *
- * `decisionOffsetMs` is the knob: it moves the TRADER's own clock past
- * `sessionEnd`, which `verdictDelayMs` (Verdict/Execution only) cannot reach.
- */
 describe('#1389: a lot held past the bell is still flattened inside the grace', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -600,7 +435,6 @@ describe('#1389: a lot held past the bell is still flattened inside the grace', 
           decisionOffsetMs: 10_000,
         });
 
-        // The premise, asserted: the TRADER itself decided after the bell
         expect(now.getTime()).toBeGreaterThan(sessionEnd.getTime());
         expect(intent.metadata.exit_reason).toBe('flatten');
         expect(intent.metadata.mandatory_flatten).toBe(true);
@@ -616,11 +450,6 @@ describe('#1389: a lot held past the bell is still flattened inside the grace', 
       });
 
       it('does not re-flatten across the bell: the post-close drive dedupes against the in-window one', async () => {
-        // The in-flight guard is stubbed EMPTY on purpose — see
-        // `DriveFlattenOptions.unresolvedFlattens`. With the real read the
-        // first drive's `submitted`-and-unswept row would skip the second
-        // drive inside the Trader, and the KEY COORDINATE this case exists to
-        // prove would never reach Verdict's gate 3 at all
         const noneInFlight = async () => [];
 
         const inWindow = await driveFlatten(venue, { unresolvedFlattens: noneInFlight });
@@ -633,7 +462,6 @@ describe('#1389: a lot held past the bell is still flattened inside the grace', 
           unresolvedFlattens: noneInFlight,
         });
 
-        // One session close on both sides of the bell => one key => gate 3
         expect(afterBell.intent.idempotency_key).toBe(inWindow.intent.idempotency_key);
         expect(afterBell.verdict.status).toBe('no_go');
         expect(afterBell.verdict.no_go_reason).toBe('dedup');
@@ -644,9 +472,6 @@ describe('#1389: a lot held past the bell is still flattened inside the grace', 
         const inWindow = await driveFlatten(venue);
         expect(inWindow.broker.submitFlatten).toHaveBeenCalledTimes(1);
 
-        // The REAL store read this time: the first drive left a `submitted`
-        // row whose fills are unswept, so the Trader must produce nothing at
-        // all rather than a second intent for Verdict to catch
         await expect(
           driveFlatten(venue, { decisionOffsetMs: 10_000, session: inWindow.session }),
         ).rejects.toThrow('the tick path produced no flatten intent');

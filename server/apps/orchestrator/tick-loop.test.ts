@@ -36,16 +36,11 @@ function makePlan(...assets: string[]): TickPlan {
   return { instruments, tick_time: NOW };
 }
 
-/** Sequential trace IDs — replay needs a deterministic sequence, not UUIDs */
 function countingTraceIds(): () => string {
   let n = 0;
   return () => `trace-${++n}`;
 }
 
-/**
- * A runner whose passes block until released, so in-flight instruments can be
- * counted at a known point rather than raced against
- */
 function gatedRunner(): {
   runner: TickRunner;
   releaseAll: () => void;
@@ -78,7 +73,6 @@ function gatedRunner(): {
   };
 }
 
-/** Yields long enough for every pending microtask to settle */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('runTickPlan', () => {
@@ -96,7 +90,6 @@ describe('runTickPlan', () => {
     });
     await settle();
 
-    // Only the cap has started; the rest are still queued behind them
     expect(started()).toEqual(['SPY', 'QQQ']);
     expect(peakInFlight()).toBe(2);
 
@@ -110,25 +103,7 @@ describe('runTickPlan', () => {
     expect(peakInFlight()).toBe(2);
   });
 
-  /**
-   * #1013: the pool mechanism above (`max_concurrent_instruments` bounding
-   * simultaneous passes) was never the gap — `buildProductionOrchestrator`
-   * feeding it a config-derived `?? 1` was. This pins the wiring at the level
-   * that regresses silently: if the paper profile's explicit width is ever
-   * dropped back to the implicit default, this fails with `peakInFlight() ===
-   * 1` and `started()` showing one instrument at a time, exactly the
-   * behaviour #1013 measured (SPY at 19:56:42, QQQ at 19:57:07, TSLA at
-   * 19:58:02 — the issue's own timestamps, ~25-55s apart; it did not report
-   * AAPL's) against a running orchestrator.
-   *
-   * Uses the REAL configured universe and width, not stand-ins, so a change
-   * to either value is exercised here rather than assumed.
-   */
   it("runs the paper profile's universe concurrently, up to its configured width, not one instrument at a time", async () => {
-    // Width is now BELOW the universe size (20 names, width 6), so the pass
-    // walks in `ceil(20 / 6)` groups rather than starting every instrument in
-    // one instant. The property under test is unchanged and is the one that
-    // matters: concurrency is the configured width, not 1
     const profile = paperStartingProfile('paper');
     const universe = profile.universe;
     if (universe === undefined) {
@@ -147,8 +122,6 @@ describe('runTickPlan', () => {
     });
     await settle();
 
-    // The first group started together, in plan order, and saturated the
-    // configured width — not one instrument at a time
     const width = profile.maxConcurrentInstruments ?? plan.instruments.length;
     const expectedFirstGroup = Math.min(width, plan.instruments.length);
     expect(started()).toEqual(
@@ -156,18 +129,8 @@ describe('runTickPlan', () => {
     );
     expect(peakInFlight()).toBe(expectedFirstGroup);
 
-    // The universe no longer fits in one group, so `releaseAll` has to be
-    // pumped: it splices the gates that exist NOW, and each released worker
-    // lets the next instrument start and park on a gate that did not exist
-    // when the splice ran. One call would release only the first group and
-    // hang the rest
     let drains = 0;
     let settled = false;
-    // Both branches flip the flag. If only the fulfil branch did, a REJECTED
-    // `pending` would spin the pump until the drain guard threw — masking the
-    // real failure behind a bookkeeping error — and the detached promise would
-    // reject unhandled on top of it. `await pending` below is what surfaces the
-    // rejection, so this handler must not swallow it, only observe it
     pending.then(
       () => {
         settled = true;
@@ -209,7 +172,6 @@ describe('runTickPlan', () => {
   });
 
   it('returns outcomes in plan order, not completion order', async () => {
-    // First instrument finishes last: completion order is the reverse of the plan
     const delays: Record<string, number> = { SPY: 20, QQQ: 10, AAPL: 0 };
     const runner: TickRunner = {
       async runInstrument(signal, ctx) {
@@ -363,28 +325,10 @@ describe('runTickPlan', () => {
       decisionGate: new DebateBarDecisionGate(),
     });
 
-    // A literal 0-worker pool would run nothing and resolve empty
     expect(outcomes).toHaveLength(2);
   });
 
   it('does not stall a fast instrument behind a slow one', async () => {
-    // Cap 1 would serialize these; cap 2 lets AAPL finish while SPY blocks
-    //
-    // Gated rather than timed (#528, see docs/coding-standards.md "Async
-    // test assertions"): SPY does not resume until AFTER AAPL has pushed to
-    // `finished`, so the assertion is a happens-before relationship with no
-    // wall-clock dependence
-    //
-    // Deliberate deadlock at a cap of 1: with one worker, SPY runs first and
-    // never yields its slot, so AAPL never starts, `aaplRan` never resolves,
-    // and the test times out instead of passing by accident. Do not "fix"
-    // this back to a sleep
-    //
-    // That deadlock assumes SPY is dispatched FIRST, which it is only because
-    // `makePlan` below lists it first and the pool dispatches in plan order
-    // Reorder the plan so AAPL leads and a cap of 1 would still pass — AAPL
-    // would push, release, and SPY would resume on an already-resolved
-    // promise. The ordering is load-bearing, not cosmetic.
     const finished: string[] = [];
     let releaseSpy!: () => void;
     const aaplRan = new Promise<void>((resolve) => {
@@ -396,9 +340,6 @@ describe('runTickPlan', () => {
           await aaplRan;
         }
         finished.push(signal.asset);
-        // Release AFTER pushing, never before: SPY's resume is only a
-        // microtask away, so this ordering is what makes "AAPL pushed before
-        // SPY resumed" true rather than merely likely. Do not hoist.
         if (signal.asset === 'AAPL') {
           releaseSpy();
         }
@@ -415,19 +356,12 @@ describe('runTickPlan', () => {
       decisionGate: new DebateBarDecisionGate(),
     });
 
-    // QQQ and AAPL both complete before the slow SPY pass
     expect(finished).toEqual(['QQQ', 'AAPL', 'SPY']);
   });
 
   it.each([1, 6])(
     'supplies the portfolio-tail turnstile to every instrument at width %i (#1040)',
     async (width) => {
-      // This repo's dominant defect is a mechanism nothing calls. The runner's
-      // `await ctx.beginPortfolioTail?.()` is optional-chained, so a loop that
-      // stopped supplying it would go silently back to a concurrent tail — and
-      // every existing test in this file would still pass. Asserted at BOTH
-      // widths because the narrow one is the replay path: it must take the
-      // same route through the runner, not a second untested one
       const seen: Array<TickContext['beginPortfolioTail']> = [];
       const runner: TickRunner = {
         async runInstrument(_signal, ctx) {
@@ -467,11 +401,6 @@ describe('runTickPlan', () => {
     expect(runner.runInstrument).not.toHaveBeenCalled();
   });
 
-  // #507: a failed tick used to declare itself finished (its rejected
-  // `Promise.all` entry) while sibling workers were still mid-pipeline —
-  // still billing LLM debates unattributed to any live tick. These pin the
-  // fix: one instrument's throw becomes a failed `TickOutcome` for that
-  // instrument alone, and `runTickPlan` never resolves early
   describe('worker isolation (#507)', () => {
     it('does not abort other instruments when one throws', async () => {
       const runner: TickRunner = {
@@ -490,8 +419,6 @@ describe('runTickPlan', () => {
         decisionGate: new DebateBarDecisionGate(),
       });
 
-      // The two healthy instruments ran to completion — the throw cost only
-      // the instrument that threw
       expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
       expect(outcomes[2]).toEqual({ trace_id: 'trace-3', final_stage: 'execution' });
       expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
@@ -502,9 +429,6 @@ describe('runTickPlan', () => {
       const runner: TickRunner = {
         async runInstrument(signal, ctx) {
           if (signal.asset === 'FAST') throw new Error('fast worker exploded');
-          // The slow worker blocks until explicitly released, so the test
-          // can prove `runTickPlan` has NOT settled while it is still
-          // in-flight — not just that it eventually returns
           await new Promise<void>((resolve) => {
             releaseSlow = resolve;
           });
@@ -525,9 +449,6 @@ describe('runTickPlan', () => {
         settled = true;
       });
 
-      // The fast worker has already thrown and been caught; the slow worker
-      // is still blocked on its gate. Before the old bug's fix, the throw
-      // alone would have settled `Promise.all` here
       await settle();
       expect(settled).toBe(false);
 
@@ -595,8 +516,6 @@ describe('runTickPlan', () => {
       expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'a string rejection' });
     });
 
-    // Kimi review (#507 PR #515): a plain-object throw would otherwise
-    // degrade through `String(error)` to the useless "[object Object]"
     it('preserves detail from a thrown plain object via JSON.stringify', async () => {
       const runner: TickRunner = {
         async runInstrument(signal, ctx): Promise<TickOutcome> {
@@ -620,10 +539,6 @@ describe('runTickPlan', () => {
       });
     });
 
-    // A circular structure is exactly the shape most likely to reach the
-    // JSON.stringify fallback (an object graph with a `cause`/`parent` back
-    // reference), so it gets its own degrade-once-more path rather than
-    // throwing out of error handling itself
     it('falls back to String() when a thrown plain object is circular', async () => {
       const circular: Record<string, unknown> = { code: 'LOOP' };
       circular.self = circular;
@@ -646,11 +561,6 @@ describe('runTickPlan', () => {
       expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: '[object Object]' });
     });
 
-    // Kimi review (#507 PR #515): `tick-runner.ts`'s own `record()` only
-    // fires after a stage's step function RETURNS, so a crash mid-stage
-    // leaves no `audit_log` row at all unless this layer writes one — the
-    // logger line above is real-time visibility, not a durable, queryable
-    // record an operator can find after the fact
     it('writes a durable audit_log record for the crash, not just the log line', async () => {
       const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
         records: [],
@@ -683,20 +593,12 @@ describe('runTickPlan', () => {
         asset_class: 'stocks',
         timestamp: NOW,
       });
-      // Digested, not raw — same convention `tick-runner.ts`'s own `record()`
-      // calls follow (`input_digest`/`output_digest`, never the payload
-      // itself in the audit row)
       expect(typeof auditLog.records[0]?.input_digest).toBe('string');
       expect(auditLog.records[0]?.input_digest.length).toBeGreaterThan(0);
       expect(typeof auditLog.records[0]?.output_digest).toBe('string');
       expect(auditLog.records[0]?.output_digest.length).toBeGreaterThan(0);
     });
 
-    // #1380: `tick-runner.ts`'s `markStage` upserts `current_tick` BEFORE each
-    // stage's step function runs, and a crash mid-stage never reaches the
-    // matching `delete` — so the row left behind names exactly the stage the
-    // pass was in when it threw. Before this, the crash record always read
-    // `stage: 'tick-loop'` regardless of where the throw happened
     it('names the pipeline stage the crashed pass was in, read off current_tick', async () => {
       const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
         records: [],
@@ -731,12 +633,6 @@ describe('runTickPlan', () => {
       });
 
       expect(auditLog.records).toHaveLength(1);
-      // Prefixed rather than bare `'debate'`: the dashboard's live-lane query
-      // (`sqlite-query-store.ts`) filters `stage IN (…PIPELINE_STAGES)`, and a
-      // crash row is not a completed stage — folding it into that six-stage
-      // set is a rendering change this ticket does not make. Prefixing with
-      // the pre-existing `tick-loop` sentinel keeps this row provably outside
-      // that filter's match set while still naming the real `TickStage`
       expect(auditLog.records[0]?.stage).toBe('tick-loop:debate');
       expect(auditLog.records[0]?.decision).toBe('crashed');
     });
@@ -749,10 +645,6 @@ describe('runTickPlan', () => {
         },
       };
       const currentTickStore = makeCurrentTickStore();
-      // A row a PRIOR crashed pass on the same instrument left behind —
-      // never cleared, since current_tick is deleted only on success. This
-      // pass gets a fresh trace_id and crashes before writing its own row,
-      // so the only row present at read time belongs to someone else's pass
       currentTickStore.upsert({
         instrument: 'QQQ',
         asset_class: 'stocks',
@@ -776,9 +668,6 @@ describe('runTickPlan', () => {
         decisionGate: new DebateBarDecisionGate(),
       });
 
-      // Must fall back to the bare pre-#1380 stage, not the stale row's
-      // `'debate'` — a mismatched trace_id means the row cannot be trusted
-      // as this pass's own attribution
       expect(auditLog.records[0]?.stage).toBe('tick-loop');
     });
 
@@ -814,10 +703,6 @@ describe('runTickPlan', () => {
         decisionGate: new DebateBarDecisionGate(),
       });
 
-      // Named to the exact prefixed value, not just "absent from
-      // PIPELINE_STAGES" — the bare pre-#1380 sentinel `'tick-loop'` also
-      // satisfies that weaker check, so it alone cannot tell this fix apart
-      // from its absence
       expect(auditLog.records[0]?.stage).toBe('tick-loop:trader');
       expect(PIPELINE_STAGES).not.toContain(auditLog.records[0]?.stage);
     });
@@ -942,16 +827,9 @@ describe('runTickPlan', () => {
         decisionGate: new DebateBarDecisionGate(),
       });
 
-      // Only QQQ (the throw) gets an audit row from THIS layer — SPY's
-      // successful pass writes its own audit trail from inside
-      // `SequentialTickRunner`, not duplicated here
       expect(auditLog.records.map((record) => record.instrument)).toEqual(['QQQ']);
     });
 
-    // Kimi review (#507 PR #515, cycle 2): the audit write added above is a
-    // database call sitting inside the very catch block whose job is to
-    // guarantee a worker cannot reject. An unguarded SQLite failure there
-    // would reopen the orphaned-worker leak this whole issue exists to close
     describe('the failure handler cannot itself reject the worker', () => {
       it('survives auditLog.record throwing — worker still returns a failed outcome, siblings still run', async () => {
         const auditLog: AuditLog = {
@@ -966,11 +844,6 @@ describe('runTickPlan', () => {
           },
         };
 
-        // If the audit-write throw escaped the catch, this whole call would
-        // reject (or — post-fix — the sibling SPY worker would still be
-        // resolved by `Promise.all`'s rejection semantics, but `outcomes`
-        // would never be returned to assert against). Asserting the promise
-        // RESOLVES is itself part of the proof
         const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
           max_concurrent_instruments: 2,
           newTraceId: countingTraceIds(),
@@ -981,7 +854,6 @@ describe('runTickPlan', () => {
         });
 
         expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
-        // SPY — the sibling sharing the same tick — still ran to completion
         expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
       });
 
@@ -1024,18 +896,12 @@ describe('runTickPlan', () => {
           original_error: 'debate exploded',
           audit_error: 'SQLITE_BUSY: database is locked',
         });
-        // The original instrument-crash line is unaffected — both are
-        // reported, neither replaces the other
         expect(logger.entries.some((entry) => entry.message === 'instrument failed: QQQ')).toBe(
           true,
         );
       });
 
       it('survives logger.log throwing on the same path — worker still returns a failed outcome, siblings still run', async () => {
-        // A real `Logger` can throw: `JsonLogger` degrades a failing sink but
-        // throws once NO sink is left to record the failure on (#714), and an
-        // injected one can throw for any reason at all. Every `logger.log` call on this path must
-        // be safe against that, not just the audit write
         const logger: Logger = {
           log: vi.fn(() => {
             throw new Error('EPIPE');
@@ -1095,12 +961,6 @@ describe('runTickPlan', () => {
   });
 });
 
-/**
- * The tick/decision split, at the loop seam (#743): the gate is consulted per
- * instrument on the PLAN's tick time, a granted claim rides into
- * `TickContext.decision_bar`, and a claimed pass that THROWS hands the claim
- * back so the bar is retried rather than forfeited
- */
 describe('runTickPlan decision gate (#743)', () => {
   const TICK_INTERVAL_MS = paperStartingProfile('paper').tickIntervalMs;
 
@@ -1120,13 +980,6 @@ describe('runTickPlan decision gate (#743)', () => {
   }
 
   it('runs the analysts ONCE over a full debate bar of production-interval ticks', async () => {
-    // The acceptance criterion of the split, stated as a count: a full 1h bar
-    // of ticks at the production cadence (2 minutes — read off the paper
-    // profile so a retune keeps this test honest) runs the analysts exactly
-    // once. Every tick still runs the exit check exactly once (#785): the
-    // bar's one decision pass quorum-skips and evaluates the flatten itself
-    // (no Trader entry point of its own to carry it), and every other tick
-    // takes the tick path, which always runs it
     const steps: TickSteps = {
       exitCheck: vi.fn(async () => null),
       analysts: vi.fn(async () => []),
@@ -1160,17 +1013,12 @@ describe('runTickPlan decision gate (#743)', () => {
     expect(steps.analysts).toHaveBeenCalledTimes(1);
     expect(steps.exitCheck).toHaveBeenCalledTimes(ticksPerBar);
 
-    // ...and the NEXT bar's first tick decides again
     const nextBar = new Date(barOpen.getTime() + 3_600_000);
     await runTickPlan(planAt(nextBar, 'BTC-USD'), runner, { now: () => nextBar }, config);
     expect(steps.analysts).toHaveBeenCalledTimes(2);
   });
 
   it('a grace-only plan never claims a decision bar — the runner takes the tick path (#1499)', async () => {
-    // The direct seam: the loop must not even ASK the gate to claim when the
-    // plan was admitted only by the post-close grace, or a bar-aligned close
-    // (the US 20:00Z case #1499 measured) claims a fresh decision bar exactly
-    // like an ordinary window tick would
     const seen: Array<TickContext['decision_bar']> = [];
     const runner: TickRunner = {
       async runInstrument(_signal, ctx) {
@@ -1329,7 +1177,6 @@ describe('runTickPlan decision gate (#743)', () => {
     const gate = new DebateBarDecisionGate();
     const config = loopConfig(gate);
 
-    // `grace_only` absent — the property `makePlan`/`planAt` already produce
     const outcomes = await runTickPlan(
       planAt(barOpen, 'AAPL'),
       runner,
@@ -1343,10 +1190,6 @@ describe('runTickPlan decision gate (#743)', () => {
   });
 
   it('still fires the flatten on every tick when the gate NEVER opens', async () => {
-    // Mutation discriminator, hazard 1: force the gate permanently closed —
-    // the decision chain is dead, and the flatten must still reach Execution
-    // from the cheap path. This is the 2f22033 defect shape: an exit path
-    // accidentally coupled to the decision path strands a live position
     const closedGate: DecisionGate = { claim: () => undefined, rescind: () => 'stale' };
     const exit: OrderIntent = {
       idempotency_key: 'key-btc-flatten',
@@ -1441,17 +1284,12 @@ describe('runTickPlan decision gate (#743)', () => {
     const config = loopConfig(gate);
     const midBar = new Date('2026-07-15T14:32:00Z');
 
-    // A clock deliberately in a DIFFERENT bar than the plan: the gate must key
-    // off `plan.tick_time` — every instrument in one plan gated on the same
-    // instant, and in replay the plan time is the deterministic coordinate
     const laterClock: Clock = { now: () => new Date('2026-07-15T15:10:00Z') };
     await runTickPlan(planAt(midBar, 'BTC-USD'), runner, laterClock, config);
     await runTickPlan(planAt(midBar, 'BTC-USD'), runner, laterClock, config);
 
     expect(seen[0]?.open_time).toEqual(new Date('2026-07-15T14:00:00Z'));
     expect(seen[0]?.timeframe_ms).toBe(3_600_000);
-    // Second tick in the same bar: no claim, tick path only — the property
-    // whose absence was #617 (every tick a decision)
     expect(seen[1]).toBeUndefined();
   });
 
@@ -1480,9 +1318,6 @@ describe('runTickPlan decision gate (#743)', () => {
     );
     expect(first[0]?.error).toContain('transient LLM failure');
 
-    // Without the rescind this tick would be a tick pass and the bar's
-    // decision would be silently forfeited — a quiet hour indistinguishable
-    // from a quiet market (#625's signature)
     const second = await runTickPlan(
       planAt(new Date('2026-07-15T14:02:00Z'), 'BTC-USD'),
       runner,
@@ -1491,7 +1326,6 @@ describe('runTickPlan decision gate (#743)', () => {
     );
     expect(second[0]?.final_stage).toBe('trader');
 
-    // And a SUCCESSFUL pass keeps its claim: the third tick is a tick pass
     const third = await runTickPlan(
       planAt(new Date('2026-07-15T14:04:00Z'), 'BTC-USD'),
       runner,
@@ -1501,12 +1335,8 @@ describe('runTickPlan decision gate (#743)', () => {
     expect(third[0]?.final_stage).toBe('position_check');
   });
 
-  // ── The retry bound (#785): a PERSISTENTLY failing decision pass must not
-  // rescind for the rest of the bar — up to ~30 analyst rebuilds at the
-  // production cadence, exactly the churn #743 exists to remove. ───────────
   describe('bounded decision-pass retry (#785)', () => {
     it('stops retrying after the budget and reports the forfeit loudly, over a full bar of ticks', async () => {
-      // Every decision pass throws — a PERSISTENT fault, not a transient one
       const runner: TickRunner = {
         async runInstrument(_signal, ctx) {
           if (ctx.decision_bar !== undefined) {
@@ -1535,20 +1365,12 @@ describe('runTickPlan decision gate (#743)', () => {
         );
       }
 
-      // Every claimed decision pass throws until the budget is exhausted;
-      // after that the gate refuses further claims for the rest of the bar,
-      // so the runner never sees `decision_bar` again this bar and every
-      // remaining tick is a cheap, SUCCEEDING tick pass — not a retry
       const decisionAttempts = outcomes.filter((o) => o?.error !== undefined).length;
       expect(decisionAttempts).toBe(maxRetries);
       expect(outcomes.slice(maxRetries).every((o) => o?.final_stage === 'position_check')).toBe(
         true,
       );
 
-      // NAMED, loud forfeit report — this is what #785's acceptance criterion
-      // ("an explicit forfeit state that alerts") demands: distinguishable
-      // from the ordinary per-attempt "instrument failed" line already
-      // emitted by the catch block
       const forfeitEntry = logger.entries.find((entry) =>
         entry.message.includes('retry budget exhausted'),
       );
@@ -1556,9 +1378,6 @@ describe('runTickPlan decision gate (#743)', () => {
       expect(forfeitEntry?.level).toBe('error');
       expect(forfeitEntry?.payload).toMatchObject({ instrument: 'BTC-USD' });
 
-      // Bounded, not unbounded: `runInstrument` was claimed (and threw) only
-      // `maxRetries` times over the WHOLE bar, not once per remaining tick
-      // (which would be `ticksPerBar` at the production cadence)
       expect(decisionAttempts).toBeLessThan(ticksPerBar);
     });
 
@@ -1580,13 +1399,11 @@ describe('runTickPlan decision gate (#743)', () => {
       const first = await runTickPlan(planAt(barOpen, 'BTC-USD'), runner, CLOCK, config);
       expect(first[0]?.error).toContain('decision pass failure #1');
 
-      // Same bar, later tick: forfeited — no more claims, no more throws
       const midBar = new Date(barOpen.getTime() + TICK_INTERVAL_MS);
       const second = await runTickPlan(planAt(midBar, 'BTC-USD'), runner, CLOCK, config);
       expect(second[0]?.final_stage).toBe('position_check');
       expect(second[0]?.error).toBeUndefined();
 
-      // The NEXT bar opens with a fresh claim and a fresh budget
       const nextBar = new Date(barOpen.getTime() + 3_600_000);
       const third = await runTickPlan(planAt(nextBar, 'BTC-USD'), runner, CLOCK, config);
       expect(third[0]?.error).toContain('decision pass failure #2');
@@ -1594,12 +1411,6 @@ describe('runTickPlan decision gate (#743)', () => {
   });
 
   describe('a refused decision pass does not consume the retry budget (#1391)', () => {
-    /**
-     * Two personas answer before the third refuses — the shape that decides
-     * the cost. A retried pass re-bills the two that answered, because a pass
-     * that threw never persisted the `debate_log` row the same-bar replay
-     * short-circuits on.
-     */
     function refusingRunner(billed: { calls: number }, makeError: () => Error): TickRunner {
       return {
         async runInstrument(_signal, ctx) {
@@ -1650,8 +1461,6 @@ describe('runTickPlan decision gate (#743)', () => {
     });
 
     it('leaves an ordinary provider failure retrying, so the carve-out stays narrow', async () => {
-      // The mutation this pins: skipping the rescind for EVERY error would
-      // disable #743's retry mechanism wholesale and still pass the test above
       const billed = { calls: 0 };
       const maxRetries = 5;
       const runner = refusingRunner(billed, () => new LlmProviderError('nous responded 503'));

@@ -109,7 +109,6 @@ function makeTradingCalendar(isOpen = true): TradingCalendar {
     isOpen: () => isOpen,
     isTradingDay: () => true,
     sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
-    // #668 — this double predates `sessionEnd`; no test here asks about it
     sessionEnd: () => null,
   };
 }
@@ -122,21 +121,10 @@ function makeApprovals(outcome: ApprovalOutcome = 'approved'): ApprovalChannel {
   return { requestApproval: vi.fn().mockResolvedValue(outcome) };
 }
 
-/**
- * Port-shaped fake, not `InMemoryVerdictLogStore` (#306): these tests exist
- * to prove `LoggingVerdict` calls `writeLog` with the right row, which is
- * exactly the `VerdictLogStore` contract — asserting through the concrete
- * class's now-removed `getByTraceId` would test implementation surface the
- * port never promised
- */
 function makeStore(): VerdictLogStore & { writeLog: Mock<(entry: VerdictLog) => void> } {
-  // Typed `vi.fn`, not bare: an untyped mock is `Mock<Procedure>`, which does
-  // not satisfy the port's `writeLog(entry: VerdictLog): void` in the
-  // intersection above
   return { writeLog: vi.fn<(entry: VerdictLog) => void>() };
 }
 
-/** The row most recently written for `trace_id`, or undefined if none was */
 function lastRowFor(
   store: { writeLog: ReturnType<typeof vi.fn> },
   trace_id: string,
@@ -181,8 +169,6 @@ describe('LoggingVerdict.decide', () => {
       instrument: 'AAPL',
       status: 'no_go',
       no_go_reason: 'staleness',
-      // #1111: the row carries what the gate measured, so a `staleness` row is
-      // readable without joining back to `debate_log` for the decision bar
       no_go_detail_measured_ms: 60 * 60_000,
       no_go_detail_bound_ms: 30 * 60_000,
       hitl_override: false,

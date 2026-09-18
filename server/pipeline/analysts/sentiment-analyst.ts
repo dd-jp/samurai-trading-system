@@ -1,14 +1,3 @@
-/**
- * Sentiment analyst persona (ticket #71) — see docs/specs/analysts-spec.md
- * "Module: Analyst Roles & Input Model": primary = social signals (Market
- * Intelligence); context = contemporaneous price/volume, to normalize crowd
- * sentiment against actual market movement. Optional; applies to both
- * crypto and stocks.
- *
- * A stateless pure function of its `AnalystInput`, mirroring
- * technical-analyst.ts and fundamental-analyst.ts: a deterministic rule
- * over the primary/context inputs, not an LLM call.
- */
 
 import type { BarWindow } from '../../providers/market-data-service/index.js';
 import type { IntelligenceItem } from '../../providers/market-intelligence/index.js';
@@ -17,7 +6,6 @@ import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 import { NO_DATA_MARKER } from './types.js';
 
-/** 24h social context window, matching technical-analyst's always-on context frame */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CONTEXT_TIMEFRAME = '1h';
 const CONTEXT_CANDLE_LOOKBACK = 20;
@@ -36,7 +24,6 @@ function directionFrom(items: IntelligenceItem[]): Direction {
   return 'neutral';
 }
 
-/** Average item confidence, clamped to [0.05, 0.95]; no social items this window reads as low confidence */
 function confidenceFrom(items: IntelligenceItem[]): number {
   if (items.length === 0) {
     return 0.05;
@@ -61,10 +48,6 @@ export const sentimentAnalyst: Analyst = {
       lookback: CONTEXT_CANDLE_LOOKBACK,
     };
 
-    // #914/#960: entity-scoped, not class-wide — same defect and same fix as
-    // fundamental-analyst.ts. `resolveMiSubject` resolves an LSE-listed
-    // wrapper to the US underlying MI is keyed on and is the identity for
-    // every non-pool instrument
     const miSubject = resolveMiSubject(signal.asset);
 
     const [marketContext, candles] = await Promise.all([
@@ -92,12 +75,6 @@ export const sentimentAnalyst: Analyst = {
       direction,
       confidence,
       key_points: [
-        // #436: an empty store must not read as an assessment. With no writer
-        // in production, `social` is empty on EVERY tick, and the old wording
-        // ("0 social items in window, net sentiment driving neutral") is
-        // indistinguishable in a debate transcript — or in a 14-day soak's own
-        // output — from "sentiment looked and saw nothing bullish". It never
-        // looked. Says so, in the text the mediator actually reads.
         marketContext.social.length === 0
           ? `${NO_DATA_MARKER}: no social items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the market. Weight it accordingly.`
           : `${marketContext.social.length} social items in window, net sentiment driving ${direction}`,

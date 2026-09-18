@@ -22,15 +22,9 @@ import {
 
 const asOf = new Date('2026-08-03T12:00:00Z');
 
-/**
- * Saturday 12:00 UTC — the weekend instant the two calendars disagree about.
- * Crypto's session opened that morning at 00:00 UTC; the stock session has been
- * open since Friday's 16:00 ET close, which is 20:00 UTC (EDT, UTC-4).
- */
 const SATURDAY_NOON_UTC = new Date('2026-08-01T12:00:00Z');
 const CRYPTO_OPEN = '2026-08-01T00:00:00.000Z';
 const STOCKS_OPEN = '2026-07-31T20:00:00.000Z';
-/** Friday evening: after the stock session opened, before the crypto one did */
 const FRIDAY_EVENING = '2026-07-31T22:00:00.000Z';
 
 interface Harness {
@@ -94,22 +88,6 @@ function makeTradeReader(trades: ClosedTrade[]): ClosedTradeReader {
   return { getClosedTradesBetween: vi.fn().mockReturnValue(trades) };
 }
 
-/**
- * Writes a `closed_trades` row directly — the realized numerator is read in SQL.
- *
- * `closedAt` is a `Date`, not a string, and normalized through `toISOString()`
- * here rather than trusted from the caller. `closed_at` is a TEXT column and the
- * realized-PnL filter is a lexicographic `closed_at > open_at`, which is only
- * chronological when both sides are written in the SAME fixed-width form. A `Z`
- * suffix alone does not guarantee that: `'2026-08-01T10:00:00Z'` and
- * `'2026-08-01T10:00:00.000Z'` are the same instant, yet the second sorts BEFORE
- * the first (they diverge at `.` vs `Z`, and `.` is 0x2E against 0x5A). Taking a
- * `Date` makes the mis-formatted fixture unrepresentable instead of relying on
- * every future caller to hand-write the millisecond form.
- *
- * Production is already consistent: `SqliteExecutionStore.writeClosedTrade` and
- * `SqliteSessionEquityStore.put` both go through `toISOString()`.
- */
 function insertClosedTrade(
   db: StoreHandle,
   args: {
@@ -117,7 +95,6 @@ function insertClosedTrade(
     assetClass: 'crypto' | 'stocks';
     pnl: number;
     closedAt: Date;
-    /** #753. Defaults to the live arm, which is what every pre-#753 row was. */
     arm?: TradingArm;
   },
 ): void {
@@ -148,8 +125,6 @@ function insertClosedTrade(
 
 function makeProvider(
   harness: Harness,
-  // `client` rather than `funding`: every fixture below varies the Alpaca
-  // account body, and `alpacaFunding` is the adapter under test on that path
   overrides: Partial<Omit<BrokerAccountStateProviderInput, 'funding'>> & {
     client?: AlpacaBrokerClient;
   } = {},
@@ -164,8 +139,6 @@ function makeProvider(
     logger: makeLogger(),
     calendars: { crypto: new AlwaysOpenCalendar(), stocks: new UsEquityRegularHoursCalendar() },
     mode: 'paper',
-    // Well before every boundary these fixtures use — the healthy case, where
-    // the process was already running when the session opened
     startedAt: new Date('2026-07-01T00:00:00.000Z'),
     ...rest,
   });
@@ -177,8 +150,6 @@ describe('SqliteAccountStateStore', () => {
     try {
       expect(store.recordEquity(100_000, asOf)).toBe(100_000);
       expect(store.recordEquity(120_000, asOf)).toBe(120_000);
-      // The drawdown breaker divides by this. A peak revised downward makes
-      // every later drawdown read shallower than it is
       expect(store.recordEquity(80_000, asOf)).toBe(120_000);
       expect(store.peakEquity()).toBe(120_000);
     } finally {
@@ -191,8 +162,6 @@ describe('SqliteAccountStateStore', () => {
     const path = join(dir, 'test.sqlite');
     try {
       new SqliteAccountStateStore(openSharedStore(path)).recordEquity(150_000, asOf);
-      // The whole point of the table: a restart must not reset the peak, or
-      // the hard portfolio-drawdown breaker silently re-baselines
       expect(new SqliteAccountStateStore(openSharedStore(path)).peakEquity()).toBe(150_000);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -281,8 +250,6 @@ describe('SqliteSessionEquityStore', () => {
         closedAt: new Date('2026-08-01T06:00:00.000Z'),
       });
 
-      // Strict `>`: a trade closing exactly at the boundary belongs to the
-      // session that just ended, not the one opening
       expect(sessionEquity.realizedSince('crypto', new Date(CRYPTO_OPEN))).toBe(-50);
       expect(sessionEquity.realizedSinceAllClasses(new Date(CRYPTO_OPEN))).toBe(650);
     } finally {
@@ -307,10 +274,6 @@ describe('SqliteSessionEquityStore', () => {
         closedAt: new Date(boundary.getTime() + 1),
       });
 
-      // `closed_at > open_at` is lexicographic over TEXT, so this only holds
-      // because both sides are written through `toISOString()` — same width,
-      // zero-padded, Z-suffixed. A `Z`-suffixed but second-precision timestamp
-      // would sort AFTER its own millisecond form and land on the wrong side
       expect(sessionEquity.realizedSince('crypto', boundary)).toBe(-3);
     } finally {
       cleanup();
@@ -320,8 +283,6 @@ describe('SqliteSessionEquityStore', () => {
   it('reports zero, not null, for a session with no closes yet', () => {
     const { sessionEquity, cleanup } = openStore();
     try {
-      // SUM over no rows is SQL NULL; a fresh session has realized 0, and a
-      // null leaking out here would become NaN in the division
       expect(sessionEquity.realizedSince('crypto', new Date(CRYPTO_OPEN))).toBe(0);
       expect(sessionEquity.realizedSinceAllClasses(new Date(CRYPTO_OPEN))).toBe(0);
     } finally {
@@ -329,15 +290,6 @@ describe('SqliteSessionEquityStore', () => {
     }
   });
 
-  /**
-   * #753. This sum is the `daily_basis` numerator, and `daily_basis` is what the
-   * daily-loss circuit breaker trips on for the arm holding real capital.
-   * Falsifier arm 2 writes into the SAME `closed_trades` table, so an unfiltered
-   * sum would let a control-arm loss tighten the live breaker and a control-arm
-   * gain loosen it — the shadow measurement steering the live book. Giving the
-   * control arm its own `CircuitBreakers` instance does not fix this on its own:
-   * both instances would still divide by one contaminated basis.
-   */
   it('sums the live arm only — falsifier arm 2 must not move the live breaker (#753)', () => {
     const { db, sessionEquity, cleanup } = openStore();
     try {
@@ -423,19 +375,12 @@ describe('BrokerAccountStateProvider — account scalars', () => {
         ]),
       });
 
-      // The breaker stops a run of *losing* decisions; flat is not losing
       expect((await provider.getAccountState(asOf)).consecutive_losses).toBe(1);
     } finally {
       harness.cleanup();
     }
   });
 
-  /**
-   * The three shapes that must not become a number, one per failure mode:
-   * outright garbage, a `parseFloat`-truncatable figure, and a blank that
-   * `Number` would call zero. The last two are the dangerous ones — they
-   * produce a *finite* wrong answer rather than a NaN anyone would notice.
-   */
   it.each([
     ['outright garbage', 'N/A'],
     ['a thousands-separated figure parseFloat would truncate to 100', '100,000.50'],
@@ -469,16 +414,6 @@ describe('BrokerAccountStateProvider — account scalars', () => {
 });
 
 describe('BrokerAccountStateProvider — session boundaries (#332)', () => {
-  /**
-   * THE acceptance test: a weekend spanning a crypto boundary must measure the
-   * crypto figure from 00:00 UTC Saturday, not from Friday's 16:00 ET close.
-   *
-   * The fixture discriminates the two calendars with one trade per class,
-   * both closing Friday 22:00 UTC — after the stock session opened (Friday
-   * 20:00 UTC = 16:00 EDT) but before the crypto one did (Saturday 00:00 UTC).
-   * A crypto figure anchored to the equity calendar would sweep up the crypto
-   * trade; anchored correctly it cannot see it.
-   */
   it('measures crypto from 00:00 UTC, not from Friday 16:00 ET, across a weekend', async () => {
     const harness = openStore();
     try {
@@ -502,13 +437,9 @@ describe('BrokerAccountStateProvider — session boundaries (#332)', () => {
       expect(daily_basis.stocks.known).toBe(true);
       if (!daily_basis.crypto.known || !daily_basis.stocks.known) return;
 
-      // Friday 22:00 UTC is BEFORE Saturday 00:00 UTC, so the crypto loss
-      // belongs to Friday's crypto session, not this one
       expect(daily_basis.crypto.realized_pnl).toBe(0);
-      // The same instant is INSIDE the stock session that opened Friday 16:00 ET
       expect(daily_basis.stocks.realized_pnl).toBe(-3_000);
 
-      // And the boundaries themselves, as persisted
       expect(harness.sessionEquity.get('crypto')?.open_at.toISOString()).toBe(CRYPTO_OPEN);
       expect(harness.sessionEquity.get('stocks')?.open_at.toISOString()).toBe(STOCKS_OPEN);
     } finally {
@@ -519,9 +450,6 @@ describe('BrokerAccountStateProvider — session boundaries (#332)', () => {
   it('records open_at as the session start instant, not the time of the write', async () => {
     const harness = openStore();
     try {
-      // asOf is twelve hours past the crypto boundary. Recording the write
-      // time would bake that drift in as if it were the open; recording the
-      // boundary leaves it visible
       await makeProvider(harness).getAccountState(SATURDAY_NOON_UTC);
 
       expect(harness.sessionEquity.get('crypto')?.open_at.toISOString()).toBe(CRYPTO_OPEN);
@@ -536,7 +464,6 @@ describe('BrokerAccountStateProvider — session boundaries (#332)', () => {
   it('advances the snapshot when a boundary is crossed, re-basing to current equity', async () => {
     const harness = openStore();
     try {
-      // Yesterday's session, at a different equity
       harness.sessionEquity.put('crypto', 80_000, new Date('2026-07-31T00:00:00.000Z'), true);
 
       const provider = makeProvider(harness, {
@@ -569,9 +496,6 @@ describe('BrokerAccountStateProvider — session boundaries (#332)', () => {
       });
       const { daily_basis } = await provider.getAccountState(SATURDAY_NOON_UTC);
 
-      // The advance is strict (`stored < sessionStart`). A `<=` would re-base
-      // the open to current equity every tick, and the daily figure would read
-      // ~0 forever no matter how far the account fell
       expect(harness.sessionEquity.get('crypto')?.open_equity).toBe(80_000);
       expect(daily_basis.crypto).toEqual({ known: true, open_equity: 80_000, realized_pnl: 0 });
     } finally {
@@ -600,7 +524,6 @@ describe('BrokerAccountStateProvider — session boundaries (#332)', () => {
       expect(harness.sessionEquity.get('portfolio')?.open_at.toISOString()).toBe(CRYPTO_OPEN);
       if (!daily_basis.crypto.known || !daily_basis.portfolio.known) throw new Error('unknown');
       expect(daily_basis.crypto.realized_pnl).toBe(-100);
-      // The portfolio numerator spans every class over the same UTC window
       expect(daily_basis.portfolio.realized_pnl).toBe(-120);
     } finally {
       harness.cleanup();
@@ -646,9 +569,6 @@ describe('BrokerAccountStateProvider — cold start (#332)', () => {
 
       const { daily_basis } = await provider.getAccountState(SATURDAY_NOON_UTC);
 
-      // The property that matters: not known, and carrying no number at all
-      // A `0` here would tell the daily-loss breaker the account is flat when
-      // in truth nobody knows what it has done today
       for (const key of ['crypto', 'stocks', 'portfolio'] as const) {
         expect(daily_basis[key].known).toBe(false);
         expect(daily_basis[key]).not.toHaveProperty('open_equity');
@@ -678,17 +598,10 @@ describe('BrokerAccountStateProvider — cold start (#332)', () => {
   it('stays unknown in live across a RESTART inside the same session', async () => {
     const harness = openStore();
     try {
-      // First process cold-seeds at Saturday noon and dies
       await makeProvider(harness, { mode: 'live', startedAt: SATURDAY_NOON_UTC }).getAccountState(
         SATURDAY_NOON_UTC,
       );
 
-      // A second process comes up at 19:00, still inside the same crypto
-      // session. The row on disk now has open_at == this session's start, so
-      // nothing about its shape distinguishes it from a real observation — only
-      // the persisted verdict does. A process-memory flag would have forgotten,
-      // and this figure would read as a flat day against a base captured after
-      // whatever the account had already lost
       const restarted = makeProvider(harness, {
         mode: 'live',
         startedAt: new Date('2026-08-01T19:00:00Z'),
@@ -706,12 +619,8 @@ describe('BrokerAccountStateProvider — cold start (#332)', () => {
   it('treats a restart that missed the boundary as a cold start, not a clean advance', async () => {
     const harness = openStore();
     try {
-      // A snapshot from Friday's crypto session, properly observed then
       harness.sessionEquity.put('crypto', 100_000, new Date('2026-07-31T00:00:00.000Z'), true);
 
-      // The process was down over the boundary and comes up Saturday noon. The
-      // stale row advances — but the equity written is a mid-session sample,
-      // not Saturday's open, so it must NOT inherit the old row's trust
       const provider = makeProvider(harness, { mode: 'live', startedAt: SATURDAY_NOON_UTC });
       const { daily_basis } = await provider.getAccountState(SATURDAY_NOON_UTC);
 
@@ -729,12 +638,9 @@ describe('BrokerAccountStateProvider — cold start (#332)', () => {
   it('becomes known in live once a real boundary crossing supersedes the seed', async () => {
     const harness = openStore();
     try {
-      // Started Saturday noon: it missed Saturday's open, but is up for Sunday's
       const provider = makeProvider(harness, { mode: 'live', startedAt: SATURDAY_NOON_UTC });
 
       await provider.getAccountState(SATURDAY_NOON_UTC);
-      // Sunday: a boundary this process actually observed, so the snapshot is
-      // a genuine session open and the figure is knowable again
       const sunday = await provider.getAccountState(new Date('2026-08-02T09:00:00Z'));
 
       expect(sunday.daily_basis.crypto).toEqual({
@@ -757,8 +663,6 @@ describe('BrokerAccountStateProvider — cold start (#332)', () => {
 
       const { daily_basis } = await makeProvider(harness).getAccountState(SATURDAY_NOON_UTC);
 
-      // Dividing by this would give Infinity or NaN, and both compare false
-      // against the breaker threshold — the figure would read as "no loss"
       expect(daily_basis.crypto.known).toBe(false);
       if (daily_basis.crypto.known) return;
       expect(daily_basis.crypto.reason).toContain('non-positive');
@@ -851,8 +755,6 @@ describe('BrokerAccountStateProvider — GAP-8 retired (#332)', () => {
     const harness = openStore();
     try {
       const logger = makeLogger();
-      // A `last_equity` the old code would have divided by, and a value that
-      // would have made the old guard return 0. Neither is read now.
       const account = { cash: '50000', equity: '90000', last_equity: '0' } as AlpacaAccount;
 
       const provider = makeProvider(harness, { client: makeClient(account), logger });
@@ -860,7 +762,6 @@ describe('BrokerAccountStateProvider — GAP-8 retired (#332)', () => {
 
       expect(state).not.toHaveProperty('daily_pnl_pct');
       expect(logger.entries.some((entry) => entry.message.includes('GAP-8'))).toBe(false);
-      // '0' as last_equity used to be a special case; it is now simply ignored
       expect(state.cash).toBe(50_000);
     } finally {
       harness.cleanup();
@@ -891,7 +792,6 @@ describe('BrokerAccountStateProvider — calendar wiring', () => {
         SATURDAY_NOON_UTC,
       );
 
-      // crypto twice — the portfolio row shares the UTC boundary
       expect(crypto.sessionStart).toHaveBeenCalledTimes(2);
       expect(stocks.sessionStart).toHaveBeenCalledTimes(1);
       expect(harness.sessionEquity.get('portfolio')?.open_at).toEqual(cryptoStart);
@@ -901,15 +801,6 @@ describe('BrokerAccountStateProvider — calendar wiring', () => {
   });
 });
 
-/**
- * The daily equity series (#345). Sampled by this provider rather than by a
- * timer of its own, so the series and the daily-loss breaker can never disagree
- * about where a day begins — both reach `TradingCalendar.sessionStart` (#331)
- * through the same call.
- *
- * Every test drives time through `asOf` and `startedAt`. Nothing here waits on
- * a wall clock.
- */
 describe('BrokerAccountStateProvider — daily equity series', () => {
   const DAY_1 = new Date('2026-08-01T00:00:00.000Z');
   const DAY_2 = new Date('2026-08-02T00:00:00.000Z');
@@ -922,9 +813,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
 
       const series = harness.dailyEquity.all();
       expect(series).toHaveLength(1);
-      // Anchored to the session start. Storing the observation time instead
-      // would space consecutive rows by however long each tick happened to
-      // take, and an unevenly spaced series is not a `ReturnSeries` at all
       expect(series[0]?.session_start).toEqual(DAY_1);
       expect(series[0]?.recorded_at).toEqual(new Date('2026-08-01T09:17:00.000Z'));
       expect(series[0]?.equity).toBe(100_000);
@@ -939,7 +827,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
       const provider = makeProvider(harness, {
         client: makeClient(makeAccount({ equity: '100000' })),
       });
-      // Many ticks inside day 1, then several inside day 2
       for (const at of ['00:00:30', '06:00:00', '23:59:00']) {
         await provider.getAccountState(new Date(`2026-08-01T${at}.000Z`));
       }
@@ -949,7 +836,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
 
       const series = harness.dailyEquity.all();
       expect(series.map((o) => o.session_start)).toEqual([DAY_1, DAY_2]);
-      // The property the whole ticket rests on
       expect(
         (series[1]?.session_start.getTime() as number) -
           (series[0]?.session_start.getTime() as number),
@@ -970,7 +856,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
       }).getAccountState(new Date('2026-08-01T20:00:00.000Z'));
 
       expect(harness.dailyEquity.all()).toHaveLength(1);
-      // A daily OPEN, not a rolling intraday mark
       expect(harness.dailyEquity.all()[0]?.equity).toBe(100_000);
     } finally {
       harness.cleanup();
@@ -980,10 +865,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
   it('samples only the portfolio boundary — the stocks close must not enter the series', async () => {
     const harness = openStore();
     try {
-      // Saturday noon UTC: the stock session opened Friday 20:00 UTC, the
-      // crypto/portfolio one at Saturday 00:00 UTC. Only the latter is evenly
-      // spaced — the stock boundary skips weekends, so a Friday→Monday step is
-      // three days wide and cannot be annualized as a single period
       await makeProvider(harness).getAccountState(SATURDAY_NOON_UTC);
 
       const series = harness.dailyEquity.all();
@@ -1003,8 +884,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
         startedAt: new Date('2026-07-31T00:00:00.000Z'),
       }).getAccountState(new Date('2026-08-01T00:00:30.000Z'));
 
-      // A NEW process, started after the boundary had already passed, over the
-      // same store — #332's second cold-start case
       await makeProvider(harness, {
         client: makeClient(makeAccount({ equity: '55000' })),
         startedAt: new Date('2026-08-01T14:00:00.000Z'),
@@ -1012,7 +891,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
 
       const series = harness.dailyEquity.all();
       expect(series).toHaveLength(1);
-      // The genuine open, not the restarted process's mid-session figure
       expect(series[0]?.equity).toBe(100_000);
     } finally {
       harness.cleanup();
@@ -1022,19 +900,13 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
   it('fills the day even when the process comes up mid-session', async () => {
     const harness = openStore();
     try {
-      // A process runs through day 1, then stops
       await makeProvider(harness, {
         client: makeClient(makeAccount({ equity: '100000' })),
       }).getAccountState(new Date('2026-08-01T00:00:30.000Z'));
-      // Day 2 opens while nothing is running; a process comes up hours later
-      // The row must still be written, or a hole appears that breaks the
-      // spacing of every observation after it — and equity that was never
-      // recorded on the day cannot be backfilled
       await makeProvider(harness, {
         client: makeClient(makeAccount({ equity: '104000' })),
         startedAt: new Date('2026-08-02T10:00:00.000Z'),
       }).getAccountState(new Date('2026-08-02T10:00:05.000Z'));
-      // A second restart the same day — must not add a row or change the one there
       await makeProvider(harness, {
         client: makeClient(makeAccount({ equity: '90000' })),
         startedAt: new Date('2026-08-02T18:00:00.000Z'),
@@ -1043,7 +915,6 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
       const series = harness.dailyEquity.all();
       expect(series.map((o) => o.session_start)).toEqual([DAY_1, DAY_2]);
       expect(series[1]?.equity).toBe(104_000);
-      // Flagged honestly: nothing observed day 2's actual open
       expect(series[1]?.observed_at_boundary).toBe(false);
     } finally {
       harness.cleanup();
@@ -1057,9 +928,7 @@ describe('BrokerAccountStateProvider — daily equity series', () => {
         client: makeClient(makeAccount({ equity: '100000' })),
         startedAt: new Date('2026-08-01T09:00:00.000Z'),
       });
-      // Day 1 sampled mid-session (this process started inside it)
       await provider.getAccountState(new Date('2026-08-01T09:00:05.000Z'));
-      // Day 2's boundary passes under the same running process
       await provider.getAccountState(new Date('2026-08-02T00:00:20.000Z'));
 
       const series = harness.dailyEquity.all();

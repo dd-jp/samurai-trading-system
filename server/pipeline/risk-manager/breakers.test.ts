@@ -3,7 +3,6 @@ import type { BreakerConfig, BreakerEvalInput } from './breakers.js';
 import { CircuitBreakers } from './breakers.js';
 import type { DailyPnlByClass, PortfolioView } from './types.js';
 
-/** Every class at the same known figure — the daily-loss breaker reads `portfolio` */
 function pnl(pct: number): DailyPnlByClass {
   const known = { known: true, pct } as const;
   return { crypto: known, stocks: known, portfolio: known };
@@ -31,21 +30,9 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
   };
 }
 
-/**
- * Every `_pct` here is a FRACTION, not a percentage — 0.03 is three percent.
- * That is the scale `portfolio-view.ts` computes (`(peak - equity) / peak`) and
- * the scale `paper-profile.ts` ships, and these fixtures used to be on a
- * percentage scale instead: self-consistent within a case, since both sides of
- * every comparison were scaled the same way, but a config no production path
- * would ever hold. #638's clamp is stated in fractions, so the mismatch had to
- * be resolved rather than papered over — the fixtures were the wrong half.
- */
 function makeConfig(overrides: Partial<BreakerConfig> = {}): BreakerConfig {
   return {
     daily_loss_pct: 0.03,
-    // Higher than the portfolio tier in the fixture, so the two tiers are
-    // separable in tests: a portfolio-tier breach does not incidentally trip
-    // the class tier, and a class-tier breach has to be set up deliberately
     daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
     max_drawdown_pct: 0.2,
     max_consecutive_losses: 4,
@@ -118,25 +105,14 @@ describe('CircuitBreakers', () => {
       }),
     );
 
-    // #332 left this advisory-only because it had no re-arm story. #333 supplies
-    // one — the tier is non-sticky, so this clears itself at the next boundary
-    // this process is up for — and decision 5 escalates it to a block
     expect(state.portfolio_tripped).toBe(true);
-    // Every tier is halted, not just the portfolio one: a class whose own
-    // figure is unknown must not keep trading on the strength of the other's
     expect(state.asset_class_tripped).toEqual({ crypto: true, stocks: true });
 
-    // Still visible in the audit trail with its reason — the #293/#320/#324/#342
-    // posture that a degraded state is never reached quietly. The reason is
-    // carried through because a halted session has to be diagnosable without
-    // reading code
     expect(state.armed_breakers).toEqual([
       'daily_pnl_unknown:portfolio (no session-open equity observed)',
       'daily_pnl_unknown:crypto (no session-open equity observed)',
       'daily_pnl_unknown:stocks (no session-open equity observed)',
     ]);
-    // A halt for a REASON, not a threshold breach — the loss breaker itself
-    // never fired, and the operator summary must not suggest it did
     expect(state.armed_breakers.some((name) => name.startsWith('daily_loss_soft'))).toBe(false);
   });
 
@@ -152,19 +128,11 @@ describe('CircuitBreakers', () => {
       }),
     );
 
-    // A `null`/`undefined` here would coerce to 0 in `pct <= -0.05` and be
-    // indistinguishable from a genuinely flat session — which, post-#333, is
-    // the difference between halting and trading on. The union makes the
-    // absence explicit instead
     expect(state.armed_breakers.every((name) => name.startsWith('daily_pnl_unknown:'))).toBe(true);
     expect(state.portfolio_tripped).toBe(true);
   });
 
   it('halts ONE class on an unknown of its OWN, leaving the other tradeable (#333)', () => {
-    // The surgical property for the unknown tier, which the all-three-unknown
-    // test above cannot show: an unknown is per-tier, not a global stop. Only
-    // crypto's figure is missing here, so only crypto is halted — stocks has a
-    // real number and keeps trading, and the portfolio floor is untouched
     const breakers = new CircuitBreakers(makeConfig());
 
     const state = breakers.evaluate(
@@ -191,10 +159,6 @@ describe('CircuitBreakers', () => {
       makeConfig({ daily_loss_pct: 0.03, daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 } }),
     );
 
-    // Crypto down 6% while stocks are up 4%. All three figures share one
-    // denominator (portfolio equity), so the portfolio nets to −2% — inside its
-    // own 3% floor. This is precisely the case surgical halting exists for: the
-    // account-wide tier alone would let crypto keep bleeding
     const state = breakers.evaluate(
       makeInput({
         portfolio: makePortfolio({
@@ -217,9 +181,6 @@ describe('CircuitBreakers', () => {
       makeConfig({ daily_loss_pct: 0.03, daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 } }),
     );
 
-    // Both classes inside their own 5% tier, portfolio through its 3% floor
-    // Surgical halting was ADDED, not swapped in — neither tier can be traded
-    // away for the other
     const state = breakers.evaluate(
       makeInput({
         portfolio: makePortfolio({
@@ -253,8 +214,6 @@ describe('CircuitBreakers', () => {
       true,
     );
 
-    // Recovery, same instance: only the hard drawdown breaker is sticky, so a
-    // class that comes back inside its threshold trades again with no reArm()
     expect(breakers.evaluate(makeInput()).asset_class_tripped.crypto).toBe(false);
   });
 
@@ -263,9 +222,6 @@ describe('CircuitBreakers', () => {
       makeConfig({ daily_loss_pct: 0.03, daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 } }),
     );
 
-    // Crypto through its daily-loss tier; stocks through the volatility tier
-    // Both land in the same `asset_class_tripped` field from different causes,
-    // and the armed list has to keep them distinguishable for the operator
     const state = breakers.evaluate(
       makeInput({
         volatility: { crypto: 1, stocks: 5 },
@@ -309,13 +265,6 @@ describe('CircuitBreakers', () => {
     expect(atThreshold.armed_breakers).toContain('consecutive_loss_cooldown');
   });
 
-  /**
-   * The band, not the line (#634). `max_drawdown_pct` is the upper edge and
-   * `auto_rearm.recovery_drawdown_pct` the lower; between them the breaker
-   * holds whatever state it is already in. This is the test that stops a
-   * later change collapsing the two numbers into one — which would give a
-   * breaker that clears in the same `evaluate()` call that tripped it.
-   */
   it('holds the hard drawdown trip anywhere inside the hysteresis band, and clears below it', () => {
     const breakers = new CircuitBreakers(
       makeConfig({
@@ -324,8 +273,6 @@ describe('CircuitBreakers', () => {
       }),
     );
 
-    // Inside the band but never tripped: state is untripped and stays so, so
-    // the band itself is not what arms the breaker
     const belowThreshold = breakers.evaluate(
       makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }) }),
     );
@@ -337,8 +284,6 @@ describe('CircuitBreakers', () => {
     expect(tripped.portfolio_tripped).toBe(true);
     expect(tripped.armed_breakers).toContain('portfolio_drawdown_hard');
 
-    // Same 15% reading as the first call, opposite verdict — that asymmetry
-    // IS the hysteresis. A partial recovery does not resume trading.
     const insideBand = breakers.evaluate(
       makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }) }),
     );
@@ -352,13 +297,6 @@ describe('CircuitBreakers', () => {
     expect(belowBand.armed_breakers).not.toContain('portfolio_drawdown_hard');
   });
 
-  /**
-   * ADR-0013 removed every human gate, which removed the operator who used to
-   * call `reArm()`. Before #634 the recovery policy was gated on
-   * `mode === 'backtest'`, so in paper and live the hard breaker trip was
-   * PERMANENT — and persisted (`breaker_state`, reloaded into the constructor
-   * at boot), so it outlived a restart too. These two are the regression pins.
-   */
   it.each(['live', 'paper'] as const)(
     'auto-re-arms the hard drawdown breaker on recovery in %s mode — ADR-0013 left no operator to call reArm()',
     (mode) => {
@@ -382,12 +320,6 @@ describe('CircuitBreakers', () => {
     },
   );
 
-  /**
-   * `max_days_tripped` is the one half of the policy that stays backtest-only.
-   * Elapsed time is not recovery: with 1 day configured, a 14-day soak that
-   * drew down past the threshold would otherwise resume entries on day 2 while
-   * still fully down, which is the opposite of #634's "re-arm on recovery".
-   */
   it.each(['live', 'paper'] as const)(
     'does NOT re-arm on elapsed time alone in %s mode while the drawdown persists',
     (mode) => {
@@ -405,8 +337,6 @@ describe('CircuitBreakers', () => {
         }),
       );
 
-      // A month later, and still 25% down: the timeout arm would have cleared
-      // this many times over in backtest
       const stillTripped = breakers.evaluate(
         makeInput({
           portfolio: makePortfolio({ drawdown_pct: 0.25 }),
@@ -420,9 +350,6 @@ describe('CircuitBreakers', () => {
   );
 
   it('clears the hard drawdown breaker on an explicit reArm() without waiting for the recovery threshold', () => {
-    // The operator override that survives #634. What it buys over auto-re-arm
-    // is skipping the LOWER edge: 15% is inside the band, so the recovery
-    // condition would hold the trip indefinitely, and reArm() releases anyway
     const breakers = new CircuitBreakers(
       makeConfig({
         max_drawdown_pct: 0.2,
@@ -440,9 +367,6 @@ describe('CircuitBreakers', () => {
   });
 
   it('re-trips immediately after reArm() if the drawdown is still at the trip level', () => {
-    // reArm() is not an override of the UPPER edge — the trip test runs first
-    // in every `evaluate()`, so releasing at a still-breaching drawdown buys
-    // exactly one call. Pinned because the docblock says so.
     const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 0.2 }));
     breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }) }));
 
@@ -546,14 +470,6 @@ describe('CircuitBreakers', () => {
 });
 
 describe('CircuitBreakers — hysteresis band validation (#634)', () => {
-  /**
-   * Since the recovery policy runs in every mode, these two numbers are the
-   * whole stop: nothing clears the hard breaker by hand any more. A band of
-   * zero or negative width is therefore not a tuning mistake that shows up as
-   * a slightly-wrong halt — it is a breaker that trips and clears within one
-   * `evaluate()`, so `armed_breakers` never names it and the halt is
-   * indistinguishable from never having been breached.
-   */
   it.each([
     { recovery: 0.2, label: 'equal to the trip level (zero-width band)' },
     { recovery: 0.25, label: 'above the trip level (inverted band)' },
@@ -574,10 +490,6 @@ describe('CircuitBreakers — hysteresis band validation (#634)', () => {
       () =>
         new CircuitBreakers(
           makeConfig({
-            // Both edges inside #638's clamp, so this case still exercises the
-            // WIDTH check rather than tripping the bounds check first —
-            // `0.3` on the recovery edge is now refused for crossing its own
-            // ceiling, which is a different (and correct) complaint
             max_drawdown_pct: 0.25,
             auto_rearm: { recovery_drawdown_pct: 0.25, max_days_tripped: 5 },
           }),
@@ -637,12 +549,6 @@ describe('CircuitBreakers — crash-restart persistence (#203)', () => {
       { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
     ]);
 
-    // Simulates a process restart: a brand-new instance, seeded only from the persisted rows
-    //
-    // Re-evaluated at 15% — inside the hysteresis band (#634), so the reading
-    // is one that would NOT trip a fresh breaker but must not clear a restored
-    // one either. That is what distinguishes "the trip survived the restart"
-    // from "the trip was re-derived from the current drawdown"
     const after = new CircuitBreakers(config, persisted);
     const stillTripped = after.evaluate(
       makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }), mode: 'live' }),

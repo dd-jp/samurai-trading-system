@@ -1,24 +1,8 @@
-/**
- * The two halves of #1115's enforcement.
- *
- * PRESENCE is the compiler's job: `LogEntry` is a union on `level`, so a
- * `warn`/`error` line with no `event` does not type-check. The
- * `@ts-expect-error` block below is what makes that testable — relax the
- * union and the suppressions become unused, which `npm run typecheck` reports as
- * an error. It fails in `tsc -p tsconfig.test.json`, not in `vitest`.
- *
- * SPELLING is this file's runtime half. `LogEventCode` is deliberately not a
- * union of every code (see its doc comment), so nothing stops a call site
- * writing `event: \`refresh_${instrument}\`` or `event: 'tokenBucketWait'` —
- * both would type-check and both would break the grep the field exists for.
- * The scan below is what closes that.
- */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LogEntry } from './primitives.js';
 
-/** A real no-op, not a `declare`: these probes are compiled AND run */
 const log = (_entry: LogEntry): void => undefined;
 const dynamic: boolean = true;
 
@@ -71,32 +55,9 @@ function sourceFiles(directory: string): string[] {
   return found;
 }
 
-/**
- * Property assignments only. The leading `{` or start-of-line is what keeps
- * parameter declarations (`safeAlert(alert, event: FailoverEvent)`,
- * `on(event: 'error', …)`) out — they follow a `(` or a `, ` on the same
- * line. Two shapes survive that filter and are excluded by value: a union
- * type annotation broken onto its own line (`index.ts`'s
- * `event: 'uncaughtException' | 'unhandledRejection',`), and the `event:
- * LogEventCode` parameter of the four helpers that take a code and build the
- * entry themselves. Every OTHER non-literal — an interpolated template, a
- * variable — is meant to fail here.
- */
 const EVENT_ASSIGNMENT = /(?:^[ \t]*|\{[ \t]*)event: ([^,\n]*)/gm;
 const SNAKE_CASE_LITERAL = /^'[a-z][a-z0-9]*(?:_[a-z0-9]+)+'$/;
 
-/**
- * A floor, so a scan that matched nothing (a regex broken by a formatting
- * change, a moved source root) fails loudly instead of passing vacuously.
- * 160 assignments reached the value check when #1115 landed — 165 raw
- * matches, less the excluded shapes named above.
- *
- * Codes passed as a HELPER ARGUMENT rather than written as a property —
- * `degradationLine('log_sinks_exhausted', …)` and the four helpers that take
- * a code and build the entry themselves — are outside this scan by
- * construction. The compiler still requires them (the parameter is not
- * optional); only their spelling is unchecked.
- */
 const MINIMUM_EVENT_ASSIGNMENTS = 140;
 
 describe('every logged event code is a stable snake_case literal', () => {

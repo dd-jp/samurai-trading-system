@@ -1,7 +1,3 @@
-// Self-hosted fonts, bundled at build time (dashboard-spec.md, "Type" and
-// story 21: "Zero external requests is a hard requirement"). Imported here
-// rather than in App.tsx so the component test never pulls font assets in —
-// see App.test.tsx
 import '@fontsource/chakra-petch/600.css';
 import '@fontsource/chakra-petch/700.css';
 import '@fontsource/ibm-plex-sans/400.css';

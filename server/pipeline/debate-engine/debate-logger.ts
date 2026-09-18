@@ -1,38 +1,8 @@
-/**
- * `DebateLogger` (#38) — see docs/specs/debate-engine-spec.md (story 20:
- * "log every debate... so I can audit decisions and tune weights in the
- * Feedback Loop").
- *
- * Distinct from the `DebateLog` persisted analytics record (spec's "Debate
- * log write", Feedback Loop's system-of-record) — that is a single
- * append-only row written once per completed debate, out of scope here.
- * `DebateLogger` is the ephemeral, fine-grained observability spine: one
- * structured JSON line per lifecycle event (inputs, each round, output,
- * latency, timeouts, analyst failures), for auditing/tuning, not for
- * downstream joins.
- *
- * `LogSink` is declared locally rather than importing `Logger` from
- * `orchestrator/types.ts` — orchestrator already imports types from
- * debate-engine (`AnalystView`, `DebateResult`), so importing the other way
- * would be backwards. The shape is identical by design: `JsonLogger`
- * (orchestrator/logger.ts) satisfies `LogSink` structurally with no import
- * needed, so the concrete stdout-JSON sink is reused for free at wiring time.
- */
 import type { Logger } from '../../shared/index.js';
 import type { AnalystView, DebateResult, Direction } from './types.js';
 
-/**
- * Alias of the canonical shared `Logger` shape (shared/types.ts — code-review
- * 2026-08-01, M6), keeping this module's established `LogSink` name
- */
 export type LogSink = Logger;
 
-/**
- * A single analyst's failure to contribute a usable view to this debate
- * (quorum/timeout handling, spec's "Module: Analyst Failure Handling").
- * Distinct from the Analysts layer's `AnalystFailure` (analyst_type + role)
- * — this is debate-scoped and identifies the specific analyst instance.
- */
 export interface DebateAnalystFailure {
   analyst_id: string;
   analyst_type: string;
@@ -42,7 +12,6 @@ export interface DebateAnalystFailure {
 export type DebatePersona = 'bull' | 'bear' | 'mediator';
 
 export interface DebateLogger {
-  /** Story 20 / AC: inputs — AnalystViews received and which analysts failed */
   logInputs(entry: {
     trace_id: string;
     debate_id: string;
@@ -50,7 +19,6 @@ export interface DebateLogger {
     failures: DebateAnalystFailure[];
   }): void;
 
-  /** AC: rounds — what each persona said, when */
   logRound(entry: {
     trace_id: string;
     debate_id: string;
@@ -60,10 +28,8 @@ export interface DebateLogger {
     timestamp: Date;
   }): void;
 
-  /** AC: output — the full DebateResult */
   logOutput(entry: { trace_id: string; debate_id: string; result: DebateResult }): void;
 
-  /** AC: latency metrics — actual wall-clock time vs budget */
   logLatency(entry: {
     trace_id: string;
     debate_id: string;
@@ -71,7 +37,6 @@ export interface DebateLogger {
     budget_ms: number;
   }): void;
 
-  /** AC: timeout events — budget exceeded, debate terminated early */
   logTimeout(entry: {
     trace_id: string;
     debate_id: string;
@@ -80,14 +45,12 @@ export interface DebateLogger {
     reason: string;
   }): void;
 
-  /** AC: analyst failures with reasons */
   logAnalystFailure(entry: {
     trace_id: string;
     debate_id: string;
     failure: DebateAnalystFailure;
   }): void;
 
-  /** AC: disagreements detected (spec's semantic disagreement detection) */
   logDisagreement(entry: {
     trace_id: string;
     debate_id: string;

@@ -1,13 +1,3 @@
-/**
- * SQLite-backed `OutsideBenchmarkSampleStore` over `outside_benchmark_samples`
- * (migration 0036, #981) — FL's own record of every outside benchmark it
- * measured, over the matched control's own window.
- *
- * Written by the orchestrator's daily feedback cycle, read by the dashboard's
- * query store in the OTHER process. That split is why this is persisted at all
- * rather than recomputed on read — see the migration's own comment, and
- * `SqliteArmComparisonSampleStore`, which this mirrors.
- */
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { OutsideBenchmarkId, OutsideBenchmarkSample } from '../outside-benchmark/index.js';
@@ -43,13 +33,6 @@ function fromRow(row: OutsideBenchmarkSampleRow): OutsideBenchmarkSample {
 export class SqliteOutsideBenchmarkSampleStore implements OutsideBenchmarkSampleStore {
   constructor(private readonly db: StoreHandle) {}
 
-  /**
-   * One row per (cycle instant, benchmark). `INSERT OR REPLACE` for the reason
-   * the arm store uses it: a restart that re-runs the same cycle instant is
-   * re-measuring the same window, and the newer computation is the truthful
-   * row — but it must not become a SECOND point in the trend, which is what the
-   * composite primary key prevents.
-   */
   append(sample: OutsideBenchmarkSample): void {
     const { performance } = sample;
     this.db
@@ -68,16 +51,6 @@ export class SqliteOutsideBenchmarkSampleStore implements OutsideBenchmarkSample
       );
   }
 
-  /**
-   * Most-recently-computed first, bounded by `asOf` like every other dashboard
-   * read — a snapshot must never show a sample computed after the instant it
-   * claims to describe.
-   *
-   * `limit` counts ROWS, not cycles: with two benchmarks a limit of 10 is five
-   * cycles' worth. The caller sizes it knowing that, the same way it sizes the
-   * arm trend, and the secondary `benchmark` sort keeps a cycle's rows adjacent
-   * and in a stable order rather than at SQLite's discretion.
-   */
   getRecent(limit: number, asOf: Date): OutsideBenchmarkSample[] {
     const rows = this.db
       .prepare(

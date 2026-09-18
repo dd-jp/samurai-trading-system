@@ -1,10 +1,3 @@
-/**
- * The frozen-selection store (#375, #384).
- *
- * The property with teeth is append-only: a Stage 2 re-run is evidence about a
- * different sample, and the previous verdict is the record of what was believed
- * when a capital decision was made.
- */
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from './sqlite-stage2-selection-store.js';
 import type { Stage2Selection } from './stage2-selection.js';
@@ -48,8 +41,6 @@ describe('SqliteStage2SelectionStore', () => {
   });
 
   it('keeps a refused PBO or DSR as null, never as zero', () => {
-    // A stored 0.0 PBO reads as a perfect result and a stored 0.0 DSR reads as
-    // certain insignificance — both would drive real risk configuration
     store.record(selection({ pbo: null, dsr: null }));
 
     const stored = store.getLatest('crypto');
@@ -64,8 +55,6 @@ describe('SqliteStage2SelectionStore', () => {
     store.record(newer);
 
     expect(store.getLatest('crypto')?.backtest_sharpe).toBe(1);
-    // History survives: the previous verdict is the record of what was believed
-    // when the capital decision was made
     expect(db.prepare('SELECT COUNT(*) AS n FROM stage2_selected_config').get()).toEqual({ n: 2 });
   });
 

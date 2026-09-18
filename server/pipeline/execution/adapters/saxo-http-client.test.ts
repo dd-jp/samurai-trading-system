@@ -8,17 +8,6 @@ import {
 import type { SaxoOrderRequest } from './saxo-client.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SaxoHttpBrokerClient } from './saxo-http-client.js';
 
-/**
- * Most of these tests assert transport behaviour (retry, validation, error
- * mapping), not pacing (#1222's fan-out-count evidence lives in
- * saxo-per-request-pacing.test.ts) — a permissive bucket keeps every case
- * off the (fake, non-advancing) pacing clock regardless of how many requests
- * it issues on one client. The `SaxoHttpBrokerClient pacing (#1222)` describe
- * block below is the exception: it deliberately does NOT inject a permissive
- * bucket, to pin the constructor's own default (the only pacing path a real
- * call site takes today, mirroring `http-polygon-client.test.ts`'s "free-tier
- * pacing" split between an injected bucket and the constructor's own).
- */
 function permissiveLimiter(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
 }
@@ -312,8 +301,6 @@ describe('SaxoHttpBrokerClient', () => {
 
   describe('getBalances (#1509)', () => {
     it('reads the account-currency funding figures off a single object, not a Data envelope', async () => {
-      // A correctly funded live book: £1,000 in GBP, ADR-0015's 2026-08-18
-      // amendment. Nothing here is measured against the live GIA.
       const fetchMock = vi
         .fn()
         .mockResolvedValueOnce(
@@ -385,11 +372,6 @@ describe('SaxoHttpBrokerClient', () => {
     );
   });
 
-  /**
-   * A non-positive factor is refused rather than clamped or defaulted: cash
-   * per share is `quoted x factor`, so zero prices every share at nothing and
-   * a negative one flips the sign of the book (#1302 round 1)
-   */
   it('refuses instrument details whose PriceToContractFactor is zero or negative (#1302)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -406,12 +388,6 @@ describe('SaxoHttpBrokerClient', () => {
     );
   });
 
-  /**
-   * The path names the instrument, so a body describing a different one is
-   * the venue answering a question that was not asked — and it would hand the
-   * resolver another line's factor, the same 100x error from the other side
-   * (#1302 round 1)
-   */
   it('refuses instrument details for an instrument other than the one requested (#1302)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -473,9 +449,6 @@ describe('SaxoHttpBrokerClient', () => {
     );
   });
 
-  // #1223: a status-less transport failure (ECONNRESET/DNS failure/socket
-  // hangup — `fetch` rejecting rather than resolving) was never retried,
-  // including on safe, side-effect-free reads
   describe('status-less transport failures (#1223)', () => {
     it('retries a transport failure on a safe read (listOpenOrders is a GET)', async () => {
       const fetchMock = vi
@@ -506,18 +479,6 @@ describe('SaxoHttpBrokerClient', () => {
       expect(fetchMock).toHaveBeenCalledTimes(3);
     });
 
-    // The money-safety guarantee: a blind retry of a placement whose response
-    // was lost can produce a second live order (doc 43, PR #1212). This test
-    // pins the end-to-end behavior with a generous retry budget, but the
-    // budget alone does not isolate which guard is holding the line: PR
-    // #1212's pre-existing `maxAttempts: 1` override on `placeOrder` already
-    // forces exactly one attempt regardless of what `isRetryableSaxoBrokerError`
-    // answers (confirmed by mutation — flipping the POST classification to
-    // retryable does not fail this test). The classification-level guarantee
-    // this ticket adds — that a status-less POST error is itself classified
-    // non-retryable — is proven in isolation by `saxo-broker-errors.test.ts`'s
-    // "is NOT retryable when the failing request was a POST" unit test, which
-    // DOES fail under that same mutation
     it('does NOT retry a transport failure on placeOrder (a POST), even with attempts to spare', async () => {
       const fetchMock = vi
         .fn()
@@ -528,7 +489,6 @@ describe('SaxoHttpBrokerClient', () => {
       await expect(client.placeOrder(ORDER, 'key-1')).rejects.toBeInstanceOf(
         SaxoBrokerProviderError,
       );
-      // 1 for resolveIdentity + exactly 1 placement attempt — no retry
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
@@ -544,18 +504,6 @@ describe('SaxoHttpBrokerClient', () => {
     });
   });
 
-  // #1273: a timeout abort was retried unconditionally regardless of verb —
-  // the sole guard against retrying a lost placement response was
-  // `placeOrder`'s `maxAttempts: 1` below. This end-to-end pair pins the
-  // fix, but — same caveat as "does NOT retry a transport failure on
-  // placeOrder" above — the placeOrder test below does NOT by itself catch a
-  // classifier regression: `maxAttempts: 1` pins it to one attempt
-  // regardless of what `isRetryableSaxoBrokerError` answers (confirmed by
-  // mutation — reverting `isRetrySafeMethod` to always `true` leaves
-  // this file's 21 tests green). The classification-level guarantee is
-  // proven in isolation by `saxo-broker-errors.test.ts`'s
-  // "timeout/rate-limit/5xx retryability is verb-aware" suite, four cases of
-  // which DO fail under that same mutation
   describe('timeout retryability is verb-aware (#1273)', () => {
     it('does NOT retry a timeout on placeOrder (a POST), even with attempts to spare', async () => {
       const fetchMock = vi
@@ -567,12 +515,9 @@ describe('SaxoHttpBrokerClient', () => {
       await expect(client.placeOrder(ORDER, 'key-1')).rejects.toBeInstanceOf(
         SaxoBrokerTimeoutError,
       );
-      // 1 for resolveIdentity + exactly 1 placement attempt — no retry
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    // The preserved behavior: doc 43:33 measured a repeat order-cancel as
-    // venue-idempotent (`404 OrderNotFound`)
     it('DOES retry a timeout on cancelOrder (a DELETE)', async () => {
       const fetchMock = vi
         .fn()
@@ -590,14 +535,6 @@ describe('SaxoHttpBrokerClient', () => {
   });
 });
 
-/**
- * #1222: pacing now lives on `SaxoHttpBrokerClient` itself. These cases
- * deliberately do NOT inject a permissive bucket like every test above —
- * they pin the constructor's own default (the only pacing path a real call
- * site takes today) and per-attempt acquisition on retry, mirroring
- * `http-polygon-client.test.ts`'s "free-tier pacing" split between an
- * injected bucket and the constructor's own default.
- */
 describe('SaxoHttpBrokerClient pacing (#1222)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -611,11 +548,6 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
   it("paces a burst of 3 background requests through the constructor's own default bucket, not just an injected one", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ Data: [] }));
     vi.stubGlobal('fetch', fetchMock);
-    // No `rateLimiter` override: DEFAULT_VENUE_PACING.saxo (capacity 2,
-    // refill 1/s, reserveForPriority 1) is what every real call site
-    // actually gets. `listOpenOrders` is background (#1419), so each call
-    // needs `1 + reserveForPriority` = 2 tokens present — one instant grant
-    // from the full bucket, then one further grant per 1s refill
     const client = new SaxoHttpBrokerClient({
       accessToken: FAKE_TOKEN,
       baseUrl: 'https://gateway.example/sim/openapi/',
@@ -661,19 +593,6 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
     expect(waits[0]?.payload).toMatchObject({ bucket: 'saxo', lane: 'background' });
   });
 
-  // THE MUTATION THIS KILLS: hoist `await this.rateLimiter.acquireBackground()`
-  // out of `withRetry`'s closure in saxo-http-client.ts, so a retried attempt
-  // is covered by the first attempt's token instead of acquiring its own
-  // Every test above stays green under that mutation — none of them spies on
-  // `acquireBackground()` and counts calls per attempt, so a missed call is
-  // invisible to them regardless of bucket size. The bucket here is a
-  // generous capacity 1,000 too (it never blocks, on purpose — this test is
-  // not about parking) — it's the SPY on `acquireBackground()`, not the
-  // bucket's size, that catches the mutation. `listOpenOrders` is the
-  // background-lane call site (#1419); the priority lane's own per-attempt
-  // spend has no equivalent retry test — `saxo-per-request-pacing.test.ts`
-  // runs with `maxAttempts: 1` and mocks no failures, so it never issues a
-  // second attempt on either lane
   it('acquires a second token for a retried request, not just the first attempt', async () => {
     const fetchMock = vi
       .fn()
@@ -699,14 +618,6 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
   });
 });
 
-/**
- * #1419: proves `DEFAULT_VENUE_PACING.saxo`'s `reserveForPriority` is now
- * load-bearing, not inert — mirrors `token-bucket.test.ts`'s "TokenBucket
- * priority reserve (#391)" block, but through the real client and its own
- * call-site classification rather than a bare bucket, since the defect this
- * closes was in the classification (every call spent `acquire()`), not in
- * `TokenBucket` itself
- */
 describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -736,8 +647,6 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
         return jsonResponse(ACCOUNTS);
       }
       if (method === 'GET' && parsed.pathname.endsWith('/port/v1/orders/me')) {
-        // First page (no $skip) hands back a `__next` cursor; the second
-        // page (the pagination loop re-requesting with it) ends the sweep
         return parsed.searchParams.has('$skip')
           ? jsonResponse({ Data: [] })
           : jsonResponse({
@@ -755,17 +664,6 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
     });
   }
 
-  // Regression test for round-2 review finding on #1419: `resolveIdentity()`
-  // memoises a shared PROMISE (`this.identity ??= ...`), so whichever caller
-  // triggers it first is the one whose request actually goes over the
-  // wire — and in the real wired adapter that's usually a BACKGROUND caller
-  // (`placeIdempotently` awaits `lookup()`, which resolves identity via
-  // `listOrderActivities`, before ever calling `placeOrder`). If identity
-  // inherited its triggering caller's own lane, that one-time bootstrap
-  // would be gated by the background reserve threshold instead of the
-  // priority one — reopening the exact stall #1419 exists to prevent, one
-  // layer removed. `resolveIdentity()` hard-codes `'priority'` regardless of
-  // caller specifically to close this; pinned here independent of timing
   it('resolves account identity on the priority lane even when a background caller (listOrderActivities) triggers it first', async () => {
     const fetchMock = routedFetch();
     vi.stubGlobal('fetch', fetchMock);
@@ -782,8 +680,6 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
 
     await client.listOrderActivities(new Date('2026-01-01T00:00:00Z'));
 
-    // accounts/me (identity) always spends `acquire()`; the activities page
-    // itself is the only `acquireBackground()` spend
     expect(acquireSpy).toHaveBeenCalledTimes(1);
     expect(acquireBackgroundSpy).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -792,9 +688,6 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
   it('lets cancelOrder through immediately behind a multi-page listOpenOrders sweep that has drained the bucket to the reserve', async () => {
     const fetchMock = routedFetch();
     vi.stubGlobal('fetch', fetchMock);
-    // Mirrors DEFAULT_VENUE_PACING.saxo (capacity 2, refill 1/s,
-    // reserveForPriority 1), pinned explicitly so this test does not silently
-    // stop meaning anything if that config is later re-derived
     const rateLimiter = new TokenBucket({ capacity: 2, refillPerSecond: 1, reserveForPriority: 1 });
     const client = new SaxoHttpBrokerClient({
       accessToken: FAKE_TOKEN,
@@ -804,33 +697,16 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
       logger: recordingLogger(),
     });
 
-    // Warm account-identity resolution (memoised) via a BACKGROUND caller —
-    // matching the real wired ordering (`placeIdempotently` -> `lookup()` ->
-    // `listOrderActivities` before `placeOrder`/`cancelOrder`) rather than
-    // the favourable case of warming it from a priority call. Because
-    // `resolveIdentity()` always spends `acquire()` regardless of caller,
-    // this still costs only 1 priority token; the page's own
-    // `acquireBackground()` spend needs the bucket at full capacity (2) and
-    // so waits out one refill
     const warmup = client.listOrderActivities(new Date('2026-01-01T00:00:00Z'));
     await vi.advanceTimersByTimeAsync(1_000);
     await warmup;
-    // Let the bucket refill to full before the real race so the warmup's
-    // spend isn't what the assertions below are measuring
     await vi.advanceTimersByTimeAsync(1_000);
     fetchMock.mockClear();
 
-    // Background sweep: page 1 needs `1 + reserve` = 2 tokens, present from
-    // the full bucket, and spends 1 — leaving exactly the reserve (1) behind
     const sweep = client.listOpenOrders();
     await vi.advanceTimersByTimeAsync(0);
-    // Page 1 landed; the loop's page-2 request is now parked (background
-    // needs 2 tokens present and only the 1-token reserve remains)
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // The protective-leg cancel cuts in: identity is already warm, so this
-    // spends exactly the 1 reserved token — and gets it with NO timer
-    // advance, even though the read sweep is still mid-drain
     let cancelled = false;
     const cancel = client.cancelOrder('protective-leg').then(() => {
       cancelled = true;
@@ -840,8 +716,6 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
     await cancel;
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    // The sweep's second page was still waiting on a refill throughout — the
-    // reserve protected the cancel without needing to wait behind it
     await vi.advanceTimersByTimeAsync(2_000);
     await sweep;
     expect(fetchMock).toHaveBeenCalledTimes(3);

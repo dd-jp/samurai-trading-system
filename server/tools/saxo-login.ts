@@ -1,20 +1,3 @@
-/**
- * One-time operator login for Saxo OpenAPI (#1522) — `npm run saxo:login --
- * --env sim|live`. Runs the Authorization Code Grant
- * (developer.saxo/openapi/learn/oauth-authorization-code-grant) once per
- * environment and saves the resulting access/refresh tokens to a
- * gitignored, owner-only file. The saved session is what the orchestrator's
- * refresher renews from (#1523, adapters/saxo-token-source.ts); the developer
- * portal's 24-hour SIM-only token remains a fallback for an operator who has
- * not run this command, and is the only credential that ever existed before
- * it.
- *
- * Every line this command prints goes through `printSafely`, which routes
- * through the shared `maskCredentials` redaction pass (the same one
- * `safe-log.ts` uses for upstream-controlled text) — belt-and-braces on top
- * of never constructing a token/secret-bearing string for print in the
- * first place.
- */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
@@ -34,13 +17,6 @@ import type { SaxoTokenFileRecord } from '../pipeline/execution/adapters/saxo-to
 import { tokenFilePath, writeTokenFile } from '../pipeline/execution/adapters/saxo-token-file.js';
 import { fetchWithTimeout, maskCredentials } from '../shared/index.js';
 
-/**
- * The token endpoint, the config resolution and the token FILE all moved to
- * `pipeline/execution/adapters/` for #1523: the refresher that keeps the
- * session alive runs inside the orchestrator and must not import this CLI.
- * They are re-exported because this module's callers (and its tests) still
- * spell them this way.
- */
 export {
   type FetchLike,
   resolveLoginConfig,
@@ -75,14 +51,8 @@ export interface CallbackResult {
   code: string;
 }
 
-/** Loopback only (review round 1, finding 7) — a redirect URI host of `0.0.0.0` (or any other) would bind the code-receiving listener on every interface */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
-/**
- * Listens on the redirect URI's own host:port and path. Resolves only on a
- * `state` that matches exactly — a missing or mismatched `state` is refused
- * here, before `runLogin` ever reaches the token exchange (#1522 AC2).
- */
 export function waitForCallback(
   redirectUri: string,
   expectedState: string,
@@ -136,10 +106,6 @@ export function waitForCallback(
     settle({ code });
   });
 
-  // `listen` failures (EADDRINUSE, EACCES, ...) are emitted asynchronously
-  // on the server, not thrown from `listen()` itself — without this handler
-  // one is an uncaught exception that `runLogin`'s try/catch never sees
-  // (review round 1, finding 3)
   server.on('error', (cause) => {
     fail(
       new SaxoLoginError(
@@ -155,12 +121,6 @@ export function waitForCallback(
   return { server, result };
 }
 
-/**
- * The authorization-code half of the token endpoint. The refresh half is the
- * refresher's (#1523); both post to the same endpoint under the same Basic
- * auth and the same 200-or-201 rule, so they share one implementation
- * (`requestSaxoToken`, saxo-oauth.ts).
- */
 export async function exchangeAuthorizationCode(
   config: Pick<SaxoLoginConfig, 'tokenUrl' | 'appKey' | 'appSecret' | 'redirectUri'>,
   code: string,
@@ -192,7 +152,6 @@ export type SaxoVerification =
   | { ok: true; identity: SaxoIdentitySummary }
   | { ok: false; status?: number };
 
-/** Read-only proof call (#1522 AC3) — reports only success/failure and non-secret identity fields, never the token */
 export async function verifyToken(
   gatewayBaseUrl: string,
   accessToken: string,
@@ -217,7 +176,6 @@ export async function verifyToken(
   return { ok: true, identity: isRecord(body) ? pickIdentityFields(body) : {} };
 }
 
-/** Routes every printed line through `maskCredentials` — see the module doc comment */
 export function printSafely(line: string): void {
   console.log(maskCredentials(line));
 }
@@ -235,8 +193,6 @@ async function openInBrowser(url: string): Promise<void> {
       });
     });
   } catch {
-    // Best-effort only. The URL is always printed above, so a headless host
-    // (no `open`/`xdg-open`) still lets the operator complete the login
   }
 }
 
@@ -248,7 +204,6 @@ export interface RunLoginDeps {
   waitForCallbackImpl?: typeof waitForCallback;
   openBrowser?: (url: string) => Promise<void>;
   state?: () => string;
-  /** Overrides `tokenFilePath(environment)` — tests use this to sandbox the write under a temp directory instead of the real repo-root-anchored path */
   tokenPath?: string;
 }
 
@@ -274,9 +229,6 @@ export async function runLogin(
   try {
     callback = await result;
   } finally {
-    // `closeAllConnections` drops any socket still open (an abandoned
-    // browser tab) so `close()` doesn't wait on it — see the PR body's
-    // recorded finding 5 for the still-open gap (no listener timeout)
     server.closeAllConnections();
     server.close();
   }
@@ -284,8 +236,6 @@ export async function runLogin(
   const now = (deps.now ?? (() => new Date()))();
   const token = await exchangeAuthorizationCode(config, callback.code, now, fetchImpl);
   const path = deps.tokenPath ?? tokenFilePath(environment);
-  // `loggedInAt` is this run's own timestamp, never carried over from a prior
-  // file (#1524) — a manual login is exactly the event it records
   writeTokenFile(path, {
     ...token,
     environment,

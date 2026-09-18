@@ -34,7 +34,6 @@ export interface GlanceTabProps {
   equitySamples: readonly EquitySample[];
   ledger: readonly LedgerEntry[];
   verdictsByTrace: ReadonlyMap<string, VerdictRow>;
-  /** Opens the trace on the Live tab */
   onOpenTrace: (selection: Selection) => void;
 }
 
@@ -89,13 +88,6 @@ function EquitySparkline({ samples }: { samples: readonly EquitySample[] }) {
   );
 }
 
-/**
- * "X% of the £N book" — the same basis phrase beside both headline figures.
- * `bookGbp` comes off the wire (`PnlHeadlineWire.book_gbp`), not a client
- * literal — the declared book has already moved once (£1,500 → £1,000,
- * ADR-0015's 2026-08-18 amendment) and a hard-coded figure here would keep
- * stating the old one the moment it moves again (#1620).
- */
 function ofBook(fraction: number, bookGbp: number): string {
   return `${formatSignedPercent(fraction)} of the ${formatGbpWhole(bookGbp)} book`;
 }
@@ -105,14 +97,6 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
   const isControl = arm === 'control';
   const equity = snapshot.providers.alpaca.balance?.equity ?? null;
 
-  // `pnl` is `PnlHeadlineWire | null` on `useSnapshot.ts`'s `WireSnapshot` —
-  // widened there (PR #1619 review, finding 1) because `CONTRACT_VERSION`'s
-  // hash is deliberately shallow (top-level field names only, per
-  // `contracts/snapshot.ts`), so a rename inside `PnlHeadlineWire.overall`/
-  // `.today` moves nothing there and this component would otherwise
-  // dereference straight into a shape it never checked. `null` is also what
-  // an intermediary that stripped a build failure looks like. Either way it
-  // must read as a named absence, never as £0.00 (AC)
   if (pnl == null) {
     return (
       <section className="panel" aria-label="P&L">
@@ -125,10 +109,6 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
   }
 
   const { overall, today } = pnl;
-  // `rate_source` is a `Record` lookup, not a formatter call, so an
-  // unrecognised value (the same nested-rename skew `isPnlHeadline` guards
-  // above, one field `isPnlHeadline` doesn't check) needs its own fallback —
-  // an unguarded lookup would interpolate the literal string "undefined"
   const rate = `at ${formatUsd(pnl.rate_usd_per_gbp)}/£, ${PNL_RATE_SOURCE_WORD[pnl.rate_source] ?? UNKNOWN}`;
 
   return (
@@ -205,11 +185,6 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
 function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
   const positions = snapshot.positions;
   const isControl = snapshot.arm === 'control';
-  // Alpaca's balance is the LIVE broker's equity — reading it as the
-  // control arm's denominator would render a live-arm-only figure under the
-  // control view (dashboard-spec.md's arm selector rule; #1597). The
-  // control's own open-position notional above still applies (`positions`
-  // is arm-scoped, #1592), only the "of $equity" denominator is N/A
   const equity = isControl ? null : (snapshot.providers.alpaca.balance?.equity ?? null);
   const deployed = deployedNotional(positions);
   return (

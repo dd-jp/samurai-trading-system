@@ -1,18 +1,3 @@
-/**
- * What the client hands the sink to capture (#1035).
- *
- * Two properties carry this file. First, the captured prompt must be the
- * BYTE-IDENTICAL string that went on the wire — a re-render answers "what
- * would we send now", not "what was this call asked", and only the second
- * question is useful on day six of a soak. Second, capture must not have moved
- * the wire call itself: the metering reorder that made room for it happens
- * around a live provider call, so "the prompt sent is unchanged" is pinned
- * directly rather than assumed.
- *
- * The malformed-response case is the one most likely to be regressed by a
- * later tidy-up, and it is deliberate: a response that fails the parse gate is
- * exactly the one whose text an operator wants to read.
- */
 import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
@@ -72,8 +57,6 @@ describe('AnthropicLlmClient prompt capture', () => {
 
     const wireContent = sent?.messages[0]?.content;
     expect(sink.records[0]?.prompt).toBe(wireContent);
-    // …and that string is still what `renderMessageContent` produces, so the
-    // hoist did not quietly change what the provider is asked
     expect(wireContent).toBe(renderMessageContent(request()));
   });
 
@@ -102,12 +85,6 @@ describe('AnthropicLlmClient prompt capture', () => {
   });
 
   it('still meters a billed call whose response has no content block', async () => {
-    // The regression the #1035 reorder could have introduced. `extractText`
-    // reads `response.content`; a provider payload without it throws, and the
-    // metering used to run ABOVE that line. If the throw skipped the meter,
-    // `llm_spend` would lose a billed call and `SqliteSpendCap` — which sums
-    // that table — would silently understate the budget. The `finally` is what
-    // this pins; the call is still allowed to fail
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue({ usage: { input_tokens: 120, output_tokens: 30 } }),
     };
@@ -120,9 +97,6 @@ describe('AnthropicLlmClient prompt capture', () => {
   });
 
   it('captures nothing for an unmetered call', async () => {
-    // Inherits `recordSpend`'s existing early return: no usage block, no
-    // record at all — so capture coverage is "completed and metered", not
-    // "every call". Stated as a floor, not discovered later.
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'good' }] }),
     };
@@ -145,9 +119,6 @@ describe('AnthropicLlmClient prompt capture', () => {
   });
 
   it('does not fail the call when the sink throws while capturing', async () => {
-    // The boundary guarantee, unchanged by #1035: `LlmSpendSink` is a public
-    // interface, so the "recording must never fail a call" rule is enforced
-    // here rather than trusted per-implementation
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
     };

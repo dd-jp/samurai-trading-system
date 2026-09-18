@@ -1,15 +1,3 @@
-/**
- * #753 acceptance criteria 4 and 5, as tests:
- *
- * - both arms measured over the SAME window from the SAME read, with return AND
- *   drawdown reported together for each;
- * - a return-only comparison CANNOT be produced from the report.
- *
- * The second is a claim about a type, so the test that carries it is a
- * structural one (`Object.keys`) plus a `@ts-expect-error`: if
- * `max_drawdown_pct` were ever made optional, the compiler stops rejecting the
- * drawdown-less literal and this file fails to type-check.
- */
 import type { ClosedTrade, TradingArm } from '../../shared/index.js';
 import {
   type ArmPerformance,
@@ -52,13 +40,9 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       from: WINDOW_FROM,
       to: WINDOW_TO,
       trades: [
-        // Live: +40, −10, +20 → ends +50, deepest fall from peak 40 is 10
         trade({ arm: 'live', closed_at: new Date('2026-09-01T09:00:00Z'), realized_pnl_net: 40 }),
         trade({ arm: 'live', closed_at: new Date('2026-09-01T10:00:00Z'), realized_pnl_net: -10 }),
         trade({ arm: 'live', closed_at: new Date('2026-09-01T11:00:00Z'), realized_pnl_net: 20 }),
-        // Control: −30, +90 → ends +60 (BEATS live on return) with a 30 hole
-        // first. This is doc 12 D4's exact scenario: the return-only reading
-        // says the indicator arm won
         trade({
           arm: 'control',
           closed_at: new Date('2026-09-01T09:30:00Z'),
@@ -91,17 +75,11 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       cost_basis_drops: noCostBasisDrops(),
     });
 
-    // The same window and the same denominator for both — which is what makes
-    // the two `return_pct` numbers comparable at all
     expect(comparison.from).toEqual(WINDOW_FROM);
     expect(comparison.to).toEqual(WINDOW_TO);
     expect(comparison.basis).toBe(1_000);
   });
 
-  /**
-   * AC5, structurally. Every per-arm view the report exposes carries a
-   * drawdown; there is no shape a caller can destructure that omits it.
-   */
   it('cannot express a per-arm result without a drawdown', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
@@ -125,8 +103,6 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       expect(typeof arm.max_drawdown_pct).toBe('number');
     }
 
-    // If `max_drawdown_pct` were ever loosened to optional, this stops erroring
-    // and the file fails to type-check — the compiler is the enforcement
     // @ts-expect-error — a return-only ArmPerformance must not type-check.
     const returnOnly: ArmPerformance = {
       arm: 'control',
@@ -145,11 +121,8 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       from: WINDOW_FROM,
       to: WINDOW_TO,
       trades: [
-        // Exactly at `from`: excluded (half-open at the start)
         trade({ arm: 'live', closed_at: WINDOW_FROM, realized_pnl_net: 999 }),
-        // Exactly at `to`: included
         trade({ arm: 'control', closed_at: WINDOW_TO, realized_pnl_net: 25 }),
-        // After the window: excluded
         trade({
           arm: 'live',
           closed_at: new Date('2026-09-01T16:00:00.001Z'),
@@ -164,10 +137,6 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     expect(comparison.control.return_pct).toBeCloseTo(0.05, 12);
   });
 
-  /**
-   * #1099. Before this, a window of nothing but refused control passes was
-   * `trade_count: 0` on both arms — the same row an idle control arm writes.
-   */
   it('reports refused passes per arm, so a refusal stretch is not silence', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 6 },
@@ -221,10 +190,6 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     expect(comparison.control.trade_count).toBe(0);
   });
 
-  /**
-   * The high-water mark is the capital the arm started with, not its best
-   * trade: an arm that is down from its first close has a real drawdown
-   */
   it('measures drawdown from the starting capital, not from the first peak', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
@@ -280,7 +245,6 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     });
 
     expect(reversed.live).toEqual(forward.live);
-    // 'a' (−10) sorts first, so the series dips before it peaks
     expect(forward.live.max_drawdown_pct).toBeCloseTo(0.01, 12);
   });
 
@@ -299,11 +263,6 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     }
   });
 
-  /**
-   * #1546. The counts are produced by the reader and carried through untouched
-   * — `buildArmComparison` does not re-derive them from `trades`, and could
-   * not: the dropped rows are precisely the ones absent from `trades`.
-   */
   it('carries each arm its own cost-basis drop counts', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
@@ -323,11 +282,6 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   });
 });
 
-/**
- * #1546. The partition is the whole measurement: a `close_reason` in the wrong
- * bucket moves a row between the one-capture and the two-capture population and
- * silently flattens the asymmetry the counts exist to show.
- */
 describe('exitClassOf', () => {
   it('puts venue-resting bracket legs in the protective class', () => {
     expect(exitClassOf('stop')).toBe('protective');
@@ -341,30 +295,14 @@ describe('exitClassOf', () => {
     expect(exitClassOf('direction_flip')).toBe('flatten');
   });
 
-  /**
-   * The `never` arm is the real guard — a fifth `close_reason` is a compile
-   * error, not a silent flatten. This pins the runtime half for a row that
-   * reached the database outside the type system (a hand-edited or
-   * future-migration value), which must be loud rather than miscounted.
-   */
   it('throws on a close_reason it cannot classify', () => {
     const unclassifiable = 'partial_liquidation' as ClosedTrade['close_reason'];
     expect(() => exitClassOf(unclassifiable)).toThrow(/unhandled close_reason/);
   });
 });
 
-/**
- * #1595: `cumulativePnl` is the derivation `performanceFor` (above) and the
- * dashboard's P&L headline both build on. These tests exercise it directly,
- * with no `arm` filtering in the input — the function's whole contract is
- * "sum what you're given", and `buildArmComparison`'s own suite above already
- * proves the filter-then-delegate wiring produces the same numbers it always
- * did.
- */
 describe('cumulativePnl', () => {
   it('sums realized PnL and finds the deepest peak-to-trough fall, as a fraction of basis', () => {
-    // +40, −10, +20 → ends +50; peak reaches 40, falls to 30 (a 10 drawdown),
-    // never falls below a later peak after that
     const result = cumulativePnl(
       [
         trade({ closed_at: new Date('2026-09-01T09:00:00Z'), realized_pnl_net: 40 }),
@@ -405,10 +343,6 @@ describe('cumulativePnl', () => {
     const reversed = cumulativePnl([late, early], 1_000);
 
     expect(reversed).toEqual(forward);
-    // +40 then -30: peak 40, trough 10 → drawdown 30. Given out of order, an
-    // unsorted sum would still total 10 but the WRONG drawdown (0, since -30
-    // would be read as the first, lower-then-rising point) if this function
-    // summed in input order instead of `closed_at` order
     expect(forward.max_drawdown_pct).toBeCloseTo(0.03);
   });
 });

@@ -1,12 +1,3 @@
-/**
- * SQLite-backed `ArmComparisonSampleStore` over `arm_comparison_samples`
- * (migration 0034, #971) — FL's own record of every matched-control comparison
- * it computed, and of the ones it escalated.
- *
- * Written by the orchestrator's daily feedback cycle, read by the dashboard's
- * query store in the OTHER process. That split is the reason this is persisted
- * at all — see the migration's own comment.
- */
 
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
@@ -18,22 +9,6 @@ import type {
   PersistedArmComparisonSample,
 } from './types.js';
 
-/**
- * #1546, migration 0066 — the per-exit-class exclusion counts, read back as
- * `ExitClassDropCounts` or `null`.
- *
- * Degrades to `null` rather than throwing, for
- * `parseModelledCostBreakdownColumn`'s reason: this is a measurement ABOUT the
- * comparison, and a corrupted byte in it must not abort the dashboard's read of
- * the comparison itself. `null` already means "this cycle did not count", so a
- * corrupt value reads as not-counted rather than as a fabricated set of counts
- * — the conservative collapse, and the only one that cannot put a number in
- * front of an operator that no cycle produced.
- *
- * Rebuilt from individually checked non-negative integers under an explicit
- * class list, so no `as` is needed (#509) and a JSON object carrying an extra
- * or missing class is refused rather than half-read.
- */
 function parseExitClassEntry(parsed: object, exitClass: ExitClass): CostBasisDropCount | null {
   if (!(exitClass in parsed)) return null;
   const entry: unknown = Reflect.get(parsed, exitClass);
@@ -66,12 +41,6 @@ function parseCostBasisDropsColumn(raw: string | null): ExitClassDropCounts | nu
   return hasEveryExitClass(counts) ? counts : null;
 }
 
-/**
- * Restates for the compiler what the loop above already guarantees — it returns
- * `null` on the first class it cannot read, so reaching here means every class
- * was written. A predicate rather than an `as`, so widening `EXIT_CLASSES`
- * keeps the guarantee instead of asserting past it (#509).
- */
 function hasEveryExitClass(
   counts: Partial<Record<ExitClass, CostBasisDropCount>>,
 ): counts is ExitClassDropCounts {
@@ -92,7 +61,6 @@ interface ArmComparisonSampleRow {
   live_return_pct: number;
   live_max_drawdown_pct: number;
   live_refused_pass_count: number | null;
-  /** #1546, migration 0066 — `ExitClassDropCounts` as JSON, NULL on a pre-0066 row */
   live_cost_basis_drops_json: string | null;
   control_trade_count: number;
   control_realized_pnl_net: number;
@@ -112,12 +80,6 @@ const COLUMNS = `computed_at, window_from, window_to, basis,
                  live_refused_pass_count, control_refused_pass_count,
                  live_cost_basis_drops_json, control_cost_basis_drops_json`;
 
-/**
- * Reads back exactly what the table holds. `refused_pass_count` (#1099) is a
- * nullable column since migration 0057 (#1483) and `cost_basis_drops` (#1546)
- * since 0066 — NULL on a row computed before its migration, a real value on
- * every row after it. See `PersistedArmPerformance`.
- */
 function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
   return {
     computed_at: fromStoredTimestamp(row.computed_at),
@@ -146,15 +108,7 @@ function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
     },
     divergence: {
       diverged: row.diverged === 1,
-      // `divergence_reason` is non-NULL if and only if `diverged = 1` — a table
-      // `CHECK` in migration 0034, not a convention this mapper upholds. The
-      // ternary is therefore not a guard and is not claimed to be one: it is
-      // the `string | null` narrowing the row type needs, and both of the pairs
-      // it could otherwise produce are unrepresentable in the table
       reason: row.diverged === 1 ? row.divergence_reason : null,
-      // The floor THIS verdict was tested against (#982), read back as it was
-      // written — never recomputed against whatever `MIN_TRADES_PER_ARM_FOR_
-      // DIVERGENCE` is today
       min_trades_per_arm: row.min_trades_per_arm,
     },
   };
@@ -163,13 +117,6 @@ function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
 export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore {
   constructor(private readonly db: StoreHandle) {}
 
-  /**
-   * One row per cycle. `INSERT OR REPLACE` rather than a plain insert: a
-   * restart that re-runs the same cycle instant is re-measuring the same
-   * window, and the newer computation is the truthful row — but it must not
-   * become a SECOND point in the trend, which is what the `computed_at`
-   * primary key prevents.
-   */
   append(sample: ArmComparisonSample): void {
     const { comparison, divergence } = sample;
     this.db
@@ -200,11 +147,6 @@ export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore 
       );
   }
 
-  /**
-   * Most-recently-computed first, bounded by `asOf` like every other dashboard
-   * read — a snapshot must never show a sample computed after the instant it
-   * claims to describe
-   */
   getRecent(limit: number, asOf: Date): PersistedArmComparisonSample[] {
     const rows = this.db
       .prepare(

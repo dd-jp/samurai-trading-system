@@ -69,7 +69,6 @@ function otherLine(timestamp: string, message = 'debate.round'): string {
   return JSON.stringify({ timestamp, message, payload: {} });
 }
 
-/** A startup-stage log line — `JsonLogger`'s `trace_id: 'startup'` convention */
 function bootLine(timestamp: string): string {
   return JSON.stringify({
     timestamp,
@@ -95,11 +94,6 @@ describe('parseLogCoverage', () => {
     ]);
   });
 
-  /**
-   * #1081 code review, finding 1: a torn line must not let coverage bridge
-   * across the gap it represents — the debates that fell in that gap are not
-   * something this log can vouch for either way
-   */
   it('closes the current span at a torn (unparseable) line rather than bridging across it', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
@@ -117,19 +111,10 @@ describe('parseLogCoverage', () => {
     ]);
   });
 
-  /**
-   * #1081 code review round 2 (the blocker): closing only on a torn line
-   * missed the more common case — a clean shutdown and a much later restart
-   * appending to the SAME file leaves no torn line at all, just a long
-   * silent stretch between two perfectly well-formed lines. Without a
-   * max-gap check this reads as ONE unbroken span across the whole
-   * downtime, and every row created during it would be wrongly `isCovered`.
-   */
   it('closes the span when the gap between two clean lines exceeds MAX_INTER_LINE_GAP_MS, even with no torn line', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
       otherLine('2026-09-03T13:05:00.000Z'),
-      // Clean shutdown here, clean restart hours later — no torn line
       otherLine('2026-09-03T20:00:00.000Z'),
       otherLine('2026-09-03T20:05:00.000Z'),
     ];
@@ -152,12 +137,6 @@ describe('parseLogCoverage', () => {
     ]);
   });
 
-  /**
-   * #1081 code review round 2, "even better": a boot line is direct evidence
-   * the process just (re)started, so it closes the span unconditionally —
-   * even when the elapsed gap alone would not have (a crash-and-immediate-
-   * restart can leave a gap far under MAX_INTER_LINE_GAP_MS)
-   */
   it('closes the span at a boot line even when the elapsed gap is small', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
@@ -182,7 +161,6 @@ describe('parseLogCoverage', () => {
     const coverage = parseLogCoverage(lines);
 
     expect(coverage.timeoutIds).toEqual(new Set(['debate-1']));
-    // No timestamp to place it in time — it contributes no coverage span
     expect(coverage.intervals).toEqual([]);
   });
 
@@ -200,14 +178,6 @@ describe('parseLogCoverage', () => {
     ]);
   });
 
-  /**
-   * #1081 code review round 3, deepseek: the doc said a boot line closes the
-   * span "unconditionally", but the code only checked `trace_id === 'startup'`
-   * AFTER the "no timestamp -> continue" gate, so a boot line with no usable
-   * timestamp of its own never reached that check and silently left the span
-   * open. A boot line is direct evidence of a restart whether or not it also
-   * carries a timestamp — it must still close the span.
-   */
   it('closes the span at a boot line even when the boot line itself has no usable timestamp', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
@@ -256,7 +226,6 @@ function makeRow(overrides: Partial<DebateLogTerminationRow> = {}): DebateLogTer
   };
 }
 
-/** Coverage that treats every timestamp as covered — for cases not exercising the coverage boundary itself */
 function fullCoverage(timeoutIds: Iterable<string> = []): LogCoverage {
   return {
     timeoutIds: new Set(timeoutIds),
@@ -287,12 +256,6 @@ describe('classifyRows', () => {
     expect(result.classified[0]?.termination).toBe('non_converged');
   });
 
-  /**
-   * #1081 code review, finding 1 (the blocker): a row outside every covered
-   * span must NOT be classified `non_converged` just because no timeout line
-   * named it — absence of a match is not positive evidence of anything when
-   * the logs never saw that debate in the first place
-   */
   it('leaves a row with no log coverage at all as uncovered, not non_converged', () => {
     const result = classifyRows([makeRow()], { timeoutIds: new Set(), intervals: [] });
 
@@ -317,17 +280,10 @@ describe('classifyRows', () => {
     expect(result.uncovered).toEqual(['debate-in-gap']);
   });
 
-  /**
-   * #1081 code review round 2 (the blocker), end-to-end: a real log — no
-   * torn line, just a clean shutdown and a much later clean restart — fed
-   * through `parseLogCoverage` must leave a row created in the downtime
-   * uncovered, not silently classified on no evidence
-   */
   it('leaves a row created during a clean-shutdown-to-restart gap uncovered, via parseLogCoverage', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
       otherLine('2026-09-03T13:05:00.000Z'),
-      // Process stopped here — nothing written. Restarts hours later.
       otherLine('2026-09-03T20:00:00.000Z'),
       otherLine('2026-09-03T20:05:00.000Z'),
     ];
@@ -366,7 +322,6 @@ describe('classifyRows', () => {
     expect(result.uncovered).toEqual(['debate-uncovered']);
   });
 
-  /** A direct debate_id match is decisive even when the row's own timestamp isn't inside a span */
   it('a timeout debate_id match overrides span coverage — direct evidence needs no span', () => {
     const coverage: LogCoverage = {
       timeoutIds: new Set(['debate-1']),
@@ -381,11 +336,6 @@ describe('classifyRows', () => {
     expect(result.uncovered).toEqual([]);
   });
 
-  /**
-   * The distinguishing pin for AC4's shape at the backfill layer: the same
-   * `converged: 0` row is classified DIFFERENTLY depending on whether its
-   * debate_id shows up in the timeout log
-   */
   it('a latency-truncated row and a genuinely non-converged row — same converged, different termination', () => {
     const rows = [
       makeRow({ debate_id: 'debate-truncated', converged: 0 }),
@@ -412,15 +362,6 @@ describe('classifyRows', () => {
     expect(result.uncovered).toEqual([]);
   });
 
-  /**
-   * #1081 code review round 3 (blocker, kimi + deepseek): `converged` is
-   * `number | null` on the raw row, and NULL means the row itself never
-   * recorded a value (`DebateLog.converged` is optional) — distinct from `0`
-   * (an explicit, recorded non-convergence). Folding NULL into
-   * `'non_converged'` asserted a fact the row does not support. A covered
-   * row with `converged: null` and no timeout match must stay NULL, reported
-   * as `indeterminate` — not silently written as `'non_converged'`.
-   */
   it('leaves a covered, non-truncated row with converged: null (SQLite NULL) as indeterminate, not non_converged', () => {
     const result = classifyRows([makeRow({ converged: null })], fullCoverage());
 
@@ -523,12 +464,6 @@ describe('formatClassificationReport', () => {
 });
 
 describe('assertDbPathExists', () => {
-  /**
-   * #1081 code review round 3 (kimi): `better-sqlite3` opens a nonexistent
-   * path by silently creating an empty database file rather than throwing —
-   * an explicit `--db` pointed at a typo'd path would otherwise open (and
-   * migrate!) a brand-new empty file and report a confident "0 rows"
-   */
   it('throws for a path that does not exist', () => {
     const missingPath = join(
       mkdtempSync(join(tmpdir(), 'classify-debate-termination-')),

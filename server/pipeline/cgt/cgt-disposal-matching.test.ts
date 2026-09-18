@@ -88,7 +88,6 @@ describe('matchDisposals — same-day rule (CG51560)', () => {
 describe('matchDisposals — 30-day / bed-and-breakfast rule (CG51560/CG51570)', () => {
   it('matches a disposal against an acquisition within the following 30 days, ahead of the S104 pool', () => {
     const fills: CgtFillLeg[] = [
-      // Section 104 pool origin, well before the disposal
       leg({
         kind: 'acquisition',
         date: new Date('2025-01-10T08:00:00Z'),
@@ -96,7 +95,6 @@ describe('matchDisposals — 30-day / bed-and-breakfast rule (CG51560/CG51570)',
         grossAmount: 500,
         charges: 0,
       }),
-      // Disposal with no same-day acquisition
       leg({
         kind: 'disposal',
         date: new Date('2025-06-02T10:00:00Z'),
@@ -104,7 +102,6 @@ describe('matchDisposals — 30-day / bed-and-breakfast rule (CG51560/CG51570)',
         grossAmount: 1200,
         charges: 2,
       }),
-      // Re-acquisition 10 days later — the bed-and-breakfast buyback
       leg({
         kind: 'acquisition',
         date: new Date('2025-06-12T09:00:00Z'),
@@ -175,8 +172,6 @@ describe('matchDisposals — 30-day / bed-and-breakfast rule (CG51560/CG51570)',
     const matched = matchDisposals(fills);
 
     expect(matched).toHaveLength(1);
-    // The May acquisition is BEFORE the disposal, so it is a section-104 pool
-    // origin, never a 30-day match — the 30-day rule only looks forward
     expect(matched[0].rule).toBe('section-104');
   });
 });
@@ -211,7 +206,6 @@ describe('matchDisposals — Section 104 pool (CG51575)', () => {
 
     expect(matched).toHaveLength(1);
     expect(matched[0].rule).toBe('section-104');
-    // Pool average cost per share: (500+700)/20 = 60; 10 shares disposed = 600
     expect(matched[0].allowableCost).toBe(600);
     expect(matched[0].gain).toBe(300);
   });
@@ -372,9 +366,6 @@ describe('unconvertedCgtFillsInTaxYear', () => {
 describe('matchDisposals — disposal ordering', () => {
   it('processes disposals in date order so the earlier disposal claims a shared 30-day acquisition first', () => {
     const fills: CgtFillLeg[] = [
-      // The late disposal's own Section 104 pool origin — dated before both
-      // disposals, so the 30-day rule (forward-looking only) can never claim
-      // it; it is there so the late disposal has something to fall back to
       leg({
         kind: 'acquisition',
         date: new Date('2025-01-01T08:00:00Z'),
@@ -399,7 +390,6 @@ describe('matchDisposals — disposal ordering', () => {
         charges: 0,
         idempotency_key: 'disp-late',
       }),
-      // Only ONE qualifying acquisition for both disposals to compete over
       leg({
         kind: 'acquisition',
         date: new Date('2025-06-10T08:00:00Z'),
@@ -467,10 +457,6 @@ describe('tax-year windowing', () => {
     expect(report2526.disposals).toHaveLength(1);
     expect(report2526.disposals[0].proceeds).toBe(700);
 
-    // The filter cgtReportForTaxYear applies reads disposalDate directly, so
-    // pin that field itself (not just which report a proceeds figure lands
-    // in) — disposalDate is derived from dayKey via dayStart, and the two
-    // must never be allowed to drift apart at a tax-year boundary
     expect(report2425.disposals[0].disposalDate.toISOString()).toBe('2025-04-05T00:00:00.000Z');
     expect(report2526.disposals[0].disposalDate.toISOString()).toBe('2025-04-06T00:00:00.000Z');
   });

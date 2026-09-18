@@ -1,62 +1,23 @@
-/**
- * Alpaca News REST — the v1 ticker-layer fetcher (#553, map #552).
- *
- * Surface verified in `docs/research/21-mi-ingestion-architecture.md:51`:
- * `GET https://data.alpaca.markets/v1beta1/news`, same key headers as bars,
- * `symbols=AAPL,TSLA,BTCUSD` (crypto in-band), `start`/`end` RFC-3339, items
- * carrying `id` (int64), `headline`, `summary`, `symbols[]`, `source`, `url`,
- * `created_at`/`updated_at`. History to 2015 on the Benzinga wire, 200 req/min,
- * keys already held, £0.
- *
- * ## Coverage limit, measured — read this before extending the universe
- *
- * During the #553 grilling this endpoint was queried directly for the live
- * universe [ADR-0016](../../../../docs/adr/0016-universe-leveraged-etps-ungated.md)
- * selected. It returned **zero items for 3USL, 3LDE and SGLN**, against five
- * each for AAPL, SPY and BTCUSD. No HTTP error — the wire simply carries
- * nothing for LSE-listed ETPs, which is what a US Benzinga feed would be
- * expected to do.
- *
- * So this fetcher fully serves the **paper soak** universe and does **not**
- * serve the live equity leg. That is why #553 put GDELT in v1 alongside it
- * rather than shipping this alone: a 3x FTSE ETP has no company news of its
- * own, and what moves it is macro, which is the GDELT layer's job. Shipping
- * only this would have made paper and live *different experiments*, breaking
- * the paper→live expectancy transfer #661 needs at the ~126-trade thesis gate.
- */
 
 import { TokenBucket } from '../../../shared/index.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
 
-/** Alpaca's documented per-request ceiling for news */
 const PAGE_LIMIT = 50;
 
-/**
- * Guards a malformed or cyclical `next_page_token`. One refresh window at our
- * cadence is a handful of pages; this is far above any legitimate poll and far
- * below an infinite loop.
- */
 const MAX_PAGES = 40;
 
-/** Alpaca free allows 200 req/min; this stays well inside it */
 const DEFAULT_PACING = { capacity: 5, refillPerSecond: 2 } as const;
 
-/** One news article as the wire delivers it, after validation */
 export interface AlpacaNewsArticle {
-  /** int64 on the wire; carried as string because `native_id` is TEXT (#554) */
   id: string;
   headline: string;
   summary: string;
-  /** The tickers this article is about — one article becomes one item PER symbol */
   symbols: string[];
   source: string;
   url: string;
-  /** Publisher time. NOT our knowledge time; see `ingested_at` in the archive. */
   created_at: Date;
-  /** Vendor revision stamp — orders revisions, never gates visibility (#558) */
   updated_at: Date;
-  /** The exact bytes, for the archive's raw table (#554 re-normalizability) */
   payload: string;
 }
 
@@ -83,14 +44,6 @@ interface RawArticle {
   updated_at?: unknown;
 }
 
-/**
- * Rejects rather than defaults.
- *
- * A silently-defaulted `created_at` would land at the epoch and sit outside
- * every context window forever — the item would be archived, counted, and never
- * read, which is indistinguishable from the empty-store defect this whole
- * rework exists to fix. Loud is better.
- */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent per-field validations for one wire article; splitting them into sub-functions would scatter one record's validation contract across several places for no gain in readability.
 function validateArticle(raw: unknown): AlpacaNewsArticle {
   const bad = (): never => {
@@ -106,9 +59,6 @@ function validateArticle(raw: unknown): AlpacaNewsArticle {
   const created =
     typeof article.created_at === 'string' ? Date.parse(article.created_at) : Number.NaN;
   if (Number.isNaN(created)) return bad();
-  // Alpaca always sends `updated_at`, but an article that has never been
-  // revised is legitimately equal to its creation — so absence falls back to
-  // `created_at` rather than failing the whole batch
   const updatedRaw =
     typeof article.updated_at === 'string' ? Date.parse(article.updated_at) : Number.NaN;
   const updated = Number.isNaN(updatedRaw) ? created : updatedRaw;
@@ -140,9 +90,6 @@ export class AlpacaNewsClient {
   constructor(options: AlpacaNewsClientOptions = {}) {
     const key = options.apiKey ?? process.env.ALPACA_API_KEY;
     const secret = options.apiSecret ?? process.env.ALPACA_API_SECRET;
-    // Checked in the constructor rather than at first use: a refresh loop that
-    // discovers missing credentials on its first poll fails inside the tick,
-    // where it reads as "no news today" rather than as a misconfiguration
     if (key === undefined || key.length === 0) {
       throw new Error(
         'AlpacaNewsClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
@@ -207,14 +154,6 @@ export class AlpacaNewsClient {
     return { articles, nextPageToken };
   }
 
-  /**
-   * Articles for `symbols` published in `[start, end]`, oldest first.
-   *
-   * Keyed by `id` on the way out so a page boundary that repeats an article
-   * yields one, not two — the archive's `INSERT OR IGNORE` would also absorb it,
-   * but that is after the batch has already been counted and scored, and
-   * scoring costs money.
-   */
   async fetchNews(
     symbols: readonly string[],
     start: Date,

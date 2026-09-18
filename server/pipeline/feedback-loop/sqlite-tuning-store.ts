@@ -1,29 +1,9 @@
-/**
- * SQLite-backed `TuningStore` over `analyst_weights`/`strategy_params`/
- * `risk_thresholds` (#193) — the real store behind `InMemoryTuningStore`
- * (#91). Three separate tables, one per dial, matching
- * shared-sqlite-store-spec.md's "every table's own consumer dictates its
- * key" principle — `analyst_id`/`param_name`/`threshold_name` are unrelated
- * keyspaces even when a name happens to collide across them.
- *
- * Each dial's current value is a plain upsert: `runDailyCycle` treats a dial
- * write as "this is now the value", never a history (`dial_adjustments`,
- * via `AdjustmentLog`, is the audit trail for that). `updated_at` is stamped
- * from the injected `Clock` rather than a caller-supplied parameter, since
- * the `TuningStore` port itself carries no timestamp field.
- */
 
 import type { Clock, TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds, SystemClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 
-/**
- * The three dial tables share one shape — (name key, REAL value, updated_at)
- * — differing only in identifiers, so the getter/setter pairs collapse into
- * one KV helper per direction (code-review 2026-08-01, M8). Identifiers are
- * interpolated from these fixed literals only, never from caller input.
- */
 interface DialTable {
   table: 'analyst_weights' | 'strategy_params' | 'risk_thresholds';
   keyColumn: 'analyst_id' | 'param_name' | 'threshold_name';
@@ -60,24 +40,6 @@ export class SqliteTuningStore implements TuningStore {
     this.kvSet(ANALYST_WEIGHTS, analyst_id, weight);
   }
 
-  /**
-   * First-write-wins insert, atomic in SQLite rather than in the caller
-   * (#371, PR review). `ON CONFLICT DO NOTHING` — deliberately NOT the
-   * `DO UPDATE` every other write on this class uses, and the same choice
-   * `SqliteVerdictLogStore.writeLog` makes for the same reason: the existing
-   * row is the record.
-   *
-   * Two processes overlapping across a restart (#238) is the case a caller-side
-   * "read the map, write the missing ones" cannot cover — both can observe an
-   * absent row before either writes, and last-write-wins then resets a tuned
-   * weight to its starting value. `DO NOTHING` makes that unrepresentable:
-   * whoever inserts first owns the row, and every later seed is a no-op that
-   * leaves both `weight` and `updated_at` untouched.
-   *
-   * `changes` is 0 on the conflict path and 1 on the insert, which is exactly
-   * "did I seed it" — reported back so startup can log what it wrote without
-   * a second read that would race all over again.
-   */
   seedAnalystWeight(analyst_id: string, weight: number): boolean {
     const result = this.db
       .prepare(
@@ -102,32 +64,12 @@ export class SqliteTuningStore implements TuningStore {
     return this.kvGetAll(RISK_THRESHOLDS);
   }
 
-  /**
-   * #638: the write door. Every Feedback Loop threshold change lands here —
-   * `runDailyCycle`'s proposals and `autoTighten`'s defensive sweep both — so
-   * this is the one place that can refuse a bound crossing regardless of which
-   * caller proposed it. The refusal is a throw, not a clamp: leaving the prior
-   * in-bound row standing while pretending the write succeeded would tell the
-   * audit trail a limit moved when it did not.
-   *
-   * ADR-0013 requires exactly this ("rejected in code if it would cross a hard
-   * bound") and, since #736 removed the loosen gate, this is the only thing
-   * between an automated loop and an arbitrary risk limit.
-   */
   setRiskThreshold(name: string, value: number): void {
     assertThresholdWithinBounds(name, value, 'SqliteTuningStore.setRiskThreshold');
     this.kvSet(RISK_THRESHOLDS, name, value);
   }
 
-  /**
-   * First-write-wins, exactly as `seedAnalystWeight` (#433). The stake is
-   * higher here: this row is a safety limit, and a restart that overwrote it
-   * would re-open a cap `autoTighten` had narrowed on a kill-line breach.
-   */
   seedRiskThreshold(name: string, value: number): boolean {
-    // Seeding is a write like any other (#638) — the composition root's static
-    // config reaches the live table through here, so an unclamped seed would
-    // re-open at startup exactly what `setRiskThreshold` refuses at runtime
     assertThresholdWithinBounds(name, value, 'SqliteTuningStore.seedRiskThreshold');
     const result = this.db
       .prepare(

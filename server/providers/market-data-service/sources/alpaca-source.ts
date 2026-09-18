@@ -1,15 +1,3 @@
-/**
- * Alpaca DataSource — the ADR-0001 MVP source (ticket #66).
- * See docs/specs/market-data-service-spec.md (Module: Ingestion & Sources):
- * Alpaca supplies historical bars AND streaming quotes for the MVP universe
- * (SPY/QQQ/AAPL/TSLA equities + the BTC-USD/ETH-USD pairs Alpaca supports),
- * normalizing into the shared Bar/latest_mark representation every source
- * produces (`NormalizingDataSource`).
- *
- * Alpaca serves both asset classes, so the calendar is chosen by `asset_class`:
- * equities gate on the injected session calendar, crypto runs 24/7. The client
- * is injected — connection provisioning is an ops task (spec Dependencies).
- */
 import type { RawCandle } from '../ingestion.js';
 import {
   AlwaysOpenCalendar,
@@ -18,9 +6,7 @@ import {
 } from '../trading-calendar.js';
 import { type LiveObservation, NormalizingDataSource } from './normalizing-data-source.js';
 
-/** Alpaca's bar payload, timestamped at the bar's open */
 export interface AlpacaBar {
-  /** RFC-3339 open timestamp */
   t: string;
   o: number;
   h: number;
@@ -29,23 +15,13 @@ export interface AlpacaBar {
   v: number;
 }
 
-/** Alpaca's latest-quote payload */
 export interface AlpacaQuote {
-  /** RFC-3339 quote timestamp */
   t: string;
-  /** Ask price */
   ap: number;
-  /** Bid price */
   bp: number;
 }
 
 export interface AlpacaMarketDataClient {
-  /**
-   * `partial` (issue #292) is the caller's short-read policy: omitted or
-   * `'error'` means an implementation that CAN detect an under-covered range
-   * must fail loudly rather than return fewer than `limit` bars; `'allow'` is
-   * the explicit opt-in for a caller that tolerates a short window
-   */
   getBars(
     symbol: string,
     timeframe: string,
@@ -58,13 +34,7 @@ export interface AlpacaMarketDataClient {
 
 export interface AlpacaSourceOptions {
   asset_class: 'crypto' | 'stocks';
-  /**
-   * Session calendar for equities. Defaults to regular US equity hours; the
-   * real holiday/session table injects here (see trading-calendar.ts).
-   * Ignored for crypto, which is 24/7.
-   */
   calendar?: TradingCalendar | undefined;
-  /** Bar granularity backtest marks derive from */
   markTimeframe?: string | undefined;
 }
 
@@ -108,11 +78,6 @@ export class AlpacaDataSource extends NormalizingDataSource {
     }));
   }
 
-  /**
-   * Midpoint of the latest quote, observed at the quote's own timestamp — not
-   * the request time (spec: staleness). When the equity session is shut this
-   * legitimately returns an old observation rather than failing.
-   */
   protected override async fetchLiveObservation(instrument: string): Promise<LiveObservation> {
     const quote = await this.#client.getLatestQuote(instrument);
 

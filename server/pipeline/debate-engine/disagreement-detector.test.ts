@@ -76,10 +76,6 @@ describe('detectDisagreements', () => {
   });
 
   it('attributes its call to the debate that asked for it (#326)', async () => {
-    // This is the once-per-debate call the spec deliberately bounds. Left
-    // unattributed it would leave a fixed slice of every debate's bill out of
-    // the per-decision cost figure — the one number this instrumentation
-    // exists to produce
     const mock = new MockLlmClient();
     mock.enqueueText(JSON.stringify({ summary: 'ok', conflicts: [] }));
     const views = [makeView({ analyst_id: 'a1' }), makeView({ analyst_id: 'a2' })];
@@ -129,11 +125,6 @@ describe('detectDisagreements', () => {
     expect(result.conflicts).toEqual([]);
   });
 
-  /**
-   * Issue #361: the pinned model fences its JSON, so this detector was
-   * silently degrading to `directional_fallback` on every debate — reporting
-   * "we compared directions" where a real semantic assessment was available
-   */
   it('reads a markdown-fenced LLM response as a semantic result (#361)', async () => {
     const mock = new MockLlmClient();
     mock.enqueueText(
@@ -230,11 +221,6 @@ describe('detectDisagreements', () => {
     expect(result.summary).toBe('No directional disagreement among analysts.');
   });
 
-  /**
-   * #1394. `method: 'directional_fallback'` says the check was downgraded; it
-   * never said why, and this function had no logger at all — so a refusal, a
-   * timeout and an unreadable answer were one indistinguishable degradation.
-   */
   describe('names the swallowed failure (#1394)', () => {
     const VIEWS = [
       makeView({ analyst_id: 'a1', direction: 'bullish' }),

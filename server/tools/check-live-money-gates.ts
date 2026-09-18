@@ -1,47 +1,8 @@
-/**
- * Re-verifies every issue cited in `LIVE_MONEY_GATES` against GitHub (#868).
- *
- * ## What this is for
- *
- * `LIVE_MONEY_GATES` (`server/apps/orchestrator/live-money-gates.ts`) is the list
- * of open blockers an operator is shown at the moment they boot a live-money run.
- * On 2026-08-18 all seven of its entries were closed and had been for days: the
- * module relied on a hand-maintained convention ("verify state before citing"),
- * and the convention failed silently on the one artifact read before real money
- * moves.
- *
- * ## Why this is a command and not a test
- *
- * "Is issue N still open" is not a property of this tree — it changes with no
- * file changing — so no checkout-deterministic check can hold it:
- *
- *  - the test suite makes no real network calls, and a check whose answer depends
- *    on ambient state that varies by machine (here: `gh` auth, network, rate
- *    limits) is a check people learn to disable, which is #866's finding about
- *    `check-path-citations` with authentication in place of a `data/` directory;
- *  - a scheduled GitHub Action would never run — Actions is billing-blocked on
- *    this repo and every job fails in ~3s with 0 steps.
- *
- * So this file is deliberately NOT wired into `lint`, `typecheck`, `test` or
- * `smoke`. It is invoked by a human — `npm run check:live-gates` — and the operator
- * is told to invoke it by the live-boot warning itself, which names the command.
- * That keeps the suite deterministic while making the staleness cheap to settle
- * instead of invisible.
- *
- * ## Testability
- *
- * `checkLiveMoneyGates` takes the state lookup as an argument. The default
- * lookup shells out to `gh`; the tests inject a stub, so nothing under
- * `npm run test` touches the network. The `gh` call happens only under `isMain`.
- */
 
 import { execFile } from 'node:child_process';
 import { isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-// Imported from the module rather than the orchestrator barrel: this is a CLI, and
-// pulling `apps/orchestrator/index.js` would drag the whole runtime in to read two
-// constants
 import {
   LIVE_MONEY_GATES,
   LIVE_MONEY_GATES_VERIFIED_ON,
@@ -49,10 +10,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-/** The states GitHub reports, plus the case where the lookup itself failed */
 export type GateState = 'OPEN' | 'CLOSED' | 'UNKNOWN';
 
-/** Looks up one issue's state. Injected so tests never reach the network. */
 export type IssueStateLookup = (issue: number) => Promise<GateState>;
 
 export interface GateVerdict {
@@ -64,19 +23,10 @@ export interface GateVerdict {
 export interface GateReport {
   readonly verifiedOn: string;
   readonly verdicts: readonly GateVerdict[];
-  /** Cited issues that have closed — the list is stale by exactly these */
   readonly stale: readonly GateVerdict[];
-  /** Cited issues whose state could not be determined; not a staleness claim */
   readonly unknown: readonly GateVerdict[];
 }
 
-/**
- * Asks the lookup for each cited issue's state and partitions the answers.
- *
- * A failed lookup is `UNKNOWN`, never `CLOSED`: reporting "this gate has closed"
- * because `gh` was not authenticated would be exactly the false clearance this
- * whole module exists to prevent.
- */
 export async function checkLiveMoneyGates(
   lookup: IssueStateLookup,
   gates: readonly { readonly issue: number; readonly gap: string }[] = LIVE_MONEY_GATES,
@@ -101,7 +51,6 @@ export async function checkLiveMoneyGates(
   };
 }
 
-/** The default lookup: `gh issue view <N> --json state`. Never called by tests. */
 export const ghIssueState: IssueStateLookup = async (issue) => {
   const { stdout } = await execFileAsync('gh', ['issue', 'view', String(issue), '--json', 'state']);
   const parsed: unknown = JSON.parse(stdout);

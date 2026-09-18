@@ -3,17 +3,6 @@ import type { TraderDecisionRecord } from '../decision-records.js';
 import { openSharedStore } from './open-shared-store.js';
 import { SqliteRiskLogStore, SqliteTraderLogStore } from './sqlite-decision-record-stores.js';
 
-// #726: `risk_log.status` gained `'error'` in migration 0028 (widening a CHECK
-// constraint requires a full table rebuild in SQLite — see that migration's
-// doc comment). Every test exercising the new status elsewhere in this repo
-// (per-subclass-deployment-cap.test.ts, direct-bind.test.ts) uses a fake
-// `RiskLogStore`, so nothing actually proves the rebuilt CHECK constraint
-// accepts the value, or that the column order in the migration's
-// `INSERT INTO risk_log_new SELECT * FROM risk_log` rebuild survives a real
-// write/read round-trip through `SqliteRiskLogStore`'s own SQL. #549's
-// precedent for this exact gap: "version 24 in schema_migrations alone would
-// stay green through a column-name typo in the migration file — every marker
-// query would then fail only at runtime."
 describe('SqliteRiskLogStore (#726)', () => {
   function makeRecord(overrides: Partial<Parameters<SqliteRiskLogStore['write']>[0]> = {}) {
     return {
@@ -74,12 +63,6 @@ describe('SqliteRiskLogStore (#726)', () => {
   });
 
   it('preserves "approved" and "rejected" alongside the new "error" through the same table rebuild', () => {
-    // The prior test only proves the rebuild ACCEPTS 'error'; it says nothing
-    // about whether the rebuild PRESERVED the two pre-existing values. A typo
-    // in 0028's CHECK(status IN ('approved', 'rejcted', 'error')) would stay
-    // green through every other test in this repo — nothing else writes a
-    // 'rejected' row through this store to a real (non-fake) database, and
-    // npm run smoke never produces a rejection either
     const db = openSharedStore(':memory:');
     const store = new SqliteRiskLogStore(db);
 
@@ -115,16 +98,6 @@ describe('SqliteRiskLogStore (#726)', () => {
   });
 });
 
-// #748: `trader_log` gained `exit_reason` in migration 0030, and the INSERT in
-// `SqliteTraderLogStore` gained a column plus a bind. That pair is exactly the
-// shape #549 warned about — a version row in `schema_migrations` stays green
-// through a column-name typo, and every OTHER test that writes a trader record
-// in this repo uses a fake `TraderLogStore`, so nothing proves the real SQL
-// still binds every value to the right column, in order. A silent off-by-one
-// here would land `skip_reason`'s value in `exit_reason` and shift every
-// sizing scalar one place, which no type checks. (#1109 added three more
-// columns — `decision_class` and the two `reason_detail_*` — to the same
-// INSERT; see the round-trip test below for that pair.)
 describe('SqliteTraderLogStore exit_reason (#748)', () => {
   function makeRecord(overrides: Partial<TraderDecisionRecord> = {}): TraderDecisionRecord {
     return {
@@ -162,8 +135,6 @@ describe('SqliteTraderLogStore exit_reason (#748)', () => {
         | { intent_type: string; exit_reason: string | null; skip_reason: string | null }
         | undefined;
       expect(row?.exit_reason).toBe(exit_reason);
-      // Pinned so a bind shifted by one place cannot pass: an off-by-one would
-      // put the reason in `skip_reason` and `intent_type` in `exit_reason`
       expect(row?.intent_type).toBe('exit');
       expect(row?.skip_reason).toBeNull();
     }
@@ -182,12 +153,6 @@ describe('SqliteTraderLogStore exit_reason (#748)', () => {
   });
 });
 
-// #1109: `trader_log` gained `decision_class` and the two `reason_detail_*`
-// columns in migration 0042. This is the CURRENT behaviour the issue's
-// acceptance criteria says must fail without the fix: before this ticket
-// `TraderDecisionRecord` had no such fields, so a no_trade row was
-// unclassified everywhere — durable record included, not only the process
-// log a join back to `debate_log` was needed to explain
 describe('SqliteTraderLogStore decision_class and reason_detail (#1109)', () => {
   function makeSkipRecord(overrides: Partial<TraderDecisionRecord> = {}): TraderDecisionRecord {
     return {

@@ -1,18 +1,3 @@
-/**
- * Cross-restart rehydration of adapter state (#287, closing #294/#295).
- *
- * Every "restart" here is a genuinely fresh adapter instance built over the
- * SAME database FILE. That is not incidental: `openSharedStore(':memory:')`
- * hands each connection its own private database, so a two-instance test on
- * `:memory:` would build instance B over an empty store and pass while proving
- * nothing at all. Temp files it is.
- *
- * The discriminating assertion for the acceptance case is not "the legs exist
- * after the restart" — it is that the venue was asked to CREATE each leg at
- * most once across BOTH instances. Double-arming a live lot is the failure
- * this whole ticket exists to make impossible, and it looks identical to
- * success in any assertion that only counts final state.
- */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,21 +35,17 @@ const STOCK_REQUEST: NativeBracketRequest = {
   asset_class: 'stocks',
 };
 
-/** Pacing has its own suites; these are about state, not the wall clock */
 function permissiveLimiter(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
 }
 
-/** #298's age-out, stated here rather than inherited from the adapter's default */
 const AGE_OUT_MS = 15 * 60_000;
 const FIRST_SEEN = new Date(FILL_TS + 60_000);
 
-/** A clock frozen at one instant — each "process" below gets its own */
 function fixedClock(now: Date): Clock {
   return { now: () => now };
 }
 
-/** The operator escalation port (#298), recording what reached a human */
 function recordingAlerts(): UnpricedFillAlertChannel & { readonly posted: UnpricedFillAlert[] } {
   const posted: UnpricedFillAlert[] = [];
   return {
@@ -75,7 +56,6 @@ function recordingAlerts(): UnpricedFillAlertChannel & { readonly posted: Unpric
   };
 }
 
-/** #586's required seam — nothing in these cases can double-fill */
 function noopDoubleFillAlerts(): OcoDoubleFillAlertChannel {
   return { postOcoDoubleFillAlert: async () => {} };
 }
@@ -83,7 +63,6 @@ function noopDoubleFillAlerts(): OcoDoubleFillAlertChannel {
 const tempDirs: string[] = [];
 const openDbs: StoreHandle[] = [];
 
-/** A real file, for the reason in the file header */
 function openFileStore(): { path: string; db: StoreHandle } {
   const dir = mkdtempSync(join(tmpdir(), 'samurai-broker-state-'));
   tempDirs.push(dir);
@@ -91,7 +70,6 @@ function openFileStore(): { path: string; db: StoreHandle } {
   return { path, db: reopen(path) };
 }
 
-/** A NEW connection over the same file — the "restart" */
 function reopen(path: string): StoreHandle {
   const db = openSharedStore(path);
   openDbs.push(db);
@@ -103,13 +81,9 @@ afterEach(() => {
   while (tempDirs.length > 0) rmSync(tempDirs.pop() as string, { recursive: true, force: true });
 });
 
-// Alpaca — the bracket index is a cache, but a load-bearing one
-
 function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   return {
     id: 'parent-1',
-    // Alpaca reports the symbol on the bracket PARENT and not on its legs, so
-    // it is the only source for the instrument an unpriced-fill alert names
     symbol: 'AAPL',
     status: 'partially_filled',
     filled_qty: '1',
@@ -157,9 +131,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     });
     await first.submitBracket(STOCK_REQUEST);
 
-    // The lot is `partially_filled`, so `reconcile()` skips it and never calls
-    // `getOrder` to warm the cache. Without the journal, `fetchNewFills` would
-    // iterate an empty map and report "no new fills" forever
     const second = new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
@@ -175,19 +146,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
   });
 
   it('recovers a bracket whose journal write never happened, via the venue lookup', async () => {
-    // PR #310 review (deepseek): "a crash between `submitOrder` and
-    // `saveBracket` leaves an orphaned order at the broker with no local cache
-    // entry". The order IS at the venue and the journal row is missing — but
-    // for Alpaca that window is closed by an interlock rather than by a
-    // placeholder row, and this test is the proof
-    //
-    // `execute()` writes the lot `pending` BEFORE calling the broker
-    // (execute.ts) and only advances it to `submitted` AFTER `submitBracket`
-    // RETURNS. So a missing journal row implies `submitBracket` did not
-    // return, which implies the lot is still `pending`, which is in-flight
-    // (reconcile.ts `IN_FLIGHT_ORDER_STATES`) — and startup reconcile runs before the first
-    // fill poll. Alpaca's `getOrder` answers from the VENUE by client order
-    // id, needing no local state, so it repopulates both cache and journal
     const { path, db } = openFileStore();
     const order = alpacaOrder();
     const client = {
@@ -196,7 +154,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       getOrderByClientOrderId: vi.fn(async () => order),
     } as unknown as AlpacaBrokerClient;
 
-    // The venue call lands; the journal write is what dies
     const dyingState = new SqliteBrokerStateStore(db);
     vi.spyOn(dyingState, 'saveBracket').mockImplementation(() => {
       throw new Error('simulated DB failure after the order reached the venue');
@@ -211,10 +168,8 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     });
     await expect(first.submitBracket(STOCK_REQUEST)).rejects.toThrow(/simulated DB failure/);
 
-    // Nothing was journalled — the reviewer's premise, reproduced
     expect(new SqliteBrokerStateStore(db).loadBrackets('alpaca')).toEqual([]);
 
-    // restart
     const second = new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
@@ -225,8 +180,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     });
     expect(await second.fetchNewFills(SINCE)).toEqual([]);
 
-    // Startup reconcile settles the still-`pending` lot, which for Alpaca is a
-    // direct venue query. That single call restores the cache AND the journal.
     await second.getOrder('idem-1', 'AAPL');
 
     expect(await second.fetchNewFills(SINCE)).toHaveLength(1);
@@ -236,12 +189,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
   });
 
   it('keeps the unpriced-fill age-out clock running across a restart (#298)', async () => {
-    // The durability requirement, and the reason the clock is a table rather
-    // than a field on the adapter: a 14-day unattended soak (#238) contains
-    // restarts, and an in-process clock resets to zero on every one of them
-    // A fill the venue will never price would then be re-observed as "brand
-    // new" forever and age out never — passing every in-process test while
-    // failing the only scenario the ticket is about
     const { path, db } = openFileStore();
     const unpriced = alpacaOrder({
       status: 'filled',
@@ -268,13 +215,9 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     });
     await first.submitBracket(STOCK_REQUEST);
 
-    // First process: the anomaly is seen and recorded, and is not yet old
     await first.fetchNewFills(SINCE).catch(() => undefined);
     expect(firstAlerts.posted).toEqual([]);
 
-    // restart
-    // A genuinely fresh adapter over the same database file: new bracket map,
-    // new everything, and a clock reading one threshold later
     const secondAlerts = recordingAlerts();
     const second = new AlpacaBrokerAdapter({
       client,
@@ -287,9 +230,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       clock: fixedClock(new Date(FIRST_SEEN.getTime() + AGE_OUT_MS)),
     });
 
-    // On its FIRST sweep — not merely eventually. A restart that restarted the
-    // clock would instead have to wait out another full threshold here, which
-    // is exactly the bug, and "it alerts eventually" would not catch it
     await second.fetchNewFills(SINCE).catch(() => undefined);
 
     expect(secondAlerts.posted).toMatchObject([
@@ -300,15 +240,12 @@ describe('AlpacaBrokerAdapter across a restart', () => {
         leg: 'entry',
         instrument: 'AAPL',
         qty: 1,
-        // Stamped by the FIRST process, read back by the second
         first_seen_at: FIRST_SEEN,
         unpriced_for_ms: AGE_OUT_MS,
       },
     ]);
   });
 });
-
-// The store itself
 
 describe('SqliteBrokerStateStore', () => {
   it('scopes every read to one venue', () => {
@@ -403,8 +340,6 @@ describe('SqliteBrokerStateStore', () => {
       arm_attempt: 0,
     });
 
-    // The rehydration path knows the ids and not the request; it must not
-    // overwrite what the submit already knew
     store.recordBracketOrderIds('alpaca', 'idem-1', {
       entry_order_id: 'parent-1',
       stop_order_id: 'leg-stop',
@@ -433,10 +368,6 @@ describe('SqliteBrokerStateStore', () => {
       arm_attempt: 0,
     });
 
-    // The venue has since cancelled the children and no longer reports them
-    // Blanking the ids would drop them from the adapter's own order-id index
-    // on the next restart, and executions already booked under them would go
-    // unclaimed — #295 reinstated by the fix that was meant to close it
     store.recordBracketOrderIds('saxo', 'idem-1', {
       entry_order_id: 'p1',
       stop_order_id: null,
@@ -472,11 +403,6 @@ describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
   });
 
   it('returns rows oldest-first even when seenAt is non-monotonic across inserts', () => {
-    // Recorded out of clock order: `late` is inserted first (earlier Map
-    // position) but its `first_seen_at` is LATER than `early`'s. Insertion
-    // order and clock order disagree here, which is exactly the case the
-    // interface doc's "oldest first" promise, and Map iteration order alone,
-    // do not agree on
     const store = new InMemoryBrokerStateStore();
     store.recordUnpricedFill(
       'alpaca',
@@ -496,11 +422,6 @@ describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
   });
 
   it('breaks a first_seen_at tie by insertion order, mirroring SQL rowid', () => {
-    // Three rows share one `first_seen_at`. The SQL implementation's tiebreak
-    // is `rowid`, i.e. the order rows were physically inserted; the double's
-    // faithful analogue is Map insertion order, since `recordUnpricedFill`'s
-    // upsert (`Map.set` on an existing key) leaves a row's position exactly
-    // where SQLite's `ON CONFLICT DO UPDATE` leaves its rowid — untouched
     const store = new InMemoryBrokerStateStore();
     const tie = new Date('2026-09-05T09:00:00Z');
     store.recordUnpricedFill('alpaca', unpriced('lot-first', 'bf-1'), tie);
@@ -515,10 +436,6 @@ describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
   });
 
   it('keeps a re-observed row at its original insertion position for the tiebreak', () => {
-    // `lot-a` is re-observed (upserted) AFTER `lot-b` is first recorded, at the
-    // same first_seen_at. If the upsert moved `lot-a` to the end of Map
-    // iteration order, the tiebreak would silently stop mirroring rowid, and
-    // this would return ['lot-b', 'lot-a'] instead
     const store = new InMemoryBrokerStateStore();
     const tie = new Date('2026-09-05T09:00:00Z');
     store.recordUnpricedFill('alpaca', unpriced('lot-a', 'bf-a'), tie);
@@ -548,12 +465,6 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
     qty: 1,
   });
 
-  /**
-   * Seeds a fresh in-memory double and a fresh SQLite store — a real
-   * `better-sqlite3` handle, migrated same as production — with the same
-   * ops in the same order, so any order divergence between the two
-   * implementations is the ONLY thing that can move the assertion
-   */
   function seedBoth(ops: readonly SeedOp[]): {
     inMemory: InMemoryBrokerStateStore;
     sqlite: SqliteBrokerStateStore;
@@ -631,11 +542,6 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
   });
 
   it('breaks a first_seen_at tie by physical insertion order, identically on both stores', () => {
-    // Ids run in DESCENDING alphabetical order (zebra, mango, apple) —
-    // client_order_id is part of the table's primary key, so a planner that
-    // seeks that index would sort ties ASCENDING alphabetically instead of
-    // by insertion, giving ['lot-apple', 'lot-mango', 'lot-zebra']. Ascending
-    // ids would let that divergence hide behind agreement with insertion order
     const tie = new Date('2026-09-05T09:00:00Z');
     const stores = seedBoth([
       { venue: 'alpaca', clientOrderId: 'lot-zebra', brokerFillId: 'bf-1', seenAt: tie },
@@ -650,10 +556,6 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
   });
 
   it('leaves a re-observed row at its original tiebreak position, identically on both stores', () => {
-    // `lot-zebra` is re-observed (upserted) AFTER `lot-apple` is first
-    // recorded, at the same first_seen_at — the upsert must not move it to
-    // the end. `zebra`/`apple` (not `a`/`b`) so an alphabetical tiebreak
-    // would visibly disagree with the asserted insertion order
     const tie = new Date('2026-09-05T09:00:00Z');
     const stores = seedBoth([
       { venue: 'alpaca', clientOrderId: 'lot-zebra', brokerFillId: 'bf-z', seenAt: tie },
@@ -668,12 +570,6 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
   });
 
   it('keeps each venue in its own order when two venues are interleaved, identically on both stores', () => {
-    // The `WHERE venue = ?` predicate must not disturb the surviving rows'
-    // relative order for the venue actually loaded. `alpaca-zebra` and
-    // `alpaca-apple` additionally tie on `first_seen_at` and run reverse-
-    // alphabetical, so the predicate is exercised alongside the tiebreak too
-    // — not just against distinct-seenAt rows the predicate could pass
-    // through unchanged either way
     const tie = new Date('2026-09-05T09:02:00Z');
     const stores = seedBoth([
       {

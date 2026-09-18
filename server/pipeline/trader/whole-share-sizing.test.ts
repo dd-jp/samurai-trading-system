@@ -1,26 +1,3 @@
-/**
- * #941 — `whole_share_sizing`, the venue's quantity grid applied to the entry.
- *
- * The constraint is MEASURED, not assumed. Probed live against
- * `paper-api.alpaca.markets` on 2026-08-30: a bracket order at any fractional
- * quantity is refused `422 42210000 fractional orders must be simple orders`
- * — long and short alike — and a fractional short is refused outright even as
- * a plain limit (`fractional orders cannot be sold short`). The same order at a
- * whole-share quantity, short included, is accepted. ADR-0018 D5 sizes by CASH,
- * so nearly every intent it produces is fractional, and two of the paper soak's
- * three entries were rejected at submission for exactly this.
- *
- * The worked example every size assertion below is pinned to, under
- * `DEFAULT_TRADER_CONFIG` with ATR = 2 and entry = 100:
- *   stop distance  = atr_k (2) x ATR (2)                        = 4
- *   conviction     = (0.775 - 0.55) / (1 - 0.55)                = 0.5
- *   base risk      = max_risk_per_trade (0.01) x 1.0 x 0.5      = 0.005
- *   risk fraction  = 0.005 x 1 (converged) x 0.75 (no precedent) = 0.00375
- *   size           = equity x 0.00375 / 4
- * At `EQUITY` that is 93.75 shares — deliberately fractional, so the floor has
- * something to bite on and a test that silently stopped exercising it would
- * fail rather than pass vacuously.
- */
 import {
   AlwaysOpenCalendar,
   type Bar,
@@ -44,7 +21,6 @@ const INSTRUMENT = 'AAPL';
 const DECISION_BAR = new Date('2026-07-15T10:00:00Z');
 const ENTRY_PRICE = 100;
 const EQUITY = 100_000;
-/** `EQUITY x 0.00375 / 4` — see the header's worked example */
 const UNQUANTISED_SIZE = 93.75;
 
 class ManualClock implements Clock {
@@ -164,11 +140,6 @@ describe('whole_share_sizing quantises the ENTRY to the venue grid (#941)', () =
   });
 
   it('floors DOWN rather than to nearest — 93.75 must not become 94', async () => {
-    // The direction of the rounding is the whole point. Rounding to nearest
-    // would submit MORE than the deployment D5 sized and more than the caps
-    // the Risk Manager is about to approve against, turning a venue
-    // accommodation into an unrecorded amendment of ADR-0018 D5. 93.75 is the
-    // adversarial value precisely because nearest-rounding takes it UP
     const intent = await decide(traderInput());
 
     expect(intent?.size).toBeLessThan(UNQUANTISED_SIZE);
@@ -176,11 +147,6 @@ describe('whole_share_sizing quantises the ENTRY to the venue grid (#941)', () =
   });
 
   it('floors the SHORT side toward zero exposure too, not away from it', async () => {
-    // `size` is unsigned — direction lives in `side` — so a naive `Math.trunc`
-    // and a naive `Math.round` diverge here in opposite ways. A short floored
-    // upward is a larger short, i.e. the same envelope breach as a long
-    // rounded up, and it is the side the venue refuses outright when
-    // fractional, so it is the side most likely to be special-cased wrongly
     const intent = await decide(
       traderInput({ debate: debateResult({ direction: 'bearish', position: 'Enter short.' }) }),
     );
@@ -198,10 +164,6 @@ describe('whole_share_sizing quantises the ENTRY to the venue grid (#941)', () =
   });
 
   it('leaves the size untouched when the flag is off, so backtests are unmoved', async () => {
-    // The reason the flag exists rather than the floor being unconditional:
-    // flooring changes the FILL SIZE, so switching it on globally would move
-    // every backtest and fixture result and make runs on either side of #941
-    // incomparable
     const intent = await decide(traderInput({ config: configWith({ whole_share_sizing: false }) }));
 
     expect(intent?.size).toBe(UNQUANTISED_SIZE);
@@ -216,9 +178,6 @@ describe('whole_share_sizing records the deviation it introduces (#941)', () => 
   });
 
   it('omits the record when the floor changed nothing', async () => {
-    // Presence must mean "this intent under-deploys D5", not merely "the flag
-    // is on" — otherwise the field cannot be used to find the shortfall. At
-    // 4x the equity the size is exactly 375, already on the grid
     const intent = await decide(traderInput({ equity: async () => EQUITY * 4 }));
 
     expect(intent?.size).toBe(375);
@@ -233,7 +192,6 @@ describe('whole_share_sizing records the deviation it introduces (#941)', () => 
 });
 
 describe('an entry that cannot buy one whole share (#941)', () => {
-  /** `1_000 x 0.00375 / 4` = 0.9375 shares, i.e. $93.75 of intended notional. */
   const SUB_ONE_SHARE_EQUITY = 1_000;
 
   it('skips as rounds_to_zero_shares rather than submitting a zero quantity', async () => {
@@ -246,10 +204,6 @@ describe('an entry that cannot buy one whole share (#941)', () => {
   });
 
   it('is NOT caught by the dust floor — the intended notional clears it comfortably', async () => {
-    // The reason this needs its own guard rather than falling through to
-    // `min_viable_notional`: 0.9375 shares of a $100 name is $93.75 of
-    // intended notional against a $10 dust floor. Left to that check it would
-    // pass, and a zero quantity would go to the venue
     expect(0.9375 * ENTRY_PRICE).toBeGreaterThan(DEFAULT_TRADER_CONFIG.min_viable_notional);
 
     const unquantised = await decide(
@@ -263,10 +217,6 @@ describe('an entry that cannot buy one whole share (#941)', () => {
   });
 
   it('still reports below_min_notional when the STRATEGY sized nothing (#870)', async () => {
-    // A conviction exactly at the floor gives a multiplier of 0 and a size of
-    // exactly 0. That is the strategy declining to deploy, not the venue's
-    // grid eating a real position, and conflating the two would make a damped
-    // gate indistinguishable in a soak log from a sizing/universe mismatch
     const outcome = await decideWithReason(
       traderInput({
         debate: debateResult({ confidence: DEFAULT_TRADER_CONFIG.conviction_floor }),
@@ -306,10 +256,6 @@ describe('the flatten is never quantised (#941)', () => {
   }
 
   it('flattens the held quantity verbatim, fraction and all', async () => {
-    // Under this flag every entry fills whole, so a fractional holding should
-    // not arise — but one CAN survive from a lot opened before the flag, and a
-    // flatten that floored it would strand 0.5 shares overnight, which is the
-    // one thing ADR-0014's flat-by-close horizon forbids
     expect(CLOSE.getTime() - INSIDE_WINDOW.getTime()).toBeLessThan(
       DEFAULT_TRADER_CONFIG.flatten_before_close_ms,
     );
@@ -326,9 +272,6 @@ describe('the flatten is never quantised (#941)', () => {
   });
 
   it('does not zero a sub-one-share flatten', async () => {
-    // The failure mode with teeth: a 0.4-share residual floored to zero is not
-    // a smaller exit, it is NO exit, and the position carries overnight while
-    // the log records a clean flatten decision
     const outcome = await decideWithReason(
       traderInput({
         clock: new ManualClock(INSIDE_WINDOW),

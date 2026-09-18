@@ -80,17 +80,9 @@ describe('RateLimitedLlmClient', () => {
       new RateLimitedLlmClient(failing, rateLimiter, 'crypto').complete(request()),
     ).rejects.toThrow('transport blew up');
 
-    // The venue counted the request the moment it went out; a local counter
-    // that only credits successes drifts under exactly the failure conditions
-    // it exists to protect
     expect(order).toEqual(['recorded', 'issued']);
   });
 
-  /**
-   * The #347/#373 cancellation contract. The decorator adds no wait of its own
-   * (see the class doc), so the only way it can create a zombie is by issuing
-   * — and billing — a call for a debate that has already been cancelled.
-   */
   describe('cancellation', () => {
     it('refuses to issue a call whose signal is already aborted', async () => {
       const inner = stubClient();

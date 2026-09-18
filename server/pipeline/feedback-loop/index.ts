@@ -1,9 +1,3 @@
-/**
- * Feedback Loop (Stage 6) — see docs/specs/feedback-loop-spec.md, epic #59.
- * Implemented ticket-by-ticket: #91 is the daily batch cycle (attribution +
- * bounded/guardrailed tuning); #92 is event-driven setup-store R-labelling
- * on trade close. #93 is metrics recomposition + kill-threshold breach alerting.
- */
 
 export {
   ARM_DIVERGENCE_RETURN_GAP_PCT,

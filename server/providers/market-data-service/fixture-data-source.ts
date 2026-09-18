@@ -1,12 +1,5 @@
-/**
- * In-memory `DataSource` for ticket #64 — a concrete implementation of the
- * source port (not a test-only mock) so `getMark`'s backtest-derives-from-
- * last-bar behaviour is genuine shipped code. Ticket #66 replaces this with
- * vendor-backed sources against the same `DataSource` port.
- */
 import type { Bar, BarWindow, DataSource, Mark, Quote } from './types.js';
 
-/** The live latest-mark seed this fixture serves in 'live' mode */
 export interface FixtureLiveMark {
   price: number;
   observed_at: Date;
@@ -18,7 +11,6 @@ export class FixtureDataSource implements DataSource {
     private readonly bars: Bar[],
     private readonly liveMark: FixtureLiveMark,
     private readonly assetClass: 'crypto' | 'stocks',
-    /** Omitted entirely to model a source with no bid/ask (e.g. historical stock bars). */
     private readonly quote?: Quote,
   ) {}
 

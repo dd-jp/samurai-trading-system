@@ -1,17 +1,3 @@
-/**
- * Metrics recomposition + kill-threshold breach alerting (#93). See
- * docs/specs/feedback-loop-spec.md ("Module: Metrics & Revalidation") and
- * user story 13.
- *
- * `computeMetrics` recomposes the validation library's `MetricsSuite` and
- * periodic DSR/PBO/walk-forward output into `MetricsReport` — it reimplements
- * none of that math (acceptance criterion #1). Its own job is narrow: decide
- * whether any of the four kill-line conditions breached, and if so, alert the
- * human via the trade channel and defensively auto-tighten every risk
- * threshold. Nobody owns the kill/rework call under full automation — a
- * persisting breach should produce a mechanical halt, but this module has no
- * halt primitive; it only alerts and auto-tightens.
- */
 import { assertThresholdsWithinBounds } from '../../shared/index.js';
 import { applyGuardrail } from './guardrails.js';
 import type {
@@ -27,11 +13,6 @@ const OOS_SHARPE_UNDER_MIN = 'oos_sharpe_under_min';
 const DSR_INSIGNIFICANT = 'dsr_insignificant';
 const LIVE_BACKTEST_DIVERGENCE_OVER_MAX = 'live_backtest_divergence_over_max';
 
-/**
- * The three lines that need a `RevalidationSnapshot`. Absent one — every
- * non-revalidation day — none of them can be evaluated, which is reported in
- * `MetricsReport.not_evaluated` rather than passing silently (#327).
- */
 const REVALIDATION_GATED_KILL_LINES: readonly string[] = [
   PBO_OVER_MAX,
   OOS_SHARPE_UNDER_MIN,
@@ -46,13 +27,6 @@ function mean(values: readonly number[]): number {
   return sum / values.length;
 }
 
-/**
- * Relative drop of live Sharpe below the backtest reference, floored at 0: a
- * live Sharpe AT OR ABOVE the reference is not divergence, whatever its sign.
- * `backtest_reference_sharpe <= 0` has no meaningful relative drop, so it
- * never breaches on this check alone — a broken reference should not manufacture
- * a false breach.
- */
 function liveBacktestDivergence(liveSharpe: number, backtestReferenceSharpe: number): number {
   if (backtestReferenceSharpe <= 0) {
     return 0;
@@ -60,26 +34,6 @@ function liveBacktestDivergence(liveSharpe: number, backtestReferenceSharpe: num
   return Math.max(0, (backtestReferenceSharpe - liveSharpe) / backtestReferenceSharpe);
 }
 
-/**
- * #638: the kill lines, refused rather than softened.
- *
- * PBO 0.05 is the one hard kill criterion in the whole record (CONTEXT.md,
- * feedback-loop-spec.md story 13, `PBO_REJECT_THRESHOLD`), and FL holds the
- * only MUTABLE copy of it — so this config is where "reject if PBO > 0.05"
- * could quietly become "reject if PBO > 0.5". The two Sharpe lines are the
- * same criterion pointing downward: lowering either one softens the kill.
- *
- * Called from the composition root at boot AND on every metrics cycle, because
- * the two answer different questions — the boot check refuses to start, and
- * the per-cycle check refuses to REPORT a kill-line verdict computed against a
- * line that is not the recorded one.
- *
- * An ABSENT `kill_thresholds` block is not this guard's business and returns
- * quietly: `FeedbackConfig` requires the field, so absence only reaches here
- * through a cast, and it is a missing-config failure owned by the config's own
- * required-field checks. Reporting it as a bound crossing would put the wrong
- * name on it. What this refuses is a PRESENT value that crosses a line.
- */
 export function assertKillThresholdsWithinBounds(
   kill: KillThresholds | undefined,
   where: string,
@@ -125,13 +79,6 @@ function detectBreaches(input: MetricsInput): string[] {
   return breaches;
 }
 
-/**
- * Step every declared risk threshold toward its safe extreme by at most
- * `max_step` — the defensive response to a kill-line breach, and the one
- * dial move that needs no proposal. Reuses `applyGuardrail` with the target
- * pinned at the tighten-direction bound, so a threshold already at its
- * extreme is a no-op rather than an out-of-band write.
- */
 function autoTighten(input: MetricsInput, now: Date): void {
   const { tuning, adjustments, config } = input;
   const thresholds = tuning.getRiskThresholds();
@@ -162,20 +109,12 @@ function autoTighten(input: MetricsInput, now: Date): void {
   }
 }
 
-/**
- * Which kill-lines this input cannot answer at all. Computed from the same
- * two conditions `detectBreaches` skips on, so the report can never claim a
- * line passed when it was never run (#327).
- */
 function notEvaluated(input: MetricsInput): string[] {
   const lines: string[] = [];
 
   if (input.revalidation === undefined) {
     lines.push(...REVALIDATION_GATED_KILL_LINES);
   }
-  // Mirrors `liveBacktestDivergence`'s guard exactly. The `0` return stays —
-  // a broken reference must not manufacture a breach — but the resulting
-  // "no breach" is not evidence of health, so it is recorded as un-run
   if (input.backtest_reference_sharpe <= 0) {
     lines.push(LIVE_BACKTEST_DIVERGENCE_OVER_MAX);
   }

@@ -1,9 +1,3 @@
-/**
- * Setup-vector embedding tests (#432). The vector is what makes cosine
- * retrieval mean anything, so these pin the two properties the retrieval
- * depends on: scale-invariance across instruments, and a stable feature
- * layout.
- */
 import type { Bar } from '../../providers/market-data-service/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
 import { cosineSimilarity } from './cosine-precedent.js';
@@ -43,14 +37,6 @@ function debate(overrides: Partial<DebateResult> = {}): DebateResult {
   };
 }
 
-/**
- * A recorded-looking two-round history whose LAST element is the final
- * position, matching the direction of causality in
- * `buildAnalystContributions` (final position is read off the end of the
- * recorded history, never used to fabricate it). `[final_position]` — a
- * one-element array whose only element is the parameter itself — was the
- * fabrication #599/#615/#618 removed everywhere else in the tree (#624).
- */
 function contribution(final_position: 'bullish' | 'bearish' | 'neutral') {
   const opening: 'bullish' | 'bearish' | 'neutral' =
     final_position === 'neutral' ? 'bullish' : 'neutral';
@@ -61,10 +47,6 @@ function contribution(final_position: 'bullish' | 'bearish' | 'neutral') {
     stance_during_debate,
     final_position,
     rationale: '',
-    // `opening` is always different from `final_position` by construction
-    // above, so this two-round history always has exactly one transition —
-    // computeInfluenceScore's rule (changes / (rounds - 1)) gives 1, not a
-    // hand-picked reading
     influence_score: 1,
   };
 }
@@ -120,15 +102,12 @@ describe('buildSetupVector', () => {
   it('expresses market features as fractions of price', () => {
     const vector = buildSetupVector(debate(), MARKET);
 
-    // atr/entry, trend over the window, stopDistance/entry
     expect(vector.market_features[0]).toBeCloseTo(0.02, 10);
     expect(vector.market_features[1]).toBeCloseTo((100 - 98) / 98, 10);
     expect(vector.market_features[2]).toBeCloseTo(0.04, 10);
   });
 
   it('embeds two instruments at different price levels identically when the setup is the same', () => {
-    // The whole point of dividing by entry. A raw-price ATR would put BTC and
-    // AAPL in different regions of the space no matter how alike the setups
     const aapl = buildSetupVector(debate(), {
       entry: 100,
       atr: 2,
@@ -164,8 +143,6 @@ describe('buildSetupVector', () => {
   });
 
   it('separates a floored setup from a genuinely quiet one', () => {
-    // Same tiny ATR; one had the vol floor engaged and one did not. If the
-    // stop-width feature were dropped these would be indistinguishable
     const quiet = buildSetupVector(debate(), { ...MARKET, atr: 0.01, stopDistance: 0.02 });
     const floored = buildSetupVector(debate(), { ...MARKET, atr: 0.01, stopDistance: 0.4 });
 

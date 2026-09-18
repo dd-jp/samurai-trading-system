@@ -14,15 +14,10 @@ import type { Logger } from '../types.js';
 
 const { onTradeCloseMock } = vi.hoisted(() => ({ onTradeCloseMock: vi.fn() }));
 
-// Path kept in step with the move by hand: `vi.mock`'s specifier is a call
-// argument, not an import, so no automated rewrite sees it — and a stale one
-// fails OPEN (the mock silently stops applying and the real module runs),
-// which is why this is the only place in the tree that needed a manual fix
 vi.mock('../../../pipeline/feedback-loop/on-trade-close.js', () => ({
   onTradeClose: onTradeCloseMock,
 }));
 
-// Imported after the mock so `withOnTradeClose` picks up the mocked `onTradeClose`
 const { withOnTradeClose } = await import('./on-trade-close-hookup.js');
 
 function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
@@ -45,16 +40,10 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   };
 }
 
-/** The flat-lot advance shape `ingestFills()` emits — fills plus the close */
 function closingAdvance(trade: ClosedTrade): LotAdvance {
   return { idempotency_key: trade.idempotency_key, fills: [], closed_trade: trade };
 }
 
-/**
- * Records every call it receives — enough to prove `withOnTradeClose` is a
- * transparent pass-through on every method except `applyLotAdvance`, and
- * that `applyLotAdvance` itself still reaches the underlying store
- */
 class FakeSharedStore implements SharedStore {
   applyLotAdvanceCalls: LotAdvance[] = [];
   shouldThrow = false;
@@ -143,7 +132,6 @@ class FakeSharedStore implements SharedStore {
   }
 }
 
-/** Records every entry rather than writing to stdout, for assertions */
 class FakeLogger implements Logger {
   entries: Parameters<Logger['log']>[0][] = [];
   log(entry: Parameters<Logger['log']>[0]): void {
@@ -203,8 +191,6 @@ describe('withOnTradeClose', () => {
     const decorated = withOnTradeClose(store, input, logger);
     const trade = makeTrade();
 
-    // Resolves (does not reject) even though onTradeClose threw — the
-    // closed_trades write already succeeded and must not be reported as failed
     await expect(decorated.applyLotAdvance(closingAdvance(trade))).resolves.toBeUndefined();
 
     expect(store.applyLotAdvanceCalls).toHaveLength(1);

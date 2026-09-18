@@ -1,30 +1,16 @@
-/**
- * Cosine precedent retrieval + sizing bound (ticket #75).
- * See docs/specs/trader-spec.md "Module: Cosine Precedent Retrieval" and
- * "Cosine Precedent" user stories (12-16). Feeds
- * `OrderIntentMetadata.sizing.cosine_multiplier` /
- * `OrderIntentMetadata.cosine_precedent` in the Trader's sizing pipeline
- * (#73) — not wired in here, since #73 is not yet implemented.
- */
 import type { SetupNeighbor, SetupStore, SetupVector } from '../../shared/index.js';
 
-/** Nearest neighbors considered, after the similarity threshold filter */
 export const K_NEIGHBORS = 5;
 
-/** Minimum cosine similarity for a past setup to count as a precedent */
 export const MIN_SIMILARITY_THRESHOLD = 0.75;
 
-/** Fewer qualifying neighbors than this triggers the no-precedent default */
 const MIN_NEIGHBOR_COUNT = 1;
 
-/** 0.75x default when there is no close neighbor (trader-spec story 15) */
 export const NO_PRECEDENT_MULTIPLIER = 0.75;
 
-/** Bounded multiplier range (trader-spec story 14) */
 export const MIN_MULTIPLIER = 0.5;
 export const MAX_MULTIPLIER = 1.5;
 
-/** Weighted-mean-R magnitude at which the multiplier saturates to the bound */
 const R_SATURATION = 2;
 
 export interface CosinePrecedentResult {
@@ -34,7 +20,6 @@ export interface CosinePrecedentResult {
   no_precedent: boolean;
 }
 
-/** Cosine similarity of two equal-length vectors; 0 if either is a zero vector */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
     throw new Error('cosineSimilarity: vector length mismatch');
@@ -62,12 +47,6 @@ function toFlatVector(vector: SetupVector): number[] {
   return [...vector.debate_features, ...vector.market_features];
 }
 
-/**
- * Maps the similarity-weighted mean R of the retrieved neighbors to a
- * bounded multiplier: 0 -> 1.0x, saturating to MIN/MAX_MULTIPLIER at
- * +-R_SATURATION (trader-spec: "positive -> up, negative -> down, near-zero
- * -> 1.0x")
- */
 function rToMultiplier(weightedMeanR: number): number {
   const midpoint = (MIN_MULTIPLIER + MAX_MULTIPLIER) / 2;
   const halfRange = (MAX_MULTIPLIER - MIN_MULTIPLIER) / 2;
@@ -76,17 +55,6 @@ function rToMultiplier(weightedMeanR: number): number {
   return Math.max(MIN_MULTIPLIER, Math.min(MAX_MULTIPLIER, multiplier));
 }
 
-/**
- * Retrieves the k nearest closed setups above the similarity threshold and
- * derives the bounded (0.5x-1.5x) sizing multiplier from their
- * similarity-weighted mean R-multiple. Falls back to the 0.75x
- * no-precedent default when fewer than `MIN_NEIGHBOR_COUNT` neighbors
- * qualify (trader-spec stories 13-15) — this also covers cold-start/warm-up
- * (an empty store) naturally, with no special-casing (story 26).
- *
- * `store.findNeighbors` is expected to already restrict to setups closed
- * with a known outcome as of `asOf` (point-in-time, no lookahead).
- */
 export function retrieveCosinePrecedent(
   target: SetupVector,
   store: SetupStore,

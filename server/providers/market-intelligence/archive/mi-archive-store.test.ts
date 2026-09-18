@@ -7,7 +7,6 @@ import type { IntelligenceItem } from '../types.js';
 import { type ArchivedItem, MiArchiveStore, type RawArchiveRow } from './mi-archive-store.js';
 import { MI_SOURCES } from './mi-sources.js';
 
-/** Every read in this file that is not specifically about source filtering */
 const ALL_SOURCES = Object.values(MI_SOURCES);
 
 const T0 = new Date('2026-08-15T10:00:00Z');
@@ -61,8 +60,6 @@ describe('MiArchiveStore', () => {
     expect(read).toHaveLength(1);
     expect(read[0]?.headline).toBe('Apple beats on revenue');
     expect(read[0]?.sentiment).toBe(1);
-    // JSON has no Date type; the store's window filter compares Dates, so a
-    // string here would silently make every window comparison false
     expect(read[0]?.timestamp).toBeInstanceOf(Date);
   });
 
@@ -74,11 +71,6 @@ describe('MiArchiveStore', () => {
     expect(store.itemsKnownAt('crypto', T0, ALL_SOURCES)).toEqual([]);
   });
 
-  /**
-   * The replay contract (#558). `ingested_at <= asOf` is the whole no-lookahead
-   * guarantee for this layer — the MI analogue of the bars idiom
-   * `close_time <= asOf`.
-   */
   describe('ingested_at is the visibility gate (#558)', () => {
     it('hides a row ingested after asOf', () => {
       const store = new MiArchiveStore();
@@ -93,13 +85,6 @@ describe('MiArchiveStore', () => {
       expect(store.itemsKnownAt('stocks', later, ALL_SOURCES)).toHaveLength(1);
     });
 
-    /**
-     * The distinction that #558 had to correct in #554's wording, and the one
-     * that a reasonable implementation gets wrong: `updated_at` is the VENDOR's
-     * revision stamp and can be back-dated relative to when we received it.
-     * Gating on it would admit a row we did not yet hold — which is reading the
-     * future.
-     */
     it('gates on OUR ingest time, not the vendor revision stamp', () => {
       const store = new MiArchiveStore();
       const vendorStampedInThePast = new Date('2026-08-01T00:00:00Z');
@@ -116,8 +101,6 @@ describe('MiArchiveStore', () => {
         ],
       );
 
-      // At T0 the vendor's stamp is already in the past, but we had not
-      // received the row. It must not be visible.
       expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toEqual([]);
       expect(store.itemsKnownAt('stocks', weActuallyReceivedIt, ALL_SOURCES)).toHaveLength(1);
     });
@@ -140,9 +123,6 @@ describe('MiArchiveStore', () => {
         ],
       );
 
-      // Both revisions are held, so a replay at T0 sees the original and a
-      // replay after the correction sees both — rather than the correction
-      // retroactively rewriting what was knowable earlier
       expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toHaveLength(1);
       expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)[0]?.headline).toBe(
         'Apple beats on revenue',
@@ -162,13 +142,6 @@ describe('MiArchiveStore', () => {
     expect(store.rawRows(MI_SOURCES.alpacaNews)).toHaveLength(1);
   });
 
-  /**
-   * #1392 review round 1 (F1/F2): `hasItem` (raw-fetch dedup) and
-   * `hasScoredItem` (scoring-eligibility dedup) are deliberately independent
-   * gates — a degraded batch archives the raw bytes without a scored item, so
-   * the row must read `hasItem: true, hasScoredItem: false` until a later
-   * refresh actually scores it
-   */
   describe('hasScoredItem', () => {
     it('is false before anything is written', () => {
       const store = new MiArchiveStore();
@@ -198,12 +171,6 @@ describe('MiArchiveStore', () => {
     });
   });
 
-  /**
-   * One raw article carries a `symbols[]` array, so an article about three
-   * tickers is three items. Keying without `entity` would silently keep one —
-   * and the analyst would then see news for AAPL but not for TSLA from the same
-   * story, which is a data loss no test downstream would attribute here.
-   */
   it('keeps one item per entity from a single raw record', () => {
     const store = new MiArchiveStore();
 
@@ -238,12 +205,6 @@ describe('MiArchiveStore', () => {
     expect(store.rawRows(MI_SOURCES.alpacaNews)[0]?.fidelity).toBe('backfill');
   });
 
-  /**
-   * The specced 90-day purge (#1060). Keyed on `ingested_at` — the same
-   * column `itemsKnownAt`/`hasItem` treat as the visibility gate — NOT
-   * `updated_at`, which is the vendor's revision stamp and can be back-dated
-   * relative to when we actually received the row.
-   */
   describe('purgeOlderThan (#1060)', () => {
     const NOW = new Date('2026-09-03T00:00:00Z');
     const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -272,12 +233,6 @@ describe('MiArchiveStore', () => {
       expect(store.itemsKnownAt('stocks', NOW, ALL_SOURCES)).toHaveLength(1);
     });
 
-    /**
-     * The off-by-one this predicate invites: a row EXACTLY on the cutoff is
-     * exactly 90 days old, not OLDER than 90 days, so "purge records older
-     * than 90 days" keeps it. `< cutoff` (not `<=`) is what that reading
-     * requires.
-     */
     it('keeps a row exactly on the cutoff — exactly 90 days old is not "older than" 90 days', () => {
       const store = new MiArchiveStore();
 
@@ -293,12 +248,6 @@ describe('MiArchiveStore', () => {
       expect(store.itemsKnownAt('stocks', NOW, ALL_SOURCES)).toHaveLength(1);
     });
 
-    /**
-     * #1042 proposes a payload exemption for Reddit vendor bytes — the purge
-     * must not assume every row carries one. `payload` is `NOT NULL` today,
-     * so an empty string stands in for "no payload"; the predicate never
-     * references the column at all, so age is the only thing that decides.
-     */
     it('deletes or retains a row with no payload purely by age, never by payload presence', () => {
       const store = new MiArchiveStore();
       const old = new Date(cutoff.getTime() - 1);
@@ -336,24 +285,6 @@ describe('MiArchiveStore', () => {
       expect(store.purgeOlderThan(cutoff)).toEqual({ rawDeleted: 0, itemsDeleted: 0 });
     });
 
-    /**
-     * A real review caught this: `mi_archive_raw` has `idx_mi_archive_raw_
-     * ingested (ingested_at)` from migration 0001, so its delete uses it
-     * directly, but `mi_items` only had `idx_mi_items_class_ingested
-     * (asset_class, ingested_at)` — a composite keyed FIRST on `asset_class`,
-     * which SQLite cannot use for a range on the trailing column when the
-     * query has no `asset_class` predicate (as this delete does not). Without
-     * migration 0002's `idx_mi_items_ingested (ingested_at)`, the `mi_items`
-     * half of every sweep (boot + daily) was a full table scan against the
-     * table this store exists to keep re-normalizable, and therefore the one
-     * most likely to grow large.
-     *
-     * Checked against a SEPARATE readonly connection to the same on-disk
-     * file, matching `stage2-historical-store.test.ts`'s precedent: an
-     * `:memory:` store's private handle cannot be reached from outside the
-     * class, and `EXPLAIN QUERY PLAN` never executes the statement, so
-     * running it through a second, readonly handle is safe.
-     */
     it('deletes through an index on both tables, not a full scan (#1060)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'mi-archive-plan-'));
       const dbPath = join(dir, 'archive.sqlite');
@@ -402,8 +333,6 @@ describe('MiArchiveStore', () => {
     it('returns one source over a half-open span of vendor time, in order', () => {
       const rows = seeded().rawRowsBetween(MI_SOURCES.gdeltGkg, hour(0), hour(2));
 
-      // `c` sits exactly on the exclusive end, so consecutive windows tile
-      // without counting it twice; `d` is another source in range
       expect(rows.map((row) => row.native_id)).toEqual(['a', 'b']);
     });
 
@@ -418,8 +347,6 @@ describe('MiArchiveStore', () => {
       store.write([raw({ source: MI_SOURCES.gdeltGkg })], []);
       store.close();
 
-      // A separate readonly handle, for the reason the purge plan test states:
-      // the class's own connection is private and EXPLAIN never executes
       const db = new BetterSqlite3(dbPath, { readonly: true });
       const plan = (
         db
@@ -434,8 +361,6 @@ describe('MiArchiveStore', () => {
         .join(' | ');
       db.close();
 
-      // Without the index the planner falls back to the PRIMARY KEY autoindex,
-      // which can only narrow to the source — 168k rows on the paper archive
       expect(plan).toContain('idx_mi_archive_raw_source_updated');
       expect(plan).not.toContain('SCAN');
     });

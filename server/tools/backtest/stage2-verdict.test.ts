@@ -21,9 +21,6 @@ function metrics(sharpe: number, overrides: Partial<MetricsSuite> = {}): Metrics
     kurtosis: 0,
     turnover: 1,
     exposure: 0.5,
-    // The DSR inputs (#406). `per_period_sharpe` is deliberately not derived
-    // from `sharpe`: DSR reads the per-period statistic, and a helper that tied
-    // them together would hide a caller reaching for the annualized one
     per_period_sharpe: 0.1,
     annualization_factor: 15.87,
     observations: 1000,
@@ -31,7 +28,6 @@ function metrics(sharpe: number, overrides: Partial<MetricsSuite> = {}): Metrics
   };
 }
 
-/** One config's fake EvalReport, with 5 walk-forward folds — matching the spec's fixed fold count */
 function fakeReport(
   foldSharpes: number[],
   windowSharpe: number,
@@ -48,9 +44,7 @@ function fakeReport(
 
 interface TrialOverrides {
   windowSharpe?: number;
-  /** The CSCV pass's per-fold sharpes — omit entirely to model a grid run without it */
   cscvFoldSharpes?: number[];
-  /** Model a CSCV pass that threw (e.g. a barren fold). */
   cscvError?: string;
   window?: Partial<MetricsSuite>;
 }
@@ -136,7 +130,6 @@ describe('renderStage2Verdict', () => {
       window: FIVE_YEAR_WINDOW,
     });
 
-    // 5 years of data supports ~45 independent trials per overfitting.ts's own calibration note
     expect(verdict.min_btl.limit).toBeGreaterThanOrEqual(40);
     expect(verdict.min_btl.limit).toBeLessThanOrEqual(50);
     expect(verdict.min_btl.distinct_configs).toBe(12);
@@ -144,9 +137,6 @@ describe('renderStage2Verdict', () => {
   });
 
   it('forwards an explicit expectedAnnualSharpe to the MinBTL check (#637)', () => {
-    // At the default E[SR]=1.0, 12 trials over 5 years is comfortably under
-    // the ~45-trial cap. At the measured 0.71, the cap for the same window is
-    // 10 — so the same N now exceeds it
     const atDefault = renderStage2Verdict({
       results: [],
       distinctTrialCount: 12,
@@ -180,9 +170,6 @@ describe('renderStage2Verdict', () => {
   });
 
   it('reports cscv_pass_not_run when the grid was run without the CSCV pass', () => {
-    // The spec-shaped 5-fold walk-forward result on its own: real trial data,
-    // but nothing PBO can rank across. Before #406 this was the permanent
-    // state of every run
     const results = [
       trialResult('hash-a', 'stocks', [0.5, 0.6, 0.4, 0.7, 0.5]),
       trialResult('hash-b', 'stocks', [0.3, 0.2, 0.4, 0.1, 0.3]),
@@ -204,8 +191,6 @@ describe('renderStage2Verdict', () => {
   });
 
   it('computes PBO from the CSCV pass, not from the walk-forward folds', () => {
-    // Walk-forward stays at the spec's 5 folds — an odd count `pbo()` rejects
-    // Only the 6-fold CSCV pass makes PBO computable, which is the whole seam
     const results = [
       trialResult('hash-a', 'stocks', [0.5, 0.6, 0.4, 0.7, 0.5], {
         cscvFoldSharpes: [0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
@@ -227,10 +212,6 @@ describe('renderStage2Verdict', () => {
     if (outcome && 'result' in outcome) {
       expect(outcome.result.pbo).toBeGreaterThanOrEqual(0);
       expect(outcome.result.pbo).toBeLessThanOrEqual(1);
-      // hash-a dominates hash-b on every fold, so the IS-best config is also
-      // the OOS-best on every partition — PBO is 0, the "no selection noise"
-      // extreme. Asserted to prove the matrix reached `pbo()` in fold order
-      // rather than being reduced to a number somewhere on the way
       expect(outcome.result.pbo).toBe(0);
       expect(outcome.result.verdict).toBe('accept');
     }
@@ -262,8 +243,6 @@ describe('renderStage2Verdict', () => {
   });
 
   it('refuses PBO for the whole asset class when one config CSCV pass failed', () => {
-    // A partial matrix is not a smaller matrix: PBO ranks configs against each
-    // other fold by fold, so a missing row would silently change the ranking
     const results = [
       trialResult('hash-a', 'stocks', [0.5, 0.6, 0.4, 0.7, 0.5], {
         cscvFoldSharpes: [0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
@@ -289,8 +268,6 @@ describe('renderStage2Verdict', () => {
   });
 
   it('computes PBO independently per asset class instead of dropping all but the first', () => {
-    // Stocks carries a CSCV pass (computable); crypto does not. Both must be
-    // reported — neither should silently overwrite or hide the other
     const results = [
       trialResult('hash-a', 'stocks', [0.9, 0.9, 0.9, 0.9, 0.9], {
         cscvFoldSharpes: [0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
@@ -356,7 +333,6 @@ describe('renderStage2Verdict', () => {
 
   it('deflates the config the search would have selected — highest OOS Sharpe, not first or best-window', () => {
     const results = [
-      // Best whole-window Sharpe, worst OOS — the cherry-pick to avoid
       trialResult('hash-a', 'stocks', [0.1, 0.1, 0.1, 0.1, 0.1], { windowSharpe: 9 }),
       trialResult('hash-b', 'stocks', [0.9, 0.9, 0.9, 0.9, 0.9], { windowSharpe: 1 }),
     ];
@@ -372,8 +348,6 @@ describe('renderStage2Verdict', () => {
   });
 
   it('refuses DSR rather than fabricating one when the variance term is non-positive', () => {
-    // A high Sharpe with strong positive skew drives 1 - skew*SR + ... below 0,
-    // which deflatedSharpe() rejects. Real samples can produce this.
     const results = [
       trialResult('hash-a', 'stocks', [0.5, 0.6, 0.4, 0.7, 0.5], {
         window: { per_period_sharpe: 1, skew: 3 },
@@ -400,8 +374,6 @@ describe('renderStage2Verdict', () => {
     const results = [
       trialResult('hash-a', 'stocks', [0.9, 0.9, 0.9, 0.9, 0.9], {
         cscvFoldSharpes: [0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
-        // 0.1 per-period over 1000 observations deflates to ~0.93 at N=12 —
-        // below the 0.95 line
         window: { per_period_sharpe: 0.1 },
       }),
       trialResult('hash-b', 'stocks', [0.9, 0.9, 0.9, 0.9, 0.9], {
@@ -423,8 +395,6 @@ describe('renderStage2Verdict', () => {
   });
 
   it('reports overall_pass = true only when MinBTL, OOS Sharpe, PBO and DSR all clear', () => {
-    // The one configuration in which the gate passes — asserted so the pass
-    // path is exercised, not just the many ways it fails
     const results = [
       trialResult('hash-a', 'stocks', [0.9, 0.9, 0.9, 0.9, 0.9], {
         cscvFoldSharpes: [0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
@@ -487,8 +457,6 @@ describe('renderStage2Verdict', () => {
   it('exposes the same KILL_LINE.minOosSharpe used by killLineChecks', () => {
     expect(KILL_LINE.minOosSharpe).toBe(0.5);
     expect(KILL_LINE.maxPbo).toBe(0.05);
-    // Not a spec value — see the constant's comment. Pinned so a change to the
-    // DSR confidence level is a deliberate edit, not a drift
     expect(KILL_LINE.minDsr).toBe(0.95);
   });
 });
