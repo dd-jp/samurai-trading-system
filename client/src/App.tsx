@@ -67,8 +67,7 @@ function safeSessionStorage(): TokenStorage {
     setItem: (key, value) => {
       try {
         store.setItem(key, value);
-      } catch {
-      }
+      } catch {}
     },
   };
 }

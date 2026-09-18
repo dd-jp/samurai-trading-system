@@ -1,4 +1,3 @@
-
 import {
   classifyStatus,
   isServerErrorStatus,
@@ -78,8 +77,7 @@ function describe(bodyText: string, response: Response): string {
     if (typeof body.description === 'string' && body.description.length > 0) {
       return body.description;
     }
-  } catch {
-  }
+  } catch {}
   return truncateForError(bodyText);
 }
 

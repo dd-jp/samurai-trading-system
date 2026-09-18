@@ -1,4 +1,3 @@
-
 import type { Logger } from '../../../shared/index.js';
 import type { LlmInFlightGate } from '../../../shared/llm/index.js';
 import { type NousCitation, nousResponses } from '../../../shared/llm/index.js';

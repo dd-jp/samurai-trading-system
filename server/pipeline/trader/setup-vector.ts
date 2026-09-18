@@ -38,10 +38,6 @@ export function buildSetupVector(debate: DebateResult, market: SetupMarketContex
       debate.converged ? 1 : 0,
       disagreementMagnitude(debate),
     ],
-    market_features: [
-      atr / entry,
-      trendOver(bars),
-      stopDistance / entry,
-    ],
+    market_features: [atr / entry, trendOver(bars), stopDistance / entry],
   };
 }

@@ -1,4 +1,3 @@
-
 export interface TradingCalendar {
   isOpen(instant: Date): boolean;
   isTradingDay(instant: Date): boolean;
@@ -215,11 +214,7 @@ const US_HOLIDAYS = new Set([
 ]);
 
 const US_EARLY_CLOSE_MINUTES = 13 * 60;
-const US_EARLY_CLOSE_DAYS = new Set([
-  '2026-11-27',
-  '2026-12-24',
-  '2027-11-26',
-]);
+const US_EARLY_CLOSE_DAYS = new Set(['2026-11-27', '2026-12-24', '2027-11-26']);
 
 export const US_TABLE_COVERAGE_END = '2027-12-31';
 
@@ -327,12 +322,7 @@ export const LSE_HOLIDAYS = new Set([
 
 export const LSE_HOLIDAYS_CHECKED_THROUGH = '2028-12-31';
 
-export const LSE_HALF_DAYS = new Set([
-  '2026-12-24',
-  '2026-12-31',
-  '2027-12-24',
-  '2027-12-31',
-]);
+export const LSE_HALF_DAYS = new Set(['2026-12-24', '2026-12-31', '2027-12-24', '2027-12-31']);
 
 export const LSE_HALF_DAYS_CHECKED_THROUGH = '2028-12-31';
 

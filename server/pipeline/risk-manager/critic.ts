@@ -1,4 +1,3 @@
-
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
 import type { LogEventCode, Logger, OrderIntent } from '../../shared/index.js';
@@ -334,8 +333,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         message,
         payload,
       });
-    } catch {
-    }
+    } catch {}
   }
 
   #logUnavailable(

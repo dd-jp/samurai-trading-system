@@ -1,4 +1,3 @@
-
 export interface ThresholdBound {
   readonly min?: number;
   readonly max?: number;

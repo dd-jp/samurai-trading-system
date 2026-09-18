@@ -1,4 +1,3 @@
-
 import {
   type BarWindow,
   INDICATOR_KINDS,
@@ -32,9 +31,7 @@ type Comparator = InvalidationComparator;
 
 const INDICATOR_KIND_SET: ReadonlySet<string> = new Set<string>(INDICATOR_KINDS);
 
-type FalsifyingDirection =
-  | 'opposite_side'
-  | 'downward_only';
+type FalsifyingDirection = 'opposite_side' | 'downward_only';
 
 const INDICATOR_DIRECTION: Partial<Record<IndicatorKind, FalsifyingDirection>> = {
   sma: 'opposite_side',

@@ -1,4 +1,3 @@
-
 export type SaxoAssetType = 'Etn' | 'Etf' | 'Etc';
 
 export type SaxoBuySell = 'Buy' | 'Sell';

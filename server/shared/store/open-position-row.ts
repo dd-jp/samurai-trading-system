@@ -1,4 +1,3 @@
-
 import type { OpenPosition, OrderState } from '../types/records.js';
 import { fromStoredTimestamp } from './sqlite-utils.js';
 

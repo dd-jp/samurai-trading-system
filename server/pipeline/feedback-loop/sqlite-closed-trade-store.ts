@@ -1,4 +1,3 @@
-
 import type { ClosedTrade, ClosedTradeStore, TradingArm } from '../../shared/index.js';
 import {
   type ClosedTradeRow,

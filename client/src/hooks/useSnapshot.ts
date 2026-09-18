@@ -1,4 +1,3 @@
-
 import {
   CONTRACT_VERSION,
   type DashboardSnapshot,

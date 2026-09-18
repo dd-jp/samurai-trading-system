@@ -91,8 +91,7 @@ export class RotatingFileSink {
     if (fd === null) return;
     try {
       closeSync(fd);
-    } catch {
-    }
+    } catch {}
   }
 
   private open(): void {
@@ -136,8 +135,7 @@ export class RotatingFileSink {
   private report(message: string): void {
     try {
       this.options.onFailure?.(message);
-    } catch {
-    }
+    } catch {}
   }
 }
 

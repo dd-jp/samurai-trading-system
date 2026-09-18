@@ -1,4 +1,3 @@
-
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
 import type { Clock } from '../../shared/index.js';

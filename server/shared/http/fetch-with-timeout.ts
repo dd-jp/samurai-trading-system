@@ -1,4 +1,3 @@
-
 export async function fetchWithTimeout(
   url: string | URL,
   init: RequestInit,

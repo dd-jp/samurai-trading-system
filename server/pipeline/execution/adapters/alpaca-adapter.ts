@@ -336,8 +336,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     return normalizeOrder(clientOrderId, order);
   }
 
-  async resizeProtectiveLegs(): Promise<void> {
-  }
+  async resizeProtectiveLegs(): Promise<void> {}
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the walk's advance invariant ("advancing past an index means its order is not resting", enforced in both directions), the live-preferred-over-settled adoption order, and the three independent size bounds (qty, sizedAboveSettled, entryFilledQty) are each individually documented as load-bearing — two prior restructurings (#1570 review's early-return) were tried and reverted as live-money bugs, so a fresh extraction here repeats a mistake this function's own history already made
   async rearmProtectiveLegs(

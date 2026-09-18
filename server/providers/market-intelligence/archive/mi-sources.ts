@@ -1,4 +1,3 @@
-
 export const MI_SOURCES = {
   alpacaNews: 'alpaca-news',
   gdeltGkg: 'gdelt-gkg',

@@ -1,4 +1,3 @@
-
 import { sanitizeLogText } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';

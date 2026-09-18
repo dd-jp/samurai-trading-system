@@ -1,4 +1,3 @@
-
 import { safeLog } from '../safe-log.js';
 import { currentTraceId } from '../trace-context.js';
 import type { Logger } from '../types/primitives.js';

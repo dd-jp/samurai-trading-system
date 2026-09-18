@@ -1,4 +1,3 @@
-
 import type { ClosedTrade, ExitFill, Fill, OpenPosition } from '../../shared/index.js';
 import { weightedAvgPrice } from '../../shared/index.js';
 

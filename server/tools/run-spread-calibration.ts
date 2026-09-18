@@ -1,4 +1,3 @@
-
 import type { Bar } from '../providers/market-data-service/index.js';
 import { closeTimeOf, computeIndicator } from '../providers/market-data-service/index.js';
 import { TokenBucket } from '../shared/index.js';

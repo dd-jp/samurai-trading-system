@@ -313,8 +313,7 @@ async function readExitPrice(
     const reason = describeThrownSafely(error);
     try {
       input.onUnpricedFlatten?.({ instrument, reason });
-    } catch {
-    }
+    } catch {}
     return { price: 0, asset_class: lotAssetClass, unpriced: true };
   }
 }

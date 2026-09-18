@@ -206,7 +206,6 @@ describe('the measured debate-input delta for the RVOL line (#797)', () => {
       { rvol: 1.5, sessions_used: 10, sessions_target: 10, degraded_reason: null },
       ETP_UNDERLYING,
     );
-    // eslint-disable-next-line no-console
     console.log(
       `#797 debate-input measurement (one persona, one round, one analyst view): ` +
         `${chars.before} -> ${chars.after} chars, ~${tokens.before} -> ~${tokens.after} tokens ` +

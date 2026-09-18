@@ -1,4 +1,3 @@
-
 import type { RetryConfig } from '../../../shared/index.js';
 import { fetchWithTimeout, truncateForError, withRetry } from '../../../shared/index.js';
 import type { AlpacaHttpMethod } from './alpaca-broker-errors.js';

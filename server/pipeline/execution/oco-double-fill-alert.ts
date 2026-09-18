@@ -1,4 +1,3 @@
-
 export interface OcoDoubleFillAlert {
   client_order_id: string;
   instrument: string;

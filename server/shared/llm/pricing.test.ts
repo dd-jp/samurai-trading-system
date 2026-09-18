@@ -113,7 +113,6 @@ describe('priceUsage', () => {
 });
 
 describe('priceServerToolCalls (#476)', () => {
-
   it('prices each invocation, because a tool-running provider bills on top of tokens', () => {
     expect(priceServerToolCalls(1)).toBeCloseTo(SERVER_TOOL_USD_PER_CALL, 10);
     expect(priceServerToolCalls(200)).toBeCloseTo(0.8, 10);

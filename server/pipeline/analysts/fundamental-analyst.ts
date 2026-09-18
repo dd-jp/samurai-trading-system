@@ -1,4 +1,3 @@
-
 import type { IntelligenceItem } from '../../providers/market-intelligence/index.js';
 import { resolveMiSubject } from '../../providers/universe-pool/index.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';

@@ -1,4 +1,3 @@
-
 export const OUTSIDE_BENCHMARKS = ['spy', 'sixty_forty'] as const;
 
 export type OutsideBenchmarkId = (typeof OUTSIDE_BENCHMARKS)[number];

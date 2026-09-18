@@ -1,4 +1,3 @@
-
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
@@ -10,10 +9,7 @@ export const IMMUTABLE_RECORD_DIRS = [
   'docs/reviews/',
 ] as const;
 
-const SKIPPED_DIRS = new Set([
-  '.claude',
-  '__fixtures__',
-]);
+const SKIPPED_DIRS = new Set(['.claude', '__fixtures__']);
 
 const LEGACY_ROOT = 'src';
 

@@ -1,4 +1,3 @@
-
 const DASHBOARD_TOKEN_QUERY_PARAM = 'token';
 
 export const DASHBOARD_TOKEN_STORAGE_KEY = 'samurai-dashboard-token';

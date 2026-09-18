@@ -1,4 +1,3 @@
-
 import { isNotableVerdict } from './notifications/notable-verdict.js';
 import type { TradeChannelNotifier } from './notifications/types.js';
 import type { Verdict, VerdictDecision, VerdictInput } from './types.js';

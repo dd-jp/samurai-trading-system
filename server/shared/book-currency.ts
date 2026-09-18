@@ -1,4 +1,3 @@
-
 export const BOOK_CURRENCY = 'GBP';
 
 const PENCE_CODES: readonly string[] = ['GBX', 'gbx', 'GBp', 'p'];

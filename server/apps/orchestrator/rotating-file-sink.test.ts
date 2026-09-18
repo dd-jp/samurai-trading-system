@@ -27,8 +27,7 @@ beforeEach(() => {
 afterEach(() => {
   try {
     chmodSync(dir, 0o700);
-  } catch {
-  }
+  } catch {}
   rmSync(dir, { recursive: true, force: true });
 });
 

@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from 'vitest';
 import { LOW_CONVICTION_CAP } from '../pipeline/analysts/technical-analyst.js';
 import { EVIDENCE_WEIGHT } from '../pipeline/debate-engine/conviction-score.js';

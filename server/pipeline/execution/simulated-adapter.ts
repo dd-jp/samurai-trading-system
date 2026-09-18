@@ -184,16 +184,14 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       netByInstrument.set(order.instrument, (netByInstrument.get(order.instrument) ?? 0) + signed);
     }
 
-    return (
-      [...netByInstrument.entries()]
-        .filter(([, qty]) => qty !== 0)
-        .map(([instrument, qty]) => ({
-          instrument,
-          qty,
-          side: qty > 0 ? ('buy' as const) : ('sell' as const),
-          avg_entry_price: null,
-        }))
-    );
+    return [...netByInstrument.entries()]
+      .filter(([, qty]) => qty !== 0)
+      .map(([instrument, qty]) => ({
+        instrument,
+        qty,
+        side: qty > 0 ? ('buy' as const) : ('sell' as const),
+        avg_entry_price: null,
+      }));
   }
 
   private async buildMarketState(order: NativeBracketRequest, now: Date): Promise<MarketState> {

@@ -1,4 +1,3 @@
-
 export interface UnattributedFlattenFillAlert {
   trace_id: string;
   flatten_idempotency_key: string;

@@ -5,6 +5,7 @@
     "node_modules",
     "coverage",
     "docs/prototypes",
+    "docs/research/archive",
     "server/tools/__fixtures__",
     "server/providers/market-data-service/__fixtures__"
   ],

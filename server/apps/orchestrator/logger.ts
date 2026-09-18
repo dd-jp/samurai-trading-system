@@ -163,8 +163,7 @@ export class JsonLogger implements Logger {
   private lastResort(line: string): void {
     try {
       this.stderr.write(line);
-    } catch {
-    }
+    } catch {}
   }
 
   get stdoutRetired(): boolean {
@@ -175,8 +174,7 @@ export class JsonLogger implements Logger {
     return this.recordDurably(line, (message) => {
       try {
         warnOnStdout(message, this.stdout);
-      } catch {
-      }
+      } catch {}
     });
   }
 

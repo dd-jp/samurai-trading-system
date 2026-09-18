@@ -157,7 +157,6 @@ describe('the measured debate-input delta (#745)', () => {
 
     const chars = { before: before.length, after: after.length };
     const tokens = { before: Math.round(chars.before / 4), after: Math.round(chars.after / 4) };
-    // eslint-disable-next-line no-console
     console.log(
       `#745 debate-input measurement (one persona, one round, one analyst view): ` +
         `${chars.before} -> ${chars.after} chars, ~${tokens.before} -> ~${tokens.after} tokens ` +

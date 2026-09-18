@@ -192,8 +192,7 @@ async function openInBrowser(url: string): Promise<void> {
         resolvePromise();
       });
     });
-  } catch {
-  }
+  } catch {}
 }
 
 export interface RunLoginDeps {

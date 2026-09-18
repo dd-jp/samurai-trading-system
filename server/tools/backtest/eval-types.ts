@@ -1,4 +1,3 @@
-
 import type { ClosedTrade, Fill } from '../../shared/index.js';
 import type { SplitScheme } from './splits.js';
 import type { DateRange } from './universe.js';

@@ -1,4 +1,3 @@
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Logger, OrderIntent } from '../../shared/index.js';

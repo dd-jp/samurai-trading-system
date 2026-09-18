@@ -1,4 +1,3 @@
-
 import type { ClosedTrade, ExitReason } from '../types/records.js';
 import { fromStoredTimestamp } from './sqlite-utils.js';
 

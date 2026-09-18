@@ -1,4 +1,3 @@
-
 import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/index.js';
 import {
   CONTROL_DEBATE_ID_PREFIX,

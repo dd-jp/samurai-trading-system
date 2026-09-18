@@ -1,4 +1,3 @@
-
 import type { OpenPosition, OrderState } from '../../shared/index.js';
 import { coversQty, describeThrownSafely, heldQuantitiesFor, safeLog } from '../../shared/index.js';
 import { IN_FLIGHT_ORDER_STATES, TERMINAL_ORDER_STATES } from '../../shared/store/index.js';

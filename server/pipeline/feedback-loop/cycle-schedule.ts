@@ -1,4 +1,3 @@
-
 export function currentBoundary(now: Date, intervalMs: number): Date {
   if (intervalMs <= 0) {
     throw new Error(`currentBoundary: intervalMs must be positive, got ${intervalMs}`);

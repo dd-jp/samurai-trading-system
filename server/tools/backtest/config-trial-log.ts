@@ -1,4 +1,3 @@
-
 import type { BacktestReport } from './types.js';
 
 export interface ConfigTrialLog {

@@ -1,4 +1,3 @@
-
 import type { DebateRow } from '@contracts';
 
 type Direction = DebateRow['direction'];

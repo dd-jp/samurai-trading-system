@@ -18,10 +18,7 @@ export interface OrderIntent {
   metadata: OrderIntentMetadata;
 }
 
-export type ExitReason =
-  | 'flatten'
-  | 'signal_decay'
-  | 'direction_flip';
+export type ExitReason = 'flatten' | 'signal_decay' | 'direction_flip';
 
 interface OrderIntentMetadata {
   debate_id: string;

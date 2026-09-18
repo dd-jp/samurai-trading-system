@@ -1,4 +1,3 @@
-
 import type { FeedbackConfig, LoosenAppliedNotice } from '../../../pipeline/feedback-loop/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import {

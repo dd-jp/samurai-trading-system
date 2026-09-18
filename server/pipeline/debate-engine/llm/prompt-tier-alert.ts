@@ -1,4 +1,3 @@
-
 export interface PromptTierAlert {
   model: string;
   trace_id: string;

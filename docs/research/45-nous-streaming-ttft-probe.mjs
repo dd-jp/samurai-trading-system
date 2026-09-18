@@ -1,4 +1,3 @@
-
 const MODEL = 'anthropic/claude-haiku-4.5';
 const TIMEOUT_MS = 45_000;
 const MAX_TOKENS = 300;
@@ -87,8 +86,7 @@ function applySseEvent(rawEvent, dispatchedAt, state) {
         state.contentLength += delta.content.length;
         if (state.ttftMs === null) state.ttftMs = performance.now() - dispatchedAt;
       }
-    } catch {
-    }
+    } catch {}
   }
 }
 

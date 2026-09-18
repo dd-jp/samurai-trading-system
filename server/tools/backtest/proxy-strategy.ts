@@ -1,4 +1,3 @@
-
 import type { Bar, IndicatorSpec } from '../../providers/market-data-service/index.js';
 import {
   computeIndicator,

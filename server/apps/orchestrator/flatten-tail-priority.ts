@@ -1,4 +1,3 @@
-
 export function orderHeldFirst<T extends { readonly asset: string }>(
   instruments: readonly T[],
   heldAssets: ReadonlySet<string>,

@@ -1,4 +1,3 @@
-
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { Stage2Selection } from './stage2-selection.js';

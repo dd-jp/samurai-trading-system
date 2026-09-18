@@ -1,4 +1,3 @@
-
 export interface LseCalendarCoverageAlert {
   coverage_end: string;
   days_remaining: number;

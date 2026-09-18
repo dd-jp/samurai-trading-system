@@ -1,4 +1,3 @@
-
 import type { Signal } from '../../pipeline/analysts/index.js';
 import {
   CONTROL_DEBATE_ID_PREFIX,

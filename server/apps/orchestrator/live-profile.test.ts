@@ -1,4 +1,3 @@
-
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import { startingProfileForMode } from './index.js';
 import {
@@ -188,7 +187,6 @@ describe('liveStartingProfile', () => {
 });
 
 describe('liveStartingProfile — unconverted-book plausibility warning (#1441)', () => {
-
   it('warns when the declared ceiling is the GBP book’s bare number, unconverted', () => {
     const logger = makeLogger();
 

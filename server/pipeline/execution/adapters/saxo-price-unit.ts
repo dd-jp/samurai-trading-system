@@ -1,4 +1,3 @@
-
 export interface SaxoQuoteUnit {
   readonly price_to_contract_factor: number;
 }

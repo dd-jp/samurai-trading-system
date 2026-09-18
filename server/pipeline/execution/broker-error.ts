@@ -1,4 +1,3 @@
-
 import { MAX_ERROR_BODY_CHARS } from '../../shared/index.js';
 
 export class BrokerError extends Error {

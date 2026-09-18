@@ -143,4 +143,3 @@ describe('buildVerdictLog', () => {
     expect(() => buildVerdictLog(input, makeDecision())).toThrow();
   });
 });
-

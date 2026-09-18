@@ -1,4 +1,3 @@
-
 import type { Logger } from '../../../shared/index.js';
 import type { LlmInFlightGate, NousChatResult } from '../../../shared/llm/index.js';
 import { NousRefusalError, nousChat } from '../../../shared/llm/index.js';

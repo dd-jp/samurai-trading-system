@@ -1049,10 +1049,7 @@ describe('VerdictImpl.decide — unpriced mandatory flatten (#826)', () => {
     delete metadata.unpriced_exit;
 
     const decision = await verdict.decide(
-      inputFor(
-        { ...priced, metadata },
-        { marketData: makeMarketData(makeMark({ price: 140 })) },
-      ),
+      inputFor({ ...priced, metadata }, { marketData: makeMarketData(makeMark({ price: 140 })) }),
     );
 
     expect(decision.status).toBe('no_go');

@@ -18,70 +18,80 @@ const DIRECTIVE_RE =
 
 function listFiles() {
   const patterns = EXTS.map((e) => `*.${e}`);
-  const out = execFileSync('git', ['ls-files', '--', ...patterns, ...EXCLUDE], { encoding: 'utf8' });
+  const out = execFileSync('git', ['ls-files', '--', ...patterns, ...EXCLUDE], {
+    encoding: 'utf8',
+  });
   return out.split('\n').filter(Boolean);
+}
+
+function parseFile(filePath, src) {
+  try {
+    const result = parseSync(filePath, src);
+    if (result.errors.length > 0) {
+      console.error(`PARSE ERRORS, skipped: ${filePath}`);
+      return null;
+    }
+    return result;
+  } catch (err) {
+    console.error(`PARSE FAILED: ${filePath}: ${err.message}`);
+    return null;
+  }
+}
+
+function partitionComments(comments) {
+  const toRemove = [];
+  let kept = 0;
+  for (const c of comments) {
+    if (DIRECTIVE_RE.test(c.value)) {
+      kept += 1;
+    } else {
+      toRemove.push(c);
+    }
+  }
+  return { toRemove, kept };
+}
+
+function removalRangeFor(out, comment) {
+  const { start, end } = comment;
+  const lineStart = out.lastIndexOf('\n', start - 1) + 1;
+  const wholeLineComment = /^[ \t]*$/.test(out.slice(lineStart, start));
+
+  let nextNewline = out.indexOf('\n', end);
+  if (nextNewline === -1) nextNewline = out.length;
+  const restOfLineBlank = /^[ \t]*$/.test(out.slice(end, nextNewline));
+
+  if (wholeLineComment && restOfLineBlank) {
+    return { start: lineStart, end: nextNewline < out.length ? nextNewline + 1 : nextNewline };
+  }
+
+  let trimmedStart = start;
+  while (trimmedStart > lineStart && /[ \t]/.test(out[trimmedStart - 1])) trimmedStart -= 1;
+  return { start: trimmedStart, end };
+}
+
+function removeComments(src, toRemove) {
+  const sorted = [...toRemove].sort((a, b) => b.start - a.start);
+  let out = src;
+  for (const c of sorted) {
+    const { start, end } = removalRangeFor(out, c);
+    out = out.slice(0, start) + out.slice(end);
+  }
+  return out.replace(/\n{3,}/g, '\n\n');
 }
 
 function stripFile(filePath) {
   const src = fs.readFileSync(filePath, 'utf8');
-  let result;
-  try {
-    result = parseSync(filePath, src);
-  } catch (err) {
-    console.error(`PARSE FAILED: ${filePath}: ${err.message}`);
-    return { changed: false, removed: 0, kept: 0 };
-  }
-  if (result.errors.length > 0) {
-    console.error(`PARSE ERRORS, skipped: ${filePath}`);
-    return { changed: false, removed: 0, kept: 0 };
-  }
+  const parsed = parseFile(filePath, src);
+  if (!parsed) return { changed: false, removed: 0, kept: 0 };
 
-  const toRemove = [];
-  let kept = 0;
-  for (const c of result.comments) {
-    if (DIRECTIVE_RE.test(c.value)) {
-      kept += 1;
-      continue;
-    }
-    toRemove.push(c);
-  }
+  const { toRemove, kept } = partitionComments(parsed.comments);
   if (toRemove.length === 0) return { changed: false, removed: 0, kept };
 
-  toRemove.sort((a, b) => b.start - a.start);
-  let out = src;
-  for (const c of toRemove) {
-    let start = c.start;
-    let end = c.end;
+  const out = removeComments(src, toRemove);
+  if (out === src) return { changed: false, removed: 0, kept };
 
-    const lineStart = out.lastIndexOf('\n', start - 1) + 1;
-    const beforeOnLine = out.slice(lineStart, start);
-    const wholeLineComment = /^[ \t]*$/.test(beforeOnLine);
-
-    let nextNewline = out.indexOf('\n', end);
-    if (nextNewline === -1) nextNewline = out.length;
-    const afterOnLine = out.slice(end, nextNewline);
-    const restOfLineBlank = /^[ \t]*$/.test(afterOnLine);
-
-    if (wholeLineComment && restOfLineBlank) {
-      // Own-line comment: drop the whole line (including its newline) so no
-      // blank line is left behind
-      start = lineStart;
-      end = nextNewline < out.length ? nextNewline + 1 : nextNewline;
-    } else {
-      // Trailing comment: drop it and any trailing whitespace back to the
-      // last non-space char, keep the code and the newline
-      while (start > lineStart && /[ \t]/.test(out[start - 1])) start -= 1;
-    }
-    out = out.slice(0, start) + out.slice(end);
-  }
-
-  out = out.replace(/\n{3,}/g, '\n\n');
-
-  if (out !== src) {
-    if (!DRY_RUN) fs.writeFileSync(filePath, out);
-    return { changed: true, removed: toRemove.length, kept };
-  }
-  return { changed: false, removed: 0, kept };
+  if (!DRY_RUN) fs.writeFileSync(filePath, out);
+  return { changed: true, removed: toRemove.length, kept };
 }
 
 const files = listFiles();

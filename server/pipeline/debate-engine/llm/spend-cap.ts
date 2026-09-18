@@ -1,4 +1,3 @@
-
 import type { Logger } from '../../../shared/index.js';
 import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';

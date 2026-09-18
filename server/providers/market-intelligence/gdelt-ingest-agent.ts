@@ -1,4 +1,3 @@
-
 import type { Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/index.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';

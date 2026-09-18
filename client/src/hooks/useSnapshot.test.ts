@@ -171,7 +171,6 @@ describe('toWireSnapshot', () => {
   });
 
   describe('profit_factor normalization (#1270 review round 1, MAJOR)', () => {
-
     it('degrades a pre-#1270 null (the value JSON.stringify collapsed Infinity/NaN/-Infinity into) to unreadable, never guessing no_losses', () => {
       const body = raw({ metrics: { ...makeMetrics(), profit_factor: null } });
       expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'unreadable' });

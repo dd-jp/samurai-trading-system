@@ -1,4 +1,3 @@
-
 export interface FlattenOverfillWarning {
   trace_id: string;
   idempotency_key: string;

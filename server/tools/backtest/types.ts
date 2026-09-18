@@ -1,4 +1,3 @@
-
 import type { TickOutcome } from '../../apps/orchestrator/index.js';
 import type { DateRange } from './universe.js';
 

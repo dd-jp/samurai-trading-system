@@ -1,4 +1,3 @@
-
 import { deflatedSharpe, minbtlGuard, pbo } from './overfitting.js';
 import type { TrialGridResult } from './trial-execution.js';
 import type { DateRange } from './universe.js';

@@ -1,4 +1,3 @@
-
 import type { LlmInFlightGate, NousChatResult } from '../../../shared/llm/index.js';
 import {
   LlmInFlightRefusedError,

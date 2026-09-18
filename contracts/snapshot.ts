@@ -1,4 +1,3 @@
-
 import type { MetricsSuite, ProfitFactorWire } from './metrics.js';
 import type { PipelineStage, PipelineView } from './pipeline.js';
 import type { AssetClass, Direction, OrderState, StoreMode } from './primitives.js';

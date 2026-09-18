@@ -1,4 +1,3 @@
-
 import { BOOK_CURRENCY, type Fill, isPenceCurrency } from '../../shared/index.js';
 import { type FillRow, fromFillRow, type StoreHandle } from '../../shared/store/index.js';
 import type { CgtFillLeg, UnconvertedCgtFill } from './cgt-disposal-matching.js';

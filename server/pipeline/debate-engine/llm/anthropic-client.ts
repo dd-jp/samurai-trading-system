@@ -1,4 +1,3 @@
-
 import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
 import type { AnthropicUsage } from '../../../shared/llm/index.js';
 import { hashPromptTemplate } from '../../../shared/llm/index.js';
@@ -201,8 +200,7 @@ export class AnthropicLlmClient implements LlmClient {
         stage: attribution?.stage,
         debate_id: attribution?.debate_id,
       });
-    } catch {
-    }
+    } catch {}
     return error;
   }
 
@@ -259,8 +257,7 @@ export class AnthropicLlmClient implements LlmClient {
         response: responseText,
         prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
       });
-    } catch {
-    }
+    } catch {}
   }
 
   private async callWithTimeout(

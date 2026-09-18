@@ -1,4 +1,3 @@
-
 import { PIPELINE_STAGES } from './pipeline.js';
 
 describe('PIPELINE_STAGES', () => {

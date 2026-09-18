@@ -1,4 +1,3 @@
-
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { AssetClass, CurrentTick, CurrentTickStore, TickStage } from './types.js';

@@ -1,4 +1,3 @@
-
 import {
   isQuorumSkipDecision,
   PIPELINE_STAGES,

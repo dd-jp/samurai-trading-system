@@ -1402,7 +1402,6 @@ describe('decide — cosine precedent wiring (#432)', () => {
 });
 
 describe('decideWithReason — named skip reasons (#475)', () => {
-
   it('flat and neutral', async () => {
     const outcome = await decideWithReason(
       traderInput({ debate: debateResult({ direction: 'neutral' }) }),

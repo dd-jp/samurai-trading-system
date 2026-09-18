@@ -1,4 +1,3 @@
-
 import {
   type Bar,
   type BarWindow,

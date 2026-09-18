@@ -1,4 +1,3 @@
-
 import type { ClosedTrade } from '../../shared/index.js';
 import type {
   EvalExecutor,

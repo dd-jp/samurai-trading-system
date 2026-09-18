@@ -1,4 +1,3 @@
-
 type PolymarketOutcome = 'Yes' | 'No';
 
 export interface CuratedMacroMarket {

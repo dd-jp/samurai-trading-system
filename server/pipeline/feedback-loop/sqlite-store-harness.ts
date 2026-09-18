@@ -1,4 +1,3 @@
-
 import type { ClosedTrade } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle, toStoredTimestamp } from '../../shared/store/index.js';
 import { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';

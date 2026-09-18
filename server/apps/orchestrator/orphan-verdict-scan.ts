@@ -1,4 +1,3 @@
-
 import { describeThrownSafely } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp } from '../../shared/store/index.js';

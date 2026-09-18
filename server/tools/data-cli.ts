@@ -1,4 +1,3 @@
-
 import { pathToFileURL } from 'node:url';
 import { runFromEnvironment as backfillFromEnvironment } from './backfill-market-data.js';
 import { HttpTiingoClient } from './backtest/index.js';

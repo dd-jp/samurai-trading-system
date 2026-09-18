@@ -1,4 +1,3 @@
-
 import type { VerdictLogStore } from '../../shared/index.js';
 import type { Verdict, VerdictDecision, VerdictInput } from './types.js';
 import { buildVerdictLog } from './verdict-log-store.js';

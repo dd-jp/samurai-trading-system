@@ -1,4 +1,3 @@
-
 import { delay } from './delay.js';
 
 export interface RetryAttemptReport {
@@ -62,8 +61,7 @@ async function retryOrRethrow(
         delay_ms,
         error,
       });
-    } catch {
-    }
+    } catch {}
   }
   await delay(delay_ms);
 }

@@ -1,4 +1,3 @@
-
 import type { TradingCalendar } from '../trading-calendar.js';
 import { UsEquityRegularHoursCalendar } from '../trading-calendar.js';
 import { type AlpacaBar, AlpacaDataSource, type AlpacaMarketDataClient } from './alpaca-source.js';

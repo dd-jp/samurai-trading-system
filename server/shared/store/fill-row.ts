@@ -1,4 +1,3 @@
-
 import type { ExitReason, Fill } from '../types/records.js';
 import { toBrokerFillId } from '../types/records.js';
 import { fromStoredTimestamp } from './sqlite-utils.js';

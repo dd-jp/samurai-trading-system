@@ -162,7 +162,6 @@ describe('mutation: a deliberately bad in-code citation (#1345)', () => {
 });
 
 describe('stringDelim resets per line, not carried across the file (#1375 review)', () => {
-
   it('an apostrophe inside a regex literal does not swallow the next line’s citation', () => {
     const source =
       "const re = /it's a test/;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n";

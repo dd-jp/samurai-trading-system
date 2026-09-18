@@ -92,7 +92,6 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
 });
 
 describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep-2026-09-03.md)', () => {
-
   it('the checked-in pool declares a non-empty fallback subset that is not the whole pool', () => {
     const fallback = LSE_ETP_POOL.filter((row) => row.fallback_default);
     expect(fallback.length).toBeGreaterThan(0);
