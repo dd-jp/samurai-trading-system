@@ -1,43 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import BetterSqlite3 from 'better-sqlite3';
-// Leaf import, not `../index.js`: `stripLineComments`'s only consumers are this
-// test and `contracts/boundary.test.ts`, neither a real cross-module
-// production dependency the barrel exists to track — same reasoning as
-// `sqlite-decision-record-stores.test.ts`'s `../decision-records.js` import
 import { stripLineComments } from '../strip-comments.js';
 import { MIGRATIONS_DIR, runMigrations } from './migrate.js';
-
-/**
- * Closes #1251: `docs/specs/shared-sqlite-store-spec.md`'s consolidated DDL
- * claims to be every table folded to its CURRENT effective shape (every
- * later `ALTER TABLE` migration applied), not just its creating migration.
- * That claim was never mechanically checked — six already-declared tables
- * drifted silently behind later migrations before this test existed. This
- * builds BOTH sides for real (the spec's own fenced `CREATE TABLE`/`CREATE
- * INDEX` statements executed against a fresh `:memory:` DB; the actual
- * migration chain run against a second `:memory:` DB) and diffs them
- * column-by-column, index-by-index, and (via a full normalized `CREATE
- * TABLE` text comparison, not a per-CHECK diff — see the inline comment
- * below) CHECK-by-CHECK — so a future migration that adds a column/index or
- * changes a CHECK without updating the spec fails HERE instead of silently
- * reproducing #1251.
- *
- * `ALTER TABLE` statements in the spec are illustrative prose (e.g. the
- * `invalidation_log` section's walk-through of migration 0040) and are
- * deliberately excluded from the spec-side DB build — they document a step,
- * not the table's current shape, which the `CREATE TABLE` block alone must
- * carry.
- *
- * Every ```sql fence in the spec must be classifiable as CREATE TABLE, CREATE
- * INDEX, or ALTER TABLE — `buildDbFromSpec` throws on anything else (a
- * worked-example SELECT/INSERT/PRAGMA, say) rather than silently ignoring it,
- * because a silently-skipped fence is exactly the kind of drift this test
- * exists to catch. If the spec ever needs a non-DDL `sql` fence (e.g. to show
- * `recordTrial`'s upsert or `SqliteVerdictLogStore`'s `ON CONFLICT ... DO
- * NOTHING`), give it a different fence language (e.g. ```sql-example) so this
- * test's classifier never sees it — do not widen the classifier to swallow it.
- */
 
 const SPEC_PATH = fileURLToPath(
   new URL('../../../docs/specs/shared-sqlite-store-spec.md', import.meta.url),
@@ -61,11 +26,6 @@ function extractSqlBlocks(specText: string): string[] {
   return Array.from(specText.matchAll(blockRe), (m) => m[1]);
 }
 
-/**
- * Splits on top-level `;` only — a naive `split(';')` breaks on the `;`-free
- * but paren-nested CHECK/column lists every CREATE TABLE here has, and would
- * silently truncate or merge statements instead of erroring
- */
 function splitStatements(sql: string): string[] {
   const stmts: string[] = [];
   let depth = 0;
@@ -83,25 +43,11 @@ function splitStatements(sql: string): string[] {
   return stmts.filter(Boolean);
 }
 
-/**
- * Normalizes a `CREATE TABLE ...` statement's raw SQL text for comparison,
- * collapsing differences that are real in `sqlite_master.sql` but not in the
- * schema the table actually enforces:
- *  - comments (already stripped upstream, stripped again here for safety)
- *  - whitespace
- *  - double-quoted identifiers (`_new`+RENAME rebuilds — 0017/0022/0028/
- *    0029/0031/0048 — leave the migrated table's name quoted; the spec's
- *    hand-written DDL never quotes it)
- *  - the redundant `NULL` nullability keyword (SQLite's default; some
- *    migrations spell it out, some don't — semantically identical)
- */
 function normalizeCreateTableSql(sql: string): string {
   return stripLineComments(sql)
     .replace(/"([A-Za-z_][A-Za-z0-9_]*)"/g, '$1')
     .replace(/\s+/g, ' ')
     .replace(/\bNULL\b/gi, (match: string, offset: number, full: string) => {
-      // Drop a standalone nullability `NULL` (not part of `NOT NULL`, `IS NULL`,
-      // `CHECK(... IS NULL ...)`, or a `DEFAULT NULL`).
       const before = full.slice(0, offset);
       if (/\bNOT\s*$/i.test(before) || /\bIS\s*$/i.test(before) || /\bDEFAULT\s*$/i.test(before)) {
         return match;
@@ -122,8 +68,6 @@ function buildDbFromSpec(specText: string): BetterSqlite3.Database {
 
   const createTableStmts = allStatements.filter((s) => /^CREATE TABLE/i.test(s));
   const createIndexStmts = allStatements.filter((s) => /^CREATE (UNIQUE )?INDEX/i.test(s));
-  // ALTER TABLE blocks are illustrative prose (see module doc) — recognized so
-  // they don't trip the `other` throw below, but otherwise unused
   const other = allStatements.filter(
     (s) =>
       !/^CREATE TABLE/i.test(s) && !/^CREATE (UNIQUE )?INDEX/i.test(s) && !/^ALTER TABLE/i.test(s),
@@ -152,17 +96,6 @@ function tablesOf(db: BetterSqlite3.Database): string[] {
   return (
     db
       .prepare(
-        // Same exclusion as `open-shared-store.test.ts`'s TABLES-completeness
-        // check: `sqlite_sequence` is SQLite's own AUTOINCREMENT bookkeeping,
-        // created implicitly and identically by both DB builds whenever either
-        // side has an AUTOINCREMENT table, so it is excluded rather than
-        // required to be declared. `schema_migrations` is NOT excluded here
-        // (unlike a naive read of that other test's exclusion list might
-        // suggest) — both DB builds declare it with matching columns (the
-        // spec's own fenced CREATE TABLE at "Module: Migrations" vs.
-        // `migrate.ts`'s `CREATE TABLE IF NOT EXISTS`, which SQLite's
-        // `sqlite_master.sql` normalizes to the same text minus the `IF NOT
-        // EXISTS` clause), so it is diffed like any other table
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('sqlite_sequence')",
       )
       .all() as { name: string }[]
@@ -267,10 +200,6 @@ describe('spec vs migrated DB — shared-sqlite-store-spec.md column/index/CHECK
         );
       }
 
-      // Column tuples and index sets can't see a table-level CHECK or a
-      // widened CHECK value list on an existing column (e.g. #1251's
-      // closed_trades.close_reason, arm_comparison_samples' table CHECK) —
-      // only the full normalized CREATE TABLE text catches those
       expect(
         createTableSqlOf(specDb, table),
         `${table}: normalized CREATE TABLE text differs (likely a CHECK constraint)`,

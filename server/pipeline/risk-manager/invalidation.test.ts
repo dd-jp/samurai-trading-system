@@ -1,18 +1,3 @@
-/**
- * The deterministic half of the invalidation fold (#994).
- *
- * These are the properties the mechanism rests on, in order of how expensive
- * they are to get wrong:
- *
- *  - A model can never produce a breach. It proposes; measured data decides.
- *  - A malformed or absent conditions half never voids the prose verdict, and
- *    never fabricates enforcement — it reports `no_conditions`.
- *  - Every drop is recorded WITH its reason, so a systematically bad prompt is
- *    visible instead of degrading into "conditions never fire" for a month.
- *  - An observable this module has no declared semantics for is NOT dropped:
- *    adding a member to `INDICATOR_KINDS` must never become a trade-blocking
- *    event.
- */
 
 import type { Bar, MarketDataService } from '../../providers/market-data-service/index.js';
 import {
@@ -73,7 +58,6 @@ function bar(volume: number): Bar {
   };
 }
 
-/** Real shape, no cast — a mis-shaped stub behind `as` would disable the check under test */
 function marketData(overrides: Partial<MarketDataService> = {}): MarketDataService {
   const unused = (name: string) => () => Promise.reject(new Error(`${name} not stubbed`));
   return {
@@ -105,7 +89,6 @@ describe('validateConditions', () => {
   });
 
   it('treats an absent conditions half as nothing proposed and nothing refused', () => {
-    // The Q3 shape too: a pre-fold row has no field here at all
     expect(validateConditions(undefined, 'buy')).toEqual({ accepted: [], dropped: [] });
   });
 
@@ -142,8 +125,6 @@ describe('validateConditions', () => {
   });
 
   it('drops an observable that binds to no service the risk step can read', () => {
-    // Including `mi_context`, which the 2026-08-05 proposal had and the fold
-    // deliberately does not carry — the risk step holds no MI context store
     const { dropped } = validateConditions(
       [raw({ observable: { kind: 'mi_context', window_ms: 3_600_000, measure: 'news_count' } })],
       'buy',
@@ -171,9 +152,6 @@ describe('validateConditions', () => {
   });
 
   it('drops an indicator spec whose params is an array, not a plain object — Object.values on an array is not a params map', () => {
-    // `typeof [] === 'object'` and `Object.values([1, 2])` are both finite
-    // numbers, so a naive object check would let an array through and
-    // `readIndicatorSpec` would hand it out cast to `Record<string, number>`
     const { dropped: droppedEmpty } = validateConditions(
       [
         raw({
@@ -218,7 +196,6 @@ describe('validateConditions', () => {
   });
 
   it('drops a condition that would fire when the thesis is WORKING', () => {
-    // A long thesis falsified by the price going UP is not a falsifier
     const { accepted, dropped } = validateConditions([raw({ comparator: '>' })], 'buy');
     expect(accepted).toEqual([]);
     expect(dropped[0]?.reason).toBe('direction_incoherent');
@@ -251,9 +228,6 @@ describe('validateConditions', () => {
   });
 
   it('does NOT drop an indicator kind with no declared direction or range', () => {
-    // The rule `devils-advocate-spec.md` states explicitly: an observable whose
-    // semantics are undeclared falls through to the other rules. Otherwise
-    // adding a member to `INDICATOR_KINDS` becomes a trade-blocking event
     const undeclared = raw({
       comparator: '>',
       threshold: -0.5,
@@ -288,8 +262,6 @@ describe('validateConditions', () => {
     expect(accepted).toEqual([]);
     expect(dropped[0]?.reason).toBe('lookback_too_large');
 
-    // Dropped at validation means it never reaches `evaluateConditions` — the
-    // fake throws if `getIndicator` is ever called, so a call would fail loud
     const results = await evaluateConditions({
       conditions: accepted,
       instrument: '3USL',
@@ -364,10 +336,6 @@ describe('validateConditions', () => {
   });
 
   it('bounds the INSPECTED length, so a 1000-element emission cannot write 1000 reason lines', () => {
-    // Every drop becomes a reason line on the RiskDecision and a row in
-    // `risk_critic_log.dropped_conditions_json`. Iterating the whole array
-    // makes the model's emission length the only limit on both, so a hostile
-    // or looping emission is a persistence and log-volume amplifier
     const flood = Array.from({ length: 1000 }, (_, index) => raw({ id: `c${index}` }));
     const { accepted, dropped } = validateConditions(flood, 'buy');
 
@@ -375,8 +343,6 @@ describe('validateConditions', () => {
     expect(dropped.length).toBeLessThanOrEqual(MAX_INSPECTED_CONDITIONS + 1);
     expect(dropped.every((entry) => entry.reason === 'over_cap')).toBe(true);
 
-    // The uninspected remainder is ONE summarising drop that names the count,
-    // so the fact of a flood is still auditable
     const summary = dropped[dropped.length - 1];
     expect(summary?.id).toBeNull();
     expect(summary?.raw).toContain(String(1000 - MAX_INSPECTED_CONDITIONS));
@@ -402,9 +368,6 @@ describe('validateConditions', () => {
   });
 
   it('KEEPS a list shorter than three — a thin emission is recorded, never dropped', () => {
-    // Dropping a valid 2-condition set would enforce strictly less than the
-    // emission supports: the same safety regression as discarding the prose
-    // verdict over a malformed conditions half
     const { accepted, dropped } = validateConditions([raw({ id: 'a' }), raw({ id: 'b' })], 'buy');
     expect(accepted).toHaveLength(2);
     expect(dropped).toEqual([]);
@@ -536,8 +499,6 @@ describe('invalidationReasons / breachedConditions', () => {
   });
 
   it('records the single no_conditions line when nothing checkable came out', () => {
-    // One line for all four causes — nothing emitted, everything dropped, an
-    // unreadable half, and a pre-fold row — because they are one code path
     expect(invalidationReasons(verdict())).toEqual([NO_CONDITIONS_REASON]);
     expect(invalidationReasons(verdict({ conditions: [] }))).toEqual([NO_CONDITIONS_REASON]);
   });
@@ -579,14 +540,6 @@ describe('invalidationReasons / breachedConditions', () => {
   });
 });
 
-/**
- * The persisted-shape readers (#994 review, MUST 1).
- *
- * `risk_critic_log`'s two JSON columns are TEXT: a cast alone lets `[{}]`
- * throw inside `evaluate()` and lets `[{"state":"breached"}]` reach a HARD
- * REJECT with no measurement behind it. These are the direct tests for that
- * boundary — the store-level tests exercise it through SQLite.
- */
 describe('readPersistedConditions / readPersistedDroppedConditions', () => {
   const wellFormed: EvaluatedCondition = {
     condition: {
@@ -605,8 +558,6 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
   });
 
   it('drops only the malformed element and keeps the surviving subset (#1068)', () => {
-    // Element-wise salvage: a corrupt sibling must not cost a well-formed
-    // condition its place in the replayed checklist
     expect(readPersistedConditions([wellFormed, {}])).toEqual([wellFormed]);
   });
 
@@ -615,10 +566,6 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
   });
 
   it('reads an emitted-but-empty list as [], not no_conditions — the two stay distinguishable (#1068)', () => {
-    // writeJsonList (critic-store.ts) writes "never emitted" as NULL and
-    // "everything dropped at validation time" as `[]` specifically so a
-    // caller can tell them apart. An empty array is not corrupt, so it must
-    // not collapse to undefined alongside the actually-malformed cases above
     expect(readPersistedConditions([])).toEqual([]);
   });
 
@@ -706,9 +653,6 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
         id: 'c3',
         observable: {
           kind: 'indicator',
-          // Cast: this indicator never existed, or has since been retired from
-          // `INDICATOR_KINDS`. The state was measured at the time, so the
-          // historical replay must reach the same decision
           spec: { indicator: 'stochastic_rsi' as never, params: {}, lookback: 20, timeframe: '1h' },
         },
         comparator: '<',
@@ -750,9 +694,6 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
         id: 'c3',
         observable: {
           kind: 'indicator',
-          // No `timeframe` at all — `readIndicatorSpec` would reject this for
-          // a known kind; the retired-kind leniency must not skip it. Cast:
-          // the missing field is the point of the fixture
           spec: {
             indicator: 'stochastic_rsi',
             params: {},
@@ -777,7 +718,6 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
           kind: 'indicator',
           spec: {
             indicator: 'stochastic_rsi' as never,
-            // `params` present but with a non-finite/non-number value
             params: { period: 'not-a-number' as never },
             lookback: 20,
             timeframe: '1h',
@@ -801,9 +741,6 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
           kind: 'indicator',
           spec: {
             indicator: 'stochastic_rsi' as never,
-            // Cast: `params` must be a plain object; an array satisfies
-            // `typeof value === 'object'` and every value can be finite, so
-            // this is the shape the shared params check exists to reject
             params: [] as never,
             lookback: 20,
             timeframe: '1h',
@@ -915,8 +852,6 @@ describe('readPersistedConditions / readPersistedDroppedConditions', () => {
           },
         ],
       ],
-      // A well-formed survivor alongside a corrupt sibling must not turn into
-      // a false breach either — only the corrupt element is dropped
       [
         'a mix of one well-formed not_breached entry and one corrupt breached entry',
         [

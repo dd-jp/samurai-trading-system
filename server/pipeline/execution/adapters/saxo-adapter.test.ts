@@ -1,9 +1,3 @@
-/**
- * `SaxoBrokerAdapter` against a fake `SaxoOpenApiClient` (#1032 item 1).
- *
- * Every wire shape below is a recorded SIM-gateway response from 2026-09-05
- * (doc 43) with the account/client keys stripped — no credential appears here.
- */
 import type {
   MarketDataService,
   TradingCalendar,
@@ -56,19 +50,8 @@ import type {
 } from './saxo-client.js';
 import { saxoCashPerShare } from './saxo-price-unit.js';
 
-/**
- * Mirrors `DEFAULT_FILL_POLL_INTERVAL_MS`'s default (production/defaults.ts)
- * — restated rather than imported, since that constant lives in
- * `apps/orchestrator` and this adapter's own tests live in `pipeline/`
- */
 const FILL_POLL_INTERVAL_MS = 15_000;
 
-/**
- * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
- * nothing in this file turns on the residual re-flatten's session gate, and a
- * shut venue would stand that path down for a reason none of these tests are
- * about.
- */
 const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
   crypto: new AlwaysOpenCalendar(),
   stocks: new AlwaysOpenCalendar(),
@@ -88,10 +71,6 @@ const RESOLVER: SaxoInstrumentResolver = {
   lseTickerFor: (uic) => (uic === 3347273 ? '3USL' : undefined),
 };
 
-/**
- * LQQ3, the GBX line of doc 44 §2.1's measured pair: quoted in pence,
- * settled in GBP, `PriceToContractFactor` 0.01
- */
 const GBX_REF = {
   uic: 29391797,
   asset_type: 'Etn',
@@ -105,7 +84,6 @@ const GBX_RESOLVER: SaxoInstrumentResolver = {
   lseTickerFor: (uic) => (uic === GBX_REF.uic ? 'LQQ3' : undefined),
 };
 
-/** Every pool line answers as 3USL's did on SIM (USD/USD/1.0) unless a test says otherwise */
 function detailsClient(
   perUic: ReadonlyMap<number, Partial<SaxoInstrumentDetails>> = new Map(),
 ): Pick<SaxoOpenApiClient, 'getInstrumentDetails'> {
@@ -121,12 +99,10 @@ function detailsClient(
   };
 }
 
-/** The wire value the adapter sends for `clientOrderId`'s bracket master / bare flatten — see #1510 */
 function wireRef(clientOrderId: string): string {
   return saxoExternalReference(clientOrderId);
 }
 
-/** The wire value for one of `clientOrderId`'s bracket legs */
 function wireLegRef(clientOrderId: string, leg: 'stop' | 'target'): string {
   return `${wireRef(clientOrderId)}:${leg}`;
 }
@@ -190,13 +166,6 @@ function workingMaster(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   };
 }
 
-/**
- * A related order read as never activated by a master's fill — `Status`
- * `NotWorking` is UNVERIFIED as that meaning (#1215 round 1, see
- * `SaxoOpenOrderStatus`). `OrderRelation` is left unset rather than
- * asserting a value: `Oco` is documented for an ACTIVATED pair only
- * (saxo-client.ts), which this fixture is not.
- */
 function dormantLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   return {
     OrderId: '5040047178',
@@ -212,7 +181,6 @@ function dormantLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   };
 }
 
-/** The `:target` sibling of `dormantLeg`, as its own `listOpenOrders` row */
 function targetLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   return dormantLeg({
     OrderId: '5040047179',
@@ -310,16 +278,6 @@ function makeAdapter(
   return { adapter, logger, state, legResizeAlerts, dormantLegsAlerts, priceUnitAlerts };
 }
 
-/**
- * A clock the test advances explicitly between polls, rather than one that
- * advances on its own read — `escalateIfStale`'s flow reads `clock.now()`
- * more than once per `getOrder` call (the activity lookback window, then the
- * defer record), so an auto-advancing clock would not correspond 1:1 with
- * polls. `advance` models one fill-poll interval
- * (`DEFAULT_FILL_POLL_INTERVAL_MS`) elapsing between polls, which is what the
- * dormant-defer repeat (`DORMANT_DEFER_ALERT_REPEAT_EVERY_MS`) is measured
- * against.
- */
 function controllableClock(startAt = new Date('2026-09-05T09:00:00Z')) {
   let currentMs = startAt.getTime();
   return {
@@ -330,13 +288,6 @@ function controllableClock(startAt = new Date('2026-09-05T09:00:00Z')) {
   };
 }
 
-/**
- * Drives `DORMANT_DEFER_ALERT_AFTER` polls against the same reference, one
- * `FILL_POLL_INTERVAL_MS` apart, so the first alert fires on the LAST poll —
- * and leaves `clock` exactly at that poll's timestamp (no trailing advance),
- * so a caller's next `clock.advance(x)` measures elapsed time since the
- * alert precisely rather than `x + FILL_POLL_INTERVAL_MS`
- */
 async function primeDormantDeferAlert(
   adapter: SaxoBrokerAdapter,
   clock: ReturnType<typeof controllableClock>,
@@ -413,12 +364,6 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
     expect(ack.broker_order_ids).toEqual(['5040047177', '5040047178', '5040047179']);
   });
 
-  // The empty `listOrderActivities` default is realistic on THIS path,
-  // unlike the 30-day `getOrder` lookback (#1215 round 2, finding 6): this
-  // is `placeIdempotently`'s own `PLACEMENT_LOOKBACK_MS` window (60 s), and
-  // a genuinely fresh placement attempt has no audit row for this reference
-  // yet — the deliberate placement-vs-reconcile asymmetry `PLACEMENT_
-  // LOOKBACK_MS`'s own doc explains
   it('places fresh rather than adopting a phantom fill when only dormant legs rest under the reference (#1215)', async () => {
     const client = makeClient({
       listOpenOrders: vi.fn().mockResolvedValue([
@@ -490,13 +435,6 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
-  // The dormant-legs defer (#1215 round 1) must win even when a corroborating
-  // audit row IS available on the 409 retry — the retry reads the open list
-  // only, never the audit trail, so a `Filled` row sitting right there is
-  // never consulted (#1438). Consulting it would adopt a phantom fill on
-  // `Status` evidence the retry itself cannot corroborate against a
-  // `masterSeenOpen` fact, exactly what `cancel`'s corroboration path exists
-  // to avoid doing on the placement side too
   it('defers dormant legs found after a duplicate-request refusal even when the audit trail already has a Filled row for them (#1438)', async () => {
     const listOpenOrders = vi
       .fn()
@@ -529,7 +467,6 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
 
     await adapter.submitBracket(makeBracket());
 
-    // clock is 09:00:00Z; 4 x 15 s window = 60 s
     expect(client.listOrderActivities).toHaveBeenCalledTimes(1);
     expect(client.listOrderActivities).toHaveBeenCalledWith(new Date('2026-09-05T08:59:00Z'));
   });
@@ -808,8 +745,6 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     await primeDormantDeferAlert(adapter, clock);
     expect(dormantLegsAlerts.alerts).toHaveLength(1);
 
-    // One more poll, one fill-poll interval later — nowhere near
-    // DORMANT_DEFER_ALERT_REPEAT_EVERY_MS since the first alert
     clock.advance(FILL_POLL_INTERVAL_MS);
     await adapter.getOrder('key-3usl-0930', '3USL');
     expect(dormantLegsAlerts.alerts).toHaveLength(1);
@@ -873,11 +808,6 @@ describe('SaxoBrokerAdapter.getOrder', () => {
         clock,
       );
 
-      // Simulate the real fill-poll loop for a 2-hour wedge: one poll every
-      // FILL_POLL_INTERVAL_MS. At the pre-#1426 poll-count-8 repeat this would
-      // have alerted every 8 polls (~2 minutes) — 60 times in 2 hours. At the
-      // re-derived wall-clock repeat it must alert only on the polls that land
-      // at or past each DORMANT_DEFER_ALERT_REPEAT_EVERY_MS boundary
       const twoHoursOfPolls = Math.floor((2 * 60 * 60_000) / FILL_POLL_INTERVAL_MS);
       for (let i = 0; i < twoHoursOfPolls; i++) {
         await adapter.getOrder('key-3usl-0930', '3USL');
@@ -904,16 +834,10 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     }
     expect(dormantLegsAlerts.alerts).toHaveLength(1);
 
-    // The master finally settles: audit trail reports Expired, legs are
-    // cancelled, and the deferred count for this reference is cleared
     listOrderActivities.mockResolvedValue([activity({ Status: 'Expired' })]);
     await adapter.getOrder('key-3usl-0930', '3USL');
     expect(dormantLegsAlerts.alerts).toHaveLength(1);
 
-    // A brand-new dormant episode under the SAME reference (a fresh bracket
-    // re-using the id, or the venue re-exposing dormant legs) must not
-    // inherit the earlier episode's count — it should take
-    // DORMANT_DEFER_ALERT_AFTER polls of its own before alerting again
     listOpenOrders.mockResolvedValue([dormantLeg()]);
     listOrderActivities.mockResolvedValue([activity()]);
     for (let i = 0; i < DORMANT_DEFER_ALERT_AFTER - 1; i++) {
@@ -1024,8 +948,6 @@ describe('SaxoBrokerAdapter.getOrder', () => {
 
     const order = await adapter.getOrder('key-3usl-0930', '3USL');
 
-    // Leg Amount is 3 (dormantLeg/targetLeg default); the audit trail's own
-    // FillAmount (2) is the real fill size and is what is reported (#1563)
     expect(order).toMatchObject({ order_state: 'filled', filled_qty: 2 });
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
@@ -1111,8 +1033,6 @@ describe('SaxoBrokerAdapter.getOrder', () => {
 
     const order = await adapter.getOrder('key-3usl-0930', '3USL');
 
-    // Summed FillAmount is 4 against a leg Amount of 3 — clamped, not
-    // reported raw (#1574)
     expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
@@ -1256,24 +1176,13 @@ describe('SaxoBrokerAdapter flatten', () => {
     expect(await adapter.resumeFlatten('flat-1', '3USL')).toBeNull();
   });
 
-  /**
-   * #1500's reachability premise on THIS adapter: the never-confirmed-flatten
-   * branch is entered because `resumeFlatten` threw, and it then asks for a
-   * cancel — so the two must be able to fail independently. Here they do by
-   * construction: `resumeFlatten` needs the activity trail, `cancel()` needs
-   * only the open-order list and a DELETE. The Alpaca adapter has its own
-   * version of this test, where that independence had to be BUILT.
-   */
   it('cancels a flatten whose activity-trail lookup is failing — the two use different endpoints', async () => {
     const client = makeClient({
       listOrderActivities: vi.fn().mockRejectedValue(new Error('activities endpoint 503')),
     });
     const { adapter } = makeAdapter(client);
 
-    // Nothing open under the reference, so the lookup falls through to the
-    // activity trail — the endpoint that is down — and cannot answer
     await expect(adapter.resumeFlatten('flat-1', '3USL')).rejects.toThrow();
-    // The cancel never consults that trail, so it completes regardless
     await expect(adapter.cancel('flat-1', '3USL')).resolves.toBeUndefined();
     expect(client.listOpenOrders).toHaveBeenCalled();
   });
@@ -1384,10 +1293,6 @@ describe('SaxoBrokerAdapter flatten', () => {
     });
     const { adapter } = makeAdapter(client);
 
-    // Without the ExternalReference filter, `unrelated-flat`'s later,
-    // Filled row would win the "latest" pick and this would resolve as a
-    // fill off an unrelated order instead of pinning the dead row under
-    // 'flat-1'
     await expect(adapter.submitFlatten('3USL', 'sell', 3, 'flat-1')).rejects.toMatchObject({
       name: 'BrokerError',
       operation: 'submitFlatten',
@@ -1396,11 +1301,6 @@ describe('SaxoBrokerAdapter flatten', () => {
   });
 
   it("computes the 409 retry's audit-trail read from PLACEMENT_LOOKBACK_MS (#1217)", async () => {
-    // clock is 09:00:00Z; 4 x 15s duplicate window = 60s. Unlike the other
-    // tests' fixed stubs, this one mimics a server-side `from` filter — it
-    // only serves the Filled row on the exact expected window, and stays
-    // empty (as on the pre-POST lookup() miss too) for any other `from`, so
-    // a wrong window on the retry call surfaces as the 409 being rethrown
     const expectedFrom = new Date('2026-09-05T08:59:00.000Z').getTime();
     const listOrderActivities = vi
       .fn()
@@ -1523,8 +1423,6 @@ describe('SaxoBrokerAdapter.cancel', () => {
   it('leaves the legs in place and pages when the master went inside this call and the audit trail answers nothing (#1216)', async () => {
     let reads = 0;
     const client = makeClient({
-      // Each cancel() reads twice: the master is open on the first, gone on
-      // the re-read after its DELETE 404s
       listOpenOrders: vi.fn(async () =>
         reads++ % 2 === 0
           ? [workingMaster(), dormantLeg(), targetLeg()]
@@ -1545,8 +1443,6 @@ describe('SaxoBrokerAdapter.cancel', () => {
     expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047178');
     expect(client.cancelOrder).not.toHaveBeenCalledWith('5040047179');
 
-    // The wedge must reach the page, so the empty answer cannot clear the
-    // consecutive-defer count on its way past
     for (let poll = 1; poll < DORMANT_DEFER_ALERT_AFTER; poll++) {
       await adapter.cancel('key-3usl-0930', '3USL');
     }
@@ -1574,8 +1470,6 @@ describe('SaxoBrokerAdapter.cancel', () => {
   it('keeps the legs and pages across the live cancel/reconcile/cancel sequence (#1216 round 2)', async () => {
     let reads = 0;
     const client = makeClient({
-      // The master is on the list for the first read only: it left inside the
-      // first cancel and never comes back, which is the wedge itself
       listOpenOrders: vi.fn(async () =>
         reads++ === 0 ? [workingMaster(), dormantLeg(), targetLeg()] : [dormantLeg(), targetLeg()],
       ),
@@ -1590,11 +1484,6 @@ describe('SaxoBrokerAdapter.cancel', () => {
 
     await expect(adapter.cancel('key-3usl-0930', '3USL')).resolves.toBeUndefined();
 
-    // Every poll runs reconcile() -> getOrder() on the same key before the
-    // next cancel. That call must inherit "the master was open moments ago",
-    // or it takes lookup's cancel-on-silence verdict and strips the legs one
-    // poll after cancel refused to — so the DELETE count is asserted before
-    // the answer, and only the master's own DELETE may have happened
     const reconcilePoll = await adapter.getOrder('key-3usl-0930', '3USL').then(
       (order) => order,
       (error: unknown) => error,
@@ -1731,11 +1620,6 @@ describe('SaxoBrokerAdapter protective legs', () => {
       (thrown: unknown) => thrown,
     );
 
-    // Both halves matter. The discriminator is what stops the #549 sweep
-    // retrying a gap that can never close; throwing outside `this.call` is
-    // what keeps the discriminator alive, since `sanitizeBrokerError` keeps
-    // only `BrokerError`'s own fields (protective-rearm-unsupported.ts's
-    // INVARIANT)
     expect(isProtectiveRearmUnsupported(error)).toBe(true);
     expect(error).not.toBeInstanceOf(BrokerError);
     expect((error as ProtectiveRearmUnsupportedError).venue).toBe('saxo');
@@ -1787,12 +1671,6 @@ describe('SaxoBrokerAdapter protective legs', () => {
   });
 });
 
-/**
- * The regression the round-2 review named: `ingestFills` calls
- * `resizeProtectiveLegs` on EVERY new entry fill, above `applyLotAdvance`, so
- * an adapter that throws there wedges the fill un-persisted forever. Driven
- * through the real `ExecutionImpl` against the Saxo adapter, not a stub.
- */
 describe('ExecutionImpl.ingestFills through SaxoBrokerAdapter', () => {
   const NOW = new Date('2026-09-05T09:00:00Z');
   const OPENED_AT = new Date('2026-09-05T08:00:00Z');
@@ -1999,15 +1877,6 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     expect(fill?.timestamp).toEqual(since);
   });
 
-  /**
-   * Until #1302 this left that one fill's `fee_currency` unset and logged,
-   * so a batch was never held hostage to one attribution gap. The price now
-   * depends on the same lookup — without the line's factor a GBX quote is
-   * 100x wrong — so the whole sweep fails instead. A transient cause clears
-   * next poll (`ingestFills` re-drives off the open lots' `opened_at` rather
-   * than a watermark); a persistent one wedges every poll until the pool or
-   * the Uic is fixed, which is why the refusal also pages.
-   */
   it('fails the sweep on a fill whose Uic resolves to no pool line, booking neither it nor its batch', async () => {
     const client = makeClient({
       listOrderActivities: vi.fn().mockResolvedValue([
@@ -2142,8 +2011,6 @@ describe('saxoInstrumentResolverFromVenue', () => {
       (row) => row.provenance.saxo.line === null && row.provenance.saxo.sibling_line !== undefined,
     );
 
-    // 14 since #1220 added 3LUS, the sterling line of 3USL's ISIN, from this
-    // same 2026-09-05 capture's own sibling record
     expect(own.length).toBe(14);
     for (const row of own) {
       const line = row.provenance.saxo.line;
@@ -2167,14 +2034,6 @@ describe('saxoInstrumentResolverFromVenue', () => {
   });
 });
 
-/**
- * #1302 — the GBX/GBP unit collision, end to end across the adapter's
- * boundary. LQQ3 is doc 44 §2.1's measured GBX line: `CurrencyCode` `GBP`,
- * `PriceCurrency` `GBX`, `PriceToContractFactor` `0.01`, so a quote of 31151
- * is £311.51 and not £31,151. Saxo's search endpoint — the pool's own source
- * — reports the line as `GBP` and carries neither of the last two fields, so
- * nothing but the details endpoint can tell the two readings apart.
- */
 describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
   const GBX_BRACKET: NativeBracketRequest = {
     client_order_id: 'key-lqq3-0930',
@@ -2222,7 +2081,6 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
   it('books a fill at cash per share, with the fee on that figure in the settlement currency', async () => {
     const client = makeClient({
       placeOrder: vi.fn().mockResolvedValue(gbxPlacement()),
-      // Empty for the placement's own adopt-or-place lookup, then the fill
       listOrderActivities: vi
         .fn()
         .mockResolvedValueOnce([])
@@ -2245,7 +2103,6 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     expect(fill?.price).toBeCloseTo(311.51, 8);
     expect(fill?.fee).toBeCloseTo(311.51 * SAXO_COMMISSION_RATE, 8);
     expect(fill?.fee_currency).toBe('GBP');
-    // #1521: a book-currency fill never needed a rate, so neither field is set
     expect(fill?.fx_rate_to_gbp).toBeUndefined();
     expect(fill?.fx_rate_to_gbp_source).toBeUndefined();
   });
@@ -2325,17 +2182,6 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     ]);
   });
 
-  /**
-   * `ingestFills` floors its `since` at the earliest open lot's `opened_at`
-   * rather than advancing a watermark, so a PERSISTENT unresolvable Uic is
-   * re-driven every poll. The refusal must fire on every one of them —
-   * booking a possibly-100x price is the only outcome worse than the flood —
-   * while the page repeats on the throttle's cadence instead. The `LogId`
-   * changes each poll deliberately: the episode is the Uic, not the row that
-   * happened to trigger it, and `fetchNewFills` refuses at the FIRST
-   * unresolved row, so keying on the row would let a shifting venue order
-   * restart the count and page every poll anyway.
-   */
   it('refuses every poll while paging on the throttle cadence for one unresolvable Uic', async () => {
     let row = 0;
     const client = makeClient({
@@ -2380,7 +2226,6 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     ]);
   });
 
-  /** One episode per Uic: a second unresolvable line pages at once, not on the first one's cadence */
   it('pages a different unresolvable Uic immediately', async () => {
     const filled = {
       ExternalReference: wireRef(GBX_BRACKET.client_order_id),
@@ -2411,7 +2256,6 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     expect(priceUnitAlerts.alerts.map((alert) => alert.uic)).toEqual([999999, 888888]);
   });
 
-  /** The same cadence on the read-only side, where the price is nulled rather than refused */
   it('nulls the price every poll while logging the unresolvable position Uic on the cadence', async () => {
     const client = makeClient({
       listNetPositions: vi.fn().mockResolvedValue([
@@ -2439,21 +2283,12 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     expect(logged()).toBe(2);
   });
 
-  /**
-   * The refusal is scoped to rows that carry a PRICE (#1302 round 1). An
-   * owned row with no price — `Placed` here — has no unit to resolve, and
-   * `ingestFills` floors its lookback at the earliest open lot's `opened_at`
-   * rather than advancing a watermark, so a Uic the pool no longer knows
-   * (pool edited under a live lot, restart mid-lot) would otherwise sit in
-   * range and refuse every OTHER lot's fills on every poll, forever.
-   */
   it('books a fill for one lot while an owned non-fill row under an unknown Uic sits in the sweep', async () => {
     const other: NativeBracketRequest = { ...GBX_BRACKET, client_order_id: 'key-lqq3-1000' };
     const client = makeClient({
       placeOrder: vi.fn().mockResolvedValue(gbxPlacement()),
       listOrderActivities: vi
         .fn()
-        // Empty for each placement's own adopt-or-place lookup, then the sweep
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
         .mockResolvedValue([
@@ -2491,7 +2326,6 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
 
   it('leaves a USD line (factor 1.0) at the numbers it was given, both directions', async () => {
     const client = makeClient({
-      // Empty for the placement's own adopt-or-place lookup, then the fill
       listOrderActivities: vi
         .fn()
         .mockResolvedValueOnce([])
@@ -2505,21 +2339,10 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     expect(vi.mocked(client.placeOrder).mock.calls[0]?.[0].OrderPrice).toBe(10);
     expect(fill?.price).toBe(10.25);
     expect(fill?.fee_currency).toBe('USD');
-    // #1521: no reachable Saxo surface carries this rate (verified on SIM,
-    // migration 0060's header) — a non-book-currency fill gets an explicit
-    // source naming why, never a silently missing rate
     expect(fill?.fx_rate_to_gbp).toBeUndefined();
     expect(fill?.fx_rate_to_gbp_source).toBe('not_reported_by_venue');
   });
 
-  /**
-   * The issue's own blast-radius arithmetic, pinned against the conversion
-   * rather than against the pipeline: ADR-0018 D5's £350 index allowance over
-   * 3UKL at 2,435 GBp buys 14 shares, where the unconverted quote would have
-   * put the instrument above the allowance and silently out of the tradeable
-   * set. Nothing feeds a Saxo quote into sizing today (no LSE mark source,
-   * #895), so this pins the consequence of the unit, not a wired path.
-   */
   it('turns the D5 cash allowance into a non-zero quantity on a GBX line', () => {
     const D5_INDEX_CASH_GBP = 350;
     const quoted = 2435;
@@ -2567,13 +2390,6 @@ describe('saxoInstrumentResolverFromVenue quote units (#1302)', () => {
     );
   });
 
-  /**
-   * The other side of the same coin flip, and the dangerous one: a scaling
-   * factor no currency difference corroborates would resolve clean and read
-   * 31151 as £3.1151, so an order aimed at £311.51 goes out as 31151. ADR-0018
-   * D5 sizes cash-first, making that a 100x OVER-quantity on a live GIA rather
-   * than the undersize the issue's own blast radius describes.
-   */
   it('refuses a scaling factor no PriceCurrency difference corroborates', async () => {
     const absent = detailsClient(
       new Map([
@@ -2594,13 +2410,6 @@ describe('saxoInstrumentResolverFromVenue quote units (#1302)', () => {
     );
   });
 
-  /**
-   * That refusal is fail-closed at boot, so its boundary matters: a line
-   * stating no quote unit and no scaling is not a contradiction — quote and
-   * cash coincide whatever `PriceCurrency` would have said — and must still
-   * resolve, or a gateway that merely omits the field takes the adapter down
-   * for every line rather than for a mis-priced one
-   */
   it('resolves a line with no PriceCurrency and a factor of 1', async () => {
     const client = detailsClient(
       new Map([
@@ -2614,16 +2423,7 @@ describe('saxoInstrumentResolverFromVenue quote units (#1302)', () => {
   });
 });
 
-/**
- * #1510 — `computeIdempotencyKey`'s real 64-character sha256 hex digest
- * overflows Saxo's 50-char `ExternalReference`. `saxoExternalReference`
- * derives a fixed-width venue reference from it and every read path
- * translates back, so this suite drives the adapter under the SHAPE
- * `computeIdempotencyKey` actually produces, not the short test-fixture ids
- * the rest of this file uses.
- */
 describe('SaxoBrokerAdapter Saxo ExternalReference derivation (#1510)', () => {
-  /** A real `computeIdempotencyKey` output shape: 64 lowercase hex chars */
   const HEX_64_KEY = 'a'.repeat(64);
 
   it('derives a fixed 40-hex reference, well inside the 50-char venue field even with a leg suffix', () => {
@@ -2634,11 +2434,6 @@ describe('SaxoBrokerAdapter Saxo ExternalReference derivation (#1510)', () => {
   });
 
   it('derives DISTINCT references for a retry/residual-reflatten suffix, never truncating the base digest', () => {
-    // execute.ts's resolveExitRetryKey and residual-reflatten.ts append these
-    // suffixes to the SAME base key precisely so a retry is a genuinely new
-    // attempt — slicing computeIdempotencyKey's own digest instead of hashing
-    // the whole client_order_id would have collapsed every retry of one
-    // order onto the same ExternalReference
     const base = saxoExternalReference(HEX_64_KEY);
     const retry1 = saxoExternalReference(`${HEX_64_KEY}:retry-1`);
     const retry2 = saxoExternalReference(`${HEX_64_KEY}:retry-2`);
@@ -2690,14 +2485,6 @@ describe('SaxoBrokerAdapter Saxo ExternalReference derivation (#1510)', () => {
     });
   });
 
-  /**
-   * Reconcile / fill-sync / `getOrder` / `resumeFlatten` round-trip: a fresh
-   * process (fresh adapter, journal-only knowledge of the bracket) must map
-   * the Saxo-observed `ExternalReference` back to the full 64-char
-   * `client_order_id` — never the wire value itself, which is what a
-   * translation bug would leak into `NormalizedOrder.client_order_id` and
-   * `NormalizedFill.client_order_id`
-   */
   it('maps the Saxo wire reference back to the full 64-character client_order_id on getOrder, after a restart', async () => {
     const state = new InMemoryBrokerStateStore();
     state.saveBracket({

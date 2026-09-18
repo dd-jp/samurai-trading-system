@@ -1,66 +1,8 @@
-/**
- * Backticked-path citation checker.
- *
- * Inline backticked path citations — `` `server/pipeline/verdict/index.ts:44` `` — are
- * load-bearing evidence in this repo's decision records: a reader who cannot resolve the
- * path cannot check the reasoning. Markdown link checkers cannot catch a stale one because
- * these are not links.
- *
- * The design errs one-directional, toward false negatives over false positives, because
- * the two failure modes here are asymmetric: noise trains everyone to ignore red and gets
- * the check deleted or `|| true`-d, while a "fix" that edits an ADR's path to satisfy the
- * checker falsifies the record — the ADR said what it said, at the tree it said it about.
- * Concretely: `IMMUTABLE_RECORD_DIRS` (four directories, listed once) is the only blanket
- * suppression, so no contributor is ever handed a red run whose cheapest fix is editing a
- * decision record; everything else silences per citation via an inline
- * `<!-- cite-exempt: ... -->` marker carrying a reason and a written justification, so an
- * exemption is a visible line in a diff with a sentence attached, never a directory quietly
- * added to a list; and extraction is narrow by construction (`parseCandidate`) — a token
- * must look unambiguously like a repo-relative path before it counts as a citation at all.
- * The `planned` reason inverts and self-clears: it FAILS once its path starts resolving, so
- * the widest exemption can't silently outlive its own truth once the module ships.
- *
- * Existence resolves against `git ls-files --cached` — not the working directory, which is
- * read for exactly one thing, an indexed file's CONTENT, to count its lines. It used to
- * `statSync` the working tree, so a clean checkout and one carrying gitignored `data/`
- * reported different violation counts for the same commit, and a citation to a runtime
- * artefact resolved only on a machine that happened to have produced it. `--cached` alone
- * (deliberately not `--others --exclude-standard`) fixes that by construction: the index
- * has no gitignored path and no runtime output, so the report is a pure function of the
- * index plus file content, with no list of runtime directories to keep current. Two
- * accepted costs follow from that choice, both in the safe (false-negative) direction: a
- * file cited in the same change that creates it reads unresolved until `git add`-ed, and a
- * new unstaged `.md` isn't scanned at all until staged. Outside a git checkout (a tarball
- * export, a vendored copy) the checker throws rather than falling back to the filesystem,
- * which would silently restore the working-tree dependence this design removed.
- *
- * Line validation is end-of-file only: `path:44` fails if the file has fewer than 44
- * lines, but nothing verifies line 44 still holds the cited *symbol* — the citation carries
- * no symbol name, and a heuristic scraping one out of surrounding prose would be a
- * false-positive generator, the direction this file must not err in.
- *
- * A `.ts`/`.tsx` comment cites a path the same way a markdown sentence does, so both are
- * scanned under identical rules: `parseCandidate` and the `cite-exempt` marker apply the
- * same in a line or block comment, with the same four exempt reasons. A bare symbol name
- * (no `/`) is rejected before path-checking for the reason above — verifying a symbol needs
- * the line-content check this file deliberately doesn't do. A fenced ``` block inside a doc
- * comment is NOT stripped the way markdown fencing is (`stripFencedBlocks`) — a path-shaped
- * backtick in a comment's own code example reads as a real citation, so mark it
- * `cite-exempt` or avoid the shape.
- */
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
-/**
- * Directories whose contents are preserved by rule and are therefore never parsed.
- *
- * This list is the checker's only blanket suppression and it must stay exactly this
- * long. If a future change wants to add a fifth directory to make the check go quiet,
- * that is the widening this ticket was written against — use a per-citation marker
- * instead, which costs one line and a sentence of justification.
- */
 export const IMMUTABLE_RECORD_DIRS = [
   'docs/adr/',
   'docs/wayfinder/',
@@ -68,30 +10,11 @@ export const IMMUTABLE_RECORD_DIRS = [
   'docs/reviews/',
 ] as const;
 
-/**
- * Directory names excluded from the scanned file set and from the known roots.
- *
- * Every entry here is TRACKED — that is the only reason an entry is needed at all.
- * `node_modules`, `dist`, `coverage`, `graphify-out`, `.git` and `.vitest-reports` are
- * structurally unreachable once resolution runs on the git index (verified with
- * `git ls-files` that none of them has a tracked file), so they were dropped from this
- * set. Do not re-add them: an entry that can never match is an entry a reader has to
- * disprove.
- *
- * `.claude/` appears in `.gitignore` yet has tracked files under it —
- * an explicit `git add` beats an ignore rule — so it is still load-bearing here.
- */
 const SKIPPED_DIRS = new Set([
-  // Agent skills: tracked, but not this repo's prose or source, and never
-  // the subject of a citation
   '.claude',
-  // Fixture markdown deliberately contains citations that do NOT resolve — that is what
-  // it is for. Scanning it would make the checker flag its own test data on every run.
-  // Do not remove this entry without moving the fixtures somewhere else first
   '__fixtures__',
 ]);
 
-/** Legacy top-level source root, since removed. Kept so `src/…` citations stay in scope. */
 const LEGACY_ROOT = 'src';
 
 export const EXEMPT_REASONS = ['foreign', 'historical', 'planned', 'untracked'] as const;
@@ -103,17 +26,11 @@ export interface Exemption {
 }
 
 export interface Citation {
-  /** Repo-relative path of the markdown file the citation was written in */
   readonly file: string;
-  /** 1-based line within that markdown file */
   readonly line: number;
-  /** The citation exactly as it appears between the backticks */
   readonly raw: string;
-  /** The path part, with any trailing `:line` and trailing slash removed */
   readonly path: string;
-  /** The cited line number, when the citation carried one */
   readonly lineNumber?: number;
-  /** Set when an in-document marker exempts this citation */
   readonly exemption?: Exemption;
 }
 
@@ -138,20 +55,11 @@ export interface Report {
   readonly violations: readonly Violation[];
 }
 
-/** What the tree says about a cited path. Injected so tests can run against fixtures. */
 export interface TreeResolver {
   kind(repoRelativePath: string): 'file' | 'directory' | 'missing';
   lineCount(repoRelativePath: string): number;
 }
 
-/**
- * Every path in the git index of the checkout at `root`, repo-relative, `/`-separated.
- *
- * `-z` because a NUL-separated listing needs no unquoting and cannot be confused by a
- * path containing a quote or a newline. Deliberately not memoized: a module-level cache
- * would make the invariance test vacuous — it would pass by never re-listing rather than
- * because the property holds.
- */
 export function listIndexedPaths(root: string): readonly string[] {
   let stdout: string;
   try {
@@ -171,13 +79,6 @@ export function listIndexedPaths(root: string): readonly string[] {
   return stdout.split('\0').filter((path) => path !== '');
 }
 
-/**
- * A resolver whose existence answers come from the index and whose line counts come from
- * disk.
- *
- * A path is a directory when the index holds something beneath it: git stores no
- * directory entries, so `docs/specs` is real exactly because `docs/specs/<name>.md` is.
- */
 export function createIndexResolver(root: string, indexedPaths: readonly string[]): TreeResolver {
   const files = new Set(indexedPaths);
   const directories = new Set<string>();
@@ -195,15 +96,8 @@ export function createIndexResolver(root: string, indexedPaths: readonly string[
       try {
         text = readFileSync(join(root, path), 'utf8');
       } catch {
-        // Indexed but not readable on disk — a tracked file deleted in the working tree
-        // with the deletion unstaged. Existence and content now come from different
-        // places, so this case exists where it could not before. Report a length no
-        // citation can exceed: the checker errs toward the false negative, and crashing
-        // the whole run over one locally-deleted file is the worst available outcome
         return Number.MAX_SAFE_INTEGER;
       }
-      // A trailing newline terminates the last line rather than starting an empty one,
-      // so `a\nb\n` is 2 lines, not 3 — cite `b` as `:2` and it must pass
       if (text === '') return 0;
       return text.replace(/\n$/, '').split('\n').length;
     },
@@ -212,25 +106,6 @@ export function createIndexResolver(root: string, indexedPaths: readonly string[
 
 const MARKER = /<!--\s*cite-exempt:\s*([a-z]+)\s*(?:[—:-]\s*)?([^>]*?)\s*-->/;
 
-/**
- * Marker scope is exactly one line: the line the marker is written on. Line scope is
- * the smallest scope that is still writable everywhere a citation can appear — prose
- * here is one paragraph per line, and a markdown table row is covered by appending the
- * marker after the row's final `|` (GFM discards the excess cell rather than rendering
- * it; a comment on its own line would end the table instead). There is deliberately no
- * file-scoped or block-scoped form — an exemption has to be attached to the citation it
- * excuses.
- *
- * The known cost: a marker covers every citation on its line, so a correct citation
- * sharing a line with an exempt one stops being checked. Narrowing the marker to a
- * single named path would recover that, at the price of a marker that goes stale
- * silently when the prose around it is edited — a false-positive source, which is the
- * direction this checker is not allowed to err in.
- *
- * Append the marker to the end of the cited line; never put it at the start. A comment
- * that opens a line opens a CommonMark HTML block, and the rest of that line stops being
- * parsed as markdown — links, emphasis and backticks in it render as literal text.
- */
 function markerOn(line: string): { reason: string; note: string } | null {
   const match = MARKER.exec(line);
   if (!match) return null;
@@ -248,7 +123,6 @@ function stepFence(line: string, fence: string | null): { output: string; fence:
   return { output: '', fence };
 }
 
-/** Blanks out fenced code blocks so inline-looking backticks inside them are not scanned */
 function stripFencedBlocks(lines: readonly string[]): string[] {
   const out: string[] = [];
   let fence: string | null = null;
@@ -260,21 +134,6 @@ function stripFencedBlocks(lines: readonly string[]): string[] {
   return out;
 }
 
-/**
- * Blanks out everything in a `.ts`/`.tsx` source that is not line- or block-comment
- * text, so a citation is only ever extracted from a comment — never from a string,
- * template literal, import specifier or type. Not a parser: strings/templates are
- * tracked as "opened by this quote char, closed by the same one, backslash escapes",
- * which cannot see a `${...}` interpolation re-entering code inside a template literal —
- * a false-negative risk this file is allowed to err in, since it means a citation goes
- * unseen rather than a false positive being raised.
- *
- * Every open delimiter — `'`, `"`, and a template's backtick alike — resets at
- * end-of-line, unconditionally: none of the three can legitimately leave a real string
- * open past a line's end in valid TS. Carrying a delimiter across the loop was tried and
- * measured worse: one dangling quote or backtick upstream blanked every later comment in
- * the file, including this function's own doc comment.
- */
 function consumeBlockComment(
   line: string,
   i: number,
@@ -308,7 +167,6 @@ function consumeCode(
   return { text: '', i: i + 1, inBlock: false, delim: null };
 }
 
-/** One line's worth of the comment-stripping state machine; `stringDelim` never carries past end-of-line */
 function scanCommentLine(line: string, inBlock: boolean): { output: string; inBlock: boolean } {
   let buf = '';
   let i = 0;
@@ -347,23 +205,6 @@ function stripToComments(lines: readonly string[]): string[] {
   return out;
 }
 
-/**
- * Whether a backticked token is a repo path citation.
- *
- * Deliberately strict — every rejection here is a false negative accepted on purpose:
- *
- *  - **At least two non-empty segments.** A bare top-level directory is a concept token,
- *    not a citation. CLAUDE.md literally asserts *"There is no root `src/`"*; demanding
- *    that `src/` resolve would be demanding the sentence create what it denies.
- *  - **Known first segment.** A directory that exists at the repo root today, or the
- *    legacy `src`. This keeps `application/json`, `req/min` and `crypto/stocks` out
- *    without a hand-maintained denylist, and it means a citation under a top-level name
- *    that never existed is ignored rather than flagged — cheap, and on the safe side.
- *  - **No metacharacters.** `docs/specs/<stage>-spec.md`, globs and anchored paths are
- *    templates or fragments, not citations of a concrete file.
- *  - **No line ranges.** `foo.ts:10-20` is skipped outright rather than mis-parsed into
- *    a path ending in `:10-20`.
- */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent rejection guards, each named for the one shape it rules out; splitting them into sub-functions would scatter one path-shape contract across several call sites for no gain in readability.
 function parseCandidate(
   token: string,
@@ -391,19 +232,6 @@ function parseCandidate(
   return lineNumber === undefined ? { path } : { path, lineNumber };
 }
 
-/**
- * Top-level directories that exist in the index, plus the legacy root.
- *
- * This is the half of the checker that used to flip on runtime state: a `data/`
- * produced by a paper run made `data` a known root, turning previously-ignored tokens
- * into citations. Directories are known because the index lists a file beneath them, so
- * no amount of runtime output can add one.
- *
- * There is no dotfile rule any more. `.github/**` is tracked, so the listing supplies
- * that root the same way it supplies `server`; the one tracked dot-directory that is
- * NOT wanted (`.claude`) is named in `SKIPPED_DIRS`, and every other dot
- * directory is untracked and therefore already absent.
- */
 export function knownRootsFromPaths(indexedPaths: readonly string[]): ReadonlySet<string> {
   const roots = new Set<string>([LEGACY_ROOT]);
   for (const path of indexedPaths) {
@@ -425,13 +253,6 @@ export interface ExtractOptions {
   readonly knownRoots: ReadonlySet<string>;
 }
 
-/**
- * Shared scan: `contentLines` is what gets searched for backticked citations (fenced
- * blocks blanked, for markdown; non-comment code blanked, for `.ts`/`.tsx`), while
- * `rawLines` — always the real source — is what a `cite-exempt` marker is read from, so
- * a marker written outside a fence or a comment still attaches to the citation on its
- * line
- */
 function citationsOnLine(
   rawLine: string,
   contentLine: string,
@@ -477,7 +298,6 @@ export function extractCitations(markdown: string, options: ExtractOptions): Cit
   return citationsFromLines(rawLines, stripFencedBlocks(rawLines), options);
 }
 
-/** Same rules as {@link extractCitations}, scoped to line- and block-comment text only */
 export function extractCodeCitations(source: string, options: ExtractOptions): Citation[] {
   const rawLines = source.split('\n');
   return citationsFromLines(rawLines, stripToComments(rawLines), options);
@@ -546,32 +366,14 @@ export function isPreservedByRule(repoRelativeFile: string): boolean {
   return IMMUTABLE_RECORD_DIRS.some((dir) => posix.startsWith(dir));
 }
 
-/**
- * The markdown to scan: tracked `.md`, minus anything under a skipped directory.
- *
- * Taking the file set from the index too — not just the resolution of the paths inside
- * it — is what makes `filesScanned` a repository fact. A walker would also pick up an
- * ignored `.md` dropped into the checkout by a tool, and the scanned count would move
- * again for a reason having nothing to do with the repository.
- */
 export function markdownFilesIn(indexedPaths: readonly string[]): string[] {
   return indexedPaths
     .filter((path) => path.endsWith('.md'))
     .filter((path) => !path.split('/').some((segment) => SKIPPED_DIRS.has(segment)));
 }
 
-/**
- * `.ts`/`.tsx` only — `.mts`/`.cts` are unused in this tree and are out of scope until one
- * is added; `runCitationCheck`'s dispatch uses this same pattern so a file neither `.md`
- * nor matching it is skipped explicitly, not swept in by an else branch
- */
 const CODE_EXTENSION_RE = /\.tsx?$/;
 
-/**
- * The `.ts`/`.tsx` source to scan for comment citations, tracked minus a skipped
- * directory — same rule `markdownFilesIn` applies, so `__fixtures__` (this file's own
- * `known-good.ts`/`known-bad.ts` included) is never scanned by the repo-wide run
- */
 export function codeFilesIn(indexedPaths: readonly string[]): string[] {
   return indexedPaths
     .filter((path) => CODE_EXTENSION_RE.test(path))
@@ -580,21 +382,13 @@ export function codeFilesIn(indexedPaths: readonly string[]): string[] {
 
 export interface CheckOptions {
   readonly root: string;
-  /** Repo-relative files to scan. Defaults to every tracked `.md`/`.ts`/`.tsx` under `root`. */
   readonly files?: readonly string[];
   readonly tree?: TreeResolver;
   readonly knownRoots?: ReadonlySet<string>;
-  /** The git index listing. Defaults to `git ls-files --cached` run against `root`. */
   readonly indexedPaths?: readonly string[];
-  /** Where citation text is read from. Defaults to the real filesystem under `root`. */
   readonly readMarkdown?: (repoRelativeFile: string) => string;
 }
 
-/**
- * Reachable as `null` only via the `files` option (the default file set is always `.md` or
- * `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
- * `filesScanned` stays a fact about files this run actually extracted citations from
- */
 function extractorFor(
   file: string,
 ): ((text: string, options: ExtractOptions) => Citation[]) | null {
@@ -622,8 +416,6 @@ function recordCitations(
 
 export function runCitationCheck(options: CheckOptions): Report {
   const root = resolve(options.root);
-  // Lazy: a caller that supplies the tree, the roots and the file list is running against
-  // fixtures and must not be made to shell out to git for a listing it never reads
   let listing: readonly string[] | undefined = options.indexedPaths;
   const indexed = (): readonly string[] => (listing ??= listIndexedPaths(root));
 
@@ -652,13 +444,6 @@ export function runCitationCheck(options: CheckOptions): Report {
     try {
       text = read(file);
     } catch {
-      // Indexed but not readable on disk — the same "deletion unstaged" case
-      // `createIndexResolver.lineCount` already tolerates, now reachable for the file
-      // BEING scanned too, not only for a file a citation points at. No citations found
-      // is the false negative this file is allowed to err toward; crashing the whole run
-      // over one locally-deleted file is not. Not counted as scanned either — an ENOENT
-      // never contributed a citation and `filesScanned` should stay a fact about files
-      // actually read, not files attempted
       continue;
     }
     const extract = extractorFor(file);

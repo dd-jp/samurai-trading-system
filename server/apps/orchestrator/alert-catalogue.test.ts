@@ -1,16 +1,3 @@
-/**
- * Every catalogue entry, through both adapters, against
- * `alert-catalogue.golden.json` — captured from the per-alert classes the
- * catalogue replaced, so a byte moved in an event code, level, payload key,
- * message or Telegram body reddens here. The golden holds each fixture case
- * outside and inside a `runWithTraceId('tick-x')` scope, which is what pins
- * the two trace shapes: ambient join (heartbeat, data failover, breach) and
- * threaded-id-wins (threshold clamp, mi coverage, the fill-sync surfaces).
- *
- * Below the table: the properties the golden cannot express — structure,
- * invariance across fields the formatter must not read, and the control-arm
- * predicate on surfaces the fixtures do not cover.
- */
 import { readFileSync } from 'node:fs';
 import { noCostBasisDrops } from '../../pipeline/control-arm/index.js';
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
@@ -352,9 +339,6 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
       qty: 3,
       observed_at: new Date('2026-01-02T10:00:00Z'),
     },
-    // #1550: the buy-to-close half. The pre-#1550 text said "sold" and
-    // "REVERSE" unconditionally, which on this case named the wrong verb and
-    // the wrong direction — a buy over-running a closed SHORT leaves a LONG
     {
       trace_id: 'fill-sync',
       flatten_idempotency_key: 'flatten-3',
@@ -366,8 +350,6 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
       observed_at: new Date('2026-01-02T10:00:00Z'),
     },
   ],
-  // #1550: live arm, then control arm — the second must log and send nothing,
-  // the `page` predicate `flattenReconcileAlerts` above is fixtured for
   unrecordedVenuePositionAlerts: [
     { trace_id: 'fill-sync', instrument: '3LDE', qty: 40, side: 'buy', observed_at: AT },
     {
@@ -391,7 +373,6 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
   ],
 };
 
-/** Each port through its own method name — what makes `asPort`'s cast in the catalogue safe */
 const INVOKE: { readonly [K in AlertId]: (port: AlertPort<K>, alert: AlertOf<K>) => unknown } = {
   heartbeatChannel: (port, alert) => port.postHeartbeat(alert),
   orphanAlerts: (port, alert) => port.postOrphanAlert(alert),
@@ -437,7 +418,6 @@ const GOLDEN: { readonly [K in AlertId]: readonly GoldenCase[] } = JSON.parse(
   readFileSync(new URL('./alert-catalogue.golden.json', import.meta.url), 'utf8'),
 );
 
-/** The golden went through JSON once, so the live value must too (Dates become ISO strings) */
 function roundTrip(value: unknown): unknown {
   return value === undefined ? null : JSON.parse(JSON.stringify(value));
 }
@@ -458,7 +438,6 @@ function telegramStub(outcome: 'sends' | 'fails'): TelegramClient & { sent: [str
   };
 }
 
-/** Lets a detached send's `.catch` run */
 function settle(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -530,8 +509,6 @@ function describeTradeChannel<K extends AlertId>(id: K): void {
         await returned;
         await settle();
 
-        // A detached port answers nothing, so no caller can await a page
-        // that was never going to reach it; an awaited one hands back the send
         expect(returned === undefined).toBe(delivery === 'detached');
         expect(telegram.sent).toEqual(expected?.text === null ? [] : [[CHAT_ID, expected?.text]]);
         expect(logger.entries).toEqual([]);
@@ -577,8 +554,6 @@ describe('armDivergenceAlerts text', () => {
   const { text } = ALERT_CATALOGUE.armDivergenceAlerts;
 
   it('prints both arms with return AND drawdown — no return-only line exists (doc 12 D4)', () => {
-    // Structural rather than by substring, so an edit that splits the
-    // columns onto separate lines fails here
     const armLines = text(ALERT)
       .split('\n')
       .filter((line) => line.includes('return '));
@@ -588,12 +563,6 @@ describe('armDivergenceAlerts text', () => {
     }
   });
 
-  /**
-   * #1099 added `refused_pass_count` to `ArmPerformance`, which this alert
-   * carries whole. The ruling kept refusals OUT of alerting, so the message an
-   * operator's phone shows must not move — the formatter picks its fields
-   * explicitly and reads no refusal count.
-   */
   it('renders the identical message whether or not the window carried refusals', () => {
     const refused = {
       ...ALERT,
@@ -612,10 +581,6 @@ describe('residualExposureAlerts text', () => {
   const [ALERT] = FIXTURES.residualExposureAlerts;
   const { text } = ALERT_CATALOGUE.residualExposureAlerts;
 
-  // #1348: `trace_id` was added to `ResidualExposureAlert` purely to
-  // distinguish the two arms at the LOG line — the Telegram body must not
-  // change with it, or the arm label would leak onto an operator's phone
-  // through a formatter no one intended to touch
   it('does not vary with trace_id', () => {
     expect(text({ ...ALERT, trace_id: 'control-arm-fill-sync' })).toBe(
       text({ ...ALERT, trace_id: 'fill-sync' }),
@@ -626,11 +591,6 @@ describe('residualExposureAlerts text', () => {
 describe('flattenReconcileAlerts page predicate (#1349)', () => {
   const [ALERT] = FIXTURES.flattenReconcileAlerts;
 
-  // DECISION (David, 2026-09-08, #1349): the control arm's broker is
-  // `SimulatedBrokerAdapter` — there is no venue, so this page's "check the
-  // order on the venue by hand" instruction is never actionable for a
-  // control-arm trace_id. The predicate reads the whole trace_id, not a
-  // fixed literal, so both surfaces of each arm resolve the same way
   it.each([
     ['reconcile', true],
     ['fill-sync', true],

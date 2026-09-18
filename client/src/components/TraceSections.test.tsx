@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `GatesSection`'s binding-constraint and critic-verdict text branches — the
- * two highest-risk functions in the drawer decluttering pass (#1588 review
- * round 2). Both drawers render these through the shared component, so one
- * test here covers Live and Review at once.
- */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { makeRiskCritic } from '../test-fixtures.ts';

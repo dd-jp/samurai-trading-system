@@ -1,30 +1,6 @@
-/**
- * MetricsSuite computation (ticket #89). See
- * docs/specs/cost-model-backtest-spec.md ("Module: Validation Library").
- *
- * **Reported together, never one number.** `computeMetrics` is the only export:
- * there is deliberately no `computeSharpe(...)` for a caller to reach for. The
- * suite exists because a single number invites the cherry-pick the whole
- * overfitting defence is built to stop, so the shape enforces it.
- *
- * **Implemented in TypeScript, not pybroker.** The spec names pybroker as the
- * eval executor, but ADR-0001 resolves the reuse posture as "mine the three
- * repos for patterns, no hard dependency ... Python repos remain pattern
- * references only, read during implementation, not imported" and fixes
- * TypeScript as the core language. #88 set the same precedent for the harness.
- * The repos are not on disk in this worktree, so the formulas below come from
- * their primary sources (cited per-function) rather than from pybroker's
- * `src/eval.py`. <!-- cite-exempt: foreign — pybroker's own tree, mined not depended on; never expected to exist here -->
- */
 
 import type { MetricsSuite, ReturnSeries, TradeSeries } from './validation-types.js';
 
-/**
- * Compute the full suite. Throws rather than returning a degenerate number:
- * every ratio below is undefined on a zero-dispersion or empty sample, and a
- * silently-zero Sharpe next to a real drawdown is precisely the kind of
- * flattering lie this component exists to prevent.
- */
 export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): MetricsSuite {
   assertUsableSeries(returns);
 
@@ -43,9 +19,6 @@ export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): Metr
   const downside = downsideDeviation(r);
   const max_drawdown = maxDrawdown(r);
 
-  // The DSR inputs (#406). `per_period_sharpe` is the statistic
-  // `deflatedSharpe()` is defined against; `sharpe` below is it times
-  // `annualization`, so the two can never disagree about the same sample
   const per_period_sharpe = mean / stdev;
 
   return {
@@ -68,23 +41,6 @@ export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): Metr
   };
 }
 
-/**
- * Lo (2002), "The Statistics of Sharpe Ratios", eq. (9-10): the correct
- * factor for scaling a per-period Sharpe to a q-period one is
- *
- *   ξ(q) = q / sqrt( q + 2·Σ_{k=1..q-1} (q−k)·ρ_k )
- *
- * **not** the naive √q, which is only the ρ_k = 0 special case (substitute and
- * see). The distinction is load-bearing rather than academic: positively
- * autocorrelated returns — the shape a trend-following system produces — have
- * a q-period variance *larger* than q times the per-period variance, so √q
- * overstates their annualized Sharpe. The spec calls this out by name.
- *
- * The autocovariances use the biased (÷n) estimator on purpose. Together with
- * the (q−k) Bartlett weights that makes the denominator a variance-of-a-sum
- * estimate, which is non-negative by construction — the (÷(n−k)) estimator can
- * produce a negative radicand on noisy samples.
- */
 function loAnnualizationFactor(r: readonly number[], periodsPerYear: number): number {
   const maxLag = Math.min(periodsPerYear - 1, r.length - 1);
 
@@ -106,7 +62,6 @@ function loAnnualizationFactor(r: readonly number[], periodsPerYear: number): nu
   return periodsPerYear / Math.sqrt(varianceOfSum);
 }
 
-/** ρ_k, via the biased autocovariance estimator — see loAnnualizationFactor */
 function autocorrelation(r: readonly number[], lag: number): number {
   const mean = average(r);
   const deviations = r.map((value) => value - mean);
@@ -126,16 +81,9 @@ function autocorrelation(r: readonly number[], lag: number): number {
     variance += deviation ** 2;
   }
 
-  // Standard biased autocorrelation: numerator has n−lag terms,
-  // denominator has n terms. The 1/n cancels out of the ratio.
   return variance === 0 ? 0 : covariance / variance;
 }
 
-/**
- * Downside deviation about a zero target: only returns below the target
- * contribute, but the sum is divided by the full n (Sortino's convention) so
- * a strategy is not rewarded for having few, deep losses
- */
 function downsideDeviation(r: readonly number[]): number {
   let sum = 0;
   for (const value of r) {
@@ -146,14 +94,12 @@ function downsideDeviation(r: readonly number[]): number {
   return Math.sqrt(sum / r.length);
 }
 
-/** Geometric, so the compounding a real account experiences is respected */
 function annualizedReturn(r: readonly number[], periodsPerYear: number): number {
   let equity = 1;
   for (const value of r) {
     equity *= 1 + value;
   }
 
-  // A wipeout has no real annualized return; -100% is the honest report
   if (equity <= 0) {
     return -1;
   }
@@ -161,7 +107,6 @@ function annualizedReturn(r: readonly number[], periodsPerYear: number): number 
   return equity ** (periodsPerYear / r.length) - 1;
 }
 
-/** Worst peak-to-trough decline of the compounded equity curve, as a positive fraction */
 function maxDrawdown(r: readonly number[]): number {
   let equity = 1;
   let peak = 1;
@@ -176,12 +121,6 @@ function maxDrawdown(r: readonly number[]): number {
   return worst;
 }
 
-/**
- * Gross wins / gross losses. `Infinity` on a lossless sample is deliberate:
- * the ratio genuinely is unbounded there, and substituting a finite stand-in
- * would invent an edge the sample does not show. A caller reading `Infinity`
- * next to a 3-trade sample can see the metric for what it is.
- */
 function profitFactor(trades: TradeSeries): number {
   let wins = 0;
   let losses = 0;
@@ -201,7 +140,6 @@ function profitFactor(trades: TradeSeries): number {
   return wins / losses;
 }
 
-/** (P_win × AvgWin) − (P_loss × AvgLoss), per trade. Net of costs — see `Trade.pnl`. */
 function expectancy(trades: TradeSeries): number {
   const all = trades.trades;
   if (all.length === 0) {
@@ -234,12 +172,6 @@ function turnover(trades: TradeSeries): number {
   return notional / trades.averageCapital;
 }
 
-/**
- * Fraction of the window with *any* position open. Overlapping trades are
- * merged rather than summed: two instruments held at once is one period of
- * market exposure, and summing them would report exposure > 1 for a portfolio
- * that was simply diversified.
- */
 function exposure(trades: TradeSeries): number {
   const windowMs = trades.window.end.getTime() - trades.window.start.getTime();
 
@@ -280,13 +212,11 @@ function exposure(trades: TradeSeries): number {
   return held / windowMs;
 }
 
-/** Sample skew, g1 = m3 / m2^1.5 — the moment estimator the DSR is defined against */
 function skew(r: readonly number[]): number {
   const m2 = centralMoment(r, 2);
   return m2 === 0 ? 0 : centralMoment(r, 3) / m2 ** 1.5;
 }
 
-/** **Excess** kurtosis: m4 / m2² − 3, so a normal sample reports 0 */
 function excessKurtosis(r: readonly number[]): number {
   const m2 = centralMoment(r, 2);
   return m2 === 0 ? 0 : centralMoment(r, 4) / m2 ** 2 - 3;

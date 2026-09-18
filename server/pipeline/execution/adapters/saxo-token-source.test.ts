@@ -1,12 +1,3 @@
-/**
- * #1523 — the refresher that keeps a Saxo OAuth session alive.
- *
- * Every case here is offline: a fake token endpoint, injected timers and a
- * sandboxed token file. Nothing reads the operator's real saved session, and
- * the one acceptance criterion that needs the live SIM gateway (authenticated
- * calls across consecutive access-token lifetimes) is a measurement, not a
- * test.
- */
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -43,7 +34,6 @@ function savedRecord(overrides: Partial<SaxoTokenFileRecord> = {}): SaxoTokenFil
     environment: 'sim',
     accessToken: SAVED_ACCESS,
     refreshToken: SAVED_REFRESH,
-    // The lifetimes measured on live, 2026-09-14: 1200 s / 3600 s
     accessTokenExpiresAt: new Date(START + 1_200_000).toISOString(),
     refreshTokenExpiresAt: new Date(START + 3_600_000).toISOString(),
     obtainedAt: new Date(START).toISOString(),
@@ -163,8 +153,6 @@ describe('SaxoTokenRefresher', () => {
     const { refresher, scheduled, calls } = build();
     refresher.start();
 
-    // 1200 s of access-token life, refreshed a minute early — derived from the
-    // saved instants, never from a hard-coded 20/40-minute window
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0]?.delayMs).toBe(1_200_000 - 60_000);
 
@@ -173,7 +161,6 @@ describe('SaxoTokenRefresher', () => {
 
     expect(calls).toEqual([`grant_type=refresh_token&refresh_token=${SAVED_REFRESH}`]);
     expect(await refresher.getAccessToken()).toBe(ROTATED_ACCESS);
-    // The next window is armed off the NEW response, not the old record
     expect(scheduled).toHaveLength(2);
     expect(scheduled[1]?.delayMs).toBe(1_200_000 - 60_000);
     void refresher.stop();
@@ -185,10 +172,6 @@ describe('SaxoTokenRefresher', () => {
     const inUse: SaxoSessionState[] = [];
     const built = build({
       writeRecord: (target, record) => {
-        // Both halves of the ordering, observed mid-write: the file still
-        // holds the old refresh token, and the refresher still reports the old
-        // session. Either one swapping first is a token in use whose partner
-        // is not on disk
         observed.push(readTokenFile(target)?.refreshToken ?? 'none');
         inUse.push(built.refresher.sessionState());
         writeTokenFile(target, record);
@@ -196,8 +179,6 @@ describe('SaxoTokenRefresher', () => {
     });
     const refresher = built.refresher;
     refresher.start();
-    // Fired late in the access token's life, so the rotated record's expiry is
-    // a different instant from the saved one and the swap is observable
     built.clock.advance(1_140_000);
     built.scheduled[0]?.callback();
     await refresher.whenIdle();
@@ -258,7 +239,6 @@ describe('SaxoTokenRefresher', () => {
     expect(await second.refresher.getAccessToken()).toBe(ROTATED_ACCESS);
     second.scheduled[0]?.callback();
     await second.refresher.whenIdle();
-    // The restarted process refreshes with the token the first one SAVED
     expect(second.calls).toEqual([`grant_type=refresh_token&refresh_token=${ROTATED_REFRESH}`]);
     second.refresher.stop();
   });
@@ -293,9 +273,6 @@ describe('SaxoTokenRefresher', () => {
     await expect(firstRefresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
     expect(first.alerts).toHaveLength(1);
 
-    // A fresh `npm run saxo:login` writes a usable session; the restarted process
-    // gets a brand-new `SaxoTokenRefresher`, which is the only way `lostReason`
-    // is ever cleared — see `SaxoSessionLostAlert`'s doc
     writeTokenFile(path, savedRecord());
     const second = recordingSessionLostAlerts();
     const secondRefresher = build({ sessionLostAlerts: second }).refresher;
@@ -303,7 +280,6 @@ describe('SaxoTokenRefresher', () => {
     expect(second.alerts).toHaveLength(0);
     void secondRefresher.stop();
 
-    // A LATER loss on the new instance alerts again, independent of the first
     const failing = build({
       sessionLostAlerts: second,
       fetchImpl: async () => new Response('{"error":"invalid_grant"}', { status: 400 }),
@@ -313,11 +289,6 @@ describe('SaxoTokenRefresher', () => {
     await failing.refresher.whenIdle();
     expect(second.alerts).toHaveLength(1);
 
-    // `lose()` clears the timer without re-arming it, so nothing should ever
-    // invoke this callback again in production — but if something did (a
-    // stray re-entry into `runRefresh()` on an already-lost instance), the
-    // guard at its top, not a second dedup check, is what must stop a second
-    // alert
     failing.scheduled[0]?.callback();
     await failing.refresher.whenIdle();
     expect(second.alerts).toHaveLength(1);
@@ -328,8 +299,6 @@ describe('SaxoTokenRefresher', () => {
 
     await expect(refresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
 
-    // The refusal is still logged — see the pre-existing "no saved session"
-    // case — this only proves the optional channel costs nothing when absent
     expect(entries.map((entry) => entry.event)).toContain('saxo_session_lost');
   });
 
@@ -372,7 +341,6 @@ describe('SaxoTokenRefresher', () => {
       status: 'lost',
       reason: 'the refresh token was rejected (HTTP 400)',
     });
-    // One armed refresh, cleared; no retry behind it
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0]?.cleared).toBe(true);
     expect(entries.map((entry) => entry.event)).toContain('saxo_session_lost');
@@ -394,8 +362,6 @@ describe('SaxoTokenRefresher', () => {
     }
     expect(refresher.sessionState()).toMatchObject({ status: 'active', failedAttempts: 4 });
 
-    // Inside the last few seconds of the refresh window, another retry could
-    // not land before it closes — so the session is declared lost instead
     clock.advance(3_600_000 - 3_000);
     scheduled[scheduled.length - 1]?.callback();
     await refresher.whenIdle();
@@ -407,8 +373,6 @@ describe('SaxoTokenRefresher', () => {
   it('puts no token value in any log line or error message', async () => {
     writeTokenFile(path, savedRecord());
     const { refresher, scheduled, entries } = build({
-      // An upstream body that echoes the secret back is the worst case this
-      // has to survive
       fetchImpl: async () => new Response(`refused for ${SAVED_REFRESH}`, { status: 500 }),
       backoff: { baseMs: 1_000, maxMs: 1_000 },
     });
@@ -470,13 +434,6 @@ describe('SaxoTokenRefresher', () => {
     void refresher.stop();
   });
 
-  /**
-   * Shutdown joins an in-flight rotation. The gateway invalidated the previous
-   * refresh token when it issued this one, so a process that exits between
-   * receipt and `rename` has no working token at all on its next boot — the
-   * operator has to run `npm run saxo:login` again. `stop()` resolving early is
-   * that exit: `buildShutdownHandler` calls `exit(0)` the moment it does.
-   */
   it('does not resolve stop() until a rotation in flight has been written to disk', async () => {
     writeTokenFile(path, savedRecord());
     let releaseGateway = (): void => {};
@@ -493,21 +450,12 @@ describe('SaxoTokenRefresher', () => {
     scheduled[0]?.callback();
 
     const stopped = refresher.stop();
-    // The gateway replies AFTER shutdown began — the exact window in which a
-    // non-joining stop would lose the rotated token
     releaseGateway();
     await stopped;
 
     expect(readTokenFile(path)?.refreshToken).toBe(ROTATED_REFRESH);
   });
 
-  /**
-   * The refresher is stopped after the orchestrator drains, but the drain
-   * itself still sends Saxo requests. Once stopped it renews nothing, so the
-   * only safe answer to an expired access token is to refuse: a 401 is
-   * deliberately non-retryable, and a drain would read it as a venue failure
-   * rather than as the session having ended.
-   */
   it('refuses rather than handing out an expired bearer once it has been stopped', async () => {
     writeTokenFile(path, savedRecord());
     const { refresher, clock, calls } = build();

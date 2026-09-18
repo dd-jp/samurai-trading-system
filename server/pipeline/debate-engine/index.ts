@@ -1,13 +1,5 @@
-/**
- * Debate Engine (Stage 2) — see docs/specs/debate-engine-spec.md, epic #40.
- * Implemented ticket-by-ticket starting with #24.
- */
 
 export type { DebateRoundLogEntry } from '../../shared/index.js';
-// Re-exported from `shared/llm` rather than owned here: the sentiment agent
-// prices against the same table, and `shared/llm/nous-config.ts` reads it to
-// refuse an unpriced model at startup. Kept on this barrel because the debate
-// engine's spend meter is still its principal consumer
 export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions, computeInfluenceScore } from './analyst-contribution.js';
 export { computeConvictionScore, EVIDENCE_WEIGHT } from './conviction-score.js';
@@ -46,13 +38,6 @@ export {
 } from './llm/errors.js';
 export type { FailureCause } from './llm/failure-cause.js';
 export { classifyFailureCause } from './llm/failure-cause.js';
-// The prompt-plumbing three, on the barrel since #957 because the risk critic
-// (`risk-manager/critic.ts`) is the first consumer OUTSIDE this module: it
-// answers in JSON and shows a model book context, so it needs the same
-// bare-JSON instruction, the same fence-tolerant unwrap, and the same
-// untrusted-data wrapper the debate's own prompts use. Sharing them is the
-// point — a second copy of any of the three would drift from the one the
-// personas are tested against
 export { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 export { MockLlmClient } from './llm/mock-client.js';
 export { NousMessagesClient } from './llm/nous-messages-client.js';

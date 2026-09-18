@@ -74,18 +74,10 @@ function buildInput(signal: Signal, trace_id: string, newsSentiment: 1 | 0 | -1 
     trace_id,
     signal,
     clock,
-    // #811: AnalystInput.bar is required too — the claimed decision bar's
-    // open_time, which in every other production case is already floored to
-    // the debate-bar grid. ASOF stands in for it here, unchanged.
     bar: ASOF,
     market_intelligence: marketIntelligence,
     market_data: marketData,
-    // #746: fundamental never reads it, but AnalystInput.calendar is
-    // required, so every test-built input must inject one explicitly rather
-    // than leave it undefined
     calendar: new AlwaysOpenCalendar(),
-    // #790: AnalystInput.telemetry is required too; this analyst has nothing
-    // to report through it, so the no-op default is correct here
     telemetry: NOOP_ANALYST_TELEMETRY,
   };
 }
@@ -139,9 +131,6 @@ describe('fundamentalAnalyst', () => {
   });
 
   it('marks an EMPTY intelligence window as absent input, not a neutral read (#436)', async () => {
-    // Sharper here than for sentiment: `fundamental` is MANDATORY for stocks,
-    // so an equity debate runs one real analyst of three while this returns a
-    // constant — and ADR-0007 removed the human gate that might have caught it
     const clock = new ManualClock(ASOF);
     const empty = new MarketIntelligenceStore(clock);
     const input = { ...buildInput(signal, 'trace-empty'), market_intelligence: empty };
@@ -242,12 +231,6 @@ describe('fundamentalAnalyst', () => {
       expect(view.confidence).toBe(0.05);
     });
 
-    /**
-     * #960's MI-wide rule: an LSE-listed leveraged ETP's MI read targets the
-     * US underlying (`screening_instrument`), not the traded `lse_ticker`. A
-     * real pool row (`3USL` -> `SPY`, `lse-etp-pool.ts`) proves the resolution
-     * step actually runs rather than merely existing unused.
-     */
     it('resolves an LSE ETP instrument through screeningInstrumentFor to its US underlying before querying MI', async () => {
       const clock = new ManualClock(ASOF);
       const store = new MarketIntelligenceStore(clock);
@@ -281,14 +264,6 @@ describe('fundamentalAnalyst', () => {
     });
   });
 
-  /**
-   * #1164: macro/GDELT/Polymarket items now route to `marketContext.intel`,
-   * not `.news` — this analyst must still fold them into its evidence, or the
-   * routing fix silently re-breaks the 2026-09-05 Polymarket visibility fix
-   * on the live LSE-ETP universe, where Alpaca News returns 0 `.news` items
-   * and Polymarket's class-wide items were the only signal reaching
-   * `fundamental`
-   */
   describe('class-wide intel items (#1164)', () => {
     function ingestIntelOnly(
       clock: ManualClock,

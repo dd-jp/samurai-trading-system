@@ -12,9 +12,6 @@ function recordingLogger(): Logger & { entries: LogEntry[] } {
   return { entries, log: (entry) => entries.push(entry) };
 }
 
-// `ScoreItemsDeps.logger` is required (#1392 review round 1, F5) — every call
-// below that isn't asserting on logged entries passes this instead of a
-// `recordingLogger()`
 const NOOP_LOGGER: Logger = { log: () => {} };
 
 const ITEMS: ScorableItem[] = [
@@ -50,12 +47,6 @@ describe('scoreItems', () => {
     ]);
   });
 
-  /**
-   * AC3 (#1533): the gate's own log lines want the finer
-   * `market_intelligence_scoring` name, but `llm_spend`'s ADR-0008 cap
-   * grouping (module doc comment) must keep reading `stage:
-   * 'market_intelligence'` unchanged — the two names diverge on purpose
-   */
   it('sets gate_stage to market_intelligence_scoring without changing the metered stage', async () => {
     const client = new MockLlmClient();
     client.enqueueText(JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }));
@@ -85,10 +76,6 @@ describe('scoreItems', () => {
     expect(result.scores).toEqual([{ index: 0, sentiment: 1, confidence: 0.8 }]);
   });
 
-  // Narrower than #1392's batch-wide scope: the whole batch answered fine,
-  // one index inside it did not. #1420 fixed this by tagging the fallback
-  // `omitted: true` — distinguishable from a genuine unanimous-neutral read
-  // even though `degraded` stays `false` for the batch
   it('an item the model omitted falls back to UNSCORED tagged omitted: true, distinguishable from a genuine neutral read', async () => {
     const client = new MockLlmClient();
     client.enqueueText(JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }));
@@ -133,9 +120,6 @@ describe('scoreItems', () => {
 
     it('reports invalid, rather than a successful empty parse, when every scored entry fails validation', async () => {
       const client = new MockLlmClient();
-      // Well-formed JSON, `scores` is an array, but nothing in it matches the
-      // expected shape — the old `scores.filter(isScore)` reported this as
-      // `valid: true` with `data: { scores: [] }`
       client.enqueueText(JSON.stringify({ scores: [{ note: 'no directional read' }] }));
 
       const result = await scoreItems(ITEMS, { llmClient: client, logger: NOOP_LOGGER });

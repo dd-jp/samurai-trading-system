@@ -33,9 +33,6 @@ describe('scaleCostConfig', () => {
     expect(scaled.venues).toBeUndefined();
   });
 
-  // #1000: floors/venues are not "cost coefficients" this function scales —
-  // dropping them would silently reset a caller's floor override or Saxo
-  // rate back to the default at every rung of the sensitivity ladder
   it('carries floors through UNSCALED rather than dropping them', () => {
     const withFloors: CostConfig = {
       ...BASE,
@@ -47,12 +44,6 @@ describe('scaleCostConfig', () => {
     expect(scaled.floors).toEqual({ minHalfSpreadRate: 0.002, minCommissionRate: 0.003 });
   });
 
-  // #1017: `venues[*]` rate fields are cost coefficients (the same kind of
-  // fact as `stocks.commissionRate`/`crypto.commissionRate`), unlike
-  // `floors`, and must be scaled the same way — carrying them through
-  // unscaled silently under-measures cost sensitivity the moment a
-  // Saxo-keyed config reaches the ladder (`PESSIMISTIC_COST_CONFIG` sets no
-  // `venues` today, so this was inert, not yet observable, before #1017)
   it('scales every present rate field of each venue override by factor (#1017)', () => {
     const withVenues: CostConfig = {
       ...BASE,
@@ -77,10 +68,6 @@ describe('scaleCostConfig', () => {
     expect('spreadVolatilityCoefficient' in (scaled.venues?.saxo ?? {})).toBe(false);
   });
 
-  // #1000 review finding: floors/venues must be copied, not aliased — a
-  // caller mutating a scaled rung's floors/venues (e.g. the sensitivity
-  // ladder in run-stage2-cost-decomposition.ts) must not reach back into the
-  // input config it was scaled from
   it('copies floors rather than aliasing the input config object', () => {
     const withFloors: CostConfig = {
       ...BASE,
@@ -104,12 +91,6 @@ describe('scaleCostConfig', () => {
     expect(scaled.venues?.saxo).not.toBe(withVenues.venues?.saxo);
   });
 
-  // #1032 item 2: the #1017 tests above check the scaled CONFIG object. None
-  // of them would have caught `venues` being inert end to end, because no
-  // `MarketState` in the codebase carried `venue`. This one prices a fill
-  // through `CostModelImpl` against a venue-stamped state, so the scaled
-  // Saxo rate must show up in the charged commission — not just in the
-  // config it was copied into
   it('charges the SCALED Saxo rate on a venue-stamped fill (end to end)', () => {
     const withVenues: CostConfig = {
       ...BASE,
@@ -137,7 +118,6 @@ describe('scaleCostConfig', () => {
     const { venue: _venue, ...unstamped } = state;
     const unkeyed = new CostModelImpl(withVenues).fill(request, unstamped);
 
-    // Notional 1,000: 8bps -> 0.8, halved -> 0.4, base stocks 5bps -> 0.5
     expect(full.cost_breakdown.commission).toBeCloseTo(0.8, 10);
     expect(half.cost_breakdown.commission).toBeCloseTo(0.4, 10);
     expect(unkeyed.cost_breakdown.commission).toBeCloseTo(0.5, 10);

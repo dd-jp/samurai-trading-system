@@ -1,11 +1,5 @@
-/**
- * Deterministic technical-indicator computation — fixed rounding, no
- * floating nondeterminism (docs/specs/market-data-service-spec.md).
- * Computed here rather than inside analysts, so analysts stay stateless.
- */
 import { type Bar, INDICATOR_KINDS, type IndicatorKind, type IndicatorSpec } from './types.js';
 
-/** Fixed rounding so repeated computations are byte-identical */
 const ROUNDING_PRECISION = 8;
 
 function round(value: number): number {
@@ -62,9 +56,6 @@ function rsi(values: number[], period: number): number {
     avgLoss = (avgLoss * (period - 1) + loss) / period;
   }
 
-  // A genuinely flat window (every change zero, e.g. a halted or
-  // auction-flat bar): the standard `avgLoss === 0 -> 100` branch below
-  // would treat 0/0 as maximum strength, so return the neutral 50 instead (#725)
   if (avgGain === 0 && avgLoss === 0) {
     return 50;
   }
@@ -103,17 +94,10 @@ function atr(bars: Bar[], period: number): number {
   return atrValue;
 }
 
-/**
- * ATR as a percentage of the last close (#744). Scale-dependent — scales
- * by the leverage factor vs the underlying, so a spec comparing the two
- * directly must target one instrument consistently.
- */
 function atrPctValue(bars: Bar[], period: number): number {
   const atrValue = atr(bars, period);
   const lastClose = (bars[bars.length - 1] as Bar).close;
 
-  // A 0 close never occurs in this system's universe, but guarding it keeps
-  // the "never NaN/Infinity" contract true unconditionally, not just in practice
   if (lastClose === 0) {
     return 0;
   }
@@ -121,10 +105,6 @@ function atrPctValue(bars: Bar[], period: number): number {
   return (atrValue / lastClose) * 100;
 }
 
-/**
- * Donchian channel position (#744): last close's fraction in [0, 1]
- * between the window's lowest low (0) and highest high (1)
- */
 function donchianPosValue(bars: Bar[], period: number): number {
   const window = bars.slice(-period);
   const highestHigh = Math.max(...window.map((bar) => bar.high));
@@ -132,8 +112,6 @@ function donchianPosValue(bars: Bar[], period: number): number {
   const range = highestHigh - lowestLow;
   const lastClose = (window[window.length - 1] as Bar).close;
 
-  // Zero-range window: no "where in the range" to report, so answer the
-  // neutral midpoint 0.5 rather than let NaN propagate (same posture as #725's RSI fix)
   if (range === 0) {
     return 0.5;
   }
@@ -141,12 +119,6 @@ function donchianPosValue(bars: Bar[], period: number): number {
   return (lastClose - lowestLow) / range;
 }
 
-/**
- * Wilder's ADX (#744) — exposes only the scalar the confidence cap reads.
- * Uses Wilder's accumulation smoothing form for the TR/+DM/-DM smoothers
- * (matching the Python reference `generate-indicator-golden.py`), not
- * `atr()`'s mean form — the two differ by a constant factor that cancels exactly in `DI = 100 * smoothedDM / smoothedTR`.
- */
 function adxValue(bars: Bar[], period: number): number {
   const plusDM: number[] = [];
   const minusDM: number[] = [];
@@ -175,10 +147,8 @@ function adxValue(bars: Bar[], period: number): number {
   let smoothedPlus = sum(plusDM.slice(0, period));
   let smoothedMinus = sum(minusDM.slice(0, period));
 
-  // Zero true range throughout: nothing to divide DI by, so DI+/DI- read 0 rather than NaN
   const diPlus = () => (smoothedTR === 0 ? 0 : (100 * smoothedPlus) / smoothedTR);
   const diMinus = () => (smoothedTR === 0 ? 0 : (100 * smoothedMinus) / smoothedTR);
-  // DI+ === DI- === 0: no directional imbalance to report, so DX reads 0 rather than NaN
   const dxFrom = (plus: number, minus: number) =>
     plus + minus === 0 ? 0 : (100 * Math.abs(plus - minus)) / (plus + minus);
 
@@ -201,12 +171,6 @@ function adxValue(bars: Bar[], period: number): number {
   return adxAverage;
 }
 
-/**
- * MACD histogram (#744): `macdLine - signalLine` as a flat scalar, not a
- * shared `macd` kind — widening `IndicatorValue.value` would touch the
- * cache key, the accessor, and four consumers. `fast`/`slow`/`signal` are
- * all required; none fall back to `spec.lookback` since no one of the three is obviously "the" period.
- */
 function macdHistogramValue(bars: Bar[], fast: number, slow: number, signal: number): number {
   const values = closes(bars);
 
@@ -221,12 +185,9 @@ function macdHistogramValue(bars: Bar[], fast: number, slow: number, signal: num
     return series;
   };
 
-  // fastSeries[k] is the EMA at values index (fast - 1 + k)
   const fastSeries = emaSeries(values, fast);
-  // slowSeries[k] is the EMA at values index (slow - 1 + k)
   const slowSeries = emaSeries(values, slow);
 
-  // MACD line exists only where both EMAs do: from max(fast, slow) - 1 onward
   const macdStart = Math.max(fast, slow) - 1;
   const macdLine: number[] = [];
   for (let index = macdStart; index < values.length; index++) {
@@ -245,12 +206,6 @@ function macdHistogramValue(bars: Bar[], fast: number, slow: number, signal: num
   return lastMacd - signalValue;
 }
 
-/**
- * Bollinger/Keltner squeeze ratio (#744): `bbWidth / kcWidth`; below 1
- * means the Bollinger Band has narrowed inside the Keltner Channel. Keltner
- * half must reuse `ema`/`atr` over the full window passed in — truncating
- * it to `kc_period + 1` bars would present Cutler's smoothing as Wilder's (the RSI warm-up defect class, see F1/F2).
- */
 function bbKcSqueezeValue(
   bars: Bar[],
   bbPeriod: number,
@@ -267,8 +222,6 @@ function bbKcSqueezeValue(
   const kcAtr = atr(bars, kcPeriod);
   const kcWidth = 2 * kcMult * kcAtr;
 
-  // Zero-ATR window: true range being 0 throughout also forces bbWidth to
-  // 0, so answer the neutral ratio 1 (bands touching) rather than NaN
   if (kcWidth === 0) {
     return 1;
   }
@@ -276,12 +229,6 @@ function bbKcSqueezeValue(
   return bbWidth / kcWidth;
 }
 
-/**
- * Bars must be ascending by close_time — enforced here rather than trusted,
- * since a reversed window would silently feed wrong true-range legs into
- * `atr` and reprice every stop derived from it. Throws rather than sorts:
- * a misordered window means the feed is broken, and repairing it here would hide that from every other consumer.
- */
 function assertAscending(bars: Bar[]): void {
   for (let i = 1; i < bars.length; i++) {
     const previous = bars[i - 1] as Bar;
@@ -297,20 +244,10 @@ function assertAscending(bars: Bar[]): void {
   }
 }
 
-/**
- * Raised when a window is too short for its period (#319). Typed rather
- * than a bare `Error` so "window too short" stays distinguishable from
- * `assertAscending`'s "feed is misordered" — the latter must keep
- * propagating rather than be absorbed into a skip.
- */
 export class InsufficientBarsError extends Error {
-  /** `spec.indicator` — any member of `INDICATOR_KINDS` */
   readonly indicator: string;
-  /** The dominant period a human reads as "how deep" — `IndicatorDefinition.reportedPeriod(spec)` (#744) */
   readonly period: number;
-  /** Bars this indicator needs before it can produce a genuine `period`-length value */
   readonly required: number;
-  /** Bars the window actually held */
   readonly received: number;
 
   constructor(details: { indicator: string; period: number; required: number; received: number }) {
@@ -328,29 +265,13 @@ export class InsufficientBarsError extends Error {
   }
 }
 
-/**
- * One definition per kind (#703 B2), replacing two parallel `switch`
- * statements — `Record<IndicatorKind, IndicatorDefinition>` makes an
- * omitted kind or arity a compile error instead of a silent mismatch.
- * `minimumBars`/`recommendedWarmup`/`reportedPeriod` are functions of the
- * whole spec, not constants, because #744's multi-parameter kinds have no single period to key off.
- */
 interface IndicatorDefinition {
-  /** Bars needed for a genuine value — the arity floor `minimumBarsFor` reports */
   readonly minimumBars: (spec: IndicatorSpec) => number;
-  /** The warm-up width `recommendedWarmupFor` reports; strictly separate from `minimumBars`'s arity floor */
   readonly recommendedWarmup: (spec: IndicatorSpec) => number;
-  /** The figure `InsufficientBarsError.period` reports — `periodOf(spec)` for single-period kinds, else the dominant parameter */
   readonly reportedPeriod: (spec: IndicatorSpec) => number;
-  /** Takes the full window; each kind reads what it needs from `spec.params`. Rounding is the caller's. */
   readonly compute: (bars: Bar[], spec: IndicatorSpec) => number;
 }
 
-/**
- * Requires `spec.params[name]`, throwing and naming the parameter if
- * absent — unlike `periodOf`'s `spec.lookback` fallback, multi-parameter
- * kinds (`macd_histogram`, `bb_kc_squeeze`) have no single obviously-right default among their several named parameters
- */
 function requiredParam(spec: IndicatorSpec, name: string): number {
   const value = spec.params[name];
   if (value === undefined) {
@@ -365,7 +286,6 @@ function requiredParam(spec: IndicatorSpec, name: string): number {
   return value;
 }
 
-/** `requiredParam`, additionally rejecting non-positive-integer values (see `periodOf`'s reasoning) */
 function requiredIntParam(spec: IndicatorSpec, name: string): number {
   const value = requiredParam(spec, name);
   if (!Number.isInteger(value) || value < 1) {
@@ -376,7 +296,6 @@ function requiredIntParam(spec: IndicatorSpec, name: string): number {
   return value;
 }
 
-/** `requiredParam`, additionally rejecting non-positive or non-finite values — for multiplier params */
 function requiredPositiveParam(spec: IndicatorSpec, name: string): number {
   const value = requiredParam(spec, name);
   if (!Number.isFinite(value) || value <= 0) {
@@ -412,29 +331,20 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
     reportedPeriod: (spec) => periodOf(spec),
     compute: (bars, spec) => atr(bars, periodOf(spec)),
   },
-  // #744 additions: atr_pct/donchian_pos/adx use periodOf like the kinds
-  // above; macd_histogram/bb_kc_squeeze never call it (see requiredParam)
   atr_pct: {
-    // Same arity as atr: one seed bar for the predecessor close, plus period
     minimumBars: (spec) => periodOf(spec) + 1,
     recommendedWarmup: (spec) => 4 * periodOf(spec) + 1,
     reportedPeriod: (spec) => periodOf(spec),
     compute: (bars, spec) => atrPctValue(bars, periodOf(spec)),
   },
   donchian_pos: {
-    // Windowed like sma: trailing `period` bars only, no seed bar needed
     minimumBars: (spec) => periodOf(spec),
     recommendedWarmup: (spec) => periodOf(spec),
     reportedPeriod: (spec) => periodOf(spec),
     compute: (bars, spec) => donchianPosValue(bars, periodOf(spec)),
   },
   adx: {
-    // 2 x period is genuine arity, not a warm-up preference: the first ADX
-    // value needs `period` DX readings, each itself needing a period-long
-    // smoothed DI — no period-length DX average exists below 2 x period
     minimumBars: (spec) => 2 * periodOf(spec),
-    // Beyond the 2x-period arity floor, ADX is doubly Wilder-smoothed, so it
-    // gets a further 4 x period convergence margin on top
     recommendedWarmup: (spec) => 2 * periodOf(spec) + 4 * periodOf(spec),
     reportedPeriod: (spec) => periodOf(spec),
     compute: (bars, spec) => adxValue(bars, periodOf(spec)),
@@ -444,15 +354,12 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
       const fast = requiredIntParam(spec, 'fast');
       const slow = requiredIntParam(spec, 'slow');
       const signal = requiredIntParam(spec, 'signal');
-      // MACD line exists from max(fast, slow) - 1 onward; the signal EMA
-      // then needs `signal` more MACD-line values to seed itself
       return Math.max(fast, slow) + signal - 1;
     },
     recommendedWarmup: (spec) => {
       const fast = requiredIntParam(spec, 'fast');
       const slow = requiredIntParam(spec, 'slow');
       const signal = requiredIntParam(spec, 'signal');
-      // Dominated by the slower EMA's 4x-period convergence margin
       return 4 * Math.max(fast, slow) + signal - 1;
     },
     reportedPeriod: (spec) =>
@@ -471,14 +378,11 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
       requiredPositiveParam(spec, 'bb_mult');
       const kcPeriod = requiredIntParam(spec, 'kc_period');
       requiredPositiveParam(spec, 'kc_mult');
-      // Bollinger half needs bb_period bars (no seed); Keltner half needs
-      // kc_period + 1 (atr's predecessor-close seed). Larger sets the floor.
       return Math.max(bbPeriod, kcPeriod + 1);
     },
     recommendedWarmup: (spec) => {
       const bbPeriod = requiredIntParam(spec, 'bb_period');
       const kcPeriod = requiredIntParam(spec, 'kc_period');
-      // Bollinger half is warm-up-blind (stays at bb_period); Keltner half gets ema/atr's 4x-period margin
       return Math.max(bbPeriod, 4 * kcPeriod + 1);
     },
     reportedPeriod: (spec) =>
@@ -494,11 +398,6 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
   },
 };
 
-/**
- * Looked up rather than indexed, so an unknown kind throws by name instead
- * of `.compute is not a function`. Unreachable for a well-typed caller —
- * kept as a backstop against a cast (`as IndicatorKind`) silencing the compiler at some call site.
- */
 function definitionFor(indicator: IndicatorKind): IndicatorDefinition {
   const definition = INDICATORS[indicator];
   if (definition === undefined) {
@@ -509,11 +408,6 @@ function definitionFor(indicator: IndicatorKind): IndicatorDefinition {
   return definition;
 }
 
-/**
- * `params.period` selects the indicator's window inside the lookback,
- * defaulting to the full lookback. Non-integer/non-positive periods are
- * rejected: e.g. `sma`'s `slice(-period)` at `period = 0` would silently return the whole array as a fabricated "0-period" mean.
- */
 function periodOf(spec: IndicatorSpec): number {
   const period = spec.params.period ?? spec.lookback;
   if (!Number.isInteger(period) || period < 1) {
@@ -526,34 +420,15 @@ function periodOf(spec: IndicatorSpec): number {
   return period;
 }
 
-/**
- * Bars `spec` needs for a genuine `period`-length value. Exported so a
- * caller that must degrade (`atrFor` in `trader/decide.ts`) can check
- * arity up front instead of catching `InsufficientBarsError`.
- */
 export function minimumBarsFor(spec: IndicatorSpec): number {
   return definitionFor(spec.indicator).minimumBars(spec);
 }
 
-/**
- * Warm-up long enough that one more bar barely moves the value — the WIDTH
- * question, kept strictly separate from `minimumBarsFor`'s ARITY floor
- * (raising the floor to this would forfeit cold-start ticks instead of
- * just producing a less-converged reading). `4 x period + 1` is ~98%
- * convergence for a Wilder smoother (each step retains `(period-1)/period`) and is the conventional figure, not a fitted one.
- */
 export function recommendedWarmupFor(spec: IndicatorSpec): number {
   return definitionFor(spec.indicator).recommendedWarmup(spec);
 }
 
-/**
- * Computes `spec.indicator` over `bars`. Throws rather than returning a
- * degraded value (#319) — an unguarded short window fabricates a value
- * (e.g. a 3-bar mean presented as period-14 ATR), not an approximation;
- * callers that must degrade check `minimumBarsFor` first instead of catching.
- */
 export function computeIndicator(bars: Bar[], spec: IndicatorSpec): number {
-  // Ordering checked before length: a misordered feed is the more actionable diagnosis
   assertAscending(bars);
   const definition = definitionFor(spec.indicator);
 

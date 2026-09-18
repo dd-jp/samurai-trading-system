@@ -85,5 +85,3 @@ describe('TelegramChannel.notify', () => {
   });
 });
 
-// `TelegramChannel.requestApproval` was retired in #275 — see the class doc
-// comment. The live HITL gate is covered by telegram/telegram-approval-gateway.test.ts.

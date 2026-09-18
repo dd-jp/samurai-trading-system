@@ -1,28 +1,6 @@
-/**
- * `InMemoryQueryStore` — a concrete implementation of the `DashboardQueryStore`
- * port (dashboard-spec.md "Module: Query Store"), seeded with realistic
- * fixture data so the dashboard runs out of the box. Mirrors the project's
- * existing in-memory store pattern (server/pipeline/feedback-loop/fixture-stores.ts,
- * server/pipeline/trader/fixture-setup-store.ts, server/pipeline/debate-engine/debate-log-store.ts):
- * the real SQLite-backed shared store is deferred (no shared store exists
- * anywhere in the codebase yet — every stage's store is an in-memory
- * implementation of its port pending that build-out).
- *
- * Read-only by construction: only the `DashboardQueryStore` get-* methods are
- * implemented; no setters, no write path (dashboard-spec.md "Any write path
- * ... strictly read-only"). The fixture data is static; a future ticket swaps
- * this for the real SQLite-backed `DashboardQueryStore` without touching the
- * server or snapshot seam.
- */
 
 import type { PipelineStage } from '../../../contracts/index.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
-// Imported from the concrete module, not the `debate-engine` barrel: the
-// barrel re-exports `SqliteDebateLogStore`, the Anthropic/Nous LLM clients
-// etc., and a value import of the barrel would drag every one of those
-// runtime dependencies into a fixture module that has none today
-// `computeInfluenceScore` itself has no imports beyond `./types.js`, so this
-// stays a type-only-equivalent, zero-side-effect import
 import { computeInfluenceScore } from '../../pipeline/debate-engine/index.js';
 import {
   MIN_TRADES_PER_ARM_FOR_DIVERGENCE,
@@ -133,14 +111,6 @@ const OPEN_POSITIONS: OpenPosition[] = [
   },
 ];
 
-/**
- * Closed-trade fixtures — the two round trips `positions` above never had a
- * way to show: a WIN (SPY, target hit) and a LOSS (QQQ, stop hit), each with
- * its own entry + exit fill so the panel's fills sub-list has something real
- * to render. Every number below is internally consistent both ways
- * `buildSnapshot`'s `exit_price` can be derived, so the fixture cannot
- * silently drift the two derivations apart.
- */
 const CLOSED_TRADES: ClosedTrade[] = [
   {
     idempotency_key: 'SPY-2026-07-19T06:30:00Z',
@@ -156,11 +126,6 @@ const CLOSED_TRADES: ClosedTrade[] = [
     opened_at: hoursAgo(8),
     closed_at: hoursAgo(6.5),
     close_reason: 'target',
-    // A fixture row is a normally-charged trade — every leg the
-    // modelled-cost mechanism COVERS was charged. Not "both legs": these two
-    // rows close on `'target'` and `'stop'`, and a protective leg is outside
-    // coverage (`modelledCostCharged`, ingest-fills.ts), so the flag is true
-    // on the entry leg alone
     modelled_cost_charged: true,
   },
   {
@@ -275,16 +240,6 @@ const RECENT_DEBATES: DebateLog[] = [
   },
 ];
 
-/**
- * A recorded stance history has one entry per debate round — otherwise the
- * fixtures depict a 3-round debate with a 1-square strip. An EMPTY history
- * is the recorded-none case and is legal at any round count; it is "nothing
- * was recorded", not a history that ran short.
- *
- * Checked at module load so editing a debate's `rounds` without its stance
- * arrays (or the reverse) fails at import in every test run, rather than
- * rendering a wrong strip nobody questions.
- */
 function assertStanceLengthsMatchRounds(debates: readonly DebateLog[]): void {
   for (const debate of debates) {
     for (const entry of debate.contributions) {
@@ -300,36 +255,11 @@ function assertStanceLengthsMatchRounds(debates: readonly DebateLog[]): void {
 
 assertStanceLengthsMatchRounds(RECENT_DEBATES);
 
-/**
- * Indexed off the contract these helpers build rather than off `Direction`
- * directly, so a widening of `AnalystContribution` (a nullable final position
- * for an unresolved debate, say) reaches the fixtures as a compile error
- * instead of a signature that silently no longer matches what it constructs
- */
 type Stance = AnalystContribution['stance_during_debate'][number];
 type FinalPosition = AnalystContribution['final_position'];
 
-/**
- * A recorded round history: at least one round, oldest first, and as many
- * entries as the owning debate's `rounds`. Enforced at load by
- * `assertStanceLengthsMatchRounds`.
- */
 type RecordedStances = readonly [Stance, ...Stance[]];
 
-/**
- * One analyst's contribution, built from its RECORDED round history.
- *
- * `final_position` reads off the last round; nothing here is derived from
- * `final_position` — a history synthesized from where the analyst ended up
- * makes one that was talked around indistinguishable from one that never
- * moved. A flat history in these fixtures is flat because it was recorded flat.
- *
- * `influence_score` is likewise not hand-picked: it is
- * `computeInfluenceScore(stances)`, the same function
- * `buildAnalystContributions` calls in production, so the only way to change
- * a fixture's score is to change its recorded stances, exactly like a real
- * debate.
- */
 function contribution(type: string, stances: RecordedStances): AnalystContribution {
   const [opening, ...laterRounds] = stances;
   return {
@@ -342,15 +272,6 @@ function contribution(type: string, stances: RecordedStances): AnalystContributi
   };
 }
 
-/**
- * An analyst whose round stances were never recorded: `buildAnalystContributions`
- * emits an empty `stance_during_debate` and falls back to the analyst's opening
- * view for `final_position`, so this is the recorded-none case, NOT a history
- * shorter than the debate's `rounds`. The strip renders it as its stated empty
- * state. `computeInfluenceScore([])` is 0 — no rounds recorded, no transition
- * observable — so that is what this fixture reports too, rather than a
- * hand-picked non-zero reading.
- */
 function unrecordedContribution(type: string, final: FinalPosition): AnalystContribution {
   return {
     analyst_id: `${type}-analyst`,
@@ -413,17 +334,6 @@ const VERDICT_HISTORY: VerdictAuditEntry[] = [
   },
 ];
 
-/**
- * Risk decisions with their critic verdicts, keyed by the same
- * `(trace_id, instrument)` pairs the verdict history above uses so the
- * drawer finds one for a trace an operator can actually click.
- *
- * Three rows, three different facts, because a fixture store whose job is
- * "the dashboard runs out of the box" must exercise the branches or they
- * ship having never been drawn: a decision rejected on a MEASURED breach
- * while the critic's prose passed, a decision whose conditions were all
- * refused by the validator, and a row that carries none at all.
- */
 const RISK_CRITICS: RiskCriticRecord[] = [
   {
     trace_id: 'trace-001',
@@ -523,7 +433,6 @@ const ATTRIBUTION: Record<string, AttributionSummary> = {
   'sentiment-analyst': { analyst_id: 'sentiment-analyst', rolling_r: -0.47, window_days: 30 },
 };
 
-/** Zero — the fixture's baseline is a healthy alert channel, like every other tile here */
 const ALERT_DELIVERY_FAILURE_COUNT = 0;
 
 const TICK_STATUS: TickStatus = {
@@ -544,28 +453,11 @@ const DAILY_METRICS: MetricsSuite = {
   kurtosis: 2.8,
   turnover: 3.6,
   exposure: 0.42,
-  // The DSR inputs. Consistent with `sharpe` above rather than arbitrary:
-  // 0.1146 x 15.87 = 1.82, and 252 observations is a year of daily bars — a
-  // fixture that contradicted its own Sharpe would be a confusing thing to
-  // develop the dashboard against
   per_period_sharpe: 0.1146,
   annualization_factor: 15.87,
   observations: 252,
 };
 
-/**
- * Spend fixtures. `last_24h` carries a non-zero `unpriced_calls` on purpose:
- * it is the case a fixture set is most likely to omit and the one the UI most
- * needs to prove it renders, since a silently-dropped unpriced call is how a
- * spend total understates itself. `per_debate.unattributed_calls` is non-zero
- * for the same reason — it is the caveat that travels with the percentiles,
- * and a fixture that never exercises it lets the UI ship without a place to
- * show it.
- *
- * p95 sits well above p50 in every window, deliberately: LLM latency is
- * long-tailed and a fixture set with p50 == p95 would let a percentile bug
- * that collapses the two render as plausible.
- */
 const LLM_SPEND_24H = {
   cost_usd: 0.4183,
   input_tokens: 214_500,
@@ -602,26 +494,6 @@ const LLM_SPEND_7D = {
   },
 };
 
-/**
- * Two Feedback Loop cycles' matched-control comparisons, newest first.
- *
- * The live arm leads on both columns here — the healthy reading, and the one an
- * operator opening the dashboard for the first time should see. The divergent
- * case has its own coverage in `arm-comparison-cycle.test.ts` and in the panel's
- * own test; baking a permanent divergence into the out-of-the-box fixtures would
- * teach the reader that the alert state is normal.
- */
-/**
- * The outside benchmarks over the SAME window as `ARM_COMPARISONS[0]` —
- * that match is the fixture's whole point, since the panel states it. Two
- * benchmarks per cycle, exercising the populated branch a fixture store
- * whose job is "the dashboard runs out of the box" must not skip.
- *
- * The numbers are deliberately unremarkable and NOT chosen to make the live arm
- * look good: over this window SPY beat the live arm's 1.84%. That is a normal
- * reading for a flat-by-close book against a fully-invested index, it is not a
- * failure, and the panel's copy has to hold up when it happens.
- */
 const OUTSIDE_BENCHMARKS: OutsideBenchmarkSample[] = [
   {
     computed_at: NOW,
@@ -661,9 +533,6 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         return_pct: 0.0184,
         max_drawdown_pct: 0.021,
         refused_pass_count: 0,
-        // The flatten class dropped where the protective one did not — the
-        // asymmetry this column exists to make visible, demoed rather than
-        // flattened to zeros
         cost_basis_drops: {
           protective: { kept: 15, dropped: 0 },
           flatten: { kept: 9, dropped: 3 },
@@ -676,9 +545,6 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         return_pct: 0.0062,
         max_drawdown_pct: 0.028,
         refused_pass_count: 2,
-        // The control arm can only ever be kept: `SimulatedBrokerAdapter`
-        // prices its own fills, so no leg of a control lot can be missing a
-        // `cost_breakdown`
         cost_basis_drops: {
           protective: { kept: 11, dropped: 0 },
           flatten: { kept: 8, dropped: 0 },
@@ -692,10 +558,6 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
     },
   },
   {
-    // Predates migrations 0057 and 0066: `refused_pass_count` and
-    // `cost_basis_drops` are `null` on both arms, not `0`/all-zero — the
-    // fixture server's demo of the honest historical case a real
-    // pre-migration row reads back as
     computed_at: new Date(NOW.getTime() - 24 * 3_600_000),
     comparison: {
       from: new Date(NOW.getTime() - 31 * 24 * 3_600_000),
@@ -728,18 +590,8 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
   },
 ];
 
-/**
- * The fixture server states a cap rather than sending `null`, so the demo
- * exercises the meter rather than its empty state. ADR-0008's paper figure,
- * which is what a fixture run stands in for.
- */
 const FIXTURE_LLM_CAP_USD = 50;
 
-/**
- * A fixed, arbitrary past instant standing in for the real orchestrator's
- * arm-at-boot timestamp — armed, not absent, for the same "demo exercises
- * the real state" reason `FIXTURE_LLM_CAP_USD` exists
- */
 const FIXTURE_LLM_CAP_ARMED_AT = '2026-08-01T00:00:00.000Z';
 
 const LLM_SPEND_ALL = {
@@ -760,27 +612,6 @@ const LLM_SPEND_ALL = {
   },
 };
 
-/**
- * Pipeline-view fixtures. One lane per instrument in `MARKS`, chosen so
- * every cell state and every outcome the render layer has to draw appears at
- * least once without the developer having to run a tick:
- *
- *  - BTC-USD — a clean walk to Execution (`go`).
- *  - ETH-USD — a debate retried once, then rejected at Verdict (`no_go`),
- *    which is what puts a two-attempt cell and a completed-but-negative
- *    traversal on screen together.
- *  - AAPL    — stopped at Trader on `no_trade`.
- *  - TSLA    — stopped at Analysts on `quorum_skip`.
- *  - SPY     — in flight at Debate, on the same trace as `TICK_STATUS` so the
- *              two views of the live tick agree.
- *  - QQQ     — no trace at all: the idle lane.
- *
- * AAPL and TSLA are the deliberate ones: short-circuits that end before
- * Verdict, which the UI must draw and which the SQLite store now serves too
- * (`audit_log.instrument`, migration 0013 — see `pipeline-query.ts`'s header).
- * They stayed in the fixtures after that landed because a fixture the real
- * store cannot reproduce is a fixture nobody can trust.
- */
 const PIPELINE_NOW = NOW;
 
 function pipelineEvent(
@@ -822,9 +653,6 @@ const PIPELINE_EVENTS: PipelineStageEvent[] = [
 
   pipelineEvent('trace-p-tsla', 'TSLA', 'stocks', 'analysts', 'quorum_skip', 47),
 
-  // The live trace's completed stages. Its current stage has no row yet — the
-  // audit row is written after the stage returns — which is exactly the state
-  // a `live` cell has to render from
   pipelineEvent('trace-007', 'SPY', 'stocks', 'analysts', 'quorum_met', 6),
 ];
 
@@ -847,22 +675,6 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return TICK_STATUS;
   }
 
-  /**
-   * `arm` accepted (so a subclass can override arm-aware, per-arm behavior —
-   * `server.test.ts`'s `TwoArmQueryStore`) but ignored here — this fixture's
-   * data has never varied by arm, and giving it a second, static "control"
-   * fixture set is out of scope for a dev/test seed store.
-   *
-   * Consequence for `fixture-server.ts` (the Playwright/e2e entry): the real
-   * `server.ts` handler stamps the wire snapshot's `arm` field from the
-   * request's own `?arm=` regardless of what the store returns, so hitting
-   * `?arm=control` against the fixture server yields these same live rows
-   * mislabelled `arm: 'control'`. Arm-scoping IS proven at the HTTP layer —
-   * `server.test.ts`'s `TwoArmQueryStore` covers it against the real server —
-   * but any Playwright/e2e test built against this fixture store cannot use
-   * position/closed-trade content to tell the arms apart; it would pass
-   * vacuously against a regression that broke real cross-arm scoping.
-   */
   getOpenPositions(_asOf: Date, _arm: TradingArm): OpenPosition[] {
     return OPEN_POSITIONS;
   }
@@ -871,26 +683,19 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return CLOSED_TRADES.slice(0, limit);
   }
 
-  /** Same arm-insensitive limitation as `getRecentClosedTrades` above — see its doc */
   getAllClosedTrades(_asOf: Date, _arm: TradingArm): ClosedTrade[] {
     return CLOSED_TRADES;
   }
 
-  /** Same "scoped to the named lots" contract as `SqliteQueryStore` — see there */
   getFillsForTrades(idempotencyKeys: readonly string[], _asOf: Date): Fill[] {
     const keys = new Set(idempotencyKeys);
     return FILLS.filter((fill) => keys.has(fill.idempotency_key));
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc */
   getVerdictHistory(limit: number, _asOf: Date, _arm: TradingArm): VerdictAuditEntry[] {
     return VERDICT_HISTORY.slice(0, limit);
   }
 
-  /**
-   * `limit` is honoured for `getPipelineActivity`'s reason. `arm` accepted
-   * and ignored — see `getOpenPositions`'s doc.
-   */
   getRiskCritics(limit: number, _asOf: Date, _arm: TradingArm): RiskCriticRecord[] {
     return RISK_CRITICS.slice(0, limit).map((record) => ({ ...record }));
   }
@@ -899,12 +704,10 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...ANALYST_WEIGHTS };
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc */
   getAttribution(_asOf: Date, _arm: TradingArm): Record<string, AttributionSummary> {
     return { ...ATTRIBUTION };
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc */
   getDailyMetrics(_asOf: Date, _arm: TradingArm): MetricsSuite {
     return { ...DAILY_METRICS };
   }
@@ -917,23 +720,14 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...mark };
   }
 
-  /** Same throw-on-missing contract as `getMark`, per instrument in request order */
   getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark> {
     return new Map(instruments.map((instrument) => [instrument, this.getMark(instrument, asOf)]));
   }
 
-  /**
-   * One sample, not zero: an empty array is the honest "FL has computed
-   * none yet" state and the panel renders it as those words — a fixture store
-   * whose whole job is "the dashboard runs out of the box" must exercise the
-   * populated branch instead, or the panel ships never having been drawn.
-   * `limit` is honoured for `getPipelineActivity`'s reason.
-   */
   getArmComparisons(limit: number, _asOf: Date): PersistedArmComparisonSample[] {
     return ARM_COMPARISONS.slice(0, limit).map((sample) => ({ ...sample }));
   }
 
-  /** `limit` counts rows, not cycles — see the port's doc */
   getOutsideBenchmarks(limit: number, _asOf: Date): OutsideBenchmarkSample[] {
     return OUTSIDE_BENCHMARKS.slice(0, limit).map((sample) => ({ ...sample }));
   }
@@ -948,16 +742,6 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     };
   }
 
-  /**
-   * `maxLanes` is honoured (the fixtures are the universe, and a store that
-   * ignored its own bound would let the dashboard ship never having exercised
-   * one); `lookbackMs` and `asOf` are not, for the same reason every method
-   * above ignores `asOf` — the fixture data is static, so every trace is
-   * always "recent". `arm` accepted and ignored — see `getOpenPositions`'s
-   * doc; unlike `SqliteQueryStore`, there is no `current_tick` table here for
-   * `live` to vary by, so `arm: 'control'` returns the same `live` array as
-   * `arm: 'live'` rather than `[]`.
-   */
   getPipelineActivity(
     maxLanes: number,
     _lookbackMs: number,
@@ -980,5 +764,4 @@ export class InMemoryQueryStore implements DashboardQueryStore {
   }
 }
 
-/** Exposed so tests can pin the clock against the same fixtures */
 export const FIXTURE_NOW = NOW;

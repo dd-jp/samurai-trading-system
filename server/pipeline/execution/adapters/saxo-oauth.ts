@@ -1,33 +1,9 @@
-/**
- * The Saxo OAuth token endpoint, shared by the one-time operator login
- * (`server/tools/saxo-login.ts`, #1522) and the long-running refresher
- * (`saxo-token-source.ts`, #1523).
- *
- * It lives in `adapters/` rather than in `tools/` because the refresher runs
- * inside the orchestrator: importing the login CLI (which has a top-level
- * `runLogin()` behind an `import.meta.url` guard) from the trading path would
- * invert the existing direction and drag a browser-opening flow into the
- * server bundle. `saxo-login.ts` re-exports what its own callers still name.
- *
- * Both grants — `authorization_code` at login and `refresh_token` afterwards
- * — go through `requestSaxoToken`, so the two facts that are easy to get
- * wrong are stated once: the endpoint answers **201** on live (measured
- * 2026-09-14, #1523), and the lifetimes come from the response
- * (`expires_in` 1200 s, `refresh_token_expires_in` 3600 s live against the
- * docs' 2400) rather than from any published example.
- */
 import { maskCredentials } from '../../../shared/index.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS } from './saxo-environment.js';
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
-/**
- * Carries the HTTP status when the failure was a response rather than a
- * transport or body fault. The refresher reads it to tell a rejected grant
- * (4xx — the refresh token is gone, the session is lost) from a transient
- * one (5xx, timeout — retry inside the remaining window).
- */
 export class SaxoOAuthError extends Error {
   readonly status: number | undefined;
 
@@ -37,7 +13,6 @@ export class SaxoOAuthError extends Error {
   }
 }
 
-/** Both Saxo apps register the same localhost redirect (#1522); the environment picks the host */
 const DEFAULT_AUTH_URLS: Readonly<Record<SaxoTradingEnvironment, string>> = {
   sim: 'https://sim.logonvalidation.net/authorize',
   live: 'https://live.logonvalidation.net/authorize',
@@ -99,9 +74,7 @@ export function resolveSaxoOAuthConfig(
 export interface SaxoTokenResponse {
   accessToken: string;
   refreshToken: string;
-  /** ISO instant, derived from the response's `expires_in` (measured 1200 s live, 2026-09-14 — never hardcoded) */
   accessTokenExpiresAt: string;
-  /** ISO instant, derived from the response's `refresh_token_expires_in` (measured 3600 s live, 2026-09-14 — never hardcoded) */
   refreshTokenExpiresAt: string;
 }
 
@@ -109,14 +82,6 @@ export type SaxoTokenGrant =
   | { grant_type: 'authorization_code'; code: string; redirect_uri: string }
   | { grant_type: 'refresh_token'; refresh_token: string };
 
-/**
- * HTTP Basic AppKey:AppSecret at the token URL. Both 200 and 201 count as
- * success — the live gateway measured 201 on 2026-09-14 (#1522's dispatch
- * facts); the docs' example shows 200.
- *
- * No part of `grant` is ever put in an error message: on the refresh grant it
- * IS the refresh token.
- */
 export async function requestSaxoToken(
   config: Pick<SaxoOAuthConfig, 'tokenUrl' | 'appKey' | 'appSecret'>,
   grant: SaxoTokenGrant,
@@ -153,9 +118,6 @@ export async function requestSaxoToken(
       response.status,
     );
   }
-  // Masked even though a token-endpoint error body is not expected to echo
-  // the app secret back — defense in depth, matching saxo-http-client.ts's
-  // own error-body posture
   if (response.status !== 200 && response.status !== 201) {
     throw new SaxoOAuthError(
       `Saxo token exchange failed: HTTP ${response.status} — ${maskCredentials(text).slice(0, 500)}`,

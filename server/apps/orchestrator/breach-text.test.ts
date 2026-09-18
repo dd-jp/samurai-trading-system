@@ -26,28 +26,15 @@ const NONE_ALERT = {
   reported_at: new Date('2026-09-08T09:00:00Z'),
 };
 
-/**
- * The two markers the four `classifyBreach` cases decide between. Tests
- * assert on these directly — if the kill-line and spend-cap text were ever
- * swapped, these assertions redden (#1343's mutation-proof requirement).
- * `hasSpendCapMarker` is a regex because the prose spells it both
- * `spend-cap` (hyphenated, e.g. "a spend-cap refusal") and `spend cap`
- * (e.g. "the LLM spend cap has refused") depending on the sentence.
- */
 const KILL_LINE_MARKER = 'auto-tightened';
 function hasSpendCapMarker(text: string): boolean {
   return /spend[- ]cap/i.test(text);
 }
 
 describe('breachStage (#1280)', () => {
-  // Threading the trace made a hardcoded `'feedback-loop'` wrong on the
-  // spend-cap caller, whose sibling line in `SqliteSpendCap#refuse` logs under
-  // `debate` — an operator grepping that stage for the tick would otherwise
-  // miss the breach entirely
   it('files a breach under the stage of the caller that raised it', () => {
     expect(breachStage(ALERT)).toBe('debate');
     expect(breachStage(KILL_LINE_ALERT)).toBe('feedback-loop');
-    // Conservative on a list the two current producers never build
     expect(breachStage(BOTH_ALERT)).toBe('feedback-loop');
   });
 });
@@ -89,9 +76,6 @@ describe('formatBreachAlert (#1343)', () => {
     expect(text).toContain('Samurai LLM SPEND-CAP BREACH');
     expect(hasSpendCapMarker(text)).toBe(true);
     expect(text).not.toContain(KILL_LINE_MARKER);
-    // SqliteSpendCap#refuse covers three sites behind one boolean, one of
-    // which (a non-finite cost_usd sum) does NOT clear on its own — so the
-    // text must not promise a fix, or a specific cause, it cannot back up
     expect(text).toContain('debates, market-intelligence refreshes and risk-critic checks');
     expect(text).not.toContain('clear on its own');
     expect(text).not.toContain('unreadable');
@@ -127,9 +111,6 @@ describe('breachLogMessage (#1343)', () => {
 
     expect(hasSpendCapMarker(breachLogMessage(ALERT.breaches))).toBe(true);
     expect(breachLogMessage(ALERT.breaches)).not.toContain(KILL_LINE_MARKER);
-    // Same hedge as formatBreachAlert: three refusal sites behind one
-    // boolean, one of which does not clear on its own, so the message must
-    // not promise a specific cause or that anything resolves unassisted
     expect(breachLogMessage(ALERT.breaches)).not.toContain('clear on its own');
     expect(breachLogMessage(ALERT.breaches)).toContain(
       'debates, market-intelligence refreshes, risk-critic checks',

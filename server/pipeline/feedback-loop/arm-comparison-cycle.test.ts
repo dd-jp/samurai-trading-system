@@ -81,7 +81,6 @@ class RecordingAlerts implements ArmDivergenceAlertChannel {
   }
 }
 
-/** `min_trades_per_arm` closes on each arm, so the trade-count guard is clear */
 function armTrades(arm: 'live' | 'control', pnls: readonly number[]): ArmedClosedTrade[] {
   return pnls.map((pnl, index) =>
     trade({
@@ -147,13 +146,6 @@ describe('evaluateArmDivergence', () => {
     expect(verdict.min_trades_per_arm).toBe(MIN_TRADES_PER_ARM_FOR_DIVERGENCE);
   });
 
-  /**
-   * D4: the control leading on return alone is NOT the finding. A control that
-   * bought its return with a deeper drawdown did not beat a risk-targeted
-   * stream, and firing on the return column alone would be exactly the
-   * return-only comparison `docs/research/12-edge-hypothesis-critique.md` D4
-   * rules out.
-   */
   it('does not fire when the control leads on return but took a deeper drawdown', () => {
     const verdict = evaluateArmDivergence(
       comparisonOf({
@@ -183,7 +175,6 @@ describe('evaluateArmDivergence', () => {
     expect(verdict.diverged).toBe(false);
   });
 
-  /** The falsifying direction only — the live arm winning is not an escalation */
   it('never fires when the LIVE arm is ahead, however far ahead it is', () => {
     const verdict = evaluateArmDivergence(
       comparisonOf({
@@ -215,14 +206,6 @@ describe('evaluateArmDivergence', () => {
     expect(verdict.min_trades_per_arm).toBe(MIN_TRADES_PER_ARM_FOR_DIVERGENCE);
   });
 
-  /**
-   * #982: `min_trades_per_arm` on the verdict must be the THRESHOLD PASSED IN,
-   * not a hardcoded echo of the module default — a non-default floor proves the
-   * value actually flows through `evaluateArmDivergence` rather than being
-   * hardcoded at some later hop (the sample store, the row mapper, the
-   * projection) where every other test in this suite, using the default
-   * threshold, could not tell the difference
-   */
   it('carries whatever min_trades_per_arm the caller configured, not the module default', () => {
     const customThresholds = { ...DEFAULT_ARM_DIVERGENCE_THRESHOLDS, min_trades_per_arm: 8 };
 
@@ -294,7 +277,6 @@ describe('runArmComparisonCycle', () => {
   });
 
   it('alerts on divergence, once, carrying both arms and the convergence caveat', () => {
-    // Control +2% of the £1,000 basis, live flat-to-down, control drawdown 0
     const { alerts, input } = cycleInput([
       ...armTrades('live', [-1, -1, -1, -1, -1]),
       ...armTrades('control', [4, 4, 4, 4, 4]),
@@ -324,11 +306,6 @@ describe('runArmComparisonCycle', () => {
     expect(alerts.posted).toHaveLength(0);
   });
 
-  /**
-   * The zero-trade case is the one an empty soak produces, and it must persist
-   * a sample rather than silently skipping: an absent row and a computed row
-   * with no trades in it are different facts
-   */
   it('persists a sample with no trades, and never alerts on it', () => {
     const { alerts, samples, input } = cycleInput([]);
 
@@ -340,10 +317,6 @@ describe('runArmComparisonCycle', () => {
     expect(alerts.posted).toHaveLength(0);
   });
 
-  /**
-   * #1099. A window of pure refusals used to be indistinguishable from an empty
-   * one: both produced `trade_count: 0` and nothing else.
-   */
   it('carries the refusal counts, over the same window it read trades for', () => {
     const { source, input } = cycleInput([], { live: 0, control: 6 });
 
@@ -355,13 +328,6 @@ describe('runArmComparisonCycle', () => {
     expect(source.refusalWindows).toEqual(source.windows);
   });
 
-  /**
-   * #1099 ruled the refusal count OUT of the verdict: it is a signal for the
-   * operator reading the report, not an input to alerting. Asserted on the
-   * DIVERGING fixture on purpose — the arms below cross, so a verdict that
-   * quietly suppressed (or manufactured) divergence when refusals are present
-   * changes this result. The non-diverging fixture would pass either way.
-   */
   it('does not let refusals move the divergence verdict, on a window that DOES diverge', () => {
     const trades = [
       ...armTrades('live', [-1, -1, -1, -1, -1]),
@@ -375,10 +341,6 @@ describe('runArmComparisonCycle', () => {
 
     expect(quietSample.divergence.diverged).toBe(true);
     expect(refusedSample.divergence).toEqual(quietSample.divergence);
-    // And the alert the verdict drives: same count, same sentence, same instant
-    // `alert.comparison` itself differs by the refusal count by design — what
-    // the operator READS of it is asserted byte-for-byte in
-    // `arm-divergence-alert-channel.test.ts`
     expect(refused.alerts.posted).toHaveLength(quiet.alerts.posted.length);
     expect(refused.alerts.posted[0]?.reason).toBe(quiet.alerts.posted[0]?.reason);
     expect(refused.alerts.posted[0]?.reported_at).toEqual(quiet.alerts.posted[0]?.reported_at);

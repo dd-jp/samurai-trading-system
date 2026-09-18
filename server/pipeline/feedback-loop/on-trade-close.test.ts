@@ -16,7 +16,6 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     entry: 100,
     stop: 90,
     filled_size: 10,
-    // initial risk = |100 - 90| * 10 = 100, so realized_pnl_net 200 => R = 2
     realized_pnl_net: 200,
     fees_total: 1,
     opened_at: new Date('2026-07-01T10:00:00Z'),
@@ -27,11 +26,6 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   };
 }
 
-/**
- * Labelling is a property of the `SetupStore` port, so every case runs against
- * both the in-memory fixture and the real SQLite-backed store over
- * `cosine_setups` (#198)
- */
 const STORE_IMPLEMENTATIONS: Array<[string, () => SetupStore]> = [
   ['FixtureSetupStore', () => new FixtureSetupStore()],
   ['SqliteSetupStore', () => new SqliteSetupStore(openSharedStore(':memory:'))],

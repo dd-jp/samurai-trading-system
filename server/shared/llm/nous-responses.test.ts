@@ -1,14 +1,3 @@
-/**
- * `nous-responses.ts` — the Responses/retrieval transport.
- *
- * Most of the shared parsing (error envelope, token coercion, truncation,
- * metered-model resolution) is already pinned via `nous-chat.ts`'s tests
- * against the same `nous-wire.ts` helpers. This file stays to a success
- * scaffold plus the `clampCallToBudget` (#1533) case that is specific to
- * this transport's own `dispatchResponses` — the two dispatch sites are
- * separate functions, so the fix at `nous-chat.ts` proves nothing about this
- * one.
- */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LlmInFlightGate } from './in-flight-gate.js';
 import { UNGATED_LLM_IN_FLIGHT } from './in-flight-gate.js';

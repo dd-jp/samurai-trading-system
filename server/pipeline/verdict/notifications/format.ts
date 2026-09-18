@@ -1,9 +1,3 @@
-/**
- * Pure message formatting for the trade channel (ticket #81). See
- * docs/specs/verdict-spec.md ("Module: Human-in-the-Loop" — "Context shown").
- * No formatting decisions here read live state; given the same decision +
- * risk decision the message text is always the same.
- */
 import type { RiskDecision } from '../../risk-manager/index.js';
 import type { VerdictDecision } from '../types.js';
 
@@ -24,7 +18,6 @@ function orderContextLines(riskDecision: RiskDecision): string[] {
   ];
 }
 
-/** Formats the final go/no-go result for the trade channel (verdict-spec story 14) */
 export function formatDecisionMessage(
   decision: VerdictDecision,
   riskDecision: RiskDecision,

@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #1141: the ledger-accumulation rule was previously reachable only by
- * rendering `<App/>`. `lib/ledger.ts`'s pure transition is already covered
- * directly (`lib/ledger.test.ts`) — this file covers the hook that folds
- * each polled snapshot into it, driven through a sequence of snapshots with
- * no DOM assertions.
- */
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { doneThrough, makeView } from '../lib/test-support.ts';
@@ -37,13 +30,11 @@ describe('useLedger', () => {
     );
     expect(result.current.map((e) => e.trace_id)).toEqual(['trace-eth']);
 
-    // Re-poll of the SAME settled lane must not re-stamp it
     rerender({
       snapshot: snapshotWith({ pipeline: makeView([settled]), as_of: '2026-08-07T12:00:03.000Z' }),
     });
     expect(result.current.map((e) => e.trace_id)).toEqual(['trace-eth']);
 
-    // A second, distinct trace settling appends alongside it
     const secondSettled = doneThrough('BTC-USD', 'trace-btc', 'verdict', {
       startMs: 60_000,
       outcome: 'no_go',

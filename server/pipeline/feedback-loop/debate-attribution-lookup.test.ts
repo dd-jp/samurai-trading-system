@@ -38,9 +38,6 @@ describe('getContributionsForAttribution', () => {
     const store = new InMemoryDebateLogStore();
     const result = makeResult();
     store.writeLog(
-      // #687: `buildDebateLog` no longer takes a bar — it projects
-      // `result.bar_timestamp`, so the row and the `debate_id` it is keyed by
-      // cannot name different bars
       buildDebateLog(result, 'BTC-USD', new Date('2026-07-14T09:00:08Z')),
     );
 
@@ -53,13 +50,6 @@ describe('getContributionsForAttribution', () => {
     expect(getContributionsForAttribution(store, 'debate-never-completed')).toBeUndefined();
   });
 
-  /**
-   * #1081 — a debate the latency budget cut short has `contributions` that
-   * are partial mediator state, not a completed per-analyst assessment.
-   * Attributing off it would move Feedback Loop weights on an infrastructure
-   * timeout rather than evidence, so it is excluded the same way a missing
-   * row is.
-   */
   it('returns undefined for a debate the latency budget truncated, even though a row exists', () => {
     const store = new InMemoryDebateLogStore();
     const result = makeResult({
@@ -89,7 +79,6 @@ describe('getContributionsForAttribution', () => {
       direction: 'bullish',
       rounds: 2,
       created_at: new Date('2026-07-14T09:00:08Z'),
-      // No `termination` field at all — a row written before migration 0041
     });
 
     expect(getContributionsForAttribution(store, 'debate-pre-1081')).toEqual([makeContribution()]);

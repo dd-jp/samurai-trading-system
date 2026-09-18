@@ -1,29 +1,9 @@
-/**
- * The Glance tab's arithmetic, kept pure so it is tested without a DOM.
- *
- * Everything here is presentation arithmetic over figures the wire already
- * carries — sums and ratios of `positions[]`. Nothing is a domain computation
- * the server should own: no P&L is re-derived from prices, no risk is
- * re-measured. The P&L headline itself (`snapshot.pnl`, #1595) is computed
- * server-side and rendered as-is — see `GlanceTab.tsx`'s `PnlCard`.
- */
 import type { PositionRow } from '@contracts';
 
 export interface OpenRiskRow {
   position: PositionRow;
-  /** `filled_size × mark_price` — what the position is worth now */
   notional: number;
-  /**
-   * Fraction of the mark price between here and the stop, in the direction
-   * the stop lies: `(mark − stop) / mark` long, `(stop − mark) / mark` short.
-   * Negative means the mark is already through the stop.
-   */
   stopDistance: number;
-  /**
-   * Where the mark sits on the stop→target line, 0 at the stop and 1 at the
-   * target, clamped. `null` when the bracket has no width, which is not a
-   * position this system opens but is a row the wire can carry.
-   */
   progress: number | null;
 }
 

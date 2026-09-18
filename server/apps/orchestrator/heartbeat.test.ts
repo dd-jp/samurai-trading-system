@@ -64,8 +64,6 @@ describe('Heartbeat.start', () => {
     heartbeat.stop(handle);
     await vi.advanceTimersByTimeAsync(120_000);
 
-    // A missed heartbeat is externally detectable via silence: once stopped,
-    // no further posts occur, however long the watchdog waits
     expect(channel.postHeartbeat).toHaveBeenCalledTimes(2);
   });
 });

@@ -15,20 +15,12 @@ import {
   presentVerdictStatus,
 } from './state-presentation.ts';
 
-/**
- * Typing each expectation table as `Record<Wire, Presented>` makes the test
- * fail `tsc` (not just at runtime) the moment a wire enum grows a member the
- * presenter has not been taught — the actual invariant this module exists to
- * buy back from the old parallel-table shape
- */
-
 describe('presentCell', () => {
   const inFlightExpectations: Record<PipelineCellState, Presented> = {
     done: { word: 'done', tone: 'done' },
     live: { word: 'live', tone: 'live' },
     stopped: { word: 'stopped', tone: 'stop' },
     skipped: { word: 'skipped', tone: 'skip' },
-    // A cell ahead of an in-flight tick reads as "wait", not "not reached"
     not_reached: { word: 'wait', tone: 'wait' },
   };
 
@@ -56,8 +48,6 @@ describe('presentCell', () => {
   });
 
   function expectedIdleTone(state: PipelineCellState): Presented['tone'] {
-    // The tone tracks the cell's own state even when the lane is idle and the
-    // word is overridden to "idle" — only the word carries the lane-level fact
     return inFlightExpectations[state].tone;
   }
 });

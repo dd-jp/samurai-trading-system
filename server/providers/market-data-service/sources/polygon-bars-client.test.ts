@@ -75,9 +75,6 @@ describe('PolygonBarsClient.getBars', () => {
 
     let thrown: unknown;
     try {
-      // maxAttempts: 1 — a 500 is retryable by default; this test is about
-      // the auth header and secret-masking, not the retry path (covered
-      // separately below), so it stays single-attempt and fast
       await new PolygonBarsClient({
         retry: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
       }).getBars(SYMBOL, '1h', ASOF, 1);
@@ -111,9 +108,6 @@ describe('PolygonBarsClient.getBars', () => {
 
     await new PolygonBarsClient().getBars(SYMBOL, '1h', ASOF, 1);
 
-    // ASOF is 2026-08-07. A 4-day floor misapplied to an intraday timeframe
-    // would push `from` back to 2026-08-03; the correct small buffer keeps
-    // `from` on the same day as `asOf`
     const url = String(fetchMock.mock.calls[0]?.[0]);
     expect(url).toContain('/range/1/hour/2026-08-07/2026-08-07');
   });
@@ -229,12 +223,6 @@ describe('PolygonBarsClient.getBars', () => {
       const rateLimiter = new TokenBucket({ capacity: 5, refillPerSecond: 5 });
       const acquireSpy = vi.spyOn(rateLimiter, 'acquireBackground');
 
-      // `settled` absorbs a rejection into a resolution, so no promise is
-      // left unhandled while control sits inside advanceTimersByTimeAsync
-      // The sibling "exhausts retries" test can assert on the raw promise
-      // because `.rejects` settles the same way whenever the rejection
-      // lands; `.resolves` cannot — under a mutation that removes the
-      // retry, getBars rejects before any timer is even scheduled
       const settled = new PolygonBarsClient({ rateLimiter })
         .getBars(SYMBOL, '1h', ASOF, 1)
         .catch((error: unknown) => error);
@@ -270,9 +258,6 @@ describe('PolygonBarsClient.getBars', () => {
   });
 
   describe('isRetryablePolygonBarsError', () => {
-    // Mutation evidence in both directions: widening this predicate to match
-    // the other three transport clients' shape (RateLimit always retryable)
-    // must fail here, and so must narrowing it to drop the 5xx branch
     it('retries Timeout and 5xx ProviderError, never RateLimit or non-5xx ProviderError', () => {
       expect(isRetryablePolygonBarsError(new PolygonBarsTimeoutError('x'))).toBe(true);
       expect(isRetryablePolygonBarsError(new PolygonBarsProviderError('x', 503))).toBe(true);

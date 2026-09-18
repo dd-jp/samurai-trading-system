@@ -1,10 +1,3 @@
-/**
- * SQLite-backed `SharedStore` over `open_positions`, `fills` and
- * `closed_trades` (#193) — Execution's sole writer; no business logic here,
- * only schema translation. Timestamps are ISO-8601 UTC TEXT via
- * `toStoredTimestamp`/`fromStoredTimestamp` (sorts correctly as TEXT). JSON
- * columns round-trip via stringify/parse at this boundary only.
- */
 
 import type {
   ClosedTrade,
@@ -37,30 +30,15 @@ import type {
   UnresolvedFlattenSubmission,
 } from './types.js';
 
-/**
- * `TERMINAL_ORDER_STATES` minus `closed` and `abandoned` (#1088, #1186) —
- * sweeping `abandoned` would delete `abandon_reason` on the very next
- * reconcile pass, since its age gate is already past cutoff when written
- */
 const SWEEPABLE_TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES.filter(
   (state) => state !== 'closed' && state !== 'abandoned',
 );
 
-/**
- * Frozen so `fillSizesByLeg`'s SQL predicate can't be mutated at runtime
- * (#568). `'exit'` is `leg != 'entry'` so it can't drift from
- * `ingest-fills.ts`'s `isExitFill` if a fourth leg is added.
- */
 const LEG_PREDICATES = Object.freeze({
   entry: "leg = 'entry'",
   exit: "leg != 'entry'",
 } as const);
 
-/**
- * Thrown when the write-ahead INSERT loses a race for an idempotency key.
- * A named type, not a message prefix, so `execute()` can discriminate a
- * dedup (`deduped`) from a genuine store failure without string-matching.
- */
 export class DuplicatePositionError extends Error {
   constructor(readonly idempotency_key: string) {
     super(
@@ -72,7 +50,6 @@ export class DuplicatePositionError extends Error {
   }
 }
 
-/** `writeAheadFlatten`'s equivalent of `DuplicatePositionError` — see there for the reasoning */
 class DuplicateFlattenSubmissionError extends Error {
   constructor(readonly idempotency_key: string) {
     super(
@@ -84,12 +61,6 @@ class DuplicateFlattenSubmissionError extends Error {
   }
 }
 
-/**
- * Thrown when a flatten is refused because another flatten on the same
- * instrument is unresolved (#1214) — two live flattens could reverse the
- * position (#516). Callers discriminate on this to stand down quietly rather
- * than report a broken journal.
- */
 export class UnresolvedFlattenForInstrumentError extends Error {
   constructor(
     readonly idempotency_key: string,
@@ -106,19 +77,8 @@ export class UnresolvedFlattenForInstrumentError extends Error {
 }
 
 export class SqliteExecutionStore implements SharedStore {
-  /**
-   * Which arm's book this instance reads/writes (#753). One class, two
-   * instances — never two classes, so persistence can't drift between arms.
-   * Stamped on every row and filters the SCAN queries; key-based reads/writes
-   * are unfiltered since `arm` is already hashed into `idempotency_key`.
-   */
   private readonly arm: TradingArm;
 
-  /**
-   * The declared ceiling this instance's asks were clamped against, stamped
-   * on every row it writes (#1112 AC5). `undefined` means no ceiling was
-   * declared (pre-#1112, or a non-paper/non-live construction).
-   */
   private readonly sizingCapitalCeiling: number | undefined;
 
   constructor(
@@ -130,11 +90,6 @@ export class SqliteExecutionStore implements SharedStore {
     this.sizingCapitalCeiling = sizingCapitalCeiling;
   }
 
-  /**
-   * True if an order already exists under this key. Checks both
-   * `open_positions` (entry/scale_in) and `flatten_submissions` (exit, #508)
-   * — an exit writes no `OpenPosition`, so only the second table catches a replay.
-   */
   async findByKey(idempotency_key: string): Promise<boolean> {
     const positionRow = this.db
       .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
@@ -147,11 +102,6 @@ export class SqliteExecutionStore implements SharedStore {
     return flattenRow !== undefined;
   }
 
-  /**
-   * Write-ahead: INSERT before the broker call, so a crash in the gap leaves
-   * a recoverable `pending` row (#86 reconciles it). A duplicate key throws
-   * `DuplicatePositionError` rather than upserting, to avoid erasing broker ids.
-   */
   async writeAheadPosition(position: OpenPosition): Promise<void> {
     try {
       this.db
@@ -184,9 +134,7 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(position.decision_timestamp),
           position.conviction,
           position.converged ? 1 : 0,
-          // #753: this instance's arm — see the `arm` field's doc above
           this.arm,
-          // #1001 — best-effort submit-time snapshot, see `OpenPosition`'s field docs
           position.decision_price ?? null,
           position.quote_bid ?? null,
           position.quote_ask ?? null,
@@ -197,11 +145,9 @@ export class SqliteExecutionStore implements SharedStore {
           position.modelled_cost_breakdown === undefined
             ? null
             : JSON.stringify(position.modelled_cost_breakdown),
-          // #1301 — the protective legs' own cost estimate, same capture pass
           position.modelled_protective_exit_cost_breakdown === undefined
             ? null
             : JSON.stringify(position.modelled_protective_exit_cost_breakdown),
-          // #1112 AC5 — see `sizingCapitalCeiling`'s own doc
           this.sizingCapitalCeiling ?? null,
         );
     } catch (cause) {
@@ -212,7 +158,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /** Persist the post-ack transition (`pending` → `submitted`), or reconcile's adopted state */
   async updatePositionState(
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
@@ -230,13 +175,10 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /** Non-terminal lots only (execution-spec.md) — deterministic order for callers that iterate */
   async getOpenPositions(): Promise<OpenPosition[]> {
     const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
-        // #753: arm-scoped — an unfiltered scan would put the control arm's
-        // lots into the live arm's book
         `SELECT * FROM open_positions
           WHERE arm = ? AND order_state NOT IN (${placeholders})
           ORDER BY opened_at`,
@@ -245,12 +187,10 @@ export class SqliteExecutionStore implements SharedStore {
     return rows.map(fromOpenPositionRow);
   }
 
-  /** See `SharedStore.sweepTerminalPositions` (types/store.ts) for the full contract */
   async sweepTerminalPositions(cutoff: Date): Promise<number> {
     const placeholders = SWEEPABLE_TERMINAL_STATES.map(() => '?').join(', ');
     const result = this.db
       .prepare(
-        // #753: arm-scoped, same reason as every other scan in this class
         `DELETE FROM open_positions
           WHERE arm = ? AND order_state IN (${placeholders})
             AND filled_size = 0 AND decision_timestamp < ?`,
@@ -259,14 +199,9 @@ export class SqliteExecutionStore implements SharedStore {
     return result.changes;
   }
 
-  /** See `SharedStore.abandonWedgedZeroFillLot` (types/store.ts) for the full contract */
   async abandonWedgedZeroFillLot(idempotency_key: string, reason: string): Promise<boolean> {
     const result = this.db
       .prepare(
-        // #753: arm-scoped, though a wedge can occur on either arm
-        // WHERE-guarded on the exact wedge shape so a race can't overwrite a
-        // lot that un-wedged itself between read and write; mirrors
-        // `isWedgedZeroFillLot` (key-scheme-guard.ts) in SQL — keep in sync (#1601)
         `UPDATE open_positions
             SET order_state = 'abandoned', abandon_reason = ?
           WHERE arm = ? AND idempotency_key = ?
@@ -276,11 +211,6 @@ export class SqliteExecutionStore implements SharedStore {
     return result.changes > 0;
   }
 
-  /**
-   * Dedup gate matched on the full `fills` PK — `(idempotency_key,
-   * broker_fill_id)`, not `broker_fill_id` alone (#1320) — since
-   * `broker_fill_id` is venue-assigned and not unique across lots
-   */
   async hasFill({
     idempotency_key,
     broker_fill_id,
@@ -291,10 +221,6 @@ export class SqliteExecutionStore implements SharedStore {
     return row !== undefined;
   }
 
-  /**
-   * One row per (partial) fill. `(idempotency_key, broker_fill_id)` is the
-   * PK, so a duplicate write surfaces as a constraint violation, not double-counting.
-   */
   private insertFill(fill: Fill): void {
     try {
       this.db
@@ -332,11 +258,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /**
-   * Every fill for a lot, in ingestion order — `rowid` breaks ties
-   * same-millisecond timestamps can't, so `ingestFills()` can reconstruct
-   * state deterministically
-   */
   async getFills(idempotency_key: string): Promise<Fill[]> {
     const rows = this.db
       .prepare('SELECT * FROM fills WHERE idempotency_key = ? ORDER BY rowid')
@@ -344,25 +265,14 @@ export class SqliteExecutionStore implements SharedStore {
     return rows.map(fromFillRow);
   }
 
-  /**
-   * #517: one `SUM(qty) ... GROUP BY` query for every named lot rather than
-   * N `getFills` round-trips. A key with no persisted entry fill is absent
-   * from the returned map.
-   */
   async getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
     return this.fillSizesByLeg(idempotency_keys, 'entry');
   }
 
-  /** #568's mirror of `getEntryFillSizes` over the closing legs (see `shared/held-quantity.ts`) */
   async getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
     return this.fillSizesByLeg(idempotency_keys, 'exit');
   }
 
-  /**
-   * The shared batch read behind both methods above. The SQL fragment is
-   * chosen from a frozen table (#568), never taken as a literal, so an
-   * `as`-cast caller can't reach arbitrary SQL text on a live-money store.
-   */
   private async fillSizesByLeg(
     idempotency_keys: readonly string[],
     side: 'entry' | 'exit',
@@ -400,10 +310,6 @@ export class SqliteExecutionStore implements SharedStore {
       .run(update.filled_size, update.avg_entry_price, update.order_state, idempotency_key);
   }
 
-  /**
-   * The realized record, written once on round-trip-to-flat. `idempotency_key`
-   * is the PK, so a second write for the same lot is a constraint violation.
-   */
   private insertClosedTrade(trade: ClosedTrade): void {
     try {
       this.db
@@ -429,12 +335,8 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(trade.opened_at),
           toStoredTimestamp(trade.closed_at),
           trade.close_reason,
-          // #753 — this instance's arm; what makes arm comparison queryable
           this.arm,
-          // #1112 AC5 — see `sizingCapitalCeiling`'s own doc
           this.sizingCapitalCeiling ?? null,
-          // #1121 AC5 — what actually happened to this lot's fills, computed
-          // at close time by `closedTrade()`; nullable pre-migration-0037
           trade.modelled_cost_charged ? 1 : 0,
         );
     } catch (cause) {
@@ -450,10 +352,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /**
-   * One poll's advance of a lot, in a single transaction — fills, lot state,
-   * and (on round-trip-to-flat) the `ClosedTrade` commit together or not at all
-   */
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     this.db.transaction(() => {
       for (const fill of advance.fills) {
@@ -468,12 +366,6 @@ export class SqliteExecutionStore implements SharedStore {
     })();
   }
 
-  /**
-   * Write-ahead: INSERT at `'submitting'` before `broker.submitFlatten`
-   * (mirrors `writeAheadPosition`). The one-flatten-per-instrument check
-   * (#1214) runs in the SAME transaction as the INSERT — a caller-side read
-   * first would leave a race window between two concurrent submitters.
-   */
   async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
     try {
       this.db.transaction(() => {
@@ -524,12 +416,9 @@ export class SqliteExecutionStore implements SharedStore {
         submission.side,
         submission.size,
         toStoredTimestamp(submission.submitted_at),
-        // Both columns projected from the same array — the positional
-        // pairing is re-established by `getFlattenAttribution`
         JSON.stringify(submission.lot_held_quantities.map((lot) => lot.idempotency_key)),
         JSON.stringify(submission.lot_held_quantities.map((lot) => lot.held)),
         submission.exit_reason,
-        // #1001 — see `FlattenSubmissionWriteAhead`'s field docs
         submission.decision_price,
         submission.quote_bid,
         submission.quote_ask,
@@ -540,12 +429,10 @@ export class SqliteExecutionStore implements SharedStore {
         submission.modelled_cost_breakdown === null
           ? null
           : JSON.stringify(submission.modelled_cost_breakdown),
-        // #1124 — this instance's arm, same posture as `writeAheadPosition`
         this.arm,
       );
   }
 
-  /** Persist the post-ack transition (`'submitting'` → `'submitted'`) */
   async resolveFlattenSubmitted(
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
@@ -571,7 +458,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /** Persist → `'error'` — see `SharedStore.resolveFlattenError` for when this applies */
   async resolveFlattenError(
     idempotency_key: string,
     reason: string,
@@ -592,10 +478,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /**
-   * Pure read backing the invariant that a retry key is only safe over a row
-   * provably dead at the venue (#1214) — only `'error'` clears the retry walk
-   */
   async isRetryableFlattenError(idempotency_key: string): Promise<boolean> {
     const row = this.db
       .prepare('SELECT status FROM flatten_submissions WHERE idempotency_key = ?')
@@ -603,10 +485,6 @@ export class SqliteExecutionStore implements SharedStore {
     return row?.status === 'error';
   }
 
-  /**
-   * #517/#571: which lot(s) a flatten closed, and what each held when
-   * submitted. `null` covers "no such flatten" and pre-migration rows alike.
-   */
   async getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null> {
     const row = this.db
       .prepare(
@@ -627,15 +505,10 @@ export class SqliteExecutionStore implements SharedStore {
       | undefined;
     if (row === undefined || row.lot_idempotency_keys === null) return null;
 
-    // #1001 — the flatten's own submit-time cost breakdown, prorated per lot
-    // by `redistributeOneFlatten`. Validated not cast (#1014 finding 4, #509).
     const modelledCostBreakdown = parseModelledCostBreakdownColumn(
       row.modelled_cost_breakdown_json,
     );
 
-    // Validated, not cast (#509) — an unvalidated `as string[]` would blow up
-    // deep inside `ingestFills()`'s allocation loop with no clear cause. The
-    // raw value is withheld from the error since it reaches `audit_log` (#507)
     const keys = parseJsonColumn(idempotency_key, 'lot_idempotency_keys', row.lot_idempotency_keys);
     if (!Array.isArray(keys) || !keys.every((entry) => typeof entry === 'string')) {
       throw new Error(
@@ -657,8 +530,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
 
     const held = parseJsonColumn(idempotency_key, 'lot_held_quantities', row.lot_held_quantities);
-    // The two columns encode pairing positionally — a length mismatch would
-    // attribute a lot's quantity to a different lot
     if (!Array.isArray(held) || held.length !== keys.length) {
       throw new Error(
         `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities for ` +
@@ -667,8 +538,6 @@ export class SqliteExecutionStore implements SharedStore {
       );
     }
 
-    // Non-negative and finite: `executeExit` refuses an over-exited lot
-    // before writing this row, so anything else is a corrupted record
     const paired: LotHeldQuantity[] = [];
     for (const [index, key] of keys.entries()) {
       const quantity: unknown = held[index];
@@ -692,12 +561,6 @@ export class SqliteExecutionStore implements SharedStore {
     };
   }
 
-  /**
-   * `reconcile()`'s worklist (#519, #526): `'submitting'`, or `'submitted'`
-   * not yet swept. `arm`-scoped since #1124 — unfiltered, each arm's
-   * reconcile asked its own broker about the OTHER arm's `client_order_id`.
-   * `writeAheadFlatten`'s one-flatten-per-instrument guard runs this same predicate.
-   */
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
@@ -731,10 +594,6 @@ export class SqliteExecutionStore implements SharedStore {
     }));
   }
 
-  /**
-   * A fresher venue answer on an already-`'submitted'` row — must not touch
-   * `resolved_at`/`status` the way `resolveFlattenSubmitted` does
-   */
   async recordFlattenOrderStateObserved(
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
@@ -755,7 +614,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /** Migration 0062's throttle input — see `SharedStore.markFlattenCancelAttempted` */
   async markFlattenCancelAttempted(idempotency_key: string, attempted_at: Date): Promise<void> {
     const result = this.db
       .prepare('UPDATE flatten_submissions SET cancel_attempted_at = ? WHERE idempotency_key = ?')
@@ -769,7 +627,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /** Migration 0063's window start and throttle — see `SharedStore.markFlattenTerminalUnsweptChecked` */
   async markFlattenTerminalUnsweptChecked(
     idempotency_key: string,
     checked_at: Date,
@@ -788,7 +645,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /** Bounds `getUnresolvedFlattens()` above — see `SharedStore.markFlattenFillsSwept`'s doc for when this may be called */
   async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
     const result = this.db
       .prepare('UPDATE flatten_submissions SET fills_swept_at = ? WHERE idempotency_key = ?')
@@ -802,10 +658,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /**
-   * #549's durable marker. COALESCE keeps the first observation time. Throws
-   * on an unknown lot — silently succeeding would falsely imply sweep coverage.
-   */
   async markResidualUnprotected(idempotency_key: string, observed_at: Date): Promise<void> {
     const result = this.db
       .prepare(
@@ -823,10 +675,6 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /**
-   * Clears the #549 marker and its alert-dedup timestamp together. A no-op
-   * on an unmarked/unknown lot, unlike `markResidualUnprotected` above.
-   */
   async confirmResidualProtected(idempotency_key: string): Promise<void> {
     this.db
       .prepare(
@@ -839,10 +687,6 @@ export class SqliteExecutionStore implements SharedStore {
       .run(idempotency_key);
   }
 
-  /**
-   * #549's once-per-episode alert dedup — first-writer-wins: the write lands
-   * only while the episode is un-alerted; `changes` reports who won
-   */
   async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean> {
     const result = this.db
       .prepare(
@@ -855,10 +699,6 @@ export class SqliteExecutionStore implements SharedStore {
     return result.changes > 0;
   }
 
-  /**
-   * Same first-writer-wins dedup as `markResidualAlerted`, over its own
-   * column — a pre-attempt page can't block this, and vice versa
-   */
   async markResidualRearmUnsupportedAlerted(
     idempotency_key: string,
     alerted_at: Date,
@@ -874,10 +714,6 @@ export class SqliteExecutionStore implements SharedStore {
     return result.changes > 0;
   }
 
-  /**
-   * Point-read of `residual_rearm_unsupported_alerted_at`. No matching row
-   * reads the same as `null` — both mean "never alerted".
-   */
   async getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<Date | null> {
     const row = this.db
       .prepare(
@@ -891,12 +727,10 @@ export class SqliteExecutionStore implements SharedStore {
       : fromStoredTimestampOrNull(row.residual_rearm_unsupported_alerted_at);
   }
 
-  /** The #549 sweep's worklist — non-terminal lots still marked unprotected */
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
     const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
-        // #753: arm-scoped, same reason as `getOpenPositions()`
         `SELECT * FROM open_positions
           WHERE arm = ?
             AND residual_unprotected_since IS NOT NULL
@@ -906,8 +740,6 @@ export class SqliteExecutionStore implements SharedStore {
       .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
 
     return rows.map((row) => {
-      // Non-null by the WHERE clause — fail loudly on a corrupted row rather
-      // than fabricate an observation time (#549 review)
       if (row.residual_unprotected_since === null) {
         throw new Error(
           `SqliteExecutionStore.getUnprotectedResidualLots: row '${row.idempotency_key}' ` +
@@ -926,10 +758,6 @@ export class SqliteExecutionStore implements SharedStore {
   }
 }
 
-/**
- * `JSON.parse` for one `flatten_submissions` column; the raw value is
- * withheld from the error — see `getFlattenAttribution`
- */
 function parseJsonColumn(idempotency_key: string, column: string, raw: string): unknown {
   try {
     return JSON.parse(raw);

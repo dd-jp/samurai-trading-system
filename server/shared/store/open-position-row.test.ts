@@ -6,7 +6,6 @@ import {
 import { toStoredTimestamp } from './sqlite-utils.js';
 
 const BREAKDOWN = { spread_cost: 1, commission: 0.5, slippage: 0.25, market_impact: 0 };
-// Deliberately distinct from BREAKDOWN so a mapper crossing the two columns fails
 const PROTECTIVE_BREAKDOWN = {
   spread_cost: 2,
   commission: 0.75,

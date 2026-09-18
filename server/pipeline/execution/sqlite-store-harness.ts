@@ -1,23 +1,3 @@
-/**
- * Test-only helpers over `SqliteExecutionStore` (#195) — what `execute.test.ts`,
- * `reconcile.test.ts` and `ingest-fills.test.ts` build on in place of their
- * former test-local `InMemoryStore` doubles, so the suites exercise the real
- * SQLite-backed store rather than a Map's semantics.
- *
- * Two additions beyond the production `SharedStore` port, both read-only and
- * both because assertions need to see states the port deliberately hides:
- *
- * - `getPosition`/`countAllPositions` read EVERY state, including terminal —
- *   `getOpenPositions()` excludes those by design (execution-spec.md), but a
- *   test asserting "the lot ended up `rejected`" needs to see it anyway.
- * - `writeLog` records write-ahead/update-state calls in order, mirroring
- *   what the old `InMemoryStore.writeLog` gave tests that assert not just
- *   the end state but what was durable at each point.
- *
- * Kept out of `SqliteExecutionStore` itself so that module's exported surface
- * stays exactly the port it implements — no test-only reads on the
- * production class.
- */
 
 import type { ClosedTrade, OpenPosition, OrderState, TradingArm } from '../../shared/index.js';
 import {
@@ -31,7 +11,6 @@ import {
 import { SqliteExecutionStore } from './sqlite-shared-store.js';
 import type { FlattenSubmissionWriteAhead } from './types.js';
 
-/** Row shape for `TestExecutionStore.getFlattenSubmission` — a read the production port never needs */
 export interface FlattenSubmissionRow {
   idempotency_key: string;
   instrument: string;
@@ -44,31 +23,21 @@ export interface FlattenSubmissionRow {
   reason: string | null;
   submitted_at: string;
   resolved_at: string | null;
-  /** JSON `string[]` — NULL for a row written before migration 0020 (#517) */
   lot_idempotency_keys: string | null;
-  /** JSON `number[]`, positionally parallel to the keys — NULL before migration 0021 (#571) */
   lot_held_quantities: string | null;
-  /** NULL until `markFlattenFillsSwept` runs — migration 0023 (#519/#526) */
   fills_swept_at: string | null;
-  /** #1001, migration 0037 — the raw submit-time snapshot columns, unparsed */
   decision_price: number | null;
   quote_bid: number | null;
   quote_ask: number | null;
   quote_mid: number | null;
   quote_observed_at: string | null;
   modelled_cost_breakdown_json: string | null;
-  /** Migration 0050, #1124 — which arm's store wrote this row */
   arm: 'live' | 'control';
 }
 
 export class TestExecutionStore extends SqliteExecutionStore {
   readonly writeLog: string[] = [];
 
-  // #1121: optional so every existing call site (implicitly 'live', matching
-  // `SqliteExecutionStore`'s own default) keeps compiling unchanged — added
-  // only so a test can put a 'control'-arm store on the SAME `testDb` a
-  // 'live' one already writes to, to compare the two arms' closed_trades
-  // rows from one shared table the way `SqliteArmComparisonSource` does
   constructor(
     private readonly testDb: StoreHandle,
     arm: TradingArm = 'live',
@@ -125,13 +94,6 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return super.markFlattenFillsSwept(idempotency_key, swept_at);
   }
 
-  /**
-   * Rewrites a journal row's `lot_held_quantities` column after the write-ahead
-   * — `null` ages it to its pre-migration-0021 shape (the only one that still
-   * routes the split through `getEntryFillSizes`); any other string is what a
-   * corrupted row would read back as. Tests reach the column through this so
-   * the raw SQL lives in one place next to the store it targets.
-   */
   ageFlattenHeldQuantities(idempotency_key: string, raw: string | null = null): void {
     this.testDb
       .prepare('UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?')
@@ -164,14 +126,6 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return super.markResidualRearmUnsupportedAlerted(idempotency_key, alerted_at);
   }
 
-  /**
-   * Logged only when it actually deletes something — unlike every other
-   * override above, this one is called UNCONDITIONALLY on every `reconcile()`
-   * pass (#1088), so logging every call (including a 0-row no-op) would
-   * turn `writeLog` from "what this pass durably changed" into "what this
-   * pass merely invoked", breaking every existing `writeLog` assertion that
-   * predates this mechanism
-   */
   override async sweepTerminalPositions(cutoff: Date): Promise<number> {
     const swept = await super.sweepTerminalPositions(cutoff);
     if (swept > 0) this.writeLog.push(`sweep-terminal-positions:${swept}`);
@@ -187,7 +141,6 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return abandoned;
   }
 
-  /** Raw read of the #549 marker columns (migration 0024) — production reads them only via `getUnprotectedResidualLots` */
   async getResidualProtectionMarker(
     idempotency_key: string,
   ): Promise<{ unprotected_since: string | null; alerted_at: string | null } | null> {
@@ -203,16 +156,6 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return row === undefined ? null : row;
   }
 
-  /**
-   * Raw read of the #1447 permanent-gap dedup column (migration 0059) — kept
-   * off `getResidualProtectionMarker`'s shape rather than added to it so the
-   * many existing `toEqual({ unprotected_since, alerted_at })` assertions
-   * stay exact instead of needing a third field everywhere. Named `...Raw`
-   * (not overriding the base class's `getResidualRearmUnsupportedAlertedAt`,
-   * production's own point-read of the same column, which returns
-   * `Date | null`) so tests can assert the exact stored TEXT when that
-   * matters without colliding with the production method's type.
-   */
   async getResidualRearmUnsupportedAlertedAtRaw(idempotency_key: string): Promise<string | null> {
     const row = this.testDb
       .prepare(
@@ -223,7 +166,6 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return row === undefined ? null : row.alerted_at;
   }
 
-  /** Every state, including terminal — what `getOpenPositions()` deliberately excludes */
   async getPosition(idempotency_key: string): Promise<OpenPosition | null> {
     const row = this.testDb
       .prepare('SELECT * FROM open_positions WHERE idempotency_key = ?')
@@ -245,7 +187,6 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return rows.map(fromClosedTradeRow);
   }
 
-  /** Raw read of the flatten journal (#508 review, PR #516) — production never reads this back */
   async getFlattenSubmission(idempotency_key: string): Promise<FlattenSubmissionRow | null> {
     const row = this.testDb
       .prepare('SELECT * FROM flatten_submissions WHERE idempotency_key = ?')

@@ -18,7 +18,6 @@ describe('IndicatorCache eviction', () => {
     const cache = new IndicatorCache(2);
     cache.set('a', value(1));
     cache.set('b', value(2));
-    // Touch 'a' so 'b' is the coldest when 'c' arrives
     cache.get('a');
     cache.set('c', value(3));
 

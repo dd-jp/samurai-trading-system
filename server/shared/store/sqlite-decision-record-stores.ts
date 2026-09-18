@@ -1,15 +1,3 @@
-/**
- * SQLite-backed `TraderLogStore` / `RiskLogStore` over `trader_log` and
- * `risk_log` (#328, migration `0016_decision_records.sql`).
- *
- * Follows `SqliteVerdictLogStore` (#302) exactly, including its conflict rule:
- * `ON CONFLICT DO NOTHING` on the `(trace_id, instrument)` primary key, so a
- * retried tick or a re-processed crash-recovery pass cannot abort the pipeline
- * on a repeated key. **First-write-wins, not last-write-wins** — these are
- * audit records of what the stage actually decided, so the first decision under
- * a trace is the one that happened; a later write under the same key is a
- * replay, not a correction.
- */
 
 import type {
   RiskDecisionRecord,
@@ -20,17 +8,12 @@ import type {
 import type { StoreHandle } from './open-shared-store.js';
 import { toStoredTimestamp } from './sqlite-utils.js';
 
-/** `reason_detail_compared_value, reason_detail_threshold` column values */
 function reasonDetailColumns(
   record: TraderDecisionRecord,
 ): readonly [compared_value: number | null, threshold: number | null] {
   return [record.reason_detail?.compared_value ?? null, record.reason_detail?.threshold ?? null];
 }
 
-/**
- * `base_risk_fraction, conviction_multiplier, vol_floor_factor,
- * non_converged_haircut, cosine_multiplier` column values
- */
 function sizingColumns(
   record: TraderDecisionRecord,
 ): readonly [
@@ -49,18 +32,12 @@ function sizingColumns(
   ];
 }
 
-/**
- * `no_precedent` is a real tri-state here: 1, 0, or NULL for "the retrieval
- * never ran". Coercing the third to 0 would claim precedent was found and
- * simply not recorded.
- */
 function noPrecedentColumn(
   cosine_precedent: TraderDecisionRecord['cosine_precedent'],
 ): 0 | 1 | null {
   return cosine_precedent === null ? null : cosine_precedent.no_precedent ? 1 : 0;
 }
 
-/** `neighbor_count, weighted_mean_r, no_precedent` column values */
 function cosinePrecedentColumns(
   record: TraderDecisionRecord,
 ): readonly [

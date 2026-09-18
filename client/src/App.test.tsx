@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * The shell: one poll feeds a rail and three tabs. These tests cover what a
- * screenshot cannot — the words in accessible names, the honest empty
- * states, focus surviving a poll, and a hostile string rendering inert —
- * against a fake `fetch`, so nothing here touches a network.
- */
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { App } from './App.tsx';
@@ -71,8 +65,6 @@ function laneView() {
 }
 
 async function openTab(name: 'Glance' | 'Live' | 'Review') {
-  // Awaited: since #1520 the tablist does not exist until the first snapshot
-  // lands — the page is the cold-start state until then
   fireEvent.click(await screen.findByRole('tab', { name }));
 }
 
@@ -82,11 +74,6 @@ afterEach(() => {
 
 describe('rail', () => {
   it('reads ALIVE with the poll clock, PAPER, the live tick and both providers', async () => {
-    // The snapshot's own `generated_at` stays at the fixture default
-    // (12:00:00Z, via `makeSnapshot`) while the injected client clock reads a
-    // different instant — the poll clock and the snapshot clock must read
-    // their own sources rather than coincide because a test happened not to
-    // vary them (#1166)
     renderApp(
       [
         makeSnapshot({
@@ -122,9 +109,6 @@ describe('rail', () => {
   });
 
   it('marks the page STALE after two missed polls and keeps the last clock', async () => {
-    // Wider than POLL_MS: this test needs to observe ALIVE before the
-    // watchdog flips it, and the default 20ms/40ms window races the real
-    // wall clock under load (findByRole + a full Rail render can outrun it)
     renderApp([makeSnapshot(), null], undefined, 100);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
     await within(rail).findByText('ALIVE');
@@ -161,13 +145,6 @@ describe('rail', () => {
     expect(within(rail).queryByRole('img', { name: /LLM budget used/ })).toBeNull();
   });
 
-  // A snapshotless client knows nothing about the operator's budget: claiming
-  // it was never armed, or that it's deliberately uncapped, is as false as
-  // drawing a meter against an invented one — "unknown" must outrank both
-  // (#1140's priority order, sharpened by #1196's two new claims it could
-  // make from zero information). Since #1520 the page answers this by not
-  // rendering the meter at all before the first snapshot, which is the same
-  // claim made one level up
   it('does not claim the budget is armed, unarmed, or uncapped before the first poll lands', () => {
     renderApp([HANGS]);
 
@@ -191,9 +168,6 @@ describe('rail', () => {
     expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
   });
 
-  // #1140: the denominator is the enforcer's, so a raised budget must move the
-  // meter — with a client-side constant this test reads $50 whatever the wire
-  // says, which is the defect
   it('draws the meter against the cap the wire carries, not a fixed figure', async () => {
     const spend = makeSpend({ cap_usd: 200 });
     spend.all_time = { ...spend.all_time, cost_usd: 50 };
@@ -216,9 +190,6 @@ describe('rail', () => {
     expect(await within(rail).findByText(/over cap/)).toBeTruthy();
   });
 
-  // #1196: an armed-uncapped run (the wire's `cap_usd: null` PLUS a non-null
-  // `cap_armed_at`) is a deliberate operator choice, not an absent or unarmed
-  // one — the rail must say so, never "never armed" or "ambiguous"
   it('names the reason instead of drawing a meter when the run is armed uncapped', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null }) })]);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
@@ -231,12 +202,6 @@ describe('rail', () => {
     expect(within(rail).queryByText(/over cap/)).toBeNull();
   });
 
-  // Review round 3's MAJOR, reproduced exactly: a real, enforced cap
-  // serialized as a string (e.g. by a corrupted `budget_usd` column,
-  // `SqliteLlmSpendCapStore.read()`) alongside an intact `cap_armed_at` must
-  // not render as "deliberately uncapped" — that claim comes from `cap_usd`
-  // being EXPLICITLY `null`, and a malformed `cap_usd` is a different fact
-  // entirely: this client could not read it, not that the wire said so
   it('names the cap unreadable, never "deliberately uncapped", when cap_usd is malformed', async () => {
     const spend = { ...makeSpend({ cap_usd: 50 }) };
     // @ts-expect-error simulating a malformed wire value (e.g. corrupted storage)
@@ -255,9 +220,6 @@ describe('rail', () => {
     expect(within(rail).queryByText(/over cap/)).toBeNull();
   });
 
-  // #1196's core acceptance criterion: "never armed" (no row was ever
-  // written) must read differently from "armed uncapped" (a deliberate
-  // operator choice) — collapsing both into the same sentence is the defect
   it('names "never armed" distinctly from "armed uncapped", and never claims a budget is merely unconfigured', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null, cap_armed_at: null }) })]);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
@@ -270,13 +232,6 @@ describe('rail', () => {
     expect(within(rail).queryByText(/over cap/)).toBeNull();
   });
 
-  // Round 2's MAJOR: `cap_usd: null` with `cap_armed_at` ABSENT (not
-  // explicitly `null`) is a pre-#1196 server — it did boot and did arm, it
-  // simply predates this field. Reading that absence as "never armed" is an
-  // affirmative false claim about enforcement, the same shape of defect
-  // #1196 itself fixed one field up. The rail must assert neither "armed"
-  // nor "unarmed" for this cell — the one combination nothing tested before
-  // this round
   it('claims neither armed nor unarmed when cap_usd is null and cap_armed_at is absent entirely', async () => {
     const spend = { ...makeSpend({ cap_usd: null }) };
     // @ts-expect-error simulating a pre-#1196 server's wire shape
@@ -295,12 +250,6 @@ describe('rail', () => {
     expect(within(rail).queryByText(/over cap/)).toBeNull();
   });
 
-  // A numeric `cap_usd` is itself affirmative evidence something armed —
-  // `cap_armed_at` is #1196's discriminator for a NULL cap only, never a
-  // gate on a numeric one. A payload carrying a real cap but missing (not
-  // explicitly null) `cap_armed_at` — the shape an older server or a
-  // version-skewed deployment would send — must still draw the meter, not
-  // regress to "never armed" and throw the denominator away (review finding)
   it('draws the meter from a numeric cap even when cap_armed_at is absent from the wire', async () => {
     const spend = { ...makeSpend({ cap_usd: 50 }) };
     // @ts-expect-error simulating an older/mixed-version wire payload
@@ -316,9 +265,6 @@ describe('rail', () => {
     expect(within(rail).queryByText(/never armed/)).toBeNull();
   });
 
-  // The additional defect found in review: a $0 cap is the MOST restrictive
-  // budget possible and must not render as "no budget configured" (the least
-  // restrictive reading) — nor as a silently-healthy meter
   it('states an armed $0 cap explicitly, never as an unconfigured budget', async () => {
     const spend = makeSpend({ cap_usd: 0 });
     spend.all_time = { ...spend.all_time, cost_usd: 0 };
@@ -368,9 +314,6 @@ describe('rail', () => {
     expect(within(rail).queryByText(/failed to deliver/)).toBeNull();
   });
 
-  // #1108: silence must not read as calm — the rail names the count instead
-  // #1131: the field and its rendered text both name the 24h window now, so
-  // the tile itself does not overclaim a lifetime total
   it('surfaces a nonzero alert_delivery_failures_24h count as a degraded channel', async () => {
     renderApp([makeSnapshot({ alert_delivery_failures_24h: 4 })]);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
@@ -380,28 +323,12 @@ describe('rail', () => {
   });
 });
 
-/**
- * #1520 (decided in #1144): the page answers "has a snapshot ever arrived"
- * ONCE, at the root, instead of letting 22 leaves each answer "is one present
- * right now". The three states below have to stay distinguishable from each
- * other — a cold start must not be dressed as an empty book, and a stale feed
- * must not be dressed as a cold start, which would throw away the last known
- * state of the book at exactly the moment an operator is reaching for it.
- *
- * The cold-start states are the SAME `FeedStatus` machine the rail reads
- * (#1316's discriminator), not a second one beside it — which is what the
- * MISMATCH case below pins: a first poll that answers with a wire contract
- * this client cannot read is a cold start whose word is MISMATCH, not
- * WAITING.
- */
 describe('cold start (#1520)', () => {
   it('gates the whole dashboard on the first snapshot: one waiting state, no rail and no tabs', () => {
     renderApp([HANGS]);
 
     expect(screen.getByText('WAITING')).toBeTruthy();
     expect(screen.getByText('waiting for the first snapshot')).toBeTruthy();
-    // Not a half-rendered dashboard: no rail, no tablist, no empty cards that
-    // an operator could read as a book with nothing in it
     expect(screen.queryByRole('complementary', { name: 'Rail' })).toBeNull();
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.queryByRole('tabpanel')).toBeNull();
@@ -427,7 +354,6 @@ describe('cold start (#1520)', () => {
   });
 
   it('keeps the last known book on screen when the feed goes stale — a stale feed is never a cold start', async () => {
-    // Wider than POLL_MS for the same reason as the STALE test above (#1520)
     renderApp(
       [makeSnapshot({ positions: [makePosition({ instrument: 'SPY' })] }), null],
       undefined,
@@ -440,8 +366,6 @@ describe('cold start (#1520)', () => {
 
     expect(screen.queryByText('waiting for the first snapshot')).toBeNull();
     expect(screen.queryByText('WAITING')).toBeNull();
-    // The numbers themselves stay: staleness is a label and a border, never a
-    // disappearance (dashboard-spec.md, "Layout — the Rail")
     expect(within(screen.getByLabelText('Open risk')).getByText('SPY')).toBeTruthy();
     expect(within(rail).getByText('snapshot 12:00:00Z')).toBeTruthy();
   });
@@ -623,14 +547,6 @@ describe('live', () => {
   });
 });
 
-/**
- * #1080. A debate that hit its latency budget before any round completed
- * returns `neutral` with zero confidence, so the trace it leaves —
- * `debate: neutral`, `trader: no_trade` — used to be byte-identical to a
- * debate that ran to convergence and genuinely found nothing. The page is
- * where an operator reads that trace, so this is where the two have to look
- * different.
- */
 describe('degraded stages on the page (#1080)', () => {
   function starvedLaneView() {
     const starved = makeLane({
@@ -670,34 +586,17 @@ describe('degraded stages on the page (#1080)', () => {
     expect(debateRow?.textContent).toContain('budget_exhausted');
     expect(debateRow?.textContent).toContain('before any round completed');
 
-    // The no_trade beside it is a genuine decision word and must NOT be
-    // recoloured — the point is telling the two apart, not flagging the pair
     expect(drawer.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
 
-  // F1 (#1142): the lane matrix walked the same cells as the drawer but
-  // rendered a bare `decisionOf(cell)`, so this same starved debate read
-  // glossed in the drawer and unglossed in the matrix — the surface an
-  // operator scans first. Both now render from `resolveLaneCells`, so the
-  // matrix carries the drawer's `data-degraded` hook too. The per-word
-  // coverage (which decisions gloss, and what they say) lives at the
-  // resolver in `lane-cells.test.ts`; this is the DOM wiring proof for the
-  // renderer the drawer test above does not touch
   it('explains a starved sub-budget in the LANE MATRIX too, not only the drawer', async () => {
     renderApp([makeSnapshot({ pipeline: starvedLaneView() })]);
     await openTab('Live');
 
-    // aria-label overrides inner text for assistive tech (LiveTab.tsx's
-    // button), so the lane's own accessible name has to say "degraded" too —
-    // otherwise the fix is sighted-only
     const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
     const debateCell = qqq.querySelector('[data-stage="debate"]');
     expect(debateCell?.getAttribute('data-degraded')).toBe('true');
 
-    // The cell paints its decision WORD (dashboard-spec.md:135), not the
-    // gloss sentence — a sentence overflows the matrix column. The gloss
-    // reaches the surface as `title` and as the non-colour glyph, not as the
-    // cell's visible text
     const decisionSpan = debateCell?.querySelector('.lane-decision');
     expect(decisionSpan?.textContent).toContain('budget_exhausted');
     expect(decisionSpan?.textContent).not.toContain('before any round completed');
@@ -709,11 +608,6 @@ describe('degraded stages on the page (#1080)', () => {
     expect(qqq.querySelector('[data-stage="trader"]')?.getAttribute('data-degraded')).toBeNull();
   });
 
-  // #1428: the wiring proof for the two renderers #1396 left on the old
-  // `audit_log`-only resolution. `budget_exhausted` is written for an escaped
-  // LLM failure exactly as it is for a genuine budget expiry, so the drawer
-  // could state both answers at once — the Timeline row saying one thing and
-  // the debate section directly beneath it saying another, for one debate
   const llmFailureDebate = makeDebate({
     instrument: 'QQQ',
     termination: 'latency_truncated',
@@ -737,21 +631,12 @@ describe('degraded stages on the page (#1080)', () => {
 
     const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
     const decisionSpan = qqq.querySelector('[data-stage="debate"] .lane-decision');
-    // Still the bare word visibly (dashboard-spec.md:135); the cause reaches
-    // the surface through the same `title` the audit gloss already used
     expect(decisionSpan?.textContent).toContain('budget_exhausted');
     expect(decisionSpan?.textContent).not.toContain(CAUSE);
     expect(decisionSpan?.getAttribute('title')).toContain(CAUSE);
   });
 });
 
-/**
- * #1038: the dashboard's only way to acquire a bearer token is `?token=` on
- * a shared link (`lib/dashboard-token.ts`'s header). These are the wiring
- * tests — the pure resolve/strip logic is covered directly in
- * `lib/dashboard-token.test.ts`; this file proves `App.tsx` actually calls
- * it, scrubs the address bar, and reaches the poll's `Authorization` header.
- */
 describe('dashboard token from the URL (#1038)', () => {
   afterEach(() => {
     window.sessionStorage.clear();
@@ -771,10 +656,6 @@ describe('dashboard token from the URL (#1038)', () => {
     return { fetchImpl, inits: () => inits, lastInit: () => inits[inits.length - 1] };
   }
 
-  // Pins `inits()[0]`, not `lastInit()`: round 2 finding A found the round-1
-  // fix regressed exactly the first poll to unauthenticated while a later,
-  // correctly-authenticated poll still landed within `waitFor`'s retry
-  // window — `lastInit()` never caught it
   it('sends the ?token= from a shared link as the very first poll’s Authorization header', async () => {
     window.history.pushState(null, '', '/?token=fixture-dashboard-token');
     const { fetchImpl, inits } = recordingFetch();
@@ -818,14 +699,6 @@ describe('dashboard token from the URL (#1038)', () => {
     expect(headers === undefined || headers.Authorization === undefined).toBe(true);
   });
 
-  // Token resolution runs inside useState's lazy initializer (round 2
-  // finding A moved it back there from an effect, to win the race against
-  // useSnapshot's mount-time poll). `window.sessionStorage`'s PROPERTY ACCESS
-  // itself throws `SecurityError` where site data is blocked (Safari Block
-  // All Cookies, some Chrome privacy settings, privacy extensions) — with no
-  // error boundary, an uncaught throw here would blow up render (a white
-  // screen). `safeSessionStorage()` catches it and degrades to a no-op
-  // store, so the default no-token path renders instead
   it('renders the default path instead of white-screening when sessionStorage access throws', async () => {
     const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
     Object.defineProperty(window, 'sessionStorage', {
@@ -849,14 +722,6 @@ describe('dashboard token from the URL (#1038)', () => {
     }
   });
 
-  // Round 2 finding B: `safeSessionStorage()` guarded only the property
-  // access, so a throwing `getItem`/`setItem` (Safari private browsing,
-  // `QuotaExceededError`) still escaped — and `resolveDashboardToken` calls
-  // `storage.setItem` BEFORE returning a fresh URL token, so an unguarded
-  // throw there would both blank the dashboard (thrown out of the lazy
-  // initializer, no error boundary) AND lose the URL token that triggered
-  // the write. Both halves are asserted: the dashboard renders, and the
-  // first poll still carries the URL token despite the write failing
   it('carries the URL token on the first poll, and does not blank the dashboard, when sessionStorage.setItem throws', async () => {
     const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
     const throwingStore: Pick<Storage, 'getItem' | 'setItem'> = {
@@ -885,10 +750,6 @@ describe('dashboard token from the URL (#1038)', () => {
     }
   });
 
-  // Round 2 finding B's other half: `getItem` throwing (not just `setItem`)
-  // must also degrade to the default path rather than blank the dashboard
-  // No ?token= here, so `resolveDashboardToken` falls through to the
-  // `storage.getItem` read this store throws on
   it('renders the default path instead of white-screening when sessionStorage.getItem throws', async () => {
     const original = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
     const throwingStore: Pick<Storage, 'getItem' | 'setItem'> = {
@@ -917,19 +778,7 @@ describe('dashboard token from the URL (#1038)', () => {
   });
 });
 
-/**
- * #1593: the rail's Live/Control selector, the hash it lives in beside the
- * tab, and the Control banner. `App.tsx`'s `ArmView` is keyed by `arm`, so
- * switching arms remounts the whole snapshot-derived subtree rather than
- * mutating it in place — the tests below that assert the PREVIOUS arm's data
- * is gone, not just joined by the new arm's, are the mutation evidence for
- * that: they fail against a version that swaps `snapshot` in place inside one
- * `useSnapshot` call (a plausible, WRONG first implementation) whenever that
- * version's poll for the new arm has not landed yet, because the old arm's
- * numbers would still be on screen instead of the cold start.
- */
 describe('arm selector (#1593)', () => {
-  /** Routes a fake poll by whether its URL asked for the control arm */
   function fetchByArm(payloads: { live: unknown; control: unknown }): typeof fetch {
     const impl = async (input: unknown): Promise<Response> => {
       const url = typeof input === 'string' ? input : String(input);
@@ -964,7 +813,6 @@ describe('arm selector (#1593)', () => {
     expect(window.location.hash).toBe('#review/control');
     expect(screen.getByText('CONTROL ARM — simulated fills, no money')).toBeTruthy();
 
-    // Round trip back to Live: no second segment, not `#review/live`
     fireEvent.click(screen.getByRole('button', { name: 'Live arm' }));
     await waitFor(() => expect(screen.queryByText(/CONTROL ARM/)).toBeNull());
     expect(window.location.hash).toBe('#review');

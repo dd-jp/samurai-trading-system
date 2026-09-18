@@ -1,69 +1,3 @@
-/**
- * The production call site `RateLimiter` never had (#388).
- *
- * `RateLimiter` (debate-engine/rate-limiter.ts) was implemented, tested and
- * exported, and constructed nowhere outside its own test — the seventh
- * instance of this repo's dominant defect class in two days. The throttle the
- * system actually ran on was `maxConcurrentInstruments: 1`, an incidental
- * property of a concurrency default rather than of the component built to
- * provide it, and one config change away from vanishing.
- *
- * This decorator is the metering half of the fix: every LLM call a debate
- * makes goes through `complete` here, so `recordCall` cannot be forgotten at a
- * call site the way it was forgotten at the composition root. The admission
- * half (`reserve`, once per debate) is in `debate-adapter.ts`.
- *
- * ## It does not wait, and that is the decision
- *
- * `RateLimiter` has no blocking API at all: `reserve` returns
- * `{granted}`/`{granted: false, reason}` synchronously and `recordCall` is a
- * counter increment. Nothing here adds a wait on top, deliberately —
- *
- * - a limiter that parks a call behind a 60s tick is its own failure mode
- *   (#388 says so in as many words): the tick loop is a `setTimeout` chain, so
- *   a parked debate stretches the whole cadence rather than shedding load; and
- * - a wait is precisely what creates a ZOMBIE against #347/#373's cancellation
- *   contract. A call parked in a limiter while the debate's latency budget
- *   fires would wake up after `enforceLatencyBudget` has already returned its
- *   fallback, issue a request nobody reads, and bill for it — the exact leak
- *   #347 closed at the transport.
- *
- * So the posture is FAIL-FAST, not wait: the budget is checked once, up front,
- * before a debate starts (see `buildDebateStep`), and a debate that is admitted
- * runs to completion without ever being parked mid-flight.
- *
- * ## What it counts, stated precisely
- *
- * LOGICAL calls — one `recordCall` per `complete()` — not HTTP attempts. This
- * decorator sits ABOVE `AnthropicLlmClient`, whose `complete` wraps its own
- * `attempt` in `withRetry(..., config.retry)`, so a call that is retried once
- * issues two requests to the provider and meters as ONE.
- *
- * Deliberate, and disclosed rather than papered over (PR #390 review): the
- * limiter's unit is "an LLM call a debate makes", which is what
- * `WORST_CASE_LLM_CALLS_PER_DEBATE` reserves against and what the per-debate
- * budget is reasoned about in. Metering below the retry would count transport
- * attempts, a different quantity, and could not be per-asset-class — the inner
- * client has no instrument.
- *
- * The consequence is bounded and worth knowing: at `DEFAULT_LLM_CLIENT_CONFIG`'s
- * `maxAttempts: 2`, actual provider requests are at most 2x the metered figure,
- * and only in the pathological case where every call fails retryably. A
- * constant, bounded factor does not defeat a ceiling whose job is stopping
- * UNBOUNDED growth from a config change, and the retries are separately paced
- * by their own backoff.
- *
- * ## What it does owe the cancellation contract
- *
- * With no wait of its own, the only zombie this layer can create is issuing —
- * and billing — a call for a debate that has ALREADY been cancelled. The round
- * orchestrator stops issuing calls on abort, but a persona call in the middle
- * of the `bull -> bear -> mediator` sequence can find the signal aborted
- * between being constructed and being sent. Checking here is a cheap, exact
- * backstop: an aborted request is refused before it reaches the transport and
- * WITHOUT spending budget, because a call that never went out consumed no
- * provider quota.
- */
 import {
   type AssetClass,
   LlmCancelledError,
@@ -77,12 +11,6 @@ export class RateLimitedLlmClient implements LlmClient {
   constructor(
     private readonly inner: LlmClient,
     private readonly rateLimiter: RateLimiter,
-    /**
-     * Fixed at construction rather than read per call: `LlmRequest` carries no
-     * instrument, and one of these is built per debate (`buildDebatePersonas`
-     * is already per-debate state), so the class is known exactly where the
-     * decorator is created and guessing it here would be the invention
-     */
     private readonly assetClass: AssetClass,
   ) {}
 
@@ -94,17 +22,12 @@ export class RateLimitedLlmClient implements LlmClient {
       );
     }
 
-    // BEFORE the call, not after. The provider counts a request the moment it
-    // arrives, so a local counter that credits only successful calls drifts
-    // downward under exactly the conditions — timeouts, 429s, 5xx — that make
-    // the budget matter. Over-counting a failed call is the safe direction.
     this.rateLimiter.recordCall(this.assetClass);
 
     return this.inner.complete(request);
   }
 }
 
-/** The abort reason as text, so the refusal says WHY rather than "aborted" */
 function describeAbort(signal: AbortSignal): string {
   const reason: unknown = signal.reason;
   if (reason instanceof Error) return reason.message;

@@ -83,17 +83,6 @@ class FixtureRegistry implements InstrumentRegistry {
   }
 }
 
-/**
- * A genuinely frictionless fill — `fill_price = mid`, every component zero.
- *
- * Deliberately a test-only `CostModel` implementation rather than a
- * `CostConfig` with zeroed coefficients: `CostModelImpl` applies a structural
- * 1bp floor beneath any config precisely so a config CANNOT construct a
- * frictionless fill (Principle 1). That guard is about the eval path, and it
- * stays intact — this bypasses it inside a test to build the counterfactual
- * the guard makes unreachable by design, which is the only way to prove the
- * add-back reconstructs it.
- */
 class ZeroCostModel implements CostModel {
   fill(request: FillRequest, marketState: MarketState): CostModelResult {
     return {
@@ -104,23 +93,11 @@ class ZeroCostModel implements CostModel {
   }
 }
 
-/** A price path with enough trend reversals to open and close several lots */
 const CYCLE = [
   100, 101, 103, 106, 110, 115, 121, 128, 130, 129, 125, 120, 114, 108, 103, 99, 96, 94, 93, 95, 98,
   102, 107, 113, 120, 128, 133, 136, 138, 137, 133, 128, 122, 116, 111, 107, 104, 102, 101, 103,
 ];
 
-/**
- * The cycle TWICE (#857).
- *
- * `proxyWarmupBars` is now the converged ATR width (17 bars, up from the
- * `atrWindow + 1 = 5` arity floor), which eats the first reversal of a single
- * cycle. One cycle left too few closed trades for `EvalExecutorImpl`'s
- * walk-forward folds — it threw "return series has zero variance" rather than
- * quietly scoring nothing, which is the failure mode working as intended.
- * Two cycles restore the trade density the fixture was written for; the
- * `attribution.trades > 2` assertion below is what keeps that honest.
- */
 const CLOSES = [...CYCLE, ...CYCLE];
 
 const WINDOW: DateRange = { start: day(0), end: day(CLOSES.length) };
@@ -160,14 +137,6 @@ function fill(leg: Fill['leg'], qty: number, breakdown: Fill['cost_breakdown']):
 }
 
 describe('attributeTradeCost', () => {
-  /**
-   * The units trap, pinned by hand: `spread_cost`, `slippage` and
-   * `market_impact` are PER-UNIT price offsets and must be multiplied by qty;
-   * `commission` is already an absolute currency amount and must not be.
-   *
-   * entry: 10 × (0.5 + 0.25 + 0.125) = 8.75, commission 1.25
-   * exit:  10 × (0.4 + 0.20 + 0.100) = 7.00, commission 1.00
-   */
   it('multiplies the per-unit components by qty and sums commission as-is', () => {
     const attribution = attributeTradeCost(
       [
@@ -202,16 +171,6 @@ describe('attributeTradeCost', () => {
 });
 
 describe('the gross reconstruction', () => {
-  /**
-   * THE claim this whole diagnostic rests on: adding the modeled costs back to
-   * a priced run reproduces a genuinely frictionless run's PnL exactly, not
-   * approximately.
-   *
-   * It holds because the replay's trade path is cost-independent — entries,
-   * exits, stops, targets and sizes are all pure functions of bars and config,
-   * and nothing reads `fill_price` back into a decision. Rather than trust
-   * that reading of `ReplayDriver`, this runs both worlds and compares.
-   */
   it('equals a genuinely zero-cost replay, trade for trade', async () => {
     const priced = await runReplay(new CostModelImpl(COST_CONFIG));
     const free = await runReplay(new ZeroCostModel());
@@ -219,16 +178,11 @@ describe('the gross reconstruction', () => {
     const reconstructed = await new GrossOfCostsTradeSource(priced.trades).closedTrades(WINDOW);
     const actual = await free.trades.closedTrades(WINDOW);
 
-    // A vacuous pass (both empty) would prove nothing about the arithmetic
     expect(actual.length).toBeGreaterThan(2);
     expect(reconstructed.map((t) => t.idempotency_key)).toEqual(
       actual.map((t) => t.idempotency_key),
     );
 
-    // The add-back has no per-side branch because the sign flip on a short
-    // cancels out (see the module header's derivation). That is only PROVED if
-    // the fixture path actually contains both sides — a long-only sample would
-    // leave the short algebra untested while the test still passed
     expect(actual.some((t) => t.side === 'buy')).toBe(true);
     expect(actual.some((t) => t.side === 'sell')).toBe(true);
 
@@ -240,10 +194,6 @@ describe('the gross reconstruction', () => {
     }
   });
 
-  /**
-   * Falsification: if the reconstruction were merely "close", a formula that
-   * dropped commission would still pass the test above. It must not.
-   */
   it('is not satisfied by an add-back that omits commission', async () => {
     const priced = await runReplay(new CostModelImpl(COST_CONFIG));
     const free = await runReplay(new ZeroCostModel());
@@ -275,11 +225,6 @@ describe('the gross reconstruction', () => {
     expect(gross.every((trade) => trade.fees_total === 0)).toBe(true);
   });
 
-  /**
-   * The gross view must survive the eval path's own attestation: the fills are
-   * passed through un-zeroed precisely so `assertCostModelPriced` keeps
-   * meaning what it says
-   */
   it('scores through the unmodified EvalExecutorImpl', async () => {
     const priced = await runReplay(new CostModelImpl(COST_CONFIG));
     const source: ReplayTradeSource = new GrossOfCostsTradeSource(priced.trades);
@@ -312,12 +257,6 @@ describe('attributeRunCosts', () => {
     expect(attribution.mean_adverse_move_in_atr).toBeUndefined();
   });
 
-  /**
-   * The ATR multiple is what makes a cost legible: the strategy sets targets at
-   * 3–4 ATR, so an adverse move of a meaningful fraction of one ATR per fill is
-   * a miscalibrated fixture rather than a market. Recovered exactly from
-   * `slippage = volatility × slippageCoefficient`.
-   */
   it('recovers the adverse move in ATR units from the slippage coefficient', async () => {
     const priced = await runReplay(new CostModelImpl(COST_CONFIG));
     const attribution = await attributeRunCosts(
@@ -326,8 +265,6 @@ describe('attributeRunCosts', () => {
       COST_CONFIG.crypto.slippageCoefficient,
     );
 
-    // spread(0.25 ATR, being half of 0.5×ATR) + slippage(0.2 ATR) + a small
-    // impact term — floors aside, ~0.45 ATR per fill for this fixture
     expect(attribution.mean_adverse_move_in_atr).toBeGreaterThan(0.4);
     expect(attribution.mean_adverse_move_in_atr).toBeLessThan(0.6);
   });

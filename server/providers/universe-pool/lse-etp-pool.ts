@@ -1,99 +1,17 @@
-/**
- * The LSE leveraged-ETP pool: a checked-in, hand-compiled list of leveraged
- * ETPs Samurai may trade on the live equity leg (Saxo GIA, GBP account,
- * LSE-listed), each paired with the separate US instrument the screener
- * ranks it on.
- *
- * `lse_ticker` is what Samurai holds and routes orders against.
- * `screening_instrument` is what the screener fetches bars for and computes
- * indicators on — the US underlying, since there is no free LSE intraday
- * history. These are different objects on different venues in different
- * currencies, kept as a NAMED field pair rather than one overloaded
- * identifier. `buildRoutingMap` below binds ONLY on `lse_ticker`;
- * `screening_instrument` is never looked up there — wiring bar-fetch and
- * order-routing off two different fields makes a wrong-root fetch/route
- * impossible by construction.
- *
- * This file is data plus a type, not wiring: it is not yet consumed by the
- * production/paper universe builders, so landing `subclass` here does not
- * yet arm `per_subclass_deployment_cap` against unreviewed rows.
- *
- * `fallback_default` marks the hand-declared watchlist a caller falls back
- * to when the screener's output is stale, empty or unreadable — it lives
- * here rather than in the fallback's own consumer, since a fallback derived
- * from anything the screener produces is unavailable exactly when needed.
- * `assertValidFallbackSubset` enforces its rules; see that function.
- *
- * The live venue is Saxo Capital Markets UK (GIA), not Trading 212 (barred
- * outright by its own algo-trading terms). `t212_isa`/`t212_source_url`
- * answer "does Trading 212 list this ticker", a different, still-recorded
- * claim from `saxo_tradeable` (the Saxo-sourced field — see
- * `SaxoInstrumentEvidence`), captured against the SIM gateway only, not yet
- * verified against a live account.
- *
- * `subclass_envelope_measured` is `false` on rows whose underlying is
- * nothing like SPY (ADR-0018 D3/D5's `index_etp_3x` numbers were measured
- * with SPY standing in for the whole subclass) — see `liveSizingSubclassFor()`.
- *
- * `tradeableUniverse()` additionally excludes every non-sterling row — see
- * `isSterlingQuoted()`.
- *
- * This pool (31 rows / 26 distinct underlyings, see
- * `countRankableUnderlyings()`) is a verified seed of the three-issuer
- * catalogue (Leverage Shares, WisdomTree, GraniteShares), not a claim of
- * completeness — none of the issuers' short (-3x) side is represented,
- * every row is `direction: 'long'`. Each row cites a fetched source for
- * ISIN/currency and a T212 page title as listing evidence
- * (`RowProvenance`); see individual rows' `notes` for row-specific caveats.
- *
- * Residual risks, recorded rather than left to be discovered:
- * 1. Tracking error — each ETP resets DAILY, so a reach rate measured on the
- *    underlying does not transfer 1:1, especially on rough intraday paths.
- * 2. The underlying-vs-ETP FX leg — every underlying is USD-denominated even
- *    on a sterling-quoted line, and no universe filter can remove that.
- * 3. Session offset — the screener's session starts at the 14:30 London US
- *    cash open; the LSE line has already traded since 08:00.
- */
 import { type AssetClass, type InstrumentSubclass, isBookCurrency } from '../../shared/index.js';
 
-/** Long/short stance the ETP itself carries — separate from any debate direction */
 type EtpDirection = 'long' | 'short';
 
-/**
- * `true`/`false` are a Saxo-sourced verified claim; nothing may set either
- * without that source. `'unverified'` is not a placeholder default — it
- * explicitly records that no such capture exists for the row. See
- * `LseEtpPoolRow.saxo_tradeable` and `liquidityGateStatus`.
- */
 type SaxoTradeability = true | false | 'unverified';
 
-/**
- * One LSE line as Saxo's `GET /ref/v1/instruments` returns it. `exchange_id`
- * is `LSE_ETF` on every LSE ETP line — `ExchangeId=LSE` returns nothing for
- * these, which is why the capture keyed on symbol/ISIN instead.
- */
 interface SaxoInstrumentLine {
   readonly symbol: string;
   readonly uic: number;
   readonly asset_type: 'Etn' | 'Etf' | 'Etc';
   readonly exchange_id: 'LSE_ETF';
-  /**
-   * Provenance only — what the search endpoint reported, which for a
-   * GBX-quoted line is `GBP` (it carries no quote unit at all). Never derive
-   * a cash amount from this; `saxoInstrumentResolverFromVenue` reads the
-   * details endpoint's own currency fields for that.
-   */
   readonly currency: string;
 }
 
-/**
- * The row's Saxo evidence, searched by ticker AND ISIN. `line` is the
- * row's OWN ticker line (`saxo_tradeable` is `true` iff non-null).
- * `sibling_line` is a DIFFERENT ticker under the same ISIN, recorded for a
- * future deliberate re-key — never what the row trades. `gateway: 'sim'`
- * is a real caveat: re-verify against the live gateway before the live
- * ramp.
- */
 interface SaxoInstrumentEvidence {
   readonly verified_on: string;
   readonly gateway: 'sim';
@@ -101,105 +19,36 @@ interface SaxoInstrumentEvidence {
   readonly sibling_line?: SaxoInstrumentLine;
 }
 
-/** Per-row citation — a shared file-level date can't say which claim (ticker, ISIN, currency, listing) came from which fetch */
 interface RowProvenance {
-  /** ISIN of the ETP, as stated by the issuer/aggregator source below */
   readonly isin: string;
-  /** One of the three named issuers: 'Leverage Shares' | 'WisdomTree' | 'GraniteShares' */
   readonly issuer: string;
-  /** A URL actually fetched or returned by search during this compile, naming ticker/ISIN/currency */
   readonly source_url: string;
-  /**
-   * A trading212.com instrument page confirming T212 lists this ticker.
-   *
-   * Optional: absent means exactly one thing — no T212 evidence exists for
-   * this row (rows added after T212 was barred outright cannot carry one,
-   * since that research pass no longer runs). Citing a plausible-looking
-   * URL nobody fetched would be worse than the absence in a file whose whole
-   * discipline is provenance. Read `t212_isa` the same way on such a row.
-   */
   readonly t212_source_url?: string;
-  /** ISO date this row was compiled/verified */
   readonly verified_on: string;
-  /** What Saxo's own instrument list says about this row — the source of `saxo_tradeable` */
   readonly saxo: SaxoInstrumentEvidence;
-  /** Anything uncertain about this specific row that a reader must not silently trust */
   readonly notes?: string;
 }
 
-/** One tradeable-instrument row */
 export interface LseEtpPoolRow {
-  /** What Samurai HOLDS and ROUTES orders against. The LSE-listed ETP. */
   readonly lse_ticker: string;
-  /**
-   * What the screener fetches bars for and computes indicators on. The US
-   * underlying (or, for an index/basket, the closest liquid US ETF proxy —
-   * see each row's `screening_instrument`/`underlying` pair). NEVER passed to
-   * `buildRoutingMap` or any routing lookup — see module doc.
-   */
   readonly screening_instrument: string;
-  /** Human-readable name of the thing being tracked (index, basket, or single company) */
   readonly underlying: string;
-  /** Leverage multiple, e.g. 3 for a 3x product. Always positive; see `direction` for long/short. */
   readonly leverage: number;
   readonly direction: EtpDirection;
-  /** ADR-0018's pricing dimension. Must be one of `KNOWN_SUBCLASSES` — see `assertKnownSubclass`. */
   readonly subclass: InstrumentSubclass;
-  /** ISO 4217-ish currency code of the LSE-listed line this row actually names (may be GBP, GBX, or USD) */
   readonly currency: string;
-  /**
-   * Best-effort: does Trading 212 LIST this ticker (from T212's own public
-   * instrument pages), never a Saxo or tradeability/spread claim. On a row
-   * compiled after T212 was barred, `false` means "no T212 evidence
-   * exists", not "T212 does not list it" — such rows carry no
-   * `t212_source_url` and say so in `provenance.notes`.
-   */
   readonly t212_isa: boolean;
-  /**
-   * Tradeable on Saxo Capital Markets UK (GIA) — the live venue — sourced
-   * from Saxo's OWN instrument list (`provenance.saxo`). This is the hard
-   * liquidity gate; `t212_isa` is a different, unrelated claim. `false`
-   * covers two cases the evidence block distinguishes: a sibling line under
-   * the same ISIN lists but not this ticker, or nothing lists at all —
-   * neither is a claim about the underlying product. `'unverified'` is not
-   * a placeholder for `true`; read through `liquidityGateStatus`.
-   */
   readonly saxo_tradeable: SaxoTradeability;
-  /**
-   * Whether ADR-0018's D3/D5 numbers for THIS row's `subclass` were actually
-   * measured against an instrument like it — not just whether the subclass
-   * string is recognised (`assertKnownSubclass`'s separate, weaker job).
-   * `false` on the four rows whose underlying is nothing like SPY (3VT,
-   * 3KOR, 3KWE, 3XLE). Read through `liveSizingSubclassFor()`, never
-   * directly.
-   */
   readonly subclass_envelope_measured: boolean;
-  /**
-   * Whether this row is part of the pool's declared fallback watchlist —
-   * used when the screener's output is stale, empty or unreadable. Lives
-   * here rather than in the consumer's rotation logic because the fallback
-   * must work when the screener has failed, so it can't be derived from
-   * anything the screener produces. Enforced by `assertValidPool`.
-   */
   readonly fallback_default: boolean;
   readonly provenance: RowProvenance;
 }
 
-/**
- * The subclasses this pool file may legally populate — a SUBSET of
- * `InstrumentSubclass`. `'crypto'` is excluded on purpose (never appears in
- * an LSE equity pool) so an accidental crypto row fails as loudly as an
- * unrecognised string would.
- */
 export const KNOWN_SUBCLASSES: readonly InstrumentSubclass[] = [
   'index_etp_3x',
   'single_stock_etp_3x',
 ];
 
-/**
- * Thrown by `assertKnownSubclass`. A distinct class so a caller validating a
- * whole pool can tell "bad data" from an unrelated fault.
- */
 export class UnknownSubclassError extends Error {
   constructor(
     readonly lse_ticker: string,
@@ -215,19 +64,12 @@ export class UnknownSubclassError extends Error {
   }
 }
 
-/** Refuses a row whose `subclass` is not in `KNOWN_SUBCLASSES`. Never coerces or defaults. */
 export function assertKnownSubclass(row: LseEtpPoolRow): void {
   if (!KNOWN_SUBCLASSES.includes(row.subclass)) {
     throw new UnknownSubclassError(row.lse_ticker, row.subclass);
   }
 }
 
-/**
- * The checked-in pool: 31 rows (tradeable ETP lines) resolving to 26
- * distinct `screening_instrument` values (rankable underlyings — see
- * `countRankableUnderlyings()`), since SPY, QQQ, PLTR and NVDA each carry
- * more than one line
- */
 export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
   {
     lse_ticker: '3USL',
@@ -281,8 +123,6 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     direction: 'long',
     subclass: 'index_etp_3x',
     currency: 'GBX',
-    // Compiled after T212 was barred — `false` means "unevidenced", not
-    // "T212 does not list it"; see `t212_isa`'s own doc
     t212_isa: false,
     saxo_tradeable: true,
     fallback_default: true,
@@ -670,9 +510,6 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
         'used here.',
     },
   },
-  // Verified 2026-08-19. T212 pages answer HTTP 403 to a programmatic fetch,
-  // so `t212_source_url` evidence below is the search-returned page title,
-  // not a direct read of the page
   {
     lse_ticker: '3LME',
     screening_instrument: 'MSFT',
@@ -1352,13 +1189,6 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
   },
 ];
 
-/**
- * Builds the routing map `AssetClassRoutingDataSource`-shaped callers need:
- * `lse_ticker -> 'stocks'`, for every row. `screening_instrument` is never
- * read here — the whole point of the two-field split is that a routing
- * layer built from this map cannot resolve a screening instrument to
- * anything, because it was never given the chance to.
- */
 export function buildRoutingMap(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
 ): ReadonlyMap<string, AssetClass> {
@@ -1369,11 +1199,6 @@ export function buildRoutingMap(
   return map;
 }
 
-/**
- * The `screening_instrument` for a traded `lse_ticker`, or `null` when it's
- * not a pool row at all. A LOOKUP, not the inverse of `buildRoutingMap` —
- * must never be used to pick an API root or place an order.
- */
 export function screeningInstrumentFor(
   lseTicker: string,
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
@@ -1381,13 +1206,6 @@ export function screeningInstrumentFor(
   return pool.find((row) => row.lse_ticker === lseTicker)?.screening_instrument ?? null;
 }
 
-/**
- * Market Intelligence retrieval subject for an instrument — MI is keyed on
- * `screening_instrument`, not `lse_ticker`, since a 3x wrapper generates no
- * headlines of its own. Unlike `screeningInstrumentFor`, always returns a
- * usable subject: a non-pool instrument already IS its own MI subject.
- * Never used for order placement or bar-fetching.
- */
 export function resolveMiSubject(
   instrument: string,
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
@@ -1395,71 +1213,28 @@ export function resolveMiSubject(
   return screeningInstrumentFor(instrument, pool) ?? instrument;
 }
 
-/**
- * Distinct `screening_instrument` values (rankable underlyings, not
- * tradeable ETP lines) — the count the screener's ranking step consumes,
- * strictly less than `pool.length` whenever an underlying carries more than
- * one issuer's ETP line
- */
 export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL): number {
   return new Set(pool.map((row) => row.screening_instrument)).size;
 }
 
-/**
- * The subclass a LIVE-SIZING consumer may use for this row, or `undefined`
- * when its envelope was never measured. A future universe builder MUST
- * call this rather than reading `row.subclass` directly — an unset
- * `UniverseInstrument.subclass` arms no per-subclass regime, which is safer
- * than silently sizing against another instrument's envelope. Does not
- * change screening/ranking, which still reads the full pool unfiltered —
- * this exclusion is sizing-only.
- */
 export function liveSizingSubclassFor(row: LseEtpPoolRow): InstrumentSubclass | undefined {
   return row.subclass_envelope_measured ? row.subclass : undefined;
 }
 
-/**
- * Row-level admission: admit-unless-verified-`false`. An `'unverified'` row
- * is admitted — an unarmed gate must pass rows through, not exclude on a
- * tradeability claim nobody checked. Both `liquidityGateStatus` and
- * `assertValidFallbackSubset` read admission through this single function so
- * the two can never silently disagree.
- */
 export function gateAdmits(row: LseEtpPoolRow): boolean {
   return row.saxo_tradeable !== false;
 }
 
-/**
- * Whether the row's LSE line is quoted in sterling — the second gate
- * alongside `gateAdmits`: the GBP/USD leg between entry and exit is an
- * uncompensated cost nothing here prices, and a foreign-currency broker fee
- * cannot be summed cleanly into a GBP book. GBX is IN — pence is an exact
- * unit conversion, not an FX rate.
- */
 export function isSterlingQuoted(row: LseEtpPoolRow): boolean {
   return isBookCurrency(row.currency);
 }
 
-/**
- * The rows a live consumer may trade: Saxo-listed AND sterling-quoted. This
- * is the function a live universe builder must build its instruments from —
- * reading `LSE_ETP_POOL` directly would readmit the excluded non-sterling
- * lines. Deliberately narrow: five rows of the checked-in thirty-one.
- */
 export function tradeableUniverse(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
 ): readonly LseEtpPoolRow[] {
   return pool.filter((row) => gateAdmits(row) && isSterlingQuoted(row));
 }
 
-/**
- * Whether `saxo_tradeable` is doing anything, classified off `gateAdmits`'s
- * output (never re-derived from `saxo_tradeable` directly, so the two can't
- * disagree). `'unarmed'` = every row `'unverified'`, must read as
- * pass-through. `'vacuous'` = `gateAdmits` agrees on every row (admits all
- * or excludes all) — not a legitimate configuration; `assertValidPool`
- * refuses it. `'armed'` = `gateAdmits` disagrees between rows.
- */
 export type LiquidityGateStatus =
   | { readonly state: 'unarmed'; readonly reason: string }
   | { readonly state: 'armed'; readonly reason: string }
@@ -1468,9 +1243,6 @@ export type LiquidityGateStatus =
 export function liquidityGateStatus(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
 ): LiquidityGateStatus {
-  // Two passes on purpose: "armed at all" and "what it decides" must read off
-  // `gateAdmits`'s actual output, not `saxo_tradeable`'s raw distinctness —
-  // the latter reported 'armed' for a case where nothing was excluded
   const verifiedCount = pool.filter((row) => row.saxo_tradeable !== 'unverified').length;
   if (pool.length === 0 || verifiedCount === 0) {
     return {
@@ -1510,16 +1282,6 @@ export function liquidityGateStatus(
   };
 }
 
-/**
- * Validates every row: subclass recognised, both identity fields non-empty
- * and distinct after TRIMMING AND CASE-FOLDING (`'3USL'`/`' 3usl '` are the
- * same identity, not two). Rejects the whole pool at once rather than
- * letting a bad row surface later as a routing throw mid-session. Folds
- * case here (unlike `buildRoutingMap`'s runtime lookups, which must match
- * exactly) because this is authoring-time hygiene on a hand-compiled file,
- * where a case/whitespace-only difference is a transcription of one
- * identifier, never two genuinely different instruments.
- */
 export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
   for (const row of pool) {
     assertKnownSubclass(row);
@@ -1544,12 +1306,6 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
   assertValidFallbackSubset(pool);
 }
 
-/**
- * Refuses a pool whose liquidity gate is 'vacuous' (constant `true` or
- * `false` across every row) — a no-op-or-total gate shipping silently. The
- * `'unarmed'` state does NOT throw — see `liquidityGateStatus`'s own doc
- * for why that one is honest.
- */
 function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
   const status = liquidityGateStatus(pool);
   if (status.state === 'vacuous') {
@@ -1564,33 +1320,8 @@ function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
   }
 }
 
-/**
- * The most rows `assertValidPool` will accept as the fallback subset. The
- * spec sizes the watchlist at 5-10 names and gives the reason: falling back
- * to every row would produce a refusal storm instead of trading, and 10 is
- * also the tick budget. The floor is deliberately NOT enforced — only "no
- * fallback row at all" is a loader failure; a hard floor would reject a
- * legitimately small future pool.
- */
 export const FALLBACK_DEFAULT_MAX_ROWS = 10;
 
-/**
- * Enforces six rules on the pool's declared fallback subset:
- * 1. At least one `fallback_default` row exists (the spec's own rule).
- * 2. At most `FALLBACK_DEFAULT_MAX_ROWS` — a ceiling, not "not the full
- *    pool"; a pool of ≤10 rows may legitimately mark every row.
- * 3. Every fallback row has a measured subclass envelope — degraded mode
- *    has no screener running to notice an unmeasured one.
- *    `liveSizingSubclassFor` would size such a row against nothing.
- * 4. No two fallback rows share a `screening_instrument` — this module's
- *    own invariant (not the spec's): two lines on one underlying would
- *    concentrate a degraded-mode session on a single name.
- * 5. No fallback row is Saxo-VERIFIED `false` (the spec's "Fallback
- *    behaviour") — an `'unverified'` row still loads; only a verified
- *    exclusion is refused.
- * 6. No fallback row is non-sterling — same silent-halt argument as rule 5,
- *    one gate over.
- */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: six independent fallback-list rules (each documented above as its own numbered rule), each with its own throw message; merging their loops or splitting them into sub-functions would change which rule's message fires first on a multi-violation pool, which lse-etp-pool.test.ts pins.
 export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void {
   const fallback = pool.filter((row) => row.fallback_default);

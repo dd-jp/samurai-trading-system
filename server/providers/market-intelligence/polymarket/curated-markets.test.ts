@@ -8,19 +8,6 @@ import type { PolymarketMarket, PolymarketPricePoint } from './polymarket-client
 const NOW = new Date('2026-09-05T15:00:00Z');
 const clock: Clock = { now: () => NOW };
 
-/**
- * One live Gamma/CLOB snapshot per shipped row, measured 2026-09-05 while
- * fixing #1120 (see `curated-markets.ts`'s "#1120: the two recession rows
- * replaced" section for the full evidence table). Keyed on `marketSlug` so
- * the fixture stays correct if the table's row ORDER ever changes.
- *
- * This is the regression #1120 asks for: `us-recession-2026` (pinned at
- * 0.935) and `us-recession-2027` (volume swinging under `MIN_VOLUME_24H_USD`
- * across every prior probe) are gone from `CURATED_MACRO_MARKETS`, so neither
- * appears below — a row still named here that the table no longer carries
- * would be caught by the "one snapshot per row" assertion this file's tests
- * make.
- */
 const LIVE_SNAPSHOTS: Record<
   string,
   { outcomePrices: [number, number]; volume24hr: number; liquidity: number }
@@ -60,7 +47,6 @@ const LIVE_SNAPSHOTS: Record<
   },
 };
 
-/** A 24h hourly series ending at `NOW`, moving past the dead band so a real item is asserted, not a zero vote */
 function history(from: number, to: number): PolymarketPricePoint[] {
   const points: PolymarketPricePoint[] = [];
   for (let index = 0; index <= 24; index += 1) {
@@ -78,22 +64,10 @@ describe('CURATED_MACRO_MARKETS (#1120)', () => {
   });
 
   it('has a live snapshot fixture for every shipped row, one for one', () => {
-    // Guards the fixture table above against drifting out of sync with the
-    // real one — a row added or renamed in `curated-markets.ts` with no
-    // matching entry here would otherwise pass the next test by accident,
-    // via `market()`'s fallback default rather than a real per-row read
     const marketSlugs = CURATED_MACRO_MARKETS.map((entry) => entry.marketSlug);
     expect(Object.keys(LIVE_SNAPSHOTS).sort()).toEqual([...marketSlugs].sort());
   });
 
-  /**
-   * The acceptance test #1120 asks for: a poll produces a scored item for
-   * EVERY curated row, so none of the six is in the permanently-refusing
-   * state that made `us-recession-2026`/`-2027` dead weight in the first
-   * place. Built the way `production.ts` builds the agent — no `table`
-   * override — so this fails if the shipped `CURATED_MACRO_MARKETS` and this
-   * fixture ever disagree on which rows exist.
-   */
   it('produces a scored item for every curated row against a live snapshot', async () => {
     const store = new MarketIntelligenceStore(clock);
     const agent = new PolymarketAgent({

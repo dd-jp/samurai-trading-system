@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 
-/** Async-`'error'`-only stand-in for `process.stdout` — see stdout-fault-guard.test.ts */
 class FakeStdout {
   private listener?: (error: Error) => void;
   on(_event: 'error', listener: (error: Error) => void): this {
@@ -19,12 +18,6 @@ class FakeStdout {
   }
 }
 
-/**
- * Same shape as `FakeStdout`, plus `write` — stands in for `process.stderr`,
- * which is both the reporting channel and (per the module doc's "Both
- * streams, not just stdout") a stream that must itself have an `'error'`
- * listener so a dead stderr degrades instead of reaching `uncaughtException`
- */
 class FakeStderr {
   private listener?: (error: Error) => void;
   readonly lines: string[] = [];
@@ -54,8 +47,6 @@ describe('watchDashboardStdout', () => {
     watchDashboardStdout(stdout, stderr);
 
     expect(() => stdout.emitError(new Error('EPIPE'))).not.toThrow();
-    // A dead pipe fires 'error' again on every subsequent write attempt
-    // (measured: 36 of 40 in the module doc) — the report must not repeat
     stdout.emitError(new Error('EPIPE'));
     stdout.emitError(new Error('EPIPE'));
 
@@ -74,9 +65,6 @@ describe('watchDashboardStdout', () => {
     const stderr = new FakeStderr();
     watchDashboardStdout(stdout, stderr);
 
-    // stderr sharing a fd with stdout is the realistic failure this covers
-    // (closed terminal, torn-down detached tmux) — see the module doc's
-    // empirical confirmation. Firing this must not throw.
     expect(() => stderr.emitError(new Error('EPIPE'))).not.toThrow();
   });
 

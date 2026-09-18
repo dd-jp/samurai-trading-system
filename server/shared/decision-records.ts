@@ -1,72 +1,15 @@
-/**
- * Trader and Risk decision records (#328) — the stage-specific real-field
- * tables that `audit_log`'s digests deliberately are not.
- *
- * Ports live in `shared/` rather than in `trader/` and `risk-manager/` for the
- * same reason `DebateLogStore` and `VerdictLogStore` do: the writer is the
- * stage, the reader is the dashboard, and neither module should have to import
- * the other to agree on the shape.
- *
- * Both records are written on EVERY evaluation, including one that produces no
- * order. `TickOutcome.final_stage` records where a tick stopped and never why,
- * and "why did nothing trade for six hours" is the likeliest question a paper
- * soak produces. A skip is a decision.
- */
 
 import type { ExitReason } from './types.js';
 
-/** One Trader decision. `intent_type: null` with a `skip_reason` is a decision not to trade. */
 export interface TraderDecisionRecord {
   trace_id: string;
   instrument: string;
-  /** Joins `debate_log`. The debate's content is not duplicated — that record already exists. */
   debate_id: string;
   intent_type: 'entry' | 'scale_in' | 'exit' | null;
-  /**
-   * WHY the exit exists (#748) — `'flatten'`, `'signal_decay'` or
-   * `'direction_flip'`. Present exactly when `intent_type` is `'exit'`, null
-   * otherwise.
-   *
-   * Without it the three in-process exits are one indistinguishable row here,
-   * and "the system released a position because its thesis died" and "the
-   * session ended" become the same fact. Typed as the domain union rather than
-   * `string` so a fourth kind of exit cannot be written without deciding to add
-   * one.
-   */
   exit_reason: ExitReason | null;
-  /** Why no order was produced. Present exactly when `intent_type` is null. */
   skip_reason: string | null;
-  /**
-   * WHY `skip_reason` fired, at the operator-response granularity #1109
-   * exists to give: `'declined_on_signal'` (the debate or position state was
-   * read and said no — nothing to fix), `'could_not_decide'` (the debate
-   * itself produced nothing usable — a starved debate, not a market read), or
-   * `'input_unusable'` (the Trader's own priced inputs could not be used this
-   * tick — missing, not yet available, or non-finite). Not typed as
-   * `TraderSkipReason`'s sibling union here because `pipeline/trader/decide.ts`
-   * is the owner of that vocabulary and this port only needs to persist its
-   * string; see `TraderDecisionClass` there for the authoritative three
-   * values — including why `input_unusable` deliberately mixes a benign
-   * warm-up reason (`atr_insufficient_bars`) in with the genuinely corrupt
-   * ones: `reason_detail` (below) and `TraderDiagnostic` carry that severity
-   * split, not this column. Present exactly when `skip_reason` is set.
-   */
   decision_class: string | null;
-  /**
-   * The compared value and the threshold it missed, for the four skip
-   * reasons that are numeric gates (`below_conviction_floor`,
-   * `below_min_notional`, `scale_in_conviction_delta_not_met`,
-   * `atr_insufficient_bars`) — without both numbers a near-miss and a
-   * decisive refusal are the same row. `null` for every other skip and
-   * always null when an order was produced.
-   */
   reason_detail: { compared_value: number; threshold: number } | null;
-  /**
-   * The five factors whose product is the size. Null on a skip that happened
-   * before sizing ran — which is most of them, and the distinction matters:
-   * "sized and then rejected" and "never got as far as sizing" are different
-   * stories about the same absent trade.
-   */
   sizing: {
     base_risk_fraction: number;
     conviction_multiplier: number;
@@ -74,7 +17,6 @@ export interface TraderDecisionRecord {
     non_converged_haircut: number;
     cosine_multiplier: number;
   } | null;
-  /** What the cosine retrieval returned — the input that moved `cosine_multiplier` */
   cosine_precedent: {
     neighbor_count: number;
     weighted_mean_r: number | null;
@@ -87,14 +29,6 @@ export interface TraderDecisionRecord {
   created_at: Date;
 }
 
-/**
- * One Risk evaluation: approved, rejected, or `error` (#726) — the gate
- * pipeline threw before a decision could be reached at all (today, only
- * `perSubclassDeploymentCap`'s unresolvable-envelope throw; see
- * `risk-manager/index.ts`). An `error` row is written from the catch around
- * `RiskManagerImpl.evaluate()` in `direct-bind.ts`'s `buildRiskStep`, not from
- * `evaluate()` itself, which never returns on that path.
- */
 export interface RiskDecisionRecord {
   trace_id: string;
   instrument: string;
@@ -104,31 +38,17 @@ export interface RiskDecisionRecord {
   original_size: number | null;
   final_size: number | null;
   stop_tightened: boolean;
-  /** Breaker state as EVALUATED, not as it stands now */
   breakers: {
     portfolio_tripped: boolean;
     crypto_tripped: boolean;
     stocks_tripped: boolean;
     armed_breakers: string[];
   };
-  /**
-   * The portfolio scalars the checks actually read.
-   *
-   * Deliberately not the whole `PortfolioView`: `exposure_by_instrument` is a
-   * map with no bound, and under #397's rotating shortlist it is the field that
-   * grows without limit. These are what the gates compare against.
-   */
   portfolio: {
     equity: number;
     drawdown_pct: number;
     gross_exposure: number;
     consecutive_losses: number;
-    /**
-     * Null pct with a reason is the `known: false` case (#333). An absent daily
-     * figure has to stay distinguishable from a flat one HERE too — recording
-     * it as 0 would reintroduce, in the audit trail, exactly the confusion the
-     * breaker's tagged union exists to prevent.
-     */
     daily_pnl_portfolio_pct: number | null;
     daily_pnl_crypto_pct: number | null;
     daily_pnl_stocks_pct: number | null;
@@ -138,11 +58,9 @@ export interface RiskDecisionRecord {
 }
 
 export interface TraderLogStore {
-  /** Append-only, first-write-wins on `(trace_id, instrument)` */
   write(record: TraderDecisionRecord): void;
 }
 
 export interface RiskLogStore {
-  /** Append-only, first-write-wins on `(trace_id, instrument)` */
   write(record: RiskDecisionRecord): void;
 }

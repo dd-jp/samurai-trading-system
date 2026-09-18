@@ -1,13 +1,3 @@
-/**
- * The bounds table and its validator (#638, CV-15 / GAP-6).
- *
- * These cover the TABLE. The acceptance criterion — "sets each guarded value
- * beyond its line and asserts the system refuses to boot" — is covered at the
- * seams that actually put a number into force, in
- * `server/pipeline/risk-manager/threshold-clamp.test.ts` and
- * `server/pipeline/feedback-loop/threshold-clamp.test.ts`, because a test that
- * only calls the validator proves the table and not the wiring.
- */
 import {
   assertThresholdsWithinBounds,
   assertThresholdWithinBounds,
@@ -67,8 +57,6 @@ describe('assertThresholdWithinBounds', () => {
 
     expect(thrown).toBeInstanceOf(ThresholdBoundViolationError);
     const violation = thrown as ThresholdBoundViolationError;
-    // The offending value survives into the message: an operator must be able
-    // to fix the config without attaching a debugger
     expect(violation.value).toBe(0.5);
     expect(violation.threshold).toBe('max_pbo');
     expect(violation.message).toContain('at most 0.05');
@@ -148,11 +136,6 @@ describe('isThresholdBoundViolation (#766)', () => {
   });
 
   it('recognises an AGGREGATE crossing — the plain Error two-or-more violations throw', () => {
-    // This is the case an `instanceof ThresholdBoundViolationError` check
-    // misses: `assertThresholdsWithinBounds` throws a bare `Error` when two
-    // or more rows cross at once, not the typed class. A detector that only
-    // matched the typed class would silence the MORE alarming case (multiple
-    // crossings) while paging correctly on a single one
     let thrown: unknown;
     try {
       assertThresholdsWithinBounds({ max_pbo: 0.5, min_oos_sharpe: 0.1 }, 'test');

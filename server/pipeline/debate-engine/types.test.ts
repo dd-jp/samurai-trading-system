@@ -91,8 +91,6 @@ describe('DebateResult', () => {
     expect(result.confidence).toBeGreaterThanOrEqual(0);
     expect(result.confidence).toBeLessThanOrEqual(1);
     expect(typeof result.debate_id).toBe('string');
-    // #687: the bar coordinate is part of the Trader-facing contract, because
-    // the Trader keys its order on it instead of flooring a clock read
     expect(result.bar_timestamp).toEqual(new Date('2026-07-15T10:00:00Z'));
     expect(['bullish', 'bearish', 'neutral']).toContain(result.direction);
   });

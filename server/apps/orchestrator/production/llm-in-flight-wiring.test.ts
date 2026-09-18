@@ -1,25 +1,3 @@
-/**
- * The wiring proof for #1080's in-flight cap — every Nous-speaking client the
- * REAL composition root builds is behind the SAME gate, and that gate is the
- * one `ProductionComponents` exposes.
- *
- * A separate file from `in-flight-gate.test.ts`, the split
- * `rate-limit-wiring.test.ts` makes: that file tests what a gate does, this
- * one tests what the composition root does with one. The cap is worthless
- * unless every caller shares a single instance — Nous queues per ACCOUNT, so
- * two gates would cap two halves of one queue and cap neither.
- *
- * ## The mutations these kill
- *
- * 1. Build a second `NousAccountInFlightGate` for the sentiment client (or
- *    pass `UNGATED_LLM_IN_FLIGHT` to it). Every unit test stays green; the
- *    identity assertions here go red.
- * 2. Ignore `config.maxInFlightLlmCalls` and hard-code the default. The
- *    override case goes red.
- * 3. Hand the debate client `NousMessagesClientOptions.timeoutMs` as its gate
- *    budget instead of `AnthropicLlmClientConfig.timeoutMs` — the wider
- *    network backstop, which is not the clock a queue wait actually eats.
- */
 
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import {
@@ -125,14 +103,6 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   return { logger: { log: (entry) => entries.push(entry) }, entries };
 }
 
-/**
- * A fully typed broker stub, NOT a cast. `docs/coding-standards.md` bars `as`
- * on fixtures, and this site is why: the `as unknown as` that used to stand
- * here described a client with `listOrders` and `listFills` — two methods
- * `AlpacaBrokerClient` does not declare — while five it does declare were
- * missing, and the compiler was told not to look. Nothing here is ever called;
- * `buildProductionComponents` only wires it.
- */
 function stubBrokerClient(): NonNullable<ProductionConfig['alpacaBrokerClient']> {
   return {
     submitOrder: vi.fn(),
@@ -161,10 +131,6 @@ function stubAccountState(): NonNullable<ProductionConfig['accountState']> {
   };
 }
 
-/**
- * The narrowest `ProductionConfig` that builds — and deliberately WITHOUT
- * `llmClient`, because the default debate client is the thing under test
- */
 function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): ProductionConfig {
   return {
     db,
@@ -207,9 +173,6 @@ describe('in-flight gate wiring (#1080)', () => {
     captured.debate.length = 0;
     captured.sentiment.length = 0;
     captured.xSearch.length = 0;
-    // `nousCredentials` reads `process.env` directly, so the default debate
-    // client (and the sentiment role) resolve from here rather than from
-    // `ProductionConfig.processEnv`
     vi.stubEnv('NOUS_BASE_URL', 'https://nous.test/v1');
     vi.stubEnv('NOUS_API_KEY', 'test-fake-nous-key');
     vi.stubEnv('NOUS_MODEL', 'anthropic/claude-haiku-4.5');
@@ -251,15 +214,7 @@ describe('in-flight gate wiring (#1080)', () => {
 
     buildProductionComponents(stubConfig(db, { logger }));
 
-    // The OUTER race's clock, not the network backstop: `callWithTimeout`'s
-    // timer starts before `createMessage`, so that is what a queue wait eats
-    // into. Equal to it and not less, because the gate's queue timer fires a
-    // full `expectedCallMs` earlier — `queue_deadline` is reachable by
-    // construction, so no safety margin is subtracted here (an earlier revision
-    // subtracted `LLM_GATE_BUDGET_MARGIN_MS`; the timer change retired it)
     expect(captured.debate[0]?.gateBudgetMs).toBe(DEFAULT_LLM_CLIENT_CONFIG.timeoutMs);
-    // The mutation this kills: hand it `NousMessagesClientOptions.timeoutMs`,
-    // the wider network backstop, which is not the clock a wait actually eats
     expect(captured.debate[0]?.gateBudgetMs).toBeLessThan(DEFAULT_NOUS_TIMEOUT_MS);
   });
 
@@ -274,8 +229,6 @@ describe('in-flight gate wiring (#1080)', () => {
     });
 
     await Promise.resolve();
-    // Behaviour first, so raising the default is killed by the queue actually
-    // holding rather than by the constant's own value
     expect(secondGranted).toBe(false);
     expect(DEFAULT_MAX_IN_FLIGHT_LLM_CALLS).toBe(1);
 
@@ -284,16 +237,6 @@ describe('in-flight gate wiring (#1080)', () => {
     expect(secondGranted).toBe(true);
   });
 
-  /**
-   * The shipped trade, pinned as behaviour. At a cap of 1 and
-   * `DEFAULT_EXPECTED_NOUS_CALL_MS` against the debate client's 28,000 ms
-   * budget, the account admits ONE call in flight plus exactly ONE queued
-   * caller; every further arrival is refused on the spot, at zero tokens and
-   * zero burned deadline. Of the six instruments a pass runs concurrently,
-   * two proceed and four get `gate_refused` — deliberately, because #1080
-   * measured that a fast pass producing no synthesis is worth less than a slow
-   * one that decides.
-   */
   it('admits exactly one queued caller per debate budget at the shipped default', async () => {
     const components = buildProductionComponents(stubConfig(db, {}));
     const budgetMs = DEFAULT_LLM_CLIENT_CONFIG.timeoutMs;
@@ -314,9 +257,6 @@ describe('in-flight gate wiring (#1080)', () => {
   });
 
   it('honours an explicit expectedLlmCallMs', async () => {
-    // A 30,000 ms expected call cannot fit a 28,000 ms budget even with an idle
-    // queue ahead of it, so the FIRST caller behind a held slot is refused —
-    // which the 13,000 ms default admits
     const components = buildProductionComponents(stubConfig(db, { expectedLlmCallMs: 30_000 }));
 
     const held = await components.llmInFlightGate.acquire({ budgetMs: 28_000 });
@@ -339,29 +279,6 @@ describe('in-flight gate wiring (#1080)', () => {
   });
 });
 
-/**
- * What the account-wide cap actually costs a pass, driven end to end through
- * the REAL tick loop rather than asserted about a gate in isolation (#1080).
- *
- * This is the file's second job and it is a different one from the identity
- * checks above: those prove every client shares one gate, these prove that
- * when that gate says no, the pass DEGRADES instead of faulting. Round 2 of
- * review found it faulting — `LlmAdmissionRefusedError` is in no branch of
- * `latency-budget.ts`'s `LlmFailure` union, so it propagated out of the debate
- * step uncaught and each refused instrument produced a `debate_unresolved`
- * error line, an `instrument_pass_failed` error line, an `audit_log` row
- * reading `crashed`, and a rescind that retried the bar and re-billed every
- * persona that had already answered. Under the shipped defaults that was the
- * designed steady state for four of every six instruments in a pass.
- *
- * Nothing stubs the refusal here. A real `NousAccountInFlightGate` holds its
- * one permit, a real `NousMessagesClient` asks it for another and is refused,
- * and the refusal travels the real path: `nousChat` -> `LlmInFlightRefusedError`
- * -> `LlmAdmissionRefusedError` -> `AnthropicLlmClient` -> the persona ->
- * `runDebate` -> `enforceLatencyBudget` -> `buildDebateStep`'s catch. A test
- * that threw `LlmAdmissionRefusedError` from a stub client would pass even if
- * the gate never produced that class.
- */
 describe('a gate refusal degrades the pass instead of crashing it (#1080)', () => {
   const RETRIEVAL_LIKE_CALL_MS = 26_000;
 
@@ -402,9 +319,6 @@ describe('a gate refusal degrades the pass instead of crashing it (#1080)', () =
     const clock = new SimulatedClock(NOW);
     const { logger, entries } = recordingLogger();
 
-    // The contended shape the spec calls out: an MI retrieval call (26,000 ms
-    // expected) holds the only permit, so a 28,000 ms debate budget cannot fit
-    // a 13,000 ms call behind it and is refused on admission
     const gate = new NousAccountInFlightGate({
       maxInFlight: 1,
       expectedCallMs: DEFAULT_EXPECTED_NOUS_CALL_MS,
@@ -414,8 +328,6 @@ describe('a gate refusal degrades the pass instead of crashing it (#1080)', () =
       expectedCallMs: RETRIEVAL_LIKE_CALL_MS,
     });
 
-    // Any call that reaches the wire is a bug in the refusal path, not a
-    // fixture gap — say so where it would happen rather than in a comment
     const fetchMock = vi.fn(async () => {
       throw new Error('unreachable: a refused call must never reach the wire');
     });
@@ -451,10 +363,6 @@ describe('a gate refusal degrades the pass instead of crashing it (#1080)', () =
         debated.push(result);
         return result;
       },
-      // `confidence: 0` is below `conviction_floor`, so the real Trader
-      // declines and the pass short-circuits here with `no_trade`; asserted
-      // against the floor below rather than by wiring a Trader that needs an
-      // account, bars and a book to answer
       trader: async () => null,
       risk: async () => {
         throw new Error('unreachable: the trader declines a refused debate');
@@ -488,7 +396,6 @@ describe('a gate refusal degrades the pass instead of crashing it (#1080)', () =
       },
     );
 
-    // The pass RESOLVED. Before the fix this outcome carried an error.
     expect(outcomes[0]?.error).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
 
@@ -498,8 +405,6 @@ describe('a gate refusal degrades the pass instead of crashing it (#1080)', () =
     expect(result?.confidence).toBeLessThan(DEFAULT_TRADER_CONFIG.conviction_floor);
     expect(result?.direction).toBe('neutral');
 
-    // Attributable (#1080 AC4), and at `warn` — the load-shedding level, not
-    // the fault level
     const refusal = entries.find((entry) => entry.event === 'debate_refused_gate');
     expect(refusal?.level).toBe('warn');
     expect(refusal?.payload).toMatchObject({
@@ -508,14 +413,11 @@ describe('a gate refusal degrades the pass instead of crashing it (#1080)', () =
       in_flight: 1,
     });
 
-    // None of the four fault signals the throw produced
     expect(entries.map((entry) => entry.event)).not.toContain('debate_unresolved');
     expect(entries.map((entry) => entry.event)).not.toContain('instrument_pass_failed');
     expect(auditLog.records.map((row) => row.decision)).not.toContain('crashed');
     expect(rescind).not.toHaveBeenCalled();
 
-    // And the audit row names the cause rather than looking like a debate that
-    // genuinely found nothing
     const debateRow = auditLog.records.find((row) => row.stage === 'debate');
     expect(debateRow?.decision).toBe('not_admitted');
 

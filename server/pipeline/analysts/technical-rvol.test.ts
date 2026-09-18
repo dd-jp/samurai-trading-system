@@ -1,21 +1,3 @@
-/**
- * #797 — `computeRvol` gets a caller, and the caller is informational only.
- *
- * #747 shipped `computeRvol` computed, tested and exported, with nothing
- * calling it. This file is the removal proof for the wiring that closes that:
- * unwire the `rvolLine(...)` entry from `technicalAnalyst`'s `key_points` and
- * `puts a computed RVOL reading into the analyst's key_points` below goes red.
- * `rvol.test.ts` would stay GREEN through that same unwire, which is why the
- * assertion here is on the returned `AnalystView`, not on `computeRvol`.
- *
- * The fixture is a REAL `UsEquityRegularHoursCalendar` over twelve consecutive
- * June 2026 trading days rather than the synthetic day-boundary calendar
- * `rvol.test.ts` uses. `rvol.test.ts` isolates the median/same-bucket
- * arithmetic; this file has to prove the ANALYST produces a real ratio against
- * the calendar production actually wires (`production.ts:577`,
- * `sessionCalendars.stocks`), which is the part a synthetic calendar cannot
- * show.
- */
 import {
   AlwaysOpenCalendar,
   type Bar,
@@ -41,19 +23,11 @@ const TIMEFRAME = '5m';
 const BAR_INTERVAL_MS = 5 * 60 * 1000;
 const SIGNAL: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
 
-/** An ETP row from #749's pool, and the underlying it screens on */
 const ETP_TICKER = '3USL';
 const ETP_UNDERLYING = 'SPY';
 
-/**
- * Twelve consecutive June 2026 trading days (Mon 1st through Tue 16th, no US
- * holiday in the range — Juneteenth is the 19th). Twelve, because
- * `RVOL_SESSION_WINDOW` is 10 prior sessions plus the current one, plus one
- * spare so the oldest partial accounting group is not one of the ten.
- */
 const TRADING_DAYS = [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 15, 16];
 
-/** EDT in June: 09:30 ET = 13:30 UTC, 16:00 ET = 20:00 UTC */
 const SESSION_OPEN_UTC_HOUR = 13;
 const SESSION_OPEN_UTC_MINUTE = 30;
 const BARS_PER_DAY = 78;
@@ -84,17 +58,6 @@ function bar(closeTime: Date, index: number, volume: number): Bar {
   };
 }
 
-/**
- * Every 5m bar of the twelve sessions, ascending.
- *
- * Bars close 09:35 through 16:00 ET, except the LAST day, which stops at 15:55
- * on purpose. `UsEquityRegularHoursCalendar.sessionStart` is the most recent
- * CLOSE at or before an instant (a close-to-close accounting boundary, see its
- * doc comment), so a 16:00 bar opens the NEXT accounting group. Stopping the
- * final day at 15:55 therefore leaves the current group a full 78 bars deep
- * and the ten groups behind it full too — a mid-session reading against ten
- * complete same-clock-time baselines, rather than a one-bar current group.
- */
 function sessionBars(): Bar[] {
   const bars: Bar[] = [];
   let index = 0;
@@ -148,8 +111,6 @@ describe('the RVOL line reaches the debate (#797)', () => {
     const view = await runTechnical(new UsEquityRegularHoursCalendar());
 
     const point = rvolPointOf(view);
-    // Not merely "a line exists": a REAL ratio, from a real equity calendar
-    // Current bucket 1,500 over a 1,000 median = 1.5x, over all ten sessions
     expect(point).toBe(
       `RVOL (5m): 1.5x the median same-clock-time bucket over ` +
         `${RVOL_SESSION_WINDOW}/${RVOL_SESSION_WINDOW} prior sessions — informational, no vote`,
@@ -178,10 +139,6 @@ describe('the RVOL line reaches the debate (#797)', () => {
 
 describe('RVOL feeds no vote — #745’s one-vote-per-axis rule is untouched (#797)', () => {
   it('leaves direction, confidence and the axis-vote line identical whether RVOL reads or degrades', async () => {
-    // The same bars, twice, differing ONLY in the calendar — which is the only
-    // input RVOL has that the axes do not. One run produces a real 1.5x
-    // reading, the other degrades to `no_session_anchor`. If RVOL fed a vote,
-    // a vote would have appeared or vanished between them
     const withRvol = await runTechnical(new UsEquityRegularHoursCalendar());
     const withoutRvol = await runTechnical(new AlwaysOpenCalendar());
 
@@ -192,7 +149,6 @@ describe('RVOL feeds no vote — #745’s one-vote-per-axis rule is untouched (#
     const axisLine = (view: AnalystView): string =>
       view.key_points.find((line) => line.startsWith('Axis votes:')) as string;
     expect(axisLine(withRvol)).toBe(axisLine(withoutRvol));
-    // And RVOL is not one of the axes being counted
     expect(axisLine(withRvol).toLowerCase()).not.toContain('rvol');
   });
 });
@@ -218,8 +174,6 @@ describe('the #744 volume caveat is rendered, not merely known (#797)', () => {
       screeningInstrumentFor(ETP_TICKER),
     );
 
-    // The deviation announces itself INTO the debate prompt: the wrapper, the
-    // informed instrument, and the ticket that owns the gap
     expect(line).toContain(`measured on ${ETP_TICKER}, a leveraged-ETP wrapper`);
     expect(line).toContain(`The informed instrument is ${ETP_UNDERLYING}`);
     expect(line).toContain('#797');
@@ -245,13 +199,8 @@ describe('the measured debate-input delta for the RVOL line (#797)', () => {
     const before = await promptFor(without);
     const after = await promptFor(view);
 
-    // Same method #745 used and stated: characters are what is measured,
-    // tokens are reported as chars/4, because this repo has no tokenizer
-    // (`shared/llm/pricing.ts` prices token counts the API reports back)
     const chars = { before: before.length, after: after.length };
     const tokens = { before: Math.round(chars.before / 4), after: Math.round(chars.after / 4) };
-    // The ETP branch is the LONGEST form this line ever takes, so it is priced
-    // too rather than left as the cheap case's problem
     const etpPoint = rvolLine(
       ETP_TICKER,
       { rvol: 1.5, sessions_used: 10, sessions_target: 10, degraded_reason: null },
@@ -268,10 +217,6 @@ describe('the measured debate-input delta for the RVOL line (#797)', () => {
     );
 
     expect(chars.after).toBeGreaterThan(chars.before);
-    // Bounded, not pinned — same posture as #745's own delta assertion. One
-    // informational line must stay ONE line: a later change that grows this
-    // into a paragraph per session fails here rather than quietly repricing
-    // every debate round
     expect(tokens.after - tokens.before).toBeLessThan(60);
     expect(Math.round(etpPoint.length / 4)).toBeLessThan(100);
   });
@@ -279,9 +224,6 @@ describe('the measured debate-input delta for the RVOL line (#797)', () => {
 
 describe('the RVOL window is wide enough to ever produce a number (#797)', () => {
   it('asks for more than ten sessions of 5m bars', () => {
-    // The trap this pins: `WARMUP_5M` (260) is ~3.3 sessions, so reusing it
-    // would return `insufficient_sessions` on every tick forever — a caller in
-    // name only, which is the defect #797 exists to close
     expect(RVOL_5M_LOOKBACK).toBeGreaterThan((RVOL_SESSION_WINDOW + 1) * BARS_PER_DAY);
   });
 });

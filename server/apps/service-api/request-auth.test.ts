@@ -1,14 +1,3 @@
-/**
- * TDD for #1038: `isAuthorizedRequest` must refuse a request lacking a valid
- * bearer token once `SAMURAI_DASHBOARD_TOKEN` is configured, and must NOT
- * refuse any request when no credential is configured — that regression
- * would brick the default `npm run dashboard` path this repo runs today. See
- * `request-auth.ts`'s header for the full design (scope, host-agnosticism,
- * the constant-time approach).
- *
- * `'fixture-dashboard-token'` throughout is a fixture value only — never a
- * real credential, per this repo's test-secret convention.
- */
 import { extractBearerToken, isAuthorizedRequest } from './request-auth.js';
 
 const FIXTURE_TOKEN = 'fixture-dashboard-token';
@@ -45,9 +34,6 @@ describe('isAuthorizedRequest — the request-time half of #887/#1038', () => {
   });
 
   it('REFUSES a request with no Authorization header once a credential is configured', () => {
-    // This is the load-bearing case David's decision named explicitly: a test
-    // that only asserted the valid-credential case would still pass against
-    // the pre-#1038 behaviour, which accepts every request unconditionally
     expect(isAuthorizedRequest(undefined, FIXTURE_TOKEN)).toBe(false);
   });
 

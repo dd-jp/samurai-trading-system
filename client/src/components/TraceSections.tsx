@@ -1,12 +1,3 @@
-/**
- * The sections both drawers are built from: a trace's stage timeline, its
- * Risk gates and invalidation conditions, its debate record, and its fills.
- *
- * Every empty state names its reason. The wire is honest about what the
- * store never kept — no decision word for Trader and Risk (#328), no
- * round-by-round debate state (decision #10) — and the page repeats that
- * rather than papering over it with a dash.
- */
 import type { DebateRow, FillRow, RiskCriticRow, VerdictRow } from '@contracts';
 import { debateDegradedGloss } from '../lib/debate-termination.ts';
 import {
@@ -44,8 +35,6 @@ export function Timeline({ cells }: { cells: readonly ResolvedCell[] }) {
             key={cell.stage}
             className="timeline-row"
             data-stage={cell.stage}
-            // Set only when it applies, so a test (and a stylesheet) can select
-            // the degraded rows without matching every healthy one (#1080)
             data-degraded={cell.degraded ? 'true' : undefined}
           >
             <span className="timeline-stage">
@@ -78,15 +67,6 @@ function bindingConstraintText(constraint: string | null): string {
   return constraint;
 }
 
-/**
- * `isControl` overrides the whole reading, not just a fallback (#1597): the
- * control arm calls no model and so consults no critic — `critic_verdict` is
- * `null` on its own rows for that structural reason, not because a live-only
- * critic was skipped this one time, and the two must not share a sentence.
- * The binding constraint and conditions above this line still render
- * normally — the control's own Risk decision happened and is not absent
- * (dashboard-spec.md's #1594 amendment) — only the critic verdict is N/A.
- */
 function criticVerdictText(row: RiskCriticRow, isControl: boolean): string {
   if (isControl) return CONTROL_NO_CRITIC;
   if (row.critic_verdict === null) {
@@ -101,9 +81,7 @@ function criticVerdictText(row: RiskCriticRow, isControl: boolean): string {
 export interface GatesSectionProps {
   riskCritic: RiskCriticRow | undefined;
   verdict: VerdictRow | undefined;
-  /** How the row was found — the empty state names the key that found nothing */
   keyedBy: RiskCriticJoin;
-  /** The control arm consults no critic — see `criticVerdictText`'s doc comment */
   isControl: boolean;
 }
 
@@ -212,10 +190,8 @@ function RiskCriticBody({
 
 export interface DebateSectionProps {
   debate: DebateRow | undefined;
-  /** `true` while the selected lane is still running — changes the empty state */
   inFlight: boolean;
   linkedBy: DebateJoin;
-  /** The control arm trades by indicator alone and never runs a debate (#1597) */
   isControl: boolean;
 }
 

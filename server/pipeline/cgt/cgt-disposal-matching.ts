@@ -1,42 +1,12 @@
-/**
- * #1518 — UK CGT share-identification matching for Samurai's live Saxo GIA
- * equity leg. David's 2026-08-26 GIA ruling, recorded in ADR-0015's
- * 2026-08-30 amendment: disposals on that leg are CGT events, not
- * ISA-exempt. This is a RECORDKEEPING mechanism, not tax advice — see
- * `docs/cgt-disposal-matching.md` for the disclaimer this module's output
- * must always carry.
- *
- * Applies HMRC's statutory share-identification order (TCGA92 ss105-106A, as
- * restated in the CGT manual):
- *   1. Same-day rule (CG51560) — acquisitions and disposals of the same
- *      instrument on the same day are matched with each other first.
- *   2. 30-day "bed and breakfast" rule (CG51560/CG51570) — a disposal's
- *      remainder is matched against acquisitions of the same instrument in
- *      the FOLLOWING 30 days, earliest first.
- *   3. Section 104 pool (CG51575) — whatever is left matches against a
- *      single running average-cost pool of every other acquisition.
- *
- * Pure and side-effect-free: no store, no clock, no I/O. Every date is an
- * input. `server/pipeline/cgt/sqlite-cgt-fill-source.ts` is the store-backed
- * caller.
- */
 
 export const HMRC_SAME_DAY_RULE_CITATION = 'CG51560';
 export const HMRC_30_DAY_RULE_CITATION = 'CG51560/CG51570';
 export const HMRC_SECTION_104_CITATION = 'CG51575';
 
-/** 2024/25 onward (Autumn Statement 2022 cut) — HMRC "Capital Gains Tax rates and allowances". Not a computed tax figure: this module reports gains, never tax owed (rate depends on the operator's income band). */
 export const ANNUAL_EXEMPT_AMOUNT_GBP = 3000;
 
-/** The earliest UK tax year `ANNUAL_EXEMPT_AMOUNT_GBP` is sourced for — an earlier year used a different (undocumented here) Annual Exempt Amount */
 export const ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR = 2024;
 
-/**
- * Refuses a tax year this module has no sourced Annual Exempt Amount for,
- * rather than printing `ANNUAL_EXEMPT_AMOUNT_GBP` under a year it may not
- * apply to — the same refuse-rather-than-mis-report posture as the Section
- * 104 pool's insufficient-pool guard below
- */
 export function assertTaxYearIsSourced(startYear: number): void {
   if (startYear < ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR) {
     throw new Error(
@@ -48,16 +18,6 @@ export function assertTaxYearIsSourced(startYear: number): void {
   }
 }
 
-/**
- * One fill, already classified as an acquisition (an `entry` leg) or a
- * disposal (`stop`/`target`/`exit`) by the caller. `grossAmount` is
- * price × quantity in GBP; `charges` is the fill's own incidental cost
- * (commission/fee), also GBP — the caller is responsible for converting a
- * pence sub-unit (GBX/gbx/GBp/p) figure and setting aside anything it cannot
- * price in sterling before construction (see `sqlite-cgt-fill-source.ts`),
- * because this module has no FX model and must not silently misprice a
- * foreign-currency fill.
- */
 export interface CgtFillLeg {
   instrument: string;
   kind: 'acquisition' | 'disposal';
@@ -69,17 +29,6 @@ export interface CgtFillLeg {
   broker_fill_id: string;
 }
 
-/**
- * A fill the caller could not price in sterling — its `fee_currency` (which
- * also names the currency `grossAmount`/`charges` are denominated in, see
- * `sqlite-cgt-fill-source.ts`) is neither GBP nor a pence sub-unit
- * (GBX/gbx/GBp/p), and the venue-applied `fx_rate_to_gbp` (#1521) is either
- * absent or not a usable rate (stored but zero or negative), so this module
- * has no rate to convert it with. A non-GBP fill that carries a stored rate
- * greater than zero is converted by the caller and never reaches this
- * shape. Carried in native currency so the report can name exactly what is
- * missing rather than guess or drop it silently.
- */
 export interface UnconvertedCgtFill {
   instrument: string;
   kind: 'acquisition' | 'disposal';
@@ -88,15 +37,6 @@ export interface UnconvertedCgtFill {
   grossAmount: number;
   charges: number;
   currency: string;
-  /**
-   * Why this fill has no usable GBP rate — the row's own `fx_rate_to_gbp_source`
-   * (#1521) when no rate is stored at all, `'no_rate_stored'` when the row
-   * predates the column, or `` `invalid_stored_rate:${value}` `` when a
-   * stored rate exists but is zero or negative (which this module refuses to
-   * multiply by rather than silently zeroing or flipping the sign of a real
-   * disposal). Never blank — an accountant reading the report's unconverted
-   * section needs to know why a line is missing, not just that it is.
-   */
   fxRateToGbpSource: string;
   idempotency_key: string;
   broker_fill_id: string;
@@ -105,12 +45,9 @@ export interface UnconvertedCgtFill {
 export interface MatchedDisposal {
   instrument: string;
   disposalDate: Date;
-  /** The specific matched acquisition's date — same-day/30-day only. A Section 104 match blends many acquisition dates, so it has none. */
   acquisitionDate?: Date;
   quantity: number;
-  /** Gross disposal proceeds less this quantity's share of disposal-leg charges */
   proceeds: number;
-  /** Acquisition cost plus this quantity's share of acquisition-leg charges */
   allowableCost: number;
   gain: number;
   rule: 'same-day' | '30-day' | 'section-104';
@@ -118,37 +55,16 @@ export interface MatchedDisposal {
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/** The 30-day rule's window (CG51560/CG51570) — also used to flag a disposal as still provisional (see `disposalStillInThirtyDayWindow`) */
 const THIRTY_DAY_WINDOW_MS = 30 * MS_PER_DAY;
 
-/**
- * True while a disposal's 30-day bed-and-breakfast window is still open as of
- * `asOf` — an acquisition of the same instrument arriving before the window
- * closes would still reclassify this disposal from `section-104` to `30-day`
- * (or change which acquisition a `30-day` match already used), so a report
- * run inside the window is provisional for that disposal. Inclusive of the
- * boundary day itself, matching the matcher's own `<=` window-end check.
- */
 export function disposalStillInThirtyDayWindow(disposalDate: Date, asOf: Date): boolean {
   return asOf.getTime() <= disposalDate.getTime() + THIRTY_DAY_WINDOW_MS;
 }
 
-/**
- * The calendar day a fill's timestamp falls on, as a sortable key.
- *
- * UTC, not Europe/London — deliberately. The LSE trading session is
- * 08:00-16:30 London time and this venue restriction is structural
- * (`tradeableUniverse`, GBP LSE-listed only), so no fill this module ever
- * sees can land in the 00:00-01:00 window where UTC and London-local dates
- * diverge during BST. UTC bucketing is therefore equal to London-calendar
- * bucketing FOR THIS VENUE — a non-LSE venue would break this invariant, so
- * do not reuse this key for one without re-deriving it in Europe/London.
- */
 function dayKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Derived from `dayKey`, not computed independently — a `MatchedDisposal.disposalDate` that disagreed with the day `dayKey` grouped it under would misfile a disposal into the wrong tax year with no test able to see the two had drifted apart */
 function dayStart(date: Date): Date {
   return new Date(`${dayKey(date)}T00:00:00.000Z`);
 }
@@ -186,7 +102,6 @@ function toDayLots(fills: readonly CgtFillLeg[]): DayLot[] {
   return [...byDay.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
-/** This day-lot's per-share cost/proceeds, averaged over its ORIGINAL quantity — `take()` only decrements `remaining`, never `quantity`, so every partial take prices at the same day-average, not a shrinking one */
 function unitAmount(lot: DayLot): number {
   return lot.totalAmount / lot.quantity;
 }
@@ -224,7 +139,6 @@ function buildMatch(
   };
 }
 
-/** Same-day rule (CG51560): pool every acquisition and disposal dated the same day and match the smaller side in full, at that day's average price on each side */
 function matchSameDay(
   instrument: string,
   acquisitions: readonly DayLot[],
@@ -254,9 +168,7 @@ function matchDisposalWithinThirtyDayWindow(
   for (const acq of acquisitions) {
     if (disp.remaining <= 0) break;
     if (acq.remaining <= 0) continue;
-    // strictly AFTER — direction matters
     if (acq.date.getTime() <= disp.date.getTime()) continue;
-    // inclusive of the +30 boundary itself
     if (acq.date.getTime() > windowEnd.getTime()) continue;
     const matchQty = Math.min(acq.remaining, disp.remaining);
     const cost = take(acq, matchQty);
@@ -266,20 +178,12 @@ function matchDisposalWithinThirtyDayWindow(
   return results;
 }
 
-/**
- * 30-day / bed-and-breakfast rule (CG51560/CG51570): each disposal's
- * remainder, earliest disposal first, against acquisitions strictly AFTER it
- * within 30 days, earliest acquisition first (FIFO) — so an earlier disposal
- * claims a shared re-acquisition ahead of a later one
- */
 function matchThirtyDay(
   instrument: string,
   acquisitions: readonly DayLot[],
   disposals: readonly DayLot[],
 ): MatchedDisposal[] {
   const results: MatchedDisposal[] = [];
-  // `acquisitions` already arrives sorted ascending by date (`toDayLots`) —
-  // no re-sort needed
   for (const disp of disposals) {
     if (disp.remaining <= 0) continue;
     const windowEnd = new Date(disp.date.getTime() + THIRTY_DAY_WINDOW_MS);
@@ -326,20 +230,11 @@ function applyDisposalToPool(
     undefined,
     qty,
     proceeds,
-    // `cost` is already the pooled average cost — no separate charges to add
     { amount: cost, charges: 0 },
     'section-104',
   );
 }
 
-/**
- * Section 104 pool (CG51575): everything same-day and 30-day matching left
- * untouched, processed in strict chronological order as one running
- * average-cost pool. An acquisition always tops the pool up; a disposal
- * always draws from it — same-day/30-day resolution above guarantees no
- * day's lot has remaining quantity on BOTH sides, so there is no ordering
- * ambiguity to resolve on a tied date.
- */
 function matchSection104Pool(
   instrument: string,
   acquisitions: readonly DayLot[],
@@ -368,14 +263,6 @@ function matchSection104Pool(
   return results;
 }
 
-/**
- * Matches every disposal fill against its acquisitions, per instrument, in
- * HMRC's statutory order (same-day → 30-day → Section 104 pool). Throws
- * rather than silently under-reporting when a disposal cannot be matched at
- * all — an unmatchable disposal is a data-integrity fault (fills missing
- * upstream, or a short sale this long-only model cannot price), and a wrong
- * gain of zero is worse than a refusal on a document headed for HMRC.
- */
 export function matchDisposals(fills: readonly CgtFillLeg[]): MatchedDisposal[] {
   const byInstrument = new Map<string, CgtFillLeg[]>();
   for (const fill of fills) {
@@ -419,12 +306,10 @@ export interface CgtTaxYearReport {
   annualExemptAmountGbp: number;
 }
 
-/** '2025-26' for a tax year starting 6 Apr `startYear`. The one place this format is built — `ukTaxYearLabel`, `cgtReportForTaxYear` and `report-cgt-disposals.ts`'s `--tax-year` validation all derive from it rather than recomputing the same string three ways. */
 export function taxYearLabelForStartYear(startYear: number): string {
   return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
 }
 
-/** '2025-26' for any date from 6 Apr 2025 up to (not including) 6 Apr 2026 */
 export function ukTaxYearLabel(date: Date): string {
   const bounds = ukTaxYearBounds(date.getUTCFullYear());
   const startYear =
@@ -432,7 +317,6 @@ export function ukTaxYearLabel(date: Date): string {
   return taxYearLabelForStartYear(startYear);
 }
 
-/** Half-open `[6 Apr startYear, 6 Apr startYear+1)`, UTC — see `dayKey`'s doc for why UTC is London-calendar-correct on this LSE-only venue */
 export function ukTaxYearBounds(startYear: number): { from: Date; to: Date } {
   return {
     from: new Date(Date.UTC(startYear, 3, 6)),
@@ -449,16 +333,6 @@ function inTaxYear<T>(rows: readonly T[], startYear: number, dateOf: (row: T) =>
     .sort((a, b) => dateOf(a).getTime() - dateOf(b).getTime());
 }
 
-/**
- * Every already-matched disposal whose date falls in the given UK tax year.
- * Matching itself (`matchDisposals`) must run over the FULL fill history
- * first — the Section 104 pool and the 30-day rule both need acquisitions
- * outside the reported year to price a disposal inside it correctly.
- *
- * Refuses a year `ANNUAL_EXEMPT_AMOUNT_GBP` is not sourced for (see
- * `assertTaxYearIsSourced`) rather than printing that figure under a year it
- * may not apply to.
- */
 export function cgtReportForTaxYear(
   disposals: readonly MatchedDisposal[],
   startYear: number,
@@ -479,7 +353,6 @@ export function cgtReportForTaxYear(
   };
 }
 
-/** The subset of `unconverted` (see `UnconvertedCgtFill`) whose fill date falls in the given UK tax year — same windowing `cgtReportForTaxYear` applies to matched disposals, so the report's two sections cover the same period */
 export function unconvertedCgtFillsInTaxYear(
   unconverted: readonly UnconvertedCgtFill[],
   startYear: number,

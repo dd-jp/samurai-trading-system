@@ -1,23 +1,3 @@
-/**
- * The wiring proof for #1214 — the residual re-flatten's session gate reads
- * the REAL calendar the composition root builds, not a stub of its own.
- *
- * `residual-protection-sweep.test.ts` proves the mechanism: a venue that
- * cannot arm protective legs gets its residual closed instead, bounded,
- * journalled, and stood down when the venue is shut. It cannot prove the
- * property this file exists for — that `production.ts` threads its
- * `sessionCalendars` (the same pair the flatten window and the daily-PnL
- * boundary resolve against) all the way into `ExecutionInput`. A unit test
- * hands the surface a calendar it chose itself, so it stays green against a
- * root that quietly substitutes an always-open one, which is this repo's
- * dominant defect class (#322) and the reason `ExecutionInput.sessionCalendars`
- * is a required field rather than an optional with a default.
- *
- * The assertion runs in BOTH directions against ONE composition: shut at
- * 02:00Z (22:00 the previous evening in New York), open at 15:00Z (11:00).
- * An always-open substitute fails the first half; a never-open one fails the
- * second. Only the genuine calendar passes both.
- */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LlmClient } from '../../../pipeline/debate-engine/index.js';
 import type {
@@ -45,20 +25,11 @@ import {
   makeWiringRiskConfig,
 } from './wiring-config-fixtures.js';
 
-/** 2026-07-20 is a Monday. 02:00Z is 22:00 Sunday in New York — the US venue is shut. */
 const SHUT_INSTANT = new Date('2026-07-20T02:00:00Z');
-/** The same Monday at 11:00 New York — inside the regular session */
 const OPEN_INSTANT = new Date('2026-07-20T15:00:00Z');
 const OPENED_AT = new Date('2026-07-17T14:00:00Z');
 const LOT = 'key-1';
 
-/**
- * Saxo's shape: `rearmProtectiveLegs` refuses permanently
- * (`IsOcoOrderSupported: false` on every LSE pool line, doc 43) and
- * `submitFlatten` works. Every other method throws, so an unexpected call
- * fails loudly rather than returning a silently-wrong stub —
- * `WedgingBroker`'s posture (filled-zero-size-wiring.test.ts).
- */
 class SaxoShapedBroker implements BrokerAdapter {
   readonly flattenCalls: Array<{ clientOrderId: string; size: number }> = [];
 
@@ -104,7 +75,6 @@ class SaxoShapedBroker implements BrokerAdapter {
   }
 }
 
-/** The durable state a partial flatten leaves behind: entry 10, exit 4, marked unprotected */
 async function seedMarkedResidual(store: ExecutionSharedStore): Promise<void> {
   const position: OpenPosition = {
     idempotency_key: LOT,
@@ -152,10 +122,8 @@ async function seedMarkedResidual(store: ExecutionSharedStore): Promise<void> {
   await store.markResidualUnprotected(LOT, OPENED_AT);
 }
 
-/** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-/** `filled-zero-size-wiring.test.ts`'s stub config, plus an EXPLICIT equity calendar */
 function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
     db,
@@ -206,10 +174,6 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     riskConfig: makeWiringRiskConfig(),
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
-      // Read by `assertFlattenGraceWithinMarkAge` at boot (#1389): the
-      // post-bell flatten grace must not outrun gate 2a's staleness ceiling
-      // Nothing in this file turns on the value; it just has to clear
-      // `DEFAULT_TRADER_CONFIG.flatten_after_close_ms`
       max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     } as ProductionConfig['verdictConfig'],
     executionConfig: makeWiringExecutionConfig(),
@@ -224,9 +188,6 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     } as ProductionConfig['breakerConfig'],
     costConfig: makeWiringCostConfig(),
     ciiConsumerConfig: makeWiringCiiConsumerConfig(),
-    // EXPLICIT, unlike the other wiring proofs' `AlwaysOpenCalendar`: this
-    // file's whole subject is that the root's real session opinion reaches
-    // Execution, so the calendar under test must be one that actually closes
     tradingCalendar: new UsEquityRegularHoursCalendar(),
   } as StubConfig;
 }
@@ -242,18 +203,6 @@ describe("the residual re-flatten reads the root's own session calendar (#1214)"
     db.close();
   });
 
-  /**
-   * THE MUTATION THIS KILLS: replace `sessionCalendars: deps.sessionCalendars`
-   * in `buildExecutionSurface` (direct-bind.ts) with a fresh
-   * `{ crypto: new AlwaysOpenCalendar(), stocks: new AlwaysOpenCalendar() }`,
-   * or drop `sessionCalendars` from `production.ts`'s `executionDeps` and
-   * substitute one there. Dropping the field outright is a `tsc` error — it
-   * is required on both `ExecutionStepDeps` and `ExecutionInput` — so an
-   * always-open substitute is the mutation that survives typecheck, and it is
-   * precisely the one that fires market orders into a shut venue. Every unit
-   * test in `residual-protection-sweep.test.ts` stays green under it: they
-   * pass their own calendars in and never build a surface at all.
-   */
   it('stands the re-flatten down outside the session and submits it inside, off one composition', async () => {
     const logger = recordingLogger();
     const broker = new SaxoShapedBroker();
@@ -264,7 +213,6 @@ describe("the residual re-flatten reads the root's own session calendar (#1214)"
 
     const surface = buildExecutionSurface(components.executionDeps, 'trace-1214-wiring');
 
-    // 22:00 the previous evening in New York: no market order may be sent
     await surface.sweepResidualProtection();
     expect(broker.flattenCalls).toEqual([]);
     expect(logger.entries).toContainEqual(
@@ -274,7 +222,6 @@ describe("the residual re-flatten reads the root's own session calendar (#1214)"
       }),
     );
 
-    // Same composition, same surface, same marked lot — only the clock moves
     clock.advanceTo(OPEN_INSTANT);
     await surface.sweepResidualProtection();
     expect(broker.flattenCalls).toEqual([

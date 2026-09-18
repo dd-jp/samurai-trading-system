@@ -22,14 +22,12 @@ function trades(list: TradeSeries['trades'], averageCapital = 100_000): TradeSer
   return { trades: list, averageCapital, window: WINDOW };
 }
 
-/** i.i.d.-ish returns: no autocorrelation to speak of */
 const FLAT_ISH = [0.01, -0.005, 0.012, -0.008, 0.006, 0.009, -0.003, 0.011, -0.006, 0.004];
 
 describe('computeMetrics', () => {
   it('reports every field of the suite together', () => {
     const metrics = computeMetrics(series(FLAT_ISH), trades([trade()]));
 
-    // The suite is the contract: a caller must never be handed one number
     expect(Object.keys(metrics).sort()).toEqual(
       [
         'calmar',
@@ -42,8 +40,6 @@ describe('computeMetrics', () => {
         'skew',
         'sortino',
         'turnover',
-        // The DSR inputs (#406) — part of the same contract: they describe the
-        // sample `sharpe` was computed on, so they travel with it
         'per_period_sharpe',
         'annualization_factor',
         'observations',
@@ -57,11 +53,6 @@ describe('computeMetrics', () => {
   });
 
   describe('the DSR inputs (#406)', () => {
-    /**
-     * The three fields are redundant with `sharpe` by construction, which is
-     * what makes them safe to consume — and what makes drift between them
-     * silent. Pinning the identity is the only thing that keeps them honest.
-     */
     it('reports a per-period Sharpe that reproduces the annualized one exactly', () => {
       const metrics = computeMetrics(series(FLAT_ISH), trades([trade()]));
 
@@ -74,8 +65,6 @@ describe('computeMetrics', () => {
     it('reports a per-period Sharpe that is NOT the annualized one — the bug this seam exists to prevent', () => {
       const metrics = computeMetrics(series(FLAT_ISH), trades([trade()]));
 
-      // Handing `sharpe` to deflatedSharpe() was the pre-#406 trap: it inflates
-      // the statistic by the annualization factor and silently flatters DSR
       expect(metrics.annualization_factor).toBeGreaterThan(1);
       expect(Math.abs(metrics.sharpe)).toBeGreaterThan(Math.abs(metrics.per_period_sharpe));
     });
@@ -88,8 +77,6 @@ describe('computeMetrics', () => {
     });
 
     it('is unaffected by periodsPerYear in the per-period Sharpe, and affected in the factor', () => {
-      // The annualization base is the one thing that separates the two, so the
-      // stock/crypto split (252 vs 365) must move the factor and nothing else
       const stocks = computeMetrics(series(FLAT_ISH, 252), trades([trade()]));
       const crypto = computeMetrics(series(FLAT_ISH, 365), trades([trade()]));
 
@@ -99,16 +86,7 @@ describe('computeMetrics', () => {
   });
 
   describe('sharpe — Lo (2002) annualization', () => {
-    /**
-     * The discriminating test: positively autocorrelated returns have a
-     * q-period variance larger than q times the per-period variance, so the
-     * naive ×√q overstates their annualized Sharpe. If this passes with the
-     * naive factor, the adjustment is not there.
-     */
     it('reports a lower Sharpe than naive x-root-q on positively autocorrelated returns', () => {
-      // AR(1) with phi = +0.6 — the momentum/trend shape this system trades
-      // 12 periods/year keeps max-lag at 11 (well within the 60 obs window)
-      // so the autocorrelation estimates at the tail are stable
       const autocorrelated = arOne(0.6, 60);
       const periodsPerYear = 12;
 
@@ -129,23 +107,17 @@ describe('computeMetrics', () => {
     });
 
     it('collapses to naive x-root-q when returns have no serial correlation', () => {
-      // Perfectly alternating around a mean has rho_k that cancel over the
-      // Bartlett weights only approximately, so use a series built to have
-      // ~zero autocorrelation at every lag: a single non-zero deviation
       const returns = [0.02, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01];
       const periodsPerYear = 4;
 
       const { sharpe } = computeMetrics(series(returns, periodsPerYear), trades([trade()]));
       const naive = perPeriodSharpe(returns) * Math.sqrt(periodsPerYear);
 
-      // Not exactly equal — the sample rho_k are not exactly zero — but the
-      // adjustment must not move a near-uncorrelated series far
       expect(sharpe).toBeCloseTo(naive, 0);
     });
   });
 
   it('computes max_drawdown as a positive peak-to-trough fraction of compounded equity', () => {
-    // 1.0 -> 1.5 -> 0.75 -> 0.9: worst decline is 0.75/1.5, i.e. 50%.
     const { max_drawdown } = computeMetrics(series([0.5, -0.5, 0.2]), trades([trade()]));
 
     expect(max_drawdown).toBeCloseTo(0.5, 10);
@@ -171,7 +143,6 @@ describe('computeMetrics', () => {
       ]),
     );
 
-    // 0.5 * 200 - 0.5 * 150 = 25
     expect(expectancy).toBeCloseTo(25, 10);
   });
 
@@ -186,7 +157,6 @@ describe('computeMetrics', () => {
 
   describe('exposure', () => {
     it('is the fraction of the window with a position open', () => {
-      // 2 of the window's 10 days
       const { exposure } = computeMetrics(
         series(FLAT_ISH),
         trades([
@@ -201,9 +171,6 @@ describe('computeMetrics', () => {
     });
 
     it('merges concurrent trades rather than summing them', () => {
-      // Two instruments held over the same 2 days is 2 days of exposure, not
-      // 4 — a diversified portfolio is not 40% exposed because it holds two
-      // names, and summing would report exposure > 1 for a fully-invested one
       const { exposure } = computeMetrics(
         series(FLAT_ISH),
         trades([
@@ -227,7 +194,6 @@ describe('computeMetrics', () => {
   it('reports excess kurtosis, so a flat-tailed sample is not silently +3', () => {
     const { kurtosis } = computeMetrics(series(FLAT_ISH), trades([trade()]));
 
-    // Whatever the value, it is excess: a normal-ish sample sits near 0, not 3
     expect(kurtosis).toBeLessThan(3);
   });
 
@@ -250,12 +216,10 @@ describe('computeMetrics', () => {
   });
 });
 
-/** Deterministic AR(1): r_t = phi * r_{t-1} + e_t, with a fixed sawtooth for e */
 function arOne(phi: number, length: number): number[] {
   const returns: number[] = [];
   let previous = 0.01;
 
-  // Simple mulberry32 PRNG seeded to 42 for reproducibility
   let state = 42;
   const rand = () => {
     state |= 0;

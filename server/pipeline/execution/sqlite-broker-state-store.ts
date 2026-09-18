@@ -1,15 +1,3 @@
-/**
- * SQLite-backed `BrokerStateStore` over `broker_brackets` (#287, migration
- * `0007`) and `broker_unpriced_fills` (#298, migration `0008`). See
- * docs/specs/shared-sqlite-store-spec.md ("Consolidated Schema") and
- * broker-state-store.ts for why this seam is synchronous.
- *
- * Follows `SqliteAccountStateStore` (#276): a small focused class over the
- * shared handle, upserting with `ON CONFLICT ... DO UPDATE` so a re-write is
- * idempotent, and doing whatever merge logic exists IN SQL rather than
- * read-then-write — two adapters (or a retry racing itself) must not be able
- * to lose an update between a select and an insert.
- */
 
 import type { StoreHandle } from '../../shared/store/index.js';
 import {
@@ -125,14 +113,6 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
       );
   }
 
-  /**
-   * The rehydration path: the venue's order ids for a client order id whose
-   * request this process never saw. `phase` defaults to `'armed'` on insert —
-   * true for the two venues that use this path (Alpaca/Saxo native brackets,
-   * whose legs are live from the first call) — and is left ALONE on conflict,
-   * because alpaca-crypto-emulation's phase is emulation state that no venue
-   * lookup is entitled to overwrite.
-   */
   recordBracketOrderIds(
     venue: BrokerVenue,
     clientOrderId: string,
@@ -170,14 +150,6 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
       );
   }
 
-  /**
-   * The age-out clock's write (#298). `first_seen_at` is absent from the
-   * `DO UPDATE SET` list on purpose and that omission is the feature: a fill
-   * re-offered unpriced on every poll — and across restarts, which is what
-   * makes this durable rather than a Map — must accumulate age, not reset it.
-   * `alerted_at` is left alone for the same reason: a re-observation is not a
-   * new anomaly.
-   */
   recordUnpricedFill(venue: BrokerVenue, observation: UnpricedFillObservation, seenAt: Date): void {
     this.db
       .prepare(
@@ -269,8 +241,6 @@ function fromBracketRow(row: BracketRow): BrokerBracketRecord {
     entry_order_id: row.entry_order_id,
     stop_order_id: row.stop_order_id,
     target_order_id: row.target_order_id,
-    // All-or-nothing: a half-populated request cannot re-place a leg, and
-    // presenting one would let a caller read a price that was never requested
     request: hasRequest
       ? {
           instrument: row.instrument as string,

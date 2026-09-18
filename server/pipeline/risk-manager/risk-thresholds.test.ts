@@ -1,11 +1,3 @@
-/**
- * The `risk_thresholds` naming contract and overlay (#433).
- *
- * `autoTighten` has written this table since #93 and nothing read it, so the
- * system's defensive response to a detected dead edge changed no decision.
- * These pin the contract that closes it — and the guards that stop a corrupt
- * row from disabling a cap.
- */
 import { RISK_THRESHOLD_KEYS, resolveRiskConfig, riskThresholdsFrom } from './risk-thresholds.js';
 import type { RiskConfig } from './types.js';
 
@@ -43,8 +35,6 @@ describe('riskThresholdsFrom', () => {
   });
 
   it('skips what a partial config does not carry rather than throwing at startup', () => {
-    // `RiskConfig` requires every field, so a gap means a cast-past-the-compiler
-    // object — which is what a test fixture is, and startup must survive one
     const partial = { max_position_size_fraction_of_equity: 5_000 } as RiskConfig;
 
     expect(riskThresholdsFrom(partial)).toEqual({ max_position_size_fraction_of_equity: 5_000 });
@@ -68,7 +58,6 @@ describe('resolveRiskConfig', () => {
 
     expect(config.max_position_size_fraction_of_equity).toBe(1_000);
     expect(applied).toEqual({ max_position_size_fraction_of_equity: 1_000 });
-    // Untouched dials keep their static values
     expect(config.per_asset_cap_fraction_of_equity).toBe(10_000);
   });
 
@@ -86,10 +75,6 @@ describe('resolveRiskConfig', () => {
   });
 
   it('honours a LOOSENING — the bounds that produced it are the control, not this read', () => {
-    // daily-cycle.ts applies a threshold loosening itself (#736, ADR-0013
-    // Decision 2), so a loosened row in the table has already been through the
-    // dial's [floor, ceiling] and the in-code clamp at the write door. What
-    // guards this read is the clamp re-check below, not a second-guess
     const { config } = resolveRiskConfig(makeConfig(), {
       max_position_size_fraction_of_equity: 9_000,
     });
@@ -98,8 +83,6 @@ describe('resolveRiskConfig', () => {
   });
 
   it('ignores a NaN rather than applying it', () => {
-    // The one that matters most: every comparison against NaN is false, so a
-    // NaN cap would silently disable the gate instead of tightening it
     const { config, applied } = resolveRiskConfig(makeConfig(), {
       max_position_size_fraction_of_equity: Number.NaN,
     });

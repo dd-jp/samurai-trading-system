@@ -8,11 +8,6 @@ import {
 } from '../lib/vocabulary.ts';
 import { CapMeter } from './CapMeter.tsx';
 
-/**
- * The tighter of CONTEXT.md's two drawdown tolerances (index ~26.2% vs
- * single-stock ~41.8%); the daily suite reports one figure for the whole
- * book, so the rail checks it against the stricter bound
- */
 const DRAWDOWN_TOLERANCE = 0.262;
 
 export type Tab = 'glance' | 'live' | 'review';
@@ -29,27 +24,13 @@ export const ARMS: readonly { id: TradingArmWire; label: string }[] = [
 ];
 
 export interface RailProps {
-  /**
-   * Already produced a snapshot — cold start is a page-level state
-   * `App.tsx` renders instead of the dashboard, and never reaches here. This
-   * reports the feed's freshness/health on top of the last-known snapshot,
-   * not its absence.
-   */
   feed: LiveFeed;
   tab: Tab;
   onTab: (tab: Tab) => void;
-  /** Which arm's feed the rail — and everything downstream of it — is showing */
   arm: TradingArmWire;
   onArm: (arm: TradingArmWire) => void;
 }
 
-/**
- * Plain buttons, not `role="tablist"`: this is a two-way switch, not a set
- * of panels, so a native `<button>` needs no roving-tabindex machinery.
- * Selection is carried in the accessible name (not `aria-selected`) because
- * the selected-tint colour is otherwise the only signal to a sighted user —
- * dashboard-spec.md: "colour is never the sole carrier of a signal".
- */
 function armAriaLabel(
   entry: { id: TradingArmWire; label: string },
   current: TradingArmWire,
@@ -57,14 +38,6 @@ function armAriaLabel(
   return entry.id === current ? `${entry.label} arm, selected` : `${entry.label} arm`;
 }
 
-/**
- * `FeedStatus` is the single source of truth for health state — never
- * re-derive it from `snapshot`/`stale` flags beside it (that drift caused
- * #1316). `rendersHealthTiles` and `announce` are required fields here so a
- * new `FeedStatus` member forces a typed decision at every call site instead
- * of silently falling through to a literal check elsewhere in this file.
- * Exported because `ColdStart.tsx` shares this same state machine.
- */
 type HealthFeed<S extends FeedStatus> = S extends 'stale' | 'alive' ? LiveFeed : SnapshotFeed;
 
 export const HEALTH: {
@@ -75,9 +48,6 @@ export const HEALTH: {
     announce: boolean;
   };
 } = {
-  // Ranked ahead of every other state in `useSnapshot.ts`'s `deriveStatus` —
-  // see that function's doc comment for why a contract mismatch must outrank
-  // staleness rather than merely being folded into it
   'contract-mismatch': {
     word: 'MISMATCH',
     note: ({ error }) => error ?? 'served bundle disagrees with the server contract',
@@ -91,9 +61,6 @@ export const HEALTH: {
         ? WAITING_FOR_FIRST_SNAPSHOT
         : `no snapshot yet — last attempt failed: ${error}`,
     rendersHealthTiles: true,
-    // The cold-start page is the whole screen, so it is already unmissable;
-    // announcing it as a live region would re-read the page a reader has
-    // just landed on
     announce: false,
   },
   stale: {
@@ -127,11 +94,6 @@ function HealthBlock({ feed }: { feed: LiveFeed }) {
   );
 }
 
-/**
- * Rendered instead of a health-derived tile during a contract mismatch.
- * Never omitted — a hidden tile is indistinguishable from a healthy tile
- * with nothing to report (dashboard-spec.md: "a blank field reads as zero").
- */
 function MismatchBlock({ label, dataField }: { label: string; dataField: string }) {
   return (
     <div className="rail-block rail-contract-mismatch" data-field={dataField}>
@@ -158,12 +120,6 @@ function ModeBlock({ snapshot }: { snapshot: WireSnapshot }) {
   );
 }
 
-/**
- * The control arm's tick store is in-memory only (`control-arm-wiring.ts`),
- * so `tick_status`/`live_*` never hold a control-arm row. Reading them as
- * "idle" under control would understate the absence as a quiet moment
- * rather than a structural one.
- */
 function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot }) {
   if (snapshot.arm === 'control') {
     return (
@@ -207,12 +163,6 @@ function balanceFigures(balance: AlpacaBalanceWire) {
   ];
 }
 
-/**
- * dashboard-spec.md: providers, LLM spend and alert delivery render
- * identically in both arms — there is one probe/ledger/channel per process,
- * not one per arm — so this states plainly what the figures alone would
- * otherwise leave an operator to infer
- */
 function SystemTag() {
   return (
     <span className="muted small" data-system-fact="true">
@@ -271,15 +221,6 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
   );
 }
 
-/**
- * Renders only when nonzero — a healthy channel gets no permanent tile.
- * Absence isn't proof of health: it also covers `log-only` mode and a
- * mismatched `TELEGRAM_CHAT_ID` between service-api and the orchestrator,
- * both of which silently produce a zero count. The window is 24h and
- * self-clears, distinct from the in-process "channel degraded" Telegram
- * notice's own counter — a nonzero reading here means a send failed
- * recently, not that the channel is currently unreachable.
- */
 function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot }) {
   const count = snapshot.alert_delivery_failures_24h;
   if (count === 0) return null;
@@ -296,27 +237,12 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot }) {
   );
 }
 
-/**
- * `null` = the wire explicitly says no cap; `undefined` = `cap_usd` itself
- * could not be trusted. Keep these distinct — collapsing them let a
- * malformed `cap_usd` render as `'uncapped'` (`normalizeCapUsd` in
- * `useSnapshot.ts`). `$0` is passed through rather than treated as "no cap":
- * it's the most restrictive cap there is, and `CapMeter` already declines to
- * divide by a `cap <= 0`.
- */
 function capOf(snapshot: WireSnapshot): number | null | undefined {
   const cap = snapshot.llm_spend?.cap_usd;
   if (cap === null) return null;
   return typeof cap === 'number' && Number.isFinite(cap) ? cap : undefined;
 }
 
-/**
- * Discriminates "armed uncapped" from "never armed" when `cap_usd` is null;
- * must not gate a numeric `cap_usd`, which is itself proof something armed
- * (see `capReasonOf` below). `undefined` here means the field is absent
- * (a pre-this-field server) or unreadable — do not collapse that to `null`
- * ("never armed"), which is an affirmative false claim about enforcement.
- */
 function capArmedAtOf(snapshot: WireSnapshot): string | null | undefined {
   return snapshot.llm_spend?.cap_armed_at;
 }
@@ -330,15 +256,6 @@ type CapReason =
   | 'zero'
   | 'capped';
 
-/**
- * Priority order matters: missing spend outranks everything (no snapshot
- * means no known budget); an untrustworthy `capUsd` outranks `armedAt`
- * (guessing 'uncapped' for an unreadable field is the same mistake
- * 'ambiguous' exists to avoid); a present numeric `capUsd` outranks
- * `armedAt` too (a numeric cap is itself proof of enforcement, regardless of
- * whether this wire happens to carry the arming instant). Only a `null`
- * `capUsd` falls through to `armedAt`'s three-way read.
- */
 function capReasonOf(
   spendKnown: boolean,
   capUsd: number | null | undefined,
@@ -350,34 +267,23 @@ function capReasonOf(
     if (armedAt === undefined) return 'ambiguous';
     return armedAt === null ? 'never-armed' : 'uncapped';
   }
-  // `<= 0`, not `=== 0`: `CapMeter` refuses to draw for any non-positive
-  // cap, so a malformed negative `cap_usd` must not fall through to 'capped'
   if (capUsd <= 0) return 'zero';
   return 'capped';
 }
 
 const CAP_EMPTY_STATE: Readonly<Record<Exclude<CapReason, 'capped' | 'zero'>, string>> = {
   unknown: 'no spend figure on this snapshot — meter not drawable',
-  // Distinct from `ambiguous`: a malformed/untrustworthy `cap_usd` itself,
-  // not a missing discriminator for an otherwise-explicit `null`
   unreadable: 'LLM spend cap on this snapshot could not be read — meter not drawable',
-  // Distinct from `uncapped`: nothing is enforcing anything here, the
-  // opposite of an operator's deliberate choice
   'never-armed': 'LLM spend cap was never armed — meter not drawable',
   uncapped: 'LLM spend is deliberately uncapped — meter not drawable',
-  // Asserts neither "armed" nor "unarmed" — this wire is silent on arming
-  // state, and the honest reading is that silence, not a guess either way
   ambiguous: 'no trustworthy arming record on this snapshot — meter not drawable',
 };
 
-// $0 (or a malformed negative) is a configured, maximally restrictive
-// budget, not an absent one — never "no LLM budget configured"
 function zeroCapEmptyState(capUsd: number): string {
   return `LLM spend cap is ${formatUsd(capUsd)} — meter not drawable`;
 }
 
 function spendEmptyState(reason: CapReason, cap: number | null, zeroCapBreached: boolean): string {
-  // 'capped' means capUsd > 0, which CapMeter always draws
   if (reason === 'capped') return '';
   if (reason === 'zero') {
     return `${zeroCapEmptyState(cap ?? 0)}${zeroCapBreached ? ' · already over' : ''}`;
@@ -408,12 +314,6 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
   const allTime = snapshot.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
-  // `CapMeter`'s `cap` prop is `number | null` — it has no concept of
-  // "unreadable" of its own, and does not need one: passing `undefined`
-  // through as `null` still draws no meter and shows the same em-dash
-  // denominator CapMeter already renders for `null` (`CapMeter.tsx`). Only
-  // `capReasonOf` below needs the raw three-valued `cap` to tell
-  // "unreadable" apart from "the wire explicitly said no cap"
   const capForMeter = cap ?? null;
   const armedAt = capArmedAtOf(snapshot);
   const spendKnown = spent !== undefined && Number.isFinite(spent);
@@ -421,9 +321,6 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
   const unpriced = allTime?.unpriced_calls ?? 0;
   const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
   const windows = snapshot.llm_spend;
-  // A $0 cap with any recorded spend is already breached, but `CapMeter`
-  // never divides by a cap `<= 0` (0/0 and x/0 are both unjustifiable), so
-  // this is stated directly rather than left for a fabricated `over` flag
   const zeroCapBreached = reason === 'zero' && spendKnown && (spent ?? 0) > 0;
   return (
     <CapMeter
@@ -455,22 +352,8 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
   );
 }
 
-/**
- * `metrics` is required and non-nullable on the wire, so "no suite has run"
- * has no wire representation to read — a suite that ran but returned an
- * unusable figure is `'unreadable'` instead
- */
 type DrawdownReason = 'unreadable' | 'drawn';
 
-/**
- * The finite number to hand `CapMeter`, or `undefined` when the field cannot
- * be trusted — mirrors `capOf`'s posture above. `typeof` is checked before
- * dividing: numeric coercion (`'0.2' / cap`, `null / cap === 0`) could turn
- * a wrong-typed value into a finite-looking quotient before a finiteness
- * check ever runs. The quotient is also checked, not just the raw value,
- * because a huge but finite `max_drawdown` can overflow when divided by the
- * fixed `DRAWDOWN_TOLERANCE` (e.g. `1e308 / 0.262` is `Infinity`).
- */
 function drawdownValueOf(metrics: MetricsSuiteWire): number | undefined {
   const value = metrics.max_drawdown;
   if (typeof value !== 'number') return undefined;
@@ -478,8 +361,6 @@ function drawdownValueOf(metrics: MetricsSuiteWire): number | undefined {
 }
 
 const DRAWDOWN_EMPTY_STATE: Readonly<Record<Exclude<DrawdownReason, 'drawn'>, string>> = {
-  // Never "no daily suite yet" — that would be an affirmative claim that
-  // nothing has run, made about a suite that did
   unreadable: 'daily suite drawdown figure could not be read — meter not drawable',
 };
 
@@ -509,7 +390,6 @@ function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire }) {
   );
 }
 
-// Follows the ARIA vertical-tablist keyboard pattern (arrows move, Home/End jump to ends)
 function tabForKey(key: string, current: Tab): Tab | null {
   const index = TABS.findIndex((entry) => entry.id === current);
   if (key === 'ArrowDown') return TABS[(index + 1) % TABS.length]?.id ?? null;
@@ -523,13 +403,7 @@ export function Rail(props: RailProps) {
   const { feed, tab, onTab, arm, onArm } = props;
   const { snapshot, status, lastSuccessAt } = feed;
   const mismatched = status === 'contract-mismatch';
-  // Read off `status`, not a separate `stale` boolean — the page-level gate
-  // owns the cold-start window, so there is only one reading left in here
   const stale = status === 'stale';
-  // The tile gate, not `mismatched` — `mismatched` only drives this state's
-  // own visual styling. `rendersHealthTiles` forces a typed decision for
-  // every `HEALTH` entry, so a state that shouldn't trust `snapshot` can't
-  // fall through to the healthy branch by default (see `MismatchBlock`)
   const renderHealthTiles = HEALTH[status].rendersHealthTiles;
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const next = tabForKey(event.key, tab);
@@ -618,9 +492,6 @@ export function Rail(props: RailProps) {
       <div className="rail-foot mono muted" data-field="snapshot-clock">
         <span>snapshot {formatClockUtc(snapshot.as_of)}</span>
         {lastSuccessAt !== null && (
-          // Not a duplicate of HealthBlock's visible "polled" note: this one
-          // renders in every health state, so it still reaches a screen reader
-          // once the visible note has switched to STALE's "last update" line
           <span className="visually-hidden">
             Last successful poll {formatClockUtc(lastSuccessAt)}
           </span>

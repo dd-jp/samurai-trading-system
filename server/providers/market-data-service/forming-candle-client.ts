@@ -1,19 +1,3 @@
-/**
- * Shared test fixture (issue #362 review). An `AlpacaMarketDataClient` whose `getBars`
- * genuinely tracks the requested `limit` — unlike this module's other test
- * doubles, which return a fixed array regardless of args. Generates exactly
- * `limit` sequential hourly candles ending at the CURRENT (forming) hour
- * relative to whatever `asOf` the call receives: the most recent one always
- * has `close_time > asOf`, so `completedBars` always drops exactly one of
- * them — the exact shape of the reported bug
- * (`sma(14) needs 14 bars but received 13`).
- *
- * Used by both `sources/sources.test.ts` (direct
- * `NormalizingDataSource.fetchBars` unit coverage) and
- * `ingestion-round-trip.test.ts` (the full `MarketDataServiceImpl` cold-start
- * regression, through a real empty store) — same generator, two different
- * assertions on top of it.
- */
 import type { AlpacaBar, AlpacaMarketDataClient } from './sources/alpaca-source.js';
 
 export function formingCandleClient(quoteAsOf: Date): AlpacaMarketDataClient {

@@ -1,10 +1,3 @@
-/**
- * Shared (cross-stage) — clock abstraction and domain types used by every
- * pipeline stage. See docs/coding-standards.md: cross-module imports go
- * through this barrel, not `shared/clock.js` / `shared/types.js` directly.
- * `shared/store/` has its own barrel (`shared/store/index.ts`) — persistence
- * helpers are not re-exported here.
- */
 
 export { BOOK_CURRENCY, isBookCurrency, isPenceCurrency } from './book-currency.js';
 export type { Clock } from './clock.js';
@@ -12,9 +5,6 @@ export { SimulatedClock, SystemClock } from './clock.js';
 export type { RiskLogStore, TraderLogStore } from './decision-records.js';
 export { digest } from './digest.js';
 export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-integer.js';
-// #568: the one fill-record arithmetic every exit-sizing and flatness
-// judgement runs — Trader, Execution and the residual sweep — so the three
-// can never disagree on what a lot still holds
 export { escalatesAt } from './escalation-cadence.js';
 export type { ExitFill, LotHeldQuantity } from './held-quantity.js';
 export {
@@ -44,22 +34,6 @@ export type { RetryAttemptReport, RetryConfig } from './http/retry.js';
 export { withRetry, worstCaseFetchMs } from './http/retry.js';
 export type { TokenBucketConfig } from './http/token-bucket.js';
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';
-// Only what has a real cross-module consumer: `DEFAULT_VENUE_PACING` for the
-// three broker adapters' constructor defaults, `resolveVenuePacing` +
-// `VenuePacingConfig` for the composition root, and `resolvePolygonPacing`
-// for `HttpPolygonClient` (#510/#520 — deliberately NOT folded into
-// `resolveVenuePacing`/`VENUE_KEYS`: see that function's doc for why a
-// Stage-2-only venue must not be validated by the live composition root)
-// `DEFAULT_POLYGON_PACING` joined the barrel in #562: the live orchestrator's
-// equities OHLCV fallback (orchestrator/production/data-failover.ts) resolves
-// `SAMURAI_PACING_POLYGON_*` at boot and falls back to this checked-in default
-// on a malformed override rather than refusing to boot — see that module's doc
-// for why that one variable is not worth failing a live start over
-// `VenueKey`, `VENUE_KEYS`, `VENUE_DOCUMENTED_CEILING_PER_SECOND`,
-// `POLYGON_DOCUMENTED_CEILING_PER_SECOND` and `venuePacingEnvVars` are
-// internal to `venue-pacing.ts` and its own test (or, for
-// `venuePacingEnvVars`, imported directly by `http-polygon-client.test.ts` —
-// see that barrel-exclusion note there), so they stay off this barrel
 export type { VenuePacingConfig } from './http/venue-pacing.js';
 export {
   DEFAULT_POLYGON_PACING,
@@ -71,9 +45,6 @@ export {
   resolveVenuePacing,
 } from './http/venue-pacing.js';
 export { NO_DATA_MARKER } from './no-data-marker.js';
-// #573: three consumers (orchestrator/tick-loop.ts, execution/ingest-fills.ts,
-// execution/reconcile.ts) need the identical "a log call inside a catch must
-// not itself throw" guarantee — see safe-log.ts's file doc
 export {
   describeThrown,
   describeThrownSafely,
@@ -83,11 +54,6 @@ export {
 export { maskAndCap, maskCredentials, sanitizeLogText } from './sanitize-log-text.js';
 export type { ContinueOnFaultEffects, ErrorStream, StdoutStream } from './stdout-fault-guard.js';
 export { guardedWrite, installContinueOnFault, watchStdoutErrors } from './stdout-fault-guard.js';
-// #638: the in-code clamp on the kill-line and breaker thresholds. Exported
-// from the shared barrel because the three paths that can put a threshold into
-// force — boot-time construction, the tuning store's write, and the Risk
-// Manager's live read — sit in three different packages and must consult ONE
-// bounds table, or the clamp drifts apart into three that disagree
 export {
   assertThresholdsWithinBounds,
   assertThresholdWithinBounds,

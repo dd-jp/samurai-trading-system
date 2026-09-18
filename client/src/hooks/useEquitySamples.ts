@@ -1,13 +1,3 @@
-/**
- * The equity-sampling rule (#1141, F7): dedupes an unchanged poll (same
- * `observed_at` AND same `equity`), refuses non-finite equity, skips when
- * the balance is absent, and caps the series at `MAX_EQUITY_SAMPLES` by
- * dropping from the front. Previously reachable only by rendering `<App/>`.
- *
- * Takes a non-null `WireSnapshot` (#1520): it runs below the root's
- * cold-start gate, so "no snapshot yet" is not a state it can observe. An
- * absent BALANCE still is — that is a field on a snapshot that did arrive.
- */
 import { useEffect, useState } from 'react';
 import type { WireSnapshot } from './useSnapshot.ts';
 

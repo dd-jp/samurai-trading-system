@@ -1,22 +1,3 @@
-/**
- * #745 — what the axis vote costs the debate prompt, and where its
- * interpretation bands are allowed to live.
- *
- * Two claims, both about the boundary between this layer and the debate:
- *
- * 1. **Zero LLM calls are recorded against the analyst layer** — asserted, not
- *    assumed. The 2026-08-16 amendment to `analysts-spec.md` ("Where the LLM
- *    belongs") makes the deterministic analyst the SPECIFIED end state, so a
- *    model arriving here later is a spec violation, not an upgrade.
- * 2. **Interpretation bands are computed in the analyst, never explained in
- *    the prompt.** `renderAnalystViews` wraps the analyst block in
- *    `wrapUntrusted`, so a decoder legend written into the prompt would be
- *    TRUSTED text explaining UNTRUSTED numbers — an injection lever aimed
- *    straight at the reading the model takes from them.
- *
- * Plus the measured token delta the ticket requires, taken through the REAL
- * persona prompt builder rather than a hand-assembled approximation.
- */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +32,6 @@ class ManualClock implements Clock {
   }
 }
 
-/** 60 bars of a mildly noisy uptrend — enough for every enrichment kind but MACD's converged warm-up */
 function bars(count = 60): Bar[] {
   const start = new Date('2026-07-14T00:00:00Z').getTime();
   return Array.from({ length: count }, (_, i) => {
@@ -97,7 +77,6 @@ async function runTechnical(): Promise<AnalystView> {
   });
 }
 
-/** The prompt one persona actually receives for `views`, built by the real persona code */
 async function promptFor(views: AnalystView[]): Promise<string> {
   const client = new MockLlmClient();
   client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'r' }));
@@ -105,21 +84,11 @@ async function promptFor(views: AnalystView[]): Promise<string> {
   return client.requests[0]?.prompt as string;
 }
 
-/**
- * The PRE-#745 technical block, rebuilt from the same run's own numbers.
- *
- * Rebuilt rather than measured against a checked-in string because the two
- * lines that did not change (the 1h context line, the MI line) must be
- * byte-identical for the delta to be attributable to the axis vote — taking
- * them from the same view guarantees that, where a literal would silently
- * measure fixture drift as well.
- */
 function previousShapeOf(view: AnalystView): AnalystView {
   const context = view.key_points.find((line) => line.startsWith('Context (1h):')) as string;
   const mi = view.key_points.find((line) => line.startsWith('MI context:')) as string;
   const momentum = view.key_points.find((line) => line.startsWith('Momentum (5m):')) as string;
   const trend = view.key_points.find((line) => line.startsWith('Trend (5m):')) as string;
-  // `Trend (5m): bullish — close 121.3 above SMA(14) 118.9` -> the two numbers
   const [, close, sma] = /close ([\d.-]+) \w+ SMA\(14\) ([\d.-]+)/.exec(trend) as RegExpExecArray;
   const [, rsi] = /RSI\(14\) ([\d.-]+)/.exec(momentum) as RegExpExecArray;
   return {
@@ -144,10 +113,6 @@ function findLlmImportOffenders(dir: string, sources: string[]): string[] {
 
 describe('the analyst layer makes no LLM call (#745)', () => {
   it('imports no LLM client, prompt builder or model config anywhere in pipeline/analysts', () => {
-    // A source scan, because the property is "there is no seam", and a
-    // behavioural test can only ever prove "the seam that exists was not used
-    // on this path". Non-test files only: a test may legitimately import the
-    // debate's persona code to measure a prompt, as this very file does
     const sources = readdirSync(HERE).filter(
       (name) => name.endsWith('.ts') && !name.endsWith('.test.ts'),
     );
@@ -170,24 +135,14 @@ describe('interpretation bands are computed in the analyst, not the prompt (#745
   it('puts every band inside the untrusted block, and no decoder legend outside it', async () => {
     const view = await runTechnical();
     const prompt = await promptFor([view]);
-    // BOTH trusted regions: the preamble before the wrapper, and everything
-    // after the closing tag. The mediator prompt already appends trusted text
-    // after a `wrapUntrusted` block ("Underlying analyst views:"), so the
-    // trailing region is a real shape in this codebase and is where a decoder
-    // legend would most naturally be appended
     const trusted =
       prompt.slice(0, prompt.indexOf(OPEN_TAG)) +
       prompt.slice(prompt.lastIndexOf(CLOSE_TAG) + CLOSE_TAG.length);
 
-    // Every axis line reaches the model INSIDE the wrapper
     for (const point of view.key_points) {
       expect(prompt.slice(prompt.indexOf(OPEN_TAG))).toContain(point);
     }
 
-    // And the trusted half explains none of it. If a future change adds "RSI
-    // above 70 means overbought" to the prompt preamble, the model is being
-    // told how to read numbers that an ingested headline can influence — the
-    // exact asymmetry #208's wrapper exists to prevent
     for (const legend of ['RSI', 'ADX', 'MACD', 'Donchian', 'squeeze', 'overbought', 'oversold']) {
       expect(trusted).not.toContain(legend);
     }
@@ -200,10 +155,6 @@ describe('the measured debate-input delta (#745)', () => {
     const before = await promptFor([previousShapeOf(view)]);
     const after = await promptFor([view]);
 
-    // Characters are what is actually measured; tokens are reported as
-    // chars/4, stated as the method rather than implied — there is no
-    // tokenizer in this repo (`shared/llm/pricing.ts` prices token counts the
-    // API reports back, it does not produce them)
     const chars = { before: before.length, after: after.length };
     const tokens = { before: Math.round(chars.before / 4), after: Math.round(chars.after / 4) };
     // eslint-disable-next-line no-console
@@ -215,10 +166,6 @@ describe('the measured debate-input delta (#745)', () => {
         `${view.key_points.join('\n').length} chars`,
     );
 
-    // Bounded rather than pinned to a literal: the assertion that matters is
-    // that the block stays the same ORDER of magnitude the ticket priced, so
-    // that a later change adding a paragraph per axis fails here instead of
-    // quietly repricing every debate round
     expect(chars.after).toBeGreaterThan(chars.before);
     expect(tokens.after - tokens.before).toBeLessThan(300);
   });

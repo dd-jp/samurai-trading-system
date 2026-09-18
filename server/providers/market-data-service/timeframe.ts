@@ -1,10 +1,3 @@
-/**
- * Timeframe parsing and close-time derivation (ticket #66).
- * See docs/specs/market-data-service-spec.md (Module: Point-in-Time
- * Enforcement): vendor sources timestamp candles at their *open*,
- * so ingestion — not the source — computes `close_time = open_time + timeframe`.
- * This module is the single place that conversion happens.
- */
 
 const UNIT_MS: Record<string, number> = {
   m: 60_000,
@@ -12,7 +5,6 @@ const UNIT_MS: Record<string, number> = {
   d: 86_400_000,
 };
 
-/** `'5m'` -> 300000. Throws on anything this service cannot key bars on. */
 export function timeframeToMs(timeframe: string): number {
   const match = /^(\d+)([mhd])$/.exec(timeframe);
   if (!match) {
@@ -29,15 +21,10 @@ export function timeframeToMs(timeframe: string): number {
   return count * UNIT_MS[unit!]!;
 }
 
-/** True for day-grained timeframes, whose bar covers an entire session */
 export function isDailyTimeframe(timeframe: string): boolean {
   return /^(\d+)d$/.test(timeframe);
 }
 
-/**
- * The point-in-time key. A candle for `[t, t+Δ)` becomes visible only at
- * `t+Δ`, which is what keeps the forming candle out of every read.
- */
 export function closeTimeOf(openTime: Date, timeframe: string): Date {
   return new Date(openTime.getTime() + timeframeToMs(timeframe));
 }

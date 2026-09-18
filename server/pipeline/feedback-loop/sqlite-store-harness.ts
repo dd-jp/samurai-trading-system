@@ -1,25 +1,3 @@
-/**
- * Test-only constructors over `SqliteTuningStore`/`SqliteClosedTradeStore`/
- * `SqliteAdjustmentLog` (#197) — what `daily-cycle.test.ts` and
- * `metrics.test.ts` build on in place of their former `InMemoryTuningStore`/
- * `InMemoryClosedTradeStore`/`InMemoryAdjustmentLog` fixtures, so the suites
- * exercise the real SQLite-backed stores rather than a Map's/array's
- * semantics. Mirrors `server/pipeline/execution/sqlite-store-harness.ts`'s role for the
- * Execution cutover (#195).
- *
- * Each helper opens its own fresh `:memory:` store, so a call here is as
- * isolated as the old `new InMemoryXStore(...)` it replaces — tests that
- * override one store with different seed data get an independent database,
- * not a shared one that would leak a harness's default seed into the
- * override.
- *
- * `seedClosedTrades` writes directly to `closed_trades` rather than going
- * through `SqliteClosedTradeStore` (which has no write method — see that
- * class's doc on why) or through Execution's `SqliteExecutionStore` (would
- * make the Feedback Loop's test suite depend on Execution's async port for
- * synchronous seed data). The INSERT mirrors
- * `SqliteExecutionStore.writeClosedTrade`'s column list exactly.
- */
 
 import type { ClosedTrade } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle, toStoredTimestamp } from '../../shared/store/index.js';

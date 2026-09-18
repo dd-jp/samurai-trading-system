@@ -1,14 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { guardedWrite, installContinueOnFault, watchStdoutErrors } from './stdout-fault-guard.js';
 
-/**
- * A stdout stand-in shaped like the real thing: `'error'` fires
- * asynchronously, through a registered listener, never as a synchronous
- * throw from `write`. This is deliberate — #714's (and this ticket's own,
- * reproduced against `console.log`) measurement is that a destroyed pipe
- * delivers the fault as an async event, and a test that only ever throws
- * synchronously from `write` would pass against a guard that does nothing.
- */
 class FakeStdout {
   private listener?: (error: Error) => void;
 
@@ -17,7 +9,6 @@ class FakeStdout {
     return this;
   }
 
-  /** Fires the async `'error'` event a real destroyed pipe delivers */
   emitError(error: Error): void {
     if (this.listener === undefined) {
       throw new Error('nothing subscribed to stdout errors');
@@ -33,9 +24,6 @@ describe('watchStdoutErrors', () => {
 
     watchStdoutErrors(stdout, (error) => faults.push(error));
 
-    // The mechanism under test: firing the ASYNC event, not calling write()
-    // and catching a throw. This is the distinction #714 measured — a
-    // try/catch around a write catches nothing on a real pipe
     expect(() => stdout.emitError(new Error('EPIPE'))).not.toThrow();
     expect(faults).toHaveLength(1);
     expect(faults[0]?.message).toBe('EPIPE');
@@ -93,10 +81,6 @@ describe('installContinueOnFault', () => {
   });
 
   it('never calls an exit effect — there is none to call', () => {
-    // There is no `exit` in ContinueOnFaultEffects at all: the type itself is
-    // the proof this handler cannot terminate the process, unlike
-    // `installFaultHandlers` in orchestrator/index.ts (#714), whose effects
-    // require one
     const handlers = new Map<string, (error: unknown) => void>();
     installContinueOnFault(() => 'fault', {
       stderr: { write: () => {} },

@@ -1,41 +1,3 @@
-/**
- * Where `SaxoHttpBrokerClient` gets its bearer, per request (#1523).
- *
- * Saxo's documented model for a direct retail client is: log in by hand ONCE
- * (`npm run saxo:login`, #1522), then keep the session alive by exchanging the
- * refresh token before its window closes. Certificate-based headless auth is
- * institutional-only. Every exchange ROTATES the refresh token — Saxo's
- * security page: *"this refresh token replaces and invalidates the previous
- * refresh token"* — so the saved file is not a cache, it is the session.
- *
- * ## What "persist before use" does and does not buy
- *
- * The new refresh token is written to disk BEFORE the access token that came
- * with it is adopted, so this process never trades on a token whose partner
- * was not saved. It narrows the crash window to the file write; it does not
- * close it. Saxo invalidates the old refresh token when the new one is
- * ISSUED, not when it is first used, so a crash between the gateway's reply
- * and the `rename` strands the session whatever the ordering — the recovery
- * for that is a new `npm run saxo:login`, which is why the lost state is
- * reported rather than retried away.
- *
- * ## Timing comes from the response, never from the docs
- *
- * `expires_in` measured 1200 s and `refresh_token_expires_in` 3600 s on live
- * (2026-09-14, #1523), against the documented example's 1200/2400. A
- * hard-coded 40-minute window would have been wrong in the direction that
- * loses the session, so every delay here is derived from the instants the
- * gateway actually returned.
- *
- * ## Paging the operator (#1524)
- *
- * `lose()` posts to `SaxoTokenRefresherDeps.sessionLostAlerts` when supplied,
- * in addition to the `saxo_session_lost` log line it always writes — see
- * `SaxoSessionLostAlertChannel`'s doc for why that call needs no throttle of
- * its own. The weekly re-login reminder Saxo also recommends is a separate,
- * self-scheduled concern with no per-request trigger to hang off
- * (`production/saxo-weekly-reminder-alert.ts`).
- */
 import type { Clock, Logger } from '../../../shared/index.js';
 import { fetchWithTimeout, maskCredentials, SystemClock } from '../../../shared/index.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
@@ -49,69 +11,29 @@ export type SaxoSessionState =
       status: 'active';
       accessTokenExpiresAt: string;
       refreshTokenExpiresAt: string;
-      /** Consecutive failed refresh attempts still inside the window; 0 when the last one succeeded */
       failedAttempts: number;
     }
-  /** A bearer that cannot be renewed — the operator-pasted `SAXO_*_ACCESS_TOKEN` */
   | { status: 'unrefreshable' }
   | { status: 'lost'; reason: string };
 
-/** Thrown by `getAccessToken()` once the session can no longer be renewed */
 export class SaxoSessionLostError extends Error {}
 
-/**
- * The operator escalation for a session going lost (#1524). Posted from
- * `lose()` — the one place a `SaxoTokenRefresher` instance can ever make this
- * transition, and it can make it at most once (every path back into `lose()`
- * is guarded by `this.lostReason !== undefined`) — so "one alert per lost
- * episode, not per failed request" falls out of that guard rather than
- * needing a throttle of its own. A NEW episode is a new instance: this
- * process only ever gets one by restarting after a fresh `npm run saxo:login`
- * (`buildSaxoTokenSource`, production/saxo-venue.ts), which is also the only
- * way `lostReason` is ever cleared.
- *
- * `reason` is always safe to page: every string `lose()` is called with is
- * either hand-composed (naming a path or an instant, never a body) or has
- * already been through `maskCredentials`/`redactSession` — see the call
- * sites below.
- */
 export interface SaxoSessionLostAlert {
   environment: SaxoTradingEnvironment;
   reason: string;
   reported_at: Date;
 }
 
-/**
- * Declared beside `SaxoSessionLostAlert`, like `TickSkipAlertChannel` beside
- * `TickSkipAlert` (production/tick-skip-alert.ts). The alert catalogue's
- * `saxoSessionLostAlerts` entry (alert-catalogue.ts) implements it; `void`,
- * not `Promise<void>` — `lose()` is called from synchronous code
- * (`load()`'s guards) and cannot await a page without becoming async itself.
- */
 export interface SaxoSessionLostAlertChannel {
   postSaxoSessionLostAlert(alert: SaxoSessionLostAlert): void;
 }
 
 export interface SaxoTokenSource {
-  /** The bearer to send on the NEXT request. Never memoised by the caller. */
   getAccessToken(): Promise<string>;
   sessionState(): SaxoSessionState;
-  /**
-   * Releases any scheduled work and RESOLVES ONLY once a rotation already in
-   * flight has finished writing. Async because of that join: Saxo invalidated
-   * the previous refresh token when it issued the one in flight, so a process
-   * that exits between receipt and `rename` strands the session and costs the
-   * operator a manual `npm run saxo:login`. Idempotent.
-   */
   stop(): Promise<void>;
 }
 
-/**
- * The pre-#1523 behaviour, kept for the operator who pasted a developer-portal
- * token into `SAXO_SIM_ACCESS_TOKEN` and never ran `npm run saxo:login`: one
- * string, no renewal, and a state that says so out loud rather than reporting
- * a healthy session that will 401 within the day
- */
 export class StaticSaxoTokenSource implements SaxoTokenSource {
   constructor(private readonly token: string) {}
 
@@ -124,7 +46,6 @@ export class StaticSaxoTokenSource implements SaxoTokenSource {
   }
 
   async stop(): Promise<void> {
-    // Nothing is scheduled: there is nothing to renew
   }
 }
 
@@ -133,10 +54,6 @@ export interface SaxoRefreshTimers {
   clear(handle: unknown): void;
 }
 
-/**
- * `unref()` so a scheduled refresh never by itself keeps the process alive —
- * the orchestrator's shutdown, not this timer, decides when the run ends
- */
 const DEFAULT_TIMERS: SaxoRefreshTimers = {
   set: (callback, delayMs) => setTimeout(callback, delayMs).unref(),
   clear: (handle) => {
@@ -145,7 +62,6 @@ const DEFAULT_TIMERS: SaxoRefreshTimers = {
 };
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-/** Refresh this far ahead of the access token's expiry, or a quarter of its remaining life if that is shorter */
 const MAX_LEAD_MS = 60_000;
 const LEAD_FRACTION = 0.25;
 const DEFAULT_BACKOFF = { baseMs: 5_000, maxMs: 120_000 } as const;
@@ -153,16 +69,13 @@ const DEFAULT_BACKOFF = { baseMs: 5_000, maxMs: 120_000 } as const;
 export interface SaxoTokenRefresherDeps {
   environment: SaxoTradingEnvironment;
   config: Pick<SaxoOAuthConfig, 'tokenUrl' | 'appKey' | 'appSecret'>;
-  /** The saved session (`tokenFilePath(environment)` in production). Read lazily, never at construction. */
   tokenPath: string;
   logger: Logger;
   clock?: Clock;
   fetchImpl?: FetchLike;
   timers?: SaxoRefreshTimers;
-  /** Overridden only to inject a failure at the persistence step; see `runRefresh` */
   writeRecord?: (path: string, record: SaxoTokenFileRecord) => void;
   backoff?: { baseMs: number; maxMs: number };
-  /** Where a lost session is escalated (#1524); absent means the loss is logged only — see `lose()` */
   sessionLostAlerts?: SaxoSessionLostAlertChannel;
 }
 
@@ -190,22 +103,11 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     this.backoff = deps.backoff ?? DEFAULT_BACKOFF;
   }
 
-  /**
-   * Primes the session from disk and arms the schedule, returning the state
-   * for the caller to report, so a boot with no usable session says so at
-   * startup rather than on the first order. Called by `buildSaxoTokenSource`.
-   */
   start(): SaxoSessionState {
     this.load();
     return this.sessionState();
   }
 
-  /**
-   * The "session is lost" refusal shared by both checks in `getAccessToken`
-   * (pre- and post-refresh) — pulled out purely to remove the duplicated
-   * `if` from the cyclomatic-complexity count; the throw fires immediately
-   * at whichever call site invokes it, so extraction changes no ordering
-   */
   private assertSessionUsable(
     record: SaxoTokenFileRecord | undefined,
   ): asserts record is SaxoTokenFileRecord {
@@ -218,9 +120,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
 
   async getAccessToken(): Promise<string> {
     this.load();
-    // A rotation already in flight owns the file; awaiting it means this
-    // caller leaves with the token that was actually persisted, never a
-    // superseded one. It never rejects — every outcome lands in state.
     await this.inFlight;
     const record = this.record;
     this.assertSessionUsable(record);
@@ -228,11 +127,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       await this.refreshNow();
       const renewed = this.record;
       this.assertSessionUsable(renewed);
-      // `runRefresh` returns without renewing anything once `stop()` has run,
-      // so the record can still be the expired one. Refusing is the only safe
-      // answer: an expired bearer buys a 401, which is deliberately NOT
-      // retryable, and a shutdown drain would read that as a venue failure
-      // instead of as the session having ended
       if (Date.parse(renewed.accessTokenExpiresAt) <= this.clock.now().getTime()) {
         throw new SaxoSessionLostError(
           `Saxo ${this.deps.environment} access token expired at ${renewed.accessTokenExpiresAt} and could not be renewed${this.stopped ? ' — the refresher was stopped' : ''}.`,
@@ -261,7 +155,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     await this.whenIdle();
   }
 
-  /** Resolves once any in-flight rotation has finished — the join point for a caller that must not race one */
   async whenIdle(): Promise<void> {
     await this.inFlight;
   }
@@ -299,11 +192,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     this.schedule();
   }
 
-  /**
-   * Both bounds come from the gateway's own reply. The access token's expiry
-   * sets the cadence; the refresh token's caps it, so a schedule can never be
-   * armed past the window that makes refreshing possible at all.
-   */
   private schedule(): void {
     const record = this.record;
     if (record === undefined || this.stopped) return;
@@ -345,23 +233,11 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       ...response,
       environment: this.deps.environment,
       obtainedAt: now.toISOString(),
-      // Carried forward, not restamped (#1524): a silent rotation is not a
-      // manual login, and `loggedInAt` answers "when did an operator last run
-      // `npm run saxo:login`", not "when did this process last renew its bearer"
-      // — see `SaxoTokenFileRecord.loggedInAt`
       ...(record.loggedInAt === undefined ? {} : { loggedInAt: record.loggedInAt }),
     };
     try {
-      // PERSIST BEFORE USE. `this.record` is swapped only after the write
-      // returns, so no request can ever go out on an access token whose
-      // rotated refresh token is not on disk
       this.writeRecord(this.deps.tokenPath, next);
     } catch (cause) {
-      // The gateway has already invalidated `record.refreshToken` by issuing
-      // the one that could not be saved, so the retry below will almost
-      // certainly be rejected and end in `lost`. That is the honest outcome:
-      // the session needs a new login, and pretending otherwise would mean
-      // running on an access token nothing can renew
       this.onFailure('saxo_token_persist_failed', cause);
       return;
     }
@@ -388,9 +264,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     const detail = this.redactSession(
       cause instanceof Error ? maskCredentials(cause.message) : String(cause),
     );
-    // A 4xx is the gateway saying this refresh token is not one it will
-    // honour. Retrying cannot change that answer, and each attempt is another
-    // request against the account's limit
     if (status !== undefined && status >= 400 && status < 500) {
       this.lose(`the refresh token was rejected (HTTP ${status})`);
       return;
@@ -430,13 +303,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     }, delay);
   }
 
-  /**
-   * `maskCredentials` keys on a name beside the value (`"token": "..."`), and
-   * a token-endpoint error body can quote the bare secret with no name at all
-   * — measured against a fixture that echoes the refresh token back in a 500
-   * body. This process knows exactly which strings are its own session's, so
-   * it removes those by value before anything is logged.
-   */
   private redactSession(text: string): string {
     const record = this.record;
     if (record === undefined) return text;
@@ -456,10 +322,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       message: `Saxo ${this.deps.environment} session is lost: ${reason}`,
       payload: { environment: this.deps.environment, reason },
     });
-    // Every path into `lose()` is guarded by `this.lostReason !== undefined`
-    // (`load()` runs once; `runRefresh()` returns immediately once lost), so
-    // this line runs at most once per instance — the "one alert per lost
-    // episode" property lives in that guard, not here
     this.deps.sessionLostAlerts?.postSaxoSessionLostAlert({
       environment: this.deps.environment,
       reason,

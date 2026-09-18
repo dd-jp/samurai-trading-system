@@ -1,22 +1,3 @@
-/**
- * Real `SaxoOpenApiClient` over `fetch` (#1032 item 1) — the Saxo counterpart
- * of `alpaca-http-client.ts`: same `withRetry` + `fetchWithTimeout` transport,
- * same validate-at-the-boundary posture, same env-sourced credential rule.
- *
- * Authentication is an OAuth bearer read from a `SaxoTokenSource` **per
- * request** (#1523), not captured once at construction: the access token
- * lasts 1200 s and the refresher rotates it underneath, so a client that held
- * a string would 401 twenty minutes into any run. Obtaining and renewing the
- * token is still not this client's job — it asks for the current one and
- * sends it. A session that can no longer be renewed surfaces as
- * `SaxoSessionLostError` from the token source rather than as a 401 here.
- * `SAXO_SIM_ACCESS_TOKEN`/`SAXO_LIVE_ACCESS_TOKEN` remain the fallback for an
- * operator-pasted developer-portal token, wrapped in a `StaticSaxoTokenSource`.
- * The token is never logged or embedded in an error message.
- *
- * `AccountKey`/`ClientKey` are resolved once from `/port/v1/accounts/me` and
- * memoised, so the adapter never holds an account identifier.
- */
 import type { Logger, RetryConfig } from '../../../shared/index.js';
 import {
   DEFAULT_VENUE_PACING,
@@ -53,60 +34,17 @@ export { SAXO_CREDENTIAL_ENV_VARS, type SaxoTradingEnvironment };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
-/** Saxo pages with `$top`; 500 is well above any single-account working set */
 const PAGE_SIZE = 500;
 
 export interface SaxoHttpBrokerClientOptions {
-  /**
-   * Where the bearer for the NEXT request comes from (#1523). The composition
-   * root passes the refresher (`buildSaxoTokenSource`, saxo-venue.ts); omitted,
-   * `accessToken`/the environment variable is wrapped in a
-   * `StaticSaxoTokenSource`, which is the pre-#1523 behaviour and cannot be
-   * renewed.
-   */
   tokenSource?: SaxoTokenSource;
-  /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].token`. Never logged. Ignored when `tokenSource` is given. */
   accessToken?: string;
   environment?: SaxoTradingEnvironment;
-  /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].gateway`, then `SAXO_GATEWAY_URLS[environment]` */
   baseUrl?: string;
-  /** Pins the account when the client holds more than one; otherwise the sole account is used */
   accountKey?: string;
   timeoutMs?: number;
   retry?: RetryConfig;
-  /**
-   * Paces every upstream HTTP request this client issues, one token per
-   * `fetchWithTimeout` call (#1222 — a public operation like `submitBracket`
-   * or `cancel` can fan out to several, so pacing lives at the transport
-   * boundary rather than the caller). Defaults to `DEFAULT_VENUE_PACING.saxo`.
-   *
-   * Since #1419, each call site spends one of two lanes on this same bucket
-   * (`SaxoRequestPriority`): `placeOrder`/`cancelOrder` go through
-   * `acquire()`, everything else — polling, pagination, reference-data
-   * reads — through `acquireBackground()`, so `DEFAULT_VENUE_PACING.saxo`'s
-   * `reserveForPriority` protects a pending placement/cancel from a
-   * draining read sweep. The one-time account-identity lookup
-   * (`resolveIdentity()`) always spends `acquire()` too, REGARDLESS of
-   * which caller triggers it — see that method's own doc for why a
-   * background-triggered identity fetch would otherwise reopen this same
-   * stall one layer removed.
-   */
   rateLimiter?: TokenBucket;
-  /**
-   * REQUIRED, no default (#1222 round 2): wires `TokenBucketTelemetry`
-   * (#1083) onto the DEFAULT bucket — the fallback for a caller that
-   * constructs this client standalone with no `rateLimiter` (the
-   * composition root builds its own shared bucket with telemetry the same way
-   * `production.ts` does for Alpaca and passes it as `rateLimiter` — see
-   * `buildSaxoRateLimiter` (saxo-venue.ts, #1400) — so this option never
-   * reaches that path). Made
-   * unconditional rather than optional: the pre-#1222 `SaxoBrokerAdapter`
-   * always built its default bucket with telemetry, because its own
-   * `logger` was required — an omitted seam at a composition root is this
-   * repo's dominant defect class (`AlpacaBrokerAdapterInput.logger` refuses
-   * a silent default for the identical reason), and pacing moving to this
-   * client should not weaken that guarantee.
-   */
   logger: Logger;
 }
 
@@ -115,35 +53,8 @@ interface AccountIdentity {
   clientKey: string;
 }
 
-/**
- * `RequestInit` with `method` narrowed from optional `string` to a required
- * `SaxoHttpMethod` (#1223) — every call into `request()` must state its verb
- * explicitly. That verb is what decides retryability for every classified
- * failure shape this client can throw: a status-less transport failure
- * (`classifySaxoBrokerNetworkError`, #1223) and, since #1273, a timeout,
- * rate-limit or 5xx response (`classifySaxoBrokerResponse`) too — both read
- * it back out of `init.method`. This is what stops a new operation from
- * silently inheriting `fetch`'s implicit "no method means GET" default and
- * picking up retries it never asked for.
- */
 type SaxoRequestInit = Omit<RequestInit, 'method'> & { method: SaxoHttpMethod };
 
-/**
- * Which `TokenBucket` lane a request spends (#1419). `'priority'` is for
- * anything that arms or removes a protective leg or flattens a position —
- * `placeOrder`/`cancelOrder`. Everything else (position/order/activity
- * polling, pagination, reference-data reads) is `'background'`, so a
- * multi-page sweep can drain down to `DEFAULT_VENUE_PACING.saxo`'s reserve
- * without delaying a pending placement/cancel. The account-identity lookup
- * (`resolveIdentity()`) is NOT classified by its caller's own lane — it
- * hard-codes `'priority'` regardless, because `this.identity` memoises a
- * shared PROMISE rather than a per-call lane: whichever caller runs first
- * is the one whose request actually goes over the wire, and every later
- * caller (on either lane) just awaits it. If a background reader were
- * allowed to create that promise on the background lane, a concurrent
- * priority caller sharing this client would be waiting on a promise gated
- * by the background reserve threshold instead of the priority one.
- */
 type SaxoRequestPriority = 'priority' | 'background';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -299,18 +210,6 @@ function validateNetPosition(raw: unknown, context: string): SaxoNetPosition {
   };
 }
 
-/**
- * A missing or non-positive `PriceToContractFactor` fails here rather than
- * defaulting to 1: the whole point of reading this endpoint is that the unit
- * must not be guessed (#1302), and a line whose unit the venue will not state
- * is a line this adapter must refuse to price.
- *
- * The returned `Uic`/`AssetType` are checked against the pair the path asked
- * for. This endpoint is the sole authority on the unit and the response is
- * the only place a mismatch can surface: a body describing a DIFFERENT
- * instrument would hand the resolver a factor for the wrong line, which is
- * the same 100x error read from a different direction.
- */
 function validateInstrumentDetails(
   body: unknown,
   context: string,
@@ -340,10 +239,6 @@ function validateInstrumentDetails(
   };
 }
 
-/**
- * `/port/v1/balances/me` answers a single object, not a `{Data: [...]}`
- * envelope, so this does not go through `readData`/`listAll`
- */
 function validateBalance(body: unknown, context: string): SaxoAccountBalance {
   if (!isRecord(body)) failValidation(context, 'expected an object', body);
   const Currency = requireString(body, 'Currency', context);
@@ -431,11 +326,6 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       });
   }
 
-  /**
-   * Asks the token source on every attempt, not once per client and not once
-   * per operation: a rotation that lands between a failed attempt and its
-   * retry is picked up by the retry (#1523)
-   */
   private async headers(
     init: RequestInit,
     extra: Record<string, string> = {},
@@ -460,9 +350,6 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   ): Promise<T> {
     return withRetry<T>(
       async () => {
-        // One token per attempt (#1222): a retried request is a second
-        // upstream call and must be paced as one, not covered by the first
-        // attempt's token
         if (priority === 'priority') {
           await this.rateLimiter.acquire();
         } else {
@@ -492,7 +379,6 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
             }`,
           );
         }
-        // A 2xx with an empty body is a legitimate cancel/placement ack shape
         if (text.length === 0) return validate(undefined, context);
         let parsed: unknown;
         try {
@@ -511,24 +397,6 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     );
   }
 
-  /**
-   * ALWAYS priority, regardless of which caller triggers it (#1419 round 2).
-   * `this.identity` memoises the PROMISE, not a per-call lane — whichever
-   * caller runs first (`placeOrder`/`cancelOrder`, or a background reader
-   * like `listOrderActivities`) is the one whose request actually goes over
-   * the wire, and every later caller just awaits that same promise. If that
-   * first request spent the background lane (because a background reader
-   * happened to race ahead — real in this repo: `placeIdempotently` awaits
-   * `lookup()`, which can itself resolve identity via `listOrderActivities`,
-   * before ever calling `placeOrder`), a concurrent write elsewhere sharing
-   * this client would be waiting on a promise gated by the BACKGROUND
-   * reserve threshold, not the priority one — exactly the stall #1419
-   * exists to prevent, one layer removed. Since this is a one-shot,
-   * per-client bootstrap (cheap: `needed` is 1 on the priority lane, not
-   * `1 + reserveForPriority`), there is no reason to ever let it draw from
-   * the background lane, and the identity-gates-every-write property only
-   * holds if it doesn't.
-   */
   private resolveIdentity(): Promise<AccountIdentity> {
     this.identity ??= this.request(
       '/port/v1/accounts/me',
@@ -563,13 +431,11 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
         priority,
       );
       rows.push(...page.rows);
-      // `__next` is absolute on the gateway; strip the base so `request` re-prefixes it
       path = page.next?.startsWith(this.baseUrl) ? page.next.slice(this.baseUrl.length) : page.next;
     }
     return rows;
   }
 
-  /** Unauthenticated by account: reference data, no `AccountKey` in the path or query */
   async getInstrumentDetails(
     uic: number,
     assetType: SaxoAssetType,
@@ -585,24 +451,6 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     );
   }
 
-  /**
-   * Single attempt, no transport retry: Saxo's duplicate guard only covers a
-   * 15 s window (doc 43), so a retried POST after a slow reply can place a
-   * second order. Recovery is the adapter's adopt-or-place lookup instead.
-   *
-   * Since #1273, `isRetryableSaxoBrokerError` (via `isRetrySafeMethod`)
-   * already refuses retry for every error shape `request()` can throw on a
-   * POST: a status-less transport failure (`retryableTransportFailure` is
-   * `method === 'GET'`), a timeout, a rate-limit, and a 5xx response (all
-   * three gated by the same POST-excluding allowlist), plus the unclassified
-   * body-read/parse failures below, which were never retryable regardless of
-   * verb. So `maxAttempts: 1` here no longer carries the guarantee — the
-   * classifier does, on its own, verb by verb. It stays as defense in depth:
-   * a future error shape that skips classification, or a classifier edit
-   * that stops consulting `method`, would silently re-open retry on
-   * placement without it. Do not remove it on the strength of the
-   * classifier alone.
-   */
   async placeOrder(request: SaxoOrderRequest, requestId: string): Promise<SaxoOrderPlacement> {
     const { accountKey } = await this.resolveIdentity();
     return this.request(
@@ -651,20 +499,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     );
   }
 
-  /**
-   * The GBP-native funding read (#1509). No `AccountKey` in the path: `/me`
-   * resolves to the token's own account, the same one `resolveIdentity`
-   * pins, so this cannot drift onto a different account than orders go to.
-   */
   async getBalances(): Promise<SaxoAccountBalance> {
     return this.request(
       '/port/v1/balances/me',
       { method: 'GET' },
       'getBalances',
       validateBalance,
-      // A once-per-boot funding read, not an order path: the priority lane
-      // (#1419) exists for `placeOrder`/`cancelOrder` and the identity call
-      // they depend on, which must not queue behind a portfolio sweep
       'background',
     );
   }

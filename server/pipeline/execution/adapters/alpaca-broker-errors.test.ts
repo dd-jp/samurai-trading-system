@@ -40,8 +40,6 @@ describe('isRetryableAlpacaBrokerError', () => {
   });
 
   it('does not retry a status above the valid HTTP range (#1172)', () => {
-    // 599 is the top of the valid 5xx range; 600 cannot be a real HTTP status —
-    // a hostile/broken upstream, not a transient server error to retry against
     expect(
       isRetryableAlpacaBrokerError(
         new AlpacaBrokerProviderError('p', 599, undefined, undefined, 'GET'),
@@ -59,18 +57,8 @@ describe('isRetryableAlpacaBrokerError', () => {
     expect(isRetryableAlpacaBrokerError(undefined)).toBe(false);
   });
 
-  // #1275 review item 1: `isRetrySafeMethod` reducing to
-  // `method !== 'POST'` passed all 165 tests across the three Alpaca files
-  // (confirmed by mutation) — every verb this suite exercised (GET/DELETE
-  // retry-safe, POST not) reads the same under both forms. What that mutant
-  // actually admits is `undefined`, `PUT` and `PATCH`, which nothing here
-  // pinned. These two close it.
   describe('the allowlist fails closed on verbs it does not name (#1275 review item 1)', () => {
     it('a 5xx ProviderError with no verb recorded is NOT retryable (fail-closed on absent verb)', () => {
-      // `method` is optional only on ProviderError — this is the shape a
-      // status-less network error, a JSON-parse failure, or `failValidation`
-      // construct, but WITH a `status` attached so the method gate is
-      // isolated: `isServerErrorStatus` alone would say true here
       expect(isRetryableAlpacaBrokerError(new AlpacaBrokerProviderError('p', 503))).toBe(false);
     });
 
@@ -87,16 +75,8 @@ describe('isRetryableAlpacaBrokerError', () => {
     });
   });
 
-  // #1275: timeout, rate-limit and 5xx retryability now carries the request's
-  // verb instead of firing unconditionally — this is the gap #1273 closed for
-  // Saxo and deliberately left open here, until now
   describe('timeout/rate-limit/5xx retryability is verb-aware (#1275)', () => {
     describe('a fetchWithTimeout deadline abort (classifyAlpacaBrokerNetworkError)', () => {
-      // This is the money-safety guarantee: a blind retry of a placement
-      // whose response was lost can produce a second live order. This must
-      // stay false independent of `submitOrder`'s own `maxAttempts: 1`
-      // override, and independent of whether Alpaca actually 422s a
-      // duplicate `client_order_id` — that has not been probed
       it('a POST timeout is NEVER classified retryable', () => {
         const abortError = new DOMException('The operation was aborted', 'TimeoutError');
         const error = classifyAlpacaBrokerNetworkError(abortError, 'submitOrder', 'POST');
@@ -127,14 +107,6 @@ describe('isRetryableAlpacaBrokerError', () => {
         expect(isRetryableAlpacaBrokerError(error)).toBe(false);
       });
 
-      // Acceptance criterion, verbatim: a placement POST timeout must produce
-      // exactly one fetch attempt through the real retry loop — not "the
-      // classifier says false" one step removed from it. Driven through the
-      // real `withRetry` (no fake timers needed: baseDelayMs 0 means a
-      // mutated, retrying run also completes immediately, so this fails on
-      // call count rather than hanging). `submitOrder`'s own `maxAttempts: 1`
-      // override is deliberately NOT part of this config — this test proves
-      // the classifier alone stops the retry, independent of that override
       it('a placement POST timeout produces exactly one fetch attempt through withRetry', async () => {
         const fetchLike = vi.fn().mockImplementation(() => {
           throw classifyAlpacaBrokerNetworkError(

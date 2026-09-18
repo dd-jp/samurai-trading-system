@@ -1,9 +1,3 @@
-/**
- * JSON-line logger: writes to stdout and an optional durable file sink.
- *
- * Sink failure (#714): a failing sink reports on the other sink then is
- * abandoned; when neither sink can take a line, `log` writes stderr and throws.
- */
 import type { LogEntry, LogEventCode } from '../../shared/index.js';
 import { maskCredentials } from '../../shared/index.js';
 import { redactPayload } from './redact-payload.js';
@@ -14,35 +8,20 @@ import {
 } from './rotating-file-sink.js';
 import type { Logger } from './types.js';
 
-/**
- * Byte sink a `JsonLogger` writes formatted lines to. `degraded` matters: a
- * successful `write()` doesn't prove durability once a sink has retired.
- */
 export interface LogLineSink {
   write(line: string): void;
-  /** True once this sink has retired and its `write` is a silent no-op */
   readonly degraded?: boolean;
 }
 
-/**
- * Parts of `process.stdout` this module uses. Injectable so
- * `watchStdoutErrors`'s `'error'` subscription is testable without the real stream.
- */
 export interface StdoutStream {
   write(line: string): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
-/** Last-resort stream, used only when neither sink can take a line */
 export interface ErrorStream {
   write(line: string): unknown;
 }
 
-/**
- * Redacts a payload and serializes it; cannot throw (#1035) — a redaction
- * failure degrades to `{ redaction_failed: true }` instead of destroying the
- * last-resort write on `log`'s no-sink path
- */
 function redactedPayloadJson(payload: unknown): string | undefined {
   if (payload === undefined) return undefined;
   try {
@@ -53,13 +32,6 @@ function redactedPayloadJson(payload: unknown): string | undefined {
   }
 }
 
-/**
- * Wire format for a log line, also used for the sink-failure warn line.
- *
- * `payload` is redacted centrally (#1035) and `message` is masked (#1133) here
- * rather than at call sites. Built field-by-field so `redactedPayloadJson`'s
- * already-serialized string can be spliced in raw instead of re-serialized (#1061).
- */
 export function formatLogLine(entry: LogEntry): string {
   const payloadJson = redactedPayloadJson(entry.payload);
 
@@ -82,10 +54,6 @@ export function formatLogLine(entry: LogEntry): string {
   return `{${segments.join(',')}}\n`;
 }
 
-/**
- * A degradation notice in the same wire format as `formatLogLine`, built
- * directly so the redaction walker is bypassed on this failure path
- */
 function degradationLine(
   event: LogEventCode,
   message: string,
@@ -104,7 +72,6 @@ function degradationLine(
   })}\n`;
 }
 
-/** Reports a file-sink failure on the one stream that may still work */
 function warnOnStdout(message: string, stdout: StdoutStream = process.stdout): void {
   stdout.write(degradationLine('log_file_sink_degraded', message, { log_file_sink: 'degraded' }));
 }
@@ -113,12 +80,6 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * Whether `debug` lines are written (`SAMURAI_LOG_LEVEL`, default `info`).
- *
- * Only `debug` is filterable — not a full level ladder — because `warn`/`error`
- * carry the #714 sink-degradation notices that must never be suppressible.
- */
 export function debugEnabledFromEnvironment(
   value: string | undefined = process.env.SAMURAI_LOG_LEVEL,
 ): boolean {
@@ -134,20 +95,10 @@ export class JsonLogger implements Logger {
     private readonly fileSink?: LogLineSink,
     private readonly stdout: StdoutStream = process.stdout,
     private readonly stderr: ErrorStream = process.stderr,
-    /**
-     * Constructor argument, not an environment read, so the dozen `new
-     * JsonLogger()` test call sites don't inherit an ambient setting
-     */
     private readonly debugEnabled = false,
   ) {}
 
-  /**
-   * Writes one line to every sink that still works; throws only when none can
-   * record it (#714). The throw is not assumed fatal — see `watchStdoutErrors`.
-   */
   log(entry: LogEntry): void {
-    // Checked before the sinks: a suppressed debug line must not fall through
-    // to the no-sink throw below on an otherwise healthy run
     if (entry.level === 'debug' && !this.debugEnabled) return;
 
     const line = formatLogLine(entry);
@@ -155,8 +106,6 @@ export class JsonLogger implements Logger {
     const reachedFile = this.writeToFileSink(line);
     if (reachedStdout || reachedFile) return;
 
-    // Not swallowed: a run that can't record what it did with real money
-    // must not carry on unremarked (#714)
     this.reportNoSink();
     this.lastResort(line);
     throw new Error(
@@ -166,20 +115,12 @@ export class JsonLogger implements Logger {
     );
   }
 
-  /**
-   * Writes to stdout, degrading rather than throwing when the degradation can
-   * be recorded durably. Covers only synchronous stdio failure; a broken pipe
-   * is async and is handled by `watchStdoutErrors` instead (measured: zero
-   * synchronous throws on a destroyed pipe).
-   */
   private writeToStdout(line: string): boolean {
     if (this.stdoutDegraded) return false;
     try {
       this.stdout.write(line);
       return true;
     } catch (error) {
-      // Rethrow when nothing durable can hold the report — same last-resort
-      // trace as `log`'s own escalation
       if (!this.degradeStdout(error)) {
         this.reportNoSink();
         this.lastResort(line);
@@ -189,11 +130,6 @@ export class JsonLogger implements Logger {
     }
   }
 
-  /**
-   * Retires stdout for the process, recording why on the file sink first.
-   * Returns whether that record is durable. Idempotent: a dead pipe emits an
-   * `'error'` per write, and only the first should produce a record.
-   */
   degradeStdout(error: unknown): boolean {
     if (this.stdoutDegraded) return true;
     const recorded = this.recordDurably(
@@ -210,7 +146,6 @@ export class JsonLogger implements Logger {
     return true;
   }
 
-  /** Reports sink exhaustion on stderr once per process, not once per line */
   private reportNoSink(): void {
     if (this.noSinkReported) return;
     this.noSinkReported = true;
@@ -225,43 +160,26 @@ export class JsonLogger implements Logger {
     );
   }
 
-  /**
-   * Writes to stderr, ignoring any failure — this is already the
-   * both-sinks-gone path and the caller throws regardless
-   */
   private lastResort(line: string): void {
     try {
       this.stderr.write(line);
     } catch {
-      /* nothing left to try */
     }
   }
 
-  /** Whether stdout has been retired (#714) */
   get stdoutRetired(): boolean {
     return this.stdoutDegraded;
   }
 
-  /**
-   * Writes one line to the file sink, reporting failure once on stdout, then
-   * abandoning the sink. The warn bypasses `this.log` to avoid re-entering the
-   * failing sink's path.
-   */
   private writeToFileSink(line: string): boolean {
     return this.recordDurably(line, (message) => {
       try {
         warnOnStdout(message, this.stdout);
       } catch {
-        // both destinations are broken; `log` sees `false` from both writes and throws
       }
     });
   }
 
-  /**
-   * The single "did this land somewhere durable" check. `degraded` is checked
-   * after a successful write too, since `RotatingFileSink.write` never throws
-   * once retired — it would otherwise report every later write as durable.
-   */
   private recordDurably(line: string, onFailure?: (message: string) => void): boolean {
     if (this.fileSink === undefined || this.fileSinkFailed) return false;
     try {
@@ -278,15 +196,8 @@ export class JsonLogger implements Logger {
   }
 }
 
-/**
- * Subscribes to stdout's `'error'` event so an async write failure (a broken
- * pipe, which never reaches `writeToStdout`'s synchronous catch) degrades the
- * logger instead of raising an uncaught EPIPE
- */
 export function watchStdoutErrors(logger: JsonLogger, stdout: StdoutStream = process.stdout): void {
   stdout.on('error', (error: Error) => {
-    // No durable sink left to record on: throw so it reaches
-    // `uncaughtException`, the only case a logging fault may end the run
     if (!logger.degradeStdout(error)) {
       throw new Error(
         `structured log stdout sink failed (${describe(error)}) and the failure could not be ` +
@@ -296,14 +207,6 @@ export function watchStdoutErrors(logger: JsonLogger, stdout: StdoutStream = pro
   });
 }
 
-/**
- * The logger the shipped entrypoint runs on: stdout plus a rotating file
- * (`SAMURAI_LOG_FILE`/`SAMURAI_LOG_MAX_BYTES`/`SAMURAI_LOG_MAX_FILES`).
- *
- * The stdout `'error'` subscription is attached here, not in the constructor,
- * so the dozen test call sites for `new JsonLogger()` don't subscribe to the
- * real process stream.
- */
 export function buildEntrypointLogger(
   config?: FileSinkConfig,
   stdout: StdoutStream = process.stdout,

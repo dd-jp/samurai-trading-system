@@ -1,57 +1,7 @@
-/**
- * The adapters' durable state seam (#287, closing #294/#295) over
- * `broker_brackets` (migration 0007) and `broker_unpriced_fills` (0008).
- *
- * Every live adapter keeps a working set in memory (alpaca-crypto-emulation's
- * bracket Map, alpaca-adapter's and saxo-adapter's parent-order-id indexes)
- * and writes through to this store so a restart can rebuild it. The Maps are
- * not replaced by the store: alpaca-crypto-emulation's exactly-once sibling
- * cancel depends on claiming a phase transition with no `await` in between,
- * so the hot path has to stay in-process.
- *
- * SYNCHRONOUS ON PURPOSE, and this is the load-bearing design decision of the
- * whole ticket. Every method here is called from inside one of those
- * synchronous claims (`advanceEntry`, `advanceExits` in
- * alpaca-crypto-emulation.ts, which documents that "everything from here to
- * the phase write is synchronous"). An async seam would insert an await into
- * that window and reopen the double-arm / double-cancel races those claims
- * exist to close. better-sqlite3 is synchronous, so nothing is given up —
- * `SqliteAccountStateStore` (#276) is the same shape for the same reason.
- */
 import type { NativeBracketRequest, NormalizedFill } from './types.js';
 
-/**
- * Which adapter owns a row. In the primary key of every table that carries
- * it (`broker_brackets`, `broker_unpriced_fills`), so two adapters wired over
- * one database can never read each other's brackets even if a client order
- * id were reused across venues.
- *
- * `ccxt`/`ibkr` narrowed out by migration 0055 (#1459): both venues left with
- * crypto (2026-08-16) and the IBKR disqualification (#906), and neither ever
- * had a built adapter to construct one.
- */
 export type BrokerVenue = 'alpaca' | 'saxo';
 
-/**
- * The emulated lifecycle (originally ccxt's; now Alpaca's crypto emulation,
- * #586); always `'armed'` on a native-bracket path.
- *
- * `submitting` is the write-ahead phase (#312): journalled BEFORE the venue
- * call, so a crash between `createOrder` and the journal leaves a row naming
- * the order that may exist rather than a live venue order nothing knows about.
- *
- * It is deliberately NOT `pending_entry` with a null `entry_order_id` — that
- * is indistinguishable from an ordinary bracket whose id has not been recorded
- * yet, since `recordBracketOrderIds` COALESCEs and a null there already means
- * "no news".
- *
- * `cancelling_sibling` (#586, migration 0022) is the same write-ahead rule
- * applied to the OCO edge: one protective leg has been observed filled and the
- * surviving sibling's cancel is owed to the venue. Journalled BEFORE the
- * cancel call, so a crash in that window leaves a row that says a live resting
- * order still needs killing, rather than an `armed` that hides the fill or a
- * `resolved` that hides the sibling.
- */
 export type BrokerBracketPhase =
   | 'submitting'
   | 'pending_entry'
@@ -60,12 +10,6 @@ export type BrokerBracketPhase =
   | 'cancelling_sibling'
   | 'resolved';
 
-/**
- * One persisted bracket. See the migration for per-venue column applicability
- * — in short, alpaca-crypto-emulation uses all of it (it owns the phase state
- * machine), while alpaca-adapter and saxo-adapter use the identity plus the
- * venue order ids because the venue owns theirs.
- */
 export interface BrokerBracketRecord {
   venue: BrokerVenue;
   client_order_id: string;
@@ -73,120 +17,58 @@ export interface BrokerBracketRecord {
   entry_order_id: string | null;
   stop_order_id: string | null;
   target_order_id: string | null;
-  /**
-   * The originating `NativeBracketRequest`, or null on a row learned from the
-   * venue rather than from a submit (Alpaca/Saxo `getOrder`), which knows the
-   * order ids and not the request that produced them
-   */
   request: BrokerBracketRequestFields | null;
   armed_qty: number | null;
   arming_qty: number | null;
   arm_attempt: number;
 }
 
-/**
- * The request fields an adapter needs to re-place a leg after a restart:
- * everything in `NativeBracketRequest` except the client order id, which is
- * the row's own key.
- *
- * DERIVED from `NativeBracketRequest` rather than re-listed, so a field added
- * there is a compile error here instead of a column that silently stops being
- * journalled — the same spec/code drift class this repo treats as its own
- * defect.
- */
 export type BrokerBracketRequestFields = Omit<NativeBracketRequest, 'client_order_id'>;
 
-/** The journalled half of a bracket request — the one place it is spelled out */
 export function toRequestFields(order: NativeBracketRequest): BrokerBracketRequestFields {
   const { client_order_id: _clientOrderId, ...fields } = order;
   return fields;
 }
 
-/** The venue order ids a rehydration path learns without the request */
 export interface BrokerBracketOrderIds {
   entry_order_id: string | null;
   stop_order_id: string | null;
   target_order_id: string | null;
 }
 
-/**
- * A fill the venue reports filled but cannot price (#298) — the observation an
- * adapter records instead of booking a fabricated price.
- *
- * `instrument` is denormalized from the bracket parent because the alert built
- * from this row has to be actionable on its own: an operator reading it needs
- * the symbol and the quantity, not a foreign key.
- */
 export interface UnpricedFillObservation {
   client_order_id: string;
-  /** The venue order id the fill would have been booked under */
   broker_fill_id: string;
   leg: NormalizedFill['leg'];
   instrument: string;
-  /** The quantity the venue claims filled — what makes this a contradiction */
   qty: number;
 }
 
-/** A persisted `UnpricedFillObservation` plus its age-out clock */
 export interface UnpricedFillRecord extends UnpricedFillObservation {
-  /** Set once, on first observation. Never advanced — this IS the clock. */
   first_seen_at: Date;
-  /** Refreshed each sweep that still sees it unpriced; diagnostic only */
   last_seen_at: Date;
-  /** Null until an age-out alert has been delivered for this fill */
   alerted_at: Date | null;
 }
 
 export interface BrokerStateStore {
-  /** Every bracket this venue has ever recorded, oldest first */
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[];
-  /** Full-row upsert — the submit path and every alpaca-crypto-emulation phase transition */
   saveBracket(record: BrokerBracketRecord): void;
-  /**
-   * Partial upsert for the REHYDRATION paths: record the venue's order ids for
-   * a client order id whose original request this process never saw. Leaves
-   * the request columns untouched (null on insert) rather than inventing them.
-   */
   recordBracketOrderIds(
     venue: BrokerVenue,
     clientOrderId: string,
     ids: BrokerBracketOrderIds,
   ): void;
-  /**
-   * Notes that this fill is still unpriced as of `seenAt` (#298).
-   *
-   * FIRST WRITE WINS on `first_seen_at`: a re-observation refreshes
-   * `last_seen_at` and the observation's mutable fields and leaves the clock
-   * alone. That is the whole point — a fill re-offered unpriced on every poll,
-   * across restarts, must accumulate age rather than resetting it.
-   */
   recordUnpricedFill(venue: BrokerVenue, observation: UnpricedFillObservation, seenAt: Date): void;
-  /** Every still-unresolved unpriced fill for this venue, oldest first */
   loadUnpricedFills(venue: BrokerVenue): UnpricedFillRecord[];
-  /** Records that the age-out alert for this fill was actually delivered */
   markUnpricedFillAlerted(
     venue: BrokerVenue,
     clientOrderId: string,
     brokerFillId: string,
     alertedAt: Date,
   ): void;
-  /** Drops the row: the venue priced the fill and it has been ingested */
   clearUnpricedFill(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): void;
 }
 
-/**
- * The no-persistence implementation — semantically identical to the
- * process-local Maps the adapters used before this ticket.
- *
- * It is the constructor DEFAULT so existing wiring and test doubles keep
- * working, but note the asymmetry with the adapters' `rateLimiter` default:
- * that default is merely conservative, whereas THIS default IS the bug #287
- * exists to fix. Production wiring must inject `SqliteBrokerStateStore`
- * (server/apps/orchestrator/production.ts does, for the Alpaca MVP path) or the
- * adapter silently starts every run with empty state while real positions sit
- * open at the broker — the same quiet failure `sharedStorePath` throws to
- * prevent.
- */
 export class InMemoryBrokerStateStore implements BrokerStateStore {
   private readonly brackets = new Map<string, BrokerBracketRecord>();
   private readonly unpriced = new Map<string, UnpricedFillRecord & { venue: BrokerVenue }>();
@@ -199,10 +81,6 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
     const existing = this.brackets.get(key(record.venue, record.client_order_id));
     this.brackets.set(key(record.venue, record.client_order_id), {
       ...record,
-      // Mirrors the SQL implementation's `COALESCE(excluded, existing)` on the
-      // request columns: a save that carries no request must never blank one a
-      // submit recorded. Kept in step deliberately — a test double that is
-      // merely *nearly* the real store is how a suite certifies a bug
       request: record.request ?? existing?.request ?? null,
     });
   }
@@ -221,11 +99,6 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
       armed_qty: existing?.armed_qty ?? null,
       arming_qty: existing?.arming_qty ?? null,
       arm_attempt: existing?.arm_attempt ?? 0,
-      // COALESCE per id, mirroring the SQL implementation: a venue lookup that
-      // reports no child (because the venue has since cancelled it) must not
-      // blank an id a submit recorded, or the adapter's own `legs`/order-id
-      // index loses it on the next restart and its executions go unclaimed —
-      // #295, reinstated
       entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
       stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
       target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,
@@ -238,10 +111,6 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
     this.unpriced.set(rowKey, {
       ...observation,
       venue,
-      // Mirrors the SQL implementation's untouched `first_seen_at` on conflict
-      // Kept in step deliberately: a test double whose clock resets where the
-      // real store's does not is how a suite certifies the bug it was written
-      // to catch
       first_seen_at: existing?.first_seen_at ?? seenAt,
       last_seen_at: seenAt,
       alerted_at: existing?.alerted_at ?? null,
@@ -249,10 +118,6 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
   }
 
   loadUnpricedFills(venue: BrokerVenue): UnpricedFillRecord[] {
-    // Mirrors the SQL `ORDER BY first_seen_at, rowid`: sort ascending on the
-    // clock, and let Array.prototype.sort's guaranteed stability do the
-    // tiebreak — the pre-sort order here is Map iteration order, i.e.
-    // insertion order, the double's analogue of rowid (#1340)
     return [...this.unpriced.values()]
       .filter((row) => row.venue === venue)
       .map(({ venue: _venue, ...row }) => row)

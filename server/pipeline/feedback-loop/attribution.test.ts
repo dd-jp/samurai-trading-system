@@ -31,7 +31,6 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
     entry: 100,
     stop: 90,
     filled_size: 10,
-    // initial risk = |100 - 90| * 10 = 100, so realized_pnl_net 200 => R = 2
     realized_pnl_net: 200,
     fees_total: 1,
     opened_at: new Date('2026-07-01T10:00:00Z'),
@@ -141,14 +140,6 @@ describe('creditForContribution — signed by stance-vs-outcome', () => {
     expect(credit).toBe(0);
   });
 
-  /*
-   * #370. Credit used to be scaled by `influence_score`, with a shadow-credit
-   * top-up below an influence ceiling. `computeInfluenceScore` measures how
-   * often an analyst was MOVED, not how much it moved others, and it is 0 for
-   * the one-round debates production actually produces — so the weighting ran
-   * on a dead input and shadow credit silently carried the whole signal.
-   * These pin that the input is gone, not merely currently zero.
-   */
   it('ignores influence_score entirely — a loud and a quiet analyst earn the same', () => {
     const loud = creditForContribution(makeContribution({ influence_score: 0.9 }), 2, 'bullish');
     const quiet = creditForContribution(makeContribution({ influence_score: 0 }), 2, 'bullish');
@@ -156,16 +147,12 @@ describe('creditForContribution — signed by stance-vs-outcome', () => {
   });
 
   it('is exactly agreement × R, so credit survives an all-zero influence debate', () => {
-    // The production case: every contribution scores 0 influence. Under the
-    // old formula this collapsed to the shadow term alone
     const contribution = makeContribution({ influence_score: 0 });
     expect(creditForContribution(contribution, 2, 'bullish')).toBe(2);
     expect(creditForContribution(contribution, -1, 'bullish')).toBe(-1);
   });
 
   it('penalises a wrong analyst at the same magnitude it rewards a right one', () => {
-    // Symmetry is the behavioural change #370 makes: shadow credit was
-    // upside-only, so a zero-influence loser used to be floored near 0
     const right = creditForContribution(
       makeContribution({ final_position: 'bullish' }),
       2,
@@ -193,7 +180,6 @@ describe('accumulateCredit — the DebateLog join', () => {
     const credits = accumulateCredit([makeTrade({ debate_id: 'debate-1' })], log);
 
     expect([...credits.keys()].sort()).toEqual(['bear', 'bull']);
-    // Winning long: the bull gains, the bear loses
     expect(credits.get('bull')?.total_credit).toBeGreaterThan(0);
     expect(credits.get('bear')?.total_credit).toBeLessThan(0);
   });
@@ -227,12 +213,6 @@ describe('accumulateCredit — the DebateLog join', () => {
     expect(credits.size).toBe(0);
   });
 
-  /**
-   * #1081 — the Feedback Loop consumer this ticket's fix has to reach. A
-   * latency-truncated debate's `contributions` are partial mediator state,
-   * not evidence of any analyst's real performance; crediting or blaming an
-   * analyst off it would tune weights on an infrastructure timeout.
-   */
   it('skips a trade whose debate was truncated by the latency budget — no evidence to attribute', () => {
     const log = new InMemoryDebateLogStore();
     log.writeLog({

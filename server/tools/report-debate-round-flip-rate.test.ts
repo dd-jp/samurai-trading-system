@@ -69,8 +69,6 @@ describe('computeFlipRate (#1517)', () => {
   });
 
   it('compares round 1 against the FINAL round, ignoring any intermediate reversal', () => {
-    // Flips bearish -> bullish -> bearish: round 1 and the final round agree,
-    // so this is NOT counted as a flip even though the direction moved mid-debate
     const rows = [
       row({ debate_id: 'd1', round: 1, direction: 'bearish' }),
       row({ debate_id: 'd1', round: 2, direction: 'bullish' }),

@@ -1,9 +1,3 @@
-/**
- * The live starting profile (#511).
- *
- * Every credential in here is a stub string. Nothing in this file reads a real
- * key, and nothing sets `SAMURAI_MODE`.
- */
 
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import { startingProfileForMode } from './index.js';
@@ -45,8 +39,6 @@ describe('resolveLiveCapitalCeilingUsd', () => {
     ['empty', ''],
     ['whitespace', '   '],
   ])('refuses a %s ceiling by name, with no default to fall back to', (_label, raw) => {
-    // Fail closed: there is no defensible default for how much money a run may
-    // lose, so absence is a refusal rather than a fallback
     expect(() => resolveLiveCapitalCeilingUsd(raw)).toThrow(LIVE_MAX_CAPITAL_ENV_VAR);
   });
 
@@ -58,8 +50,6 @@ describe('resolveLiveCapitalCeilingUsd', () => {
   );
 
   it("refuses '2000abc' instead of silently reading 2000 out of it", () => {
-    // `parseFloat` would return 2000 here and turn a typo into an accepted
-    // ceiling; `Number` refuses the whole string
     expect(() => resolveLiveCapitalCeilingUsd('2000abc')).toThrow(/positive, finite number/);
   });
 
@@ -92,22 +82,6 @@ describe('liveStartingProfile', () => {
   });
 
   it("shares the paper profile's equity-relative caps verbatim, except the account-level book ceiling — the CEILING ARGUMENT no longer touches riskConfig (#886)", () => {
-    // Before #886 the six caps were derived from the ceiling once at boot, so
-    // live and paper necessarily disagreed. #886 made them fractions of live
-    // EQUITY, resolved at evaluate time by the Risk Manager — both profiles
-    // now build `riskConfig` from the same `RISK_CAP_EQUITY_FRACTIONS`
-    // constant, through the same shared `buildStartingProfileConfigs`, and the
-    // `capitalCeilingUsd` ARGUMENT (`CEILING` here) plays no part in it at
-    // all — asserted below by rebuilding `live` with a wildly different
-    // ceiling and getting the identical `riskConfig` back
-    //
-    // **`live_book_ceiling` is the one deliberate exception (#888 review
-    // fix-up), and it is NOT ceiling-argument-shaped.** It is set from
-    // `LIVE_BOOK_GBP` — a fixed constant, not `CEILING` — whenever
-    // `liveStartingProfile` calls `buildStartingProfileConfigs` at all, which
-    // is unconditional, unlike the ceiling argument's independence asserted
-    // above. See `RiskConfig['live_book_ceiling']`'s doc comment
-    // (risk-manager/types.ts) for why paper deliberately does not carry it
     const live = liveStartingProfile(CEILING);
     const paper = paperStartingProfile('paper');
 
@@ -119,9 +93,6 @@ describe('liveStartingProfile', () => {
   });
 
   it('produces the identical riskConfig regardless of which ceiling it is built with', () => {
-    // The ceiling still bounds something (`sizingEquity`'s Trader ask), but
-    // not this. A caller declaring $2,000 vs $2,000,000 must get the same six
-    // caps — only `capitalCeilingUsd` on the returned profile differs
     const small = liveStartingProfile(CEILING);
     const large = liveStartingProfile(CEILING * 1_000);
 
@@ -130,9 +101,6 @@ describe('liveStartingProfile', () => {
   });
 
   it('keeps every cap at or under 1x equity — no leverage, independent of the ceiling (#886)', () => {
-    // Gross exposure above equity is leverage. Since #886 this is a bound on
-    // the FRACTION itself, not on the ceiling: `portfolio_gross_cap` above 1
-    // would permit more notional than the account (whatever its equity) holds
     expect(
       liveStartingProfile(CEILING).riskConfig.portfolio_gross_cap_fraction_of_equity,
     ).toBeLessThanOrEqual(1);
@@ -159,14 +127,6 @@ describe('liveStartingProfile', () => {
   });
 
   it('derives the ceiling floor from the fraction and the dust floor, not a magic number', () => {
-    // #886 moved the guarantee this floor used to provide (a per-trade cap
-    // that clears the dust floor) from the CEILING to live EQUITY — the
-    // ceiling no longer feeds `riskConfig` at all (see the tests above). What
-    // survives is narrower: `sizingEquity` (direct-bind.ts) clamps the
-    // Trader's ask to `min(ceiling, equity)`, so a ceiling below this floor
-    // still forces every ask under the dust floor regardless of real equity
-    // The armed-D5-at-low-equity case this floor does NOT cover is asserted in
-    // `d5-trader-cap-agreement.test.ts`, not here
     const floor = minLiveCapitalCeilingUsd();
 
     expect(floor).toBeCloseTo(
@@ -180,7 +140,6 @@ describe('liveStartingProfile', () => {
     const { feedback, riskConfig } = liveStartingProfile(CEILING);
     const dial = feedback?.config.risk_thresholds?.max_position_size_fraction_of_equity;
 
-    // #433's invariant: the dial's ceiling IS the shipped cap
     expect(dial?.ceiling).toBe(riskConfig.max_position_size_fraction_of_equity);
     expect(dial?.floor).toBeLessThan(riskConfig.max_position_size_fraction_of_equity);
   });
@@ -189,8 +148,6 @@ describe('liveStartingProfile', () => {
     const live = liveStartingProfile(CEILING);
     const paper = paperStartingProfile('paper');
 
-    // Stated as a test rather than only in a comment: if a later change starts
-    // diverging these, it should be a decision someone made on purpose
     expect(live.breakerConfig).toEqual(paper.breakerConfig);
     expect(live.verdictConfig).toEqual(paper.verdictConfig);
     expect(live.tickIntervalMs).toBe(paper.tickIntervalMs);
@@ -231,7 +188,6 @@ describe('liveStartingProfile', () => {
 });
 
 describe('liveStartingProfile — unconverted-book plausibility warning (#1441)', () => {
-  // Rationale: `ceilingLooksLikeUnconvertedBookGbp`'s docblock (live-profile.ts)
 
   it('warns when the declared ceiling is the GBP book’s bare number, unconverted', () => {
     const logger = makeLogger();
@@ -272,8 +228,6 @@ describe('liveStartingProfile — unconverted-book plausibility warning (#1441)'
 
 describe('LIVE_MONEY_GATES', () => {
   it('gives every cited issue a claim, so no bare number can accumulate', () => {
-    // A number with no claim attached is unverifiable by the next reader, which
-    // is exactly how the #384/#375/#333 citation went stale unnoticed
     for (const gate of LIVE_MONEY_GATES) {
       expect(Number.isInteger(gate.issue)).toBe(true);
       expect(gate.gap.trim().length).toBeGreaterThan(20);
@@ -281,35 +235,12 @@ describe('LIVE_MONEY_GATES', () => {
   });
 
   it('leads with the reason that does not depend on a bug number', () => {
-    // The numbered list goes stale as issues close; this sentence does not,
-    // until the soak actually runs
     expect(LIVE_MONEY_GATE_SUMMARY).toContain('#238');
     expect(LIVE_MONEY_GATE_SUMMARY).toContain('has not run');
     expect(LIVE_MONEY_GATE_SUMMARY).toMatch(/as of 2026-\d\d-\d\d/i);
   });
 
   it('cites no issue that was closed when this list was verified', () => {
-    // #868: the first seven are the list as it shipped from #566. Every one of
-    // them was closed by 2026-08-18 while still being rendered to an operator
-    // booting live money, so they are pinned here permanently — a revert of the
-    // list, or a copy-paste of the old one, fails on this line rather than on
-    // the next operator's read
-    // #826 joins the ghost list on 2026-08-19, closed by the change that made
-    // the mandatory flat-by-close exit survive a stalled mark source, and
-    // deleted from LIVE_MONEY_GATES in that same edit per this module's rule
-    // #894 joins it the same day, closed by the change that stopped Verdict's
-    // staleness gate refusing that flatten one stage later. Neither closure
-    // closed the whole operator-facing gap — quotes are still not failed over
-    // and entries plus both discretionary exits still stop at the mark read —
-    // so the surviving half is cited as #900, which is open
-    // (#800 was already retired here by PR #890, which re-pointed its entry at
-    // #888.) #798 closed 2026-08-26 and was replaced by #925 in the same edit
-    // #886 closed 2026-08-26 too (D5 cap authority + equity-relative caps
-    // shipped) and was replaced by #932 (the per_asset_cap gap #886 left open)
-    // #888 closed 2026-08-30 (PR #948); its USD/GBP flag carries forward as #949
-    // #925 closed 2026-08-31 (PR #952): breaker ceiling raised to 0.45
-    // #932 closed 2026-08-31 (PR #956): per_asset_cap exempted for D5-classified
-    // instruments the same way #886 exempted per_trade_size_cap
     const closed = [
       526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886, 888, 925, 932,
     ];
@@ -323,17 +254,10 @@ describe('LIVE_MONEY_GATES', () => {
   });
 
   it('cites the gates that are open today, by number (#868)', () => {
-    // Pinned as literals rather than derived from LIVE_MONEY_GATES: a test that
-    // renders the constant and asserts it contains the constant passes for any
-    // list, which is why the seven ghosts survived a suite of ~2900 tests
     expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 900]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
-    // The decay #868 records was not that the list went stale — lists do — but
-    // that a reader told to "re-check their state" had seven issues to check by
-    // hand and no way to do it, so nobody did. The summary names the one
-    // command that settles it, and dates its own claim
     expect(LIVE_MONEY_GATE_SUMMARY).toContain(LIVE_MONEY_GATES_RECHECK_COMMAND);
     expect(LIVE_MONEY_GATE_SUMMARY).toContain(LIVE_MONEY_GATES_VERIFIED_ON);
     expect(LIVE_MONEY_GATE_SUMMARY).toContain('not a live');
@@ -341,12 +265,6 @@ describe('LIVE_MONEY_GATES', () => {
 });
 
 describe('the live-boot warning as an operator actually receives it', () => {
-  /**
-   * Reached through `startingProfileForMode`, the seam `orchestrator/index.ts`
-   * takes on `mode === 'live'` — not `liveStartingProfile` directly. The gate
-   * list being correct is worth nothing if the branch that renders it is not
-   * the branch a live boot takes.
-   */
   function liveBootWarning(): string {
     const logger = makeLogger();
     vi.stubEnv(LIVE_MAX_CAPITAL_ENV_VAR, String(CEILING));
@@ -373,11 +291,6 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names no gate that has closed, at the boot path', () => {
     const message = liveBootWarning();
 
-    // #798 closed 2026-08-26 (the "accept the wider envelope" ruling) and was
-    // replaced by #925 in the same edit. #886 closed the same day and was
-    // replaced by #932. #888 closed 2026-08-30 (PR #948). #925 closed
-    // 2026-08-31 (PR #952): breaker ceiling raised to 0.45. #932 closed
-    // 2026-08-31 (PR #956): per_asset_cap exempted for D5-classified instruments
     for (const issue of [
       526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886, 888, 925, 932,
     ]) {

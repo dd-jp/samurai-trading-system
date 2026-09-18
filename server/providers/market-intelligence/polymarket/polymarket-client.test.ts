@@ -53,8 +53,6 @@ describe('PolymarketClient.fetchEventMarket', () => {
     expect(market).toEqual({
       slug: 'will-the-fed-increase-interest-rates-by-25-bps-after-the-september-2026-meeting-649',
       question: 'Will the Fed increase interest rates by 25 bps?',
-      // Gamma serialises these two as JSON *strings*, not arrays — the whole
-      // reason this parse exists rather than a cast
       outcomes: ['Yes', 'No'],
       outcomePrices: [0.295, 0.705],
       tokenIds: ['11111', '22222'],

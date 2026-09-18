@@ -181,11 +181,6 @@ describe('open risk', () => {
     expect(screen.getByText(/No open position — nothing at risk/)).toBeTruthy();
   });
 
-  /**
-   * #1597: Alpaca is the LIVE broker, so its equity is a live-arm-only figure
-   * (dashboard-spec.md's arm selector rule). The deployed-notional half comes
-   * from `positions`, which IS arm-scoped, and still renders.
-   */
   it('names the control arm’s absent equity denominator rather than Alpaca’s', () => {
     renderGlance(
       makeSnapshot({

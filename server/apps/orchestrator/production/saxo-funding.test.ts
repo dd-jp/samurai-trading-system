@@ -10,18 +10,12 @@ import {
   verifySameCurrency,
 } from './saxo-funding.js';
 
-/**
- * A correctly funded live book: £1,000, ADR-0015's 2026-08-18 amendment, in
- * the currency it is declared in. `TotalValue` equals `CashBalance` because a
- * flat book holds no positions.
- */
 const GBP_FUNDED: SaxoAccountBalance = {
   Currency: 'GBP',
   CashBalance: LIVE_BOOK_GBP,
   TotalValue: LIVE_BOOK_GBP,
 };
 
-/** Measured on the SIM trial account, doc 44 §6.3 — the negative case is real */
 const SIM_TRIAL: SaxoAccountBalance = {
   Currency: 'EUR',
   CashBalance: 100_000,
@@ -32,7 +26,6 @@ function clientReturning(balance: SaxoAccountBalance) {
   return { getBalances: async () => balance };
 }
 
-/** The ceilings `liveStartingProfile` ships, before anything arms them */
 function liveShapedConfig(): RiskConfig {
   return {
     live_book_ceiling: { book: LIVE_BOOK_GBP, refuse_above_tolerance: 0.05 },
@@ -142,11 +135,6 @@ describe('assertSameCurrencyFunding (the boot refusal, ungated by any ceiling)',
     ).toThrow(/EUR.*GBP/s);
   });
 
-  /**
-   * The check is deliberately NOT gated on a declared ceiling. A profile with
-   * no ceiling is the case with the least protection downstream — every tick
-   * still sizes against `readFunding`'s `equity` — so it must refuse too.
-   */
   it('refuses regardless of what the risk config declares', () => {
     const noCeiling = {} as RiskConfig;
     expect(

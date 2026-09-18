@@ -1,16 +1,6 @@
-/**
- * Review round 1, check 4: `npm run report:cgt` must never take a write handle
- * on the live-money store, and must never run migrations against it — both
- * of which `openSharedStore` does (WAL/pragma setup plus `runMigrations`),
- * possibly while the orchestrator holds the same file open. This opens the
- * SQLite file directly, read-only, and refuses if it does not already exist
- * or does not already carry every column this report reads — rather than
- * either write to it or silently read a schema it was not written against.
- */
 import BetterSqlite3 from 'better-sqlite3';
 import type { StoreHandle } from '../../shared/store/index.js';
 
-/** Every column `SqliteCgtFillSource`'s query selects, by table — the schema this report was written against */
 const REQUIRED_CGT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   fills: [
     'idempotency_key',

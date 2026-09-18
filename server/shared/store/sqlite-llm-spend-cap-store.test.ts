@@ -1,9 +1,3 @@
-/**
- * #1196: `read()` must let a caller tell "armed uncapped" (a row exists,
- * `budget_usd IS NULL`) apart from "never armed" (no row at all) — the
- * discrimination `arm()` already persists via `armed_at` and `read()` used to
- * throw away
- */
 import { describe, expect, it } from 'vitest';
 import { openSharedStore, type StoreHandle } from './open-shared-store.js';
 import { SqliteLlmSpendCapStore } from './sqlite-llm-spend-cap-store.js';
@@ -37,9 +31,6 @@ describe('SqliteLlmSpendCapStore.read', () => {
     expect(new SqliteLlmSpendCapStore(db).read().budgetUsd).toBe(275);
   });
 
-  // The additional defect this ticket also closes: a $0 cap is the MOST
-  // restrictive state possible and must not collapse into "uncapped" or
-  // "never armed"
   it('reports an armed $0 cap as 0, not null', () => {
     const db = makeDb();
     new SqliteLlmSpendCapStore(db).arm(0, ARMED_AT);
@@ -69,8 +60,6 @@ describe('SqliteLlmSpendCapStore.read', () => {
 
   it('treats a non-finite stored budget as uncapped rather than rendering Infinity%, without losing armed_at', () => {
     const db = makeDb();
-    // Bypasses `arm()`'s typed signature to simulate a REAL column value
-    // `arm()` would never write today, matching the existing defensive read
     db.prepare('REPLACE INTO llm_spend_cap (id, budget_usd, armed_at) VALUES (1, ?, ?)').run(
       Number.POSITIVE_INFINITY,
       toStoredTimestamp(ARMED_AT),

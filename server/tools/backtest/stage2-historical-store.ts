@@ -1,26 +1,3 @@
-/**
- * Stage 2 historical OHLCV store (ticket #241) — see
- * docs/specs/stage2-validation-execution-spec.md ("Module: Historical Data
- * Ingestion") and wayfinder map #154 (decisions #155, #157).
- *
- * Ingests daily bars from Polygon/Massive for the MVP universe and persists
- * them to a research-only scratch SQLite file — deliberately NOT the shared
- * store's `bars` table, although that table exists (0001_init.sql) with the
- * same columns and key: the shared store is runtime state the Feedback Loop
- * and dashboard read live, and research ingests must not be able to corrupt
- * it or collide with the orchestrator's writes. A fresh `Stage2HistoricalStore`
- * over `:memory:` is also the fixture shape for tests.
- *
- * The Polygon HTTP client is injected (`PolygonClient`), matching
- * `AlpacaDataSource`'s precedent in market-data-service/sources —
- * provisioning the API key is an ops/setup task, not this module's concern.
- *
- * `membershipDuring` reports every ingested symbol as currently listed
- * (`delisted_at: undefined`): none of the fixed MVP-universe six
- * (SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD) has been delisted, so there is no real
- * delisting data to source. The seam is real — `assertSurvivorshipFree` runs
- * against it — it simply has nothing to report for this universe.
- */
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
@@ -30,10 +7,8 @@ import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index
 import type { ReplayTimeline } from './types.js';
 import type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
 
-/** The timeframe every path used before #664 made it a parameter */
 export const DEFAULT_STAGE2_TIMEFRAME = '1d';
 
-/** One Polygon aggregate, timestamped at the bar's open (epoch ms) */
 export interface PolygonAggregate {
   t: number;
   o: number;
@@ -43,18 +18,7 @@ export interface PolygonAggregate {
   v: number;
 }
 
-/** The transport seam — a real Polygon/Massive HTTP client, or a test fake */
 export interface PolygonClient {
-  /**
-   * Aggregates for `symbol` over `window` at `timeframe`, ascending by open
-   * time.
-   *
-   * `timeframe` is REQUIRED, not defaulted to `'1d'` (#664). A defaulted
-   * parameter is how this repo's dominant defect class — a mechanism nothing
-   * calls with a non-default value — gets introduced: every implementation and
-   * every fake would keep serving daily bars and typecheck. Required, the
-   * compiler enumerates every call site instead.
-   */
   fetchAggregates(
     symbol: string,
     window: DateRange,
@@ -79,44 +43,13 @@ interface Stage2ListingRow {
   delisted_at: string | null;
 }
 
-/**
- * What a symbol has already been ASKED for, and what actually came back.
- *
- * The two are tracked separately, and that separation is the point. Coverage
- * derived from stored bars alone (`MIN`/`MAX(open_time)`) cannot be satisfied
- * by a window whose end falls after the last bar the vendor has — which is
- * ALWAYS true in practice: `STAGE2_PINNED_WINDOW` ends at an intraday instant,
- * daily bars open at midnight, and equities print nothing at a weekend. Such a
- * store would see a permanent tail gap and re-request it on every run, so
- * "re-running is a no-op" would be false forever, just cheaper than before.
- */
 export interface Stage2Coverage {
-  /** The union of every window requested so far — contiguous by construction */
   requestedFrom: Date;
   requestedTo: Date;
-  /** `MIN`/`MAX(open_time)` of what the vendor actually served, if anything */
   firstBar?: Date | undefined;
   lastBar?: Date | undefined;
 }
 
-/**
- * The parts of `window` not already requested — at most a head range and a
- * tail range, in that order. Empty means the whole window is already on disk
- * and no vendor call is needed.
- *
- * Split out as a pure function because it is the whole of #495's decision, and
- * every interesting case (nothing stored, fully covered, earlier start, later
- * end, both ends, a vendor that served less than was asked) is a boundary
- * condition worth testing without a database or a network in the way.
- *
- * Gaps stay contiguous with existing coverage — the head extends backwards
- * from `requestedFrom`, the tail forwards to `window.end` — so the union of
- * requested ranges is always a single interval and never needs a gap list.
- *
- * The tail starts at the LAST STORED BAR rather than at `requestedTo` when one
- * exists: that bar is the only one that could have been provisional, and
- * re-reading it costs one bar. See `ingest`.
- */
 export function uncoveredRanges(
   window: DateRange,
   coverage: Stage2Coverage | undefined,
@@ -136,13 +69,6 @@ export function uncoveredRanges(
   return gaps;
 }
 
-/**
- * SQLite creates the database FILE, never the directory holding it, and the
- * scratch path convention is `data/…` which is gitignored — so it is absent on
- * every fresh clone and better-sqlite3 throws an error naming neither the path
- * nor the fix. `openSharedStore` already learnt this (#323); this store opens
- * its own handle and has to learn it too. `recursive: true` is idempotent.
- */
 function ensureParentDirectory(dbPath: string): void {
   if (dbPath === ':memory:') return;
   const directory = dirname(dbPath);
@@ -150,45 +76,19 @@ function ensureParentDirectory(dbPath: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
-/**
- * How a store is opened. An OPTIONS OBJECT rather than a second positional
- * string (#664): `dbPath` was already positional and `timeframe` is also a
- * string, so a positional addition would let the two be swapped silently at a
- * call site and still typecheck. Requiring the object also makes the compiler
- * enumerate every construction, which is the point — a store whose timeframe
- * defaulted to `'1d'` would be the exact "parameter nothing ever sets" defect
- * this ticket exists to avoid.
- */
 export interface Stage2HistoricalStoreOptions {
-  /** `'1d'`, `'1m'`, `'5m'`… — parsed by `timeframeToMs`, so garbage throws here */
   timeframe: string;
-  /** Scratch SQLite path. `':memory:'` is the test/fixture shape. */
   dbPath?: string;
 }
 
 export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry {
   private readonly db: BetterSqlite3.Database;
-  /**
-   * The ONE timeframe this store instance ingests, stores and serves.
-   *
-   * Every read below is scoped by it (#664 item 5) — the table's PRIMARY KEY
-   * already carries `timeframe`, so a `'1m'` and a `'1d'` row for the same
-   * instrument/open-time are distinct and neither overwrites the other, but
-   * an unscoped read would silently serve their UNION as one jagged series.
-   *
-   * A separate scratch file per timeframe was considered and rejected: it
-   * splits the `stage2_coverage` bookkeeping for no benefit the composite
-   * index below doesn't already buy.
-   */
   readonly timeframe: string;
 
   constructor(
     private readonly client: PolygonClient,
     options: Stage2HistoricalStoreOptions,
   ) {
-    // Parsed, not merely stored: `closeTimeOf` would throw later, mid-ingest,
-    // after the network spend. `timeframeToMs` throws here on anything this
-    // repo cannot key bars on
     timeframeToMs(options.timeframe);
     this.timeframe = options.timeframe;
     const dbPath = options.dbPath ?? ':memory:';
@@ -239,18 +139,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     `);
   }
 
-  /**
-   * What `symbol` already has on disk, or `undefined` if it has never been
-   * ingested.
-   *
-   * BOTH ends of the requested range are read, not just the latest (#495
-   * review point). A tail-only strategy is wrong the moment a run asks for an
-   * EARLIER start than a previous one did: coverage would look satisfied, no
-   * fetch would happen, and the caller would be served a window quietly
-   * shorter than the one it asked for — the same silent-truncation class of
-   * bug this ticket exists to remove, merely relocated from the vendor to the
-   * cache.
-   */
   #coverage(symbol: string): Stage2Coverage | undefined {
     const requested = this.db
       .prepare(
@@ -275,11 +163,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     };
   }
 
-  /**
-   * Widens the recorded request range to include `window`. Recorded only after
-   * the fetch resolves, so a vendor error leaves the range unchanged and the
-   * next run retries the same gap instead of treating a failed call as cached.
-   */
   #recordCoverage(symbol: string, window: DateRange, previous: Stage2Coverage | undefined): void {
     const from =
       previous && previous.requestedFrom < window.start ? previous.requestedFrom : window.start;
@@ -296,25 +179,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       .run(symbol, this.timeframe, toStoredTimestamp(from), toStoredTimestamp(to));
   }
 
-  /**
-   * Fetches the parts of `window` not already on disk and persists them.
-   * Idempotent per `(instrument, timeframe, open_time)`, matching
-   * `SqliteMarketDataStore.appendBars`'s re-ingest-is-a-no-op convention.
-   *
-   * Coverage is read first and only the uncovered head and tail are
-   * requested, so a window already covered at both ends issues no call and a
-   * partial window tops up rather than restarting.
-   *
-   * The tail refetch starts at the LAST STORED BAR rather than the previous
-   * request boundary, because that bar is the only one that could have been
-   * PROVISIONAL (a run whose window ended mid-session stores a partially
-   * formed daily bar); `INSERT OR REPLACE` then corrects it, at the cost of
-   * one re-read bar per top-up.
-   *
-   * A repeat run with an UNCHANGED window fetches nothing, so it will not
-   * revisit a bar that was provisional when first stored — this doesn't
-   * arise on `STAGE2_PINNED_WINDOW`, which ends at a fixed past instant.
-   */
   async ingest(symbol: string, window: DateRange): Promise<void> {
     const coverage = this.#coverage(symbol);
     for (const gap of uncoveredRanges(window, coverage)) {
@@ -330,14 +194,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       .run(symbol);
   }
 
-  /**
-   * `INSERT OR REPLACE`, not `OR IGNORE`. What protects this store from
-   * restated history is that both primaries are UNADJUSTED (Alpaca pinned
-   * `adjustment=raw`; crypto venues do not restate candles), so a re-read bar
-   * carries identical values — not the choice of SQL verb, which cannot tell
-   * a restatement from a correction. `IGNORE` would not preserve history; it
-   * would only make the provisional-bar case above permanent.
-   */
   #persist(symbol: string, aggregates: PolygonAggregate[]): void {
     const upsert = this.db.prepare(
       `INSERT OR REPLACE INTO stage2_bars
@@ -345,18 +201,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
-    // ONE transaction for the whole page, not one implicit transaction per
-    // row (#664): unbatched, a single instrument-year of 1-minute bars
-    // (98,280 rows) takes ~25.9s to persist since each `run()` outside a
-    // transaction commits on its own — ten years across four symbols is ~4M
-    // rows, ~17 hours for a backfill whose network side is minutes. Batched,
-    // the same rows take well under a second
-    //
-    // Invisible at daily resolution (2,500 rows/symbol committed one at a
-    // time is under a second), which is why it survived until intraday made
-    // it the binding cost. `better-sqlite3`'s `transaction()` is synchronous
-    // and rolls back on a throw, so a malformed page leaves no half-written
-    // series
     this.db.transaction((rows: PolygonAggregate[]) => {
       for (const aggregate of rows) {
         const openTime = new Date(aggregate.t);
@@ -376,11 +220,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     })(aggregates);
   }
 
-  /**
-   * Point-in-time read: bars for `symbol` with `close_time` inside `window`
-   * (inclusive), ascending — the shape `proxySignal` (#242) and the replay
-   * driver (#243) consume directly
-   */
   bars(symbol: string, window: DateRange): Bar[] {
     const rows = this.db
       .prepare(
@@ -411,24 +250,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     }));
   }
 
-  /**
-   * `ReplayTimeline.barTimestamps` — the union of **every** ingested
-   * instrument's close times, across all asset classes.
-   *
-   * **Almost certainly not what a replay wants (#420).** A replay trades one
-   * asset class, and stock and crypto daily bars close at different UTC times,
-   * so this union is close to their *sum*: over a 2-year window it returns
-   * ~1,229 timestamps where stocks have ~504 bars and crypto ~730. Driving a
-   * stock replay off it pads the return series with a zero on every
-   * crypto-only bar, which scales the per-period Sharpe by roughly
-   * `sqrt(n_real / n_union)` and leaves `periodsPerYear` describing a cadence
-   * the series no longer has.
-   *
-   * Use `timelineFor(symbols)` for anything scored per asset class. This
-   * method is kept because `ReplayTimeline` is a single-method interface the
-   * store legitimately satisfies, and a whole-universe timeline is still the
-   * right answer for a whole-universe question.
-   */
   async barTimestamps(window: DateRange): Promise<readonly Date[]> {
     const rows = this.db
       .prepare(
@@ -444,15 +265,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     return rows.map((row) => fromStoredTimestamp(row.close_time));
   }
 
-  /**
-   * A `ReplayTimeline` scoped to `symbols` — the close times of those
-   * instruments only (#420).
-   *
-   * This is the timeline a per-asset-class replay must step. `ReplayDriver`
-   * already scopes its `universe` correctly, so only the right instruments
-   * ever trade; the defect this fixes was that the *timeline* was not scoped
-   * with it, and the return series is built one slot per stepped bar.
-   */
   timelineFor(symbols: readonly string[]): ReplayTimeline {
     if (symbols.length === 0) {
       throw new Error(
@@ -467,7 +279,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     };
   }
 
-  /** The close times of `symbols` only, ascending. See `timelineFor`. */
   private barTimestampsFor(
     symbols: readonly string[],
     window: DateRange,
@@ -492,8 +303,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     }[];
 
     if (rows.length === 0) {
-      // Name the cause here rather than let it surface four layers up as
-      // `toReturnSeries: no bars in the sample` (pitfall P3)
       const ingested = (
         this.db
           .prepare('SELECT DISTINCT instrument FROM stage2_bars WHERE timeframe = ?')
@@ -517,7 +326,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     return Promise.resolve(rows.map((row) => fromStoredTimestamp(row.close_time)));
   }
 
-  /** `InstrumentRegistry.membershipDuring` — see class doc for the "nothing delisted" posture */
   async membershipDuring(_window: DateRange): Promise<InstrumentListing[]> {
     const rows = this.db
       .prepare('SELECT symbol, delisted_at FROM stage2_listing')

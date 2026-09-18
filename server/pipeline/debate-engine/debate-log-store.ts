@@ -1,24 +1,6 @@
-/**
- * In-memory `DebateLogStore` for #63 — a concrete implementation of the
- * port (not a test-only mock), mirroring server/pipeline/trader/fixture-setup-store.ts's
- * `FixtureSetupStore`. See docs/specs/debate-engine-spec.md
- * ("Debate log write"). The real SQLite-backed store is
- * `SqliteDebateLogStore` (#200, server/pipeline/debate-engine/sqlite-debate-log-store.ts).
- */
 import type { DebateLog, DebateLogStore, DebateRoundLogEntry } from '../../shared/index.js';
 import type { DebateResult } from './types.js';
 
-/**
- * Constructs the persisted `DebateLog` row from a resolved `DebateResult`.
- * `instrument` isn't carried on `DebateResult`, so the caller — the component
- * that ran the debate and knows the tick's instrument — supplies it.
- *
- * `bar_timestamp` USED TO BE a caller-supplied parameter for the same reason,
- * and it no longer is (#687): the result now carries the bar it was hashed
- * over, so taking a second copy here would be one more place for the row's
- * coordinate and the `debate_id` it is keyed by to disagree. Projected off the
- * result, they cannot.
- */
 export function buildDebateLog(
   result: DebateResult,
   instrument: string,
@@ -33,54 +15,23 @@ export function buildDebateLog(
     direction: result.direction,
     rounds: result.rounds_completed,
     created_at,
-    // #426. Omitted rather than `undefined` so the row shape matches the
-    // optional field exactly; a caller with no trace writes NULL
     ...(trace_id === undefined ? {} : { trace_id }),
-    // #617. What the Trader actually reads, so a later same-bar tick can
-    // replay this row instead of re-running an identical debate. `confidence`
-    // is the load-bearing one — it is what position sizing is a function of,
-    // and until migration 0026 the table had no column for it
     confidence: result.confidence,
     synthesis: result.synthesis,
     position: result.position,
     disagreement_summary: result.disagreement_summary,
     open_items: result.open_items,
     converged: result.converged,
-    // `result.read` has no field here, unlike every other property above:
-    // `DebateLog` has no `read` column to project it into (#1418). Harmless
-    // while every producer sets `read: true`, but a future `read: false`
-    // producer would need this row to carry it before `replayedDebateResult`
-    // could read anything but `true` back off a replay
-    // #1081. Derived from the SAME `result` the row's other fields come off,
-    // so a truncated debate cannot be mis-tagged converged by a caller that
-    // forgot to pass a separate flag: `timed_out` is set by exactly one
-    // producer, `enforceLatencyBudget`, and set only when it force-terminated
-    // the debate before a result was produced. Every other producer of a
-    // `DebateResult` — a completed round, the round-cap hybrid termination —
-    // leaves it unset, so `converged` alone decides between the other two
-    // states
     termination:
       result.timed_out !== undefined
         ? 'latency_truncated'
         : result.converged
           ? 'converged'
           : 'non_converged',
-    // #1380 (migration 0051). Only ever set alongside 'latency_truncated'
-    // above — both are read off the SAME `result.timed_out`, so a row cannot
-    // carry a cause without also carrying the termination it explains. Absent
-    // rather than null on the domain object, matching every other optional
-    // field here: a pre-migration `timed_out` (a test fixture, a replay of an
-    // old row) genuinely has no cause to report
     ...(result.timed_out?.cause === undefined ? {} : { termination_cause: result.timed_out.cause }),
   };
 }
 
-/**
- * Projects `result.round_verdicts` (#1517) into `debate_round_log` rows,
- * keyed by `result.debate_id`. Empty input (a producer with no round data,
- * or `round_verdicts` absent entirely) yields an empty array rather than
- * throwing — same "nothing to write" convention `writeRoundLog` follows.
- */
 export function buildDebateRoundLogRows(
   result: DebateResult,
   created_at: Date,
@@ -94,112 +45,8 @@ export function buildDebateRoundLogRows(
   }));
 }
 
-/**
- * The bar coordinate a live tick belongs to (#393).
- *
- * ## The defect
- *
- * `debate_log.bar_timestamp` stored `clock.now()`, unfloored. A tick at
- * 14:32:07 wrote `bar_timestamp = 14:32:07` — which is what `created_at`
- * already means. The column is named for a bar coordinate and held the tick
- * time.
- *
- * That breaks replay-from-log, the determinism posture ADR-0003 §2 states for
- * every LLM pass ("replay the logged output instead of re-calling the LLM …
- * a live LLM call inside a replayed path is disqualified outright"). Under
- * a deterministic replay the clock is advanced TO a bar close, so a replay looks up
- * 14:30:00 and misses every live row. `debate_id` cannot bridge the two either
- * — it hashes the same unfloored instant plus the analyst views.
- *
- * ## The timeframe had to be introduced, and this is the one chosen
- *
- * #393 records the open question honestly: the debate step receives no
- * timeframe, and timeframe is a per-ANALYST constant today
- * (`INDICATOR_TIMEFRAME`, `CONTEXT_TIMEFRAME`) rather than a tick property.
- *
- * One hour, because it is the coordinate the rest of the system already
- * decides on: `DEFAULT_INDICATOR_TIMEFRAME` is `1h`, `DEFAULT_TRADER_CONFIG
- * .atr_timeframe` is `1h`, and the Trader's stop — the number a mis-floored
- * bar would actually corrupt — is priced off 1h bars. Choosing anything else
- * would introduce a second bar concept alongside the one every indicator
- * already uses.
- *
- * It is deliberately NOT the tick cadence (2 minutes on the paper profile
- * since #670 — ADR-0008 §2 as amended; this comment said 15 minutes long
- * after that retune). Cadence is how often the system looks; a bar is what it
- * looks AT. Flooring to cadence would make the coordinate change the day
- * someone retunes the scheduler, and every historical row would then refer to
- * a grid nothing else shares — and the scheduler HAS been retuned once
- * already without this grid moving, which is the argument working.
- *
- * Consequence worth stating: at a 2-minute cadence, thirty consecutive ticks
- * share one bar, and they DO thereby share a `debate_id`. Since the
- * tick/decision split (#743) only one of those thirty runs the debate stage
- * at all; the sharing matters for crash-retries and restarts within a bar.
- *
- * **CORRECTED 2026-08-14 (#617).** This paragraph previously argued the
- * collision away: "the bar is only one of three hash inputs, and the third is
- * the analyst views, whose `key_points` are raw model prose. Two ticks fifteen
- * minutes apart collide only if the analysts produced byte-identical output
- * over the interval, which is the retry case the write-once primary key is
- * for, not a second debate."
- *
- * That premise is false, and it is worth being precise about why, because it
- * is what let the defect run unnoticed through a soak. **There is no LLM
- * client anywhere in `server/pipeline/analysts/`.** Both analysts are
- * deterministic functions of closed bars: the technical analyst's `key_points`
- * are templated numeric strings, the sentiment analyst emits a constant
- * `NO_DATA_MARKER` string on every production tick, and bar reads are pinned
- * to the grid by `barIndex(timeframe, asOf)`. When every analyst read 1h
- * bars, the views were byte-identical within one 1h bar, so all three hash
- * inputs were — every non-first tick collided, by construction rather than by
- * coincidence.
- *
- * **AMENDED 2026-08-17 (#742/#743/#781).** "Deterministic functions of closed
- * bars" no longer implies "byte-identical within a 1h bar": #742 moved the
- * technical read to 5m bars, so freshly-recomputed views drift within a
- * debate bar and the content hash with them (#781 records the exposure). The
- * property is restored STRUCTURALLY by the tick/decision split (#743): the
- * analysts run once per debate bar, so the views — and the hash — are
- * computed once per bar; and the debate adapter's per-bar memo replays the
- * bar's resolved row even if the stage is re-entered.
- *
- * Measured: 29 of 40 debates in the soak's first five hours warned on the
- * duplicate write, and the fresh-debate count equals bars-elapsed ×
- * instruments, not ticks × instruments.
- *
- * **AMENDED 2026-08-17 (#782).** "Deterministic functions of closed bars" was
- * not even true of the MI half until now: every analyst's item counts came
- * from `MarketIntelligenceStore.getContext`, whose window ended at the raw
- * clock read, so an item ageing out mid-bar moved `key_points` and the
- * `fundamental`/`sentiment` confidence with it. `getContext` now floors that
- * window end with `floorToBar` below, so MI is sampled on this same grid.
- * It does NOT restore byte-identity within a 1h bar — the 5m technical read
- * above is unaffected — the structural per-bar guarantee still comes from
- * #743. What it closes is the one input that answered to wall-clock time
- * rather than to any bar, which is what defeated the content gate on the
- * cross-restart path where the per-bar memo is empty.
- *
- * First-write-wins remains the intended resolution, but it is NOT sufficient
- * on its own: the duplicate run's LLM calls were already paid for, and its
- * (discarded) synthesis was still what the Trader acted on, so `debate_log`
- * held tick 1 while the Trader sized on tick N. `buildDebateStep` now checks
- * for the existing row BEFORE the debate runs and returns it — see #617.
- */
 export const DEBATE_BAR_TIMEFRAME_MS = 60 * 60 * 1_000;
 
-/**
- * Floors an instant to its bar's opening boundary, in UTC.
- *
- * Epoch-relative, not calendar-relative. The honest statement of the tradeoff:
- * epoch flooring produces a uniform grid with no local-time concept at all, so
- * it neither knows nor cares about DST — which is right here, because every
- * timestamp in this system is UTC (`bar_timestamp` is stored and compared as
- * an ISO instant) and UTC has no DST transitions to misalign against. A
- * calendar floor would be the one that needs a timezone argument to be
- * well-defined. If a local-session timeframe is ever introduced — a US equity
- * trading day, say — this function is NOT the right tool for it.
- */
 export function floorToBar(at: Date, timeframeMs: number = DEBATE_BAR_TIMEFRAME_MS): Date {
   return new Date(Math.floor(at.getTime() / timeframeMs) * timeframeMs);
 }
@@ -215,13 +62,6 @@ export class InMemoryDebateLogStore implements DebateLogStore {
     return this.rows.get(debate_id);
   }
 
-  // No reader exists on this in-memory store (#1517's flip-rate tool reads
-  // SqliteDebateLogStore only, matching getTerminationCauseWindowCounts'
-  // precedent of a concrete-class-only accessor), and `writeRoundLog` itself
-  // is off the `DebateLogStore` port (#1558 review round 2) — so `rounds`
-  // is discarded here rather than routed through a same-named method this
-  // class has no use for. A `Map.set` cannot partially fail, so there is no
-  // atomicity gap for this in-memory implementation to close either
   writeLogWithRounds(entry: DebateLog, _rounds: DebateRoundLogEntry[]): void {
     this.writeLog(entry);
   }

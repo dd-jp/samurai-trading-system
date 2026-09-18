@@ -1,15 +1,9 @@
-/**
- * Hand-rolled numbered migration runner — docs/specs/shared-sqlite-store-spec.md
- * "Module: Migrations" (#193). No ORM: numbered `NNNN_name.sql` files applied in
- * order, each recorded in `schema_migrations` so re-running is a no-op.
- */
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type BetterSqlite3 from 'better-sqlite3';
 
-/** `<dir>/migrations`, resolved next to this module (source and build output alike) */
 export const MIGRATIONS_DIR = fileURLToPath(new URL('./migrations', import.meta.url));
 
 const MIGRATION_FILE = /^(\d{4})_[\w-]+\.sql$/;
@@ -19,7 +13,6 @@ interface Migration {
   filename: string;
 }
 
-/** Migration files under `dir`, sorted ascending by version */
 export function listMigrations(dir: string): Migration[] {
   return readdirSync(dir)
     .map((filename) => ({ filename, match: MIGRATION_FILE.exec(filename) }))
@@ -28,12 +21,6 @@ export function listMigrations(dir: string): Migration[] {
     .sort((a, b) => a.version - b.version);
 }
 
-/**
- * Applies every migration not yet recorded in `schema_migrations`, in version
- * order. Each file is applied inside a transaction together with its
- * `schema_migrations` row, so a failing migration leaves no partial version.
- * Returns the versions applied by this call (empty on an up-to-date DB).
- */
 export function runMigrations(db: BetterSqlite3.Database, dir: string = MIGRATIONS_DIR): number[] {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
   version     INTEGER PRIMARY KEY,

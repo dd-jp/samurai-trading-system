@@ -65,12 +65,6 @@ import type {
 } from './exit-valuation-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
-/**
- * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
- * nothing in this file turns on the residual re-flatten's session gate, and a
- * shut venue would stand that path down for a reason none of these tests are
- * about.
- */
 const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
   crypto: new AlwaysOpenCalendar(),
   stocks: new AlwaysOpenCalendar(),
@@ -121,9 +115,6 @@ const FAKE_ACCOUNT_STATE = {
   getAccountState: vi.fn(async () => ({
     cash: 10_000,
     peak_equity: 10_000,
-    // `as const` because `SessionBasis` is a discriminated union on
-    // `known: true | false`; without it `known` widens to `boolean` and the
-    // literal no longer selects a branch
     daily_basis: {
       crypto: { known: true, open_equity: 10_000, realized_pnl: 0 },
       stocks: { known: true, open_equity: 10_000, realized_pnl: 0 },
@@ -139,15 +130,8 @@ const FAKE_VOLATILITY = {
 
 const NO_POSITIONS: OpenPosition[] = [];
 
-/**
- * The #640 valuation-freshness bound for these binds. Wide, because these
- * tests exercise wiring rather than freshness — `FAKE_MARKET_DATA` observes
- * every mark at the clock's own `now`, so the bound is never the reason a case
- * here passes or fails. `portfolio-view.test.ts` owns the gate's behaviour.
- */
 const TEST_MAX_MARK_AGE = { crypto: 2 * 60_000, stocks: 15 * 60_000 };
 
-/** B1 persistence seam — a sink; these tests assert step behavior, not the write */
 const NOOP_BREAKER_STATE = { save: () => {} };
 
 function makeDebate(overrides: Partial<DebateResult> = {}): DebateResult {
@@ -163,8 +147,6 @@ function makeDebate(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 10,
     direction: 'bullish',
     debate_id: 'debate-1',
-    // #687: NOW is bar-aligned, so this is the bar the Trader now inherits
-    // instead of flooring a clock read of its own
     bar_timestamp: NOW,
     read: true,
     ...overrides,
@@ -178,8 +160,6 @@ describe('buildTraderStep', () => {
       max_risk_per_trade: 0.01,
       asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
       subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
-      // Unarmed: this fixture's universe declares no subclass, so sizing keeps
-      // the pre-ADR-0018 geometry these expectations were written against
       subclass_of: {},
       atr_timeframe: '1h',
       atr_lookback: 14,
@@ -214,11 +194,8 @@ describe('buildTraderStep', () => {
       portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
-      // #568: no lot open in these cases, so nothing to look an exit fill up for
       getExitFillSizes: async () => new Map<string, number>(),
       getUnresolvedFlattens: async () => [],
-      // #668: the Trader resolves flat-by-close through the instrument's own
-      // venue calendar, so the step needs the same pair production builds once
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -239,11 +216,6 @@ describe('buildTraderStep', () => {
   });
 
   it("brackets and sizes off ADR-0018's frozen row once the config classifies the instrument", async () => {
-    // The composition-root half of #739: `paperTradingProfile` fills
-    // `subclass_of` from the universe, and THIS is the binding that carries it
-    // into the live decision. A per-subclass table the production step never
-    // consults is this repo's dominant defect shape, so the assertion is on the
-    // emitted intent's geometry and deployment rather than on the config
     const config: TraderConfig = {
       conviction_floor: 0.5,
       max_risk_per_trade: 0.01,
@@ -299,13 +271,8 @@ describe('buildTraderStep', () => {
     });
 
     if (intent === null) throw new Error('expected an entry intent');
-    // Mark is 100 and the index row is +2.00% / -2.16%
     expect(intent.stop).toBeCloseTo(97.84, 9);
     expect(intent.target).toBeCloseTo(102, 9);
-    // Equity is the fake account's $10,000, the no-precedent haircut is 0.75x,
-    // and #897's headroom reserve keeps the first tranche at 0.9x the envelope
-    // — all stated rather than divided out, so the number below is the whole
-    // deployment this binding actually produces: 0.35 x 0.9 x 10,000 x 0.75
     expect(intent.size * intent.entry).toBeCloseTo(0.35 * 0.9 * 10_000 * 0.75, 6);
     expect(intent.metadata.sizing.frozen_bracket?.headroom_reserve_fraction).toBe(0.1);
     expect(intent.metadata.sizing.frozen_bracket?.stop_pct).toBe(0.0216);
@@ -317,8 +284,6 @@ describe('buildTraderStep', () => {
       max_risk_per_trade: 0.01,
       asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
       subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
-      // Unarmed: this fixture's universe declares no subclass, so sizing keeps
-      // the pre-ADR-0018 geometry these expectations were written against
       subclass_of: {},
       atr_timeframe: '1h',
       atr_lookback: 14,
@@ -353,11 +318,8 @@ describe('buildTraderStep', () => {
       portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
-      // #568: no lot open in these cases, so nothing to look an exit fill up for
       getExitFillSizes: async () => new Map<string, number>(),
       getUnresolvedFlattens: async () => [],
-      // #668: the Trader resolves flat-by-close through the instrument's own
-      // venue calendar, so the step needs the same pair production builds once
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -374,20 +336,12 @@ describe('buildTraderStep', () => {
     expect(intent).toBeNull();
   });
 
-  // #568, at the call site: the composition root binds `getExitFillSizes` to
-  // the SAME store `getOpenPositions` reads (production.ts), so an exit is
-  // sized off the fill record `executeExit` re-derives its own guard from
-  // Bound here to a real `SqliteExecutionStore` rather than a fake, because
-  // the failure this closes was precisely a reader that existed and was not
-  // wired to the lots it had to agree with
   it('sizes an exit to the residual of a partially flattened lot, reading the same store the lots come from', async () => {
     const config: TraderConfig = {
       conviction_floor: 0.5,
       max_risk_per_trade: 0.01,
       asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
       subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
-      // Unarmed: this fixture's universe declares no subclass, so sizing keeps
-      // the pre-ADR-0018 geometry these expectations were written against
       subclass_of: {},
       atr_timeframe: '1h',
       atr_lookback: 14,
@@ -423,8 +377,6 @@ describe('buildTraderStep', () => {
       conviction: 0.6,
       converged: true,
     });
-    // The earlier partial flatten's own fill: 4 of the 10 closed, 6 left at
-    // the venue, the lot still open at `filled_size` 10
     await store.applyLotAdvance({
       idempotency_key: 'key-aapl-entry-1',
       fills: [
@@ -461,8 +413,6 @@ describe('buildTraderStep', () => {
       portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
-      // #668: the Trader resolves flat-by-close through the instrument's own
-      // venue calendar, so the step needs the same pair production builds once
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -472,7 +422,6 @@ describe('buildTraderStep', () => {
     const intent = await step({
       trace_id: TRACE_ID,
       instrument: 'AAPL',
-      // Opposite the held long → flatten
       debate: makeDebate({ direction: 'bearish', confidence: 0.8, converged: true }),
       clock: CLOCK,
     });
@@ -483,15 +432,6 @@ describe('buildTraderStep', () => {
   });
 });
 
-/**
- * #1109. Proves the composition root, not just `decide.ts` — the no-caller
- * failure this codebase's own defect history keeps producing (see
- * `decide.test.ts`'s equivalent unit coverage for the classification itself).
- * Every one of these fails on the pre-#1109 shape of `TraderDecisionRecord`
- * (no `decision_class`/`reason_detail` fields to read), which is the empty
- * payload issue #1109 reports: 63 no_trade rows in the 2026-09-04 session,
- * none of them answering why without a manual join back to `debate_log`.
- */
 describe('buildTraderStep — decision_class on trader_log (#1109)', () => {
   const CONFIG: TraderConfig = {
     conviction_floor: 0.5,
@@ -627,7 +567,6 @@ describe('sizingEquity (#511)', () => {
   });
 
   it('leaves equity untouched when no ceiling is declared', () => {
-    // Paper, backtest, and every existing caller: the pre-#511 behaviour
     expect(sizingEquity(10_000, undefined)).toBe(10_000);
   });
 });
@@ -638,8 +577,6 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
     subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
-    // Unarmed: this fixture's universe declares no subclass, so sizing keeps
-    // the pre-ADR-0018 geometry these expectations were written against
     subclass_of: {},
     atr_timeframe: '1h',
     atr_lookback: 14,
@@ -667,7 +604,6 @@ describe('buildTraderStep capital ceiling (#511)', () => {
         volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
         auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
       }),
-      // `cash: 10_000`, no open positions, so portfolio equity is 10_000
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
@@ -677,11 +613,8 @@ describe('buildTraderStep capital ceiling (#511)', () => {
       portfolioSnapshots: new Map(),
       config: CEILING_CONFIG,
       setupStore: new FixtureSetupStore(),
-      // #568: no lot open in these cases, so nothing to look an exit fill up for
       getExitFillSizes: async () => new Map<string, number>(),
       getUnresolvedFlattens: async () => [],
-      // #668: the Trader resolves flat-by-close through the instrument's own
-      // venue calendar, so the step needs the same pair production builds once
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -702,10 +635,6 @@ describe('buildTraderStep capital ceiling (#511)', () => {
   }
 
   it('sizes off the ceiling, not off account equity, when equity is larger', async () => {
-    // THE acceptance criterion: equity 10,000 against a declared 1,000 must
-    // size as if the account held 1,000. Asserted as a RATIO against the
-    // unclamped size rather than an absolute, so it pins the clamp rather than
-    // re-deriving `decide`'s arithmetic here
     const unclamped = await sizeFor(undefined);
     const clamped = await sizeFor(toCapitalCeilingUsd(1_000, 'test'));
 
@@ -713,8 +642,6 @@ describe('buildTraderStep capital ceiling (#511)', () => {
   });
 
   it('does not inflate a size when the ceiling is above real equity', async () => {
-    // A ceiling is a bound, never a target: a $1m declaration against a $10k
-    // account must not size as if the money were there
     expect(await sizeFor(toCapitalCeilingUsd(1_000_000, 'test'))).toBeCloseTo(
       await sizeFor(undefined),
       10,
@@ -722,11 +649,6 @@ describe('buildTraderStep capital ceiling (#511)', () => {
   });
 
   it('rejects instead of skipping when the CONTROL arm cannot read the account (#1089)', async () => {
-    // #1089's `control_arm_valuation_refused` skip is narrowed by error TYPE
-    // (`BookValuationError`/`AggregateError`), not merely by `arm === 'control'`
-    // A plain account-read failure must stay a FAULT on either arm; were the
-    // catch in `buildBracket` to check only `arm`, it would be downgraded to a
-    // skip and a broken control-arm read would go unnoticed for the soak
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
@@ -766,26 +688,6 @@ describe('buildTraderStep capital ceiling (#511)', () => {
   });
 });
 
-/**
- * The diagnostic escalation wired into the step (#698), as corrected by #710's
- * review.
- *
- * `trader-diagnostic-alert.test.ts` pins the throttle's counting rules on their
- * own. These are the properties that only exist at the COMPOSITION: that the
- * step does not wait for the transport, that the durable log is not throttled
- * with the alert, and that the line carries the tick's own trace. Every one of
- * them was wrong or untested when the throttle's unit tests were fully green.
- */
-/**
- * #748. The Trader now names three different in-process exits and `trader_log`
- * has a column for them — but the COMPOSITION is where that column gets its
- * value, and this repo's dominant defect class is a tested mechanism nothing
- * calls. `decide.test.ts` proves the intent carries `metadata.exit_reason`;
- * `sqlite-decision-record-stores.test.ts` proves the column round-trips. Only
- * this pins the wire between them: dropping `intent.metadata.exit_reason` from
- * `buildTraderSteps`' exit-path write leaves both of those green and every
- * released position in the soak indistinguishable from a flat-by-close.
- */
 describe('buildTraderSteps exit_reason persistence (#748)', () => {
   const HELD: OpenPosition = {
     idempotency_key: 'existing-key',
@@ -812,8 +714,6 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
     subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
-    // Unarmed: this fixture's universe declares no subclass, so sizing keeps
-    // the pre-ADR-0018 geometry these expectations were written against
     subclass_of: {},
     atr_timeframe: '1h',
     atr_lookback: 14,
@@ -832,8 +732,6 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
 
   it('records signal_decay on the row the exit-check path writes', async () => {
     const written: TraderDecisionRecord[] = [];
-    // Momentum netting AGAINST the held long: RSI below 50 and a negative MACD
-    // histogram is the `-1` the default criterion releases on
     const marketData = {
       ...FAKE_MARKET_DATA,
       getIndicator: vi.fn(async (_instrument: string, spec: IndicatorSpec) => ({
@@ -862,9 +760,6 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
       portfolioSnapshots: new Map(),
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
-      // Nothing exited yet — the whole 50 is still held. A non-empty map here
-      // is the amount ALREADY closed (#568), so seeding it would leave zero to
-      // release and the exit would correctly decline to fire
       getExitFillSizes: async () => new Map<string, number>(),
       getUnresolvedFlattens: async () => [],
       sessionCalendars: {
@@ -884,25 +779,12 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
     expect(intent?.intent_type).toBe('exit');
     expect(intent?.metadata.exit_reason).toBe('signal_decay');
     expect(written).toHaveLength(1);
-    // The row, not the intent — this is the assertion the composition owes
     expect(written[0]?.exit_reason).toBe('signal_decay');
     expect(written[0]?.intent_type).toBe('exit');
-    // Attributed to the debate that OPENED the lot, not to a debate this tick
-    // never ran — the tick path has no `DebateResult` at all
     expect(written[0]?.debate_id).toBe('debate-that-opened-the-lot');
   });
 });
 
-/**
- * #1128: `checkExitsWithReason` already computed `decision_class` via
- * `classifyExitCheckSkip` — the composition threw it away. These pin the fix
- * AT THE SEAM: change-only for an ordinary skip (the #743 volume argument —
- * ~30 exit-check calls per bar per instrument at a 2-minute tick against a 1h
- * bar, tick-runner.ts's own count is "~29 of 30 passes" idle), every
- * occurrence for the two data-fault reasons, and no row at all for
- * `no_open_position` — `trader_log.debate_id` is `NOT NULL` (migration 0016)
- * and a flat instrument has no lot to attribute one to.
- */
 describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
   const HELD: OpenPosition = {
     idempotency_key: 'held-lot',
@@ -945,15 +827,11 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
     flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
-  // RSI 60 + a positive MACD histogram nets +1: momentum AGREES with the held
-  // long, so the decay read holds
   const HOLDS = async (_instrument: string, spec: IndicatorSpec) => ({
     indicator: spec.indicator,
     value: spec.indicator === 'rsi' ? 60 : 0.5,
     as_of_bar_close: NOW,
   });
-  // RSI 40 + a negative MACD histogram nets -1 against the held long, the
-  // same reading `exit_reason_persistence`'s `signal_decay` test uses
   const DECAYS = async (_instrument: string, spec: IndicatorSpec) => ({
     indicator: spec.indicator,
     value: spec.indicator === 'rsi' ? 40 : -0.5,
@@ -1013,8 +891,6 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
 
     expect(written).toHaveLength(1);
     expect(written[0]?.skip_reason).toBe('signal_still_supports_position');
-    // The defect this ticket closes: `decision_class` reaching the row at
-    // all, not merely a row existing
     expect(written[0]?.decision_class).toBe('declined_on_signal');
     expect(written[0]?.debate_id).toBe('debate-that-opened-the-lot');
   });
@@ -1065,11 +941,6 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
 
   it('writes exit_held_quantity_diverged on a bounded repeat, not every tick, while the wedge persists (review round 1, finding 1a)', async () => {
     const written: TraderDecisionRecord[] = [];
-    // `heldQuantitiesFor` nets `filled_size` (50, from HELD) against recorded
-    // exit fills; a recorded exit fill that exceeds it (999) is the store
-    // contradicting itself — `held.some((lot) => lot.held < 0)` in
-    // `buildFlattenExit` — which is exactly what routes to
-    // `exit_held_quantity_diverged` rather than `exit_no_filled_size`
     const { exitCheck } = build({
       traderLog: { write: (record) => written.push(record) },
       getIndicator: DECAYS,
@@ -1080,9 +951,6 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       await exitCheck({ trace_id: `trace-${i}`, instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
     }
 
-    // 9 identical ticks would be 9 rows under the pre-review "write every
-    // occurrence" rule; the bounded repeat (onset, then every
-    // `ALERT_REPEAT_EVERY_DIAGNOSTICS` ticks) caps it to 2: tick 1 and tick 9
     expect(written).toHaveLength(2);
     expect(written[0]?.skip_reason).toBe('exit_held_quantity_diverged');
     expect(written[1]?.skip_reason).toBe('exit_held_quantity_diverged');
@@ -1115,23 +983,14 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       getOpenPositions: async () => positions,
     });
 
-    // Episode 1: holds, first occurrence -> writes
     await exitCheck({ trace_id: 'trace-1', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
-    // A second identical tick would ordinarily stay suppressed, proving the
-    // episode really did open
     await exitCheck({ trace_id: 'trace-2', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
     expect(written).toHaveLength(1);
 
-    // The store reconciles the lot flat without this exitCheck ever seeing a
-    // fired exit intent — the ONLY boundary that observes this is the
-    // no_open_position branch's own `clearEpisode` call
     positions = [];
     await exitCheck({ trace_id: 'trace-flat', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
     expect(written).toHaveLength(1);
 
-    // Episode 2: a new lot reopens with the SAME first skip reason episode 1
-    // wrote. If the no_open_position tick above had not cleared the episode,
-    // this would still read as an unchanged repeat and stay suppressed
     positions = [{ ...HELD, debate_id: 'debate-that-reopened-the-lot' }];
     await exitCheck({ trace_id: 'trace-3', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
 
@@ -1162,14 +1021,6 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       await exitCheck({ trace_id: `trace-${i}`, instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
     }
 
-    // Each reason gets its own per-reason repeat budget (`ALERT_REPEAT_EVERY_DIAGNOSTICS`,
-    // currently 8): onset writes both reasons (ticks 0-1), then every switch
-    // back to a reason already written within the budget stays suppressed
-    // until that reason's own budget clears, at tick 8-9 here — exact
-    // accounting for this shape is pinned directly against
-    // `ExitSkipWriteThrottle` in exit-skip-write-throttle.test.ts, so this
-    // integration test only needs to confirm the pipeline actually wires the
-    // gate in, not re-derive its arithmetic
     expect(written).toHaveLength(4);
     expect(written.map((record) => record.skip_reason)).toEqual([
       'signal_still_supports_position',
@@ -1190,11 +1041,8 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       getOpenPositions: async () => positions,
     });
 
-    // Episode 1: holds, first occurrence of the tracked instrument -> writes
     await exitCheck({ trace_id: 'trace-1', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
 
-    // The signal decays, the flatten actually fires (a real intent, not a
-    // skip), and the lot closes
     indicatorImpl = DECAYS;
     const exitIntent = await exitCheck({
       trace_id: 'trace-2',
@@ -1204,10 +1052,6 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
     });
     expect(exitIntent).not.toBeNull();
 
-    // Episode 2: a NEW lot (new debate_id) is already open by the very next
-    // exitCheck — this exitCheck never observes the instrument flat in
-    // between — and the momentum read is back to holding: the SAME first
-    // skip reason episode 1 wrote
     positions = [{ ...HELD, debate_id: 'debate-that-reopened-the-lot' }];
     indicatorImpl = HOLDS;
     await exitCheck({ trace_id: 'trace-3', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
@@ -1218,16 +1062,6 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
   });
 
   it('writes a fresh row after the DECISION path fires the exit, even when the reopened lot hits the same first skip reason (review round 3, finding 3)', async () => {
-    // The sibling above proves this for `exitCheck`'s OWN fired exit. But
-    // `routeDecision`'s holding branch can ALSO reach `buildExitIntent` —
-    // for `direction_flip` here, and for the flat-by-close flatten — through
-    // the `trader` (debate-bar) binding instead, which never routes through
-    // `exitCheck` at all. `exitSkipThrottle` is one shared instance across
-    // both bindings (see `buildTraderSteps`), so if `trader`'s own
-    // fired-exit branch did not clear the instrument's tick-path episode
-    // state, a lot closed by a debate-bar decision and reopened before the
-    // next tick would still read its first tick-path skip as an unchanged
-    // repeat of the CLOSED lot's last-written reason
     const written: TraderDecisionRecord[] = [];
     let positions: OpenPosition[] = [HELD];
     const { trader, exitCheck } = build({
@@ -1236,25 +1070,18 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       getOpenPositions: async () => positions,
     });
 
-    // Episode 1: holds, first tick-path occurrence -> writes
     await exitCheck({ trace_id: 'trace-1', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
     expect(written).toHaveLength(1);
 
-    // A debate bar decides direction_flip and fires the exit through the
-    // TRADER binding, not exitCheck
     const exitIntent = await trader({
       trace_id: 'trace-2',
       instrument: 'AAPL',
-      // Opposite the held long -> direction_flip
       debate: makeDebate({ direction: 'bearish', confidence: 0.8, converged: true }),
       clock: CLOCK,
     });
     expect(exitIntent?.intent_type).toBe('exit');
     expect(written).toHaveLength(2);
 
-    // Episode 2: a NEW lot reopens with the SAME first skip reason episode 1
-    // wrote, observed by the very next exitCheck tick — no exitCheck ever
-    // saw the instrument flat in between
     positions = [{ ...HELD, debate_id: 'debate-that-reopened-the-lot' }];
     await exitCheck({ trace_id: 'trace-3', instrument: 'AAPL', clock: CLOCK, bar: TICK_BAR });
 
@@ -1264,25 +1091,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
   });
 });
 
-/**
- * #826 — THE WIRE, not the mechanism.
- *
- * `decide.test.ts` proves `buildFlattenExit` degrades to an unpriced flatten
- * when the mark read fails, and `verdict/index.test.ts` proves Verdict lets
- * such an intent through. Neither says the live orchestrator ever REACHES that
- * behaviour: the tick path runs through `buildTraderSteps`, and if this root
- * did not thread `onUnpricedFlatten` the degradation would still happen but
- * nobody would be paged for it — which is precisely the "tested mechanism
- * nothing calls" shape this repo keeps shipping.
- *
- * So this drives the real `exitCheck` binding with a market-data double whose
- * `getMark` throws the way a stalled Alpaca does, inside the flat-by-close
- * window, and asserts BOTH halves at the composition: the exit intent, and the
- * page on the channel the composition root owns.
- */
 describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
-  // 2026-07-28 is a Tuesday; the US close is 20:00 UTC and the config below
-  // opens the flatten window at 19:55, so 19:56 is inside it
   const INSIDE_WINDOW = new Date('2026-07-28T19:56:00Z');
   const WINDOW_CLOCK: Clock = { now: () => INSIDE_WINDOW };
   const TICK_BAR = new Date('2026-07-28T19:00:00Z');
@@ -1333,8 +1142,6 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
     return buildTraderSteps({
       marketData: {
         ...FAKE_MARKET_DATA,
-        // The stall: bars still answer, the mark does not — the exact split
-        // `FailoverDataSource` leaves in place by failing over bars only
         getMark: vi.fn(async () => {
           throw new Error(STALL);
         }),
@@ -1401,28 +1208,11 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
     expect(posted).toHaveLength(1);
     expect(posted[0]?.seam).toBe('trader');
     expect(posted[0]?.instrument).toBe('AAPL');
-    // The dark name IS the exited name on this seam — that is what
-    // distinguishes it from #841's two
     expect(posted[0]?.unvalued_instruments).toEqual(['AAPL']);
     expect(posted[0]?.reason).toContain('timed out');
     expect(posted[0]?.reported_at).toEqual(INSIDE_WINDOW);
   });
 
-  /**
-   * The OTHER binding — the decision-path `trader` step.
-   *
-   * `buildTraderSteps` threads `onUnpricedFlatten` twice, and until this case
-   * existed only the tick-path thread was pinned: deleting the `trader` bind
-   * left all ~3900 tests green, which is this repo's dominant defect shape (a
-   * mechanism that is tested and a wire that nothing holds).
-   *
-   * The debate is deliberately NEUTRAL. `routeDecision` decides flat-by-close
-   * ABOVE its `neutral || !converged` skip — that ordering is the load-bearing
-   * part of the branch's own comment — so a neutral debate is exactly the case
-   * that reaches `buildFlattenExit` on this path, and it reaches it without the
-   * pass needing a working equity read (the strict snapshot throws here, since
-   * the same dark mark it captures is the one under test).
-   */
   it('pages the operator when the DECISION path decides the unpriced flatten', async () => {
     const posted: ExitValuationDegradedAlert[] = [];
     const { trader } = buildTraderSteps({
@@ -1470,8 +1260,6 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
     expect(intent?.intent_type).toBe('exit');
     expect(intent?.metadata.exit_reason).toBe('flatten');
     expect(intent?.metadata.unpriced_exit).toBe(true);
-    // The wire, which is what a deleted bind breaks — the intent above still
-    // degrades without it
     expect(posted).toHaveLength(1);
     expect(posted[0]?.seam).toBe('trader');
     expect(posted[0]?.instrument).toBe('AAPL');
@@ -1525,20 +1313,6 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
 });
 
 describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
-  /**
-   * A calendar that answers "this venue never closes" for an EQUITY — the fault
-   * `session_end_absent_on_non_crypto` exists to report, which a conforming
-   * implementation cannot produce (both shipped equity calendars resolve a
-   * close).
-   *
-   * This fixture used to answer with a close already in the PAST, reporting
-   * `session_end_in_past`. #1389 deleted that kind: a close already gone is now
-   * an ordinary instant inside the post-close grace, answered by flattening
-   * against that close. These four tests are about the ESCALATION MACHINERY —
-   * log every tick, alert on a bounded interval, under the tick trace, with or
-   * without a channel — so they need any kind that a broken calendar still
-   * raises, and this is the one left.
-   */
   const BROKEN_STOCKS_CALENDAR: TradingCalendar = {
     isOpen: () => true,
     isTradingDay: () => true,
@@ -1551,8 +1325,6 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
     subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
-    // Unarmed: this fixture's universe declares no subclass, so sizing keeps
-    // the pre-ADR-0018 geometry these expectations were written against
     subclass_of: {},
     atr_timeframe: '1h',
     atr_lookback: 14,
@@ -1617,13 +1389,6 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
   }
 
   it('does not wait for the alert transport before returning the intent', async () => {
-    // The defect this pins is a SLOW transport, not a failing one — the failing
-    // case was always caught. `buildTraderStep`'s return value is what Risk and
-    // Execution act on, and the Telegram client retries 3x against a 10s
-    // per-request timeout, so an awaited send could hold a flat-by-close exit
-    // for ~31s of a 15-minute tick while the bell approaches. A channel that
-    // never settles is that outage taken to its limit: the step must still
-    // answer, and this test hangs rather than fails if it ever awaits again
     let posted = 0;
     const step = buildStep({
       traderDiagnosticAlerts: {
@@ -1636,17 +1401,10 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
 
     await step({ trace_id: TRACE_ID, instrument: 'AAPL', debate: makeDebate(), clock: CLOCK });
 
-    // Reaching here at all is the assertion. The count proves the send was
-    // still ISSUED rather than dropped — fire-and-forget, not fire-and-skip
     expect(posted).toBe(1);
   });
 
   it('logs the condition on every tick while alerting on a bounded interval', async () => {
-    // #710. The `error` log used to live inside the function the throttle
-    // gates, so a condition present on every tick was logged on tick 1, again
-    // on tick 9, and nowhere in between — while this module's docblock promised
-    // an absent channel meant "no second copy", never "silent". Seven ticks in
-    // eight had no durable record of a broken calendar
     const { logger, entries } = collectingLogger();
     let posted = 0;
     const step = buildStep({
@@ -1663,18 +1421,11 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
     }
 
     expect(diagnosticLines(entries)).toHaveLength(3);
-    // ...and the run length in the line is what tells the operator it is not
-    // clearing, which is the whole signal
     expect(diagnosticLines(entries)[2]?.message).toContain('3 consecutive tick(s)');
-    // The chat, sharing a channel with kill-threshold breaches, hears it once
     expect(posted).toBe(1);
   });
 
   it('logs under the TICK trace, not a synthetic constant', async () => {
-    // #710. `trace_id: 'trader-diagnostic'` was hardcoded, which severed the
-    // line from the debate, the `trader_log` row and the verdict for the same
-    // instrument on the same tick — the joins a soak post-mortem needs to
-    // reconstruct what the Trader was looking at when it complained
     const { logger, entries } = collectingLogger();
 
     await buildStep({ logger })({
@@ -1704,9 +1455,6 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
 
 describe('buildRiskStep', () => {
   const RISK_CONFIG: RiskConfig = {
-    // Fractions of the fixture's equity ($10,000, `FAKE_ACCOUNT_STATE`),
-    // sized so none of them binds unless a test overrides one on purpose —
-    // 10x/20x equity is "never" regardless of a test's own position sizes
     max_position_size_fraction_of_equity: 10,
     per_asset_cap_fraction_of_equity: 10,
     per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 10 },
@@ -1769,7 +1517,6 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
-      // Required-but-nullable since #957: no producer here, said out loud
       critic: undefined,
     });
 
@@ -1781,13 +1528,6 @@ describe('buildRiskStep', () => {
   });
 
   it('#1019: a sibling write-ahead order with no fill yet still consumes the gross cap, end to end from getOpenPositions', async () => {
-    // The whole chain the ticket is about, through the real composition rather
-    // than a hand-built `PortfolioView`: `execute.ts` writes this row with
-    // `filled_size: 0` BEFORE calling the broker, `ingestFills()` advances it
-    // on a 15s poll, and until it does the row values at zero. At #1013's
-    // width 6 that is where every sibling in a tick lands, so before this fix
-    // the second instrument's entry cleared the gross cap against an empty
-    // book
     const writeAhead: OpenPosition = {
       idempotency_key: 'MSFT-write-ahead',
       debate_id: 'debate-sibling',
@@ -1809,8 +1549,6 @@ describe('buildRiskStep', () => {
     };
 
     const step = buildRiskStep({
-      // Cap = 0.7 x $10,000 equity = $7,000. The sibling reserves 65 x 100 =
-      // $6,500, leaving $500 of the $1,000 this intent asks for
       config: { ...RISK_CONFIG, portfolio_gross_cap_fraction_of_equity: 0.7 },
       correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
       ciiConsumer: { getScores: vi.fn(() => ({})) },
@@ -1838,19 +1576,10 @@ describe('buildRiskStep', () => {
     expect(decision.status).toBe('approved');
     expect(decision.order_intent?.size).toBe(5);
     expect(decision.binding_constraint).toBe('portfolio_gross_exposure_cap');
-    // The unfilled lot must not have inflated equity: `cash` is not debited at
-    // submit time either, so counting it on both sides would move a sticky
-    // drawdown breaker off a position that does not exist yet
     expect(decision.risk_snapshot.exposure.portfolio).toBe(0);
   });
 
   it("#1019: next_breaker_state is the state of THIS pass's own observation, not whatever the shared instance holds after the await", async () => {
-    // `circuitBreakers` is ONE instance across every instrument's bind and
-    // since #1013 siblings run concurrently, so a read taken after the
-    // portfolio `await` can pick up a state a sibling's `evaluate()` advanced
-    // in between and file it under THIS instrument's `risk_log` row. The
-    // second return value below stands in for that sibling: the decision must
-    // carry the first, and so must the state persisted beside it
     const circuitBreakers = new CircuitBreakers({
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
@@ -1915,8 +1644,6 @@ describe('buildRiskStep', () => {
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
       auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
     });
-    // Force the hard drawdown breaker to trip: peak far above equity so
-    // drawdown_pct exceeds max_drawdown_pct on the first evaluate() call
     const step = buildRiskStep({
       config: RISK_CONFIG,
       correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
@@ -1941,7 +1668,6 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
-      // Required-but-nullable since #957: no producer here, said out loud
       critic: undefined,
     });
 
@@ -1952,19 +1678,9 @@ describe('buildRiskStep', () => {
   });
 
   it('#740: persists a below-viable-size refusal to risk_log with a binding_constraint distinct from a circuit-breaker refusal', async () => {
-    // Verified against the actual persisted `risk_log` ROWS `riskLog.write`
-    // receives (below), not the in-memory `RiskDecision.reasons` array — a
-    // post-mortem reads the store, never the process's own memory. Two
-    // DIFFERENT rejection causes are driven through the SAME riskLog sink so
-    // the assertion can fail if they ever collapse onto one tag — a single
-    // `toBe('min_viable_size')` plus a tautological `not.toBe` on an
-    // unrelated literal would not catch that
     const writes: unknown[] = [];
     const riskLog = { write: (record: unknown) => writes.push(record) };
 
-    // Trimmed to £5 notional by the per-asset-class cap (0.0005 x the
-    // $10,000 fixture equity = $5), which is below the £100 `min_viable_size`
-    // floor — a dust residual that must refuse rather than forward
     const sizeStep = buildRiskStep({
       config: {
         ...RISK_CONFIG,
@@ -1990,7 +1706,6 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
-      // Required-but-nullable since #957: no producer here, said out loud
       critic: undefined,
       riskLog,
     });
@@ -2005,8 +1720,6 @@ describe('buildRiskStep', () => {
     expect(sizeDecision.binding_constraint).toBe('min_viable_size');
     expect(sizeDecision.order_intent).toBeNull();
 
-    // Same riskLog sink, a genuinely different rejection cause: the sticky
-    // tripped-breaker scenario from the test immediately above
     const breakerStep = buildRiskStep({
       config: RISK_CONFIG,
       correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
@@ -2038,7 +1751,6 @@ describe('buildRiskStep', () => {
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
-      // Required-but-nullable since #957: no producer here, said out loud
       critic: undefined,
       riskLog,
     });
@@ -2061,17 +1773,10 @@ describe('buildRiskStep', () => {
     expect(breakerRow.status).toBe('rejected');
     expect(sizeRow.binding_constraint).toBe('min_viable_size');
     expect(breakerRow.binding_constraint).toBe('circuit_breaker:portfolio');
-    // The property the ticket asks to be verified, not merely inspected:
-    // two distinct rejection causes must not collapse onto the same
-    // persisted binding_constraint tag
     expect(sizeRow.binding_constraint).not.toBe(breakerRow.binding_constraint);
   });
 
   describe('#726: risk_log on the per-subclass cap gate throw', () => {
-    // AAPL is deliberately absent from `subclass_of` — the D5 envelope is
-    // declared (armed) but this instrument was never added to the pool file,
-    // which is exactly the hole `perSubclassDeploymentCap` refuses to size
-    // around
     const ARMED_CAP_CONFIG: RiskConfig = {
       ...RISK_CONFIG,
       per_subclass_deployment_cap: {
@@ -2106,7 +1811,6 @@ describe('buildRiskStep', () => {
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
         portfolioSnapshots: new Map(),
-        // Required-but-nullable since #957: no producer here, said out loud
         critic: undefined,
         riskLog,
       });
@@ -2130,20 +1834,12 @@ describe('buildRiskStep', () => {
       expect(row.trace_id).toBe(TRACE_ID);
       expect(row.instrument).toBe('AAPL');
       expect(row.status).toBe('error');
-      // An operator reading this row alone must be able to tell which
-      // instrument/subclass was missing without opening the code
       expect(row.binding_constraint).toBe(
         'per_subclass_deployment_cap:unclassified_instrument:AAPL',
       );
     });
 
     it('still returns before the entry-gate loop on an exit, even with the same armed-but-unclassified config', async () => {
-      // The sharpest edge on the throw: ADR-0014's flat-by-close reaches Risk
-      // as an `exit`, and `evaluate()` returns before `ENTRY_CAP_GATES` (and
-      // this gate) is ever entered. Pinned again here, at the binding level,
-      // so the try/catch this fix adds around `evaluate()` cannot be the thing
-      // that regresses it — the pipeline-level pin already lives in
-      // `per-subclass-deployment-cap.test.ts`
       const { store, writes } = makeRiskLog();
       const step = buildStep(store);
 
@@ -2160,12 +1856,6 @@ describe('buildRiskStep', () => {
     });
 
     it('propagates the original gate error unchanged even if the risk_log write itself throws', async () => {
-      // Guards the catch's own side effect the same way #507 guards
-      // tick-loop.ts's: a SQLite failure (disk full, locked handle) writing
-      // the diagnostic row must not replace the diagnostic itself. Without
-      // the inner try/catch around `riskLog.write`, this would reject with
-      // "boom" instead of "AAPL has no subclass" — the operator gets an
-      // opaque store error instead of the actionable one
       const step = buildStep({
         write: () => {
           throw new Error('boom');
@@ -2210,10 +1900,7 @@ describe('buildRiskStep', () => {
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
         portfolioSnapshots: new Map(),
-        // Required-but-nullable since #957: no producer here, said out loud
         critic: undefined,
-        // max_pbo's bound is 0.05 (threshold-bounds.ts) — 0.5 crosses it, so
-        // `resolveRiskConfig` throws on every `evaluate()` call
         thresholds: { getRiskThresholds: () => ({ max_pbo: 0.5 }) },
         ...overrides,
       });
@@ -2230,10 +1917,6 @@ describe('buildRiskStep', () => {
       expect(posted).toHaveLength(1);
       expect((posted[0] as { where: string }).where).toBe('live-read');
       expect((posted[0] as { message: string }).message).toMatch(/max_pbo/);
-      // #1280: the tick's own id, threaded from this catch — the same id the
-      // step's other lines and its `risk_log` row carry. The out-of-tick half
-      // of the pair is production.test.ts's `'feedback-cycle'` assertion on
-      // the daily-kill-line-check seam
       expect((posted[0] as { trace_id: string }).trace_id).toBe(TRACE_ID);
     });
 
@@ -2246,9 +1929,6 @@ describe('buildRiskStep', () => {
     });
 
     it('does not post — and does not throw — for an exit intent under the same bad table (#766)', async () => {
-      // The empirical finding #766 asks for: RiskManagerImpl now skips the
-      // live resolve entirely for an exit, so the flatten path never reaches
-      // the clamp at all and this channel is never consulted for it
       const { channel, posted } = makeAlerts();
       const step = buildStep({ thresholdClampAlerts: channel });
 
@@ -2282,10 +1962,6 @@ describe('buildRiskStep', () => {
   });
 
   describe('#841: the exit path must not require a whole-book valuation', () => {
-    /**
-     * Two held lots, one of which the feed will not price. Both are 'stocks'
-     * so the per-class freshness bound cannot be the reason a case passes.
-     */
     function makeHeld(instrument: string): OpenPosition {
       return {
         idempotency_key: `held-${instrument}`,
@@ -2310,7 +1986,6 @@ describe('buildRiskStep', () => {
 
     const HELD = [makeHeld('AAPL'), makeHeld('DARK')];
 
-    /** Prices AAPL; throws for DARK — the single unreadable name */
     const DARK_MARKET_DATA = {
       ...FAKE_MARKET_DATA,
       getMarks: vi.fn(async (instruments: readonly string[], asOf: Date) =>
@@ -2362,7 +2037,6 @@ describe('buildRiskStep', () => {
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
         portfolioSnapshots: new Map(),
-        // Required-but-nullable since #957: no producer here, said out loud
         critic: undefined,
         ...overrides,
       });
@@ -2380,14 +2054,8 @@ describe('buildRiskStep', () => {
         clock: CLOCK,
       });
 
-      // The whole point: an order still exists for the name that CAN be
-      // valued. Before #841 this call rejected with the valuation refusal and
-      // the flatten never reached Verdict at all
       expect(decision.status).toBe('approved');
       expect(decision.order_intent?.instrument).toBe('AAPL');
-      // And the fresh name is genuinely still IN the book that was valued —
-      // 10 filled @ 100 — rather than the exit having been let through on an
-      // empty view that skipped every position
       expect(riskLogRows[0]?.portfolio.gross_exposure).toBe(1_000);
     });
 
@@ -2405,9 +2073,6 @@ describe('buildRiskStep', () => {
       expect(posted[0]?.instrument).toBe('AAPL');
       expect(posted[0]?.seam).toBe('risk');
       expect(posted[0]?.unvalued_instruments).toEqual(['DARK']);
-      // The reason has to name WHY, not merely that — `describeThrown` prints
-      // the message alone, so a reason that loses the source text is a reason
-      // the operator never reads
       expect(posted[0]?.reason).toMatch(/DARK/);
       expect(posted[0]?.reason).toMatch(/feed timeout/);
     });
@@ -2432,10 +2097,6 @@ describe('buildRiskStep', () => {
 
     it('re-raises an exit failure the degraded attempt cannot explain, instead of swallowing it', async () => {
       const { channel, posted } = makeAlerts();
-      // The book values cleanly; it is the VOLATILITY read that fails — one
-      // of the reads the degraded attempt deliberately skips. So the fallback
-      // succeeds with nothing unvalued, and the real fault would vanish on
-      // every exit tick if the original throw were dropped here
       const step = buildStep({
         marketData: FAKE_MARKET_DATA,
         getOpenPositions: async () => [makeHeld('AAPL')],
@@ -2454,7 +2115,6 @@ describe('buildRiskStep', () => {
           clock: CLOCK,
         }),
       ).rejects.toThrow(/volatility feed unavailable/);
-      // And it is not miscast as a valuation degradation on the way out
       expect(posted).toHaveLength(0);
     });
 
@@ -2462,10 +2122,6 @@ describe('buildRiskStep', () => {
       const { channel, posted } = makeAlerts();
       const step = buildStep({ exitValuationAlerts: channel });
 
-      // Unchanged behaviour: no view, no order, and the tick fails loudly for
-      // #507's catch to record. Every consumer of `exposure_by_instrument`
-      // reads an absent key as zero exposure, so an entry sized against a
-      // book missing DARK would be sized against caps that are all too wide
       await expect(
         step({
           trace_id: TRACE_ID,
@@ -2473,17 +2129,10 @@ describe('buildRiskStep', () => {
           clock: CLOCK,
         }),
       ).rejects.toThrow(/DARK/);
-      // And the exit-only alert never fires for it
       expect(posted).toHaveLength(0);
     });
 
     it('a degraded valuation cannot trip — or persist — the sticky drawdown breaker', async () => {
-      // A partial view omits a held lot, which understates equity and so
-      // OVERSTATES drawdown. Evaluating breakers off it could trip the sticky
-      // hard-drawdown tier and write it to `breaker_state`, halting every new
-      // entry on a number that was never true. Peak equity here is far above
-      // the degraded equity (10,000 cash + 1,000 AAPL = 11,000 against a
-      // 1,000,000 peak), which WOULD trip a 20% max drawdown if evaluated
       const saved: unknown[] = [];
       const circuitBreakers = makeBreakers();
       const step = buildStep({
@@ -2516,20 +2165,10 @@ describe('buildRiskStep', () => {
           .getPersistedState()
           .some((row) => row.tier === 'portfolio_drawdown' && row.tripped),
       ).toBe(false);
-      // Nothing persisted from the degraded path either — the strict path is
-      // the only writer of `breaker_state`
       expect(saved).toHaveLength(0);
     });
   });
 
-  /**
-   * #957: the risk critic's CADENCE, which is the half that lives here rather
-   * than in the producer. The producer answers; this step decides WHEN to ask,
-   * and #955 specifies "every intent that reaches step 7" — every viable entry
-   * that survived the exit bypass, the breaker gate and the `min_viable_size`
-   * reject. Each test below is one of those survivals, or one of the exits
-   * that must NOT be paid for.
-   */
   describe('risk critic (#957)', () => {
     const BREAKER_CONFIG = {
       daily_loss_pct: 0.05,
@@ -2540,7 +2179,6 @@ describe('buildRiskStep', () => {
       auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
     } as const;
 
-    /** A producer that records what it was asked and answers with `verdict` */
     function recordingCritic(verdict?: RiskCriticVerdict): {
       critic: RiskCriticProducer;
       asks: { instrument: string; held: string[] }[];
@@ -2560,16 +2198,6 @@ describe('buildRiskStep', () => {
       };
     }
 
-    /**
-     * A DEGRADED snapshot, memoised for this trace the way the Trader's is.
-     *
-     * The only route to a non-empty `unvalued_instruments` on an entry: the
-     * entry path asks `computePortfolioView` for a strict valuation, which
-     * REFUSES rather than returning a partial view, so a stale mark aborts the
-     * pass long before step 7. Seeding the per-trace memo puts the degraded
-     * view in front of `evaluate()` directly, which is what makes the
-     * `unvalued_book` gate reachable here at all.
-     */
     function unvaluedSnapshot(): PortfolioSnapshot {
       const known = { known: true, pct: 0 } as const;
       return {
@@ -2632,8 +2260,6 @@ describe('buildRiskStep', () => {
         mode: 'paper',
         breakerState: NOOP_BREAKER_STATE,
         portfolioSnapshots: overrides.portfolioSnapshots ?? new Map(),
-        // Unconditional, not a conditional spread: `critic` is required-but-
-        // nullable on `RiskStepDeps` (#957), so "no producer" is a value here
         critic: overrides.critic,
         ...(overrides.riskLog === undefined ? {} : { riskLog: overrides.riskLog }),
       });
@@ -2646,8 +2272,6 @@ describe('buildRiskStep', () => {
 
       expect(asks).toHaveLength(1);
       expect(asks[0]?.instrument).toBe('AAPL');
-      // The co-catalyst read ADR-0003 §1 names as the blind spot needs the
-      // rest of the book, not just this intent
       expect(asks[0]?.held).toBeDefined();
     });
 
@@ -2667,7 +2291,6 @@ describe('buildRiskStep', () => {
       expect(decision.status).toBe('rejected');
       expect(decision.binding_constraint).toBe('risk_critic:reject');
       expect(decision.reasons.join(' ')).toContain('same CPI print');
-      // ONE row, not one per evaluate pass — the dry run is discarded
       expect(writes).toHaveLength(1);
       expect(writes[0]?.binding_constraint).toBe('risk_critic:reject');
     });
@@ -2681,7 +2304,6 @@ describe('buildRiskStep', () => {
 
       const decision = await step({ critic })({
         trace_id: TRACE_ID,
-        // 10 x $100 = $1,000 of notional proposed
         intent: makeIntent({ size: 10, entry: 100 }),
         clock: CLOCK,
       });
@@ -2692,9 +2314,6 @@ describe('buildRiskStep', () => {
     });
 
     it('no verdict leaves the decision on the mechanical steps, by record', async () => {
-      // The fail-open path the ticket requires to stay intact: a producer-side
-      // failure returns `undefined`, and the decision must stay
-      // distinguishable from one the critic actually passed
       const { critic } = recordingCritic(undefined);
 
       const decision = await step({ critic })({
@@ -2756,10 +2375,6 @@ describe('buildRiskStep', () => {
     });
 
     it('never pays for an entry the unvalued-book gate already refused', async () => {
-      // The fourth member of the population #955's cadence names, alongside
-      // the exit bypass, the breaker gate and the min-viable floor: an entry
-      // on a book that could not be fully valued is refused at
-      // `unvalued_book` — ABOVE step 7 — so it must cost no call
       const { critic, asks } = recordingCritic();
       const snapshots = new Map<string, PortfolioSnapshot>([[TRACE_ID, unvaluedSnapshot()]]);
 
@@ -2776,9 +2391,6 @@ describe('buildRiskStep', () => {
     });
 
     it('DOES pay once the same intent’s book is fully valued — the gate is what excluded it', async () => {
-      // The positive half, and the reason the case above is evidence of
-      // anything: the ONLY difference is the degraded snapshot. Without this,
-      // a critic that never fired at all would pass the check above
       const { critic, asks } = recordingCritic();
 
       const decision = await step({ critic })({
@@ -2896,9 +2508,6 @@ describe('buildVerdictStep', () => {
   });
 
   it('#841: an EXIT still reaches a verdict when one held instrument cannot be valued', async () => {
-    // The second seam. `buildVerdictStep` re-derives the portfolio for gate
-    // 5, so fixing only `buildRiskStep` would have left the flatten approved
-    // at Risk and dead here — same refusal, same missing order, same silence
     const held: OpenPosition = {
       idempotency_key: 'held-DARK',
       debate_id: 'debate-1',
@@ -3251,30 +2860,11 @@ describe('buildPersistence', () => {
   });
 });
 
-/**
- * #847 — a decision pass must not abort before the Trader can flatten.
- *
- * #841 fixed the two seams that VALUE the book for an exit (`buildRiskStep`,
- * `buildVerdictStep`). What it could not reach was the pass whose Trader would
- * have produced the exit in the first place: `buildTraderStep` read the
- * whole-book portfolio view eagerly, before any intent existed, so one dark
- * held name aborted the pass AT the Trader and the flatten waited for the next
- * tick's `runExitCheckPass` — a bounded but real delay against ADR-0014's
- * flat-by-close.
- *
- * The read is still performed eagerly (it is also where `CircuitBreakers`
- * evaluates and persists its sticky tiers); only the FAILURE is deferred, to
- * the one branch that consumes equity.
- */
 describe('#847: a dark mark must not suppress a newly decided flatten', () => {
-  /** 2026-07-28 is a Tuesday; the US close is 20:00 UTC, so the window opens 19:55 */
   const INSIDE_FLATTEN_WINDOW = new Date('2026-07-28T19:56:00Z');
   const WINDOW_CLOCK: Clock = { now: () => INSIDE_FLATTEN_WINDOW };
 
   const RISK_CONFIG: RiskConfig = {
-    // Fractions of the fixture's equity ($10,000, `FAKE_ACCOUNT_STATE`),
-    // sized so none of them binds unless a test overrides one on purpose —
-    // 10x/20x equity is "never" regardless of a test's own position sizes
     max_position_size_fraction_of_equity: 10,
     per_asset_cap_fraction_of_equity: 10,
     per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 10 },
@@ -3329,7 +2919,6 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     };
   }
 
-  /** Prices everything except DARK — the one held name the feed will not serve */
   const DARK_MARKET_DATA = {
     ...FAKE_MARKET_DATA,
     getMark: vi.fn(async (instrument: string, asOf: Date) => {
@@ -3370,7 +2959,6 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
       mode: 'paper' as const,
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots,
-      // Required-but-nullable since #957: no producer here, said out loud
       critic: undefined,
       config: TRADER_CONFIG,
       setupStore: new FixtureSetupStore(),
@@ -3390,8 +2978,6 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     const intent = await step({
       trace_id: TRACE_ID,
       instrument: 'AAPL',
-      // Neutral, which was 92 of 94 debates in the soak — so this also pins
-      // that the flatten is reached on the commonest branch of all
       debate: makeDebate({ direction: 'neutral', synthesis: 'neutral', position: 'flat' }),
       clock: WINDOW_CLOCK,
     });
@@ -3399,8 +2985,6 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     expect(intent).not.toBeNull();
     expect(intent?.intent_type).toBe('exit');
     expect(intent?.side).toBe('sell');
-    // Nothing was memoized: the strict read threw, so no entry later in this
-    // trace can pick a partial observation up out of the B4 memo
     expect(snapshots.size).toBe(0);
   });
 
@@ -3433,19 +3017,8 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     expect(decision.order_intent?.instrument).toBe('AAPL');
   });
 
-  /**
-   * THE REGRESSION THAT WOULD COST THE MOST AND SHOW THE LEAST.
-   *
-   * An entry is sized off equity, and every exposure cap reads an absent
-   * instrument as ZERO exposure — so a book that cannot be fully valued must
-   * still refuse outright here. It refuses by THROWING (aborting the tick into
-   * `tick-loop.ts`'s #507 catch), exactly as the eager read did, rather than
-   * degrading to a partial view or turning into a quiet skip row.
-   */
   it('still refuses to size an ENTRY when one held name is dark', async () => {
     const snapshots = new Map<string, never>();
-    // MSFT is flat, so this is an entry; DARK is held and unpriceable, so the
-    // whole-book valuation the sizing depends on cannot be produced
     const step = buildTraderStep(makeDeps([makeHeld('DARK')], snapshots));
 
     await expect(
@@ -3459,18 +3032,6 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     expect(snapshots.size).toBe(0);
   });
 
-  /**
-   * WHY THE READ IS CAPTURED RATHER THAN MADE LAZY.
-   *
-   * `computeCurrentPortfolioAndBreakers` is not a pure observation: it runs
-   * `CircuitBreakers.evaluate()` and persists the sticky tiers. A decision pass
-   * is one of the few places that happens — the tick path performs no portfolio
-   * read at all, and Verdict only re-derives on passes that produced an intent.
-   * So deferring the READ (rather than only the failure) would silently stop
-   * evaluating breakers on every no-trade decision bar, which was 92 of 94
-   * debates in the soak. This pins the side effect on the emptiest pass there
-   * is: neutral debate, flat book, no intent, no exception.
-   */
   it('still evaluates and persists breakers on a decision pass that produces nothing', async () => {
     const snapshots = new Map<string, never>();
     const saved: unknown[] = [];
@@ -3507,34 +3068,9 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     });
 
     expect(intent?.intent_type).toBe('entry');
-    // The B4 memo is still populated on a healthy pass, so Risk gates the
-    // entry against the same observation the Trader sized it against — and
-    // `CircuitBreakers.evaluate()` ran (and persisted) on this pass
     expect(snapshots.size).toBe(1);
   });
 
-  /**
-   * #1089 — the CONTROL arm's version of "still refuses to size an ENTRY when
-   * one held name is dark", above, only it must NOT refuse.
-   *
-   * `buildTraderStep`, exercised directly here, is the exact function bound
-   * as `TickSteps['trader']` — `SequentialTickRunner.runInstrument` calls it
-   * with no try/catch of its own (`tick-runner.ts`'s module header documents
-   * that absence as a deliberate, enforced invariant: containment lives at
-   * each stage's own call site, not in the runner). So a `step(...)` call
-   * here that resolves rather than rejects IS the same fact as
-   * `runInstrument` completing rather than throwing — there is no wrapper in
-   * between that could make this pass vacuously.
-   *
-   * Two held names are dark, matching #1089's real six lost passes: `DARK`
-   * (a normal position with a stale mark, mirroring QQQ/MSTR/MARA mid-
-   * flatten) and `ZERO` (`avg_entry_price: 0.0`, mirroring the permanently
-   * zero-priced META lot #1087/#1088 separately own — `readMarks` only
-   * inspects the MARK, so `ZERO` is unvaluable here because its mark is dark
-   * too, not because its entry price is zero). Both together produce the
-   * exact `AggregateError` shape #1089 quotes: "2 held instrument(s) could
-   * not be valued".
-   */
   describe('#1089: a dark or zero-priced held instrument must not crash the CONTROL arm', () => {
     const CONTROL_DARK_MARKET_DATA = {
       ...FAKE_MARKET_DATA,
@@ -3634,9 +3170,6 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
         clock: CLOCK,
       });
 
-      // Pinned on `payload.kind`, not a substring of the free-text `message`
-      // — a reword of the diagnostic's `detail` string must not silently
-      // stop this test from proving the mechanism
       const errorLine = logs.find(
         (entry) =>
           entry.level === 'error' &&

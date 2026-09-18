@@ -1,12 +1,3 @@
-/**
- * The scoring half of #556, as a pure function (#1086).
- *
- * Every case here builds its rows through `projectedPayload`, which lays a
- * 27-column GKG line out and projects it with the client's own
- * `PROJECTED_COLUMNS`. That is deliberate: the archive stores the projection,
- * not the line, so a parser reading the wrong offset would be invisible to a
- * fixture that hand-wrote six fields in the order the parser expects.
- */
 import type { RawArchiveRow } from '../archive/mi-archive-store.js';
 import { MI_SOURCES } from '../archive/mi-sources.js';
 import { PROJECTED_COLUMNS } from './gdelt-gkg-client.js';
@@ -34,9 +25,6 @@ function projectedPayload(themes: readonly string[], tone: number): string {
   columns[3] = 'fixture.test';
   columns[4] = 'https://fixture.test/a';
   columns[7] = themes.join(';');
-  // V1.5TONE is `tone,positive,negative,polarity,…` — only the first field is
-  // the average tone, and the rest are here so a parser that took the whole
-  // string fails rather than coincidentally working
   columns[15] = `${tone},2.0,0.5,2.5,20,0.1,400`;
   return PROJECTED_COLUMNS.map((column) => columns[column] ?? '').join('\t');
 }
@@ -52,10 +40,6 @@ function row(at: Date, themes: readonly string[], tone: number): RawArchiveRow {
   };
 }
 
-/**
- * A baseline that clears every coverage rule: every bucket of the 24h window
- * populated at the per-bucket record minimum, all at `tone`
- */
 function healthyBaseline(tone: number): RawArchiveRow[] {
   const rows: RawArchiveRow[] = [];
   for (let bucket = 0; bucket < BUCKETS; bucket += 1) {
@@ -72,15 +56,6 @@ function healthyBaseline(tone: number): RawArchiveRow[] {
   return rows;
 }
 
-/**
- * `healthyBaseline`'s coverage with a DIFFERENT tone on every row, so an
- * order-sensitive derivation (a first-row read, a sort, a running statistic)
- * has something to disagree about that uniform tones would hide.
- *
- * Every tone is a multiple of 0.25 — exact in binary, and the sums stay exact
- * at these magnitudes — so re-ordering cannot change the mean by a last bit
- * and turn a real determinism assertion into a flake.
- */
 const VARIED_BASELINE_TONES = [-0.5, 0.25, 1.5, -1.25] as const;
 const VARIED_SIGNAL_TONES = [2.5, 1.75, 3, 2.25, 1.5] as const;
 
@@ -173,15 +148,12 @@ describe('deriveGdeltAggregate', () => {
     expect(result.item.sentiment).toBe(1);
     expect(result.item.timestamp).toEqual(WINDOW_END);
     expect(result.item.confidence).toBeCloseTo(confidenceFromToneDelta(2), 12);
-    // Point 4 of #556: the delta is the signal, the tone MEAN rides along
     expect(result.stats.signal_tone_mean).toBeCloseTo(2, 12);
     expect(result.stats.baseline_tone_mean).toBeCloseTo(0, 12);
     expect(result.stats.tone_delta).toBeCloseTo(2, 12);
   });
 
   it('signs the item off the delta, not off the absolute tone', () => {
-    // Both windows are negative in absolute terms; the signal window is LESS
-    // negative, which is bullish news flow
     const result = derive([...healthyBaseline(-5), ...signalRows(-2)]);
     expect(result.emitted).toBe(true);
     if (!result.emitted) return;
@@ -200,7 +172,6 @@ describe('deriveGdeltAggregate', () => {
     const rows = [...variedBaseline(), ...variedSignalRows()];
     const first = derive(rows);
     const second = derive([...rows].reverse());
-    // Both halves emitted, or the comparison below is two refusals agreeing
     expect(first.emitted).toBe(true);
     expect(second.emitted).toBe(true);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
@@ -215,8 +186,6 @@ describe('deriveGdeltAggregate', () => {
     });
     expect(narrower.emitted).toBe(true);
     if (!narrower.emitted) return;
-    // The 2h signal window now reaches an hour of baseline-toned rows, so the
-    // delta is smaller than the 1h read's — same archive, different answer
     expect(narrower.stats.tone_delta).toBeLessThan(2);
     expect(narrower.stats.tone_delta).toBeGreaterThan(0);
   });
@@ -229,8 +198,6 @@ describe('deriveGdeltAggregate', () => {
     expect(
       deriveGdeltAggregate(cryptoOnly, { asset_class: 'crypto', windowEnd: WINDOW_END }).emitted,
     ).toBe(true);
-    // ECON_BITCOIN is not on the stocks watchlist, so the same rows leave the
-    // stocks leg with an empty baseline
     const stocks = deriveGdeltAggregate(cryptoOnly, {
       asset_class: 'stocks',
       windowEnd: WINDOW_END,
@@ -241,7 +208,6 @@ describe('deriveGdeltAggregate', () => {
   });
 
   it('refuses a cold archive whose baseline does not reach back a full window', () => {
-    // Drop the oldest bucket only: 23 of 24 is still above the density floor
     const withoutFarEnd = healthyBaseline(0).filter(
       (raw) => raw.updated_at.getTime() >= BASELINE_START + SIGNAL_MS,
     );
@@ -253,8 +219,6 @@ describe('deriveGdeltAggregate', () => {
 
   it('refuses a baseline with too few populated buckets', () => {
     const keep = Math.ceil(BUCKETS * MIN_BASELINE_BUCKET_FRACTION) - 1;
-    // The far end is kept, so that rule is not the one biting; the hole sits
-    // in the middle of the window
     const gapped = healthyBaseline(0).filter((raw) => {
       const bucket = Math.floor((raw.updated_at.getTime() - BASELINE_START) / SIGNAL_MS);
       return bucket === 0 || bucket >= BUCKETS - keep + 1;
@@ -266,8 +230,6 @@ describe('deriveGdeltAggregate', () => {
   });
 
   it('refuses a baseline that is dense in buckets but thin in records', () => {
-    // One record per bucket: every bucket populated, far end included, but
-    // under the per-bucket record floor
     const thin = Array.from({ length: BUCKETS }, (_, bucket) =>
       row(new Date(BASELINE_START + bucket * SIGNAL_MS), ['ECON_INTEREST_RATES'], 0),
     );
@@ -278,9 +240,6 @@ describe('deriveGdeltAggregate', () => {
   });
 
   it('keeps a populated signal window a precondition of emitting, not an assumption', () => {
-    // The emission path throws if a window mean is undefined, on the grounds
-    // that the floors above already ruled it out. A floor of zero would make
-    // that throw reachable on a quiet hour
     expect(MIN_SIGNAL_RECORDS).toBeGreaterThanOrEqual(1);
   });
 
@@ -295,21 +254,11 @@ describe('deriveGdeltAggregate', () => {
     const future = row(new Date(WINDOW_END.getTime() + 60_000), ['ECON_INTEREST_RATES'], 50);
     const withFuture = derive([...healthyBaseline(0), ...signalRows(2), future]);
     const without = derive([...healthyBaseline(0), ...signalRows(2)]);
-    // Emitted on both sides, or a tone of 50 could be excluded by a refusal
-    // rather than by the window end
     expect(withFuture.emitted).toBe(true);
     expect(without.emitted).toBe(true);
     expect(JSON.stringify(withFuture)).toBe(JSON.stringify(without));
   });
 
-  // #688 asks to measure "the empirical distribution of |toneDelta| per
-  // theme" — a quantity this function does not produce. It pools every
-  // watched theme into one mean before taking the delta, so two themes
-  // moving sharply in OPPOSITE directions in the same window cancel rather
-  // than each registering as a signal. Pinned here so a per-theme
-  // calibration cannot be built by accident on top of this shape, and so an
-  // intentional per-theme rewrite reads as a deliberate break of this test,
-  // not a silent regression
   it('pools opposite-direction theme shocks into one class-wide delta (#688)', () => {
     const start = WINDOW_END.getTime() - SIGNAL_MS;
     const signal = [
@@ -323,8 +272,6 @@ describe('deriveGdeltAggregate', () => {
     const result = derive([...healthyBaseline(0), ...signal]);
     expect(result.emitted).toBe(true);
     if (!result.emitted) return;
-    // ECON_STOCKMARKET moved +3 and ECON_BANKRUPTCY moved -3 — each a large,
-    // unambiguous per-theme shock — but the class-wide mean is exactly 0
     expect(result.stats.signal_tone_mean).toBe(0);
     expect(result.stats.tone_delta).toBe(0);
     expect(confidenceFromToneDelta(result.stats.tone_delta ?? NaN)).toBe(0);

@@ -1,11 +1,3 @@
-/**
- * `nous-chat.ts` — the single wire between this system and a model.
- *
- * The cases worth pinning are the ones that cost money quietly rather than
- * failing loudly: a truncated completion that would otherwise be retried at
- * the same budget, and a provider-echoed model id that would land the row
- * unpriced (and an unpriced row does not count against the spend cap).
- */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LlmInFlightGate } from './in-flight-gate.js';
 import { UNGATED_LLM_IN_FLIGHT } from './in-flight-gate.js';
@@ -22,17 +14,6 @@ const REQUEST = {
   messages: [{ role: 'user' as const, content: 'hello' }],
 };
 
-/**
- * Builds a real `Response` (via the global constructor) for `status`/`ok` to
- * come from — `ok` is the constructor's own derivation from `status`
- * (200-299), not a separately-settable field, so every call site here passes
- * a `status` that already implies the `ok` it wants. `jsonOverride` covers
- * the one case (an unparseable 2xx body) that needs `.json()` to behave
- * differently than "resolve with the stringified `body`"; `Response.json` is
- * read-only in the ambient fetch types, so `defineProperty` replaces the own
- * binding at runtime instead of a direct reassignment, without needing a
- * cast to route around the readonly check.
- */
 function stubFetch(
   body: unknown,
   init: { status?: number; jsonOverride?: () => Promise<unknown> } = {},
@@ -51,17 +32,6 @@ function stubFetch(
   return fetchMock;
 }
 
-/**
- * Like `stubFetch`, but for the `ttfb_ms` (#1012) tests below, which need to
- * separate two phases of one fetch: time to headers (before
- * `fetchWithTimeout`'s promise settles) vs. additional time inside
- * `response.json()` reading the body. Returns a REAL `Response` (via the
- * global constructor) with `.json` overridden to advance the fake-timer
- * clock before resolving — no type-assertion cast to `Response` needed,
- * since a real `Response` instance already satisfies the full type.
- * Requires `vi.useFakeTimers()` to be active in the caller: the delays below
- * are `vi.advanceTimersByTime` calls, not real waits.
- */
 function stubFetchWithTiming(
   body: unknown,
   timing: { headerDelayMs: number; bodyDelayMs: number },
@@ -70,10 +40,6 @@ function stubFetchWithTiming(
     vi.advanceTimersByTime(timing.headerDelayMs);
     const response = new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
     const originalJson = response.json.bind(response);
-    // `Response.json` is a read-only property in the ambient fetch types, so
-    // a direct `response.json = ...` reassignment doesn't type-check
-    // `defineProperty` replaces the own binding at runtime the same way,
-    // without needing a cast to route around the readonly check
     Object.defineProperty(response, 'json', {
       value: async () => {
         vi.advanceTimersByTime(timing.bodyDelayMs);
@@ -123,8 +89,6 @@ describe('nousChat', () => {
     const result = await nousChat(OPTIONS, REQUEST);
 
     expect(result.text).toBe('{"ok":true}');
-    // `cache_read_input_tokens` is present and zero rather than absent: a
-    // response reporting no cache hit is a real zero, not an unknown
     expect(result.usage).toEqual({
       input_tokens: 11,
       output_tokens: 22,
@@ -133,8 +97,6 @@ describe('nousChat', () => {
   });
 
   it('treats an absent usage block as zero rather than NaN', async () => {
-    // A zero-token row is visibly free; a NaN would be written to `llm_spend`
-    // and poison the cap's SUM
     stubFetch(completion({ usage: undefined }));
 
     const result = await nousChat(OPTIONS, REQUEST);
@@ -147,14 +109,6 @@ describe('nousChat', () => {
   });
 
   describe('truncation', () => {
-    /**
-     * The money case. `finish_reason: 'length'` means the model ran out of
-     * budget mid-answer, so the text is partial or empty. Left to reach
-     * `parseResponse` it becomes `LlmMalformedResponseError`, which
-     * `isRetryable` RETRIES — re-billing a failure that is deterministic at
-     * the same `max_tokens`. `NousTruncatedError` carries no `.status`, so
-     * `classifyProviderError` lands it on the non-retryable branch.
-     */
     it('throws rather than returning partial text', async () => {
       stubFetch(
         completion({
@@ -166,8 +120,6 @@ describe('nousChat', () => {
     });
 
     it('throws even when the truncated body carries no content at all', async () => {
-      // The kimi-k3 shape: the whole budget spent on hidden reasoning tokens,
-      // zero answer text, every time
       stubFetch(
         completion({
           choices: [{ message: {}, finish_reason: 'length' }],
@@ -206,12 +158,6 @@ describe('nousChat', () => {
   });
 
   describe('refusal', () => {
-    /**
-     * Truncation's sibling, and the same money bug: a refusal is deterministic
-     * in the PROMPT, so a retry buys the identical answer at full price. Left
-     * unsignalled it reaches `parseResponse` as empty or prose text, becomes
-     * `LlmMalformedResponseError`, and `isRetryable` retries it.
-     */
     it('throws on finish_reason="content_filter"', async () => {
       stubFetch(
         completion({ choices: [{ message: { content: '' }, finish_reason: 'content_filter' }] }),
@@ -239,10 +185,6 @@ describe('nousChat', () => {
     });
 
     it('does not fire on prose that merely reads like a refusal', async () => {
-      // The false positive this detection must not have: a text sniffer turns
-      // every transient malformed sample into a hard failure. `personas.test.ts`'s
-      // "still fails loudly on a refusal" sends exactly this body with no wire
-      // marker on it, and it must stay an ordinary retryable parse failure
       stubFetch(
         completion({
           choices: [
@@ -288,7 +230,6 @@ describe('nousChat', () => {
 
   describe('metered model id', () => {
     it('meters against the echoed model when this system can price it', async () => {
-      // A server-side reroute bills what ran, not what was asked for
       stubFetch(completion({ model: 'anthropic/claude-haiku-4.5' }));
 
       const result = await nousChat(OPTIONS, REQUEST);
@@ -296,13 +237,6 @@ describe('nousChat', () => {
       expect(result.model).toBe('anthropic/claude-haiku-4.5');
     });
 
-    /**
-     * The second silent-money case. A proxy can echo an upstream vendor's own
-     * id, which `MODEL_RATES` does not carry. Metering against it records a
-     * null `cost_usd`; `spend-cap.ts` sums nulls as zero; the $50/14d ceiling
-     * quietly stops existing. Falling back to the requested id — already
-     * proved priceable by `nousCredentials` — keeps the row counted.
-     */
     it('falls back to the requested id when the echo is not priceable', async () => {
       stubFetch(completion({ model: 'claude-haiku-4-5-20251001' }));
 
@@ -321,15 +255,6 @@ describe('nousChat', () => {
   });
 
   describe('time-to-first-byte (#1012)', () => {
-    /**
-     * #1012: `latency_ms` (measured around the whole call, one layer up in
-     * `anthropic-client.ts`) cannot distinguish queue/generation time from
-     * body-read time because it is a single span. `ttfb_ms` isolates the
-     * `fetchWithTimeout` half — headers received, before `response.json()`
-     * reads the body — using fake timers so the two spans are exact and
-     * non-flaky, the same technique `anthropic-client.test.ts` uses for
-     * `latency_ms` (#326).
-     */
     it('measures only the time up to the response settling, not the body read', async () => {
       vi.useFakeTimers();
       try {
@@ -344,8 +269,6 @@ describe('nousChat', () => {
     });
 
     it('reports a smaller ttfb_ms than the caller-measured total latency when the body read is slow', async () => {
-      // Cross-checks against the OUTER timer the way a caller (`anthropic-client.ts`)
-      // actually measures `latency_ms` — around the whole `nousChat` call
       vi.useFakeTimers();
       try {
         stubFetchWithTiming(completion(), { headerDelayMs: 4_000, bodyDelayMs: 1_000 });
@@ -366,48 +289,11 @@ describe('nousChat', () => {
 
       const result = await nousChat(OPTIONS, REQUEST);
 
-      // stubFetch's `json()` resolves with no artificial delay, so with real
-      // timers ttfb_ms should be a small, non-negative number well under any
-      // flake-prone threshold, and never negative
       expect(result.ttfb_ms).toBeGreaterThanOrEqual(0);
     });
   });
 
   describe('cache accounting (#1010)', () => {
-    /**
-     * #1010: `llm_spend.cache_creation_input_tokens` /
-     * `cache_read_input_tokens` are zero on every one of 383 sampled debate
-     * calls. Measurement (prompt-caching.test.ts) found the debate model's
-     * requests fall well short of the 4,096-token minimum Anthropic requires
-     * before it caches anything, so nothing in this repo requests caching —
-     * see the comment on `anthropic-client.ts`'s `renderMessageContent`.
-     *
-     * This test used to pin the SEPARATE, structural half of that same zero:
-     * the parser read only `prompt_tokens`/`completion_tokens` and had no
-     * field to carry a cache count through, so a cache hit upstream was
-     * invisible. #969 CLOSED that half — the retrieval path gets large
-     * prompts cached by the provider on its own initiative, whether or not
-     * anything here asks for it, so an invisible cache line became a real
-     * mispricing rather than a hypothetical one.
-     *
-     * What it pins now is the SUBTRACTION, which is the part that is easy to
-     * get wrong in the expensive direction. Nous reports usage the OpenAI
-     * way — `cached_tokens` is a SUBSET of `prompt_tokens` — while
-     * `AnthropicUsage` means the Anthropic thing, where the two are disjoint
-     * and `priceUsage` bills both. Carrying the count across without
-     * subtracting bills the cached tokens twice.
-     *
-     * #1010's other finding is untouched and still true: nothing in this repo
-     * REQUESTS caching, and the pinned debate model's requests fall short of
-     * the minimum anyway — see `never sends a cache_control breakpoint` below,
-     * which is now the canary for that half.
-     *
-     * The Anthropic-shaped `cache_read_input_tokens` guess is deliberately
-     * still present in the fixture and deliberately still ignored: Nous is
-     * OpenAI-shaped on both endpoints (verified on a live `/responses` probe,
-     * 2026-09-03), and reading both would double-count a provider that sent
-     * both spellings of the same number.
-     */
     it('subtracts provider-reported cached tokens out of the input count', async () => {
       stubFetch(
         completion({
@@ -423,24 +309,15 @@ describe('nousChat', () => {
 
       const result = await nousChat(OPTIONS, REQUEST);
 
-      // 11 prompt tokens of which 9 were cached = 2 fresh, not 11 fresh plus
-      // 9 cached. The wrong reading over-counts this call by ~80%.
       expect(result.usage).toEqual({
         input_tokens: 2,
         output_tokens: 22,
         cache_read_input_tokens: 9,
       });
-      // Cache WRITES stay dropped: nothing in this system writes a cache
-      // entry, so a provider reporting one is not a case this meter has a
-      // rate for (`CACHE_WRITE_MULTIPLIER` remains inert in pricing.ts)
       expect(result.usage).not.toHaveProperty('cache_creation_input_tokens');
     });
 
     it('never reports more cached tokens than the prompt contained', async () => {
-      // Defensive against an inverted provider report. Without the clamp,
-      // `input_tokens` goes negative, `priceUsage` returns a NEGATIVE cost,
-      // and the row BUYS BACK headroom under ADR-0008's ceiling — a spend
-      // meter that can be credited by a malformed response is not a ceiling
       stubFetch(
         completion({
           usage: {
@@ -461,13 +338,6 @@ describe('nousChat', () => {
     });
 
     it('never sends a cache_control breakpoint in the POSTed request body', async () => {
-      // Documents present-day behaviour: the request builder has no
-      // content-block structure to attach `cache_control` to (flat string
-      // `content`, see `NousChatMessage` above), so it can't appear by
-      // construction. This is the canary for that changing silently — if a
-      // future change starts sending one, it should be a deliberate,
-      // measured decision (prompt-caching.test.ts re-cleared, Nous's
-      // pass-through behaviour confirmed), not an accident
       const fetchMock = stubFetch(completion());
 
       await nousChat(OPTIONS, REQUEST);
@@ -478,7 +348,6 @@ describe('nousChat', () => {
   });
 
   describe('gate-budget clamp (#1533)', () => {
-    /** A gate whose `acquire` takes `waitMs` of (fake-timer) wall clock before granting the slot */
     function delayingGate(waitMs: number): LlmInFlightGate {
       return {
         acquire: async () => {
@@ -488,7 +357,6 @@ describe('nousChat', () => {
       };
     }
 
-    /** A `fetch` stub that never settles on its own — only when its signal aborts, mirroring real `fetch` cancellation */
     function stubHangingFetch(): { signal: () => AbortSignal | undefined } {
       let capturedSignal: AbortSignal | undefined;
       const fetchMock = vi.fn((_url: string, init: RequestInit) => {
@@ -521,8 +389,6 @@ describe('nousChat', () => {
           );
           const rejection = expect(resultPromise).rejects.toMatchObject({ name: 'TimeoutError' });
 
-          // Remaining budget is 1000 - 800 = 200ms, not the full 5000ms
-          // configured network timeout. Just under that must not yet abort.
           await vi.advanceTimersByTimeAsync(199);
           expect(hanging.signal()?.aborted).toBe(false);
 
@@ -537,11 +403,6 @@ describe('nousChat', () => {
     );
 
     it("does not clamp when clampCallToBudget is left unset (the debate client's deliberate posture)", async () => {
-      // False-positive guard: `NousMessagesClient` sets `gateBudgetMs` too, but
-      // never opts into the clamp, because its OUTER race
-      // (`AnthropicLlmClient.callWithTimeout`) is meant to decide a slow
-      // call's timeout, not this network backstop. A held permit must not
-      // shrink the network timeout here
       vi.useFakeTimers();
       try {
         const hanging = stubHangingFetch();
@@ -552,8 +413,6 @@ describe('nousChat', () => {
         );
         const rejection = expect(resultPromise).rejects.toMatchObject({ name: 'TimeoutError' });
 
-        // Without the clamp the full configured 5000ms network timeout
-        // applies, unaffected by the 800ms already spent waiting
         await vi.advanceTimersByTimeAsync(4_999);
         expect(hanging.signal()?.aborted).toBe(false);
 
@@ -583,7 +442,6 @@ describe('nousChat', () => {
         );
         const rejection = expect(resultPromise).rejects.toMatchObject({ name: 'TimeoutError' });
 
-        // A negative remaining budget clamps to 0, aborting on the very next tick
         await vi.advanceTimersByTimeAsync(0);
         await rejection;
       } finally {
@@ -603,11 +461,6 @@ describe('nousChat', () => {
     });
 
     it('truncates an unbounded provider message before it reaches the log line', async () => {
-      // Review round 1 (#1055). `error.message` is a provider-supplied string
-      // of unbounded length, and this message goes to the log sink and to
-      // alert transports. An upstream returning a megabyte of prose would
-      // otherwise put a megabyte into EVERY retry's log line. The full body
-      // stays available unmodified on `.body` for anyone who needs it
       const huge = 'x'.repeat(20_000);
       stubFetch({ error: { type: 'server_error', message: huge } }, { status: 500 });
 
@@ -620,8 +473,6 @@ describe('nousChat', () => {
     });
 
     it('never puts the API key in an error message', async () => {
-      // Error strings go straight to logs, and a provider echoing the request
-      // back is exactly how a key ends up in one
       stubFetch({ error: { type: 'invalid_request', message: 'bad' } }, { status: 400 });
 
       const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as Error;
@@ -642,8 +493,6 @@ describe('nousChat', () => {
     });
 
     it('rejects a 2xx with no choices rather than reporting empty text', async () => {
-      // Empty text would parse as a malformed response and be retried; a
-      // structurally wrong body is not a transient sample
       stubFetch(completion({ choices: [] }));
 
       await expect(nousChat(OPTIONS, REQUEST)).rejects.toThrow(/choices/);

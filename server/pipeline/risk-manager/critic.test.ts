@@ -1,18 +1,3 @@
-/**
- * Risk critic producer (#957) — check-pipeline step 7's producer half.
- *
- * The properties under test are the ones the ticket's acceptance criteria and
- * ADR-0003 §2 turn on, in order of how expensive they are to get wrong:
- *
- *  - `backtest` NEVER reaches an LLM client — including for a `debate_id` with
- *    no logged row, which is precisely the case a naive "fall back to a live
- *    call" would get wrong and quietly void Stage 2's PBO/DSR statistics.
- *  - Every failure fails OPEN as `undefined`, so `evaluate()` keeps its
- *    explicit `risk_critic: skipped` reason.
- *  - Spend meters into `llm_spend` under its own stage, joined to the decision
- *    by `debate_id`.
- *  - A model number can never widen a position or arrive as `NaN`.
- */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
@@ -77,9 +62,6 @@ function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
       debate_id: DEBATE_ID,
       conviction: 0.8,
       converged: true,
-      // The REAL `OrderIntentMetadata['sizing']` shape. The builder used to
-      // end in `as OrderIntent`, and the cast was hiding a `vol_floor_applied`
-      // field that has never existed on it (`shared/types/records.ts`)
       sizing: {
         base_risk_fraction: 0.01,
         conviction_multiplier: 1,
@@ -107,13 +89,6 @@ function makeRequest(overrides: Partial<RiskCriticRequest> = {}): RiskCriticRequ
   };
 }
 
-/**
- * A `MarketDataService` double for the invalidation half (#994).
- *
- * Real shape, no cast: a stub behind `as MarketDataService` would let the
- * evaluator read a field this fixture never supplies and still stay green.
- * `overrides` is how a test says what the condition should MEASURE.
- */
 function stubMarketData(overrides: Partial<MarketDataService> = {}): MarketDataService {
   const unused = (name: string) => () => Promise.reject(new Error(`${name} not stubbed`));
   return {
@@ -134,7 +109,6 @@ function stubMarketData(overrides: Partial<MarketDataService> = {}): MarketDataS
   };
 }
 
-/** A well-formed, side-coherent condition on the `buy` intent every request here carries */
 function markCondition(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'thesis-needs-price-above-95',
@@ -146,7 +120,6 @@ function markCondition(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-/** An `LlmClient` double that answers with `text` and counts its calls */
 function fakeLlm(text: string): { client: LlmClient; calls: () => number } {
   let calls = 0;
   const client: LlmClient = {
@@ -206,9 +179,6 @@ describe('parseCriticVerdict', () => {
   });
 
   it('carries the conditions half out UNVALIDATED, so it cannot fail the prose parse (#997 Q2a)', () => {
-    // The conditions here are garbage on every axis. The prose still parses,
-    // because discarding a valid verdict over the ADVISORY half would make the
-    // system strictly less safe than it is with no conditions at all
     const parsed = parseCriticVerdict(
       JSON.stringify({
         verdict: 'reject',
@@ -240,10 +210,6 @@ describe('parseCriticVerdict', () => {
     ],
     ['no reasoning', { verdict: 'reject', max_notional: null, reasoning: '  ' }],
   ])('refuses %s rather than letting it reach sizing', (_label, body) => {
-    // `applyCritic` compares `max_notional` against the trimmed notional, and
-    // a non-finite value passes BOTH that comparison and the later
-    // `approvedSize <= 0` / `min_viable_size` guards as NaN — i.e. it would
-    // submit a position of unknown size. Refusing here is the fail-open path.
     expect(parseCriticVerdict(JSON.stringify(body)).valid).toBe(false);
   });
 
@@ -275,7 +241,6 @@ describe('renderCriticPrompt', () => {
 
     expect(prompt).toContain('3USL');
     expect(prompt).toContain('TRIMMED or REJECTED');
-    // The escape attempt cannot close the data block early
     expect(prompt.split('</untrusted_analyst_data>')).toHaveLength(2);
   });
 
@@ -359,9 +324,6 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
       logger,
     });
 
-    // `undefined` is the whole point: `evaluate()` then takes its
-    // `critic === undefined` branch and records `risk_critic: skipped`, with
-    // the mechanical steps as the safety net (ADR-0003, #640)
     expect(await producer.produce(makeRequest())).toBeUndefined();
     expect(store.getByDebateId(DEBATE_ID)?.verdict.verdict).toBe('unavailable');
     expect(entries.some((entry) => entry.level === 'warn')).toBe(true);
@@ -406,13 +368,6 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
     expect(store.getByDebateId(DEBATE_ID)?.verdict.reasoning).toContain('budget exhausted');
   });
 
-  /**
-   * #1394's acceptance criterion for this stage: the ONE
-   * `risk_critic_verdict_unavailable` code must separate a spend-cap refusal
-   * from a provider fault from the producer's own budget expiring. Before this
-   * the spend-cap path logged nothing at all, and the other two rendered the
-   * same prose at the same level.
-   */
   describe('risk_critic_verdict_unavailable names the cause (#1394)', () => {
     async function causeOf(
       options: Partial<{ llm: LlmClient; spendCap: SpendCap; budgetMs: number }>,
@@ -468,8 +423,6 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
     });
 
     it('calls its own expired budget `timeout`, though `#expiry` throws a bare Error', async () => {
-      // The producer's controller is aborted by nothing but its own timer, so
-      // `aborted` is the evidence — whichever arm of the race rejects first
       expect(
         await causeOf({
           budgetMs: 5,
@@ -483,14 +436,6 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
       ).toEqual({ level: 'warn', failure_cause: 'timeout' });
     });
 
-    /**
-     * The invariant `#warn`'s doc comment states, now that a second logging
-     * site sits in front of `#record`: a throwing logger must not be what
-     * costs the run its `unavailable` row. Without that row a backtest reading
-     * this `debate_id` finds nothing and reaches a different decision than the
-     * live run did — see `#record`'s own comment on why the row, not the
-     * verdict, is the thing being protected.
-     */
     it('still records the unavailable verdict when the logger throws', async () => {
       const store = new InMemoryRiskCriticStore();
       const thrower: Logger = {
@@ -507,8 +452,6 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
         logger: thrower,
       });
 
-      // `undefined` IS the unavailable verdict as the risk step reads it
-      // (`toDecisionInput`); the row is the artifact under test
       await expect(producer.produce(makeRequest())).resolves.toBeUndefined();
       expect(store.getByDebateId(DEBATE_ID)?.verdict.verdict).toBe('unavailable');
     });
@@ -543,9 +486,6 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
   });
 
   it('returns within its own budget when the provider never answers, instead of holding the order', async () => {
-    // The hazard #710 names in direct-bind.ts: this call is awaited in FRONT
-    // of an order submission, and the injected client's own retry/timeout
-    // config belongs to the debate (minutes, not seconds)
     const store = new InMemoryRiskCriticStore();
     let aborted = false;
     const producer = new LlmRiskCriticProducer({
@@ -567,21 +507,11 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
     const started = Date.now();
     expect(await producer.produce(makeRequest())).toBeUndefined();
     expect(Date.now() - started).toBeLessThan(2_000);
-    // Cancelled, not merely abandoned — an abandoned call still bills
     expect(aborted).toBe(true);
     expect(store.getByDebateId(DEBATE_ID)?.verdict.verdict).toBe('unavailable');
   });
 
   it('DISCARDS a real verdict it could not persist, rather than acting on one no replay can see', async () => {
-    // The determinism half of ADR-0003 §2, and the one case where "the
-    // decision must not depend on the log" is wrong: an un-persisted verdict
-    // has no row for its `debate_id`, so a backtest replaying this decision
-    // reaches it WITHOUT the verdict. Acting on it live would make the live
-    // trade unreproducible by construction — and only for the trades taken
-    // while the store was down, which is the worst possible sample to have
-    // silently diverge. Fail open instead: same `undefined` as any other
-    // producer failure, same `risk_critic: skipped` reason, live and replay
-    // agreeing on what step 7 saw
     const { client } = fakeLlm(
       JSON.stringify({ verdict: 'trim', max_notional: 250, reasoning: 'crowded catalyst' }),
     );
@@ -602,7 +532,6 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
 
     expect(verdict).toBeUndefined();
     expect(entries.some((entry) => entry.message.includes('could not be persisted'))).toBe(true);
-    // A store failure is not a tick failure: the producer still returns
     expect(entries.some((entry) => entry.level === 'warn')).toBe(true);
   });
 });
@@ -626,9 +555,6 @@ describe('LlmRiskCriticProducer spend metering (#957 acceptance: meters into llm
   }
 
   it('records one priced row under its own stage, joined to the decision by debate_id', async () => {
-    // A REAL `AnthropicLlmClient` over a fake wire, writing through a REAL
-    // `SqliteLlmSpendStore` — the metering path the composition root wires,
-    // not a stub of it
     const llm = new AnthropicLlmClient(
       wire(),
       { model: 'anthropic/claude-haiku-4.5', max_tokens: 512, timeoutMs: 10_000, retry: NO_RETRY },
@@ -656,15 +582,7 @@ describe('LlmRiskCriticProducer spend metering (#957 acceptance: meters into llm
     expect(rows[0]?.stage).toBe('risk_critic');
     expect(rows[0]?.trace_id).toBe(TRACE_ID);
     expect(rows[0]?.debate_id).toBe(DEBATE_ID);
-    // Priced, so it counts against ADR-0008's ceiling. An unpriced row would
-    // contribute zero and silently widen the cap
     expect(rows[0]?.cost_usd).toBeGreaterThan(0);
-    // #1514: the row this ticket's AC needs — "which prompt version produced
-    // decision X" reads straight off this column, joined by debate_id above
-    // Combined with WIRE_ENVELOPE_TEMPLATE_HASH (round-1 review finding 1),
-    // not the bare CRITIC_PROMPT_TEMPLATE_HASH: the persisted value must also
-    // change if the shared wire envelope (renderMessageContent's Context:
-    // wrap) changes, not only if this stage's own template does
     expect(rows[0]?.prompt_template_hash).toBe(
       hashPromptTemplate(`${CRITIC_PROMPT_TEMPLATE_HASH}:${WIRE_ENVELOPE_TEMPLATE_HASH}`),
     );
@@ -683,7 +601,6 @@ describe('ReplayRiskCriticProducer (backtest)', () => {
 
     const producer = buildRiskCriticProducer({
       mode: 'backtest',
-      // Supplied and deliberately unused: the mode branch must not reach it
       llm: { complete },
       store,
       spendCap: UNCAPPED_SPEND,
@@ -700,9 +617,6 @@ describe('ReplayRiskCriticProducer (backtest)', () => {
   });
 
   it('replays UNSEEN history as "no verdict" and still makes no call', async () => {
-    // The anti-requirement. A fallback to a live call here would re-introduce
-    // exactly the nondeterminism ADR-0003 §2 forbids, and it would only ever
-    // fire on history the critic has not seen — i.e. every fresh backtest.
     const complete = vi.fn();
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
@@ -730,8 +644,6 @@ describe('ReplayRiskCriticProducer (backtest)', () => {
 
     const producer = new ReplayRiskCriticProducer({ store });
 
-    // The live run recorded `risk_critic: skipped` for this decision; the
-    // replay must reach the same decision, which means the same input
     expect(await producer.produce(makeRequest())).toBeUndefined();
   });
 
@@ -762,17 +674,12 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
       llm: client,
       store,
       spendCap: UNCAPPED_SPEND,
-      // The mark is 90, below the condition's threshold of 95 — the thesis's
-      // stated premise has already failed as the intent is being formed
       marketData: stubMarketData({
         getMark: () =>
           Promise.resolve({ price: 90, observed_at: NOW, source: 'test', asset_class: 'stocks' }),
       }),
     }).produce(makeRequest());
 
-    // ONE call, not two: #997 Q1's whole point is that the step-7 seam does
-    // not accumulate a second LLM pass, which is what keeps the ~$1/yr
-    // envelope #955 accepted
     expect(calls()).toBe(1);
     expect(verdict?.verdict).toBe('pass');
     expect(verdict?.conditions).toEqual([
@@ -785,11 +692,6 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
   });
 
   it('IGNORES a state the model asserts — only a measured read can produce a breach', async () => {
-    // The load-bearing rule of the whole mechanism: "the LLM names what to
-    // check; deterministic code does the checking, so a model cannot produce a
-    // breach — only propose a condition." Here the model claims a breach in
-    // its own output while the measured mark sits comfortably above the
-    // threshold
     const { client } = fakeLlm(
       conditionsAnswer([{ ...markCondition(), state: 'breached', severity: 'critical' }]),
     );
@@ -827,9 +729,6 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
       marketData: stubMarketData(),
     }).produce(makeRequest());
 
-    // The reject survives with full authority; the conditions half reports
-    // nothing checkable, and every drop is persisted with its reason so a
-    // systematically malformed prompt is visible rather than silent
     expect(verdict?.verdict).toBe('reject');
     expect(verdict?.conditions).toEqual([]);
     expect(verdict?.dropped_conditions?.map((dropped) => dropped.reason)).toEqual([
@@ -852,15 +751,10 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
 
     expect(verdict?.conditions?.[0]?.state).toBe('unevaluable');
     expect(verdict?.conditions?.[0]?.observed).toBeNull();
-    // And the prose verdict is untouched by the data outage
     expect(verdict?.verdict).toBe('pass');
   });
 
   it('keeps a prose REJECT even when the logger itself throws inside the conditions half', async () => {
-    // The failure domains are separate ON PURPOSE. While the conditions step
-    // ran inside the LLM `try`, a throw from its own reporting path landed in
-    // the LLM catch and returned `unavailable` — silently voiding a reject the
-    // model had already produced, which is the one outcome #997 Q2a forbids
     const { client } = fakeLlm(
       JSON.stringify({
         verdict: 'reject',
@@ -905,10 +799,6 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
   });
 
   it('stops measuring when the producer budget expires, reporting unevaluable rather than hanging', async () => {
-    // The budget spans BOTH halves. A market-data seam that never answers used
-    // to be an unbounded wait in front of an order the tick is waiting on: the
-    // AbortController cancelled the model call and nothing in the conditions
-    // half listened to it
     const { client } = fakeLlm(conditionsAnswer([markCondition()]));
 
     const verdict = await new LlmRiskCriticProducer({
@@ -946,15 +836,12 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
     };
     store.writeVerdict({ debate_id: DEBATE_ID, verdict: breached, created_at: NOW });
 
-    // No LLM client and no MarketDataService: the replay producer holds
-    // neither, so "it cannot reach a live dependency" is structural
     const verdict = await new ReplayRiskCriticProducer({ store }).produce(makeRequest());
 
     expect(verdict).toEqual(breached);
   });
 });
 
-/** Reads the row back through the real store, failing loudly rather than casting an absent row into shape */
 function readStoredVerdict(db: StoreHandle): RiskCriticVerdict {
   const logged = new SqliteRiskCriticStore(db).getByDebateId(DEBATE_ID);
   if (logged === undefined) throw new Error('the test wrote no row for this debate');
@@ -1017,9 +904,6 @@ describe('SqliteRiskCriticStore', () => {
   });
 
   it('replays a PRE-FOLD row — NULL conditions columns — as no_conditions, never a crash (#997 Q3)', () => {
-    // Written the way migration 0032 wrote every row before 0040 existed. A
-    // backtest spanning the fold date reads these, and must reach the decision
-    // the live run reached: the prose verdict with the authority it always had
     db.prepare(
       `INSERT INTO risk_critic_log (debate_id, verdict, max_notional, reasoning, created_at)
        VALUES (?, 'reject', NULL, 'pre-fold row', ?)`,
@@ -1127,11 +1011,6 @@ describe('SqliteRiskCriticStore', () => {
   ])(
     'collapses a persisted conditions list containing %s to no_conditions, never a half-trusted breach',
     (_case, stored) => {
-      // The column is TEXT and its contents are whatever a past process — or a
-      // hand-edit — left there. A cast on read would let `[{}]` throw inside
-      // `evaluate()` and let a bare `{"state":"breached"}` hard-reject a trade
-      // with NOTHING measured behind it, handing the storage layer the
-      // authority the types deny the model
       db.prepare(
         `INSERT INTO risk_critic_log
            (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
@@ -1157,9 +1036,6 @@ describe('SqliteRiskCriticStore', () => {
       state: 'not_breached',
       observed: 100,
     };
-    // One well-formed element (survivor) alongside one that fails the
-    // tightened shape check (a breach with nothing measured behind it). The
-    // corrupt sibling must not cost the survivor its place in the replay
     const stored = JSON.stringify([survivor, { state: 'breached', observed: null }]);
     db.prepare(
       `INSERT INTO risk_critic_log
@@ -1182,9 +1058,6 @@ describe('SqliteRiskCriticStore', () => {
   });
 
   it('a real breach still fires when a corrupt sibling is dropped from the same row (#1068)', () => {
-    // The direction the no-false-breach tests above don't cover: the
-    // tightening must drop the malformed element WITHOUT silently disabling
-    // enforcement for the well-formed breach sitting next to it
     const realBreach = {
       condition: {
         id: 'c1',

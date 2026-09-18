@@ -1,11 +1,3 @@
-/**
- * SQLite-backed store for the frozen Stage 2 selection (#375, #384) over the
- * `stage2_selected_config` table (migration 0014).
- *
- * Append-only by design: a re-run is evidence about a different sample, and the
- * previous verdict is the record of what was believed when a capital decision
- * was made. Readers take the newest row per asset class; nothing is destroyed.
- */
 
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
@@ -29,13 +21,6 @@ interface SelectionRow {
 export class SqliteStage2SelectionStore {
   constructor(private readonly db: StoreHandle) {}
 
-  /**
-   * Records one frozen selection.
-   *
-   * `ON CONFLICT DO NOTHING` on the (config, class, timestamp) key: re-running
-   * the persistence step of the same verdict must not rewrite the row, for
-   * `seedAnalystWeight`'s reason — the row that exists is the record.
-   */
   record(selection: Stage2Selection): void {
     this.db
       .prepare(
@@ -61,7 +46,6 @@ export class SqliteStage2SelectionStore {
       );
   }
 
-  /** The newest selection for one asset class, or null if Stage 2 has never run for it */
   getLatest(asset_class: 'crypto' | 'stocks'): Stage2Selection | null {
     const row = this.db
       .prepare(
@@ -75,7 +59,6 @@ export class SqliteStage2SelectionStore {
     return row === undefined ? null : toSelection(row);
   }
 
-  /** The newest selection per asset class — at most one crypto and one stocks row */
   getLatestPerAssetClass(): Stage2Selection[] {
     return (['crypto', 'stocks'] as const)
       .map((asset_class) => this.getLatest(asset_class))

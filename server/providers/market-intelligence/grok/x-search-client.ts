@@ -1,44 +1,3 @@
-/**
- * The first `GrokSentimentClient` that actually retrieves (map #522).
- *
- * `NousSentimentClient` (its sibling) asks a model what X thinks and gets
- * training-data recall back — honestly flagged (`retrievalEvidence: false`,
- * hard-coded), so `GrokAgent` discards every item. `MarketContext.social`
- * has therefore never had a producer (#914, #625).
- *
- * This client runs the provider's server-side `x_search` tool through
- * `nous-responses.ts`, so the model reads real posts and returns real
- * permalinks. Same vendor, same key, same spend meter.
- *
- * Evidence is enforced per item, not per call: the call-level
- * `retrievalEvidence` boolean `GrokAgent` fails closed on is too coarse once
- * retrieval is real — a response can genuinely run the tool, cite three
- * posts, and still list ten items, the other seven being recall padding. So
- * an item survives only if its permalink parses as a real X status URL and
- * appears in the response's own citation set, and `url` is taken from the
- * citation, never the model's body text. The call-level flag is set from
- * `citations.length > 0`, not from whether any item survived — collapsing
- * those would turn "looked and saw nothing worth reporting" into "could not
- * look", the exact distinction #485 exists to preserve.
- *
- * Recency is enforced here, not by the API: `x_search`'s `from_date`/
- * `to_date` are day-granular — a probe requesting a 6-hour window returned
- * posts up to 19.3 hours old. The check is offline: an X status id is a
- * snowflake, and `(id >> 22) + 1288834974657` is the post's millisecond
- * timestamp — the same decode that proved retrieval genuine in the first
- * place (cited posts landed 40-80 seconds before the response's own
- * `created_at`; no training corpus contains those).
- *
- * Prompt injection: `analysts-spec.md`'s `<untrusted_analyst_data>`
- * convention cannot be applied to the post bodies here — with a server-side
- * tool the retrieved text enters the model's context inside the provider,
- * before any code in this repo runs, so there is no seam to wrap it.
- * Mitigations instead: the instructions state the posts are data not
- * instructions; every field is validated before becoming an item; `url`
- * comes only from the citation set, so a post can't mint its own citation;
- * and the blast radius is bounded to one score among up to ten, on one
- * analyst — it cannot reach the order path.
- */
 
 import type { Logger } from '../../../shared/index.js';
 import type { LlmInFlightGate } from '../../../shared/llm/index.js';
@@ -48,89 +7,19 @@ import type { GrokSentimentClient } from './grok-agent.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-/**
- * What a retrieval call is expected to take, for the in-flight gate's queue
- * estimate — the top of the 5-26s range measured, not `DEFAULT_TIMEOUT_MS`.
- *
- * Declaring the timeout as the expectation would make `wait + 60,000 >=
- * 60,000` true for every non-zero wait, refusing every retrieval call the
- * moment anything else holds the permit. The measured figure leaves ~34s of
- * wait tolerance instead, letting retrieval queue behind a debate call
- * rather than be refused behind it.
- */
 const MEASURED_RETRIEVAL_CALL_MS = 26_000;
 
-/**
- * Response budget.
- *
- * Larger than `NousSentimentClient`'s 2048 because this model reasons
- * before answering and the reasoning is billed against the same budget — a
- * measured call spent 2,009 of 4,007 output tokens on it. A `finish_reason`
- * truncation is a hard failure (`NousTruncatedError`), not silently
- * retried, so the budget has to clear reasoning plus the answer.
- */
 const DEFAULT_MAX_TOKENS = 6_000;
 
-/** How many items one call may contribute. A prompt that returns 200 posts is spend, not signal. */
 const MAX_ITEMS = 10;
 
-/**
- * The retrieval model.
- *
- * A floating alias, and pinning is not on the menu: `x_search` 400s on
- * every pinned id ("supported only on OpenRouter-routed models"). Safety
- * comes from a liveness assertion instead of a pin — the 400 is routed to
- * the coverage alert, and the meter honours the echoed id
- * (`resolveMeteredModel`), which is why both grok rows in `pricing.ts`
- * carry the retrieval rates.
- */
 export const X_SEARCH_MODEL = '~x-ai/grok-latest';
 
-/**
- * Default and ceiling for `max_search_results`.
- *
- * Search results ride in the prompt: a 3-result call measured ~5,300 input
- * tokens, a 10-result call 58,153 tokens (~$0.089).
- *
- * Two multipliers set the call count: buckets are session-derived (a 6.5h
- * US session touches 4 two-hour buckets, not 12), and the universe is 20
- * names. A soak is ~800 calls: ~$16 at 3 results, ~$71 at 10, against
- * ADR-0008's $50 cap shared with a ~$8.40 debate leg — the cap binds, and
- * at 3 results this leg is the larger of the two.
- *
- * The clamp below bounds an operator typo, not the budget: 10 on a 20-name
- * universe doesn't fit, and `SqliteSpendCap` failing closed means the soak
- * goes dark partway through rather than overspending. Re-derive the
- * default if the universe width changes; do not inherit it.
- *
- * Against that, 4 x 3 = 12 posts/instrument/session is thin — below the
- * ~17/ticker/day at which Bluesky was judged too sparse (#1041) — and
- * doesn't improve as the universe widens, since it's per instrument while
- * the bill is not. If 12 proves too thin the answer is a narrower
- * retrieval subset than the trading universe, not a bigger budget.
- */
 export const DEFAULT_MAX_SEARCH_RESULTS = 3;
 export const MAX_SEARCH_RESULTS_CEILING = 10;
 
-/**
- * Twitter's snowflake epoch (2010-11-04T01:42:54.657Z), in ms.
- *
- * A status id encodes its own creation time in the high bits: `id >> 22` is
- * milliseconds since this epoch. BigInt, not Number — a status id exceeds
- * `Number.MAX_SAFE_INTEGER`, and parsing as a float would silently round
- * and corrupt both the timestamp and the item id.
- */
 const SNOWFLAKE_EPOCH_MS = 1_288_834_974_657n;
 
-/**
- * A canonical X status permalink.
- *
- * Query and fragment are stripped before matching: the provider returns
- * `?s=20`-style tracking suffixes, and a post is the same post with or
- * without one. Only `x.com` (and `www.`) with a numeric status id counts —
- * a probe returned annotations pointing at `timestampconvert.net`, so a
- * non-empty citation is not by itself evidence of anything.
- */
 const X_STATUS_URL = /^https?:\/\/(?:www\.)?x\.com\/([A-Za-z0-9_]{1,15})\/status\/(\d{5,25})$/;
 
 interface ParsedStatusUrl {
@@ -139,10 +28,6 @@ interface ParsedStatusUrl {
   postedAt: Date;
 }
 
-/**
- * Decomposes a permalink into the fields the archive projection and the
- * recency filter both need, or `null` if it is not one
- */
 export function parseStatusUrl(url: string): ParsedStatusUrl | null {
   const withoutQuery = url.split(/[?#]/)[0] ?? '';
   const match = X_STATUS_URL.exec(withoutQuery);
@@ -163,7 +48,6 @@ export function parseStatusUrl(url: string): ParsedStatusUrl | null {
   return { handle, statusId, postedAt: new Date(postedAtMs) };
 }
 
-/** The shape the prompt asks for. Validated field by field before it becomes an item. */
 interface RawSentiment {
   url?: unknown;
   headline?: unknown;
@@ -175,26 +59,12 @@ interface RawSentiment {
 export interface XSearchClientOptions {
   apiKey: string;
   baseUrl: string;
-  /** Defaults to `X_SEARCH_MODEL`. Overridable so a future routed alias needs no code change. */
   model?: string;
-  /** Clamped to `[1, MAX_SEARCH_RESULTS_CEILING]` */
   maxSearchResults?: number;
-  /**
-   * How far back a post may be and still count as this bucket's news.
-   *
-   * Defaults to the agent's refresh interval, which is the honest window: a
-   * 2-hour bucket asking about posts from 19 hours ago is not measuring this
-   * bucket.
-   */
   windowMs?: number;
   timeoutMs?: number;
   maxTokens?: number;
   logger?: Logger;
-  /**
-   * The account-wide in-flight cap. Required for the same reason as the
-   * other two Nous clients — and most load-bearing here: a retrieval call
-   * is the longest thing this process puts in the shared account queue.
-   */
   gate: LlmInFlightGate;
 }
 
@@ -250,23 +120,10 @@ export class XSearchClient implements GrokSentimentClient {
         apiKey: this.#apiKey,
         baseUrl: this.#baseUrl,
         timeoutMs: this.#timeoutMs,
-        // Bounds the citation-derived estimate, not the number of searches:
-        // one `x_search` call returns up to `max_search_results` citations,
-        // so this is the right bound for "N citations came back, how many
-        // calls was that at most?" If the model issues several searches the
-        // provider reports them and that reported count wins — the only
-        // number that matches the bill
         maxServerToolCalls: this.#maxSearchResults,
         gate: this.#gate,
-        // The gate budget bounds wait + call: `clampCallToBudget` shrinks the
-        // network timeout by however long the wait already took, so the
-        // worst case is `this.#timeoutMs`, not wait plus the full timeout
         gateBudgetMs: this.#timeoutMs,
         clampCallToBudget: true,
-        // Declared because a retrieval call is nothing like a debate call: it
-        // runs the provider's own search loop, measured at 5-26s against a
-        // debate call's ~13s. A caller queued behind one that estimated 13s
-        // would be admitted into a deadline it cannot make
         expectedCallMs: MEASURED_RETRIEVAL_CALL_MS,
         llmStage: 'market_intelligence_retrieval',
       },
@@ -279,9 +136,6 @@ export class XSearchClient implements GrokSentimentClient {
           {
             type: 'x_search',
             max_search_results: this.#maxSearchResults,
-            // Day-granular on the wire — see the module header. Sent anyway
-            // to narrow what the provider searches; the real window is
-            // enforced below, on the results
             from_date: isoDate(windowStart),
             to_date: isoDate(asOf),
           },
@@ -289,9 +143,6 @@ export class XSearchClient implements GrokSentimentClient {
       },
     );
 
-    // The provider's own clock, not this machine's: the recency assertion is
-    // "the post predates the response", and mixing clocks would fold local
-    // skew into it
     const responseAt = result.created_at_ms === null ? asOf : new Date(result.created_at_ms);
 
     return {
@@ -305,19 +156,11 @@ export class XSearchClient implements GrokSentimentClient {
       model: result.model,
       usage: result.usage,
       server_tool_calls: result.server_tool_calls,
-      // Whether the tool ran, not whether any item survived — collapsing
-      // those would destroy the "looked and saw nothing" case (module header)
       retrievalEvidence: result.citations.length > 0,
       latency_ms: Date.now() - started,
     };
   }
 
-  /**
-   * Parses to zero items rather than throwing on a shape we cannot read.
-   *
-   * Zero reaches the analysts as `NO_DATA_MARKER` — an answer we cannot
-   * decode must not be distinguishable from an outage by accident.
-   */
   #parseItems(
     content: string,
     citations: readonly NousCitation[],
@@ -329,11 +172,6 @@ export class XSearchClient implements GrokSentimentClient {
     if (!parseResult.ok) return this.#unreadable(context.instrument);
     const parsed = parseResult.value;
 
-    // `JSON.parse` succeeding does not mean an object came back: the literal
-    // `null` parses fine, and reading `.items` off it would throw a
-    // TypeError, turning "unreadable" into an uncaught exception. A
-    // primitive (`5`, `"text"`) wouldn't throw but is equally unreadable,
-    // so both are refused by the same check
     if (typeof parsed !== 'object' || parsed === null) {
       return this.#unreadable(context.instrument);
     }
@@ -355,10 +193,6 @@ export class XSearchClient implements GrokSentimentClient {
     return items;
   }
 
-  /**
-   * Parses `content` as JSON, recovering a fenced or prose-wrapped object
-   * before giving up — the same salvage `NousSentimentClient` does
-   */
   #parseJsonContent(content: string): { ok: true; value: unknown } | { ok: false } {
     try {
       return { ok: true, value: JSON.parse(content) };
@@ -373,11 +207,6 @@ export class XSearchClient implements GrokSentimentClient {
     }
   }
 
-  /**
-   * Keyed by status id, not by raw URL string: the same post cited as
-   * `x.com/u/status/1` and `www.x.com/u/status/1?s=20` is one post, and a
-   * string-keyed set would let the second slip past as a different citation
-   */
   #buildCitedMap(citations: readonly NousCitation[]): Map<string, string> {
     const cited = new Map<string, string>();
     for (const citation of citations) {
@@ -404,9 +233,6 @@ export class XSearchClient implements GrokSentimentClient {
     let unreadableItems = 0;
 
     for (const raw of items_.slice(0, MAX_ITEMS)) {
-      // `items: [null]` is a well-formed array whose element throws on the
-      // first field read in `#toItem`. One malformed element must cost only
-      // that element, not the whole response
       if (typeof raw !== 'object' || raw === null) {
         unreadableItems += 1;
         continue;
@@ -421,9 +247,6 @@ export class XSearchClient implements GrokSentimentClient {
         continue;
       }
       if (outcome === null) continue;
-      // One item per post within a call — the provider can cite the same
-      // post twice; ingest-level dedupe catches it across calls, this
-      // catches it within one
       if (seen.has(outcome.id)) continue;
       seen.add(outcome.id);
       items.push(outcome);
@@ -463,21 +286,11 @@ export class XSearchClient implements GrokSentimentClient {
     });
   }
 
-  /**
-   * One raw item to an `IntelligenceItem`, or a reason it was dropped.
-   *
-   * Returns a discriminated outcome rather than plain `null` so the caller
-   * can report why items vanished — "ten items became zero" needs a
-   * different operator response than "the model said nothing".
-   */
   #toItem(
     raw: RawSentiment,
     cited: ReadonlyMap<string, string>,
     context: { instrument: string; windowStart: Date; responseAt: Date },
   ): IntelligenceItem | 'unevidenced' | 'stale' | null {
-    // Every field validated: a `sentiment` of 2 or a confidence of 1.4 would
-    // otherwise flow into the analysts' arithmetic on a value the type
-    // system says cannot exist
     if (typeof raw.headline !== 'string' || raw.headline.trim() === '') return null;
     if (raw.sentiment !== 1 && raw.sentiment !== 0 && raw.sentiment !== -1) return null;
     if (typeof raw.confidence !== 'number' || !Number.isFinite(raw.confidence)) return null;
@@ -486,30 +299,16 @@ export class XSearchClient implements GrokSentimentClient {
     const claimed = parseStatusUrl(raw.url);
     if (claimed === null) return 'unevidenced';
 
-    // The gate: the model's URL is used only to look up a citation; the
-    // stored `url` is the citation's. A post the tool never returned can't
-    // be cited into existence by the model typing its permalink
     const evidenced = cited.get(claimed.statusId);
     if (evidenced === undefined) return 'unevidenced';
 
-    // Recency, enforced here because `from_date`/`to_date` can't express
-    // it. The upper bound is the response's own timestamp — a post can't
-    // postdate the answer that cites it
     const postedAt = claimed.postedAt;
     if (postedAt < context.windowStart || postedAt > context.responseAt) return 'stale';
 
     return {
-      // Stable across calls and derived from the post itself, which is what
-      // makes ingest-level dedupe possible. `NousSentimentClient`'s
-      // `grok:<instrument>:<asOf>:<index>` changes every call by
-      // construction, so no two calls could ever be recognised as carrying
-      // the same post
       id: `x:${claimed.statusId}`,
       source: 'x',
       type: 'sentiment',
-      // The post's time, not the fetch's — what the store's window filter
-      // should see, and what keeps the archive replayable on the real
-      // publication axis
       timestamp: postedAt,
       entity: context.instrument,
       headline: raw.headline,
@@ -535,18 +334,10 @@ export class XSearchClient implements GrokSentimentClient {
   }
 }
 
-/** `YYYY-MM-DD`, the only granularity `x_search` accepts */
 function isoDate(at: Date): string {
   return at.toISOString().slice(0, 10);
 }
 
-/**
- * Clamps operator input to `[1, MAX_SEARCH_RESULTS_CEILING]`, loudly.
- *
- * The ceiling is the cap's, not a preference — see
- * `DEFAULT_MAX_SEARCH_RESULTS`. Silently honouring a typed 100 would
- * multiply the soak's LLM bill by an order of magnitude.
- */
 function clampSearchResults(requested: number | undefined, logger: Logger | undefined): number {
   if (requested === undefined) return DEFAULT_MAX_SEARCH_RESULTS;
   if (!Number.isFinite(requested)) return DEFAULT_MAX_SEARCH_RESULTS;

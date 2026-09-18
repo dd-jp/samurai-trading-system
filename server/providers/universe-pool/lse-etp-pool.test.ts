@@ -37,8 +37,6 @@ function makeRow(overrides: Partial<LseEtpPoolRow> = {}): LseEtpPoolRow {
     t212_isa: true,
     saxo_tradeable: 'unverified',
     subclass_envelope_measured: true,
-    // Opt in explicitly, so a future multi-row pool built from this helper does
-    // not silently exercise the fallback ceiling and duplicate-underlying rules
     fallback_default: false,
     provenance: {
       isin: 'XX0000000000',
@@ -70,9 +68,6 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
       expect(row.provenance.isin).toBeTruthy();
       expect(row.provenance.issuer).toBeTruthy();
       expect(row.provenance.source_url).toMatch(/^https:\/\//);
-      // Optional since #1220: a row added after the 2026-08-30 venue change
-      // (3LUS) has no T212 evidence to cite, and inventing a URL in a file
-      // whose whole discipline is provenance would be worse than its absence
       if (row.provenance.t212_source_url !== undefined) {
         expect(row.provenance.t212_source_url).toMatch(
           /^https:\/\/www\.trading212\.com\/trading-instruments\/invest\//,
@@ -83,24 +78,6 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
   });
 
   it('is at least the 11 tradeable ETP lines verified for this pass, seeding a line-count universe known to exceed 25', () => {
-    // A first pass of this file stopped at 6 rows and asserted
-    // `toBeLessThan(25)` as a pool-count finding. That assertion encoded a
-    // research-coverage artifact (currency-line doubt applied inconsistently
-    // across candidate rows) as if it were a property of the universe, and
-    // was wrong: re-running the same T212-instrument-page bar against the
-    // dropped candidates immediately produced five more verified rows, and a
-    // plain search of GraniteShares' own catalogue surfaced an 18-ticker 3x
-    // single-stock line before Leverage Shares' or WisdomTree's ranges were
-    // even considered. The verified-tradeable ETP-LINE count across the three
-    // named issuers is materially above 25 — see the module doc's provenance
-    // section. That is a line count, NOT the distinct-underlying count #707's
-    // 25-name threshold is measured against (26 today — see the
-    // `countRankableUnderlyings` describe block below, where that threshold
-    // has its own assertion). #813 carried nineteen further rows through the
-    // same per-row verification, but the file still ships a verified seed
-    // rather than a claim of completeness — neither issuer's short (-3x)
-    // side is represented at all — so the test asserts a floor rather than a
-    // ceiling
     expect(LSE_ETP_POOL.length).toBeGreaterThanOrEqual(11);
   });
 
@@ -115,12 +92,6 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
 });
 
 describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep-2026-09-03.md)', () => {
-  // The fallback is the only thing standing between a bad screener run and a
-  // fully dark session (universe-selector-spec.md, "Candidate pool", after
-  // story 26 was withdrawn), so its failure mode is a *silent* one: a pool
-  // that declares no fallback presents as a healthy no-trade session on the
-  // one day it matters. These tests are the load-time half of that; #751's
-  // provider tests own the behavioural half
 
   it('the checked-in pool declares a non-empty fallback subset that is not the whole pool', () => {
     const fallback = LSE_ETP_POOL.filter((row) => row.fallback_default);
@@ -130,9 +101,6 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
   });
 
   it('every fallback row has a measured subclass envelope', () => {
-    // ADR-0018 D3's bracket and D5's fraction were never measured against the
-    // four #903 rows (3VT/3KOR/3KWE/3XLE). Degraded mode is the worst place
-    // to discover that, so the subset is drawn from measured rows only
     for (const row of LSE_ETP_POOL.filter((r) => r.fallback_default)) {
       expect(row.subclass_envelope_measured).toBe(true);
     }
@@ -162,9 +130,6 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
   });
 
   it('assertValidPool rejects two fallback rows on one underlying, naming both lines', () => {
-    // SPY, QQQ, PLTR and NVDA each carry two ETP lines; marking both is
-    // doubled exposure to one name in the mode with no screener to notice
-    // This rule is the module's own, not the spec's — the throw says so
     const doubled = [
       makeRow({ lse_ticker: '3SPY', screening_instrument: 'SPY', fallback_default: true }),
       makeRow({ lse_ticker: '3USL', screening_instrument: 'SPY', fallback_default: true }),
@@ -174,9 +139,6 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
   });
 
   it('assertValidPool rejects a fallback row whose subclass envelope was never measured', () => {
-    // #903's four widened rows are excluded from liveSizingSubclassFor, so a
-    // fallback holding one would size against nothing — in the one mode with
-    // no screener running to notice
     const widened = [
       makeRow({
         lse_ticker: '3VT',
@@ -198,15 +160,7 @@ describe('the declared fallback subset (F4, docs/reviews/universe-path-gap-sweep
     ).not.toThrow();
   });
 
-  // Rule 5 (#1100 review): docs/specs/universe-selector-spec.md "Fallback
-  // behaviour" requires no fallback row be one gateAdmits excludes — a
-  // Saxo-VERIFIED saxo_tradeable: false. Proven on a synthetic fixture so the
-  // rule is pinned independently of which checked-in rows happen to be false
   it('assertValidPool rejects a fallback row that is Saxo-verified false — a fallback naming an instrument Saxo does not list', () => {
-    // A second, non-fallback row carries saxo_tradeable: true so gateAdmits
-    // genuinely disagrees across the pool (armed) — proving rule 5 fires on
-    // its own, not riding on the pool-wide vacuous check the single excluded
-    // fallback row would also trip alone
     const excluded = [
       makeRow({
         lse_ticker: '3EXC',
@@ -255,9 +209,6 @@ describe('routing binds on lse_ticker only', () => {
 
   it('the real checked-in pool never lets a screening_instrument double as a routing key', () => {
     const routing = buildRoutingMap(LSE_ETP_POOL);
-    // No skip-guard for `screening_instrument === lse_ticker`: `assertValidPool`
-    // now refuses such a row outright (#807), so a `continue` here would be a
-    // test branch that reads as coverage and covers nothing
     for (const row of LSE_ETP_POOL) {
       expect(routing.has(row.screening_instrument)).toBe(false);
     }
@@ -292,9 +243,6 @@ describe('subclass validation fails loud', () => {
   });
 });
 
-// The checked-in pool's distinctness is asserted above ('every lse_ticker is
-// distinct', and the routing block). These cover the other half — a pool a
-// CALLER supplies, which #751 is the first ticket to make possible (#807)
 describe('identity distinctness is enforced, not merely observed', () => {
   it('assertValidPool rejects a caller-supplied row whose lse_ticker equals its screening_instrument, naming the row', () => {
     const collapsed = makeRow({ lse_ticker: 'SPY', screening_instrument: 'SPY' });
@@ -303,9 +251,6 @@ describe('identity distinctness is enforced, not merely observed', () => {
   });
 
   it('assertValidPool treats a case-only or whitespace-only difference as the SAME identity, not two', () => {
-    // '3USL' vs '3usl' is a transcription of one identifier, never two
-    // instruments on two venues — the exact confusion the named field pair
-    // refuses. Case-sensitive validation would wave this through.
     expect(() =>
       assertValidPool([makeRow({ lse_ticker: '3USL', screening_instrument: '3usl' })]),
     ).toThrow(/same identity/);
@@ -315,8 +260,6 @@ describe('identity distinctness is enforced, not merely observed', () => {
   });
 
   it('assertValidPool accepts a genuinely distinct pair even when one string contains the other', () => {
-    // The checked-in pool holds 3SPY/SPY and 3QQQ/QQQ: a distinct ETP line and
-    // its distinct US underlying. The check is equality, never containment.
     expect(() =>
       assertValidPool([
         makeRow({ lse_ticker: '3SPY', screening_instrument: 'SPY', fallback_default: true }),
@@ -333,12 +276,6 @@ describe('t212_isa is populated for every row', () => {
   });
 });
 
-// #1054 Part 1: `saxo_tradeable` is the field docs/specs/universe-selector-spec.md
-// story 16 / #750 AC7 name as the liquidity gate — `t212_isa` above answers a
-// different, no-longer-live question (does Trading 212 list it) and must
-// never be read as the gate. #1032 item 3 captured Saxo's own instrument
-// list (`GET /ref/v1/instruments`, SIM gateway, 2026-09-05) row by row, so
-// every value below is sourced, and the gate is ARMED
 describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 Part 1, #1032 item 3)', () => {
   it('carries Saxo-sourced evidence on every checked-in row, and no row is left unverified', () => {
     for (const row of LSE_ETP_POOL) {
@@ -356,8 +293,6 @@ describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 
         expect(line.symbol).toBe(`${row.lse_ticker}:xlon`);
         expect(line.exchange_id).toBe('LSE_ETF');
         expect(Number.isInteger(line.uic) && line.uic > 0).toBe(true);
-        // Saxo quotes the GBX lines as GBP; the row's own currency field is
-        // the listing-line currency, which is the same claim in that case
         expect(line.currency).toBe(row.currency === 'GBX' ? 'GBP' : row.currency);
       }
     }
@@ -449,9 +384,6 @@ describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 
   });
 
   it('a mix of unverified and verified-true rows is vacuous (admits everything), not armed — gateAdmits agrees on every row even though saxo_tradeable itself is not constant', () => {
-    // This is the case a `saxo_tradeable`-distinctness check gets wrong:
-    // the raw field takes two different values across these rows, but
-    // admit-unless-false admits both of them, so the gate excludes nothing
     const pool = [
       makeRow({ lse_ticker: 'A1', screening_instrument: 'AAA', saxo_tradeable: 'unverified' }),
       makeRow({ lse_ticker: 'A2', screening_instrument: 'BBB', saxo_tradeable: true }),
@@ -470,10 +402,6 @@ describe('saxo_tradeable — the field the liquidity gate actually reads (#1054 
   });
 });
 
-// AC: "A test fails if the liquidity gate is constant across the whole pool"
-// (no-op gate is a build break). The unarmed state (constant 'unverified') is
-// the one exception — see the module doc's `saxo_tradeable` field comment for
-// why that state is distinct from a constant verified value, which is a bug
 describe('assertValidPool fails loud when the liquidity gate is constant (#1054)', () => {
   it('does not throw on the checked-in pool, whose gate is constant "unverified" — the explicit unarmed state', () => {
     expect(() => assertValidPool(LSE_ETP_POOL)).not.toThrow();
@@ -515,15 +443,6 @@ describe('countRankableUnderlyings — the count #707 consumes, not #751', () =>
   });
 
   it('clears the >= 25 distinct-underlying threshold #707 ranks against (#813)', () => {
-    // The named acceptance criterion of #813, asserted rather than observed
-    // This is the gate `docs/specs/universe-selector-spec.md` ("Candidate
-    // pool") sets for where the monthly-quintile ranking earns its keep: at
-    // 7 underlyings the quintiles held 1-2 names each and the statistic was
-    // undefined rather than merely weak. It is deliberately a floor, not an
-    // equality — rows may be added freely, but removing enough of them to
-    // drop back under 25 must fail here rather than silently re-block #707
-    // Note this counts UNDERLYINGS, not rows: 30 rows would not satisfy it
-    // if they collapsed onto fewer than 25 distinct screening instruments
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBeGreaterThanOrEqual(25);
   });
 
@@ -549,13 +468,6 @@ describe('countRankableUnderlyings — the count #707 consumes, not #751', () =>
   });
 });
 
-// #903: index_etp_3x was widened by #813 to include four underlyings nothing
-// like SPY (3VT/VT all-world, 3KOR/EWY South Korea, 3KWE/KWEB China internet,
-// 3XLE/XLE US energy sector), but ADR-0018's D3/D5 numbers for index_etp_3x
-// were measured with SPY standing in for the whole subclass. These tests
-// prove — against the REAL `resolveSubclassBracket`, not a re-implementation
-// — that a live-sizing consumer built the way #751 must build it cannot size
-// those four rows off the SPY-measured envelope
 describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_3x rows from live sizing', () => {
   const UNMEASURED_TICKERS = ['3VT', '3KOR', '3KWE', '3XLE'];
 
@@ -592,21 +504,15 @@ describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_
     }
     expect(Object.keys(subclassOf).length).toBe(LSE_ETP_POOL.length - 4);
 
-    // The proof that matters: feed this map into the REAL Trader-side
-    // resolver and confirm each of the four unmeasured rows fails loud
-    // instead of being sized off the SPY-measured index_etp_3x bracket
     for (const ticker of UNMEASURED_TICKERS) {
       expect(() => resolveSubclassBracket(ticker, subclassOf, ADR_0018_SUBCLASS_BRACKETS)).toThrow(
         SubclassBracketUnresolvableError,
       );
     }
 
-    // The guard must not over-exclude: a measured index_etp_3x row (3USL)
-    // still resolves successfully to the SPY-measured bracket
     const resolved = resolveSubclassBracket('3USL', subclassOf, ADR_0018_SUBCLASS_BRACKETS);
     expect(resolved).toBe(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x);
 
-    // And a measured single_stock_etp_3x row resolves to its own bracket too
     const resolvedSingleStock = resolveSubclassBracket(
       '3LTS',
       subclassOf,
@@ -616,17 +522,11 @@ describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_
   });
 
   it('screening/ranking is unaffected: the full pool and its rankable-underlying count are unchanged by the sizing exclusion', () => {
-    // The guard is sizing-only. #707's ranking precondition and #751's
-    // tradeable-line count must not silently shrink because of it
     expect(LSE_ETP_POOL.length).toBe(31);
     expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(26);
   });
 });
 
-// #914/#960: the read-side resolution step both the fundamental analyst's
-// fix and any future MI producer need — resolve an LSE wrapper to the US
-// underlying MI is actually keyed on, falling back to the instrument itself
-// for anything not in the pool
 describe('resolveMiSubject — the MI-wide retrieval-subject resolution (#914/#960)', () => {
   it('resolves a real LSE pool row to its screening_instrument, matching screeningInstrumentFor directly', () => {
     expect(resolveMiSubject('3USL')).toBe('SPY');
@@ -644,16 +544,8 @@ describe('resolveMiSubject — the MI-wide retrieval-subject resolution (#914/#9
   });
 });
 
-// #1220 (David's ruling, 2026-09-08: sterling-only for the live ramp). The
-// pool's non-sterling rows are EXCLUDED from the tradeable universe, not
-// deprioritised — an unmodelled GBP/USD leg on a GBP book is a cost the
-// system cannot price, and #1310 owns the width consequence
 describe('sterling-only tradeable universe (#1220)', () => {
   it('isSterlingQuoted agrees with the shared isBookCurrency on every pool row and every pence code', () => {
-    // #1465: `isSterlingQuoted` now delegates to `isBookCurrency` directly, so
-    // this is no longer pinning two hand-kept lists in agreement (#1100's
-    // failure mode) — it guards against a future edit making `isSterlingQuoted`
-    // stop delegating and drift again
     for (const row of LSE_ETP_POOL) {
       expect(isSterlingQuoted(row)).toBe(isBookCurrency(row.currency));
     }
@@ -675,8 +567,6 @@ describe('sterling-only tradeable universe (#1220)', () => {
     for (const row of LSE_ETP_POOL.filter((r) => !isSterlingQuoted(r))) {
       expect(tradeable).not.toContain(row);
     }
-    // 3USL is the ruling's own worked example: Saxo-listed, envelope-measured,
-    // and still out, because it is a USD line
     expect(tradeable.map((row) => row.lse_ticker)).not.toContain('3USL');
   });
 
@@ -713,9 +603,6 @@ describe('sterling-only tradeable universe (#1220)', () => {
   });
 
   it('assertValidPool rejects a non-sterling fallback row, naming the row and its currency', () => {
-    // Rule 6. A fallback row the tradeable universe excludes is the silent
-    // halt wearing the fallback's name — the same argument rule 5 makes for
-    // the liquidity gate, one gate over
     const usdFallback = [
       makeRow({
         lse_ticker: '3USD',
@@ -751,17 +638,12 @@ describe('sterling-only tradeable universe (#1220)', () => {
   });
 });
 
-// #1220 (b): the SPY fallback slot moves off 3USL (USD) onto 3LUS:xlon, the
-// GBP line of the same ISIN Saxo already listed in the 2026-09-05 capture as
-// 3USL's `sibling_line`
 describe('the 3LUS SPY fallback slot (#1220)', () => {
   it('holds the SPY slot on 3LUS — the sterling line, at the Uic the sibling evidence recorded', () => {
     const spyFallback = LSE_ETP_POOL.filter(
       (row) => row.fallback_default && row.screening_instrument === 'SPY',
     );
     expect(spyFallback.map((row) => row.lse_ticker)).toEqual(['3LUS']);
-    // GBX per the justETF listing table 3USL's own note cites; Saxo's search
-    // endpoint reports GBP for it because it carries no quote unit
     expect(spyFallback[0]?.currency).toBe('GBX');
     expect(spyFallback[0]?.provenance.saxo.line?.currency).toBe('GBP');
     expect(spyFallback[0]?.provenance.saxo.line?.symbol).toBe('3LUS:xlon');

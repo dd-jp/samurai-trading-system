@@ -1,45 +1,3 @@
-/**
- * Migration evidence for ticket #304 — "move `computeAtr` out of Trader into
- * the Market Data Service".
- *
- * Trader used to carry its own private `computeAtr`: a PLAIN ARITHMETIC MEAN
- * of the last `lookback` true ranges. The Market Data Service's `atr` (via
- * `computeIndicator`) is WILDER-SMOOTHED: it seeds on the first `period` true
- * ranges and then smooths every remaining one. Those are different
- * algorithms, and ATR sets Trader's stop distance — so deleting the private
- * one is only safe if the two agree at the width Trader actually calls with.
- *
- * `LEGACY_TRADER_ATR` below is the deleted function, verbatim, kept as the
- * reference implementation. These tests prove:
- *   1. They agree exactly (to MDS's 8dp rounding) at the width Trader
- *      presents — `atr_lookback + 1` bars, which yields exactly
- *      `atr_lookback` true ranges, so `atr`'s smoothing loop is empty
- *      (`trueRanges.length <= period`).
- *   2. They DIVERGE once the window is wider than that, which is exactly why
- *      the `+ 1` fetch width in `decide.ts` is load-bearing rather than
- *      incidental. If someone widens that fetch, Wilder's smoothing switches
- *      on and every stop in the system moves.
- *   3. They diverge NARROWER than that too, since #319: the legacy function
- *      fabricated a short-window mean and called it ATR(`lookback`);
- *      `computeIndicator` now throws `InsufficientBarsError`. That is the one
- *      deliberate behavioural break from the migrated function.
- *
- * So this file is not a one-off check: it pins the equivalence Trader's stop
- * placement was calibrated on, and fails loudly if a future change to
- * `computeIndicator`'s `atr` case would move it.
- *
- * **Note (#757): `decide.ts` no longer fetches `atr_lookback + 1` bars in
- * production.** It now fetches the CONVERGED width
- * (`recommendedWarmupFor(atrIndicatorSpec(...))`, `4 x atr_lookback + 1`) —
- * see `docs/reviews/indicator-characterisation-2026-08-16.md` F1 and
- * `atr-warmup.test.ts` for the measurement that gate cleared. Point 1 above
- * is therefore no longer a claim about the live production width; it still
- * pins the ALGORITHMIC boundary (plain mean at or below `period` true
- * ranges, Wilder-smoothed beyond it) at the width the legacy function was
- * calibrated against, which remains the correct reference for what
- * `computeIndicator`'s `atr` case computes. `decide.test.ts`'s "ATR bar
- * window" describes now pin the live fetch width.
- */
 import {
   type Bar,
   computeIndicator,
@@ -49,11 +7,6 @@ import { atrIndicatorSpec } from './decide.js';
 
 const LOOKBACK = 14;
 
-/**
- * The pre-#304 `trader/decide.ts` `computeAtr`, copied unchanged. Do not
- * "improve" it — its value here is being the historical algorithm, not being
- * good code.
- */
 function LEGACY_TRADER_ATR(bars: Bar[], lookback: number): number | null {
   const [earliest, ...rest] = [...bars].sort(
     (a, b) => a.close_time.getTime() - b.close_time.getTime(),
@@ -77,32 +30,10 @@ function LEGACY_TRADER_ATR(bars: Bar[], lookback: number): number | null {
   return window.reduce((sum, tr) => sum + tr, 0) / window.length;
 }
 
-/**
- * The real spec `decide.ts` asks MDS for — imported, not rebuilt here. A
- * local copy would keep this file green if `atrIndicatorSpec` drifted (e.g.
- * someone dropped the pinned `params.period` and let `computeIndicator`'s
- * `?? spec.lookback` fallback turn this into an ATR(15)), which is precisely
- * the drift this file exists to catch.
- *
- * `atrFor` itself is not called here: it pre-checks `minimumBarsFor` and
- * returns null, which would hide the throw the last test below has to
- * observe.
- */
 function mdsAtr(bars: Bar[], lookback: number): number {
-  // The timeframe is inert for this equivalence — `computeIndicator` runs on
-  // the bars it is handed, and both sides of the comparison get the same ones
-  // It is passed explicitly because #315 made it required, which is the point:
-  // a spec cannot claim a timeframe it was not built for
   return computeIndicator(bars, atrIndicatorSpec(lookback, '1h'));
 }
 
-/**
- * Deterministic pseudo-random OHLC bars — a fixed LCG rather than
- * `Math.random`, so a failure is reproducible from the seed alone. Gaps
- * between one bar's close and the next bar's range are deliberate: they are
- * what makes the `|high - prevClose|` / `|prevClose - low|` legs of the true
- * range bind, instead of `high - low` always winning.
- */
 function pseudoRandomBars(count: number, seed: number): Bar[] {
   let state = seed;
   const next = (): number => {
@@ -131,14 +62,6 @@ function pseudoRandomBars(count: number, seed: number): Bar[] {
 }
 
 describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeIndicator', () => {
-  // Parametrized on the LOOKBACK, each at its own `lookback + 1` fetch width,
-  // rather than on a bar count at a fixed ATR(14). Before #319 this ran short
-  // windows through an ATR(14) spec — 2, 3, 7 and 14 bars — and the two
-  // implementations "agreed" because both fabricated the same short-window
-  // mean. `computeIndicator` now refuses those, so the plain-mean regime is
-  // pinned the honest way: every case here is a window wide enough for the
-  // period it claims, which is exactly the invariant `atrIndicatorSpec`
-  // encodes and the only shape Trader can present now
   it.each([1, 2, 6, 13, LOOKBACK])(
     'agrees exactly for an ATR(%i) over its own lookback + 1 fetch width',
     (lookback) => {
@@ -146,16 +69,12 @@ describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeI
         const bars = pseudoRandomBars(lookback + 1, seed);
         const legacy = LEGACY_TRADER_ATR(bars, lookback);
         expect(legacy).not.toBeNull();
-        // MDS rounds to 8dp for determinism; the legacy function did not
-        // That fixed rounding is the ONLY numeric difference between them
         expect(mdsAtr(bars, lookback)).toBeCloseTo(legacy as number, 8);
       }
     },
   );
 
   it('agrees on the exact fetch width decide.ts uses, to the last bit', () => {
-    // `atr_lookback + 1` bars -> exactly `atr_lookback` true ranges, so
-    // `seedRanges` is the whole array and the smoothing loop never runs
     const bars = pseudoRandomBars(LOOKBACK + 1, 99);
     const legacy = LEGACY_TRADER_ATR(bars, LOOKBACK) as number;
 
@@ -163,11 +82,6 @@ describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeI
   });
 
   it('DIVERGES beyond that width — the boundary that used to make lookback + 1 load-bearing', () => {
-    // 5 bars past the LEGACY seed width => 5 true ranges past the seed, so
-    // Wilder's smoothing engages and the two answers part company. This is
-    // the mechanism `decide.ts` deliberately engages now (#757) by fetching
-    // the converged width instead — the "regression" this used to describe
-    // is the adoption's whole point
     const bars = pseudoRandomBars(LOOKBACK + 6, 7);
     const legacy = LEGACY_TRADER_ATR(bars, LOOKBACK) as number;
 
@@ -175,26 +89,13 @@ describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeI
   });
 
   it('THROWS below the seed width where the legacy function fabricated a mean (#319)', () => {
-    // The divergence that matters now, and the reason `atrFor` pre-checks the
-    // length rather than trusting the value
-    //
-    // The legacy function answered a number for ANY window of two bars or
-    // more — `trueRanges.slice(-14)` over 13 ranges is 13 ranges, divided by
-    // 13, returned as an ATR(14). `computeIndicator` used to do the same via
-    // `seedRanges.length`. Both were fabrications, and identical fabrications,
-    // which is why the equivalence tests above could not see the bug
-    // `computeIndicator` now refuses, with the arity in the error
     const oneShort = pseudoRandomBars(LOOKBACK, 3);
     expect(LEGACY_TRADER_ATR(oneShort, LOOKBACK)).toBeCloseTo(
-      // The fabricated value the legacy code shipped: a mean over 13 ranges
       LEGACY_TRADER_ATR(oneShort, LOOKBACK - 1) as number,
       10,
     );
     expect(() => mdsAtr(oneShort, LOOKBACK)).toThrow(InsufficientBarsError);
 
-    // And at the extreme: one bar is no true range at all. The legacy
-    // function returned null and `buildBracket` skipped on it; the throw is
-    // what `atrFor`'s length pre-check converts back into that same skip
     expect(LEGACY_TRADER_ATR(pseudoRandomBars(1, 3), LOOKBACK)).toBeNull();
     expect(() => mdsAtr(pseudoRandomBars(1, 3), LOOKBACK)).toThrow(
       /atr\(14\) needs 15 bars but received 1/,

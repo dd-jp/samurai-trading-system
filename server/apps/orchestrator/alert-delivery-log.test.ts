@@ -1,7 +1,3 @@
-/**
- * `SqliteAlertDeliveryLog` (#1108) — direct unit coverage over its own
- * `:memory:` DB, mirroring sqlite-audit-log.test.ts's shape
- */
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, openSharedStore } from '../../shared/store/index.js';
 import {
@@ -44,13 +40,6 @@ describe('SqliteAlertDeliveryLog', () => {
     expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(2);
   });
 
-  // #1108 third review pass: the CI-bot finding this closes. Heartbeat sends
-  // (#342) are recorded into the same table as escalation sends — #342's
-  // isolation only stops a heartbeat failure from advancing or triggering
-  // the escalation-chat alert in telegram-bot-api-client.ts, it does not stop
-  // the row from being written — so an unfiltered COUNT(*) would let a
-  // heartbeat outage falsely degrade the "alert channel" tile. `chatId` is
-  // the fix: a heartbeat-chat row must not count, an alert-chat row must
   it('excludes a non-alert (heartbeat) chat_id row from the count, and counts an alert-chat row', () => {
     const { log } = makeStore();
 
@@ -58,14 +47,9 @@ describe('SqliteAlertDeliveryLog', () => {
     log.recordFailure(failure({ chat_id: ALERT_CHAT_ID }));
 
     expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
-    // The heartbeat row is still durably recorded — just not counted toward
-    // the alert-channel tile. Same table, different chat, both rows present.
     expect(log.countFailures(ASOF, HEARTBEAT_CHAT_ID)).toBe(1);
   });
 
-  // Pins the UPPER bound specifically — #1131 adds a lower bound alongside
-  // this one, so this test alone no longer proves `countFailures` is
-  // bounded at all; the window tests below pin the lower bound
   it('excludes rows recorded after asOf', () => {
     const { log } = makeStore();
 
@@ -75,10 +59,6 @@ describe('SqliteAlertDeliveryLog', () => {
     expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
   });
 
-  // #1131: the count used to have no lower bound at all, so a failure from
-  // months ago counted toward "is the alert channel down" forever. These pin
-  // the trailing-window lower bound that fixes that — mutate the bound away
-  // (drop the `timestamp > ?` clause) and the first assertion here goes red
   describe('windowing (#1131)', () => {
     it('excludes a row older than the trailing window', () => {
       const { log } = makeStore();
@@ -98,10 +78,6 @@ describe('SqliteAlertDeliveryLog', () => {
       expect(log.countFailures(ASOF, ALERT_CHAT_ID)).toBe(1);
     });
 
-    // #1313: the two cases above sit one millisecond either side of the edge,
-    // so neither says what happens AT it. Mutating `timestamp > ?` to
-    // `timestamp >= ?` left all of them green. These two pin both ends of the
-    // half-open window `countFailures`'s doc now states
     it('excludes a row at exactly the window edge — the lower bound is exclusive', () => {
       const { log } = makeStore();
       const onTheEdge = new Date(ASOF.getTime() - ALERT_DELIVERY_FAILURE_WINDOW_MS);
@@ -135,13 +111,6 @@ describe('SqliteAlertDeliveryLog', () => {
   it('answers the count of the 2026-09-04 session-style burst — ten failed sends', () => {
     const { log } = makeStore();
 
-    // `Date.UTC(...)`, not `new Date(2026, 8, ...)` (#1108 third review pass):
-    // the latter is HOST-LOCAL time, while `ASOF` above is a fixed UTC
-    // instant — on any machine west of UTC-1 (US timezones, say) `new
-    // Date(2026, 8, 4, 14, i)` lands after `ASOF` and every row here would be
-    // silently excluded, failing this assertion only on CI/dev machines set
-    // to those zones. Every other timestamp in this file is already an ISO
-    // string for the same reason
     for (let i = 0; i < 10; i++) {
       log.recordFailure(
         failure({ body: `alert #${i}`, timestamp: new Date(Date.UTC(2026, 8, 4, 14, i)) }),
@@ -172,12 +141,6 @@ describe('SqliteAlertDeliveryLog', () => {
     expect(row?.error).toContain('[REDACTED]');
   });
 
-  // #1108 finding 4: the deleted round-trip test left nothing pinning that
-  // each column lands in the right place. Every field below is a DISTINCT
-  // value, so a body/error (or method) transposition in the INSERT's
-  // parameter order fails this even though every other test in the file
-  // would still pass (the finding-6/blocker tests above both seed body AND
-  // error with token-bearing text, which can't detect a swap)
   it('round-trips every column to a distinct value, catching a body/error/method transposition', () => {
     const { log, db } = makeStore();
     const entry: AlertDeliveryFailure = {
@@ -206,8 +169,6 @@ describe('SqliteAlertDeliveryLog', () => {
     expect(fromStoredTimestamp(row?.timestamp ?? '')).toEqual(entry.timestamp);
   });
 
-  // #1131: mirrors mi-archive-store.test.ts's coverage of
-  // `MiArchiveStore.purgeOlderThan`, the pattern this method copies
   describe('pruneOlderThan (#1131)', () => {
     it('deletes rows strictly older than cutoff and returns the count removed', () => {
       const { log, db } = makeStore();

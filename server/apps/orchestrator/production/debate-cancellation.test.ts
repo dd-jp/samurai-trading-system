@@ -1,18 +1,3 @@
-/**
- * End-to-end cancellation proof for #347 — the composed chain
- * `enforceLatencyBudget` -> `runDebate` -> `buildDebatePersonas` ->
- * `AnthropicLlmClient` -> `NousMessagesClient` -> `fetch`.
- *
- * The unit tests beside each module pin their own seam; this file is the only
- * place that proves the seams JOIN UP — that the signal `enforceLatencyBudget`
- * creates is the signal the real `fetch` init carries, and that aborting it
- * both kills the in-flight request and stops the round loop from issuing more.
- * A per-module test cannot show that: every one of them could pass while the
- * signal is dropped on the floor one layer down.
- *
- * No network and no wall-clock: `fetch` is stubbed (`vi.stubGlobal`, the same
- * seam `nous-chat.test.ts` uses) and every duration is fake-timer driven.
- */
 
 import type {
   AnalystView,
@@ -33,11 +18,6 @@ import { buildDebatePersonas } from './debate-adapter.js';
 const FAKE_KEY = 'test-fake-nous-key';
 const FAKE_BASE_URL = 'https://nous.test/v1';
 
-/**
- * `converged: false` on purpose: the debate then runs the full 3-round cap,
- * which is the "equivalent one that runs to the cap" the call-count assertion
- * measures the timed-out run against
- */
 const RESPONSE_TEXT = JSON.stringify({
   stance: 'bullish',
   rationale: 'cancellation fixture',
@@ -72,11 +52,6 @@ function makeLogger(): DebateLogger {
   };
 }
 
-/**
- * A `fetch` that takes `ms` of fake time to answer and rejects the moment its
- * `init.signal` aborts — i.e. it behaves like the real thing, which is what
- * makes "aborted, not merely ignored" observable at this layer.
- */
 function stubSlowFetch(ms: number): { signals: AbortSignal[]; calls: () => number } {
   const signals: AbortSignal[] = [];
   const fetchMock = vi.fn((_url: string, init: RequestInit) => {
@@ -109,8 +84,6 @@ function stubSlowFetch(ms: number): { signals: AbortSignal[]; calls: () => numbe
 
 function buildLlmClient(): AnthropicLlmClient {
   return new AnthropicLlmClient(
-    // 60s network backstop, well outside anything these tests exercise, so the
-    // only thing that ever cancels a call here is the latency budget
     new NousMessagesClient({
       apiKey: FAKE_KEY,
       baseUrl: FAKE_BASE_URL,
@@ -131,7 +104,6 @@ function runBudgetedDebate(personas: DebatePersonas, logger: DebateLogger) {
     assetClass: 'crypto',
     trace_id: 'trace-1',
     debate_id: 'debate-1',
-    // #687: the same bar `runDebate` hashes, so the timeout fallback names it too
     bar: CLOCK.now(),
     produceResult: (signal) =>
       runDebate(
@@ -155,7 +127,6 @@ describe('debate cancellation (#347)', () => {
   });
 
   it('runs every round to the cap when each call is fast enough', async () => {
-    // 1s per call * (3 rounds * 3 personas + 1 disagreement call) = 10s < 30s budget
     const fetches = stubSlowFetch(1_000);
     const logger = makeLogger();
     const personas = buildDebatePersonas(buildLlmClient(), 'trace-1', CLOCK);
@@ -171,8 +142,6 @@ describe('debate cancellation (#347)', () => {
   });
 
   it('issues strictly fewer LLM calls when the budget fires in round 1', async () => {
-    // 16s per call: bull answers at 16s, bear is still in flight when the 30s
-    // budget fires. Two calls issued, versus ten for the run-to-cap case.
     const fetches = stubSlowFetch(16_000);
     const logger = makeLogger();
     const personas = buildDebatePersonas(buildLlmClient(), 'trace-1', CLOCK);
@@ -184,8 +153,6 @@ describe('debate cancellation (#347)', () => {
     expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000, cause: 'budget' });
     expect(fetches.calls()).toBe(2);
 
-    // The decisive assertion: no call is issued AFTER the budget fires. Without
-    // cancellation the abandoned chain runs on and reaches ten
     await vi.advanceTimersByTimeAsync(120_000);
     expect(fetches.calls()).toBe(2);
   });
@@ -199,9 +166,6 @@ describe('debate cancellation (#347)', () => {
     await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
     await promise;
 
-    // The signal handed to the second (in-flight) fetch is aborted; the first,
-    // which had already answered, is not left dangling in an aborted state that
-    // some later retry could observe
     expect(fetches.signals).toHaveLength(2);
     expect(fetches.signals[1]?.aborted).toBe(true);
   });
@@ -233,10 +197,6 @@ describe('debate cancellation (#347)', () => {
     await promise;
     await vi.advanceTimersByTimeAsync(120_000);
 
-    // `logTimeout` is the one event a timed-out debate is entitled to. A
-    // cancellation is a deliberate act, not a fault: it must not also surface
-    // as an analyst failure, which is what an operator watching a 14-day soak
-    // would otherwise learn to ignore
     expect(logger.logAnalystFailure).not.toHaveBeenCalled();
     expect(logger.logDisagreement).not.toHaveBeenCalled();
     expect(logger.logRound).not.toHaveBeenCalled();
@@ -248,14 +208,10 @@ describe('debate cancellation (#347)', () => {
     const personas = buildDebatePersonas(buildLlmClient(), 'trace-1', CLOCK);
 
     const promise = runBudgetedDebate(personas, logger);
-    // Exactly the 10s the ten calls take — stopping SHORT of the 15s budget, so
-    // the budget timer is still pending unless it was explicitly cleared
     await vi.advanceTimersByTimeAsync(10_000);
     await promise;
     await vi.advanceTimersByTimeAsync(0);
 
-    // The budget timer is cleared when the debate wins the race; an unfired
-    // timer per tick is its own slow leak over an unattended soak
     expect(vi.getTimerCount()).toBe(0);
   });
 });

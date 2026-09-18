@@ -50,13 +50,6 @@ describe('cosineSimilarity', () => {
   });
 });
 
-/**
- * Retrieval behaviour is a property of the `SetupStore` port, so every case
- * runs against both implementations: the in-memory fixture and the real
- * SQLite-backed store over `cosine_setups` (#198). Seeding goes through the
- * port itself (`writeSetup` + `labelSetup`) rather than the fixture's
- * constructor, since that is the only way a real store can be populated.
- */
 const STORE_IMPLEMENTATIONS: Array<[string, () => SetupStore]> = [
   ['FixtureSetupStore', () => new FixtureSetupStore()],
   ['SqliteSetupStore', () => new SqliteSetupStore(openSharedStore(':memory:'))],

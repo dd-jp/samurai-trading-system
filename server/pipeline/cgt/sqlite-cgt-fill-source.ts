@@ -1,52 +1,3 @@
-/**
- * The one read behind #1518's CGT report: every fill on the LIVE arm's Saxo
- * GIA equity book, joined to its instrument/side, split into GBP-priced legs
- * ready for `matchDisposals` and the fills this report cannot price in
- * sterling without inventing an FX rate.
- *
- * `fills` carries no `instrument` column (`server/shared/types/records.ts`) —
- * it joins to whichever of `closed_trades` (a round-tripped lot) or
- * `open_positions` (a still-open one) shares its `idempotency_key`. BOTH are
- * read, not `closed_trades` alone: an open lot's entry fill is a real
- * acquisition the Section 104 pool must know about, and a partially-flattened
- * open lot has real disposal fills of its own — `closed_trades` sees neither.
- * A key CAN be in both tables at once — `closedTrade()` (ingest-fills.ts)
- * never deletes the matching `open_positions` row (the #1088 `LotRetirement`
- * doc: "`closed` is deliberately never swept"). Both PKs are single-column on
- * `idempotency_key`, so the two LEFT JOINs cannot fan out into duplicate rows
- * even then; the `??` below simply prefers `closed_trades` whenever a key
- * names a row in both (`sqlite-cgt-fill-source.test.ts` pins this case).
- *
- * Scoped to `arm = 'live'` (the control arm is simulated, never a real
- * disposal — CLAUDE.md's live/control split) and `asset_class = 'stocks'`
- * (this report is the Saxo GIA equity leg #1518 asks for; a pre-#705 crypto
- * disposal is a real historical CGT event too, but this ticket does not
- * cover it, and silently blending the two asset classes into one pool would
- * misstate both).
- *
- * Currency: `fee_currency` also names the currency `fills.price` (hence
- * `grossAmount`) is denominated in — both come off the same Saxo
- * `CurrencyCode` (`saxo-adapter.ts`'s `toCashFill`). GBP rows pass straight
- * through; a pence row (`isPenceCurrency`, `server/shared/book-currency.ts`
- * #1465 — GBX/gbx/GBp/p) is normalised ÷100 — defensive rather than
- * reachable today, since the adapter's own `CurrencyCode` already resolves to
- * GBP for a pence-quoted line before a fee is persisted (`saxo-price-unit.ts`'s
- * `price_to_contract_factor`). Anything else (USD on the pool lines the #1220
- * sterling gate keeps out of `tradeableUniverse()`) converts on `fills.fx_rate_to_gbp`
- * when a row carries one (#1521, migration 0060) — `grossAmount`/`charges`
- * multiplied by the stored rate, never re-derived or looked up here — and
- * only when that rate is strictly positive (round 1 review: a zero or
- * negative stored value is refused, not multiplied by, since it would
- * silently zero out or sign-flip a real disposal). A row with neither a book
- * currency nor a usable stored rate cannot be priced in sterling without
- * inventing an FX rate, so it is returned separately, in native currency,
- * carrying why (`fxRateToGbpSource`), rather than guessed into the matched
- * total or used to abort the whole report. Classification reuses
- * `isPenceCurrency`/`BOOK_CURRENCY` rather than a local GBP/GBX string
- * comparison — `book-currency.ts` checks
- * pence FIRST specifically because `GBp` (pence) upper-cases to `GBP` and a
- * naive case-insensitive pound test would 100x it.
- */
 
 import { BOOK_CURRENCY, type Fill, isPenceCurrency } from '../../shared/index.js';
 import { type FillRow, fromFillRow, type StoreHandle } from '../../shared/store/index.js';
@@ -65,20 +16,12 @@ interface FillJoinRow extends FillRow {
 
 export interface CgtFillLegs {
   legs: CgtFillLeg[];
-  /** Fills whose currency is neither GBP nor GBX — see this file's header */
   unconverted: UnconvertedCgtFill[];
 }
 
 export class SqliteCgtFillSource {
   constructor(private readonly db: StoreHandle) {}
 
-  /**
-   * Every fill this report needs, classified into `matchDisposals`'s
-   * `CgtFillLeg` shape (or set aside as `unconverted`). Refuses rather than
-   * mis-reporting on two integrity faults that are not currency-related: an
-   * unattributable fill, and a short-sale lot (this long-only matcher cannot
-   * price one).
-   */
   getLiveEquityFillLegs(): CgtFillLegs {
     const rows = this.db
       .prepare(
@@ -122,7 +65,6 @@ export class SqliteCgtFillSource {
   }
 }
 
-/** Returns `null` for a row outside this report's scope (see this file's header) */
 function classifyFillRow(
   row: FillJoinRow,
 ): { leg: CgtFillLeg } | { unconverted: UnconvertedCgtFill } | null {
@@ -150,10 +92,6 @@ function classifyFillRow(
   return priceFillInGbp(fill, instrument, kind);
 }
 
-/**
- * `null` guard-clause conditions live in `classifyFillRow`; this only decides
- * HOW to price an already-scoped fill in sterling — see this file's header
- */
 function priceFillInGbp(
   fill: Fill,
   instrument: string,
@@ -163,8 +101,6 @@ function priceFillInGbp(
   const rawGrossAmount = fill.price * fill.qty;
   const rawCharges = fill.fee;
 
-  // Pence FIRST — see this file's header on why a case-insensitive GBP
-  // comparison run first would swallow `GBp` and 100x it
   const divisor = isPenceCurrency(currency)
     ? PENCE_PER_GBP
     : currency.toUpperCase() === BOOK_CURRENCY
@@ -175,8 +111,6 @@ function priceFillInGbp(
     return { leg: toLeg(fill, instrument, kind, rawGrossAmount / divisor, rawCharges / divisor) };
   }
   if (fill.fx_rate_to_gbp !== undefined && fill.fx_rate_to_gbp > 0) {
-    // #1521: the venue's own rate, applied verbatim — never re-derived,
-    // never blended with a spot lookup. See this file's header
     return {
       leg: toLeg(
         fill,
@@ -188,12 +122,6 @@ function priceFillInGbp(
     };
   }
 
-  // A stored rate that is zero or negative is not a rate this module
-  // will multiply by (round 1 review, recorded not fixed) — a zero
-  // silently zeroes a real disposal, a negative flips its sign, and
-  // both would confidently misreport a live CGT event. Fall through to
-  // unconverted instead of trusting a value that fails a sign check no
-  // real exchange rate can fail
   const fxRateToGbpSource =
     fill.fx_rate_to_gbp !== undefined
       ? `invalid_stored_rate:${fill.fx_rate_to_gbp}`
@@ -214,7 +142,6 @@ function priceFillInGbp(
   };
 }
 
-/** ISO 4217 minor unit: 100 pence (GBX/gbx/GBp/p, see `isPenceCurrency`) makes 1 GBP */
 const PENCE_PER_GBP = 100;
 
 function toLeg(

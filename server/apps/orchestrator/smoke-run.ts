@@ -1,9 +1,3 @@
-/**
- * Offline end-to-end smoke run — the pre-soak gate. Runs the real entrypoint assembly over
- * fixtures and a simulated broker; NOT a substitute for the credentialed wiring bar (ADR-0004 §5).
- * The clock is a `SimulatedClock` frozen at `SMOKE_RUN_INSTANT`: a running wall clock would date
- * every modelled fill before the lot's `opened_at` and it would never be ingested.
- */
 import {
   existsSync,
   mkdtempSync,
@@ -57,9 +51,6 @@ import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from '../../pipeline/execution/index.js';
-// #1125: not re-exported through the barrel above (see ingest-fills.ts's own
-// exports) — imported directly, the same way `filled-zero-size-wiring.test.ts`
-// already does
 import {
   ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
   AlpacaBrokerAdapter,
@@ -180,22 +171,12 @@ import {
 } from './production.js';
 import type { LogEntry, Logger, UniverseInstrument } from './types.js';
 
-/** Baseline buckets the seed below fills, and records in each */
 const SMOKE_GDELT_SEED_BUCKETS = 24;
 const SMOKE_GDELT_SEED_PER_BUCKET = 2;
-/** Records the seed puts in the signal hour — above `MIN_SIGNAL_RECORDS` */
 const SMOKE_GDELT_SEED_SIGNAL_ROWS = 5;
 const SMOKE_GDELT_SEEDED_ROWS =
   SMOKE_GDELT_SEED_BUCKETS * SMOKE_GDELT_SEED_PER_BUCKET + SMOKE_GDELT_SEED_SIGNAL_ROWS;
 
-/**
- * Puts 25 hours of GDELT history in the archive before the run starts, so
- * this gate can observe the scoring pass firing rather than only refusing —
- * a smoke run otherwise holds one canned batch at one instant, short of the
- * pass's 24h baseline lead by design. Written directly rather than through
- * `smokeGdeltClient`, which serves only ONE batch and cannot supply 25 hours
- * of history in one run.
- */
 function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
   const bar = floorToBar(SMOKE_RUN_INSTANT, DEBATE_BAR_TIMEFRAME_MS);
   const hourMs = 60 * 60 * 1000;
@@ -232,23 +213,15 @@ function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
   archive.write(rows, []);
 }
 
-/** The seed above, plus the one canned batch row `smokeGdeltClient`'s theme filter keeps — named so the fixture and gate stay one fact, not two */
 export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
 
-/** Derived from `SMOKE_TEST_UNIVERSE` rather than a literal so a universe change can't silently turn a correct run red */
 const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
   ...new Set(SMOKE_TEST_UNIVERSE.map((instrument) => instrument.asset_class)),
 ];
 
 export const SMOKE_GDELT_EXPECTED_AGGREGATES = SMOKE_GDELT_ASSET_CLASSES.length;
 
-/**
- * Serves one canned batch over a real deflate zip, built rather than mocked, so the gate
- * exercises the whole decode path offline. Two rows (one watched theme, one not) so the
- * archived count is 1 and a filter that stopped filtering shows up as 2.
- */
 function smokeGdeltClient(): GdeltGkgClient {
-  // Must be NEWER than seedSmokeGdeltBaseline's rows or the fetcher's cursor skips the download
   const stamp = '20260804114500';
   const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
   const lastupdate = [
@@ -291,19 +264,8 @@ function smokeGdeltClient(): GdeltGkgClient {
   });
 }
 
-/**
- * How many Polymarket macro items the canned wire should produce: ONE. The
- * fixture serves a healthy market for the first curated row, a thin-volume
- * market for the second, and a rotted (empty) event for every other row —
- * 0 means the poller never ran, 2 means the fail-closed volume guard stopped biting.
- */
 const SMOKE_POLYMARKET_EXPECTED_ITEMS = 1;
 
-/**
- * A REAL `PolymarketClient` behind a fake `fetchImpl`, not a hand-rolled fake: Gamma serialises
- * `outcomes`/`outcomePrices`/`clobTokenIds` as JSON-encoded strings, and that decode is most of
- * what this client is
- */
 function smokePolymarketClient(): PolymarketClient {
   const [healthy, thin] = CURATED_MACRO_MARKETS;
   const marketFor = (slug: string, volume24hr: number): Record<string, unknown> => ({
@@ -326,14 +288,11 @@ function smokePolymarketClient(): PolymarketClient {
       return [{ slug, markets: [marketFor(healthy.marketSlug, 533_307)] }];
     }
     if (thin !== undefined && slug === thin.eventSlug) {
-      // Below `MIN_VOLUME_24H_USD`, so the agent must refuse it — the reason the expected count is 1, not 2
       return [{ slug, markets: [marketFor(thin.marketSlug, 5)] }];
     }
-    // Every other curated row reads as rotted: Gamma answers with an empty array, which the agent warns on and ingests nothing from
     return [];
   };
 
-  // A 24h hourly series rising 0.60 -> 0.66; +0.06 clears the ±0.02 dead band, giving a real direction rather than a dead-band zero
   const history = Array.from({ length: 25 }, (_, index) => ({
     t: Math.floor((SMOKE_RUN_INSTANT.getTime() - (24 - index) * 60 * 60_000) / 1000),
     p: 0.6 + (0.06 * index) / 24,
@@ -351,22 +310,10 @@ function smokePolymarketClient(): PolymarketClient {
   });
 }
 
-/**
- * The instant the whole run is frozen at. NOT inside US equity regular hours (measured) — this
- * run injects `AlwaysOpenCalendar` instead. The exact-hour alignment is load-bearing for the
- * Polymarket gate: `getContext()` floors its window to the debate bar, so nudging this off the
- * hour silently zeroes served intel.
- */
 export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 
-/** The instrument the fixtures describe — `SMOKE_TEST_UNIVERSE`'s single entry */
 const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
 
-/**
- * Each count is a floor forced by a downstream consumer, not a round number (e.g. `5m` x 60
- * clears `RSI_SPEC`'s converged warm-up of 57 by three). `smoke-run.test.ts` pins these against
- * the profile's own lookbacks.
- */
 const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: number }[] = [
   { timeframe: '5m', count: 60, stepMs: 5 * 60 * 1_000 },
   { timeframe: '1h', count: 60, stepMs: 60 * 60 * 1_000 },
@@ -374,33 +321,19 @@ const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: num
   { timeframe: '1d', count: 40, stepMs: 24 * 60 * 60 * 1_000 },
 ];
 
-/** The mark, and the last fixture close, the run trades against */
 const SMOKE_MARK_PRICE = 160;
 
-/**
- * Three down bars then four up, netting +5 every seven bars — a rising series is not enough,
- * it must rise WITH pullbacks or RSI(14) hits exactly 100 and the analyst reads `neutral`
- * "overbought" instead of `bullish`. This cycle yields RSI 68.52, only 1.48 points below the
- * 70 gate — a future edit adding upward bias can push it over and fail the run silently-loud.
- */
 const SMOKE_CLOSE_CYCLE: readonly number[] = [-2, -2, -3, 3, 3, 3, 3];
 
-/**
- * `count` closes ending exactly at `lastClose`, walking `SMOKE_CLOSE_CYCLE`
- * backwards so the final bar is always the cycle's last up bar
- */
 export function buildTrendingCloses(count: number, lastClose: number): number[] {
   const length = SMOKE_CLOSE_CYCLE.length;
   const closes = Array.from<number>({ length: count });
   closes[count - 1] = lastClose;
 
   for (let step = 1; step < count; step += 1) {
-    // `((x % n) + n) % n`: a bare `%` goes negative once `step` passes the cycle length
     const delta = SMOKE_CLOSE_CYCLE[(((length - step) % length) + length) % length];
     const next = closes[count - step];
     if (delta === undefined || next === undefined) {
-      // Unreachable after the guarded modulo; thrown rather than defaulted so an indexing bug
-      // can't quietly produce a wrong-but-plausible fixture the RSI assertions are pinned to
       throw new Error(`buildTrendingCloses: no close or delta at step ${step} of ${count}`);
     }
     closes[count - 1 - step] = next - delta;
@@ -409,12 +342,6 @@ export function buildTrendingCloses(count: number, lastClose: number): number[] 
   return closes;
 }
 
-/**
- * A rising fixture series with pullbacks, ending just under `SMOKE_MARK_PRICE`. The trend is
- * what lets the run reach a `go` at all: the Analysts must agree directionally to clear
- * `traderConfig.conviction_floor`, or a flat/noisy series short-circuits to `trader: no_trade`.
- * See `SMOKE_CLOSE_CYCLE` for why it isn't a monotonic ramp.
- */
 export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Bar[] {
   return SMOKE_BAR_SERIES.flatMap(({ timeframe, count, stepMs }) => {
     const closes = buildTrendingCloses(count, SMOKE_MARK_PRICE - 1);
@@ -441,12 +368,6 @@ export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Ba
   });
 }
 
-/**
- * Constant rather than queue-based (unlike `MockLlmClient`, which dequeues per
- * call and throws once exhausted) since this run's call count depends on how
- * many ticks reach Debate. `stance: 'bullish'` is required for a GO to be
- * reachable at all; `converged: true` bounds the debate to round 1.
- */
 export const SMOKE_LLM_RESPONSE = JSON.stringify({
   stance: 'bullish',
   rationale: 'offline smoke fixture: uptrend intact, structure supports a long entry',
@@ -471,7 +392,6 @@ export class ConstantResponseLlmClient implements LlmClient {
   }
 }
 
-/** Injected: the only in-repo `AccountStateProvider` makes a network call, out of bounds here */
 export class FixedAccountStateProvider implements AccountStateProvider {
   constructor(private readonly equity: number = 100_000) {}
 
@@ -481,7 +401,6 @@ export class FixedAccountStateProvider implements AccountStateProvider {
     daily_basis: SessionBasisByClass;
     consecutive_losses: number;
   }> {
-    // `known: true`, not unknown — an unknown figure arms daily_pnl_unknown and looks degraded
     const flat = { known: true, open_equity: this.equity, realized_pnl: 0 } as const;
 
     return {
@@ -493,11 +412,6 @@ export class FixedAccountStateProvider implements AccountStateProvider {
   }
 }
 
-/**
- * `buildProductionComponents` resolves the Alpaca client eagerly and its constructor throws
- * without `ALPACA_API_KEY`, so a credential-free run must inject something here even though it
- * should never be called. Throws rather than stubbing an answer, so a wiring regression is loud.
- */
 export class UnreachableAlpacaClient implements AlpacaBrokerClient {
   reached = false;
 
@@ -556,11 +470,6 @@ export class UnreachableAlpacaClient implements AlpacaBrokerClient {
   }
 }
 
-/**
- * The exit path (#576). The entry-path run above can't honestly reach an `exit` intent, so this
- * harness composes Execution directly via `buildExecutionSurface` with hand-built
- * `VerdictDecision`s. One instrument per scenario so lots don't leak across `heldLots` filters.
- */
 const EXIT_PATH_INSTRUMENTS = {
   fullExit: 'ETH-USD',
   partialFlatten: 'SOL-USD',
@@ -569,34 +478,16 @@ const EXIT_PATH_INSTRUMENTS = {
   residualSweep: 'LINK-USD',
 } as const;
 
-/**
- * `CostModelImpl.fill()` always returns `filled_size: request.size` — no
- * partial-fill modelling exists in the real cost model, so
- * `ExitPathBrokerAdapter` truncates a NAMED flatten's fill to this fraction
- * on this side of the `BrokerAdapter` seam, leaving `execution/` untouched
- */
 const PARTIAL_FLATTEN_FRACTION = 0.4;
-/** Scenario 3's setup fraction, reusing scenario 2's partial-flatten technique */
 const PRIOR_EXIT_FRACTION = 0.3;
 
 const EXIT_PATH_LOT_SIZE = 10;
 
-/**
- * `AlwaysOpenCalendar` for both classes, matching this run's `tradingCalendar`
- * override — `SMOKE_RUN_INSTANT` sits outside real session hours, and a shut
- * venue would stand down the residual re-flatten (#1214) for a reason none of
- * these scenarios is about
- */
 const EXIT_PATH_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
   crypto: new AlwaysOpenCalendar(),
   stocks: new AlwaysOpenCalendar(),
 };
 
-/**
- * `ResidualExposureAlert` is documented as the fallback for when
- * `maybeRearmResidual` (ingest-fills.ts) itself fails — a successful re-arm
- * posts nothing here, so a healthy smoke run should produce zero of these
- */
 class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
   readonly alerts: ResidualExposureAlert[] = [];
 
@@ -608,7 +499,6 @@ class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChan
   }
 }
 
-/** A healthy scenario 4 resolves cleanly, so this should stay empty (#519) */
 class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
   readonly alerts: FlattenReconcileAlert[] = [];
 
@@ -617,13 +507,6 @@ class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChan
   }
 }
 
-/**
- * The `error`-level lines `startFillSync`'s `catch` blocks write on a
- * rejected pass, imported from that module so a rewording there can't leave
- * a stale literal here. The loop logs and keeps polling either way, so a
- * pass that rejects on every poll is invisible to every other check in this
- * gate, which reads effects rather than log lines.
- */
 const FILL_SYNC_FAILURE_MESSAGES = [
   FILL_SYNC_RECONCILE_FAILED,
   FILL_SYNC_POLL_FAILED,
@@ -636,7 +519,6 @@ function isFillSyncFailureMessage(message: string): message is FillSyncFailureMe
   return (FILL_SYNC_FAILURE_MESSAGES as readonly string[]).includes(message);
 }
 
-/** One rejection the fill-sync loop logged and survived (#1049) */
 export interface FillSyncFailure {
   message: FillSyncFailureMessage;
   error: string;
@@ -646,18 +528,8 @@ export interface FillSyncFailureEvidence {
   failures: readonly FillSyncFailure[];
 }
 
-/**
- * Fill-sync rejections a healthy smoke run is allowed to produce. Empty
- * deliberately: the one scripted fault on this path (scenario 5's failed
- * re-arm) surfaces as a residual-exposure alert, never a poll rejection.
- */
 const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
 
-/**
- * An empty tolerated entry is ignored rather than honoured —
- * `'x'.includes('')` is true, so a blank allowlist line would otherwise
- * tolerate every failure the loop ever logs
- */
 export function untoleratedFillSyncFailures(
   failures: readonly FillSyncFailure[],
   tolerated: readonly string[] = TOLERATED_FILL_SYNC_FAILURES,
@@ -666,11 +538,6 @@ export function untoleratedFillSyncFailures(
   return failures.filter((failure) => !allowed.some((entry) => failure.error.includes(entry)));
 }
 
-/**
- * Records every fill-sync rejection (#1049) on the way to the real logger —
- * the gate's other checks read effects, not log lines, so this stays scoped
- * to `FILL_SYNC_FAILURE_MESSAGES` rather than reading a `Logger` back in full
- */
 export class FillSyncFailureRecorder implements Logger {
   private readonly failures: FillSyncFailure[] = [];
 
@@ -711,11 +578,9 @@ const fillSyncProbe: Probe<'fillSync'> = {
 
 export interface MarketDataFetchEvidence {
   fetchCount: number;
-  /** A bar fetch inside a tick carries that tick's id; `'market-data'` otherwise */
   traceIds: string[];
 }
 
-/** Records every `market_data_fetch` line (#1082), matched by `LogEntry.event` not message text */
 export class MarketDataFetchRecorder implements Logger {
   private fetchCount = 0;
   private readonly traceIds = new Set<string>();
@@ -741,7 +606,6 @@ const marketDataFetchProbe: Probe<'marketDataFetch'> = {
   },
   verdict(evidence, { observations }) {
     const failures: string[] = [];
-    // Store starts cold, so the first bar fetch is a guaranteed cache miss
     if (evidence.fetchCount === 0) {
       failures.push(
         'zero market_data_fetch lines were recorded over the run — the store starts cold, so at ' +
@@ -752,7 +616,6 @@ const marketDataFetchProbe: Probe<'marketDataFetch'> = {
       );
     }
 
-    // Deleting the runWithTraceId wrapper leaves every fetch byte-identical and green — only this join catches it
     const tickTraces = new Set(observations.ticks.map((tick) => tick.trace_id));
     const joined = evidence.traceIds.some((trace_id) => tickTraces.has(trace_id));
     if (tickTraces.size > 0 && evidence.fetchCount > 0 && !joined) {
@@ -773,28 +636,17 @@ function payloadError(payload: unknown): string {
   return typeof error === 'string' ? error : '';
 }
 
-/**
- * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576): `callSequence`
- * records call order so cancel-before-flatten (#516) can be asserted, and `truncateFlattenFill`
- * produces a genuinely partial fill while preserving `broker_fill_id`, which `ingestFills()` dedups on
- */
 class ExitPathBrokerAdapter implements BrokerAdapter {
   readonly callSequence: string[] = [];
   private readonly partialFlattenFraction = new Map<string, number>();
-  /** Lots whose next `rearmProtectiveLegs` call throws — scenario 5's one-shot failure (#549) */
   private readonly rearmFailuresOnce = new Set<string>();
 
-  /** Concrete `SimulatedBrokerAdapter`, not `BrokerAdapter`: `getProtectedQty` isn't on that interface */
   constructor(private readonly delegate: SimulatedBrokerAdapter) {}
 
   truncateFlattenFill(clientOrderId: string, fraction: number): void {
     this.partialFlattenFraction.set(clientOrderId, fraction);
   }
 
-  /**
-   * One-shot stand-in for "the observing poll's re-arm did not confirm",
-   * forcing the durable marker to be the only path back to protection
-   */
   failRearmOnce(clientOrderId: string): void {
     this.rearmFailuresOnce.add(clientOrderId);
   }
@@ -822,14 +674,12 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
     if (this.partialFlattenFraction.size === 0) return fills;
 
     return fills.map((fill) => {
-      // A flatten's fill id is always `${clientOrderId}:flatten` (simulated-adapter.ts)
       const clientOrderId = fill.broker_fill_id.endsWith(':flatten')
         ? fill.broker_fill_id.slice(0, -':flatten'.length)
         : undefined;
       const fraction =
         clientOrderId === undefined ? undefined : this.partialFlattenFraction.get(clientOrderId);
       if (fraction === undefined) return fill;
-      // `broker_fill_id` is left untouched — see the class docs' dedup note
       return { ...fill, qty: fill.qty * fraction, fee: fill.fee * fraction };
     });
   }
@@ -871,18 +721,15 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
     return this.delegate.cancel(clientOrderId, instrument);
   }
 
-  /** Passed straight through — see the class docs for why this is deliberately unreconciled */
   async getOpenPositions(): ReturnType<BrokerAdapter['getOpenPositions']> {
     return this.delegate.getOpenPositions();
   }
 
-  /** The quantity `rearmProtectiveLegs`/`resizeProtectiveLegs` last set for this lot */
   getProtectedQty(clientOrderId: string): number | null {
     return this.delegate.getProtectedQty(clientOrderId);
   }
 }
 
-/** A minimal `OrderIntent` for the exit-path harness — Trader-computed fields are fixed placeholders `execute()` never reads */
 function exitPathOrder(
   instrument: string,
   idempotencyKey: string,
@@ -916,13 +763,11 @@ function exitPathOrder(
         cosine_multiplier: 1,
       },
       cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
-      // #793: executeExit refuses to write ahead without an exit_reason
       ...(intentType === 'exit' ? { exit_reason: 'flatten' as const } : {}),
     },
   };
 }
 
-/** An approved `RiskDecision` for `order`, shared by every harness in this file that needs one */
 function approvedRiskDecision(order: OrderIntent): RiskDecision {
   return {
     status: 'approved',
@@ -936,21 +781,11 @@ function approvedRiskDecision(order: OrderIntent): RiskDecision {
   };
 }
 
-/**
- * Drives the exit-path harness through the REAL `VerdictImpl` (#894), spread from
- * `buildStartingProfileConfigs` so a profile retune can't leave this silently untested.
- * `max_mark_age` is overridden since `FixtureDataSource` serves one fixed-timestamp mark.
- */
 const EXIT_PATH_VERDICT_CONFIG: VerdictConfig = {
   ...buildStartingProfileConfigs().verdictConfig,
   max_mark_age: { crypto: 24 * 60 * 60_000, stocks: 24 * 60 * 60_000 },
 };
 
-/**
- * A `no_go` throws rather than being returned: every scenario here is built
- * to pass every gate, so a refusal means a lost precondition or a changed
- * gate, and the run should say which reason fired rather than submit nothing
- */
 async function exitPathVerdict(
   order: OrderIntent,
   deps: {
@@ -999,62 +834,30 @@ function assertSubmitted(result: ExecutionResult, step: string): void {
 export interface ExitPathEvidence {
   brokerCallSequence: readonly string[];
   residualAlerts: readonly ResidualExposureAlert[];
-  /** Scoped to scenario 1's own lot (#508/#517), not an aggregate count that could hide a regression here */
   fullExit: { lotKey: string };
   partialFlatten: {
     idempotencyKey: string;
     expectedResidual: number;
     protectedQty: number | null;
   };
-  /** Scoped to scenario 3's own two lots (#571), so neither being phantom-open is independently checkable */
   twoLotFlatten: { lotKeys: readonly string[] };
-  /**
-   * `flattenKey` (not `lotKey`) because `ReconcileDivergence` keys off the
-   * flatten — a flatten writes no `OpenPosition`. `reconcileReport` proves
-   * the restarted `reconcile()`'s flatten sweep recovered it, not merely
-   * `ingestFills()` (#519, #526).
-   */
   crashRestart: { lotKey: string; flattenKey: string; reconcileReport: ReconcileReport };
   flattenReconcileAlerts: readonly FlattenReconcileAlert[];
-  /**
-   * Scenario 5 (#549): a one-shot scripted re-arm failure, so the durable
-   * marker (migration 0024) plus the restarted `reconcile()` sweep are the
-   * only path back to protection
-   */
   residualSweep: {
     lotKey: string;
     expectedResidual: number;
     protectedQty: number | null;
     markerCleared: boolean;
     sweepDivergenceAction: ReconcileDivergence['action'] | undefined;
-    /**
-     * Read off the SAME `findSweepDivergence` lookup as `sweepDivergenceAction`
-     * (see its doc) — scenario 4's flatten divergence is also `action:
-     * 'adopted'`, so only this reason text distinguishes a genuine #549
-     * sweep from a wrong-key substitution
-     */
     sweepDivergenceReason: string | undefined;
   };
-  /**
-   * #1088: a terminal row seeded past `TERMINAL_SWEEP_AGE_MS`. Kept separate
-   * from `crashRestart` — that proves the flatten sweep (#519/#526) over
-   * `flatten_submissions`; this proves `sweepTerminalPositions` over
-   * `open_positions`, a different mechanism and table.
-   */
   terminalSweep: {
     seededKey: string;
-    /** true = the seeded row is still present after the restarted reconcile() — a failure */
     rowPresentAfterSweep: boolean;
     swept: number;
   };
 }
 
-/**
- * The #549 sweep's own divergence for one lot, by key. Returns the whole divergence, not just
- * `.action` (#1285 B2: two scenarios share `action: 'adopted'`, only `.reason` distinguishes them).
- * `.find`, never `.findLast` (#1285 N2): a sentinel `idempotency_key: ''` entry is appended last
- * and an empty string is a substring of every key.
- */
 export function findSweepDivergence(
   divergences: readonly ReconcileDivergence[],
   lotKey: string,
@@ -1062,7 +865,6 @@ export function findSweepDivergence(
   return divergences.find((divergence) => divergence.idempotency_key === lotKey);
 }
 
-/** Drives the exit-path scenarios documented above; returns what `evaluateSmokeGate` needs beyond a store row */
 async function runExitPathScenarios(input: {
   db: StoreHandle;
   clock: SimulatedClock;
@@ -1107,16 +909,11 @@ async function runExitPathScenarios(input: {
       config: executionConfig,
       sessionCalendars: EXIT_PATH_SESSION_CALENDARS,
       residualExposureAlerts: residualAlerts,
-      // #527: not gated — no scenario here over-fills a flatten
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
-      // #1550: not gated — the venue and store share one SimulatedBrokerAdapter,
-      // so they can never disagree about which instruments are held
       unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
       unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger,
-      // #1087: not gated here — that invariant violation is exercised by its
-      // own dedicated broker/composition root; see `runFilledZeroSizeWedgeScenario`
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path',
@@ -1155,10 +952,6 @@ async function runExitPathScenarios(input: {
   const twoLotFlatten = await runTwoLotFlattenScenario(ctx);
   const crashRestartLot = await enterCrashRestartLotAheadOfResidualSweep(ctx);
   const residualSweep = await runResidualSweepScenario(ctx);
-  // #549/#1228: an extra `ingestFills()` before the restart would retry (and
-  // heal) this failed re-arm in-process; `PostSweepScenarioContext` guards
-  // the scenario functions against that, and `sweepDivergenceAction`/
-  // `sweepDivergenceReason` below catch it if it happens anyway
   await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
   const terminalSweepKey = await seedTerminalSweepRow(ctx);
   const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
@@ -1169,7 +962,6 @@ async function runExitPathScenarios(input: {
     .get(residualSweep.lotKey) as { residual_unprotected_since: string | null } | undefined;
   const sweepDivergence = findSweepDivergence(restartReconcile.divergences, residualSweep.lotKey);
 
-  // Raw SQL, not getOpenPositions() — that can't distinguish "swept" from "never open" (#1088)
   const terminalSweepRow = db
     .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
     .get(terminalSweepKey);
@@ -1228,12 +1020,6 @@ function exitPathFlattenSubmissionFailures(observations: SmokeObservations): str
   return failures;
 }
 
-/**
- * #516 — ordering, not merely that both calls happened: each `submitFlatten`
- * must have a `cancel` since the PREVIOUS `submitFlatten`, not merely
- * somewhere earlier in the sequence (the weaker form would let every later
- * flatten's window wrongly borrow an earlier cancel)
- */
 function exitPathCancelBeforeFlattenFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
   const { brokerCallSequence } = evidence;
@@ -1276,7 +1062,6 @@ function exitPathClosedTradesFailures(observations: SmokeObservations): string[]
   return failures;
 }
 
-/** Scoped to scenario 1's own lot so an isolated regression there can't hide behind scenario 3's aggregate count */
 function exitPathFullExitLotFailures(
   evidence: ExitPathEvidence,
   positions: SmokeObservations['positions'],
@@ -1298,11 +1083,6 @@ function exitPathFullExitLotFailures(
   return failures;
 }
 
-/**
- * #525 — a partial flatten's residual must be re-armed without needing the
- * fallback alert. Scoped since #549: scenario 5 deliberately fails one
- * re-arm, so any OTHER lot alerting still means a genuine failure.
- */
 function exitPathPartialFlattenFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
   const { partialFlatten, residualAlerts, residualSweep } = evidence;
@@ -1332,14 +1112,6 @@ function exitPathPartialFlattenFailures(evidence: ExitPathEvidence): string[] {
   return failures;
 }
 
-/**
- * #549 — scenario 5's observing-poll re-arm was scripted to fail, so only the
- * durable marker plus the restarted reconcile()'s sweep can re-establish
- * protection. The reason-text match below (not just `.action === 'adopted'`)
- * is load-bearing: a wrong-key lookup can land on a different scenario's
- * divergence that also reads `'adopted'`, and only `sweepOne`'s own re-arm
- * reason, bound to this lot's `expectedResidual`, rules that out (#1285 B2/N3).
- */
 function exitPathResidualSweepFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
   const { residualAlerts, residualSweep } = evidence;
@@ -1421,12 +1193,6 @@ function exitPathTwoLotFlattenFailures(
   return failures;
 }
 
-/**
- * #519/#526 — a regression that deletes `reconcile()`'s flatten sweep, or
- * reverts `resumeFlatten` to a no-op, leaves scenario 4's lot open forever:
- * `ingestFills()` alone never polls an order the process-local `flattens`
- * map has forgotten
- */
 function exitPathCrashRestartFailures(
   evidence: ExitPathEvidence,
   positions: SmokeObservations['positions'],
@@ -1476,7 +1242,6 @@ function exitPathCrashRestartFailures(
   return failures;
 }
 
-/** #1088 — a seeded terminal row still present after the restart means `sweepTerminalPositions` regressed */
 function exitPathTerminalSweepFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
   const { terminalSweep } = evidence;
@@ -1492,10 +1257,6 @@ function exitPathTerminalSweepFailures(evidence: ExitPathEvidence): string[] {
   return failures;
 }
 
-/**
- * #576. Runs after the tick loop has drained; shares `db`/`clock` but drives
- * its own instruments so the two runs cannot contend for the same lots.
- */
 const exitPathProbe: Probe<'exitPath'> = {
   async run({ db, clock, profile, logger, tickLoopResidualAlerts }) {
     const harness = await runExitPathScenarios({
@@ -1526,7 +1287,6 @@ const exitPathProbe: Probe<'exitPath'> = {
   },
 };
 
-/** Everything the extracted exit-path scenarios below share and mutate in sequence */
 interface ExitPathScenarioContext {
   readonly db: StoreHandle;
   readonly clock: SimulatedClock;
@@ -1543,16 +1303,8 @@ interface ExitPathScenarioContext {
   readonly submit: (order: OrderIntent, step: string) => Promise<void>;
 }
 
-/**
- * `ExitPathScenarioContext` minus `execution` (#1228): the Simulated feed
- * re-offers a flatten's fill every poll, so any `ingestFills()` between
- * scenario 5's failed re-arm and the restart would heal it in-process.
- * Omitting `execution` makes an accidental ingest in that window a compile
- * error instead of a gate failure at `npm run smoke` time.
- */
 type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
 
-/** Scenario 1 (#508/#516/#517): open, exit in full */
 async function runFullExitScenario(ctx: ExitPathScenarioContext): Promise<{ lotKey: string }> {
   const lot1 = 'smoke-exit-full-lot';
   await ctx.submit(
@@ -1583,7 +1335,6 @@ async function runFullExitScenario(ctx: ExitPathScenarioContext): Promise<{ lotK
   return { lotKey: lot1 };
 }
 
-/** Scenario 2 (#525): a flatten that fills only partially */
 async function runPartialFlattenScenario(
   ctx: ExitPathScenarioContext,
 ): Promise<{ idempotencyKey: string; expectedResidual: number }> {
@@ -1614,20 +1365,12 @@ async function runPartialFlattenScenario(
     'scenario 2 exit',
   );
   await ctx.execution.ingestFills();
-  // Matches `heldQuantityFromFills`'s own `filledSize - exitQty` expression
-  // exactly — not an algebraic rearrangement, which isn't guaranteed to be
-  // the same float64 bit pattern (ADR-0005)
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
   const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
   return { idempotencyKey: lot2, expectedResidual };
 }
 
-/**
- * Scenario 3 (#571): an older lot with a prior partial exit (built with
- * scenario 2's technique, since `executeExit` refuses any exit not equal to
- * what's currently held) plus a fresh sibling, flattened together
- */
 async function runTwoLotFlattenScenario(
   ctx: ExitPathScenarioContext,
 ): Promise<{ lotKeys: readonly string[] }> {
@@ -1692,12 +1435,6 @@ async function runTwoLotFlattenScenario(
   return { lotKeys: [lot3Older, lot3Newer] };
 }
 
-/**
- * Scenario 4's entry (#519/#526), hoisted ahead of scenario 5: scenario 5's
- * failed re-arm must be the last thing any `ingestFills()` does before the
- * restart, so scenario 4's exit is submitted separately, later, by
- * `exitCrashRestartLotWithoutSweep`
- */
 async function enterCrashRestartLotAheadOfResidualSweep(
   ctx: ExitPathScenarioContext,
 ): Promise<{ lotKey: string; exitKey: string }> {
@@ -1719,11 +1456,6 @@ async function enterCrashRestartLotAheadOfResidualSweep(
   return { lotKey: lot4, exitKey: lot4ExitKey };
 }
 
-/**
- * Scenario 5 (#549): a partial flatten whose observing-poll re-arm fails
- * (scripted, one-shot). The restarted `reconcile()`'s residual-protection
- * sweep is what re-arms the residual and clears the marker.
- */
 async function runResidualSweepScenario(
   ctx: ExitPathScenarioContext,
 ): Promise<{ lotKey: string; expectedResidual: number }> {
@@ -1761,11 +1493,6 @@ async function runResidualSweepScenario(
   return { lotKey: lot5, expectedResidual };
 }
 
-/**
- * Scenario 4's exit (#519/#526): a flatten that acks but is never swept for
- * fills before a "restart" — `reconcile()`'s flatten-journal sweep, not
- * `ingestFills()` alone, is what recovers it
- */
 async function exitCrashRestartLotWithoutSweep(
   ctx: PostSweepScenarioContext,
   lot4ExitKey: string,
@@ -1781,15 +1508,8 @@ async function exitCrashRestartLotWithoutSweep(
     ),
     'scenario 4 exit',
   );
-  // Deliberately no ingestFills() here — the flatten acks but its fill is
-  // never swept, exactly the row SharedStore.getUnresolvedFlattens() exists to find
 }
 
-/**
- * Scenario 6 (#1088): seeded directly via the store port, never through
- * `submit()` — `decision_timestamp` is set the full `TERMINAL_SWEEP_AGE_MS`
- * behind `clock.now()` directly rather than relying on the clock advancing that far
- */
 async function seedTerminalSweepRow(ctx: PostSweepScenarioContext): Promise<string> {
   const terminalSweepKey = 'smoke-terminal-sweep-target';
   const terminalSweepDecisionTimestamp = new Date(
@@ -1818,7 +1538,6 @@ async function seedTerminalSweepRow(ctx: PostSweepScenarioContext): Promise<stri
   return terminalSweepKey;
 }
 
-/** A second `Execution` over the same store + broker — `reconcile.test.ts`'s own definition of "a restart" */
 async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Promise<{
   restarted: ReturnType<typeof buildExecutionSurface>;
   restartReconcile: ReconcileReport;
@@ -1838,8 +1557,6 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
       unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
       unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: ctx.logger,
-      // Fresh instance — a real restart's process is gone too, and
-      // FilledZeroSizeThrottle is documented restart-clean by design
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path-restart',
@@ -1849,11 +1566,6 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
   return { restarted, restartReconcile };
 }
 
-/**
- * #586 — Alpaca rejects every advanced order class for crypto (verified live, #550: 422 code
- * 42210000), so `AlpacaBrokerAdapter` emulates the protective pair. Composes the REAL adapter
- * with only the wire client scripted, since neither other harness reaches this path.
- */
 class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
   private readonly orders = new Map<string, AlpacaOrder>();
   private readonly idsByClientOrderId = new Map<string, string>();
@@ -1866,7 +1578,6 @@ class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
     qty: string;
     client_order_id: string;
   }): AlpacaOrder {
-    // #585/#588: the live venue 422s dash form as "asset not found"
     if (!request.symbol.endsWith('/USD')) {
       throw new Error(
         `smoke crypto-emulation scenario: order for '${request.symbol}' reached the wire in ` +
@@ -1972,9 +1683,7 @@ class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
   }
 }
 
-/** What `evaluateSmokeGate` needs from the crypto-emulation scenario (#586) */
 export interface CryptoEmulationEvidence {
-  /** The lot's `broker_brackets` row after the full drive, or undefined if none was journalled */
   journalRow:
     | {
         phase: string;
@@ -1983,17 +1692,13 @@ export interface CryptoEmulationEvidence {
         target_order_id: string | null;
       }
     | undefined;
-  /** The entry fill came back through the emulation's sweep */
   entryFillSeen: boolean;
-  /** The stop leg's fill came back through the sweep after it fired */
   stopFillSeen: boolean;
-  /** The surviving take-profit leg's cancel reached the venue after the stop filled */
   siblingCancelled: boolean;
 }
 
 const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
 
-/** Drives one emulated crypto bracket end to end: submit, fill entry, sweep (arms legs), fill stop, sweep (cancels sibling) */
 async function runCryptoEmulationScenario(
   db: StoreHandle,
   logger: Logger,
@@ -2007,8 +1712,6 @@ async function runCryptoEmulationScenario(
       postUnpricedFillAlert: async () => {},
     },
     logger,
-    // A double fill is impossible here (the target is cancelled before it
-    // could ever fill), so an alert here is itself a defect
     ocoDoubleFillAlerts: {
       postOcoDoubleFillAlert: async (alert) => {
         throw new Error(
@@ -2064,7 +1767,6 @@ async function runCryptoEmulationScenario(
   };
 }
 
-/** #586. The real AlpacaBrokerAdapter — the six-stage run and exit-path harness both override the broker instead */
 const cryptoEmulationProbe: Probe<'cryptoEmulation'> = {
   run({ db, logger }) {
     return runCryptoEmulationScenario(db, logger);
@@ -2128,14 +1830,11 @@ export interface LoggerResilienceEvidence {
   degradationRecordedInFile: boolean;
   linesAfterStdoutDeath: number;
   escalatedWhenNothingCouldRecord: boolean;
-  /** The throw alone isn't enough — inside a tick it's swallowed by `safeLog` (#573) */
   lastResortTraceOnStderr: boolean;
   fatalRecordedInFile: boolean;
-  /** Null if the fault handler never called `exit` */
   fatalExitCode: number | null;
 }
 
-/** A stdout that can be killed the way a real pipe dies: asynchronously */
 class BreakablePipe implements StdoutStream {
   private listener?: (error: Error) => void;
   throwOn?: Error;
@@ -2164,12 +1863,6 @@ class BreakablePipe implements StdoutStream {
   }
 }
 
-/**
- * #714 — a soak dies from a closed terminal only in production, never in a
- * unit test; `watchStdoutErrors`/`installFaultHandlers` live at the
- * entrypoint, which nothing else in this gate exercises. Uses a temp
- * directory, removed afterwards, so the gate leaves no artefacts behind.
- */
 function runLoggerResilienceScenario(): LoggerResilienceEvidence {
   const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-'));
   try {
@@ -2241,7 +1934,6 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
   }
 }
 
-/** #714 — no unit test exercises the entrypoint's stdout 'error' subscription or its fault net */
 const loggerResilienceProbe: Probe<'loggerResilience'> = {
   run() {
     return runLoggerResilienceScenario();
@@ -2290,49 +1982,16 @@ const loggerResilienceProbe: Probe<'loggerResilience'> = {
   },
 };
 
-/**
- * What the #1116 retention sweep observed. Every field is an EFFECT of
- * driving the REAL `runEntrypointLogRetention` against files on disk — not
- * "the function exists".
- */
 export interface LogRetentionEvidence {
-  /** A file well outside the retention window was actually removed */
   staleFileRemoved: boolean;
-  /** A file inside the retention window survived — a sweep must not eat evidence of a live run */
   freshFileKept: boolean;
-  /** The sink's own rotation generation survived despite being old */
   protectedFileKeptDespiteAge: boolean;
-  /**
-   * An undated bare name survived despite being old — the shape a still-open
-   * writer holds (`service-api.log`), which unlinking would turn into
-   * invisible growth rather than reclaimed space. It also survives the
-   * truncate path (#1206), which is default-on again as of the #1281 review
-   * round-2 reversal, because `service-api.log` is not in
-   * `bareTruncateNames`'s default (`soak-boot.out` alone) — the name
-   * allowlist, not this fixture's small size, is what protects it now.
-   */
   liveShapedFileKeptDespiteAge: boolean;
-  /** A non-log file in the swept directory survived despite being old */
   nonLogFileKeptDespiteAge: boolean;
-  /**
-   * #1206, exercised end to end with NO configuration at all (#1281 review
-   * round 2): an oversized `soak-boot.out` — the one file the ticket names —
-   * was actually truncated by the real entrypoint helper, proving the
-   * default-on threshold and the default name allowlist both reach it
-   * without an operator setting anything
-   */
   oversizedSoakBootTruncatedByDefault: boolean;
-  /** `bytesReclaimed` actually accounted for the file that was removed */
   bytesReclaimed: number;
 }
 
-/**
- * #1116 — driven through `runEntrypointLogRetention`, the exported boot
- * helper `index.ts` calls, so argument derivation is covered too. The
- * `FileSinkConfig` and `env` are both built literally rather than read from
- * the real environment, since a gate must never run this sweep against the
- * actual `logs/` a soak is writing to.
- */
 function runLogRetentionScenario(): LogRetentionEvidence {
   const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-retention-'));
   try {
@@ -2340,12 +1999,9 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     const stalePath = join(directory, 'orchestrator-20260101-0000.log');
     const freshPath = join(directory, 'orchestrator-20260904-0000.log');
     const activePath = join(directory, 'orchestrator.log');
-    // Archival-shaped, so `protectedPaths` alone is what keeps it, not the name rule
     const rotatedPath = `${activePath}.1`;
-    // The service-api.log shape: undated, bare, held open by a sibling process for weeks
     const liveShapedPath = join(directory, 'service-api.log');
     const nonLogPath = join(directory, '.env.local');
-    // #1206: oversized to cross DEFAULT_BARE_TRUNCATE_BYTES (16 MiB) with no env var set
     const soakBootPath = join(directory, 'soak-boot.out');
     for (const path of [
       stalePath,
@@ -2386,7 +2042,6 @@ function runLogRetentionScenario(): LogRetentionEvidence {
   }
 }
 
-/** #1116. Real files in its own temp directory; nothing else drives `sweepStaleLogs` against disk. */
 const logRetentionProbe: Probe<'logRetention'> = {
   run() {
     return runLogRetentionScenario();
@@ -2452,12 +2107,6 @@ export interface EntrypointFaultGuardEvidence {
   }[];
 }
 
-/**
- * The same "throw when nothing subscribed" trick as `BreakablePipe.breakPipe`
- * (#714): a mutation that stops calling `watchStdoutErrors` inside
- * `watchDashboardStdout`/`watchSupervisorStdout` makes this throw, aborting
- * `npm run smoke` loudly instead of passing silently
- */
 class NoListenerBreakablePipe {
   private listener?: (error: Error) => void;
   readonly lines: string[] = [];
@@ -2479,12 +2128,6 @@ class NoListenerBreakablePipe {
   }
 }
 
-/**
- * #764 — #714 fixed the unguarded-stdout class for the orchestrator only;
- * this fixes it for service-api and supervisor, whose arbitrary-fault
- * decision is CONTINUE rather than the orchestrator's STOP (see each
- * fault-guard.ts's own doc for the reasoning)
- */
 function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
   function probe(
     name: 'service-api' | 'supervisor',
@@ -2497,8 +2140,6 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
     const stdoutPipe = new NoListenerBreakablePipe();
     const stderrPipe = new NoListenerBreakablePipe();
     watchStdout(stdoutPipe, stderrPipe);
-    // No boolean field records this outcome deliberately — the throw itself
-    // is the enforcement (a mutation that drops the subscription aborts the run)
     stdoutPipe.breakPipe(name, 'stdout');
     stderrPipe.breakPipe(name, 'stderr');
     const stdoutFaultLines = stderrPipe.lines;
@@ -2532,7 +2173,6 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
   };
 }
 
-/** #764 — nothing else drives the service-api/supervisor guards against a destroyed pipe's real async 'error' event */
 const entrypointFaultGuardsProbe: Probe<'entrypointFaultGuards'> = {
   run() {
     return runEntrypointFaultGuardScenario();
@@ -2565,26 +2205,18 @@ function readLogLines(filePath: string): { message: string; payload?: unknown }[
     .map((line) => JSON.parse(line) as { message: string; payload?: unknown });
 }
 
-/** One tick's audit trail: the stages it reached and what each decided */
 interface SmokeTick {
   trace_id: string;
   stages: { stage: string; decision: string }[];
 }
 
-/**
- * What the run observably did, read back from the shared store via SQL
- * against the same handle the process wrote through — not from log strings,
- * since a log line is a description of an effect, not the effect itself
- */
 export interface SmokeObservations {
   ticks: SmokeTick[];
-  /** From `debate_log` — observed since a store with no caller is otherwise invisible (#364) */
   debates: {
     debate_id: string;
     instrument: string;
     direction: string;
     rounds: number;
-    /** #1081. Null would mean `buildDebateLog` stopped setting it. */
     termination: string | null;
   }[];
   verdicts: {
@@ -2592,7 +2224,6 @@ export interface SmokeObservations {
     instrument: string;
     status: string;
     no_go_reason: string | null;
-    /** #1111, migration 0046 — what the gate measured and the bound it broke */
     no_go_detail_measured_ms: number | null;
     no_go_detail_bound_ms: number | null;
   }[];
@@ -2604,60 +2235,29 @@ export interface SmokeObservations {
     filled_size: number;
     avg_entry_price: number;
     order_state: string;
-    /**
-     * #753, migration 0033 — which arm opened this lot.
-     *
-     * Observed for the reason `debates` is: falsifier arm 2 is mandated
-     * (ADR-0014 amendment 2, ADR-0017 §Consequences) to run in parallel with the
-     * live arm from the first soak day, and a control arm that has silently
-     * stopped producing is invisible to every other check in this file. This
-     * column is also the acceptance criterion itself — "the control arm's trades
-     * are distinguishable in the trade record" — so reading it here is reading
-     * the thing the ticket promised, not a proxy for it.
-     */
     arm: TradingArm;
   }[];
-  /** From `fills` — appended by `ingestFills()` on the fill-sync poll */
   fills: { idempotency_key: string; leg: string; price: number; qty: number; fee: number }[];
-  /**
-   * From `closed_trades` — written by `ingestFills()`'s round-trip-to-flat
-   * branch (#82/#83). Empty until #576's exit-path harness (`runExitPathScenarios`
-   * below) started driving `intent_type: 'exit'` through `execute()`; before
-   * that this table was unreachable offline, because
-   * `SimulatedBrokerAdapter.submitBracket` models only the entry fill and
-   * nothing ever submitted a flatten. See `evaluateSmokeGate`'s check.
-   */
   closedTrades: {
     idempotency_key: string;
     realized_pnl_net: number;
     close_reason: string;
-    /** #753 — see `positions.arm`. The column the comparison report groups on. */
     arm: TradingArm;
   }[];
-  /** From `flatten_submissions` — the write-ahead journal `executeExit` writes before cancel/submitFlatten (#508/#516) */
   flattenSubmissions: { idempotency_key: string; instrument: string; status: string }[];
-  /** Rows the GDELT macro layer archived (#556); read from the MI archive since MI lives in its own file (#554) */
   gdeltRowsArchived: number;
-  /** Aggregates the GDELT scoring pass (#1086); paired with the archive count since only this proves an item reached `intel` (#1164) */
   gdeltAggregateItems: number;
-  /** Paired with the item/intel counts below for the same reason as GDELT (#504, #1164) */
   polymarketRowsArchived: number;
   polymarketItemsArchived: number;
   polymarketIntelItems: number;
-  /** From `cosine_setups` — the row `Trader.decide` writes at decision time (#432) */
   cosineSetups: { debate_id: string; instrument: string }[];
-  /** From `risk_thresholds` — seeded at startup, read live by `RiskManagerImpl.evaluate` (#433) */
   riskThresholds: { name: string; value: number }[];
-  /** From `analyst_weights` — seeded at startup so the daily cycle has a row to step per analyst (#371) */
   analystWeights: { analyst_id: string }[];
-  /** From `trader_log`/`risk_log` — both write on skip/rejection too, so zero rows is always a wiring failure (#328) */
   traderDecisions: { trace_id: string; instrument: string; intent_type: string | null }[];
   riskDecisions: { trace_id: string; instrument: string; status: string }[];
-  /** From `breaker_state` (#203) — empty means a tripped kill switch silently re-arms on restart */
   breakerStates: { tier: string; tripped: number }[];
 }
 
-/** Reads everything the gate and the report need, in one pass over the store */
 function readSmokeObservations(
   db: StoreHandle,
   miArchive?: MiArchiveStore,
@@ -2687,9 +2287,6 @@ function readSmokeObservations(
           'no_go_detail_bound_ms FROM verdict_log ORDER BY rowid',
       )
       .all() as SmokeObservations['verdicts'],
-    // #1028: ordered by content, not `rowid` — insertion order across arms
-    // is scheduling-dependent, and this makes the readback describe what
-    // was recorded rather than when
     positions: db
       .prepare(
         'SELECT idempotency_key, instrument, side, requested_size, filled_size, avg_entry_price, ' +
@@ -2702,7 +2299,6 @@ function readSmokeObservations(
           'ORDER BY idempotency_key, leg, rowid',
       )
       .all() as SmokeObservations['fills'],
-    // Same content-based ordering as `positions`/`fills` above (#1028)
     closedTrades: db
       .prepare(
         'SELECT idempotency_key, realized_pnl_net, close_reason, arm FROM closed_trades ' +
@@ -2713,9 +2309,6 @@ function readSmokeObservations(
       .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
       .all() as SmokeObservations['flattenSubmissions'],
     gdeltRowsArchived: miArchive?.rawRows(SOURCE_GDELT).length ?? 0,
-    // Counted across every leg of SMOKE_TEST_UNIVERSE with fundamental's own
-    // 24h window (MI_CONTEXT_WINDOW_MS), so this counts what the analyst
-    // would have seen rather than what was merely written
     gdeltAggregateItems: SMOKE_GDELT_ASSET_CLASSES.reduce(
       (total, asset_class) =>
         total +
@@ -2725,14 +2318,9 @@ function readSmokeObservations(
       0,
     ),
     polymarketRowsArchived: miArchive?.rawRows(SOURCE_POLYMARKET).length ?? 0,
-    // #835: the items table, not the raw one — this source wrote `[]` for
-    // its items, which no raw-row count could see
     polymarketItemsArchived:
       miArchive?.itemsKnownAt(POLYMARKET_ASSET_CLASS, SMOKE_RUN_INSTANT, [SOURCE_POLYMARKET])
         .length ?? 0,
-    // Entity-scoped like every analyst read (resolveMiSubject, #914/#960) —
-    // unscoped, a curated market filed under a macro series name would reach
-    // this count with no analyst seeing it (#1164)
     polymarketIntelItems:
       marketIntelligence
         ?.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'smoke', undefined, 'SPY')
@@ -2760,15 +2348,9 @@ function readSmokeObservations(
 
 export interface SmokeGateResult {
   passed: boolean;
-  /** One line per unmet requirement, in `PROBE_VERDICT_ORDER`. Empty on a pass. */
   failures: string[];
 }
 
-/**
- * A minimal `RiskInput` for the #766 exit-bypass probe below — same shape
- * `risk-manager/index.test.ts`'s own fixtures use, trimmed to what
- * `RiskManagerImpl.evaluate` actually reads on the branch this probe drives
- */
 function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
   const intent: OrderIntent = {
     idempotency_key: 'smoke-threshold-clamp-exit-probe',
@@ -2818,7 +2400,6 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
         portfolio: { known: true as const, pct: 0 },
       },
       consecutive_losses: 0,
-      // #841: a fully-valued book — this probe is about the clamp, not the valuation
       unvalued_instruments: [],
     },
     breakers: {
@@ -2833,11 +2414,6 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
   };
 }
 
-/**
- * #766 — drives the real `RiskManagerImpl.evaluate()`. Also probes the entry
- * side, which must still throw: a probe that only checked "exit does not
- * throw" couldn't tell a working clamp from one that stopped enforcing at all.
- */
 function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
   const badThresholds = { getRiskThresholds: () => ({ max_pbo: 0.5 }) };
   const manager = new RiskManagerImpl(riskConfig, badThresholds);
@@ -2857,24 +2433,16 @@ function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
   return exitApproved && entryStillRefused;
 }
 
-/**
- * What the threshold-clamp probe (#638) observed. Every field records a
- * REFUSAL that actually happened at a real seam, not that a validator exists.
- */
 export interface ThresholdClampEvidence {
-  /** Compared against `GUARDED_THRESHOLD_NAMES` so a deleted bounds-table row turns the gate red */
   probedNames: readonly string[];
   liveReadAccepted: readonly string[];
   writeDoorAccepted: readonly string[];
   breakerConstructionRefused: boolean;
   killLineCheckRefused: boolean;
-  /** The shipped paper values still boot — the clamp bounds a dial, not forbids one */
   shippedConfigAccepted: boolean;
-  /** #766 — see `probeExitBypassesLiveClamp`; false means the exit path is stranded or the clamp stopped enforcing */
   exitBypassesLiveClamp: boolean;
 }
 
-/** A value one whole unit outside whichever edge the bound states */
 function outOfBoundValueFor(name: string): number {
   const bound = boundFor(name);
   if (bound === undefined) {
@@ -2890,18 +2458,10 @@ function refuses(probe: () => void): boolean {
     probe();
     return false;
   } catch (error) {
-    // Only a bounds refusal counts — any other throw would read as the clamp
-    // working while the probe never reached it
     return isThresholdBoundViolation(error);
   }
 }
 
-/**
- * #638 — negative probes through the real seams. The live read is the one
- * that matters: `RiskManagerImpl.evaluate()` re-resolves its config from
- * `risk_thresholds` on every call, so a boot-only clamp would constrain
- * nothing the loop does between two ticks.
- */
 function runThresholdClampScenario(
   breakerConfig: BreakerConfig,
   riskConfig: RiskConfig,
@@ -2945,11 +2505,7 @@ function runThresholdClampScenario(
           'smoke threshold-clamp probe',
         ),
       ),
-      // The other half, and the reason this is not a one-sided check: a clamp
-      // that refused the shipped configuration would be a broken clamp, and
-      // every negative probe above would still pass
       shippedConfigAccepted: !refuses(() => new CircuitBreakers(breakerConfig)),
-      // #766
       exitBypassesLiveClamp: probeExitBypassesLiveClamp(riskConfig),
     };
   } finally {
@@ -2957,20 +2513,12 @@ function runThresholdClampScenario(
   }
 }
 
-/**
- * #638. Negative probes through every seam that can put a risk threshold into
- * force, against the SHIPPED paper values, on its own in-memory store. What it
- * gates is the only stop ADR-0013 leaves standing: with no human gate
- * anywhere, a config edit (or, after #736, the Feedback Loop by itself) is the
- * entire distance between the running system and an arbitrary risk limit.
- */
 const thresholdClampProbe: Probe<'thresholdClamp'> = {
   run({ profile }) {
     return runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #638 — the in-code clamp on the last stop ADR-0013 leaves standing
     const clamp = evidence;
     const missingFromProbe = GUARDED_THRESHOLD_NAMES.filter(
       (name) => !clamp.probedNames.includes(name),
@@ -3034,22 +2582,11 @@ const thresholdClampProbe: Probe<'thresholdClamp'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the approvals-fallback probe (#1152) */
 export interface ApprovalFallbackEvidence {
-  /** Whether calling `requestApproval` on the uninjected fallback rejected instead of answering */
   refusedFabricatedConsent: boolean;
-  /** The rejection's message, or `null` if it did not reject */
   message: string | null;
 }
 
-/**
- * #1152 — the surviving fallback must refuse rather than fabricate consent.
- * No full-orchestrator tick can exercise this (ADR-0007's `auto` dial makes
- * the HITL gate unreachable), so `channel` must be read off a real, built
- * orchestrator (`orchestrator.approvals`), never reconstructed here — a
- * self-reconstructing probe would prove the helper refuses, not that the
- * composition root is actually wired to it.
- */
 async function runApprovalFallbackScenario(
   channel: ApprovalChannel,
 ): Promise<ApprovalFallbackEvidence> {
@@ -3077,11 +2614,6 @@ async function runApprovalFallbackScenario(
   }
 }
 
-/**
- * #1152. Reads `orchestrator.approvals` — never a second
- * `resolveApprovalsChannel` call — so a composition-root wiring regression is
- * what this detects; see `runApprovalFallbackScenario`.
- */
 const approvalFallbackProbe: Probe<'approvalFallback'> = {
   run({ approvals }) {
     return runApprovalFallbackScenario(approvals);
@@ -3105,49 +2637,28 @@ const approvalFallbackProbe: Probe<'approvalFallback'> = {
   },
 };
 
-/**
- * #971 — the Feedback Loop's daily timer is 24h and this run lasts seconds,
- * so the probe drives the real `runArmComparisonCycle` directly against the
- * tape this run just traded, same posture as `runThresholdClampScenario`
- */
 export interface ArmComparisonEvidence {
-  /** `null` only if the cycle produced no comparison at all */
   live: ArmPerformance | null;
   control: ArmPerformance | null;
   persistedRows: number;
   persistedBothDrawdowns: boolean;
   diverged: boolean;
   alerts: number;
-  /** So the outside-benchmark probe can be handed the same window rather than recomputing one (#981) */
   comparison: ArmComparison;
 }
 
-/** #981 — same posture as `ArmComparisonEvidence`: FL's timer can't fire in a seconds-long run */
 export interface OutsideBenchmarkEvidence {
   measured: number;
   persistedRows: number;
-  /** Whether return AND drawdown both survived the round trip on every row (D4) */
   persistedBothColumns: boolean;
-  /** To the millisecond — a benchmark measured over an approximate window is noise, not a comparison (#636) */
   windowsMatchArmComparison: boolean;
   unmeasured: readonly string[];
 }
 
-/**
- * Whether `scheduleFeedbackCycle` (#1110) actually ran inside this run.
- * `feedback_cycle_schedule.last_boundary` is written only by the composition
- * root's own timer, so a row here is evidence the real scheduler ran.
- */
 function feedbackCycleScheduleWasWritten(db: StoreHandle): boolean {
   return new SqliteFeedbackCycleScheduleStore(db).lastBoundary() !== null;
 }
 
-/**
- * #1110. Neither `armComparison` nor `outsideBenchmarks` covers this: both
- * call the shipped cycles DIRECTLY, never through `scheduleFeedbackCycle`.
- * This is the one piece of evidence in the gate that only the composition
- * root's OWN timer can produce.
- */
 const feedbackCycleScheduleWrittenProbe: Probe<'feedbackCycleScheduleWritten'> = {
   run({ db }) {
     return feedbackCycleScheduleWasWritten(db);
@@ -3168,18 +2679,8 @@ const feedbackCycleScheduleWrittenProbe: Probe<'feedbackCycleScheduleWritten'> =
   },
 };
 
-/**
- * #1112 AC5 — filtered to BTC-USD, `SMOKE_TEST_UNIVERSE`'s only instrument,
- * since the exit scenarios trade five other underlyings through their own
- * stores sharing this db but not its `capitalCeilingUsd`. Both tables, since
- * a lot that closed within the run leaves `open_positions` empty. Compared
- * against the run's own configured ceiling rather than null-checked, since a
- * drifted literal is exactly the defect this field exists to catch.
- */
 export type SizingCeilingEvidence = {
-  /** `paperStartingProfile('paper').capitalCeilingUsd` for this run — `undefined` is itself the #1112 defect */
   configuredCeiling: number | undefined;
-  /** BTC-USD rows across both tables; zero is no-evidence, not a passing gate */
   rows: number;
   allMatchConfiguredCeiling: boolean;
 };
@@ -3204,13 +2705,6 @@ function readSizingCeilingStamps(
   };
 }
 
-/**
- * #1112 AC5. `SqliteExecutionStore`'s stamp is unit-tested and
- * `capitalCeilingUsd` reaching the Trader is proven at the composition root;
- * neither proves the ONE-LINE wire from `config.capitalCeilingUsd` into
- * `new SqliteExecutionStore(...)` in `production.ts`. AC3 (#1180) additionally
- * needs the arm comparison's basis, hence `after`.
- */
 const sizingCeilingProbe: Probe<'sizingCeiling', 'armComparison'> = {
   after: ['armComparison'],
   run({ db, profile }) {
@@ -3239,11 +2733,6 @@ const sizingCeilingProbe: Probe<'sizingCeiling', 'armComparison'> = {
       );
     }
 
-    // #1112 AC3/#1180: the comparison's denominator
-    // and the Trader's sizing denominator are ONE value. Split them and
-    // `return_pct` is a return on capital nothing was sized against — the
-    // reading that made both figures wrong when the ceiling became a converted
-    // USD figure and the basis stayed at the raw GBP book
     if (
       configuredCeiling !== undefined &&
       prior.armComparison.comparison.basis !== configuredCeiling
@@ -3259,12 +2748,6 @@ const sizingCeilingProbe: Probe<'sizingCeiling', 'armComparison'> = {
   },
 };
 
-/**
- * #1140 — read through `SqliteQueryStore.getLlmSpend`, the shipped read that
- * fills `DashboardSnapshot.llm_spend`, not off `llm_spend_cap` directly, so
- * the whole path falsifies rather than the denominator agreeing by luck.
- * `capArmedAt` rides along for #1196: a real booted run always arms.
- */
 function readPublishedLlmCap(db: StoreHandle): {
   capUsd: number | null;
   capArmedAt: string | null;
@@ -3273,12 +2756,6 @@ function readPublishedLlmCap(db: StoreHandle): {
   return { capUsd: spend.cap_usd, capArmedAt: spend.cap_armed_at };
 }
 
-/**
- * #1140 / #1196. Both halves come from this run: the published cap off the
- * dashboard's own read, the expected one off the profile the orchestrator
- * booted on — never a literal 50, which would pass on a wire that had stopped
- * carrying anything from the config at all.
- */
 const llmSpendCapProbe: Probe<'llmSpendCap'> = {
   run({ db, profile }) {
     const published = readPublishedLlmCap(db);
@@ -3311,7 +2788,6 @@ const llmSpendCapProbe: Probe<'llmSpendCap'> = {
   },
 };
 
-/** Drives the shipped arm-comparison cycle over the smoke run's own store */
 export function runArmComparisonProbe(db: StoreHandle): ArmComparisonEvidence {
   let alerts = 0;
   const samples = new SqliteArmComparisonSampleStore(db);
@@ -3345,7 +2821,6 @@ export function runArmComparisonProbe(db: StoreHandle): ArmComparisonEvidence {
   };
 }
 
-/** #971 — runs after `orchestrator.stop()`, so the tape is complete before the comparison is taken */
 const armComparisonProbe: Probe<'armComparison'> = {
   run({ db }) {
     return runArmComparisonProbe(db);
@@ -3386,25 +2861,17 @@ const armComparisonProbe: Probe<'armComparison'> = {
   },
 };
 
-/**
- * A deterministic, offline stand-in for the benchmark vendor (#981). The
- * closes below are not a claim about SPY or AGG — they exist only to let the
- * gate assert the wiring: compute, persist, round-trip, inherit the window.
- */
 const SMOKE_BENCHMARK_DAY_MS = 24 * 60 * 60 * 1000;
 
 class FixtureBenchmarkSeriesSource implements BenchmarkSeriesSource {
-  /** Per-day drift, so the two legs are distinguishable and neither is flat */
   private static readonly DRIFT: Record<string, number> = { SPY: 0.001, AGG: 0.0002 };
 
   async getDailyCloses(instrument: string, from: Date, to: Date): Promise<BenchmarkObservation[]> {
-    // Three days of pad before `from` so the anchor bar the computation requires exists
     const start = from.getTime() - 3 * SMOKE_BENCHMARK_DAY_MS;
     const drift = FixtureBenchmarkSeriesSource.DRIFT[instrument] ?? 0.0005;
     const observations: BenchmarkObservation[] = [];
     let close = 100;
     for (let t = start; t <= to.getTime(); t += SMOKE_BENCHMARK_DAY_MS) {
-      // A single mid-series dip, so max_drawdown_pct is a real reading, not always 0
       const step = observations.length === 7 ? -0.01 : drift;
       close *= 1 + step;
       observations.push({ close_time: new Date(t), close });
@@ -3413,7 +2880,6 @@ class FixtureBenchmarkSeriesSource implements BenchmarkSeriesSource {
   }
 }
 
-/** Drives the shipped outside-benchmark cycle over the arm comparison's window */
 async function runOutsideBenchmarkProbe(
   db: StoreHandle,
   comparison: ArmComparison,
@@ -3446,7 +2912,6 @@ async function runOutsideBenchmarkProbe(
   };
 }
 
-/** #981 — handed the arm comparison's own `ArmComparison`: the benchmark's window is the matched control's */
 const outsideBenchmarksProbe: Probe<'outsideBenchmarks', 'armComparison'> = {
   after: ['armComparison'],
   run({ db }, prior) {
@@ -3489,20 +2954,12 @@ const outsideBenchmarksProbe: Probe<'outsideBenchmarks', 'armComparison'> = {
 };
 
 export interface DataFailoverEvidence {
-  /** In `open_time` order */
   storedSources: readonly string[];
-  /** ISO — so an out-of-session row is visible, not merely counted */
   storedOpenTimes: readonly string[];
   alerts: readonly DataFailoverAlert[];
-  /** The primary's throw, if the read failed outright instead of failing over */
   readError: string | null;
 }
 
-/**
- * Regular-hours `1h` opens plus one pre-market open the vendor would also
- * serve. The pre-market row is the negative half: the fallback must drop it,
- * because the primary's own `NormalizingDataSource` would have.
- */
 const FAILOVER_FIXTURE_OPEN_TIMES = [
   '2026-08-03T09:00:00.000Z',
   '2026-08-03T18:00:00.000Z',
@@ -3512,11 +2969,6 @@ const FAILOVER_FIXTURE_OPEN_TIMES = [
 export const FAILOVER_IN_SESSION_OPEN_TIMES: readonly string[] =
   FAILOVER_FIXTURE_OPEN_TIMES.slice(1);
 
-/**
- * #562 — driven through `buildProductionOrchestrator` with a market-data
- * client that cannot answer and a fallback fetcher that can, against a cold
- * `:memory:` store so the read can't be satisfied from the Tier-2 cache
- */
 async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvidence> {
   const db = openSharedStore(':memory:');
   try {
@@ -3530,19 +2982,14 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
       clock,
       logger,
       universe: [{ asset: 'SPY', asset_class: 'stocks' }],
-      // The REAL equity calendar, not this run's `AlwaysOpenCalendar`
-      // override: an always-open calendar would drop nothing, and the
-      // out-of-session half of this probe would pass vacuously
       tradingCalendar: new UsEquityRegularHoursCalendar(),
       stocksTradingWindow: () => true,
-      // The stall being survived
       alpacaDataClient: {
         getBars: async () => {
           throw new Error('alpaca 503 (smoke failover probe)');
         },
         getLatestQuote: async () => ({ t: SMOKE_RUN_INSTANT.toISOString(), ap: 100, bp: 99 }),
       },
-      // The vendor's own coverage: extended hours included, uncalendared
       equitiesFallbackBarFetcher: async (symbol, window) =>
         FAILOVER_FIXTURE_OPEN_TIMES.map((openTime): Bar => {
           const open_time = new Date(openTime);
@@ -3596,21 +3043,12 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
   }
 }
 
-/**
- * #562. Its own composition root and cold in-memory store: the main run
- * injects a fixture data source, so the root's `config.dataSource ??` seam
- * short-circuits the failover there, and deleting the entire
- * `buildFailoverDataSource` call site would otherwise leave `npm run smoke` green.
- */
 const dataFailoverProbe: Probe<'dataFailover'> = {
   run({ logger }) {
     return runDataFailoverScenario(logger);
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #562 — the live orchestrator's OHLCV failover, asserted on its DURABLE
-    // effect: a bar the fallback served, in the store, with the fallback's own
-    // provenance and the primary's session semantics
     const failover = evidence;
     if (failover.readError !== null) {
       failures.push(
@@ -3656,23 +3094,14 @@ const dataFailoverProbe: Probe<'dataFailover'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the source-factory scenario (#1151) */
 export interface DataSourceFactoryEvidence {
-  /** `bars.source` values the store holds after a read served by the `kind: 'alpaca'` arm */
   alpacaStoredSources: readonly string[];
-  /** `bars.source` values the store holds after a read served by the `kind: 'lse'` arm */
   lseStoredSources: readonly string[];
-  /** Whichever probe refused to boot or threw on the read, as its own message */
   error: string | null;
 }
 
-/**
- * Deliberately not a real vendor's: #895 (provision the real-time L1 feed) is open, so no
- * vendor in this tree can serve the `kind: 'lse'` arm — the probe only proves the arm is REACHED
- */
 export const SMOKE_LSE_VENDOR = 'smoke-lse-vendor';
 
-/** `1h` opens inside the venue's own regular session on the last completed trading day */
 const FACTORY_US_OPEN_TIMES = ['2026-08-03T18:00:00.000Z', '2026-08-03T19:00:00.000Z'] as const;
 const FACTORY_LSE_OPEN_TIMES = ['2026-08-03T09:00:00.000Z', '2026-08-03T10:00:00.000Z'] as const;
 
@@ -3687,13 +3116,6 @@ function factoryProbeBars(openTimes: readonly string[]) {
   }));
 }
 
-/**
- * `createDataSource`'s enforcement assertion (#1151): every production source used to be
- * constructed BESIDE the factory, so its arms were reached by nothing. Both surviving arms are
- * driven through the real `buildProductionOrchestrator`, asserted on the DURABLE effect (a
- * provenance-stamped `bars` row). Construction is INSIDE the try so a broken arm's boot-time
- * throw reaches the gate as a failing row, not an unhandled rejection.
- */
 async function runDataSourceFactoryScenario(logger: Logger): Promise<DataSourceFactoryEvidence> {
   const profile = paperStartingProfile('paper');
 
@@ -3751,9 +3173,6 @@ async function runDataSourceFactoryScenario(logger: Logger): Promise<DataSourceF
     },
   });
 
-  // A sterling pool line (#1220): the LSE arm refuses to CONSTRUCT for a
-  // USD-declared row, so a probe on one would fail for the currency guard
-  // rather than for the reachability this asserts
   const lseClient: LseMarkClient = {
     vendor: SMOKE_LSE_VENDOR,
     getBars: async () => ({
@@ -3777,21 +3196,12 @@ async function runDataSourceFactoryScenario(logger: Logger): Promise<DataSourceF
   };
 }
 
-/**
- * #1151. `createDataSource` had ZERO production call sites while claiming to
- * be the single place a source name resolves to an implementation. No unit
- * test can tell construction-through-the-factory from construction-beside-it
- * (the object built is identical), and the main run's injected fixture source
- * means no arm is resolved there at all.
- */
 const dataSourceFactoryProbe: Probe<'dataSourceFactory'> = {
   run({ logger }) {
     return runDataSourceFactoryScenario(logger);
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #1151 — `createDataSource` reached from the composition root, asserted on
-    // the DURABLE effect of each surviving arm. See `runDataSourceFactoryScenario`.
     const factory = evidence;
     if (factory.error !== null) {
       failures.push(
@@ -3826,20 +3236,11 @@ const dataSourceFactoryProbe: Probe<'dataSourceFactory'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the analyst failure-cause scenario (#1114) */
 export interface AnalystFailureCauseEvidence {
-  /** Every `stage: 'analysts', level: 'debug'` payload the run's own `AnalystOrchestrator` recorded */
   debugPayloads: readonly Record<string, unknown>[];
-  /** The run's own `AnalystRunResult.failures[].kind` values, so the gate can tell a genuine rejection happened rather than trusting the payloads alone */
   failureKinds: readonly string[];
 }
 
-/**
- * Records every `stage: 'analysts', level: 'debug'` line on the way to the
- * real logger — the one channel #1114's cause-logging mechanism reaches.
- * Mirrors `FillSyncFailureRecorder`'s shape: scoped to the hole it closes,
- * never throws itself, and passes everything through to `inner` unchanged.
- */
 class AnalystDebugRecorder implements Logger {
   private readonly payloads: Record<string, unknown>[] = [];
 
@@ -3857,13 +3258,6 @@ class AnalystDebugRecorder implements Logger {
   }
 }
 
-/**
- * #1114's enforcement assertion, driven through the real `buildProductionOrchestrator` with
- * BOTH the primary AND the equities fallback throwing, so `market_data.getBars` genuinely
- * REJECTS rather than timing out (the timeout half is unrecoverable-by-construction and covered
- * by a fake-timer unit test instead). Asserted on the DURABLE effect: `debug` payloads the real
- * `AnalystOrchestrator` recorded through the real logger — delete that wiring and this records nothing.
- */
 async function runAnalystFailureCauseScenario(
   logger: Logger,
 ): Promise<AnalystFailureCauseEvidence> {
@@ -3882,7 +3276,6 @@ async function runAnalystFailureCauseScenario(
       universe: [{ asset: signal.asset, asset_class: signal.asset_class }],
       tradingCalendar: new UsEquityRegularHoursCalendar(),
       stocksTradingWindow: () => true,
-      // Both legs down: a single failure would fail over cleanly (see runDataFailoverScenario)
       alpacaDataClient: {
         getBars: async () => {
           throw new Error('alpaca down (smoke analyst-failure-cause probe, #1114)');
@@ -3914,11 +3307,6 @@ async function runAnalystFailureCauseScenario(
   }
 }
 
-/**
- * #1114. `production.ts`'s `new AnalystOrchestrator({ ..., logger })` has
- * exactly one durable effect an unattended run can show for it: the `debug`
- * lines this scenario reads back.
- */
 const analystFailureCauseProbe: Probe<'analystFailureCause'> = {
   run({ logger }) {
     return runAnalystFailureCauseScenario(logger);
@@ -3926,8 +3314,6 @@ const analystFailureCauseProbe: Probe<'analystFailureCause'> = {
   verdict(evidence) {
     const failures: string[] = [];
     const failureCause = evidence;
-    // #1394: `withOhlcvFailover` combines the probe's two dead legs into a plain Error,
-    // classified as 'other' rather than a guessed transport fault
     if (!failureCause.failureKinds.includes('other')) {
       failures.push(
         "the analyst failure-cause probe's double-failed data source did not produce a genuine " +
@@ -3963,9 +3349,7 @@ const analystFailureCauseProbe: Probe<'analystFailureCause'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the FILLED_WITH_ZERO_SIZE wedge scenario (#1125) */
 export interface FilledZeroSizeWedgeEvidence {
-  /** Every FILLED_WITH_ZERO_SIZE payload the scenario's own recorder captured, in poll order */
   warnings: readonly {
     idempotency_key: string;
     instrument: string;
@@ -3975,14 +3359,11 @@ export interface FilledZeroSizeWedgeEvidence {
   }[];
 }
 
-/** The lot `runFilledZeroSizeWedgeScenario` seeds — named here so the gate check below can pin it */
 const FILLED_ZERO_SIZE_WEDGE_LOT_KEY = 'smoke-filled-zero-size-wedge';
 const FILLED_ZERO_SIZE_WEDGE_INSTRUMENT = 'AAPL';
 const FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS = 60 * 60_000;
-/** Kept DISTINCT from `opened_at` so a swap of the two fields at the call site is catchable */
 const FILLED_ZERO_SIZE_WEDGE_DECISION_BEFORE_OPENED_MS = 5_000;
 
-/** Records every FILLED_WITH_ZERO_SIZE line reaching the real logger — #1087's throttled wedge-detector */
 class FilledZeroSizeWarningRecorder implements Logger {
   private readonly warnings: FilledZeroSizeWedgeEvidence['warnings'][number][] = [];
 
@@ -4000,12 +3381,6 @@ class FilledZeroSizeWarningRecorder implements Logger {
   }
 }
 
-/**
- * #1125's second broker/harness surface: `fetchNewFills` applies its own `since` filter and the
- * scripted fill is dated 1ms before it, so it returns `[]` forever — reproducing #1087's wedge.
- * `SimulatedBrokerAdapter` can't produce this post-#1087 (stamps fills at submit time), so every
- * method beyond `getOrder`/`fetchNewFills` throws rather than returning a silently-wrong stub.
- */
 class SmokeWedgedLotBroker implements BrokerAdapter {
   constructor(
     private readonly order: NormalizedOrder,
@@ -4047,12 +3422,6 @@ class SmokeWedgedLotBroker implements BrokerAdapter {
   }
 }
 
-/**
- * #1125 — drives a genuinely wedged lot through the REAL `ingestFills()`/throttle path
- * (`buildExecutionSurface`) on its own cold `:memory:` store, so the exit-path harness's shared
- * `innerBroker` is never in the way. `costModel`/`marketData` are never consulted on this path
- * (verified by reading ingest-fills.ts/reconcile.ts) — the cast to `unknown` below relies on that.
- */
 async function runFilledZeroSizeWedgeScenario(
   logger: Logger,
 ): Promise<FilledZeroSizeWedgeEvidence> {
@@ -4083,10 +3452,6 @@ async function runFilledZeroSizeWedgeScenario(
           qty: 10,
           price: 100,
           fee: 1,
-          // Dated before this lot's OWN `opened_at` — with this the store's
-          // sole open position, `opened_at` IS the poll's `since` floor
-          // (ingest-fills.ts), so this fill is excluded FOREVER, exactly
-          // #1087's incident shape
           timestamp: new Date(openedAt.getTime() - 1),
         },
       ],
@@ -4162,7 +3527,6 @@ async function runFilledZeroSizeWedgeScenario(
   }
 }
 
-/** #1125 — drives a genuinely wedged lot through the real gate, not just the unit-test proof */
 const filledZeroSizeWedgeProbe: Probe<'filledZeroSizeWedge'> = {
   run({ logger }) {
     return runFilledZeroSizeWedgeScenario(logger);
@@ -4190,9 +3554,6 @@ const filledZeroSizeWedgeProbe: Probe<'filledZeroSizeWedge'> = {
         warning.instrument !== FILLED_ZERO_SIZE_WEDGE_INSTRUMENT ||
         warning.order_state !== 'filled' ||
         warning.consecutive !== ALERT_AFTER_CONSECUTIVE_ZERO_SIZE ||
-        // Exact match, not `> 0` (#1125 review round 2 finding 1): a `> 0` check would
-        // still pass if `ingest-fills.ts` read `decision_timestamp` instead of `opened_at`
-        // (only 5s apart against a 1h stuck_ms) — this equality catches that swap
         warning.stuck_ms !== FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS
       ) {
         failures.push(
@@ -4208,24 +3569,13 @@ const filledZeroSizeWedgeProbe: Probe<'filledZeroSizeWedge'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the risk-critic scenario (#957, extended by the invalidation fold #994) */
 export interface RiskCriticEvidence {
-  /** `risk_critic_log.verdict` values the run's own composition root wrote, in insertion order */
   loggedVerdicts: readonly string[];
-  /** The step's throw, if consulting the critic took the risk stage down instead of failing open */
   stepError: string | null;
-  /** `state` of every persisted invalidation condition — MEASURED by `invalidation.ts`, never asserted by the model (#994) */
   conditionStates: readonly string[];
-  /** The decision's `binding_constraint`. `risk_critic:invalidated` is the fold's own enforcement path. */
   bindingConstraint: string | null;
 }
 
-/**
- * The one LLM double in the smoke process, answering BOTH call sites (#994). Branches on the
- * attribution stage and hands the critic call one condition whose outcome is fixed by the
- * fixture (mark == SMOKE_MARK_PRICE, threshold one unit above) so a correctly wired evaluator
- * must measure `breached` and reject — nothing here asserts the state, the fixture forces it.
- */
 class SmokeLlmClient implements LlmClient {
   readonly #debate = new ConstantResponseLlmClient();
 
@@ -4262,12 +3612,6 @@ class SmokeLlmClient implements LlmClient {
   }
 }
 
-/**
- * The risk critic's enforcement assertion (#957), driven through the REAL `buildProductionComponents`
- * and asserted on the DURABLE effect: a `risk_critic_log` row. Also asserts the fold (#994):
- * `SmokeLlmClient` answers `pass` with one condition the fixture mark already violates, so the
- * persisted condition must read `breached` and the binding constraint must be `risk_critic:invalidated`.
- */
 async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence> {
   const db = openSharedStore(':memory:');
   try {
@@ -4299,8 +3643,6 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
       llmClient: new SmokeLlmClient(),
     });
 
-    // A viable entry, not an exit — an exit would bypass step 7 entirely. Size 1 clears the
-    // profile's `min_viable_size` floor, which rejects above step 7 before the critic is asked
     const intent = exitPathOrder(
       SMOKE_INSTRUMENT,
       'smoke-risk-critic-entry',
@@ -4338,10 +3680,6 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
   }
 }
 
-/**
- * #957 — the six-stage run can't stand in for this: it has produced zero approved entries
- * historically (#625), so a never-fired critic is indistinguishable from an unwired one
- */
 const riskCriticProbe: Probe<'riskCritic'> = {
   run({ logger }) {
     return runRiskCriticScenario(logger);
@@ -4366,8 +3704,6 @@ const riskCriticProbe: Probe<'riskCritic'> = {
       );
     }
 
-    // #994: the fixture pins the outcome (mark == SMOKE_MARK_PRICE, threshold one unit above),
-    // so a measured `breached` is the only correct result
     if (!critic.conditionStates.includes('breached')) {
       failures.push(
         'the risk critic emitted a well-formed invalidation condition and no persisted ' +
@@ -4387,22 +3723,12 @@ const riskCriticProbe: Probe<'riskCritic'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the prompt-tier-crossing scenario (#1155) */
 export interface PromptTierWarningEvidence {
-  /** `postPromptTierAlert` calls the real channel observed — should be exactly 1 (see the scenario's own doc) */
   alertsFired: number;
-  /** `llm_spend` rows the crossing call itself wrote, over the SAME store the alert channel is wired into */
   spendRows: number;
-  /** The crossing call's persisted `cost_usd` — the tier RATE actually applied, not just the warning */
   costUsd: number | null;
 }
 
-/**
- * #1155's producer, asserted on its DURABLE effect through the real `SqliteLlmSpendStore`.
- * `record()` is called directly since the gap #1155 closes is entirely inside it — only the
- * INPUT (reported prompt tokens) is fabricated. Two crossing calls, not one: a single call can't
- * distinguish a throttle that fires once from one deleted outright.
- */
 function runPromptTierWarningScenario(): PromptTierWarningEvidence {
   const db = openSharedStore(':memory:');
   try {
@@ -4413,7 +3739,6 @@ function runPromptTierWarningScenario(): PromptTierWarningEvidence {
       },
     });
 
-    // One token over x-ai/grok-4.5's published 200,000-token large-prompt tier (pricing.ts)
     const crossingUsage = { input_tokens: 200_001, output_tokens: 1_000 };
     const record = () =>
       store.record({
@@ -4442,7 +3767,6 @@ function runPromptTierWarningScenario(): PromptTierWarningEvidence {
   }
 }
 
-/** #1155 — `crossesPromptTier` (pricing.ts) had a test and no production caller */
 const promptTierWarningProbe: Probe<'promptTierWarning'> = {
   run() {
     return runPromptTierWarningScenario();
@@ -4474,7 +3798,6 @@ const promptTierWarningProbe: Probe<'promptTierWarning'> = {
   },
 };
 
-/** Reads persisted condition states for the gate, tolerating a NULL or unreadable column exactly as the replay path does */
 function readSmokeConditionStates(stored: string | null): string[] {
   if (stored === null) return [];
   try {
@@ -4486,26 +3809,17 @@ function readSmokeConditionStates(stored: string | null): string[] {
   }
 }
 
-/** What the six-stage run was asked to do, and whether it stayed offline while doing it */
 interface TickLoopEvidence {
   minTicks: number;
   alpacaWireClientReached: boolean;
 }
 
-/** #1140 / #1196 — the LLM cap as the dashboard reads it, beside the budget this run armed */
 interface LlmSpendCapEvidence {
   publishedCapUsd: number | null;
   configuredBudgetUsd: number | undefined;
   capArmedAt: string | null;
 }
 
-/**
- * One entry per probe, every one required — wiring a new mechanism means adding a probe here,
- * and `PROBES` (a mapped type over these keys) refuses to compile until it has a run and a
- * verdict. #1083's token-bucket wait telemetry has deliberately NO probe: it needs a real wait
- * past `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`, so it's enforced under fake timers in
- * `production/rate-limit-wiring.test.ts` instead.
- */
 export interface SmokeEvidence {
   tickLoop: TickLoopEvidence;
   llmRateLimiterSnapshot: RateLimiterSnapshot;
@@ -4533,7 +3847,6 @@ export interface SmokeEvidence {
 
 type ProbeId = keyof SmokeEvidence;
 
-/** What `runSmoke` has in hand once the tick loop has stopped and drained */
 interface ProbeRunContext {
   db: StoreHandle;
   clock: SimulatedClock;
@@ -4549,17 +3862,10 @@ interface ProbeRunContext {
 }
 
 interface VerdictContext<After extends ProbeId> {
-  /** The six-stage run's readback — the substrate every probe's verdict may read against */
   observations: SmokeObservations;
   prior: Pick<SmokeEvidence, After>;
 }
 
-/**
- * A probe owns one mechanism end to end. Verdicts assert the mechanism's own DURABLE effect,
- * never just that an object was constructed — a construction-only check passes for a component
- * nothing calls. `After` names probes whose evidence this one reads; they must precede it in
- * `PROBE_RUN_ORDER`, which `runProbes` checks before calling `run`.
- */
 interface Probe<Id extends ProbeId, After extends ProbeId = never> {
   after?: readonly After[];
   run(
@@ -4577,11 +3883,6 @@ function summariseVerdicts(verdicts: SmokeObservations['verdicts']): string {
     .join(', ');
 }
 
-/**
- * Checked explicitly rather than left to the throw: `startTickLoop` catches everything a tick
- * throws and logs it, so a run that reached the network would otherwise fail for a downstream
- * symptom and never name the cause
- */
 function tickLoopWireAndTickFailures(
   evidence: TickLoopEvidence,
   observations: SmokeObservations,
@@ -4616,11 +3917,6 @@ function tickLoopWireAndTickFailures(
   return failures;
 }
 
-/**
- * One `debate_log` row is required, not one per tick: the frozen clock and identical fixture
- * views mean every tick hashes to the same `debate_id`, collapsed by the writer's
- * first-write-wins guard. #1081: every row must classify itself (`termination` non-null).
- */
 function tickLoopDebateLogFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   const { debates } = observations;
@@ -4645,11 +3941,6 @@ function tickLoopDebateLogFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-/**
- * #753 — falsifier arm 2. The ONLY check anywhere that the control arm has a caller: every
- * unit can pass while `TickSteps.controlArm` is unbound in `production.ts` (the member is
- * optional, not a compile error), leaving a soak with no matched control (ADR-0014 amendment 2).
- */
 function tickLoopControlArmFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   const { ticks, positions } = observations;
@@ -4683,7 +3974,6 @@ function tickLoopControlArmFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-/** The per-stage durable-record checks (#430's convention) — each owns a table nothing else in this gate reads */
 function tickLoopDownstreamRecordFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   const { debates } = observations;
@@ -4706,7 +3996,6 @@ function tickLoopDownstreamRecordFailures(observations: SmokeObservations): stri
     );
   }
 
-  // #328 — once a debate resolves, a trader_log row is unconditional (written on skip too)
   if (debates.length > 0 && observations.traderDecisions.length === 0) {
     failures.push(
       'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
@@ -4745,12 +4034,6 @@ function tickLoopDownstreamRecordFailures(observations: SmokeObservations): stri
   return failures;
 }
 
-/**
- * #1111: the two gates whose refusal is a number against a bound must write that number.
- * This gate never produces a staleness/stale_feed verdict to check the detail on (fixture marks
- * stay fresh by construction) — the only structural guard on `readAt` reaching a real caller is
- * `PortfolioAccountingInput.clock` being a required field, a compile-time check this gate can't see.
- */
 function tickLoopVerdictFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   const { verdicts } = observations;
@@ -4777,7 +4060,6 @@ function tickLoopVerdictFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-/** Execution actually ran: a `submitted` tick, a written-ahead lot, and an ingested entry fill */
 function tickLoopExecutionFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   const { ticks, positions, fills } = observations;
@@ -4807,12 +4089,6 @@ function tickLoopExecutionFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-/**
- * The seeded baseline plus the canned batch's one row on a watched theme. Asserted, not merely
- * printed: the seed count alone means the poller never fired (no-caller defect), one more than
- * expected means the theme filter stopped filtering. #1086: 0 aggregates means the scoring pass
- * is built and never called (the state #556's archive half shipped in).
- */
 function tickLoopGdeltFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   if (observations.gdeltRowsArchived !== SMOKE_GDELT_EXPECTED_ROWS) {
@@ -4836,11 +4112,6 @@ function tickLoopGdeltFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-/**
- * #504/#430. Two counts answer different questions: the archive row says a fetch reached the
- * vendor path, the store item says the fundamental analyst could see the result. Covers only the
- * STARTUP refresh — the recurring 15-minute poll never fires inside a smoke run and is uncovered here.
- */
 function tickLoopPolymarketFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   if (observations.polymarketRowsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
@@ -4876,12 +4147,6 @@ function tickLoopPolymarketFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-/**
- * The six-stage run, read back from the shared store. "Transacted" is a conjunction of
- * independently-observable effects rather than one summary flag, because each is a different
- * wiring defect (loop ran; a tick got past Analysts, #350; debate reached `debate_log`, #364;
- * a `go` reached `verdict_log`; Execution submitted; a fill came back through `ingestFills()`).
- */
 const tickLoopProbe: Probe<'tickLoop'> = {
   run({ targetTicks, alpacaBrokerClient }) {
     return { minTicks: targetTicks, alpacaWireClientReached: alpacaBrokerClient.reached };
@@ -4950,14 +4215,8 @@ const tickLoopProbe: Probe<'tickLoop'> = {
       lines.push(`  ${row.instrument} status=${row.status} [${row.idempotency_key}]`);
     }
 
-    // `SMOKE_GDELT_EXPECTED_ROWS`: the seeded 25h baseline plus the ONE row of
-    // the canned two-row batch that carries a watched theme. One row more than
-    // expected means the theme filter has stopped filtering
     lines.push('', `GDELT macro rows archived: ${observations.gdeltRowsArchived}`);
     lines.push(`GDELT macro aggregates derived: ${observations.gdeltAggregateItems}`);
-    // One healthy market, one refused on thin volume, the rest served as rotted
-    // slugs — so 1 and 1 is correct and anything else is a wiring or guard
-    // change
     lines.push(
       `Polymarket macro rows archived: ${observations.polymarketRowsArchived}, ` +
         `items archived: ${observations.polymarketItemsArchived}, ` +
@@ -4968,10 +4227,6 @@ const tickLoopProbe: Probe<'tickLoop'> = {
   },
 };
 
-/**
- * #388 — `RateLimiter.snapshot()` after the run: an effect no table records, so this is the
- * only check that would have caught the component being fully unit-tested with no production caller
- */
 const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
   run({ llmRateLimiter }) {
     return llmRateLimiter.snapshot();
@@ -4994,8 +4249,6 @@ const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
       }
     }
 
-    // #581 — each debate_log row checked against its instrument's round cap; a row above cap
-    // means buildDebateStep stopped threading the cap into runDebate
     const smokeAssetClass = new Map<string, AssetClass>(
       SMOKE_TEST_UNIVERSE.map((entry) => [entry.asset, entry.asset_class]),
     );
@@ -5011,8 +4264,6 @@ const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
           'on every tick',
       );
     }
-    // Closed AssetClass set, not Object.entries: a malformed snapshot key can't produce an
-    // undefined cap whose NaN bound would silently pass the gate
     for (const assetClass of ['crypto', 'stocks'] as const satisfies readonly AssetClass[]) {
       const entry = evidence[assetClass];
       if (entry === undefined) continue;
@@ -5057,10 +4308,6 @@ const PROBES: { [K in ProbeId]: Probe<K, ProbeId> } = {
 
 type MissingFrom<Order extends readonly ProbeId[]> = Exclude<ProbeId, Order[number]>;
 
-/**
- * Pins an order over every probe. Omitting one fails to compile with
- * `missing: '<id>'` in the type mismatch; listing one twice throws at load.
- */
 function everyProbeOnce<const Order extends readonly ProbeId[]>(
   order: Order & ([MissingFrom<Order>] extends [never] ? unknown : { missing: MissingFrom<Order> }),
 ): Order {
@@ -5070,7 +4317,6 @@ function everyProbeOnce<const Order extends readonly ProbeId[]>(
   return order;
 }
 
-/** Side-effect order over the shared store and clock: exitPath/cryptoEmulation write the tape armComparison reads */
 const PROBE_RUN_ORDER = everyProbeOnce([
   'tickLoop',
   'exitPath',
@@ -5096,7 +4342,6 @@ const PROBE_RUN_ORDER = everyProbeOnce([
   'marketDataFetch',
 ]);
 
-/** Readout order: cause before symptom, so a never-debated run is reported before checks that hang off a debate */
 const PROBE_VERDICT_ORDER = everyProbeOnce([
   'tickLoop',
   'llmRateLimiterSnapshot',
@@ -5122,7 +4367,6 @@ const PROBE_VERDICT_ORDER = everyProbeOnce([
   'marketDataFetch',
 ]);
 
-/** Runs every probe in `PROBE_RUN_ORDER`, handing each the evidence of the probes it declared `after` */
 async function runProbes(ctx: ProbeRunContext): Promise<SmokeEvidence> {
   const gathered: Partial<SmokeEvidence> = {};
   const runOne = async <Id extends ProbeId>(id: Id): Promise<void> => {
@@ -5156,7 +4400,6 @@ function probeReport<Id extends ProbeId>(
   return PROBES[id].report?.(evidence[id], observations) ?? [];
 }
 
-/** The gate. Pure over observations and evidence, so every branch is unit-testable without starting a process. */
 export function evaluateSmokeGate(
   observations: SmokeObservations,
   evidence: SmokeEvidence,
@@ -5165,7 +4408,6 @@ export function evaluateSmokeGate(
   return { passed: failures.length === 0, failures };
 }
 
-/** The human-readable run report. Returned as lines so tests can assert on it without capturing stdout. */
 export function formatSmokeReport(
   observations: SmokeObservations,
   evidence: SmokeEvidence,
@@ -5193,22 +4435,10 @@ export function formatSmokeReport(
 }
 
 export interface SmokeRunOptions {
-  /** How many ticks must complete before the run is allowed to stop. Default 3. */
   ticks?: number;
-  /**
-   * Gap between ticks. Default 250ms — `ticks * tickIntervalMs` must stay far below
-   * `verdictConfig.max_signal_age.crypto` (5 min) since the fixture mark's `observed_at` is
-   * frozen; raising either constant materially would silently start no-going the later ticks.
-   */
   tickIntervalMs?: number;
-  /** Gap between fill polls. Default 100ms, tighter than the tick interval so ingestFills() runs before the gate checks. */
   fillPollIntervalMs?: number;
-  /** Heartbeat cadence. Default 100ms, so the dead-man's-switch timer fires several times inside a ~1s run. */
   heartbeatIntervalMs?: number;
-  /**
-   * Hard wall-clock ceiling. Default 30s. The run stops and reports whatever it
-   * reached rather than hanging — a gate that can hang is a gate nobody runs.
-   */
   deadlineMs?: number;
   logger?: Logger;
 }
@@ -5218,14 +4448,10 @@ const DEFAULT_SMOKE_TICK_INTERVAL_MS = 250;
 const DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS = 100;
 const DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS = 100;
 const DEFAULT_SMOKE_DEADLINE_MS = 30_000;
-/** How long to keep waiting for the fill poll once the tick target is met */
 const FILL_GRACE_MS = 2_000;
-/** Store-polling granularity for the two waits below */
 const OBSERVE_INTERVAL_MS = 25;
-/** #1028 — falsifier arm 2 (control) is mandated to run alongside live from the first soak day (ADR-0014 amendment 2) */
 const SMOKE_TRADING_ARMS: readonly TradingArm[] = ['live', 'control'];
 
-/** Polls the store until `done` or the deadline — never a fixed sleep */
 async function waitUntil(check: () => boolean, deadline: number): Promise<void> {
   while (Date.now() < deadline && !check()) {
     await delay(OBSERVE_INTERVAL_MS);
@@ -5235,26 +4461,16 @@ async function waitUntil(check: () => boolean, deadline: number): Promise<void> 
 export interface SmokeRunResult {
   observations: SmokeObservations;
   gate: SmokeGateResult;
-  /** The human-readable report lines. Printed by the entrypoint, not by `runSmoke` itself. */
   report: string[];
 }
 
-/**
- * Starts the real entrypoint assembly over fixtures, runs a bounded number of ticks, drains, and
- * evaluates the gate. Every dependency below goes in through a documented `ProductionConfig`
- * override; none of it is a branch inside the composition root.
- */
 export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunResult> {
   const targetTicks = options.ticks ?? DEFAULT_SMOKE_TICKS;
   const tickIntervalMs = options.tickIntervalMs ?? DEFAULT_SMOKE_TICK_INTERVAL_MS;
   const fillPollIntervalMs = options.fillPollIntervalMs ?? DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS;
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? DEFAULT_SMOKE_DEADLINE_MS;
-  // Plain JsonLogger, never buildEntrypointLogger(): that opens a rotating file sink and
-  // creates logs/, and a gate should leave no artefacts. Store is :memory: for the same reason.
-  // #1049: every logged line passes through the recorder so swallowed fill-sync rejections reach the gate
   const fillSyncFailures = new FillSyncFailureRecorder(options.logger ?? new JsonLogger());
-  // #1082: chained on top, same unconditional-forwarding shape, additionally counting market_data_fetch lines
   const marketDataFetch = new MarketDataFetchRecorder(fillSyncFailures);
   const logger: Logger = marketDataFetch;
   const db = openSharedStore(':memory:');
@@ -5273,8 +4489,6 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       },
     );
 
-    // Built here, not reached through the root: SimulatedBrokerAdapter needs a MarketDataService
-    // at construction but is itself a constructor input to buildProductionOrchestrator
     const marketDataForBroker = new MarketDataServiceImpl(
       dataSource,
       clock,
@@ -5288,21 +4502,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       config: profile.executionConfig.simulated,
     });
     const alpacaBrokerClient = new UnreachableAlpacaClient();
-    // Built here, not left to the composition root: the gate has to READ it afterwards (#388)
     const llmRateLimiter = new RateLimiter(clock, profile.rateLimiterConfig);
-    // #576: recorded rather than left at the log-only default, so the gate can see whether the
-    // six-stage run itself ever posted one, not only the exit-path harness below
     const tickLoopResidualAlerts = new RecordingResidualExposureAlertChannel(
       loggingAlertChannel('residualExposureAlerts', logger),
     );
     const smokeMiArchive = new MiArchiveStore();
     seedSmokeGdeltBaseline(smokeMiArchive);
 
-    // Typed `Required<AlertChannels>` so a field added to `AlertChannelSlots` fails typecheck
-    // HERE if this object isn't updated to match (#803's regression: a channel landed without
-    // this injection and nothing caught it). Log-only throughout except where noted: a few
-    // ports' real implementations already log at `error` before consulting them, so a logging
-    // stand-in here would double-emit — those get a bare no-op instead
     const smokeAlertChannels = {
       heartbeatChannel: loggingAlertChannel('heartbeatChannel', logger),
       orphanAlerts: loggingAlertChannel('orphanAlerts', logger),
@@ -5311,28 +4517,21 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       breachAlerts: loggingAlertChannel('breachAlerts', logger),
       loosenNotices: loggingAlertChannel('loosenNotices', logger),
       analystSkipAlerts: loggingAlertChannel('analystSkipAlerts', logger),
-      // #576: recorded, not just logged — see `tickLoopResidualAlerts` above
       residualExposureAlerts: tickLoopResidualAlerts,
       flattenReconcileAlerts: loggingAlertChannel('flattenReconcileAlerts', logger),
       verdictAlerts: { notify: async () => {} },
-      // Bare no-op: postTraderDiagnosticAlert already logs at `error` before consulting the port
       traderDiagnosticAlerts: { postTraderDiagnosticAlert: async () => {} },
       miCoverageAlerts: loggingAlertChannel('miCoverageAlerts', logger),
-      // #766 — see `runThresholdClampScenario`/`probeExitBypassesLiveClamp` for the real probe
       thresholdClampAlerts: { postThresholdClampAlert: () => {} },
       dataFailoverAlerts: loggingAlertChannel('dataFailoverAlerts', logger),
       exitValuationAlerts: { postExitValuationDegradedAlert: () => {} },
       calendarFallbackAlerts: loggingAlertChannel('calendarFallbackAlerts', logger),
-      // Since #1110 this IS reached here: feedback_cycle_schedule catches up on its first
-      // boundary inside start(); feedbackCycleScheduleWrittenProbe asserts that reach
       armDivergenceAlerts: loggingAlertChannel('armDivergenceAlerts', logger),
       tickSkipAlerts: { postTickSkipAlert: async () => {} },
-      // #1155 — runPromptTierWarningScenario below drives this port's real wiring end to end
       promptTierAlerts: loggingAlertChannel('promptTierAlerts', logger),
       lseCalendarCoverageAlerts: loggingAlertChannel('lseCalendarCoverageAlerts', logger),
       llmFailureRateAlerts: loggingAlertChannel('llmFailureRateAlerts', logger),
       gateRefusalRateAlerts: loggingAlertChannel('gateRefusalRateAlerts', logger),
-      // Saxo adapter slots — this run is Alpaca/simulated-broker only, so never exercised
       legResizeAlerts: loggingAlertChannel('legResizeAlerts', logger),
       dormantLegsAlerts: loggingAlertChannel('dormantLegsAlerts', logger),
       priceUnitAlerts: loggingAlertChannel('priceUnitAlerts', logger),
@@ -5344,14 +4543,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({
-      // Same checked-in tuning as `npm run orchestrator`, `mode: 'paper'`, so the HITL gate
-      // resolves through `automation_level: 'auto'` exactly as it will during the soak. No
-      // `approvals` is injected, so the root installs `UnwiredApprovalChannel`, which THROWS
-      // if the HITL gate is ever reached — this run transacting is positive evidence the
-      // `auto` dial short-circuits before any approval is requested (ADR-0007 enforcement)
       ...profile,
-      // #1112: bumped for this offline run only, enough to clear the whole-share floor at this
-      // fixture's ATR — `paperStartingProfile`'s own multiplier (real paper/live sizing) is untouched
       traderConfig: {
         ...profile.traderConfig,
         asset_class_risk_multiplier: {
@@ -5360,21 +4552,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
         },
       },
       db,
-      // In-memory: left to default, the composition root opens data/samurai-mi-paper.sqlite,
-      // the live soak's own MI archive — a gate run must not touch that file
       miArchive: smokeMiArchive,
-      // GDELT/Polymarket would otherwise reach the live network from start(), breaking this
-      // run's "no credentials, no network" claim; canned wires keep the ingest path exercised
       gdeltClient: smokeGdeltClient(),
       polymarketClient: smokePolymarketClient(),
       clock,
       logger,
       universe: SMOKE_TEST_UNIVERSE,
-      // #738: SMOKE_RUN_INSTANT is outside US equity regular hours, and UniverseScheduler no
-      // longer exempts crypto from the calendar gate — without this, BTC-USD never ticks
       tradingCalendar: new AlwaysOpenCalendar(),
-      // `...profile` carries stocksTradingWindow: londonEntryWindow() (#706), which
-      // SMOKE_RUN_INSTANT (08:00 London) falls outside of — overridden to unconditionally admit
       stocksTradingWindow: () => true,
       broker,
       dataSource,
@@ -5382,8 +4566,6 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       llmRateLimiter,
       accountState: new FixedAccountStateProvider(),
       alpacaBrokerClient,
-      // Exhaustive over ALERT_CHANNEL_FIELDS, which also makes resolveAlertsMode return
-      // undefined so this run neither reads SAMURAI_ALERTS nor falls back by omission
       ...smokeAlertChannels,
       tickIntervalMs,
       fillPollIntervalMs,
@@ -5394,9 +4576,6 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     const deadline = Date.now() + deadlineMs;
     try {
       await waitUntil(() => readSmokeObservations(db).ticks.length >= targetTicks, deadline);
-      // #1028: `positions.length > 0` alone is satisfiable by ONE fully-filled arm while the
-      // OTHER arm's row doesn't exist yet — `expectedOpenPositions` is the ceiling of at-most-one
-      // lot per (arm, instrument), so the wait can't return while a whole arm's row is absent
       const expectedOpenPositions = SMOKE_TEST_UNIVERSE.length * SMOKE_TRADING_ARMS.length;
       await waitUntil(
         () => {
@@ -5409,8 +4588,6 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
         Math.min(Date.now() + FILL_GRACE_MS, deadline),
       );
     } finally {
-      // Always drained, including on the deadline path: abandoning an in-flight tick
-      // manufactures exactly the orphaned verdict #209 exists to detect
       await orchestrator.stop();
     }
 
@@ -5428,8 +4605,6 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       marketDataFetch,
     });
 
-    // Safe to read Polymarket counts here, and only here: start() fires the first refresh as
-    // a detached promise, and stop() (above) awaits it draining — reading before stop() would race it
     const observations = readSmokeObservations(db, smokeMiArchive, orchestrator.marketIntelligence);
     const gate = evaluateSmokeGate(observations, evidence);
     return { observations, gate, report: formatSmokeReport(observations, evidence, gate) };
@@ -5438,7 +4613,6 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   }
 }
 
-// Entrypoint guard, matching orchestrator/index.ts's: importing this file (from its own test) must not start a run
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const { report, gate } = await runSmoke();

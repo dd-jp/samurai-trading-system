@@ -154,12 +154,6 @@ describe('computeCorrelationEstimate — warm-up fallback', () => {
   });
 });
 
-/**
- * #303: an omitted pair used to be indistinguishable from a genuinely
- * uncorrelated one — the concentration check reads both as "not correlated".
- * `insufficient_history` names the omitted pairs so the caller can tell the
- * two apart. It changes no limit; it only removes the conflation.
- */
 describe('computeCorrelationEstimate — insufficient_history (#303)', () => {
   it('names an omitted pair in insufficient_history rather than only dropping it', async () => {
     const marketData = makeMarketData({
@@ -223,12 +217,6 @@ describe('computeCorrelationEstimate — insufficient_history (#303)', () => {
     expect(estimate.insufficient_history).toEqual(['TSLA', 'ETH-USD']);
   });
 
-  /**
-   * The #381 widening scenario: the ADR-0001 universe on day 1 of a soak.
-   * Every pair is under `min_bars`, so `correlations` is empty and the
-   * concentration check cannot bind. Without `insufficient_history` that is
-   * byte-for-byte identical to a genuinely diversified portfolio.
-   */
   it('reports all five peers of a six-instrument day-1 portfolio as uncovered', async () => {
     const universe = ['SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'];
     const marketData = makeMarketData(
@@ -262,12 +250,6 @@ describe('computeCorrelationEstimate — point-in-time reads', () => {
     expect(marketData.getBars).toHaveBeenCalledWith('MSFT', { ...window, partial: 'allow' }, asOf);
   });
 
-  /**
-   * #292: a short bar window is degraded-but-valid HERE and nowhere else —
-   * `min_bars` already omits an under-covered pair. Without the opt-in, a
-   * single thin peer would reject the whole `Promise.all` and take every
-   * instrument's correlation read (and the tick) down with it.
-   */
   it('opts into a partial read, since min_bars already handles a short window', async () => {
     const marketData = makeMarketData({
       AAPL: makeBars('AAPL', [100, 101, 102, 103]),

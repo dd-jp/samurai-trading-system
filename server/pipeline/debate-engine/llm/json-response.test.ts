@@ -1,31 +1,11 @@
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './json-response.js';
 
-/**
- * Captured verbatim from a live `claude-haiku-4-5-20251001` call using the
- * exact Bull-persona prompt `personas.ts` sends (issue #361 diagnostic,
- * `stop_reason: "end_turn"`, 247/1024 output tokens — a complete response,
- * not a truncation). This is the shape that halted every quorum-met tick.
- */
 const CAPTURED_BULL_RESPONSE =
   '```json\n{\n  "stance": "bullish",\n  "rationale": "Despite mixed signals, the technical setup presents compelling bullish opportunities."\n}\n```';
 
-/**
- * Captured verbatim from the same diagnostic, Mediator prompt. Note the
- * trailing prose *after* the closing fence — the mediator appends commentary
- * the schema never asked for, which is why the payload is delimited by the
- * first closing fence rather than by the end of the response.
- */
 const CAPTURED_MEDIATOR_RESPONSE =
   '```json\n{\n  "stance": "neutral",\n  "rationale": "Material disagreement persists.",\n  "converged": false\n}\n```\n\n**Mediator Note:** This is a classic early recovery vs. momentum persistence clash.';
 
-/**
- * The prompt-side assertions in `personas.test.ts` and
- * `disagreement-detector.test.ts` check that each rendered prompt *contains*
- * `BARE_JSON_INSTRUCTION` — which proves the constant reaches the wire, but
- * would stay green if the constant itself were gutted, since both sides move
- * together. This is the one place the wording is pinned against literals, so
- * "the instruction stopped asking for bare JSON" fails somewhere.
- */
 describe('BARE_JSON_INSTRUCTION', () => {
   it('asks for bare JSON: no fence, no preamble, no trailing commentary', () => {
     expect(BARE_JSON_INSTRUCTION).toContain('no markdown code fence');
@@ -66,9 +46,6 @@ describe('unwrapFencedJson', () => {
   });
 
   it('leaves an UNTERMINATED fence untouched so a truncated response stays a loud failure', () => {
-    // max_tokens hit mid-emit: opening fence present, closing fence never
-    // arrives. Unwrapping here would hand a half-object to JSON.parse and, in
-    // a laxer parser, could become a fabricated position (#288/#319)
     const truncated = '```json\n{\n  "stance": "bullish",\n  "rationale": "Momentum favo';
     expect(unwrapFencedJson(truncated)).toBe(truncated);
     expect(() => JSON.parse(unwrapFencedJson(truncated))).toThrow();
@@ -96,8 +73,6 @@ describe('unwrapFencedJson', () => {
   });
 
   it('ignores a backtick run that is not at the start of a line when finding the close', () => {
-    // The closing delimiter must begin a line; an inline ``` inside a string
-    // value must not terminate the payload early
     const inline = '```json\n{"a":"x ``` y"}\n```';
     expect(JSON.parse(unwrapFencedJson(inline))).toEqual({ a: 'x ``` y' });
   });

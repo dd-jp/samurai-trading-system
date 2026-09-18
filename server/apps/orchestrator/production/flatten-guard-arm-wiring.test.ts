@@ -1,40 +1,3 @@
-/**
- * The wiring proof for #1389's in-flight flatten guard — each arm's guard reads
- * its OWN flatten journal.
- *
- * `decide.test.ts` proves the guard skips when `unresolvedFlattens` names the
- * instrument, and `flat-by-close-to-execution.test.ts` proves the live arm's
- * thunk is bound to the store its positions come from. Neither can prove the
- * property this file exists for, because both build their trader steps
- * themselves: that the CONTROL arm's thunk is bound to the control book.
- *
- * `buildControlArmWiring` composes the control Trader by spreading the live
- * arm's `TraderStepDeps` and overriding the per-arm fields one at a time. An
- * override omitted there is invisible — the spread silently supplies the live
- * arm's binding, `tsc` is satisfied (the field is required and present), and
- * every existing test stays green because none of them builds the control arm's
- * trader steps at all. `getUnresolvedFlattens` shipped that way in #1389's first
- * round: the control arm asked the live book whether a flatten was in flight,
- * so a live flatten wedged at `submitting` (a lost ack, or a flatten that never
- * fills and so is never swept) made the control arm skip its own flatten for
- * that instrument — on every later tick and every future close, in a MATCHED
- * control where every instrument is an instrument both arms hold. The arm whose
- * whole job is to be the falsifier baseline would then carry lots past the
- * close, which is the failure #1389 was filed for.
- *
- * Driven through `buildProductionOrchestrator(...)`, not through a
- * `buildControlArmWiring` call this file assembles: the deps that reach the
- * control arm are the ROOT's `traderStepDeps`, and a test that hands
- * `buildControlArmWiring` a deps object of its own asserts a binding it chose.
- * `flatten-reconcile-arm-wiring.test.ts`'s reasoning, and its stub config.
- *
- * The two thunks are read directly rather than by driving a tick. What is under
- * test is which BOOK each guard consults, and a row's visibility is the whole
- * of that — `SqliteExecutionStore` scopes `getUnresolvedFlattens` with
- * `WHERE arm = ?` (migration 0050), so arm-scoping is a property of the store
- * INSTANCE the thunk closes over and nothing downstream of the thunk can
- * restore it.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LlmClient } from '../../../pipeline/debate-engine/index.js';
 import type {
@@ -64,15 +27,6 @@ import {
   makeWiringVerdictConfig,
 } from './wiring-config-fixtures.js';
 
-/**
- * `residual-and-overfill-arm-wiring.test.ts`'s `startFillSync` spy, same shape
- * and same reason: defaults to the real implementation, so nothing about what
- * the root builds changes — this only exposes the exact `TraderStepDeps` object
- * each of the two `buildTraderSteps` calls received. The thunk is not reachable
- * from `ControlArmWiring`'s return value (it exposes the tick step, the two
- * execution surfaces and the store), so capturing the deps at the builder is
- * the only way to read it.
- */
 const { buildTraderStepsSpy } = vi.hoisted(() => ({ buildTraderStepsSpy: vi.fn() }));
 
 vi.mock('./direct-bind.js', async (importOriginal) => {
@@ -83,7 +37,6 @@ vi.mock('./direct-bind.js', async (importOriginal) => {
 
 const NOW = new Date('2026-07-20T16:00:00Z');
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s broker, verbatim reasoning */
 class AmnesiacFlattenBroker implements BrokerAdapter {
   async submitBracket(): Promise<BrokerAck> {
     throw new Error('AmnesiacFlattenBroker.submitBracket: this wiring proof never enters a lot');
@@ -114,14 +67,6 @@ class AmnesiacFlattenBroker implements BrokerAdapter {
   }
 }
 
-/**
- * A flatten left at `'submitting'` — the write-ahead is on record and no ack
- * has come back. That is `getUnresolvedFlattens`'s first disjunct and the state
- * the guard exists to refuse a second flatten in, so it is what a seeded row
- * has to be. Written AFTER the boot on purpose: `start()`'s reconcile sweep
- * would otherwise settle it, and this file is about which rows each thunk can
- * SEE, not about the sweep.
- */
 async function seedUnresolvedFlatten(
   store: ExecutionSharedStore,
   key: string,
@@ -145,12 +90,6 @@ async function seedUnresolvedFlatten(
   });
 }
 
-/**
- * The one `buildTraderSteps` call made for `arm`, with `undefined` read as
- * `'live'` (`TraderStepDeps.arm`'s documented absent state). `arm` is the field
- * `buildControlArmWiring` demonstrably does override, so it identifies the two
- * calls without depending on the order the root happens to build them in.
- */
 function onlyArm(captured: readonly TraderStepDeps[], arm: 'live' | 'control'): TraderStepDeps {
   const matches = captured.filter((deps) => (deps.arm ?? 'live') === arm);
   const [only] = matches;
@@ -162,10 +101,8 @@ function onlyArm(captured: readonly TraderStepDeps[], arm: 'live' | 'control'): 
   return only;
 }
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s `StubConfig`, verbatim reasoning */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s stub config, verbatim */
 function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
     db,
@@ -250,20 +187,6 @@ describe("the in-flight flatten guard reads its own arm's journal (#1389)", () =
     db.close();
   });
 
-  /**
-   * THE MUTATION THIS KILLS: drop `getUnresolvedFlattens` from
-   * `buildControlArmWiring`'s `buildTraderSteps({ ... })` overrides
-   * (control-arm-wiring.ts). The spread then supplies the live arm's binding,
-   * `tsc` stays green (the field is required and present), and the whole suite
-   * stays green except this case — which is exactly how the defect shipped.
-   *
-   * The rows are seeded on DIFFERENT instruments, not on one: a same-instrument
-   * pair would leave the control thunk returning a row of the right shape under
-   * the defect, and only the arm-scoping (which row) is under test here. Each
-   * arm is asserted to see its own row AND not to see the other's, so binding
-   * the control thunk to the live store fails on both halves and binding the
-   * LIVE thunk to the control store fails too.
-   */
   it("binds each arm's `getUnresolvedFlattens` to that arm's own store", async () => {
     const orchestrator = buildProductionOrchestrator({
       ...stubConfig(db, recordingLogger()),

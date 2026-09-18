@@ -1,19 +1,3 @@
-/**
- * Stage 2 runner — see docs/specs/stage2-validation-execution-spec.md.
- * One-shot (re-runnable) glue: ingests real Polygon OHLCV for the MVP
- * universe, runs the 12-config grid across stock and crypto asset classes,
- * and renders the Stage 2 overfitting verdict. Every seam it wires already
- * exists and is tested; this file only sequences calls.
- *
- * Not exercised against live Polygon traffic: this sandboxed environment has
- * no network access, so the real ~5-year, 6-symbol ingestion has never
- * actually run here. `runStage2` is unit-tested against a fake
- * `PolygonClient` (`run-stage2.test.ts`) to verify wiring/typechecking only —
- * running it for real and producing a written verdict is a follow-up
- * manual/ops step.
- *
- * Usage: `POLYGON_API_KEY=... npx tsc -p tsconfig.build.json && node dist/server/tools/run-stage2.js`
- */
 import { isDailyTimeframe } from '../providers/market-data-service/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 import {
@@ -38,7 +22,6 @@ import {
 import { resolveStage2Source } from './stage2-source.js';
 import { makeAssetClass } from './stage2-support.js';
 
-/** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories") */
 export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
 export const CRYPTO_SYMBOLS = ['BTC-USD', 'ETH-USD'] as const;
 
@@ -46,13 +29,6 @@ const FIVE_YEARS_MS = 5 * 365 * 86_400_000;
 export const DEFAULT_CAPITAL_PER_TRADE = 10_000;
 export const DEFAULT_AVERAGE_CAPITAL = 10_000;
 
-/**
- * Pessimistic cost-model defaults — mirrors `cost-model.test.ts`'s
- * `PESSIMISTIC_CONFIG` fixture, the only asset-class cost values this repo
- * has settled on so far. Overridable via `RunStage2Deps.costConfig` once a
- * real config is decided; using the same fixture here keeps this script's
- * numbers directly comparable to the unit-tested cost model behaviour.
- */
 export const PESSIMISTIC_COST_CONFIG: CostConfig = {
   crypto: {
     spreadVolatilityCoefficient: 0.5,
@@ -68,28 +44,6 @@ export const PESSIMISTIC_COST_CONFIG: CostConfig = {
   },
 };
 
-/**
- * Cost config calibrated against measured market data and published fee
- * schedules. See docs/research/archive/2026-08-05-cost-model-calibration.md.
- *
- * spreadVolatilityCoefficient — MEASURED: median spread/ATR14 from real
- * Alpaca quotes sampled in the five minutes before each bar's close (where
- * the replay fills); the fitted per-asset-class medians are used here.
- *
- * commissionRate — PUBLISHED: Alpaca's crypto taker fee (0.25%,
- * docs.alpaca.markets/docs/crypto-fees) and equities' commission-free rate
- * (0, relying on `CostModelImpl`'s structural 1bp floor for the real
- * SEC/FINRA-TAF/CAT pass-through).
- *
- * slippageCoefficient — ASSUMPTION: derived as
- * `spreadVolatilityCoefficient / 4` since slippage can't be measured without
- * live fills. Replace with a measured figure once the paper soak produces
- * fills to compare modeled against realized.
- *
- * impactK — UNCHANGED: negligible at $10k/trade in this universe (54 of
- * 62,393 currency units in the worst decomposition row), no measurement
- * basis to revise it.
- */
 export const CALIBRATED_COST_CONFIG: CostConfig = {
   crypto: {
     spreadVolatilityCoefficient: 0.028,
@@ -105,31 +59,6 @@ export const CALIBRATED_COST_CONFIG: CostConfig = {
   },
 };
 
-/**
- * The same calibration, fitted at the INTRADAY replay resolution.
- * `CALIBRATED_COST_CONFIG` fits `spreadVolatilityCoefficient` against daily
- * ATR14, but `CostModelImpl` consumes it against whatever bars the run
- * replays — a ratio fitted at one resolution and consumed at another is a
- * category error, which is why this config exists.
- *
- * spreadVolatilityCoefficient — MEASURED at 1-minute resolution: real Alpaca
- * SIP quotes sampled in the minute ending at each 1-minute bar close, against
- * 1-minute ATR14, not the daily coefficient rescaled by arithmetic. See
- * docs/research/53-intraday-cost-calibration.md.
- *
- * commissionRate — PUBLISHED, unchanged: nothing about resolution changes a
- * fee schedule.
- *
- * slippageCoefficient — ASSUMPTION: the same `spreadVolatilityCoefficient / 4`
- * rule as the daily config.
- *
- * impactK — UNCHANGED: its smallness basis shrinks further at minute
- * resolution, so there is no reason to revise it.
- *
- * crypto — the PESSIMISTIC fixture, deliberately not the calibrated one: an
- * intraday run is equities-only (`universeFor`), so this branch is
- * unreachable; if ever reached, it over-charges rather than flatters.
- */
 export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
   crypto: PESSIMISTIC_COST_CONFIG.crypto,
   stocks: {
@@ -138,119 +67,42 @@ export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
     slippageCoefficient: 0.017425,
     impactK: 0.05,
   },
-  // Layered via `venues` rather than `stocks.commissionRate` (kept 0 for the
-  // Alpaca-priced legs this config also serves): the intraday stocks replay
-  // stamps `MarketState.venue = 'saxo'` (`runStage2` below), so 8bps a side
-  // (ADR-0015) is what an intraday run now charges
   venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
 };
 
-/**
- * Which cost config a direct run uses. `SAMURAI_STAGE2_COST_CONFIG=pessimistic`
- * re-runs against the old fixture for comparison; the calibrated one is the
- * default because it is the one with a stated basis for every number.
- *
- * Daily only — kept at this signature because `run-stage2-cost-decomposition.ts`
- * calls it and is pinned to `STAGE2_PINNED_WINDOW` at daily resolution, so
- * changing what it selects would silently move a recorded result. A run
- * that knows its timeframe should call `costConfigFor`.
- */
 export function costConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CostConfig {
   return env.SAMURAI_STAGE2_COST_CONFIG?.trim() === 'pessimistic'
     ? PESSIMISTIC_COST_CONFIG
     : CALIBRATED_COST_CONFIG;
 }
 
-/**
- * The cost config for a run at `timeframe` — the timeframe-keyed shape,
- * following `periodsPerYearFor(assetClass, timeframe)` and the
- * timeframe-scoped historical store.
- *
- * Composes with `costConfigFromEnv` rather than replacing it: the
- * `pessimistic` escape hatch still wins, since a run asking for the
- * uncalibrated fixture wants a comparison at every resolution.
- *
- * Every non-daily timeframe gets the 1-minute fit, which OVER-charges
- * coarser ones (ATR grows with bar length, quoted spread doesn't) —
- * deliberate, since a single over-charging coefficient beats an unmeasured
- * per-timeframe ladder, and the product's replay resolution is 1m.
- */
 export function costConfigFor(timeframe: string, env: NodeJS.ProcessEnv = process.env): CostConfig {
   const fromEnv = costConfigFromEnv(env);
   if (fromEnv === PESSIMISTIC_COST_CONFIG) return fromEnv;
   return isDailyTimeframe(timeframe) ? CALIBRATED_COST_CONFIG : CALIBRATED_INTRADAY_COST_CONFIG;
 }
 
-/** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth */
 export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
   return { start: new Date(now.getTime() - FIVE_YEARS_MS), end: now };
 }
 
-/**
- * The exact window the 2026-08-05 verdict requested, to the millisecond.
- *
- * A direct run uses this rather than `defaultFiveYearWindow()`, which reads
- * `new Date()` and therefore shifts the effective window — and every
- * walk-forward fold boundary — on each new day. A gate verdict that cannot
- * be reproduced tomorrow is not evidence.
- *
- * Defined in `stage2-source.ts` alongside the free stack's ten-year window,
- * and re-exported here so other callers keep importing it from where they
- * always have.
- */
 export { STAGE2_PINNED_WINDOW } from './stage2-source.js';
 
-/**
- * Where a DIRECT run keeps its ingested bars.
- *
- * Not `:memory:`: every run would otherwise start from an empty database and
- * re-pull the whole five-year window from the vendor. Persisting it is the
- * load-bearing precondition for the free-data decision — a free, no-SLA
- * source is only acceptable if history survives on disk.
- *
- * Deliberately NOT `sharedStorePath()`: this is research scratch with a
- * private schema, and the shared store holds live run state — the two must
- * not share a file. `runStage2`'s own default stays `:memory:`, which keeps
- * tests from touching the filesystem or reading each other's bars.
- */
 export const STAGE2_SCRATCH_DB_PATH = 'data/stage2-bars.sqlite';
 
 export interface RunStage2Deps {
   polygonClient: PolygonClient;
   window?: DateRange;
-  /** Scratch SQLite path for `Stage2HistoricalStore`. Defaults to `:memory:`. */
   dbPath?: string;
   capitalPerTrade?: number;
   averageCapital?: number;
-  /**
-   * The bar resolution to ingest and replay. Defaults to `'1d'`.
-   * An intraday value makes this an EQUITIES-ONLY run — see `universeFor`.
-   */
   timeframe?: string;
   costConfig?: CostConfig;
-  /** Sink for the printed report — defaults to `console.log` */
   print?: (line: string) => void;
-  /**
-   * Where the run's selected config is frozen — the SHARED store, not the
-   * scratch one `dbPath` opens: the Feedback Loop reads it at runtime, and a
-   * verdict written to a research scratch file would be a verdict nobody can
-   * act on.
-   *
-   * Optional: a caller that supplies none is doing a dry run, and writing to
-   * a database it did not ask for would be the surprising behaviour.
-   */
   selections?: { record(selection: Stage2Selection): void };
-  /** Stamps the selection; defaults to wall clock. Injected so a test can pin it. */
   now?: () => Date;
 }
 
-/**
- * The run's shared replay context — identical across every asset class this
- * script builds (`store`, `costModel`, `window`, `capitalPerTrade`). Bundled
- * so `makeAssetClass` takes one context plus the three fields that actually
- * vary per asset class, instead of the same four values traveling as
- * separate positional params on every call.
- */
 interface ReplayContext {
   store: Stage2HistoricalStore;
   costModel: CostModelImpl;
@@ -258,26 +110,10 @@ interface ReplayContext {
   capitalPerTrade: number;
 }
 
-/**
- * Which symbols a run of `timeframe` covers.
- *
- * Daily runs keep the full six-symbol MVP universe, unchanged. An INTRADAY
- * run is equities-only: crypto left Samurai's scope (ADR-0015's amendment),
- * and `FreeStackAggregatesClient`'s Coinbase leg refuses any non-daily
- * request. Narrowing here rather than letting that throw makes the scope
- * decision legible at the runner.
- */
 export function universeFor(timeframe: string): readonly string[] {
   return isDailyTimeframe(timeframe) ? [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS] : [...STOCK_SYMBOLS];
 }
 
-/**
- * Bar bounds are computed by min/max rather than by taking `bars[0]` and
- * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
- * today, but this function's structural parameter type cannot state that, and
- * a store that ever returned bars unordered would silently mis-narrow the
- * window rather than fail
- */
 function firstAndLastBar(
   bars: readonly { close_time: Date }[],
 ): { first: Date; last: Date } | undefined {
@@ -291,22 +127,9 @@ function firstAndLastBar(
   return { first, last };
 }
 
-/**
- * The sub-window of `requested` that EVERY symbol actually has bars for.
- *
- * Intersected, not unioned: the grid replays one universe per asset class,
- * and a fold whose range predates a symbol's first bar produced the
- * `toReturnSeries: no bars in the sample` abort on the first live run.
- *
- * A symbol with NO bars at all is a hard failure, not a narrowing — silently
- * dropping it would change what the verdict is a verdict ABOUT. So is an
- * EMPTY intersection (start >= end): disjoint coverage across symbols would
- * otherwise hand replay/folds/MinBTL a window they cannot sample.
- */
 export function effectiveWindow(
   store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
   requested: DateRange,
-  /** Defaults to the full daily universe */
   symbols: readonly string[] = [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS],
 ): DateRange {
   let start = requested.start;
@@ -342,7 +165,6 @@ export function effectiveWindow(
   return { start, end };
 }
 
-/** Resolves every `RunStage2Deps` optional field to its default, in one place */
 function resolveRunStage2Config(deps: RunStage2Deps): {
   window: DateRange;
   print: (line: string) => void;
@@ -363,7 +185,6 @@ function resolveRunStage2Config(deps: RunStage2Deps): {
   };
 }
 
-/** Ingests every MVP-universe symbol at `timeframe` over `window`, printing per-symbol progress */
 async function ingestUniverse(
   store: Stage2HistoricalStore,
   symbols: readonly string[],
@@ -396,12 +217,6 @@ async function ingestUniverse(
   }
 }
 
-/**
- * Warn when EITHER boundary moved, naming which. A provider whose history
- * lags the request narrows the END instead of the start (stale or partial
- * vendor data), and warning only on the start would let that shrink the
- * sample invisibly — the run output would read as a full-window run
- */
 function warnIfWindowNarrowed(
   requested: DateRange,
   effective: DateRange,
@@ -434,17 +249,6 @@ function warnIfWindowNarrowed(
   }
 }
 
-/**
- * `periodsPerYearFor`, not the daily constants: `periodsPerYear` is the
- * annualization base for every Sharpe in the suite, so a 1-minute replay
- * annualized off 252 understates it by ~sqrt(390).
- *
- * An intraday run is the LSE-ETP universe replayed on its US proxy
- * (ADR-0016) and its live venue is Saxo, so its stocks legs price at
- * `CALIBRATED_INTRADAY_COST_CONFIG.venues.saxo`. Daily runs stay
- * Alpaca-priced: `CALIBRATED_COST_CONFIG` carries no `venues` and the
- * pinned daily results must not move.
- */
 function buildAssetClasses(ctx: ReplayContext, timeframe: string): TrialGridAssetClass[] {
   const stocks = makeAssetClass(
     ctx,
@@ -461,18 +265,6 @@ function buildAssetClasses(ctx: ReplayContext, timeframe: string): TrialGridAsse
     : [stocks];
 }
 
-/**
- * Freeze the selection.
- *
- * Without this the run is a printout: the trial log was in-memory, so
- * nothing survived the process that computed it, and the Feedback Loop had
- * neither a backtest Sharpe to measure divergence against nor a
- * `revalidation` snapshot to evaluate PBO/OOS-Sharpe/DSR with.
- *
- * Optional, and absent in the unit tests: a caller that supplies no store is
- * doing a dry run, and writing to a database it did not ask for would be the
- * surprising behaviour.
- */
 function freezeSelections(
   deps: RunStage2Deps,
   verdict: Stage2Verdict,
@@ -497,13 +289,6 @@ function freezeSelections(
   }
 }
 
-/**
- * Ingests the full MVP universe, runs the 12-config grid across stocks and
- * crypto, and renders the Stage 2 verdict. Returns the verdict (and prints
- * the full metrics suite per config plus the pass/kill decision via
- * `deps.print`) so a caller/test can assert on the structured result without
- * scraping stdout.
- */
 export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const { window, print, capitalPerTrade, averageCapital, timeframe, dbPath, costConfig } =
     resolveRunStage2Config(deps);
@@ -513,10 +298,6 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   await ingestUniverse(store, symbols, window, timeframe, print);
 
-  // Intersected across symbols, since a Polygon plan serves a bounded
-  // history: replaying the requested window against a shorter one produces an
-  // opaque `toReturnSeries: no bars in the sample` failure inside the first
-  // fold. Everything downstream (replay, folds, MinBTL) runs on this window.
   const effective = effectiveWindow(store, window, symbols);
   warnIfWindowNarrowed(window, effective, print);
 
@@ -526,16 +307,11 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   const assetClasses = buildAssetClasses(ctx, timeframe);
 
-  // Sizing is stated POSITIVELY before the run, not as `exceeded: true` after
-  // trials are already spent — a reader should see what the cap constrained
   const results = await runTrialGrid({
     assetClasses,
     window: effective,
     averageCapital,
     configTrialLog,
-    // Reports the sizing actually used (`selected.length`), not `limit` —
-    // they differ whenever the cap doesn't bind, so printing `limit` could
-    // announce a bigger grid than what ran
     announceSizing: (sizing) =>
       print(
         `Stage 2: grid sized to N=${sizing.selected.length} from a ` +
@@ -543,8 +319,6 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
           `for ${sizing.requested}; MinBTL supports ${sizing.limit}). ` +
           'Running across stocks + crypto...',
       ),
-    // The gate run needs the CSCV pass — without it PBO has no configs x
-    // folds matrix to rank across
     includeCscvPass: true,
   });
 
@@ -561,7 +335,6 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   return verdict;
 }
 
-/** Prints the full metrics suite per (config, asset class) plus the pass/kill decision */
 function printReport(
   results: readonly TrialGridResult[],
   verdict: Stage2Verdict,
@@ -635,40 +408,20 @@ function printReport(
   print(`=== Stage 2 VERDICT: ${verdict.overall_pass ? 'PASS' : 'KILL/INCOMPLETE'} ===`);
 }
 
-/**
- * Entrypoint guard — only runs when this file is executed directly (`node
- * dist/server/tools/run-stage2.js`), not when imported by a test. Mirrors
- * `server/apps/orchestrator/index.ts` / `server/apps/service-api/index.ts`'s split between an
- * exported, testable function and a thin top-level invocation.
- */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  // Polygon (2y) unless `STAGE2_SOURCE=free-stack` asks for the ten-year free
-  // stack — see `stage2-source.ts` for why the old path stays the default
   const {
     client: polygonClient,
     window: runWindow,
     label,
-    // Read from `STAGE2_TIMEFRAME` (default '1d'), so a direct run — the
-    // only real caller of this script — is what drives an intraday replay
-    // `STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack` is the intended intraday
-    // invocation
     timeframe: runTimeframe,
   } = resolveStage2Source();
   console.log(
     `Stage 2 source: ${label} at ${runTimeframe} over ${runWindow.start.toISOString()} .. ` +
       `${runWindow.end.toISOString()}`,
   );
-  // costConfig/dbPath/selections are all supplied here rather than by
-  // changing `runStage2`'s own defaults, so every existing caller/test keeps
-  // what it was written against and only a direct run picks up the
-  // calibrated cost config, a persisted bars store, and the SHARED selections
-  // store the Feedback Loop reads at runtime (a verdict frozen to research
-  // scratch would be unactionable)
   const shared = openSharedStore(sharedStorePath());
   runStage2({
     polygonClient,
-    // Keyed on the run's timeframe: a daily-fitted spread/ATR ratio consumed
-    // against per-minute volatility is the defect this avoids
     costConfig: costConfigFor(runTimeframe),
     window: runWindow,
     timeframe: runTimeframe,

@@ -1,18 +1,3 @@
-/**
- * Typed transforms over a REAL `/api/snapshot` payload — the fixture material
- * for every multi-poll scenario (#544).
- *
- * Nothing here builds a snapshot from scratch, deliberately. `toWireSnapshot`
- * (useSnapshot.ts) validates the body's shape and, when it fails, DISCARDS the
- * payload while keeping the last good one — so a hand-written fixture that
- * drifted from the wire model does not fail loudly, it renders a page that
- * quietly goes stale. Starting from what the server actually served means the
- * only thing a transform can get wrong is the part the scenario is about.
- *
- * Imports are type-only, which is what lets Playwright load this module
- * straight from source: the type imports are erased before its loader ever has
- * to resolve them.
- */
 import type {
   DashboardSnapshot,
   PipelineCell,
@@ -21,14 +6,8 @@ import type {
   VerdictRow,
 } from '../../contracts/index.ts';
 
-/** Recorded gap between the settled stages below — arbitrary but deterministic */
 const STAGE_GAP_MS = 20_000;
 
-/**
- * The settled trace this suite replays: recorded rows for five of the six
- * stages, and NONE for `SKIPPED_STAGE`, so the drawer's timeline has a
- * `skipped` row to render alongside the done ones
- */
 const SETTLED_STAGES: readonly { stage: PipelineStage; decision: string | null }[] = [
   { stage: 'analysts', decision: 'quorum_met' },
   { stage: 'debate', decision: 'bullish' },
@@ -38,7 +17,6 @@ const SETTLED_STAGES: readonly { stage: PipelineStage; decision: string | null }
   { stage: 'execution', decision: 'filled' },
 ];
 
-/** The stage left without a recorded row */
 const SKIPPED_STAGE: PipelineStage = 'verdict';
 
 export function laneOf(snapshot: DashboardSnapshot, instrument: string): PipelineLane {
@@ -47,11 +25,6 @@ export function laneOf(snapshot: DashboardSnapshot, instrument: string): Pipelin
   return lane;
 }
 
-/**
- * The same lane, one poll later: its in-flight trace has finished, recorded a
- * row at every stage it visited, and settled `go` at Execution. The
- * `trace_id` is unchanged, so the verdict row the scenario adds joins to it.
- */
 export function settleAtExecution(
   snapshot: DashboardSnapshot,
   instrument: string,
@@ -62,10 +35,6 @@ export function settleAtExecution(
   let recorded = 0;
   const cells = SETTLED_STAGES.map<PipelineCell>(({ stage, decision }) => {
     if (stage === SKIPPED_STAGE) {
-      // Synthetic: the real tick-runner records sequentially and Verdict
-      // gates Execution, so the runtime can never reach Execution without a
-      // Verdict row. The gap is fabricated purely so the timeline renders a
-      // `skipped` row — the same shape a genuine mid-pipeline skip produces
       return {
         stage,
         state: 'skipped',
@@ -91,8 +60,6 @@ export function settleAtExecution(
 
   return {
     ...snapshot,
-    // The tick that was in flight is over: both readouts of it have to agree,
-    // or the strip claims a live trace the theater no longer shows
     tick_status: null,
     pipeline: {
       lanes: snapshot.pipeline.lanes.map((candidate) =>
@@ -104,7 +71,6 @@ export function settleAtExecution(
   };
 }
 
-/** The same snapshot with one more row in `verdicts[]` — the ledger's join target */
 export function withVerdict(snapshot: DashboardSnapshot, verdict: VerdictRow): DashboardSnapshot {
   return { ...snapshot, verdicts: [verdict, ...snapshot.verdicts] };
 }

@@ -1,42 +1,3 @@
-/**
- * The wiring proof for #1086 — the GDELT scoring pass is built by the REAL
- * composition root, against the SAME archive the ingest agent writes and the
- * SAME store the analysts read.
- *
- * A separate file from `gdelt-scoring-pass.test.ts`, the split
- * `mi-refresh-wiring.test.ts` and `rate-limit-wiring.test.ts` make: that file
- * tests what the pass does, this one tests what the composition root does with
- * one. A correct pass constructed nowhere on the shipped path is this repo's
- * dominant defect class, and no unit test can see it.
- *
- * ## The mutations these kill
- *
- * 1. Do not build the pass at all (the pre-#1086 state: the archive half with
- *    no reader). `gdeltScoringPass` is `undefined` and both assertions go red.
- * 2. Build it with a fresh `new MarketIntelligenceStore(clock)` instead of the
- *    root's `marketIntelligence`. The pass still derives, still logs, and the
- *    item reaches a store nothing reads — `gdelt-scoring-pass.test.ts` stays
- *    green throughout, because the store it asserts on is the one it passed
- *    in. Only the analyst-visible read here goes red.
- * 3. Build it with a fresh `new MiArchiveStore()` instead of
- *    `config.miArchive`. The archived history is invisible, the pass refuses
- *    on a cold baseline, and the emitted-item assertion goes red.
- * 4. Derive for every `AssetClass` rather than the universe's. The crypto leg
- *    derives from the same macro-themed seed and logs its own aggregate, so
- *    the no-crypto-GDELT-log assertion below goes red.
- *
- * Mutations 2 and 4 were applied to `production.ts` and observed red, rather
- * than argued: an assertion over an `unknown` payload is exactly the kind that
- * can pass vacuously.
- *
- * ## What this file does NOT cover, and where that is covered
- *
- * That `start()` actually CALLS `run` on its GDELT timer. Driving the real
- * timer here would mean starting the tick loop against these stubs. `npm run
- * smoke` runs the real composition root through `start()` with a seeded
- * archive and asserts an emitted aggregate reaches the store
- * (`SMOKE_GDELT_EXPECTED_AGGREGATES`), which is that half.
- */
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import {
   GDELT_MACRO_ENTITY,
@@ -59,7 +20,6 @@ import {
 } from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-09-03T12:34:00Z');
-/** `floorToBar(NOW)` on the 1h debate grid */
 const BAR = new Date('2026-09-03T12:00:00Z');
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -74,7 +34,6 @@ function payload(tone: number): string {
   return PROJECTED_COLUMNS.map((column) => columns[column] ?? '').join('\t');
 }
 
-/** 24 populated baseline buckets at tone 0, then a signal hour at tone 2 */
 function seededArchive(): MiArchiveStore {
   const archive = new MiArchiveStore();
   const rows: RawArchiveRow[] = [];
@@ -104,7 +63,6 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   return { logger: { log: (entry) => entries.push(entry) }, entries };
 }
 
-/** The narrowest `ProductionConfig` that builds. Every transport is a stub. */
 function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): ProductionConfig {
   return {
     db,
@@ -182,8 +140,6 @@ describe('GDELT scoring wiring (#1086)', () => {
     expect(components.gdeltScoringPass).toBeDefined();
     components.gdeltScoringPass?.run('wiring');
 
-    // The read `fundamental-analyst.ts` performs — entity-scoped, through the
-    // store the root handed the analyst step
     const context = components.marketIntelligence.getContext(
       'stocks',
       24 * HOUR_MS,
@@ -209,14 +165,9 @@ describe('GDELT scoring wiring (#1086)', () => {
 
     components.gdeltScoringPass?.run('wiring');
 
-    // The seeded archive carries a MACRO theme, which is on BOTH watchlists —
-    // so a pass built over every AssetClass would emit a crypto aggregate too
-    // The stocks leg derived, so the pass ran at all…
     expect(entries.some((entry) => entry.message.includes('derived GDELT macro aggregate'))).toBe(
       true,
     );
-    // …and no line, emitted or refused, belongs to a leg the universe has no
-    // instrument in
     for (const entry of entries) {
       expect(entry.payload).not.toMatchObject({
         source: MI_SOURCES.gdeltGkg,

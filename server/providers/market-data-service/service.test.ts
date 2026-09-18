@@ -101,13 +101,7 @@ describe('MarketDataServiceImpl.getBars', () => {
   });
 });
 
-/**
- * #391: repeat calls inside one bar interval must not re-fetch. Six
- * instruments on Alpaca's per-ACCOUNT 200 req/min is only affordable if a tick
- * that learns nothing new costs no HTTP call.
- */
 describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', () => {
-  /** Wraps the fixture source to count how often the network would be hit */
   class CountingDataSource implements DataSource {
     fetches = 0;
 
@@ -122,10 +116,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
       return this.inner.fetchMark(instrument, asOf, mode);
     }
 
-    // `Quote | null`, matching `DataSource.fetchQuote` — null is how the port
-    // says "no bid/ask available", and `undefined` is not the same signal
-    // `fetchQuote` is also optional on the port, so the inner source may not
-    // have one; a source that cannot quote reports null rather than throwing
     async fetchQuote(instrument: string, asOf: Date): Promise<Quote | null> {
       return (await this.inner.fetchQuote?.(instrument, asOf)) ?? null;
     }
@@ -153,7 +143,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     const window = { timeframe: TIMEFRAME, lookback: 2 };
 
     const first = await service.getBars(INSTRUMENT, window, ASOF);
-    // 20 minutes later — same 1h bar, so no bar has closed since
     const second = await service.getBars(
       INSTRUMENT,
       window,
@@ -164,19 +153,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     expect(second).toEqual(first);
   });
 
-  /**
-   * #1080. The cache above writes on COMPLETION, so it cannot see a request
-   * that is still in flight: N concurrent callers asking for the same window
-   * all miss, all queue on the venue token bucket, and all pay for the same
-   * bytes. Measured in the 2026-09-10 19:56 soak burst — 133 `market_data_fetch`
-   * lines over 34 distinct `(instrument, timeframe, lookback)` triples, every
-   * one logged `cache: "miss"`, with `(NFLX, 1d, 30)` fetched seven times in
-   * one tick. 74% of the burst's venue tokens bought nothing.
-   *
-   * Concurrency is the trigger, so the assertion has to be concurrent: awaiting
-   * the calls in sequence would be satisfied by the completion cache alone and
-   * would pass before this fix.
-   */
   it('coalesces concurrent callers asking for the same window into one fetch (#1080)', async () => {
     const { service, source } = buildCounting('live');
     const window = { timeframe: TIMEFRAME, lookback: 2 };
@@ -202,12 +178,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     expect(source.fetches).toBe(2);
   });
 
-  /**
-   * `partial` is a CONTRACT, not a hint: `'allow'` accepts a short window and
-   * the default `'error'` throws on one (`alpaca-http-client.ts`). Two callers
-   * that disagree about it are asking different questions of the same bytes, so
-   * coalescing them would silently hand one of them the other's contract.
-   */
   it('does not coalesce callers that disagree about partial windows (#1080)', async () => {
     const { service, source } = buildCounting('live');
 
@@ -232,11 +202,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     expect(source.fetches).toBe(2);
   });
 
-  /**
-   * A shared in-flight promise must not turn one caller's failure into a
-   * permanently poisoned key: the entry has to be dropped when it rejects, or
-   * every later caller replays a stale error instead of retrying
-   */
   it('drops a rejected in-flight entry rather than replaying it (#1080)', async () => {
     const source = new CountingDataSource(
       new FixtureDataSource(
@@ -283,10 +248,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
   });
 
   it('re-fetches for a DEEPER lookback in the same interval', async () => {
-    // Live collision, not a hypothetical: DEFAULT_VOLATILITY_INDICATOR asks for
-    // 15 bars while the technical analyst asks for 20, both within one hour. A
-    // cache keyed on the interval alone would serve the shallow window to the
-    // deeper caller
     const { service, source } = buildCounting('live');
 
     await service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 1 }, ASOF);
@@ -306,24 +267,11 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     expect(source.fetches).toBe(2);
   });
 
-  /**
-   * #512 (warm-start backfill). `lastBarFetch` (the in-process map the tests
-   * above exercise) is empty on every fresh `MarketDataServiceImpl` instance
-   * — it has no constructor seam and nothing persists it. A backfill script
-   * that fills the SQLite store in a SEPARATE process therefore cannot make
-   * the FIRST call from a freshly started orchestrator skip the network
-   * unless the freshness test also trusts the store's own recency, not only
-   * this process's fetch history. Modelled here as two service instances
-   * sharing one store handle — the same relationship a backfill process and
-   * the orchestrator process have via `sharedStorePath()`/`openSharedStore()`.
-   */
   it('a second, freshly constructed instance serves from an already-warm store without fetching (#512)', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
     const window = { timeframe: TIMEFRAME, lookback: 2 };
 
-    // Simulates the backfill script (or a prior process' tick): a first
-    // service instance fetches and persists into the shared store
     const warmingSource = new CountingDataSource(
       new FixtureDataSource(
         BARS,
@@ -340,9 +288,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     await warmingService.getBars(INSTRUMENT, window, ASOF);
     expect(warmingSource.fetches).toBe(1);
 
-    // A brand-new instance — empty `lastBarFetch`, exactly what a freshly
-    // started orchestrator process constructs — reading the SAME store a few
-    // minutes later, still inside the same bar interval
     const coldSource = new CountingDataSource(
       new FixtureDataSource(
         BARS,
@@ -389,8 +334,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     );
     await warmingService.getBars(INSTRUMENT, window, ASOF);
 
-    // A new hour has rolled over since the store was warmed — a bar may have
-    // closed that the store does not have, so this must still fetch
     const coldSource = new CountingDataSource(
       new FixtureDataSource(
         BARS,
@@ -410,25 +353,11 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     expect(coldSource.fetches).toBe(1);
   });
 
-  /**
-   * #512 fix: the store-recency test is elapsed-time, not "close_time equals
-   * the UTC interval boundary" — a real Alpaca equity bar is
-   * SESSION-anchored (a `1Hour` bar closes on the half-hour during EDT, a
-   * `1Day` bar closes at the next session's open, neither a clock-hour or
-   * UTC-midnight multiple), so a boundary-equality test would have been
-   * silently inert for every equity in `DEFAULT_UNIVERSE` while only
-   * happening to work for Coinbase's UTC-midnight-aligned crypto daily bars.
-   * This fixture is deliberately NOT boundary-aligned (bars close on the
-   * half-hour, not the hour) to prove the predicate doesn't depend on it.
-   */
   it('treats a phase-offset (session-anchored) store as fresh when less than one width has elapsed (#512)', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
     const window = { timeframe: TIMEFRAME, lookback: 2 };
 
-    // Bars close on the half-hour — never a multiple of `timeframeToMs('1h')`
-    // from the UTC epoch, so `close_time === barIndex * timeframeToMs` (the
-    // old, rejected boundary-equality test) would never be true here
     store.appendBars([bar('2026-07-15T09:30:00Z', 100), bar('2026-07-15T10:30:00Z', 110)]);
 
     const coldSource = new CountingDataSource(
@@ -438,8 +367,6 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
         'crypto',
       ),
     );
-    // 20 minutes after the latest stored bar's close — well under one 1h
-    // width, so nothing could have closed since
     const tickAsOf = new Date('2026-07-15T10:50:00Z');
     const coldService = new MarketDataServiceImpl(
       coldSource,
@@ -510,16 +437,11 @@ describe('MarketDataServiceImpl.getMark', () => {
     expect(first.price).toBe(999);
     expect(second.price).toBe(999);
     expect(third.price).toBe(999);
-    // 1st call fetches, 2nd (inside 5s) serves from the store, 3rd refetches
     expect(fetchMark).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('MarketDataServiceImpl.getMarks (#289 H8)', () => {
-  /**
-   * A source that answers for some instruments and throws for others, so a
-   * batch read can be observed to be PARTIAL rather than all-or-nothing
-   */
   class SelectiveDataSource implements DataSource {
     constructor(private readonly failing: ReadonlySet<string>) {}
 
@@ -555,12 +477,6 @@ describe('MarketDataServiceImpl.getMarks (#289 H8)', () => {
     expect(aapl?.ok === true ? aapl.mark.price : null).toBe(42);
   });
 
-  /**
-   * The property the whole seam exists for: one instrument's failure must not
-   * decide the others'. A rejecting `Promise.all` reports whichever promise
-   * lost the race and discards the rest, which is exactly the diagnosis
-   * `computePortfolioView` needs whole.
-   */
   it('reports a per-instrument failure without failing the batch', async () => {
     const service = selectiveService(['MSFT']);
 
@@ -671,17 +587,6 @@ describe('MarketDataServiceImpl.getADV', () => {
   });
 });
 
-/**
- * #1082: the bar/market-data path emitted ZERO telemetry, so 106 analyst
- * timeouts in one session were undiagnosable — the technical analyst's only
- * external I/O is a bar fetch through here, and nothing recorded whether a
- * slow tick was a cache hit, a slow venue fetch, or a fetch that never
- * returned at all. These tests exercise `MarketDataServiceImpl`'s own
- * `market_data_fetch` emission, the same choke point `getIndicator` and
- * `getADV` both route through — the composition-root WIRING is instead
- * covered by `production/rate-limit-wiring.test.ts`'s
- * "wires market-data fetch telemetry (#1082)" block.
- */
 describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => {
   class ThrowingDataSource implements DataSource {
     constructor(private readonly error: Error) {}
@@ -726,7 +631,6 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
 
     await service.getBars(INSTRUMENT, window, ASOF);
     entries.length = 0;
-    // 20 minutes later, same 1h bar interval — route 1 (#391) hits
     await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 20 * 60_000));
 
     expect(fetchEvents(entries)).toHaveLength(0);
@@ -752,12 +656,6 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     expect(typeof events[0].duration_ms).toBe('number');
   });
 
-  /**
-   * The other half of the same line: `#1082` proved it FIRES, this proves it
-   * is JOINABLE. A fetch inside a tick must carry that tick's id — the
-   * `'market-data'` label is a fallback for a fetch with no enclosing tick
-   * (a scheduled refresh, a CLI tool), not the normal case.
-   */
   it("carries the enclosing tick's trace_id, not the category label", async () => {
     const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
     const window = { timeframe: TIMEFRAME, lookback: 2 };
@@ -790,9 +688,6 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
       "the issue's own RVOL-936 pathological case, a window the venue can never fully satisfy (AC2)",
     async () => {
       const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
-      // Only 2 completed bars ever exist at ASOF — a lookback the store can
-      // never reach, so every call misses, forever, exactly like a symbol
-      // that can't reach the full RVOL window
       const window = { timeframe: TIMEFRAME, lookback: 50 };
 
       await service.getBars(INSTRUMENT, window, ASOF);
@@ -822,10 +717,7 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     const window = { timeframe: TIMEFRAME, lookback: 2 };
 
     await service.getBars(INSTRUMENT, window, ASOF);
-    // Same interval, 20 minutes later — a hit (#391), clearing the streak
     await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 20 * 60_000));
-    // A new bar interval — store recency (#512) now falls outside one
-    // timeframe width, so this misses again
     await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 60 * 60_000));
 
     const events = fetchEvents(entries);
@@ -857,12 +749,6 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     expect(typeof events[0].error).toBe('string');
 
     const lines = fetchLines(entries);
-    // A single throw on a key with NO prior misses (consecutive_misses: 1,
-    // below the escalation threshold) must still log at `warn` — the
-    // consecutive-miss escalation applies to the `ok` branch only. A fetch
-    // that throws is itself the anomaly this issue exists to surface;
-    // gating its visibility on an unrelated counter would hide the very
-    // "fetch that never returned" case #1082 was filed for
     expect(lines[0]?.level).toBe('warn');
   });
 
@@ -882,10 +768,6 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     async () => {
       const { service } = serviceWithTelemetry('backtest', new ManualClock(ASOF));
 
-      // Several DISTINCT (instrument, timeframe, lookback) keys, the shape
-      // that would otherwise accumulate one map entry each — a stand-in for
-      // a backtest walking many symbols/windows over a long historical
-      // replay
       await service.getBars('AAPL', { timeframe: TIMEFRAME, lookback: 2 }, ASOF);
       await service.getBars('MSFT', { timeframe: TIMEFRAME, lookback: 5 }, ASOF);
       await service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 50 }, ASOF);

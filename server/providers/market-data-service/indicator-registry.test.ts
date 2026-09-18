@@ -1,18 +1,3 @@
-/**
- * B2 (#703) — the registry, and the warm-up dial that owns B1's finding F2.
- *
- * Two things are under test and they are deliberately separate:
- *
- *   1. `minimumBarsFor` and `computeIndicator` now read ONE table, so a kind
- *      cannot exist in the arithmetic and not in the arity. That property is
- *      enforced by the compiler (`Record<IndicatorKind, IndicatorDefinition>`),
- *      and what remains testable is that the table still says the right things.
- *   2. `recommendedWarmupFor` is a DIFFERENT number from `minimumBarsFor` for
- *      every recursive kind, it genuinely converges, and — since #722 — it is
- *      what `RSI_SPEC` asks for. That adoption was B2's open finding F2 and is
- *      the deliberate repricing of every technical opinion the debate reads;
- *      ATR and SMA stay on the floor, so the two are pinned separately below.
- */
 import { describe, expect, it } from 'vitest';
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
 import { atrIndicatorSpec } from '../../pipeline/trader/decide.js';
@@ -26,12 +11,6 @@ import { type Bar, INDICATOR_KINDS, type IndicatorKind, type IndicatorSpec } fro
 
 const PERIOD = 14;
 
-/**
- * Canonical params per kind (#744) — the single-period kinds all get
- * `{ period: PERIOD }`; the two multi-parameter additions get a realistic
- * named-parameter set instead, since `specFor`'s old single-`period` shape
- * can no longer describe every row in `INDICATOR_KINDS`
- */
 const canonicalParams = (kind: IndicatorKind): Record<string, number> => {
   switch (kind) {
     case 'macd_histogram':
@@ -50,7 +29,6 @@ const specFor = (kind: IndicatorKind, lookback: number): IndicatorSpec => ({
   timeframe: '1h',
 });
 
-/** A gently rising walk, so no kind hits a degenerate branch */
 const BARS: Bar[] = Array.from({ length: 400 }, (_, i) => {
   const close = 100 + i * 0.37 + (i % 7) * 0.11;
   return {
@@ -69,10 +47,6 @@ const BARS: Bar[] = Array.from({ length: 400 }, (_, i) => {
 
 describe('one registry, not two switches', () => {
   it('serves every declared kind', () => {
-    // If a kind were in the union with no row, this file would not compile. The
-    // runtime half: every kind actually computes rather than throwing
-    // `Unsupported indicator`, which is what the old duplicated `default`
-    // branches produced when the two switches disagreed
     for (const kind of INDICATOR_KINDS) {
       const value = computeIndicator(BARS.slice(0, 60), specFor(kind, 60));
       expect(Number.isFinite(value)).toBe(true);
@@ -80,10 +54,6 @@ describe('one registry, not two switches', () => {
   });
 
   it('declares the seed bar exactly where a predecessor is consumed', () => {
-    // The "N bars yield N-1 deltas" rule, now stated once as data. Getting this
-    // wrong does not throw — it computes over `period - 1` deltas and divides
-    // by `period`, which is the RSI(13)-labelled-14 defect (#319) and the ATR
-    // off-by-one, both of which this repo has already shipped once
     expect(minimumBarsFor(specFor('sma', 20))).toBe(PERIOD);
     expect(minimumBarsFor(specFor('ema', 20))).toBe(PERIOD);
     expect(minimumBarsFor(specFor('rsi', 20))).toBe(PERIOD + 1);
@@ -91,24 +61,15 @@ describe('one registry, not two switches', () => {
   });
 
   it('declares the #744 arity for the five new kinds too', () => {
-    // Same intent as the block above, extended to the new kinds — this is
-    // the row-by-row boundary a `minimumBars` closure that lied would fail
     expect(minimumBarsFor(specFor('atr_pct', 20))).toBe(PERIOD + 1);
     expect(minimumBarsFor(specFor('donchian_pos', 20))).toBe(PERIOD);
-    // 2 x period: the structural ADX floor, not a warm-up preference — see
-    // the `adx` row's comment in indicators.ts
     expect(minimumBarsFor(specFor('adx', 20))).toBe(2 * PERIOD);
-    // max(fast, slow) + signal - 1, with the canonical 12/26/9
     expect(minimumBarsFor(specFor('macd_histogram', 40))).toBe(26 + 9 - 1);
-    // max(bb_period, kc_period + 1), with the canonical 20/20
     expect(minimumBarsFor(specFor('bb_kc_squeeze', 40))).toBe(20 + 1);
   });
 
   for (const kind of INDICATOR_KINDS) {
     it(`${kind}: exactly minimumBarsFor computes, one bar fewer throws by name`, () => {
-      // The registry-driven boundary: a `minimumBars` closure perturbed by
-      // one bar for any single kind fails exactly this test, by that kind's
-      // name, rather than a generic "some kind is off" failure
       const required = minimumBarsFor(specFor(kind, 60));
 
       expect(() =>
@@ -130,11 +91,6 @@ describe('one registry, not two switches', () => {
   });
 
   it('names the unknown kind and the known ones rather than crashing', () => {
-    // Reachable only through a cast, which is the honest scope of the guard:
-    // there is no unvalidated runtime path into `IndicatorSpec.indicator`
-    // today. The cast below is exactly what would silence the compiler at a
-    // real call site, and unchecked `INDICATORS[kind]` fails at
-    // `.compute is not a function`, naming neither the spec nor the kind
     const bogus = { ...specFor('rsi', 20), indicator: 'macd' as IndicatorKind };
 
     expect(() => computeIndicator(BARS.slice(0, 20), bogus)).toThrow(/Unsupported indicator: macd/);
@@ -152,15 +108,10 @@ describe('recommendedWarmupFor — the width question, not the arity one', () =>
   });
 
   it('is the floor itself for sma, which is warm-up blind', () => {
-    // Not a special case for tidiness: `rsi-warmup.test.ts` pins that `sma` at
-    // 14 bars of history equals `sma` at 400. Recommending more would be
-    // recommending waste
     expect(recommendedWarmupFor(specFor('sma', 20))).toBe(minimumBarsFor(specFor('sma', 20)));
   });
 
   it('actually converges — one more bar past it barely moves the value', () => {
-    // The claim `4 x period + 1` makes, checked rather than asserted. Compared
-    // against a 200-bar warm-up on the SAME final bar
     const end = 300;
     const at = (lookback: number): number =>
       computeIndicator(BARS.slice(end - lookback, end), specFor('rsi', lookback));
@@ -170,51 +121,25 @@ describe('recommendedWarmupFor — the width question, not the arity one', () =>
     const floor = at(minimumBarsFor(specFor('rsi', 20)));
 
     expect(Math.abs(recommended - converged)).toBeLessThan(0.5);
-    // And the floor is the thing it is not: strictly further away
     expect(Math.abs(floor - converged)).toBeGreaterThan(Math.abs(recommended - converged));
   });
 
   it('is what RSI_SPEC now asks for — the analyst reads a converged Wilder RSI (#722)', () => {
-    // B2 added the dial; #722 turned it, for RSI only. The assertion this
-    // replaces pinned `RSI_SPEC.lookback === minimumBarsFor(RSI_SPEC)` (15) and
-    // was designed to fail here, so that adopting the warm-up would be a
-    // visible change rather than a quiet one. This is that change.
-    //
-    // Derived, not literal: `RSI_SPEC` composes `recommendedWarmupFor`, so this
-    // asserts the two cannot drift apart, and the `57` pins the value the
-    // repricing was measured at
     expect(RSI_SPEC.lookback).toBe(recommendedWarmupFor(RSI_SPEC));
     expect(RSI_SPEC.lookback).toBe(57);
     expect(RSI_SPEC.lookback).toBeGreaterThan(minimumBarsFor(RSI_SPEC));
-    // The floor itself is untouched: 15 bars still produce a value, so a cold
-    // instrument degrades to a less-warm RSI rather than to no view at all
     expect(minimumBarsFor(RSI_SPEC)).toBe(15);
   });
 
   it('is NOT adopted by SMA, which is warm-up BLIND regardless', () => {
-    // `SMA_SPEC` reads `slice(-period)` directly — there is no seed/smoothing
-    // split to converge, so the floor is not a compromise for it at all
-    // (`rsi-warmup.test.ts` pins 14 bars against 400)
     expect(SMA_SPEC.lookback).toBe(minimumBarsFor(SMA_SPEC));
   });
 
   it('IS adopted by atrIndicatorSpec — the stop/breaker ATR, converged (#757)', () => {
-    // #722's scope was F2 alone — the RSI the debate reads — and left ATR on
-    // the floor deliberately: adopting it reprices every stop rather than
-    // every opinion, and needed its own declared-before-measured gate. #757
-    // measured (median relative shift 3.0%, p90 6.9% against a declared
-    // median<=15%/p90<=30% gate,
-    // `docs/reviews/indicator-characterisation-2026-08-16.md` F1) and cleared
-    // it, so this assertion — deliberately built to fail the moment that
-    // happened, the same way #722's replaced this file's RSI pin — now
-    // documents the adoption instead of the floor
     const spec = atrIndicatorSpec(PERIOD, '1h');
     expect(spec.lookback).toBe(recommendedWarmupFor(spec));
     expect(spec.lookback).toBe(57);
     expect(spec.lookback).toBeGreaterThan(minimumBarsFor(spec));
-    // The floor itself is untouched: 15 bars still produce a value, so a cold
-    // instrument degrades to a less-warm ATR (and a less-warm stop/breaker
-    // reading) rather than to no reading at all
     expect(minimumBarsFor(spec)).toBe(15);
   });
 });

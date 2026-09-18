@@ -183,10 +183,10 @@ non-commercial and non-business*, which is arguable and unlitigated here. Not le
 
 | Call site | What it feeds | Live-money path? |
 | --- | --- | --- |
-| `server/tools/stage2-source.ts:71` | `STAGE2_SOURCE` **defaults to `'polygon'`** — every Stage 2 verdict to date was computed on Massive bars unless `free-stack` was set | Research/eval. But a Stage 2 verdict *is* an investment strategy derived from the Information — the single closest fit to §6.1(j)'s enumeration in the whole repo |
-| `server/tools/backfill-market-data.ts:362` | equity leg of `withOhlcvFailover`: Alpaca primary → `PolygonBarsClient` fallback, persisting rows stamped `source: 'polygon'` into the shared store the runtime reads | **The one path that could put Massive bars under a trading decision** |
+| `server/tools/stage2-source.ts:38` | `STAGE2_SOURCE` **defaults to `'polygon'`** — every Stage 2 verdict to date was computed on Massive bars unless `free-stack` was set | Research/eval. But a Stage 2 verdict *is* an investment strategy derived from the Information — the single closest fit to §6.1(j)'s enumeration in the whole repo |
+| `server/tools/backfill-market-data.ts:252` | equity leg of `withOhlcvFailover`: Alpaca primary → `PolygonBarsClient` fallback, persisting rows stamped `source: 'polygon'` into the shared store the runtime reads | **The one path that could put Massive bars under a trading decision** |
 | `server/tools/run-spread-calibration.ts:258` | cost-model calibration | Research |
-| `server/tools/run-stage2-cost-decomposition.ts:393` | cost decomposition | Research |
+| `server/tools/run-stage2-cost-decomposition.ts:280` | cost decomposition | Research |
 
 **The runtime composition root does not touch Massive.** `production.ts:547-548` builds its
 `DataSource` from `buildAlpacaDataSource` and `MarketDataServiceImpl` gets nothing else; there is no

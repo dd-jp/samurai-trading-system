@@ -7,11 +7,6 @@ import {
   TERMINAL_ORDER_STATES,
 } from './index.js';
 
-/**
- * Rows only need the columns the guard reads plus the NOT NULLs; every other
- * value is filler. `key_scheme` is passed explicitly rather than left to the
- * migration's default so each test states which side of the cutover it means.
- */
 function insertLot(
   db: StoreHandle,
   lot: {
@@ -58,8 +53,6 @@ describe('key-scheme guard (#686)', () => {
          '2026-08-14T09:00:00.000Z')`,
     ).run();
 
-    // The migration's DEFAULT is 2, so a row inserted without naming the column
-    // is post-cutover. If this ever reads 1, every new lot blocks startup.
     expect(db.prepare('SELECT key_scheme FROM open_positions').get()).toEqual({ key_scheme: 2 });
     expect(() => assertNoStaleKeyScheme(db)).not.toThrow();
   });
@@ -78,8 +71,6 @@ describe('key-scheme guard (#686)', () => {
     const db = openSharedStore(':memory:');
     insertLot(db, { key: 'stale-1', instrument: '3LDE', order_state: 'submitted', key_scheme: 1 });
 
-    // The message is the whole remedy — nothing downstream repairs this — so
-    // the instrument, the state and the drain instruction all have to be in it
     expect(() => assertNoStaleKeyScheme(db)).toThrow(/3LDE \(submitted\) stale-1/);
     expect(() => assertNoStaleKeyScheme(db)).toThrow(/flatten the book/);
   });
@@ -88,8 +79,6 @@ describe('key-scheme guard (#686)', () => {
     const db = openSharedStore(':memory:');
     insertLot(db, { key: `stale-${state}`, order_state: state, key_scheme: 1 });
 
-    // A terminal lot is harmless: nothing will replay a decision for it. This
-    // is what makes the guard a one-time drain rather than a permanent block
     expect(findStaleKeySchemeLots(db)).toEqual([]);
     expect(() => assertNoStaleKeyScheme(db)).not.toThrow();
   });
@@ -101,8 +90,6 @@ describe('key-scheme guard (#686)', () => {
         key: `stale-${i}`,
         order_state: 'filled',
         key_scheme: 1,
-        // Descending inserts, so a store that returned insertion order rather
-        // than `opened_at` order would fail the first-key assertion below
         opened_at: `2026-08-${String(28 - i).padStart(2, '0')}T09:00:00.000Z`,
       });
     }

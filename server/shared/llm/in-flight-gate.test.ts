@@ -43,7 +43,6 @@ describe('NousAccountInFlightGate', () => {
       return slot;
     });
 
-    // Nothing may proceed while the single slot is held
     await Promise.resolve();
     expect(order).toEqual([]);
 
@@ -54,8 +53,6 @@ describe('NousAccountInFlightGate', () => {
     expect(order).toEqual(['second', 'third']);
     const waits = entries.filter((entry) => entry.event === 'llm_gate_wait');
     expect(waits).toHaveLength(2);
-    // `queue_depth` is what was ALREADY waiting when the call arrived: nothing
-    // for the second caller, the second caller for the third
     expect(waits[0]?.payload).toMatchObject({
       queue_depth: 0,
       max_in_flight: 1,
@@ -76,9 +73,6 @@ describe('NousAccountInFlightGate', () => {
     });
 
     const held = await gate.acquire({ budgetMs: 28_000 });
-    // Three queued callers put the fourth at an estimated 4 x 5,800 = 23,200ms
-    // of waiting. That wait ALONE fits inside 28,000 — the call it would then
-    // have to make is what does not (23,200 + 5,800 = 29,000)
     const queued = [0, 1, 2].map(() => gate.acquire({ budgetMs: 28_000 }));
 
     await expect(gate.acquire({ budgetMs: 28_000, llmStage: 'debate' })).rejects.toBeInstanceOf(
@@ -114,8 +108,6 @@ describe('NousAccountInFlightGate', () => {
       logger,
     });
 
-    // One X-retrieval call in flight, measured at up to 60s — a debate caller
-    // behind it waits for THAT, not for a 5,800ms debate call
     const held = await gate.acquire({ budgetMs: 60_000, expectedCallMs: 60_000 });
 
     await expect(gate.acquire({ budgetMs: 28_000, llmStage: 'debate' })).rejects.toBeInstanceOf(
@@ -133,7 +125,6 @@ describe('NousAccountInFlightGate', () => {
     const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: EXPECTED_CALL_MS });
     const held = await gate.acquire({ budgetMs: 28_000 });
 
-    // A 5,800ms wait fits a 28,000ms budget; a 60,000ms call after it does not
     await expect(gate.acquire({ budgetMs: 28_000, expectedCallMs: 60_000 })).rejects.toBeInstanceOf(
       LlmInFlightRefusedError,
     );
@@ -160,8 +151,6 @@ describe('NousAccountInFlightGate', () => {
       const queued = gate.acquire({ budgetMs: 14_000, llmStage: 'risk_critic' });
       const settled = queued.catch((error: unknown) => error);
 
-      // Dropped at `budgetMs - expectedCallMs`, not at `budgetMs`: a waiter
-      // granted any later could not make its own call inside the budget
       await vi.advanceTimersByTimeAsync(8_199);
       expect(entries.filter((entry) => entry.event === 'llm_gate_refused')).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
@@ -176,7 +165,6 @@ describe('NousAccountInFlightGate', () => {
         ),
       ).toHaveLength(1);
 
-      // The refused waiter must not have consumed the slot it never got
       held.release();
       const next = await gate.acquire({ budgetMs: 14_000 });
       next.release();
@@ -190,7 +178,6 @@ describe('NousAccountInFlightGate', () => {
     const held = await gate.acquire({ budgetMs: 28_000 });
     const queued = gate.acquire({ budgetMs: 28_000 });
 
-    // What a caller's `finally` does when its own AbortSignal fires in flight
     held.release();
 
     const slot = await queued;

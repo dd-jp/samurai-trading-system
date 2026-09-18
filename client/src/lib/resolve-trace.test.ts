@@ -18,10 +18,6 @@ describe('resolveTrade', () => {
       makeSnapshot({
         pipeline: makeView([lane]),
         closed_trades: [makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1' })],
-        // A same-instrument decoy: an instrument-only guess would land here
-        // too, so debate?.debate_id below only holds if the join is truly
-        // keyed on debate_id — the assertion is what makes debateJoin's
-        // 'exact: true' label falsifiable, not the label itself
         debates: [
           makeDebate({ debate_id: 'decoy', instrument: 'SPY' }),
           makeDebate({ debate_id: 'd1', instrument: 'SPY' }),
@@ -122,10 +118,6 @@ describe('resolveTrace', () => {
           makeDebate({ debate_id: 'spy-newest', instrument: 'SPY' }),
           makeDebate({ debate_id: 'spy-older', instrument: 'SPY' }),
         ],
-        // debate_id differs from 'spy-newest' so an exact join would resolve
-        // to a different row than today's instrument-only fallback does —
-        // the debate?.debate_id assertion below is what makes debateJoin's
-        // 'exact: false' label falsifiable, not the label check itself
         risk_critics: [
           makeRiskCritic({ trace_id: 'trace-spy', instrument: 'SPY', debate_id: 'spy-older' }),
         ],
@@ -136,16 +128,6 @@ describe('resolveTrace', () => {
     expect(detail.debateJoin).toEqual({ by: 'instrument', exact: false });
   });
 
-  /**
-   * #1597: `snapshot.debates` is always the LIVE arm's debates — the control
-   * arm never writes `debate_log` (`contracts/snapshot.ts`'s `arm` doc
-   * comment) — so an instrument-only join (`latestDebateFor`) run against a
-   * control-arm snapshot would attribute the live arm's real debate to a
-   * control lane trading the same instrument. This is the mutation this
-   * ticket's fix closes: reverting `resolveTrace`'s `snapshot.arm ===
-   * 'control'` guard turns this assertion into `detail.debate?.debate_id ===
-   * 'spy-newest'`, a real cross-arm leak.
-   */
   it('never attributes the live arm’s debate to a control-arm lane on the same instrument', () => {
     const detail = resolveTrace(
       makeSnapshot({
@@ -205,27 +187,18 @@ describe('resolveTrace', () => {
   it('never resolves another instrument’s lane for a mismatched selection (#1205)', () => {
     const snapshot = makeSnapshot({
       pipeline: makeView([doneThrough('SPY', 'trace-1', 'execution', { outcome: 'go' })]),
-      // A trace_id-only match on verdictFor would find this row too — it
-      // exists so the verdict conjunction is exercised the same way the lane
-      // conjunction is, not just the lane
       verdicts: [makeVerdict({ trace_id: 'trace-1', instrument: 'SPY' })],
     });
-    // A Selection naming AAPL but pinning SPY's trace_id must not resolve
-    // SPY's lane, or SPY's verdict, under an AAPL header — the mismatch must
-    // surface as "no trace", not as someone else's trace
     const detail = resolveTrace(snapshot, { instrument: 'AAPL', traceId: 'trace-1' });
     expect(detail.lane).toBeUndefined();
     expect(detail.cells).toBeNull();
     expect(detail.verdict).toBeUndefined();
-    // The trace is live in the window under SPY, not aged out — and its id
-    // must not leak into AAPL's TraceDetail unvalidated (#1267)
     expect(detail.absence.lane).toBe('wrong_instrument');
     expect(detail.traceId).toBeNull();
   });
 
   it('names a mismatch by its verdict alone, when the lane has already left the window (#1267)', () => {
     const snapshot = makeSnapshot({
-      // No lane at all carries trace-1 — only a verdict attests it, under SPY
       pipeline: makeView([doneThrough('SPY', 'trace-2', 'execution', { outcome: 'go' })]),
       verdicts: [makeVerdict({ trace_id: 'trace-1', instrument: 'SPY' })],
     });
@@ -244,12 +217,6 @@ describe('resolveTrace', () => {
     expect(detail.traceId).toBeNull();
   });
 
-  // Unlike the arms above, the lanes arm has no test where a lane is its ONLY
-  // attestation: #1205's test above pairs its lane with a verdict decoy, so
-  // removing the lanes arm outright still passes there via the verdict arm
-  // This isolates it — no verdict, no risk-critic, no tick_status — so the
-  // lanes arm itself (not its dead `!== instrument` conjunct, see trace.ts's
-  // docstring) is not left at zero coverage
   it('names a mismatch by its lane alone, with no verdict, risk-critic or tick_status attesting it', () => {
     const snapshot = makeSnapshot({
       pipeline: makeView([doneThrough('SPY', 'trace-1', 'trader')]),
@@ -372,8 +339,6 @@ describe('laneDebate', () => {
         makeDebate({ debate_id: 'other', instrument: 'QQQ' }),
       ],
     });
-    // Identity, not equality: the matrix and the drawer disagree the moment
-    // they reach two different rows, whatever either then renders
     expect(laneDebate(snapshot, lane)).toBe(
       resolveTrace(snapshot, { instrument: 'SPY', traceId: null }).debate,
     );
@@ -389,13 +354,6 @@ describe('laneDebate', () => {
     expect(laneDebate(snapshot, lane)).toBeUndefined();
   });
 
-  /**
-   * #1597 review round 1: the guard moved INTO `laneDebate` so the matrix and
-   * the drawer cannot disagree on a control-arm snapshot either — before this
-   * round, only the `LiveTab.tsx` call site starved the array, so this
-   * function alone still returned the live arm's row for a control lane.
-   * Same instrument as the lane, matching the round-1 finding's own repro.
-   */
   it('agrees with resolveTrace’s undefined on a control-arm snapshot, same instrument', () => {
     const lane = doneThrough('SPY', 'trace-spy', 'execution', { outcome: 'go' });
     const snapshot = makeSnapshot({

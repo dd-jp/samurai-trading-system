@@ -35,9 +35,6 @@ describe('classifyFailureCause (#1394)', () => {
 
   it('maps a gate refusal to `gate_refused`, on both reasons and at both layers (#1080)', () => {
     const fields = { queue_depth: 3, in_flight: 1, budget_ms: 28_000, waited_ms: 0 };
-    // Both layers, because the gate's own error crosses the MI clients
-    // untranslated while `NousMessagesClient` re-wraps it for the debate path —
-    // and a refusal is not a `transport` fault at either: nothing was sent
     expect(
       classifyFailureCause(
         new LlmInFlightRefusedError({ ...fields, reason: 'admission', message: 'refused' }),

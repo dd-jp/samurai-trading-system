@@ -1,48 +1,7 @@
-/**
- * The #686 rollout guard.
- *
- * ## What it protects
- *
- * #686 added a `side` ('open' | 'close') discriminator to the idempotency-key
- * payload. A key computed before that change can never match one computed after
- * it for the same `(instrument, bar)`.
- *
- * That matters because the three dedup layers are **not independent**:
- * `open_positions`'s PRIMARY KEY *is* `idempotency_key`, so `findByKey`, the
- * primary-key backstop and the broker's `client_order_id` are one mechanism
- * wearing three hats. They share a single input. A crash-replay spanning the
- * cutover therefore misses in `findByKey`, raises no primary-key conflict, and
- * presents the broker an id it has not seen — **a double order with all three
- * layers passing it**. There is no layer left to catch it, which is why this has
- * to be caught before the process starts rather than defended against at
- * runtime.
- *
- * ## Why refuse rather than repair
- *
- * The pre-cutover key cannot be recomputed. Deriving it needs the bar, and while
- * `decision_timestamp` holds it, re-deriving and rewriting a primary key that a
- * live broker order is already keyed against trades a detectable failure for a
- * silent one. Draining is the honest fix and it is cheap: flatten the book, or
- * start the run on a fresh store.
- *
- * Migration `0027_open_positions_key_scheme.sql` stamps every row that existed
- * at cutover with `key_scheme = 1`; everything written since defaults to 2.
- */
 import type { Database } from 'better-sqlite3';
 import type { OrderState } from '../../../contracts/index.js';
 import type { OpenPosition } from '../types/records.js';
 
-/**
- * `order_state`s that are finished — excluded from `getOpenPositions()`
- * (execution-spec.md).
- *
- * Lives here, in the layer both readers may import, rather than being copied:
- * `pipeline/execution/sqlite-shared-store.ts` imports it too. A second copy
- * would be a list two modules must agree on with nothing enforcing it, and the
- * disagreement is silent — a state missing here makes this guard block on a
- * finished lot forever, and a state missing there leaks terminal rows into the
- * open book.
- */
 export const TERMINAL_ORDER_STATES: readonly OrderState[] = [
   'closed',
   'cancelled',
@@ -51,40 +10,8 @@ export const TERMINAL_ORDER_STATES: readonly OrderState[] = [
   'abandoned',
 ];
 
-/**
- * `order_state`s a crash can strand: written ahead, or acked by the venue but
- * not advanced since. `reconcile()`'s bracket pass revisits exactly these and
- * adopts broker truth for them.
- *
- * Lives here for the same reason `TERMINAL_ORDER_STATES` does — two stages
- * read it and neither owns it (coding-standards.md "A port consumed by more
- * than one stage… moves to `shared/` when the second consumer arrives").
- * `pipeline/execution/reconcile.ts` picks its worklist from it;
- * `pipeline/risk-manager/portfolio-view.ts` derives the states whose unfilled
- * remainder is reserved against the entry caps from it (#1019), because the
- * only safe reservation is one the reconcile pass can release.
- */
 export const IN_FLIGHT_ORDER_STATES: readonly OrderState[] = ['pending', 'submitted'];
 
-/**
- * A lot adopted `filled`/`partially_filled` from broker truth whose
- * `filled_size` has not moved off zero — the shape
- * `wedged-zero-fill-sweep.ts` retires after `WEDGED_ZERO_FILL_ABANDON_AFTER_MS`
- * (execution/), and the shape `portfolio-view.ts` reserves against the entry
- * caps until one of that sweep or a real fill resolves it (#1568).
- *
- * Lives here for the same reason `IN_FLIGHT_ORDER_STATES` does — no single
- * module owns this shape. `wedged-zero-fill-sweep.ts`, `portfolio-view.ts`
- * and `ingest-fills.ts`'s `FILLED_WITH_ZERO_SIZE` warning gate (#1087) all
- * read this export (#1586, #1601). `abandonWedgedZeroFillLot`'s SQL UPDATE
- * guard (sqlite-shared-store.ts) restates the same shape and cannot import
- * this function — a SQL string is structurally independent no matter how
- * many TS call sites converge here (#1601).
- * `portfolio-view.ts`'s reservation is only safe because it shares a release
- * path with the sweep; that argument holds only while both read the SAME
- * check, so a second, independently written copy is exactly the
- * silent-disagreement failure mode this file's own doc names (#1586).
- */
 export function isWedgedZeroFillLot(
   position: Pick<OpenPosition, 'order_state' | 'filled_size'>,
 ): boolean {
@@ -94,14 +21,12 @@ export function isWedgedZeroFillLot(
   );
 }
 
-/** A lot still in flight whose key predates the #686 derivation */
 export interface StaleKeySchemeLot {
   idempotency_key: string;
   instrument: string;
   order_state: string;
 }
 
-/** Non-terminal lots still carrying a pre-#686 key, oldest first */
 export function findStaleKeySchemeLots(db: Database): StaleKeySchemeLot[] {
   const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
 
@@ -116,14 +41,6 @@ export function findStaleKeySchemeLots(db: Database): StaleKeySchemeLot[] {
     .all(...TERMINAL_ORDER_STATES) as StaleKeySchemeLot[];
 }
 
-/**
- * Throws when the store holds in-flight lots keyed under the old derivation.
- *
- * Called from the composition root BEFORE the tick loop is armed. A terminal
- * lot is harmless — nothing will ever replay a decision for it — so only
- * non-terminal rows block, which is what makes this a one-time drain rather
- * than a permanent obstacle.
- */
 export function assertNoStaleKeyScheme(db: Database): void {
   const stale = findStaleKeySchemeLots(db);
   if (stale.length === 0) return;

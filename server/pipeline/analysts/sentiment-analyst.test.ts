@@ -77,15 +77,10 @@ function buildInput(
     trace_id,
     signal,
     clock,
-    // #811: AnalystInput.bar is required — the claimed decision bar's
-    // open_time. ASOF stands in for it here, unchanged.
     bar: ASOF,
     market_intelligence: marketIntelligence,
     market_data: marketData,
-    // #746: sentiment never reads it, but AnalystInput.calendar is required
     calendar: new AlwaysOpenCalendar(),
-    // #790: AnalystInput.telemetry is required too; the no-op default is
-    // correct here since this analyst never reports through it
     telemetry: NOOP_ANALYST_TELEMETRY,
   };
 }
@@ -139,11 +134,6 @@ describe('sentimentAnalyst', () => {
   });
 
   it('marks an EMPTY intelligence window as absent input, not a neutral read (#436)', async () => {
-    // `MarketIntelligenceStore` has no writer in production, so this is what
-    // every real tick looks like today. The old text ("0 social items in
-    // window, net sentiment driving neutral") is indistinguishable in a debate
-    // transcript from "the analyst looked and saw nothing bullish" — and a
-    // 14-day soak's own output would read that way for two weeks
     const clock = new ManualClock(ASOF);
     const empty = new MarketIntelligenceStore(clock);
     const input = { ...buildInput(signal, 'trace-empty'), market_intelligence: empty };
@@ -152,9 +142,6 @@ describe('sentimentAnalyst', () => {
 
     expect(view.key_points[0]).toContain(NO_DATA_MARKER);
     expect(view.key_points[0]).toContain('ABSENCE OF INPUT');
-    // Still neutral and still low-confidence — the marker changes what the
-    // debate is TOLD, not the arithmetic. Pinned so a later change to one is
-    // not mistaken for a change to the other
     expect(view.direction).toBe('neutral');
     expect(view.confidence).toBe(0.05);
   });
@@ -247,12 +234,6 @@ describe('sentimentAnalyst', () => {
       expect(view.confidence).toBe(0.05);
     });
 
-    /**
-     * #960's MI-wide rule applies to sentiment the same way it applies to
-     * fundamental: an LSE-listed leveraged ETP's MI read targets the US
-     * underlying, not the traded `lse_ticker`. `3USL` -> `SPY` is a real row
-     * (`lse-etp-pool.ts`).
-     */
     it('resolves an LSE ETP instrument through screeningInstrumentFor to its US underlying before querying MI', async () => {
       const clock = new ManualClock(ASOF);
       const store = new MarketIntelligenceStore(clock);

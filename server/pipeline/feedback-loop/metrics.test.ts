@@ -61,15 +61,6 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
   };
 }
 
-/**
- * Deliberately NOT `Partial<MetricsInput>`. Under `exactOptionalPropertyTypes`
- * a `Partial` of an optional property rejects an explicitly-passed
- * `undefined`, but that is precisely how three tests below say "no
- * revalidation this cycle" — the default below supplies one, and the spread
- * has to be able to take it back out. Omitting the key instead would silently
- * leave `makeRevalidation()` in place and make those tests assert the
- * opposite of what they are named for.
- */
 type MetricsInputOverrides = Omit<Partial<MetricsInput>, 'revalidation'> & {
   revalidation?: MetricsInput['revalidation'] | undefined;
 };
@@ -84,11 +75,6 @@ function makeInput(overrides: MetricsInputOverrides = {}): {
   const adjustments = openAdjustmentLog();
   const alerts = new InMemoryBreachAlertChannel();
 
-  // Cast on the spread, not the fields: `exactOptionalPropertyTypes` rejects
-  // `{ ...base, ...overrides }` as a `MetricsInput` precisely because
-  // `overrides` may carry `revalidation: undefined` — which is the whole point
-  // of `MetricsInputOverrides` above. Everything before the spread is still
-  // type-checked against `MetricsInput`
   const input = {
     clock: makeClock(),
     daily: makeSuite(),
@@ -106,9 +92,6 @@ function makeInput(overrides: MetricsInputOverrides = {}): {
 
 describe('computeMetrics', () => {
   it('refuses to score a cycle against a softened kill line (#638)', () => {
-    // The boot check cannot cover this: `FeedbackConfig` is held for the life
-    // of the process, so the per-cycle check is what stops a verdict being
-    // REPORTED against a line that is not the recorded one
     const { input } = makeInput({
       config: makeConfig({
         kill_thresholds: {
@@ -247,7 +230,6 @@ describe('computeMetrics', () => {
 
     computeMetrics(input);
 
-    // Tightened by at most max_step, never crossing the floor
     expect(tuning.getRiskThresholds().max_position_size).toBeCloseTo(0.1);
   });
 
@@ -264,12 +246,6 @@ describe('computeMetrics', () => {
   });
 });
 
-/**
- * #327 — "did not breach" must never read as "was checked and passed". These
- * assert the RECORD, not a log line: a revalidation-less day and a broken
- * reference Sharpe both produce `breaches: []`, and the only thing that tells
- * them apart from a genuine all-clear is `not_evaluated`.
- */
 describe('computeMetrics — un-evaluated kill-lines (#327)', () => {
   it('reports nothing un-evaluated when all four lines actually ran', () => {
     const { input } = makeInput();
@@ -283,9 +259,7 @@ describe('computeMetrics — un-evaluated kill-lines (#327)', () => {
     const { input } = makeInput({ revalidation: undefined });
     const report = computeMetrics(input);
 
-    // The clean bill of health it would otherwise look like...
     expect(report.breaches).toEqual([]);
-    // ...is distinguishable only because of this
     expect(report.not_evaluated).toEqual([
       'pbo_over_max',
       'oos_sharpe_under_min',
@@ -308,7 +282,6 @@ describe('computeMetrics — un-evaluated kill-lines (#327)', () => {
     });
     const report = computeMetrics(input);
 
-    // The `0` return is deliberate and unchanged — visibility is the fix
     expect(report.breaches).toEqual([]);
     expect(report.not_evaluated).toEqual(['live_backtest_divergence_over_max']);
     expect(alerts.getAlerts()).toEqual([]);
