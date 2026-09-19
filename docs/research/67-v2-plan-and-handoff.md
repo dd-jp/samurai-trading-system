@@ -182,6 +182,7 @@ IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Sess
 | G14 | **Session A pre-answers.** Where is the paper DB archived? What happens to `server/shared/store/spec-schema-drift.test.ts` when its spec is deleted? | `~/samurai-archive/v1-final/samurai-paper.sqlite`, outside git; delete the test with the spec — migrations are the schema authority. | Step 0 |
 | G15 | **What is "crap"?** No tool by that name is configured (package.json, oxlint, biome, fallow, CI). | The CRAP score gate (complexity × coverage), ticket #1649 — build it and make it bind. | Step 0 |
 | G16 | **Macro event gate.** Should the debate sleeve skip or halve new entries on high-impact release days (FOMC, US CPI, NFP, BoE rate decisions, UK CPI)? Momentum rebalances weekly and is unaffected. | Yes for the debate sleeve only: no new entries on a high-impact day, exits unaffected; counted as a trial, measured against a no-gate shadow in paper. Source per R17. | Step 3 |
+| G17 | **Parked market-intelligence code.** v2 uses only daily bars + news (Q9); WorldMonitor, Polymarket, social sentiment and X are unused, so Step 5's reachability teardown would delete them. Keep them parked in the tree, or delete and rebuild later if needed? | Delete (git and the v1-final tag keep them); bring a source back only when the research loop shows it adds edge, as a counted trial. Their tickets stay parked, not closed. | Step 5 |
 
 ### R — research (facts, primary sources)
 
@@ -214,6 +215,7 @@ IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Sess
 - **Step 3:** G4, G5, G13, G16, R1, R2, R3, R5, R6, R7, R8, R10, R17.
 - **Paper start:** Step 4 + 4b, G12, R9, R16.
 - **Live:** G1 (debate sleeve), G7, R11, David's sign-off.
+- **Step 5 (Session F):** G17.
 - **Research loop:** G11.
 
 ## 6. Traps already hit (read before touching the repo)

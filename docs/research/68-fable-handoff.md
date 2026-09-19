@@ -3,7 +3,7 @@
 Paste-ready prompts for Fable (`claude-fable-5-1`), one session per prompt, each with its effort
 level. Authority for every session: `docs/research/66-v2-grill-decisions.md` (David's rulings)
 and `docs/research/67-v2-plan-and-handoff.md` (plan; §5a is the loose-ends register with stable
-IDs G1–G16 and R1–R17, each naming the one step it blocks). All on `main`.
+IDs G1–G17 and R1–R17, each naming the one step it blocks). All on `main`.
 
 **Before anything:** David fixes GitHub Actions billing — CI refuses to start any job until then,
 so no PR can show CI green.
@@ -82,7 +82,7 @@ Create the v2 wayfinder map as GitHub issues. First check for an existing open "
    so far" = doc 66's Q1–Q19 one line each, "Frontier" = the child tickets.
 2. Child tickets — exactly one per row of doc 67 §5a, using its ID in the title
    ("G4 — Debate universe", "R12 — UK tax on funds"):
-   - G1–G16 → label `wayfinder:grilling`. Body: question, options, the recommendation from the
+   - G1–G17 → label `wayfinder:grilling`. Body: question, options, the recommendation from the
      §5a table, and "Blocks: <step>".
    - R1–R3, R5–R17 → label `wayfinder:research`. Body: the exact questions, sources to use
      (primary: HMRC manuals, broker docs/terms, vendor/provider terms, academic papers for R5),
@@ -104,7 +104,7 @@ Create the v2 wayfinder map as GitHub issues. First check for an existing open "
 Report the map URL and a table (ID → issue number → blocks). Do not start working any ticket.
 
 EVAL (Session eval, doc 68): goal = the v2 map exists once and fully charts §5a. Pass = exactly
-one open "Samurai v2" map; exactly one ticket per G1–G16, R1–R3, R5–R17, X, Step 0/1/2/3/3c/4/4b/
+one open "Samurai v2" map; exactly one ticket per G1–G17, R1–R3, R5–R17, X, Step 0/1/2/3/3c/4/4b/
 5/6 and L, correctly labelled; each is a sub-issue of the map and on project #1 with Status Todo;
 every blocked_by edge matches doc 67 §5a's summary plus the X/Step 0 edges (evaluator re-reads
 each via the dependencies API); no ticket claimed or worked. Artifact: the report, no PR.
@@ -381,7 +381,7 @@ reads each drill record; no row marked pass on the author's word alone.
 ## Session F — Step 5: v1 teardown · effort **high**
 
 ```
-Read docs/research/67-v2-plan-and-handoff.md Step 5 and doc 66 Q11. Run fallow + graphify
+Read docs/research/67-v2-plan-and-handoff.md Step 5 and doc 66 Q11 and G17. Run fallow + graphify
 reachability from the v2 root, produce the deletion list and STOP for David's review. Then
 delete in per-area waves (one PR each), rename surviving v1-named modules, and do the client
 pass so the UI reads no deleted server field. Run `npm run check:live-gates` before deleting
