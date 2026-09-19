@@ -1,11 +1,10 @@
-import { existsSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
-import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
 import type { DebateRoundLogEntry, Direction } from '../pipeline/debate-engine/index.js';
 import { SqliteDebateLogStore } from '../pipeline/debate-engine/index.js';
-import { openSharedStore, resolveStoreMode, sharedStorePath } from '../shared/store/index.js';
+import { openSharedStore } from '../shared/store/index.js';
+import { parseWindowDays, resolveDbPathFromArgv } from './cli-args.js';
+import { isMainModule } from './cli-entrypoint.js';
 
-export const DEFAULT_WINDOW_DAYS = 30;
+export { assertDbPathExists, DEFAULT_WINDOW_DAYS, parseWindowDays } from './cli-args.js';
 
 export interface FlipRateReport {
   total_debates: number;
@@ -89,48 +88,10 @@ export function formatFlipRateReport(report: FlipRateReport, from: Date, to: Dat
   return lines.join('\n');
 }
 
-export function parseWindowDays(argv: readonly string[]): number {
-  const index = argv.indexOf('--days');
-  if (index === -1) return DEFAULT_WINDOW_DAYS;
-
-  const raw = argv[index + 1];
-  const days = Number(raw);
-  if (!Number.isFinite(days) || days <= 0) {
-    throw new Error(`--days must be a positive number of days, got ${JSON.stringify(raw)}.`);
-  }
-  return days;
-}
-
-export function assertDbPathExists(dbPath: string): void {
-  if (!existsSync(dbPath)) {
-    throw new Error(`--db ${dbPath} does not exist — refusing to create a new database file.`);
-  }
-}
-
-const invokedPath = process.argv[1];
-const isMain =
-  invokedPath !== undefined &&
-  import.meta.url ===
-    new URL(`file://${isAbsolute(invokedPath) ? invokedPath : resolve(invokedPath)}`).href;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const argv = process.argv.slice(2);
   const days = parseWindowDays(argv);
-  const explicitDbIndex = argv.indexOf('--db');
-  const explicitDbPath = explicitDbIndex === -1 ? undefined : argv[explicitDbIndex + 1];
-  if (explicitDbIndex !== -1 && explicitDbPath === undefined) {
-    throw new Error('--db requires a path argument.');
-  }
-
-  let dbPath: string;
-  if (explicitDbPath !== undefined) {
-    assertDbPathExists(explicitDbPath);
-    dbPath = explicitDbPath;
-  } else {
-    const mode = resolveStoreMode();
-    dbPath = sharedStorePath(mode);
-    assertStorePathMatchesMode({ dbPath, mode });
-  }
+  const dbPath = resolveDbPathFromArgv(argv);
   const db = openSharedStore(dbPath);
   const store = new SqliteDebateLogStore(db);
 

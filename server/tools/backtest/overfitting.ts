@@ -1,3 +1,4 @@
+import { combinations } from './combinatorics.js';
 import type { DateRange } from './universe.js';
 import type { MinBtlVerdict, PboVerdict } from './validation-types.js';
 
@@ -243,23 +244,6 @@ function at(values: readonly number[], index: number): number {
   }
 
   return value;
-}
-
-function combinations(n: number, choose: number): number[][] {
-  const result: number[][] = [];
-
-  const walk = (start: number, picked: number[]): void => {
-    if (picked.length === choose) {
-      result.push([...picked]);
-      return;
-    }
-    for (let index = start; index < n; index++) {
-      walk(index + 1, [...picked, index]);
-    }
-  };
-
-  walk(0, []);
-  return result;
 }
 
 function assertUsableMatrix(performance: readonly (readonly number[])[]): number {

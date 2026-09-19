@@ -3,6 +3,7 @@ import {
   describeThrownSafely,
   fetchWithTimeout,
   isServerErrorStatus,
+  nonEmpty,
   truncateForError,
   withRetry,
 } from '../../shared/index.js';
@@ -102,10 +103,7 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
   readonly #retry: RetryConfig;
 
   constructor(options: AlpacaCalendarClientOptions = {}) {
-    const fromEnv = (name: string): string | undefined => {
-      const value = process.env[name]?.trim();
-      return value === undefined || value.length === 0 ? undefined : value;
-    };
+    const fromEnv = (name: string): string | undefined => nonEmpty(process.env[name]);
     const apiKey = options.apiKey ?? fromEnv('ALPACA_API_KEY');
     const apiSecret = options.apiSecret ?? fromEnv('ALPACA_API_SECRET');
     if (apiKey === undefined || apiKey.length === 0) {

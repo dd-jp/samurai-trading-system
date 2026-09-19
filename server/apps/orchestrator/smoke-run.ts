@@ -368,6 +368,22 @@ export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Ba
   });
 }
 
+function buildSmokeClockAndDataSource() {
+  const clock = new SimulatedClock(SMOKE_RUN_INSTANT);
+  const profile = paperStartingProfile('paper');
+  const dataSource = new FixtureDataSource(
+    buildSmokeFixtureBars(),
+    { price: SMOKE_MARK_PRICE, observed_at: SMOKE_RUN_INSTANT, source: 'smoke-fixture' },
+    'crypto',
+    {
+      bid: SMOKE_MARK_PRICE - 0.5,
+      ask: SMOKE_MARK_PRICE + 0.5,
+      observed_at: SMOKE_RUN_INSTANT,
+    },
+  );
+  return { clock, profile, dataSource };
+}
+
 export const SMOKE_LLM_RESPONSE = JSON.stringify({
   stance: 'bullish',
   rationale: 'offline smoke fixture: uptrend intact, structure supports a long entry',
@@ -3615,18 +3631,7 @@ class SmokeLlmClient implements LlmClient {
 async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence> {
   const db = openSharedStore(':memory:');
   try {
-    const clock = new SimulatedClock(SMOKE_RUN_INSTANT);
-    const profile = paperStartingProfile('paper');
-    const dataSource = new FixtureDataSource(
-      buildSmokeFixtureBars(),
-      { price: SMOKE_MARK_PRICE, observed_at: SMOKE_RUN_INSTANT, source: 'smoke-fixture' },
-      'crypto',
-      {
-        bid: SMOKE_MARK_PRICE - 0.5,
-        ask: SMOKE_MARK_PRICE + 0.5,
-        observed_at: SMOKE_RUN_INSTANT,
-      },
-    );
+    const { clock, profile, dataSource } = buildSmokeClockAndDataSource();
 
     const components = buildProductionComponents({
       ...profile,
@@ -4476,18 +4481,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   const db = openSharedStore(':memory:');
 
   try {
-    const clock = new SimulatedClock(SMOKE_RUN_INSTANT);
-    const profile = paperStartingProfile('paper');
-    const dataSource = new FixtureDataSource(
-      buildSmokeFixtureBars(),
-      { price: SMOKE_MARK_PRICE, observed_at: SMOKE_RUN_INSTANT, source: 'smoke-fixture' },
-      'crypto',
-      {
-        bid: SMOKE_MARK_PRICE - 0.5,
-        ask: SMOKE_MARK_PRICE + 0.5,
-        observed_at: SMOKE_RUN_INSTANT,
-      },
-    );
+    const { clock, profile, dataSource } = buildSmokeClockAndDataSource();
 
     const marketDataForBroker = new MarketDataServiceImpl(
       dataSource,

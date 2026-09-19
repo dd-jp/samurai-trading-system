@@ -1,6 +1,6 @@
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
-import { logCaughtFailure, safeLog } from '../../shared/index.js';
+import { logFailureIfPresent, logIfPresent } from '../../shared/index.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
 import type { MarketIntelligenceStore } from './index.js';
@@ -66,8 +66,7 @@ export class GdeltScoringPass {
   constructor(private readonly deps: GdeltScoringPassDeps) {}
 
   private log(entry: LogEntry): void {
-    const logger = this.deps.logger;
-    if (logger !== undefined) safeLog(logger, entry);
+    logIfPresent(this.deps.logger, entry);
   }
 
   private logFailure(
@@ -75,8 +74,7 @@ export class GdeltScoringPass {
     error: unknown,
     payload: Record<string, unknown>,
   ): void {
-    const logger = this.deps.logger;
-    if (logger !== undefined) logCaughtFailure(logger, template, error, payload);
+    logFailureIfPresent(this.deps.logger, template, error, payload);
   }
 
   run(trace_id = 'gdelt-scoring'): void {

@@ -1,5 +1,5 @@
 import type { Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
-import { logCaughtFailure, safeLog } from '../../shared/index.js';
+import { logFailureIfPresent, logIfPresent } from '../../shared/index.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
 import {
@@ -27,8 +27,7 @@ export class GdeltIngestAgent {
   constructor(private readonly deps: GdeltIngestAgentDeps) {}
 
   private log(entry: LogEntry): void {
-    const logger = this.deps.logger;
-    if (logger !== undefined) safeLog(logger, entry);
+    logIfPresent(this.deps.logger, entry);
   }
 
   private logFailure(
@@ -36,8 +35,7 @@ export class GdeltIngestAgent {
     error: unknown,
     payload: Record<string, unknown>,
   ): void {
-    const logger = this.deps.logger;
-    if (logger !== undefined) logCaughtFailure(logger, template, error, payload);
+    logFailureIfPresent(this.deps.logger, template, error, payload);
   }
 
   private effectiveCursor(): Date | undefined {

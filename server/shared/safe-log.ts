@@ -25,6 +25,10 @@ export function safeLog(logger: Logger, entry: LogEntry): void {
   } catch {}
 }
 
+export function logIfPresent(logger: Logger | undefined, entry: LogEntry): void {
+  if (logger !== undefined) safeLog(logger, entry);
+}
+
 export type CaughtFailureLogTemplate = LogEntryTemplate;
 
 export function logCaughtFailure(
@@ -40,4 +44,13 @@ export function logCaughtFailure(
     errorText = '[unrenderable error]';
   }
   safeLog(logger, { ...template, payload: { ...extraPayload, error: errorText } });
+}
+
+export function logFailureIfPresent(
+  logger: Logger | undefined,
+  template: CaughtFailureLogTemplate,
+  error: unknown,
+  extraPayload?: Record<string, unknown>,
+): void {
+  if (logger !== undefined) logCaughtFailure(logger, template, error, extraPayload);
 }

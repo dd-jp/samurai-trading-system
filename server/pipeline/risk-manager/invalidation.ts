@@ -5,7 +5,7 @@ import {
   type IndicatorSpec,
   type MarketDataService,
 } from '../../providers/market-data-service/index.js';
-import type { OrderIntent } from '../../shared/index.js';
+import { isFiniteNumber, type OrderIntent } from '../../shared/index.js';
 import type {
   DroppedCondition,
   EvaluatedCondition,
@@ -85,10 +85,6 @@ function drop(
   reason: DroppedCondition['reason'],
 ): DroppedCondition {
   return { id, raw: bounded(raw), reason };
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
 }
 
 function isPositiveInteger(value: unknown): value is number {

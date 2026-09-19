@@ -1,5 +1,10 @@
 import type { RetryConfig, TokenBucket } from '../../../shared/index.js';
-import { fetchWithTimeout, truncateForError, withRetry } from '../../../shared/index.js';
+import {
+  fetchWithTimeout,
+  isFiniteNumber,
+  truncateForError,
+  withRetry,
+} from '../../../shared/index.js';
 import { isDailyTimeframe, timeframeToMs } from '../timeframe.js';
 import {
   AlpacaDataProviderError,
@@ -63,10 +68,6 @@ function toAlpacaBar(raw: RawAlpacaBar): AlpacaBar {
   return { t: raw.t, o: raw.o, h: raw.h, l: raw.l, c: raw.c, v: raw.v };
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
 function validateRawAlpacaBar(raw: unknown, symbol: string, context: string): RawAlpacaBar {
   if (typeof raw === 'object' && raw !== null) {
     const { t, o, h, l, c, v } = raw as Record<string, unknown>;
@@ -118,6 +119,19 @@ function requireBarsArray(value: unknown, symbol: string, context: string): unkn
     `AlpacaHttpDataClient: malformed bars array for ${symbol} (${context}): expected an array, ` +
       `got ${truncateForError(JSON.stringify(value))}`,
   );
+}
+
+function toBarsPage(
+  rawBars: unknown,
+  symbol: string,
+  nextPageTokenRaw: unknown,
+): { bars: AlpacaBar[]; nextPageToken: string | undefined } {
+  const bars: AlpacaBar[] = [];
+  for (const raw of requireBarsArray(rawBars, symbol, 'getBars')) {
+    bars.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
+  }
+  const nextPageToken = typeof nextPageTokenRaw === 'string' ? nextPageTokenRaw : undefined;
+  return { bars, nextPageToken };
 }
 
 export function toAlpacaTimeframe(timeframe: string): string {
@@ -266,13 +280,7 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
       'getBars',
     ) as CryptoBarsResponse;
     const rawBars = lookupCryptoKey(body.bars ?? undefined, alpacaSymbol, symbol);
-    const bars: AlpacaBar[] = [];
-    for (const raw of requireBarsArray(rawBars, symbol, 'getBars')) {
-      bars.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
-    }
-    const nextPageToken =
-      typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
-    return { bars, nextPageToken };
+    return toBarsPage(rawBars, symbol, body.next_page_token);
   }
 
   private async fetchStocksBarsPage(
@@ -289,13 +297,7 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
       ),
       'getBars',
     ) as StocksBarsResponse;
-    const bars: AlpacaBar[] = [];
-    for (const raw of requireBarsArray(body.bars, symbol, 'getBars')) {
-      bars.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
-    }
-    const nextPageToken =
-      typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
-    return { bars, nextPageToken };
+    return toBarsPage(body.bars, symbol, body.next_page_token);
   }
 
   private async fetchRange(

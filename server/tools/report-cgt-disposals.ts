@@ -1,4 +1,3 @@
-import { isAbsolute, resolve } from 'node:path';
 import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
 import {
   assertTaxYearIsSourced,
@@ -17,6 +16,7 @@ import {
   unconvertedCgtFillsInTaxYear,
 } from '../pipeline/cgt/index.js';
 import { resolveStoreMode, type StoreHandle, sharedStorePath } from '../shared/store/index.js';
+import { isMainModule } from './cli-entrypoint.js';
 
 function gbp(value: number): string {
   return value.toFixed(2);
@@ -150,13 +150,7 @@ export function formatCgtReport(
   return lines.join('\n');
 }
 
-const invokedPath = process.argv[1];
-const isMain =
-  invokedPath !== undefined &&
-  import.meta.url ===
-    new URL(`file://${isAbsolute(invokedPath) ? invokedPath : resolve(invokedPath)}`).href;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const startYear = parseTaxYearStartYear(process.argv.slice(2), new Date());
   const mode = resolveStoreMode();
   assertLiveMode(mode);

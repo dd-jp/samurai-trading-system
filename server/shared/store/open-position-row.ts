@@ -1,3 +1,5 @@
+import { isFiniteNumber } from '../is-finite-number.js';
+import { parseJsonColumnAsObject } from '../parse-json-column.js';
 import type { OpenPosition, OrderState } from '../types/records.js';
 import { fromStoredTimestamp } from './sqlite-utils.js';
 
@@ -34,21 +36,9 @@ export interface OpenPositionRow {
 
 export type ModelledCostBreakdown = NonNullable<OpenPosition['modelled_cost_breakdown']>;
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
 export function parseModelledCostBreakdownColumn(raw: string | null): ModelledCostBreakdown | null {
-  if (raw === null) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const parsed = parseJsonColumnAsObject(raw);
+  if (parsed === null) return null;
   if (
     !('spread_cost' in parsed) ||
     !('commission' in parsed) ||

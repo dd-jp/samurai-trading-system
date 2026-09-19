@@ -1,5 +1,5 @@
 import { timeframeToMs, toAlpacaTimeframe } from '../../providers/market-data-service/index.js';
-import { TokenBucket } from '../../shared/index.js';
+import { requireJsonObjectBody, TokenBucket } from '../../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
 
@@ -243,14 +243,11 @@ export class FreeStackAggregatesClient implements PolygonClient {
           `${response.statusText} for ${symbol}.`,
       );
     }
-    const parsed: unknown = await response.json();
-    if (typeof parsed !== 'object' || parsed === null) {
-      throw new Error(
-        `FreeStackAggregatesClient: malformed Alpaca response for ${symbol}: expected an ` +
-          `object, got ${truncateForError(JSON.stringify(parsed))}`,
-      );
-    }
-    const body = parsed as { bars?: Record<string, unknown>; next_page_token?: unknown };
+    const body = (await requireJsonObjectBody(
+      response,
+      'FreeStackAggregatesClient: malformed Alpaca response',
+      symbol,
+    )) as { bars?: Record<string, unknown>; next_page_token?: unknown };
     const bars = body.bars?.[symbol];
     if (bars !== undefined && !Array.isArray(bars)) {
       throw new Error(

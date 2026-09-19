@@ -7,8 +7,12 @@ import {
   toCivilDate,
   wallClockToInstant,
 } from '../../../providers/market-data-service/index.js';
-import type { Clock } from '../../../shared/index.js';
-import { describeThrownSafely, SystemClock } from '../../../shared/index.js';
+import type { Clock, InjectableTimers } from '../../../shared/index.js';
+import {
+  DEFAULT_INJECTABLE_TIMERS,
+  describeThrownSafely,
+  SystemClock,
+} from '../../../shared/index.js';
 import type { Logger } from '../types.js';
 
 export interface SaxoWeeklyReminderAlert {
@@ -21,17 +25,9 @@ export interface SaxoWeeklyReminderAlertChannel {
   postSaxoWeeklyReminderAlert(alert: SaxoWeeklyReminderAlert): Promise<void>;
 }
 
-export interface SaxoWeeklyReminderTimers {
-  set(callback: () => void, delayMs: number): unknown;
-  clear(handle: unknown): void;
-}
+export type SaxoWeeklyReminderTimers = InjectableTimers;
 
-const DEFAULT_TIMERS: SaxoWeeklyReminderTimers = {
-  set: (callback, delayMs) => setTimeout(callback, delayMs).unref(),
-  clear: (handle) => {
-    clearTimeout(handle as ReturnType<typeof setTimeout>);
-  },
-};
+const DEFAULT_TIMERS: SaxoWeeklyReminderTimers = DEFAULT_INJECTABLE_TIMERS;
 
 const SAXO_WEEKLY_REMINDER_LONDON_MINUTES = 18 * 60;
 

@@ -1,6 +1,6 @@
 import type { Bar } from '../providers/market-data-service/index.js';
 import { closeTimeOf, computeIndicator } from '../providers/market-data-service/index.js';
-import { TokenBucket } from '../shared/index.js';
+import { median, TokenBucket } from '../shared/index.js';
 import type { DateRange } from './backtest/index.js';
 import {
   DEFAULT_STAGE2_TIMEFRAME,
@@ -46,15 +46,6 @@ interface SymbolSpreadStats {
 interface SpreadCalibration {
   symbols: SymbolSpreadStats[];
   fitted: { stocks: number; crypto: number };
-}
-
-function median(xs: readonly number[]): number {
-  if (xs.length === 0) return Number.NaN;
-  const sorted = [...xs].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2
-    : (sorted[mid] as number);
 }
 
 function percentile(xs: readonly number[], p: number): number {
@@ -131,6 +122,15 @@ function spreadOf(quote: AlpacaQuote): number | undefined {
   return spread > 0 ? spread : undefined;
 }
 
+function medianSpreadAndMid(
+  page: readonly AlpacaQuote[],
+): { spread: number; mid: number; quoteCount: number } | undefined {
+  const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
+  if (spreads.length === 0) return undefined;
+  const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
+  return { spread: median(spreads), mid: median(mids), quoteCount: spreads.length };
+}
+
 function atrAt(bars: readonly Bar[], at: Date, timeframe: string): number | undefined {
   const upTo = bars.filter((bar) => bar.close_time.getTime() <= at.getTime());
   if (upTo.length < ATR_WINDOW + 1) return undefined;
@@ -192,16 +192,13 @@ async function sampleDateSpread(
     return undefined;
   }
 
-  const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
-  if (spreads.length === 0) return undefined;
-
-  const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
-  const daySpread = median(spreads);
-  const dayMid = median(mids);
+  const sample = medianSpreadAndMid(page);
+  if (sample === undefined) return undefined;
+  const { spread: daySpread, mid: dayMid, quoteCount } = sample;
 
   return {
     end,
-    quoteCount: spreads.length,
+    quoteCount,
     daySpread,
     dayBps: dayMid > 0 ? (daySpread / dayMid) * 10_000 : undefined,
   };
@@ -431,14 +428,12 @@ async function sampleBucketSpread(
     print(`  ${symbol} ${end.toISOString()}: ${String(error)}`);
     return undefined;
   }
-  const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
-  if (spreads.length === 0) return undefined;
-  const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
-  const spread = median(spreads);
-  const mid = median(mids);
+  const sample = medianSpreadAndMid(page);
+  if (sample === undefined) return undefined;
+  const { spread, mid, quoteCount } = sample;
   const atr = atrAt(minuteBars, end, INTRADAY_CALIBRATION_TIMEFRAME);
   return {
-    quoteCount: spreads.length,
+    quoteCount,
     bps: mid > 0 ? (spread / mid) * 10_000 : undefined,
     ratio: atr !== undefined ? spread / atr : undefined,
   };

@@ -76,6 +76,7 @@ export type {
   BrokerAck,
   BrokerAdapter,
   ExecutionConfig,
+  ExecutionInput,
   ExecutionResult,
   FlattenAttribution,
   FlattenSubmissionWriteAhead,
