@@ -18,8 +18,8 @@ Authority for every session: `docs/research/66-v2-grill-decisions.md` (rulings Q
 ```
 You are working on Samurai (repo: samurai-trading-system). Read, in order:
 docs/research/67-v2-plan-and-handoff.md, docs/research/66-v2-grill-decisions.md,
-docs/research/65-next-steps-plan.md, then docs/samurai-postmortem.md and
-docs/samurai-vision-v2.md from the MAIN checkout (they are untracked there).
+docs/research/65-next-steps-plan.md, docs/samurai-postmortem.md and
+docs/samurai-vision-v2.md (all on main).
 
 Do Step 0 of doc 67 exactly, on a new branch off fresh origin/main, as ONE PR:
 tag v1-final; archive the paper DB; delete all docs/specs/* and docs/adr/*; write
@@ -31,7 +31,7 @@ per Step 0 item 8; graphify update.
 Traps (doc 67 §6 and Step 0 item 7): do NOT edit applied SQL migrations; do NOT "fix" the
 path-citations test fixtures; spec-schema-drift.test.ts reads the store spec you are deleting.
 
-STOP and ask David before: committing his untracked docs (61-64, postmortem, vision); choosing
+STOP and ask David before: committing his untracked docs 61-64 if still untracked; choosing
 the paper-DB archive location; deciding what replaces spec-schema-drift.test.ts. Do not merge —
 open the PR and report. Verify locally: lint + typecheck + test + npm run smoke green.
 Reply to David in caveman-ultra style; normal prose in docs and commits.
@@ -78,6 +78,46 @@ open a PR, do not merge. If not a defect: report the evidence and STOP — David
 short-only vs veto-only for the debate sleeve. Caveman-ultra replies to David.
 ```
 
+## Session T — GitHub board triage against v2 · effort **high**
+
+Run after Session A merges (so the v2 ADR exists to cite), before Session D. Board snapshot
+2026-09-19: 819 items, 50 open (Todo 43, In Progress 3, In Review 4).
+
+```
+You are working on Samurai. Read docs/research/66-v2-grill-decisions.md,
+docs/research/67-v2-plan-and-handoff.md and docs/research/68-fable-handoff.md (this section).
+
+Triage every open item on project #1 (Todo, In Progress, In Review) against the v2 rulings.
+List them with `gh project item-list 1 --owner dd-jp --limit 1000 --format json` (always pass
+--limit 1000; the default silently truncates). Read each issue BODY and comments, not just the
+title — bodies go stale. For each, pick one:
+  close-obsolete  — v1-only (intraday/flatten, 3x ETPs, D5 £350/£250, T212, v1 soak/arms);
+                    comment citing the doc 66 ruling that obsoletes it, then close.
+  fold            — still needed; comment naming the v2 step (doc 67 Step N) it belongs to,
+                    relabel/retitle if its v1 framing is wrong.
+  keep            — tooling/quality David wants (lint, CRAP, fallow, telemetry).
+  defer           — touches code the v1 teardown (Step 5) may delete; comment and leave.
+  park            — MI/sentiment inputs not in v2 yet; label parked.
+
+Before closing ANY issue: grep server/ client/ contracts/ for "#<n>" and the issue URL — code
+cites some issues as live gates that must stay open. If cited, do not close; report it.
+Never write "Closes #n" or "closed #n" in any PR body. In Progress/In Review items with an open
+PR: report them to David rather than closing.
+
+First produce the full classification table and STOP for David's approval. Only after he
+approves, apply it. Caveman-ultra replies to David.
+```
+
+Preliminary buckets (from titles only — verify each against its body):
+
+| Bucket | Issues |
+|---|---|
+| close-obsolete | #238, #751, #895, #900, #1054, #1119, #1149, #1412, #1413, #1498, #1554, #1603, #1604, #1657 |
+| fold | #756 → Step 2; #750, #1515 → Step 1; #1400, #1302, #1215, #1426, #1581, #1438, #1444 → Steps 3/4; #1521 → tax log; #1516 → gate band; #1387 |
+| keep | #1648, #1649, #1677, #1082, #1427, #1675 |
+| defer | #1652, #1654, #1656, #1658, #1659, #1660, #1661, #1662, #1663, #1665 |
+| park | #688, #689, #1042, #1085, #928, #1685, #1686 |
+
 ## Later sessions (not ready yet)
 
 | Session | Step | Effort | Blocked on |
@@ -95,4 +135,4 @@ stop at any kill line or open question and ask David."*
 - Fix GitHub Actions billing.
 - Rule on the Python research sidecar (doc 66 "Still open").
 - Open the live Alpaca account, apply for margin (debate-sleeve shorts), W-8BEN, one GBP→USD transfer.
-- Decide on committing docs 61–64, the postmortem and vision-v2.
+- Decide on committing docs 61–64 (untracked in the local main checkout only; the postmortem and vision-v2 are already on main).
