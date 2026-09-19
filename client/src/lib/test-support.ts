@@ -41,18 +41,21 @@ export interface LaneSpec {
   total_ms?: number | null;
 }
 
+function cellFields(cell: CellSpec | undefined): Omit<PipelineCell, 'stage'> {
+  return {
+    state: cell?.state ?? 'not_reached',
+    duration_ms: cell?.duration_ms ?? null,
+    decision: cell?.decision ?? null,
+    recorded_at: cell?.recorded_at ?? null,
+    attempts: cell?.attempts ?? (cell ? 1 : 0),
+  };
+}
+
 export function makeLane(spec: LaneSpec): PipelineLane {
-  const cells: PipelineCell[] = STAGES.map((stage) => {
-    const cell = spec.cells?.[stage];
-    return {
-      stage,
-      state: cell?.state ?? 'not_reached',
-      duration_ms: cell?.duration_ms ?? null,
-      decision: cell?.decision ?? null,
-      recorded_at: cell?.recorded_at ?? null,
-      attempts: cell?.attempts ?? (cell ? 1 : 0),
-    };
-  });
+  const cells: PipelineCell[] = STAGES.map((stage) => ({
+    stage,
+    ...cellFields(spec.cells?.[stage]),
+  }));
   return {
     instrument: spec.instrument,
     asset_class: spec.asset_class ?? 'crypto',

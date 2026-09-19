@@ -120,6 +120,26 @@ function ModeBlock({ snapshot }: { snapshot: WireSnapshot }) {
   );
 }
 
+function liveTickTraceId(snapshot: WireSnapshot): string | null {
+  return snapshot.tick_status?.trace_id ?? snapshot.pipeline.live_trace_id ?? null;
+}
+
+function liveTickMain(snapshot: WireSnapshot): { className: string; text: string } {
+  const tick = snapshot.tick_status ?? null;
+  if (tick !== null) {
+    const enteredAt = snapshot.pipeline.live_entered_at ?? null;
+    const since = enteredAt !== null ? ` · since ${formatClockUtc(enteredAt)}` : '';
+    return { className: 'rail-value mono', text: `${tick.instrument} · ${tick.stage}${since}` };
+  }
+  if (liveTickTraceId(snapshot) !== null) {
+    return {
+      className: 'rail-value',
+      text: 'live — a trace is running, but this snapshot carries no tick detail',
+    };
+  }
+  return { className: 'rail-value muted', text: 'idle — no tick in progress' };
+}
+
 function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot }) {
   if (snapshot.arm === 'control') {
     return (
@@ -129,24 +149,12 @@ function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot }) {
       </div>
     );
   }
-  const tick = snapshot.tick_status ?? null;
-  const enteredAt = snapshot.pipeline.live_entered_at ?? null;
-  const traceId = tick?.trace_id ?? snapshot.pipeline.live_trace_id ?? null;
+  const traceId = liveTickTraceId(snapshot);
+  const main = liveTickMain(snapshot);
   return (
     <div className="rail-block" data-field="live-tick">
       <span className="label">Live tick</span>
-      {tick !== null ? (
-        <span className="rail-value mono">
-          {tick.instrument} · {tick.stage}
-          {enteredAt !== null ? ` · since ${formatClockUtc(enteredAt)}` : ''}
-        </span>
-      ) : traceId !== null ? (
-        <span className="rail-value">
-          live — a trace is running, but this snapshot carries no tick detail
-        </span>
-      ) : (
-        <span className="rail-value muted">idle — no tick in progress</span>
-      )}
+      <span className={main.className}>{main.text}</span>
       <span className="rail-note mono">{traceId === null ? 'no live trace' : traceId}</span>
     </div>
   );
@@ -310,18 +318,40 @@ function spendFootnoteNote(input: {
   return `${overPrefix}${base}${unattributedSuffix}${armedSuffix}`;
 }
 
-function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
+interface SpendMeterInputs {
+  spent: number | undefined;
+  capForMeter: number | null;
+  armedAt: string | null | undefined;
+  reason: CapReason;
+  unpriced: number;
+  unattributed: number;
+  windows: WireSnapshot['llm_spend'];
+  zeroCapBreached: boolean;
+}
+
+function spendMeterInputs(snapshot: WireSnapshot): SpendMeterInputs {
   const allTime = snapshot.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
-  const capForMeter = cap ?? null;
   const armedAt = capArmedAtOf(snapshot);
   const spendKnown = spent !== undefined && Number.isFinite(spent);
   const reason = capReasonOf(spendKnown, cap, armedAt);
-  const unpriced = allTime?.unpriced_calls ?? 0;
-  const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
-  const windows = snapshot.llm_spend;
   const zeroCapBreached = reason === 'zero' && spendKnown && (spent ?? 0) > 0;
+  return {
+    spent,
+    capForMeter: cap ?? null,
+    armedAt,
+    reason,
+    unpriced: allTime?.unpriced_calls ?? 0,
+    unattributed: allTime?.per_debate.unattributed_calls ?? 0,
+    windows: snapshot.llm_spend,
+    zeroCapBreached,
+  };
+}
+
+function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  const { spent, capForMeter, armedAt, reason, unpriced, unattributed, windows, zeroCapBreached } =
+    spendMeterInputs(snapshot);
   return (
     <CapMeter
       dataField="llm-cap"
@@ -390,13 +420,18 @@ function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire }) {
   );
 }
 
+const TAB_KEY_DELTA: Readonly<Record<string, number>> = {
+  ArrowDown: 1,
+  ArrowUp: -1,
+};
+
 function tabForKey(key: string, current: Tab): Tab | null {
-  const index = TABS.findIndex((entry) => entry.id === current);
-  if (key === 'ArrowDown') return TABS[(index + 1) % TABS.length]?.id ?? null;
-  if (key === 'ArrowUp') return TABS[(index - 1 + TABS.length) % TABS.length]?.id ?? null;
   if (key === 'Home') return TABS[0]?.id ?? null;
   if (key === 'End') return TABS[TABS.length - 1]?.id ?? null;
-  return null;
+  const delta = TAB_KEY_DELTA[key];
+  if (delta === undefined) return null;
+  const index = TABS.findIndex((entry) => entry.id === current);
+  return TABS[(index + delta + TABS.length) % TABS.length]?.id ?? null;
 }
 
 export function Rail(props: RailProps) {
