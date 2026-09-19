@@ -5,6 +5,8 @@ import { analystsSkipDecisionWord } from './analysts-decision.js';
 import { debateDecisionWord, isDegradedDecision } from './debate-decision.js';
 import type { TickContext, TickOutcome, TickRunner, TickStage, TickSteps } from './types.js';
 
+type StageTimer = { wallMs: number; perfMs: number };
+
 export class SequentialTickRunner implements TickRunner {
   readonly #lastAdvisory = new Map<string, string>();
 
@@ -15,152 +17,32 @@ export class SequentialTickRunner implements TickRunner {
   }
 
   async #runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome> {
-    const { trace_id, clock, logger, auditLog, currentTickStore } = ctx;
+    const { trace_id, clock, logger, currentTickStore } = ctx;
     const instrument = signal.asset;
-
-    const startStageTimer = () => ({ wallMs: Date.now(), perfMs: performance.now() });
-
-    const recordLevel = (
-      stage: TickStage,
-      decision: string,
-    ): 'debug' | 'info' | 'warn' | 'error' => {
-      if (stage === 'execution' && decision === 'error') {
-        return 'error';
-      }
-      if (stage === 'position_check' && decision === 'no_exit_due') {
-        return 'debug';
-      }
-      return isDegradedDecision(decision) ? 'warn' : 'info';
-    };
-
-    const record = (
-      stage: TickStage,
-      decision: string,
-      input: unknown,
-      output: unknown,
-      startedAt: { wallMs: number; perfMs: number },
-    ) => {
-      const duration_ms = performance.now() - startedAt.perfMs;
-      logger.log({
-        trace_id,
-        stage,
-        event: 'stage_decision',
-        level: recordLevel(stage, decision),
-        message: `${stage}: ${decision}`,
-        payload: output,
-        started_at: new Date(startedAt.wallMs).toISOString(),
-        duration_ms,
-      });
-      auditLog.record({
-        trace_id,
-        stage,
-        decision,
-        input_digest: digest(input),
-        output_digest: digest(output),
-        timestamp: clock.now(),
-        instrument,
-        asset_class: signal.asset_class,
-      });
-    };
-
-    const markStage = (stage: TickStage) => {
-      currentTickStore.upsert({
-        instrument,
-        asset_class: signal.asset_class,
-        stage,
-        trace_id,
-        updated_at: clock.now(),
-      });
-    };
-
-    const runIntentTail = async (
-      intent: OrderIntent,
-      extras: Pick<TickOutcome, 'early_exit_fired' | 'flatten_fired'>,
-    ): Promise<TickOutcome> => {
-      markStage('risk');
-      const riskInput = { trace_id, intent, clock };
-      const riskTimer = startStageTimer();
-      const riskDecision = await this.steps.risk(riskInput);
-      record('risk', riskDecision.status, riskInput, riskDecision, riskTimer);
-      this.reportAdvisoryWarnings(instrument, riskDecision.warnings, ctx);
-      if (riskDecision.status === 'rejected') {
-        currentTickStore.delete(instrument);
-        return { trace_id, final_stage: 'risk', ...extras };
-      }
-
-      markStage('verdict');
-      const verdictInput = { trace_id, risk_decision: riskDecision, clock };
-      const verdictTimer = startStageTimer();
-      const verdict = await this.steps.verdict(verdictInput);
-      record('verdict', verdict.status, verdictInput, verdict, verdictTimer);
-      if (verdict.status !== 'go') {
-        currentTickStore.delete(instrument);
-        return { trace_id, final_stage: 'verdict', verdict_status: 'no_go', ...extras };
-      }
-
-      markStage('execution');
-      const executionTimer = startStageTimer();
-      const executionResult = await this.steps.execution(verdict);
-      record('execution', executionResult.status, verdict, executionResult, executionTimer);
-
-      currentTickStore.delete(instrument);
-      return {
-        trace_id,
-        final_stage: 'execution',
-        verdict_status: 'go',
-        execution_result: executionResult,
-        ...extras,
-      };
-    };
-
-    const runExitCheckPass = async (bar: Date): Promise<TickOutcome> => {
-      markStage('position_check');
-      const exitInput = { trace_id, instrument, bar, clock };
-      const exitCheckTimer = startStageTimer();
-      const exitIntent = await this.steps.exitCheck(exitInput);
-      record(
-        'position_check',
-        exitIntent === null ? 'no_exit_due' : (exitIntent.metadata.exit_reason ?? 'exit'),
-        exitInput,
-        exitIntent,
-        exitCheckTimer,
-      );
-      if (exitIntent === null) {
-        currentTickStore.delete(instrument);
-        return { trace_id, final_stage: 'position_check' };
-      }
-      await ctx.beginPortfolioTail?.();
-      return runIntentTail(
-        exitIntent,
-        exitIntent.metadata.exit_reason === 'signal_decay'
-          ? { early_exit_fired: true }
-          : { flatten_fired: true },
-      );
-    };
 
     const decisionBar = ctx.decision_bar;
     if (decisionBar === undefined) {
       await this.steps.controlArm?.({ signal, ctx });
-      return runExitCheckPass(floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS));
+      return this.runExitCheckPass(signal, ctx, floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS));
     }
 
-    markStage('analysts');
+    this.markStage(signal, ctx, 'analysts');
     const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
-    const analystsTimer = startStageTimer();
+    const analystsTimer = this.startStageTimer();
     const views = await this.steps.analysts(analystsInput);
     const analystsDecision =
       views.length === 0
         ? analystsSkipDecisionWord(this.steps.analystSkipKind?.(trace_id))
         : 'quorum_met';
-    record('analysts', analystsDecision, analystsInput, views, analystsTimer);
+    this.record(signal, ctx, 'analysts', analystsDecision, analystsInput, views, analystsTimer);
 
     await this.steps.controlArm?.({ signal, ctx, views });
 
     if (views.length === 0) {
-      return runExitCheckPass(decisionBar.open_time);
+      return this.runExitCheckPass(signal, ctx, decisionBar.open_time);
     }
 
-    markStage('debate');
+    this.markStage(signal, ctx, 'debate');
     const debateInput = {
       trace_id,
       instrument,
@@ -169,9 +51,17 @@ export class SequentialTickRunner implements TickRunner {
       clock,
       bar: decisionBar.open_time,
     };
-    const debateTimer = startStageTimer();
+    const debateTimer = this.startStageTimer();
     const debate = await this.steps.debate(debateInput);
-    record('debate', debateDecisionWord(debate), debateInput, debate, debateTimer);
+    this.record(
+      signal,
+      ctx,
+      'debate',
+      debateDecisionWord(debate),
+      debateInput,
+      debate,
+      debateTimer,
+    );
 
     if (debate.bar_timestamp.getTime() !== decisionBar.open_time.getTime()) {
       logger.log({
@@ -196,11 +86,13 @@ export class SequentialTickRunner implements TickRunner {
 
     await ctx.beginPortfolioTail?.();
 
-    markStage('trader');
+    this.markStage(signal, ctx, 'trader');
     const traderInput = { trace_id, instrument, debate, clock };
-    const traderTimer = startStageTimer();
+    const traderTimer = this.startStageTimer();
     const intent = await this.steps.trader(traderInput);
-    record(
+    this.record(
+      signal,
+      ctx,
       'trader',
       intent === null ? 'no_trade' : intent.intent_type,
       traderInput,
@@ -212,7 +104,153 @@ export class SequentialTickRunner implements TickRunner {
       return { trace_id, final_stage: 'trader' };
     }
 
-    return runIntentTail(intent, {});
+    return this.runIntentTail(signal, ctx, intent, {});
+  }
+
+  private startStageTimer(): StageTimer {
+    return { wallMs: Date.now(), perfMs: performance.now() };
+  }
+
+  private recordLevel(stage: TickStage, decision: string): 'debug' | 'info' | 'warn' | 'error' {
+    if (stage === 'execution' && decision === 'error') {
+      return 'error';
+    }
+    if (stage === 'position_check' && decision === 'no_exit_due') {
+      return 'debug';
+    }
+    return isDegradedDecision(decision) ? 'warn' : 'info';
+  }
+
+  private record(
+    signal: Signal,
+    ctx: TickContext,
+    stage: TickStage,
+    decision: string,
+    input: unknown,
+    output: unknown,
+    startedAt: StageTimer,
+  ): void {
+    const { trace_id, clock, logger, auditLog } = ctx;
+    const duration_ms = performance.now() - startedAt.perfMs;
+    logger.log({
+      trace_id,
+      stage,
+      event: 'stage_decision',
+      level: this.recordLevel(stage, decision),
+      message: `${stage}: ${decision}`,
+      payload: output,
+      started_at: new Date(startedAt.wallMs).toISOString(),
+      duration_ms,
+    });
+    auditLog.record({
+      trace_id,
+      stage,
+      decision,
+      input_digest: digest(input),
+      output_digest: digest(output),
+      timestamp: clock.now(),
+      instrument: signal.asset,
+      asset_class: signal.asset_class,
+    });
+  }
+
+  private markStage(signal: Signal, ctx: TickContext, stage: TickStage): void {
+    ctx.currentTickStore.upsert({
+      instrument: signal.asset,
+      asset_class: signal.asset_class,
+      stage,
+      trace_id: ctx.trace_id,
+      updated_at: ctx.clock.now(),
+    });
+  }
+
+  private async runIntentTail(
+    signal: Signal,
+    ctx: TickContext,
+    intent: OrderIntent,
+    extras: Pick<TickOutcome, 'early_exit_fired' | 'flatten_fired'>,
+  ): Promise<TickOutcome> {
+    const { trace_id, clock, currentTickStore } = ctx;
+    const instrument = signal.asset;
+
+    this.markStage(signal, ctx, 'risk');
+    const riskInput = { trace_id, intent, clock };
+    const riskTimer = this.startStageTimer();
+    const riskDecision = await this.steps.risk(riskInput);
+    this.record(signal, ctx, 'risk', riskDecision.status, riskInput, riskDecision, riskTimer);
+    this.reportAdvisoryWarnings(instrument, riskDecision.warnings, ctx);
+    if (riskDecision.status === 'rejected') {
+      currentTickStore.delete(instrument);
+      return { trace_id, final_stage: 'risk', ...extras };
+    }
+
+    this.markStage(signal, ctx, 'verdict');
+    const verdictInput = { trace_id, risk_decision: riskDecision, clock };
+    const verdictTimer = this.startStageTimer();
+    const verdict = await this.steps.verdict(verdictInput);
+    this.record(signal, ctx, 'verdict', verdict.status, verdictInput, verdict, verdictTimer);
+    if (verdict.status !== 'go') {
+      currentTickStore.delete(instrument);
+      return { trace_id, final_stage: 'verdict', verdict_status: 'no_go', ...extras };
+    }
+
+    this.markStage(signal, ctx, 'execution');
+    const executionTimer = this.startStageTimer();
+    const executionResult = await this.steps.execution(verdict);
+    this.record(
+      signal,
+      ctx,
+      'execution',
+      executionResult.status,
+      verdict,
+      executionResult,
+      executionTimer,
+    );
+
+    currentTickStore.delete(instrument);
+    return {
+      trace_id,
+      final_stage: 'execution',
+      verdict_status: 'go',
+      execution_result: executionResult,
+      ...extras,
+    };
+  }
+
+  private async runExitCheckPass(
+    signal: Signal,
+    ctx: TickContext,
+    bar: Date,
+  ): Promise<TickOutcome> {
+    const { trace_id, clock, currentTickStore } = ctx;
+    const instrument = signal.asset;
+
+    this.markStage(signal, ctx, 'position_check');
+    const exitInput = { trace_id, instrument, bar, clock };
+    const exitCheckTimer = this.startStageTimer();
+    const exitIntent = await this.steps.exitCheck(exitInput);
+    this.record(
+      signal,
+      ctx,
+      'position_check',
+      exitIntent === null ? 'no_exit_due' : (exitIntent.metadata.exit_reason ?? 'exit'),
+      exitInput,
+      exitIntent,
+      exitCheckTimer,
+    );
+    if (exitIntent === null) {
+      currentTickStore.delete(instrument);
+      return { trace_id, final_stage: 'position_check' };
+    }
+    await ctx.beginPortfolioTail?.();
+    return this.runIntentTail(
+      signal,
+      ctx,
+      exitIntent,
+      exitIntent.metadata.exit_reason === 'signal_decay'
+        ? { early_exit_fired: true }
+        : { flatten_fired: true },
+    );
   }
 
   private reportAdvisoryWarnings(instrument: string, warnings: string[], ctx: TickContext): void {

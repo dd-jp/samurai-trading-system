@@ -17,6 +17,7 @@ import {
   type StoreHandle,
   sharedStorePath,
 } from '../../shared/store/index.js';
+import type { AlertPort, LoggedAlertId } from './alert-catalogue.js';
 import { loggingAlertChannel } from './alert-catalogue.js';
 import {
   type AlertsMode,
@@ -415,16 +416,27 @@ function buildSaxoSessionWiring(deps: {
     ? new SaxoWeeklyReminder({
         environment: 'sim',
         tokenPath: tokenFilePath('sim'),
-        channel:
-          injected.saxoWeeklyReminderAlerts ??
-          alertChannels.saxoWeeklyReminderAlerts ??
-          loggingAlertChannel('saxoWeeklyReminderAlerts', logger),
+        channel: resolveAlertChannel(
+          'saxoWeeklyReminderAlerts',
+          injected.saxoWeeklyReminderAlerts,
+          alertChannels.saxoWeeklyReminderAlerts,
+          logger,
+        ),
         logger,
         clock,
       })
     : undefined;
 
   return { saxoTokenSource, saxoWeeklyReminder, saxoClient };
+}
+
+function resolveAlertChannel<K extends LoggedAlertId>(
+  id: K,
+  injected: AlertPort<K> | undefined,
+  fromAlertChannels: AlertPort<K> | undefined,
+  logger: Logger,
+): AlertPort<K> {
+  return injected ?? fromAlertChannels ?? loggingAlertChannel(id, logger);
 }
 
 async function buildSaxoBrokerIfNeeded(deps: {
@@ -459,18 +471,24 @@ async function buildSaxoBrokerIfNeeded(deps: {
     db,
     logger,
     clock,
-    legResizeAlerts:
-      injected.legResizeAlerts ??
-      alertChannels.legResizeAlerts ??
-      loggingAlertChannel('legResizeAlerts', logger),
-    dormantLegsAlerts:
-      injected.dormantLegsAlerts ??
-      alertChannels.dormantLegsAlerts ??
-      loggingAlertChannel('dormantLegsAlerts', logger),
-    priceUnitAlerts:
-      injected.priceUnitAlerts ??
-      alertChannels.priceUnitAlerts ??
-      loggingAlertChannel('priceUnitAlerts', logger),
+    legResizeAlerts: resolveAlertChannel(
+      'legResizeAlerts',
+      injected.legResizeAlerts,
+      alertChannels.legResizeAlerts,
+      logger,
+    ),
+    dormantLegsAlerts: resolveAlertChannel(
+      'dormantLegsAlerts',
+      injected.dormantLegsAlerts,
+      alertChannels.dormantLegsAlerts,
+      logger,
+    ),
+    priceUnitAlerts: resolveAlertChannel(
+      'priceUnitAlerts',
+      injected.priceUnitAlerts,
+      alertChannels.priceUnitAlerts,
+      logger,
+    ),
     ...(saxoWireClient === undefined ? {} : { client: saxoWireClient }),
   });
 }

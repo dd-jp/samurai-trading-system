@@ -246,21 +246,44 @@ function resolveSweepOptions(options: LogRetentionOptions): ResolvedSweepOptions
   };
 }
 
-function sweepOneEntry(
-  entry: Dirent,
+interface SweepEntryCtx {
+  root: string;
+  keepSet: ReadonlySet<string>;
+  protectedSet: ReadonlySet<string>;
+  truncateNameSet: ReadonlySet<string>;
+  bareTruncateBytes: number | undefined;
+  liveIdentities: readonly FileIdentity[];
+  cutoff: number;
+  remove: (path: string) => void;
+  truncate: (path: string) => void;
+}
+
+function sweepArchivedLogEntry(path: string, result: LogRetentionResult, ctx: SweepEntryCtx): void {
+  const stat = safeStat(path);
+  if (stat === undefined) return;
+  const outcome = tryRemoveArchivedLogEntry(path, stat, ctx.liveIdentities, ctx.cutoff, ctx.remove);
+  if (outcome.removed) {
+    result.filesRemoved += 1;
+    result.bytesReclaimed += outcome.bytesReclaimed;
+  }
+}
+
+function sweepBareLogEntry(
+  path: string,
+  bareTruncateBytes: number,
   result: LogRetentionResult,
-  ctx: {
-    root: string;
-    keepSet: ReadonlySet<string>;
-    protectedSet: ReadonlySet<string>;
-    truncateNameSet: ReadonlySet<string>;
-    bareTruncateBytes: number | undefined;
-    liveIdentities: readonly FileIdentity[];
-    cutoff: number;
-    remove: (path: string) => void;
-    truncate: (path: string) => void;
-  },
+  ctx: SweepEntryCtx,
 ): void {
+  const stat = safeStat(path);
+  if (stat === undefined) return;
+  const outcome = tryTruncateBareLogEntry(path, stat, bareTruncateBytes, ctx.truncate);
+  if (outcome.truncated) {
+    result.filesTruncated += 1;
+    result.bytesReclaimed += outcome.bytesReclaimed;
+  }
+}
+
+function sweepOneEntry(entry: Dirent, result: LogRetentionResult, ctx: SweepEntryCtx): void {
   if (!entry.isFile()) return;
   if (ctx.keepSet.has(entry.name)) return;
 
@@ -268,19 +291,7 @@ function sweepOneEntry(
   if (ctx.protectedSet.has(resolve(path))) return;
 
   if (isArchivedLogName(entry.name)) {
-    const stat = safeStat(path);
-    if (stat === undefined) return;
-    const outcome = tryRemoveArchivedLogEntry(
-      path,
-      stat,
-      ctx.liveIdentities,
-      ctx.cutoff,
-      ctx.remove,
-    );
-    if (outcome.removed) {
-      result.filesRemoved += 1;
-      result.bytesReclaimed += outcome.bytesReclaimed;
-    }
+    sweepArchivedLogEntry(path, result, ctx);
     return;
   }
 
@@ -291,13 +302,7 @@ function sweepOneEntry(
     return;
   }
 
-  const stat = safeStat(path);
-  if (stat === undefined) return;
-  const outcome = tryTruncateBareLogEntry(path, stat, ctx.bareTruncateBytes, ctx.truncate);
-  if (outcome.truncated) {
-    result.filesTruncated += 1;
-    result.bytesReclaimed += outcome.bytesReclaimed;
-  }
+  sweepBareLogEntry(path, ctx.bareTruncateBytes, result, ctx);
 }
 
 export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult {

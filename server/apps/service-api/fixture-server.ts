@@ -7,6 +7,10 @@ import type { ProviderStatusPanel, ProviderStatusReader } from './provider-statu
 import { createDashboardServer } from './server.js';
 import type { VerdictAuditEntry } from './types.js';
 
+function isValidPort(port: number): boolean {
+  return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
+
 function resolvePort(): number {
   const raw = process.env.PORT;
   if (raw === undefined || raw === '') {
@@ -16,7 +20,7 @@ function resolvePort(): number {
     );
   }
   const port = Number(raw);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (!isValidPort(port)) {
     throw new Error(
       `fixture server refuses PORT="${raw}": it must be an integer in 1-65535 (0 would bind an ephemeral port the harness URL could never reach)`,
     );

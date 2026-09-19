@@ -102,6 +102,80 @@ function chooseTracePerInstrument(activity: PipelineActivity): Map<string, LaneT
   return byInstrument;
 }
 
+interface StageTimings {
+  durationByStage: Map<PipelineStage, number>;
+  attemptsByStage: Map<PipelineStage, number>;
+  decisionByStage: Map<PipelineStage, string>;
+  recordedAtByStage: Map<PipelineStage, Date>;
+  total_ms: number;
+}
+
+function accumulateStageTimings(events: PipelineStageEvent[]): StageTimings {
+  const durationByStage = new Map<PipelineStage, number>();
+  const attemptsByStage = new Map<PipelineStage, number>();
+  const decisionByStage = new Map<PipelineStage, string>();
+  const recordedAtByStage = new Map<PipelineStage, Date>();
+  let total_ms = 0;
+
+  events.forEach((event, index) => {
+    attemptsByStage.set(event.stage, (attemptsByStage.get(event.stage) ?? 0) + 1);
+    decisionByStage.set(event.stage, event.decision);
+    recordedAtByStage.set(event.stage, event.timestamp);
+    const next = events[index + 1];
+    if (next === undefined) {
+      return;
+    }
+    const gap = next.timestamp.getTime() - event.timestamp.getTime();
+    durationByStage.set(event.stage, (durationByStage.get(event.stage) ?? 0) + gap);
+    total_ms += gap;
+  });
+
+  return { durationByStage, attemptsByStage, decisionByStage, recordedAtByStage, total_ms };
+}
+
+function buildLaneCell(
+  stage: PipelineStage,
+  index: number,
+  timings: StageTimings,
+  reachedIndex: number,
+  live: PipelineLiveTick | null,
+  finalStage: PipelineStage | null,
+): PipelineCell {
+  const attempts = timings.attemptsByStage.get(stage) ?? 0;
+  const state = cellState({ stage, index, attempts, reachedIndex, live, finalStage });
+  return {
+    stage,
+    state,
+    duration_ms: state === 'live' ? null : (timings.durationByStage.get(stage) ?? null),
+    decision: timings.decisionByStage.get(stage) ?? null,
+    recorded_at:
+      state === 'live' ? null : (timings.recordedAtByStage.get(stage)?.toISOString() ?? null),
+    attempts,
+  };
+}
+
+function laneStartedAt(events: PipelineStageEvent[], live: PipelineLiveTick | null): string | null {
+  return (events[0]?.timestamp ?? live?.entered_at)?.toISOString() ?? null;
+}
+
+function computeReachedIndex(events: PipelineStageEvent[], live: PipelineLiveTick | null): number {
+  return Math.max(
+    ...events.map((event) => PIPELINE_STAGES.indexOf(event.stage)),
+    live === null ? -1 : PIPELINE_STAGES.indexOf(live.stage),
+  );
+}
+
+function buildLaneCells(
+  timings: StageTimings,
+  reachedIndex: number,
+  live: PipelineLiveTick | null,
+  finalStage: PipelineStage | null,
+): PipelineCell[] {
+  return PIPELINE_STAGES.map<PipelineCell>((stage, index) =>
+    buildLaneCell(stage, index, timings, reachedIndex, live, finalStage),
+  );
+}
+
 function buildLane(
   instrument: string,
   asset_class: PipelineLane['asset_class'],
@@ -122,43 +196,10 @@ function buildLane(
   }
 
   const { events, live } = trace;
-  const durationByStage = new Map<PipelineStage, number>();
-  const attemptsByStage = new Map<PipelineStage, number>();
-  const decisionByStage = new Map<PipelineStage, string>();
-  const recordedAtByStage = new Map<PipelineStage, Date>();
-  let total_ms = 0;
-
-  events.forEach((event, index) => {
-    attemptsByStage.set(event.stage, (attemptsByStage.get(event.stage) ?? 0) + 1);
-    decisionByStage.set(event.stage, event.decision);
-    recordedAtByStage.set(event.stage, event.timestamp);
-    const next = events[index + 1];
-    if (next === undefined) {
-      return;
-    }
-    const gap = next.timestamp.getTime() - event.timestamp.getTime();
-    durationByStage.set(event.stage, (durationByStage.get(event.stage) ?? 0) + gap);
-    total_ms += gap;
-  });
-
-  const reachedIndex = Math.max(
-    ...events.map((event) => PIPELINE_STAGES.indexOf(event.stage)),
-    live === null ? -1 : PIPELINE_STAGES.indexOf(live.stage),
-  );
+  const timings = accumulateStageTimings(events);
+  const reachedIndex = computeReachedIndex(events, live);
   const finalStage = live?.stage ?? events[events.length - 1]?.stage ?? null;
-
-  const cells = PIPELINE_STAGES.map<PipelineCell>((stage, index) => {
-    const attempts = attemptsByStage.get(stage) ?? 0;
-    const state = cellState({ stage, index, attempts, reachedIndex, live, finalStage });
-    return {
-      stage,
-      state,
-      duration_ms: state === 'live' ? null : (durationByStage.get(stage) ?? null),
-      decision: decisionByStage.get(stage) ?? null,
-      recorded_at: state === 'live' ? null : (recordedAtByStage.get(stage)?.toISOString() ?? null),
-      attempts,
-    };
-  });
+  const cells = buildLaneCells(timings, reachedIndex, live, finalStage);
 
   return {
     instrument,
@@ -167,8 +208,8 @@ function buildLane(
     cells,
     outcome: outcomeOf(trace),
     final_stage: finalStage,
-    started_at: (events[0]?.timestamp ?? live?.entered_at)?.toISOString() ?? null,
-    total_ms,
+    started_at: laneStartedAt(events, live),
+    total_ms: timings.total_ms,
   };
 }
 

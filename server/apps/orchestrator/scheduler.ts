@@ -35,17 +35,23 @@ export interface SchedulerConfig {
 export class UniverseScheduler implements Scheduler {
   constructor(private readonly config: SchedulerConfig) {}
 
+  private isMarketOpen(tickTime: Date): boolean {
+    return (
+      this.config.calendar.isOpen(tickTime) && (this.config.stocksTradingWindow?.(tickTime) ?? true)
+    );
+  }
+
   nextTick(clock: Clock): TickPlan {
     const tickTime = clock.now();
-    const marketOpen =
-      this.config.calendar.isOpen(tickTime) &&
-      (this.config.stocksTradingWindow?.(tickTime) ?? true);
-    const inFlattenGrace = this.config.postCloseFlattenWindow?.(tickTime) ?? false;
 
-    return {
-      instruments: marketOpen || inFlattenGrace ? [...this.config.universe] : [],
-      tick_time: tickTime,
-      ...(marketOpen ? {} : inFlattenGrace ? { grace_only: true } : {}),
-    };
+    if (this.isMarketOpen(tickTime)) {
+      return { instruments: [...this.config.universe], tick_time: tickTime };
+    }
+
+    if (this.config.postCloseFlattenWindow?.(tickTime) ?? false) {
+      return { instruments: [...this.config.universe], tick_time: tickTime, grace_only: true };
+    }
+
+    return { instruments: [], tick_time: tickTime };
   }
 }
