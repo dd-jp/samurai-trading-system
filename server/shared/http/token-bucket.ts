@@ -61,6 +61,49 @@ function waitAnnounceMessage(
   );
 }
 
+function shouldSuppress(
+  inRepeatWindow: boolean,
+  roundedWaitMs: number,
+  catastrophicMs: number,
+): boolean {
+  return inRepeatWindow && roundedWaitMs < catastrophicMs;
+}
+
+function announceWait(
+  telemetry: TokenBucketTelemetry,
+  waitAnnounce: Map<TokenBucketLane, LaneWaitAnnounce>,
+  lane: TokenBucketLane,
+  roundedWaitMs: number,
+  nowMs: number,
+  prior: LaneWaitAnnounce | undefined,
+  inRepeatWindow: boolean,
+): void {
+  const suppressedSinceLast = prior?.suppressedCount ?? 0;
+  const maxSuppressedWaitMs = prior?.maxSuppressedWaitMs ?? 0;
+  waitAnnounce.set(lane, { lastAnnouncedAtMs: nowMs, suppressedCount: 0, maxSuppressedWaitMs: 0 });
+  safeLog(telemetry.logger, {
+    trace_id: currentTraceId() ?? 'token-bucket',
+    stage: 'rate_limit',
+    event: 'token_bucket_wait',
+    level: 'info',
+    message: waitAnnounceMessage(
+      telemetry.name,
+      lane,
+      roundedWaitMs,
+      suppressedSinceLast,
+      maxSuppressedWaitMs,
+    ),
+    payload: {
+      bucket: telemetry.name,
+      lane,
+      wait_ms: roundedWaitMs,
+      catastrophic_bypass: inRepeatWindow,
+      suppressed_since_last: suppressedSinceLast,
+      max_suppressed_wait_ms: maxSuppressedWaitMs,
+    },
+  });
+}
+
 export class TokenBucket {
   private tokens: number;
   private lastRefill: number;
@@ -107,40 +150,22 @@ export class TokenBucket {
     const prior = this.waitAnnounce.get(lane);
     const catastrophicMs = catastrophicThresholdMs(lane);
     const inRepeatWindow = withinRepeatWindow(prior, nowMs);
-    if (prior !== undefined && inRepeatWindow && roundedWaitMs < catastrophicMs) {
+
+    if (prior !== undefined && shouldSuppress(inRepeatWindow, roundedWaitMs, catastrophicMs)) {
       prior.suppressedCount += 1;
       prior.maxSuppressedWaitMs = Math.max(prior.maxSuppressedWaitMs, roundedWaitMs);
       return;
     }
-    const catastrophicBypass = inRepeatWindow;
-    const suppressedSinceLast = prior?.suppressedCount ?? 0;
-    const maxSuppressedWaitMs = prior?.maxSuppressedWaitMs ?? 0;
-    this.waitAnnounce.set(lane, {
-      lastAnnouncedAtMs: nowMs,
-      suppressedCount: 0,
-      maxSuppressedWaitMs: 0,
-    });
-    safeLog(this.telemetry.logger, {
-      trace_id: currentTraceId() ?? 'token-bucket',
-      stage: 'rate_limit',
-      event: 'token_bucket_wait',
-      level: 'info',
-      message: waitAnnounceMessage(
-        this.telemetry.name,
-        lane,
-        roundedWaitMs,
-        suppressedSinceLast,
-        maxSuppressedWaitMs,
-      ),
-      payload: {
-        bucket: this.telemetry.name,
-        lane,
-        wait_ms: roundedWaitMs,
-        catastrophic_bypass: catastrophicBypass,
-        suppressed_since_last: suppressedSinceLast,
-        max_suppressed_wait_ms: maxSuppressedWaitMs,
-      },
-    });
+
+    announceWait(
+      this.telemetry,
+      this.waitAnnounce,
+      lane,
+      roundedWaitMs,
+      nowMs,
+      prior,
+      inRepeatWindow,
+    );
   }
 
   private waitOrAbort(ms: number, signal?: AbortSignal): Promise<void> {

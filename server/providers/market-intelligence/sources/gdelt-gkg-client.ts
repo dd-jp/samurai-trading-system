@@ -62,6 +62,17 @@ export interface GdeltGkgClientOptions {
   themes?: readonly string[] | undefined;
 }
 
+function isValidCivilComponents(
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+): boolean {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  return hour <= 23 && minute <= 59 && second <= 59;
+}
+
 function parseGdeltStamp(stamp: string): Date | undefined {
   const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(stamp);
   if (match === null) return undefined;
@@ -74,10 +85,8 @@ function parseGdeltStamp(stamp: string): Date | undefined {
     number,
     number,
   ];
-  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
-  if (hour > 23 || minute > 59 || second > 59) return undefined;
-  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
-  const date = new Date(ms);
+  if (!isValidCivilComponents(month, day, hour, minute, second)) return undefined;
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   return date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : undefined;
 }
 
@@ -143,6 +152,26 @@ function unzipFirstEntry(buffer: Buffer): string {
   return inflated.toString('utf8');
 }
 
+function fieldAt(fields: readonly string[], column: number): string {
+  return fields[column] ?? '';
+}
+
+function themesOf(rawThemes: string): string[] {
+  return rawThemes.split(';').filter((theme) => theme.length > 0);
+}
+
+function matchesWatchedTheme(lineThemes: readonly string[], themes: ReadonlySet<string>): boolean {
+  return lineThemes.some((theme) => themes.has(theme));
+}
+
+function parseTone(rawTone: string): number {
+  return Number.parseFloat(rawTone.split(',')[0] ?? '');
+}
+
+function payloadOf(fields: readonly string[]): string {
+  return PROJECTED_COLUMNS.map((column) => fieldAt(fields, column)).join('\t');
+}
+
 function parseGkgLine(
   line: string,
   themes: ReadonlySet<string>,
@@ -151,23 +180,23 @@ function parseGkgLine(
   const fields = line.split('\t');
   if (fields.length < MIN_COLUMNS) return null;
 
-  const lineThemes = (fields[COL.themes] ?? '').split(';').filter((theme) => theme.length > 0);
-  if (!lineThemes.some((theme) => themes.has(theme))) return null;
+  const lineThemes = themesOf(fieldAt(fields, COL.themes));
+  if (!matchesWatchedTheme(lineThemes, themes)) return null;
 
-  const tone = Number.parseFloat((fields[COL.tone] ?? '').split(',')[0] ?? '');
+  const tone = parseTone(fieldAt(fields, COL.tone));
   if (!Number.isFinite(tone)) return null;
 
-  const nativeId = fields[COL.recordId] ?? '';
+  const nativeId = fieldAt(fields, COL.recordId);
   if (nativeId.length === 0) return null;
 
   return {
     native_id: nativeId,
     batch_time: batchTime,
-    source_name: fields[COL.sourceName] ?? '',
-    document_url: fields[COL.documentUrl] ?? '',
+    source_name: fieldAt(fields, COL.sourceName),
+    document_url: fieldAt(fields, COL.documentUrl),
     themes: lineThemes,
     tone,
-    payload: PROJECTED_COLUMNS.map((column) => fields[column] ?? '').join('\t'),
+    payload: payloadOf(fields),
   };
 }
 

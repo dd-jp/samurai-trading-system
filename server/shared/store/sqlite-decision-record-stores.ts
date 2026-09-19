@@ -13,22 +13,16 @@ function reasonDetailColumns(
   return [record.reason_detail?.compared_value ?? null, record.reason_detail?.threshold ?? null];
 }
 
-function sizingColumns(
-  record: TraderDecisionRecord,
-): readonly [
-  base_risk_fraction: number | null,
-  conviction_multiplier: number | null,
-  vol_floor_factor: number | null,
-  non_converged_haircut: number | null,
-  cosine_multiplier: number | null,
-] {
-  return [
-    record.sizing?.base_risk_fraction ?? null,
-    record.sizing?.conviction_multiplier ?? null,
-    record.sizing?.vol_floor_factor ?? null,
-    record.sizing?.non_converged_haircut ?? null,
-    record.sizing?.cosine_multiplier ?? null,
-  ];
+const SIZING_COLUMN_KEYS = [
+  'base_risk_fraction',
+  'conviction_multiplier',
+  'vol_floor_factor',
+  'non_converged_haircut',
+  'cosine_multiplier',
+] as const satisfies readonly (keyof NonNullable<TraderDecisionRecord['sizing']>)[];
+
+function sizingColumns(record: TraderDecisionRecord): readonly (number | null)[] {
+  return SIZING_COLUMN_KEYS.map((key) => record.sizing?.[key] ?? null);
 }
 
 function noPrecedentColumn(

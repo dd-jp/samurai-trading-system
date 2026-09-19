@@ -68,6 +68,34 @@ function optionalDate(raw: unknown): Date | undefined {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
+function findRawMarket(body: unknown, marketSlug: string): Record<string, unknown> | undefined {
+  if (!Array.isArray(body) || body.length === 0) return undefined;
+  const event = body[0] as { markets?: unknown };
+  const markets = Array.isArray(event.markets) ? event.markets : [];
+  return markets.find((market) => (market as { slug?: unknown }).slug === marketSlug) as
+    | Record<string, unknown>
+    | undefined;
+}
+
+function parseOutcomeFields(
+  raw: Record<string, unknown>,
+  marketSlug: string,
+): { outcomes: string[]; prices: number[]; tokenIds: string[] } {
+  const outcomes = decodeJsonArray(raw.outcomes, 'outcomes', marketSlug);
+  const prices = decodeJsonArray(raw.outcomePrices, 'outcomePrices', marketSlug).map(Number);
+  const tokenIds = decodeJsonArray(raw.clobTokenIds, 'clobTokenIds', marketSlug);
+  if (outcomes.length !== prices.length || outcomes.length !== tokenIds.length) {
+    throw new Error(
+      `polymarket: market '${marketSlug}' has ${outcomes.length} outcomes but ` +
+        `${prices.length} prices and ${tokenIds.length} token ids`,
+    );
+  }
+  if (prices.some((price) => !Number.isFinite(price))) {
+    throw new Error(`polymarket: market '${marketSlug}' has an unparseable outcome price`);
+  }
+  return { outcomes, prices, tokenIds };
+}
+
 export class PolymarketClient {
   private readonly gammaBaseUrl: string;
   private readonly clobBaseUrl: string;
@@ -87,27 +115,10 @@ export class PolymarketClient {
   ): Promise<PolymarketMarket | undefined> {
     const url = `${this.gammaBaseUrl}/events?slug=${encodeURIComponent(eventSlug)}`;
     const body = await this.getJson(url);
-    if (!Array.isArray(body) || body.length === 0) return undefined;
-
-    const event = body[0] as { markets?: unknown };
-    const markets = Array.isArray(event.markets) ? event.markets : [];
-    const raw = markets.find((market) => (market as { slug?: unknown }).slug === marketSlug) as
-      | Record<string, unknown>
-      | undefined;
+    const raw = findRawMarket(body, marketSlug);
     if (raw === undefined) return undefined;
 
-    const outcomes = decodeJsonArray(raw.outcomes, 'outcomes', marketSlug);
-    const prices = decodeJsonArray(raw.outcomePrices, 'outcomePrices', marketSlug).map(Number);
-    const tokenIds = decodeJsonArray(raw.clobTokenIds, 'clobTokenIds', marketSlug);
-    if (outcomes.length !== prices.length || outcomes.length !== tokenIds.length) {
-      throw new Error(
-        `polymarket: market '${marketSlug}' has ${outcomes.length} outcomes but ` +
-          `${prices.length} prices and ${tokenIds.length} token ids`,
-      );
-    }
-    if (prices.some((price) => !Number.isFinite(price))) {
-      throw new Error(`polymarket: market '${marketSlug}' has an unparseable outcome price`);
-    }
+    const { outcomes, prices, tokenIds } = parseOutcomeFields(raw, marketSlug);
 
     return {
       slug: marketSlug,

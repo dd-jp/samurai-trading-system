@@ -53,6 +53,19 @@ function articleSymbols(article: RawArticle): string[] {
     : [];
 }
 
+function requireId(article: RawArticle, bad: () => never): string | number {
+  return typeof article.id === 'number' || typeof article.id === 'string' ? article.id : bad();
+}
+
+function requireHeadline(article: RawArticle, bad: () => never): string {
+  return typeof article.headline === 'string' ? article.headline : bad();
+}
+
+function requireCreatedAt(article: RawArticle, bad: () => never): number {
+  const created = parsedTimestampOrNaN(article.created_at);
+  return Number.isNaN(created) ? bad() : created;
+}
+
 function validateArticle(raw: unknown): AlpacaNewsArticle {
   const bad = (): never => {
     throw new Error(
@@ -62,10 +75,9 @@ function validateArticle(raw: unknown): AlpacaNewsArticle {
   if (typeof raw !== 'object' || raw === null) return bad();
   const article = raw as RawArticle;
 
-  const id = typeof article.id === 'number' || typeof article.id === 'string' ? article.id : bad();
-  const headline = typeof article.headline === 'string' ? article.headline : bad();
-  const created = parsedTimestampOrNaN(article.created_at);
-  if (Number.isNaN(created)) return bad();
+  const id = requireId(article, bad);
+  const headline = requireHeadline(article, bad);
+  const created = requireCreatedAt(article, bad);
   const updatedRaw = parsedTimestampOrNaN(article.updated_at);
   const updated = Number.isNaN(updatedRaw) ? created : updatedRaw;
 
@@ -82,6 +94,16 @@ function validateArticle(raw: unknown): AlpacaNewsArticle {
   };
 }
 
+function requireCredential(value: string | undefined, envVar: string, field: string): string {
+  if (value === undefined || value.length === 0) {
+    throw new Error(
+      `AlpacaNewsClient: ${envVar} is not set. Provide it via the environment ` +
+        `(.env.local) or pass { ${field} } explicitly.`,
+    );
+  }
+  return value;
+}
+
 export class AlpacaNewsClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
@@ -90,22 +112,16 @@ export class AlpacaNewsClient {
   private readonly rateLimiter: TokenBucket;
 
   constructor(options: AlpacaNewsClientOptions = {}) {
-    const key = options.apiKey ?? process.env.ALPACA_API_KEY;
-    const secret = options.apiSecret ?? process.env.ALPACA_API_SECRET;
-    if (key === undefined || key.length === 0) {
-      throw new Error(
-        'AlpacaNewsClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiKey } explicitly.',
-      );
-    }
-    if (secret === undefined || secret.length === 0) {
-      throw new Error(
-        'AlpacaNewsClient: ALPACA_API_SECRET is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiSecret } explicitly.',
-      );
-    }
-    this.apiKey = key;
-    this.apiSecret = secret;
+    this.apiKey = requireCredential(
+      options.apiKey ?? process.env.ALPACA_API_KEY,
+      'ALPACA_API_KEY',
+      'apiKey',
+    );
+    this.apiSecret = requireCredential(
+      options.apiSecret ?? process.env.ALPACA_API_SECRET,
+      'ALPACA_API_SECRET',
+      'apiSecret',
+    );
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.rateLimiter = options.rateLimiter ?? new TokenBucket(DEFAULT_PACING);

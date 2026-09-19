@@ -62,6 +62,21 @@ function flattenBoundary(
   return { sessionEnd, remainingMs: sessionEnd.getTime() - bar.open_time.getTime() };
 }
 
+function resolveFlattenState(
+  bar: Bar,
+  timeframe: string,
+  sessionCalendar: TradingCalendar,
+  flattenBeforeCloseMsOverride: number | undefined,
+): { boundary: { sessionEnd: Date; remainingMs: number } | null; withinFlattenWindow: boolean } {
+  const boundary = flattenBoundary(bar, timeframe, sessionCalendar);
+  const flattenBeforeCloseMs = Math.max(
+    flattenBeforeCloseMsOverride ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS,
+    timeframeToMs(timeframe),
+  );
+  const withinFlattenWindow = boundary !== null && boundary.remainingMs <= flattenBeforeCloseMs;
+  return { boundary, withinFlattenWindow };
+}
+
 interface OpenLot {
   idempotency_key: string;
   side: 'buy' | 'sell';
@@ -240,21 +255,31 @@ export class ReplayDriver {
 
     const signal = proxySignal(bars, state.config, this.deps.timeframe);
     const lot = state.open.get(instrument.symbol);
-
-    const boundary = flattenBoundary(bar, this.deps.timeframe, this.deps.sessionCalendar);
-    const flattenBeforeCloseMs = Math.max(
-      this.deps.flattenBeforeCloseMs ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS,
-      timeframeToMs(this.deps.timeframe),
+    const { boundary, withinFlattenWindow } = resolveFlattenState(
+      bar,
+      this.deps.timeframe,
+      this.deps.sessionCalendar,
+      this.deps.flattenBeforeCloseMs,
     );
-    const withinFlattenWindow = boundary !== null && boundary.remainingMs <= flattenBeforeCloseMs;
 
     if (lot !== undefined) {
       this.handleOpenLot(state, instrument, lot, bar, bars, signal, withinFlattenWindow);
       return;
     }
 
-    if (signal.direction === 'flat') return;
+    this.maybeOpenLot(state, instrument, bar, bars, signal, boundary, withinFlattenWindow);
+  }
 
+  private maybeOpenLot(
+    state: RunState,
+    instrument: ReplayInstrument,
+    bar: Bar,
+    bars: readonly Bar[],
+    signal: ProxySignal,
+    boundary: { sessionEnd: Date; remainingMs: number } | null,
+    withinFlattenWindow: boolean,
+  ): void {
+    if (signal.direction === 'flat') return;
     if (withinFlattenWindow) return;
 
     state.open.set(

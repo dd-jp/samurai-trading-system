@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -84,6 +84,27 @@ Implementer gate only, not CI: GitHub Actions is billing-blocked on this repo.
 Run against the merge ref once billing is unblocked (deferred, not part of #1634).`);
 }
 
+function logAdvisory(advisory: readonly string[]): void {
+  if (advisory.length === 0) return;
+  console.log(`Advisory — changed but not mutated (no score bar), ${advisory.length} file(s):`);
+  for (const file of advisory) console.log(`  ${file}`);
+}
+
+function logTradingPath(tradingPath: readonly string[], baseRef: string): void {
+  console.log(`Mutating ${tradingPath.length} trading-path file(s) changed vs ${baseRef}:`);
+  for (const file of tradingPath) console.log(`  ${file}`);
+}
+
+function runStryker(root: string, tradingPath: readonly string[]): SpawnSyncReturns<Buffer> {
+  const testFileGlobs = TRADING_PATH_PREFIXES.map((prefix) => `${prefix}**/*.test.ts`);
+  const strykerBin = fileURLToPath(new URL('../../node_modules/.bin/stryker', import.meta.url));
+  return spawnSync(
+    strykerBin,
+    ['run', '--mutate', tradingPath.join(','), '--testFiles', testFileGlobs.join(',')],
+    { cwd: root, stdio: 'inherit' },
+  );
+}
+
 function main(): void {
   const arg = process.argv[2];
   if (arg === '--help' || arg === '-h') {
@@ -96,26 +117,16 @@ function main(): void {
   const changed = getChangedFiles(baseRef, root);
   const { tradingPath, advisory } = partitionChangedFiles(changed);
 
-  if (advisory.length > 0) {
-    console.log(`Advisory — changed but not mutated (no score bar), ${advisory.length} file(s):`);
-    for (const file of advisory) console.log(`  ${file}`);
-  }
+  logAdvisory(advisory);
 
   if (tradingPath.length === 0) {
     console.log(`No trading-path files changed vs ${baseRef} — mutation gate skipped.`);
     return;
   }
 
-  console.log(`Mutating ${tradingPath.length} trading-path file(s) changed vs ${baseRef}:`);
-  for (const file of tradingPath) console.log(`  ${file}`);
+  logTradingPath(tradingPath, baseRef);
 
-  const testFileGlobs = TRADING_PATH_PREFIXES.map((prefix) => `${prefix}**/*.test.ts`);
-  const strykerBin = fileURLToPath(new URL('../../node_modules/.bin/stryker', import.meta.url));
-  const result = spawnSync(
-    strykerBin,
-    ['run', '--mutate', tradingPath.join(','), '--testFiles', testFileGlobs.join(',')],
-    { cwd: root, stdio: 'inherit' },
-  );
+  const result = runStryker(root, tradingPath);
 
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;

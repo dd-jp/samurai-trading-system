@@ -83,34 +83,57 @@ function bookSpread(market: PolymarketMarket): number | undefined {
   return market.bestAsk - market.bestBid;
 }
 
+function closedReason(market: PolymarketMarket): Refusal {
+  return market.closed ? 'the market is closed' : undefined;
+}
+
+function missingUpdatedAtReason(market: PolymarketMarket): Refusal {
+  return market.updatedAt === undefined ? 'the market carries no updatedAt stamp' : undefined;
+}
+
+function staleUpdatedAtReason(market: PolymarketMarket, now: Date): Refusal {
+  if (market.updatedAt === undefined) return undefined;
+  return now.getTime() - market.updatedAt.getTime() > MAX_UPDATED_AGE_MS
+    ? `the market's updatedAt is ${market.updatedAt.toISOString()}, past the staleness bound`
+    : undefined;
+}
+
+function noQuoteReason(hasQuote: boolean): Refusal {
+  return hasQuote ? undefined : 'the market has no live bid/ask';
+}
+
+function wideSpreadReason(hasQuote: boolean, spread: number | undefined): Refusal {
+  if (!hasQuote || spread === undefined) return undefined;
+  return spread > MAX_SPREAD ? `the spread is ${spread}, past ${MAX_SPREAD}` : undefined;
+}
+
+function lowVolumeReason(market: PolymarketMarket): Refusal {
+  return market.volume24hr === undefined || market.volume24hr < MIN_VOLUME_24H_USD
+    ? `24h volume is ${market.volume24hr ?? 'absent'}, below ${MIN_VOLUME_24H_USD}`
+    : undefined;
+}
+
+function lowLiquidityReason(market: PolymarketMarket): Refusal {
+  return market.liquidity === undefined || market.liquidity < MIN_LIQUIDITY_USD
+    ? `liquidity is ${market.liquidity ?? 'absent'}, below ${MIN_LIQUIDITY_USD}`
+    : undefined;
+}
+
 function refuseOnBook(market: PolymarketMarket, now: Date): Refusal {
   const hasQuote = market.bestBid !== undefined && market.bestAsk !== undefined;
   const spread = bookSpread(market);
 
-  const rules: ReadonlyArray<readonly [failed: boolean, reason: string]> = [
-    [market.closed, 'the market is closed'],
-    [market.updatedAt === undefined, 'the market carries no updatedAt stamp'],
-    [
-      market.updatedAt !== undefined &&
-        now.getTime() - market.updatedAt.getTime() > MAX_UPDATED_AGE_MS,
-      `the market's updatedAt is ${market.updatedAt?.toISOString()}, past the staleness bound`,
-    ],
-    [!hasQuote, 'the market has no live bid/ask'],
-    [
-      hasQuote && spread !== undefined && spread > MAX_SPREAD,
-      `the spread is ${spread}, past ${MAX_SPREAD}`,
-    ],
-    [
-      market.volume24hr === undefined || market.volume24hr < MIN_VOLUME_24H_USD,
-      `24h volume is ${market.volume24hr ?? 'absent'}, below ${MIN_VOLUME_24H_USD}`,
-    ],
-    [
-      market.liquidity === undefined || market.liquidity < MIN_LIQUIDITY_USD,
-      `liquidity is ${market.liquidity ?? 'absent'}, below ${MIN_LIQUIDITY_USD}`,
-    ],
+  const reasons: ReadonlyArray<Refusal> = [
+    closedReason(market),
+    missingUpdatedAtReason(market),
+    staleUpdatedAtReason(market, now),
+    noQuoteReason(hasQuote),
+    wideSpreadReason(hasQuote, spread),
+    lowVolumeReason(market),
+    lowLiquidityReason(market),
   ];
-  for (const [failed, reason] of rules) {
-    if (failed) return reason;
+  for (const reason of reasons) {
+    if (reason !== undefined) return reason;
   }
   return undefined;
 }
@@ -146,6 +169,38 @@ type BuiltRow =
   | { outcome: 'item'; item: IntelligenceItem; raw: RawArchiveRow }
   | { outcome: 'refused' }
   | { outcome: 'transport-failed' };
+
+type OutcomeResolution = { tokenId: string } | string;
+
+function resolveBullishOutcome(
+  market: PolymarketMarket,
+  entry: CuratedMacroMarket,
+): OutcomeResolution {
+  const outcomeIndex = market.outcomes.indexOf(entry.bullishOutcome);
+  if (outcomeIndex < 0) {
+    return (
+      `the curated bullish outcome '${entry.bullishOutcome}' is not among the market's ` +
+      `outcomes [${market.outcomes.join(', ')}] — the market's shape changed under the table`
+    );
+  }
+  const tokenId = market.tokenIds[outcomeIndex];
+  if (tokenId === undefined) return 'the bullish outcome has no CLOB token id';
+
+  const probability = market.outcomePrices[outcomeIndex];
+  if (probability === undefined || !Number.isFinite(probability)) {
+    return 'the bullish outcome carries no quoted probability';
+  }
+  if (isPinnedProbability(probability)) {
+    return (
+      `the bullish outcome is quoted at ${probability}, leaving ` +
+      `${Math.min(probability, 1 - probability).toFixed(4)} of headroom against the ` +
+      `${MIN_PROBABILITY_HEADROOM} minimum — a contract pinned this near certainty cannot ` +
+      'carry a 24h delta, so it would emit a zero vote every hour rather than a signal. ' +
+      'Re-point this row at a bucket with room to move, or drop it, in curated-markets.ts'
+    );
+  }
+  return { tokenId };
+}
 
 export function toArchivedItem(item: IntelligenceItem, raw: RawArchiveRow): ArchivedItem {
   return {
@@ -344,42 +399,9 @@ export class PolymarketAgent {
     const refusal = refuseOnBook(market, now);
     if (refusal !== undefined) return this.#refuse(trace_id, entry, refusal, now);
 
-    const outcomeIndex = market.outcomes.indexOf(entry.bullishOutcome);
-    if (outcomeIndex < 0) {
-      return this.#refuse(
-        trace_id,
-        entry,
-        `the curated bullish outcome '${entry.bullishOutcome}' is not among the market's ` +
-          `outcomes [${market.outcomes.join(', ')}] — the market's shape changed under the table`,
-        now,
-      );
-    }
-    const tokenId = market.tokenIds[outcomeIndex];
-    if (tokenId === undefined) {
-      return this.#refuse(trace_id, entry, 'the bullish outcome has no CLOB token id', now);
-    }
-
-    const probability = market.outcomePrices[outcomeIndex];
-    if (probability === undefined || !Number.isFinite(probability)) {
-      return this.#refuse(
-        trace_id,
-        entry,
-        'the bullish outcome carries no quoted probability',
-        now,
-      );
-    }
-    if (isPinnedProbability(probability)) {
-      return this.#refuse(
-        trace_id,
-        entry,
-        `the bullish outcome is quoted at ${probability}, leaving ` +
-          `${Math.min(probability, 1 - probability).toFixed(4)} of headroom against the ` +
-          `${MIN_PROBABILITY_HEADROOM} minimum — a contract pinned this near certainty cannot ` +
-          'carry a 24h delta, so it would emit a zero vote every hour rather than a signal. ' +
-          'Re-point this row at a bucket with room to move, or drop it, in curated-markets.ts',
-        now,
-      );
-    }
+    const resolution = resolveBullishOutcome(market, entry);
+    if (typeof resolution === 'string') return this.#refuse(trace_id, entry, resolution, now);
+    const { tokenId } = resolution;
 
     let history: PolymarketPricePoint[];
     try {

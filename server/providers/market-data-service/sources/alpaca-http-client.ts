@@ -175,6 +175,25 @@ export function resolveAlpacaDataFeed(raw: string | undefined): AlpacaDataFeed {
   );
 }
 
+function requireCredential(value: string | undefined, envVar: string, field: string): string {
+  if (value === undefined || value.length === 0) {
+    throw new Error(
+      `AlpacaHttpDataClient: ${envVar} is not set. Provide it via the environment ` +
+        `(.env.local) or pass { ${field} } explicitly.`,
+    );
+  }
+  return value;
+}
+
+function resolveFeedFor(
+  assetClass: 'crypto' | 'stocks',
+  feed: AlpacaDataFeed | undefined,
+): AlpacaDataFeed | undefined {
+  return assetClass === 'stocks'
+    ? (feed ?? resolveAlpacaDataFeed(process.env[ALPACA_DATA_FEED_ENV_VAR]))
+    : undefined;
+}
+
 export interface AlpacaHttpDataClientOptions {
   assetClass: 'crypto' | 'stocks';
   feed?: AlpacaDataFeed;
@@ -197,25 +216,18 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
   private readonly rateLimiter: TokenBucket | undefined;
 
   constructor(options: AlpacaHttpDataClientOptions) {
-    const apiKey = options.apiKey ?? process.env.ALPACA_API_KEY;
-    const apiSecret = options.apiSecret ?? process.env.ALPACA_API_SECRET;
-    if (apiKey === undefined || apiKey.length === 0) {
-      throw new Error(
-        'AlpacaHttpDataClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiKey } explicitly.',
-      );
-    }
-    if (apiSecret === undefined || apiSecret.length === 0) {
-      throw new Error(
-        'AlpacaHttpDataClient: ALPACA_API_SECRET is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiSecret } explicitly.',
-      );
-    }
+    const apiKey = requireCredential(
+      options.apiKey ?? process.env.ALPACA_API_KEY,
+      'ALPACA_API_KEY',
+      'apiKey',
+    );
+    const apiSecret = requireCredential(
+      options.apiSecret ?? process.env.ALPACA_API_SECRET,
+      'ALPACA_API_SECRET',
+      'apiSecret',
+    );
     this.assetClass = options.assetClass;
-    this.feed =
-      options.assetClass === 'stocks'
-        ? (options.feed ?? resolveAlpacaDataFeed(process.env[ALPACA_DATA_FEED_ENV_VAR]))
-        : undefined;
+    this.feed = resolveFeedFor(options.assetClass, options.feed);
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
