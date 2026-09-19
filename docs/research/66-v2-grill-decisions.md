@@ -27,3 +27,14 @@ yet a spec; a wayfinder map and ADRs still follow.
 - Windowed data reads carry tested coverage invariants (postmortem §2).
 - Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN.
 - Paper profit is not evidence of edge; paper gates on fidelity to the backtest.
+
+## Rulings Q10–Q13
+
+| # | Question | Ruling |
+|---|---|---|
+| Q10 | Where v2 is built | **New slim v2 composition root in this repo**, reusing broker adapters (Alpaca, Saxo), providers, stores, and the debate core behind a real module interface. v1 orchestrator frozen; v1 paper soak stopped. |
+| Q11 | v1 teardown timing | **After the v2 root runs end-to-end.** Steps: tag `v1-final` + archive paper DB → v2 root → reachability via **fallow** (not knip) + graphify → review list → delete in per-area waves with CI green. Known-dead: flatten subsystem, 15-min tick cadence + tick/bar dedup, 3× ETP universe/gating, D5 £350/£250 sizing + intraday brackets, crypto remnants, T212 refs, v1 paper arms. ADR-0014–0018 superseded by new ADRs, never deleted; specs archived. |
+| — | Tooling | **All existing oxlint, biome, crap and fallow rules stay intact and bind v2 from its first commit.** |
+| — | Language | **TypeScript; no Python rewrite.** Everything that trades (live, paper, gate backtest) is TS so one strategy implementation runs everywhere. No LangGraph/CrewAI/LangSmith: debate substrate is already TS; tracing = prompt version + inputs + output + cost per LLM call joined to the resulting trade, in our own store. *Proposed, not yet ruled:* optional offline Python research sidecar (ML, replication code) crossing only via files (parquet / ONNX / strategy spec), with a TS parity test before anything reaches paper. |
+| Q12 | Host | **MacBook** + external dead-man's switch (e.g. healthchecks.io) + Saxo token-refresh/wake job; broker-resting stops. Move to a cloud VM if paper records any downtime fault. |
+| Q13 | Promotion authority | **Auto:** research proposals, backtests, gate-passing promotion to paper, risk tightening. **David sign-off:** anything reaching live (new sleeve, changed rule, capital increase), via a one-page summary (change, haircut backtest, paper fidelity, worst case vs £1,500). **Never:** loosening the £1,500 or daily cap mid-year. |
