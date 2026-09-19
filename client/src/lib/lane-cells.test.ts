@@ -21,8 +21,9 @@ describe('resolveLaneCells', () => {
     expect(debate?.state).toEqual({ word: 'wait', tone: 'wait' });
   });
 
-  it('glosses every DEGRADED_DECISIONS word into `decisionText`, keeps `decisionWord` bare, and sets `degraded`', () => {
-    for (const [word, gloss] of Object.entries(DEGRADED_DECISIONS)) {
+  it.each(Object.entries(DEGRADED_DECISIONS))(
+    'glosses DEGRADED_DECISIONS word %s into `decisionText`, keeps `decisionWord` bare, and sets `degraded`',
+    (word, gloss) => {
       const lane = makeLane({
         instrument: 'QQQ',
         outcome: 'stopped',
@@ -33,8 +34,10 @@ describe('resolveLaneCells', () => {
       expect(cell?.hasRecordedDecision).toBe(true);
       expect(cell?.decisionWord).toBe(word);
       expect(cell?.decisionText).toBe(`${word} — ${gloss}`);
-    }
+    },
+  );
 
+  it('does not treat a genuine (non-degraded) decision as degraded', () => {
     const genuine = makeLane({
       instrument: 'QQQ',
       outcome: 'stopped',

@@ -64,13 +64,17 @@ export class SqliteCgtFillSource {
   }
 }
 
+function fromClosedOrOpen<T>(closed: T | null, open: T | null): T | null {
+  return closed ?? open;
+}
+
 function classifyFillRow(
   row: FillJoinRow,
 ): { leg: CgtFillLeg } | { unconverted: UnconvertedCgtFill } | null {
-  const instrument = row.c_instrument ?? row.o_instrument;
-  const assetClass = row.c_asset_class ?? row.o_asset_class;
-  const side = row.c_side ?? row.o_side;
-  const arm = row.c_arm ?? row.o_arm;
+  const instrument = fromClosedOrOpen(row.c_instrument, row.o_instrument);
+  const assetClass = fromClosedOrOpen(row.c_asset_class, row.o_asset_class);
+  const side = fromClosedOrOpen(row.c_side, row.o_side);
+  const arm = fromClosedOrOpen(row.c_arm, row.o_arm);
 
   if (instrument === null || assetClass === null || side === null || arm === null) {
     throw new Error(

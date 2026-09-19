@@ -90,20 +90,20 @@ function readServerContractVersion(value: unknown): string | undefined {
   return typeof version === 'string' ? version : undefined;
 }
 
+const WIRE_SHAPE_ARRAY_FIELDS = ['positions', 'debates', 'verdicts', 'analysts'] as const;
+const WIRE_SHAPE_OBJECT_FIELDS = ['metrics', 'providers'] as const;
+
+function isWireObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 function hasWireShape(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.generated_at !== 'string') return false;
-  for (const key of ['positions', 'debates', 'verdicts', 'analysts']) {
-    if (!Array.isArray(candidate[key])) return false;
-  }
-  for (const key of ['metrics', 'providers']) {
-    const field = candidate[key];
-    if (typeof field !== 'object' || field === null) return false;
-  }
-  const pipeline = candidate.pipeline;
-  if (typeof pipeline !== 'object' || pipeline === null) return false;
-  return Array.isArray((pipeline as Record<string, unknown>).lanes);
+  if (!isWireObject(value)) return false;
+  if (typeof value.generated_at !== 'string') return false;
+  if (WIRE_SHAPE_ARRAY_FIELDS.some((key) => !Array.isArray(value[key]))) return false;
+  if (WIRE_SHAPE_OBJECT_FIELDS.some((key) => !isWireObject(value[key]))) return false;
+  const pipeline = value.pipeline;
+  return isWireObject(pipeline) && Array.isArray(pipeline.lanes);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

@@ -2529,13 +2529,63 @@ function runThresholdClampScenario(
   }
 }
 
+const THRESHOLD_CLAMP_FAILURE_CHECKS: ReadonlyArray<{
+  failed: (clamp: ThresholdClampEvidence) => boolean;
+  message: (clamp: ThresholdClampEvidence) => string;
+}> = [
+  {
+    failed: (clamp) => clamp.liveReadAccepted.length > 0,
+    message: (clamp) =>
+      `the LIVE risk_thresholds read accepted out-of-bound values for ` +
+      `${clamp.liveReadAccepted.join(', ')} — RiskManagerImpl.evaluate() re-resolves its ` +
+      'config from that table on every call, so this is the path the Feedback Loop moves a ' +
+      'dial on between two ticks, with no boot in between (#638/ADR-0013)',
+  },
+  {
+    failed: (clamp) => clamp.writeDoorAccepted.length > 0,
+    message: (clamp) =>
+      `the Feedback Loop write door accepted out-of-bound values for ` +
+      `${clamp.writeDoorAccepted.join(', ')} — ADR-0013 requires every dial change to be ` +
+      'rejected in code if it would cross a hard bound, and after #736 there is nobody in ' +
+      'the path at all (#638)',
+  },
+  {
+    failed: (clamp) => !clamp.breakerConstructionRefused,
+    message: () =>
+      'the breaker constructor accepted a 0.95/0.90 drawdown pair — the pre-existing check is ' +
+      'a relative ordering test only, so this boots a system whose hard drawdown breaker ' +
+      'can never fire (#638)',
+  },
+  {
+    failed: (clamp) => !clamp.killLineCheckRefused,
+    message: () =>
+      'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.05 as a ' +
+      'bright line and the Feedback Loop holds the only mutable copy of it (#638)',
+  },
+  {
+    failed: (clamp) => !clamp.shippedConfigAccepted,
+    message: () =>
+      'the shipped paper breaker configuration is itself refused by the clamp — the bound is ' +
+      'wrong, not the config, and every negative probe above would still pass (#638)',
+  },
+  {
+    failed: (clamp) => !clamp.exitBypassesLiveClamp,
+    message: () =>
+      'with a live risk_thresholds row out of bounds, an exit intent did not reach ' +
+      "RiskManagerImpl.evaluate()'s approved bypass while an entry intent was still refused — " +
+      "either the exit/flatten path is stranded behind #638's clamp (a materially worse " +
+      "defect than #766 was filed for: ADR-0014's flat-by-close invariant has no session-end " +
+      'job to catch a missed flatten) or the clamp stopped refusing entries at all (#766)',
+  },
+];
+
 const thresholdClampProbe: Probe<'thresholdClamp'> = {
   run({ profile }) {
     return runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
   },
   verdict(evidence) {
-    const failures: string[] = [];
     const clamp = evidence;
+    const failures: string[] = [];
     const missingFromProbe = GUARDED_THRESHOLD_NAMES.filter(
       (name) => !clamp.probedNames.includes(name),
     );
@@ -2550,49 +2600,10 @@ const thresholdClampProbe: Probe<'thresholdClamp'> = {
           'is a limit nobody has seen enforced (#638)',
       );
     }
-    if (clamp.liveReadAccepted.length > 0) {
-      failures.push(
-        `the LIVE risk_thresholds read accepted out-of-bound values for ` +
-          `${clamp.liveReadAccepted.join(', ')} — RiskManagerImpl.evaluate() re-resolves its ` +
-          'config from that table on every call, so this is the path the Feedback Loop moves a ' +
-          'dial on between two ticks, with no boot in between (#638/ADR-0013)',
-      );
-    }
-    if (clamp.writeDoorAccepted.length > 0) {
-      failures.push(
-        `the Feedback Loop write door accepted out-of-bound values for ` +
-          `${clamp.writeDoorAccepted.join(', ')} — ADR-0013 requires every dial change to be ` +
-          'rejected in code if it would cross a hard bound, and after #736 there is nobody in ' +
-          'the path at all (#638)',
-      );
-    }
-    if (!clamp.breakerConstructionRefused) {
-      failures.push(
-        'the breaker constructor accepted a 0.95/0.90 drawdown pair — the pre-existing check is ' +
-          'a relative ordering test only, so this boots a system whose hard drawdown breaker ' +
-          'can never fire (#638)',
-      );
-    }
-    if (!clamp.killLineCheckRefused) {
-      failures.push(
-        'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.05 as a ' +
-          'bright line and the Feedback Loop holds the only mutable copy of it (#638)',
-      );
-    }
-    if (!clamp.shippedConfigAccepted) {
-      failures.push(
-        'the shipped paper breaker configuration is itself refused by the clamp — the bound is ' +
-          'wrong, not the config, and every negative probe above would still pass (#638)',
-      );
-    }
-    if (!clamp.exitBypassesLiveClamp) {
-      failures.push(
-        'with a live risk_thresholds row out of bounds, an exit intent did not reach ' +
-          "RiskManagerImpl.evaluate()'s approved bypass while an entry intent was still refused — " +
-          "either the exit/flatten path is stranded behind #638's clamp (a materially worse " +
-          "defect than #766 was filed for: ADR-0014's flat-by-close invariant has no session-end " +
-          'job to catch a missed flatten) or the clamp stopped refusing entries at all (#766)',
-      );
+    for (const check of THRESHOLD_CLAMP_FAILURE_CHECKS) {
+      if (check.failed(clamp)) {
+        failures.push(check.message(clamp));
+      }
     }
     return failures;
   },
@@ -3979,64 +3990,70 @@ function tickLoopControlArmFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-function tickLoopDownstreamRecordFailures(observations: SmokeObservations): string[] {
-  const failures: string[] = [];
-  const { debates } = observations;
-  if (debates.length > 0 && observations.cosineSetups.length === 0) {
-    failures.push(
+const TICK_LOOP_DOWNSTREAM_CHECKS: ReadonlyArray<{
+  failed: (observations: SmokeObservations) => boolean;
+  message: string;
+}> = [
+  {
+    failed: (observations) =>
+      observations.debates.length > 0 && observations.cosineSetups.length === 0,
+    message:
       'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
-        'not write the setup it embedded, so cosine retrieval has nothing to find and every ' +
-        'position takes the permanent 0.75x no-precedent haircut. This is the #432 defect ' +
-        'exactly: retrieval (#75) and the store (#198) both existed and `decide()` called ' +
-        'neither, while the whole unit suite passed',
-    );
-  }
-
-  if (observations.riskThresholds.length === 0) {
-    failures.push(
+      'not write the setup it embedded, so cosine retrieval has nothing to find and every ' +
+      'position takes the permanent 0.75x no-precedent haircut. This is the #432 defect ' +
+      'exactly: retrieval (#75) and the store (#198) both existed and `decide()` called ' +
+      'neither, while the whole unit suite passed',
+  },
+  {
+    failed: (observations) => observations.riskThresholds.length === 0,
+    message:
       'no row in risk_thresholds — the composition root did not seed the dials, so ' +
-        "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
-        'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
-        'end existed and the read end did not, and nothing failed',
-    );
-  }
-
-  if (debates.length > 0 && observations.traderDecisions.length === 0) {
-    failures.push(
+      "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
+      'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
+      'end existed and the read end did not, and nothing failed',
+  },
+  {
+    failed: (observations) =>
+      observations.debates.length > 0 && observations.traderDecisions.length === 0,
+    message:
       'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
-        'record is not wired, so why a size came out at N (or why nothing traded at all) is ' +
-        'reconstructable only from an `audit_log` digest and ephemeral stdout. Note the ' +
-        'Trader writes on a SKIP too, so this cannot be explained by a quiet tick',
-    );
-  }
-
-  if (observations.traderDecisions.length > 0 && observations.riskDecisions.length === 0) {
-    failures.push(
+      'record is not wired, so why a size came out at N (or why nothing traded at all) is ' +
+      'reconstructable only from an `audit_log` digest and ephemeral stdout. Note the ' +
+      'Trader writes on a SKIP too, so this cannot be explained by a quiet tick',
+  },
+  {
+    failed: (observations) =>
+      observations.traderDecisions.length > 0 && observations.riskDecisions.length === 0,
+    message:
       'the Trader produced an intent but no row in risk_log — Risk evaluated it and left no ' +
-        'record of what portfolio state it sized against or which gate bound. A rejected ' +
-        'intent never reaches Verdict, so with this unwired a rejection has no durable ' +
-        'record anywhere in the system',
-    );
-  }
-
-  if (observations.analystWeights.length === 0) {
-    failures.push(
+      'record of what portfolio state it sized against or which gate bound. A rejected ' +
+      'intent never reaches Verdict, so with this unwired a rejection has no durable ' +
+      'record anywhere in the system',
+  },
+  {
+    failed: (observations) => observations.analystWeights.length === 0,
+    message:
       'no row in analyst_weights — the startup seeder did not run, so `runDailyCycle` skips ' +
-        'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
-        'a clean run. This is the #371 defect',
-    );
-  }
-
-  const breakerTiers = new Set(observations.breakerStates.map((row) => row.tier));
-  if (!breakerTiers.has('portfolio_drawdown') || !breakerTiers.has('kill_switch')) {
-    failures.push(
+      'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
+      'a clean run. This is the #371 defect',
+  },
+  {
+    failed: (observations) => {
+      const breakerTiers = new Set(observations.breakerStates.map((row) => row.tier));
+      return !breakerTiers.has('portfolio_drawdown') || !breakerTiers.has('kill_switch');
+    },
+    message:
       'breaker_state is missing a tier row — the tick path never persisted the sticky ' +
-        "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
-        'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
-        'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
-    );
-  }
-  return failures;
+      "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
+      'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
+      'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
+  },
+];
+
+function tickLoopDownstreamRecordFailures(observations: SmokeObservations): string[] {
+  return TICK_LOOP_DOWNSTREAM_CHECKS.filter((check) => check.failed(observations)).map(
+    (check) => check.message,
+  );
 }
 
 function tickLoopVerdictFailures(observations: SmokeObservations): string[] {

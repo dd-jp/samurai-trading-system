@@ -35,6 +35,31 @@ export interface BreakerEvalInput {
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+function combinePortfolioTripped(
+  hardTripped: boolean,
+  killSwitchEngaged: boolean,
+  dailyLoss: { dailyLossTripped: boolean; dailyUnknown: boolean },
+  consecutiveLossTripped: boolean,
+): boolean {
+  return (
+    hardTripped ||
+    killSwitchEngaged ||
+    dailyLoss.dailyLossTripped ||
+    dailyLoss.dailyUnknown ||
+    consecutiveLossTripped
+  );
+}
+
+function combineClassTripped(
+  vol: { cryptoVolTripped: boolean; stocksVolTripped: boolean },
+  dailyLossClassTripped: { crypto: boolean; stocks: boolean },
+): { crypto: boolean; stocks: boolean } {
+  return {
+    crypto: vol.cryptoVolTripped || dailyLossClassTripped.crypto,
+    stocks: vol.stocksVolTripped || dailyLossClassTripped.stocks,
+  };
+}
+
 export class CircuitBreakers {
   private hardTripped = false;
   private hardTrippedAt: Date | null = null;
@@ -132,19 +157,14 @@ export class CircuitBreakers {
     const vol = this.evaluateVolatilityBreakers(volatility);
     armed.push(...vol.armed);
 
-    const portfolioTripped =
-      this.hardTripped ||
-      this.killSwitchEngaged ||
-      dailyLoss.dailyLossTripped ||
-      dailyLoss.dailyUnknown ||
-      consecutiveLossTripped;
-
     return {
-      portfolio_tripped: portfolioTripped,
-      asset_class_tripped: {
-        crypto: vol.cryptoVolTripped || dailyLoss.classTripped.crypto,
-        stocks: vol.stocksVolTripped || dailyLoss.classTripped.stocks,
-      },
+      portfolio_tripped: combinePortfolioTripped(
+        this.hardTripped,
+        this.killSwitchEngaged,
+        dailyLoss,
+        consecutiveLossTripped,
+      ),
+      asset_class_tripped: combineClassTripped(vol, dailyLoss.classTripped),
       armed_breakers: armed,
     };
   }

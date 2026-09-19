@@ -638,29 +638,50 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
     AssetType: 'Etn',
   };
 
+  interface RoutedFetchRoute {
+    method: string;
+    matches: (parsed: URL) => boolean;
+    respond: (parsed: URL) => Response;
+  }
+
   function routedFetch(): ReturnType<typeof vi.fn> {
-    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat method+path dispatch, one branch per mocked endpoint
+    const routes: readonly RoutedFetchRoute[] = [
+      {
+        method: 'GET',
+        matches: (parsed) => parsed.pathname.endsWith('/port/v1/accounts/me'),
+        respond: () => jsonResponse(ACCOUNTS),
+      },
+      {
+        method: 'GET',
+        matches: (parsed) => parsed.pathname.endsWith('/port/v1/orders/me'),
+        respond: (parsed) =>
+          parsed.searchParams.has('$skip')
+            ? jsonResponse({ Data: [] })
+            : jsonResponse({
+                Data: [OPEN_ORDER_ROW],
+                __next: `${parsed.origin}${parsed.pathname}?$top=500&$skip=500`,
+              }),
+      },
+      {
+        method: 'GET',
+        matches: (parsed) => parsed.pathname.endsWith('/cs/v1/audit/orderactivities'),
+        respond: () => jsonResponse({ Data: [] }),
+      },
+      {
+        method: 'DELETE',
+        matches: (parsed) => parsed.pathname.includes('/trade/v2/orders/'),
+        respond: () => jsonResponse(undefined),
+      },
+    ];
+
     return vi.fn(async (url: string | URL, init?: RequestInit) => {
       const parsed = new URL(String(url));
       const method = init?.method ?? 'GET';
-      if (method === 'GET' && parsed.pathname.endsWith('/port/v1/accounts/me')) {
-        return jsonResponse(ACCOUNTS);
+      const route = routes.find((r) => r.method === method && r.matches(parsed));
+      if (route === undefined) {
+        throw new Error(`saxo priority lane test: unmocked request ${method} ${parsed.pathname}`);
       }
-      if (method === 'GET' && parsed.pathname.endsWith('/port/v1/orders/me')) {
-        return parsed.searchParams.has('$skip')
-          ? jsonResponse({ Data: [] })
-          : jsonResponse({
-              Data: [OPEN_ORDER_ROW],
-              __next: `${parsed.origin}${parsed.pathname}?$top=500&$skip=500`,
-            });
-      }
-      if (method === 'GET' && parsed.pathname.endsWith('/cs/v1/audit/orderactivities')) {
-        return jsonResponse({ Data: [] });
-      }
-      if (method === 'DELETE' && parsed.pathname.includes('/trade/v2/orders/')) {
-        return jsonResponse(undefined);
-      }
-      throw new Error(`saxo priority lane test: unmocked request ${method} ${parsed.pathname}`);
+      return route.respond(parsed);
     });
   }
 

@@ -44,6 +44,50 @@ function readJsonList<T>(
   }
 }
 
+function logConditionsUnparseable(logger: Logger | undefined, debate_id: string): void {
+  logger?.log({
+    trace_id: currentTraceId() ?? debate_id,
+    stage: 'risk',
+    event: 'risk_critic_conditions_unparseable',
+    level: 'warn',
+    message:
+      'risk_critic_log: conditions_json is not valid JSON; the row replays as no_conditions (#1068)',
+    payload: { debate_id, reason: 'unparseable_json' },
+  });
+}
+
+function logConditionsNotArray(logger: Logger | undefined, debate_id: string): void {
+  logger?.log({
+    trace_id: currentTraceId() ?? debate_id,
+    stage: 'risk',
+    event: 'risk_critic_conditions_not_array',
+    level: 'warn',
+    message:
+      'risk_critic_log: conditions_json is not a JSON array; the row replays as no_conditions (#1068)',
+    payload: { debate_id, reason: 'not_an_array' },
+  });
+}
+
+function logConditionsDropped(
+  logger: Logger | undefined,
+  debate_id: string,
+  emitted: number,
+  survived: number,
+  dropped: number,
+): void {
+  logger?.log({
+    trace_id: currentTraceId() ?? debate_id,
+    stage: 'risk',
+    event: 'risk_critic_conditions_dropped_on_read',
+    level: 'warn',
+    message:
+      'risk_critic_log: persisted invalidation condition(s) failed the tightened shape ' +
+      'check on read and were dropped from replay; surviving conditions (if any) replay ' +
+      'unaffected, and the row falls back to no_conditions only if nothing survived (#1068)',
+    payload: { debate_id, emitted, survived, dropped },
+  });
+}
+
 function readConditionsJson(
   stored: string | null,
   debate_id: string,
@@ -55,28 +99,12 @@ function readConditionsJson(
   try {
     parsed = JSON.parse(stored);
   } catch {
-    logger?.log({
-      trace_id: currentTraceId() ?? debate_id,
-      stage: 'risk',
-      event: 'risk_critic_conditions_unparseable',
-      level: 'warn',
-      message:
-        'risk_critic_log: conditions_json is not valid JSON; the row replays as no_conditions (#1068)',
-      payload: { debate_id, reason: 'unparseable_json' },
-    });
+    logConditionsUnparseable(logger, debate_id);
     return undefined;
   }
 
   if (!Array.isArray(parsed)) {
-    logger?.log({
-      trace_id: currentTraceId() ?? debate_id,
-      stage: 'risk',
-      event: 'risk_critic_conditions_not_array',
-      level: 'warn',
-      message:
-        'risk_critic_log: conditions_json is not a JSON array; the row replays as no_conditions (#1068)',
-      payload: { debate_id, reason: 'not_an_array' },
-    });
+    logConditionsNotArray(logger, debate_id);
     return undefined;
   }
 
@@ -84,17 +112,7 @@ function readConditionsJson(
   const survived = conditions?.length ?? 0;
   const dropped = parsed.length - survived;
   if (dropped > 0) {
-    logger?.log({
-      trace_id: currentTraceId() ?? debate_id,
-      stage: 'risk',
-      event: 'risk_critic_conditions_dropped_on_read',
-      level: 'warn',
-      message:
-        'risk_critic_log: persisted invalidation condition(s) failed the tightened shape ' +
-        'check on read and were dropped from replay; surviving conditions (if any) replay ' +
-        'unaffected, and the row falls back to no_conditions only if nothing survived (#1068)',
-      payload: { debate_id, emitted: parsed.length, survived, dropped },
-    });
+    logConditionsDropped(logger, debate_id, parsed.length, survived, dropped);
   }
   return conditions;
 }

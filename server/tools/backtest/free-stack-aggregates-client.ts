@@ -67,6 +67,19 @@ interface AlpacaRawBar {
   v?: unknown;
 }
 
+function parseAlpacaBarFields(bar: AlpacaRawBar): PolygonAggregate | undefined {
+  const t = typeof bar.t === 'string' ? Date.parse(bar.t) : undefined;
+  const o = requireFiniteNumber(bar.o);
+  const h = requireFiniteNumber(bar.h);
+  const l = requireFiniteNumber(bar.l);
+  const c = requireFiniteNumber(bar.c);
+  const v = requireFiniteNumber(bar.v);
+  if (t === undefined || Number.isNaN(t)) return undefined;
+  if (o === undefined || h === undefined || l === undefined) return undefined;
+  if (c === undefined || v === undefined) return undefined;
+  return { t, o, h, l, c, v };
+}
+
 function validateAlpacaBar(raw: unknown, symbol: string): PolygonAggregate {
   const bad = (): never => {
     throw new Error(
@@ -75,17 +88,7 @@ function validateAlpacaBar(raw: unknown, symbol: string): PolygonAggregate {
     );
   };
   if (typeof raw !== 'object' || raw === null) return bad();
-  const bar = raw as AlpacaRawBar;
-  const t = typeof bar.t === 'string' ? Date.parse(bar.t) : undefined;
-  const o = requireFiniteNumber(bar.o);
-  const h = requireFiniteNumber(bar.h);
-  const l = requireFiniteNumber(bar.l);
-  const c = requireFiniteNumber(bar.c);
-  const v = requireFiniteNumber(bar.v);
-  if (t === undefined || Number.isNaN(t)) return bad();
-  if (o === undefined || h === undefined || l === undefined) return bad();
-  if (c === undefined || v === undefined) return bad();
-  return { t, o, h, l, c, v };
+  return parseAlpacaBarFields(raw as AlpacaRawBar) ?? bad();
 }
 
 export interface FreeStackAggregatesClientOptions {
@@ -97,6 +100,16 @@ export interface FreeStackAggregatesClientOptions {
   rateLimiter?: TokenBucket;
 }
 
+function requireCredential(value: string | undefined, envVar: string, field: string): string {
+  if (value === undefined || value.length === 0) {
+    throw new Error(
+      `FreeStackAggregatesClient: ${envVar} is not set. Provide it via the environment ` +
+        `(.env.local) or pass { ${field} } explicitly.`,
+    );
+  }
+  return value;
+}
+
 export class FreeStackAggregatesClient implements PolygonClient {
   private readonly alpacaKeyId: string;
   private readonly alpacaSecretKey: string;
@@ -106,22 +119,16 @@ export class FreeStackAggregatesClient implements PolygonClient {
   private readonly rateLimiter: TokenBucket;
 
   constructor(options: FreeStackAggregatesClientOptions = {}) {
-    const keyId = options.alpacaKeyId ?? process.env.ALPACA_API_KEY;
-    const secretKey = options.alpacaSecretKey ?? process.env.ALPACA_API_SECRET;
-    if (keyId === undefined || keyId.length === 0) {
-      throw new Error(
-        'FreeStackAggregatesClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
-          '(.env.local) or pass { alpacaKeyId } explicitly.',
-      );
-    }
-    if (secretKey === undefined || secretKey.length === 0) {
-      throw new Error(
-        'FreeStackAggregatesClient: ALPACA_API_SECRET is not set. Provide it via the ' +
-          'environment (.env.local) or pass { alpacaSecretKey } explicitly.',
-      );
-    }
-    this.alpacaKeyId = keyId;
-    this.alpacaSecretKey = secretKey;
+    this.alpacaKeyId = requireCredential(
+      options.alpacaKeyId ?? process.env.ALPACA_API_KEY,
+      'ALPACA_API_KEY',
+      'alpacaKeyId',
+    );
+    this.alpacaSecretKey = requireCredential(
+      options.alpacaSecretKey ?? process.env.ALPACA_API_SECRET,
+      'ALPACA_API_SECRET',
+      'alpacaSecretKey',
+    );
     this.alpacaBaseUrl = options.alpacaBaseUrl ?? DEFAULT_ALPACA_BASE_URL;
     this.coinbaseBaseUrl = options.coinbaseBaseUrl ?? DEFAULT_COINBASE_BASE_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;

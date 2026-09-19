@@ -42,6 +42,18 @@ export async function readErrorBody(
   return { detail, ...parseErrorFields(bodyText) };
 }
 
+function extractCode(record: Record<string, unknown>): string | undefined {
+  return 'code' in record && typeof record.code === 'number' && Number.isFinite(record.code)
+    ? String(record.code)
+    : undefined;
+}
+
+function extractMessage(record: Record<string, unknown>): string | undefined {
+  return 'message' in record && typeof record.message === 'string' && record.message.length > 0
+    ? truncateForError(record.message)
+    : undefined;
+}
+
 function parseErrorFields(bodyText: string): {
   code: string | undefined;
   message: string | undefined;
@@ -56,17 +68,7 @@ function parseErrorFields(bodyText: string): {
   if (typeof parsed !== 'object' || parsed === null) return { code: undefined, message: undefined };
   const record = parsed as Record<string, unknown>;
 
-  const code =
-    'code' in record && typeof record.code === 'number' && Number.isFinite(record.code)
-      ? String(record.code)
-      : undefined;
-
-  const message =
-    'message' in record && typeof record.message === 'string' && record.message.length > 0
-      ? truncateForError(record.message)
-      : undefined;
-
-  return { code, message };
+  return { code: extractCode(record), message: extractMessage(record) };
 }
 
 export async function readErrorDetail(response: Response): Promise<string> {

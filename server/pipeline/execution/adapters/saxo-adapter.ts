@@ -68,6 +68,33 @@ interface DormantDeferRecord {
   readonly lastAlertedAtMs: number;
 }
 
+function dormantDeferPriorOrDefaults(
+  prior: DormantDeferRecord | undefined,
+  now: Date,
+): DormantDeferRecord {
+  if (prior !== undefined) return prior;
+  return { consecutive: 0, firstObservedAt: now, masterSeenOpen: false, lastAlertedAtMs: 0 };
+}
+
+function nextDormantDeferState(
+  prior: DormantDeferRecord | undefined,
+  masterSeenOpen: boolean,
+  now: Date,
+): { record: DormantDeferRecord; due: boolean } {
+  const defaults = dormantDeferPriorOrDefaults(prior, now);
+  const consecutive = defaults.consecutive + 1;
+  const due = dueForDormantDeferAlert(consecutive, defaults.lastAlertedAtMs, now.getTime());
+  return {
+    record: {
+      consecutive,
+      firstObservedAt: defaults.firstObservedAt,
+      masterSeenOpen: masterSeenOpen || defaults.masterSeenOpen,
+      lastAlertedAtMs: due ? now.getTime() : defaults.lastAlertedAtMs,
+    },
+    due,
+  };
+}
+
 function refusedKey(externalReference: string): string {
   return `refused:${externalReference}`;
 }
@@ -622,22 +649,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   ): Promise<void> {
     const now = this.clock.now();
     const prior = this.dormantDefer.get(deferKey);
-    const consecutive = (prior?.consecutive ?? 0) + 1;
-    const firstObservedAt = prior?.firstObservedAt ?? now;
-    const lastAlertedAtMs = prior?.lastAlertedAtMs ?? 0;
-    const due = dueForDormantDeferAlert(consecutive, lastAlertedAtMs, now.getTime());
-    this.dormantDefer.set(deferKey, {
-      consecutive,
-      firstObservedAt,
-      masterSeenOpen: masterSeenOpen || prior?.masterSeenOpen === true,
-      lastAlertedAtMs: due ? now.getTime() : lastAlertedAtMs,
-    });
+    const { record, due } = nextDormantDeferState(prior, masterSeenOpen, now);
+    this.dormantDefer.set(deferKey, record);
     if (!due) return;
     try {
       await this.dormantLegsAlerts.postDormantLegsUnresolvedAlert({
         client_order_id: externalReference,
         instrument: instrument ?? this.brackets.get(externalReference)?.instrument ?? '',
-        stuck_ms: now.getTime() - firstObservedAt.getTime(),
+        stuck_ms: now.getTime() - record.firstObservedAt.getTime(),
         observed_at: now,
       });
     } catch {
@@ -1102,16 +1121,21 @@ interface QuotedFill {
   timestamp: Date;
 }
 
-function toQuotedFill(
+function isFiniteQty(qty: number | undefined): boolean {
+  return typeof qty === 'number' && Number.isFinite(qty) && qty > 0;
+}
+
+function isFinitePrice(price: number | undefined): boolean {
+  return typeof price === 'number' && Number.isFinite(price);
+}
+
+function validateQuotedFillPresence(
   activity: SaxoOrderActivity,
   clientOrderId: string,
   leg: Leg,
-  since: Date,
-): QuotedFill | undefined {
-  const qty = activity.FillAmount;
-  const quoted = activity.AveragePrice;
-  const hasQty = typeof qty === 'number' && Number.isFinite(qty) && qty > 0;
-  const hasPrice = typeof quoted === 'number' && Number.isFinite(quoted);
+  hasQty: boolean,
+  hasPrice: boolean,
+): boolean {
   if (!hasQty && !hasPrice) {
     if (activity.Status === 'FinalFill' || activity.Status === 'Filled') {
       throw new Error(
@@ -1120,23 +1144,43 @@ function toQuotedFill(
           'real fill row (doc 43 round 2), so this row is unbookable, not empty.',
       );
     }
-    return undefined;
+    return true;
   }
   if (!hasQty || !hasPrice) {
     throw new Error(
       `Saxo activity ${activity.LogId} for '${clientOrderId}' (${leg}) carries only one of ` +
-        `FillAmount (${String(qty)}) and AveragePrice (${String(quoted)}).`,
+        `FillAmount (${String(activity.FillAmount)}) and AveragePrice ` +
+        `(${String(activity.AveragePrice)}).`,
     );
   }
+  return false;
+}
+
+function clampedFillTimestamp(activity: SaxoOrderActivity, since: Date): Date {
   const reported = new Date(activity.ActivityTime);
-  const timestamp = Number.isNaN(reported.getTime()) || reported < since ? since : reported;
+  return Number.isNaN(reported.getTime()) || reported < since ? since : reported;
+}
+
+function toQuotedFill(
+  activity: SaxoOrderActivity,
+  clientOrderId: string,
+  leg: Leg,
+  since: Date,
+): QuotedFill | undefined {
+  const qty = activity.FillAmount;
+  const quoted = activity.AveragePrice;
+  const hasQty = isFiniteQty(qty);
+  const hasPrice = isFinitePrice(quoted);
+  const empty = validateQuotedFillPresence(activity, clientOrderId, leg, hasQty, hasPrice);
+  if (empty) return undefined;
+
   return {
     client_order_id: clientOrderId,
     broker_fill_id: activity.LogId,
     leg,
-    qty,
-    quoted_price: quoted,
-    timestamp,
+    qty: qty as number,
+    quoted_price: quoted as number,
+    timestamp: clampedFillTimestamp(activity, since),
   };
 }
 

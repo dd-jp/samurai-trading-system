@@ -95,6 +95,28 @@ async function classifyCalendarResponseError(
   );
 }
 
+function requireApiKey(value: string | undefined): string {
+  if (value === undefined || value.length === 0) {
+    throw new Error(
+      'AlpacaHttpCalendarClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
+        '(.env.local) or pass { apiKey } explicitly — the paper account pair, shared with the ' +
+        'market-data client (per Alpaca public docs, one paper key pair covers both Trading ' +
+        'and Market Data APIs).',
+    );
+  }
+  return value;
+}
+
+function requireApiSecret(value: string | undefined): string {
+  if (value === undefined || value.length === 0) {
+    throw new Error(
+      'AlpacaHttpCalendarClient: ALPACA_API_SECRET is not set. Provide it via the environment ' +
+        '(.env.local) or pass { apiSecret } explicitly.',
+    );
+  }
+  return value;
+}
+
 export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
   readonly #apiKey: string;
   readonly #apiSecret: string;
@@ -104,24 +126,8 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
 
   constructor(options: AlpacaCalendarClientOptions = {}) {
     const fromEnv = (name: string): string | undefined => nonEmpty(process.env[name]);
-    const apiKey = options.apiKey ?? fromEnv('ALPACA_API_KEY');
-    const apiSecret = options.apiSecret ?? fromEnv('ALPACA_API_SECRET');
-    if (apiKey === undefined || apiKey.length === 0) {
-      throw new Error(
-        'AlpacaHttpCalendarClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiKey } explicitly — the paper account pair, shared with the ' +
-          'market-data client (per Alpaca public docs, one paper key pair covers both Trading ' +
-          'and Market Data APIs).',
-      );
-    }
-    if (apiSecret === undefined || apiSecret.length === 0) {
-      throw new Error(
-        'AlpacaHttpCalendarClient: ALPACA_API_SECRET is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiSecret } explicitly.',
-      );
-    }
-    this.#apiKey = apiKey;
-    this.#apiSecret = apiSecret;
+    this.#apiKey = requireApiKey(options.apiKey ?? fromEnv('ALPACA_API_KEY'));
+    this.#apiSecret = requireApiSecret(options.apiSecret ?? fromEnv('ALPACA_API_SECRET'));
     this.#baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#retry = options.retry ?? DEFAULT_RETRY_CONFIG;

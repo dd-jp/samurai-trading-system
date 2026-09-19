@@ -407,6 +407,53 @@ export function resolveApprovalsChannel(
   return config.approvals ?? new UnwiredApprovalChannel();
 }
 
+function resolveCapitalCeiling(
+  config: ProductionConfig,
+): ReturnType<typeof toCapitalCeilingUsd> | undefined {
+  const ceiling =
+    config.capitalCeilingUsd === undefined
+      ? undefined
+      : toCapitalCeilingUsd(config.capitalCeilingUsd, 'ProductionConfig.capitalCeilingUsd');
+  if (config.mode === 'live' && ceiling === undefined) {
+    throw new Error(
+      'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd, and ' +
+        'it is undefined. It is the ceiling every position size in a live run is derived from ' +
+        '(sizingEquity, production/direct-bind.ts) — build the config through ' +
+        'liveStartingProfile() rather than assembling ProductionConfig by hand, or set the ' +
+        'field explicitly. Refusing to size a live run off unclamped equity.',
+    );
+  }
+  return ceiling;
+}
+
+function assertNoOutsideBenchmarkCalendarCollision(
+  tradingCalendar: TradingCalendar,
+  universe: readonly UniverseInstrument[],
+): void {
+  if (tradingCalendar.constructor === UsEquityRegularHoursCalendar) {
+    return;
+  }
+  const collidingInstrument = universe.find((instrument) =>
+    BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
+  );
+  if (collidingInstrument === undefined) {
+    return;
+  }
+  throw new Error(
+    'Orchestrator cannot start: the resolved trading calendar ' +
+      '(equityCalendarFor(config)) is not UsEquityRegularHoursCalendar and ' +
+      `'${collidingInstrument.asset}' is still directly in ProductionConfig.universe. ` +
+      'That collides with the outside-benchmark path (#989): ' +
+      "buildBenchmarkDataSource's fixed benchmark port always normalizes against " +
+      'UsEquityRegularHoursCalendar — the two writers would target the same ' +
+      '(instrument, timeframe, open_time) row in the bars table under different ' +
+      `calendars. Safe once #751's LSE-only cutover lands (${collidingInstrument.asset} ` +
+      'becomes a non-tradeable screening instrument, per LseMarkDataSource#assertTradeable), ' +
+      `once this universe drops '${collidingInstrument.asset}', or once ` +
+      'config.tradingCalendar resolves to UsEquityRegularHoursCalendar.',
+  );
+}
+
 function resolveProductionBootConfig(
   config: ProductionConfig,
   clock: Clock,
@@ -434,45 +481,14 @@ function resolveProductionBootConfig(
     );
   }
 
-  const ceiling =
-    config.capitalCeilingUsd === undefined
-      ? undefined
-      : toCapitalCeilingUsd(config.capitalCeilingUsd, 'ProductionConfig.capitalCeilingUsd');
-  if (config.mode === 'live' && ceiling === undefined) {
-    throw new Error(
-      'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd, and ' +
-        'it is undefined. It is the ceiling every position size in a live run is derived from ' +
-        '(sizingEquity, production/direct-bind.ts) — build the config through ' +
-        'liveStartingProfile() rather than assembling ProductionConfig by hand, or set the ' +
-        'field explicitly. Refusing to size a live run off unclamped equity.',
-    );
-  }
+  const ceiling = resolveCapitalCeiling(config);
 
   const environment = readProductionEnvironment(config);
 
   const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
 
   const tradingCalendar = equityCalendarFor(config);
-  if (tradingCalendar.constructor !== UsEquityRegularHoursCalendar) {
-    const collidingInstrument = universe.find((instrument) =>
-      BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
-    );
-    if (collidingInstrument !== undefined) {
-      throw new Error(
-        'Orchestrator cannot start: the resolved trading calendar ' +
-          '(equityCalendarFor(config)) is not UsEquityRegularHoursCalendar and ' +
-          `'${collidingInstrument.asset}' is still directly in ProductionConfig.universe. ` +
-          'That collides with the outside-benchmark path (#989): ' +
-          "buildBenchmarkDataSource's fixed benchmark port always normalizes against " +
-          'UsEquityRegularHoursCalendar — the two writers would target the same ' +
-          '(instrument, timeframe, open_time) row in the bars table under different ' +
-          `calendars. Safe once #751's LSE-only cutover lands (${collidingInstrument.asset} ` +
-          'becomes a non-tradeable screening instrument, per LseMarkDataSource#assertTradeable), ' +
-          `once this universe drops '${collidingInstrument.asset}', or once ` +
-          'config.tradingCalendar resolves to UsEquityRegularHoursCalendar.',
-      );
-    }
-  }
+  assertNoOutsideBenchmarkCalendarCollision(tradingCalendar, universe);
 
   if (tradingCalendar instanceof LseRegularHoursCalendar) {
     assertLseCalendarCoverage({
@@ -932,6 +948,69 @@ function buildExecutionAndRiskInfra(deps: {
 
   return { executionStore, broker, circuitBreakers, ciiConsumer, breakerStateDeps, executionDeps };
 }
+function armLlmSpendCap(deps: {
+  config: ProductionConfig;
+  clock: Clock;
+  logger: Logger;
+  breachAlerts: BreachAlertChannel;
+  publishedSpendCap: SqliteLlmSpendCapStore;
+}): SpendCap {
+  const { config, clock, logger, breachAlerts, publishedSpendCap } = deps;
+
+  if (config.llmBudgetUsd === undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      event: 'llm_budget_uncapped',
+      level: 'warn',
+      message:
+        'ProductionConfig.llmBudgetUsd is not set — LLM spend is UNCAPPED. Nothing will ' +
+        'stop this process billing without bound; the rate limiter bounds calls per ' +
+        'window, not total dollars, and it refills. Correct for a short attended run; an ' +
+        'unattended soak (#238) must set a budget.',
+      payload: { llm_budget_usd: null },
+    });
+    publishedSpendCap.arm(null, clock.now());
+    return UNCAPPED_SPEND;
+  }
+
+  const cap = new SqliteSpendCap(
+    guardedStore(config.db, 'debate-engine'),
+    config.llmBudgetUsd,
+    logger,
+    () =>
+      breachAlerts.postBreachAlert({
+        breaches: [LLM_SPEND_CAP_BREACH],
+        reported_at: clock.now(),
+      }),
+  );
+  publishedSpendCap.arm(config.llmBudgetUsd, clock.now());
+
+  const opening = cap.startingTotal();
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    event: 'llm_spend_cap_armed',
+    level: opening.admitted ? 'info' : 'error',
+    message: opening.admitted
+      ? `LLM spend cap armed: $${opening.spent_usd.toFixed(2)} of ` +
+        `$${opening.budget_usd.toFixed(2)} already recorded in this database, ` +
+        `$${(opening.budget_usd - opening.spent_usd).toFixed(2)} remaining. The window is the ` +
+        'whole llm_spend table, so spend from earlier runs against this file counts. Start ' +
+        'from a fresh store if this run is meant to have the full budget.'
+      : `LLM spend cap is ALREADY BREACHED at startup: ${opening.reason}. No debate will be ` +
+        'admitted and the run will take no new trade. Raise llmBudgetUsd or start from a ' +
+        'fresh store.',
+    payload: {
+      spent_usd: opening.spent_usd,
+      budget_usd: opening.budget_usd,
+      admitted: opening.admitted,
+    },
+  });
+
+  return cap;
+}
+
 function buildMarketDataAndSpendLayer(deps: {
   config: ProductionConfig;
   clock: Clock;
@@ -1028,58 +1107,7 @@ function buildMarketDataAndSpendLayer(deps: {
 
   const publishedSpendCap = new SqliteLlmSpendCapStore(guardedStore(config.db, 'orchestrator'));
 
-  let spendCap: SpendCap;
-  if (config.llmBudgetUsd === undefined) {
-    logger.log({
-      trace_id: 'startup',
-      stage: 'orchestrator',
-      event: 'llm_budget_uncapped',
-      level: 'warn',
-      message:
-        'ProductionConfig.llmBudgetUsd is not set — LLM spend is UNCAPPED. Nothing will ' +
-        'stop this process billing without bound; the rate limiter bounds calls per ' +
-        'window, not total dollars, and it refills. Correct for a short attended run; an ' +
-        'unattended soak (#238) must set a budget.',
-      payload: { llm_budget_usd: null },
-    });
-    publishedSpendCap.arm(null, clock.now());
-    spendCap = UNCAPPED_SPEND;
-  } else {
-    const cap = new SqliteSpendCap(
-      guardedStore(config.db, 'debate-engine'),
-      config.llmBudgetUsd,
-      logger,
-      () =>
-        breachAlerts.postBreachAlert({
-          breaches: [LLM_SPEND_CAP_BREACH],
-          reported_at: clock.now(),
-        }),
-    );
-    spendCap = cap;
-    publishedSpendCap.arm(config.llmBudgetUsd, clock.now());
-
-    const opening = cap.startingTotal();
-    logger.log({
-      trace_id: 'startup',
-      stage: 'orchestrator',
-      event: 'llm_spend_cap_armed',
-      level: opening.admitted ? 'info' : 'error',
-      message: opening.admitted
-        ? `LLM spend cap armed: $${opening.spent_usd.toFixed(2)} of ` +
-          `$${opening.budget_usd.toFixed(2)} already recorded in this database, ` +
-          `$${(opening.budget_usd - opening.spent_usd).toFixed(2)} remaining. The window is the ` +
-          'whole llm_spend table, so spend from earlier runs against this file counts. Start ' +
-          'from a fresh store if this run is meant to have the full budget.'
-        : `LLM spend cap is ALREADY BREACHED at startup: ${opening.reason}. No debate will be ` +
-          'admitted and the run will take no new trade. Raise llmBudgetUsd or start from a ' +
-          'fresh store.',
-      payload: {
-        spent_usd: opening.spent_usd,
-        budget_usd: opening.budget_usd,
-        admitted: opening.admitted,
-      },
-    });
-  }
+  const spendCap = armLlmSpendCap({ config, clock, logger, breachAlerts, publishedSpendCap });
 
   return {
     marketData,

@@ -32,25 +32,27 @@ interface DebateLogRow {
   termination_cause: DebateTerminationCause | null;
 }
 
+const DEBATE_LOG_COLUMNS: ReadonlyArray<(entry: DebateLog) => unknown> = [
+  (entry) => entry.debate_id,
+  (entry) => entry.instrument,
+  (entry) => toStoredTimestamp(entry.bar_timestamp),
+  (entry) => JSON.stringify(entry.contributions),
+  (entry) => entry.direction,
+  (entry) => entry.rounds,
+  (entry) => toStoredTimestamp(entry.created_at),
+  (entry) => entry.trace_id ?? null,
+  (entry) => entry.confidence ?? null,
+  (entry) => entry.synthesis ?? null,
+  (entry) => entry.position ?? null,
+  (entry) => entry.disagreement_summary ?? null,
+  (entry) => (entry.open_items === undefined ? null : JSON.stringify(entry.open_items)),
+  (entry) => (entry.converged === undefined ? null : entry.converged ? 1 : 0),
+  (entry) => entry.termination ?? null,
+  (entry) => entry.termination_cause ?? null,
+];
+
 function debateLogInsertParams(entry: DebateLog): unknown[] {
-  return [
-    entry.debate_id,
-    entry.instrument,
-    toStoredTimestamp(entry.bar_timestamp),
-    JSON.stringify(entry.contributions),
-    entry.direction,
-    entry.rounds,
-    toStoredTimestamp(entry.created_at),
-    entry.trace_id ?? null,
-    entry.confidence ?? null,
-    entry.synthesis ?? null,
-    entry.position ?? null,
-    entry.disagreement_summary ?? null,
-    entry.open_items === undefined ? null : JSON.stringify(entry.open_items),
-    entry.converged === undefined ? null : entry.converged ? 1 : 0,
-    entry.termination ?? null,
-    entry.termination_cause ?? null,
-  ];
+  return DEBATE_LOG_COLUMNS.map((column) => column(entry));
 }
 
 export class SqliteDebateLogStore implements DebateLogStore {

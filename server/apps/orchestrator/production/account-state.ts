@@ -91,6 +91,24 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
       : this.input.sessionEquity.realizedSince(key, openAt);
   }
 
+  private resolveSessionOpen(
+    key: SessionEquityKey,
+    equity: number,
+    sessionStart: Date,
+    stored: ReturnType<SqliteSessionEquityStore['get']>,
+    observedAtBoundary: boolean,
+  ): { openEquity: number; openAt: Date; trustworthy: boolean } {
+    if (stored === null || stored.open_at.getTime() < sessionStart.getTime()) {
+      this.input.sessionEquity.put(key, equity, sessionStart, observedAtBoundary);
+      return { openEquity: equity, openAt: sessionStart, trustworthy: observedAtBoundary };
+    }
+    return {
+      openEquity: stored.open_equity,
+      openAt: stored.open_at,
+      trustworthy: stored.observed_at_boundary,
+    };
+  }
+
   private sessionBasisFor(key: SessionEquityKey, equity: number, asOf: Date): SessionBasis {
     const sessionStart = this.calendarFor(key).sessionStart(asOf);
     const stored = this.input.sessionEquity.get(key);
@@ -102,18 +120,13 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
       this.input.dailyEquity.append(sessionStart, equity, asOf, observedAtBoundary);
     }
 
-    let { open_equity: openEquity, open_at: openAt } = stored ?? {
-      open_equity: equity,
-      open_at: sessionStart,
-    };
-    let trustworthy = stored?.observed_at_boundary ?? false;
-
-    if (stored === null || openAt.getTime() < sessionStart.getTime()) {
-      this.input.sessionEquity.put(key, equity, sessionStart, observedAtBoundary);
-      openEquity = equity;
-      openAt = sessionStart;
-      trustworthy = observedAtBoundary;
-    }
+    const { openEquity, openAt, trustworthy } = this.resolveSessionOpen(
+      key,
+      equity,
+      sessionStart,
+      stored,
+      observedAtBoundary,
+    );
 
     if (!trustworthy) {
       return this.midSessionBase(key, openEquity, openAt, sessionStart);

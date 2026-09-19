@@ -70,6 +70,35 @@ export interface AlpacaBrokerAdapterInput {
 
 type LookedUpOrderId = { id: string | null } | { error: unknown };
 
+function openOrderIdByClientOrderId(
+  open: readonly AlpacaOrder[],
+  clientOrderId: string,
+): string | null {
+  return open.find((candidate) => candidate.client_order_id === clientOrderId)?.id ?? null;
+}
+
+function latestRearmOrderId(open: readonly AlpacaOrder[], clientOrderId: string): string | null {
+  let best: { attempt: number; id: string } | null = null;
+  for (const candidate of open) {
+    const attempt = rearmAttemptOf(clientOrderId, candidate.client_order_id);
+    if (attempt === null) continue;
+    if (best === null || attempt > best.attempt) best = { attempt, id: candidate.id };
+  }
+  return best?.id ?? null;
+}
+
+function resolvedId(
+  result: LookedUpOrderId,
+  open: readonly AlpacaOrder[],
+  fallback: (open: readonly AlpacaOrder[]) => string | null,
+): string | null {
+  return 'error' in result ? fallback(open) : result.id;
+}
+
+function firstLookupError(order: LookedUpOrderId, rearmed: LookedUpOrderId): unknown {
+  return 'error' in order ? order.error : (rearmed as { error: unknown }).error;
+}
+
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, string>();
   private readonly bracketSubmittedAt = new Map<string, Date>();
@@ -173,38 +202,31 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   ): Promise<{ order: string | null; rearmedOrder: string | null }> {
     const inProcessRearm = this.rearmedLegs.get(clientOrderId) ?? null;
     const order = await this.lookupOpenOrderId(clientOrderId);
-    const rearmed: LookedUpOrderId =
-      inProcessRearm !== null
-        ? { id: inProcessRearm }
-        : 'error' in order
-          ? order
-          : await this.lookupLatestRearmOrderId(clientOrderId);
+    const rearmed = await this.resolveRearmedOrderId(clientOrderId, inProcessRearm, order);
     if (!('error' in order) && !('error' in rearmed)) {
       return { order: order.id, rearmedOrder: rearmed.id };
     }
 
-    const lookupError = 'error' in order ? order.error : (rearmed as { error: unknown }).error;
     let open: readonly AlpacaOrder[];
     try {
       open = await this.call('cancel', () => this.input.client.listOpenOrders());
     } catch {
-      throw lookupError;
+      throw firstLookupError(order, rearmed);
     }
-    const idOf = (key: string): string | null =>
-      open.find((candidate) => candidate.client_order_id === key)?.id ?? null;
-    const latestRearmId = (): string | null => {
-      let best: { attempt: number; id: string } | null = null;
-      for (const candidate of open) {
-        const attempt = rearmAttemptOf(clientOrderId, candidate.client_order_id);
-        if (attempt === null) continue;
-        if (best === null || attempt > best.attempt) best = { attempt, id: candidate.id };
-      }
-      return best?.id ?? null;
-    };
     return {
-      order: 'error' in order ? idOf(clientOrderId) : order.id,
-      rearmedOrder: 'error' in rearmed ? latestRearmId() : rearmed.id,
+      order: resolvedId(order, open, (list) => openOrderIdByClientOrderId(list, clientOrderId)),
+      rearmedOrder: resolvedId(rearmed, open, (list) => latestRearmOrderId(list, clientOrderId)),
     };
+  }
+
+  private async resolveRearmedOrderId(
+    clientOrderId: string,
+    inProcessRearm: string | null,
+    order: LookedUpOrderId,
+  ): Promise<LookedUpOrderId> {
+    if (inProcessRearm !== null) return { id: inProcessRearm };
+    if ('error' in order) return order;
+    return this.lookupLatestRearmOrderId(clientOrderId);
   }
 
   private async lookupLatestRearmOrderId(clientOrderId: string): Promise<LookedUpOrderId> {

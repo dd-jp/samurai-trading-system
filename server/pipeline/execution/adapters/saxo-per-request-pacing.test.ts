@@ -85,27 +85,49 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
+interface RoutedFetchRoute {
+  method: string;
+  matches: (pathname: string) => boolean;
+  respond: () => Response;
+}
+
 function routedFetch(openOrders: readonly unknown[]): ReturnType<typeof vi.fn> {
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat method+path dispatch, one branch per mocked endpoint
+  const routes: readonly RoutedFetchRoute[] = [
+    {
+      method: 'GET',
+      matches: (pathname) => pathname.endsWith('/port/v1/accounts/me'),
+      respond: () => jsonResponse(ACCOUNTS),
+    },
+    {
+      method: 'GET',
+      matches: (pathname) => pathname.endsWith('/port/v1/orders/me'),
+      respond: () => jsonResponse({ Data: openOrders }),
+    },
+    {
+      method: 'GET',
+      matches: (pathname) => pathname.endsWith('/cs/v1/audit/orderactivities'),
+      respond: () => jsonResponse({ Data: [] }),
+    },
+    {
+      method: 'POST',
+      matches: (pathname) => pathname.endsWith('/trade/v2/orders'),
+      respond: () => jsonResponse(PLACEMENT),
+    },
+    {
+      method: 'DELETE',
+      matches: (pathname) => pathname.includes('/trade/v2/orders/'),
+      respond: () => jsonResponse(undefined),
+    },
+  ];
+
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const { pathname } = new URL(String(url));
     const method = init?.method ?? 'GET';
-    if (method === 'GET' && pathname.endsWith('/port/v1/accounts/me')) {
-      return jsonResponse(ACCOUNTS);
+    const route = routes.find((r) => r.method === method && r.matches(pathname));
+    if (route === undefined) {
+      throw new Error(`saxo-per-request-pacing.test.ts: unmocked request ${method} ${pathname}`);
     }
-    if (method === 'GET' && pathname.endsWith('/port/v1/orders/me')) {
-      return jsonResponse({ Data: openOrders });
-    }
-    if (method === 'GET' && pathname.endsWith('/cs/v1/audit/orderactivities')) {
-      return jsonResponse({ Data: [] });
-    }
-    if (method === 'POST' && pathname.endsWith('/trade/v2/orders')) {
-      return jsonResponse(PLACEMENT);
-    }
-    if (method === 'DELETE' && pathname.includes('/trade/v2/orders/')) {
-      return jsonResponse(undefined);
-    }
-    throw new Error(`saxo-per-request-pacing.test.ts: unmocked request ${method} ${pathname}`);
+    return route.respond();
   });
 }
 

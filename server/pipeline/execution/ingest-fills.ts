@@ -2,6 +2,7 @@ import type { Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
   BOOK_CURRENCY,
   coversQty,
+  type ExitFill,
   isBookCurrency,
   isExitFill,
   isFlat,
@@ -479,6 +480,10 @@ async function handleLotWithNoNewFills(
   }
 }
 
+// The resizeProtectiveLegs call, the maybeRearmResidual call, and the final applyLotAdvance
+// write are each gated on filledSize/flat computed just above and ordered relative to each
+// other and to that write — a further split risks decoupling a broker call from the exact
+// state snapshot it must act on
 async function advanceLot(
   input: FillIngestInput,
   position: OpenPosition,
@@ -507,31 +512,19 @@ async function advanceLot(
     ...(persisted ?? (await store.getFills(position.idempotency_key))),
     ...newFills,
   ];
-  const entryFills = recorded.filter((fill) => fill.leg === 'entry');
-  const exitFills = recorded.filter(isExitFill);
-
-  const filledSize = totalQty(entryFills);
+  const filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));
   if (filledSize === 0) {
     await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
     return;
   }
 
-  const { hadWarned } = input.filledZeroSizeThrottle.clear(position.idempotency_key);
-  if (hadWarned) {
-    safeLog(input.logger, {
-      trace_id: input.trace_id,
-      stage: 'execution',
-      event: 'fill_zero_size_cleared',
-      level: 'info',
-      message: FILLED_ZERO_SIZE_CLEARED,
-      payload: { idempotency_key: position.idempotency_key, instrument: position.instrument },
-    });
-  }
+  await clearFillZeroSizeWarning(input, position);
 
-  const avgEntryPrice = weightedAvgPrice(entryFills);
-  const exitQty = totalQty(exitFills);
-  const flat = isFlat({ filledSize, exitQty });
-  const orderState = nextState(position, filledSize, flat);
+  const { entryFills, exitFills, avgEntryPrice, exitQty, flat, orderState } = computeLotState(
+    position,
+    recorded,
+    filledSize,
+  );
 
   if (!flat && ingestedEntry) {
     await broker.resizeProtectiveLegs(position.idempotency_key, filledSize);
@@ -555,6 +548,45 @@ async function advanceLot(
         }
       : {}),
   });
+}
+
+async function clearFillZeroSizeWarning(
+  input: FillIngestInput,
+  position: OpenPosition,
+): Promise<void> {
+  const { hadWarned } = input.filledZeroSizeThrottle.clear(position.idempotency_key);
+  if (!hadWarned) return;
+  safeLog(input.logger, {
+    trace_id: input.trace_id,
+    stage: 'execution',
+    event: 'fill_zero_size_cleared',
+    level: 'info',
+    message: FILLED_ZERO_SIZE_CLEARED,
+    payload: { idempotency_key: position.idempotency_key, instrument: position.instrument },
+  });
+}
+
+interface LotState {
+  entryFills: Fill[];
+  exitFills: ExitFill[];
+  avgEntryPrice: number;
+  exitQty: number;
+  flat: boolean;
+  orderState: OrderState;
+}
+
+function computeLotState(
+  position: OpenPosition,
+  recorded: readonly Fill[],
+  filledSize: number,
+): LotState {
+  const entryFills = recorded.filter((fill) => fill.leg === 'entry');
+  const exitFills = recorded.filter(isExitFill);
+  const avgEntryPrice = weightedAvgPrice(entryFills);
+  const exitQty = totalQty(exitFills);
+  const flat = isFlat({ filledSize, exitQty });
+  const orderState = nextState(position, filledSize, flat);
+  return { entryFills, exitFills, avgEntryPrice, exitQty, flat, orderState };
 }
 
 function nextState(position: OpenPosition, filledSize: number, flat: boolean): OrderState {
@@ -653,6 +685,23 @@ async function warnOnNonSterlingFee(
   }
 }
 
+const OPTIONAL_FILL_KEYS = [
+  'exit_reason',
+  'flatten_idempotency_key',
+  'fee_currency',
+  'fx_rate_to_gbp',
+  'fx_rate_to_gbp_source',
+] as const satisfies readonly (keyof NormalizedFill & keyof Fill)[];
+
+function optionalFillFields(
+  fill: NormalizedFill,
+): Partial<Pick<Fill, (typeof OPTIONAL_FILL_KEYS)[number]>> {
+  const entries = OPTIONAL_FILL_KEYS.map((key) => [key, fill[key]] as const).filter(
+    ([, value]) => value !== undefined,
+  );
+  return Object.fromEntries(entries) as Partial<Pick<Fill, (typeof OPTIONAL_FILL_KEYS)[number]>>;
+}
+
 function toFill(
   fill: NormalizedFill,
   idempotencyKey: string,
@@ -664,6 +713,7 @@ function toFill(
       ? prorateCostBreakdown(modelledLegCost.breakdown, fill.qty / modelledLegCost.requestedSize)
       : undefined;
   const chargedFee = chargeTopUpTo(fill.fee, fallbackCostBreakdown?.commission);
+  const costBreakdown = fill.cost_breakdown ?? fallbackCostBreakdown;
 
   return {
     idempotency_key: idempotencyKey,
@@ -673,20 +723,8 @@ function toFill(
     qty: fill.qty,
     fee: chargedFee,
     timestamp: fill.timestamp,
-    ...(fill.cost_breakdown !== undefined
-      ? { cost_breakdown: fill.cost_breakdown }
-      : fallbackCostBreakdown !== undefined
-        ? { cost_breakdown: fallbackCostBreakdown }
-        : {}),
-    ...(fill.exit_reason === undefined ? {} : { exit_reason: fill.exit_reason }),
-    ...(fill.flatten_idempotency_key === undefined
-      ? {}
-      : { flatten_idempotency_key: fill.flatten_idempotency_key }),
-    ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
-    ...(fill.fx_rate_to_gbp === undefined ? {} : { fx_rate_to_gbp: fill.fx_rate_to_gbp }),
-    ...(fill.fx_rate_to_gbp_source === undefined
-      ? {}
-      : { fx_rate_to_gbp_source: fill.fx_rate_to_gbp_source }),
+    ...(costBreakdown === undefined ? {} : { cost_breakdown: costBreakdown }),
+    ...optionalFillFields(fill),
   };
 }
 

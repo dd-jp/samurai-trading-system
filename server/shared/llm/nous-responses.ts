@@ -70,14 +70,23 @@ interface OutputItem {
   content?: unknown;
 }
 
+function isMessageItem(item: OutputItem): boolean {
+  return item?.type === undefined || item.type === 'message';
+}
+
+function textOfOutputContent(content: OutputContent): string | null {
+  if (content?.type !== undefined && content.type !== 'output_text') return null;
+  return typeof content?.text === 'string' ? content.text : null;
+}
+
 function textPartsOf(item: OutputItem): string[] {
-  if (item?.type !== undefined && item.type !== 'message') return [];
+  if (!isMessageItem(item)) return [];
   if (!Array.isArray(item?.content)) return [];
 
   const parts: string[] = [];
   for (const content of item.content as OutputContent[]) {
-    if (content?.type !== undefined && content.type !== 'output_text') continue;
-    if (typeof content?.text === 'string') parts.push(content.text);
+    const text = textOfOutputContent(content);
+    if (text !== null) parts.push(text);
   }
   return parts;
 }
@@ -93,18 +102,27 @@ function extractText(body: ResponsesBody): string {
   return parts.join('');
 }
 
+function nestedUrlCitation(record: {
+  url_citation?: unknown;
+}): { url?: unknown; title?: unknown } | undefined {
+  return typeof record.url_citation === 'object' && record.url_citation !== null
+    ? (record.url_citation as { url?: unknown; title?: unknown })
+    : undefined;
+}
+
+function preferString(nested: unknown, fallback: unknown): unknown {
+  return typeof nested === 'string' ? nested : fallback;
+}
+
 function toCitation(annotation: unknown): NousCitation | null {
   if (typeof annotation !== 'object' || annotation === null) return null;
   const record = annotation as { url?: unknown; title?: unknown; url_citation?: unknown };
-  const nested =
-    typeof record.url_citation === 'object' && record.url_citation !== null
-      ? (record.url_citation as { url?: unknown; title?: unknown })
-      : undefined;
+  const nested = nestedUrlCitation(record);
 
-  const url = typeof nested?.url === 'string' ? nested.url : record.url;
+  const url = preferString(nested?.url, record.url);
   if (typeof url !== 'string' || url === '') return null;
 
-  const title = typeof nested?.title === 'string' ? nested.title : record.title;
+  const title = preferString(nested?.title, record.title);
   return { url, ...(typeof title === 'string' ? { title } : {}) };
 }
 
@@ -168,7 +186,54 @@ export async function nousResponses(
   return withNousGateSlot(options, (timeoutMs) => dispatchResponses(options, request, timeoutMs));
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent response-shape guards translating one wire failure (bad JSON, missing body, missing output, truncation) at a time into a typed error; splitting the checks apart would scatter this one wire contract across several functions.
+function buildResponsesRequestBody(request: NousResponsesRequest): Record<string, unknown> {
+  return {
+    model: request.model,
+    input: request.input,
+    ...(request.instructions === undefined ? {} : { instructions: request.instructions }),
+    ...(request.tools === undefined ? {} : { tools: request.tools }),
+    max_output_tokens: request.max_output_tokens,
+  };
+}
+
+function buildResponsesFetchInit(
+  options: NousResponsesOptions,
+  request: NousResponsesRequest,
+): RequestInit {
+  return {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${options.apiKey}`,
+    },
+    body: JSON.stringify(buildResponsesRequestBody(request)),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  };
+}
+
+function estimateServerToolCalls(
+  parsed: ResponsesBody,
+  citations: readonly NousCitation[],
+  maxServerToolCalls: number | undefined,
+): number {
+  const toolCalls = countServerToolCalls(parsed);
+  const estimatedFromCitations =
+    maxServerToolCalls === undefined
+      ? citations.length
+      : Math.min(citations.length, maxServerToolCalls);
+  return Math.max(toolCalls, estimatedFromCitations);
+}
+
+function createdAtMsOf(parsed: ResponsesBody): number | null {
+  return typeof parsed.created_at === 'number' && Number.isFinite(parsed.created_at)
+    ? parsed.created_at * 1000
+    : null;
+}
+
+function finishReasonOf(parsed: ResponsesBody): string | null {
+  return typeof parsed.status === 'string' ? parsed.status : null;
+}
+
 async function dispatchResponses(
   options: NousResponsesOptions,
   request: NousResponsesRequest,
@@ -177,21 +242,7 @@ async function dispatchResponses(
   const dispatchedAt = Date.now();
   const response = await fetchWithTimeout(
     `${options.baseUrl}/responses`,
-    {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${options.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: request.model,
-        input: request.input,
-        ...(request.instructions === undefined ? {} : { instructions: request.instructions }),
-        ...(request.tools === undefined ? {} : { tools: request.tools }),
-        max_output_tokens: request.max_output_tokens,
-      }),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    },
+    buildResponsesFetchInit(options, request),
     timeoutMs,
   );
   const ttfb_ms = Date.now() - dispatchedAt;
@@ -232,23 +283,14 @@ async function dispatchResponses(
 
   const citations = extractCitations(parsed);
 
-  const toolCalls = countServerToolCalls(parsed);
-  const ceiling = options.maxServerToolCalls;
-  const estimatedFromCitations =
-    ceiling === undefined ? citations.length : Math.min(citations.length, ceiling);
-  const server_tool_calls = Math.max(toolCalls, estimatedFromCitations);
-
   return {
     text: extractText(parsed),
     usage,
     model: resolveMeteredModel(parsed.model, request.model),
     citations,
-    server_tool_calls,
-    finish_reason: typeof parsed.status === 'string' ? parsed.status : null,
-    created_at_ms:
-      typeof parsed.created_at === 'number' && Number.isFinite(parsed.created_at)
-        ? parsed.created_at * 1000
-        : null,
+    server_tool_calls: estimateServerToolCalls(parsed, citations, options.maxServerToolCalls),
+    finish_reason: finishReasonOf(parsed),
+    created_at_ms: createdAtMsOf(parsed),
     ttfb_ms,
   };
 }

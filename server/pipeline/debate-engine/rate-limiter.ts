@@ -48,25 +48,33 @@ function assertBudget(budget: RateLimitConfig | undefined, where: string): void 
   check('maxDebates', 'non-negative');
 }
 
+function assertValidClock(clock: Clock): void {
+  if (clock === null || clock === undefined || typeof clock.now !== 'function') {
+    throw new Error('RateLimiter: clock is required and must implement now(): Date.');
+  }
+  if (!(clock.now() instanceof Date)) {
+    throw new Error('RateLimiter: clock.now() must return a Date.');
+  }
+}
+
+function assertValidRateLimiterConfig(config: RateLimiterConfig): void {
+  if (config === null || config === undefined) {
+    throw new Error('RateLimiter: config is required.');
+  }
+  assertBudget(config.default, 'default');
+  for (const [assetClass, budget] of Object.entries(config.perAssetClass ?? {})) {
+    if (budget !== undefined) assertBudget(budget, `perAssetClass.${assetClass}`);
+  }
+}
+
 export class RateLimiter {
   private readonly clock: Clock;
   private readonly config: RateLimiterConfig;
   private readonly windows = new Map<AssetClass, WindowState>();
 
   constructor(clock: Clock, config: RateLimiterConfig) {
-    if (clock === null || clock === undefined || typeof clock.now !== 'function') {
-      throw new Error('RateLimiter: clock is required and must implement now(): Date.');
-    }
-    if (!(clock.now() instanceof Date)) {
-      throw new Error('RateLimiter: clock.now() must return a Date.');
-    }
-    if (config === null || config === undefined) {
-      throw new Error('RateLimiter: config is required.');
-    }
-    assertBudget(config.default, 'default');
-    for (const [assetClass, budget] of Object.entries(config.perAssetClass ?? {})) {
-      if (budget !== undefined) assertBudget(budget, `perAssetClass.${assetClass}`);
-    }
+    assertValidClock(clock);
+    assertValidRateLimiterConfig(config);
 
     this.clock = clock;
     this.config = config;

@@ -38,6 +38,24 @@ const LEG_PREDICATES = Object.freeze({
   exit: "leg != 'entry'",
 } as const);
 
+function toSqliteBool(value: boolean): 0 | 1 {
+  return value ? 1 : 0;
+}
+
+function orNull<T>(value: T | undefined): T | null {
+  return value ?? null;
+}
+
+function nullableStoredTimestamp(
+  date: Date | undefined,
+): ReturnType<typeof toStoredTimestamp> | null {
+  return date === undefined ? null : toStoredTimestamp(date);
+}
+
+function nullableJson(value: unknown): string | null {
+  return value === undefined ? null : JSON.stringify(value);
+}
+
 export class DuplicatePositionError extends Error {
   constructor(readonly idempotency_key: string) {
     super(
@@ -132,22 +150,16 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(position.opened_at),
           toStoredTimestamp(position.decision_timestamp),
           position.conviction,
-          position.converged ? 1 : 0,
+          toSqliteBool(position.converged),
           this.arm,
-          position.decision_price ?? null,
-          position.quote_bid ?? null,
-          position.quote_ask ?? null,
-          position.quote_mid ?? null,
-          position.quote_observed_at === undefined
-            ? null
-            : toStoredTimestamp(position.quote_observed_at),
-          position.modelled_cost_breakdown === undefined
-            ? null
-            : JSON.stringify(position.modelled_cost_breakdown),
-          position.modelled_protective_exit_cost_breakdown === undefined
-            ? null
-            : JSON.stringify(position.modelled_protective_exit_cost_breakdown),
-          this.sizingCapitalCeiling ?? null,
+          orNull(position.decision_price),
+          orNull(position.quote_bid),
+          orNull(position.quote_ask),
+          orNull(position.quote_mid),
+          nullableStoredTimestamp(position.quote_observed_at),
+          nullableJson(position.modelled_cost_breakdown),
+          nullableJson(position.modelled_protective_exit_cost_breakdown),
+          orNull(this.sizingCapitalCeiling),
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -507,51 +519,16 @@ export class SqliteExecutionStore implements SharedStore {
     const modelledCostBreakdown = parseModelledCostBreakdownColumn(
       row.modelled_cost_breakdown_json,
     );
-
-    const keys = parseJsonColumn(idempotency_key, 'lot_idempotency_keys', row.lot_idempotency_keys);
-    if (!Array.isArray(keys) || !keys.every((entry) => typeof entry === 'string')) {
-      throw new Error(
-        `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_idempotency_keys for ` +
-          `'${idempotency_key}' is not a JSON array of strings`,
-      );
-    }
-
-    if (row.lot_held_quantities === null) {
-      return {
-        lot_idempotency_keys: keys,
-        lot_held_quantities: null,
-        exit_reason: row.exit_reason,
-        instrument: row.instrument,
-        side: row.side,
-        modelled_cost_breakdown: modelledCostBreakdown,
-        size: row.size,
-      };
-    }
-
-    const held = parseJsonColumn(idempotency_key, 'lot_held_quantities', row.lot_held_quantities);
-    if (!Array.isArray(held) || held.length !== keys.length) {
-      throw new Error(
-        `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities for ` +
-          `'${idempotency_key}' is not a JSON array of one quantity per journalled lot ` +
-          `(${keys.length})`,
-      );
-    }
-
-    const paired: LotHeldQuantity[] = [];
-    for (const [index, key] of keys.entries()) {
-      const quantity: unknown = held[index];
-      if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 0) {
-        throw new Error(
-          `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities ` +
-            `for '${idempotency_key}' holds an entry that is not a finite non-negative number`,
-        );
-      }
-      paired.push({ idempotency_key: key, held: quantity });
-    }
+    const keys = parseFlattenLotKeys(idempotency_key, row.lot_idempotency_keys);
+    const lot_held_quantities = parseFlattenHeldQuantities(
+      idempotency_key,
+      keys,
+      row.lot_held_quantities,
+    );
 
     return {
       lot_idempotency_keys: keys,
-      lot_held_quantities: paired,
+      lot_held_quantities,
       exit_reason: row.exit_reason,
       instrument: row.instrument,
       side: row.side,
@@ -767,4 +744,44 @@ function parseJsonColumn(idempotency_key: string, column: string, raw: string): 
       { cause },
     );
   }
+}
+
+function parseFlattenLotKeys(idempotency_key: string, raw: string): string[] {
+  const keys = parseJsonColumn(idempotency_key, 'lot_idempotency_keys', raw);
+  if (!Array.isArray(keys) || !keys.every((entry) => typeof entry === 'string')) {
+    throw new Error(
+      `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_idempotency_keys for ` +
+        `'${idempotency_key}' is not a JSON array of strings`,
+    );
+  }
+  return keys;
+}
+
+function parseFlattenHeldQuantities(
+  idempotency_key: string,
+  keys: readonly string[],
+  raw: string | null,
+): LotHeldQuantity[] | null {
+  if (raw === null) return null;
+  const held = parseJsonColumn(idempotency_key, 'lot_held_quantities', raw);
+  if (!Array.isArray(held) || held.length !== keys.length) {
+    throw new Error(
+      `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities for ` +
+        `'${idempotency_key}' is not a JSON array of one quantity per journalled lot ` +
+        `(${keys.length})`,
+    );
+  }
+
+  const paired: LotHeldQuantity[] = [];
+  for (const [index, key] of keys.entries()) {
+    const quantity: unknown = held[index];
+    if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 0) {
+      throw new Error(
+        `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities ` +
+          `for '${idempotency_key}' holds an entry that is not a finite non-negative number`,
+      );
+    }
+    paired.push({ idempotency_key: key, held: quantity });
+  }
+  return paired;
 }

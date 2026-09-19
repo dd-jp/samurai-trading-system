@@ -64,7 +64,6 @@ export async function nousChat(
   return withNousGateSlot(options, (timeoutMs) => dispatch(options, request, timeoutMs));
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent response-shape guards translating one wire failure (bad JSON, missing choices, truncation, refusal) at a time into a typed error; splitting the checks apart would scatter this one wire contract across several functions.
 async function dispatch(
   options: NousChatOptions,
   request: NousChatRequest,
@@ -109,20 +108,26 @@ async function dispatch(
 
   const usage = normaliseUsage(parsed.usage);
   const finish_reason = typeof choice.finish_reason === 'string' ? choice.finish_reason : null;
-
-  if (finish_reason === 'length') {
-    throw new NousTruncatedError(request.model, request.max_tokens, usage);
-  }
-
   const refusal = typeof choice.message?.refusal === 'string' ? choice.message.refusal : '';
-  if (finish_reason === 'content_filter' || refusal.trim() !== '') {
-    throw new NousRefusalError(
-      request.model,
-      finish_reason === 'content_filter' ? 'finish_reason="content_filter"' : 'message.refusal',
-      usage,
-      refusal === '' ? undefined : refusal,
-    );
-  }
+
+  const wireFailures: ReadonlyArray<{ test: boolean; build: () => Error }> = [
+    {
+      test: finish_reason === 'length',
+      build: () => new NousTruncatedError(request.model, request.max_tokens, usage),
+    },
+    {
+      test: finish_reason === 'content_filter' || refusal.trim() !== '',
+      build: () =>
+        new NousRefusalError(
+          request.model,
+          finish_reason === 'content_filter' ? 'finish_reason="content_filter"' : 'message.refusal',
+          usage,
+          refusal === '' ? undefined : refusal,
+        ),
+    },
+  ];
+  const wireFailure = wireFailures.find((candidate) => candidate.test);
+  if (wireFailure !== undefined) throw wireFailure.build();
 
   return {
     text: typeof choice.message?.content === 'string' ? choice.message.content : '',
