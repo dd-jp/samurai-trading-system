@@ -23,7 +23,9 @@ docs/samurai-vision-v2.md (all on main).
 
 Do Step 0 of doc 67 exactly, on a new branch off fresh origin/main, as ONE PR:
 tag v1-final; archive the paper DB; delete all docs/specs/* and docs/adr/*; write
-docs/adr/0001-samurai-v2.md from doc 66; rewrite CONTEXT.md and CLAUDE.md (keep verbatim the
+docs/adr/0001-samurai-v2.md from doc 66; rewrite CONTEXT.md (keep its "North Star" section
+verbatim as the first section, dropping only its "until the v2 rewrite" sentence) and CLAUDE.md
+(open its Project Identity with a one-line pointer to that North Star; keep verbatim the
 Code Comments, Rate Limit HARD STOP and graphify sections; add the lint rule: oxlint, biome,
 crap, fallow rules intact); fix every reference to deleted docs; rename files for readability
 per Step 0 item 8; graphify update.

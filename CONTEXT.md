@@ -5,6 +5,23 @@ No implementation details here. Just terms, relationships, invariants.
 
 ---
 
+## North Star
+
+Set by David, 2026-09-19 (rulings in `docs/research/66-v2-grill-decisions.md`). This overrides everything below it that conflicts, until the v2 rewrite of this file lands.
+
+**Samurai is an autonomous, self-improving trading system that makes a steady net profit (even a small one) over each year, and never loses more than £1,500 net in a year.**
+
+- **Profit** counts only net of every cost and ahead of the matched benchmark: risk-matched buy-and-hold of the same universe for the momentum sleeve, and the no-LLM control (arm 2) for the debate sleeve. There is **no daily % target**; losing days are accepted in pursuit of a profitable year.
+- **£1,500** is a hard kill-switch on net loss from starting capital, across all venues, in GBP, marked to market. Position size halves at −£500 and quarters at −£1,000, and trading halts for the year at −£1,500. Profits never extend it.
+- **Proof comes before money.** A sleeve reaches live capital only after passing the pre-declared gate: DSR ≥ 0.95, PBO ≤ 0.10, a 40% Sharpe haircut, 8–12 weeks of paper trading inside the backtest's 90% band with costs within ±25%, 4 fault-free weeks, and David's sign-off.
+- **Capital is derived, not chosen:** live capital ≤ £1,500 / (backtest max drawdown × 1.5), ramped only while live results stay in band.
+- **Self-improving** means learning from mistakes offline: the research loop proposes changes, every variant tried counts as a trial, and a change reaches live only via the gate. Live behaviour changes on its own only through pre-declared, backtested rules and risk that only tightens.
+- **Least error margin** means every protective action rests at the broker or is watchdog-backed, never depending on a live process; and backtest, paper and live run the same code.
+
+Superseded goals: the intraday flat-by-close debate-as-edge thesis (ADR-0014) and `docs/samurai-vision-v2.md`'s 0.5–2%/day target.
+
+---
+
 ## Concepts
 
 ### Agent Roles (6-stage pipeline)
