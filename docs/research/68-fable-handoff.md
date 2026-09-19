@@ -28,9 +28,44 @@ Every session: reply to David in caveman-ultra style, normal prose in docs and c
 never merge (merges are David's); never write "Closes #n" or "closed #n"; stop at any kill line
 or ambiguity and ask David. Each step's PR meets doc 67 §5's definition of done (own tests, e2e
 where runtime paths change, oxlint + biome + fallow + CRAP gate, mutation testing on risk code).
+Every session ends with the **Session eval** below; each prompt's last line names its goal.
 
 Doc numbers pre-assigned to avoid parallel collisions: **69 = Session R, 70 = Session B,
 71 = Session C.** Anything else takes the next free number on `origin/main`.
+
+## Session eval — run before reporting done or opening a PR
+
+Each prompt ends with an `EVAL:` line: the session's goal, its artifacts and its pass condition.
+The session must then do this:
+
+```
+Before you report done or open a PR, spawn ONE subagent (fresh context, effort high,
+read-only; a different model from yours where available). It did not do the work, so give it:
+the EVAL line verbatim; the session prompt; the artifacts (branch + `git diff origin/main...HEAD`,
+issue URLs, doc paths); the commands to re-run. Instruct it:
+
+  "You are an independent evaluator. Assume the goal is NOT met until evidence shows otherwise.
+   Hunt for what is missing, wrong or unverified; do not confirm success from the author's
+   summary. Check, each with evidence (file:line, command output, URL):
+   1. Every clause of the EVAL goal and pass condition.
+   2. Doc 67 §5 definition of done, for the parts this step touches (own tests; e2e where
+      runtime paths change; oxlint + biome + fallow + CRAP gate; mutation testing on risk code).
+   3. Guardrails: no secrets (data/saxo-tokens/, .env*); no "Closes #n"/"closed #n" in PR body
+      or commits; no edits to applied SQL migrations or path-citations fixtures; no scope beyond
+      the prompt; no decision taken that belongs to David; no merge.
+   4. `npx tsx server/tools/check-path-citations.ts` = 0 violations if any doc changed.
+   Return a table (check | PASS/FAIL | evidence), each FAIL marked CONFIRMED or PLAUSIBLE,
+   and a final verdict: PASS or FAIL."
+
+If the subagent cannot run shell commands, run the commands yourself and hand it the raw output;
+it still reads the files itself. ONE eval round only: fix the CONFIRMED failures, re-run only the
+failed checks yourself, and record PLAUSIBLE ones and minors in the PR body (or the report) —
+do not loop. Put the eval table in the PR body or the report. If a CONFIRMED failure cannot be
+fixed without David, do not open the PR: report it and STOP.
+```
+
+Where a prompt has a STOP for David's approval (T, B, U, F, and C's no-defect branch), run the eval
+on the artifact presented at the stop, then again on the build PR after approval.
 
 ---
 
@@ -67,6 +102,12 @@ Create the v2 wayfinder map as GitHub issues. First check for an existing open "
 6. Verify: every §5a ID has exactly one ticket; re-read each blocked issue's blocked_by list.
 
 Report the map URL and a table (ID → issue number → blocks). Do not start working any ticket.
+
+EVAL (Session eval, doc 68): goal = the v2 map exists once and fully charts §5a. Pass = exactly
+one open "Samurai v2" map; exactly one ticket per G1–G15, R1–R3, R5–R16, X, Step 0/1/2/3/3c/4/4b/
+5/6 and L, correctly labelled; each is a sub-issue of the map and on project #1 with Status Todo;
+every blocked_by edge matches doc 67 §5a's summary plus the X/Step 0 edges (evaluator re-reads
+each via the dependencies API); no ticket claimed or worked. Artifact: the report, no PR.
 ```
 
 ## Session G — grill David on the rulings · effort **high**
@@ -86,6 +127,12 @@ After each answer: comment the ruling on the ticket; append a one-line pointer t
 "Decisions so far"; append the ruling to doc 66 (new row, same ID) and, where it overrides an
 earlier ruling, mark that clause superseded (e.g. G8 supersedes Q11's "never deleted"); close the
 ticket. Commit the doc 66 edits on one branch and open one PR at the end of the session.
+
+EVAL (Session eval, doc 68): goal = each ruling David gave is recorded faithfully everywhere.
+Give the evaluator David's answers verbatim. Pass = for every G answered this session: the
+ticket comment, map pointer and doc 66 row carry the same ruling with the same ID and match his
+words (no ruling he did not give); overridden clauses marked superseded; ticket closed; G items
+not yet answered left open and unrecorded.
 ```
 
 ## Session R — facts research · effort **high**
@@ -103,6 +150,12 @@ verified / refuted / unknown. Where the answer needs a decision (R1 may need an 
 may force whole-share-only US positions) say so plainly and propose the decision.
 
 Comment each ticket's findings and close it when every question is marked. No code. One PR.
+
+EVAL (Session eval, doc 68): goal = every R question answered from primary sources. Pass = doc 69
+marks every question in R1–R3, R5–R16 verified / refuted / unknown with URL and access date;
+the evaluator opens at least 8 cited URLs (including R1, R2, R5, R12) and confirms each supports
+the stated claim; secondary sources are not the sole basis for "verified"; decisions are
+proposed, not taken; each closed ticket has its findings comment.
 ```
 
 ## Session C — Step 2: debate audit · effort **xhigh**
@@ -127,6 +180,13 @@ horizon. State the caveat that v1 debates ran on hourly bars over a different bo
 Write docs/research/71-debate-audit.md. If a defect: fix it with tests on a new branch,
 re-replay, show bullish can clear the floor. If not a defect: report and STOP — David decides
 short-only vs veto-only. One PR.
+
+EVAL (Session eval, doc 68): goal = an evidenced verdict on the 0.473 cap. Pass = doc 71 traces
+the conviction formula to file:line; the evaluator re-runs the replay from the committed script
+against the read-only DB URI and gets the same numbers; the verdict (defect / genuine) follows
+from them; the scoreboard defects and arm 2's rule are covered with the hourly-vs-daily caveat;
+no LLM calls, no write to the paper DB. If defect: the fix has failing-then-passing tests and
+the re-replay shows bullish clearing 0.55. If genuine: no code change, STOP stated.
 ```
 
 ## Session X — cross-verification · effort **high**
@@ -144,6 +204,11 @@ doc 68 a model with no chat history could misread. Run
 
 Fix doc-only issues in one PR. List anything needing David's ruling and STOP. Close the
 X ticket when there are zero contradictions and 0 violations.
+
+EVAL (Session eval, doc 68): goal = docs 65–68 + CONTEXT.md agree with each other and the repo.
+Pass = the evaluator's own independent pass over the same checklist finds no contradiction the
+session missed; every cited path/symbol exists; 0 citation violations; items needing David are
+listed, not decided.
 ```
 
 ## Session A — Step 0: doc rewrite · effort **high**
@@ -166,6 +231,13 @@ update. Do NOT edit applied SQL migrations or the path-citations test fixtures.
 
 Verify: `npx tsx server/tools/check-path-citations.ts` = 0 violations; lint + typecheck + test +
 `npm run smoke` green locally.
+
+EVAL (Session eval, doc 68): goal = Step 0 done exactly as doc 67 lists it. Pass = each Step 0
+item checked off with evidence; tag v1-final exists; the DB backup opens with sqlite3 at the G14
+location and is not in git; docs/specs and docs/adr hold only what G8 allows; the v2 ADR lists
+every open §5a item with its ticket; CONTEXT.md North Star and the three CLAUDE.md sections are
+verbatim (diff them); no migration or fixture edited; 0 citation violations; lint, typecheck,
+test and smoke green (evaluator re-runs them).
 ```
 
 ## Session T — GitHub board triage · effort **high**
@@ -193,6 +265,12 @@ some issues as live gates. If cited, do not close. Run `npm run check:live-gates
 after. In Progress / In Review items with an open PR: report, don't close.
 
 First produce the full classification table and STOP for David's approval; apply only after.
+
+EVAL (Session eval, doc 68): goal = every open board item classified correctly, nothing live
+closed. Pass at the table: every open item appears once; each bucket is justified from the body,
+not the title; the evaluator re-greps server/ client/ contracts/ for each close-obsolete number.
+Pass after applying: only approved actions taken; each has its comment; `npm run check:live-gates`
+output identical before and after; no In Progress/In Review item with an open PR closed.
 ```
 
 Starting buckets (from titles; verify each against its body):
@@ -232,6 +310,15 @@ buy-and-hold of the same universe.
 Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with DSR >= 0.95 and
 PBO <= the G9 bar. Report pass/fail with numbers and the max drawdown. No LLM calls, no paid
 data. One PR.
+
+EVAL (Session eval, doc 68): goal = an honest, reproducible momentum kill-line verdict. Pass at
+the proposal: every item listed above is decided with a source. Pass at the PR: the evaluator
+re-runs the committed backtest command and gets the reported numbers; the trial count includes
+every configuration run (grep the logs); both stop variants and the G10 budget rules ran; costs
+match the prompt; no look-ahead (signals use only data at or before the decision bar; test it);
+walk-forward splits never overlap; the verdict applies the haircut, DSR and the G9 PBO bar
+exactly; the strategy module is the one live code will import. A FAIL verdict is a valid pass
+of this eval.
 ```
 
 ## Session D — Step 3: v2 composition root · effort **high**
@@ -242,6 +329,11 @@ exactly: slim v2 root; reuse broker adapters, providers, stores, debate core beh
 interface; Saxo simulated paper adapter at the live tariff; Alpaca paper; Anthropic + OpenRouter
 clients with pinned versions; separate paper book per sleeve; wire only sleeves that survived B
 and C; stop the v1 paper soak. Verify with a dry run that submits no orders. One PR per area.
+
+EVAL (Session eval, doc 68), per PR: goal = this area of Step 3 built and wired. Pass = the area
+has a real caller from the v2 root (no tested-but-uncalled mechanism); only sleeves that passed
+B/C are wired; model versions pinned; each sleeve has its own paper book; the dry run shows zero
+submitted orders; the v1 soak is stopped; tests, lint, typecheck, smoke green.
 ```
 
 ## Session U — Step 3c: UI · effort **high**
@@ -250,6 +342,11 @@ and C; stop the v1 paper soak. Verify with a dry run that submits no orders. One
 Read docs/research/67-v2-plan-and-handoff.md Step 3c and ruling G13 in doc 66. Write the v2 UI
 spec, STOP for David's approval, then build the screens alongside Session D. Component tests per
 screen; e2e for halt and sign-off. Keep the dashboard's existing lint/test rules.
+
+EVAL (Session eval, doc 68): goal = the approved v2 screens work against the real v2 server.
+Pass at the spec: covers every Step 3c item and G13. Pass at the PR: every approved screen
+exists with a component test; e2e for halt and sign-off pass; every field the client reads is
+served by the v2 server (evaluator greps both sides); no screen shows a v1-only concept.
 ```
 
 ## Session E — Step 4: protection · effort **high**
@@ -260,6 +357,12 @@ docs/research/69-v2-facts.md (R2, R16). Build broker-resting stops, the loss-bud
 the daily cap, dead-man's switch, Saxo token refresh, per-disposal GBP tax log (share matching
 per R12), and the LLM trace. Verify with fault injection (kill the process mid-position → stop
 still rests at the broker; budget breach → entries halt).
+
+EVAL (Session eval, doc 68): goal = the protections hold under failure. Pass = both fault
+injections re-run by the evaluator with the same outcome; −£500 / −£1,000 / −£1,500 steps and
+the daily cap tested at their boundaries; the dead-man's switch fires on a stalled process;
+share matching (same-day, 30-day) tested per R12; mutation testing run on the risk code with
+survivors listed; every mechanism has a caller from the v2 root.
 ```
 
 ## Session Q — Step 4b: assurance · effort **high**
@@ -268,6 +371,10 @@ still rests at the broker; budget breach → entries halt).
 Read docs/research/67-v2-plan-and-handoff.md Step 4b. Build every row as an automated test or a
 recorded drill with its pass condition. One PR per area. Paper trading may not start until every
 row passes; report the checklist with evidence per row.
+
+EVAL (Session eval, doc 68): goal = paper may safely start. Pass = every Step 4b row has a test
+or recorded drill whose pass condition is stated and met; the evaluator re-runs the tests and
+reads each drill record; no row marked pass on the author's word alone.
 ```
 
 ## Session F — Step 5: v1 teardown · effort **high**
@@ -278,6 +385,11 @@ reachability from the v2 root, produce the deletion list and STOP for David's re
 delete in per-area waves (one PR each), rename surviving v1-named modules, and do the client
 pass so the UI reads no deleted server field. Run `npm run check:live-gates` before deleting
 anything that references an issue.
+
+EVAL (Session eval, doc 68): goal = v1 removed without harming v2. Pass at the list: each
+deletion is unreachable from the v2 root by both fallow and graphify. Pass per wave PR: typecheck,
+test, lint and smoke green; the client reads no deleted field; `npm run check:live-gates`
+unchanged; no migration deleted or edited.
 ```
 
 ## Session P — Step 6: paper soak review · effort **high** · weekly
@@ -288,11 +400,18 @@ the week's paper data: band position, realised vs modelled cost, order-level fid
 plumbing-fault ledger, loss budget. Report to David. When the go-live conditions are met,
 produce the one-page sign-off summary (change, haircut backtest, paper fidelity, worst case vs
 £1,500) and STOP.
+
+EVAL (Session eval, doc 68): goal = an honest weekly picture. Pass = every number in the report
+reproduces from the paper DB (read-only URI) by a query shown in the report; band position,
+cost and fault figures match; no go-live claim unless every Q7/Q19 condition is met with
+evidence; the sign-off summary, if produced, states the worst case against £1,500. Artifact:
+the report, no PR.
 ```
 
 ## Session L — research loop · effort **xhigh**
 
-Only after G11 (research-loop design) is ruled and a trade journal exists.
+Only after G11 (research-loop design) is ruled and a trade journal exists. Its prompt, written
+then, ends with an EVAL line like the others.
 
 ## David's own to-dos (Fable cannot do these)
 
