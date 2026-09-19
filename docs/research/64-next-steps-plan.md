@@ -122,6 +122,8 @@ Once a sleeve passes, capital is bounded by three evidence-based limits and one 
 | **Capacity ceiling** | `k × instrument ADV` | Not binding at retail size on liquid 1× ETFs **[inferred]** |
 | **L: the £ loss David accepts before stopping** | — | **Not derivable.** It is a statement about David's finances, not about the strategy |
 
+**David, 2026-09-19: L = £1,500.** The risk ceiling is therefore `£1,500 / (backtest max drawdown × 1.5)`. At a 20% drawdown that gives £5,000; at 30% it gives ~£3,333 **[derived]**. **Paper only until David is confident.** Confidence is defined as the pre-declared gate below, not as a feeling.
+
 The live ramp is also evidence-gated. Start at the floor, and step capital up only after N live trades whose realized return and drawdown fall inside the backtest's confidence band. A deviation outside the band steps capital back down. Exposure within the capital (leverage, vol target) comes from half-Kelly on a shrunk Sharpe estimate, not from the capital figure.
 
 ## 6. Knowledge gaps
