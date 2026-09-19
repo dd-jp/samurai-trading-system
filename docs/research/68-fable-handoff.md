@@ -6,8 +6,48 @@ docs Step 0 rewrites). Sessions D+ come later and are listed for completeness.
 
 **Not ready yet — do not start Session A until doc 67 §5a (loose-ends register) is empty:**
 12 rulings for David, a list of doc fixes (including corrections to Step 0 item 7 and to Session T's
-buckets below), and Session R's research. Then one final cross-verification pass. Session R and
-the doc fixes can run now.
+buckets below), and Session R's research. Then one final cross-verification pass.
+
+**Order:** W (tickets) → grill the 12 rulings with David + R (research) + doc fixes, in parallel →
+cross-verification → A → T → B/C → D → E → F.
+
+## Session W — wayfinder map + tickets · effort **high** · run FIRST
+
+```
+You are working on Samurai (GitHub repo dd-jp/samurai-trading-system, project board #1).
+Read docs/research/66-v2-grill-decisions.md, docs/research/67-v2-plan-and-handoff.md (esp. §5
+and §5a) and this doc (68).
+
+Create the wayfinder map for v2 as GitHub issues:
+1. One map issue "Samurai v2", label `wayfinder-map`. Body: the North Star (CONTEXT.md), a
+   "Decisions so far" section listing doc 66's rulings Q1–Q19 one line each with a pointer to
+   doc 66, and a "Frontier" section listing the child tickets below.
+2. Child tickets, each linking back to the map and to its doc 67 §5a line:
+   - `wayfinder:grilling` — one per ruling in §5a "Needs David's ruling" (items 1–12). Body: the
+     question, the options, the recommendation already written in doc 67, and what it blocks.
+   - `wayfinder:research` — one per §5a "Needs research" bullet (UK tax, brokers, data,
+     execution timing, security). Body: exact questions, primary sources to use, done = each
+     question marked verified/refuted/unknown with a URL.
+   - `wayfinder:task` — one "Apply §5a doc fixes", and one "Final cross-verification of docs
+     65–68 + CONTEXT.md" (done = zero contradictions, `npx tsx server/tools/check-path-citations.ts`
+     reports 0 violations).
+   - `wayfinder:task` — one per build step in doc 67 §5 (Steps 0–6 and 4b), each with its
+     verify/kill line.
+3. Wire real blocking edges with GitHub's issue-dependencies API, not just prose: Step 0 is
+   blocked by every grilling ticket, the doc-fix task and the cross-verification task; the
+   cross-verification is blocked by the doc-fix task and every grilling ticket; Steps 3–6
+   follow doc 67's order.
+4. Add every issue to project #1 (`gh project item-add`) and set Status = Todo; when listing the
+   board always pass --limit 1000.
+
+Never write "Closes #n" or "closed #n" anywhere. Before creating anything, check for an existing
+open "Samurai v2" map to avoid duplicates. Report the map URL and a table of ticket numbers to
+David. Do not start working any ticket. Caveman-ultra replies to David.
+```
+
+Grilling tickets are resolved with David one at a time (record the ruling as a comment, append a
+one-line pointer to the map's "Decisions so far", update doc 66, close the ticket). Sessions R,
+the doc fixes and the cross-verification then work their tickets.
 
 ## Session R — facts research · effort **high**
 
