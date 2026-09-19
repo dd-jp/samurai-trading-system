@@ -94,14 +94,8 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
     this.brackets.set(key(venue, clientOrderId), {
       venue,
       client_order_id: clientOrderId,
-      phase: existing?.phase ?? 'armed',
-      request: existing?.request ?? null,
-      armed_qty: existing?.armed_qty ?? null,
-      arming_qty: existing?.arming_qty ?? null,
-      arm_attempt: existing?.arm_attempt ?? 0,
-      entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
-      stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
-      target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,
+      ...existingOrDefaultBracketFields(existing),
+      ...mergedBracketOrderIds(ids, existing),
     });
   }
 
@@ -142,6 +136,29 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
 
 function key(venue: BrokerVenue, clientOrderId: string): string {
   return `${venue}|${clientOrderId}`;
+}
+
+function existingOrDefaultBracketFields(
+  existing: BrokerBracketRecord | undefined,
+): Pick<BrokerBracketRecord, 'phase' | 'request' | 'armed_qty' | 'arming_qty' | 'arm_attempt'> {
+  return {
+    phase: existing?.phase ?? 'armed',
+    request: existing?.request ?? null,
+    armed_qty: existing?.armed_qty ?? null,
+    arming_qty: existing?.arming_qty ?? null,
+    arm_attempt: existing?.arm_attempt ?? 0,
+  };
+}
+
+function mergedBracketOrderIds(
+  ids: BrokerBracketOrderIds,
+  existing: BrokerBracketRecord | undefined,
+): BrokerBracketOrderIds {
+  return {
+    entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
+    stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
+    target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,
+  };
 }
 
 function fillKey(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): string {

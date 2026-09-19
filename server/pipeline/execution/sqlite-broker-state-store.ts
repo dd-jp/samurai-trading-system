@@ -8,6 +8,7 @@ import type {
   BrokerBracketOrderIds,
   BrokerBracketPhase,
   BrokerBracketRecord,
+  BrokerBracketRequestFields,
   BrokerStateStore,
   BrokerVenue,
   UnpricedFillObservation,
@@ -58,7 +59,6 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
   }
 
   saveBracket(record: BrokerBracketRecord): void {
-    const request = record.request;
     this.db
       .prepare(
         `INSERT INTO broker_brackets (
@@ -97,14 +97,7 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         record.entry_order_id,
         record.stop_order_id,
         record.target_order_id,
-        request?.instrument ?? null,
-        request?.asset_class ?? null,
-        request?.side ?? null,
-        request?.size ?? null,
-        request?.entry ?? null,
-        request?.stop ?? null,
-        request?.target ?? null,
-        request?.time_in_force ?? null,
+        ...requestColumnValues(record.request),
         record.armed_qty,
         record.arming_qty,
         record.arm_attempt,
@@ -220,6 +213,21 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
       )
       .run(venue, clientOrderId, brokerFillId);
   }
+}
+
+const REQUEST_COLUMN_KEYS = [
+  'instrument',
+  'asset_class',
+  'side',
+  'size',
+  'entry',
+  'stop',
+  'target',
+  'time_in_force',
+] as const satisfies readonly (keyof BrokerBracketRequestFields)[];
+
+function requestColumnValues(request: BrokerBracketRequestFields | null): unknown[] {
+  return REQUEST_COLUMN_KEYS.map((key) => request?.[key] ?? null);
 }
 
 function fromBracketRow(row: BracketRow): BrokerBracketRecord {

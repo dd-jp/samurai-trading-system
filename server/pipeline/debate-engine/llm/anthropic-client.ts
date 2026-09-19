@@ -119,23 +119,28 @@ function extractText(response: AnthropicMessageResponse): string {
     .join('');
 }
 
+const ALREADY_CLASSIFIED_ERROR_TYPES = [
+  LlmTimeoutError,
+  LlmRateLimitError,
+  LlmMalformedResponseError,
+  LlmProviderError,
+  LlmRefusalError,
+  LlmTruncatedError,
+  LlmAdmissionRefusedError,
+];
+
+function statusOf(error: unknown): unknown {
+  return typeof error === 'object' && error !== null
+    ? (error as { status?: unknown }).status
+    : undefined;
+}
+
 function classifyProviderError(error: unknown): Error {
-  if (
-    error instanceof LlmTimeoutError ||
-    error instanceof LlmRateLimitError ||
-    error instanceof LlmMalformedResponseError ||
-    error instanceof LlmProviderError ||
-    error instanceof LlmRefusalError ||
-    error instanceof LlmTruncatedError ||
-    error instanceof LlmAdmissionRefusedError
-  ) {
-    return error;
+  if (ALREADY_CLASSIFIED_ERROR_TYPES.some((errorType) => error instanceof errorType)) {
+    return error as Error;
   }
 
-  const status =
-    typeof error === 'object' && error !== null
-      ? (error as { status?: unknown }).status
-      : undefined;
+  const status = statusOf(error);
   const message = error instanceof Error ? error.message : String(error);
 
   if (status === 429) {

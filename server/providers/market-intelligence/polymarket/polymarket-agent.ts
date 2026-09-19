@@ -77,23 +77,40 @@ function confidenceOfDelta(delta: number): number {
 
 type Refusal = string | undefined;
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent fail-closed gates, each naming the one condition it refuses; splitting them apart would obscure that every gate is a peer of every other, not a nested decision.
+function bookSpread(market: PolymarketMarket): number | undefined {
+  if (market.spread !== undefined) return market.spread;
+  if (market.bestBid === undefined || market.bestAsk === undefined) return undefined;
+  return market.bestAsk - market.bestBid;
+}
+
 function refuseOnBook(market: PolymarketMarket, now: Date): Refusal {
-  if (market.closed) return 'the market is closed';
-  if (market.updatedAt === undefined) return 'the market carries no updatedAt stamp';
-  if (now.getTime() - market.updatedAt.getTime() > MAX_UPDATED_AGE_MS) {
-    return `the market's updatedAt is ${market.updatedAt.toISOString()}, past the staleness bound`;
-  }
-  if (market.bestBid === undefined || market.bestAsk === undefined) {
-    return 'the market has no live bid/ask';
-  }
-  const spread = market.spread ?? market.bestAsk - market.bestBid;
-  if (spread > MAX_SPREAD) return `the spread is ${spread}, past ${MAX_SPREAD}`;
-  if (market.volume24hr === undefined || market.volume24hr < MIN_VOLUME_24H_USD) {
-    return `24h volume is ${market.volume24hr ?? 'absent'}, below ${MIN_VOLUME_24H_USD}`;
-  }
-  if (market.liquidity === undefined || market.liquidity < MIN_LIQUIDITY_USD) {
-    return `liquidity is ${market.liquidity ?? 'absent'}, below ${MIN_LIQUIDITY_USD}`;
+  const hasQuote = market.bestBid !== undefined && market.bestAsk !== undefined;
+  const spread = bookSpread(market);
+
+  const rules: ReadonlyArray<readonly [failed: boolean, reason: string]> = [
+    [market.closed, 'the market is closed'],
+    [market.updatedAt === undefined, 'the market carries no updatedAt stamp'],
+    [
+      market.updatedAt !== undefined &&
+        now.getTime() - market.updatedAt.getTime() > MAX_UPDATED_AGE_MS,
+      `the market's updatedAt is ${market.updatedAt?.toISOString()}, past the staleness bound`,
+    ],
+    [!hasQuote, 'the market has no live bid/ask'],
+    [
+      hasQuote && spread !== undefined && spread > MAX_SPREAD,
+      `the spread is ${spread}, past ${MAX_SPREAD}`,
+    ],
+    [
+      market.volume24hr === undefined || market.volume24hr < MIN_VOLUME_24H_USD,
+      `24h volume is ${market.volume24hr ?? 'absent'}, below ${MIN_VOLUME_24H_USD}`,
+    ],
+    [
+      market.liquidity === undefined || market.liquidity < MIN_LIQUIDITY_USD,
+      `liquidity is ${market.liquidity ?? 'absent'}, below ${MIN_LIQUIDITY_USD}`,
+    ],
+  ];
+  for (const [failed, reason] of rules) {
+    if (failed) return reason;
   }
   return undefined;
 }

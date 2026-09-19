@@ -68,6 +68,26 @@ interface DormantDeferRecord {
   readonly lastAlertedAtMs: number;
 }
 
+function nextDormantDeferState(
+  prior: DormantDeferRecord | undefined,
+  masterSeenOpen: boolean,
+  now: Date,
+): { record: DormantDeferRecord; due: boolean } {
+  const consecutive = (prior?.consecutive ?? 0) + 1;
+  const firstObservedAt = prior?.firstObservedAt ?? now;
+  const lastAlertedAtMs = prior?.lastAlertedAtMs ?? 0;
+  const due = dueForDormantDeferAlert(consecutive, lastAlertedAtMs, now.getTime());
+  return {
+    record: {
+      consecutive,
+      firstObservedAt,
+      masterSeenOpen: masterSeenOpen || prior?.masterSeenOpen === true,
+      lastAlertedAtMs: due ? now.getTime() : lastAlertedAtMs,
+    },
+    due,
+  };
+}
+
 function refusedKey(externalReference: string): string {
   return `refused:${externalReference}`;
 }
@@ -622,22 +642,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   ): Promise<void> {
     const now = this.clock.now();
     const prior = this.dormantDefer.get(deferKey);
-    const consecutive = (prior?.consecutive ?? 0) + 1;
-    const firstObservedAt = prior?.firstObservedAt ?? now;
-    const lastAlertedAtMs = prior?.lastAlertedAtMs ?? 0;
-    const due = dueForDormantDeferAlert(consecutive, lastAlertedAtMs, now.getTime());
-    this.dormantDefer.set(deferKey, {
-      consecutive,
-      firstObservedAt,
-      masterSeenOpen: masterSeenOpen || prior?.masterSeenOpen === true,
-      lastAlertedAtMs: due ? now.getTime() : lastAlertedAtMs,
-    });
+    const { record, due } = nextDormantDeferState(prior, masterSeenOpen, now);
+    this.dormantDefer.set(deferKey, record);
     if (!due) return;
     try {
       await this.dormantLegsAlerts.postDormantLegsUnresolvedAlert({
         client_order_id: externalReference,
         instrument: instrument ?? this.brackets.get(externalReference)?.instrument ?? '',
-        stuck_ms: now.getTime() - firstObservedAt.getTime(),
+        stuck_ms: now.getTime() - record.firstObservedAt.getTime(),
         observed_at: now,
       });
     } catch {

@@ -43,7 +43,16 @@ interface RawArticle {
   updated_at?: unknown;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent per-field validations for one wire article; splitting them into sub-functions would scatter one record's validation contract across several places for no gain in readability.
+function parsedTimestampOrNaN(value: unknown): number {
+  return typeof value === 'string' ? Date.parse(value) : Number.NaN;
+}
+
+function articleSymbols(article: RawArticle): string[] {
+  return Array.isArray(article.symbols)
+    ? article.symbols.filter((symbol): symbol is string => typeof symbol === 'string')
+    : [];
+}
+
 function validateArticle(raw: unknown): AlpacaNewsArticle {
   const bad = (): never => {
     throw new Error(
@@ -55,22 +64,16 @@ function validateArticle(raw: unknown): AlpacaNewsArticle {
 
   const id = typeof article.id === 'number' || typeof article.id === 'string' ? article.id : bad();
   const headline = typeof article.headline === 'string' ? article.headline : bad();
-  const created =
-    typeof article.created_at === 'string' ? Date.parse(article.created_at) : Number.NaN;
+  const created = parsedTimestampOrNaN(article.created_at);
   if (Number.isNaN(created)) return bad();
-  const updatedRaw =
-    typeof article.updated_at === 'string' ? Date.parse(article.updated_at) : Number.NaN;
+  const updatedRaw = parsedTimestampOrNaN(article.updated_at);
   const updated = Number.isNaN(updatedRaw) ? created : updatedRaw;
-
-  const symbols = Array.isArray(article.symbols)
-    ? article.symbols.filter((symbol): symbol is string => typeof symbol === 'string')
-    : [];
 
   return {
     id: String(id),
     headline,
     summary: typeof article.summary === 'string' ? article.summary : '',
-    symbols,
+    symbols: articleSymbols(article),
     source: typeof article.source === 'string' ? article.source : 'alpaca',
     url: typeof article.url === 'string' ? article.url : '',
     created_at: new Date(created),

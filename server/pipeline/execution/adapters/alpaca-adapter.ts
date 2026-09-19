@@ -70,6 +70,23 @@ export interface AlpacaBrokerAdapterInput {
 
 type LookedUpOrderId = { id: string | null } | { error: unknown };
 
+function openOrderIdByClientOrderId(
+  open: readonly AlpacaOrder[],
+  clientOrderId: string,
+): string | null {
+  return open.find((candidate) => candidate.client_order_id === clientOrderId)?.id ?? null;
+}
+
+function latestRearmOrderId(open: readonly AlpacaOrder[], clientOrderId: string): string | null {
+  let best: { attempt: number; id: string } | null = null;
+  for (const candidate of open) {
+    const attempt = rearmAttemptOf(clientOrderId, candidate.client_order_id);
+    if (attempt === null) continue;
+    if (best === null || attempt > best.attempt) best = { attempt, id: candidate.id };
+  }
+  return best?.id ?? null;
+}
+
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, string>();
   private readonly bracketSubmittedAt = new Map<string, Date>();
@@ -190,20 +207,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     } catch {
       throw lookupError;
     }
-    const idOf = (key: string): string | null =>
-      open.find((candidate) => candidate.client_order_id === key)?.id ?? null;
-    const latestRearmId = (): string | null => {
-      let best: { attempt: number; id: string } | null = null;
-      for (const candidate of open) {
-        const attempt = rearmAttemptOf(clientOrderId, candidate.client_order_id);
-        if (attempt === null) continue;
-        if (best === null || attempt > best.attempt) best = { attempt, id: candidate.id };
-      }
-      return best?.id ?? null;
-    };
     return {
-      order: 'error' in order ? idOf(clientOrderId) : order.id,
-      rearmedOrder: 'error' in rearmed ? latestRearmId() : rearmed.id,
+      order: 'error' in order ? openOrderIdByClientOrderId(open, clientOrderId) : order.id,
+      rearmedOrder: 'error' in rearmed ? latestRearmOrderId(open, clientOrderId) : rearmed.id,
     };
   }
 

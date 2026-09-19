@@ -47,6 +47,44 @@ export function parseStatusUrl(url: string): ParsedStatusUrl | null {
   return { handle, statusId, postedAt: new Date(postedAtMs) };
 }
 
+interface WellFormedSentiment {
+  headline: string;
+  sentiment: 1 | 0 | -1;
+  confidence: number;
+  url?: unknown;
+  summary?: unknown;
+}
+
+function isWellFormedSentiment(raw: RawSentiment): raw is RawSentiment & WellFormedSentiment {
+  if (typeof raw.headline !== 'string' || raw.headline.trim() === '') return false;
+  if (raw.sentiment !== 1 && raw.sentiment !== 0 && raw.sentiment !== -1) return false;
+  if (typeof raw.confidence !== 'number' || !Number.isFinite(raw.confidence)) return false;
+  return true;
+}
+
+interface CitedStatus {
+  url: string;
+  postedAt: Date;
+  statusId: string;
+}
+
+function resolveCitedStatus(
+  url: unknown,
+  cited: ReadonlyMap<string, string>,
+  windowStart: Date,
+  responseAt: Date,
+): CitedStatus | 'unevidenced' | 'stale' {
+  if (typeof url !== 'string') return 'unevidenced';
+  const claimed = parseStatusUrl(url);
+  if (claimed === null) return 'unevidenced';
+
+  const evidenced = cited.get(claimed.statusId);
+  if (evidenced === undefined) return 'unevidenced';
+
+  if (claimed.postedAt < windowStart || claimed.postedAt > responseAt) return 'stale';
+  return { url: evidenced, postedAt: claimed.postedAt, statusId: claimed.statusId };
+}
+
 interface RawSentiment {
   url?: unknown;
   headline?: unknown;
@@ -290,30 +328,21 @@ export class XSearchClient implements GrokSentimentClient {
     cited: ReadonlyMap<string, string>,
     context: { instrument: string; windowStart: Date; responseAt: Date },
   ): IntelligenceItem | 'unevidenced' | 'stale' | null {
-    if (typeof raw.headline !== 'string' || raw.headline.trim() === '') return null;
-    if (raw.sentiment !== 1 && raw.sentiment !== 0 && raw.sentiment !== -1) return null;
-    if (typeof raw.confidence !== 'number' || !Number.isFinite(raw.confidence)) return null;
-    if (typeof raw.url !== 'string') return 'unevidenced';
+    if (!isWellFormedSentiment(raw)) return null;
 
-    const claimed = parseStatusUrl(raw.url);
-    if (claimed === null) return 'unevidenced';
-
-    const evidenced = cited.get(claimed.statusId);
-    if (evidenced === undefined) return 'unevidenced';
-
-    const postedAt = claimed.postedAt;
-    if (postedAt < context.windowStart || postedAt > context.responseAt) return 'stale';
+    const resolved = resolveCitedStatus(raw.url, cited, context.windowStart, context.responseAt);
+    if (resolved === 'unevidenced' || resolved === 'stale') return resolved;
 
     return {
-      id: `x:${claimed.statusId}`,
+      id: `x:${resolved.statusId}`,
       source: 'x',
       type: 'sentiment',
-      timestamp: postedAt,
+      timestamp: resolved.postedAt,
       entity: context.instrument,
       headline: raw.headline,
       sentiment: raw.sentiment,
       confidence: Math.min(1, Math.max(0, raw.confidence)),
-      url: evidenced,
+      url: resolved.url,
       ...(typeof raw.summary === 'string' ? { summary: raw.summary } : {}),
     };
   }

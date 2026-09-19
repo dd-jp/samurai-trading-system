@@ -37,49 +37,64 @@ function failValidation(context: string, detail: string, body: unknown): never {
   );
 }
 
+function runValidationRules(
+  rules: ReadonlyArray<readonly [failed: boolean, message: string]>,
+  context: string,
+  body: unknown,
+): void {
+  for (const [failed, message] of rules) {
+    if (failed) failValidation(context, message, body);
+  }
+}
+
 function validateAlpacaOrderLeg(raw: unknown, context: string, body: unknown): void {
   if (!isRecord(raw)) failValidation(context, 'a bracket leg was not an object', body);
   const { id, type, status, filled_qty, filled_avg_price, filled_at } = raw;
-  if (typeof id !== 'string') failValidation(context, 'leg.id must be a string', body);
-  if (type !== 'limit' && type !== 'stop') {
-    failValidation(context, "leg.type must be 'limit' or 'stop'", body);
-  }
-  if (status !== undefined && typeof status !== 'string') {
-    failValidation(context, 'leg.status must be a string', body);
-  }
-  if (filled_qty !== undefined && !isFiniteNumericString(filled_qty)) {
-    failValidation(context, 'leg.filled_qty must be a numeric string', body);
-  }
-  if (
-    filled_avg_price !== undefined &&
-    filled_avg_price !== null &&
-    !isFiniteNumericString(filled_avg_price)
-  ) {
-    failValidation(context, 'leg.filled_avg_price must be a numeric string or null', body);
-  }
-  if (filled_at !== undefined && filled_at !== null && typeof filled_at !== 'string') {
-    failValidation(context, 'leg.filled_at must be a string or null', body);
-  }
+  runValidationRules(
+    [
+      [typeof id !== 'string', 'leg.id must be a string'],
+      [type !== 'limit' && type !== 'stop', "leg.type must be 'limit' or 'stop'"],
+      [status !== undefined && typeof status !== 'string', 'leg.status must be a string'],
+      [
+        filled_qty !== undefined && !isFiniteNumericString(filled_qty),
+        'leg.filled_qty must be a numeric string',
+      ],
+      [
+        filled_avg_price !== undefined &&
+          filled_avg_price !== null &&
+          !isFiniteNumericString(filled_avg_price),
+        'leg.filled_avg_price must be a numeric string or null',
+      ],
+      [
+        filled_at !== undefined && filled_at !== null && typeof filled_at !== 'string',
+        'leg.filled_at must be a string or null',
+      ],
+    ],
+    context,
+    body,
+  );
 }
 
 function validateAlpacaOrderIdentityFields(body: Record<string, unknown>, context: string): void {
   const { id, client_order_id, symbol, side, qty, order_class } = body;
-  if (typeof id !== 'string') failValidation(context, 'id must be a string', body);
-  if (client_order_id !== undefined && typeof client_order_id !== 'string') {
-    failValidation(context, 'client_order_id must be a string', body);
-  }
-  if (symbol !== undefined && typeof symbol !== 'string') {
-    failValidation(context, 'symbol must be a string', body);
-  }
-  if (side !== undefined && side !== 'buy' && side !== 'sell') {
-    failValidation(context, "side must be 'buy' or 'sell'", body);
-  }
-  if (qty !== undefined && !isFiniteNumericString(qty)) {
-    failValidation(context, 'qty must be a numeric string', body);
-  }
-  if (order_class !== undefined && typeof order_class !== 'string') {
-    failValidation(context, 'order_class must be a string', body);
-  }
+  runValidationRules(
+    [
+      [typeof id !== 'string', 'id must be a string'],
+      [
+        client_order_id !== undefined && typeof client_order_id !== 'string',
+        'client_order_id must be a string',
+      ],
+      [symbol !== undefined && typeof symbol !== 'string', 'symbol must be a string'],
+      [side !== undefined && side !== 'buy' && side !== 'sell', "side must be 'buy' or 'sell'"],
+      [qty !== undefined && !isFiniteNumericString(qty), 'qty must be a numeric string'],
+      [
+        order_class !== undefined && typeof order_class !== 'string',
+        'order_class must be a string',
+      ],
+    ],
+    context,
+    body,
+  );
 }
 
 function validateAlpacaOrderCoreFields(body: Record<string, unknown>, context: string): void {

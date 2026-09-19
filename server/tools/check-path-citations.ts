@@ -202,20 +202,24 @@ function stripToComments(lines: readonly string[]): string[] {
   return out;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent rejection guards, each named for the one shape it rules out; splitting them into sub-functions would scatter one path-shape contract across several call sites for no gain in readability.
-function parseCandidate(
-  token: string,
-  knownRoots: ReadonlySet<string>,
-): Omit<Citation, 'file' | 'line' | 'raw'> | null {
-  const trimmed = token.trim();
-  if (trimmed === '' || !trimmed.includes('/')) return null;
-  if (/[\s<>*{}()[\]|#?!,'"$\\~^`]/.test(trimmed)) return null;
-  if (/:\d+\s*-\s*\d+$/.test(trimmed)) return null;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return null;
+const CANDIDATE_REJECTION_PATTERNS: readonly RegExp[] = [
+  /[\s<>*{}()[\]|#?!,'"$\\~^`]/,
+  /:\d+\s*-\s*\d+$/,
+  /^[a-z][a-z0-9+.-]*:\/\//i,
+];
 
+function parseWithLineSuffix(trimmed: string): {
+  rawPath: string;
+  lineNumber: number | undefined;
+} {
   const withLine = /^(.*?):(\d+)$/.exec(trimmed);
-  const rawPath = withLine ? (withLine[1] ?? '') : trimmed;
-  const lineNumber = withLine ? Number(withLine[2]) : undefined;
+  return {
+    rawPath: withLine ? (withLine[1] ?? '') : trimmed,
+    lineNumber: withLine ? Number(withLine[2]) : undefined,
+  };
+}
+
+function resolvedSegments(rawPath: string, knownRoots: ReadonlySet<string>): string[] | null {
   if (rawPath.includes(':')) return null;
   if (!/^[A-Za-z0-9._@/-]+$/.test(rawPath)) return null;
   if (rawPath.startsWith('/') || rawPath.startsWith('.')) return null;
@@ -224,6 +228,20 @@ function parseCandidate(
   if (segments.length < 2) return null;
   const root = segments[0] ?? '';
   if (!knownRoots.has(root) && root !== LEGACY_ROOT) return null;
+  return segments;
+}
+
+function parseCandidate(
+  token: string,
+  knownRoots: ReadonlySet<string>,
+): Omit<Citation, 'file' | 'line' | 'raw'> | null {
+  const trimmed = token.trim();
+  if (trimmed === '' || !trimmed.includes('/')) return null;
+  if (CANDIDATE_REJECTION_PATTERNS.some((pattern) => pattern.test(trimmed))) return null;
+
+  const { rawPath, lineNumber } = parseWithLineSuffix(trimmed);
+  const segments = resolvedSegments(rawPath, knownRoots);
+  if (segments === null) return null;
 
   const path = segments.join('/');
   return lineNumber === undefined ? { path } : { path, lineNumber };
@@ -300,37 +318,40 @@ export function extractCodeCitations(source: string, options: ExtractOptions): C
   return citationsFromLines(rawLines, stripToComments(rawLines), options);
 }
 
-export function checkCitation(citation: Citation, tree: TreeResolver): Violation | null {
-  const where = `${citation.file}:${citation.line}`;
-  const exemption = citation.exemption;
-
-  if (exemption) {
-    if (
-      !(EXEMPT_REASONS as readonly string[]).includes(exemption.reason) ||
-      exemption.note === ''
-    ) {
-      return {
-        kind: 'malformed-exemption',
-        citation,
-        message:
-          `${where}: \`${citation.raw}\` carries a cite-exempt marker that is not usable. ` +
-          `Reason must be one of ${EXEMPT_REASONS.join('|')} and must be followed by a written ` +
-          `justification, e.g. <!-- cite-exempt: foreign — pybroker's tree, not ours -->. ` +
-          `Got reason="${exemption.reason}" note="${exemption.note}".`,
-      };
-    }
-    if (exemption.reason === 'planned' && tree.kind(citation.path) !== 'missing') {
-      return {
-        kind: 'stale-planned-exemption',
-        citation,
-        message:
-          `${where}: \`${citation.raw}\` is marked \`planned\` but the path now resolves. ` +
-          `Remove the marker — this is a live citation and should be checked like one.`,
-      };
-    }
-    return null;
+function checkExemptCitation(
+  citation: Citation,
+  exemption: Exemption,
+  tree: TreeResolver,
+  where: string,
+): Violation | null {
+  if (!(EXEMPT_REASONS as readonly string[]).includes(exemption.reason) || exemption.note === '') {
+    return {
+      kind: 'malformed-exemption',
+      citation,
+      message:
+        `${where}: \`${citation.raw}\` carries a cite-exempt marker that is not usable. ` +
+        `Reason must be one of ${EXEMPT_REASONS.join('|')} and must be followed by a written ` +
+        `justification, e.g. <!-- cite-exempt: foreign — pybroker's tree, not ours -->. ` +
+        `Got reason="${exemption.reason}" note="${exemption.note}".`,
+    };
   }
+  if (exemption.reason === 'planned' && tree.kind(citation.path) !== 'missing') {
+    return {
+      kind: 'stale-planned-exemption',
+      citation,
+      message:
+        `${where}: \`${citation.raw}\` is marked \`planned\` but the path now resolves. ` +
+        `Remove the marker — this is a live citation and should be checked like one.`,
+    };
+  }
+  return null;
+}
 
+function checkResolvedCitation(
+  citation: Citation,
+  tree: TreeResolver,
+  where: string,
+): Violation | null {
   const kind = tree.kind(citation.path);
   if (kind === 'missing') {
     return {
@@ -356,6 +377,13 @@ export function checkCitation(citation: Citation, tree: TreeResolver): Violation
     };
   }
   return null;
+}
+
+export function checkCitation(citation: Citation, tree: TreeResolver): Violation | null {
+  const where = `${citation.file}:${citation.line}`;
+  const exemption = citation.exemption;
+  if (exemption) return checkExemptCitation(citation, exemption, tree, where);
+  return checkResolvedCitation(citation, tree, where);
 }
 
 export function isPreservedByRule(repoRelativeFile: string): boolean {

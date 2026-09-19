@@ -32,6 +32,35 @@ interface LaneWaitAnnounce {
   maxSuppressedWaitMs: number;
 }
 
+function catastrophicThresholdMs(lane: TokenBucketLane): number {
+  return lane === 'priority'
+    ? TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS
+    : TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS;
+}
+
+function withinRepeatWindow(prior: LaneWaitAnnounce | undefined, nowMs: number): boolean {
+  return (
+    prior !== undefined && nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS
+  );
+}
+
+function waitAnnounceMessage(
+  bucketName: string,
+  lane: TokenBucketLane,
+  roundedWaitMs: number,
+  suppressedSinceLast: number,
+  maxSuppressedWaitMs: number,
+): string {
+  return (
+    `token_bucket_wait: the '${bucketName}' bucket paced a ${lane} caller for ` +
+    `${roundedWaitMs}ms before granting a token.` +
+    (suppressedSinceLast > 0
+      ? ` ${suppressedSinceLast} more threshold-crossing wait(s) on this lane were folded ` +
+        `into this line since the last announcement, the longest ${maxSuppressedWaitMs}ms.`
+      : '')
+  );
+}
+
 export class TokenBucket {
   private tokens: number;
   private lastRefill: number;
@@ -76,22 +105,14 @@ export class TokenBucket {
     const roundedWaitMs = Math.round(waitedMs);
     const nowMs = this.now();
     const prior = this.waitAnnounce.get(lane);
-    const catastrophicMs =
-      lane === 'priority'
-        ? TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS
-        : TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS;
-    if (
-      prior !== undefined &&
-      nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS &&
-      roundedWaitMs < catastrophicMs
-    ) {
+    const catastrophicMs = catastrophicThresholdMs(lane);
+    const inRepeatWindow = withinRepeatWindow(prior, nowMs);
+    if (prior !== undefined && inRepeatWindow && roundedWaitMs < catastrophicMs) {
       prior.suppressedCount += 1;
       prior.maxSuppressedWaitMs = Math.max(prior.maxSuppressedWaitMs, roundedWaitMs);
       return;
     }
-    const catastrophicBypass =
-      prior !== undefined &&
-      nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS;
+    const catastrophicBypass = inRepeatWindow;
     const suppressedSinceLast = prior?.suppressedCount ?? 0;
     const maxSuppressedWaitMs = prior?.maxSuppressedWaitMs ?? 0;
     this.waitAnnounce.set(lane, {
@@ -104,13 +125,13 @@ export class TokenBucket {
       stage: 'rate_limit',
       event: 'token_bucket_wait',
       level: 'info',
-      message:
-        `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
-        `${roundedWaitMs}ms before granting a token.` +
-        (suppressedSinceLast > 0
-          ? ` ${suppressedSinceLast} more threshold-crossing wait(s) on this lane were folded ` +
-            `into this line since the last announcement, the longest ${maxSuppressedWaitMs}ms.`
-          : ''),
+      message: waitAnnounceMessage(
+        this.telemetry.name,
+        lane,
+        roundedWaitMs,
+        suppressedSinceLast,
+        maxSuppressedWaitMs,
+      ),
       payload: {
         bucket: this.telemetry.name,
         lane,
