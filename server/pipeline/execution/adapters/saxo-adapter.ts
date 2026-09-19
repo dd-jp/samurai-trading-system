@@ -956,10 +956,11 @@ function masterLookup(master: SaxoOpenOrder, externalReference: string): LookedU
   };
 }
 
-function activatedLegsLookup(
+function legsResult(
   externalReference: string,
   legs: readonly SaxoOpenOrder[],
   first: SaxoOpenOrder,
+  filled_qty: number,
 ): LookedUpOrder {
   const ids: OrderIds = {};
   for (const leg of legs) {
@@ -976,9 +977,17 @@ function activatedLegsLookup(
       client_order_id: externalReference,
       broker_order_ids: orderIdList(ids),
       order_state: 'filled',
-      filled_qty: first.Amount,
+      filled_qty,
     },
   };
+}
+
+function activatedLegsLookup(
+  externalReference: string,
+  legs: readonly SaxoOpenOrder[],
+  first: SaxoOpenOrder,
+): LookedUpOrder {
+  return legsResult(externalReference, legs, first, first.Amount);
 }
 
 function fromActivity(activity: SaxoOrderActivity, externalReference: string): LookedUpOrder {
@@ -1003,24 +1012,7 @@ function legsFilled(
 ): LookedUpOrder {
   const [first] = legs;
   if (first === undefined) return fromActivity(master, externalReference);
-  const ids: OrderIds = {};
-  for (const leg of legs) {
-    if (leg.OpenOrderType === 'StopIfTraded') ids.stop = leg.OrderId;
-    else ids.target = leg.OrderId;
-  }
-  return {
-    kind: 'legs',
-    ids,
-    legs,
-    side: first.BuySell === 'Buy' ? 'sell' : 'buy',
-    amount: first.Amount,
-    normalized: {
-      client_order_id: externalReference,
-      broker_order_ids: orderIdList(ids),
-      order_state: 'filled',
-      filled_qty: master.FillAmount ?? first.Amount,
-    },
-  };
+  return legsResult(externalReference, legs, first, master.FillAmount ?? first.Amount);
 }
 
 function orderIdList(ids: OrderIds): string[] {

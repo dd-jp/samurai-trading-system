@@ -1,3 +1,4 @@
+import type { LlmInFlightGate } from './in-flight-gate.js';
 import { type AnthropicUsage, rateFor } from './pricing.js';
 
 const MAX_ERROR_BODY_CHARS = 500;
@@ -105,6 +106,52 @@ export function clampTimeoutToBudget(
 
 export function resolveMeteredModel(echoed: unknown, requested: string): string {
   return typeof echoed === 'string' && rateFor(echoed) !== null ? echoed : requested;
+}
+
+export interface NousGateOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal | undefined;
+  gate: LlmInFlightGate;
+  gateBudgetMs?: number | undefined;
+  expectedCallMs?: number | undefined;
+  llmStage?: string | undefined;
+  clampCallToBudget?: boolean | undefined;
+}
+
+export async function withNousGateSlot<T>(
+  options: NousGateOptions,
+  dispatch: (timeoutMs: number) => Promise<T>,
+): Promise<T> {
+  const enteredAt = Date.now();
+  const slot = await options.gate.acquire({
+    budgetMs: options.gateBudgetMs,
+    expectedCallMs: options.expectedCallMs,
+    signal: options.signal,
+    llmStage: options.llmStage,
+  });
+  try {
+    const configuredTimeoutMs = options.timeoutMs ?? DEFAULT_NOUS_TIMEOUT_MS;
+    const timeoutMs =
+      options.clampCallToBudget === true
+        ? clampTimeoutToBudget(configuredTimeoutMs, options.gateBudgetMs, Date.now() - enteredAt)
+        : configuredTimeoutMs;
+    return await dispatch(timeoutMs);
+  } finally {
+    slot.release();
+  }
+}
+
+export async function parseNousJsonBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (cause) {
+    throw new NousApiError(
+      response.status,
+      `Nous API error: response body could not be parsed as JSON (${
+        cause instanceof Error ? cause.message : String(cause)
+      })`,
+    );
+  }
 }
 
 export interface NousWireUsage {

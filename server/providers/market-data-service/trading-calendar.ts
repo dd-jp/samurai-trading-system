@@ -218,6 +218,44 @@ const US_EARLY_CLOSE_DAYS = new Set(['2026-11-27', '2026-12-24', '2027-11-26']);
 
 export const US_TABLE_COVERAGE_END = '2027-12-31';
 
+function searchSessionEnd(
+  civilDate: ZonedCivilDate,
+  zone: string,
+  closeMinutesFor: (civilDate: ZonedCivilDate) => number,
+  isTradingDay: (instant: Date) => boolean,
+  instant: Date,
+  marketName: string,
+): Date {
+  let current = civilDate;
+  for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
+    const close = wallClockToInstant(current, closeMinutesFor(current), zone);
+    if (close.getTime() > instant.getTime() && isTradingDay(close)) return close;
+    current = nextCivilDay(current);
+  }
+  throw new Error(
+    `No ${marketName} session close found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
+  );
+}
+
+function searchSessionStart(
+  civilDate: ZonedCivilDate,
+  zone: string,
+  closeMinutesFor: (civilDate: ZonedCivilDate) => number,
+  isTradingDay: (instant: Date) => boolean,
+  instant: Date,
+  marketName: string,
+): Date {
+  let current = civilDate;
+  for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
+    const close = wallClockToInstant(current, closeMinutesFor(current), zone);
+    if (close.getTime() <= instant.getTime() && isTradingDay(close)) return close;
+    current = previousCivilDay(current);
+  }
+  throw new Error(
+    `No ${marketName} session close found within ${MAX_SESSION_SEARCH_DAYS} days before ${instant.toISOString()}`,
+  );
+}
+
 export class UsEquityRegularHoursCalendar implements TradingCalendar {
   isOpen(instant: Date): boolean {
     if (!this.isTradingDay(instant)) {
@@ -257,34 +295,24 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   }
 
   sessionEnd(instant: Date): Date | null {
-    let civilDate = toCivilDate(instant, ET_ZONE);
-
-    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
-      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
-      if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
-        return close;
-      }
-      civilDate = nextCivilDay(civilDate);
-    }
-
-    throw new Error(
-      `No US equity session close found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
+    return searchSessionEnd(
+      toCivilDate(instant, ET_ZONE),
+      ET_ZONE,
+      (civilDate) => this.#closeMinutesFor(civilDate),
+      (i) => this.isTradingDay(i),
+      instant,
+      'US equity',
     );
   }
 
   sessionStart(instant: Date): Date {
-    let civilDate = toCivilDate(instant, ET_ZONE);
-
-    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
-      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
-      if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
-        return close;
-      }
-      civilDate = previousCivilDay(civilDate);
-    }
-
-    throw new Error(
-      `No US equity session close found within ${MAX_SESSION_SEARCH_DAYS} days before ${instant.toISOString()}`,
+    return searchSessionStart(
+      toCivilDate(instant, ET_ZONE),
+      ET_ZONE,
+      (civilDate) => this.#closeMinutesFor(civilDate),
+      (i) => this.isTradingDay(i),
+      instant,
+      'US equity',
     );
   }
 }
@@ -359,34 +387,24 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   }
 
   sessionStart(instant: Date): Date {
-    let civilDate = toCivilDate(instant, LONDON_ZONE);
-
-    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
-      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
-      if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
-        return close;
-      }
-      civilDate = previousCivilDay(civilDate);
-    }
-
-    throw new Error(
-      `No LSE session close found within ${MAX_SESSION_SEARCH_DAYS} days before ${instant.toISOString()}`,
+    return searchSessionStart(
+      toCivilDate(instant, LONDON_ZONE),
+      LONDON_ZONE,
+      (civilDate) => this.#closeMinutesFor(civilDate),
+      (i) => this.isTradingDay(i),
+      instant,
+      'LSE',
     );
   }
 
   sessionEnd(instant: Date): Date | null {
-    let civilDate = toCivilDate(instant, LONDON_ZONE);
-
-    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
-      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
-      if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
-        return close;
-      }
-      civilDate = nextCivilDay(civilDate);
-    }
-
-    throw new Error(
-      `No LSE session close found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
+    return searchSessionEnd(
+      toCivilDate(instant, LONDON_ZONE),
+      LONDON_ZONE,
+      (civilDate) => this.#closeMinutesFor(civilDate),
+      (i) => this.isTradingDay(i),
+      instant,
+      'LSE',
     );
   }
 

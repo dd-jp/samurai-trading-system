@@ -1,3 +1,4 @@
+import { deriveBacktestMark } from './ingestion.js';
 import type { Bar, BarWindow, DataSource, Mark, Quote } from './types.js';
 
 export interface FixtureLiveMark {
@@ -32,21 +33,8 @@ export class FixtureDataSource implements DataSource {
       };
     }
 
-    const lastCompletedBar = this.bars
-      .filter((bar) => bar.instrument === instrument && bar.close_time.getTime() <= asOf.getTime())
-      .sort((a, b) => a.close_time.getTime() - b.close_time.getTime())
-      .at(-1);
-
-    if (!lastCompletedBar) {
-      throw new Error(`No completed bar for ${instrument} at or before ${asOf.toISOString()}`);
-    }
-
-    return {
-      price: lastCompletedBar.close,
-      observed_at: lastCompletedBar.close_time,
-      source: lastCompletedBar.source,
-      asset_class: this.assetClass,
-    };
+    const instrumentBars = this.bars.filter((bar) => bar.instrument === instrument);
+    return deriveBacktestMark(instrumentBars, instrument, asOf, this.assetClass);
   }
 
   async fetchQuote(_instrument: string, _asOf: Date): Promise<Quote | null> {

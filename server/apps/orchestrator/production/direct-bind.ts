@@ -1,16 +1,4 @@
-import type {
-  BrokerAdapter,
-  ExecutionConfig,
-  FilledZeroSizeThrottle,
-  FlattenOverfillAlertChannel,
-  FlattenReconcileAlertChannel,
-  NonSterlingFeeAlertChannel,
-  ResidualExposureAlertChannel,
-  SharedStore,
-  UnattributedFlattenFillAlertChannel,
-  UnrecordedVenuePositionAlertChannel,
-  UnrecordedVenuePositionThrottle,
-} from '../../../pipeline/execution/index.js';
+import type { ExecutionInput } from '../../../pipeline/execution/index.js';
 import { ExecutionImpl } from '../../../pipeline/execution/index.js';
 import type {
   BreakerEvalInput,
@@ -82,7 +70,6 @@ import {
 } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { guardedStore } from '../../../shared/store/index.js';
-import type { CostModel } from '../../../tools/backtest/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
@@ -832,24 +819,7 @@ export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
   };
 }
 
-export interface ExecutionStepDeps {
-  clock: Clock;
-  broker: BrokerAdapter;
-  store: SharedStore;
-  costModel: CostModel;
-  marketData: MarketDataService;
-  config: ExecutionConfig;
-  residualExposureAlerts: ResidualExposureAlertChannel;
-  flattenOverfillAlerts: FlattenOverfillAlertChannel;
-  flattenReconcileAlerts: FlattenReconcileAlertChannel;
-  unrecordedVenuePositionAlerts: UnrecordedVenuePositionAlertChannel;
-  unrecordedVenuePositionThrottle: UnrecordedVenuePositionThrottle;
-  logger: Logger;
-  filledZeroSizeThrottle: FilledZeroSizeThrottle;
-  sessionCalendars: Record<AssetClass, TradingCalendar>;
-  nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
-  unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
-}
+export type ExecutionStepDeps = Omit<ExecutionInput, 'trace_id'>;
 
 export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['execution'] {
   return (verdict) => {

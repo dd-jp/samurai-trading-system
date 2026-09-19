@@ -1,15 +1,15 @@
 import { fetchWithTimeout } from '../http/fetch-with-timeout.js';
-import type { LlmInFlightGate } from './in-flight-gate.js';
 import {
   buildApiError,
-  clampTimeoutToBudget,
-  DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
+  type NousGateOptions,
   NousTruncatedError,
   type NousWireUsage,
   normaliseUsage,
+  parseNousJsonBody,
   resolveMeteredModel,
   truncateForError,
+  withNousGateSlot,
 } from './nous-wire.js';
 import type { AnthropicUsage } from './pricing.js';
 
@@ -42,17 +42,10 @@ export interface NousResponsesResult {
   ttfb_ms: number;
 }
 
-export interface NousResponsesOptions {
+export interface NousResponsesOptions extends NousGateOptions {
   apiKey: string;
   baseUrl: string;
-  timeoutMs?: number;
-  signal?: AbortSignal | undefined;
-  gate: LlmInFlightGate;
-  gateBudgetMs?: number | undefined;
-  expectedCallMs?: number | undefined;
-  llmStage?: string | undefined;
   maxServerToolCalls?: number | undefined;
-  clampCallToBudget?: boolean | undefined;
 }
 
 interface ResponsesBody {
@@ -172,23 +165,7 @@ export async function nousResponses(
   options: NousResponsesOptions,
   request: NousResponsesRequest,
 ): Promise<NousResponsesResult> {
-  const enteredAt = Date.now();
-  const slot = await options.gate.acquire({
-    budgetMs: options.gateBudgetMs,
-    expectedCallMs: options.expectedCallMs,
-    signal: options.signal,
-    llmStage: options.llmStage,
-  });
-  try {
-    const configuredTimeoutMs = options.timeoutMs ?? DEFAULT_NOUS_TIMEOUT_MS;
-    const timeoutMs =
-      options.clampCallToBudget === true
-        ? clampTimeoutToBudget(configuredTimeoutMs, options.gateBudgetMs, Date.now() - enteredAt)
-        : configuredTimeoutMs;
-    return await dispatchResponses(options, request, timeoutMs);
-  } finally {
-    slot.release();
-  }
+  return withNousGateSlot(options, (timeoutMs) => dispatchResponses(options, request, timeoutMs));
 }
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent response-shape guards translating one wire failure (bad JSON, missing body, missing output, truncation) at a time into a typed error; splitting the checks apart would scatter this one wire contract across several functions.
@@ -223,17 +200,7 @@ async function dispatchResponses(
     throw await buildApiError(response);
   }
 
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch (cause) {
-    throw new NousApiError(
-      response.status,
-      `Nous API error: response body could not be parsed as JSON (${
-        cause instanceof Error ? cause.message : String(cause)
-      })`,
-    );
-  }
+  const body = await parseNousJsonBody(response);
 
   if (typeof body !== 'object' || body === null) {
     throw new NousApiError(

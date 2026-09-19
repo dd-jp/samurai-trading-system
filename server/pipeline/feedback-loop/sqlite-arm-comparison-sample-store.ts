@@ -1,3 +1,4 @@
+import { parseJsonColumnAsObject } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { CostBasisDropCount, ExitClass, ExitClassDropCounts } from '../control-arm/index.js';
@@ -19,15 +20,8 @@ function parseExitClassEntry(parsed: object, exitClass: ExitClass): CostBasisDro
 }
 
 function parseCostBasisDropsColumn(raw: string | null): ExitClassDropCounts | null {
-  if (raw === null) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const parsed = parseJsonColumnAsObject(raw);
+  if (parsed === null) return null;
   if (Object.keys(parsed).length !== EXIT_CLASSES.length) return null;
 
   const counts: Partial<Record<ExitClass, CostBasisDropCount>> = {};

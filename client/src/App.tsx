@@ -139,19 +139,10 @@ function Dashboard(props: DashboardProps) {
   );
 }
 
-interface ArmViewProps {
-  arm: TradingArmWire;
-  onArm: (next: TradingArmWire) => void;
+type ArmViewProps = Omit<DashboardProps, 'live'> & {
   authToken: string | null;
   snapshotOptions: UseSnapshotOptions | undefined;
-  tab: Tab;
-  onTab: (next: Tab) => void;
-  onOpenTrace: (selection: Selection) => void;
-  liveSelection: Selection | null;
-  onSelectLive: (selection: Selection) => void;
-  reviewKey: string | null;
-  onSelectReview: (key: string | null) => void;
-}
+};
 
 function ArmView(props: ArmViewProps) {
   const { arm, onArm, authToken, snapshotOptions, ...rest } = props;

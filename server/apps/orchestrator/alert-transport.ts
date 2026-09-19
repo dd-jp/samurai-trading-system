@@ -16,7 +16,7 @@ export const ALERT_CHANNEL_FIELDS = [
   'verdictAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
-export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
+const _ALL_ALERT_CHANNEL_FIELDS_COVERED: {
   [K in Exclude<keyof AlertChannelSlots, (typeof ALERT_CHANNEL_FIELDS)[number]>]: never;
 } = {};
 

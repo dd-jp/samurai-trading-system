@@ -1,4 +1,3 @@
-import { isAbsolute, resolve } from 'node:path';
 import { assertStorePathMatchesMode, LIVE_BOOK_SIZING_USD } from '../apps/orchestrator/index.js';
 import {
   type ArmComparison,
@@ -7,8 +6,10 @@ import {
   SqliteArmComparisonSource,
 } from '../pipeline/control-arm/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../shared/store/index.js';
+import { parseWindowDays } from './cli-args.js';
+import { isMainModule } from './cli-entrypoint.js';
 
-export const DEFAULT_WINDOW_DAYS = 30;
+export { DEFAULT_WINDOW_DAYS, parseWindowDays } from './cli-args.js';
 
 function pct(value: number): string {
   return `${(value * 100).toFixed(2)}%`;
@@ -161,25 +162,7 @@ function costBasisDropLines(comparison: ArmComparison): string[] {
   return lines;
 }
 
-export function parseWindowDays(argv: readonly string[]): number {
-  const index = argv.indexOf('--days');
-  if (index === -1) return DEFAULT_WINDOW_DAYS;
-
-  const raw = argv[index + 1];
-  const days = Number(raw);
-  if (!Number.isFinite(days) || days <= 0) {
-    throw new Error(`--days must be a positive number of days, got ${JSON.stringify(raw)}.`);
-  }
-  return days;
-}
-
-const invokedPath = process.argv[1];
-const isMain =
-  invokedPath !== undefined &&
-  import.meta.url ===
-    new URL(`file://${isAbsolute(invokedPath) ? invokedPath : resolve(invokedPath)}`).href;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const days = parseWindowDays(process.argv.slice(2));
   const mode = resolveStoreMode();
   const dbPath = sharedStorePath(mode);

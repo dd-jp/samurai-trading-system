@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
-import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
+import { readFileSync } from 'node:fs';
 import type { DebateTermination } from '../shared/index.js';
-import { openSharedStore, resolveStoreMode, sharedStorePath } from '../shared/store/index.js';
+import { openSharedStore } from '../shared/store/index.js';
+import { assertDbPathExists, resolveDbPathFromArgv } from './cli-args.js';
+import { isMainModule } from './cli-entrypoint.js';
 
 export interface DebateLogTerminationRow {
   debate_id: string;
@@ -232,11 +232,7 @@ export function parseLogPaths(argv: readonly string[]): string[] {
   return [...new Set(paths)];
 }
 
-export function assertDbPathExists(dbPath: string): void {
-  if (!existsSync(dbPath)) {
-    throw new Error(`--db ${dbPath} does not exist — refusing to create a new database file.`);
-  }
-}
+export { assertDbPathExists };
 
 function parseIsoFlag(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -248,13 +244,7 @@ function parseIsoFlag(argv: readonly string[], flag: string): string | undefined
   return raw;
 }
 
-const invokedPath = process.argv[1];
-const isMain =
-  invokedPath !== undefined &&
-  import.meta.url ===
-    new URL(`file://${isAbsolute(invokedPath) ? invokedPath : resolve(invokedPath)}`).href;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const argv = process.argv.slice(2);
   const logPaths = parseLogPaths(argv);
   if (logPaths.length === 0) {
@@ -266,21 +256,7 @@ if (isMain) {
   const since = parseIsoFlag(argv, '--since');
   const until = parseIsoFlag(argv, '--until');
   const apply = argv.includes('--apply');
-  const explicitDbIndex = argv.indexOf('--db');
-  const explicitDbPath = explicitDbIndex === -1 ? undefined : argv[explicitDbIndex + 1];
-  if (explicitDbIndex !== -1 && explicitDbPath === undefined) {
-    throw new Error('--db requires a path argument.');
-  }
-
-  let dbPath: string;
-  if (explicitDbPath !== undefined) {
-    assertDbPathExists(explicitDbPath);
-    dbPath = explicitDbPath;
-  } else {
-    const mode = resolveStoreMode();
-    dbPath = sharedStorePath(mode);
-    assertStorePathMatchesMode({ dbPath, mode });
-  }
+  const dbPath = resolveDbPathFromArgv(argv);
   const db = openSharedStore(dbPath);
 
   const coverage: LogCoverage = { timeoutIds: new Set(), intervals: [] };

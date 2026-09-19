@@ -1,4 +1,11 @@
-import { resolvePolygonPacing, TokenBucket, truncateForError } from '../../shared/index.js';
+import {
+  type RawPolygonAggregate,
+  requireJsonObjectBody,
+  resolvePolygonPacing,
+  TokenBucket,
+  toPolygonDate,
+  validateRawPolygonAggregate,
+} from '../../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
 
@@ -6,51 +13,13 @@ const DEFAULT_BASE_URL = 'https://api.polygon.io';
 const MAX_PAGES = 25;
 const PAGE_LIMIT = 50_000;
 
-interface RawPolygonAggregate {
-  t: number;
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-  v: number;
-}
-
 interface PolygonAggregatesResponse {
   results?: RawPolygonAggregate[];
   next_url?: string;
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function validateRawPolygonAggregate(raw: unknown, symbol: string): RawPolygonAggregate {
-  if (typeof raw === 'object' && raw !== null) {
-    const { t, o, h, l, c, v } = raw as Record<string, unknown>;
-    if (
-      isFiniteNumber(t) &&
-      isFiniteNumber(o) &&
-      isFiniteNumber(h) &&
-      isFiniteNumber(l) &&
-      isFiniteNumber(c) &&
-      isFiniteNumber(v)
-    ) {
-      return { t, o, h, l, c, v };
-    }
-  }
-  throw new Error(
-    `HttpPolygonClient.fetchAggregates: malformed aggregate for ${symbol}: ${truncateForError(
-      JSON.stringify(raw),
-    )}`,
-  );
-}
-
 export function toPolygonTicker(symbol: string): string {
   return symbol.endsWith('-USD') ? `X:${symbol.slice(0, -'-USD'.length)}USD` : symbol;
-}
-
-function toPolygonDate(date: Date): string {
-  return date.toISOString().split('T')[0] as string;
 }
 
 export interface HttpPolygonClientOptions {
@@ -97,20 +66,19 @@ export class HttpPolygonClient implements PolygonClient {
       );
     }
 
-    const parsed: unknown = await response.json();
-    if (typeof parsed !== 'object' || parsed === null) {
-      throw new Error(
-        `HttpPolygonClient.fetchAggregates: malformed response body for ${symbol}: expected an ` +
-          `object, got ${truncateForError(JSON.stringify(parsed))}`,
-      );
-    }
-    const body = parsed as PolygonAggregatesResponse;
+    const body = (await requireJsonObjectBody(
+      response,
+      'HttpPolygonClient.fetchAggregates: malformed response body',
+      symbol,
+    )) as PolygonAggregatesResponse;
     if (body.results !== undefined && !Array.isArray(body.results)) {
       throw new Error(
         `HttpPolygonClient.fetchAggregates: malformed 'results' for ${symbol}: expected an array`,
       );
     }
-    const rows = (body.results ?? []).map((bar) => validateRawPolygonAggregate(bar, symbol));
+    const rows = (body.results ?? []).map((bar) =>
+      validateRawPolygonAggregate(bar, symbol, 'HttpPolygonClient.fetchAggregates'),
+    );
 
     const next_url = typeof body.next_url === 'string' ? body.next_url : undefined;
     return { rows, next_url };

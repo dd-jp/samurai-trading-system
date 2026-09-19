@@ -2,7 +2,9 @@ import {
   fetchWithTimeout,
   type RetryConfig,
   type TokenBucket,
+  toPolygonDate,
   truncateForError,
+  validateRawPolygonAggregate,
   withRetry,
 } from '../../../shared/index.js';
 import { closeTimeOf, isDailyTimeframe, timeframeToMs } from '../timeframe.js';
@@ -20,40 +22,8 @@ const PAGE_LIMIT = 50_000;
 const REQUEST_BUFFER_MULTIPLIER = 2;
 const MIN_DAILY_BUFFER_MS = 4 * 86_400_000;
 
-interface RawPolygonAggregate {
-  t: number;
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-  v: number;
-}
-
 interface PolygonAggregatesResponse {
   results?: unknown;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function validateRawPolygonAggregate(raw: unknown, symbol: string): RawPolygonAggregate {
-  if (typeof raw === 'object' && raw !== null) {
-    const { t, o, h, l, c, v } = raw as Record<string, unknown>;
-    if (
-      isFiniteNumber(t) &&
-      isFiniteNumber(o) &&
-      isFiniteNumber(h) &&
-      isFiniteNumber(l) &&
-      isFiniteNumber(c) &&
-      isFiniteNumber(v)
-    ) {
-      return { t, o, h, l, c, v };
-    }
-  }
-  throw new Error(
-    `PolygonBarsClient: malformed aggregate for ${symbol}: ${truncateForError(JSON.stringify(raw))}`,
-  );
 }
 
 export function toPolygonRange(timeframe: string): { multiplier: number; timespan: string } {
@@ -65,10 +35,6 @@ export function toPolygonRange(timeframe: string): { multiplier: number; timespa
   const timespan = unit === 'm' ? 'minute' : unit === 'h' ? 'hour' : 'day';
   // biome-ignore lint/style/noNonNullAssertion: countText is constrained to \d+ by the regex.
   return { multiplier: Number(countText!), timespan };
-}
-
-function toPolygonDate(date: Date): string {
-  return date.toISOString().split('T')[0] as string;
 }
 
 export interface PolygonBarsClientOptions {
@@ -168,7 +134,7 @@ export class PolygonBarsClient {
     const rawResults: unknown[] = Array.isArray(body.results) ? body.results : [];
 
     const bars: Bar[] = rawResults
-      .map((raw) => validateRawPolygonAggregate(raw, symbol))
+      .map((raw) => validateRawPolygonAggregate(raw, symbol, 'PolygonBarsClient'))
       .map((agg): Bar => {
         const open_time = new Date(agg.t);
         return {

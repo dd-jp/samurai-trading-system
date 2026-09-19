@@ -1,3 +1,4 @@
+import { median } from '../../shared/index.js';
 import type { TradingCalendar } from './trading-calendar.js';
 import type { Bar } from './types.js';
 
@@ -30,14 +31,6 @@ function degraded(reason: RvolDegradedReason, sessionsUsed: number): RvolReading
     sessions_target: RVOL_SESSION_WINDOW,
     degraded_reason: reason,
   };
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2
-    : (sorted[mid] as number);
 }
 
 function partitionBarsBySession(bars: Bar[], calendar: TradingCalendar): Map<number, Bar[]> {

@@ -1,5 +1,10 @@
-import type { Clock, Logger } from '../../../shared/index.js';
-import { fetchWithTimeout, maskCredentials, SystemClock } from '../../../shared/index.js';
+import type { Clock, InjectableTimers, Logger } from '../../../shared/index.js';
+import {
+  DEFAULT_INJECTABLE_TIMERS,
+  fetchWithTimeout,
+  maskCredentials,
+  SystemClock,
+} from '../../../shared/index.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
 import type { FetchLike, SaxoOAuthConfig, SaxoTokenResponse } from './saxo-oauth.js';
 import { requestSaxoToken, SaxoOAuthError } from './saxo-oauth.js';
@@ -48,17 +53,9 @@ export class StaticSaxoTokenSource implements SaxoTokenSource {
   async stop(): Promise<void> {}
 }
 
-export interface SaxoRefreshTimers {
-  set(callback: () => void, delayMs: number): unknown;
-  clear(handle: unknown): void;
-}
+export type SaxoRefreshTimers = InjectableTimers;
 
-const DEFAULT_TIMERS: SaxoRefreshTimers = {
-  set: (callback, delayMs) => setTimeout(callback, delayMs).unref(),
-  clear: (handle) => {
-    clearTimeout(handle as ReturnType<typeof setTimeout>);
-  },
-};
+const DEFAULT_TIMERS: SaxoRefreshTimers = DEFAULT_INJECTABLE_TIMERS;
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_LEAD_MS = 60_000;

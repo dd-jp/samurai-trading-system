@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
+import { isMainModule } from './cli-entrypoint.js';
 
 export const IMMUTABLE_RECORD_DIRS = [
   'docs/adr/',
@@ -482,13 +483,7 @@ export function formatReport(report: Report): string {
   return lines.join('\n');
 }
 
-const invokedPath = process.argv[1];
-const isMain =
-  invokedPath !== undefined &&
-  import.meta.url ===
-    new URL(`file://${isAbsolute(invokedPath) ? invokedPath : resolve(invokedPath)}`).href;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const root = process.argv[2] ?? process.cwd();
   const report = runCitationCheck({ root });
   console.log(formatReport(report));

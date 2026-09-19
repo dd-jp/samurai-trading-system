@@ -1,5 +1,5 @@
 import type { RetryConfig } from '../../../shared/index.js';
-import { fetchWithTimeout, truncateForError, withRetry } from '../../../shared/index.js';
+import { fetchWithTimeout, nonEmpty, truncateForError, withRetry } from '../../../shared/index.js';
 import type { AlpacaHttpMethod } from './alpaca-broker-errors.js';
 import {
   AlpacaBrokerProviderError,
@@ -219,10 +219,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   constructor(options: AlpacaHttpBrokerClientOptions = {}) {
     const environment = options.environment ?? 'paper';
     const names = ALPACA_CREDENTIAL_ENV_VARS[environment];
-    const fromEnv = (name: string): string | undefined => {
-      const value = process.env[name]?.trim();
-      return value === undefined || value.length === 0 ? undefined : value;
-    };
+    const fromEnv = (name: string): string | undefined => nonEmpty(process.env[name]);
     const apiKey = options.apiKey ?? fromEnv(names.key);
     const apiSecret = options.apiSecret ?? fromEnv(names.secret);
     if (apiKey === undefined || apiKey.length === 0) {

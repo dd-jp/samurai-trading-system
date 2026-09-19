@@ -1,11 +1,10 @@
 import { execFile } from 'node:child_process';
-import { isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
-
 import {
   LIVE_MONEY_GATES,
   LIVE_MONEY_GATES_VERIFIED_ON,
 } from '../apps/orchestrator/live-money-gates.js';
+import { isMainModule } from './cli-entrypoint.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -96,13 +95,7 @@ export function formatGateReport(report: GateReport): string {
   return lines.join('\n');
 }
 
-const invokedPath = process.argv[1];
-const isMain =
-  invokedPath !== undefined &&
-  import.meta.url ===
-    new URL(`file://${isAbsolute(invokedPath) ? invokedPath : resolve(invokedPath)}`).href;
-
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const report = await checkLiveMoneyGates(ghIssueState);
   console.log(formatGateReport(report));
   if (report.stale.length > 0 || report.unknown.length > 0) process.exitCode = 1;

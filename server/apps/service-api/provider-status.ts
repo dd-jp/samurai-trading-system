@@ -103,13 +103,6 @@ export class ProviderStatusPoller implements ProviderStatusReader {
     this.timer.unref?.();
   }
 
-  stop(): void {
-    if (this.timer !== undefined) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
-  }
-
   async pollOnce(): Promise<ProviderStatusPanel> {
     const [alpaca, polygon] = await Promise.all([this.probeAlpaca(), this.probePolygon()]);
     this.panel = { alpaca, polygon };
