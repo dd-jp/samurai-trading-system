@@ -132,6 +132,39 @@ Once a sleeve passes, capital is bounded by three evidence-based limits and one 
 
 The live ramp is also evidence-gated. Start at the floor, and step capital up only after N live trades whose realized return and drawdown fall inside the backtest's confidence band. A deviation outside the band steps capital back down. Exposure within the capital (leverage, vol target) comes from half-Kelly on a shrunk Sharpe estimate, not from the capital figure.
 
+## 5b. North star and strategic direction (2026-09-19)
+
+### North star (derived; no doc states one)
+
+No document in the repo names a north star **[verified: grep]**. Composed from what is recorded (CONTEXT.md's falsification test, doc 02's graduation line, David's L = £1,500, and his "no live money until confident" rule), it is:
+
+> **A system whose edge over a matched no-LLM control is proven to a pre-declared statistical bar (DSR-significant, PBO ≤ 0.05) on the instruments it will actually trade, then run live at a capital size derived from its measured drawdown and a £1,500 loss limit.**
+
+It is **not a return number.** Doc 10's 0.04%/day is superseded. CONTEXT.md's live Sharpe target of ~1.5 sits above the corpus prior that 0.4–0.8 is a good outcome and anything above 2 is an artefact (doc 64). Treat ~1.5 as aspirational, not as the bar.
+
+### Where Samurai stands against it [verified: `samurai-paper.sqlite`, 2026-09-19]
+
+1. **The debate layer cannot originate a long trade.** 267 debates: 209 neutral (mean confidence 0.133), 42 bearish (mean 0.67), 16 bullish (mean 0.385, **max 0.473**). The conviction floor is **0.55**. **No bullish debate has ever cleared it.** #625 was closed, but its ceiling-below-floor defect persists on the long side.
+2. **Paper trading has been running a strategy the live product can't run.** 6 of 7 live-arm trades and 42 of 79 control-arm trades are **shorts** (stop above entry) on US single stocks via Alpaca. The live product is long-only on LSE ETPs through Saxo. The instruments behind the control's profit (MSTR, MARA, COIN, SMCI) are not tradeable at Saxo.
+3. **The live universe has 3 instruments** (3LUS, LQQ3, LCO3), and one of them is a 3× single-stock ETP on Coinbase **[verified: doc 60]**.
+4. **The scoreboard is inconsistent** (§1: sizing above D5, and the control arm's return has a different sign in the two stores).
+5. **The chassis is not the constraint.** 1,428 LLM calls cost **$3.04** in total, so the plumbing is cheap and it works. The ground-up Python rewrite stays withdrawn (§2).
+6. **Intraday research is uniformly negative or underpowered:** docs 50 and 57 reject, docs 51 and 55 are underpowered, and doc 13's proxy is a terminal KILL.
+
+**Reading [inferred]:** after ~3.5 weeks of paper trading, nothing in hand counts toward the north star. The debate can't trade long, the arms trade the wrong side and the wrong universe, and the scoreboard disagrees with itself.
+
+### Direction, ordered, each step with a kill criterion
+
+| # | Step | Cost | Kill / decision line (declared now) |
+|---|---|---|---|
+| D1 | **Long-side conviction audit.** Replay existing `debate_log` offline. Why does bullish confidence cap below 0.5? Is it the scoring formula, the prompts, or the market? | £0, no LLM | If the cap is the formula (e.g. the neutral mass drags the score down), it is a bug: fix it and re-soak. If bullish debates are genuinely rare and weak, **the debate-as-edge thesis is untestable long-only**, so the LLM moves to a veto role (doc 62) |
+| D2 | **Make paper match live.** Long-only switch on both arms, universe = the tradeable instruments (or their 1× equivalents under D3), sizing ≤ D5, and fix the scoreboard (§3 Step 0) | small code | Paper results only count after this. Everything earned before it is excluded from any graduation decision |
+| D3 | **£0 momentum backtest** (§3 Step 1): monthly and weekly TSMOM, long or flat, 1× ETFs, vs always-long at the same vol, net of Saxo cost, Sharpe haircut 40% | £0 | Kill if it doesn't beat always-long (Sharpe with PBO ≤ 0.05, or drawdown at equal return). If it passes, a new ADR makes momentum sleeve 1 and drops flat-by-close for that sleeve |
+| D4 | **Two-sleeve paper soak** (momentum + intraday if D1 survives), with fixed weights and per-sleeve flat-by-close | runtime | Pass = fidelity to the backtest band plus zero plumbing faults (§5a). Not statistical edge, which paper cannot prove |
+| D5 | **Live at the floor**, capital ≤ £1,500 / (haircut drawdown × 1.5), only after the rules written in advance under D4 are met **and** David signs off | real money | Step back down on deviation from the backtest band |
+
+**If both D1 and D3 fail, stop.** Keep the chassis as a tested asset and wait for a thesis that clears a gate.
+
 ## 6. Knowledge gaps
 
 1. The control-arm sign contradiction (Step 0a) is unexplained.
