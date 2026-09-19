@@ -13,6 +13,7 @@ import type {
   RiskDecision,
   RiskInput,
   RiskManager,
+  SubclassDeploymentCap,
 } from './types.js';
 
 export type {
@@ -423,71 +424,92 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
   };
 };
 
-const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
-  const declared = config.per_subclass_deployment_cap;
-  if (declared === undefined) return null;
-
-  const subclass = declared.subclass_of[intent.instrument];
+function resolveSubclassCap(
+  declared: SubclassDeploymentCap,
+  instrument: string,
+): { subclass: string; capFraction: number } | null {
+  const subclass = declared.subclass_of[instrument];
   if (subclass === undefined) {
     throw new PerSubclassCapUnresolvableError(
-      `per_subclass_deployment_cap is declared but ${intent.instrument} has no subclass ` +
+      `per_subclass_deployment_cap is declared but ${instrument} has no subclass ` +
         `(known: ${Object.keys(declared.subclass_of).join(', ') || 'none'}). ADR-0018 D5's ` +
         `deployment envelope cannot be resolved without one, and the alternative to this throw ` +
         `is sizing the position with no envelope at all. Add the instrument to the pool file.`,
-      intent.instrument,
-      `per_subclass_deployment_cap:unclassified_instrument:${intent.instrument}`,
+      instrument,
+      `per_subclass_deployment_cap:unclassified_instrument:${instrument}`,
     );
   }
 
   const capFraction: number | null | undefined = declared.cap_fraction_of_equity[subclass];
   if (capFraction === undefined) {
     throw new PerSubclassCapUnresolvableError(
-      `per_subclass_deployment_cap declares ${intent.instrument} as '${subclass}' but carries no ` +
+      `per_subclass_deployment_cap declares ${instrument} as '${subclass}' but carries no ` +
         `cap for that subclass (known: ` +
         `${Object.keys(declared.cap_fraction_of_equity).join(', ') || 'none'}). ADR-0018 ` +
         `D5's envelope cannot be resolved without one, and the alternative to this throw is sizing ` +
         `the position with no envelope at all. Add the subclass to the cap record.`,
-      intent.instrument,
+      instrument,
       `per_subclass_deployment_cap:no_cap_for_subclass:${subclass}`,
     );
   }
   if (capFraction === null) return null;
 
-  const ceiling = declared.equity_ceiling;
-  if (ceiling !== undefined) {
-    if (!ceiling.same_currency_verified) {
-      throw new PerSubclassCapUnresolvableError(
-        'per_subclass_deployment_cap: currency mismatch, cannot verify funding — ' +
-          `equity_ceiling's declared book (${ceiling.book}) is GBP but portfolio.equity ` +
-          `(${portfolio.equity}) is read from Alpaca's USD-denominated GET /v2/account. #1180 ` +
-          'added a configured GBP->USD rate for the SIZING inlet and deliberately did not arm ' +
-          "this comparison with it: a rate error is proportional at the Trader's ask and " +
-          'absolute here, where it decides a total refusal against a few percent of tolerance. ' +
-          'Refusing to arm rather than silently compare GBP to USD. Resolve with a live FX-rate ' +
-          "feed, or by running a venue whose account read reports the book's own currency — " +
-          'Saxo GET /port/v1/balances/me, wired as saxoFunding (#1509), which arms ' +
-          'equity_ceiling.same_currency_verified via armSameCurrencyCeilings when it does.',
-        intent.instrument,
-        `per_subclass_deployment_cap:currency_mismatch:${intent.instrument}`,
-      );
-    }
-    const refuseAbove = ceiling.book * (1 + ceiling.refuse_above_tolerance);
-    if (portfolio.equity > refuseAbove) {
-      throw new PerSubclassCapUnresolvableError(
-        `per_subclass_deployment_cap's declared book is ${ceiling.book} but portfolio.equity is ` +
-          `${portfolio.equity}, more than ${(ceiling.refuse_above_tolerance * 100).toFixed(0)}% ` +
-          `above it. ADR-0018 D5's envelope was measured against the declared book (#888), and an ` +
-          'account funded this far past it invalidates every sizing assumption built on that ' +
-          'book, not just this one fraction. Refusing to size this entry — re-fund the account ' +
-          'down to the declared book, or raise the book deliberately.',
-        intent.instrument,
-        `per_subclass_deployment_cap:equity_exceeds_book:${intent.instrument}`,
-      );
-    }
+  return { subclass, capFraction };
+}
+
+function resolveSubclassCappedEquity(
+  ceiling: SubclassDeploymentCap['equity_ceiling'],
+  instrument: string,
+  portfolioEquity: number,
+): number {
+  if (ceiling === undefined) return portfolioEquity;
+
+  if (!ceiling.same_currency_verified) {
+    throw new PerSubclassCapUnresolvableError(
+      'per_subclass_deployment_cap: currency mismatch, cannot verify funding — ' +
+        `equity_ceiling's declared book (${ceiling.book}) is GBP but portfolio.equity ` +
+        `(${portfolioEquity}) is read from Alpaca's USD-denominated GET /v2/account. #1180 ` +
+        'added a configured GBP->USD rate for the SIZING inlet and deliberately did not arm ' +
+        "this comparison with it: a rate error is proportional at the Trader's ask and " +
+        'absolute here, where it decides a total refusal against a few percent of tolerance. ' +
+        'Refusing to arm rather than silently compare GBP to USD. Resolve with a live FX-rate ' +
+        "feed, or by running a venue whose account read reports the book's own currency — " +
+        'Saxo GET /port/v1/balances/me, wired as saxoFunding (#1509), which arms ' +
+        'equity_ceiling.same_currency_verified via armSameCurrencyCeilings when it does.',
+      instrument,
+      `per_subclass_deployment_cap:currency_mismatch:${instrument}`,
+    );
+  }
+  const refuseAbove = ceiling.book * (1 + ceiling.refuse_above_tolerance);
+  if (portfolioEquity > refuseAbove) {
+    throw new PerSubclassCapUnresolvableError(
+      `per_subclass_deployment_cap's declared book is ${ceiling.book} but portfolio.equity is ` +
+        `${portfolioEquity}, more than ${(ceiling.refuse_above_tolerance * 100).toFixed(0)}% ` +
+        `above it. ADR-0018 D5's envelope was measured against the declared book (#888), and an ` +
+        'account funded this far past it invalidates every sizing assumption built on that ' +
+        'book, not just this one fraction. Refusing to size this entry — re-fund the account ' +
+        'down to the declared book, or raise the book deliberately.',
+      instrument,
+      `per_subclass_deployment_cap:equity_exceeds_book:${instrument}`,
+    );
   }
 
-  const cappedEquity =
-    ceiling === undefined ? portfolio.equity : Math.min(portfolio.equity, ceiling.book);
+  return Math.min(portfolioEquity, ceiling.book);
+}
+
+const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
+  const declared = config.per_subclass_deployment_cap;
+  if (declared === undefined) return null;
+
+  const resolved = resolveSubclassCap(declared, intent.instrument);
+  if (resolved === null) return null;
+  const { subclass, capFraction } = resolved;
+
+  const cappedEquity = resolveSubclassCappedEquity(
+    declared.equity_ceiling,
+    intent.instrument,
+    portfolio.equity,
+  );
   const cap = capFraction * cappedEquity;
 
   const deployedToSubclass = [

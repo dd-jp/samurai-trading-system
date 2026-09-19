@@ -106,6 +106,24 @@ function isWellFormedParams(value: unknown): value is Record<string, number> | u
   return Object.values(value as Record<string, unknown>).every(isFiniteNumber);
 }
 
+type Classified<T, E> = { ok: true; value: T } | { ok: false; error: E };
+
+function classifyIndicatorKind(
+  value: unknown,
+): Classified<IndicatorKind, 'unparseable' | 'unknown_indicator'> {
+  if (!isNonEmptyString(value)) return { ok: false, error: 'unparseable' };
+  if (!INDICATOR_KIND_SET.has(value)) return { ok: false, error: 'unknown_indicator' };
+  return { ok: true, value: value as IndicatorKind };
+}
+
+function classifyInvalidationLookback(
+  value: unknown,
+): Classified<number, 'unparseable' | 'lookback_too_large'> {
+  if (!isPositiveInteger(value)) return { ok: false, error: 'unparseable' };
+  if (value > MAX_INVALIDATION_LOOKBACK) return { ok: false, error: 'lookback_too_large' };
+  return { ok: true, value };
+}
+
 function readIndicatorSpec(
   value: unknown,
 ): IndicatorSpec | 'unparseable' | 'unknown_indicator' | 'lookback_too_large' {
@@ -116,17 +134,20 @@ function readIndicatorSpec(
     lookback?: unknown;
     timeframe?: unknown;
   };
-  if (!isNonEmptyString(spec.indicator)) return 'unparseable';
-  if (!INDICATOR_KIND_SET.has(spec.indicator)) return 'unknown_indicator';
-  if (!isPositiveInteger(spec.lookback)) return 'unparseable';
-  if (spec.lookback > MAX_INVALIDATION_LOOKBACK) return 'lookback_too_large';
+
+  const indicator = classifyIndicatorKind(spec.indicator);
+  if (!indicator.ok) return indicator.error;
+
+  const lookback = classifyInvalidationLookback(spec.lookback);
+  if (!lookback.ok) return lookback.error;
+
   if (!isNonEmptyString(spec.timeframe)) return 'unparseable';
   if (!isWellFormedParams(spec.params)) return 'unparseable';
 
   return {
-    indicator: spec.indicator as IndicatorKind,
+    indicator: indicator.value,
     params: spec.params === undefined ? {} : (spec.params as Record<string, number>),
-    lookback: spec.lookback,
+    lookback: lookback.value,
     timeframe: spec.timeframe,
   };
 }
@@ -243,26 +264,24 @@ function classifyRawCondition(
 ): ConditionClassification {
   const id = isNonEmptyString(candidate.id) ? candidate.id.trim().slice(0, MAX_RAW_CHARS) : null;
 
-  if (id === null || !isNonEmptyString(candidate.rationale)) {
-    return { id, ok: false, reason: 'unparseable' };
-  }
-  if (!COMPARATORS.includes(candidate.comparator as Comparator)) {
-    return { id, ok: false, reason: 'unparseable' };
-  }
-  if (!isFiniteNumber(candidate.threshold)) {
+  const isUnparseable =
+    id === null ||
+    !isNonEmptyString(candidate.rationale) ||
+    !COMPARATORS.includes(candidate.comparator as Comparator) ||
+    !isFiniteNumber(candidate.threshold);
+  if (isUnparseable) {
     return { id, ok: false, reason: 'unparseable' };
   }
 
   const observable = readObservable(candidate.observable);
-  if (observable === 'unparseable' || observable === 'unknown_observable') {
-    return { id, ok: false, reason: observable };
-  }
-  if (observable === 'unknown_indicator' || observable === 'lookback_too_large') {
+  if (typeof observable === 'string') {
     return { id, ok: false, reason: observable };
   }
 
   const comparator = candidate.comparator as Comparator;
-  if (!thresholdInRange(observable, candidate.threshold)) {
+  const threshold = candidate.threshold as number;
+  const rationale = candidate.rationale as string;
+  if (!thresholdInRange(observable, threshold)) {
     return { id, ok: false, reason: 'threshold_out_of_range' };
   }
   if (!directionIsCoherent(observable, comparator, side)) {
@@ -280,8 +299,8 @@ function classifyRawCondition(
       id,
       observable,
       comparator,
-      threshold: candidate.threshold,
-      rationale: candidate.rationale.trim().slice(0, MAX_RAW_CHARS),
+      threshold,
+      rationale: rationale.trim().slice(0, MAX_RAW_CHARS),
     },
   };
 }

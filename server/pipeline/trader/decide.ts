@@ -10,8 +10,10 @@ import {
   describeThrownSafely,
   type ExitReason,
   heldQuantitiesFor,
+  type LotHeldQuantity,
   type OpenPosition,
   type OrderIntent,
+  type TradingArm,
   totalHeldQuantity,
 } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
@@ -330,6 +332,54 @@ async function flattenAlreadyInFlight(
   return unresolved.some((submission) => submission.instrument === input.instrument);
 }
 
+function flattenExitIdempotencyKey(
+  instrument: string,
+  decisionBar: Date,
+  exitKind: ExitKind,
+  arm: TradingArm,
+): string {
+  if (exitKind.reason === 'flatten') {
+    return computeFlattenIdempotencyKey(instrument, exitKind.session_close, arm);
+  }
+  return computeIdempotencyKey(
+    instrument,
+    decisionBar,
+    exitKind.reason === 'signal_decay' ? 'early_close' : 'close',
+    arm,
+  );
+}
+
+function buildFlattenExitMetadata(
+  attribution: ExitAttribution,
+  arm: TradingArm,
+  exitReason: ExitReason,
+  unpriced: boolean,
+  held: readonly LotHeldQuantity[],
+): OrderIntent['metadata'] {
+  return {
+    debate_id: attribution.debate_id,
+    arm,
+    exit_reason: exitReason,
+    ...(unpriced ? { unpriced_exit: true as const } : {}),
+    ...(exitReason === 'flatten' ? { mandatory_flatten: true as const } : {}),
+    lot_held_quantities: held,
+    conviction: attribution.conviction,
+    converged: attribution.converged,
+    sizing: {
+      base_risk_fraction: 0,
+      conviction_multiplier: 0,
+      vol_floor_factor: 1,
+      non_converged_haircut: 1,
+      cosine_multiplier: NO_PRECEDENT_MULTIPLIER,
+    },
+    cosine_precedent: {
+      neighbor_count: 0,
+      weighted_mean_r: null,
+      no_precedent: true,
+    },
+  };
+}
+
 async function buildFlattenExit(
   input: Pick<
     TraderInput,
@@ -361,15 +411,7 @@ async function buildFlattenExit(
 
   return emit(
     {
-      idempotency_key:
-        exitKind.reason === 'flatten'
-          ? computeFlattenIdempotencyKey(instrument, exitKind.session_close, arm)
-          : computeIdempotencyKey(
-              instrument,
-              decisionBar,
-              exitKind.reason === 'signal_decay' ? 'early_close' : 'close',
-              arm,
-            ),
+      idempotency_key: flattenExitIdempotencyKey(instrument, decisionBar, exitKind, arm),
       instrument,
       asset_class: priced.asset_class,
       side: closingSide,
@@ -381,28 +423,7 @@ async function buildFlattenExit(
       time_in_force: config.time_in_force[priced.asset_class],
       decision_timestamp: decisionBar,
       decided_at: asOf,
-      metadata: {
-        debate_id: attribution.debate_id,
-        arm,
-        exit_reason: exitReason,
-        ...(priced.unpriced ? { unpriced_exit: true as const } : {}),
-        ...(exitReason === 'flatten' ? { mandatory_flatten: true as const } : {}),
-        lot_held_quantities: held,
-        conviction: attribution.conviction,
-        converged: attribution.converged,
-        sizing: {
-          base_risk_fraction: 0,
-          conviction_multiplier: 0,
-          vol_floor_factor: 1,
-          non_converged_haircut: 1,
-          cosine_multiplier: NO_PRECEDENT_MULTIPLIER,
-        },
-        cosine_precedent: {
-          neighbor_count: 0,
-          weighted_mean_r: null,
-          no_precedent: true,
-        },
-      },
+      metadata: buildFlattenExitMetadata(attribution, arm, exitReason, priced.unpriced, held),
     },
     null,
   );
@@ -592,20 +613,38 @@ function classifyExitCheckSkip(skip_reason: TraderSkipReason): TraderDecisionCla
   return SKIP_REASON_CLASS[skip_reason];
 }
 
+type ExitPositionContext = {
+  positions: OpenPosition[];
+  existingSide: OpenPosition['side'];
+  positionAssetClass: AssetClass;
+};
+
+async function resolveExitPositionContext(
+  input: ExitCheckInput,
+): Promise<{ ok: true; context: ExitPositionContext } | { ok: false; outcome: TraderOutcome }> {
+  const { instrument, positionState } = input;
+
+  const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
+  if (positions.length === 0) return { ok: false, outcome: skip('no_open_position') };
+
+  const existingSide = positions[0]?.side;
+  if (existingSide === undefined) return { ok: false, outcome: skip('no_position_side') };
+
+  const positionAssetClass = positions[0]?.asset_class;
+  if (positionAssetClass === undefined) return { ok: false, outcome: skip('no_position_side') };
+
+  return { ok: true, context: { positions, existingSide, positionAssetClass } };
+}
+
 async function routeExitCheck(
   input: ExitCheckInput,
   diagnostics: TraderDiagnostic[],
 ): Promise<TraderOutcome> {
-  const { instrument, positionState } = input;
+  const { instrument } = input;
 
-  const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
-  if (positions.length === 0) return skip('no_open_position');
-
-  const existingSide = positions[0]?.side;
-  if (existingSide === undefined) return skip('no_position_side');
-
-  const positionAssetClass = positions[0]?.asset_class;
-  if (positionAssetClass === undefined) return skip('no_position_side');
+  const resolved = await resolveExitPositionContext(input);
+  if (!resolved.ok) return resolved.outcome;
+  const { positions, existingSide, positionAssetClass } = resolved.context;
 
   const flattenWindow = withinFlattenWindow(input, positionAssetClass);
   if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);

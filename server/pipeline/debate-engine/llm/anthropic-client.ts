@@ -13,7 +13,7 @@ import {
 } from './errors.js';
 import { classifyFailureCause, type FailureCause } from './failure-cause.js';
 import { UNTRUSTED_WRAPPER_TEMPLATE, wrapUntrusted } from './prompt-safety.js';
-import { type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
+import { type LlmSpendRecord, type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
 import {
   LLM_CONTEXT_FIELD_KIND,
   type LlmClient,
@@ -240,6 +240,28 @@ export class AnthropicLlmClient implements LlmClient {
     return { data: parsed.data, raw_text: rawText, latency_ms };
   }
 
+  private buildSpendRecord<T>(
+    request: LlmRequest<T>,
+    response: AnthropicMessageResponse & { usage: AnthropicUsage },
+    latency_ms: number,
+    prompt: string,
+    responseText: string,
+  ): LlmSpendRecord {
+    return {
+      trace_id: request.context.attribution?.trace_id ?? 'unattributed',
+      stage: request.context.attribution?.stage ?? 'debate',
+      debate_id: request.context.attribution?.debate_id,
+      model: response.model ?? this.config.model,
+      usage: response.usage,
+      latency_ms,
+      ttfb_ms: response.ttfb_ms,
+      timestamp: new Date(),
+      prompt,
+      response: responseText,
+      prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
+    };
+  }
+
   private recordSpend<T>(
     request: LlmRequest<T>,
     response: AnthropicMessageResponse,
@@ -249,19 +271,15 @@ export class AnthropicLlmClient implements LlmClient {
   ): void {
     if (response.usage === undefined) return;
     try {
-      this.spendSink.record({
-        trace_id: request.context.attribution?.trace_id ?? 'unattributed',
-        stage: request.context.attribution?.stage ?? 'debate',
-        debate_id: request.context.attribution?.debate_id,
-        model: response.model ?? this.config.model,
-        usage: response.usage,
-        latency_ms,
-        ttfb_ms: response.ttfb_ms,
-        timestamp: new Date(),
-        prompt,
-        response: responseText,
-        prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
-      });
+      this.spendSink.record(
+        this.buildSpendRecord(
+          request,
+          { ...response, usage: response.usage },
+          latency_ms,
+          prompt,
+          responseText,
+        ),
+      );
     } catch {}
   }
 
