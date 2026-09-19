@@ -18,7 +18,7 @@ Do **not** import Qanat the engine (daily-rebalance DAG backlog, Python → barr
 ## How to access
 
 - Repo: `git clone https://github.com/fidetolabs/qanat` — MIT, no key.
-- Mechanism source-of-truth: `README.md` (§ Backtest, § The five stages), `docs/backtest.md`, `docs/contract.md` in-repo.
+- Mechanism source-of-truth: `README.md` (§ Backtest, § The five stages), `docs/backtest.md`, `docs/contract.md` in-repo. <!-- cite-exempt: foreign — qanat's repo, not ours -->
 - CLI (`qanat backtest --rebalance / --decay / --split`) for the exact numbers below.
 
 ## License boundary
