@@ -95,6 +95,18 @@ If Step 2 says the intraday branch cannot be measured, **do not run either trial
 
 **My recommendation [inferred]:** do Steps 0 and 1 first, both at £0, and let those results pick the option. My prior leans toward C over B, because doc 11's t = 0.15 is hard to escape at 1×. B is only worth adopting if the weekly variant's crash-brake produces a drawdown advantage that doc 11's monthly version did not.
 
+**David, 2026-09-19:** flat-by-close "was more of a preference, if momentum outweighs day trading i am ok to drop." Option B is open on the evidence alone.
+
+### Multi-sleeve (momentum + day + swing)
+
+David also raised running all three and "use either to maximise profit." The admissible form of that:
+
+1. **Each sleeve passes its own gate first.** Combining sleeves that have no edge adds costs but no return. Today no sleeve is validated: momentum has not been tested (Step 1), the day-trading sleeve cannot be measured yet (Step 2), and swing has no defined signal (doc 61 DOA). The weekly-hold momentum sleeve already covers the swing holding period.
+2. **Weights are fixed and declared in advance** (equal-risk, or inverse-vol across sleeves). **Do not route capital to whichever sleeve did best recently.** That is a regime-switching strategy in its own right: it needs its own pre-registration, it counts toward PBO trials, and performance chasing is the selection bias that killed Stage 2 (doc 13).
+3. **A combination only helps if the sleeves' returns have low correlation.** Measure correlation before combining, don't assume it.
+4. **Book size limits this.** £1,000 across 3 sleeves is about £333 each. Per-position caps and whole-share sizing may leave some sleeves unable to enter at all.
+5. **Flat-by-close is set per sleeve.** The day sleeve keeps it; the momentum sleeve holds overnight on 1× ETFs only. The chassis can host both.
+
 ## 6. Knowledge gaps
 
 1. The control-arm sign contradiction (Step 0a) is unexplained.
