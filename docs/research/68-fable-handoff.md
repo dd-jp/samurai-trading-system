@@ -3,7 +3,7 @@
 Paste-ready prompts for Fable (`claude-fable-5-1`), one session per prompt, each with its effort
 level. Authority for every session: `docs/research/66-v2-grill-decisions.md` (David's rulings)
 and `docs/research/67-v2-plan-and-handoff.md` (plan; §5a is the loose-ends register with stable
-IDs G1–G15 and R1–R16, each naming the one step it blocks). All on `main`.
+IDs G1–G16 and R1–R17, each naming the one step it blocks). All on `main`.
 
 **Before anything:** David fixes GitHub Actions billing — CI refuses to start any job until then,
 so no PR can show CI green.
@@ -82,9 +82,9 @@ Create the v2 wayfinder map as GitHub issues. First check for an existing open "
    so far" = doc 66's Q1–Q19 one line each, "Frontier" = the child tickets.
 2. Child tickets — exactly one per row of doc 67 §5a, using its ID in the title
    ("G4 — Debate universe", "R12 — UK tax on funds"):
-   - G1–G15 → label `wayfinder:grilling`. Body: question, options, the recommendation from the
+   - G1–G16 → label `wayfinder:grilling`. Body: question, options, the recommendation from the
      §5a table, and "Blocks: <step>".
-   - R1–R3, R5–R16 → label `wayfinder:research`. Body: the exact questions, sources to use
+   - R1–R3, R5–R17 → label `wayfinder:research`. Body: the exact questions, sources to use
      (primary: HMRC manuals, broker docs/terms, vendor/provider terms, academic papers for R5),
      done = each question marked verified / refuted / unknown with a URL, and "Blocks: <step>".
    - `wayfinder:task` tickets: "X — cross-verification of docs 65–68 + CONTEXT.md"; one per
@@ -104,7 +104,7 @@ Create the v2 wayfinder map as GitHub issues. First check for an existing open "
 Report the map URL and a table (ID → issue number → blocks). Do not start working any ticket.
 
 EVAL (Session eval, doc 68): goal = the v2 map exists once and fully charts §5a. Pass = exactly
-one open "Samurai v2" map; exactly one ticket per G1–G15, R1–R3, R5–R16, X, Step 0/1/2/3/3c/4/4b/
+one open "Samurai v2" map; exactly one ticket per G1–G16, R1–R3, R5–R17, X, Step 0/1/2/3/3c/4/4b/
 5/6 and L, correctly labelled; each is a sub-issue of the map and on project #1 with Status Todo;
 every blocked_by edge matches doc 67 §5a's summary plus the X/Step 0 edges (evaluator re-reads
 each via the dependencies API); no ticket claimed or worked. Artifact: the report, no PR.
@@ -142,9 +142,10 @@ You are working on Samurai. Read docs/research/67-v2-plan-and-handoff.md §5a ta
 research". List the open `wayfinder:research` tickets on the "Samurai v2" map and claim each by
 assignment before working it.
 
-Answer every question in R1–R3 and R5–R16 from primary sources: HMRC manuals (R1, R12), broker
+Answer every question in R1–R3 and R5–R17 from primary sources: HMRC manuals (R1, R12), broker
 docs and terms (R2, R11, R13, R16), data-vendor terms (R7, R14), LLM provider terms and
-OpenRouter docs (R10), exchange/venue docs (R9, R15), academic papers free of look-ahead (R5).
+OpenRouter docs (R10), exchange/venue docs (R9, R15), official central-bank and
+statistics release calendars (R17), academic papers free of look-ahead (R5).
 Record findings with URLs and access dates in docs/research/69-v2-facts.md. Mark each question
 verified / refuted / unknown. Where the answer needs a decision (R1 may need an accountant; R2
 may force whole-share-only US positions) say so plainly and propose the decision.
@@ -152,7 +153,7 @@ may force whole-share-only US positions) say so plainly and propose the decision
 Comment each ticket's findings and close it when every question is marked. No code. One PR.
 
 EVAL (Session eval, doc 68): goal = every R question answered from primary sources. Pass = doc 69
-marks every question in R1–R3, R5–R16 verified / refuted / unknown with URL and access date;
+marks every question in R1–R3, R5–R17 verified / refuted / unknown with URL and access date;
 the evaluator opens at least 8 cited URLs (including R1, R2, R5, R12) and confirms each supports
 the stated claim; secondary sources are not the sole basis for "verified"; decisions are
 proposed, not taken; each closed ticket has its findings comment.

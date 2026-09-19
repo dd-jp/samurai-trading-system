@@ -96,7 +96,7 @@ Caveat: v1 debates ran on hourly bars over the 3× ETP/single-stock book; a "lon
 
 ### Step 3 — v2 composition root (after 1–2)
 
-New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, debate core behind a real module interface (postmortem §5). Saxo **simulated paper adapter**: fills at Saxo bid/ask, live tariff 0.08%/side no min (Saxo SIM env has a 24h manual token + trial £8 tariff — don't use it for evaluation). Alpaca paper native. Wire only surviving sleeves. Stop the v1 paper soak (Q10). Build Anthropic + OpenRouter LLM clients (only Nous clients exist today) with pinned model versions for Sonnet 5, Opus 5, GPT and DeepSeek (Q16; R10). Separate paper book per sleeve (Q14). Blocked by G4, G5, G13 and R1, R2, R3, R5, R6, R7, R8, R10.
+New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, debate core behind a real module interface (postmortem §5). Saxo **simulated paper adapter**: fills at Saxo bid/ask, live tariff 0.08%/side no min (Saxo SIM env has a 24h manual token + trial £8 tariff — don't use it for evaluation). Alpaca paper native. Wire only surviving sleeves. Stop the v1 paper soak (Q10). Build Anthropic + OpenRouter LLM clients (only Nous clients exist today) with pinned model versions for Sonnet 5, Opus 5, GPT and DeepSeek (Q16; R10). Separate paper book per sleeve (Q14). Blocked by G4, G5, G13, G16 and R1, R2, R3, R5, R6, R7, R8, R10, R17.
 => one v2 cycle end-to-end green as a **dry run with no orders submitted** — protection (Step 4) comes before any paper order (Q17).
 
 ### Step 3c — UI (G13)
@@ -181,6 +181,7 @@ IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Sess
 | G13 | **UI scope.** Keep the v3 Rail layout or rethink? Sign-off in the UI or on GitHub? Is the dashboard needed before paper, or is the daily report enough to start? | Keep Rail, add v2 screens (Step 3c); sign-off on GitHub (auditable); daily report enough to start paper, dashboard before live. | Step 3 |
 | G14 | **Session A pre-answers.** Where is the paper DB archived? What happens to `server/shared/store/spec-schema-drift.test.ts` when its spec is deleted? | `~/samurai-archive/v1-final/samurai-paper.sqlite`, outside git; delete the test with the spec — migrations are the schema authority. | Step 0 |
 | G15 | **What is "crap"?** No tool by that name is configured (package.json, oxlint, biome, fallow, CI). | The CRAP score gate (complexity × coverage), ticket #1649 — build it and make it bind. | Step 0 |
+| G16 | **Macro event gate.** Should the debate sleeve skip or halve new entries on high-impact release days (FOMC, US CPI, NFP, BoE rate decisions, UK CPI)? Momentum rebalances weekly and is unaffected. | Yes for the debate sleeve only: no new entries on a high-impact day, exits unaffected; counted as a trial, measured against a no-gate shadow in paper. Source per R17. | Step 3 |
 
 ### R — research (facts, primary sources)
 
@@ -201,6 +202,7 @@ IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Sess
 | R14 | **Data:** how many LSE ETFs have 10+ years of history; Yahoo/Stooq terms for automated use. | Step 1 |
 | R15 | **Execution timing:** rebalance at the open, the close, or the LSE closing auction, and the slippage model for each. | Step 1 |
 | R16 | **Security:** withdrawals disabled, IP allow-lists, token storage for both venues. | Paper start |
+| R17 | **Macro event calendar source** that permits automated use: official schedules (Federal Reserve FOMC calendar, BLS release schedule, Bank of England and ONS release calendars, FRED releases API) — dates, times, how far ahead they publish, and machine-readable access. Forex Factory was considered and rejected (FX-focused, no API, terms for automated use unchecked). | Step 3 |
 
 (R4 — do stops help momentum? — is not research: it is run inside Step 1 as counted trials.)
 
@@ -209,7 +211,7 @@ IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Sess
 - **Step 0 (Session A):** G2, G3, G6, G8, G9, G14, G15 + the cross-verification (Session X).
 - **Step 1 (Session B):** G9, G10, R12, R13, R14, R15.
 - **Step 2 (Session C):** nothing — may start now.
-- **Step 3:** G4, G5, G13, R1, R2, R3, R5, R6, R7, R8, R10.
+- **Step 3:** G4, G5, G13, G16, R1, R2, R3, R5, R6, R7, R8, R10, R17.
 - **Paper start:** Step 4 + 4b, G12, R9, R16.
 - **Live:** G1 (debate sleeve), G7, R11, David's sign-off.
 - **Research loop:** G11.
