@@ -107,6 +107,23 @@ David also raised running all three and "use either to maximise profit." The adm
 4. **Book size limits this.** £1,000 across 3 sleeves is about £333 each. Per-position caps and whole-share sizing may leave some sleeves unable to enter at all.
 5. **Flat-by-close is set per sleeve.** The day sleeve keeps it; the momentum sleeve holds overnight on 1× ETFs only. The chassis can host both.
 
+## 5a. Deriving live capital from evidence (replaces the £1,000 figure)
+
+David, 2026-09-19: set aside the £1,000 book and derive live capital from evidence.
+
+**Live capital today is £0 [derived].** No sleeve has a validated edge: the live arm stands at 7 trades and −£112, momentum has not been tested, and the scoreboard is broken (§1). Evidence can only size capital for a strategy that has passed its gate.
+
+Once a sleeve passes, capital is bounded by three evidence-based limits and one input only David can supply:
+
+| Limit | Formula | Evidence source |
+|---|---|---|
+| **Floor** (minimum viable) | `fixed annual cost / expected net annual return`, and also `instruments × max share price`, so whole-share sizing can enter every name | Backtest net return. Fixed costs: LLM ~£58/yr and £7/mo real-time data for the day sleeve. The momentum sleeve is ≈ £0 fixed (no LLM; delayed data is fine at weekly cadence) |
+| **Risk ceiling** | `L / (backtest max drawdown × 1.5)` | The backtest's max drawdown. The 1.5× stress factor is **[assumed]**: an in-sample max drawdown understates future drawdowns |
+| **Capacity ceiling** | `k × instrument ADV` | Not binding at retail size on liquid 1× ETFs **[inferred]** |
+| **L: the £ loss David accepts before stopping** | — | **Not derivable.** It is a statement about David's finances, not about the strategy |
+
+The live ramp is also evidence-gated. Start at the floor, and step capital up only after N live trades whose realized return and drawdown fall inside the backtest's confidence band. A deviation outside the band steps capital back down. Exposure within the capital (leverage, vol target) comes from half-Kelly on a shrunk Sharpe estimate, not from the capital figure.
+
 ## 6. Knowledge gaps
 
 1. The control-arm sign contradiction (Step 0a) is unexplained.
