@@ -16,10 +16,6 @@ export const ALERT_CHANNEL_FIELDS = [
   'verdictAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
-const _ALL_ALERT_CHANNEL_FIELDS_COVERED: {
-  [K in Exclude<keyof AlertChannelSlots, (typeof ALERT_CHANNEL_FIELDS)[number]>]: never;
-} = {};
-
 export const TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR = 'TELEGRAM_HEARTBEAT_CHAT_ID';
 
 export const TELEGRAM_ALERT_ENV_VARS = [

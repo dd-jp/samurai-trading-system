@@ -41,7 +41,7 @@ Market Data Service ─┐
 - **Language:** TypeScript (Node 24+ per `engines`; CI pins `.nvmrc` = 24)
 - **Package manager:** npm 11.17.0 (`packageManager` field pins it for Corepack-aware tooling). `package-lock.json` is committed
 - **Tests:** Vitest
-- **Linter/formatter:** Biome
+- **Linter/formatter:** oxlint (`.oxlintrc.json` — barrel/import-boundary enforcement, comment-slop rules) partitioned against Biome (`biome.json` — recommended rules + formatting; `noUnusedVariables` off so oxlint is the sole owner of unused-vars). `npm run lint` runs both in sequence
 - **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 39 forward migrations
 - **Brokers:** Alpaca (MVP paper) and Simulated (backtest) are the only order adapters in the tree. The decided live equities venue is **Saxo Capital Markets UK (GIA), over OpenAPI** (ADR-0015's 2026-08-30 amendment) — no adapter is built yet. IBKR was disqualified on cost (#906) and Trading 212 is barred by its own algo-trading terms (#896); ccxt/IBKR survive as data sources
 - **LLM:** single provider — Nous (ADR-0009), per-role models
@@ -72,11 +72,12 @@ npm run lint
 npm run lint:fix
 ```
 
-`npm run precommit` runs lint:fix → typecheck → test:coverage in one pass. There is
-no separate format step: `biome check` **is** the formatter as well as the
-linter, so `npm run lint` already fails on an unformatted file and `npm run lint:fix`
-already rewrites it. A check-only `yarn format` used to lead that chain, which
-made the gate abort on precisely the fault the next step existed to fix.
+`npm run precommit` runs knip → lint:fix → typecheck → test:local → fallow:boundaries →
+fallow:dead-code → fallow:dupes → fallow:css → fallow:guard (staged files only) in one
+pass. There is no separate format step: `biome check` **is** the formatter as well as
+one of the two linters, so `npm run lint` already fails on an unformatted file and
+`npm run lint:fix` already rewrites it. A check-only `yarn format` used to lead that
+chain, which made the gate abort on precisely the fault the next step existed to fix.
 
 ## Running the System
 
@@ -294,7 +295,7 @@ npm run test:local
 npx vitest run server/pipeline/debate-engine/
 ```
 
-The suite is **4578 tests across 266 files** (4577 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-03 on `npm run test`.
+The suite is **7197 tests across 350 files** (7196 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-17 on `npm run test`.
 
 `vitest.config.ts` also writes a durable, machine-readable per-test record to
 `.vitest-reports/junit.xml` (gitignored) on every run, alongside the normal
@@ -304,8 +305,10 @@ it survives after the process exits ([#809](https://github.com/dd-jp/samurai-tra
 
 CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 
-- **checks** — `npm run lint`, `npm run typecheck`, `npm run build`, `npm run build:web`, `npm run test`, `npm run check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
+- **checks** — `npm run lint:oxlint`, `npm run lint:biome`, Fallow architecture boundaries, `npm run fallow:dead-code`, Fallow duplication (advisory), Fallow design-system drift (advisory), `npm run typecheck`, `npm run build`, `npm run build:web`, `npm run test`, `npm run check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
 - **e2e** — the Playwright suite against the built bundle, on its own runner with Chromium installed; failures upload traces.
+
+`npm run mutation:local` and `npm run knip` are not wired into CI — implementer-run gates only.
 
 Both must pass before merge.
 
@@ -386,14 +389,14 @@ dist/server/apps/supervisor/index.js      # npm start
 
 ## Scripts
 
-Every script in `package.json`, all 29 of them. There are no others.
+Every script in `package.json`, all 42 of them. There are no others.
 
 | Tier | Script | What it does |
 | --- | --- | --- |
 | dev | `npm run dev:web` | Vite dev server for `client/` → `localhost:5173`. Proxies `/api` to the service API |
 | dev | `npm run dev:api` | Service API from source under `tsx`, restarts on edit. Run alongside `dev:web` |
 | build | `npm run build` | `tsc` + `build:migrations` + `build:web`. Emits `dist/` |
-| build | `npm run build:migrations` | Copies `server/shared/store/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built orchestrator finds no migrations to apply. Sub-step of `build` |
+| build | `npm run build:migrations` | Copies `server/shared/store/migrations/*.sql` and `server/providers/market-intelligence/archive/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built orchestrator finds no migrations to apply. Sub-step of `build` |
 | build | `npm run build:web` | Client `tsc` + `vite build`. Sub-step of `build`, and **also its own CI step** (`ci.yml`) so a frontend-toolchain failure is named as one instead of surfacing as "build failed" |
 | run | **`npm start`** | **The one full-system command.** Builds, then supervises orchestrator + service API |
 | run | `npm run serve` | Alias for `npm start` |
@@ -406,19 +409,32 @@ Every script in `package.json`, all 29 of them. There are no others.
 | data | `npm run backfill-market-data` | Alias for `npm run data -- backfill-market-data` |
 | quality | `npm run typecheck` | Four projects: server, tests, client tests, e2e |
 | quality | `npm run test` | Full vitest suite |
-| quality | `npm run test:coverage` | Same suite under v8 coverage. What `precommit` runs |
-| quality | `npm run test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate |
+| quality | `npm run test:coverage` | Same suite under v8 coverage |
+| quality | `npm run test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate. What `precommit` runs |
 | quality | `npm run test:watch` | Vitest in watch mode |
 | quality | `npm run e2e` | Playwright suite against the built bundle, on a port picked fresh per run (#1298) so two checkouts can run it at once. CI job of its own |
-| quality | `npm run lint` | `biome check .` — lint **and** formatting, both gated in CI |
-| quality | `npm run lint:fix` | `biome check --write .` — fixes both |
-| quality | `npm run precommit` | `lint:fix` → `typecheck` → `test:coverage` |
+| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator, scoped to trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`) changed vs a base ref, mirroring `test:local`'s diff pattern. 80% score bar on those packages only (#1634). Implementer gate, not wired into `ci.yml` |
+| quality | `npm run lint:oxlint` | `oxlint` — barrel/import-boundary enforcement (`.oxlintrc.json`), comment-slop rules, unused-vars (sole owner — Biome's `noUnusedVariables` is off) |
+| quality | `npm run lint:oxlint:fix` | `oxlint --fix` |
+| quality | `npm run lint:biome` | `biome check .` — Biome's recommended rules + formatting |
+| quality | `npm run lint:biome:fix` | `biome check --write .` |
+| quality | `npm run lint` | `lint:oxlint` → `lint:biome`, both gated in CI as separate steps |
+| quality | `npm run lint:fix` | `lint:oxlint:fix` → `lint:biome:fix` |
+| quality | `npm run knip` | Unused-export/dependency check (`knip.json`). Not wired into CI; runs in `precommit` |
+| quality | `npm run fallow:boundaries` | `fallow dead-code --boundary-violations --fail-on-issues` — architecture boundary check. CI step of its own |
+| quality | `npm run fallow:dead-code` | `fallow dead-code` — CI step, annotated |
+| quality | `npm run fallow:dupes` | `fallow dupes` — duplication, advisory CI step |
+| quality | `npm run fallow:css` | `fallow health --css` — design-system drift, advisory CI step |
+| quality | `npm run fallow:guard` | `fallow guard` — run in `precommit` only, against the staged file list |
+| quality | `npm run precommit` | `knip` → `lint:fix` → `typecheck` → `test:local` → `fallow:boundaries` → `fallow:dead-code` → `fallow:dupes` → `fallow:css` → `fallow:guard` (staged files only) |
 | quality | `npm run check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
-| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator, scoped to trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`) changed vs a base ref, mirroring `test:local`'s diff pattern. 80% score bar on those packages only (#1634). Implementer gate, not CI: GitHub Actions is billing-blocked on this repo |
 | ops | `npm run check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
 | ops | `npm run report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
 | ops | `npm run report:cgt` | `tsx server/tools/report-cgt-disposals.ts` — per-tax-year CGT disposal matching for the live Saxo GIA leg (#1518, `docs/cgt-disposal-matching.md`). NOT tax advice |
+| ops | `npm run report:debate-flip-rate` | `tsx server/tools/report-debate-round-flip-rate.ts` |
+| ops | `npm run classify:debate-termination` | `tsx server/tools/classify-debate-termination.ts` |
 | ops | `npm run place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
+| ops | `npm run saxo:login` | `tsx --env-file=.env.local server/tools/saxo-login.ts` — Authorization Code Grant login for Saxo SIM/live, refs #1522 |
 
 **Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
 `data`), deliberately. A stale `dist/` fails *silently* — the process boots and
