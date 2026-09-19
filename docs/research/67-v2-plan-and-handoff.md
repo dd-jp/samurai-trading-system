@@ -27,8 +27,8 @@ than **£1,500 net in a year** (hard kill).
 5. `docs/samurai-vision-v2.md` — David's vision; its 0.5–2%/day target is **superseded by Q1**; its five open questions are answered by doc 66.
 6. `docs/research/61`–`64` — inputs (61 five topics, 62 rewrite/TSMOM fork, 63 qanat mechanisms, 64 replication prior: real strategies Sharpe 0.4–0.8, ~40% OOS decay, >2 = artefact).
 
-**Caveat:** docs 61–64, the postmortem and vision-v2 are **untracked files in the main checkout**
-(`/Users/ddjp/Documents/projects/samurai-trading-system/docs/...`), not on any branch. They are
+**Caveat:** the postmortem and vision-v2 are on main. Docs 61–64 are **untracked files in the main checkout**
+(`/Users/ddjp/Documents/projects/samurai-trading-system/docs/research/`), not on any branch. They are
 David's; do not `rm`/overwrite them. Links to them from branch docs dangle until David commits them.
 Ask David whether to commit them in the doc-rewrite PR.
 
@@ -72,7 +72,7 @@ Do on a **new branch off fresh `origin/main`**, one PR, David merges.
    - `server/providers/universe-pool/lse-etp-pool.ts`, `server/shared/threshold-bounds.ts`, `server/apps/orchestrator/alert-catalogue.ts` (+ `.golden.json`), `server/apps/orchestrator/smoke-run.ts`, `server/tools/mutation-local.test.ts` — drop or repoint the citation; regenerate the golden if its text changes.
    => `yarn` lint + typecheck + test + `npm run smoke` all green locally; CI green on the PR.
 8. **Rename files for maintenance/readability** (David, 2026-09-19: *"rename files if required, for maintenace and readbability concerns"*). Use `git mv` so history follows; update every reference in the same PR. Proposed:
-   - `docs/samurai-postmortem.md` → `docs/v1-postmortem.md`; `docs/samurai-vision-v2.md` → `docs/v2-vision.md` (both untracked in the main checkout today — commit them first with David's OK).
+   - `docs/samurai-postmortem.md` → `docs/v1-postmortem.md`; `docs/samurai-vision-v2.md` → `docs/v2-vision.md` (both on main).
    - v2 docs named by what they are: `docs/adr/0001-samurai-v2.md`; specs `docs/specs/momentum-sleeve-spec.md`, `debate-sleeve-spec.md`, `loss-budget-spec.md`.
    - Keep `docs/research/NN-slug.md` numbers (cited by number); record any research rename in `docs/research/README.md`'s rename table.
    - Code renames that remove v1 vocabulary (intraday, flatten, ETP, D5, arm names) happen in Steps 3/5 as modules move into or out of the v2 root, not in the doc PR.
@@ -117,7 +117,7 @@ fallow + graphify reachability from the v2 root → reviewed list → delete in 
 
 - **Worktree-isolation hook** refuses Bash with shell variables in sqlite paths and base64 pipes. Use literal read-only URIs: `sqlite3 "file:/Users/ddjp/Documents/projects/samurai-trading-system/data/samurai-paper.sqlite?mode=ro" "..."`. Subagent Bash is refused under worktree isolation (memory subagent-bash-refused-in-worktree).
 - Paper DB lives in the **main checkout's** `data/`, not the worktree's (memory service-reads-worktree-store).
-- Doc numbering collides with David's untracked docs — `ls docs/research` in the **main checkout** before picking a number. 61–67 are taken.
+- Doc numbering collides with David's untracked docs — `ls docs/research` in the **main checkout** before picking a number. 61–68 are taken.
 - `Closes #N` / "closed #N" in a PR body auto-closes issues at merge — grep the body.
 - Merges are David's. No live money until David is confident. Caveman-ultra style for chat replies to David; normal prose in docs/commits. Never commit secrets (Saxo live token is in `data/saxo-tokens/live.json`).
 - Rate-limit hard stop rule applies.
