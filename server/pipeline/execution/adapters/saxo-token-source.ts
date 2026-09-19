@@ -75,6 +75,22 @@ export interface SaxoTokenRefresherDeps {
   sessionLostAlerts?: SaxoSessionLostAlertChannel;
 }
 
+function oauthFailureStatus(cause: unknown): number | undefined {
+  return cause instanceof SaxoOAuthError ? cause.status : undefined;
+}
+
+function failureDetail(cause: unknown): string {
+  return cause instanceof Error ? maskCredentials(cause.message) : String(cause);
+}
+
+function isTerminalOAuthFailure(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500;
+}
+
+function refreshWindowExpired(record: SaxoTokenFileRecord, now: number, delay: number): boolean {
+  return now + delay >= Date.parse(record.refreshTokenExpiresAt);
+}
+
 export class SaxoTokenRefresher implements SaxoTokenSource {
   private readonly clock: Clock;
   private readonly fetchImpl: FetchLike;
@@ -256,11 +272,9 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
 
   private onFailure(event: string, cause: unknown): void {
     const record = this.record;
-    const status = cause instanceof SaxoOAuthError ? cause.status : undefined;
-    const detail = this.redactSession(
-      cause instanceof Error ? maskCredentials(cause.message) : String(cause),
-    );
-    if (status !== undefined && status >= 400 && status < 500) {
+    const status = oauthFailureStatus(cause);
+    const detail = this.redactSession(failureDetail(cause));
+    if (isTerminalOAuthFailure(status)) {
       this.lose(`the refresh token was rejected (HTTP ${status})`);
       return;
     }
@@ -270,7 +284,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       this.backoff.baseMs * 2 ** (this.failedAttempts - 1),
     );
     const now = this.clock.now().getTime();
-    if (record === undefined || now + delay >= Date.parse(record.refreshTokenExpiresAt)) {
+    if (record === undefined || refreshWindowExpired(record, now, delay)) {
       this.lose(
         `${this.failedAttempts} refresh attempts failed and the refresh window closes at ${
           record?.refreshTokenExpiresAt ?? 'an unknown instant'

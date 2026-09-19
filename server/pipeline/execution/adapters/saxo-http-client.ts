@@ -280,6 +280,48 @@ function validateIdentity(body: unknown, pinnedAccountKey: string | undefined): 
   return only;
 }
 
+function saxoFromEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value === undefined || value.length === 0 ? undefined : value;
+}
+
+function resolveSaxoTokenSource(
+  options: SaxoHttpBrokerClientOptions,
+  environment: SaxoTradingEnvironment,
+  tokenEnvVar: string,
+): SaxoTokenSource {
+  if (options.tokenSource !== undefined) return options.tokenSource;
+  const accessToken = options.accessToken ?? saxoFromEnv(tokenEnvVar);
+  if (accessToken === undefined || accessToken.length === 0) {
+    throw new Error(
+      `SaxoHttpBrokerClient: ${tokenEnvVar} is not set. Provide it via the environment ` +
+        `(.env.local), pass { accessToken } explicitly, or pass a { tokenSource } built ` +
+        'from a `npm run saxo:login` session (#1523). This is the ' +
+        `${environment} gateway's bearer; the SIM and live gateways issue separate tokens.`,
+    );
+  }
+  return new StaticSaxoTokenSource(accessToken);
+}
+
+function resolveSaxoBaseUrl(
+  options: SaxoHttpBrokerClientOptions,
+  gatewayEnvVar: string,
+  environment: SaxoTradingEnvironment,
+): string {
+  const baseUrl = options.baseUrl ?? saxoFromEnv(gatewayEnvVar) ?? SAXO_GATEWAY_URLS[environment];
+  return baseUrl.replace(/\/+$/, '');
+}
+
+function resolveSaxoRateLimiter(options: SaxoHttpBrokerClientOptions): TokenBucket {
+  return (
+    options.rateLimiter ??
+    new TokenBucket(DEFAULT_VENUE_PACING.saxo, undefined, {
+      logger: options.logger,
+      name: 'saxo',
+    })
+  );
+}
+
 export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalanceReader {
   private readonly tokenSource: SaxoTokenSource;
   readonly baseUrl: string;
@@ -292,38 +334,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   constructor(options: SaxoHttpBrokerClientOptions) {
     const environment = options.environment ?? 'sim';
     const names = SAXO_CREDENTIAL_ENV_VARS[environment];
-    const fromEnv = (name: string): string | undefined => {
-      const value = process.env[name]?.trim();
-      return value === undefined || value.length === 0 ? undefined : value;
-    };
-    if (options.tokenSource === undefined) {
-      const accessToken = options.accessToken ?? fromEnv(names.token);
-      if (accessToken === undefined || accessToken.length === 0) {
-        throw new Error(
-          `SaxoHttpBrokerClient: ${names.token} is not set. Provide it via the environment ` +
-            `(.env.local), pass { accessToken } explicitly, or pass a { tokenSource } built ` +
-            'from a `npm run saxo:login` session (#1523). This is the ' +
-            `${environment} gateway's bearer; the SIM and live gateways issue separate tokens.`,
-        );
-      }
-      this.tokenSource = new StaticSaxoTokenSource(accessToken);
-    } else {
-      this.tokenSource = options.tokenSource;
-    }
-    this.baseUrl = (
-      options.baseUrl ??
-      fromEnv(names.gateway) ??
-      SAXO_GATEWAY_URLS[environment]
-    ).replace(/\/+$/, '');
+    this.tokenSource = resolveSaxoTokenSource(options, environment, names.token);
+    this.baseUrl = resolveSaxoBaseUrl(options, names.gateway, environment);
     this.pinnedAccountKey = options.accountKey;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
-    this.rateLimiter =
-      options.rateLimiter ??
-      new TokenBucket(DEFAULT_VENUE_PACING.saxo, undefined, {
-        logger: options.logger,
-        name: 'saxo',
-      });
+    this.rateLimiter = resolveSaxoRateLimiter(options);
   }
 
   private async headers(

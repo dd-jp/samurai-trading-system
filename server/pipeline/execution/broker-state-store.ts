@@ -138,27 +138,39 @@ function key(venue: BrokerVenue, clientOrderId: string): string {
   return `${venue}|${clientOrderId}`;
 }
 
+type BracketDefaultKey = 'phase' | 'request' | 'armed_qty' | 'arming_qty' | 'arm_attempt';
+
+const DEFAULT_BRACKET_FIELDS: Pick<BrokerBracketRecord, BracketDefaultKey> = {
+  phase: 'armed',
+  request: null,
+  armed_qty: null,
+  arming_qty: null,
+  arm_attempt: 0,
+};
+
 function existingOrDefaultBracketFields(
   existing: BrokerBracketRecord | undefined,
-): Pick<BrokerBracketRecord, 'phase' | 'request' | 'armed_qty' | 'arming_qty' | 'arm_attempt'> {
-  return {
-    phase: existing?.phase ?? 'armed',
-    request: existing?.request ?? null,
-    armed_qty: existing?.armed_qty ?? null,
-    arming_qty: existing?.arming_qty ?? null,
-    arm_attempt: existing?.arm_attempt ?? 0,
-  };
+): Pick<BrokerBracketRecord, BracketDefaultKey> {
+  if (existing === undefined) return DEFAULT_BRACKET_FIELDS;
+  const { phase, request, armed_qty, arming_qty, arm_attempt } = existing;
+  return { phase, request, armed_qty, arming_qty, arm_attempt };
 }
+
+const BRACKET_ORDER_ID_KEYS = [
+  'entry_order_id',
+  'stop_order_id',
+  'target_order_id',
+] as const satisfies readonly (keyof BrokerBracketOrderIds)[];
 
 function mergedBracketOrderIds(
   ids: BrokerBracketOrderIds,
   existing: BrokerBracketRecord | undefined,
 ): BrokerBracketOrderIds {
-  return {
-    entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
-    stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
-    target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,
-  };
+  const merged = {} as BrokerBracketOrderIds;
+  for (const key of BRACKET_ORDER_ID_KEYS) {
+    merged[key] = ids[key] ?? existing?.[key] ?? null;
+  }
+  return merged;
 }
 
 function fillKey(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): string {

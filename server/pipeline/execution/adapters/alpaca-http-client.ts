@@ -208,6 +208,22 @@ function resolveBaseUrl(environment: AlpacaTradingEnvironment, override?: string
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
 
+function requireAlpacaCredential(
+  value: string | undefined,
+  envVar: string,
+  optionName: 'apiKey' | 'apiSecret',
+  noun: 'key' | 'secret',
+  environment: AlpacaTradingEnvironment,
+): string {
+  if (value !== undefined && value.length > 0) return value;
+  throw new Error(
+    `AlpacaHttpBrokerClient: ${envVar} is not set. Provide it via the environment ` +
+      `(.env.local) or pass { ${optionName} } explicitly. This is the ${environment} account's ` +
+      `${noun}; Alpaca issues a different pair per account and neither substitutes for the ` +
+      'other.',
+  );
+}
+
 export const ALPACA_CREDENTIAL_ENV_VARS: Readonly<
   Record<AlpacaTradingEnvironment, { readonly key: string; readonly secret: string }>
 > = {
@@ -235,26 +251,20 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     const environment = options.environment ?? 'paper';
     const names = ALPACA_CREDENTIAL_ENV_VARS[environment];
     const fromEnv = (name: string): string | undefined => nonEmpty(process.env[name]);
-    const apiKey = options.apiKey ?? fromEnv(names.key);
-    const apiSecret = options.apiSecret ?? fromEnv(names.secret);
-    if (apiKey === undefined || apiKey.length === 0) {
-      throw new Error(
-        `AlpacaHttpBrokerClient: ${names.key} is not set. Provide it via the environment ` +
-          `(.env.local) or pass { apiKey } explicitly. This is the ${environment} account's ` +
-          'key; Alpaca issues a different pair per account and neither substitutes for the ' +
-          'other.',
-      );
-    }
-    if (apiSecret === undefined || apiSecret.length === 0) {
-      throw new Error(
-        `AlpacaHttpBrokerClient: ${names.secret} is not set. Provide it via the environment ` +
-          `(.env.local) or pass { apiSecret } explicitly. This is the ${environment} account's ` +
-          'secret; Alpaca issues a different pair per account and neither substitutes for the ' +
-          'other.',
-      );
-    }
-    this.apiKey = apiKey;
-    this.apiSecret = apiSecret;
+    this.apiKey = requireAlpacaCredential(
+      options.apiKey ?? fromEnv(names.key),
+      names.key,
+      'apiKey',
+      'key',
+      environment,
+    );
+    this.apiSecret = requireAlpacaCredential(
+      options.apiSecret ?? fromEnv(names.secret),
+      names.secret,
+      'apiSecret',
+      'secret',
+      environment,
+    );
     this.baseUrl = resolveBaseUrl(environment, options.baseUrl);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;

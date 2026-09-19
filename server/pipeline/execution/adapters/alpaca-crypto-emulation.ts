@@ -266,21 +266,20 @@ export class AlpacaCryptoLegEmulation {
     stopOrder: AlpacaOrder | null,
     targetOrder: AlpacaOrder | null,
   ): Promise<void> {
-    if (bracket.phase === 'pending_entry') {
-      await this.advanceEntry(bracket, entry);
-    } else if (bracket.phase === 'arming') {
-      await this.resumeArming(bracket);
-    } else if (bracket.phase === 'armed') {
-      await this.advanceExits(bracket, stopOrder, targetOrder);
-    } else if (bracket.phase === 'cancelling_sibling') {
-      await this.finishSiblingCancel(bracket, stopOrder, targetOrder);
-    } else if (
-      bracket.phase === 'resolved' &&
-      isTerminal(entry) &&
-      (stopOrder === null || isTerminal(stopOrder)) &&
-      (targetOrder === null || isTerminal(targetOrder))
-    ) {
-      bracket.donePolling = true;
+    switch (bracket.phase) {
+      case 'pending_entry':
+        return this.advanceEntry(bracket, entry);
+      case 'arming':
+        return this.resumeArming(bracket);
+      case 'armed':
+        return this.advanceExits(bracket, stopOrder, targetOrder);
+      case 'cancelling_sibling':
+        return this.finishSiblingCancel(bracket, stopOrder, targetOrder);
+      case 'resolved':
+        if (bracketFullyTerminal(entry, stopOrder, targetOrder)) bracket.donePolling = true;
+        return;
+      default:
+        return;
     }
   }
 
@@ -501,17 +500,16 @@ export class AlpacaCryptoLegEmulation {
     targetOrder: AlpacaOrder | null,
   ): Promise<void> {
     if (bracket.phase !== 'armed') return;
-    const stopFilled = stopOrder !== null && isFilled(stopOrder);
-    const targetFilled = targetOrder !== null && isFilled(targetOrder);
-    if (!stopFilled && !targetFilled) return;
+    const outcome = exitOutcome(stopOrder, targetOrder);
+    if (outcome === 'none') return;
 
-    if (stopFilled && targetFilled) {
+    if (outcome === 'both') {
       bracket.phase = 'resolved';
       this.persist(bracket);
       return;
     }
 
-    const siblingId = stopFilled ? bracket.targetOrderId : bracket.stopOrderId;
+    const siblingId = outcome === 'stop' ? bracket.targetOrderId : bracket.stopOrderId;
     bracket.phase = 'cancelling_sibling';
     this.persist(bracket);
 
@@ -578,7 +576,31 @@ function isFilled(order: AlpacaOrder): boolean {
   return mapOrderState(order.status) === 'filled' && Number.parseFloat(order.filled_qty) > 0;
 }
 
+function exitOutcome(
+  stopOrder: AlpacaOrder | null,
+  targetOrder: AlpacaOrder | null,
+): 'none' | 'stop' | 'target' | 'both' {
+  const stopFilled = stopOrder !== null && isFilled(stopOrder);
+  const targetFilled = targetOrder !== null && isFilled(targetOrder);
+  if (stopFilled && targetFilled) return 'both';
+  if (stopFilled) return 'stop';
+  if (targetFilled) return 'target';
+  return 'none';
+}
+
 function isTerminal(order: AlpacaOrder): boolean {
   const state = mapOrderState(order.status);
   return state !== 'submitted' && state !== 'partially_filled';
+}
+
+function bracketFullyTerminal(
+  entry: AlpacaOrder,
+  stopOrder: AlpacaOrder | null,
+  targetOrder: AlpacaOrder | null,
+): boolean {
+  return (
+    isTerminal(entry) &&
+    (stopOrder === null || isTerminal(stopOrder)) &&
+    (targetOrder === null || isTerminal(targetOrder))
+  );
 }
