@@ -4,6 +4,29 @@ Paste-ready prompts for Fable (`claude-fable-5-1`), one session per step. Run Se
 Sessions B and C can run in parallel after it (or before it — they are £0 research and touch no
 docs Step 0 rewrites). Sessions D+ come later and are listed for completeness.
 
+**Not ready yet — do not start Session A until doc 67 §5a (loose-ends register) is empty:**
+12 rulings for David, a list of doc fixes (including corrections to Step 0 item 7 and to Session T's
+buckets below), and Session R's research. Then one final cross-verification pass. Session R and
+the doc fixes can run now.
+
+## Session R — facts research · effort **high**
+
+```
+You are working on Samurai. Read docs/research/67-v2-plan-and-handoff.md §5a
+"Needs research". Research each item from primary sources (HMRC manuals, broker docs/terms,
+data-vendor terms) and record findings, with URLs and dates, in a new docs/research doc (check
+the highest used number on main first). Mark each item verified / refuted / unknown. No code.
+Open a PR, do not merge. Caveman-ultra replies to David.
+```
+
+## Session E — Step 4b assurance · effort **high**
+
+After Step 4. Build every row of doc 67 Step 4b as an automated test or a recorded drill; paper
+trading may not start until all rows pass. One PR per area. Stop and ask David if a row's pass
+condition is ambiguous.
+
+---
+
 **Before starting:** fix GitHub Actions billing — CI currently refuses to start any job ("recent
 account payments have failed or your spending limit needs to be increased"), so no step's
 "CI green" check can pass until it's fixed.
@@ -103,6 +126,7 @@ title — bodies go stale. For each, pick one:
 
 Before closing ANY issue: grep server/ client/ contracts/ for "#<n>" and the issue URL — code
 cites some issues as live gates that must stay open. If cited, do not close; report it.
+Run `npm run check:live-gates` before and after closing anything.
 Never write "Closes #n" or "closed #n" in any PR body. In Progress/In Review items with an open
 PR: report them to David rather than closing.
 
@@ -114,7 +138,8 @@ Preliminary buckets (from titles only — verify each against its body):
 
 | Bucket | Issues |
 |---|---|
-| close-obsolete | #238, #751, #895, #900, #1054, #1119, #1149, #1412, #1413, #1498, #1554, #1603, #1604, #1657 |
+| close-obsolete | #1119, #1149, #1412, #1413, #1498, #1554, #1603, #1604, #1657 |
+| fold/defer (code-cited — do NOT close) | #238, #751, #895 (LSE mark source; the Saxo sim adapter needs bid/ask), #900, #1054. #895/#900 are in `LIVE_MONEY_GATES` and a test asserts they stay open. |
 | fold | #756 → Step 2; #750, #1515 → Step 1; #1400, #1302, #1215, #1426, #1581, #1438, #1444 → Steps 3/4; #1521 → tax log; #1516 → gate band; #1387 |
 | keep | #1648, #1649, #1677, #1082, #1427, #1675 |
 | defer | #1652, #1654, #1656, #1658, #1659, #1660, #1661, #1662, #1663, #1665 |
