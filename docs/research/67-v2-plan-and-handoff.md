@@ -158,6 +158,27 @@ fallow + graphify reachability from the v2 root → reviewed list → delete in 
 - **Execution timing:** rebalance at the open, the close, or the LSE closing auction, and the slippage model for each.
 - **Security:** withdrawals disabled, IP allow-lists, and token storage for both venues.
 
+Added 2026-09-19 (unknowns sweep). R1, R2 and R5 could change what gets built:
+
+- **R1 — Trading vs investing (HMRC badges of trade).** Frequent automated trading may be taxed as trading income (income tax + NI), not CGT. Establish which applies to this pattern; likely needs an accountant's view.
+- **R2 — Alpaca fractional positions cannot carry resting stops.** Stop/bracket orders are refused on fractional quantities (memory alpaca-fractional-bars-brackets). Confirm the current rules; decide between whole-share-only US positions and an alternative protection path.
+- **R3 — Whole-share granularity at small capital.** At ~£3,500 across ~25 ETFs (~£140/position), share prices of £50–100+ make target weights unreachable. Find the minimum viable capital per holdings count, on both venues.
+- **R4 — Do stops help momentum?** Stops often hurt trend strategies. Session B must backtest with and without the resting stop (counted as trials).
+- **R5 — Evidence that an LLM news/debate signal works at a daily horizon,** from studies free of look-ahead (tested after the model's training cutoff). If there is none, the 30% debate sleeve rests on hope; report before Step 3.
+- **R6 — News source for LSE ETFs** for the debate (Alpaca news is US-only; Saxo news is unreachable over OpenAPI, memory saxo-platform-oapi-vs-openapi).
+- **R7 — Live end-of-day price source for LSE** that permits automated use (Yahoo terms; Saxo is 15-min delayed).
+- **R8 — Dividends and corporate actions:** accumulating vs distributing ETFs, backtest vs live treatment, ex-dividend drops tripping stops.
+- **R9 — Holiday calendars** for both US and UK, and their expiry.
+- **R10 — LLM providers:** can GPT and DeepSeek versions be pinned via OpenRouter; data-retention/privacy terms (DeepSeek especially); rate limits.
+- **R11 — Funding Alpaca from the UK:** wire fees, Wise support, conversion cost.
+
+**Also needs David's ruling (later, not blocking Session A):**
+
+13. **Research-loop design** — which agents, what data, how proposals are generated. Its own brainstorm before Step 5/6's research loop.
+14. **David unavailable** — default behaviour when a sign-off or pause gets no answer (e.g. hold; never loosen; never go live).
+
+**What blocks Session A:** only rulings 2, 3, 8, 9, 11 plus research R1, R2, R5, the doc fixes, and the cross-verification. The other items block the step named in the "blocks" column of their tickets: ruling 12 → Session B; rulings 4, 5, 6, 10 and R3, R6, R7, R8, R10 → Step 3; rulings 1, 7, 14 and R9, R11 → paper/live; ruling 13 → the research loop.
+
 **Added by the Opus review (2026-09-19) — also need David's ruling:**
 
 8. **ADRs: delete or keep?** Q11 says ADR-0014–0018 are "superseded, never deleted"; Q18 says delete all 21. The citation checker treats `docs/adr/` as an immutable record dir (`server/tools/check-path-citations.ts` `IMMUTABLE_RECORD_DIRS`). Pick one; mark the other clause superseded.

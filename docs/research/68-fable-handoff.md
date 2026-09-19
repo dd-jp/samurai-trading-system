@@ -5,7 +5,8 @@ Sessions B and C can run in parallel after it (or before it — they are £0 res
 docs Step 0 rewrites). Sessions D+ come later and are listed for completeness.
 
 **Not ready yet — do not start Session A until doc 67 §5a (loose-ends register) is empty:**
-12 rulings for David, a list of doc fixes (including corrections to Step 0 item 7 and to Session T's
+14 rulings for David (only 2, 3, 8, 9, 11 block Session A), research R1–R11 and the earlier
+research bullets (R1, R2, R5 block Session A), a list of doc fixes (including corrections to Step 0 item 7 and to Session T's
 buckets below), and Session R's research. Then one final cross-verification pass.
 
 **Order:** W (tickets) → grill the 12 rulings with David + R (research) + doc fixes, in parallel →
@@ -33,10 +34,13 @@ Create the wayfinder map for v2 as GitHub issues:
      reports 0 violations).
    - `wayfinder:task` — one per build step in doc 67 §5 (Steps 0–6 and 4b), each with its
      verify/kill line.
-3. Wire real blocking edges with GitHub's issue-dependencies API, not just prose: Step 0 is
-   blocked by every grilling ticket, the doc-fix task and the cross-verification task; the
-   cross-verification is blocked by the doc-fix task and every grilling ticket; Steps 3–6
-   follow doc 67's order.
+3. Wire real blocking edges with GitHub's issue-dependencies API, not just prose, following
+   doc 67 §5a "What blocks Session A": Step 0 is blocked by grilling 2, 3, 8, 9, 11, research
+   R1, R2, R5, the doc-fix task and the cross-verification; every other ticket blocks only the
+   step its §5a line names. The cross-verification is blocked by the doc-fix task and the
+   Step-0-blocking rulings. Steps 3–6 follow doc 67's order.
+   Every §5a item gets a ticket: rulings 1–14 (`wayfinder:grilling`), each "Needs research"
+   bullet and R1–R11 (`wayfinder:research`). None may be left out.
 4. Add every issue to project #1 (`gh project item-add`) and set Status = Todo; when listing the
    board always pass --limit 1000.
 
