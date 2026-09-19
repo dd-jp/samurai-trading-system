@@ -27,8 +27,7 @@ than **£1,500 net in a year** (hard kill).
 5. `docs/samurai-vision-v2.md` — David's vision; its 0.5–2%/day target is **superseded by Q1**; its five open questions are answered by doc 66.
 6. Docs 61–64 in `docs/research/` — inputs (61 five topics, 62 rewrite/TSMOM fork, 63 qanat mechanisms, 64 replication prior: real strategies Sharpe 0.4–0.8, ~40% OOS decay, >2 = artefact).
 
-All of these are on `main` (docs 61–64 committed via #1694).
-Ask David whether to commit them in the doc-rewrite PR.
+All of these are on `main`.
 
 ## 3. Evidence that drove the rulings (paper DB `data/samurai-paper.sqlite`, read 2026-09-19)
 
@@ -51,24 +50,26 @@ Ask David whether to commit them in the doc-rewrite PR.
 
 ## 5. Ordered work
 
-Each step: `what => verify / kill line`. Steps 1 and 2 are £0, no LLM, and may start immediately (Q18: research, not build).
+Each step: `what => verify / kill line`. Steps 1 and 2 are £0, no LLM, and may start as soon as their own blockers in §5a are ruled (Q18: research, not build) — they do not wait for Step 0.
+
+**Definition of done for every step (David, 2026-09-19: tests, lint, e2e, crap, mutation are built as each stage requires):** a step's PR ships its own unit tests, e2e tests where it touches a runtime path, passes oxlint + biome + fallow + the CRAP gate, and runs mutation testing on any risk, sizing or loss-budget code it adds. There is no separate "testing phase"; Step 4b is the cross-cutting pre-paper checklist on top of this, not a substitute for it.
 
 ### Step 0 — Doc rewrite (David asked for this explicitly; Q18/Q18a)
 
 Do on a **new branch off fresh `origin/main`**, one PR, David merges.
 
 1. `git tag v1-final origin/main && git push origin v1-final` => tag visible on origin.
-2. Copy `data/samurai-paper.sqlite` (main checkout) to an archive location David approves (outside git; it is data) => copy opens with `sqlite3`.
-3. Delete all of `docs/specs/*` (20 files) and `docs/adr/*` (21 files) => `ls` empty.
+2. Archive `data/samurai-paper.sqlite` (main checkout) to the location ruled in G14, outside git, with `sqlite3 <db> ".backup '<dest>'"` — never `cp` (WAL mode) => the copy opens with `sqlite3` and its row counts match.
+3. Per ruling G8: delete all of `docs/specs/*` (20 files) and `docs/adr/*` (21 files) => `docs/specs/` is empty and `docs/adr/` holds only the new v2 ADR (item 4). v2 specs are written in later steps, not in this PR.
 4. Write **`docs/adr/0001-samurai-v2.md`**: all doc-66 rulings as the decision; supersedes the entire v1 ADR set; restates the still-true v1 decisions one line each — money-math precision (old 0005), daily equity return series (old 0006), client/server layout + `contracts/` wire model (old 0012), dashboard hosting (old 0019), dashboard v3 rail (old 0021). Cite `v1-final` for the originals. <!-- cite-exempt: planned — created by Step 0 -->
 5. Rewrite **`CONTEXT.md`** from scratch as the v2 glossary (sleeve, loss budget, gate, band, trial counter, arm 2, veto, venue-resting stop, research loop, promotion…). No implementation detail.
-6. Rewrite **`CLAUDE.md`**. **Keep verbatim:** "Code Comments" section (with the effde735 precedent), "Rate Limit Rule — HARD STOP" (with the autoContinueAtUsageLimit paragraph), "graphify" section. **Add:** lint tooling rule — all oxlint, biome, crap and fallow rules stay intact and bind v2; fallow for dead code. **Rewrite everything else** to doc 66: identity/goal/north star, venues/instruments, sleeves, loss budget, gate numbers, autonomy, host, language, process (Q18 lighter process replaces Standing Pipeline Rules 1/7), docs convention (specs/ADRs now v2-only), key constraints (resting stops, coverage invariants, per-disposal GBP tax log, paper ≠ edge).
-7. Fix references to deleted docs so CI stays green. Files found 2026-09-19 (`grep -rlE 'docs/(adr|specs)/|CONTEXT\.md' server client contracts .github scripts`):
-   - `server/tools/check-path-citations.ts` + `.test.ts` + `server/tools/__fixtures__/path-citations/*` — **the fixtures are deliberate test inputs; do not "fix" them** (see memory comment-stripping-pr-1688).
-   - `server/shared/store/spec-schema-drift.test.ts` — **reads `docs/specs/shared-sqlite-store-spec.md`; deleting the spec breaks it.** Decide: delete the test (spec gone) or repoint at the v2 ADR / migrations. Ask David if unclear.
-   - `server/shared/store/migrations/*.sql`, `server/providers/market-intelligence/archive/migrations/0001_mi_archive.sql` — **applied migrations: do not edit** (checksum/immutability risk). Leave their dangling citations; if `check-path-citations` flags them, exempt migrations in the checker.
-   - `server/providers/universe-pool/lse-etp-pool.ts`, `server/shared/threshold-bounds.ts`, `server/apps/orchestrator/alert-catalogue.ts` (+ `.golden.json`), `server/apps/orchestrator/smoke-run.ts`, `server/tools/mutation-local.test.ts` — drop or repoint the citation; regenerate the golden if its text changes.
-   => `yarn` lint + typecheck + test + `npm run smoke` all green locally; CI green on the PR.
+6. Rewrite **`CLAUDE.md`**. **Keep verbatim:** "Code Comments" section (with the effde735 precedent), "Rate Limit Rule — HARD STOP" (with the autoContinueAtUsageLimit paragraph), "graphify" section. **Add:** lint tooling rule — all oxlint, biome, crap and fallow rules stay intact and bind v2; fallow for dead code (what "crap" names is ruling G15); plus the per-step definition of done from §5. **Rewrite everything else** to doc 66: identity/goal/north star, venues/instruments, sleeves, loss budget, gate numbers, autonomy, host, language, process (Q18 lighter process replaces Standing Pipeline Rules 1/7), docs convention (specs/ADRs now v2-only), key constraints (resting stops, coverage invariants, per-disposal GBP tax log, paper ≠ edge).
+7. Keep the `check:citations` CI step green (`.github/workflows/ci.yml` "Path citations resolve" → `server/tools/check-path-citations.ts`). Facts (verified 2026-09-19 by two reviews):
+   - The checker scans backticked paths in all git-indexed `.md`/`.ts`/`.tsx` files, **except** `docs/adr/`, `docs/wayfinder/`, `docs/research/archive/`, `docs/reviews/`. Fenced code blocks, `.sql` files and TS string literals are **not** scanned — so migrations, `lse-etp-pool.ts`, `alert-catalogue.ts` + golden, `threshold-bounds.ts`, `smoke-run.ts` need **no** edits.
+   - Backticked `docs/adr|specs` citations that break on deletion (~30): CONTEXT.md, CLAUDE.md (both rewritten anyway), README.md, research docs 16, 39, 40, 42, 43, 58, 59, 60, 61 and `docs/research/README.md`. Fix each, or mark it `<!-- cite-exempt: historical — … -->` on the same line (valid reasons: foreign, historical, planned, untracked). Also update the `package.json` "description".
+   - The only runtime reader of a deleted doc is `server/shared/store/spec-schema-drift.test.ts` (reads `docs/specs/shared-sqlite-store-spec.md`) — handle per ruling G14.
+   - `server/tools/check-path-citations.test.ts` and `server/tools/__fixtures__/path-citations/*` use made-up paths deliberately — do not touch.
+   => `npx tsx server/tools/check-path-citations.ts` reports 0 violations; lint + typecheck + test + `npm run smoke` green locally. CI green on the PR only if Actions billing is fixed — otherwise say so in the PR.
 8. **Rename files for maintenance/readability** (David, 2026-09-19: *"rename files if required, for maintenace and readbability concerns"*). Use `git mv` so history follows; update every reference in the same PR. Proposed:
    - `docs/samurai-postmortem.md` → docs/v1-postmortem.md; `docs/samurai-vision-v2.md` → docs/v2-vision.md (both on main). Renaming breaks CONTEXT.md's North Star link and docs 66–68 — update them in the same PR.
    - v2 docs named by what they are: `docs/adr/0001-samurai-v2.md`; specs `docs/specs/momentum-sleeve-spec.md`, `debate-sleeve-spec.md`, `loss-budget-spec.md` (written in later steps, not in the Step 0 PR). <!-- cite-exempt: planned — v2 docs not yet written -->
@@ -79,18 +80,29 @@ Do on a **new branch off fresh `origin/main`**, one PR, David merges.
 
 ### Step 1 — Momentum backtest (£0, no LLM)
 
-Survivorship-safe universe (Q15). Walk-forward, trial counter from trial #1, DSR/PBO via `server/tools/backtest/overfitting.ts`, costs: Saxo 0.08%/side no minimum (16 bps round trip); Alpaca spread-only (~1–3 bps large caps, measure it). Pre-declare the parameter grid before running.
-=> **Kill:** does not beat buy-and-hold of the same universe (risk-matched) after the 40% haircut with DSR ≥ 0.95 and PBO ≤ 0.10. Record every trial.
+Blocked by G9 (PBO bar), G10 (budget path dependence) and research R12–R15 (tax status and broker access shape the universe; data history; execution timing).
+
+**First, propose and STOP for David:** strategy family (time-series trend vs cross-sectional), exact ETF list (not `lse-etp-pool.ts`, which is the 3× pool), the point-in-time S&P 500 dataset (URL), the delisted-name haircut size, LSE survivorship handling (Yahoo lacks delisted `.L` tickers), DSR on excess vs absolute returns, the parameter grid, and confirmation that the strategy is written as the module live code will import (one implementation everywhere, Q11).
+
+Then: walk-forward, trial counter from trial #1, DSR/PBO via `server/tools/backtest/overfitting.ts` (note `server/tools/backtest/stage2-verdict.ts` hard-codes `KILL_LINE.maxPbo` 0.05 — use the G9 ruling), costs Saxo 0.08%/side no minimum; Alpaca spread-only (measure it). Include R4: every configuration run with and without the resting stop, counted as trials. Report the max drawdown (capital ceiling input).
+=> **Kill:** does not beat risk-matched buy-and-hold of the same universe after the 40% haircut with DSR ≥ 0.95 and PBO ≤ the G9 bar. Record every trial.
 
 ### Step 2 — D1 debate audit/fix (£0, no LLM)
 
 Offline replay of `debate_log` from `data/samurai-paper.sqlite` to find why bullish conviction caps at 0.473 < 0.55 (history: #625 stocks ceiling 0.5478, debate rounds moved conviction by zero, #683 mediator tie-break).
+The floor is `conviction_floor` in `server/pipeline/trader/types.ts`. Also: explain doc 65's scoreboard defects (control-arm oversizing; `arm_comparison_samples` −18.8% vs `closed_trades` +£799 disagree in sign), and propose arm 2's entry rule for a daily swing horizon — the debate sleeve is judged against arm 2.
+Caveat: v1 debates ran on hourly bars over the 3× ETP/single-stock book; a "long setups are weak" verdict may not transfer to daily swing — say so in the report.
 => If formula bug: fix, re-replay, bullish must be able to clear the floor. If no bug and long setups genuinely weak: debate sleeve becomes short-only or veto-only (David decides).
 
 ### Step 3 — v2 composition root (after 1–2)
 
-New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, debate core behind a real module interface (postmortem §5). Saxo **simulated paper adapter**: fills at Saxo bid/ask, live tariff 0.08%/side no min (Saxo SIM env has a 24h manual token + trial £8 tariff — don't use it for evaluation). Alpaca paper native. Wire only surviving sleeves. Stop the v1 paper soak.
-=> one v2 paper cycle end-to-end green.
+New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, debate core behind a real module interface (postmortem §5). Saxo **simulated paper adapter**: fills at Saxo bid/ask, live tariff 0.08%/side no min (Saxo SIM env has a 24h manual token + trial £8 tariff — don't use it for evaluation). Alpaca paper native. Wire only surviving sleeves. Stop the v1 paper soak (Q10). Build Anthropic + OpenRouter LLM clients (only Nous clients exist today) with pinned model versions for Sonnet 5, Opus 5, GPT and DeepSeek (Q16; R10). Separate paper book per sleeve (Q14). Blocked by G4, G5, G13 and R1, R2, R3, R5, R6, R7, R8, R10.
+=> one v2 cycle end-to-end green as a **dry run with no orders submitted** — protection (Step 4) comes before any paper order (Q17).
+
+### Step 3c — UI (G13)
+
+Write a v2 UI spec, then build alongside Step 3: loss-budget gauge (−£500/−£1,000/−£1,500, current size step), halt/pause control and halt state, live-vs-backtest band chart, per-sleeve vs benchmark, positions and cash for both venues (GBP and USD, total in GBP), decision journal (entered/skipped/vetoed and why), research-loop view (proposals, trial count, promotions/demotions), sign-off screen if G13 puts sign-off in the UI, tax export (per disposal, GBP, share-matching). Step 5's teardown includes a client pass so the UI never reads deleted server fields.
+=> each screen has component tests; e2e covers halt and sign-off.
 
 ### Step 4 — Protection before any paper trade
 
@@ -109,10 +121,18 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Backtest | Locked final holdout | A final time slice the research loop can never read; read once, at promotion |
 | Backtest | Data sanity | Coverage invariant per series (postmortem §2); adjusted-price jumps, gaps, zero-volume days flagged |
 | Logging | Decision journal | Every decision incl. no-entry, veto, cap and skip, with its inputs and reason, append-only |
-| Logging | Deterministic replay | Any past day re-runs from logs to identical decisions |
+| Logging | Deterministic replay | Any past day re-runs from logs to identical decisions (LLM outputs replayed from the trace, not re-called) |
+| Logging | Order-level fidelity | Paper's orders for a day match a backtest replay of the same day (the band test alone is low-power) |
+| Logging | Realised vs modelled cost | Per-trade realised cost recorded; paper costs within ±25% of modelled (Q19) |
+| Resilience | Plumbing-fault ledger | Every missed stop, reconcile mismatch or stuck order logged; the gate counts 4 consecutive zero-fault weeks from it (Q7) |
 | Resilience | Fault matrix | Drills pass for: broker API down, partial fill, rejected order, stale data, clock/DST, holiday, duplicate run (idempotent), crash mid-order, Mac asleep |
 | Resilience | Reconcile every run | Broker positions/cash vs store each run; any mismatch halts entries and alerts |
 | Resilience | Loss-budget rehearsal | Simulated −£500 / −£1,000 / −£1,500 on paper → ½ size / ¼ size / halt, and the daily cap blocks entries |
+| Resilience | Never-loosen guard | Any attempt to raise the £1,500 limit or the daily cap mid-year is refused by code, not by convention (Q13) |
+| Resilience | Separate sleeve books | Each sleeve's paper book is isolated; one sleeve's loss cannot size the other (Q14) |
+| Security | Keys and egress | Broker keys trade-only, withdrawals disabled, IP-restricted where offered; test that no account data or key leaves in any LLM request (Q16) |
+| Cost | LLM spend cap | ~$30/month cap enforced across providers; breach stops LLM calls, never trading exits (Q16) |
+| Self-learning | Model swap = new trial | Changing any pinned model version resets that sleeve's paper evaluation (Q16) |
 | Self-learning | Trial counter | Append-only, tamper-evident; every backtest run increments it |
 | Self-learning | Promotion dry run | One full proposal → gate → paper-promotion cycle on a dummy change before the first real one |
 | Adaptability | Rule scenarios | Scenario tests prove each pre-declared rule fires (vol spike, trend break, sleeve slump → demotion) |
@@ -120,7 +140,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Engineering | CI alive | GitHub Actions billing fixed; CI enforces oxlint, biome, crap, fallow, tests |
 | Engineering | Property tests | Money math, loss budget, sizing |
 | Engineering | Mutation testing | Risk and loss-budget code via `server/tools/mutation-local.ts` |
-| Engineering | Broker contract tests | Order/position shapes against Alpaca paper and Saxo SIM |
+| Engineering | Broker contract tests | Order/position shapes: automated against Alpaca paper; a recorded drill against Saxo SIM (its token is manual and lasts 24h, so it cannot run in CI) |
 | Observability | v2 views | Loss budget left, live position within backtest band, sleeve vs benchmark, heartbeat, LLM spend |
 | Observability | Daily report + alerting | Daily summary pushed to David; any fault alerts within minutes |
 
@@ -132,83 +152,77 @@ fallow + graphify reachability from the v2 root → reviewed list → delete in 
 
 ### Step 6 — Paper soak to the gate (Q7/Q19), then research loop
 
-8–12 weeks inside band + 4 clean plumbing weeks → one-page summary → David sign-off → live at the floor. Research loop built once a journal exists.
+Paper runs until **at least 10 rebalances and at least 8 weeks** (capped at 12 weeks; if 10 rebalances are not reached by then, report and ask David) inside band + 4 clean plumbing weeks → one-page summary → David sign-off → live at the floor. Research loop built once a journal exists.
 
 ### Also
 
-- Open the **wayfinder map issue "Samurai v2"** (label `wayfinder-map`) with doc 66's rulings as closed decisions; tickets per step with kill lines (Q18). Every loose end in §5a becomes a child ticket.
+- Open the **wayfinder map issue "Samurai v2"** (label `wayfinder-map`) with doc 66's rulings as closed decisions and one child ticket per §5a item (doc 68 Session W).
 
-## 5a. Loose-ends register (must be empty before Session A starts)
+## 5a. Loose-ends register
 
-**Needs David's ruling (grill, one at a time):**
+IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Session G), **R** = research (doc 68 Session R). Every item names the **one** step it blocks. The v2 ADR (Step 0) records any item still open as "open — ticket #n" rather than waiting for it, unless the item is listed as blocking Step 0.
 
-1. **Debate sleeve go-live rule.** The Q7 gate assumes a backtest band; the debate sleeve cannot have one (LLM look-ahead). It needs its own rule, e.g. forward paper vs arm 2 with a pre-declared minimum trade count and significance.
-2. **Intraday.** Q9 = A (no intraday) stands unless David changes it to C (a later gated third sleeve).
-3. **Python research sidecar** — rule yes/no.
-4. **Debate universe.** Which names are debated daily (the momentum sleeve's picks, a separate screen, or both)?
-5. **Veto is a trial.** An LLM veto on momentum can erode its returns; it must be A/B-measured (veto vs no-veto) on paper, with a veto-rate cap.
-6. **FX exposure on the Alpaca USD balance.** Hedge it, or count GBP/USD moves inside the £1,500 budget?
-7. **Live demotion rule.** Exact thresholds that pull a live sleeve back to paper.
+### G — rulings for David
 
-**Needs research (Session R in doc 68):**
+| ID | Question | Recommendation | Blocks |
+|---|---|---|---|
+| G1 | **Debate sleeve go-live rule.** Q7's gate assumes a backtest band; the debate sleeve cannot have one (LLM look-ahead, Q15). | Forward paper vs arm 2 with a pre-declared minimum trade count (≥ 100) and a one-sided test at 95%; until met, its 30% stays in cash. | Debate sleeve live |
+| G2 | **Intraday.** Q9's options were: A = debate sleeve swings, no intraday sleeve (ruled); C = keep intraday as a later third sleeve that must pass its own gate. Keep A or change to C? | Keep A. | Step 0 |
+| G3 | **Python research sidecar** (TS runtime; optional offline Python crossing only via parquet/ONNX/strategy-spec files, with a TS parity test before paper). | Yes, as described; not built until needed. | Step 0 |
+| G4 | **Debate universe.** Which names are debated daily? | A liquidity screen of US large caps plus the LSE ETF universe, capped at ~20 names/day by liquidity rank; not tied to momentum's picks. | Step 3 |
+| G5 | **Veto measurement.** The LLM veto on momentum has the debate's look-ahead leak, so backtested momentum ≠ live momentum + veto; and the veto can erode returns. | Run a no-veto shadow book forward alongside; cap the veto rate (e.g. ≤ 10% of entries); drop the veto if the shadow beats it. | Step 3 |
+| G6 | **Loss-budget scope.** £1,500 per calendar year (resets) or in total before stopping (doc 65's L)? Do deposits during the ramp rebase start capital? Do GBP/USD moves on the Alpaca balance count (hedge or not)? Exact daily cap (Q6 says ≈1%)? | Total before stopping (not reset); deposits do not rebase; FX counts, no hedge at this size; daily cap exactly 1.0% of start capital. | Step 0 |
+| G7 | **Live demotion rule.** Exact thresholds that pull a live sleeve back to paper. | Demote when live return leaves the backtest's 95% band for 4 consecutive weeks, or drawdown exceeds 1.5× the backtest max. | Live |
+| G8 | **ADRs: delete or keep?** Q11 says ADR-0014–0018 are "superseded, never deleted"; Q18 (later) says delete all 21. The citation checker treats `docs/adr/` as an immutable-record dir (`IMMUTABLE_RECORD_DIRS`). | Delete per Q18 (the later ruling); the `v1-final` tag preserves them; mark Q11's clause superseded in doc 66. | Step 0 |
+| G9 | **PBO bar.** Q19 says ≤ 0.10. Code says 0.05: `server/apps/orchestrator/production.ts` throws at build when `max_pbo` > 0.05 (bound from `server/shared/threshold-bounds.ts`), also enforced in `server/pipeline/feedback-loop/sqlite-tuning-store.ts` and `server/pipeline/risk-manager/risk-thresholds.ts`; `server/tools/backtest/stage2-verdict.ts` hard-codes `KILL_LINE.maxPbo` 0.05. | Keep Q19's 0.10 for v2 and change the code bounds in the step that first uses them; or revert Q19 to 0.05. | Step 0 and Step 1 |
+| G10 | **Budget path dependence.** At the £5,000 ceiling, −£500 is a 10% drawdown — ordinary for momentum — so half-size triggers inside normal behaviour and pushes paper/live out of the backtest band. | Backtest with the budget rules included, so the band already reflects them. | Step 1 |
+| G11 | **Research-loop design** — which agents, what data, how proposals are generated. | Its own brainstorm session once a trade journal exists. | Research loop |
+| G12 | **David unavailable** — default when a sign-off or pause gets no answer. | Hold: no promotion, no capital change, protective exits keep running, never loosen anything. | Paper start |
+| G13 | **UI scope.** Keep the v3 Rail layout or rethink? Sign-off in the UI or on GitHub? Is the dashboard needed before paper, or is the daily report enough to start? | Keep Rail, add v2 screens (Step 3c); sign-off on GitHub (auditable); daily report enough to start paper, dashboard before live. | Step 3 |
+| G14 | **Session A pre-answers.** Where is the paper DB archived? What happens to `server/shared/store/spec-schema-drift.test.ts` when its spec is deleted? | `~/samurai-archive/v1-final/samurai-paper.sqlite`, outside git; delete the test with the spec — migrations are the schema authority. | Step 0 |
+| G15 | **What is "crap"?** No tool by that name is configured (package.json, oxlint, biome, fallow, CI). | The CRAP score gate (complexity × coverage), ticket #1649 — build it and make it bind. | Step 0 |
 
-- **UK tax, possibly material:** offshore-fund rules (gains on non-reporting funds taxed as income, not CGT; most US-listed ETFs are non-reporting; screen LSE ETFs for HMRC reporting-fund status); share matching (same-day and 30-day rules) under weekly rebalances, which the tax log must implement.
-- **Brokers:** Alpaca margin for UK residents, US-ETF access (PRIIPs/KID), borrow fees, PDT-removal implementation date; Saxo FX conversion fee; availability of 1× inverse ETFs on LSE.
-- **Data:** how many LSE ETFs have 10+ years of history; Yahoo/Stooq terms for automated use.
-- **Execution timing:** rebalance at the open, the close, or the LSE closing auction, and the slippage model for each.
-- **Security:** withdrawals disabled, IP allow-lists, and token storage for both venues.
+### R — research (facts, primary sources)
 
-Added 2026-09-19 (unknowns sweep). R1, R2 and R5 could change what gets built:
+| ID | Question | Blocks |
+|---|---|---|
+| R1 | **Trading vs investing (HMRC badges of trade).** Frequent automated trading may be taxed as trading income (income tax + NI), not CGT. Needs research and likely an accountant's view. | Step 3 |
+| R2 | **Alpaca order limits.** Fractional quantities are refused for bracket/OCO/OTO orders (memory alpaca-fractional-bars-brackets); confirm whether a plain stop order on a fractional position is allowed. Also: whole-share **short** brackets (SPY 6, QQQ 7) were refused for an unknown reason — this bears directly on Q8's debate-sleeve shorts. | Step 3 |
+| R3 | **Whole-share granularity.** At £1,000–£5,000 total and 70% to momentum (£700–£3,500) across ~25 ETFs, positions are ~£28–£140; LSE share prices of £50–100+ make target weights unreachable. Find the minimum viable capital per holdings count on both venues. | Step 3 |
+| R5 | **Evidence that an LLM news/debate signal works at a daily horizon,** from academic studies free of look-ahead (tested after the model's training cutoff). If none, the debate sleeve rests on hope. | Step 3 |
+| R6 | **News source for LSE ETFs** for the debate (Alpaca news is US-only; Saxo news is unreachable over OpenAPI, memory saxo-platform-oapi-vs-openapi). | Step 3 |
+| R7 | **Live end-of-day price source for LSE** that permits automated use (Yahoo terms; Saxo is 15-min delayed). | Step 3 |
+| R8 | **Dividends and corporate actions:** accumulating vs distributing ETFs, backtest vs live treatment, ex-dividend drops tripping stops. | Step 3 |
+| R9 | **Holiday calendars** for US and UK, and their expiry. | Paper start |
+| R10 | **LLM providers:** can GPT and DeepSeek versions be pinned via OpenRouter; data-retention/privacy terms (DeepSeek especially); rate limits. | Step 3 |
+| R11 | **Funding Alpaca from the UK:** wire fees, Wise support, conversion cost. | Live |
+| R12 | **UK tax on funds:** offshore-fund rules (gains on non-reporting funds taxed as income, not CGT; most US-listed ETFs are non-reporting; screen LSE ETFs for HMRC reporting-fund status); share matching (same-day and 30-day rules) under weekly rebalances, which the tax log must implement. | Step 1 |
+| R13 | **Broker access:** Alpaca margin for UK residents, US-ETF access (PRIIPs/KID), borrow fees, PDT-removal implementation date; Saxo FX conversion fee; availability of 1× inverse ETFs on LSE. | Step 1 |
+| R14 | **Data:** how many LSE ETFs have 10+ years of history; Yahoo/Stooq terms for automated use. | Step 1 |
+| R15 | **Execution timing:** rebalance at the open, the close, or the LSE closing auction, and the slippage model for each. | Step 1 |
+| R16 | **Security:** withdrawals disabled, IP allow-lists, token storage for both venues. | Paper start |
 
-- **R1 — Trading vs investing (HMRC badges of trade).** Frequent automated trading may be taxed as trading income (income tax + NI), not CGT. Establish which applies to this pattern; likely needs an accountant's view.
-- **R2 — Alpaca fractional positions cannot carry resting stops.** Stop/bracket orders are refused on fractional quantities (memory alpaca-fractional-bars-brackets). Confirm the current rules; decide between whole-share-only US positions and an alternative protection path.
-- **R3 — Whole-share granularity at small capital.** At ~£3,500 across ~25 ETFs (~£140/position), share prices of £50–100+ make target weights unreachable. Find the minimum viable capital per holdings count, on both venues.
-- **R4 — Do stops help momentum?** Stops often hurt trend strategies. Session B must backtest with and without the resting stop (counted as trials).
-- **R5 — Evidence that an LLM news/debate signal works at a daily horizon,** from studies free of look-ahead (tested after the model's training cutoff). If there is none, the 30% debate sleeve rests on hope; report before Step 3.
-- **R6 — News source for LSE ETFs** for the debate (Alpaca news is US-only; Saxo news is unreachable over OpenAPI, memory saxo-platform-oapi-vs-openapi).
-- **R7 — Live end-of-day price source for LSE** that permits automated use (Yahoo terms; Saxo is 15-min delayed).
-- **R8 — Dividends and corporate actions:** accumulating vs distributing ETFs, backtest vs live treatment, ex-dividend drops tripping stops.
-- **R9 — Holiday calendars** for both US and UK, and their expiry.
-- **R10 — LLM providers:** can GPT and DeepSeek versions be pinned via OpenRouter; data-retention/privacy terms (DeepSeek especially); rate limits.
-- **R11 — Funding Alpaca from the UK:** wire fees, Wise support, conversion cost.
+(R4 — do stops help momentum? — is not research: it is run inside Step 1 as counted trials.)
 
-**Also needs David's ruling (later, not blocking Session A):**
+### Summary of what blocks what
 
-13. **Research-loop design** — which agents, what data, how proposals are generated. Its own brainstorm before Step 5/6's research loop.
-14. **David unavailable** — default behaviour when a sign-off or pause gets no answer (e.g. hold; never loosen; never go live).
-
-**What blocks Session A:** only rulings 2, 3, 8, 9, 11 plus research R1, R2, R5, the doc fixes, and the cross-verification. The other items block the step named in the "blocks" column of their tickets: ruling 12 → Session B; rulings 4, 5, 6, 10 and R3, R6, R7, R8, R10 → Step 3; rulings 1, 7, 14 and R9, R11 → paper/live; ruling 13 → the research loop.
-
-**Added by the Opus review (2026-09-19) — also need David's ruling:**
-
-8. **ADRs: delete or keep?** Q11 says ADR-0014–0018 are "superseded, never deleted"; Q18 says delete all 21. The citation checker treats `docs/adr/` as an immutable record dir (`server/tools/check-path-citations.ts` `IMMUTABLE_RECORD_DIRS`). Pick one; mark the other clause superseded.
-9. **PBO bar vs code.** Q19 says PBO ≤ 0.10; doc 65, CONTEXT.md body and `server/shared/threshold-bounds.ts` (`max_pbo.max = 0.05`, enforced at boot by `server/apps/orchestrator/smoke-run.ts`) say 0.05. Relax the code bound or keep 0.05.
-10. **Momentum veto validation.** The LLM veto has the same look-ahead leak as the debate, so backtested momentum ≠ live momentum + veto. Proposal: run a no-veto shadow arm forward (overlaps item 5).
-11. **Loss budget scope.** £1,500 per calendar year (resets) or total before stopping (doc 65's L)? Do deposits during the ramp rebase "start capital"? FX moves on US holdings count (item 6).
-12. **Budget path dependence.** At the £5,000 ceiling, −£500 is a 10% drawdown — an ordinary momentum drawdown — so half-size triggers inside normal behaviour and pushes paper/live out of the backtest band. Either express the steps as % of the backtest's max DD or backtest with the budget rules included.
-
-**Doc fixes (no ruling needed) — apply before Session A:**
-
-- Step 0 item 7 is wrong and incomplete. What actually breaks is the `check:citations` CI step (`.github/workflows/ci.yml` "Path citations resolve"), which scans all git-indexed `.md`/`.ts` except `docs/adr/`, `docs/wayfinder/`, `docs/research/archive/`, `docs/reviews/`. `.sql` files and TS string literals are never scanned, so migrations, `lse-etp-pool.ts`, `alert-catalogue.ts`/golden, `threshold-bounds.ts`, `smoke-run.ts` need no edits. The only runtime reader of a deleted doc is `server/shared/store/spec-schema-drift.test.ts`. Backticked `docs/adr|specs` citations to fix or mark `<!-- cite-exempt: historical — … -->`: CONTEXT.md, CLAUDE.md, README.md, research docs 16, 39, 40, 42, 43, 58, 59, 60, 61 and `docs/research/README.md` (~30). Also `package.json` description. Verify with `npx tsx server/tools/check-path-citations.ts` → 0 violations.
-- Session T buckets: #238, #751, #895, #900, #1054 are code-cited; #895/#900 are in `LIVE_MONEY_GATES` and a test asserts they stay open — move to fold/defer, and run `npm run check:live-gates` before closing anything.
-- Session B is underspecified: make its first step "propose strategy family (time-series trend vs cross-sectional), exact ETF list, point-in-time S&P 500 dataset URL, delisted haircut size, LSE survivorship handling, DSR on excess vs absolute returns, and that the strategy is written as the module live code imports — then STOP for David".
-- Step 3 must build Anthropic + OpenRouter LLM clients (only Nous clients exist today, ADR-0009).
-- Doc 65's scoreboard defects (control oversizing; `arm_comparison_samples` vs `closed_trades` sign disagreement) and arm 2's undefined swing entry rule belong to Step 3 / Session C.
-- Stale/inconsistent: doc 65 needs a "superseded by doc 66" banner (still plans an intraday sleeve and flat-by-close; PBO 0.05; "haircut drawdown × 1.5"); Step 0 "ls empty" vs new specs; billing blocks CI vs "CI green"; v1 soak stop is Q10 but deferred to Step 3; copy the SQLite DB with `.backup`, not `cp` (WAL); Step 3's paper cycle runs before Step 4's protection (Q17 says protection first — make Step 3's check a dry run with no orders); pin GPT/DeepSeek versions; pick 8 or 12 weeks by rule (e.g. ≥ 10 rebalances); set the daily cap exactly; name what "crap" is (no tool configured in package.json/oxlint/biome/fallow/CI — confirm with David, likely #1649's CRAP gate); Sessions B and C must not both take doc number 69; name the owner of the wayfinder map and of Session R.
-- Session C caveat: v1 debates ran on hourly bars on the ETP/single-stock book; a "long setups are weak" verdict may not transfer to daily swing. The 0.55 floor is in `server/pipeline/trader/types.ts`.
-- Paper band test is low-power over 8–12 weeks; add an order-level check: paper's orders match a backtest replay of the same days.
-
-**Verification:** after the rulings above and the doc fixes land, run one final cross-verification pass over docs 65–68 + CONTEXT.md before Session A.
+- **Step 0 (Session A):** G2, G3, G6, G8, G9, G14, G15 + the cross-verification (Session X).
+- **Step 1 (Session B):** G9, G10, R12, R13, R14, R15.
+- **Step 2 (Session C):** nothing — may start now.
+- **Step 3:** G4, G5, G13, R1, R2, R3, R5, R6, R7, R8, R10.
+- **Paper start:** Step 4 + 4b, G12, R9, R16.
+- **Live:** G1 (debate sleeve), G7, R11, David's sign-off.
+- **Research loop:** G11.
 
 ## 6. Traps already hit (read before touching the repo)
 
 - **Worktree-isolation hook** refuses Bash with shell variables in sqlite paths and base64 pipes. Use literal read-only URIs: `sqlite3 "file:/Users/ddjp/Documents/projects/samurai-trading-system/data/samurai-paper.sqlite?mode=ro" "..."`. Subagent Bash is refused under worktree isolation (memory subagent-bash-refused-in-worktree).
 - Paper DB lives in the **main checkout's** `data/`, not the worktree's (memory service-reads-worktree-store).
-- Doc numbering collides with David's untracked docs — `ls docs/research` in the **main checkout** before picking a number. 61–68 are taken.
+- Doc numbers: 61–68 are taken. Pre-assigned to avoid parallel collisions: **69 = Session R, 70 = Session B, 71 = Session C**; anything else takes the next free number on `origin/main`.
 - `Closes #N` / "closed #N" in a PR body auto-closes issues at merge — grep the body.
 - Merges are David's. No live money until David is confident. Caveman-ultra style for chat replies to David; normal prose in docs/commits. Never commit secrets (Saxo live token is in `data/saxo-tokens/live.json`).
 - Rate-limit hard stop rule applies.
 
 ## 7. Where this lives
 
-All on `main` (docs 61–68, CONTEXT.md North Star). Session prompts are in `docs/research/68-fable-handoff.md`. Session A starts only once §5a is empty.
+All on `main` (docs 61–68, CONTEXT.md North Star). Session prompts are in `docs/research/68-fable-handoff.md`. Each step starts once its own blockers in §5a are resolved.

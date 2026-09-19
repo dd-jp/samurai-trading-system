@@ -1,5 +1,7 @@
 # 65 — Next steps: what docs 61/62/63 plus the live paper book say to do
 
+> **Superseded by [doc 66](66-v2-grill-decisions.md) (rulings) and [doc 67](67-v2-plan-and-handoff.md) (plan), 2026-09-19.** Evidence (§1–§4), the capital method (§5a) and the North Star (§5b) still hold. Its plan does not: the intraday sleeve and flat-by-close were dropped (Q9), the PBO bar is 0.10 pending ruling G9 (not 0.05), and the loss-budget scope is ruling G6.
+
 **Status:** PLAN (2026-09-19). **Implements nothing and decides nothing.** The fork in §5 is David's decision. Draws on [`61-five-topics-safest-max-profit.md`](61-five-topics-safest-max-profit.md), [`62-rewrite-safer-profitable-bot.md`](62-rewrite-safer-profitable-bot.md), [`63-qanat-adaptation.md`](63-qanat-adaptation.md), docs [11](11-trend-signal-measurement.md) and [13](13-stage2-proxy-verdict.md), and a read-only query of `data/samurai-paper.sqlite` taken 2026-09-19.
 
 **Labels.** **[verified]** means read from the repo, the DB, or GitHub during this pass. **[derived]** means arithmetic on verified inputs. **[inferred]** means an interpretation. **[assumed]** means a modelling choice.
