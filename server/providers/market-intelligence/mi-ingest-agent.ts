@@ -40,6 +40,16 @@ function readDegraded(
 
 const LOOKBACK_MS = 60 * 60 * 1000;
 
+// Paper MI archive 2026-08-26..2026-09-18, 131 scored Benzinga articles: the tag-count histogram
+// breaks between 5 (12 articles) and 6 (3); the 36 above it are "Stock Market Today" / "Why Is
+// <peer> Falling" roundups that produced 68 of 173 name items at 34 bearish to 19 bullish, against
+// 29 to 31 for the rest. Pending David's ruling on the threshold.
+const MAX_WIRE_SYMBOLS_FOR_NAME_NEWS = 5;
+
+function isNameSpecific(article: AlpacaNewsArticle): boolean {
+  return article.symbols.length <= MAX_WIRE_SYMBOLS_FOR_NAME_NEWS;
+}
+
 export interface MiIngestAgentDeps {
   archive: MiArchiveStore;
   store: MarketIntelligenceStore;
@@ -128,6 +138,7 @@ export class MiIngestAgent {
 
     const unscored = articles
       .filter((article) => article.symbols.some((symbol) => symbols.includes(symbol)))
+      .filter(isNameSpecific)
       .filter(
         (article) =>
           !this.deps.archive.hasScoredItem(

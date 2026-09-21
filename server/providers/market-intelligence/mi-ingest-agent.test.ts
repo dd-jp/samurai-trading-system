@@ -204,6 +204,46 @@ describe('MiIngestAgent', () => {
     ).toEqual(['AAPL', 'NVDA']);
   });
 
+  it('archives a market-wide roundup but neither scores it nor serves it as name news', async () => {
+    const roundup = article({
+      id: '2001',
+      headline: 'Stock Market Today: futures drop',
+      symbols: ['AAPL', 'AMD', 'AVGO', 'MU', 'NVDA', 'SMCI'],
+    });
+    const { agent, archive, store, scorer } = build([roundup], -1);
+
+    expect(await agent.refresh('t', 'AAPL', 'stocks')).toBe(false);
+
+    expect(archive.rawRows('alpaca-news')).toHaveLength(1);
+    expect(scorer.calls).toHaveLength(0);
+    expect(store.getContext('stocks', WINDOW, 't', undefined, 'AAPL').news).toEqual([]);
+  });
+
+  it('still scores an article tagging as many symbols as the name-news cap allows', async () => {
+    const { agent, store } = build([article({ symbols: ['AAPL', 'AMD', 'AVGO', 'MU', 'NVDA'] })]);
+
+    expect(await agent.refresh('t', 'AAPL', 'stocks')).toBe(true);
+
+    expect(store.getContext('stocks', WINDOW, 't', undefined, 'AAPL').news).toHaveLength(1);
+  });
+
+  it('serves the name-specific article when a roundup arrives in the same fetch', async () => {
+    const { agent, store } = build([
+      article({ id: '1001', symbols: ['AAPL'] }),
+      article({
+        id: '2001',
+        headline: 'Why Is Marvell Stock Falling Monday?',
+        symbols: ['AAPL', 'AMD', 'AVGO', 'MRVL', 'MU', 'NVDA', 'SMCI'],
+      }),
+    ]);
+
+    await agent.refresh('t', 'AAPL', 'stocks');
+
+    expect(
+      store.getContext('stocks', WINDOW, 't', undefined, 'AAPL').news.map((item) => item.headline),
+    ).toEqual(['Apple beats on revenue']);
+  });
+
   it('converts a dash-form crypto id to the wire symbol', async () => {
     const { agent, news } = build([article({ symbols: ['BTCUSD'] })]);
 
