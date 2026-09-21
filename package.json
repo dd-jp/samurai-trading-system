@@ -35,6 +35,7 @@
     "report:arms": "tsx server/tools/report-arm-comparison.ts",
     "report:cgt": "tsx server/tools/report-cgt-disposals.ts",
     "report:debate-flip-rate": "tsx server/tools/report-debate-round-flip-rate.ts",
+    "report:debate-conviction": "tsx server/tools/replay-debate-conviction.ts",
     "classify:debate-termination": "tsx server/tools/classify-debate-termination.ts",
     "lint:oxlint": "oxlint",
     "lint:oxlint:fix": "oxlint --fix",
