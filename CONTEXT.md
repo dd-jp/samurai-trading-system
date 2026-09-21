@@ -7,14 +7,14 @@ No implementation details here. Just terms, relationships, invariants.
 
 ## North Star
 
-Set by David, 2026-09-19 (rulings in `docs/research/66-v2-grill-decisions.md`). This overrides everything below it that conflicts, until the v2 rewrite of this file lands.
+Set by David, 2026-09-19, and brought in line with his G rulings of 2026-09-21 (rulings in `docs/research/66-v2-grill-decisions.md`, which wins wherever the two differ). This overrides everything below it that conflicts, until the v2 rewrite of this file lands.
 
 **Samurai is an autonomous, self-improving trading system that makes a steady net profit (even a small one) over each year, and never loses more than £1,500 net in a year.**
 
 - **Profit** counts only net of every cost and ahead of the matched benchmark: risk-matched buy-and-hold of the same universe for the momentum sleeve, and the no-LLM control (arm 2) for the debate sleeve. There is **no daily % target**; losing days are accepted in pursuit of a profitable year.
-- **£1,500** is a hard kill-switch on net loss from starting capital, across all venues, in GBP, marked to market. Position size halves at −£500 and quarters at −£1,000, and trading halts for the year at −£1,500. Profits never extend it.
-- **Proof comes before money.** A sleeve reaches live capital only after passing the pre-declared gate: DSR ≥ 0.95, PBO ≤ 0.10, a 40% Sharpe haircut, 8–12 weeks of paper trading inside the backtest's 90% band with costs within ±25%, 4 fault-free weeks, and David's sign-off.
-- **Capital is derived, not chosen:** live capital ≤ £1,500 / (backtest max drawdown × 1.5), ramped only while live results stay in band.
+- **£1,500** is a hard kill-switch on net trading loss from starting capital, across all venues, in GBP, with open positions marked to market. It is a budget per calendar year and resets each year; deposits do not rebase starting capital; GBP/USD moves on the US cash balance are excluded, so it measures trading P&L only (G6). Position size halves at −£500 and quarters at −£1,000, and trading halts for the year at −£1,500. A daily loss of 1.0% of starting capital blocks new entries for that day; exits still run. Profits never extend the budget, and neither limit is ever loosened mid-year.
+- **Proof comes before money.** A sleeve reaches live capital only after passing the pre-declared gate: DSR ≥ 0.95, PBO ≤ 0.10, a 40% Sharpe haircut, 8–12 weeks of paper trading inside the backtest's 90% band with costs within ±25%, and 4 fault-free weeks. The debate sleeve cannot be backtested honestly (the LLM has seen the history), so its proof is forward paper trading against arm 2: at least 100 closed trades and a one-sided test at 95% (G1). Once the gate passes, the system sends David an approval request on Telegram; a "no" blocks it, and no reply within 24 hours approves it, including for changes that reach live money (G12). Each request, its answer or timeout, and its one-page summary are written to a GitHub issue (G13).
+- **Capital is derived, not chosen:** live capital ≤ £1,500 / (backtest max drawdown × 1.5), ramped only while live results stay in band. A live sleeve is demoted to paper when its return leaves the backtest's 95% band for 4 consecutive weeks, or its drawdown exceeds 1.5× the backtest maximum (G7).
 - **Self-improving** means learning from mistakes offline: the research loop proposes changes, every variant tried counts as a trial, and a change reaches live only via the gate. Live behaviour changes on its own only through pre-declared, backtested rules and risk that only tightens.
 - **Least error margin** means every protective action rests at the broker or is watchdog-backed, never depending on a live process; and backtest, paper and live run the same code.
 
