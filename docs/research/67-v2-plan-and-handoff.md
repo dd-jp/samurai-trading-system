@@ -108,7 +108,7 @@ Caveat: v1 debates ran on hourly bars over the 3× ETP/single-stock book; a "lon
 
 ### Step 3 — v2 composition root (after 1–2)
 
-New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, debate core behind a real module interface (postmortem §5). Saxo **simulated paper adapter**: fills at Saxo bid/ask, live tariff 0.08%/side no min (Saxo SIM env has a 24h manual token + trial £8 tariff — don't use it for evaluation). Alpaca paper native. Wire only surviving sleeves. Stop the v1 paper soak (Q10). Build Anthropic + OpenRouter LLM clients (only Nous clients exist today) with pinned model versions for Sonnet 5, Opus 5, GPT and DeepSeek (Q16; R10). Separate paper book per sleeve (Q14), plus the shadow books the rulings require: no-veto (G5), no-macro-gate (G16), and one per counted input trial (G18: without sentiment, without social, large-cap-only). Debate universe per G4 + G18. Blocked by G4, G5, G13, G16, G18 and R1, R2, R3, R5, R6, R7, R8, R10, R17 — all resolved except G18's open parts (ticket #1753), David's Step 2 decision, and the doc 69 facts listed in doc 66 "Still open".
+New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, debate core behind a real module interface (postmortem §5). Saxo **simulated paper adapter**: fills at Saxo bid/ask, live tariff 0.08%/side no min (Saxo SIM env has a 24h manual token + trial £8 tariff — don't use it for evaluation). Alpaca paper native. Wire only surviving sleeves. Stop the v1 paper soak (Q10). Build Anthropic + OpenRouter HTTP transports (the debate core's `AnthropicLlmClient` in `server/pipeline/debate-engine/llm/anthropic-client.ts` already exists, but its only concrete transport today is the Nous one, `nous-messages-client.ts` in the same directory) with pinned model versions for Sonnet 5, Opus 5, GPT and DeepSeek (Q16; R10). Separate paper book per sleeve (Q14), plus the shadow books the rulings require: no-veto (G5), no-macro-gate (G16), and one per counted input trial (G18: without sentiment, without social, large-cap-only). Debate universe per G4 + G18. Blocked by G4, G5, G13, G16, G18 and R1, R2, R3, R5, R6, R7, R8, R10, R17 — all resolved except G18's open parts (ticket #1753), David's Step 2 decision, and the doc 69 facts listed in doc 66 "Still open".
 => one v2 cycle end-to-end green as a **dry run with no orders submitted** — protection (Step 4) comes before any paper order (Q17).
 
 ### Step 3c — UI (G13)
@@ -177,11 +177,11 @@ Momentum sleeve: paper runs until **at least 10 rebalances and at least 8 weeks*
 
 ## 5a. Loose-ends register
 
-IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Session G), **R** = research (doc 68 Session R). **Status 2026-09-21: every G item is ruled except G11 (deferred, ticket #1717 open) and the open parts of G18 (ticket #1753 open); every R item is answered in `docs/research/69-v2-facts.md`.** Every item names the **one** step it blocks. The v2 ADR (Step 0) records any item still open as "open — ticket #n" rather than waiting for it, unless the item is listed as blocking Step 0.
+IDs are stable: **G** = needs David's ruling (grilled one at a time, doc 68 Session G), **R** = research (doc 68 Session R). **Status 2026-09-21: every G item is ruled except G11 (deferred, ticket #1717 open) and the open parts of G18 (ticket #1753 open); every R item is answered in `docs/research/69-v2-facts.md`.** Every item names the **one** step it blocks, except G18, which was added later and blocks two (Step 3 and Step 5). The v2 ADR (Step 0) records any item still open as "open — ticket #n" rather than waiting for it, unless the item is listed as blocking Step 0.
 
 ### G — rulings for David
 
-The **Recommendation** column is what was proposed before the grill, kept as the record. It is **not** the ruling. The **Ruled** column is a short pointer; the full ruling is the same ID's row in doc 66, which wins. David departed from the recommendation on G4, G6, G12, G13 and G16.
+The **Question** and **Recommendation** columns are what was asked and proposed before the grill, kept as the record; a premise in them may since have been overtaken (G17's "v2 uses only daily bars + news" is no longer true under G18). Neither is the ruling. The **Ruled** column is a short pointer; the full ruling is the same ID's row in doc 66, which wins. David departed from the recommendation on G4, G6, G12, G13 and G16.
 
 | ID | Question | Recommendation (not the ruling) | Blocks | Ruled (doc 66) |
 |---|---|---|---|---|

@@ -11,11 +11,11 @@ IDs G1–G18 and R1–R17, each naming the step it blocks). Doc 66 wins over doc
 parts of G18 (ticket #1753). X reconciled docs 65–68 and `CONTEXT.md` with rulings G1–G18. Next: A,
 then T and B. Their prompts are kept below as the record of what was run.
 
-**Two kinds of approval — do not mix them up.** (1) A `STOP` in a session prompt means the
-session waits for David's actual answer, however long that takes. (2) Ruling G12's 24-hour
-auto-approval belongs to the running trading system: it sends David a Telegram request, and no
-reply in 24 hours approves it. G12 is not assumed to cover a session STOP (listed in doc 66
-"Still open" for David to confirm).
+**Two kinds of approval — do not mix them up.** (1) A `STOP` in a session prompt. (2) Ruling
+G12's 24-hour auto-approval, which the running trading system applies to the Telegram requests
+it sends David. Whether G12 also covers a session STOP is **not ruled**: it is listed in doc 66
+"Still open" for David. Working assumption until he rules: it does not, so a session at a STOP
+waits for David's actual answer and never treats silence as approval.
 
 **Before anything:** David fixes GitHub Actions billing — CI refuses to start any job until then,
 so no PR can show CI green.
