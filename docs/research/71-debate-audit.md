@@ -45,7 +45,7 @@ npx tsx server/tools/replay-debate-conviction.ts --db "file:/Users/ddjp/Document
 Two populations:
 
 - **Exact (76 debates, 2026-09-03 onward).** `llm_call_log` captured the mediator prompt, whose context block carries the exact `AnalystView[]`. The script feeds those views to the production `computeConvictionScore`, applies the analyst weights in force at the debate's `created_at` (rebuilt from `dial_adjustments`), and compares with `debate_log.confidence` at 1e-9. **76 of 76 match.** Without the weight history 33 rows miss by the factors 0.9375–1.0313, which is how the weight step was found.
-- **Implied (56 debates, before prompt capture).** Analyst confidences were not persisted, so the evidence term is backed out: `(confidence − 0.6 × directional) / 0.4`. All 56 land in [0, 1]; 10 of them only under the pre-#683 consensus, which dates them before the 2026-09-01 fix (e11ae6fe).
+- **Implied (56 debates, before prompt capture).** Analyst confidences were not persisted, so the evidence term is backed out: `(confidence − 0.6 × directional) / 0.4`. All 56 land in [0, 1]. 10 of them do so only under the pre-#683 consensus — the zero-net desks with a directional verdict, all above the current formula's 0.40 ceiling. The last of those was written 2026-09-01T19:58Z, after the fix (e11ae6fe) merged at 11:03Z, so the soak process was still running the old build that day. No row is feasible under both eras with different values, so no implied evidence figure depends on guessing the era.
 
 Output on the DB as of 2026-09-21 (267 rows, last debate 2026-09-18T19:58Z):
 
@@ -61,7 +61,7 @@ captured: 76 of 132
   persisted == current: 76
   persisted == pre-683-only: 0
   persisted == neither: 0
-not captured: 56; implied evidence in [0,1] under current or pre-#683 consensus: 56; feasible only under pre-#683: 10
+not captured: 56; implied evidence in [0,1] under current or pre-#683 consensus: 56; feasible only under pre-#683: 10; feasible under both with different values (evidence left unset): 0
 ```
 
 Doc 67's "209 neutral" is 74 real neutral verdicts plus 135 rows where no debate ran (rate-limit, gate refusal or LLM failure: empty contributions, confidence 0).

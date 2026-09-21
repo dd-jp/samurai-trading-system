@@ -203,20 +203,42 @@ describe('replayDebate', () => {
     expect(replayed?.convictionIfMediatorSidedWithDesk).toBeNull();
   });
 
-  it('backs the evidence term out of an uncaptured row and flags the era it needs', () => {
-    const views = desk('bearish');
-    const preEra = replayDebate(row(views, 'bullish', 0.15 + 0.4 * 0.8), null, {});
-    expect(preEra?.captured).toBe(false);
+  it('backs the evidence term out of an uncaptured zero-net row only the old era explains', () => {
+    const preEra = replayDebate(row(desk('bearish'), 'bullish', 0.15 + 0.4 * 0.8), null, {});
+
+    expect(preEra).toMatchObject({
+      captured: false,
+      match: 'not-captured',
+      evidenceOnlyFeasiblePre683: true,
+      evidenceEraAmbiguous: false,
+      technicalConfidence: 0.75,
+    });
     expect(preEra?.evidence).toBeCloseTo(0.8, 12);
-    expect(preEra?.evidenceOnlyFeasiblePre683).toBe(true);
-    expect(preEra?.technicalConfidence).toBe(0.75);
+  });
 
+  it('backs the evidence term out of an uncaptured leaning row and scores mediator agreement', () => {
     const leaning = replayDebate(row(desk('bullish'), 'neutral', 0.3 + 0.4 * 0.7), null, {});
-    expect(leaning?.evidence).toBeCloseTo(0.7, 12);
-    expect(leaning?.evidenceOnlyFeasiblePre683).toBe(false);
-    expect(leaning?.convictionIfMediatorSidedWithDesk).toBeCloseTo(0.45 + 0.4 * 0.7, 12);
 
-    expect(replayDebate(row(views, 'bullish', 0.99), null, {})?.evidence).toBeNull();
+    expect(leaning).toMatchObject({
+      evidenceOnlyFeasiblePre683: false,
+      evidenceEraAmbiguous: false,
+    });
+    expect(leaning?.evidence).toBeCloseTo(0.7, 12);
+    expect(leaning?.convictionIfMediatorSidedWithDesk).toBeCloseTo(0.45 + 0.4 * 0.7, 12);
+  });
+
+  it('leaves evidence unset when no era, or both eras with different values, explain the row', () => {
+    const views = desk('bearish');
+
+    expect(replayDebate(row(views, 'bullish', 0.99), null, {})).toMatchObject({
+      evidence: null,
+      evidenceEraAmbiguous: false,
+    });
+    expect(replayDebate(row(views, 'bullish', 0.3), null, {})).toMatchObject({
+      evidence: null,
+      evidenceEraAmbiguous: true,
+      convictionIfMediatorSidedWithDesk: null,
+    });
   });
 });
 

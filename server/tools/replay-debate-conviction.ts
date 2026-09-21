@@ -50,6 +50,7 @@ export interface ReplayedDebate {
   match: FormulaMatch;
   evidence: number | null;
   evidenceOnlyFeasiblePre683: boolean;
+  evidenceEraAmbiguous: boolean;
   technicalConfidence: number | null;
   fundamentalConfidence: number | null;
   convictionIfMediatorSidedWithDesk: number | null;
@@ -138,6 +139,34 @@ function classifyMatch(persisted: number, current: number, pre683: number): Form
   return 'neither';
 }
 
+function isFeasibleEvidence(evidence: number): boolean {
+  return evidence >= 0 && evidence <= 1;
+}
+
+function impliedEvidence(
+  row: DebateRow,
+  contributions: Contribution[],
+  positions: Direction[],
+  weights: Record<string, number>,
+): { evidence: number | null; onlyFeasiblePre683: boolean; eraAmbiguous: boolean } {
+  const unweighted = row.confidence / weighted(1, contributions, row.direction, weights);
+  const impliedUnder = (directional: number): number =>
+    (unweighted - CONSENSUS_WEIGHT * directional) / EVIDENCE_WEIGHT;
+  const current = impliedUnder(directionalConsensusCurrent(positions, row.direction));
+  const pre683 = impliedUnder(directionalConsensusPre683(positions, row.direction));
+  const erasAgree = Math.abs(current - pre683) <= REPLAY_TOLERANCE;
+
+  if (isFeasibleEvidence(current) && (erasAgree || !isFeasibleEvidence(pre683))) {
+    return { evidence: current, onlyFeasiblePre683: false, eraAmbiguous: false };
+  }
+  if (isFeasibleEvidence(current)) {
+    return { evidence: null, onlyFeasiblePre683: false, eraAmbiguous: true };
+  }
+  return isFeasibleEvidence(pre683)
+    ? { evidence: pre683, onlyFeasiblePre683: true, eraAmbiguous: false }
+    : { evidence: null, onlyFeasiblePre683: false, eraAmbiguous: false };
+}
+
 export function replayDebate(
   row: DebateRow,
   views: AnalystView[] | null,
@@ -155,14 +184,7 @@ export function replayDebate(
   const deskSide = signOf(analystMean);
 
   if (views === null) {
-    const unweighted = row.confidence / weighted(1, contributions, row.direction, weights);
-    const impliedUnder = (directional: number): number =>
-      (unweighted - CONSENSUS_WEIGHT * directional) / EVIDENCE_WEIGHT;
-    const current = impliedUnder(directionalConsensusCurrent(positions, row.direction));
-    const pre683 = impliedUnder(directionalConsensusPre683(positions, row.direction));
-    const feasible = (evidence: number): boolean => evidence >= 0 && evidence <= 1;
-    const evidence = feasible(current) ? current : feasible(pre683) ? pre683 : null;
-
+    const implied = impliedEvidence(row, contributions, positions, weights);
     return {
       row,
       desk,
@@ -171,16 +193,17 @@ export function replayDebate(
       replayedCurrent: null,
       replayedPre683: null,
       match: 'not-captured',
-      evidence,
-      evidenceOnlyFeasiblePre683: !feasible(current) && feasible(pre683),
+      evidence: implied.evidence,
+      evidenceOnlyFeasiblePre683: implied.onlyFeasiblePre683,
+      evidenceEraAmbiguous: implied.eraAmbiguous,
       technicalConfidence: technicalConfidenceFromRationale(contributions),
       fundamentalConfidence: null,
       convictionIfMediatorSidedWithDesk:
-        evidence === null || deskSide === 'neutral'
+        implied.evidence === null || deskSide === 'neutral'
           ? null
           : weighted(
               CONSENSUS_WEIGHT * directionalConsensusCurrent(positions, deskSide) +
-                EVIDENCE_WEIGHT * evidence,
+                EVIDENCE_WEIGHT * implied.evidence,
               contributions,
               deskSide,
               weights,
@@ -218,6 +241,7 @@ export function replayDebate(
     match: classifyMatch(row.confidence, replayedCurrent, replayedPre683),
     evidence,
     evidenceOnlyFeasiblePre683: false,
+    evidenceEraAmbiguous: false,
     technicalConfidence: confidenceOf('technical'),
     fundamentalConfidence: confidenceOf('fundamental'),
     convictionIfMediatorSidedWithDesk:
@@ -366,7 +390,8 @@ export function buildReport(debates: ReplayedDebate[], emptyRows: number, floor:
   lines.push(
     `not captured: ${uncaptured.length}; implied evidence in [0,1] under current or pre-#683 consensus: ` +
       `${uncaptured.filter((debate) => debate.evidence !== null).length}; ` +
-      `feasible only under pre-#683: ${uncaptured.filter((debate) => debate.evidenceOnlyFeasiblePre683).length}`,
+      `feasible only under pre-#683: ${uncaptured.filter((debate) => debate.evidenceOnlyFeasiblePre683).length}; ` +
+      `feasible under both with different values (evidence left unset): ${uncaptured.filter((debate) => debate.evidenceEraAmbiguous).length}`,
   );
   lines.push('');
 
