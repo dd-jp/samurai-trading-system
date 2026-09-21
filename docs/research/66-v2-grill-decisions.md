@@ -77,7 +77,7 @@ Grilled one at a time from the loose-ends register in `docs/research/67-v2-plan-
 | G16 | Macro event gate | **Debate sleeve only: new entries at half size on high-impact release days** (FOMC, US CPI, NFP, BoE rate decisions, UK CPI); exits and momentum unaffected; counted as a trial, measured against a no-gate shadow in paper; source per R17. Departs from §5a's recommendation (no new entries). (#1722) |
 | G17 | Parked market-intelligence code | **Delete in Step 5** (git and `v1-final` keep it); a source returns only when the research loop shows it adds edge, as a counted trial. Their tickets stay parked, not closed. (#1723) |
 
-**Knock-on for other docs (not edited here; Session X reconciles):** `CONTEXT.md`'s North Star and doc 67 §1/§4 still say "David's sign-off" (G12); doc 67 §4 says "marked-to-market" without the FX exclusion (G6), and its Step 3c and §5a say "Keep Rail" and "daily report enough to start paper" (G13); doc 67 Step 0 item 4 lists old 0021 among the restated decisions (G13).
+**Knock-on for other docs (not edited here; Session X reconciles):** `CONTEXT.md`'s North Star, doc 67 §4, Step 6 and §5a's blocking summary, and doc 68's Session P and Session E prompts still require David's sign-off (G12); `CONTEXT.md`'s North Star and doc 67 §4 say "marked to market" without the FX exclusion (G6); doc 67 §4 still calls the Python sidecar "not ruled" (G3); doc 67 §5a's G13 row says "Keep Rail" and "daily report enough to start paper", Step 3c still offers a sign-off screen, and §5a's blocking summary lacks the Step 6 ← Step 3c edge (G13); doc 67 Step 0 item 4 lists old 0021 among the restated decisions (G13).
 
 ## Still open
 
