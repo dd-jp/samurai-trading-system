@@ -30,7 +30,7 @@ So: the arithmetic is sound, and bullish *can* clear the floor whenever a bullis
 | Analyst weights | `debate-adapter.ts:563-566`, `server/pipeline/debate-engine/weighted-conviction.ts:3-28` | persisted score is multiplied by weighted/unweighted agreement share; factor is 1 until the feedback loop first moved a weight on 2026-09-15 |
 | Direction traded | `debate-adapter.ts:123`, `:231` | the mediator's `stance` — a neutral verdict is no trade whatever the score |
 
-The spec (`docs/specs/debate-engine-spec.md`, "Conviction Score Algorithm") states the same rules, including NO-DATA analysts counting as neutral votes and the #683 carve-out. Code and spec agree.
+The spec (`docs/specs/debate-engine-spec.md`, "Conviction Score Algorithm") states the same rules, including NO-DATA analysts counting as neutral votes and the #683 carve-out. Code and spec agree. <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 
 `abs(mean)` has no sign dependence: a bullish desk and its mirror-image bearish desk score identically. With sentiment always absent (it was `NO DATA` on 132 of 132 debates), the best reachable directional term on either side is `(1 + 1 + 0 + 1) / 4 = 0.75`.
 

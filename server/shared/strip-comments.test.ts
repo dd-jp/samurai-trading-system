@@ -1,14 +1,4 @@
-import { stripComments, stripLineComments } from './strip-comments.js';
-
-describe('stripLineComments', () => {
-  it('drops from -- to end of line', () => {
-    expect(stripLineComments('SELECT 1; -- a comment\nSELECT 2;')).toBe('SELECT 1; \nSELECT 2;');
-  });
-
-  it('leaves a line with no -- untouched', () => {
-    expect(stripLineComments('CREATE TABLE t (id INTEGER)')).toBe('CREATE TABLE t (id INTEGER)');
-  });
-});
+import { stripComments } from './strip-comments.js';
 
 describe('stripComments', () => {
   it('drops a // line comment', () => {

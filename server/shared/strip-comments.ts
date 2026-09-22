@@ -1,13 +1,3 @@
-export function stripLineComments(sql: string): string {
-  return sql
-    .split('\n')
-    .map((line) => {
-      const idx = line.indexOf('--');
-      return idx === -1 ? line : line.slice(0, idx);
-    })
-    .join('\n');
-}
-
 function stepQuoted(
   source: string,
   i: number,

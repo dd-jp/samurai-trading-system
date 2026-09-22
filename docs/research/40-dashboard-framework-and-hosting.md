@@ -407,7 +407,7 @@ non-recommendation, not a preference.**
 ## 5. Costs, side by side
 
 All retrieved 2026-08-06. ADR-0008's cap is **$50 per 14 days**, verified by reading
-`docs/adr/0008-llm-spend-cap.md` on branch `worktree-semi-auto-readiness`
+`docs/adr/0008-llm-spend-cap.md` on branch `worktree-semi-auto-readiness` <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 ([PR #428](https://github.com/dd-jp/samurai-trading-system/pull/428)) — David's words, quoted there:
 *"for paper trading lets keep 50$ / 14 day budget."* Both ADR-0007 and ADR-0008 live on that branch
 and were **not yet merged to `main`** when this was written, so `docs/adr/` on `main` still ended at

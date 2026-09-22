@@ -629,7 +629,7 @@ order-of-magnitude claim was withdrawn).
   `CostModel` — which is what `ZeroCostModel` in `cost-attribution.test.ts` does, existing solely to bypass an
   otherwise unreachable guard.
 - **Principle 1 does not require a fixed magnitude.** `docs/wayfinder/cost-model-backtest-map.md:16` and
-  `docs/specs/cost-model-backtest-spec.md:148` state it as *representability*: "the most optimistic config still
+  `docs/specs/cost-model-backtest-spec.md:148` state it as *representability*: "the most optimistic config still <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
   applies a non-zero `half_spread + commission` floor. A frictionless fill is not representable." A per-venue or
   per-asset-class floor table satisfies that in full. **Nothing in Principle 1 says the floor must be 1bp**, and
   nothing anywhere states a measurement basis for that magnitude.

@@ -1,7 +1,7 @@
 # Samurai v2 — grilling decisions (2026-09-19)
 
 Running record of David's rulings in the v2 brainstorm/grill session. Inputs: docs 61–65,
-`docs/samurai-postmortem.md`, `docs/samurai-vision-v2.md`, and the paper-DB findings in doc 65 §1/§5b.
+`docs/v1-postmortem.md`, `docs/v2-vision.md`, and the paper-DB findings in doc 65 §1/§5b.
 David's framing: ignore prior decisions/specs, correct the mistakes, open the universe, make profit
 even if tiny, one step at a time, long-term (1-year) profit accepting day-level losses.
 
@@ -72,7 +72,7 @@ Grilled one at a time from the loose-ends register in `docs/research/67-v2-plan-
 | G11 | Research-loop design | **Deferred to its own session once a trade journal exists.** Not ruled; ticket stays open and keeps the research loop blocked. (#1717) |
 | G12 | David unavailable | **The system is fully autonomous; issues and must-have approvals are messaged to David via Telegram. A request with no reply auto-approves after 24 hours,** including changes that reach live money; a "no" before it fires blocks it. Departs from §5a's recommendation (Hold). Supersedes the mandatory sign-off in Q13 and Q7 (4). Untouched: Q13's "never loosen the £1,500 or daily cap mid-year", and the gate (DSR, PBO, haircut, paper band, fault-free weeks) must still pass before any request is sent. (#1718) |
 | G13 | UI scope | **(1) Rethink the dashboard layout** in the Step 3c spec; the v3 Rail is not carried forward (supersedes Q18 cont.'s restating of ADR-0021). **(2) Approvals are answered on Telegram; the request, the reply or timeout, and the one-page summary are written to a GitHub issue as the audit record;** no sign-off screen in the UI. **(3) The v2 dashboard is required before paper starts** — Step 6 is also blocked by Step 3c. Departs from §5a's recommendation on (1) and (3). (#1719) |
-| G14 | Session A pre-answers | **Paper DB archived to `~/samurai-archive/v1-final/samurai-paper.sqlite`** (outside git, via `sqlite3 .backup`); **`server/shared/store/spec-schema-drift.test.ts` is deleted with its spec** — migrations are the schema authority. (#1720) |
+| G14 | Session A pre-answers | **Paper DB archived to `~/samurai-archive/v1-final/samurai-paper.sqlite`** (outside git, via `sqlite3 .backup`); **`server/shared/store/spec-schema-drift.test.ts` is deleted with its spec** — migrations are the schema authority. (#1720) | <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 | G15 | What is "crap" | **The CRAP score gate (complexity × coverage), ticket #1649** — build it and make it bind. (#1721) |
 | G16 | Macro event gate | **Debate sleeve only: new entries at half size on high-impact release days** (FOMC, US CPI, NFP, BoE rate decisions, UK CPI); exits and momentum unaffected; counted as a trial, measured against a no-gate shadow in paper; source per R17. Departs from §5a's recommendation (no new entries). (#1722) |
 | G17 | Parked market-intelligence code | **Delete in Step 5** (git and `v1-final` keep it); a source returns only when the research loop shows it adds edge, as a counted trial. Their tickets stay parked, not closed. *(Amended by G18: the X/social code is not deleted while its trial runs.)* (#1723) |

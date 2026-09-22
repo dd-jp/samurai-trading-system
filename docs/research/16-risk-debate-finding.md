@@ -46,16 +46,16 @@ TradingAgents itself demonstrates why this matters: its Trader emits **free-text
 
 - `tradingagents/risk_mgmt/` source tree (the actual debate implementation): https://github.com/TauricResearch/TradingAgents/tree/main/tradingagents/risk_mgmt
 - arXiv 2412.20138 §4.2 (debate protocol + facilitator): https://arxiv.org/abs/2412.20138
-- Samurai current spec: `docs/specs/risk-manager-spec.md`
+- Samurai current spec: `docs/specs/risk-manager-spec.md` <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 - Full reconnaissance report: `~/Documents/Obsidian/research/trading-repos-vs-samurai-2026-07-25.md` (§1 + Deep-Dive Addendum C.3 + D)
 
 ## Other TradingAgents Findings (for separate wayfinder stages, not this grilling)
 
 These are captured in the Obsidian report and should be considered when charting their respective stages — listed here so they're not lost:
 
-- **Analysts stage:** 4-analyst decomposition (Fundamentals / Sentiment / News / Technical) — TradingAgents' Sentiment Analyst aggregates news + StockTwits + Reddit into a structured `SentimentReport` (band, score 0–10, confidence). Port the 4 Pydantic schemas to Zod. → `docs/specs/analysts-spec.md`
-- **Debate Engine stage:** `max_debate_rounds` config knob; 5-tier `PortfolioRating` output (Buy/Overweight/Hold/Underweight/Sell) vs Samurai's structured `DebateResult`. → `docs/specs/debate-engine-spec.md`
-- **Feedback Loop stage:** append-only markdown decision log (`~/.tradingagents/memory/trading_memory.md`) + per-market alpha-vs-benchmark resolution (SPY for US, regional benchmarks for HK/JP/LON/IN/CN/AU). Port the regional benchmark map for R-multiple labels. → `docs/specs/feedback-loop-spec.md`
+- **Analysts stage:** 4-analyst decomposition (Fundamentals / Sentiment / News / Technical) — TradingAgents' Sentiment Analyst aggregates news + StockTwits + Reddit into a structured `SentimentReport` (band, score 0–10, confidence). Port the 4 Pydantic schemas to Zod. → `docs/specs/analysts-spec.md` <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
+- **Debate Engine stage:** `max_debate_rounds` config knob; 5-tier `PortfolioRating` output (Buy/Overweight/Hold/Underweight/Sell) vs Samurai's structured `DebateResult`. → `docs/specs/debate-engine-spec.md` <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
+- **Feedback Loop stage:** append-only markdown decision log (`~/.tradingagents/memory/trading_memory.md`) + per-market alpha-vs-benchmark resolution (SPY for US, regional benchmarks for HK/JP/LON/IN/CN/AU). Port the regional benchmark map for R-multiple labels. → `docs/specs/feedback-loop-spec.md` <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 - **Cross-cutting:** two-tier LLM split (`deep_think_llm` / `quick_think_llm`) + 12+ provider config shape. → `docs/techstack.md`
 
 ---

@@ -7,7 +7,7 @@
 
 Samurai's equity leg **currently boots inside** a Trading 212 Stocks & Shares ISA. Gains and losses realised inside an ISA wrapper are **outside the scope of UK Capital Gains Tax entirely** — this is not a case of the gains being small relative to an allowance, it is the wrapper removing CGT from the picture unconditionally. Two gov.uk pages confirm this directly: [gov.uk — Capital Gains Tax: What you pay it on](https://www.gov.uk/capital-gains-tax/what-you-pay-it-on) states "You do not pay Capital Gains Tax on certain assets, including any gains you make from: ISAs or PEPs"; [gov.uk — Individual Savings Accounts (ISAs): How ISAs work](https://www.gov.uk/individual-savings-accounts/how-isas-work) states "You do not pay tax on: interest on cash in an ISA, income or capital gains from investments in an ISA." Tax-loss harvesting is a technique for managing a CGT bill; there is no CGT bill to manage while every disposal happens inside the wrapper. **This doc is not a feature spec for Samurai as it stands** — but per the Status line above, "as it stands" is the ISA-booted state specifically, not a durable description; see ADR-0015's live UK-tax note for the operative-once-#905-lands framing.
 
-Crypto is the only leg of Samurai that would actually generate CGT events under the *current* ISA wrapper (crypto cannot be held in a Stocks & Shares ISA), and crypto left Samurai's scope entirely on 2026-08-16 (ADR-0015's 2026-08-16 amendment; see `docs/adr/0015-live-venue-account-and-book-split.md`). David: *"actually drop crypto. we'll create a new system one later for handling crypto trades."*
+Crypto is the only leg of Samurai that would actually generate CGT events under the *current* ISA wrapper (crypto cannot be held in a Stocks & Shares ISA), and crypto left Samurai's scope entirely on 2026-08-16 (ADR-0015's 2026-08-16 amendment; see `docs/adr/0015-live-venue-account-and-book-split.md`). David: *"actually drop crypto. we'll create a new system one later for handling crypto trades."* <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 
 So this research has two consumers — one of them Samurai's own near-term future, not a hypothetical successor:
 
@@ -72,7 +72,7 @@ HMRC's Cryptoassets Manual applies the **same statutory framework as shares** (T
 
 ## 5. Finding: ADR-0015's CGT framing should be corrected (not fixed here) — RESOLVED by #930
 
-`docs/adr/0015-live-venue-account-and-book-split.md` stated, at two points, before this doc's own follow-up ticket landed:
+`docs/adr/0015-live-venue-account-and-book-split.md` stated, at two points, before this doc's own follow-up ticket landed: <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 
 - Line ~55 (as it read at research time): *"UK tax. CGT is immaterial at £1,500 against a £3,000 annual exempt amount, but every crypto disposal and equity trade is still a recordable event..."*
 - Line ~143 (as it read at research time): *"The UK tax position is if anything looser: CGT was already immaterial at £1,500 against a £3,000 exempt amount."*

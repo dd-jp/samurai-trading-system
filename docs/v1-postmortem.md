@@ -9,7 +9,7 @@ whether the next system keeps any of Samurai's design choices.
 This is not a decision to stop running Samurai or to discard the code. It is the record of
 what the experiment found, so the next system doesn't have to re-discover it the same way.
 
-See `docs/samurai-vision-v2.md` for what gets built next.
+See `docs/v2-vision.md` for what gets built next.
 
 ---
 
