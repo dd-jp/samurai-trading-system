@@ -1,6 +1,12 @@
 # 65 — Next steps: what docs 61/62/63 plus the live paper book say to do
 
-> **Superseded by [doc 66](66-v2-grill-decisions.md) (rulings) and [doc 67](67-v2-plan-and-handoff.md) (plan), 2026-09-19.** Evidence (§1–§4), the capital method (§5a) and the North Star (§5b) still hold. Its plan does not: the intraday sleeve and flat-by-close were dropped (Q9), the PBO bar is 0.10 pending ruling G9 (not 0.05), and the loss-budget scope is ruling G6.
+> **Superseded by [doc 66](66-v2-grill-decisions.md) (rulings) and [doc 67](67-v2-plan-and-handoff.md) (plan), 2026-09-19; banner updated 2026-09-21 after rulings G1–G18.** Still holding: the evidence (§1, §2, §5b "Where Samurai stands") and §5a's capital method. No longer holding, and left in the body as the record of what was proposed:
+> - **Intraday / flat-by-close** (§3 Step 2 and Step 4, §5 option A, "Multi-sleeve" item 5, §5a's "day sleeve" costs, §5b rows D2 and D4): dropped by Q9 and G2. There is no intraday sleeve.
+> - **PBO ≤ 0.05** (§3 Step 1 kill criterion, §5b north-star sentence, §5b row D3): the bar is **0.10** (Q19, confirmed by G9).
+> - **§5b's north-star sentence:** replaced by `CONTEXT.md`'s North Star (two sleeves, each against its own benchmark, never more than £1,500 net loss in a year).
+> - **L = £1,500 "before stopping"** (§5a): ruled a budget **per calendar year** that resets, deposits do not rebase it, FX moves excluded (Q6, G6). The ceiling formula `£1,500 / (backtest max drawdown × 1.5)` stands (Q7); §5b row D5's "haircut drawdown" means that same backtest max drawdown.
+> - **"David signs off"** (§5b row D5): replaced by G12's Telegram approval request, which approves itself after 24 hours without a reply.
+> - **§3 Step 1's two TSMOM configurations and the 16 bps cost line:** the momentum backtest is now doc 67 Step 1. **§5b row D1** is done: see [doc 71](71-debate-audit.md).
 
 **Status:** PLAN (2026-09-19). **Implements nothing and decides nothing.** The fork in §5 is David's decision. Draws on [`61-five-topics-safest-max-profit.md`](61-five-topics-safest-max-profit.md), [`62-rewrite-safer-profitable-bot.md`](62-rewrite-safer-profitable-bot.md), [`63-qanat-adaptation.md`](63-qanat-adaptation.md), docs [11](11-trend-signal-measurement.md) and [13](13-stage2-proxy-verdict.md), and a read-only query of `data/samurai-paper.sqlite` taken 2026-09-19.
 
