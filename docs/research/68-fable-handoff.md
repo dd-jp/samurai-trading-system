@@ -218,7 +218,7 @@ Run after the Step-0 rulings (G2, G3, G6, G8, G9, G14, G15) are recorded in doc 
 ```
 You are an adversarial reviewer of Samurai's v2 plan (repo dd-jp/samurai-trading-system). Read
 docs/research/65 through 68, CONTEXT.md (North Star section only; the rest of that file is v1 and
-is rewritten by Session A) and docs/samurai-postmortem.md. Also read docs/research/69-v2-facts.md
+is rewritten by Session A) and docs/v1-postmortem.md. Also read docs/research/69-v2-facts.md
 and docs/research/71-debate-audit.md if they exist: they are inputs you do not edit, but a fact
 there that docs 65–68 state differently is a finding, and a fact that undermines a ruling goes on
 the list for David. Doc 66 is the authority; make the other docs match it. Find: contradictions between docs;
@@ -243,7 +243,7 @@ listed, not decided.
 You are working on Samurai. Read docs/research/67-v2-plan-and-handoff.md (Step 0, §5a, §6),
 docs/research/66-v2-grill-decisions.md (all of it: Q1–Q19, G1–G18 and "Still open"),
 docs/research/65-next-steps-plan.md (banner first), docs/research/69-v2-facts.md (last section),
-docs/research/71-debate-audit.md (Verdict), docs/samurai-postmortem.md, docs/samurai-vision-v2.md.
+docs/research/71-debate-audit.md (Verdict), docs/v1-postmortem.md, docs/v2-vision.md.
 
 Do Step 0 of doc 67 exactly, on a new branch off fresh origin/main, as ONE PR: tag v1-final;
 archive the paper DB with sqlite3 .backup to the G14 location; delete docs/specs/* and

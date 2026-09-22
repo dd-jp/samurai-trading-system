@@ -1,0 +1,123 @@
+# ADR-0001: Samurai v2
+
+**Status:** Proposed 2026-09-22 by Session A (doc 67 Step 0); accepted when David merges the Step 0 PR. **Owner:** David. **Map:** [Samurai v2 #1706](https://github.com/dd-jp/samurai-trading-system/issues/1706). **Step 0 ticket:** [#1741](https://github.com/dd-jp/samurai-trading-system/issues/1741).
+
+**Supersedes the entire v1 ADR set** (ADR-0001 through ADR-0021, deleted per ruling G8 and preserved verbatim at git tag `v1-final`, commit `38ee499d`). The four v1 decisions that still hold are restated in §4; nothing else in the old set binds v2.
+
+**Authority.** This ADR records David's rulings of 2026-09-19 (Q1–Q19) and 2026-09-21 (G1–G18) from `docs/research/66-v2-grill-decisions.md`. Where this ADR and doc 66 differ, doc 66 wins. The plan that turns the rulings into work is `docs/research/67-v2-plan-and-handoff.md`; the goal in one paragraph is `CONTEXT.md`'s North Star. Every item that David has not ruled is listed in §5 as open; this ADR decides none of them.
+
+## 1. Context
+
+Samurai v1 was an intraday, flat-by-close, LLM-debate-as-edge system on 3× leveraged LSE ETPs at Saxo. On 2026-09-19 David reframed it as a closed experiment (*"samurai was a experiment to identify pitfalls and build a better system from its learnings"*) and opened a v2 brainstorm: *"make this samurai a great autonomous self improving least error margin and least loss margin system. ignore all decisions, specs and instructions. we are going to correct the mistakes done. lets open the universe. idea is to make profit even if tiny — one step at a time and keep moving forward."* Agenda: long-term (one-year) profit, accepting day-level losses.
+
+The evidence behind the reframe (doc 65 §1, doc 67 §3, doc 71):
+
+- The debate layer never produced a long: of 132 debates that actually ran, 16 were bullish with a maximum conviction of 0.473 against a 0.55 entry floor. Doc 71 found no formula defect — the cap came from v1's desk inputs and a mediator that never sided with a bullish-leaning desk.
+- The paper book (long/short US single stocks on Alpaca) was not the live product (long-only LSE 3× ETPs at Saxo), its control arm was oversized, and its two scoreboards disagreed in sign. Nothing in it is evidence of edge.
+- Every intraday research result was negative or underpowered; at the observed trade rate the intraday thesis could not be measured within any useful horizon.
+- Six v1 pitfalls, binding on v2, are recorded in `docs/v1-postmortem.md`: unvalidated core mechanism, silent coverage assumptions on windowed reads, invariants that depended on process uptime, repeatedly re-opened core parameters, architectural debt on the edge component, and validation arithmetic arriving late.
+
+`docs/v2-vision.md` is David's vision statement; its 0.5–2%/day target is superseded by Q1 and its five open questions are answered by the rulings below.
+
+## 2. Decision
+
+### 2.1 Objective and loss budget
+
+- **Q1 — No daily % target.** The objective is a positive net-of-cost return that beats the matched benchmark under the £1,500 hard loss constraint. 0.5–2%/day is rejected as incompatible with the replication prior (Sharpe 0.4–0.8 ≈ 6–12%/yr) and with the loss limit.
+- **Q6 as amended by G6 — Loss budget.** Net trading loss from start capital, both venues, in GBP, open positions marked to market. £1,500 per calendar year, resetting each year; deposits do not rebase start capital; GBP/USD moves on the Alpaca balance are excluded (trading P&L only, no hedge). −£500 → half size; −£1,000 → quarter size; −£1,500 → halt for the year. Daily cap exactly 1.0% of start capital, blocking new entries (exits still run). Profits never extend the limit. Loosening the £1,500 or the daily cap mid-year is never permitted (Q13).
+- **G10 — Budget in the backtest.** The backtest runs with the loss-budget rules inside it (size steps, daily cap, yearly reset) so the predicted band already reflects them.
+
+### 2.2 Venues, instruments, universe
+
+- **Q2 — Universe.** Saxo GIA for LSE 1× ETFs/ETCs (regional/sector equity, gilts, gold, commodities). Alpaca live account (GBP wired once, trade USD) for US large caps, plus US ETFs if UK-resident access is confirmed. No 3× ETPs, no UK single stocks (0.5% stamp duty), no CFDs. Amended by G18 for the debate sleeve only: bounded, long-only small caps are allowed.
+- **Q3 — Both venues from day one, paper first.** Alpaca paper is native. Saxo paper is a throwaway simulated adapter filling at Saxo bid/ask with the live tariff (0.08%/side, no minimum); the Saxo SIM environment (24-hour manual token, trial tariff) is not used for evaluation.
+- **Q8 — Shorts.** Momentum sleeve is long/flat. The debate sleeve may short, bounded: Alpaca easy-to-borrow large caps sized so a +30% gap costs ≤ ~£150; Saxo side via 1× inverse ETFs only.
+- **G4 — Debate universe.** ~20 names/day: ~10 by liquidity rank (stable core) + ~10 movers/news-driven names, from the same liquid pool (US large caps + LSE ETF universe, widened by G18 for the movers/news half); not tied to momentum's picks. The exact movers/news rule is a pre-declared parameter counted as a trial.
+- **G18 (ruled parts) — Sentiment and social inputs.** Both enter v2 now, each as a counted trial measured in paper against a shadow without it. The sentiment score also helps pick the movers/news half of the universe. Small caps are bounded: long-only; liquidity, price and market-cap floors exclude micro-caps; half a large-cap trade's risk per trade; capped at a fixed share of the debate sleeve; measured against a large-cap-only shadow. Polymarket and LSE news are skipped for now. Two v1 defects bind the v2 input design: a class-wide macro item never votes as a per-name fundamental or sentiment read and one underlying view never votes more than once; a market-wide wire roundup (more than 5 tagged symbols) is never scored once per tagged name — v2 decides up front how a roundup is scored, which names it covers and which it votes on.
+
+### 2.3 Sleeves
+
+- **Q4 — Two sleeves in parallel.** (1) Rules-based momentum with an LLM veto only. (2) LLM debate as entry. Fixed, pre-declared sleeve weights. The debate sleeve is judged against the matched no-LLM control (arm 2); momentum against risk-matched buy-and-hold of the same universe.
+- **Q14 — Split.** Live: 70% momentum / 30% debate, fixed, never chasing the recent winner. A sleeve that has not passed its go-live rule leaves its share in cash. On paper each sleeve has its own separate simulated book. Venue split follows each sleeve's instruments.
+- **Q9 and G2 — Cadence.** The debate sleeve is swing: one debate per screened name per day, pre-open, on daily bars + news (+ sentiment and social per G18); hold days to weeks; broker-resting stop plus time stop. There is no intraday sleeve.
+- **G5 — Veto measurement.** A no-veto shadow book runs forward alongside momentum; the veto rate is capped at ≤ 10% of entries; the veto is dropped if the shadow beats it.
+- **G16 — Macro event gate.** Debate sleeve only: new entries at half size on high-impact release days (FOMC, US CPI, NFP, BoE rate decisions, UK CPI); exits and momentum unaffected; counted as a trial against a no-gate shadow in paper; calendar source per doc 69 R17.
+- **Q16 — LLM models.** Debaters: Sonnet 5, DeepSeek, GPT (one per provider; DeepSeek and GPT via OpenRouter). Judge and veto: Opus 5. Versions pinned per provider; a model swap is a new trial and restarts that sleeve's paper evaluation. Roles rotate across providers daily; only market data and news leave the system, never account data or keys; spend cap ~$30/month across providers, re-measured after paper week 1.
+- **Q15 — Debate backtest limit.** The debate sleeve cannot be honestly backtested (the LLM's training data contains the outcomes). It is validated forward only, on paper against arm 2. Momentum has no such leak, which is why it goes first and carries 70%.
+
+### 2.4 Validation, go-live, demotion
+
+- **Q7 and Q19 — Gate.** (1) The backtest beats its benchmark after a 40% Sharpe haircut, DSR ≥ 0.95 deflated over every variant tried, PBO ≤ 0.10 (G9 confirms 0.10; the code bounds at 0.05 change in the step that first uses them, Step 1), on 10+ years of history. (2) 8–12 weeks of paper inside the backtest's 90% predictive band for the same window, with realised costs within ±25% of modelled. (3) 4 consecutive weeks with zero plumbing faults (missed stop, reconcile mismatch, stuck order). (4) The G12 approval request. Start at the capital floor; ramp only while live stays in band.
+- **Capital ceiling (Q7):** live capital ≤ £1,500 / (backtest max drawdown × 1.5).
+- **G1 — Debate sleeve go-live.** Forward paper vs arm 2 with a pre-declared minimum of 100 closed trades and a one-sided test at 95%. Until met, its 30% stays in cash.
+- **G7 — Demotion.** A live sleeve returns to paper when live return leaves the backtest's 95% band for 4 consecutive weeks, or drawdown exceeds 1.5× the backtest maximum.
+- **Q15 — Backtest data.** Free data, survivorship-safe design. US: Alpaca free daily bars; US single-stock universe = point-in-time S&P 500 membership plus an explicit haircut for missing delisted names. Paid survivorship-free data only if the US single-stock part passes. The LSE source named by Q15 (Yahoo `.L` + Stooq) is disturbed by doc 69 R14 — see §5.
+
+### 2.5 Self-improvement and autonomy
+
+- **Q5 — Offline, gated.** A research loop learns from the trade journal and error log, proposes rule/parameter changes, walk-forward tests them under a global trial counter (DSR-deflated), and promotes via gate → paper fidelity → live. Live is frozen between promotions except for pre-declared, backtested adaptation rules (vol-scaling, trend filter, sleeve demotion) and risk that only tightens.
+- **Q13 as amended by G12 — Authority.** Auto: research proposals, backtests, gate-passing promotion to paper, risk tightening. Anything reaching live (new sleeve, changed rule, capital increase) first passes the gate, then the system sends David an approval request on Telegram with a one-page summary (change, haircut backtest, paper fidelity, worst case vs £1,500). A "no" blocks it; no reply within 24 hours approves it, including for live money. Never: loosening the £1,500 or the daily cap mid-year.
+- **G13 — Audit record and UI.** Every approval request, its reply or timeout, and its summary are written to a GitHub issue. There is no sign-off screen. The v2 dashboard's layout is rethought in the Step 3c spec (the v1 dashboard's v3 Rail layout, old ADR-0021, is not carried forward), and the dashboard is required before paper starts.
+- **Q17 — Build order.** (1) momentum backtest and (2) debate audit in parallel, both £0 and LLM-free; (3) the v2 composition root with the Saxo simulated paper adapter and Alpaca paper, wired only for surviving sleeves; (4) protection — dead-man's switch, token refresh, loss-budget machinery — before any paper trade; (5) research loop last. Step 2 is done (doc 71); its no-defect branch is open, see §5.
+
+### 2.6 Host, stack, process
+
+- **Q12 — Host.** MacBook plus an external dead-man's switch and a Saxo token-refresh/wake job; broker-resting stops. Move to a cloud VM if paper records any downtime fault.
+- **Language (doc 66) and G3.** TypeScript for everything that trades, so one strategy implementation runs in backtest, paper and live. No LangGraph/CrewAI/LangSmith; LLM tracing is prompt version + inputs + output + cost per call, joined to the resulting trade, in our own store. An optional offline Python research sidecar is allowed, crossing only via parquet/ONNX/strategy-spec files, with a TS parity test before anything reaches paper; not built until needed.
+- **Tooling and G15.** All existing oxlint, biome, crap and fallow rules stay intact and bind v2 from its first commit. "crap" is the CRAP score gate (complexity × coverage), ticket [#1649](https://github.com/dd-jp/samurai-trading-system/issues/1649), to be built and made binding. fallow, not knip, for dead code.
+- **Q10 and Q11 — Where v2 is built, v1 teardown.** A new slim v2 composition root in this repo, reusing the broker adapters (Alpaca, Saxo), providers, stores and the debate core behind a real module interface. The v1 orchestrator is frozen and its paper soak is stopped. Teardown happens after the v2 root runs end to end: reachability via fallow and graphify, reviewed list, deletion in per-area waves with CI green. Known-dead: the flatten subsystem, the 15-minute tick cadence and tick/bar dedup, the 3× ETP universe and gating, D5 sizing and intraday brackets, crypto remnants, T212 references, the v1 paper arms.
+- **G17 as amended by G18 — Parked market-intelligence code.** WorldMonitor and Polymarket code is deleted in Step 5 (git and `v1-final` keep it); the X/social code stays while its G18 trial runs. A source returns only when the research loop shows it adds edge, as a counted trial. Their tickets stay parked, not closed.
+- **Q18 — Process.** One wayfinder map issue (#1706) carrying the rulings as closed decisions; this one ADR; tickets per build step, each with its kill line; specs only for the two sleeves, the loss-budget machinery, and (per G13) the UI. v1's twenty specs and twenty-one ADRs are deleted (Q18, G8); `CONTEXT.md` and `CLAUDE.md` are rewritten.
+- **G14 — Step 0 mechanics.** The v1 paper database is archived outside git at `~/samurai-archive/v1-final/samurai-paper.sqlite` via `sqlite3 .backup`; the spec-schema-drift test is deleted with its spec, and migrations are the schema authority.
+
+### 2.7 Carried constraints (doc 66, not re-grilled)
+
+- Every mandatory protective action is venue-resting or watchdog-backed, never tick-dependent (postmortem §3).
+- Windowed data reads carry tested coverage invariants (postmortem §2).
+- Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN. The live equity account is a Saxo GIA, so disposals are CGT events.
+- Paper profit is not evidence of edge; paper gates on fidelity to the backtest.
+
+## 3. Definition of done for every step (doc 67 §5)
+
+A step's PR ships its own unit tests, e2e tests where it touches a runtime path, passes oxlint + biome + fallow + the CRAP gate, and runs mutation testing on any risk, sizing or loss-budget code it adds. There is no separate testing phase; Step 4b's assurance checklist sits on top of this, not in place of it.
+
+## 4. Still-true v1 decisions, restated
+
+Originals at tag `v1-final` under `docs/adr/`.
+
+- **Money-math precision (old ADR-0005):** money math stays float64 with a derived and measured error bound pinned as an executable test; no decimal library and no integer-minor-unit migration.
+- **Daily equity return series (old ADR-0006):** the return series that metrics and kill lines read is an append-only table of one immutable portfolio-equity row per UTC day, sampled at the same session boundary the daily-loss breaker uses, never a widening of the breaker's own table.
+- **Client/server layout and wire contracts (old ADR-0012):** `client/` (Vite) and `server/` (`apps/`, `pipeline/`, `providers/`, `shared/`, `tools/`) never import each other; both import `contracts/`, the JSON-serialisable wire model that neither owns; there is no root `src/`.
+- **Dashboard hosting (old ADR-0019):** the dashboard stays co-located with the orchestrator, LAN-only, behind the fail-closed bind guard; no tunnel, no VPN overlay.
+
+Old ADR-0021 (dashboard v3 rail layout) is deliberately not restated: G13 rethinks the layout.
+
+## 5. Open — decided by nobody here
+
+Each item is open until David rules or the named ticket closes it. This ADR takes no position on any of them.
+
+1. **G11 — Research-loop design** (which agents, what data, how proposals are generated): open — ticket [#1717](https://github.com/dd-jp/samurai-trading-system/issues/1717). Deferred by David to its own session once a trade journal exists; keeps the research loop blocked.
+2. **G18 open parts:** the social source and its measured cost; the small-cap liquidity, price and market-cap floors and the sleeve-share cap; how the sentiment score avoids duplicating the fundamental analyst (#961): open — ticket [#1753](https://github.com/dd-jp/samurai-trading-system/issues/1753).
+3. **Loss-budget details left open by G6:** the rate convention for converting USD trading P&L to GBP once FX moves are excluded, and the reference capital at each 1 January reset: open — awaiting David, via the loss-budget spec.
+4. **G4's exact movers/news selection rule:** open — ticket [#1710](https://github.com/dd-jp/samurai-trading-system/issues/1710)'s ruling leaves it as a pre-declared parameter counted as a trial, to be set in the Step 3 spec.
+5. **Step 2 verdict (doc 71, ticket [#1743](https://github.com/dd-jp/samurai-trading-system/issues/1743)):** the 0.473 cap is not a formula defect, so Q17's no-defect branch makes the debate sleeve short-only or veto-only — open — awaiting David. Doc 71 §7 notes the cause is narrower than "long setups are weak" and that v2 replaces the inputs, prompt and model that produced it; whether Q17's two-way choice still fits is also open — awaiting David.
+6. **Facts from doc 69 that disturb a ruling** (each open — awaiting David):
+   1. Q15's LSE price-history source: Yahoo's terms bar automated use and Stooq is gated (R14). Options in doc 69: Saxo `chart/v3` history, LSEG Delayed Market Data, a paid EOD vendor.
+   2. Q8's Alpaca shorts: shorting needs $2,000 equity in the Alpaca account alone, more than the whole book at the capital floor (R3, R13); a short-only debate sleeve would then run only through Saxo's 1× inverse ETFs.
+   3. Q8's "1× inverse ETFs only" wording: it admits the two Xtrackers lines; the two WisdomTree 1× short lines sit in LSE's ETN segment (R13 q6).
+   4. Q2/Q15 universe: SPY is not a UK reporting fund (gains taxed as income); VOO and IVV are (R12). Doc 69 proposes a hard reporting-fund gate.
+   5. Cost model: Saxo lists a 0.12%/yr custody fee that Q3's "0.08%/side, no minimum" does not include (R13 q5).
+   6. Carried constraint "venue-resting": a fractional Alpaca position cannot hold a GTC stop, so doc 69 proposes whole shares only at Alpaca (R2); with R3's `price ≤ C/(5N)` rule this limits which names the capital can hold.
+7. **Only David's accounts can answer** (open — awaiting David): UK-resident access to US-listed ETFs at Alpaca; Alpaca margin approval for a UK resident; whether Saxo lets the account trade 1× inverse ETFs; whether Saxo `chart/v3` history may be kept locally; whether Alpaca accepts a Wise-originated USD wire; the Saxo custody fee actually charged; at-the-open/at-the-close durations on LSE ETF lines; whether the Saxo app's claims include cash management; IP restriction.
+8. **Plan details that are not rulings** (open — awaiting David): doc 67 Step 6's "at least 10 rebalances" on top of Q7's 8–12 weeks (a monthly cadence cannot reach 10 rebalances in 12 weeks); whether G12's 24-hour auto-approval also covers a build session's STOP (doc 68 assumes it does not).
+9. **David's admin** (open — awaiting David): open the live Alpaca account; margin application; W-8BEN; one GBP→USD transfer.
+10. **Parameters chosen by backtest, not by David** — open — set by Steps 1 and 3, pre-declared, every value tried counted as a trial: momentum cadence (weekly/monthly), lookback, trend filter, holdings count; debate stop/target/time-stop; universe screen (min ADV, max spread).
+11. **G9's code change** is decided but not yet made: `max_pbo` bounds at 0.05 in the v1 code move to 0.10 in Step 1 — ticket [#1715](https://github.com/dd-jp/samurai-trading-system/issues/1715) records the ruling; the edit belongs to Step 1's PR.
+12. **G15's CRAP gate** is decided but not yet built: ticket [#1649](https://github.com/dd-jp/samurai-trading-system/issues/1649).
+
+## 6. Consequences
+
+- v1's ADRs and specs are gone from the tree; anyone needing them reads tag `v1-final`. The citation checker never scans `docs/adr/`, so this file may cite deleted paths.
+- Until Step 3 lands, the code in the tree is the frozen v1 runtime; `CLAUDE.md` and `CONTEXT.md` describe v2, not that code.
+- Every step's PR meets §3 before merge; merges are David's.
+- No live money until the gate in §2.4 passes and the G12 approval request has run its course.

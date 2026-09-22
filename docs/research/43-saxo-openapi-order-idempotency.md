@@ -8,7 +8,7 @@
 
 ## Question
 
-Story 9 of `docs/specs/execution-spec.md` and `CONTEXT.md`'s "double idempotency" invariant assume the venue enforces client-order-id uniqueness (Alpaca does, **permanently**: a duplicate `client_order_id` is a 422 whatever state the prior order is in, and the id is never released — measured in round 3 below, #1346; when this line was first written the Alpaca half was an assertion, not a measurement). Does Saxo OpenAPI `POST /trade/v2/orders` support a client-supplied idempotency key, and what happens when the same order is submitted twice?
+Story 9 of `docs/specs/execution-spec.md` and `CONTEXT.md`'s "double idempotency" invariant assume the venue enforces client-order-id uniqueness (Alpaca does, **permanently**: a duplicate `client_order_id` is a 422 whatever state the prior order is in, and the id is never released — measured in round 3 below, #1346; when this line was first written the Alpaca half was an assertion, not a measurement). Does Saxo OpenAPI `POST /trade/v2/orders` support a client-supplied idempotency key, and what happens when the same order is submitted twice? <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 
 ## Method
 

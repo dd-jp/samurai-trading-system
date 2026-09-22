@@ -4,7 +4,7 @@
 goal for Samurai — CLAUDE.md's project identity, CONTEXT.md's edge thesis, and ADR-0014
 through ADR-0018 — **on vision, not as a repeal of the code**. Those documents still describe
 what exists and why it was built; this document describes what gets built next and why.
-Companion: `docs/samurai-postmortem.md`, which is the evidence this vision is meant to act on.
+Companion: `docs/v1-postmortem.md`, which is the evidence this vision is meant to act on.
 
 This is a vision statement, not a spec. Per the repo's own Standing Pipeline Rule 1, nothing
 here should be implemented against directly — it needs a wayfinder map, grilled one decision
@@ -60,7 +60,7 @@ none of them survive unmodified:
 
 ## What is explicitly carried forward from the postmortem
 
-Independent of the vision change, `docs/samurai-postmortem.md` names six pitfalls that bind
+Independent of the vision change, `docs/v1-postmortem.md` names six pitfalls that bind
 regardless of which strategy gets built:
 
 - Validate the core signal-generation mechanism standalone, before building the full pipeline

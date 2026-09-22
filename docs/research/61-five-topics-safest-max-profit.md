@@ -114,6 +114,6 @@ No gate is proposed here, so nothing composes with #750’s eligibility band unt
 | ADR-0014, ADR-0018 | Product |
 | Docs 54, 56, 59 | Bars, prior grill, universe |
 | arXiv:2605.04004v3 | Intraday OHLCV momentum falsification |
-| `docs/specs/trader-spec.md` cosine module | Existing “vector” layer |
+| `docs/specs/trader-spec.md` cosine module | Existing “vector” layer | <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 
 Trial count this doc adds: **0**. A future sign-gate measurement would be **2** if both signs are pre-registered (continuation, reversal), plus whatever N is frozen — N must not be a third look.
