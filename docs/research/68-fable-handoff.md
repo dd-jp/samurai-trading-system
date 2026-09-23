@@ -179,8 +179,8 @@ proposed, not taken; each closed ticket has its findings comment.
 
 ## Session C — Step 2: debate audit · effort **xhigh**
 
-Done 2026-09-21: `docs/research/71-debate-audit.md` — not a formula defect. David's short-only /
-veto-only decision is open.
+Done 2026-09-21: `docs/research/71-debate-audit.md` — not a formula defect. Verdict ruled
+2026-09-22 (doc 66): long and short, each side a counted trial vs arm 2; #1743 closed.
 
 ```
 You are working on Samurai. Read docs/research/67-v2-plan-and-handoff.md (Step 2 and §3) and
@@ -330,11 +330,12 @@ strategy family (time-series trend vs cross-sectional); the exact ETF list (not
 lse-etp-pool.ts — that is the 3x pool) filtered by R12 reporting-fund status and R13 access;
 the point-in-time S&P 500 dataset (URL); the delisted-name haircut; LSE survivorship handling;
 DSR on excess vs absolute returns; execution timing from R15; the full parameter grid; and
-confirmation the strategy is written as the module live code will import. The proposal must
-also put to David, as questions and not as decisions, the doc 69 facts that disturb a ruling:
-(a) the LSE price-history source — Q15 names Yahoo .L + Stooq, but R14 found Yahoo's terms bar
-automated use and Stooq is gated, so download from neither and list the permitted options (Saxo
-chart/v3, LSEG Delayed Market Data, a paid EOD vendor) with cost and history depth; (b) the R12
+confirmation the strategy is written as the module live code will import. (a) The LSE
+price-history source is ruled (Q15 re-ruled 2026-09-22, doc 66): Yahoo .L and Stooq are out
+(R14) — probe Saxo OpenAPI chart/v3 history depth on David's account first; if it holds 10y for
+the ETF list, use it at £0; if not, STOP and report a vendor cost/depth table for David to pick.
+The proposal must also put to David, as questions and not as decisions, the doc 69 facts that
+still disturb a ruling: (b) the R12
 reporting-fund gate (SPY is not a reporting fund); (c) whether to model Saxo's 0.12%/yr custody
 fee (R13 q5); (d) R3's whole-share rule price <= C/(5N).
 
@@ -351,8 +352,9 @@ PBO <= 0.10 (G9). Report pass/fail with numbers and the max drawdown. No LLM cal
 data. One PR.
 
 EVAL (Session eval, doc 68): goal = an honest, reproducible momentum kill-line verdict. Pass at
-the proposal: every item listed above is proposed with a source, and items (a)–(d) are put to
-David as questions, not decided. Pass at the PR: the evaluator
+the proposal: every item listed above is proposed with a source, item (a) follows the ruling
+(Saxo chart/v3 depth probed, STOP with a vendor table if under 10y), and items (b)–(d) are put
+to David as questions, not decided. Pass at the PR: the evaluator
 re-runs the committed backtest command and gets the reported numbers; the trial count includes
 every configuration run (grep the logs); both stop variants and the G10 budget rules ran; costs
 match the prompt; no look-ahead (signals use only data at or before the decision bar; test it);
@@ -368,8 +370,10 @@ You are working on Samurai (repo dd-jp/samurai-trading-system). Read
 docs/research/67-v2-plan-and-handoff.md (§4, Step 3, §5a, §6), all of
 docs/research/66-v2-grill-decisions.md (rulings G4, G5, G16 and G18 shape this step; "Still
 open" lists what is not decided), and docs/research/69-v2-facts.md, 70-momentum-backtest.md and
-71-debate-audit.md. If David has not yet ruled the debate sleeve's direction after doc 71
-(short-only / veto-only), or an item under "Still open" blocks a choice you need, STOP and ask.
+71-debate-audit.md. The debate sleeve's shape is ruled (Step 2 verdict, 2026-09-22, doc 66):
+long and short, each side its own counted trial vs arm 2; shorts large-cap easy-to-borrow only
+(Q8) and none until the Alpaca $2,000 equity floor is resolved (still open). If an item under
+"Still open" blocks a choice you need, STOP and ask.
 Build Step 3 exactly: slim v2 root; reuse broker adapters, providers, stores, debate core behind a real module
 interface; Saxo simulated paper adapter at the live tariff; Alpaca paper; Anthropic + OpenRouter
 clients with pinned versions; separate paper book per sleeve plus the shadow books (no-veto G5,
@@ -489,9 +493,10 @@ then, ends with an EVAL line like the others.
 
 - Fix GitHub Actions billing (now).
 - Answer the remaining G rulings when Session G asks (G11 later; G18's open parts).
-- Rule on the items under doc 66 "Still open": the debate sleeve's direction after doc 71; the
-  doc 69 facts (LSE data source, Alpaca's $2,000 shorting floor, SPY's tax status, Saxo's custody
-  fee, whole shares at Alpaca); the 10-rebalance minimum; whether G12 covers session STOPs.
+- Rule on the items under doc 66 "Still open": the doc 69 facts (Alpaca's $2,000 shorting
+  floor, SPY's tax status, Saxo's custody fee, whole shares at Alpaca); the 10-rebalance minimum;
+  whether G12 covers session STOPs. Ruled 2026-09-22: the debate sleeve's direction after doc 71
+  and the LSE data source.
 - Account questions only David can ask (doc 69, last sections): Alpaca — margin as a UK resident,
   US-ETF access, a Wise-originated USD wire; Saxo — 1× inverse ETF permission, keeping chart
   history locally, custody fee actually charged.
