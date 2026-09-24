@@ -20,7 +20,7 @@ export function parseConstituentsCsv(text: string): MembershipRow[] {
 }
 
 function parseRow(line: string): MembershipRow {
-  const match = /^(\d{4}-\d{2}-\d{2}),"?([^"]*)"?$/.exec(line);
+  const match = /^(\d{4}-\d{2}-\d{2}),\x22?([^\x22]*)\x22?$/.exec(line);
   if (match === null || !ISO_DATE.test(match[1] as string)) {
     throw new Error(`constituents: malformed row '${line.slice(0, 40)}'`);
   }

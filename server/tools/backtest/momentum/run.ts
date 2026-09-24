@@ -210,7 +210,7 @@ export function writeLedger(outDir: string): TrialLedger {
   const ledger = existsSync(path)
     ? mergeLedger(JSON.parse(readFileSync(path, 'utf8')) as TrialLedger, GRID_A)
     : ledgerFromGrid(GRID_A);
-  writeFileSync(path, `${JSON.stringify(ledger, null, 1)}\n`);
+  writeFileSync(path, `${JSON.stringify(ledger, null, 2)}\n`);
   return ledger;
 }
 
@@ -225,7 +225,7 @@ export function runVenue(options: RunOptions): PassResult[] {
       const pass = runPass(data, capital, wholeShares);
       passes.push(pass);
       const name = `verdict-${capital}-${wholeShares ? 'whole' : 'fractional'}`;
-      writeFileSync(join(venueDir, `${name}.json`), `${JSON.stringify(pass.verdict, null, 1)}\n`);
+      writeFileSync(join(venueDir, `${name}.json`), `${JSON.stringify(pass.verdict, null, 2)}\n`);
     }
   }
   writeFileSync(join(venueDir, 'verdict.md'), renderVerdictMarkdown(data, passes));

@@ -132,7 +132,7 @@ async function main(argv: readonly string[]): Promise<void> {
     symbols,
     missing,
   };
-  writeFileSync(join(args.outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 1)}\n`);
+  writeFileSync(join(args.outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   console.log(`pulled ${Object.keys(symbols).length} symbols, ${missing.length} missing`);
 }
 
