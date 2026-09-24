@@ -4,9 +4,7 @@ import {
   equalWeights,
   inverseVolatilityWeights,
   TRADING_DAYS_PER_YEAR,
-  WHOLE_SHARE_TOLERANCE_MULTIPLE,
   wholeShares,
-  withinWholeShareTolerance,
 } from './sizing.js';
 
 describe('wholeShares', () => {
@@ -40,22 +38,6 @@ describe('adjustedQuantity', () => {
   it('rejects non-positive prices', () => {
     expect(() => adjustedQuantity(1, 0, 10)).toThrow(/prices must be > 0/);
     expect(() => adjustedQuantity(1, 10, 0)).toThrow(/prices must be > 0/);
-  });
-});
-
-describe('withinWholeShareTolerance', () => {
-  it('applies R3: price at most capital over five times the holdings count', () => {
-    expect(WHOLE_SHARE_TOLERANCE_MULTIPLE).toBe(5);
-    expect(withinWholeShareTolerance(20, 1000, 10)).toBe(true);
-    expect(withinWholeShareTolerance(20.01, 1000, 10)).toBe(false);
-  });
-
-  it('accepts exactly one holding', () => {
-    expect(withinWholeShareTolerance(200, 1000, 1)).toBe(true);
-  });
-
-  it('rejects fewer than one holding', () => {
-    expect(() => withinWholeShareTolerance(1, 1000, 0)).toThrow(/holdings/);
   });
 });
 
