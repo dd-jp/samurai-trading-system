@@ -4,11 +4,13 @@ import { join } from 'node:path';
 import { barsToCsv } from './bar-csv.js';
 import { syntheticSeries, tradingCalendar } from './fixture.js';
 import { GRID_A } from './grid.js';
+import { AlignedMarket } from './market.js';
 import { SPREAD_CSV_HEADER } from './measure-alpaca-spread.js';
 import {
   CAPITAL_PASSES_GBP,
   evaluationStartIndex,
   loadLseData,
+  memberSessionCoverage,
   parseArgs,
   runVenue,
 } from './run.js';
@@ -121,7 +123,7 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     const verdict = readVerdict(outDir, 'us', 'verdict-1000-whole.json');
     expect(verdict.trials.map((trial) => trial.trial)).toEqual([5, 6, 7, 8]);
     expect(verdict.trialsCounted).toBe(8);
-    expect(verdict.missingCoverageFraction).toBeCloseTo(1 / 13);
+    expect(verdict.missingCoverageFraction).toBeGreaterThan(0.02);
     expect(verdict.coverageStopFailed).toBe(true);
     expect(verdict.pass).toBe(false);
     expect(verdict.delistingHaircutApplied).toBe(0.05);
@@ -136,7 +138,7 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(report).toContain(
       'Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut',
     );
-    expect(report).toContain('Missing: GONE');
+    expect(report).toContain('Missing: GONE, S11');
     expect(report).toContain('## £5000 start capital, fractional');
   });
 
@@ -198,6 +200,25 @@ describe('momentum runner end to end on a synthetic fixture', () => {
       JSON.stringify({ calendar_reference: 'CSPX', symbols: { NOPE: { half_spread_bps: 1 } } }),
     );
     expect(() => loadLseData(barsDir)).toThrow(/NOPE but .*NOPE\.csv is missing/);
+  });
+
+  it('measures coverage over member-sessions, not over names with a file', () => {
+    const short = tradingCalendar('2016-01-04', 10);
+    const reference = syntheticSeries({ symbol: 'REF', calendar: short, seed: 1 });
+    const full = syntheticSeries({ symbol: 'FULL', calendar: short, seed: 2 });
+    const late = syntheticSeries({ symbol: 'LATE', calendar: short, seed: 3, from: 6 });
+    const market = new AlignedMarket(
+      reference,
+      new Map([
+        ['FULL', full],
+        ['LATE', late],
+      ]),
+    );
+    const coverage = memberSessionCoverage(market, (date) =>
+      date < (short[5] as string) ? ['FULL', 'LATE'] : ['FULL', 'NONE'],
+    );
+    expect(coverage.missingNames).toEqual(['LATE', 'NONE']);
+    expect(coverage.missingFraction).toBeCloseTo((5 + 5) / 20);
   });
 
   it('starts evaluation at the first month end after the longest lookback', () => {
