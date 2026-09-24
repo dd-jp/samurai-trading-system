@@ -1,0 +1,160 @@
+{
+  "entries": [
+    {
+      "trial": 1,
+      "config_hash": "40a16c50b62614cf",
+      "config": {
+        "trial": 1,
+        "venue": "lse",
+        "lookbackDays": 252,
+        "skipDays": 21,
+        "stop": null,
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "time-series-trend",
+        "topK": null,
+        "volWindowDays": 60,
+        "targetVolatility": 0.1
+      }
+    },
+    {
+      "trial": 2,
+      "config_hash": "f3767c3044447fcb",
+      "config": {
+        "trial": 2,
+        "venue": "lse",
+        "lookbackDays": 252,
+        "skipDays": 21,
+        "stop": {
+          "atrWindow": 20,
+          "atrMultiple": 2
+        },
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "time-series-trend",
+        "topK": null,
+        "volWindowDays": 60,
+        "targetVolatility": 0.1
+      }
+    },
+    {
+      "trial": 3,
+      "config_hash": "0a399d69c3b8ce3f",
+      "config": {
+        "trial": 3,
+        "venue": "lse",
+        "lookbackDays": 126,
+        "skipDays": 21,
+        "stop": null,
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "time-series-trend",
+        "topK": null,
+        "volWindowDays": 60,
+        "targetVolatility": 0.1
+      }
+    },
+    {
+      "trial": 4,
+      "config_hash": "03f66601a5c07ef3",
+      "config": {
+        "trial": 4,
+        "venue": "lse",
+        "lookbackDays": 126,
+        "skipDays": 21,
+        "stop": {
+          "atrWindow": 20,
+          "atrMultiple": 2
+        },
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "time-series-trend",
+        "topK": null,
+        "volWindowDays": 60,
+        "targetVolatility": 0.1
+      }
+    },
+    {
+      "trial": 5,
+      "config_hash": "763abd04e6c056ea",
+      "config": {
+        "trial": 5,
+        "venue": "us",
+        "lookbackDays": 252,
+        "skipDays": 21,
+        "stop": null,
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "cross-sectional-top-k",
+        "topK": 10,
+        "volWindowDays": null,
+        "targetVolatility": null
+      }
+    },
+    {
+      "trial": 6,
+      "config_hash": "fbb804dd7bd4f692",
+      "config": {
+        "trial": 6,
+        "venue": "us",
+        "lookbackDays": 252,
+        "skipDays": 21,
+        "stop": {
+          "atrWindow": 20,
+          "atrMultiple": 2
+        },
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "cross-sectional-top-k",
+        "topK": 10,
+        "volWindowDays": null,
+        "targetVolatility": null
+      }
+    },
+    {
+      "trial": 7,
+      "config_hash": "632bea230bdae475",
+      "config": {
+        "trial": 7,
+        "venue": "us",
+        "lookbackDays": 126,
+        "skipDays": 21,
+        "stop": null,
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "cross-sectional-top-k",
+        "topK": 10,
+        "volWindowDays": null,
+        "targetVolatility": null
+      }
+    },
+    {
+      "trial": 8,
+      "config_hash": "e121183fe35e6e88",
+      "config": {
+        "trial": 8,
+        "venue": "us",
+        "lookbackDays": 126,
+        "skipDays": 21,
+        "stop": {
+          "atrWindow": 20,
+          "atrMultiple": 2
+        },
+        "grossCap": 1,
+        "rebalance": "monthly-last-session",
+        "executionLagBars": 1,
+        "family": "cross-sectional-top-k",
+        "topK": 10,
+        "volWindowDays": null,
+        "targetVolatility": null
+      }
+    }
+  ]
+}
