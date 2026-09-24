@@ -1,6 +1,6 @@
 # Committed market data for the momentum backtest
 
-Committed under doc 70 ruling (k) (David, 2026-09-23): bars live in the repo so every verdict replays from the same bytes. The repo is private. `.gitignore`'s research cache exclusion (`docs/research/data/`) is unrelated to this directory.
+Committed under doc 70 ruling (k) (David, 2026-09-23): bars live in the repo so every verdict replays from the same bytes. The repo is private. `.gitignore` still excludes the research bar cache `docs/research/data/` <!-- cite-exempt: untracked — scratch cache, gitignored -->; that exclusion is unrelated to this directory.
 
 ## `alpaca/` — US daily bars
 

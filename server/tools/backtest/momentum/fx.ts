@@ -52,9 +52,6 @@ export class YearFixedFx {
   }
 }
 
-export const GBP_IDENTITY_FX = { usdPerGbpFor: (): number => 1 } satisfies Pick<
-  YearFixedFx,
-  'usdPerGbpFor'
->;
-
 export type BookFx = Pick<YearFixedFx, 'usdPerGbpFor'>;
+
+export const GBP_IDENTITY_FX: BookFx = { usdPerGbpFor: () => 1 };
