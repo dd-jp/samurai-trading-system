@@ -55,7 +55,7 @@ When in doubt, grep existing docs before writing new ones. Backticked paths in t
 3. Specs only for the two sleeves, the loss-budget machinery and the UI, written in the step that builds them.
 4. Every step: `what => verify / kill line`. Stop at any kill line or ambiguity and ask David; never decide what is his (the ADR's open list says what that is).
 5. Open PRs, never merge. Local gates green (lint, typecheck, test, smoke, fallow, citations) before the PR.
-6. Chat replies to David in caveman-ultra style; normal prose in docs and commits. Never commit secrets (`data/saxo-tokens/`, `.env*`).
+6. Chat replies to David in caveman-ultra style; normal prose in docs and commits. Never commit secrets (`data/saxo-tokens/` <!-- cite-exempt: untracked — gitignored local file -->, `.env*`).
 
 ## Key Constraints
 

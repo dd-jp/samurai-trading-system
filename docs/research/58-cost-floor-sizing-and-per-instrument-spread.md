@@ -241,7 +241,7 @@ not decided by this ticket.
 ## F1 — realised fills do not exist, and the paper soak cannot ever produce the ones #882 needs
 
 #882 says validating the floors "needs realised fills from the paper soak **or** the live equity leg". Checked
-against `data/samurai-paper.sqlite` (2,174,976 B, mtime 2026-09-02T03:47Z, zero-byte WAL so nothing is
+against `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — gitignored local file --> (2,174,976 B, mtime 2026-09-02T03:47Z, zero-byte WAL so nothing is
 uncommitted):
 
 | table | rows |
@@ -255,7 +255,7 @@ uncommitted):
 
 **Pipeline-generated fills: zero.** Both `fills` rows carry
 `idempotency_key = 'soak-lifecycle-probe-2026-08-26'`, minted by `server/tools/place-soak-position.ts` — a
-one-off manual probe, not a pipeline decision. `data/samurai.db` is **0 bytes**, so no live-leg store exists at
+one-off manual probe, not a pipeline decision. `data/samurai.db` <!-- cite-exempt: untracked — gitignored local file --> is **0 bytes**, so no live-leg store exists at
 all. The 2026-08-25 archive DB holds 94 debates and 0 fills; the stale worktree copy holds 78 debates and 0 fills.
 
 **The premise is not merely unmet, it is unmeetable on this venue.** Three independent reasons, any one of which

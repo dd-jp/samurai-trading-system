@@ -279,7 +279,7 @@ call for `3347273/Etn`, with the live token on hand, both returned:
 HTTPError 401 Unauthorized
 ```
 
-with an empty body. `data/saxo-tokens/live.json` explains it without ambiguity: `accessTokenExpiresAt`
+with an empty body. `data/saxo-tokens/live.json` <!-- cite-exempt: untracked — gitignored local file --> explains it without ambiguity: `accessTokenExpiresAt`
 `2026-09-14T20:52:02Z` and `refreshTokenExpiresAt` `2026-09-14T21:32:02Z`, both ~11 hours before the
 attempt. So this is not a refreshable session — closing #1302's AC2 needs a **fresh OAuth round
 trip** on the live app, not a token refresh. AC2 and AC3's live halves stay open and stay
