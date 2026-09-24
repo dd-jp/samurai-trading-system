@@ -350,3 +350,48 @@ describe('calendarDaysBetween', () => {
     expect(calendarDaysBetween('2024-01-05', '2024-01-05')).toBe(0);
   });
 });
+
+describe('simulate: no look-ahead', () => {
+  function scaledAfter(series: BarSeries, cut: number, factor: number): BarSeries {
+    return {
+      symbol: series.symbol,
+      bars: series.bars.map((bar, index) =>
+        index < cut
+          ? bar
+          : {
+              ...bar,
+              open: bar.open * factor,
+              high: bar.high * factor,
+              low: bar.low * factor,
+              close: bar.close * factor,
+              rawClose: bar.rawClose * factor,
+            },
+      ),
+    };
+  }
+
+  it.each([lseNoStop, lseStop, usNoStop])(
+    'rewriting every bar after a cut leaves marks and fills up to the cut unchanged (%o)',
+    (config) => {
+      const cut = firstDecision + 60;
+      const cutDate = calendar[cut] as string;
+      const base = [
+        syntheticSeries({ symbol: 'A', calendar, seed: 11, volatility: 0.02 }),
+        syntheticSeries({ symbol: 'B', calendar, seed: 12, volatility: 0.02 }),
+        syntheticSeries({ symbol: 'C', calendar, seed: 13, volatility: 0.02 }),
+      ];
+      const future = base.map((series, index) => scaledAfter(series, cut, 1.5 + index));
+      const before = simulate(input(base, { config }));
+      const after = simulate(input(future, { config }));
+      const upTo = (result: typeof before) => ({
+        equity: result.equity.filter((_, index) => (result.dates[index] as string) < cutDate),
+        fills: result.fills.filter((fill) => fill.date < cutDate),
+      });
+      expect(upTo(after)).toEqual(upTo(before));
+      expect(upTo(before).fills.length).toBeGreaterThan(0);
+      expect(after.equity[after.equity.length - 1]).not.toBe(
+        before.equity[before.equity.length - 1],
+      );
+    },
+  );
+});
