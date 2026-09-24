@@ -1,5 +1,7 @@
 # 70 — Momentum backtest: proposal (Session B, Step 1)
 
+> **Build phase run 2026-09-24 — US sub-book FAILS the kill line on all four passes; LSE not run. See §9.** The banner below is the state as of 2026-09-23 and stands as the record of that day.
+>
 > **PROPOSAL, RULED 2026-09-23 — STOP branch entered, nothing built.** David answered all twelve questions in §4 on 2026-09-23 (each carries its "Ruled" line). Ruling (a) chose a paid vendor for the two lines Saxo cannot supply, which is doc 68's STOP branch: §8 is the vendor cost-and-depth report it requires, ending in options David has not yet chosen between. No backtest has been executed, no code has been changed, no data has been stored beyond the read-only probes recorded in §6. The build phase (doc 68 Session B, second paragraph) starts only after David picks from §8.4.
 
 **Date:** 2026-09-22 (proposal); probes and amendments 2026-09-23. **Map:** [#1706](https://github.com/dd-jp/samurai-trading-system/issues/1706). **Ticket:** Step 1 (#1742). **Authority:** [doc 66](66-v2-grill-decisions.md) (Q2, Q6, Q7, Q8, Q14, Q15, Q19, G5, G6, G9, G10, "Still open") over [doc 67](67-v2-plan-and-handoff.md) Step 1 and §5a over [doc 68](68-fable-handoff.md) Session B. Facts from [doc 69](69-v2-facts.md) (R3, R7, R8, R12–R15). Priors from [doc 64](64-paperswithbacktest-replication-prior-and-orb.md) and [doc 11](11-trend-signal-measurement.md).
@@ -441,3 +443,69 @@ Reading: the only vendor whose page states both LSE coverage and a depth that re
 
 Recommendation: **3, then 1** — run the free Saxo sibling probe first because it costs one login; if no sibling reaches 2016-09-22, buy one month of EODHD after confirming the two tickers on the free key and reading the retained-data terms, and record the vendor's earliest bar per line in §6.1 alongside Saxo's. Option 2 only if the overlap test in §8.3 shows Saxo's own series is not good enough to trade against, which nothing so far suggests.
 
+## 9. Build-phase results (run 2026-09-24)
+
+Branch `build/v2-session-b-momentum`, run from the committed bars with `npx tsx server/tools/backtest/momentum/run.ts --venue us`. Everything below replays byte-identically from the repository (`data/bars/`, `data/backtest/momentum/`); no LLM calls, no paid data. Rulings (a)–(l) in §4 were applied as written; where a ruling left a choice, the choice is recorded under "Interpretations" and can be re-run the other way.
+
+### 9.1 US sub-book result: FAIL, all four passes
+
+**Kill line, verbatim (doc 68 Session B):** *"fails unless it beats the benchmark after a 40% Sharpe haircut with DSR >= 0.95 and PBO <= 0.10 (G9). Report pass/fail with numbers and the max drawdown. No LLM calls, no paid data."*
+
+Evaluated window 2017-01-31 to 2026-09-23 (**9.64 years**, ruling (g): bars from 2016-01-04, the first 252 sessions are lookback); walk-forward out-of-sample path 2017-09-07 to 2026-09-23 (folds 2–16 of 16). Trials 5–8 of Grid A (§2.9), counted 8 from #1 (ruling (f)); MinBTL at target Sharpe 0.6 is 18 trials, so 8 is within (ruling (i)). Coverage: **0.3% of member-sessions** without a bar across 40 names, inside the 2% stop; the 0.05 Sharpe delisting haircut is applied (ruling (h)).
+
+| Pass | WF strategy Sharpe | − 0.05 haircut, × 0.6 | Benchmark Sharpe (fractional, same budget) | Beats? | DSR (selected trial, N = 8) | DSR (WF path) | PBO (CSCV, 16 folds) | WF max DD strategy / benchmark | Capital ceiling £1,500 / (DD × 1.5) | Verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| £1,000, whole shares | 0.293 | **0.146** | 0.677 | no | 0.806 (#7) | 0.283 | 0.476 | 27.3% / 37.1% | £3,669 | **FAIL** |
+| £1,000, fractional | 0.570 | **0.312** | 0.677 | no | 0.788 (#6) | 0.598 | 0.872 | 39.9% / 37.1% | £2,801 | **FAIL** |
+| £5,000, whole shares | 0.499 | **0.270** | 0.634 | no | 0.655 (#6) | 0.516 | 0.993 | 28.4% / 23.9% | £3,997 | **FAIL** |
+| £5,000, fractional | 0.465 | **0.249** | 0.634 | no | 0.690 (#6) | 0.475 | 0.944 | 35.7% / 23.9% | £2,801 | **FAIL** |
+
+Every pass fails all three gates, not one: the haircut Sharpe is under half the benchmark's, DSR is 0.65–0.81 against 0.95, and PBO is 0.48–0.99 against 0.10. Per-trial full-window numbers (Sharpe, CAGR, vol, max DD, fills, stop hits, budget-step days) are in `data/backtest/momentum/us/verdict.md`; the JSON per pass carries the fold matrix and the per-fold selection.
+
+What the numbers say, without spin:
+
+- **The 40% haircut is not what kills it.** Unhaircut walk-forward Sharpe (0.29–0.57) is already below the equal-weight buy-and-hold benchmark (0.63–0.68) in every pass. Trial #7 (K = 10, no stop) at £1,000 whole shares reaches 0.754 over the full window, but the walk-forward selection switches between #6, #7 and #8 and the stitched out-of-sample path lands at 0.293.
+- **PBO near 1 at £5,000** means the trial that looks best in training is, out of sample, usually the worst of the four — the four US trials are interchangeable noise around the benchmark plus turnover.
+- **Whole-share sizing at £1,000 is a different strategy.** With K = 10 equal weight, each slot is £100 and 441–532 of the ~1,160 monthly slot targets round to zero shares (per-trial "zero-share targets" column), so the book holds about half its intended names. The fractional pass is the signal's true test and also fails.
+- **The loss budget binds at £5,000 and never at £1,000.** At £1,000 no year's loss reached −£500 (worst years −8% to −16% on £1–3k of equity); at £5,000 trial #5 halted for 201 days of one year (−£1,500 reached, ruling (j) halt latched to 31 December) and #6–#8 spent 123–343 days at half size. The daily 1% cap blocked entries on 216–601 sessions per trial across passes.
+- **Stops (trials 6 and 8, entry − 2 × ATR(20), never moved up) fired 185–416 times** per pass and reduced max drawdown (e.g. 25.0% vs 47.5% for #6 vs #5 at £5,000 whole) but not enough to change the verdict; the with-stop trials do not clear any gate either.
+
+**Per ruling (e) the US momentum sub-book is dropped from the momentum sleeve as specced.** What David may want to decide (not decided here): whether Grid A's US arm (§2.9) gets a second, pre-declared grid counted as trials 9–N against MinBTL 18, or whether the sleeve proceeds LSE-only if the LSE sub-book passes.
+
+### 9.2 LSE sub-book: not run — awaiting bars (STOP branch route)
+
+Ruling (a) routes CMFP and IHCU through Saxo sibling Uics first, EODHD one month as the fallback. Neither has happened: there was no valid Saxo live token this session (`data/saxo-tokens/live.json` <!-- cite-exempt: untracked — token store is gitignored --> holds a dead refresh token; the Saxo API was not called and `saxo:login` was not run, per the session brief). The window was not shortened and no proxy was substituted. The code path is built and tested on synthetic fixtures (`server/tools/backtest/momentum/run.test.ts`, "runs the LSE sub-book from a Saxo bar directory").
+
+To run it once bars land, put one `<TIDM>.csv` per line under `data/bars/saxo/` <!-- cite-exempt: planned — created when the LSE bars land --> (header `date,open,high,low,close,volume` or the seven-column Alpaca layout) with a `manifest.json` of the form `{ "calendar_reference": "<TIDM>", "symbols": { "<TIDM>": { "half_spread_bps": <measured> } } }`.
+The format is also in `data/bars/README.md`. Then
+
+```
+npx tsx server/tools/backtest/momentum/run.ts --venue lse
+```
+
+which writes `data/backtest/momentum/lse/verdict-{1000,5000}-{whole,fractional}.json` and `verdict.md` and appends trials 1–4 to `data/backtest/momentum/trials.json`. The Saxo bar puller itself is not written (no token to test it against); doc 44 §2.2 has the `chart/v3` paging recipe.
+
+### 9.3 Interpretations made in the build (re-runnable the other way)
+
+1. **Benchmark for the verdict is always fractional-share.** The whole-share benchmark at £1,000 is degenerate — equal weight over ~500 names at £2 a slot rounds every target to zero (58,020 zero-share targets, 13 fills in 9.6 years, Sharpe −0.59) — so a whole-share strategy pass compares against the fractional benchmark. The same-mode benchmark row is reported alongside for the record.
+2. **Walk-forward selection by expanding-window training Sharpe.** Fold *f* (2..16) trades the trial with the best annualised Sharpe over folds 1..*f*−1; the out-of-sample path is folds 2–16 stitched. Fold 1 is training only.
+3. **DSR is reported twice:** on the selected trial (best full-window Sharpe in the sub-book) deflated over N = 8 with the observed skew and kurtosis — this is the gate value — and on the walk-forward path itself. Both are below 0.95 in every pass.
+4. **Stops evaluate on the adjusted series**, entry price and ATR both from `adjustment=all` bars; whole-share counts come from `raw_close`. A stop hit fills at the stop level less half spread, or at the open if the open gapped through it.
+5. **Daily cap breach on a decision day drops that month's buys**, sells still run; the next entry opportunity is the next month end. This is the strictest reading of "blocks entries".
+6. **Custody 0.12%/yr (ruling (c)) accrues daily on invested value, LSE only**; the US passes carry no custody line.
+7. **Coverage `m` is member-sessions without a bar**, per §2.4, not files. The 40 names include ticker reuse (STI, TE), late SIP history (AABA, WYND) and names whose membership overlaps a gap in SIP; the list is in `data/backtest/momentum/us/verdict.md`. The pre-build probe in §6.3 measured 0.15% by calendar member-days on a single-bar request per name; the run measures 0.3% on every session.
+
+### 9.4 Data committed (ruling (k))
+
+- `data/bars/alpaca/`: 746 CSVs (745 point-in-time members + SPY), 1,761,296 bars, 2016-01-04 to 2026-09-23, `feed=sip`, adjusted OHLCV plus `raw_close`. **86 MB on disk, ~32 MB packed in git.** `manifest.json` records per-symbol first/last/count; `missing` is empty.
+- `data/bars/alpaca-spreads.csv`: 503 current members, median half spread from one SIP quote at or after 15:59:00 ET on each of the ten sessions 2026-09-10 to 2026-09-23. **Cross-sectional median 1.34 bps** (p25 0.88, p75 2.05, min 0.15 AAPL, max 7.02); names without a row take 1.34 bps.
+- `data/bars/sp500-constituents.csv`: `fja05680/sp500`, MIT, rows from 2016-01-04 (489 rows); sha256 of the full source file in `data/bars/README.md`.
+- `data/bars/fx/gbpusd-boe-xudluss.csv`: BoE XUDLUSS, OGL v3, converted once per calendar year at the last rate on or before 1 January (ruling (j)).
+- `.gitignore`: the `#787` line that said market data is never committed is amended to say only the `docs/research/data/` <!-- cite-exempt: untracked — scratch cache, gitignored --> research cache stays out; `data/bars/` and `data/backtest/` are tracked.
+
+### 9.5 Code shipped
+
+- `server/pipeline/momentum/`: `bars` (sorted-unique-date invariant, `windowCoverage`/`coverageSatisfied` on every windowed read), `signal` (time-series trend, cross-sectional top-K), `sizing` (inverse-vol, equal-weight, whole-share rounding), `loss-budget` (G6/G10 state machine, ruling (j) reference and halt), `stop` (ATR(20), entry − 2 × ATR, never moved up, gap fill), `costs` (Saxo 0.08%/side + custody; Alpaca SEC/FINRA TAF/CAT + half spread). 73 unit tests; Stryker mutation score 98.64% across the six modules.
+- `server/tools/backtest/momentum/`: runner, simulation (1-bar execution lag, cash-limited buys, delisting exits, custody accrual, budget marking in GBP), 16-fold CSCV via `overfitting.ts` (`pbo`, `deflatedSharpe`, `minbtl`), verdict and markdown report, trial ledger, Alpaca bar puller and spread measurer, synthetic fixtures. 80 tests including an end-to-end run on a fixture and a byte-identical reproducibility test.
+- G9 alignment (§2.14): `KILL_LINE.maxPbo`, `max_pbo.max` and `PBO_REJECT_THRESHOLD` are 0.10, with tests; `server/shared/threshold-bounds-readers.test.ts` proves `resolveRiskConfig` and `SqliteTuningStore.setRiskThreshold` refuse 0.11 and accept 0.10 through `threshold-bounds`. Refs #1715.
+- Ruling (l): the Saxo appropriateness test is David's admin; nothing in the code depends on it.
