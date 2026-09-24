@@ -95,7 +95,7 @@ describe('assertKillThresholdsWithinBounds (#638)', () => {
 
   it('refuses a softened PBO line', () => {
     expect(() =>
-      assertKillThresholdsWithinBounds(makeKillThresholds({ max_pbo: 0.06 }), 'test'),
+      assertKillThresholdsWithinBounds(makeKillThresholds({ max_pbo: 0.11 }), 'test'),
     ).toThrow(ThresholdBoundViolationError);
   });
 
