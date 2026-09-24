@@ -29,7 +29,7 @@ export function renderVerdictMarkdown(
   }
   if (data.venue === 'us') {
     lines.push(
-      `US coverage: ${data.missingNames.length} point-in-time constituents without bars (${pct(data.missingCoverageFraction)}); ` +
+      `US coverage: ${pct(data.missingCoverageFraction)} of member-sessions without a bar, across ${data.missingNames.length} names; ` +
         `2% stop ${data.missingCoverageFraction > 0.02 ? 'FAILED' : 'within'}; 0.05 Sharpe delisting haircut applied. ` +
         `Half-spread measured for ${data.spreadMeasuredNames} names, fallback median ${num(data.spreadFallbackBps, 2)} bps for the rest.`,
       '',

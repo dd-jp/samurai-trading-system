@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
@@ -74,6 +75,26 @@ export function parseArgs(argv: readonly string[]): RunOptions {
   };
 }
 
+export function memberSessionCoverage(
+  market: AlignedMarket,
+  universe: UniverseAt,
+): { missingFraction: number; missingNames: readonly string[] } {
+  const missingSessions = new Map<string, number>();
+  let memberSessions = 0;
+  market.calendar.forEach((date, index) => {
+    for (const symbol of universe(date)) {
+      memberSessions++;
+      if (market.has(symbol) && market.barAt(symbol, index) !== undefined) continue;
+      missingSessions.set(symbol, (missingSessions.get(symbol) ?? 0) + 1);
+    }
+  });
+  const missing = [...missingSessions.values()].reduce((sum, count) => sum + count, 0);
+  return {
+    missingFraction: memberSessions === 0 ? 0 : missing / memberSessions,
+    missingNames: [...missingSessions.keys()].sort(),
+  };
+}
+
 function loadUsData(
   options: Pick<RunOptions, 'barsDir' | 'constituentsPath' | 'fxPath' | 'spreadPath'>,
 ): VenueData {
@@ -82,17 +103,17 @@ function loadUsData(
   const membership = new PointInTimeMembership(
     parseConstituentsCsv(readFileSync(options.constituentsPath, 'utf8')),
   );
-  const tickers = membership.allTickers();
-  const missingNames = tickers.filter((ticker) => !series.has(ticker));
+  const market = new AlignedMarket(reference, series);
+  const coverage = memberSessionCoverage(market, (date) => membership.membersOn(date));
   const spreads = halfSpreadLookup(parseSpreadCsv(readFileSync(options.spreadPath, 'utf8')));
   return {
     venue: 'us',
-    market: new AlignedMarket(reference, series),
+    market,
     universe: (date) => membership.membersOn(date),
     costs: { venue: 'us', halfSpreadBps: spreads.halfSpreadBps },
     fx: new YearFixedFx(parseBoeXudlussCsv(readFileSync(options.fxPath, 'utf8'))),
-    missingCoverageFraction: missingNames.length / tickers.length,
-    missingNames,
+    missingCoverageFraction: coverage.missingFraction,
+    missingNames: coverage.missingNames,
     spreadFallbackBps: spreads.fallbackBps,
     spreadMeasuredNames: spreads.measured,
   };
@@ -231,6 +252,7 @@ export function runVenue(options: RunOptions): PassResult[] {
 if (isMainModule(import.meta.url)) {
   const options = parseArgs(process.argv.slice(2));
   const passes = runVenue(options);
+  execFileSync('npx', ['biome', 'format', '--write', options.outDir], { stdio: 'ignore' });
   for (const pass of passes) {
     const { verdict } = pass;
     console.log(

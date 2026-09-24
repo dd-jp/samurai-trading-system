@@ -2,7 +2,9 @@
 
 Evaluated 2017-01-31 to 2026-09-23 (9.64 years), 8 trials counted (Grid A), MinBTL limit at Sharpe 0.6: 18 (within).
 
-US coverage: 0 point-in-time constituents without bars (0.0%); 2% stop within; 0.05 Sharpe delisting haircut applied. Half-spread measured for 503 names, fallback median 1.34 bps for the rest.
+US coverage: 0.3% of member-sessions without a bar, across 40 names; 2% stop within; 0.05 Sharpe delisting haircut applied. Half-spread measured for 503 names, fallback median 1.34 bps for the rest.
+
+Missing: AABA, AGN, AMCR, ANDV, ANSS, APTV, ARNC, ATVI, AVB, BHGE, CTLT, CTXS, CXO, DAY, ETFC, FBHS, FRC, FTI, HES, HOLX, IR, JNPR, MRO, MXIM, NBL, NFX, PXD, RHT, RTN, SIVB, SNDK, STI, TE, TSS, TWTR, UAA, VAR, WCG, WYND, XLNX
 
 ## £1000 start capital, whole shares: FAIL
 
@@ -17,7 +19,7 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 | DSR (selected trial #7, N=8) | 0.806 | < 0.95 |
 | DSR (walk-forward path) | 0.283 | |
 | PBO (CSCV, 16 folds) | 0.476 | > 0.10 |
-| Coverage stop | 0.0% missing | within 2% |
+| Coverage stop | 0.3% missing | within 2% |
 | Walk-forward max drawdown (strategy / benchmark) | 27.3% / 37.1% | |
 | Capital ceiling £1,500 / (selected max DD × 1.5) | £3669 | |
 
@@ -45,7 +47,7 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 | DSR (selected trial #6, N=8) | 0.788 | < 0.95 |
 | DSR (walk-forward path) | 0.598 | |
 | PBO (CSCV, 16 folds) | 0.872 | > 0.10 |
-| Coverage stop | 0.0% missing | within 2% |
+| Coverage stop | 0.3% missing | within 2% |
 | Walk-forward max drawdown (strategy / benchmark) | 39.9% / 37.1% | |
 | Capital ceiling £1,500 / (selected max DD × 1.5) | £2801 | |
 
@@ -73,7 +75,7 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 | DSR (selected trial #6, N=8) | 0.655 | < 0.95 |
 | DSR (walk-forward path) | 0.516 | |
 | PBO (CSCV, 16 folds) | 0.993 | > 0.10 |
-| Coverage stop | 0.0% missing | within 2% |
+| Coverage stop | 0.3% missing | within 2% |
 | Walk-forward max drawdown (strategy / benchmark) | 28.4% / 23.9% | |
 | Capital ceiling £1,500 / (selected max DD × 1.5) | £3997 | |
 
@@ -101,7 +103,7 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 | DSR (selected trial #6, N=8) | 0.690 | < 0.95 |
 | DSR (walk-forward path) | 0.475 | |
 | PBO (CSCV, 16 folds) | 0.944 | > 0.10 |
-| Coverage stop | 0.0% missing | within 2% |
+| Coverage stop | 0.3% missing | within 2% |
 | Walk-forward max drawdown (strategy / benchmark) | 35.7% / 23.9% | |
 | Capital ceiling £1,500 / (selected max DD × 1.5) | £2801 | |
 
