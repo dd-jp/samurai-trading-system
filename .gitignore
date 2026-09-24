@@ -272,5 +272,6 @@ playwright/.cache/
 graphify-out
 .claude/
 .code-review-graph/
-# Research bar cache (#787) - never commit market data
+# Research bar cache (#787). Backtest bars are committed under data/bars/ (doc 70 ruling (k));
+# only this scratch cache stays out.
 docs/research/data/
