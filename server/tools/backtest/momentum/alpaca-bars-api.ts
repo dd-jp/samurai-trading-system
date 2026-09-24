@@ -1,7 +1,7 @@
 import { isFiniteNumber } from '../../../shared/index.js';
 
 export const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
-export const ALPACA_REQUESTS_PER_MINUTE = 200;
+const ALPACA_REQUESTS_PER_MINUTE = 200;
 const PAGE_LIMIT = 10_000;
 const RATE_LIMIT_BACKOFF_MS = 20_000;
 const MAX_ATTEMPTS = 5;

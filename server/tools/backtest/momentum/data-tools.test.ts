@@ -44,7 +44,7 @@ import {
   alpacaSymbolCandidates,
   barDate,
   joinAdjustedAndRaw,
-  parseArgs,
+  parsePullArgs,
   pullSymbol,
 } from './pull-alpaca-bars.js';
 import { distinctTrialCount, ledgerFromGrid, mergeLedger } from './trial-ledger.js';
@@ -401,7 +401,7 @@ describe('pull-alpaca-bars helpers', () => {
   });
 
   it('parses CLI flags with defaults', () => {
-    const args = parseArgs(['--end', '2026-09-23', '--out', 'x']);
+    const args = parsePullArgs(['--end', '2026-09-23', '--out', 'x']);
     expect(args.end).toBe('2026-09-23');
     expect(args.outDir).toBe('x');
     expect(args.constituents).toBe('data/bars/sp500-constituents.csv');

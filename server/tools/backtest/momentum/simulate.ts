@@ -284,16 +284,24 @@ class Simulation {
     equity: number,
   ): Order | undefined {
     const targetCash = weight * this.sizeMultiplier * equity;
+    return this.input.book.wholeShares
+      ? this.wholeShareOrder(symbol, index, targetCash)
+      : this.fractionalOrder(symbol, index, targetCash);
+  }
+
+  private fractionalOrder(symbol: string, index: number, targetCash: number): Order | undefined {
     const held = this.positions.get(symbol);
-    if (!this.input.book.wholeShares) {
-      const heldValue = held === undefined ? 0 : this.value(symbol, index, held);
-      if (this.entriesBlocked && targetCash > heldValue) return undefined;
-      return { symbol, targetShares: undefined, targetCash, reason: 'rebalance' };
-    }
+    const heldValue = held === undefined ? 0 : this.value(symbol, index, held);
+    if (this.entriesBlocked && targetCash > heldValue) return undefined;
+    return { symbol, targetShares: undefined, targetCash, reason: 'rebalance' };
+  }
+
+  private wholeShareOrder(symbol: string, index: number, targetCash: number): Order | undefined {
     const bar = this.market.barAtOrBefore(symbol, index);
     if (bar === undefined) return undefined;
     const targetShares = wholeShares(targetCash, bar.rawClose);
     if (targetCash > 0 && targetShares === 0) this.zeroShareTargets++;
+    const held = this.positions.get(symbol);
     const heldShares =
       held === undefined ? 0 : Math.round((held.quantity * bar.close) / bar.rawClose);
     if (this.entriesBlocked && targetShares > heldShares) return undefined;

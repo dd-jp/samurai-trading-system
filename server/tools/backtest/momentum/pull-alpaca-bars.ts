@@ -6,19 +6,19 @@ import { AlpacaBarsApi, credentialsFromEnv, type RawDailyBar } from './alpaca-ba
 import { barsToCsv } from './bar-csv.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 
-export const US_BARS_START = '2016-01-04';
-export const US_CALENDAR_REFERENCE = 'SPY';
+const US_BARS_START = '2016-01-04';
+const US_CALENDAR_REFERENCE = 'SPY';
 export const DEFAULT_CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const DEFAULT_ALPACA_BARS_DIR = 'data/bars/alpaca';
 
-export interface SymbolManifestEntry {
+interface SymbolManifestEntry {
   readonly alpaca_symbol: string;
   readonly first: string;
   readonly last: string;
   readonly bars: number;
 }
 
-export interface AlpacaBarsManifest {
+interface AlpacaBarsManifest {
   readonly source: string;
   readonly feed: 'sip';
   readonly adjustment: 'all (OHLCV) + raw (raw_close)';
@@ -77,7 +77,7 @@ export async function pullSymbol(
   return undefined;
 }
 
-export function parseArgs(argv: readonly string[]): {
+export function parsePullArgs(argv: readonly string[]): {
   end: string;
   constituents: string;
   outDir: string;
@@ -94,7 +94,7 @@ export function parseArgs(argv: readonly string[]): {
 }
 
 async function main(argv: readonly string[]): Promise<void> {
-  const args = parseArgs(argv);
+  const args = parsePullArgs(argv);
   const membership = new PointInTimeMembership(
     parseConstituentsCsv(readFileSync(args.constituents, 'utf8')),
   );

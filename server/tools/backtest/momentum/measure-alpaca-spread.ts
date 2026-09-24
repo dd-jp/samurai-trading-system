@@ -7,9 +7,9 @@ import { alpacaSymbolCandidates, DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca
 
 export const DEFAULT_SPREAD_PATH = 'data/bars/alpaca-spreads.csv';
 export const SPREAD_CSV_HEADER = 'symbol,sessions,median_half_spread_bps';
-export const SAMPLE_TIME_UTC = '19:59:00Z';
-export const SAMPLE_WINDOW_SECONDS = 30;
-export const DEFAULT_SESSIONS = 10;
+const SAMPLE_TIME_UTC = '19:59:00Z';
+const SAMPLE_WINDOW_SECONDS = 30;
+const DEFAULT_SESSIONS = 10;
 
 export interface QuoteSample {
   readonly bid: number;

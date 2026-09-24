@@ -18,13 +18,13 @@ import { ledgerFromGrid, mergeLedger, type TrialLedger } from './trial-ledger.js
 import type { SubBookVerdict } from './verdict.js';
 import { subBookVerdict } from './verdict.js';
 
-export const DEFAULT_SAXO_BARS_DIR = 'data/bars/saxo';
-export const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
-export const DEFAULT_OUT_DIR = 'data/backtest/momentum';
-export const LEDGER_FILE = 'trials.json';
+const DEFAULT_SAXO_BARS_DIR = 'data/bars/saxo';
+const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
+const DEFAULT_OUT_DIR = 'data/backtest/momentum';
+const LEDGER_FILE = 'trials.json';
 export const CAPITAL_PASSES_GBP = [1_000, 5_000] as const;
 
-export interface SaxoBarsManifest {
+interface SaxoBarsManifest {
   readonly calendar_reference: string;
   readonly symbols: Record<string, { readonly half_spread_bps: number }>;
 }
@@ -74,7 +74,7 @@ export function parseArgs(argv: readonly string[]): RunOptions {
   };
 }
 
-export function loadUsData(
+function loadUsData(
   options: Pick<RunOptions, 'barsDir' | 'constituentsPath' | 'fxPath' | 'spreadPath'>,
 ): VenueData {
   const series = loadBarDirectory(options.barsDir);
@@ -164,11 +164,7 @@ export interface PassResult {
   readonly benchmarkSameMode: SimulationResult;
 }
 
-export function runPass(
-  data: VenueData,
-  startCapitalGbp: number,
-  wholeShares: boolean,
-): PassResult {
+function runPass(data: VenueData, startCapitalGbp: number, wholeShares: boolean): PassResult {
   const trials = gridForVenue(data.venue);
   const start = evaluationStartIndex(data.market.calendar, GRID_A);
   const book = { startCapitalGbp, wholeShares, fx: data.fx };
@@ -205,7 +201,7 @@ export function runPass(
   return { startCapitalGbp, wholeShares, verdict, benchmarkSameMode };
 }
 
-export function writeLedger(outDir: string): TrialLedger {
+function writeLedger(outDir: string): TrialLedger {
   const path = join(outDir, LEDGER_FILE);
   const ledger = existsSync(path)
     ? mergeLedger(JSON.parse(readFileSync(path, 'utf8')) as TrialLedger, GRID_A)
