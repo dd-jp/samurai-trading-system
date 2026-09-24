@@ -1,0 +1,4488 @@
+{
+ "source": "Alpaca GET /v2/stocks/bars, timeframe=1Day, feed=sip",
+ "feed": "sip",
+ "adjustment": "all (OHLCV) + raw (raw_close)",
+ "start": "2016-01-04",
+ "end": "2026-09-23",
+ "fetched_at": "2026-09-24T01:12:32.054Z",
+ "calendar_reference": "SPY",
+ "symbols": {
+  "SPY": {
+   "alpaca_symbol": "SPY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "A": {
+   "alpaca_symbol": "A",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AABA": {
+   "alpaca_symbol": "AABA",
+   "first": "2017-06-19",
+   "last": "2019-10-02",
+   "bars": 577
+  },
+  "AAL": {
+   "alpaca_symbol": "AAL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AAP": {
+   "alpaca_symbol": "AAP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AAPL": {
+   "alpaca_symbol": "AAPL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ABBV": {
+   "alpaca_symbol": "ABBV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ABC": {
+   "alpaca_symbol": "ABC",
+   "first": "2016-01-04",
+   "last": "2023-08-29",
+   "bars": 1927
+  },
+  "ABMD": {
+   "alpaca_symbol": "ABMD",
+   "first": "2016-01-04",
+   "last": "2022-12-21",
+   "bars": 1756
+  },
+  "ABNB": {
+   "alpaca_symbol": "ABNB",
+   "first": "2020-12-10",
+   "last": "2026-09-23",
+   "bars": 1452
+  },
+  "ABT": {
+   "alpaca_symbol": "ABT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ACGL": {
+   "alpaca_symbol": "ACGL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ACN": {
+   "alpaca_symbol": "ACN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ADBE": {
+   "alpaca_symbol": "ADBE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ADI": {
+   "alpaca_symbol": "ADI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ADM": {
+   "alpaca_symbol": "ADM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ADP": {
+   "alpaca_symbol": "ADP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ADS": {
+   "alpaca_symbol": "ADS",
+   "first": "2016-01-04",
+   "last": "2022-04-01",
+   "bars": 1574
+  },
+  "ADSK": {
+   "alpaca_symbol": "ADSK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ADT": {
+   "alpaca_symbol": "ADT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AEE": {
+   "alpaca_symbol": "AEE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AEP": {
+   "alpaca_symbol": "AEP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AES": {
+   "alpaca_symbol": "AES",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AET": {
+   "alpaca_symbol": "AET",
+   "first": "2016-01-04",
+   "last": "2018-11-28",
+   "bars": 733
+  },
+  "AFL": {
+   "alpaca_symbol": "AFL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AGN": {
+   "alpaca_symbol": "AGN",
+   "first": "2016-01-04",
+   "last": "2020-05-08",
+   "bars": 1095
+  },
+  "AIG": {
+   "alpaca_symbol": "AIG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AIV": {
+   "alpaca_symbol": "AIV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AIZ": {
+   "alpaca_symbol": "AIZ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AJG": {
+   "alpaca_symbol": "AJG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AKAM": {
+   "alpaca_symbol": "AKAM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ALB": {
+   "alpaca_symbol": "ALB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ALGN": {
+   "alpaca_symbol": "ALGN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ALK": {
+   "alpaca_symbol": "ALK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ALL": {
+   "alpaca_symbol": "ALL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ALLE": {
+   "alpaca_symbol": "ALLE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ALXN": {
+   "alpaca_symbol": "ALXN",
+   "first": "2016-01-04",
+   "last": "2021-07-20",
+   "bars": 1396
+  },
+  "AMAT": {
+   "alpaca_symbol": "AMAT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AMCR": {
+   "alpaca_symbol": "AMCR",
+   "first": "2019-06-11",
+   "last": "2026-09-23",
+   "bars": 1832
+  },
+  "AMD": {
+   "alpaca_symbol": "AMD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AME": {
+   "alpaca_symbol": "AME",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AMG": {
+   "alpaca_symbol": "AMG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AMGN": {
+   "alpaca_symbol": "AMGN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AMP": {
+   "alpaca_symbol": "AMP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AMT": {
+   "alpaca_symbol": "AMT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AMTM": {
+   "alpaca_symbol": "AMTM",
+   "first": "2024-09-30",
+   "last": "2026-09-23",
+   "bars": 497
+  },
+  "AMZN": {
+   "alpaca_symbol": "AMZN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AN": {
+   "alpaca_symbol": "AN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ANDV": {
+   "alpaca_symbol": "ANDV",
+   "first": "2017-08-01",
+   "last": "2018-09-28",
+   "bars": 294
+  },
+  "ANET": {
+   "alpaca_symbol": "ANET",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ANSS": {
+   "alpaca_symbol": "ANSS",
+   "first": "2016-01-04",
+   "last": "2025-07-16",
+   "bars": 2397
+  },
+  "ANTM": {
+   "alpaca_symbol": "ANTM",
+   "first": "2016-01-04",
+   "last": "2022-06-27",
+   "bars": 1632
+  },
+  "AON": {
+   "alpaca_symbol": "AON",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AOS": {
+   "alpaca_symbol": "AOS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "APA": {
+   "alpaca_symbol": "APA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "APC": {
+   "alpaca_symbol": "APC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 1060
+  },
+  "APD": {
+   "alpaca_symbol": "APD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "APH": {
+   "alpaca_symbol": "APH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "APO": {
+   "alpaca_symbol": "APO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "APP": {
+   "alpaca_symbol": "APP",
+   "first": "2021-04-15",
+   "last": "2026-09-23",
+   "bars": 1367
+  },
+  "APTV": {
+   "alpaca_symbol": "APTV",
+   "first": "2017-11-17",
+   "last": "2026-09-23",
+   "bars": 2222
+  },
+  "ARE": {
+   "alpaca_symbol": "ARE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ARES": {
+   "alpaca_symbol": "ARES",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ARG": {
+   "alpaca_symbol": "ARG",
+   "first": "2016-01-04",
+   "last": "2016-05-20",
+   "bars": 97
+  },
+  "ARNC": {
+   "alpaca_symbol": "ARNC",
+   "first": "2016-11-01",
+   "last": "2023-08-17",
+   "bars": 1709
+  },
+  "ATO": {
+   "alpaca_symbol": "ATO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ATVI": {
+   "alpaca_symbol": "ATVI",
+   "first": "2016-01-04",
+   "last": "2023-10-13",
+   "bars": 1959
+  },
+  "AVB": {
+   "alpaca_symbol": "AVB",
+   "first": "2016-01-04",
+   "last": "2026-08-14",
+   "bars": 2669
+  },
+  "AVGO": {
+   "alpaca_symbol": "AVGO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AVY": {
+   "alpaca_symbol": "AVY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AWK": {
+   "alpaca_symbol": "AWK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AXON": {
+   "alpaca_symbol": "AXON",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AXP": {
+   "alpaca_symbol": "AXP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AYI": {
+   "alpaca_symbol": "AYI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "AZO": {
+   "alpaca_symbol": "AZO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BA": {
+   "alpaca_symbol": "BA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BAC": {
+   "alpaca_symbol": "BAC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BALL": {
+   "alpaca_symbol": "BALL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BAX": {
+   "alpaca_symbol": "BAX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BBBY": {
+   "alpaca_symbol": "BBBY",
+   "first": "2016-01-04",
+   "last": "2026-08-14",
+   "bars": 2086
+  },
+  "BBT": {
+   "alpaca_symbol": "BBT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BBWI": {
+   "alpaca_symbol": "BBWI",
+   "first": "2021-08-03",
+   "last": "2026-09-23",
+   "bars": 1291
+  },
+  "BBY": {
+   "alpaca_symbol": "BBY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BCR": {
+   "alpaca_symbol": "BCR",
+   "first": "2016-01-04",
+   "last": "2017-12-28",
+   "bars": 502
+  },
+  "BDX": {
+   "alpaca_symbol": "BDX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BEN": {
+   "alpaca_symbol": "BEN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BF.B": {
+   "alpaca_symbol": "BF.B",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BG": {
+   "alpaca_symbol": "BG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BHF": {
+   "alpaca_symbol": "BHF",
+   "first": "2017-07-17",
+   "last": "2026-09-23",
+   "bars": 2310
+  },
+  "BHGE": {
+   "alpaca_symbol": "BHGE",
+   "first": "2017-07-05",
+   "last": "2019-10-17",
+   "bars": 577
+  },
+  "BIIB": {
+   "alpaca_symbol": "BIIB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BIO": {
+   "alpaca_symbol": "BIO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BK": {
+   "alpaca_symbol": "BK",
+   "first": "2016-01-04",
+   "last": "2026-05-20",
+   "bars": 2610
+  },
+  "BKNG": {
+   "alpaca_symbol": "BKNG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BKR": {
+   "alpaca_symbol": "BKR",
+   "first": "2017-07-05",
+   "last": "2026-09-23",
+   "bars": 2318
+  },
+  "BLDR": {
+   "alpaca_symbol": "BLDR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BLK": {
+   "alpaca_symbol": "BLK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BLL": {
+   "alpaca_symbol": "BLL",
+   "first": "2016-01-04",
+   "last": "2022-05-09",
+   "bars": 1599
+  },
+  "BMY": {
+   "alpaca_symbol": "BMY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BNY": {
+   "alpaca_symbol": "BNY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BR": {
+   "alpaca_symbol": "BR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BRCM": {
+   "alpaca_symbol": "BRCM",
+   "first": "2016-01-04",
+   "last": "2016-01-29",
+   "bars": 19
+  },
+  "BRK.B": {
+   "alpaca_symbol": "BRK.B",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BRO": {
+   "alpaca_symbol": "BRO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BSX": {
+   "alpaca_symbol": "BSX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BWA": {
+   "alpaca_symbol": "BWA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BX": {
+   "alpaca_symbol": "BX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "BXLT": {
+   "alpaca_symbol": "BXLT",
+   "first": "2016-01-04",
+   "last": "2016-06-02",
+   "bars": 105
+  },
+  "BXP": {
+   "alpaca_symbol": "BXP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "C": {
+   "alpaca_symbol": "C",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CA": {
+   "alpaca_symbol": "CA",
+   "first": "2016-01-04",
+   "last": "2026-05-07",
+   "bars": 2601
+  },
+  "CAG": {
+   "alpaca_symbol": "CAG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CAH": {
+   "alpaca_symbol": "CAH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CAM": {
+   "alpaca_symbol": "CAM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 305
+  },
+  "CARR": {
+   "alpaca_symbol": "CARR",
+   "first": "2020-04-03",
+   "last": "2026-09-23",
+   "bars": 1626
+  },
+  "CASY": {
+   "alpaca_symbol": "CASY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CAT": {
+   "alpaca_symbol": "CAT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CB": {
+   "alpaca_symbol": "CB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CBOE": {
+   "alpaca_symbol": "CBOE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CBRE": {
+   "alpaca_symbol": "CBRE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CBS": {
+   "alpaca_symbol": "CBS",
+   "first": "2016-01-04",
+   "last": "2019-12-04",
+   "bars": 988
+  },
+  "CCE": {
+   "alpaca_symbol": "CCE",
+   "first": "2016-01-04",
+   "last": "2018-11-06",
+   "bars": 718
+  },
+  "CCEP": {
+   "alpaca_symbol": "CCEP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CCI": {
+   "alpaca_symbol": "CCI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CCL": {
+   "alpaca_symbol": "CCL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CDAY": {
+   "alpaca_symbol": "CDAY",
+   "first": "2018-04-26",
+   "last": "2024-01-31",
+   "bars": 1451
+  },
+  "CDNS": {
+   "alpaca_symbol": "CDNS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CDW": {
+   "alpaca_symbol": "CDW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CE": {
+   "alpaca_symbol": "CE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CEG": {
+   "alpaca_symbol": "CEG",
+   "first": "2022-02-02",
+   "last": "2026-09-23",
+   "bars": 1164
+  },
+  "CELG": {
+   "alpaca_symbol": "CELG",
+   "first": "2016-01-04",
+   "last": "2019-11-20",
+   "bars": 979
+  },
+  "CERN": {
+   "alpaca_symbol": "CERN",
+   "first": "2016-01-04",
+   "last": "2022-06-07",
+   "bars": 1619
+  },
+  "CF": {
+   "alpaca_symbol": "CF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CFG": {
+   "alpaca_symbol": "CFG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CHD": {
+   "alpaca_symbol": "CHD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CHK": {
+   "alpaca_symbol": "CHK",
+   "first": "2016-01-04",
+   "last": "2024-10-01",
+   "bars": 2201
+  },
+  "CHRW": {
+   "alpaca_symbol": "CHRW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CHTR": {
+   "alpaca_symbol": "CHTR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CI": {
+   "alpaca_symbol": "CI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CIEN": {
+   "alpaca_symbol": "CIEN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CINF": {
+   "alpaca_symbol": "CINF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CL": {
+   "alpaca_symbol": "CL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CLX": {
+   "alpaca_symbol": "CLX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CMA": {
+   "alpaca_symbol": "CMA",
+   "first": "2016-01-04",
+   "last": "2026-01-30",
+   "bars": 2534
+  },
+  "CMCSA": {
+   "alpaca_symbol": "CMCSA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CME": {
+   "alpaca_symbol": "CME",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CMG": {
+   "alpaca_symbol": "CMG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CMI": {
+   "alpaca_symbol": "CMI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CMS": {
+   "alpaca_symbol": "CMS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CNC": {
+   "alpaca_symbol": "CNC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CNP": {
+   "alpaca_symbol": "CNP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CNX": {
+   "alpaca_symbol": "CNX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "COF": {
+   "alpaca_symbol": "COF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "COG": {
+   "alpaca_symbol": "COG",
+   "first": "2016-01-04",
+   "last": "2021-10-01",
+   "bars": 1448
+  },
+  "COHR": {
+   "alpaca_symbol": "COHR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "COIN": {
+   "alpaca_symbol": "COIN",
+   "first": "2021-04-14",
+   "last": "2026-09-23",
+   "bars": 1368
+  },
+  "COL": {
+   "alpaca_symbol": "COL",
+   "first": "2016-01-04",
+   "last": "2018-11-26",
+   "bars": 731
+  },
+  "COO": {
+   "alpaca_symbol": "COO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "COP": {
+   "alpaca_symbol": "COP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "COR": {
+   "alpaca_symbol": "COR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "COST": {
+   "alpaca_symbol": "COST",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "COTY": {
+   "alpaca_symbol": "COTY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CPAY": {
+   "alpaca_symbol": "CPAY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CPB": {
+   "alpaca_symbol": "CPB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CPGX": {
+   "alpaca_symbol": "CPGX",
+   "first": "2016-01-04",
+   "last": "2016-06-30",
+   "bars": 125
+  },
+  "CPRI": {
+   "alpaca_symbol": "CPRI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CPRT": {
+   "alpaca_symbol": "CPRT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CPT": {
+   "alpaca_symbol": "CPT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CRH": {
+   "alpaca_symbol": "CRH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CRL": {
+   "alpaca_symbol": "CRL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CRM": {
+   "alpaca_symbol": "CRM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CRWD": {
+   "alpaca_symbol": "CRWD",
+   "first": "2019-06-12",
+   "last": "2026-09-23",
+   "bars": 1831
+  },
+  "CSCO": {
+   "alpaca_symbol": "CSCO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CSGP": {
+   "alpaca_symbol": "CSGP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CSRA": {
+   "alpaca_symbol": "CSRA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 596
+  },
+  "CSX": {
+   "alpaca_symbol": "CSX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CTAS": {
+   "alpaca_symbol": "CTAS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CTL": {
+   "alpaca_symbol": "CTL",
+   "first": "2016-01-04",
+   "last": "2020-09-17",
+   "bars": 1186
+  },
+  "CTLT": {
+   "alpaca_symbol": "CTLT",
+   "first": "2016-01-04",
+   "last": "2024-12-17",
+   "bars": 2255
+  },
+  "CTRA": {
+   "alpaca_symbol": "CTRA",
+   "first": "2018-11-09",
+   "last": "2026-05-06",
+   "bars": 1880
+  },
+  "CTSH": {
+   "alpaca_symbol": "CTSH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CTVA": {
+   "alpaca_symbol": "CTVA",
+   "first": "2019-06-03",
+   "last": "2026-09-23",
+   "bars": 1838
+  },
+  "CTXS": {
+   "alpaca_symbol": "CTXS",
+   "first": "2016-01-04",
+   "last": "2022-09-29",
+   "bars": 1698
+  },
+  "CVC": {
+   "alpaca_symbol": "CVC",
+   "first": "2016-01-04",
+   "last": "2016-06-20",
+   "bars": 117
+  },
+  "CVNA": {
+   "alpaca_symbol": "CVNA",
+   "first": "2017-04-28",
+   "last": "2026-09-23",
+   "bars": 2364
+  },
+  "CVS": {
+   "alpaca_symbol": "CVS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CVX": {
+   "alpaca_symbol": "CVX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "CXO": {
+   "alpaca_symbol": "CXO",
+   "first": "2016-01-04",
+   "last": "2021-01-15",
+   "bars": 1269
+  },
+  "CZR": {
+   "alpaca_symbol": "CZR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "D": {
+   "alpaca_symbol": "D",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DAL": {
+   "alpaca_symbol": "DAL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DASH": {
+   "alpaca_symbol": "DASH",
+   "first": "2020-12-09",
+   "last": "2026-09-23",
+   "bars": 1453
+  },
+  "DAY": {
+   "alpaca_symbol": "DAY",
+   "first": "2024-02-01",
+   "last": "2026-02-03",
+   "bars": 503
+  },
+  "DD": {
+   "alpaca_symbol": "DD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DDOG": {
+   "alpaca_symbol": "DDOG",
+   "first": "2019-09-19",
+   "last": "2026-09-23",
+   "bars": 1762
+  },
+  "DE": {
+   "alpaca_symbol": "DE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DECK": {
+   "alpaca_symbol": "DECK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DELL": {
+   "alpaca_symbol": "DELL",
+   "first": "2018-12-28",
+   "last": "2026-09-23",
+   "bars": 1944
+  },
+  "DFS": {
+   "alpaca_symbol": "DFS",
+   "first": "2016-01-04",
+   "last": "2025-05-16",
+   "bars": 2357
+  },
+  "DG": {
+   "alpaca_symbol": "DG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DGX": {
+   "alpaca_symbol": "DGX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DHI": {
+   "alpaca_symbol": "DHI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DHR": {
+   "alpaca_symbol": "DHR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DIS": {
+   "alpaca_symbol": "DIS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DISCA": {
+   "alpaca_symbol": "DISCA",
+   "first": "2016-01-04",
+   "last": "2022-04-08",
+   "bars": 1579
+  },
+  "DISCK": {
+   "alpaca_symbol": "DISCK",
+   "first": "2016-01-04",
+   "last": "2022-04-08",
+   "bars": 1579
+  },
+  "DISH": {
+   "alpaca_symbol": "DISH",
+   "first": "2016-01-04",
+   "last": "2023-12-29",
+   "bars": 2012
+  },
+  "DLR": {
+   "alpaca_symbol": "DLR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DLTR": {
+   "alpaca_symbol": "DLTR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DNB": {
+   "alpaca_symbol": "DNB",
+   "first": "2016-01-04",
+   "last": "2025-08-25",
+   "bars": 2425
+  },
+  "DO": {
+   "alpaca_symbol": "DO",
+   "first": "2016-01-04",
+   "last": "2024-09-03",
+   "bars": 2181
+  },
+  "DOC": {
+   "alpaca_symbol": "DOC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DOV": {
+   "alpaca_symbol": "DOV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DOW": {
+   "alpaca_symbol": "DOW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DPZ": {
+   "alpaca_symbol": "DPZ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DRE": {
+   "alpaca_symbol": "DRE",
+   "first": "2016-01-04",
+   "last": "2022-09-30",
+   "bars": 1699
+  },
+  "DRI": {
+   "alpaca_symbol": "DRI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DTE": {
+   "alpaca_symbol": "DTE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DUK": {
+   "alpaca_symbol": "DUK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DVA": {
+   "alpaca_symbol": "DVA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DVN": {
+   "alpaca_symbol": "DVN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "DWDP": {
+   "alpaca_symbol": "DWDP",
+   "first": "2017-09-01",
+   "last": "2019-05-31",
+   "bars": 438
+  },
+  "DXC": {
+   "alpaca_symbol": "DXC",
+   "first": "2017-04-03",
+   "last": "2026-09-23",
+   "bars": 2382
+  },
+  "DXCM": {
+   "alpaca_symbol": "DXCM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EA": {
+   "alpaca_symbol": "EA",
+   "first": "2016-01-04",
+   "last": "2026-08-04",
+   "bars": 2661
+  },
+  "EBAY": {
+   "alpaca_symbol": "EBAY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ECHO": {
+   "alpaca_symbol": "ECHO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ECL": {
+   "alpaca_symbol": "ECL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ED": {
+   "alpaca_symbol": "ED",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EFX": {
+   "alpaca_symbol": "EFX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EG": {
+   "alpaca_symbol": "EG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EIX": {
+   "alpaca_symbol": "EIX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EL": {
+   "alpaca_symbol": "EL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ELV": {
+   "alpaca_symbol": "ELV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EMC": {
+   "alpaca_symbol": "EMC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EME": {
+   "alpaca_symbol": "EME",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EMN": {
+   "alpaca_symbol": "EMN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EMR": {
+   "alpaca_symbol": "EMR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ENDP": {
+   "alpaca_symbol": "ENDP",
+   "first": "2016-01-04",
+   "last": "2022-08-25",
+   "bars": 1674
+  },
+  "ENPH": {
+   "alpaca_symbol": "ENPH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EOG": {
+   "alpaca_symbol": "EOG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EPAM": {
+   "alpaca_symbol": "EPAM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EQIX": {
+   "alpaca_symbol": "EQIX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EQR": {
+   "alpaca_symbol": "EQR",
+   "first": "2016-01-04",
+   "last": "2026-08-17",
+   "bars": 2670
+  },
+  "EQT": {
+   "alpaca_symbol": "EQT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ERIE": {
+   "alpaca_symbol": "ERIE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ES": {
+   "alpaca_symbol": "ES",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ESRX": {
+   "alpaca_symbol": "ESRX",
+   "first": "2016-01-04",
+   "last": "2018-12-20",
+   "bars": 748
+  },
+  "ESS": {
+   "alpaca_symbol": "ESS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ESV": {
+   "alpaca_symbol": "ESV",
+   "first": "2016-01-04",
+   "last": "2019-07-30",
+   "bars": 899
+  },
+  "ETFC": {
+   "alpaca_symbol": "ETFC",
+   "first": "2016-01-04",
+   "last": "2020-10-01",
+   "bars": 1196
+  },
+  "ETN": {
+   "alpaca_symbol": "ETN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ETR": {
+   "alpaca_symbol": "ETR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ETSY": {
+   "alpaca_symbol": "ETSY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EVHC": {
+   "alpaca_symbol": "EVHC",
+   "first": "2016-01-04",
+   "last": "2018-10-10",
+   "bars": 699
+  },
+  "EVRG": {
+   "alpaca_symbol": "EVRG",
+   "first": "2018-06-05",
+   "last": "2026-09-23",
+   "bars": 2087
+  },
+  "EW": {
+   "alpaca_symbol": "EW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EXC": {
+   "alpaca_symbol": "EXC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EXE": {
+   "alpaca_symbol": "EXE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EXPD": {
+   "alpaca_symbol": "EXPD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EXPE": {
+   "alpaca_symbol": "EXPE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "EXR": {
+   "alpaca_symbol": "EXR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "F": {
+   "alpaca_symbol": "F",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FANG": {
+   "alpaca_symbol": "FANG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FAST": {
+   "alpaca_symbol": "FAST",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FB": {
+   "alpaca_symbol": "FB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 1933
+  },
+  "FBHS": {
+   "alpaca_symbol": "FBHS",
+   "first": "2016-01-04",
+   "last": "2022-12-14",
+   "bars": 1751
+  },
+  "FCX": {
+   "alpaca_symbol": "FCX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FDS": {
+   "alpaca_symbol": "FDS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FDX": {
+   "alpaca_symbol": "FDX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FDXF": {
+   "alpaca_symbol": "FDXF",
+   "first": "2026-06-01",
+   "last": "2026-09-23",
+   "bars": 80
+  },
+  "FE": {
+   "alpaca_symbol": "FE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FERG": {
+   "alpaca_symbol": "FERG",
+   "first": "2021-03-08",
+   "last": "2026-09-23",
+   "bars": 1394
+  },
+  "FFIV": {
+   "alpaca_symbol": "FFIV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FI": {
+   "alpaca_symbol": "FI",
+   "first": "2016-01-04",
+   "last": "2025-11-10",
+   "bars": 2479
+  },
+  "FICO": {
+   "alpaca_symbol": "FICO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FIS": {
+   "alpaca_symbol": "FIS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FISV": {
+   "alpaca_symbol": "FISV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FITB": {
+   "alpaca_symbol": "FITB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FIX": {
+   "alpaca_symbol": "FIX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FL": {
+   "alpaca_symbol": "FL",
+   "first": "2016-01-04",
+   "last": "2025-09-05",
+   "bars": 2433
+  },
+  "FLEX": {
+   "alpaca_symbol": "FLEX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FLIR": {
+   "alpaca_symbol": "FLIR",
+   "first": "2016-01-04",
+   "last": "2021-05-13",
+   "bars": 1350
+  },
+  "FLR": {
+   "alpaca_symbol": "FLR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FLS": {
+   "alpaca_symbol": "FLS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FLT": {
+   "alpaca_symbol": "FLT",
+   "first": "2016-01-04",
+   "last": "2024-03-22",
+   "bars": 2069
+  },
+  "FMC": {
+   "alpaca_symbol": "FMC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FOSL": {
+   "alpaca_symbol": "FOSL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FOX": {
+   "alpaca_symbol": "FOX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FOXA": {
+   "alpaca_symbol": "FOXA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FRC": {
+   "alpaca_symbol": "FRC",
+   "first": "2016-01-04",
+   "last": "2023-04-28",
+   "bars": 1843
+  },
+  "FRT": {
+   "alpaca_symbol": "FRT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FSLR": {
+   "alpaca_symbol": "FSLR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FTI": {
+   "alpaca_symbol": "FTI",
+   "first": "2017-01-17",
+   "last": "2026-09-23",
+   "bars": 2435
+  },
+  "FTNT": {
+   "alpaca_symbol": "FTNT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "FTR": {
+   "alpaca_symbol": "FTR",
+   "first": "2016-01-04",
+   "last": "2020-04-23",
+   "bars": 1084
+  },
+  "FTV": {
+   "alpaca_symbol": "FTV",
+   "first": "2016-07-05",
+   "last": "2026-09-23",
+   "bars": 2570
+  },
+  "GAS": {
+   "alpaca_symbol": "GAS",
+   "first": "2016-01-04",
+   "last": "2016-06-30",
+   "bars": 125
+  },
+  "GD": {
+   "alpaca_symbol": "GD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GDDY": {
+   "alpaca_symbol": "GDDY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GE": {
+   "alpaca_symbol": "GE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GEHC": {
+   "alpaca_symbol": "GEHC",
+   "first": "2022-12-15",
+   "last": "2026-09-23",
+   "bars": 945
+  },
+  "GEN": {
+   "alpaca_symbol": "GEN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GEV": {
+   "alpaca_symbol": "GEV",
+   "first": "2024-04-02",
+   "last": "2026-09-23",
+   "bars": 622
+  },
+  "GGP": {
+   "alpaca_symbol": "GGP",
+   "first": "2016-01-04",
+   "last": "2018-08-27",
+   "bars": 668
+  },
+  "GILD": {
+   "alpaca_symbol": "GILD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GIS": {
+   "alpaca_symbol": "GIS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GL": {
+   "alpaca_symbol": "GL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GLW": {
+   "alpaca_symbol": "GLW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GM": {
+   "alpaca_symbol": "GM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GMCR": {
+   "alpaca_symbol": "GMCR",
+   "first": "2016-01-04",
+   "last": "2016-03-02",
+   "bars": 41
+  },
+  "GME": {
+   "alpaca_symbol": "GME",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GNRC": {
+   "alpaca_symbol": "GNRC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GOOG": {
+   "alpaca_symbol": "GOOG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GOOGL": {
+   "alpaca_symbol": "GOOGL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GPC": {
+   "alpaca_symbol": "GPC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GPN": {
+   "alpaca_symbol": "GPN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GPS": {
+   "alpaca_symbol": "GPS",
+   "first": "2016-01-04",
+   "last": "2024-08-21",
+   "bars": 2173
+  },
+  "GRMN": {
+   "alpaca_symbol": "GRMN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GS": {
+   "alpaca_symbol": "GS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GT": {
+   "alpaca_symbol": "GT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "GWW": {
+   "alpaca_symbol": "GWW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HAL": {
+   "alpaca_symbol": "HAL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HAR": {
+   "alpaca_symbol": "HAR",
+   "first": "2016-01-04",
+   "last": "2017-03-10",
+   "bars": 299
+  },
+  "HAS": {
+   "alpaca_symbol": "HAS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HBAN": {
+   "alpaca_symbol": "HBAN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HBI": {
+   "alpaca_symbol": "HBI",
+   "first": "2016-01-04",
+   "last": "2025-11-28",
+   "bars": 2492
+  },
+  "HCA": {
+   "alpaca_symbol": "HCA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HCP": {
+   "alpaca_symbol": "HCP",
+   "first": "2016-01-04",
+   "last": "2025-02-26",
+   "bars": 2301
+  },
+  "HD": {
+   "alpaca_symbol": "HD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HES": {
+   "alpaca_symbol": "HES",
+   "first": "2016-01-04",
+   "last": "2025-07-17",
+   "bars": 2398
+  },
+  "HFC": {
+   "alpaca_symbol": "HFC",
+   "first": "2016-01-04",
+   "last": "2022-03-14",
+   "bars": 1560
+  },
+  "HIG": {
+   "alpaca_symbol": "HIG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HII": {
+   "alpaca_symbol": "HII",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HLT": {
+   "alpaca_symbol": "HLT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HOG": {
+   "alpaca_symbol": "HOG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HOLX": {
+   "alpaca_symbol": "HOLX",
+   "first": "2016-01-04",
+   "last": "2026-04-06",
+   "bars": 2578
+  },
+  "HON": {
+   "alpaca_symbol": "HON",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HONA": {
+   "alpaca_symbol": "HONA",
+   "first": "2026-06-15",
+   "last": "2026-09-23",
+   "bars": 70
+  },
+  "HOOD": {
+   "alpaca_symbol": "HOOD",
+   "first": "2021-07-29",
+   "last": "2026-09-23",
+   "bars": 1294
+  },
+  "HOT": {
+   "alpaca_symbol": "HOT",
+   "first": "2016-01-04",
+   "last": "2016-09-22",
+   "bars": 183
+  },
+  "HP": {
+   "alpaca_symbol": "HP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HPE": {
+   "alpaca_symbol": "HPE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HPQ": {
+   "alpaca_symbol": "HPQ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HRB": {
+   "alpaca_symbol": "HRB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HRL": {
+   "alpaca_symbol": "HRL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HRS": {
+   "alpaca_symbol": "HRS",
+   "first": "2016-01-04",
+   "last": "2019-06-28",
+   "bars": 878
+  },
+  "HSIC": {
+   "alpaca_symbol": "HSIC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HST": {
+   "alpaca_symbol": "HST",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HSY": {
+   "alpaca_symbol": "HSY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HUBB": {
+   "alpaca_symbol": "HUBB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HUM": {
+   "alpaca_symbol": "HUM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "HWM": {
+   "alpaca_symbol": "HWM",
+   "first": "2020-04-01",
+   "last": "2026-09-23",
+   "bars": 1628
+  },
+  "IBKR": {
+   "alpaca_symbol": "IBKR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IBM": {
+   "alpaca_symbol": "IBM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ICE": {
+   "alpaca_symbol": "ICE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IDXX": {
+   "alpaca_symbol": "IDXX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IEX": {
+   "alpaca_symbol": "IEX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IFF": {
+   "alpaca_symbol": "IFF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ILMN": {
+   "alpaca_symbol": "ILMN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "INCY": {
+   "alpaca_symbol": "INCY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "INFO": {
+   "alpaca_symbol": "INFO",
+   "first": "2016-07-13",
+   "last": "2026-09-23",
+   "bars": 2564
+  },
+  "INTC": {
+   "alpaca_symbol": "INTC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "INTU": {
+   "alpaca_symbol": "INTU",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "INVH": {
+   "alpaca_symbol": "INVH",
+   "first": "2017-02-01",
+   "last": "2026-09-23",
+   "bars": 2424
+  },
+  "IP": {
+   "alpaca_symbol": "IP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IPG": {
+   "alpaca_symbol": "IPG",
+   "first": "2016-01-04",
+   "last": "2025-11-26",
+   "bars": 2491
+  },
+  "IPGP": {
+   "alpaca_symbol": "IPGP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IQV": {
+   "alpaca_symbol": "IQV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IR": {
+   "alpaca_symbol": "IR",
+   "first": "2017-05-12",
+   "last": "2026-09-23",
+   "bars": 2354
+  },
+  "IRM": {
+   "alpaca_symbol": "IRM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ISRG": {
+   "alpaca_symbol": "ISRG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IT": {
+   "alpaca_symbol": "IT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ITW": {
+   "alpaca_symbol": "ITW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "IVZ": {
+   "alpaca_symbol": "IVZ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "J": {
+   "alpaca_symbol": "J",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JBHT": {
+   "alpaca_symbol": "JBHT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JBL": {
+   "alpaca_symbol": "JBL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JCI": {
+   "alpaca_symbol": "JCI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JEC": {
+   "alpaca_symbol": "JEC",
+   "first": "2016-01-04",
+   "last": "2019-12-09",
+   "bars": 991
+  },
+  "JEF": {
+   "alpaca_symbol": "JEF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JKHY": {
+   "alpaca_symbol": "JKHY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JNJ": {
+   "alpaca_symbol": "JNJ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JNPR": {
+   "alpaca_symbol": "JNPR",
+   "first": "2016-01-04",
+   "last": "2025-07-01",
+   "bars": 2387
+  },
+  "JPM": {
+   "alpaca_symbol": "JPM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "JWN": {
+   "alpaca_symbol": "JWN",
+   "first": "2016-01-04",
+   "last": "2025-05-20",
+   "bars": 2359
+  },
+  "K": {
+   "alpaca_symbol": "K",
+   "first": "2016-01-04",
+   "last": "2025-12-10",
+   "bars": 2500
+  },
+  "KDP": {
+   "alpaca_symbol": "KDP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KEY": {
+   "alpaca_symbol": "KEY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KEYS": {
+   "alpaca_symbol": "KEYS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KHC": {
+   "alpaca_symbol": "KHC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KIM": {
+   "alpaca_symbol": "KIM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KKR": {
+   "alpaca_symbol": "KKR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KLAC": {
+   "alpaca_symbol": "KLAC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KMB": {
+   "alpaca_symbol": "KMB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KMI": {
+   "alpaca_symbol": "KMI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KMX": {
+   "alpaca_symbol": "KMX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KO": {
+   "alpaca_symbol": "KO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KORS": {
+   "alpaca_symbol": "KORS",
+   "first": "2016-01-04",
+   "last": "2018-12-31",
+   "bars": 754
+  },
+  "KR": {
+   "alpaca_symbol": "KR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KSS": {
+   "alpaca_symbol": "KSS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "KSU": {
+   "alpaca_symbol": "KSU",
+   "first": "2016-01-04",
+   "last": "2021-12-13",
+   "bars": 1498
+  },
+  "KVUE": {
+   "alpaca_symbol": "KVUE",
+   "first": "2023-05-04",
+   "last": "2026-09-23",
+   "bars": 850
+  },
+  "L": {
+   "alpaca_symbol": "L",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LB": {
+   "alpaca_symbol": "LB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LDOS": {
+   "alpaca_symbol": "LDOS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LEG": {
+   "alpaca_symbol": "LEG",
+   "first": "2016-01-04",
+   "last": "2026-08-26",
+   "bars": 2677
+  },
+  "LEN": {
+   "alpaca_symbol": "LEN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LH": {
+   "alpaca_symbol": "LH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LHX": {
+   "alpaca_symbol": "LHX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LII": {
+   "alpaca_symbol": "LII",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LIN": {
+   "alpaca_symbol": "LIN",
+   "first": "2018-10-31",
+   "last": "2026-09-23",
+   "bars": 1983
+  },
+  "LITE": {
+   "alpaca_symbol": "LITE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LKQ": {
+   "alpaca_symbol": "LKQ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LLL": {
+   "alpaca_symbol": "LLL",
+   "first": "2016-01-04",
+   "last": "2022-10-07",
+   "bars": 1704
+  },
+  "LLTC": {
+   "alpaca_symbol": "LLTC",
+   "first": "2016-01-04",
+   "last": "2017-03-10",
+   "bars": 299
+  },
+  "LLY": {
+   "alpaca_symbol": "LLY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LM": {
+   "alpaca_symbol": "LM",
+   "first": "2016-01-04",
+   "last": "2020-07-31",
+   "bars": 1153
+  },
+  "LMT": {
+   "alpaca_symbol": "LMT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LNC": {
+   "alpaca_symbol": "LNC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LNT": {
+   "alpaca_symbol": "LNT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LOW": {
+   "alpaca_symbol": "LOW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LRCX": {
+   "alpaca_symbol": "LRCX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LULU": {
+   "alpaca_symbol": "LULU",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LUMN": {
+   "alpaca_symbol": "LUMN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LUV": {
+   "alpaca_symbol": "LUV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LVLT": {
+   "alpaca_symbol": "LVLT",
+   "first": "2016-01-04",
+   "last": "2017-10-31",
+   "bars": 462
+  },
+  "LVS": {
+   "alpaca_symbol": "LVS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LW": {
+   "alpaca_symbol": "LW",
+   "first": "2016-11-10",
+   "last": "2026-09-23",
+   "bars": 2479
+  },
+  "LYB": {
+   "alpaca_symbol": "LYB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "LYV": {
+   "alpaca_symbol": "LYV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "M": {
+   "alpaca_symbol": "M",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MA": {
+   "alpaca_symbol": "MA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MAA": {
+   "alpaca_symbol": "MAA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MAC": {
+   "alpaca_symbol": "MAC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MAR": {
+   "alpaca_symbol": "MAR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MAS": {
+   "alpaca_symbol": "MAS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MAT": {
+   "alpaca_symbol": "MAT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MCD": {
+   "alpaca_symbol": "MCD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MCHP": {
+   "alpaca_symbol": "MCHP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MCK": {
+   "alpaca_symbol": "MCK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MCO": {
+   "alpaca_symbol": "MCO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MDLZ": {
+   "alpaca_symbol": "MDLZ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MDT": {
+   "alpaca_symbol": "MDT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MET": {
+   "alpaca_symbol": "MET",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "META": {
+   "alpaca_symbol": "META",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MGM": {
+   "alpaca_symbol": "MGM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MHK": {
+   "alpaca_symbol": "MHK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MJN": {
+   "alpaca_symbol": "MJN",
+   "first": "2016-01-04",
+   "last": "2017-06-14",
+   "bars": 365
+  },
+  "MKC": {
+   "alpaca_symbol": "MKC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MKTX": {
+   "alpaca_symbol": "MKTX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MLM": {
+   "alpaca_symbol": "MLM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MMC": {
+   "alpaca_symbol": "MMC",
+   "first": "2016-01-04",
+   "last": "2026-01-13",
+   "bars": 2522
+  },
+  "MMM": {
+   "alpaca_symbol": "MMM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MNK": {
+   "alpaca_symbol": "MNK",
+   "first": "2016-01-04",
+   "last": "2023-08-28",
+   "bars": 1926
+  },
+  "MNST": {
+   "alpaca_symbol": "MNST",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MO": {
+   "alpaca_symbol": "MO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MOH": {
+   "alpaca_symbol": "MOH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MON": {
+   "alpaca_symbol": "MON",
+   "first": "2016-01-04",
+   "last": "2022-12-23",
+   "bars": 1758
+  },
+  "MOS": {
+   "alpaca_symbol": "MOS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MPC": {
+   "alpaca_symbol": "MPC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MPWR": {
+   "alpaca_symbol": "MPWR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MRK": {
+   "alpaca_symbol": "MRK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MRNA": {
+   "alpaca_symbol": "MRNA",
+   "first": "2018-12-07",
+   "last": "2026-09-23",
+   "bars": 1958
+  },
+  "MRO": {
+   "alpaca_symbol": "MRO",
+   "first": "2016-01-04",
+   "last": "2024-11-21",
+   "bars": 2238
+  },
+  "MRSH": {
+   "alpaca_symbol": "MRSH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MRVL": {
+   "alpaca_symbol": "MRVL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MS": {
+   "alpaca_symbol": "MS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MSCI": {
+   "alpaca_symbol": "MSCI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MSFT": {
+   "alpaca_symbol": "MSFT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MSI": {
+   "alpaca_symbol": "MSI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MTB": {
+   "alpaca_symbol": "MTB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MTCH": {
+   "alpaca_symbol": "MTCH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MTD": {
+   "alpaca_symbol": "MTD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MU": {
+   "alpaca_symbol": "MU",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MUR": {
+   "alpaca_symbol": "MUR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "MXIM": {
+   "alpaca_symbol": "MXIM",
+   "first": "2016-01-04",
+   "last": "2021-08-25",
+   "bars": 1422
+  },
+  "MYL": {
+   "alpaca_symbol": "MYL",
+   "first": "2016-01-04",
+   "last": "2020-11-16",
+   "bars": 1228
+  },
+  "NAVI": {
+   "alpaca_symbol": "NAVI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NBL": {
+   "alpaca_symbol": "NBL",
+   "first": "2016-01-04",
+   "last": "2020-10-02",
+   "bars": 1197
+  },
+  "NCLH": {
+   "alpaca_symbol": "NCLH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NDAQ": {
+   "alpaca_symbol": "NDAQ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NDSN": {
+   "alpaca_symbol": "NDSN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NEE": {
+   "alpaca_symbol": "NEE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NEM": {
+   "alpaca_symbol": "NEM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NFLX": {
+   "alpaca_symbol": "NFLX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NFX": {
+   "alpaca_symbol": "NFX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 840
+  },
+  "NI": {
+   "alpaca_symbol": "NI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NKE": {
+   "alpaca_symbol": "NKE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NKTR": {
+   "alpaca_symbol": "NKTR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NLOK": {
+   "alpaca_symbol": "NLOK",
+   "first": "2019-11-05",
+   "last": "2022-11-07",
+   "bars": 758
+  },
+  "NLSN": {
+   "alpaca_symbol": "NLSN",
+   "first": "2016-01-04",
+   "last": "2022-10-11",
+   "bars": 1706
+  },
+  "NOC": {
+   "alpaca_symbol": "NOC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NOV": {
+   "alpaca_symbol": "NOV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NOW": {
+   "alpaca_symbol": "NOW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NRG": {
+   "alpaca_symbol": "NRG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NSC": {
+   "alpaca_symbol": "NSC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NTAP": {
+   "alpaca_symbol": "NTAP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NTRS": {
+   "alpaca_symbol": "NTRS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NUE": {
+   "alpaca_symbol": "NUE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NVDA": {
+   "alpaca_symbol": "NVDA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NVR": {
+   "alpaca_symbol": "NVR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NWL": {
+   "alpaca_symbol": "NWL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NWS": {
+   "alpaca_symbol": "NWS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NWSA": {
+   "alpaca_symbol": "NWSA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "NXPI": {
+   "alpaca_symbol": "NXPI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "O": {
+   "alpaca_symbol": "O",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ODFL": {
+   "alpaca_symbol": "ODFL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "OGN": {
+   "alpaca_symbol": "OGN",
+   "first": "2021-06-03",
+   "last": "2026-09-23",
+   "bars": 1333
+  },
+  "OI": {
+   "alpaca_symbol": "OI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "OKE": {
+   "alpaca_symbol": "OKE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "OMC": {
+   "alpaca_symbol": "OMC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ON": {
+   "alpaca_symbol": "ON",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ORCL": {
+   "alpaca_symbol": "ORCL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ORLY": {
+   "alpaca_symbol": "ORLY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "OTIS": {
+   "alpaca_symbol": "OTIS",
+   "first": "2020-04-03",
+   "last": "2026-09-23",
+   "bars": 1626
+  },
+  "OXY": {
+   "alpaca_symbol": "OXY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PANW": {
+   "alpaca_symbol": "PANW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PARA": {
+   "alpaca_symbol": "PARA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PAYC": {
+   "alpaca_symbol": "PAYC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PAYX": {
+   "alpaca_symbol": "PAYX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PBCT": {
+   "alpaca_symbol": "PBCT",
+   "first": "2016-01-04",
+   "last": "2022-04-01",
+   "bars": 1574
+  },
+  "PBI": {
+   "alpaca_symbol": "PBI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PCAR": {
+   "alpaca_symbol": "PCAR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PCG": {
+   "alpaca_symbol": "PCG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PCL": {
+   "alpaca_symbol": "PCL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 321
+  },
+  "PCP": {
+   "alpaca_symbol": "PCP",
+   "first": "2016-01-04",
+   "last": "2016-01-29",
+   "bars": 19
+  },
+  "PDCO": {
+   "alpaca_symbol": "PDCO",
+   "first": "2016-01-04",
+   "last": "2025-04-17",
+   "bars": 2337
+  },
+  "PEAK": {
+   "alpaca_symbol": "PEAK",
+   "first": "2019-11-05",
+   "last": "2024-03-01",
+   "bars": 1087
+  },
+  "PEG": {
+   "alpaca_symbol": "PEG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PENN": {
+   "alpaca_symbol": "PENN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PEP": {
+   "alpaca_symbol": "PEP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PFE": {
+   "alpaca_symbol": "PFE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PFG": {
+   "alpaca_symbol": "PFG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PG": {
+   "alpaca_symbol": "PG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PGR": {
+   "alpaca_symbol": "PGR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PH": {
+   "alpaca_symbol": "PH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PHM": {
+   "alpaca_symbol": "PHM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PKG": {
+   "alpaca_symbol": "PKG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PKI": {
+   "alpaca_symbol": "PKI",
+   "first": "2016-01-04",
+   "last": "2023-05-15",
+   "bars": 1854
+  },
+  "PLD": {
+   "alpaca_symbol": "PLD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PLTR": {
+   "alpaca_symbol": "PLTR",
+   "first": "2020-09-30",
+   "last": "2026-09-23",
+   "bars": 1502
+  },
+  "PM": {
+   "alpaca_symbol": "PM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PNC": {
+   "alpaca_symbol": "PNC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PNR": {
+   "alpaca_symbol": "PNR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PNW": {
+   "alpaca_symbol": "PNW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PODD": {
+   "alpaca_symbol": "PODD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "POM": {
+   "alpaca_symbol": "POM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 297
+  },
+  "POOL": {
+   "alpaca_symbol": "POOL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PPG": {
+   "alpaca_symbol": "PPG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PPL": {
+   "alpaca_symbol": "PPL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PRGO": {
+   "alpaca_symbol": "PRGO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PRU": {
+   "alpaca_symbol": "PRU",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PSA": {
+   "alpaca_symbol": "PSA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PSKY": {
+   "alpaca_symbol": "PSKY",
+   "first": "2025-08-07",
+   "last": "2026-09-23",
+   "bars": 284
+  },
+  "PSX": {
+   "alpaca_symbol": "PSX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PTC": {
+   "alpaca_symbol": "PTC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PVH": {
+   "alpaca_symbol": "PVH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PWR": {
+   "alpaca_symbol": "PWR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "PX": {
+   "alpaca_symbol": "PX",
+   "first": "2016-01-04",
+   "last": "2026-02-10",
+   "bars": 2541
+  },
+  "PXD": {
+   "alpaca_symbol": "PXD",
+   "first": "2016-01-04",
+   "last": "2024-05-02",
+   "bars": 2097
+  },
+  "PYPL": {
+   "alpaca_symbol": "PYPL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "Q": {
+   "alpaca_symbol": "Q",
+   "first": "2025-11-03",
+   "last": "2026-09-23",
+   "bars": 223
+  },
+  "QCOM": {
+   "alpaca_symbol": "QCOM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "QRVO": {
+   "alpaca_symbol": "QRVO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "R": {
+   "alpaca_symbol": "R",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RAI": {
+   "alpaca_symbol": "RAI",
+   "first": "2016-01-04",
+   "last": "2017-07-24",
+   "bars": 392
+  },
+  "RCL": {
+   "alpaca_symbol": "RCL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RDDT": {
+   "alpaca_symbol": "RDDT",
+   "first": "2024-03-21",
+   "last": "2026-09-23",
+   "bars": 629
+  },
+  "RE": {
+   "alpaca_symbol": "RE",
+   "first": "2016-01-04",
+   "last": "2023-07-07",
+   "bars": 1890
+  },
+  "REG": {
+   "alpaca_symbol": "REG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "REGN": {
+   "alpaca_symbol": "REGN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RF": {
+   "alpaca_symbol": "RF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RHI": {
+   "alpaca_symbol": "RHI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RHT": {
+   "alpaca_symbol": "RHT",
+   "first": "2016-01-04",
+   "last": "2019-07-08",
+   "bars": 883
+  },
+  "RIG": {
+   "alpaca_symbol": "RIG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RJF": {
+   "alpaca_symbol": "RJF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RL": {
+   "alpaca_symbol": "RL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RMD": {
+   "alpaca_symbol": "RMD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ROK": {
+   "alpaca_symbol": "ROK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ROL": {
+   "alpaca_symbol": "ROL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ROP": {
+   "alpaca_symbol": "ROP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ROST": {
+   "alpaca_symbol": "ROST",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RRC": {
+   "alpaca_symbol": "RRC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RSG": {
+   "alpaca_symbol": "RSG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RTN": {
+   "alpaca_symbol": "RTN",
+   "first": "2016-01-04",
+   "last": "2020-04-02",
+   "bars": 1070
+  },
+  "RTX": {
+   "alpaca_symbol": "RTX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "RVTY": {
+   "alpaca_symbol": "RVTY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SATS": {
+   "alpaca_symbol": "SATS",
+   "first": "2016-01-04",
+   "last": "2026-06-23",
+   "bars": 2632
+  },
+  "SBAC": {
+   "alpaca_symbol": "SBAC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SBNY": {
+   "alpaca_symbol": "SBNY",
+   "first": "2016-01-04",
+   "last": "2025-03-21",
+   "bars": 2318
+  },
+  "SBUX": {
+   "alpaca_symbol": "SBUX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SCG": {
+   "alpaca_symbol": "SCG",
+   "first": "2016-01-04",
+   "last": "2018-12-31",
+   "bars": 754
+  },
+  "SCHW": {
+   "alpaca_symbol": "SCHW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SE": {
+   "alpaca_symbol": "SE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SEDG": {
+   "alpaca_symbol": "SEDG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SEE": {
+   "alpaca_symbol": "SEE",
+   "first": "2016-01-04",
+   "last": "2026-04-08",
+   "bars": 2580
+  },
+  "SHW": {
+   "alpaca_symbol": "SHW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SIG": {
+   "alpaca_symbol": "SIG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SIVB": {
+   "alpaca_symbol": "SIVB",
+   "first": "2016-01-04",
+   "last": "2023-03-09",
+   "bars": 1808
+  },
+  "SJM": {
+   "alpaca_symbol": "SJM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SLB": {
+   "alpaca_symbol": "SLB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SLG": {
+   "alpaca_symbol": "SLG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SMCI": {
+   "alpaca_symbol": "SMCI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SNA": {
+   "alpaca_symbol": "SNA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SNDK": {
+   "alpaca_symbol": "SNDK",
+   "first": "2025-02-13",
+   "last": "2026-09-23",
+   "bars": 404
+  },
+  "SNI": {
+   "alpaca_symbol": "SNI",
+   "first": "2016-01-04",
+   "last": "2018-03-06",
+   "bars": 547
+  },
+  "SNPS": {
+   "alpaca_symbol": "SNPS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SO": {
+   "alpaca_symbol": "SO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SOLS": {
+   "alpaca_symbol": "SOLS",
+   "first": "2025-10-20",
+   "last": "2026-09-23",
+   "bars": 233
+  },
+  "SOLV": {
+   "alpaca_symbol": "SOLV",
+   "first": "2024-04-01",
+   "last": "2026-09-23",
+   "bars": 623
+  },
+  "SPG": {
+   "alpaca_symbol": "SPG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SPGI": {
+   "alpaca_symbol": "SPGI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SPLS": {
+   "alpaca_symbol": "SPLS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 599
+  },
+  "SRCL": {
+   "alpaca_symbol": "SRCL",
+   "first": "2016-01-04",
+   "last": "2024-11-01",
+   "bars": 2224
+  },
+  "SRE": {
+   "alpaca_symbol": "SRE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "STE": {
+   "alpaca_symbol": "STE",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "STI": {
+   "alpaca_symbol": "STI",
+   "first": "2022-05-02",
+   "last": "2026-09-23",
+   "bars": 1103
+  },
+  "STJ": {
+   "alpaca_symbol": "STJ",
+   "first": "2016-01-04",
+   "last": "2017-01-04",
+   "bars": 254
+  },
+  "STLD": {
+   "alpaca_symbol": "STLD",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "STT": {
+   "alpaca_symbol": "STT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "STX": {
+   "alpaca_symbol": "STX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "STZ": {
+   "alpaca_symbol": "STZ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SW": {
+   "alpaca_symbol": "SW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SWK": {
+   "alpaca_symbol": "SWK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SWKS": {
+   "alpaca_symbol": "SWKS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SWN": {
+   "alpaca_symbol": "SWN",
+   "first": "2016-01-04",
+   "last": "2024-09-30",
+   "bars": 2200
+  },
+  "SYF": {
+   "alpaca_symbol": "SYF",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SYK": {
+   "alpaca_symbol": "SYK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "SYMC": {
+   "alpaca_symbol": "SYMC",
+   "first": "2016-01-04",
+   "last": "2019-11-04",
+   "bars": 967
+  },
+  "SYY": {
+   "alpaca_symbol": "SYY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "T": {
+   "alpaca_symbol": "T",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TAP": {
+   "alpaca_symbol": "TAP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TDC": {
+   "alpaca_symbol": "TDC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TDG": {
+   "alpaca_symbol": "TDG",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TDY": {
+   "alpaca_symbol": "TDY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TE": {
+   "alpaca_symbol": "TE",
+   "first": "2020-01-10",
+   "last": "2026-09-23",
+   "bars": 1684
+  },
+  "TECH": {
+   "alpaca_symbol": "TECH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TEL": {
+   "alpaca_symbol": "TEL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TER": {
+   "alpaca_symbol": "TER",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TFC": {
+   "alpaca_symbol": "TFC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TFX": {
+   "alpaca_symbol": "TFX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TGNA": {
+   "alpaca_symbol": "TGNA",
+   "first": "2016-01-04",
+   "last": "2026-03-20",
+   "bars": 2568
+  },
+  "TGT": {
+   "alpaca_symbol": "TGT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "THC": {
+   "alpaca_symbol": "THC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TIF": {
+   "alpaca_symbol": "TIF",
+   "first": "2016-01-04",
+   "last": "2021-01-06",
+   "bars": 1262
+  },
+  "TJX": {
+   "alpaca_symbol": "TJX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TKO": {
+   "alpaca_symbol": "TKO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TMK": {
+   "alpaca_symbol": "TMK",
+   "first": "2016-01-04",
+   "last": "2019-08-08",
+   "bars": 906
+  },
+  "TMO": {
+   "alpaca_symbol": "TMO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TMUS": {
+   "alpaca_symbol": "TMUS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TPL": {
+   "alpaca_symbol": "TPL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TPR": {
+   "alpaca_symbol": "TPR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TRGP": {
+   "alpaca_symbol": "TRGP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TRIP": {
+   "alpaca_symbol": "TRIP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TRMB": {
+   "alpaca_symbol": "TRMB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TROW": {
+   "alpaca_symbol": "TROW",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TRV": {
+   "alpaca_symbol": "TRV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TSCO": {
+   "alpaca_symbol": "TSCO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TSLA": {
+   "alpaca_symbol": "TSLA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TSN": {
+   "alpaca_symbol": "TSN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TSS": {
+   "alpaca_symbol": "TSS",
+   "first": "2016-01-04",
+   "last": "2019-09-17",
+   "bars": 933
+  },
+  "TT": {
+   "alpaca_symbol": "TT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TTD": {
+   "alpaca_symbol": "TTD",
+   "first": "2016-09-21",
+   "last": "2026-09-23",
+   "bars": 2515
+  },
+  "TTWO": {
+   "alpaca_symbol": "TTWO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TWC": {
+   "alpaca_symbol": "TWC",
+   "first": "2016-01-04",
+   "last": "2016-05-17",
+   "bars": 94
+  },
+  "TWTR": {
+   "alpaca_symbol": "TWTR",
+   "first": "2016-01-04",
+   "last": "2022-10-27",
+   "bars": 1718
+  },
+  "TWX": {
+   "alpaca_symbol": "TWX",
+   "first": "2016-01-04",
+   "last": "2018-06-14",
+   "bars": 617
+  },
+  "TXN": {
+   "alpaca_symbol": "TXN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TXT": {
+   "alpaca_symbol": "TXT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "TYL": {
+   "alpaca_symbol": "TYL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UA": {
+   "alpaca_symbol": "UA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UAA": {
+   "alpaca_symbol": "UAA",
+   "first": "2016-04-08",
+   "last": "2026-09-23",
+   "bars": 2630
+  },
+  "UAL": {
+   "alpaca_symbol": "UAL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UBER": {
+   "alpaca_symbol": "UBER",
+   "first": "2019-05-10",
+   "last": "2026-09-23",
+   "bars": 1853
+  },
+  "UDR": {
+   "alpaca_symbol": "UDR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UHS": {
+   "alpaca_symbol": "UHS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ULTA": {
+   "alpaca_symbol": "ULTA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UNH": {
+   "alpaca_symbol": "UNH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UNM": {
+   "alpaca_symbol": "UNM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UNP": {
+   "alpaca_symbol": "UNP",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UPS": {
+   "alpaca_symbol": "UPS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "URBN": {
+   "alpaca_symbol": "URBN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "URI": {
+   "alpaca_symbol": "URI",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "USB": {
+   "alpaca_symbol": "USB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "UTX": {
+   "alpaca_symbol": "UTX",
+   "first": "2016-01-04",
+   "last": "2020-04-02",
+   "bars": 1070
+  },
+  "V": {
+   "alpaca_symbol": "V",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VAR": {
+   "alpaca_symbol": "VAR",
+   "first": "2016-01-04",
+   "last": "2021-04-14",
+   "bars": 1329
+  },
+  "VEEV": {
+   "alpaca_symbol": "VEEV",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VFC": {
+   "alpaca_symbol": "VFC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VIAB": {
+   "alpaca_symbol": "VIAB",
+   "first": "2016-01-04",
+   "last": "2019-12-04",
+   "bars": 988
+  },
+  "VIAC": {
+   "alpaca_symbol": "VIAC",
+   "first": "2019-12-05",
+   "last": "2022-02-16",
+   "bars": 555
+  },
+  "VICI": {
+   "alpaca_symbol": "VICI",
+   "first": "2018-02-01",
+   "last": "2026-09-23",
+   "bars": 2172
+  },
+  "VLO": {
+   "alpaca_symbol": "VLO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VLTO": {
+   "alpaca_symbol": "VLTO",
+   "first": "2023-10-02",
+   "last": "2026-09-23",
+   "bars": 747
+  },
+  "VMC": {
+   "alpaca_symbol": "VMC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VMRK": {
+   "alpaca_symbol": "VMRK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VNO": {
+   "alpaca_symbol": "VNO",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VNT": {
+   "alpaca_symbol": "VNT",
+   "first": "2020-10-09",
+   "last": "2026-09-23",
+   "bars": 1495
+  },
+  "VRSK": {
+   "alpaca_symbol": "VRSK",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VRSN": {
+   "alpaca_symbol": "VRSN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VRT": {
+   "alpaca_symbol": "VRT",
+   "first": "2018-07-30",
+   "last": "2026-09-23",
+   "bars": 2049
+  },
+  "VRTX": {
+   "alpaca_symbol": "VRTX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VST": {
+   "alpaca_symbol": "VST",
+   "first": "2017-05-10",
+   "last": "2026-09-23",
+   "bars": 2356
+  },
+  "VTR": {
+   "alpaca_symbol": "VTR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "VTRS": {
+   "alpaca_symbol": "VTRS",
+   "first": "2020-11-12",
+   "last": "2026-09-23",
+   "bars": 1471
+  },
+  "VZ": {
+   "alpaca_symbol": "VZ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WAB": {
+   "alpaca_symbol": "WAB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WAT": {
+   "alpaca_symbol": "WAT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WBA": {
+   "alpaca_symbol": "WBA",
+   "first": "2016-01-04",
+   "last": "2025-08-27",
+   "bars": 2427
+  },
+  "WBD": {
+   "alpaca_symbol": "WBD",
+   "first": "2022-04-04",
+   "last": "2026-09-23",
+   "bars": 1122
+  },
+  "WCG": {
+   "alpaca_symbol": "WCG",
+   "first": "2016-01-04",
+   "last": "2020-01-23",
+   "bars": 1021
+  },
+  "WDAY": {
+   "alpaca_symbol": "WDAY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WDC": {
+   "alpaca_symbol": "WDC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WEC": {
+   "alpaca_symbol": "WEC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WELL": {
+   "alpaca_symbol": "WELL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WFC": {
+   "alpaca_symbol": "WFC",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WFM": {
+   "alpaca_symbol": "WFM",
+   "first": "2016-01-04",
+   "last": "2017-08-25",
+   "bars": 416
+  },
+  "WHR": {
+   "alpaca_symbol": "WHR",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WLTW": {
+   "alpaca_symbol": "WLTW",
+   "first": "2016-01-05",
+   "last": "2022-01-07",
+   "bars": 1515
+  },
+  "WM": {
+   "alpaca_symbol": "WM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WMB": {
+   "alpaca_symbol": "WMB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WMT": {
+   "alpaca_symbol": "WMT",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WRB": {
+   "alpaca_symbol": "WRB",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WRK": {
+   "alpaca_symbol": "WRK",
+   "first": "2016-01-04",
+   "last": "2024-07-05",
+   "bars": 2140
+  },
+  "WSM": {
+   "alpaca_symbol": "WSM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WST": {
+   "alpaca_symbol": "WST",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WTW": {
+   "alpaca_symbol": "WTW",
+   "first": "2016-01-05",
+   "last": "2026-09-23",
+   "bars": 2695
+  },
+  "WU": {
+   "alpaca_symbol": "WU",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WY": {
+   "alpaca_symbol": "WY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "WYND": {
+   "alpaca_symbol": "WYND",
+   "first": "2018-06-01",
+   "last": "2021-02-16",
+   "bars": 682
+  },
+  "WYNN": {
+   "alpaca_symbol": "WYNN",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "XEC": {
+   "alpaca_symbol": "XEC",
+   "first": "2016-01-04",
+   "last": "2021-09-30",
+   "bars": 1447
+  },
+  "XEL": {
+   "alpaca_symbol": "XEL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "XL": {
+   "alpaca_symbol": "XL",
+   "first": "2016-01-04",
+   "last": "2022-11-11",
+   "bars": 1729
+  },
+  "XLNX": {
+   "alpaca_symbol": "XLNX",
+   "first": "2016-01-04",
+   "last": "2022-02-11",
+   "bars": 1540
+  },
+  "XOM": {
+   "alpaca_symbol": "XOM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "XRAY": {
+   "alpaca_symbol": "XRAY",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "XRX": {
+   "alpaca_symbol": "XRX",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "XYL": {
+   "alpaca_symbol": "XYL",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "XYZ": {
+   "alpaca_symbol": "XYZ",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "YUM": {
+   "alpaca_symbol": "YUM",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ZBH": {
+   "alpaca_symbol": "ZBH",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ZBRA": {
+   "alpaca_symbol": "ZBRA",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ZION": {
+   "alpaca_symbol": "ZION",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  },
+  "ZTS": {
+   "alpaca_symbol": "ZTS",
+   "first": "2016-01-04",
+   "last": "2026-09-23",
+   "bars": 2696
+  }
+ },
+ "missing": []
+}
