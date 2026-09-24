@@ -4,7 +4,7 @@ import type { MinBtlVerdict, PboVerdict } from './validation-types.js';
 
 const EULER_MASCHERONI = 0.5772156649015329;
 
-const PBO_REJECT_THRESHOLD = 0.05;
+export const PBO_REJECT_THRESHOLD = 0.1;
 
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 

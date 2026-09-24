@@ -37,13 +37,13 @@ describe('GUARDED_THRESHOLD_BOUNDS', () => {
   });
 
   it('holds PBO at the one hard kill criterion the record states', () => {
-    expect(GUARDED_THRESHOLD_BOUNDS.max_pbo.max).toBe(0.05);
+    expect(GUARDED_THRESHOLD_BOUNDS.max_pbo.max).toBe(0.1);
   });
 });
 
 describe('assertThresholdWithinBounds', () => {
   it('accepts a value inside its bound', () => {
-    expect(() => assertThresholdWithinBounds('max_pbo', 0.05, 'test')).not.toThrow();
+    expect(() => assertThresholdWithinBounds('max_pbo', 0.1, 'test')).not.toThrow();
     expect(() => assertThresholdWithinBounds('max_drawdown_pct', 0.3, 'test')).not.toThrow();
   });
 
@@ -59,7 +59,7 @@ describe('assertThresholdWithinBounds', () => {
     const violation = thrown as ThresholdBoundViolationError;
     expect(violation.value).toBe(0.5);
     expect(violation.threshold).toBe('max_pbo');
-    expect(violation.message).toContain('at most 0.05');
+    expect(violation.message).toContain('at most 0.1');
     expect(violation.message).toContain('REFUSED, not clamped');
   });
 

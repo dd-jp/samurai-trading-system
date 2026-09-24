@@ -456,7 +456,7 @@ describe('renderStage2Verdict', () => {
 
   it('exposes the same KILL_LINE.minOosSharpe used by killLineChecks', () => {
     expect(KILL_LINE.minOosSharpe).toBe(0.5);
-    expect(KILL_LINE.maxPbo).toBe(0.05);
+    expect(KILL_LINE.maxPbo).toBe(0.1);
     expect(KILL_LINE.minDsr).toBe(0.95);
   });
 });

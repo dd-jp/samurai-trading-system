@@ -4,6 +4,7 @@ import {
   minbtl,
   minbtlGuard,
   pbo,
+  PBO_REJECT_THRESHOLD,
 } from './overfitting.js';
 import type { DateRange } from './universe.js';
 
@@ -69,12 +70,12 @@ describe('deflatedSharpe', () => {
 });
 
 describe('pbo', () => {
-  it('flags a synthetic overfit case as > 0.05 and rejects it', () => {
+  it('flags a synthetic overfit case as > 0.10 and rejects it', () => {
     const noise = noiseMatrix(10, 8);
 
     const result = pbo(noise);
 
-    expect(result.pbo).toBeGreaterThan(0.05);
+    expect(result.pbo).toBeGreaterThan(PBO_REJECT_THRESHOLD);
     expect(result.verdict).toBe('reject');
   });
 
@@ -88,14 +89,15 @@ describe('pbo', () => {
 
     const result = pbo(performance);
 
-    expect(result.pbo).toBeLessThanOrEqual(0.05);
+    expect(result.pbo).toBeLessThanOrEqual(PBO_REJECT_THRESHOLD);
     expect(result.verdict).toBe('accept');
   });
 
-  it('puts the kill line at exactly 0.05 — above rejects, at or below accepts', () => {
+  it('puts the kill line at exactly 0.10 (G9) — above rejects, at or below accepts', () => {
     const result = pbo(noiseMatrix(6, 6));
 
-    expect(result.verdict).toBe(result.pbo > 0.05 ? 'reject' : 'accept');
+    expect(PBO_REJECT_THRESHOLD).toBe(0.1);
+    expect(result.verdict).toBe(result.pbo > PBO_REJECT_THRESHOLD ? 'reject' : 'accept');
   });
 
   it('returns a probability in [0, 1]', () => {
