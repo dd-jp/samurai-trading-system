@@ -1,5 +1,4 @@
 export const TRADING_DAYS_PER_YEAR = 252;
-export const WHOLE_SHARE_TOLERANCE_MULTIPLE = 5;
 
 export function wholeShares(cash: number, rawPrice: number): number {
   if (!(rawPrice > 0) || !(cash > 0)) return 0;
@@ -13,16 +12,6 @@ export function adjustedQuantity(shares: number, rawPrice: number, adjustedPrice
     );
   }
   return (shares * rawPrice) / adjustedPrice;
-}
-
-export function withinWholeShareTolerance(
-  rawPrice: number,
-  capital: number,
-  holdings: number,
-): boolean {
-  if (!(holdings >= 1))
-    throw new Error(`withinWholeShareTolerance: holdings must be >= 1 (got ${holdings})`);
-  return rawPrice <= capital / (WHOLE_SHARE_TOLERANCE_MULTIPLE * holdings);
 }
 
 export function annualisedVolatility(dailyReturns: readonly number[]): number {

@@ -34,10 +34,12 @@ import {
   lastSessions,
   measureSymbol,
   median,
+  newYorkUtcOffsetMinutes,
   parseQuotePage,
   parseSpreadCsv,
   quotesUrl,
   SPREAD_CSV_HEADER,
+  sampleWindowUtc,
   spreadRowsToCsv,
 } from './measure-alpaca-spread.js';
 import {
@@ -414,6 +416,17 @@ describe('spread measurement', () => {
     expect(url.pathname).toBe('/v2/stocks/AAPL/quotes');
     expect(url.searchParams.get('start')).toBe('2026-09-23T19:59:00Z');
     expect(url.searchParams.get('end')).toBe('2026-09-23T19:59:30Z');
+    expect(newYorkUtcOffsetMinutes('2026-07-01')).toBe(-240);
+    expect(newYorkUtcOffsetMinutes('2026-01-15')).toBe(-300);
+    expect(sampleWindowUtc('2026-01-15')).toEqual({
+      start: '2026-01-15T20:59:00Z',
+      end: '2026-01-15T20:59:30Z',
+    });
+    expect(sampleWindowUtc('2026-03-09')).toEqual({
+      start: '2026-03-09T19:59:00Z',
+      end: '2026-03-09T19:59:30Z',
+    });
+    expect(sampleWindowUtc('2026-03-06').start).toBe('2026-03-06T20:59:00Z');
     expect(url.searchParams.get('limit')).toBe('1');
     expect(parseQuotePage({ quotes: [{ bp: 99, ap: 101 }] })).toEqual({ bid: 99, ask: 101 });
     expect(parseQuotePage({ quotes: [] })).toBeUndefined();

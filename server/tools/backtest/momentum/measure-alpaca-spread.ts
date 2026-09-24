@@ -7,8 +7,30 @@ import { alpacaSymbolCandidates, DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca
 
 export const DEFAULT_SPREAD_PATH = 'data/bars/alpaca-spreads.csv';
 export const SPREAD_CSV_HEADER = 'symbol,sessions,median_half_spread_bps';
-const SAMPLE_TIME_UTC = '19:59:00Z';
+const SAMPLE_TIME_NEW_YORK = { hour: 15, minute: 59 };
 const SAMPLE_WINDOW_SECONDS = 30;
+const NEW_YORK_OFFSET_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  timeZoneName: 'longOffset',
+});
+
+export function newYorkUtcOffsetMinutes(date: string): number {
+  const part = NEW_YORK_OFFSET_FORMAT.formatToParts(new Date(`${date}T12:00:00Z`)).find(
+    (one) => one.type === 'timeZoneName',
+  );
+  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(part?.value ?? '');
+  if (match === null) throw new Error(`cannot resolve New York offset for ${date}: ${part?.value}`);
+  const sign = match[1] === '-' ? -1 : 1;
+  return sign * (Number(match[2]) * 60 + Number(match[3]));
+}
+
+export function sampleWindowUtc(date: string): { start: string; end: string } {
+  const localMinutes = SAMPLE_TIME_NEW_YORK.hour * 60 + SAMPLE_TIME_NEW_YORK.minute;
+  const startMs =
+    Date.parse(`${date}T00:00:00Z`) + (localMinutes - newYorkUtcOffsetMinutes(date)) * 60_000;
+  const iso = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z');
+  return { start: iso(startMs), end: iso(startMs + SAMPLE_WINDOW_SECONDS * 1_000) };
+}
 const DEFAULT_SESSIONS = 10;
 
 export interface QuoteSample {
@@ -17,9 +39,7 @@ export interface QuoteSample {
 }
 
 export function quotesUrl(symbol: string, date: string): string {
-  const start = `${date}T${SAMPLE_TIME_UTC}`;
-  const endSeconds = String(SAMPLE_WINDOW_SECONDS).padStart(2, '0');
-  const end = `${date}T${SAMPLE_TIME_UTC.slice(0, 6)}${endSeconds}Z`;
+  const { start, end } = sampleWindowUtc(date);
   const params = new URLSearchParams({ start, end, limit: '1', feed: 'sip', sort: 'asc' });
   return `${ALPACA_DATA_BASE_URL}/v2/stocks/${encodeURIComponent(symbol)}/quotes?${params.toString()}`;
 }

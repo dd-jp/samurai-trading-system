@@ -460,6 +460,8 @@ Evaluated window 2017-01-31 to 2026-09-23 (**9.64 years**, ruling (g): bars from
 | £5,000, whole shares | 0.499 | **0.270** | 0.634 | no | 0.655 (#6) | 0.516 | 0.993 | 28.4% / 23.9% | £3,997 | **FAIL** |
 | £5,000, fractional | 0.465 | **0.249** | 0.634 | no | 0.690 (#6) | 0.475 | 0.944 | 35.7% / 23.9% | £2,801 | **FAIL** |
 
+16 configurations were simulated (4 trials × 4 capital/share-mode passes) and N = 8 was used for DSR and MinBTL. Capital and share mode are selection dimensions, so if David authorises a second US grid the passes count in N against the MinBTL limit of 18.
+
 Every pass fails all three gates, not one: the haircut Sharpe is under half the benchmark's, DSR is 0.65–0.81 against 0.95, and PBO is 0.48–0.99 against 0.10. Per-trial full-window numbers (Sharpe, CAGR, vol, max DD, fills, stop hits, budget-step days) are in `data/backtest/momentum/us/verdict.md`; the JSON per pass carries the fold matrix and the per-fold selection.
 
 What the numbers say, without spin:
@@ -494,6 +496,8 @@ which writes `data/backtest/momentum/lse/verdict-{1000,5000}-{whole,fractional}.
 5. **Daily cap breach on a decision day drops that month's buys**, sells still run; the next entry opportunity is the next month end. This is the strictest reading of "blocks entries".
 6. **Custody 0.12%/yr (ruling (c)) accrues daily on invested value, LSE only**; the US passes carry no custody line.
 7. **Coverage `m` is member-sessions without a bar**, per §2.4, not files. The 40 names include ticker reuse (STI, TE), late SIP history (AABA, WYND) and names whose membership overlaps a gap in SIP; the list is in `data/backtest/momentum/us/verdict.md`. The pre-build probe in §6.3 measured 0.15% by calendar member-days on a single-bar request per name; the run measures 0.3% on every session.
+8. **The R3 whole-share screen `price ≤ C/(5N)` was not applied.** Ruling (d) names the two capital passes, not the screen, so `withinWholeShareTolerance` (built in the first commit, never called by the runner) was deleted rather than left as a tested mechanism nothing calls; the whole-share passes report zero-share targets instead (441–532 per trial at £1,000). Re-add with a spec that wires it.
+9. **US half spreads were measured over 10 sessions, not the 20 §2.8 proposed.** 503 names × 20 sessions is ~10,000 quote calls at the 200/min data-API limit; 10 sessions took ~50 minutes inside the session and the cross-sectional median (1.34 bps) is stable at the precision the cost model uses. The sampler's 15:59 ET window was computed as a fixed 19:59Z at the time (correct only under EDT, which held for all ten sessions); it now resolves America/New_York per date.
 
 ### 9.4 Data committed (ruling (k))
 
