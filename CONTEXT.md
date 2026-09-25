@@ -32,7 +32,7 @@ The North Star above is the goal in one paragraph. The rulings behind every term
 ### The book
 
 **Sleeve**
-One strategy with its own capital share, universe, entry rule, benchmark, book and go-live rule. v2 has one: **Debate**. The momentum sleeve was dropped on 2026-09-25 after both of its sub-books failed the kill line (doc 70); its 70% share is unassigned. A sleeve's share is fixed and pre-declared, never chases the recent winner, and stays in cash until the sleeve passes its go-live rule.
+One strategy with its own capital share, universe, entry rule, benchmark, book and go-live rule. v2 has one: **Debate**. The momentum sleeve was dropped on 2026-09-25 after both of its sub-books failed the kill line (doc 70). Its 70% share stays in cash while four rules-based candidate sleeves are tested (doc 66 S1–S7). A sleeve's share is fixed and pre-declared, never chases the recent winner, and stays in cash until the sleeve passes its go-live rule.
 
 **Debate sleeve**
 LLM-debate entry at a **swing** horizon: one debate per screened name per day, pre-open, on daily bars and news, plus sentiment and social as counted trials; holds days to weeks; exits by a venue-resting stop and a time stop. May short, bounded. Benchmark: **arm 2**. Cannot be honestly backtested (the LLM has seen the history), so its proof is forward paper only.

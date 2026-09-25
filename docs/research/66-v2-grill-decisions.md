@@ -135,9 +135,23 @@ David asked for a solid design before paper and accepted a paper delay for it; t
 | D7 | Sleeves | **"Pluggable sleeve interface (Recommended)"**: one `Sleeve` contract (universe, signal, sizing hints) and one harness that takes any sleeve through backtest, the DSR/PBO gate, paper and live on the same code. Which strategy fills the unassigned 70% is a separate grill. |
 | D8 | Bigger capital later | David: *"build in such a way that samurai will adapt to bigger capital in future."* Asked what happens to the yearly loss cap as capital grows, David chose **"Config, you set it yearly (Recommended)"**: the cap is one config value David sets each 1 January, journalled, never changed mid-year and never derived automatically; capital follows Q19 (cap / (backtest max DD × 1.5)). The steps keep today's ratios (half size at ⅓ of the cap, quarter at ⅔, halt at the cap) and the daily cap stays 1.0% of the year's start capital. Design consequences: no capital or cap literal in code (all read from the year's config record); sizing is risk-per-trade as a fraction of equity, capped by a pre-declared share of average daily volume in the risk module (D6); the `Sleeve` contract (D7) carries a minimum capital and a capacity, so a sleeve such as micro futures activates only when capital reaches its minimum; the cost model carries a size-dependent market-impact term so a backtest at larger capital prices its own impact; a new venue is one adapter module (D4); the execution module has an order-slicing seam that sends one child order until size requires more. |
 
+## Rulings — strategy grill S1–S7 (2026-09-25)
+
+What fills the 70% share that Q14 gave momentum (dropped, Session B (n)). Ticket [#1779](https://github.com/dd-jp/samurai-trading-system/issues/1779). Each answer is the option David chose.
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| S1 | What the 70% does until a strategy passes | **"Cash + test candidates (Recommended)"**: the 70% stays in cash (Q14's rule for an unpassed sleeve) while candidates run through the D7 harness as counted trials. Offered "give it to debate", David did not take it: the debate sleeve keeps its 30%. |
+| S2 | Candidates | All four offered: **cross-asset trend** (LSE 1× ETFs/ETCs across equity indices, gold, bonds and commodities; hold while above trend, else cash), **short-term mean reversion** (US large caps and ETFs on Alpaca; buy sharp dips inside an uptrend, hold 2–10 days), **post-earnings drift (PEAD)** (US large caps after an earnings surprise), **volatility-targeted index hold** (index ETFs, size scaled down in high volatility). All long-only, daily swing, on the existing venues. |
+| S3 | Order and trial budget | **"Sequential, 8 trials each (Recommended)"**: trend, then mean reversion, then vol-target, then PEAD; each gets one pre-declared grid of up to 8 trials, all counted in the DSR. |
+| S4 | On a PASS | **"Run all, then pick (Recommended)"**: all four run regardless of an early PASS. Passers split the 70% in fixed equal-risk weights, pre-declared before any result is known; weights never chase the recent winner (Q14). |
+| S5 | PEAD data | **"Research task, free first (Recommended)"**: a research task checks free sources for earnings dates and surprise history without a survivorship gap; paid data only if free fails and David approves. |
+| S6 | LLM role in these sleeves | **"LLM veto on entries"** (the recommendation was rules only): the debate panel may block an entry, as Q4 had for momentum. |
+| S7 | How the veto is judged | **"Paper vs no-veto shadow (Recommended)"**: the veto cannot be honestly backtested (Q15's leak), so the gate backtests the rules alone; in paper each sleeve runs a veto book and a no-veto shadow on the same entries, and the veto reaches live only if the veto book beats the shadow on the one-sided test. G5's measurement (veto rate ≤ 10% of entries, dropped if the shadow wins) carries over from momentum to every S2 sleeve; the veto is a counted trial and its spend sits inside the ~$30/month cap. |
+
 ## Still open
 
-- **Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.
+- ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
 - **G11 research-loop design** — deferred by David to its own session once a trade journal exists (ticket #1717 stays open).
 - ~~**Left to the loss-budget spec by G6:** the rate convention for converting USD trading P&L to GBP once FX moves are excluded, and the reference capital at each 1 January reset.~~ **Ruled 2026-09-23, Session B (j):** fixed each 1 January; equity at 1 January; halt = flat at next fill.
 - **Left as a counted, pre-declared parameter by G4:** the exact movers/news selection rule.
