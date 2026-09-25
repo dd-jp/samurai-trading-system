@@ -339,6 +339,19 @@ describe('PaperBooks', () => {
     });
   });
 
+  it('reopens existing books with no capital in force or a sleeve now below its minimum', () => {
+    const db = seededStore();
+    openBooks(db).applyFill('debate/primary', fill());
+    const noCapital = openBooks(db, '2030-01-02');
+    expect(noCapital.ids()).toEqual(['debate/primary', 'debate/no-macro-gate']);
+    expect(noCapital.position('debate/primary', 'AAPL')?.qty).toBe(2);
+    const belowMinimum = openBooks(db, '2026-09-28', [
+      { id: 'debate', spec: { ...DEBATE_SPEC, minimumCapitalGbp: 5_000 } },
+    ]);
+    expect(belowMinimum.cash('debate/primary')).toBe(800);
+    db.close();
+  });
+
   it('refuses to mark a day no capital config covers', () => {
     const db = openSharedStore(':memory:');
     new CapitalConfigStore(db, clock).setYear(2026, 1_000, 1_500);

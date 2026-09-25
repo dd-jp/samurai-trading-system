@@ -46,7 +46,8 @@ export class V2RiskGate implements RiskGate {
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined {
     const capital = this.deps.capital.inForce(tradingDate);
     if (capital === undefined || sleeveAllocationGbp(sleeve.spec, capital) > 0) return undefined;
-    return `sleeve ${sleeve.id} needs £${sleeve.spec.minimumCapitalGbp} but ${capital.year} starts at £${capital.startCapitalGbp}: no allocation (doc 66 D8)`;
+    const allocation = `sleeve ${sleeve.id} gets £0 of ${capital.year}'s £${capital.startCapitalGbp}`;
+    return `${allocation} (minimum £${sleeve.spec.minimumCapitalGbp}, capacity £${sleeve.spec.capacityGbp}): no allocation (doc 66 D8)`;
   }
 
   approveEntry(request: EntryRequest): EntryApproval {

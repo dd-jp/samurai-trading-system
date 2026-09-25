@@ -667,6 +667,8 @@ describe('runCycle', () => {
       reason: 'vetoed: x',
     });
     expect(vetoApplied(primary, longAapl)).toBe(longAapl);
+    const skipped = { ...longAapl, action: 'skip', reason: 'shorts_disabled', veto: 'x' } as const;
+    expect(vetoApplied(primary, skipped)).toBe(skipped);
   });
 
   it('gives a sleeve below its minimum capital no books and never asks it for a universe or decisions', async () => {
@@ -679,7 +681,7 @@ describe('runCycle', () => {
     const report = await runCycle(deps, '2026-09-25');
     expect(report).toMatchObject({ decisions: 0, entries: 0, books: [] });
     expect(report.refusals.at(-1)).toBe(
-      'SLEEVE_MINIMUM_CAPITAL: sleeve debate needs £1001 but 2026 starts at £1000: no allocation (doc 66 D8)',
+      "SLEEVE_MINIMUM_CAPITAL: sleeve debate gets £0 of 2026's £1000 (minimum £1001, capacity £Infinity): no allocation (doc 66 D8)",
     );
     expect(universe).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();

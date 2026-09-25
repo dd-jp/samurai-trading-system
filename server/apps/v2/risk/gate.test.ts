@@ -226,7 +226,14 @@ describe('V2RiskGate', () => {
         { id: 'trend', spec: { ...spec, minimumCapitalGbp: 2_001 } },
         '2026-09-25',
       ),
-    ).toBe('sleeve trend needs £2001 but 2026 starts at £2000: no allocation (doc 66 D8)');
+    ).toBe(
+      "sleeve trend gets £0 of 2026's £2000 (minimum £2001, capacity £500): no allocation (doc 66 D8)",
+    );
+    expect(
+      gate().allocationRefusal({ id: 'full', spec: { ...spec, capacityGbp: 0 } }, '2026-09-25'),
+    ).toBe(
+      "sleeve full gets £0 of 2026's £2000 (minimum £2000, capacity £0): no allocation (doc 66 D8)",
+    );
     expect(
       gate({ capital: undefined }).allocationRefusal({ id: 'trend', spec }, '2027-01-04'),
     ).toBeUndefined();

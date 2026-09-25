@@ -94,6 +94,7 @@ function routeOf(book: BookSpec, venue: Venue) {
 
 export function vetoApplied(book: BookSpec, decision: SleeveDecision): SleeveDecision {
   if (decision.veto === undefined || book.variant === 'no-veto') return decision;
+  if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return decision;
   return { ...decision, action: 'skip', reason: `vetoed: ${decision.veto}` };
 }
 
