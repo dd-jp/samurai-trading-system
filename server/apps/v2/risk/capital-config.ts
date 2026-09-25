@@ -18,6 +18,14 @@ interface CapitalRow {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const FIRST_YEAR = 2000;
+const LAST_YEAR = 2100;
+
+function isCalendarDate(date: string): boolean {
+  if (!ISO_DATE.test(date)) return false;
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
 
 function fromRow(row: CapitalRow): CapitalYear {
   return {
@@ -41,8 +49,11 @@ export class CapitalConfigStore {
   ) {}
 
   setYear(year: number, startCapitalGbp: number, lossCapGbp: number): CapitalYear {
-    if (!Number.isInteger(year))
-      throw new CapitalConfigError(`year must be an integer (got ${year})`);
+    if (!(Number.isInteger(year) && year >= FIRST_YEAR && year <= LAST_YEAR)) {
+      throw new CapitalConfigError(
+        `year must be an integer from ${FIRST_YEAR} to ${LAST_YEAR} (got ${year})`,
+      );
+    }
     assertPositive('start capital', startCapitalGbp);
     assertPositive('loss cap', lossCapGbp);
     if (this.#latestOfYear(year) !== undefined) {
@@ -59,8 +70,10 @@ export class CapitalConfigStore {
   }
 
   tighten(effectiveFrom: string, lossCapGbp: number): CapitalYear {
-    if (!ISO_DATE.test(effectiveFrom)) {
-      throw new CapitalConfigError(`effective date must be YYYY-MM-DD (got ${effectiveFrom})`);
+    if (!isCalendarDate(effectiveFrom)) {
+      throw new CapitalConfigError(
+        `effective date must be a real YYYY-MM-DD date (got ${effectiveFrom})`,
+      );
     }
     assertPositive('loss cap', lossCapGbp);
     const year = Number(effectiveFrom.slice(0, 4));

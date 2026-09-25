@@ -36,7 +36,13 @@ describe('CapitalConfigStore', () => {
     expect(() => capital.setYear(2026, 2_000, 1_000)).toThrow(
       /2026 is already set; mid-year the cap may only be tightened/,
     );
-    expect(() => capital.setYear(2026.5, 2_000, 1_500)).toThrow(/year must be an integer/);
+    for (const year of [2026.5, 26, 1999, 2101, -2026]) {
+      expect(() => capital.setYear(year, 2_000, 1_500)).toThrow(
+        /year must be an integer from 2000 to 2100/,
+      );
+    }
+    expect(capital.setYear(2000, 2_000, 1_500).effectiveFrom).toBe('2000-01-01');
+    expect(capital.setYear(2100, 2_000, 1_500).effectiveFrom).toBe('2100-01-01');
     for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => capital.setYear(2027, bad, 1_500)).toThrow(/start capital must be a positive/);
       expect(() => capital.setYear(2027, 2_000, bad)).toThrow(/loss cap must be a positive/);
@@ -74,8 +80,8 @@ describe('CapitalConfigStore', () => {
     expect(() => capital.tighten('2026-10-01', 800)).toThrow(/and after 2026-10-01/);
     expect(() => capital.tighten('2026-09-30', 800)).toThrow(/and after 2026-10-01/);
     expect(() => capital.tighten('2027-02-01', 800)).toThrow(/2027 has no cap to tighten/);
-    for (const malformed of ['2026-1-01', 'x2026-10-02', '2026-10-02x']) {
-      expect(() => capital.tighten(malformed, 800)).toThrow(/effective date must be YYYY-MM-DD/);
+    for (const malformed of ['2026-1-01', 'x2026-10-02', '2026-10-02x', '2026-13-01', '2026-02-30']) {
+      expect(() => capital.tighten(malformed, 800)).toThrow(/effective date must be a real YYYY-MM-DD date/);
     }
     expect(() => capital.tighten('2026-10-02', 0)).toThrow(/loss cap must be a positive/);
     expect(capital.inForce('2026-12-31')?.lossCapGbp).toBe(900);

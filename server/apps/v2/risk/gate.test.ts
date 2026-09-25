@@ -128,6 +128,41 @@ describe('V2RiskGate', () => {
     expect(gate().approveEntry(request({ macroDay: true, book: shadow })).size).toBe(6);
   });
 
+  it('applies a same-day tightening to entries before the next mark', () => {
+    const state = { ytdLossGbp: 800, sizeMultiplier: 0.5 as const };
+    expect(gate({ state }).approveEntry(request()).size).toBe(3);
+    const tightened = gate({ state, capital: { ...year, lossCapGbp: 1_200 } });
+    expect(tightened.approveEntry(request()).size).toBe(1);
+    const halted = gate({ state, capital: { ...year, lossCapGbp: 600 } });
+    expect(halted.approveEntry(request())).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'zero_size',
+    });
+  });
+
+  it('refuses a stop on the wrong side of the entry and a target at or below zero', () => {
+    for (const stop_price of [20, 20.4]) {
+      expect(
+        gate().approveEntry(request({ decision: { ...decision, stop_price } })),
+      ).toMatchObject({ order: undefined, refusal: 'stop_wrong_side' });
+    }
+    for (const stop_price of [20, 19.6]) {
+      expect(
+        gate().approveEntry(
+          request({ decision: { ...decision, action: 'enter_short', stop_price } }),
+        ),
+      ).toMatchObject({ order: undefined, refusal: 'stop_wrong_side' });
+    }
+    expect(
+      gate().approveEntry(
+        request({
+          decision: { ...decision, action: 'enter_short', price: 1.2, atr: 0.4, stop_price: 1.5 },
+        }),
+      ),
+    ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
+  });
+
   it('sizes by the previous mark multiplier and to zero when entries are blocked', () => {
     expect(gate({ state: { sizeMultiplier: 0.5 } }).approveEntry(request()).size).toBe(3);
     const blocked = gate({ state: { sizeMultiplier: 1, entriesBlockedAtNextFill: true } });
@@ -189,6 +224,9 @@ describe('V2RiskGate', () => {
     expect(
       halted.approveExit({ book: primary, held: { ...held, qty: 4 }, clientOrderId: 'x2' }),
     ).toMatchObject({ side: 'sell', size: 4 });
+    expect(() =>
+      gate().approveExit({ book: primary, held: { ...held, qty: 0 }, clientOrderId: 'x3' }),
+    ).toThrow(/no exit for AAPL at qty 0/);
   });
 
   it('never approves a copy or a look-alike', () => {

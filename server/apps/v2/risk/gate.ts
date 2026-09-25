@@ -1,5 +1,6 @@
 import type {
   BookLedger,
+  CapitalYear,
   EntryApproval,
   EntryRequest,
   ExitRequest,
@@ -10,7 +11,19 @@ import type {
 import { quotePerGbp } from '../data/index.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
+import { sizeMultiplierFor } from './loss-budget.js';
 import { positionSizeShares } from './position-size.js';
+
+function bracketRefusal(
+  side: 'buy' | 'sell',
+  entry: number,
+  stop: number,
+  target: number,
+): string | undefined {
+  const stopProtects = side === 'buy' ? stop < entry : stop > entry;
+  if (!stopProtects) return 'stop_wrong_side';
+  return target > 0 ? undefined : 'target_not_positive';
+}
 
 export interface RiskGateDeps {
   readonly books: Pick<BookLedger, 'lastDay'>;
@@ -37,6 +50,9 @@ export class V2RiskGate implements RiskGate {
     }
     const side = decision.action === 'enter_short' ? 'sell' : 'buy';
     const distance = this.deps.targetAtrMultiple * decision.atr;
+    const target = side === 'sell' ? decision.price - distance : decision.price + distance;
+    const refusal = bracketRefusal(side, decision.price, decision.stop_price, target);
+    if (refusal !== undefined) return { size, order: undefined, refusal };
     return {
       size,
       order: mintApproval({
@@ -51,13 +67,16 @@ export class V2RiskGate implements RiskGate {
         size,
         entry: decision.price,
         stop: decision.stop_price,
-        target: side === 'sell' ? decision.price - distance : decision.price + distance,
+        target,
       }),
     };
   }
 
   approveExit(request: ExitRequest): RiskApprovedOrder {
     const size = Math.abs(request.held.qty);
+    if (!(size > 0)) {
+      throw new Error(`risk gate: no exit for ${request.held.instrument} at qty ${request.held.qty}`);
+    }
     return mintApproval({
       kind: 'flatten',
       approvalId: `exit:${request.clientOrderId}:${size}`,
@@ -74,10 +93,9 @@ export class V2RiskGate implements RiskGate {
   #size(request: EntryRequest): number {
     const { book, decision, tradingDate } = request;
     if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return 0;
-    if (this.capitalRefusal(tradingDate) !== undefined) return 0;
-    const previous = this.deps.books.lastDay(book.id)?.state;
-    const multiplier =
-      previous?.entriesBlockedAtNextFill === true ? 0 : (previous?.sizeMultiplier ?? 1);
+    const capital = this.deps.capital.inForce(tradingDate);
+    if (capital === undefined) return 0;
+    const multiplier = this.#multiplier(book.id, capital);
     const fx = quotePerGbp(this.deps.market, decision.venue, tradingDate);
     return positionSizeShares({
       equityGbp: request.equityGbp,
@@ -87,5 +105,15 @@ export class V2RiskGate implements RiskGate {
       sizeMultiplier: multiplier,
       macroDay: book.variant === 'no-macro-gate' ? false : request.macroDay,
     });
+  }
+
+  #multiplier(bookId: string, capital: CapitalYear): number {
+    const previous = this.deps.books.lastDay(bookId)?.state;
+    if (previous === undefined) return 1;
+    if (previous.entriesBlockedAtNextFill) return 0;
+    return Math.min(
+      previous.sizeMultiplier,
+      sizeMultiplierFor(previous.ytdLossGbp, capital.lossCapGbp),
+    );
   }
 }
