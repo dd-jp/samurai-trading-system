@@ -6,9 +6,9 @@ Read this on every session start.
 
 - **Codename:** Samurai (v2 since 2026-09-19).
 - **Goal:** `CONTEXT.md`'s **North Star** — read it first. An autonomous, self-improving trading system that makes a steady net profit over each year and never loses more than £1,500 net in a calendar year.
-- **Owner:** David (Deepak). David is the final decision-maker; on any ambiguous call, ask him and treat the answer as final. Merges are his.
+- **Owner:** David (Deepak). David is the final decision-maker; on any ambiguous call, ask him and treat the answer as final. Merges are his, except that since 2026-09-25 a session may merge its own PR under the merge-authority ruling in doc 66.
 - **Authority chain:** `docs/research/66-v2-grill-decisions.md` (rulings Q1–Q19, G1–G18; wins over everything else) → `docs/adr/0001-samurai-v2.md` (the one ADR, with every open item listed) → `docs/research/67-v2-plan-and-handoff.md` (ordered work, Steps 0–6, definition of done, loose-ends register) → `docs/research/68-fable-handoff.md` (session prompts and the session eval). Map issue: [#1706](https://github.com/dd-jp/samurai-trading-system/issues/1706). `docs/v1-postmortem.md` holds the six v1 pitfalls that bind v2; `docs/v2-vision.md` is the vision (its daily target is superseded by Q1).
-- **Sleeves:** momentum (rules, long/flat, Opus 5 veto only, 70%, vs risk-matched buy-and-hold) and debate (Sonnet 5 + DeepSeek + GPT debaters, Opus 5 judge, daily swing, 30%, vs the no-LLM control arm 2, forward paper only). No intraday sleeve.
+- **Sleeve:** debate only (Sonnet 5 + DeepSeek + GPT debaters, Opus 5 judge, daily swing, vs the no-LLM control arm 2, forward paper only); target universe commodities, indices, ETFs and equities. Momentum was dropped 2026-09-25 after both sub-books failed the kill line (doc 70, doc 66 Session B (n)); its 70% share is unassigned (open). No intraday sleeve.
 - **Venues and universe:** Saxo Capital Markets UK GIA over OpenAPI for LSE 1× ETFs/ETCs; Alpaca live account (GBP wired once, trade USD) for US large caps (+ US ETFs if UK access is confirmed; bounded long-only small caps in the debate sleeve only). No 3× ETPs, no UK single stocks, no CFDs, no crypto.
 - **Loss budget:** £1,500 net trading loss per calendar year from start capital, both venues, GBP, marked to market, FX excluded; −£500 half size, −£1,000 quarter size, −£1,500 halt for the year; daily cap 1.0% of start capital blocks entries; never loosened mid-year.
 - **Gate:** DSR ≥ 0.95, PBO ≤ 0.10, 40% Sharpe haircut, 8–12 weeks of paper inside the 90% band with costs within ±25%, 4 fault-free weeks; debate sleeve instead ≥ 100 closed paper trades and a one-sided 95% test vs arm 2. Capital ≤ £1,500 / (backtest max DD × 1.5). Demotion on 4 weeks outside the 95% band or drawdown > 1.5× backtest max.
@@ -40,7 +40,7 @@ A step's PR ships its own unit tests, e2e tests where it touches a runtime path,
 | ------ | --------- |
 | `CONTEXT.md` (repo root) | North Star first, then the v2 glossary: terms, relationships, invariants. No implementation detail. |
 | `docs/adr/` | One ADR, `0001-samurai-v2.md`. Amend it when David rules; do not add ADRs unless a decision is hard to reverse, surprising without context and a real trade-off. Never scanned by the citation checker. |
-| `docs/specs/` | v2 specs only, written in the step that needs them: `momentum-sleeve-spec.md`, `debate-sleeve-spec.md`, `loss-budget-spec.md`, and the Step 3c UI spec (G13). `debate-sleeve-spec.md` landed with Step 3; the rest are written in their own steps. |
+| `docs/specs/` | v2 specs only, written in the step that needs them: `debate-sleeve-spec.md`, `loss-budget-spec.md`, and the Step 3c UI spec (G13). `debate-sleeve-spec.md` landed with Step 3; the rest are written in their own steps. |
 | `docs/research/` | `NN-slug.md`, numbered, banded by track; navigation starts at `docs/research/README.md`. v2 docs are 61 onward; 69 = facts (Session R), 70 = momentum backtest (Session B), 71 = debate audit (Session C). Archive is `docs/research/archive/`, never deleted. |
 | `docs/reviews/` | Audit reports, dated; start at `docs/reviews/README.md`. Immutable record. |
 | `docs/wayfinder/` | Historical only. Maps are GitHub issues. |
@@ -52,9 +52,9 @@ When in doubt, grep existing docs before writing new ones. Backticked paths in t
 
 1. One wayfinder map issue, [Samurai v2 #1706](https://github.com/dd-jp/samurai-trading-system/issues/1706), carries the rulings as closed decisions; each unruled item has a child ticket. New decisions are grilled one question at a time with David, recorded as a comment on the ticket, in doc 66 and in the ADR.
 2. Tickets per build step (doc 67 §5), each with its kill line. Claim by assignment; never `Closes #n` / `closed #n` in a PR body or commit — use `Refs #n`.
-3. Specs only for the two sleeves, the loss-budget machinery and the UI, written in the step that builds them.
+3. Specs only for the debate sleeve, the loss-budget machinery and the UI, written in the step that builds them.
 4. Every step: `what => verify / kill line`. Stop at any kill line or ambiguity and ask David; never decide what is his (the ADR's open list says what that is).
-5. Open PRs, never merge. Local gates green (lint, typecheck, test, smoke, fallow, citations) before the PR.
+5. Local gates green (lint, typecheck, test, smoke, fallow, citations) before the PR. Merge only under doc 66's merge-authority ruling: a general-purpose subagent review using `code-review-graph`, its comments fixed, and local green on the full tests, mutation testing, the CRAP gate, fallow and the doc 68 session eval. The CRAP gate (#1649) is built next; until it lands no code PR self-merges, and a docs-only PR merges after the review, its comments fixed, citations and the session eval. Otherwise open the PR and leave the merge to David.
 6. Chat replies to David in caveman-ultra style; normal prose in docs and commits. Never commit secrets (`data/saxo-tokens/` <!-- cite-exempt: untracked — gitignored local file -->, `.env*`).
 
 ## Key Constraints
