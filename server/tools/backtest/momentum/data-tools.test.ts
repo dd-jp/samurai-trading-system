@@ -1,6 +1,3 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { FetchResult, RawDailyBar } from './alpaca-bars-api.js';
 import {
   AlpacaBarsApi,
@@ -10,7 +7,7 @@ import {
   endOfDayUtc,
   parseBarsPage,
 } from './alpaca-bars-api.js';
-import { BAR_CSV_HEADER, barsToCsv, loadBarDirectory, parseBarCsv } from './bar-csv.js';
+import { BAR_CSV_HEADER, barsToCsv, roundBarPrices } from './bar-csv.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import { GBP_IDENTITY_FX, parseBoeXudlussCsv, YearFixedFx } from './fx.js';
 import {
@@ -232,40 +229,49 @@ describe('constituents', () => {
 describe('bar csv', () => {
   const bars = [
     { date: '2024-01-02', open: 1.5, high: 2, low: 1, close: 1.75, volume: 100, rawClose: 7 },
-    { date: '2024-01-03', open: 1.75, high: 2, low: 1.5, close: 1.9, volume: 200, rawClose: 7.6 },
+    {
+      date: '2024-01-03',
+      open: 1.23456,
+      high: 2,
+      low: 1.5,
+      close: 1.9,
+      volume: 2.5,
+      rawClose: 7.6,
+    },
   ];
 
-  it('round-trips through the Alpaca layout with raw_close', () => {
-    const text = barsToCsv(bars);
-    expect(text.split('\n')[0]).toBe(BAR_CSV_HEADER);
-    expect(parseBarCsv('X', text).bars).toEqual(bars);
+  it('writes the Alpaca layout with raw_close and prices rounded to four places', () => {
+    expect(barsToCsv(bars).split('\n')).toEqual([
+      BAR_CSV_HEADER,
+      '2024-01-02,1.5,2,1,1.75,100,7',
+      '2024-01-03,1.2346,2,1.5,1.9,2.5,7.6',
+      '',
+    ]);
   });
 
-  it('accepts the Saxo layout without raw_close, defaulting raw to close', () => {
-    const series = parseBarCsv('S', 'date,open,high,low,close,volume\n2024-01-02,1,2,0.5,1.5,10\n');
-    expect(series.bars[0]?.rawClose).toBe(1.5);
-  });
-
-  it('rejects a bad header, wrong cell count, non-numeric cells and unordered dates', () => {
-    expect(() => parseBarCsv('X', 'a,b\n')).toThrow(/unexpected bar CSV header/);
-    expect(() => parseBarCsv('X', `${BAR_CSV_HEADER}\n2024-01-02,1,2\n`)).toThrow(
-      /cells, expected 7/,
-    );
-    expect(() => parseBarCsv('X', `${BAR_CSV_HEADER}\n2024-01-02,1,2,0.5,x,10,1\n`)).toThrow(
-      /non-numeric/,
-    );
-    expect(() =>
-      parseBarCsv('X', `${BAR_CSV_HEADER}\n2024-01-03,1,2,0.5,1,10,1\n2024-01-02,1,2,0.5,1,10,1\n`),
-    ).toThrow(/not strictly ascending/);
-  });
-
-  it('loads every csv in a directory keyed by file name', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bars-'));
-    writeFileSync(join(dir, 'AAA.csv'), barsToCsv(bars));
-    writeFileSync(join(dir, 'manifest.json'), '{}');
-    const loaded = loadBarDirectory(dir);
-    expect([...loaded.keys()]).toEqual(['AAA']);
-    expect(loaded.get('AAA')?.bars.length).toBe(2);
+  it('rounds prices, not volume, to four places', () => {
+    const rounded = roundBarPrices([
+      {
+        date: '2024-01-02',
+        open: 1.00005,
+        high: 2.123449,
+        low: 0.99994,
+        close: 1.5,
+        volume: 1.23456,
+        rawClose: 3.33333,
+      },
+    ]);
+    expect(rounded).toEqual([
+      {
+        date: '2024-01-02',
+        open: 1.0001,
+        high: 2.1234,
+        low: 0.9999,
+        close: 1.5,
+        volume: 1.23456,
+        rawClose: 3.3333,
+      },
+    ]);
   });
 });
 
@@ -406,6 +412,8 @@ describe('pull-alpaca-bars helpers', () => {
     const args = parsePullArgs(['--end', '2026-09-23', '--out', 'x']);
     expect(args.end).toBe('2026-09-23');
     expect(args.outDir).toBe('x');
+    expect(args.storeRoot).toBe('data/bars/parquet');
+    expect(parsePullArgs(['--store', 's']).storeRoot).toBe('s');
     expect(args.constituents).toBe('data/bars/sp500-constituents.csv');
   });
 });

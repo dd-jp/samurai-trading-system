@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { ALPACA_DATA_BASE_URL, AlpacaBarsApi, credentialsFromEnv } from './alpaca-bars-api.js';
-import { parseBarCsv } from './bar-csv.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import { alpacaSymbolCandidates, DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca-bars.js';
 
@@ -143,7 +143,9 @@ async function main(): Promise<void> {
   const membership = new PointInTimeMembership(
     parseConstituentsCsv(readFileSync(DEFAULT_CONSTITUENTS_PATH, 'utf8')),
   );
-  const spy = parseBarCsv('SPY', readFileSync('data/bars/alpaca/SPY.csv', 'utf8'));
+  const store = await ParquetBarStore.open();
+  const spy = await store.readSeries('alpaca', 'SPY').finally(() => store.close());
+  if (spy === undefined) throw new Error('bar store has no alpaca SPY series');
   const sessions = lastSessions(
     spy.bars.map((bar) => bar.date),
     DEFAULT_SESSIONS,

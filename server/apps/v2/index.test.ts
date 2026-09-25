@@ -3,12 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/index.js';
+import type { DailyBar } from '../../pipeline/momentum/index.js';
+import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { CycleReport } from './cycle.js';
-import { BarsMarketData, CsvBarsSource, NO_NEWS, parseBoeGbpUsdCsv } from './data/index.js';
+import { BarsMarketData, NO_NEWS, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
 import {
   composeV2Root,
   exitCodeFor,
@@ -21,26 +23,35 @@ import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
 import { BULLISH_SCRIPT, ScriptedTransport } from './signal/index.js';
 
-const HEADER = 'date,open,high,low,close,volume,raw_close';
-
 interface Fixtures {
   directory: string;
-  barsDirectory: string;
+  barStoreRoot: string;
   constituentsPath: string;
   fxPath: string;
   spreadsPath: string;
 }
 
-function writeFixtures(): Fixtures {
+async function writeFixtures(): Promise<Fixtures> {
   const directory = mkdtempSync(join(tmpdir(), 'v2-root-'));
-  const rows: string[] = [HEADER];
+  const bars: DailyBar[] = [];
   const origin = Date.UTC(2025, 0, 1);
   for (let i = 0; i < 260; i += 1) {
     const close = 20 * (1 + 0.001 * i);
     const date = new Date(origin + i * 86_400_000).toISOString().slice(0, 10);
-    rows.push(`${date},${close},${close * 1.01},${close * 0.99},${close},1000000,${close}`);
+    bars.push({
+      date,
+      open: close,
+      high: close * 1.01,
+      low: close * 0.99,
+      close,
+      volume: 1_000_000,
+      rawClose: close,
+    });
   }
-  writeFileSync(join(directory, 'UP.csv'), `${rows.join('\n')}\n`);
+  const barStoreRoot = join(directory, 'parquet');
+  const store = await ParquetBarStore.open(barStoreRoot);
+  await store.write('alpaca', [{ symbol: 'UP', bars }]);
+  store.close();
   const constituentsPath = join(directory, 'constituents.csv');
   writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,MISSING"\n');
   const fxPath = join(directory, 'fx.csv');
@@ -50,7 +61,7 @@ function writeFixtures(): Fixtures {
     spreadsPath,
     'symbol,sessions,median_half_spread_bps\n UP ,10,0\nBAD,1,abc\nNEG,1,-1\n',
   );
-  return { directory, barsDirectory: directory, constituentsPath, fxPath, spreadsPath };
+  return { directory, barStoreRoot, constituentsPath, fxPath, spreadsPath };
 }
 
 const LAST_CLOSE = 20 * (1 + 0.001 * 259);
@@ -153,7 +164,7 @@ describe('composeV2Root', () => {
   });
 
   it('dry run: sizes, reaches the dry-run broker, submits nothing, journals every LLM call and fill', async () => {
-    const fixtures = writeFixtures();
+    const fixtures = await writeFixtures();
     directory = fixtures.directory;
     const logs: LogEntry[] = [];
     const logger: Logger = { log: (entry) => logs.push(entry) };
@@ -203,7 +214,7 @@ describe('composeV2Root', () => {
       expect(count(root, 'v2_fills')).toBe(2);
       expect(root.books.position('debate/primary', 'UP')?.qty).toBe(decision.size_shares);
       const fx = new BarsMarketData(
-        new CsvBarsSource(fixtures.barsDirectory),
+        new ParquetBarsSource(fixtures.barStoreRoot, 'alpaca'),
         parseBoeGbpUsdCsv(readFileSync(fixtures.fxPath, 'utf8')),
       ).gbpUsdAtYearStart(2025);
       const fill = root.db
@@ -227,7 +238,7 @@ describe('composeV2Root', () => {
   });
 
   it('paper mode: the primary reaches AlpacaBrokerAdapter.submitBracket, the fill is ingested, and the bracket survives a restart', async () => {
-    const fixtures = writeFixtures();
+    const fixtures = await writeFixtures();
     directory = fixtures.directory;
     const storePath = join(fixtures.directory, 'paper.sqlite');
     const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
@@ -311,7 +322,7 @@ describe('composeV2Root', () => {
   });
 
   it('refuses entries but still runs without a capital config in force', async () => {
-    const fixtures = writeFixtures();
+    const fixtures = await writeFixtures();
     directory = fixtures.directory;
     const root = composeV2Root({
       ...fixtures,
@@ -336,7 +347,7 @@ describe('composeV2Root', () => {
   });
 
   it('caps LLM calls at one in flight for the whole Nous account on the real transport factory', async () => {
-    const fixtures = writeFixtures();
+    const fixtures = await writeFixtures();
     directory = fixtures.directory;
     const urls = new Set<string>();
     const authorizations = new Set<string>();
@@ -404,7 +415,7 @@ describe('composeV2Root', () => {
   });
 
   it('logs each upstream model to stderr when the root is composed without a logger', async () => {
-    const fixtures = writeFixtures();
+    const fixtures = await writeFixtures();
     directory = fixtures.directory;
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     vi.stubGlobal(
@@ -454,8 +465,8 @@ describe('composeV2Root', () => {
     }
   });
 
-  it('refuses a paper run without LLM keys before opening the store', () => {
-    const fixtures = writeFixtures();
+  it('refuses a paper run without LLM keys before opening the store', async () => {
+    const fixtures = await writeFixtures();
     directory = fixtures.directory;
     const storePath = join(fixtures.directory, 'never.sqlite');
     expect(() =>

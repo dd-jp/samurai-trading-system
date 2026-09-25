@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { TRADING_DAYS_PER_YEAR } from '../../../pipeline/momentum/index.js';
+import { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
-import { barsToCsv } from './bar-csv.js';
+import { barsToCsv, roundBarPrices } from './bar-csv.js';
 import type { HygieneReport } from './bar-hygiene.js';
 import { applyBarHygiene } from './bar-hygiene.js';
 import type { FxRate } from './fx.js';
@@ -158,7 +159,7 @@ export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHist
 
 export interface PullContext {
   readonly api: SaxoBarsApi;
-  readonly outDir: string;
+  readonly store: ParquetBarStore;
   readonly auxDir: string;
   readonly rawDir: string;
   readonly fetchDate: string;
@@ -206,6 +207,7 @@ function spliceRecord(
 
 export function parseSaxoPullArgs(argv: readonly string[]): {
   outDir: string;
+  storeRoot: string;
   auxDir: string;
   spreads: string;
   fx: string;
@@ -217,6 +219,7 @@ export function parseSaxoPullArgs(argv: readonly string[]): {
   };
   return {
     outDir: value('--out') ?? DEFAULT_SAXO_BARS_DIR,
+    storeRoot: value('--store') ?? DEFAULT_BAR_STORE_ROOT,
     auxDir: value('--aux') ?? DEFAULT_SAXO_AUX_DIR,
     spreads: value('--spreads') ?? DEFAULT_SAXO_SPREAD_PATH,
     fx: value('--fx') ?? DEFAULT_FX_PATH,
@@ -271,7 +274,7 @@ export async function pullMomentumLine(
   const spread = ctx.spreads.get(line.tidm);
   if (spread === undefined)
     throw new Error(`${line.tidm}: no measured half spread in ${ctx.spreadsPath}`);
-  writeFileSync(join(ctx.outDir, `${line.tidm}.csv`), barsToCsv(bars));
+  await ctx.store.write('saxo', [{ symbol: line.tidm, bars: roundBarPrices(bars) }]);
   return {
     kind: 'included',
     pulled: { ...primary, bars },
@@ -396,9 +399,10 @@ async function main(argv: readonly string[]): Promise<void> {
   const spreads = parseSaxoSpreadCsv(readFileSync(args.spreads, 'utf8'));
   const fxRates = parseBoeXudlussCsv(readFileSync(args.fx, 'utf8'));
   const tokens = liveTokenSource(process.env, args.tokenFile);
+  const store = await ParquetBarStore.open(args.storeRoot);
   const ctx: PullContext = {
     api: new SaxoReadOnlyApi(tokens, resolveSaxoOAuthConfig('live', process.env).gatewayBaseUrl),
-    outDir: args.outDir,
+    store,
     auxDir: args.auxDir,
     rawDir: join(args.auxDir, 'raw'),
     fetchDate: new Date().toISOString().slice(0, 10),
@@ -409,13 +413,16 @@ async function main(argv: readonly string[]): Promise<void> {
   mkdirSync(args.outDir, { recursive: true });
   mkdirSync(ctx.rawDir, { recursive: true });
 
-  const pulledLines = await pullAllLines(ctx).finally(() => tokens.stop());
+  const pulledLines = await pullAllLines(ctx).finally(() => {
+    tokens.stop();
+    store.close();
+  });
   const manifest = saxoBarsManifest(ctx, pulledLines, new Date().toISOString());
   writeFileSync(join(args.outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   execFileSync('npx', ['biome', 'format', '--write', join(args.outDir, 'manifest.json')], {
     stdio: 'ignore',
   });
-  console.log(saxoPullSummary(args.outDir, manifest));
+  console.log(saxoPullSummary(args.storeRoot, manifest));
 }
 
 if (isMainModule(import.meta.url)) {

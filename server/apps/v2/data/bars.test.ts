@@ -1,11 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
-import { barsBefore, CsvBarsSource, currentConstituents, parseBarsCsv } from './bars.js';
-
-const HEADER = 'date,open,high,low,close,volume,raw_close';
+import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { barsBefore, currentConstituents, ParquetBarsSource } from './bars.js';
 
 function series(symbol: string, days: number, price: number, volume: number): BarSeries {
   const bars: DailyBar[] = [];
@@ -24,33 +23,23 @@ function series(symbol: string, days: number, price: number, volume: number): Ba
   return { symbol, bars };
 }
 
-describe('parseBarsCsv', () => {
-  it('reads the committed column order into DailyBar', () => {
-    const parsed = parseBarsCsv('AAPL', `${HEADER}\n2026-09-22,1,2,0.5,1.5,100,150\n`);
-    expect(parsed.bars).toEqual([
-      { date: '2026-09-22', open: 1, high: 2, low: 0.5, close: 1.5, volume: 100, rawClose: 150 },
-    ]);
-  });
-
-  it('rejects a foreign header, a bad row, or unsorted dates', () => {
-    expect(() => parseBarsCsv('X', 'a,b\n')).toThrow(/unexpected header/);
-    expect(() => parseBarsCsv('X', `${HEADER}\n2026-09-22,1,2,0.5,0,100,150`)).toThrow(/bad row/);
-    expect(() =>
-      parseBarsCsv('X', `${HEADER}\n2026-09-23,1,2,0.5,1,1,1\n2026-09-22,1,2,0.5,1,1,1`),
-    ).toThrow();
-  });
-});
-
-describe('CsvBarsSource', () => {
+describe('ParquetBarsSource', () => {
   let directory: string;
   afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
-  it('loads a symbol file once and reports a missing symbol as undefined', () => {
+  it('serves a whole venue after prime() and reports a missing symbol as undefined', async () => {
     directory = mkdtempSync(join(tmpdir(), 'v2-bars-'));
-    writeFileSync(join(directory, 'AAPL.csv'), `${HEADER}\n2026-09-22,1,2,0.5,1.5,100,150\n`);
-    const source = new CsvBarsSource(directory);
-    expect(source.load('AAPL')?.bars).toHaveLength(1);
+    const store = await ParquetBarStore.open(directory);
+    await store.write('alpaca', [series('AAPL', 3, 10, 100)]);
+    await store.write('saxo', [series('ISF', 2, 7, 1.5)]);
+    store.close();
+    const source = new ParquetBarsSource(directory, 'alpaca');
+    expect(() => source.load('AAPL')).toThrow(/alpaca read before prime\(\)/);
+    await source.prime();
+    await source.prime();
+    expect(source.load('AAPL')).toEqual(series('AAPL', 3, 10, 100));
     expect(source.load('AAPL')).toBe(source.load('AAPL'));
+    expect(source.load('ISF')).toBeUndefined();
     expect(source.load('ZZZZ')).toBeUndefined();
   });
 });

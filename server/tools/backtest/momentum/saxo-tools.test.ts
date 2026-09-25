@@ -424,12 +424,14 @@ describe('pull-saxo-bars helpers', () => {
     expect(windowStartOf({})).toEqual({ windowStart: '', binding: '' });
     expect(parseSaxoPullArgs([])).toEqual({
       outDir: 'data/bars/saxo',
+      storeRoot: 'data/bars/parquet',
       auxDir: 'data/bars/saxo-aux',
       spreads: 'data/bars/saxo-spreads.csv',
       fx: 'data/bars/fx/gbpusd-boe-xudluss.csv',
       tokenFile: undefined,
     });
     expect(parseSaxoPullArgs(['--out', 'o', '--token-file', 't']).tokenFile).toBe('t');
+    expect(parseSaxoPullArgs(['--store', 's']).storeRoot).toBe('s');
   });
 });
 
