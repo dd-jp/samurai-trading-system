@@ -86,7 +86,7 @@ Do on a **new branch off fresh `origin/main`**, one PR, David merges.
 8. **Rename files for maintenance/readability** (David, 2026-09-19: *"rename files if required, for maintenace and readbability concerns"*). Use `git mv` so history follows; update every reference in the same PR. Proposed:
    - `docs/v1-postmortem.md` and `docs/v2-vision.md` (renamed in this PR from their `samurai-`-prefixed names). Renaming breaks CONTEXT.md's North Star link, docs 66–68, and the two files' links to each other — updated in the same PR.
    - v2 docs named by what they are: `docs/adr/0001-samurai-v2.md` (written in this PR).
-   - Specs `docs/specs/momentum-sleeve-spec.md`, `debate-sleeve-spec.md`, `loss-budget-spec.md`, plus the Step 3c UI spec that G13 adds to Q18's list (written in later steps, not in the Step 0 PR). <!-- cite-exempt: planned — v2 specs not yet written -->
+   - Specs `debate-sleeve-spec.md`, `loss-budget-spec.md`, plus the Step 3c UI spec that G13 adds to Q18's list (written in later steps, not in the Step 0 PR). <!-- cite-exempt: planned — v2 specs not yet written -->
    - Keep the NN-slug numbering in `docs/research/` (cited by number); record any research rename in `docs/research/README.md`'s rename table.
    - Code renames that remove v1 vocabulary (intraday, flatten, ETP, D5, arm names) happen in Steps 3/5 as modules move into or out of the v2 root, not in the doc PR.
    => `grep -rn` for each old path returns nothing.
