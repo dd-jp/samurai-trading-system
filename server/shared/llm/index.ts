@@ -15,11 +15,10 @@ export {
   NousTruncatedError,
   nousChat,
 } from './nous-chat.js';
-export type { NousCredentials, NousEndpoint } from './nous-config.js';
+export type { NousCredentials } from './nous-config.js';
 export {
   DEFAULT_NOUS_MODELS,
   nousCredentials,
-  nousEndpoint,
   tryNousCredentials,
   tryNousEndpoint,
 } from './nous-config.js';

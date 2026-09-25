@@ -10,7 +10,7 @@ Composition root: `server/apps/v2/index.ts`. The sleeve is `server/apps/v2/debat
 
 ## 2. Universe (G4 + G18)
 
-Pool: current S&P 500 constituents (`data/bars/sp500-constituents.csv`, last row on or before the decision date), all on the Alpaca leg (`venueFor` maps every name to Alpaca). The LSE ETF leg is empty until Session B's LSE line table lands (doc 70 §10); no Saxo adapter is built in this step (§7).
+Pool: current S&P 500 constituents (`data/bars/sp500-constituents.csv`, last row on or before the decision date), all on the Alpaca leg (`venueFor` maps every name to Alpaca). The LSE ETF/ETC leg is empty until the Saxo paper adapter is built over the 22 committed LSE lines (doc 70 §10.4; ruled 2026-09-25, doc 66, ADR §5 item 13); no Saxo adapter is built in this step (§7).
 
 Per day, at most 20 names:
 
@@ -52,7 +52,7 @@ In-flight cap: one call at a time for the whole Nous account, shared by all four
 - Shorts: allowed by Q17/Q8 but built behind `SHORTS_ENABLED = false` until the Alpaca $2,000 equity floor is resolved (`ALPACA_SHORT_EQUITY_FLOOR_USD` unset — Needs David, doc 66 Q8). A bearish verdict is journalled as `skip:shorts_disabled`; when the flag turns on, a short's stop is price + 2 × ATR, its target price − 3 × ATR, and the easy-to-borrow check (Q8) is still to build.
 - Exits (ADR §5 item 9), all pre-declared here and counted: a resting stop at 2 × ATR(20) (trial T2, `STOP_ATR_MULTIPLE`, the same stop doc 70 §2.9 pre-declared for momentum); a bracket target at 3 × ATR(20) (trial T3, `DEBATE_TARGET_ATR_MULTIPLE = 3`: 1.5R against the 2-ATR stop, so the trade pays at 40% accuracy before costs, and `submitBracket` cannot express a stop-only entry, so a target is the shape the venue path already supports); a time stop after 10 marked sessions (trial T4, `DEBATE_TIME_STOP_TRADING_DAYS = 10`, the "e.g. 10 days" doc 66 Q9 wrote down for the swing hold), submitted as a flatten through the book's broker at the 11th cycle. Every leg is `gtc`, never `day`.
 - Size: fixed fractional risk at the stop distance, **pre-declared at 0.5% of book equity per trade (trial T0, `DEBATE_RISK_FRACTION = 0.005`).** Source: G6's £1,500/yr loss budget on £1,000 and its 1.0% daily cap (£10) — at 0.5% a day's two full stop-outs sit exactly on the daily cap, and the −£500 half-size step is 100 consecutive full stop-outs away, which is the loosest fraction that keeps one bad day inside G6; G18 (2) then fixes small caps at half of it (0.25%). Whole shares (doc 69 R2), capped at 10% of book equity notional (`server/apps/v2/position-size.ts`); × the loss-budget multiplier from the previous mark (G6/G10, `LossBudget`, entries blocked → 0); × 0.5 on a macro day (§6). US prices convert to GBP at the 1 January GBPUSD fix (ruling (j), `server/apps/v2/fx.ts`).
-- **Whole-share finding — Needs David (stays his whatever the fraction).** At 0.5% and £1,000 the risk budget is £5 per trade and a 2-ATR stop distance above £5 per share sizes to 0. Measured 2026-09-25 over `data/bars/alpaca` with the 20-day ATR at the 2026-09-24 close, £1,000 equity, the 10% notional cap and GBPUSD 1.34: **211 of 503** S&P names size to ≥ 1 share at 0.5% (239 of 503 at 1%); every name in the liquidity core (NVDA, MU, SNDK, META, AAPL, TSLA, AMD, MSFT, INTC, AVGO) sizes to 0 at either. The 2026-09-24 dry run confirms it: 20 names debated, 1 (PAYX) sized to 1 share, 19 sized to 0. Options for David: a price screen on the debate universe (doc 69 R3's `price ≤ C/(5N)`), fractional shares where a venue-resting stop allows them, or accepting that the sleeve trades the cheaper half of the pool.
+- **Whole-share finding — Needs David (stays his whatever the fraction).** Measured at the old £1,000 start capital; re-measure at £2,000 in #1771. At 0.5% and £1,000 the risk budget is £5 per trade and a 2-ATR stop distance above £5 per share sizes to 0. Measured 2026-09-25 over `data/bars/alpaca` with the 20-day ATR at the 2026-09-24 close, £1,000 equity, the 10% notional cap and GBPUSD 1.34: **211 of 503** S&P names size to ≥ 1 share at 0.5% (239 of 503 at 1%); every name in the liquidity core (NVDA, MU, SNDK, META, AAPL, TSLA, AMD, MSFT, INTC, AVGO) sizes to 0 at either. The 2026-09-24 dry run confirms it: 20 names debated, 1 (PAYX) sized to 1 share, 19 sized to 0. Options for David: a price screen on the debate universe (doc 69 R3's `price ≤ C/(5N)`), fractional shares where a venue-resting stop allows them, or accepting that the sleeve trades the cheaper half of the pool.
 - Cost model: the Alpaca leg is the real Alpaca paper account, which applies its own fills and fees; simulated books (every shadow, and the primary in a dry run) fill at the decision price ± half the measured spread (`DryRunBrokerAdapter`, `data/bars/alpaca-spreads.csv`, default 5 bps). The Saxo tariff (0.08%/side, 0.12%/yr custody) stays in `server/pipeline/momentum/costs.ts`; `saxoCustodyAccrual` is charged on Saxo-venue invested notional at each mark, which is £0 until an LSE line exists.
 
 ### Trial register
@@ -75,7 +75,7 @@ New entries at half size on FOMC decision days, US CPI, US Employment Situation,
 
 ## 7. Books, fills and exits (Q14, G5, G16, G18)
 
-Each instantiated book is a paper book at £1,000 start capital with its own cash (`v2_books.cash_gbp`), positions (`v2_positions`) and `LossBudget`, rebuilt from `v2_book_days` on every start so a halt and the 1 January reference equity (ruling (j)) survive the once-a-day process. A shadow book runs the same decisions with one input removed; a shadow that would be a byte-identical copy of the primary is **not instantiated**, because it would burn LLM spend and prove nothing:
+Each instantiated book is a paper book at £1,000 start capital (ruled £2,000 on 2026-09-25, doc 66; code change #1771) with its own cash (`v2_books.cash_gbp`), positions (`v2_positions`) and `LossBudget`, rebuilt from `v2_book_days` on every start so a halt and the 1 January reference equity (ruling (j)) survive the once-a-day process. A shadow book runs the same decisions with one input removed; a shadow that would be a byte-identical copy of the primary is **not instantiated**, because it would burn LLM spend and prove nothing:
 
 | Book | Sleeve | Differs from primary by | Status |
 |---|---|---|---|
@@ -84,7 +84,7 @@ Each instantiated book is a paper book at £1,000 start capital with its own cas
 | `debate/no-sentiment` | debate | sentiment input off (G18) | declared, not instantiated: there is no sentiment input to remove until `G18_SENTIMENT_DEDUP_RULE` is set (#961) |
 | `debate/no-social` | debate | social input off (G18) | declared, not instantiated: no social input until `G18_SOCIAL_SOURCE` is set (#1753) |
 | `debate/large-cap-only` | debate | small caps excluded (G18) | declared, not instantiated: the pool is large-cap only until `G18_SMALL_CAP_FLOORS` is set (#1753) |
-| `momentum/no-veto` | momentum | Opus veto off (G5) | declared, not instantiated while momentum is unregistered (§8) |
+| `momentum/no-veto` | momentum | Opus veto off (G5) | declared, not instantiated; momentum dropped (§8), row to be removed |
 
 `BOOK_SPECS` in `server/apps/v2/books.ts` carries all six with an `instantiated` flag; flipping a flag is the whole change once the input exists.
 
@@ -96,11 +96,11 @@ Each instantiated book is a paper book at £1,000 start capital with its own cas
 
 **Deferred to doc 67 Step 4** (exactly): (1) comparability — the primary's Alpaca fills are intraday limit/stop fills while shadows fill on daily bars, so primary-vs-shadow differences carry an execution term the shadow cannot see; a same-bar simulated twin of the primary is Step 4's fix; (2) partial fills — `qty_is_cumulative` fills are applied as-is, which is right for a single fill and wrong for a multi-fill leg; (3) a position whose Alpaca bracket legs were cancelled outside the system (the adapter's rearm path exists but is not called from the cycle); (4) the Saxo paper adapter — built in the step that first routes an LSE order, with the tariff constants already in `server/pipeline/momentum/costs.ts`.
 
-Arm 2 (doc 71 §6): same names, same clock, same exits, fixed risk; entry by axis vote with **thresholds unset — Needs David** (`ARM2_ENTRY_THRESHOLDS`). Until set, arm 2 journals a refusal per cycle and takes no decision.
+Arm 2 (doc 71 §6): same names, same clock, same exits, fixed risk; entry by axis vote with **thresholds unset** (`ARM2_ENTRY_THRESHOLDS`): a session proposes a pre-declared rule and David approves it (doc 66, 2026-09-25; #1773). Until set, arm 2 journals a refusal per cycle and takes no decision.
 
 ## 8. Not wired, and why
 
-- **Momentum sleeve:** doc 70 §9 — the US sub-book fails all four passes; the LSE sub-book is pending (Session B, ruling (m) 2026-09-25: if LSE fails, v2 is debate-only pending ruling). From `server/pipeline/momentum/` the root imports only `LossBudget`, `saxoCustodyAccrual`, `wholeShares`, `averageTrueRange`, `trailingReturn`, `assertSortedUniqueDates` and the bar types.
+- **Momentum sleeve:** doc 70 §9 — the US sub-book fails all four passes; the LSE sub-book fails too (doc 70 §10); David dropped momentum on 2026-09-25 (doc 66, Session B (n)), so v2 is debate-only. From `server/pipeline/momentum/` the root imports only `LossBudget`, `saxoCustodyAccrual`, `wholeShares`, `averageTrueRange`, `trailingReturn`, `assertSortedUniqueDates` and the bar types.
 - **Shorts:** flag off (§5).
 - **Saxo:** no adapter (§7).
 - **Live venues:** the root composes paper only; `SAMURAI_MODE=live` is refused.

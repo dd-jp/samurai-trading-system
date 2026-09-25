@@ -36,8 +36,8 @@ F (Step 5 teardown) — after D runs end to end
 L (research loop) — after G11
 ```
 
-Every session: reply to David in caveman-ultra style, normal prose in docs and commits; open PRs,
-never merge (merges are David's); never write "Closes #n" or "closed #n"; stop at any kill line
+Every session: reply to David in caveman-ultra style, normal prose in docs and commits; merge only
+under doc 66's merge-authority ruling (2026-09-25), else open the PR for David; never write "Closes #n" or "closed #n"; stop at any kill line
 or ambiguity and ask David. Each step's PR meets doc 67 §5's definition of done (own tests, e2e
 where runtime paths change, oxlint + biome + fallow + CRAP gate, mutation testing on risk code).
 Every session ends with the **Session eval** below; each prompt's last line names its goal.
@@ -319,7 +319,7 @@ Starting buckets (from titles; verify each against its body):
 
 Run after G9, G10 and R12–R15 are resolved (they are, as of 2026-09-21).
 
-**Status 2026-09-25: done.** Proposal ruled (doc 66 (a)–(l)); US sub-book **FAIL** (doc 70 §9.1, PRs #1759–#1762); David ruled LSE-only (doc 66 (m)); LSE sub-book run on the sibling-Uic route — **FAIL on all four passes on 22 of 24 lines, provisional** (doc 70 §10, PR #1766; the IUHC/COMF splice exceeded the pre-declared tolerance, IHCU/CMFP excluded, EODHD not bought). Combined verdict doc 70 §10.8: no momentum sub-book wired into Step 3. The continuation prompt below was executed by #1766 and is kept as the record of what ran; do not run it again. What remains is David's ruling on doc 70 §10.6 (1)–(4) — a re-run only follows an option taken there, recorded in doc 66 as Session B (n) before any trial.
+**Status 2026-09-25: done.** Proposal ruled (doc 66 (a)–(l)); US sub-book **FAIL** (doc 70 §9.1, PRs #1759–#1762); David ruled LSE-only (doc 66 (m)); LSE sub-book run on the sibling-Uic route — **FAIL on all four passes on 22 of 24 lines, provisional** (doc 70 §10, PR #1766; the IUHC/COMF splice exceeded the pre-declared tolerance, IHCU/CMFP excluded, EODHD not bought). Combined verdict doc 70 §10.8: no momentum sub-book wired into Step 3. The continuation prompt below was executed by #1766 and is kept as the record of what ran; do not run it again. David ruled doc 70 §10.6 on 2026-09-25 (doc 66, Session B (n)): "drop momentum, go debate only" — no re-run.
 
 Executed continuation prompt:
 
@@ -489,8 +489,8 @@ You are working on Samurai (repo dd-jp/samurai-trading-system). Read
 docs/research/67-v2-plan-and-handoff.md Step 6 and, in docs/research/66-v2-grill-decisions.md,
 Q7, Q19, G1, G6, G7, G12 and G13. Review
 the week's paper data: band position, realised vs modelled cost, order-level fidelity, the
-plumbing-fault ledger, loss budget. Report to David. Go-live conditions: momentum sleeve = Q7
-(1)–(3) with Q19's numbers; debate sleeve = G1 (at least 100 closed paper trades and a
+plumbing-fault ledger, loss budget. Report to David. Go-live condition (momentum dropped,
+doc 66 (n)): debate sleeve = G1 (at least 100 closed paper trades and a
 one-sided test at 95% vs arm 2). Q7 (4), David's mandatory sign-off, is superseded by G12. When
 a sleeve's conditions are met, produce the one-page approval summary (change, haircut backtest,
 paper fidelity, worst case vs £1,500) that the system's G12 Telegram request and G13 GitHub

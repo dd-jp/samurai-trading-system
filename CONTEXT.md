@@ -10,7 +10,7 @@ Set by David, 2026-09-19, and brought in line with his G rulings of 2026-09-21 (
 
 **Samurai is an autonomous, self-improving trading system that makes a steady net profit (even a small one) over each year, and never loses more than £1,500 net in a year.**
 
-- **Profit** counts only net of every cost and ahead of the matched benchmark: risk-matched buy-and-hold of the same universe for the momentum sleeve, and the no-LLM control (arm 2) for the debate sleeve. There is **no daily % target**; losing days are accepted in pursuit of a profitable year.
+- **Profit** counts only net of every cost and ahead of the matched benchmark: the no-LLM control (arm 2) for the debate sleeve, v2's one sleeve. There is **no daily % target**; losing days are accepted in pursuit of a profitable year.
 - **£1,500** is a hard kill-switch on net trading loss from starting capital, across all venues, in GBP, with open positions marked to market. It is a budget per calendar year and resets each year; deposits do not rebase starting capital; GBP/USD moves on the Alpaca balance are excluded, so it measures trading P&L only (G6). Position size halves at −£500 and quarters at −£1,000, and trading halts for the year at −£1,500. A daily loss of 1.0% of starting capital blocks new entries for that day; exits still run. Profits never extend the budget, and neither limit is ever loosened mid-year.
 - **Proof comes before money.** A sleeve reaches live capital only after passing the pre-declared gate: DSR ≥ 0.95, PBO ≤ 0.10, a 40% Sharpe haircut, 8–12 weeks of paper trading inside the backtest's 90% band with costs within ±25%, and 4 fault-free weeks. The debate sleeve cannot be backtested honestly (the LLM has seen the history), so its proof is forward paper trading against arm 2: at least 100 closed trades and a one-sided test at 95% (G1). Once the gate passes, the system sends David an approval request on Telegram; a "no" blocks it, and no reply within 24 hours approves it, including for changes that reach live money (G12). Each request, its answer or timeout, and its one-page summary are written to a GitHub issue (G13).
 - **Capital is derived, not chosen:** live capital ≤ £1,500 / (backtest max drawdown × 1.5), ramped only while live results stay in band. A live sleeve is demoted to paper when its return leaves the backtest's 95% band for 4 consecutive weeks, or its drawdown exceeds 1.5× the backtest maximum (G7).
@@ -32,10 +32,7 @@ The North Star above is the goal in one paragraph. The rulings behind every term
 ### The book
 
 **Sleeve**
-One strategy with its own capital share, universe, entry rule, benchmark, book and go-live rule. v2 has two: **Momentum** and **Debate**. Sleeve weights are fixed and pre-declared — live: 70% momentum, 30% debate — and never chase the recent winner. A sleeve that has not passed its go-live rule leaves its share in cash.
-
-**Momentum sleeve**
-Rules-only entry, long/flat, on the LSE 1× ETF/ETC universe at Saxo and US large caps (plus US ETFs if UK access is confirmed) at Alpaca. Its only LLM involvement is the **veto**. Benchmark: risk-matched buy-and-hold of the same universe. It has no look-ahead leak, so it is backtested first and carries the larger share.
+One strategy with its own capital share, universe, entry rule, benchmark, book and go-live rule. v2 has one: **Debate**. The momentum sleeve was dropped on 2026-09-25 after both of its sub-books failed the kill line (doc 70); its 70% share is unassigned. A sleeve's share is fixed and pre-declared, never chases the recent winner, and stays in cash until the sleeve passes its go-live rule.
 
 **Debate sleeve**
 LLM-debate entry at a **swing** horizon: one debate per screened name per day, pre-open, on daily bars and news, plus sentiment and social as counted trials; holds days to weeks; exits by a venue-resting stop and a time stop. May short, bounded. Benchmark: **arm 2**. Cannot be honestly backtested (the LLM has seen the history), so its proof is forward paper only.
@@ -43,17 +40,14 @@ LLM-debate entry at a **swing** horizon: one debate per screened name per day, p
 **Debate**
 A structured disagreement between three debaters (one model per provider: Sonnet 5, DeepSeek, GPT) settled by a judge (Opus 5), producing a directional conviction for one name on one day. Roles rotate across providers daily so a stance is not a provider's bias. Only market data and news leave the system — never account data or keys.
 
-**Veto**
-The judge model's right to block a momentum entry, never to create one. Capped at ≤ 10% of entries, measured against a **no-veto shadow book**, and dropped if the shadow beats it.
-
 **Shadow book**
-A paper book that runs the same sleeve with one input or rule removed, so the input's value is measured rather than assumed: no-veto (momentum), no-macro-gate, no-sentiment, no-social, large-cap-only (debate). Each shadow comparison is a counted **trial**.
+A paper book that runs the same sleeve with one input or rule removed, so the input's value is measured rather than assumed: no-macro-gate, no-sentiment, no-social, large-cap-only (debate). Each shadow comparison is a counted **trial**.
 
 **Arm 2**
 The debate sleeve's matched control: the same names, the same exit rule, the same stop, with entry by indicator alone and no LLM anywhere in the path. The debate sleeve exists only if it beats arm 2 forward, on paper: at least 100 closed trades and a one-sided test at 95%.
 
 **Universe**
-Momentum: the LSE 1× ETF/ETC list and the US large-cap list, both pre-declared. Debate: ~20 names per day — ~10 by liquidity rank (a stable core) plus ~10 movers/news names chosen with help from the sentiment score; the movers/news rule is a pre-declared parameter counted as a trial. Out of scope: 3× ETPs, UK single stocks, CFDs, crypto.
+Target: commodities, indices, ETFs and equities, with indices and commodities only through 1× ETFs/ETCs — US large caps at Alpaca plus an LSE ETF/ETC leg at Saxo (being built). Per day ~20 names — ~10 by liquidity rank (a stable core) plus ~10 movers/news names chosen with help from the sentiment score; the movers/news rule is a pre-declared parameter counted as a trial. Out of scope: 3× ETPs, UK single stocks, CFDs, crypto.
 
 **Small-cap position**
 A debate-sleeve long in a name below the large-cap floor. Long-only, half a large-cap trade's risk, capped at a fixed share of the sleeve, excluded below liquidity, price and market-cap floors, and measured against a large-cap-only shadow. The floor and cap numbers are open (G18).
@@ -62,7 +56,7 @@ A debate-sleeve long in a name below the large-cap floor. Long-only, half a larg
 Debate sleeve only. At Alpaca: easy-to-borrow large caps, sized so a +30% gap costs no more than about £150. At Saxo: 1× inverse ETFs, never CFDs.
 
 **Macro event day**
-A day with a high-impact release (FOMC, US CPI, NFP, BoE rate decision, UK CPI). The debate sleeve enters at half size; exits and the momentum sleeve are unaffected; the gate is a counted trial against a no-gate shadow.
+A day with a high-impact release (FOMC, US CPI, NFP, BoE rate decision, UK CPI). The debate sleeve enters at half size; exits are unaffected; the gate is a counted trial against a no-gate shadow.
 
 ### The loss budget
 
@@ -102,7 +96,7 @@ The backtest's predictive interval for a live or paper window. Paper is **in ban
 A week with zero plumbing faults: no missed stop, no reconcile mismatch, no stuck order. Counted from the plumbing-fault ledger, not from memory.
 
 **Benchmark**
-What a sleeve must beat, risk-matched: buy-and-hold of the same universe for momentum, arm 2 for debate. Return-only comparisons are never used.
+What a sleeve must beat, risk-matched: arm 2 for the debate sleeve. Return-only comparisons are never used.
 
 **Paper**
 Live data, simulated fills, one separate book per sleeve plus its shadows. Saxo paper is a simulated adapter filling at Saxo bid/ask at the live tariff (0.08% per side, no minimum); Alpaca paper is Alpaca's own. Paper profit is not evidence of edge; paper gates on fidelity to the backtest.
@@ -122,7 +116,7 @@ The offline process that reads the **trade journal** and error log, proposes rul
 The only way live behaviour changes without a promotion: a pre-declared, backtested rule (volatility scaling, trend filter, sleeve demotion) or a risk change that only tightens. Everything else on live is frozen between promotions.
 
 **Trade journal**
-Append-only record of every decision — entry, no-entry, veto, cap, skip, exit — with its inputs and reason, plus the **LLM trace** (prompt version, inputs, output, cost) joined to the resulting trade. Any past day must replay from it to identical decisions, with LLM outputs replayed rather than re-called.
+Append-only record of every decision — entry, no-entry, cap, skip, exit — with its inputs and reason, plus the **LLM trace** (prompt version, inputs, output, cost) joined to the resulting trade. Any past day must replay from it to identical decisions, with LLM outputs replayed rather than re-called.
 
 ### Protection
 
@@ -157,9 +151,8 @@ Research, backtests, promotion to paper and risk tightening need nobody. Only wh
 ## Relationships
 
 - Daily bars + news (+ sentiment, social, macro calendar as trials) → Debate → conviction → Debate sleeve entry, measured against arm 2 and its shadows
-- Daily bars → Momentum rules → entry → Veto (Opus 5) → Momentum sleeve entry, measured against buy-and-hold and the no-veto shadow
 - Every entry → venue-resting stop (+ time stop for debate) at the broker
-- Loss budget → size step / daily cap / halt → applies to both sleeves' entries; never to exits
+- Loss budget → size step / daily cap / halt → applies to every entry; never to exits
 - Trade journal → Research loop → trial → gate → paper → approval request → live
 - Live → band check weekly → demotion to paper when out of band
 - Backtest, paper and live run the same TypeScript code

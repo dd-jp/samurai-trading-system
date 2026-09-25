@@ -154,8 +154,10 @@ interface PulledLine {
   readonly hygiene: HygieneReport;
 }
 
-interface PullContext {
-  readonly api: SaxoReadOnlyApi;
+export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHistory'>;
+
+export interface PullContext {
+  readonly api: SaxoBarsApi;
   readonly outDir: string;
   readonly auxDir: string;
   readonly rawDir: string;
@@ -243,7 +245,7 @@ async function spliceLine(
   return { bars: result.bars, record };
 }
 
-async function pullMomentumLine(
+export async function pullMomentumLine(
   ctx: PullContext,
   line: SaxoLine | SplicedLine,
 ): Promise<LineOutcome> {
@@ -307,6 +309,88 @@ export function windowStartOf(symbols: Record<string, { readonly first: string }
   return { windowStart, binding };
 }
 
+export interface PulledLines {
+  readonly symbols: Record<string, SaxoSymbolEntry>;
+  readonly excluded: Record<string, SaxoExcludedEntry>;
+  readonly pulled: ReadonlyMap<string, PulledLine>;
+  readonly delayed: number | undefined;
+}
+
+export async function pullAllLines(ctx: PullContext): Promise<PulledLines> {
+  const symbols: Record<string, SaxoSymbolEntry> = {};
+  const excluded: Record<string, SaxoExcludedEntry> = {};
+  const pulled = new Map<string, PulledLine>();
+  let delayed: number | undefined;
+  for (const line of LSE_MOMENTUM_LINES) {
+    const outcome = await pullMomentumLine(ctx, line);
+    delayed ??= outcome.pulled.page.delayedByMinutes;
+    if (outcome.kind === 'excluded') {
+      excluded[line.tidm] = outcome.entry;
+      continue;
+    }
+    symbols[line.tidm] = outcome.entry;
+    pulled.set(line.tidm, outcome.pulled);
+  }
+  for (const aux of LSE_AUX_LINES) {
+    const line = await pullLine(ctx, aux);
+    writeFileSync(join(ctx.auxDir, `${aux.tidm}.csv`), barsToCsv(line.bars));
+    pulled.set(aux.tidm, line);
+  }
+  return { symbols, excluded, pulled, delayed };
+}
+
+export function saxoBarsManifest(
+  ctx: PullContext,
+  { symbols, excluded, pulled, delayed }: PulledLines,
+  fetchedAt: string,
+): SaxoBarsManifest {
+  const checks: Record<string, unknown> = {
+    aux_hygiene: Object.fromEntries(
+      LSE_AUX_LINES.flatMap((aux) => {
+        const line = pulled.get(aux.tidm);
+        return line === undefined ? [] : [[aux.tidm, line.hygiene]];
+      }),
+    ),
+  };
+  const isf = pulled.get('ISF');
+  const cukx = pulled.get('CUKX');
+  if (isf !== undefined && cukx !== undefined) {
+    checks.distribution_adjustment = distributionAdjustmentCheck(
+      { symbol: 'ISF', bars: isf.bars },
+      { symbol: 'CUKX', bars: cukx.bars },
+    );
+  }
+  const { windowStart, binding } = windowStartOf(symbols);
+  return {
+    source:
+      'Saxo OpenAPI GET /chart/v3/charts, Horizon=1440, Count=1200, paged back with Mode=UpTo; prices in GBP (GBX lines × 0.01 per the LSE instrument list currency, checked against PriceToContractFactor)',
+    fetched_at: fetchedAt,
+    delayed_by_minutes: delayed,
+    fetch_date_bars_dropped: ctx.fetchDate,
+    hygiene:
+      'weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw',
+    calendar_reference: LSE_CALENDAR_REFERENCE,
+    window_start: windowStart,
+    window_binding_line: binding,
+    spread: {
+      source: `Saxo GET /trade/v1/infoprices/list, FieldGroups=Quote, one burst of ${BURST_READS} reads spaced ${BURST_SPACING_MS / 1000} s at a single time point (delayed 15 min), measured once; raw in ${ctx.spreadsPath}`,
+      statistic: 'p25 of the burst half spreads, bps of mid (median alongside)',
+      measured_at: [...ctx.spreads.values()][0]?.measuredAt ?? '',
+    },
+    symbols,
+    excluded,
+    checks,
+  };
+}
+
+export function saxoPullSummary(outDir: string, manifest: SaxoBarsManifest): string {
+  const lastBar = Object.values(manifest.symbols).reduce(
+    (max, entry) => (entry.last > max ? entry.last : max),
+    '',
+  );
+  return `wrote ${Object.keys(manifest.symbols).length} lines to ${outDir} (window from ${manifest.window_start}, binding ${manifest.window_binding_line}); excluded ${Object.keys(manifest.excluded).join(', ') || 'none'}; last bar ${lastBar}`;
+}
+
 async function main(argv: readonly string[]): Promise<void> {
   const args = parseSaxoPullArgs(argv);
   const spreads = parseSaxoSpreadCsv(readFileSync(args.spreads, 'utf8'));
@@ -325,77 +409,13 @@ async function main(argv: readonly string[]): Promise<void> {
   mkdirSync(args.outDir, { recursive: true });
   mkdirSync(ctx.rawDir, { recursive: true });
 
-  const symbols: Record<string, SaxoSymbolEntry> = {};
-  const excluded: Record<string, SaxoExcludedEntry> = {};
-  const pulled = new Map<string, PulledLine>();
-  let delayed: number | undefined;
-  try {
-    for (const line of LSE_MOMENTUM_LINES) {
-      const outcome = await pullMomentumLine(ctx, line);
-      delayed ??= outcome.pulled.page.delayedByMinutes;
-      if (outcome.kind === 'excluded') {
-        excluded[line.tidm] = outcome.entry;
-        continue;
-      }
-      symbols[line.tidm] = outcome.entry;
-      pulled.set(line.tidm, outcome.pulled);
-    }
-    for (const aux of LSE_AUX_LINES) {
-      const line = await pullLine(ctx, aux);
-      writeFileSync(join(args.auxDir, `${aux.tidm}.csv`), barsToCsv(line.bars));
-      pulled.set(aux.tidm, line);
-    }
-  } finally {
-    await tokens.stop();
-  }
-  const checks: Record<string, unknown> = {
-    aux_hygiene: Object.fromEntries(
-      LSE_AUX_LINES.flatMap((aux) => {
-        const line = pulled.get(aux.tidm);
-        return line === undefined ? [] : [[aux.tidm, line.hygiene]];
-      }),
-    ),
-  };
-  const isf = pulled.get('ISF');
-  const cukx = pulled.get('CUKX');
-  if (isf !== undefined && cukx !== undefined) {
-    checks.distribution_adjustment = distributionAdjustmentCheck(
-      { symbol: 'ISF', bars: isf.bars },
-      { symbol: 'CUKX', bars: cukx.bars },
-    );
-  }
-  const { windowStart, binding } = windowStartOf(symbols);
-  const manifest: SaxoBarsManifest = {
-    source:
-      'Saxo OpenAPI GET /chart/v3/charts, Horizon=1440, Count=1200, paged back with Mode=UpTo; prices in GBP (GBX lines × 0.01 per the LSE instrument list currency, checked against PriceToContractFactor)',
-    fetched_at: new Date().toISOString(),
-    delayed_by_minutes: delayed,
-    fetch_date_bars_dropped: ctx.fetchDate,
-    hygiene:
-      'weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw',
-    calendar_reference: LSE_CALENDAR_REFERENCE,
-    window_start: windowStart,
-    window_binding_line: binding,
-    spread: {
-      source: `Saxo GET /trade/v1/infoprices/list, FieldGroups=Quote, one burst of ${BURST_READS} reads spaced ${BURST_SPACING_MS / 1000} s at a single time point (delayed 15 min), measured once; raw in ${args.spreads}`,
-      statistic: 'p25 of the burst half spreads, bps of mid (median alongside)',
-      measured_at: [...spreads.values()][0]?.measuredAt ?? '',
-    },
-    symbols,
-    excluded,
-    checks,
-  };
+  const pulledLines = await pullAllLines(ctx).finally(() => tokens.stop());
+  const manifest = saxoBarsManifest(ctx, pulledLines, new Date().toISOString());
   writeFileSync(join(args.outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   execFileSync('npx', ['biome', 'format', '--write', join(args.outDir, 'manifest.json')], {
     stdio: 'ignore',
   });
-  const lastBar = Object.values(symbols).reduce(
-    (max, entry) => (entry.last > max ? entry.last : max),
-    '',
-  );
-  console.log(
-    `wrote ${Object.keys(symbols).length} lines to ${args.outDir} (window from ${windowStart}, binding ${binding}); excluded ${Object.keys(excluded).join(', ') || 'none'}; last bar ${lastBar}`,
-  );
+  console.log(saxoPullSummary(args.outDir, manifest));
 }
 
 if (isMainModule(import.meta.url)) {
