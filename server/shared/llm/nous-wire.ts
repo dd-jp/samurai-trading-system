@@ -68,7 +68,6 @@ export class NousRefusalError extends Error {
   }
 }
 
-
 function describeErrorBody(body: unknown): string | undefined {
   if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
   const detail = (body as { error?: { type?: unknown; message?: unknown } }).error;
