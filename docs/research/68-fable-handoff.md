@@ -319,7 +319,9 @@ Starting buckets (from titles; verify each against its body):
 
 Run after G9, G10 and R12–R15 are resolved (they are, as of 2026-09-21).
 
-**Status 2026-09-25:** proposal ruled (doc 66 (a)–(l)), US sub-book built and run — **FAIL** (doc 70 §9.1). David ruled LSE-only (doc 66 (m)). **Continuation prompt:**
+**Status 2026-09-25: done.** Proposal ruled (doc 66 (a)–(l)); US sub-book **FAIL** (doc 70 §9.1, PRs #1759–#1762); David ruled LSE-only (doc 66 (m)); LSE sub-book run on the sibling-Uic route — **FAIL on all four passes on 22 of 24 lines, provisional** (doc 70 §10, PR #1766; the IUHC/COMF splice exceeded the pre-declared tolerance, IHCU/CMFP excluded, EODHD not bought). Combined verdict doc 70 §10.8: no momentum sub-book wired into Step 3. The continuation prompt below was executed by #1766 and is kept as the record of what ran; do not run it again. What remains is David's ruling on doc 70 §10.6 (1)–(4) — a re-run only follows an option taken there, recorded in doc 66 as Session B (n) before any trial.
+
+Executed continuation prompt:
 
 ```
 Continue Session B (doc 68). Read docs/research/70-momentum-backtest.md §8.4, §9.1, §9.2 and doc 66
@@ -327,10 +329,12 @@ Session B rulings (a)–(m). David ruled (m): momentum is LSE-only, no second US
 Get the missing CMFP/IHCU history on the ruled route: ask David for a saxo:login, probe the Saxo
 sibling Uics (IUHC, COMF and other listings) for bars reaching 2016-09-22; if none does, confirm both
 tickers on the EODHD free key, read its retained-data terms, then STOP and ask David to buy one month
-(£19.99). Commit bars per ruling (k). Run the pre-declared LSE grid (Grid A, same kill line), trials
-counted on from #9; no change to the list without recording it first. Report per sub-book with max
-drawdown. Base the PR on main, not on a doc branch. End with the Session eval.
+(£19.99). Commit bars per ruling (k). Run the pre-declared LSE grid (Grid A trials 1–4, already
+counted in N = 8; same kill line); no change to the list without recording it first. Report per
+sub-book with max drawdown. Base the PR on main, not on a doc branch. End with the Session eval.
 ```
+
+Original prompt:
 
 ```
 You are working on Samurai. Read docs/research/67-v2-plan-and-handoff.md (Step 1, §5a),
