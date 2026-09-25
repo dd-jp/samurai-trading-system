@@ -32,8 +32,10 @@ export {
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
+  LlmRateLimitError,
   LlmRefusalError,
   LlmTimeoutError,
+  LlmTruncatedError,
 } from './llm/errors.js';
 export type { FailureCause } from './llm/failure-cause.js';
 export { classifyFailureCause } from './llm/failure-cause.js';

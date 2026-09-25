@@ -40,7 +40,7 @@ A step's PR ships its own unit tests, e2e tests where it touches a runtime path,
 | ------ | --------- |
 | `CONTEXT.md` (repo root) | North Star first, then the v2 glossary: terms, relationships, invariants. No implementation detail. |
 | `docs/adr/` | One ADR, `0001-samurai-v2.md`. Amend it when David rules; do not add ADRs unless a decision is hard to reverse, surprising without context and a real trade-off. Never scanned by the citation checker. |
-| `docs/specs/` | v2 specs only, written in the step that needs them: `momentum-sleeve-spec.md`, `debate-sleeve-spec.md`, `loss-budget-spec.md`, and the Step 3c UI spec (G13). Empty until then. <!-- cite-exempt: planned — written in doc 67 Steps 1–3c --> |
+| `docs/specs/` | v2 specs only, written in the step that needs them: `momentum-sleeve-spec.md`, `debate-sleeve-spec.md`, `loss-budget-spec.md`, and the Step 3c UI spec (G13). `debate-sleeve-spec.md` landed with Step 3; the rest are written in their own steps. |
 | `docs/research/` | `NN-slug.md`, numbered, banded by track; navigation starts at `docs/research/README.md`. v2 docs are 61 onward; 69 = facts (Session R), 70 = momentum backtest (Session B), 71 = debate audit (Session C). Archive is `docs/research/archive/`, never deleted. |
 | `docs/reviews/` | Audit reports, dated; start at `docs/reviews/README.md`. Immutable record. |
 | `docs/wayfinder/` | Historical only. Maps are GitHub issues. |

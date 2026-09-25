@@ -9,7 +9,11 @@ const GROK_LARGE_PROMPT_TIER = {
   tier: { above_prompt_tokens: 200_000, input: 4, output: 12 },
 } as const;
 
+// First-party Claude API list rates (claude-api skill, shared/model-migration.md: Opus 5 $5/$25,
+// Sonnet 5 $2/$10 per MTok); the 'anthropic/' keys below are the Nous-discounted rates
 export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
+  'claude-opus-5': { input: 5, output: 25 },
+  'claude-sonnet-5': { input: 2, output: 10 },
   'anthropic/claude-fable-5': { input: 8, output: 40 },
   'anthropic/claude-opus-5': { input: 4, output: 20 },
   'anthropic/claude-opus-4.8': { input: 4, output: 20 },

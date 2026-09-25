@@ -3,6 +3,7 @@
   "entry": [
     "server/apps/*/index.ts",
     "server/apps/service-api/fixture-server.ts",
+    "server/apps/v2/smoke.ts",
     "e2e/**/*.spec.ts",
     "server/tools/data-cli.ts",
     "client/src/main.tsx"
