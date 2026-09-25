@@ -118,6 +118,14 @@ function positionFromRow(row: PositionRow): Position {
   };
 }
 
+function averagePriceGbp(held: Position, fill: BookFill, qty: number): number {
+  const sameDirection =
+    Math.sign(held.qty) === Math.sign(qty) && Math.abs(qty) > Math.abs(held.qty);
+  return sameDirection
+    ? (held.avgPriceGbp * Math.abs(held.qty) + fill.priceGbp * fill.qty) / Math.abs(qty)
+    : held.avgPriceGbp;
+}
+
 export class PaperBooks {
   readonly #budgets = new Map<string, LossBudget>();
   readonly #references = new Map<string, number>();
@@ -218,46 +226,50 @@ export class PaperBooks {
       const held = this.position(bookId, fill.instrument);
       const qty = (held?.qty ?? 0) + signedQty;
       if (Math.abs(qty) < FLAT_EPSILON) {
-        this.db
-          .prepare('DELETE FROM v2_positions WHERE book_id = ? AND instrument = ?')
-          .run(bookId, fill.instrument);
+        this.#closePosition(bookId, fill.instrument);
         return undefined;
       }
-      if (held === undefined) {
-        this.db
-          .prepare(
-            `INSERT INTO v2_positions (book_id, instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp,
-               client_order_id, exit_client_order_id, opened_date, marks_held, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?)`,
-          )
-          .run(
-            bookId,
-            fill.instrument,
-            fill.venue,
-            qty,
-            fill.priceGbp,
-            fill.stopGbp ?? null,
-            fill.targetGbp ?? null,
-            fill.clientOrderId,
-            fill.tradingDate,
-            this.#now(),
-          );
-      } else {
-        const sameDirection =
-          Math.sign(held.qty) === Math.sign(qty) && Math.abs(qty) > Math.abs(held.qty);
-        const avgPriceGbp = sameDirection
-          ? (held.avgPriceGbp * Math.abs(held.qty) + fill.priceGbp * fill.qty) / Math.abs(qty)
-          : held.avgPriceGbp;
-        this.db
-          .prepare(
-            `UPDATE v2_positions SET qty = ?, avg_price_gbp = ?, updated_at = ?
-             WHERE book_id = ? AND instrument = ?`,
-          )
-          .run(qty, avgPriceGbp, this.#now(), bookId, fill.instrument);
-      }
+      if (held === undefined) this.#openPosition(bookId, fill, qty);
+      else this.#resizePosition(bookId, held, fill, qty);
       return this.position(bookId, fill.instrument);
     });
     return apply();
+  }
+
+  #closePosition(bookId: string, instrument: string): void {
+    this.db
+      .prepare('DELETE FROM v2_positions WHERE book_id = ? AND instrument = ?')
+      .run(bookId, instrument);
+  }
+
+  #openPosition(bookId: string, fill: BookFill, qty: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO v2_positions (book_id, instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp,
+           client_order_id, exit_client_order_id, opened_date, marks_held, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?)`,
+      )
+      .run(
+        bookId,
+        fill.instrument,
+        fill.venue,
+        qty,
+        fill.priceGbp,
+        fill.stopGbp ?? null,
+        fill.targetGbp ?? null,
+        fill.clientOrderId,
+        fill.tradingDate,
+        this.#now(),
+      );
+  }
+
+  #resizePosition(bookId: string, held: Position, fill: BookFill, qty: number): void {
+    this.db
+      .prepare(
+        `UPDATE v2_positions SET qty = ?, avg_price_gbp = ?, updated_at = ?
+         WHERE book_id = ? AND instrument = ?`,
+      )
+      .run(qty, averagePriceGbp(held, fill, qty), this.#now(), bookId, fill.instrument);
   }
 
   setExitPending(bookId: string, instrument: string, exitClientOrderId: string): void {
