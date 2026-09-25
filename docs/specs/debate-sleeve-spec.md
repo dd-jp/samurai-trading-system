@@ -100,7 +100,7 @@ Arm 2 (doc 71 §6): same names, same clock, same exits, fixed risk; entry by axi
 
 ## 8. Not wired, and why
 
-- **Momentum sleeve:** doc 70 §9 — the US sub-book fails all four passes; the LSE sub-book is pending (Session B, ruling (m) 2026-09-25: if LSE fails, v2 is debate-only pending ruling). From `server/pipeline/momentum/` the root imports only `LossBudget`, `saxoCustodyAccrual`, `wholeShares`, `averageTrueRange`, `trailingReturn`, `assertSortedUniqueDates` and the bar types.
+- **Momentum sleeve:** doc 70 §9 — the US sub-book fails all four passes; the LSE sub-book fails too (doc 70 §10); David dropped momentum on 2026-09-25 (doc 66, Session B (n)), so v2 is debate-only. From `server/pipeline/momentum/` the root imports only `LossBudget`, `saxoCustodyAccrual`, `wholeShares`, `averageTrueRange`, `trailingReturn`, `assertSortedUniqueDates` and the bar types.
 - **Shorts:** flag off (§5).
 - **Saxo:** no adapter (§7).
 - **Live venues:** the root composes paper only; `SAMURAI_MODE=live` is refused.

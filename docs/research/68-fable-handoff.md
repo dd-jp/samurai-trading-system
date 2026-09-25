@@ -319,7 +319,7 @@ Starting buckets (from titles; verify each against its body):
 
 Run after G9, G10 and R12–R15 are resolved (they are, as of 2026-09-21).
 
-**Status 2026-09-25: done.** Proposal ruled (doc 66 (a)–(l)); US sub-book **FAIL** (doc 70 §9.1, PRs #1759–#1762); David ruled LSE-only (doc 66 (m)); LSE sub-book run on the sibling-Uic route — **FAIL on all four passes on 22 of 24 lines, provisional** (doc 70 §10, PR #1766; the IUHC/COMF splice exceeded the pre-declared tolerance, IHCU/CMFP excluded, EODHD not bought). Combined verdict doc 70 §10.8: no momentum sub-book wired into Step 3. The continuation prompt below was executed by #1766 and is kept as the record of what ran; do not run it again. What remains is David's ruling on doc 70 §10.6 (1)–(4) — a re-run only follows an option taken there, recorded in doc 66 as Session B (n) before any trial.
+**Status 2026-09-25: done.** Proposal ruled (doc 66 (a)–(l)); US sub-book **FAIL** (doc 70 §9.1, PRs #1759–#1762); David ruled LSE-only (doc 66 (m)); LSE sub-book run on the sibling-Uic route — **FAIL on all four passes on 22 of 24 lines, provisional** (doc 70 §10, PR #1766; the IUHC/COMF splice exceeded the pre-declared tolerance, IHCU/CMFP excluded, EODHD not bought). Combined verdict doc 70 §10.8: no momentum sub-book wired into Step 3. The continuation prompt below was executed by #1766 and is kept as the record of what ran; do not run it again. David ruled doc 70 §10.6 on 2026-09-25 (doc 66, Session B (n)): "drop momentum, go debate only" — no re-run.
 
 Executed continuation prompt:
 
