@@ -383,6 +383,56 @@ describe('runCycle', () => {
     }
   });
 
+  it('a bar touching both legs exits at the stop, for longs and shorts', async () => {
+    const short: SleeveDecision = {
+      ...longAapl,
+      action: 'enter_short',
+      stop_price: 20.8,
+    };
+    for (const [decision, override, price] of [
+      [longAapl, { low: 19.0, high: 21.5 }, 19.2],
+      [short, { low: 18.5, high: 21.0 }, 20.8],
+    ] as const) {
+      const deps = harness([decision], true);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      expect((await runCycle(deps, '2026-09-28')).exits).toBe(2);
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
+      ).toBeCloseTo(price, 9);
+    }
+  });
+
+  it('short brackets: the stop fires on the high, the target on the low, and neither inside', async () => {
+    const short: SleeveDecision = {
+      ...longAapl,
+      action: 'enter_short',
+      stop_price: 20.8,
+    };
+    for (const [override, price] of [
+      [{ low: 19.5, high: 20.8 }, 20.8],
+      [{ low: 18.8, high: 20.5 }, 18.8],
+      [{ low: 18.9, high: 20.7 }, undefined],
+    ] as const) {
+      const deps = harness([short], true);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      const report = await runCycle(deps, '2026-09-28');
+      const exit = deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit');
+      if (price === undefined) {
+        expect(report.exits).toBe(0);
+        expect(exit).toBeUndefined();
+        expect(deps.books.position('debate/primary', 'AAPL')?.qty).toBe(-6);
+      } else {
+        expect(report.exits).toBe(2);
+        expect(exit).toMatchObject({ side: 'buy' });
+        expect(exit?.payload.price).toBeCloseTo(price, 9);
+      }
+    }
+  });
+
   it('paper mode: a bracket stop-leg fill on the entry order closes the position in GBP', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
@@ -541,6 +591,31 @@ describe('runCycle', () => {
     expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-10-13-AAPL-exit']);
   });
 
+  it('paper mode: a retry of a crashed day never resubmits a rejected time-stop flatten', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    for (const day of [28, 29, 30]) await runCycle(deps, `2026-09-${day}`);
+    for (const day of [1, 2, 5, 6, 7, 8, 9]) {
+      await runCycle(deps, `2026-10-${String(day).padStart(2, '0')}`);
+    }
+    alpaca.flattenError = new Error('venue closed');
+    vi.spyOn(deps.books, 'markDay').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    await expect(runCycle(deps, '2026-10-12')).rejects.toThrow(/disk full/);
+    alpaca.flattenError = undefined;
+    const flatten = vi.spyOn(alpaca, 'submitFlatten');
+    const retry = await runCycle(deps, '2026-10-12');
+    expect(retry).toMatchObject({ skipped: false, exits: 0, submitted_orders: 0 });
+    expect(flatten).not.toHaveBeenCalled();
+    expect(deps.journal.orderFor('v2-debate-primary-2026-10-12-AAPL-exit')?.outcome).toBe(
+      'rejected',
+    );
+  });
+
   it('a rerun of a marked date skips with a journal line and never touches the sleeve', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-25');
@@ -623,6 +698,13 @@ describe('runCycle', () => {
       ['v2-debate-primary-2026-09-25-AAPL', 'rejected', expect.stringContaining('422')],
       ['v2-debate-primary-2026-09-25-CSP1', 'rejected', 'no_broker_for_venue:saxo'],
       ['v2-debate-primary-2026-09-25-NOSTOP', 'rejected', 'no_stop_price'],
+    ]);
+    expect(
+      orders(deps, 'debate/primary').map((o) => [o.client_order_id, JSON.parse(o.payload).target]),
+    ).toEqual([
+      ['v2-debate-primary-2026-09-25-AAPL', expect.closeTo(21.2, 9)],
+      ['v2-debate-primary-2026-09-25-CSP1', undefined],
+      ['v2-debate-primary-2026-09-25-NOSTOP', undefined],
     ]);
     expect(deps.books.position('debate/no-macro-gate', 'CSP1')?.venue).toBe('saxo');
   });

@@ -279,53 +279,95 @@ function skipped(
   };
 }
 
-export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
-  const decideOne = async (symbol: string, context: SleeveContext): Promise<SleeveDecision> => {
-    const venue = deps.venueFor(symbol);
-    const series = deps.bars.load(symbol);
-    const history = series === undefined ? [] : barsBefore(series, context.tradingDate);
-    const traceId = `v2-${context.tradingDate}-${symbol}`;
-    const read = technicalRead(history, traceId, deps.clock.now());
-    if (read === undefined) return skipped(symbol, venue, undefined, '', 'no_bars');
-    let headlines: readonly string[];
-    try {
-      headlines = await deps.news.headlines(symbol, context.tradingDate, deps.clock.now());
-    } catch (error) {
-      return skipped(symbol, venue, read, '', `news_error:${describeThrownSafely(error)}`);
-    }
-    const views = [read.view, newsView(headlines, traceId, deps.clock.now())];
-    const hash = inputsHash(
-      history.slice(-HASHED_HISTORY_DAYS),
-      views,
-      seatModels(context.tradingDate),
-    );
-    const cap = deps.panel.spendCap.check();
-    if (!cap.admitted) return skipped(symbol, venue, read, hash, `llm_spend_cap:${cap.kind}`);
-    const debateId = randomUUID();
-    try {
-      const result = await runDebate(
-        {
-          views,
-          instrument: symbol,
-          bar: new Date(`${context.tradingDate}T00:00:00.000Z`),
-        },
-        buildPersonas(deps.panel, context.tradingDate, traceId, debateId, deps.clock),
-        { maxRounds: DEBATE_MAX_ROUNDS },
-      );
-      return decisionFrom(symbol, venue, read, hash, result, headlines.length);
-    } catch (error) {
-      deps.logger?.log({
-        trace_id: traceId,
-        stage: 'v2',
-        level: 'warn',
-        event: 'v2_debate_failed',
-        message: `debate for ${symbol} failed: ${describeThrownSafely(error)}`,
-        payload: { symbol, debate_id: debateId },
-      });
-      return skipped(symbol, venue, read, hash, `llm_error:${describeThrownSafely(error)}`);
-    }
-  };
+type HeadlinesOutcome = { readonly headlines: readonly string[] } | { readonly failure: string };
 
+async function fetchHeadlines(
+  deps: DebateSleeveDeps,
+  symbol: string,
+  tradingDate: string,
+): Promise<HeadlinesOutcome> {
+  try {
+    return { headlines: await deps.news.headlines(symbol, tradingDate, deps.clock.now()) };
+  } catch (error) {
+    return { failure: `news_error:${describeThrownSafely(error)}` };
+  }
+}
+
+interface DebateRequest {
+  readonly symbol: string;
+  readonly venue: Venue;
+  readonly read: TechnicalRead;
+  readonly hash: string;
+  readonly views: AnalystView[];
+  readonly headlines: number;
+  readonly traceId: string;
+  readonly tradingDate: string;
+}
+
+async function debateDecision(
+  deps: DebateSleeveDeps,
+  input: DebateRequest,
+): Promise<SleeveDecision> {
+  const { symbol, venue, read, hash, traceId, tradingDate } = input;
+  const debateId = randomUUID();
+  try {
+    const result = await runDebate(
+      {
+        views: input.views,
+        instrument: symbol,
+        bar: new Date(`${tradingDate}T00:00:00.000Z`),
+      },
+      buildPersonas(deps.panel, tradingDate, traceId, debateId, deps.clock),
+      { maxRounds: DEBATE_MAX_ROUNDS },
+    );
+    return decisionFrom(symbol, venue, read, hash, result, input.headlines);
+  } catch (error) {
+    deps.logger?.log({
+      trace_id: traceId,
+      stage: 'v2',
+      level: 'warn',
+      event: 'v2_debate_failed',
+      message: `debate for ${symbol} failed: ${describeThrownSafely(error)}`,
+      payload: { symbol, debate_id: debateId },
+    });
+    return skipped(symbol, venue, read, hash, `llm_error:${describeThrownSafely(error)}`);
+  }
+}
+
+async function decideOne(
+  deps: DebateSleeveDeps,
+  symbol: string,
+  context: SleeveContext,
+): Promise<SleeveDecision> {
+  const venue = deps.venueFor(symbol);
+  const series = deps.bars.load(symbol);
+  const history = series === undefined ? [] : barsBefore(series, context.tradingDate);
+  const traceId = `v2-${context.tradingDate}-${symbol}`;
+  const read = technicalRead(history, traceId, deps.clock.now());
+  if (read === undefined) return skipped(symbol, venue, undefined, '', 'no_bars');
+  const news = await fetchHeadlines(deps, symbol, context.tradingDate);
+  if ('failure' in news) return skipped(symbol, venue, read, '', news.failure);
+  const views = [read.view, newsView(news.headlines, traceId, deps.clock.now())];
+  const hash = inputsHash(
+    history.slice(-HASHED_HISTORY_DAYS),
+    views,
+    seatModels(context.tradingDate),
+  );
+  const cap = deps.panel.spendCap.check();
+  if (!cap.admitted) return skipped(symbol, venue, read, hash, `llm_spend_cap:${cap.kind}`);
+  return debateDecision(deps, {
+    symbol,
+    venue,
+    read,
+    hash,
+    views,
+    headlines: news.headlines.length,
+    traceId,
+    tradingDate: context.tradingDate,
+  });
+}
+
+export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
   return {
     id: DEBATE_SLEEVE_ID,
     async decide(context): Promise<SleeveOutput> {
@@ -336,7 +378,7 @@ export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
       );
       const decisions: SleeveDecision[] = [];
       for (const symbol of [...selection.liquidity, ...selection.movers]) {
-        decisions.push(await decideOne(symbol, context));
+        decisions.push(await decideOne(deps, symbol, context));
       }
       return {
         decisions,
