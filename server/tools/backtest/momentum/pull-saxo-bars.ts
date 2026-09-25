@@ -259,15 +259,7 @@ export async function pullMomentumLine(
     return {
       kind: 'excluded',
       pulled: primary,
-      entry: {
-        uic: line.uic,
-        role: line.role,
-        first: primary.bars[0]?.date ?? '',
-        bars: primary.bars.length,
-        hygiene: primary.hygiene,
-        reason: `GBX line starts ${primary.bars[0]?.date ?? '?'} (under ten years); sibling splice exceeds the pre-declared tolerance (mean abs return diff ${splice.record.overlap.meanAbsReturnDiffBps.toFixed(2)} bps/day > ${SPLICE_MAX_MEAN_ABS_RETURN_DIFF_BPS}) — STOP for David`,
-        spliced_from: splice.record,
-      },
+      entry: excludedEntry(line, primary, splice.record),
     };
   }
   const bars = splice?.bars ?? primary.bars;
@@ -278,22 +270,49 @@ export async function pullMomentumLine(
   return {
     kind: 'included',
     pulled: { ...primary, bars },
-    entry: {
-      uic: line.uic,
-      asset_type: line.assetType,
-      role: line.role,
-      unit: line.unit,
-      price_to_contract_factor: primary.details.priceToContractFactor,
-      is_complex: primary.details.isComplex,
-      first: bars[0]?.date ?? '',
-      last: bars[bars.length - 1]?.date ?? '',
-      bars: bars.length,
-      density: density(bars),
-      half_spread_bps: spread.p25HalfSpreadBps,
-      half_spread_median_bps: spread.medianHalfSpreadBps,
-      hygiene: primary.hygiene,
-      ...(splice === undefined ? {} : { spliced_from: splice.record }),
-    },
+    entry: includedEntry(line, primary, bars, spread, splice?.record),
+  };
+}
+
+function excludedEntry(
+  line: SaxoLine,
+  primary: PulledLine,
+  record: SpliceRecord,
+): SaxoExcludedEntry {
+  const first = primary.bars[0]?.date;
+  return {
+    uic: line.uic,
+    role: line.role,
+    first: first ?? '',
+    bars: primary.bars.length,
+    hygiene: primary.hygiene,
+    reason: `GBX line starts ${first ?? '?'} (under ten years); sibling splice exceeds the pre-declared tolerance (mean abs return diff ${record.overlap.meanAbsReturnDiffBps.toFixed(2)} bps/day > ${SPLICE_MAX_MEAN_ABS_RETURN_DIFF_BPS}) — STOP for David`,
+    spliced_from: record,
+  };
+}
+
+function includedEntry(
+  line: SaxoLine,
+  primary: PulledLine,
+  bars: readonly DailyBar[],
+  spread: SaxoSpreadRow,
+  record: SpliceRecord | undefined,
+): SaxoSymbolEntry {
+  return {
+    uic: line.uic,
+    asset_type: line.assetType,
+    role: line.role,
+    unit: line.unit,
+    price_to_contract_factor: primary.details.priceToContractFactor,
+    is_complex: primary.details.isComplex,
+    first: bars[0]?.date ?? '',
+    last: bars[bars.length - 1]?.date ?? '',
+    bars: bars.length,
+    density: density(bars),
+    half_spread_bps: spread.p25HalfSpreadBps,
+    half_spread_median_bps: spread.medianHalfSpreadBps,
+    hygiene: primary.hygiene,
+    ...(record === undefined ? {} : { spliced_from: record }),
   };
 }
 

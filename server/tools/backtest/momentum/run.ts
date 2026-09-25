@@ -79,29 +79,33 @@ export interface RunOptions {
 }
 
 export function parseArgs(argv: readonly string[]): RunOptions {
-  const value = (flag: string): string | undefined => {
+  const value = (flag: string, fallback: string): string => {
     const index = argv.indexOf(flag);
-    return index === -1 ? undefined : argv[index + 1];
+    return index === -1 ? fallback : (argv[index + 1] ?? fallback);
   };
-  const venue = value('--venue');
+  const venue = value('--venue', '');
   if (venue !== 'us' && venue !== 'lse')
     throw new Error(
       'usage: run.ts --venue us|lse [--bars parquet-root] [--manifest path] [--out dir]',
     );
-  const capitals = value('--capital')
-    ?.split(',')
-    .map(Number)
-    .filter((capital) => capital > 0);
   return {
     venue,
-    barsRoot: value('--bars') ?? DEFAULT_BAR_STORE_ROOT,
-    lseManifestPath: value('--manifest') ?? join(DEFAULT_SAXO_BARS_DIR, 'manifest.json'),
-    outDir: value('--out') ?? DEFAULT_OUT_DIR,
-    capitals: capitals !== undefined && capitals.length > 0 ? capitals : CAPITAL_PASSES_GBP,
-    constituentsPath: value('--constituents') ?? DEFAULT_CONSTITUENTS_PATH,
-    fxPath: value('--fx') ?? DEFAULT_FX_PATH,
-    spreadPath: value('--spreads') ?? DEFAULT_SPREAD_PATH,
+    barsRoot: value('--bars', DEFAULT_BAR_STORE_ROOT),
+    lseManifestPath: value('--manifest', join(DEFAULT_SAXO_BARS_DIR, 'manifest.json')),
+    outDir: value('--out', DEFAULT_OUT_DIR),
+    capitals: capitalsFrom(value('--capital', '')),
+    constituentsPath: value('--constituents', DEFAULT_CONSTITUENTS_PATH),
+    fxPath: value('--fx', DEFAULT_FX_PATH),
+    spreadPath: value('--spreads', DEFAULT_SPREAD_PATH),
   };
+}
+
+function capitalsFrom(list: string): readonly number[] {
+  const capitals = list
+    .split(',')
+    .map(Number)
+    .filter((capital) => capital > 0);
+  return capitals.length > 0 ? capitals : CAPITAL_PASSES_GBP;
 }
 
 export function memberSessionCoverage(
@@ -202,12 +206,7 @@ function manifestHalfSpreads(
     const one = series.get(symbol);
     if (one === undefined)
       throw new Error(`LSE manifest lists ${symbol} but the bar store has no saxo ${symbol}`);
-    const breaks = findUnitBreaks(one.bars);
-    if (breaks.length > 0) {
-      throw new Error(
-        `LSE bars: ${symbol} has a unit break at ${breaks.map((b) => `${b.date} ×${b.factor}`).join(', ')} — re-pull through the hygiene step`,
-      );
-    }
+    assertNoUnitBreak(one);
     const halfSpread = manifest.symbols[symbol]?.half_spread_bps;
     if (halfSpread === undefined || !(halfSpread >= 0)) {
       throw new Error(`LSE manifest: ${symbol} needs a measured half_spread_bps`);
@@ -215,6 +214,15 @@ function manifestHalfSpreads(
     halfSpreads.set(symbol, halfSpread);
   }
   return halfSpreads;
+}
+
+function assertNoUnitBreak(series: BarSeries): void {
+  const breaks = findUnitBreaks(series.bars);
+  if (breaks.length > 0) {
+    throw new Error(
+      `LSE bars: ${series.symbol} has a unit break at ${breaks.map((b) => `${b.date} ×${b.factor}`).join(', ')} — re-pull through the hygiene step`,
+    );
+  }
 }
 
 function assertLinesStartByWindow(market: AlignedMarket, symbols: readonly string[]): void {

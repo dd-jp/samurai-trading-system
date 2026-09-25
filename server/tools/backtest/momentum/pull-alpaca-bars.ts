@@ -112,7 +112,7 @@ async function main(argv: readonly string[]): Promise<void> {
   }
 }
 
-async function pullInto(
+export async function pullInto(
   store: ParquetBarStore,
   api: AlpacaBarsApi,
   tickers: readonly string[],

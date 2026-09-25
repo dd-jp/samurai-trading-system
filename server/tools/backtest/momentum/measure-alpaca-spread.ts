@@ -139,29 +139,40 @@ export function lastSessions(calendar: readonly string[], count: number): string
   return calendar.slice(-count);
 }
 
+export async function spySessions(store: ParquetBarStore, count: number): Promise<string[]> {
+  const spy = await store.readSeries('alpaca', 'SPY');
+  if (spy === undefined) throw new Error('bar store has no alpaca SPY series');
+  return lastSessions(
+    spy.bars.map((bar) => bar.date),
+    count,
+  );
+}
+
+export async function measureAll(
+  api: AlpacaBarsApi,
+  tickers: readonly string[],
+  sessions: readonly string[],
+): Promise<SpreadRow[]> {
+  const rows: SpreadRow[] = [];
+  let done = 0;
+  for (const ticker of tickers) {
+    const row = await measureSymbol(api, ticker, sessions);
+    done++;
+    if (row !== undefined) rows.push(row);
+    if (done % 25 === 0)
+      console.log(`${done}/${tickers.length} measured, ${rows.length} with quotes`);
+  }
+  return rows.sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
 async function main(): Promise<void> {
   const membership = new PointInTimeMembership(
     parseConstituentsCsv(readFileSync(DEFAULT_CONSTITUENTS_PATH, 'utf8')),
   );
   const store = await ParquetBarStore.open();
-  const spy = await store.readSeries('alpaca', 'SPY').finally(() => store.close());
-  if (spy === undefined) throw new Error('bar store has no alpaca SPY series');
-  const sessions = lastSessions(
-    spy.bars.map((bar) => bar.date),
-    DEFAULT_SESSIONS,
-  );
+  const sessions = await spySessions(store, DEFAULT_SESSIONS).finally(() => store.close());
   const api = new AlpacaBarsApi(credentialsFromEnv(process.env));
-  const current = membership.membersOn(membership.lastDate());
-  const rows: SpreadRow[] = [];
-  let done = 0;
-  for (const ticker of current) {
-    const row = await measureSymbol(api, ticker, sessions);
-    done++;
-    if (row !== undefined) rows.push(row);
-    if (done % 25 === 0)
-      console.log(`${done}/${current.length} measured, ${rows.length} with quotes`);
-  }
-  rows.sort((a, b) => a.symbol.localeCompare(b.symbol));
+  const rows = await measureAll(api, membership.membersOn(membership.lastDate()), sessions);
   writeFileSync(DEFAULT_SPREAD_PATH, spreadRowsToCsv(rows));
   console.log(
     `wrote ${rows.length} rows to ${DEFAULT_SPREAD_PATH} over sessions ${sessions[0]}..${sessions[sessions.length - 1]}`,
