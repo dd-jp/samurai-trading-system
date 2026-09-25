@@ -11,7 +11,7 @@ export const SONNET_5_PIN: ModelPin = {
   seat: 'sonnet',
   wire: 'anthropic/claude-sonnet-5',
   priced: 'anthropic/claude-sonnet-5',
-  // Nous lists this id under a dated or an undated canonical_slug from one fetch to the next; David accepted the undetected-swap gap (doc 66, #1787).
+  // Nous lists this id under a dated or an undated canonical_slug from one fetch to the next; David accepted the undetected-swap gap (doc 66, #1787)
   canonicalSlug: undefined,
 };
 
