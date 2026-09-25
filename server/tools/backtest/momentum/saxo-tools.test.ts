@@ -20,7 +20,7 @@ import {
   assertUnitMatchesSaxo,
   density,
   distributionAdjustmentCheck,
-  parsePullArgs,
+  parseSaxoPullArgs,
   windowStartOf,
 } from './pull-saxo-bars.js';
 import type { ChartSample, InfoPriceQuote } from './saxo-api.js';
@@ -415,13 +415,13 @@ describe('pull-saxo-bars helpers', () => {
       binding: 'B',
     });
     expect(windowStartOf({})).toEqual({ windowStart: '', binding: '' });
-    expect(parsePullArgs([])).toEqual({
+    expect(parseSaxoPullArgs([])).toEqual({
       outDir: 'data/bars/saxo',
       auxDir: 'data/bars/saxo-aux',
       spreads: 'data/bars/saxo-spreads.csv',
       fx: 'data/bars/fx/gbpusd-boe-xudluss.csv',
       tokenFile: undefined,
     });
-    expect(parsePullArgs(['--out', 'o', '--token-file', 't']).tokenFile).toBe('t');
+    expect(parseSaxoPullArgs(['--out', 'o', '--token-file', 't']).tokenFile).toBe('t');
   });
 });

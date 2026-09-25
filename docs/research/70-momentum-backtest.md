@@ -482,7 +482,7 @@ What the numbers say, without spin:
 
 Ruling (a) routes CMFP and IHCU through Saxo sibling Uics first, EODHD one month as the fallback. Neither has happened: there was no valid Saxo live token this session (`data/saxo-tokens/live.json` <!-- cite-exempt: untracked — token store is gitignored --> holds a dead refresh token; the Saxo API was not called and `saxo:login` was not run, per the session brief). The window was not shortened and no proxy was substituted. The code path is built and tested on synthetic fixtures (`server/tools/backtest/momentum/run.test.ts`, "runs the LSE sub-book from a Saxo bar directory").
 
-To run it once bars land, put one `<TIDM>.csv` per line under `data/bars/saxo/` <!-- cite-exempt: planned — created when the LSE bars land --> (header `date,open,high,low,close,volume` or the seven-column Alpaca layout) with a `manifest.json` of the form `{ "calendar_reference": "<TIDM>", "symbols": { "<TIDM>": { "half_spread_bps": <measured> } } }`.
+To run it once bars land, put one `<TIDM>.csv` per line under `data/bars/saxo/` (header `date,open,high,low,close,volume` or the seven-column Alpaca layout) with a `manifest.json` of the form `{ "calendar_reference": "<TIDM>", "symbols": { "<TIDM>": { "half_spread_bps": <measured> } } }`.
 The format is also in `data/bars/README.md`. Then
 
 ```

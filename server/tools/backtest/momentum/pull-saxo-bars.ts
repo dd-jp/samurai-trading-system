@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
@@ -32,7 +33,7 @@ import {
 } from './splice.js';
 
 export const DEFAULT_SAXO_BARS_DIR = 'data/bars/saxo';
-export const DEFAULT_SAXO_AUX_DIR = 'data/bars/saxo-aux';
+const DEFAULT_SAXO_AUX_DIR = 'data/bars/saxo-aux';
 const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 
 export interface SpliceRecord {
@@ -49,7 +50,7 @@ export interface SpliceRecord {
   readonly within_tolerance: boolean;
 }
 
-export interface SaxoSymbolEntry {
+interface SaxoSymbolEntry {
   readonly uic: number;
   readonly asset_type: string;
   readonly role: string;
@@ -65,7 +66,7 @@ export interface SaxoSymbolEntry {
   readonly spliced_from?: SpliceRecord;
 }
 
-export interface SaxoExcludedEntry {
+interface SaxoExcludedEntry {
   readonly uic: number;
   readonly role: string;
   readonly first: string;
@@ -74,7 +75,7 @@ export interface SaxoExcludedEntry {
   readonly spliced_from?: SpliceRecord;
 }
 
-export interface SaxoBarsManifest {
+interface SaxoBarsManifest {
   readonly source: string;
   readonly fetched_at: string;
   readonly delayed_by_minutes: number | undefined;
@@ -179,7 +180,7 @@ function spliceRecord(
   };
 }
 
-export function parsePullArgs(argv: readonly string[]): {
+export function parseSaxoPullArgs(argv: readonly string[]): {
   outDir: string;
   auxDir: string;
   spreads: string;
@@ -292,7 +293,7 @@ export function windowStartOf(symbols: Record<string, { readonly first: string }
 }
 
 async function main(argv: readonly string[]): Promise<void> {
-  const args = parsePullArgs(argv);
+  const args = parseSaxoPullArgs(argv);
   const spreads = parseSaxoSpreadCsv(readFileSync(args.spreads, 'utf8'));
   const fxRates = parseBoeXudlussCsv(readFileSync(args.fx, 'utf8'));
   const tokens = liveTokenSource(process.env, args.tokenFile);
@@ -358,6 +359,9 @@ async function main(argv: readonly string[]): Promise<void> {
     checks,
   };
   writeFileSync(join(args.outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  execFileSync('npx', ['biome', 'format', '--write', join(args.outDir, 'manifest.json')], {
+    stdio: 'ignore',
+  });
   const lastBar = Object.values(symbols).reduce(
     (max, entry) => (entry.last > max ? entry.last : max),
     '',

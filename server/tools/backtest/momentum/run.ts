@@ -12,6 +12,7 @@ import { GRID_A, GRID_A_TRIAL_COUNT, gridForVenue, maxWarmupDays, trialHash } fr
 import { AlignedMarket, monthEndIndices } from './market.js';
 import { DEFAULT_SPREAD_PATH, halfSpreadLookup, parseSpreadCsv } from './measure-alpaca-spread.js';
 import { DEFAULT_ALPACA_BARS_DIR, DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca-bars.js';
+import { DEFAULT_SAXO_BARS_DIR } from './pull-saxo-bars.js';
 import { renderVerdictMarkdown } from './report.js';
 import type { SimulationResult, UniverseAt, VenueCosts } from './simulate.js';
 import { simulate } from './simulate.js';
@@ -19,7 +20,6 @@ import { ledgerFromGrid, mergeLedger, type TrialLedger } from './trial-ledger.js
 import type { SubBookVerdict } from './verdict.js';
 import { subBookVerdict } from './verdict.js';
 
-const DEFAULT_SAXO_BARS_DIR = 'data/bars/saxo';
 const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 const DEFAULT_OUT_DIR = 'data/backtest/momentum';
 const LEDGER_FILE = 'trials.json';

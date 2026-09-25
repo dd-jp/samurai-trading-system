@@ -376,10 +376,7 @@
   },
   "checks": {
     "distribution_adjustment": {
-      "pair": [
-        "ISF",
-        "CUKX"
-      ],
+      "pair": ["ISF", "CUKX"],
       "from": "2011-02-11",
       "to": "2026-09-25",
       "ratio_first": 0.08588018694235944,

@@ -218,7 +218,9 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(report).toContain(`LSE window from ${late[0]?.date} (binding line LATE)`);
     expect(report).toContain('VUSA from VUSD before 2016-03-01');
     expect(report).toContain('Excluded from the run: GONE — splice exceeds tolerance');
-    expect(report).toContain('LSE coverage: 0.0% of line-sessions without a Saxo bar inside the window.');
+    expect(report).toContain(
+      'LSE coverage: 0.0% of line-sessions without a Saxo bar inside the window.',
+    );
     writeFileSync(
       join(barsDir, 'manifest.json'),
       JSON.stringify({ ...manifest, window_start: calendar[100] }),
