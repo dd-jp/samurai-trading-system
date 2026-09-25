@@ -23,7 +23,7 @@ Superseded goals: the intraday flat-by-close debate-as-edge thesis (ADR-0014) an
 
 ## Where the rulings live
 
-The North Star above is the goal in one paragraph. The rulings behind every term below are `docs/research/66-v2-grill-decisions.md` (Q1–Q19, G1–G18), recorded as `docs/adr/0001-samurai-v2.md`; the ordered work is `docs/research/67-v2-plan-and-handoff.md`. v1's vocabulary (intraday, flat-by-close, flatten, 3× ETPs, D5 sizing, paper arms, tick cadence) is gone from this file; its records live at tag `v1-final`. `docs/v1-postmortem.md` holds the six v1 pitfalls that bind v2.
+The North Star above is the goal in one paragraph. The rulings behind every term below are `docs/research/66-v2-grill-decisions.md` (Q1–Q19, G1–G18, D1–D8, S1–S7), recorded as `docs/adr/0001-samurai-v2.md`; the ordered work is `docs/research/67-v2-plan-and-handoff.md`. v1's vocabulary (intraday, flat-by-close, flatten, 3× ETPs, D5 sizing, paper arms, tick cadence) is gone from this file; its records live at tag `v1-final`. `docs/v1-postmortem.md` holds the six v1 pitfalls that bind v2.
 
 ---
 
