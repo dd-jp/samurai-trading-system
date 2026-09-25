@@ -53,9 +53,18 @@ function catalogueOf(rows: readonly unknown[]): Catalogue {
 function pinMismatch(pin: ModelPin, catalogue: Catalogue): string | undefined {
   if (!catalogue.has(pin.wire)) return `${pin.seat} ${pin.wire} is not listed`;
   const slug = catalogue.get(pin.wire);
-  return slug === pin.canonicalSlug
+  return pin.canonicalSlug === undefined || slug === pin.canonicalSlug
     ? undefined
     : `${pin.seat} ${pin.wire} resolves to ${String(slug)}, pinned ${pin.canonicalSlug}`;
+}
+
+function verifiedPin(pin: ModelPin, catalogue: Catalogue) {
+  return {
+    seat: pin.seat,
+    wire: pin.wire,
+    canonical_slug: catalogue.get(pin.wire),
+    slug_verified: pin.canonicalSlug !== undefined,
+  };
 }
 
 export async function verifyNousPins(options: NousPinCheckOptions): Promise<void> {
@@ -67,16 +76,18 @@ export async function verifyNousPins(options: NousPinCheckOptions): Promise<void
   if (mismatches.length > 0) {
     throw new Error(`${REFUSAL}: ${mismatches.join('; ')} — a changed snapshot is a new trial`);
   }
+  const verified = options.pins.map((pin) => verifiedPin(pin, catalogue));
   options.logger.log({
     trace_id: 'v2-root',
     stage: 'v2',
     level: 'info',
     event: 'v2_llm_pins_verified',
-    message: options.pins.map((pin) => `${pin.wire} = ${pin.canonicalSlug}`).join(', '),
-    payload: options.pins.map((pin) => ({
-      seat: pin.seat,
-      wire: pin.wire,
-      canonical_slug: pin.canonicalSlug,
-    })),
+    message: verified
+      .map(
+        (entry) =>
+          `${entry.wire} = ${String(entry.canonical_slug)}${entry.slug_verified ? '' : ' (slug unverified)'}`,
+      )
+      .join(', '),
+    payload: verified,
   });
 }

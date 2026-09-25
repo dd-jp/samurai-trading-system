@@ -54,27 +54,77 @@ describe('verifyNousPins', () => {
       event: 'v2_llm_pins_verified',
       level: 'info',
       message:
-        'anthropic/claude-sonnet-5 = anthropic/claude-sonnet-5, openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5 = anthropic/claude-opus-5-20260723',
+        'anthropic/claude-sonnet-5 = anthropic/claude-sonnet-5 (slug unverified), openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5 = anthropic/claude-opus-5-20260723',
       payload: [
         {
           seat: 'sonnet',
           wire: 'anthropic/claude-sonnet-5',
           canonical_slug: 'anthropic/claude-sonnet-5',
+          slug_verified: false,
         },
-        { seat: 'gpt', wire: 'openai/gpt-5.5', canonical_slug: 'openai/gpt-5.5-20260423' },
+        {
+          seat: 'gpt',
+          wire: 'openai/gpt-5.5',
+          canonical_slug: 'openai/gpt-5.5-20260423',
+          slug_verified: true,
+        },
         {
           seat: 'deepseek',
           wire: 'deepseek/deepseek-v4-pro-0813',
           canonical_slug: 'deepseek/deepseek-v4-pro-20260813',
+          slug_verified: true,
         },
         {
           seat: 'judge',
           wire: 'anthropic/claude-opus-5',
           canonical_slug: 'anthropic/claude-opus-5-20260723',
+          slug_verified: true,
         },
       ],
     });
     expect(JSON.stringify(entries)).not.toContain(KEY);
+  });
+
+  it.each([
+    ['the dated shape', 'anthropic/claude-sonnet-5-20260630'],
+    ['a slug-less row', undefined],
+  ])('accepts Sonnet 5 listed with %s and logs the slug it observed', async (_label, slug) => {
+    const rows = LISTED.map((row) =>
+      row.id === 'anthropic/claude-sonnet-5' ? { id: row.id, canonical_slug: slug } : row,
+    );
+    const { entries, error } = await check(json({ data: rows }));
+    expect(error).toBeUndefined();
+    expect(entries[0]?.message).toContain(
+      `anthropic/claude-sonnet-5 = ${String(slug)} (slug unverified), openai/gpt-5.5`,
+    );
+    expect(entries[0]?.payload).toContainEqual({
+      seat: 'sonnet',
+      wire: 'anthropic/claude-sonnet-5',
+      canonical_slug: slug,
+      slug_verified: false,
+    });
+  });
+
+  it('refuses when Sonnet 5 is not listed at all', async () => {
+    const rows = LISTED.filter((row) => row.id !== 'anthropic/claude-sonnet-5');
+    const { entries, error } = await check(json({ data: rows }));
+    expect(error?.message).toBe(
+      'v2 refuses the paper run: Nous GET /models: sonnet anthropic/claude-sonnet-5 is not listed — a changed snapshot is a new trial',
+    );
+    expect(entries).toEqual([]);
+  });
+
+  it.each([
+    ['gpt', 'openai/gpt-5.5', 'openai/gpt-5.5-20260423'],
+    ['deepseek', 'deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
+    ['judge', 'anthropic/claude-opus-5', 'anthropic/claude-opus-5-20260723'],
+  ])('stays strict on the %s seat: an undated slug refuses', async (seat, wire, pinned) => {
+    const rows = LISTED.map((row) => (row.id === wire ? { id: wire, canonical_slug: wire } : row));
+    const { entries, error } = await check(json({ data: rows }));
+    expect(error?.message).toBe(
+      `v2 refuses the paper run: Nous GET /models: ${seat} ${wire} resolves to ${wire}, pinned ${pinned} — a changed snapshot is a new trial`,
+    );
+    expect(entries).toEqual([]);
   });
 
   it('never calls Nous on a dry run', async () => {
