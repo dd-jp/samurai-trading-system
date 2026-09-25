@@ -42,6 +42,15 @@ function send(broker: BrokerAdapter, order: RiskApprovedOrder): Promise<BrokerAc
   });
 }
 
+function failedSubmission(order: RiskApprovedOrder, error: unknown): Submission {
+  const { approvalId } = order;
+  if (!(error instanceof DryRunRefusedError)) {
+    return { outcome: 'rejected', detail: describeThrownSafely(error), approvalId };
+  }
+  const outcome = order.bookVariant === 'primary' ? 'refused_dry_run' : 'simulated';
+  return { outcome, detail: error.message, approvalId };
+}
+
 export class V2OrderExecutor implements OrderExecutor {
   constructor(private readonly deps: ExecutorDeps) {}
 
@@ -64,11 +73,7 @@ export class V2OrderExecutor implements OrderExecutor {
       const ack = await send(broker, order);
       return { outcome: 'submitted', detail: ack.order_state, approvalId };
     } catch (error) {
-      if (error instanceof DryRunRefusedError) {
-        const outcome = order.bookVariant === 'primary' ? 'refused_dry_run' : 'simulated';
-        return { outcome, detail: error.message, approvalId };
-      }
-      return { outcome: 'rejected', detail: describeThrownSafely(error), approvalId };
+      return failedSubmission(order, error);
     }
   }
 
