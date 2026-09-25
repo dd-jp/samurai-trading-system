@@ -76,7 +76,8 @@ export class V2RiskGate implements RiskGate {
     if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return 0;
     if (this.capitalRefusal(tradingDate) !== undefined) return 0;
     const previous = this.deps.books.lastDay(book.id)?.state;
-    const multiplier = previous?.entriesBlockedAtNextFill === true ? 0 : (previous?.sizeMultiplier ?? 1);
+    const multiplier =
+      previous?.entriesBlockedAtNextFill === true ? 0 : (previous?.sizeMultiplier ?? 1);
     const fx = quotePerGbp(this.deps.market, decision.venue, tradingDate);
     return positionSizeShares({
       equityGbp: request.equityGbp,

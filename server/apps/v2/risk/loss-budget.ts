@@ -1,10 +1,6 @@
-import type {
-  CapitalYear,
-  LossBudgetState,
-  SizeMultiplier,
-} from '../../../../contracts/index.js';
+import type { CapitalYear, LossBudgetState, SizeMultiplier } from '../../../../contracts/index.js';
 
-// G6 (4): exactly 1.0% of the year's start capital; D8 keeps it when the cap is re-set.
+// G6 (4): exactly 1.0% of the year's start capital; D8 keeps it when the cap is re-set
 export const DAILY_CAP_FRACTION_OF_START_CAPITAL = 0.01;
 
 export function sizeMultiplierFor(ytdLossGbp: number, lossCapGbp: number): SizeMultiplier {

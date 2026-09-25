@@ -15,8 +15,8 @@ import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import {
   AlpacaNewsSource,
-  type BarsSource,
   BarsMarketData,
+  type BarsSource,
   CsvBarsSource,
   currentConstituents,
   type NewsSource,
@@ -25,8 +25,8 @@ import {
 } from './data/index.js';
 import {
   type AlpacaBrokerClient,
-  type BrokerAdapter,
   alpacaPaperBroker,
+  type BrokerAdapter,
   DryRunBrokerAdapter,
   V2OrderExecutor,
 } from './execution/index.js';

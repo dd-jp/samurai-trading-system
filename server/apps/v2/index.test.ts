@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import type { CycleReport } from './cycle.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import type { CycleReport } from './cycle.js';
 import { BarsMarketData, CsvBarsSource, NO_NEWS, parseBoeGbpUsdCsv } from './data/index.js';
 import {
   composeV2Root,

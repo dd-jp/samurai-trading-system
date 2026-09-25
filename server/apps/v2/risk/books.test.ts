@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type { BookFill } from '../../../../contracts/index.js';
 import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
-import type { BookFill } from '../../../../contracts/index.js';
 import { BOOK_SPECS, PaperBooks } from './books.js';
 import { CapitalConfigStore } from './capital-config.js';
 
@@ -257,7 +257,7 @@ describe('PaperBooks', () => {
     db.close();
   });
 
-  it('opens no book before a capital config is in force, then seeds books at that year\'s start capital', () => {
+  it("opens no book before a capital config is in force, then seeds books at that year's start capital", () => {
     const db = openSharedStore(':memory:');
     expect(openBooks(db).ids()).toEqual([]);
     const count = db.prepare('SELECT COUNT(*) AS n FROM v2_books').get() as { n: number };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { JournalledOrder, SleeveDecision } from '../../../../contracts/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
-import type { JournalledOrder, SleeveDecision } from '../../../../contracts/index.js';
 import { CapitalConfigStore, PaperBooks } from '../risk/index.js';
 import { inputsHash, Journal } from './journal.js';
 

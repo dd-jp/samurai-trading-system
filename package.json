@@ -17,6 +17,7 @@
     "start": "npm run build && node --env-file=.env.local dist/server/apps/supervisor/index.js",
     "orchestrator": "npm run build && node --env-file=.env.local dist/server/apps/orchestrator/index.js",
     "api": "npm run build && node --env-file=.env.local dist/server/apps/service-api/index.js",
+    "v2:capital": "tsx server/apps/v2/set-capital.ts",
     "smoke": "npm run build && node dist/server/apps/orchestrator/smoke-run.js && node dist/server/apps/v2/smoke.js",
     "serve": "npm run start",
     "dashboard": "npm run api",

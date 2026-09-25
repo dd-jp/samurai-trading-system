@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import type { Direction } from '../../../../contracts/index.js';
+import type {
+  Direction,
+  Sleeve,
+  SleeveAction,
+  SleeveContext,
+  SleeveDecision,
+  SleeveOutput,
+  Venue,
+} from '../../../../contracts/index.js';
 import type {
   AnalystView,
   DebatePersonas,
@@ -25,14 +33,6 @@ import { STOP_ATR_MULTIPLE } from '../risk/index.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
 import { SHORTS_ENABLED } from './parameters.js';
-import type {
-  Sleeve,
-  SleeveAction,
-  SleeveContext,
-  SleeveDecision,
-  SleeveOutput,
-  Venue,
-} from '../../../../contracts/index.js';
 import type { UniverseSelection } from './universe.js';
 import { selectUniverse } from './universe.js';
 

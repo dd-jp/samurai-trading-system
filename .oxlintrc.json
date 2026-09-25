@@ -13,12 +13,27 @@
   "rules": {
     "no-comment-slop/no-banner-comment": "error",
     "no-comment-slop/no-foreign-syntax": "error",
-    "no-comment-slop/no-jargon": ["error", { "allow": ["leverage"] }],
+    "no-comment-slop/no-jargon": [
+      "error",
+      {
+        "allow": ["leverage"]
+      }
+    ],
     "no-comment-slop/no-trailing-comment": "error",
     "no-comment-slop/multiline-jsdoc-format": "error",
     "no-comment-slop/no-trailing-period": "error",
-    "no-comment-slop/max-comment-lines": ["error", { "max": 6 }],
-    "complexity": ["error", { "max": 20 }],
+    "no-comment-slop/max-comment-lines": [
+      "error",
+      {
+        "max": 6
+      }
+    ],
+    "complexity": [
+      "error",
+      {
+        "max": 20
+      }
+    ],
     "no-restricted-imports": [
       "error",
       {
@@ -2925,6 +2940,1138 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/apps/v2/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)pipeline/execution(/|$)",
+                "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
+              },
+              {
+                "group": ["**/contracts/*", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/*", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/*", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/*", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/orchestrator/*",
+                  "!**/orchestrator/index.js",
+                  "!**/orchestrator/index.ts"
+                ],
+                "message": "reach server/apps/orchestrator only via its index.ts barrel"
+              },
+              {
+                "group": ["**/supervisor/*", "!**/supervisor/index.js", "!**/supervisor/index.ts"],
+                "message": "reach server/apps/supervisor only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/control-arm/*",
+                  "!**/control-arm/index.js",
+                  "!**/control-arm/index.ts"
+                ],
+                "message": "reach server/pipeline/control-arm only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/risk-manager/*",
+                  "!**/risk-manager/index.js",
+                  "!**/risk-manager/index.ts"
+                ],
+                "message": "reach server/pipeline/risk-manager only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/outside-benchmark/*",
+                  "!**/outside-benchmark/index.js",
+                  "!**/outside-benchmark/index.ts"
+                ],
+                "message": "reach server/pipeline/outside-benchmark only via its index.ts barrel"
+              },
+              {
+                "group": ["**/trader/*", "!**/trader/index.js", "!**/trader/index.ts"],
+                "message": "reach server/pipeline/trader only via its index.ts barrel"
+              },
+              {
+                "group": ["**/verdict/*", "!**/verdict/index.js", "!**/verdict/index.ts"],
+                "message": "reach server/pipeline/verdict only via its index.ts barrel"
+              },
+              {
+                "group": ["**/cgt/*", "!**/cgt/index.js", "!**/cgt/index.ts"],
+                "message": "reach server/pipeline/cgt only via its index.ts barrel"
+              },
+              {
+                "group": ["**/analysts/*", "!**/analysts/index.js", "!**/analysts/index.ts"],
+                "message": "reach server/pipeline/analysts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/pipeline/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/feedback-loop/*",
+                  "!**/feedback-loop/index.js",
+                  "!**/feedback-loop/index.ts"
+                ],
+                "message": "reach server/pipeline/feedback-loop only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/debate-engine/*",
+                  "!**/debate-engine/index.js",
+                  "!**/debate-engine/index.ts"
+                ],
+                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
+              },
+              {
+                "group": ["**/backtest/*", "!**/backtest/index.js", "!**/backtest/index.ts"],
+                "message": "reach server/tools/backtest only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-data-service/*",
+                  "!**/market-data-service/index.js",
+                  "!**/market-data-service/index.ts"
+                ],
+                "message": "reach server/providers/market-data-service only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/universe-pool/*",
+                  "!**/universe-pool/index.js",
+                  "!**/universe-pool/index.ts"
+                ],
+                "message": "reach server/providers/universe-pool only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-intelligence/*",
+                  "!**/market-intelligence/index.js",
+                  "!**/market-intelligence/index.ts"
+                ],
+                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
+                "message": "reach server/apps/v2/data only via its index.ts barrel"
+              },
+              {
+                "group": ["**/signal/*", "!**/signal/index.js", "!**/signal/index.ts"],
+                "message": "reach server/apps/v2/signal only via its index.ts barrel"
+              },
+              {
+                "group": ["**/risk/*", "!**/risk/index.js", "!**/risk/index.ts"],
+                "message": "reach server/apps/v2/risk only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": ["**/journal/*", "!**/journal/index.js", "!**/journal/index.ts"],
+                "message": "reach server/apps/v2/journal only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/apps/v2/data/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)pipeline/execution(/|$)",
+                "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "message": "v2 data may not import v2 signal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*risk(/|$)",
+                "message": "v2 data may not import v2 risk (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "message": "v2 data may not import v2 execution (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "message": "v2 data may not import v2 journal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "group": ["**/contracts/*", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/*", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/*", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/*", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/orchestrator/*",
+                  "!**/orchestrator/index.js",
+                  "!**/orchestrator/index.ts"
+                ],
+                "message": "reach server/apps/orchestrator only via its index.ts barrel"
+              },
+              {
+                "group": ["**/supervisor/*", "!**/supervisor/index.js", "!**/supervisor/index.ts"],
+                "message": "reach server/apps/supervisor only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/control-arm/*",
+                  "!**/control-arm/index.js",
+                  "!**/control-arm/index.ts"
+                ],
+                "message": "reach server/pipeline/control-arm only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/risk-manager/*",
+                  "!**/risk-manager/index.js",
+                  "!**/risk-manager/index.ts"
+                ],
+                "message": "reach server/pipeline/risk-manager only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/outside-benchmark/*",
+                  "!**/outside-benchmark/index.js",
+                  "!**/outside-benchmark/index.ts"
+                ],
+                "message": "reach server/pipeline/outside-benchmark only via its index.ts barrel"
+              },
+              {
+                "group": ["**/trader/*", "!**/trader/index.js", "!**/trader/index.ts"],
+                "message": "reach server/pipeline/trader only via its index.ts barrel"
+              },
+              {
+                "group": ["**/verdict/*", "!**/verdict/index.js", "!**/verdict/index.ts"],
+                "message": "reach server/pipeline/verdict only via its index.ts barrel"
+              },
+              {
+                "group": ["**/cgt/*", "!**/cgt/index.js", "!**/cgt/index.ts"],
+                "message": "reach server/pipeline/cgt only via its index.ts barrel"
+              },
+              {
+                "group": ["**/analysts/*", "!**/analysts/index.js", "!**/analysts/index.ts"],
+                "message": "reach server/pipeline/analysts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/pipeline/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/feedback-loop/*",
+                  "!**/feedback-loop/index.js",
+                  "!**/feedback-loop/index.ts"
+                ],
+                "message": "reach server/pipeline/feedback-loop only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/debate-engine/*",
+                  "!**/debate-engine/index.js",
+                  "!**/debate-engine/index.ts"
+                ],
+                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
+              },
+              {
+                "group": ["**/backtest/*", "!**/backtest/index.js", "!**/backtest/index.ts"],
+                "message": "reach server/tools/backtest only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-data-service/*",
+                  "!**/market-data-service/index.js",
+                  "!**/market-data-service/index.ts"
+                ],
+                "message": "reach server/providers/market-data-service only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/universe-pool/*",
+                  "!**/universe-pool/index.js",
+                  "!**/universe-pool/index.ts"
+                ],
+                "message": "reach server/providers/universe-pool only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-intelligence/*",
+                  "!**/market-intelligence/index.js",
+                  "!**/market-intelligence/index.ts"
+                ],
+                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
+                "message": "reach server/apps/v2/data only via its index.ts barrel"
+              },
+              {
+                "group": ["**/signal/*", "!**/signal/index.js", "!**/signal/index.ts"],
+                "message": "reach server/apps/v2/signal only via its index.ts barrel"
+              },
+              {
+                "group": ["**/risk/*", "!**/risk/index.js", "!**/risk/index.ts"],
+                "message": "reach server/apps/v2/risk only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": ["**/journal/*", "!**/journal/index.js", "!**/journal/index.ts"],
+                "message": "reach server/apps/v2/journal only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/apps/v2/journal/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)pipeline/execution(/|$)",
+                "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*data(/|$)",
+                "message": "v2 journal may not import v2 data (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "message": "v2 journal may not import v2 signal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*risk(/|$)",
+                "message": "v2 journal may not import v2 risk (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "message": "v2 journal may not import v2 execution (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "group": ["**/contracts/*", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/*", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/*", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/*", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/orchestrator/*",
+                  "!**/orchestrator/index.js",
+                  "!**/orchestrator/index.ts"
+                ],
+                "message": "reach server/apps/orchestrator only via its index.ts barrel"
+              },
+              {
+                "group": ["**/supervisor/*", "!**/supervisor/index.js", "!**/supervisor/index.ts"],
+                "message": "reach server/apps/supervisor only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/control-arm/*",
+                  "!**/control-arm/index.js",
+                  "!**/control-arm/index.ts"
+                ],
+                "message": "reach server/pipeline/control-arm only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/risk-manager/*",
+                  "!**/risk-manager/index.js",
+                  "!**/risk-manager/index.ts"
+                ],
+                "message": "reach server/pipeline/risk-manager only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/outside-benchmark/*",
+                  "!**/outside-benchmark/index.js",
+                  "!**/outside-benchmark/index.ts"
+                ],
+                "message": "reach server/pipeline/outside-benchmark only via its index.ts barrel"
+              },
+              {
+                "group": ["**/trader/*", "!**/trader/index.js", "!**/trader/index.ts"],
+                "message": "reach server/pipeline/trader only via its index.ts barrel"
+              },
+              {
+                "group": ["**/verdict/*", "!**/verdict/index.js", "!**/verdict/index.ts"],
+                "message": "reach server/pipeline/verdict only via its index.ts barrel"
+              },
+              {
+                "group": ["**/cgt/*", "!**/cgt/index.js", "!**/cgt/index.ts"],
+                "message": "reach server/pipeline/cgt only via its index.ts barrel"
+              },
+              {
+                "group": ["**/analysts/*", "!**/analysts/index.js", "!**/analysts/index.ts"],
+                "message": "reach server/pipeline/analysts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/pipeline/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/feedback-loop/*",
+                  "!**/feedback-loop/index.js",
+                  "!**/feedback-loop/index.ts"
+                ],
+                "message": "reach server/pipeline/feedback-loop only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/debate-engine/*",
+                  "!**/debate-engine/index.js",
+                  "!**/debate-engine/index.ts"
+                ],
+                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
+              },
+              {
+                "group": ["**/backtest/*", "!**/backtest/index.js", "!**/backtest/index.ts"],
+                "message": "reach server/tools/backtest only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-data-service/*",
+                  "!**/market-data-service/index.js",
+                  "!**/market-data-service/index.ts"
+                ],
+                "message": "reach server/providers/market-data-service only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/universe-pool/*",
+                  "!**/universe-pool/index.js",
+                  "!**/universe-pool/index.ts"
+                ],
+                "message": "reach server/providers/universe-pool only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-intelligence/*",
+                  "!**/market-intelligence/index.js",
+                  "!**/market-intelligence/index.ts"
+                ],
+                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
+                "message": "reach server/apps/v2/data only via its index.ts barrel"
+              },
+              {
+                "group": ["**/signal/*", "!**/signal/index.js", "!**/signal/index.ts"],
+                "message": "reach server/apps/v2/signal only via its index.ts barrel"
+              },
+              {
+                "group": ["**/risk/*", "!**/risk/index.js", "!**/risk/index.ts"],
+                "message": "reach server/apps/v2/risk only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": ["**/journal/*", "!**/journal/index.js", "!**/journal/index.ts"],
+                "message": "reach server/apps/v2/journal only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/apps/v2/risk/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)pipeline/execution(/|$)",
+                "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "message": "v2 risk may not import v2 signal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "message": "v2 risk may not import v2 execution (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "message": "v2 risk may not import v2 journal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "group": ["**/contracts/*", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/*", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/*", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/*", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/orchestrator/*",
+                  "!**/orchestrator/index.js",
+                  "!**/orchestrator/index.ts"
+                ],
+                "message": "reach server/apps/orchestrator only via its index.ts barrel"
+              },
+              {
+                "group": ["**/supervisor/*", "!**/supervisor/index.js", "!**/supervisor/index.ts"],
+                "message": "reach server/apps/supervisor only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/control-arm/*",
+                  "!**/control-arm/index.js",
+                  "!**/control-arm/index.ts"
+                ],
+                "message": "reach server/pipeline/control-arm only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/risk-manager/*",
+                  "!**/risk-manager/index.js",
+                  "!**/risk-manager/index.ts"
+                ],
+                "message": "reach server/pipeline/risk-manager only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/outside-benchmark/*",
+                  "!**/outside-benchmark/index.js",
+                  "!**/outside-benchmark/index.ts"
+                ],
+                "message": "reach server/pipeline/outside-benchmark only via its index.ts barrel"
+              },
+              {
+                "group": ["**/trader/*", "!**/trader/index.js", "!**/trader/index.ts"],
+                "message": "reach server/pipeline/trader only via its index.ts barrel"
+              },
+              {
+                "group": ["**/verdict/*", "!**/verdict/index.js", "!**/verdict/index.ts"],
+                "message": "reach server/pipeline/verdict only via its index.ts barrel"
+              },
+              {
+                "group": ["**/cgt/*", "!**/cgt/index.js", "!**/cgt/index.ts"],
+                "message": "reach server/pipeline/cgt only via its index.ts barrel"
+              },
+              {
+                "group": ["**/analysts/*", "!**/analysts/index.js", "!**/analysts/index.ts"],
+                "message": "reach server/pipeline/analysts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/pipeline/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/feedback-loop/*",
+                  "!**/feedback-loop/index.js",
+                  "!**/feedback-loop/index.ts"
+                ],
+                "message": "reach server/pipeline/feedback-loop only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/debate-engine/*",
+                  "!**/debate-engine/index.js",
+                  "!**/debate-engine/index.ts"
+                ],
+                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
+              },
+              {
+                "group": ["**/backtest/*", "!**/backtest/index.js", "!**/backtest/index.ts"],
+                "message": "reach server/tools/backtest only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-data-service/*",
+                  "!**/market-data-service/index.js",
+                  "!**/market-data-service/index.ts"
+                ],
+                "message": "reach server/providers/market-data-service only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/universe-pool/*",
+                  "!**/universe-pool/index.js",
+                  "!**/universe-pool/index.ts"
+                ],
+                "message": "reach server/providers/universe-pool only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-intelligence/*",
+                  "!**/market-intelligence/index.js",
+                  "!**/market-intelligence/index.ts"
+                ],
+                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
+                "message": "reach server/apps/v2/data only via its index.ts barrel"
+              },
+              {
+                "group": ["**/signal/*", "!**/signal/index.js", "!**/signal/index.ts"],
+                "message": "reach server/apps/v2/signal only via its index.ts barrel"
+              },
+              {
+                "group": ["**/risk/*", "!**/risk/index.js", "!**/risk/index.ts"],
+                "message": "reach server/apps/v2/risk only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": ["**/journal/*", "!**/journal/index.js", "!**/journal/index.ts"],
+                "message": "reach server/apps/v2/journal only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/apps/v2/signal/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)pipeline/execution(/|$)",
+                "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "message": "v2 signal may not import v2 execution (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "group": ["**/contracts/*", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/*", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/*", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/*", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/orchestrator/*",
+                  "!**/orchestrator/index.js",
+                  "!**/orchestrator/index.ts"
+                ],
+                "message": "reach server/apps/orchestrator only via its index.ts barrel"
+              },
+              {
+                "group": ["**/supervisor/*", "!**/supervisor/index.js", "!**/supervisor/index.ts"],
+                "message": "reach server/apps/supervisor only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/control-arm/*",
+                  "!**/control-arm/index.js",
+                  "!**/control-arm/index.ts"
+                ],
+                "message": "reach server/pipeline/control-arm only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/risk-manager/*",
+                  "!**/risk-manager/index.js",
+                  "!**/risk-manager/index.ts"
+                ],
+                "message": "reach server/pipeline/risk-manager only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/outside-benchmark/*",
+                  "!**/outside-benchmark/index.js",
+                  "!**/outside-benchmark/index.ts"
+                ],
+                "message": "reach server/pipeline/outside-benchmark only via its index.ts barrel"
+              },
+              {
+                "group": ["**/trader/*", "!**/trader/index.js", "!**/trader/index.ts"],
+                "message": "reach server/pipeline/trader only via its index.ts barrel"
+              },
+              {
+                "group": ["**/verdict/*", "!**/verdict/index.js", "!**/verdict/index.ts"],
+                "message": "reach server/pipeline/verdict only via its index.ts barrel"
+              },
+              {
+                "group": ["**/cgt/*", "!**/cgt/index.js", "!**/cgt/index.ts"],
+                "message": "reach server/pipeline/cgt only via its index.ts barrel"
+              },
+              {
+                "group": ["**/analysts/*", "!**/analysts/index.js", "!**/analysts/index.ts"],
+                "message": "reach server/pipeline/analysts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/pipeline/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/feedback-loop/*",
+                  "!**/feedback-loop/index.js",
+                  "!**/feedback-loop/index.ts"
+                ],
+                "message": "reach server/pipeline/feedback-loop only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/debate-engine/*",
+                  "!**/debate-engine/index.js",
+                  "!**/debate-engine/index.ts"
+                ],
+                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
+              },
+              {
+                "group": ["**/backtest/*", "!**/backtest/index.js", "!**/backtest/index.ts"],
+                "message": "reach server/tools/backtest only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-data-service/*",
+                  "!**/market-data-service/index.js",
+                  "!**/market-data-service/index.ts"
+                ],
+                "message": "reach server/providers/market-data-service only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/universe-pool/*",
+                  "!**/universe-pool/index.js",
+                  "!**/universe-pool/index.ts"
+                ],
+                "message": "reach server/providers/universe-pool only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-intelligence/*",
+                  "!**/market-intelligence/index.js",
+                  "!**/market-intelligence/index.ts"
+                ],
+                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
+                "message": "reach server/apps/v2/data only via its index.ts barrel"
+              },
+              {
+                "group": ["**/signal/*", "!**/signal/index.js", "!**/signal/index.ts"],
+                "message": "reach server/apps/v2/signal only via its index.ts barrel"
+              },
+              {
+                "group": ["**/risk/*", "!**/risk/index.js", "!**/risk/index.ts"],
+                "message": "reach server/apps/v2/risk only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": ["**/journal/*", "!**/journal/index.js", "!**/journal/index.ts"],
+                "message": "reach server/apps/v2/journal only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/apps/v2/execution/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*data(/|$)",
+                "message": "v2 execution may not import v2 data (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "message": "v2 execution may not import v2 signal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "message": "v2 execution may not import v2 journal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "group": ["**/contracts/*", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/*", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/*", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/*", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/orchestrator/*",
+                  "!**/orchestrator/index.js",
+                  "!**/orchestrator/index.ts"
+                ],
+                "message": "reach server/apps/orchestrator only via its index.ts barrel"
+              },
+              {
+                "group": ["**/supervisor/*", "!**/supervisor/index.js", "!**/supervisor/index.ts"],
+                "message": "reach server/apps/supervisor only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/control-arm/*",
+                  "!**/control-arm/index.js",
+                  "!**/control-arm/index.ts"
+                ],
+                "message": "reach server/pipeline/control-arm only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/risk-manager/*",
+                  "!**/risk-manager/index.js",
+                  "!**/risk-manager/index.ts"
+                ],
+                "message": "reach server/pipeline/risk-manager only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/outside-benchmark/*",
+                  "!**/outside-benchmark/index.js",
+                  "!**/outside-benchmark/index.ts"
+                ],
+                "message": "reach server/pipeline/outside-benchmark only via its index.ts barrel"
+              },
+              {
+                "group": ["**/trader/*", "!**/trader/index.js", "!**/trader/index.ts"],
+                "message": "reach server/pipeline/trader only via its index.ts barrel"
+              },
+              {
+                "group": ["**/verdict/*", "!**/verdict/index.js", "!**/verdict/index.ts"],
+                "message": "reach server/pipeline/verdict only via its index.ts barrel"
+              },
+              {
+                "group": ["**/cgt/*", "!**/cgt/index.js", "!**/cgt/index.ts"],
+                "message": "reach server/pipeline/cgt only via its index.ts barrel"
+              },
+              {
+                "group": ["**/analysts/*", "!**/analysts/index.js", "!**/analysts/index.ts"],
+                "message": "reach server/pipeline/analysts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/pipeline/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/feedback-loop/*",
+                  "!**/feedback-loop/index.js",
+                  "!**/feedback-loop/index.ts"
+                ],
+                "message": "reach server/pipeline/feedback-loop only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/debate-engine/*",
+                  "!**/debate-engine/index.js",
+                  "!**/debate-engine/index.ts"
+                ],
+                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
+              },
+              {
+                "group": ["**/backtest/*", "!**/backtest/index.js", "!**/backtest/index.ts"],
+                "message": "reach server/tools/backtest only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-data-service/*",
+                  "!**/market-data-service/index.js",
+                  "!**/market-data-service/index.ts"
+                ],
+                "message": "reach server/providers/market-data-service only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/universe-pool/*",
+                  "!**/universe-pool/index.js",
+                  "!**/universe-pool/index.ts"
+                ],
+                "message": "reach server/providers/universe-pool only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-intelligence/*",
+                  "!**/market-intelligence/index.js",
+                  "!**/market-intelligence/index.ts"
+                ],
+                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
+                "message": "reach server/apps/v2/data only via its index.ts barrel"
+              },
+              {
+                "group": ["**/signal/*", "!**/signal/index.js", "!**/signal/index.ts"],
+                "message": "reach server/apps/v2/signal only via its index.ts barrel"
+              },
+              {
+                "group": ["**/risk/*", "!**/risk/index.js", "!**/risk/index.ts"],
+                "message": "reach server/apps/v2/risk only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": ["**/journal/*", "!**/journal/index.js", "!**/journal/index.ts"],
+                "message": "reach server/apps/v2/journal only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/apps/v2/cycle.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)pipeline/execution(/|$)",
+                "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*risk(/|$)",
+                "message": "v2 cycle may not import v2 risk (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "message": "v2 cycle may not import v2 execution (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "message": "v2 cycle may not import v2 journal (doc 67 Step 3a module boundaries)"
+              },
+              {
+                "group": ["**/contracts/*", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/*", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/*", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/*", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/orchestrator/*",
+                  "!**/orchestrator/index.js",
+                  "!**/orchestrator/index.ts"
+                ],
+                "message": "reach server/apps/orchestrator only via its index.ts barrel"
+              },
+              {
+                "group": ["**/supervisor/*", "!**/supervisor/index.js", "!**/supervisor/index.ts"],
+                "message": "reach server/apps/supervisor only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/control-arm/*",
+                  "!**/control-arm/index.js",
+                  "!**/control-arm/index.ts"
+                ],
+                "message": "reach server/pipeline/control-arm only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/risk-manager/*",
+                  "!**/risk-manager/index.js",
+                  "!**/risk-manager/index.ts"
+                ],
+                "message": "reach server/pipeline/risk-manager only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/outside-benchmark/*",
+                  "!**/outside-benchmark/index.js",
+                  "!**/outside-benchmark/index.ts"
+                ],
+                "message": "reach server/pipeline/outside-benchmark only via its index.ts barrel"
+              },
+              {
+                "group": ["**/trader/*", "!**/trader/index.js", "!**/trader/index.ts"],
+                "message": "reach server/pipeline/trader only via its index.ts barrel"
+              },
+              {
+                "group": ["**/verdict/*", "!**/verdict/index.js", "!**/verdict/index.ts"],
+                "message": "reach server/pipeline/verdict only via its index.ts barrel"
+              },
+              {
+                "group": ["**/cgt/*", "!**/cgt/index.js", "!**/cgt/index.ts"],
+                "message": "reach server/pipeline/cgt only via its index.ts barrel"
+              },
+              {
+                "group": ["**/analysts/*", "!**/analysts/index.js", "!**/analysts/index.ts"],
+                "message": "reach server/pipeline/analysts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/pipeline/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/feedback-loop/*",
+                  "!**/feedback-loop/index.js",
+                  "!**/feedback-loop/index.ts"
+                ],
+                "message": "reach server/pipeline/feedback-loop only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/debate-engine/*",
+                  "!**/debate-engine/index.js",
+                  "!**/debate-engine/index.ts"
+                ],
+                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
+              },
+              {
+                "group": ["**/backtest/*", "!**/backtest/index.js", "!**/backtest/index.ts"],
+                "message": "reach server/tools/backtest only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-data-service/*",
+                  "!**/market-data-service/index.js",
+                  "!**/market-data-service/index.ts"
+                ],
+                "message": "reach server/providers/market-data-service only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/universe-pool/*",
+                  "!**/universe-pool/index.js",
+                  "!**/universe-pool/index.ts"
+                ],
+                "message": "reach server/providers/universe-pool only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/market-intelligence/*",
+                  "!**/market-intelligence/index.js",
+                  "!**/market-intelligence/index.ts"
+                ],
+                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
+                "message": "reach server/apps/v2/data only via its index.ts barrel"
+              },
+              {
+                "group": ["**/signal/*", "!**/signal/index.js", "!**/signal/index.ts"],
+                "message": "reach server/apps/v2/signal only via its index.ts barrel"
+              },
+              {
+                "group": ["**/risk/*", "!**/risk/index.js", "!**/risk/index.ts"],
+                "message": "reach server/apps/v2/risk only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/*", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": ["**/journal/*", "!**/journal/index.js", "!**/journal/index.ts"],
+                "message": "reach server/apps/v2/journal only via its index.ts barrel"
               }
             ]
           }

@@ -8,9 +8,7 @@ function bar(date: string, rawClose: number): V2Bar {
 
 describe('BarsMarketData', () => {
   const load = vi.fn((symbol: string) =>
-    symbol === 'UP'
-      ? { symbol, bars: [bar('2026-09-23', 10), bar('2026-09-24', 11)] }
-      : undefined,
+    symbol === 'UP' ? { symbol, bars: [bar('2026-09-23', 10), bar('2026-09-24', 11)] } : undefined,
   );
   const market = new BarsMarketData({ load }, [
     { date: '2025-12-31', gbpUsd: 1.3 },

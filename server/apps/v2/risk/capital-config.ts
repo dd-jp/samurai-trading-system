@@ -41,7 +41,8 @@ export class CapitalConfigStore {
   ) {}
 
   setYear(year: number, startCapitalGbp: number, lossCapGbp: number): CapitalYear {
-    if (!Number.isInteger(year)) throw new CapitalConfigError(`year must be an integer (got ${year})`);
+    if (!Number.isInteger(year))
+      throw new CapitalConfigError(`year must be an integer (got ${year})`);
     assertPositive('start capital', startCapitalGbp);
     assertPositive('loss cap', lossCapGbp);
     if (this.#latestOfYear(year) !== undefined) {

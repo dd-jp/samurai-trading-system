@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { MarketData, Sleeve, SleeveDecision } from '../../../contracts/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -8,7 +9,6 @@ import type {
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import type { MarketData, Sleeve, SleeveDecision } from '../../../contracts/index.js';
 import { type CycleDeps, calendarDaysBetween, runCycle } from './cycle.js';
 import { DryRunBrokerAdapter, V2OrderExecutor } from './execution/index.js';
 import { Journal } from './journal/index.js';
@@ -161,8 +161,7 @@ function harness(
   const books = new PaperBooks(db, clock, capital, '2026-09-01');
   const simulatedBroker = new DryRunBrokerAdapter({
     halfSpreadBps: () => HALF_SPREAD_BPS,
-    markPrice: (instrument) =>
-      barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
+    markPrice: (instrument) => barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
     clock,
   });
   return {

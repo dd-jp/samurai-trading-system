@@ -1,10 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
-import type { Clock } from '../../../shared/index.js';
-import { digest } from '../../../shared/index.js';
-import type { StoreHandle } from '../../../shared/store/index.js';
-import { toStoredTimestamp } from '../../../shared/store/index.js';
 import type {
   DecisionJournal,
   JournalledFill,
@@ -12,6 +6,12 @@ import type {
   JournalledRefusal,
   SleeveDecision,
 } from '../../../../contracts/index.js';
+import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
+import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import type { Clock } from '../../../shared/index.js';
+import { digest } from '../../../shared/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { toStoredTimestamp } from '../../../shared/store/index.js';
 
 export function inputsHash(
   bars: readonly DailyBar[],

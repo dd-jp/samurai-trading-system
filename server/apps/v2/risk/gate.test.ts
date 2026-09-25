@@ -186,8 +186,9 @@ describe('V2RiskGate', () => {
     });
     expect(isRiskApproved(exit)).toBe(true);
     const halted = gate({ state: { halted: true, sizeMultiplier: 0 } });
-    expect(halted.approveExit({ book: primary, held: { ...held, qty: 4 }, clientOrderId: 'x2' }))
-      .toMatchObject({ side: 'sell', size: 4 });
+    expect(
+      halted.approveExit({ book: primary, held: { ...held, qty: 4 }, clientOrderId: 'x2' }),
+    ).toMatchObject({ side: 'sell', size: 4 });
   });
 
   it('never approves a copy or a look-alike', () => {
