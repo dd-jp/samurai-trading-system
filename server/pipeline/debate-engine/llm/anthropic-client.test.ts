@@ -1,3 +1,4 @@
+import type { AnthropicUsage } from '../../../shared/llm/index.js';
 import { hashPromptTemplate } from '../../../shared/llm/prompt-template-hash.js';
 import type {
   AnthropicMessageRequest,
@@ -205,6 +206,25 @@ describe('AnthropicLlmClient', () => {
     expect(error).toBeInstanceOf(LlmRateLimitError);
     expect((error as LlmRateLimitError).retryAfterMs).toBe(expected);
   });
+
+  it.each([null, undefined, 'socket hang up'])(
+    'classifies a non-object rejection (%s) as LlmProviderError',
+    async (rejection) => {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockRejectedValue(rejection),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'anthropic/claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry: NO_RETRY,
+      });
+
+      const error = await client.complete(request()).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(LlmProviderError);
+      expect((error as Error).message).toBe(String(rejection));
+    },
+  );
 
   it('classifies an unrecognized error as LlmProviderError', async () => {
     const wire: AnthropicMessagesClient = {
@@ -1089,6 +1109,14 @@ describe('AnthropicLlmClient bills replies the transport rejected', () => {
       .complete(request())
       .catch(() => {});
     expect(unnamed.records[0]?.model).toBe('openai/gpt-5.6-luna');
+    const misnamed = recordingSink();
+    await clientThrowing(
+      new LlmProviderError('swapped', { usage, model: 42 as unknown as string }),
+      misnamed,
+    )
+      .complete(request())
+      .catch(() => {});
+    expect(misnamed.records[0]?.model).toBe('openai/gpt-5.6-luna');
   });
 
   it('records nothing for an error that carries no usage or a malformed one', async () => {
@@ -1096,8 +1124,16 @@ describe('AnthropicLlmClient bills replies the transport rejected', () => {
       new LlmProviderError('down'),
       new LlmRateLimitError('slow'),
       new LlmRefusalError('no', 'message.refusal'),
-      Object.assign(new Error('odd'), { usage: { input_tokens: '1', output_tokens: 2 } }),
-      Object.assign(new Error('odd'), { usage: null }),
+      new LlmRefusalError('no', 'message.refusal', {
+        input_tokens: '1' as unknown as number,
+        output_tokens: 2,
+      }),
+      new LlmTruncatedError('cut', 'openai/gpt-5.6-luna', 100, {
+        input_tokens: 1,
+        output_tokens: '2' as unknown as number,
+      }),
+      new LlmProviderError('odd', { usage: null as unknown as AnthropicUsage }),
+      new LlmProviderError('odd', { usage: 'many' as unknown as AnthropicUsage }),
     ]) {
       const sink = recordingSink();
       await clientThrowing(error, sink)

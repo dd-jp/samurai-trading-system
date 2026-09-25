@@ -21,12 +21,12 @@ function json(body: unknown, status = 200) {
   return answering(() => Promise.resolve(new Response(JSON.stringify(body), { status })));
 }
 
-async function check(fetchImpl: typeof fetch, dryRun = false) {
+async function check(fetchImpl: typeof fetch, dryRun = false, apiKey: string | undefined = KEY) {
   const entries: LogEntry[] = [];
   const outcome = await verifyNousPins({
     dryRun,
     baseUrl: 'https://nous.test/v1',
-    apiKey: KEY,
+    apiKey,
     pins: ALL_PINS,
     logger: { log: (entry) => entries.push(entry) },
     fetch: fetchImpl,
@@ -49,8 +49,12 @@ describe('verifyNousPins', () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
+      trace_id: 'v2-root',
+      stage: 'v2',
       event: 'v2_llm_pins_verified',
       level: 'info',
+      message:
+        'anthropic/claude-sonnet-5 = anthropic/claude-sonnet-5, openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5 = anthropic/claude-opus-5-20260723',
       payload: [
         {
           seat: 'sonnet',
@@ -103,11 +107,9 @@ describe('verifyNousPins', () => {
       'not-a-row',
     ];
     const { error } = await check(json({ data: rows }));
-    expect(error?.message).toContain('gpt openai/gpt-5.5 is not listed');
-    expect(error?.message).toContain(
-      'deepseek deepseek/deepseek-v4-pro-0813 resolves to undefined, pinned deepseek/deepseek-v4-pro-20260813',
+    expect(error?.message).toBe(
+      'v2 refuses the paper run: Nous GET /models: gpt openai/gpt-5.5 is not listed; deepseek deepseek/deepseek-v4-pro-0813 resolves to undefined, pinned deepseek/deepseek-v4-pro-20260813 — a changed snapshot is a new trial',
     );
-    expect(error?.message).not.toContain('sonnet');
   });
 
   it.each([401, 500])('fails closed on HTTP %i without echoing the key', async (status) => {
@@ -137,8 +139,16 @@ describe('verifyNousPins', () => {
     );
   });
 
-  it('fails closed on a non-Error rejection', async () => {
-    const { error } = await check(answering(() => Promise.reject('socket hang up')));
+  it.each([
+    ['a key', KEY],
+    ['an empty key', ''],
+    ['no key', undefined],
+  ])('fails closed on a non-Error rejection with %s', async (_label, apiKey) => {
+    const { error } = await check(
+      answering(() => Promise.reject('socket hang up')),
+      false,
+      apiKey,
+    );
     expect(error?.message).toBe(
       'v2 refuses the paper run: Nous GET /models failed: socket hang up',
     );

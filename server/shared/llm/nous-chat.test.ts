@@ -255,6 +255,15 @@ describe('nousChat', () => {
       expect(result.model).toBe('openai/gpt-5.6-luna');
       expect(result.upstream_model).toBeUndefined();
     });
+
+    it('reports no upstream model when the echo is not a string', async () => {
+      stubFetch(completion({ model: 42 }));
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      expect(result.model).toBe('openai/gpt-5.6-luna');
+      expect(result.upstream_model).toBeUndefined();
+    });
   });
 
   describe('time-to-first-byte (#1012)', () => {

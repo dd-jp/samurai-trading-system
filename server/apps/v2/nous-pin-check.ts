@@ -35,18 +35,19 @@ async function requestCatalogue(options: NousPinCheckOptions): Promise<Response>
 
 async function catalogueRows(response: Response): Promise<unknown[]> {
   if (!response.ok) throw new Error(`${REFUSAL} answered HTTP ${response.status}`);
-  const body: unknown = await response.json().catch(() => undefined);
-  const data =
-    typeof body === 'object' && body !== null ? (body as { data?: unknown }).data : undefined;
+  const body = (await response.json().catch(() => undefined)) as { data?: unknown } | null;
+  const data = body?.data;
   if (!Array.isArray(data)) throw new Error(`${REFUSAL} returned no "data" array`);
   return data;
 }
 
 function catalogueOf(rows: readonly unknown[]): Catalogue {
-  const entries = rows
-    .filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null)
-    .map((row) => [row.id, row.canonical_slug] as const);
-  return new Map(entries);
+  return new Map(
+    rows.map((row) => {
+      const entry = row as { id?: unknown; canonical_slug?: unknown } | null;
+      return [entry?.id, entry?.canonical_slug] as const;
+    }),
+  );
 }
 
 function pinMismatch(pin: ModelPin, catalogue: Catalogue): string | undefined {
