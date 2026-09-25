@@ -1,7 +1,9 @@
 {
   "source": "Saxo OpenAPI GET /chart/v3/charts, Horizon=1440, Count=1200, paged back with Mode=UpTo; prices in GBP (GBX lines × 0.01 per the LSE instrument list currency, checked against PriceToContractFactor)",
-  "fetched_at": "2026-09-25T11:16:07.134Z",
+  "fetched_at": "2026-09-25T11:43:47.181Z",
   "delayed_by_minutes": 15,
+  "fetch_date_bars_dropped": "2026-09-25",
+  "hygiene": "weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw",
   "calendar_reference": "ISF",
   "window_start": "2016-06-21",
   "window_binding_line": "IITU",
@@ -19,11 +21,23 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2000-04-28",
-      "last": "2026-09-25",
-      "bars": 6678,
-      "density": 1.003434065934066,
+      "last": "2026-09-24",
+      "bars": 6672,
+      "density": 1.0026364511590018,
       "half_spread_bps": 0.961,
-      "half_spread_median_bps": 0.961
+      "half_spread_median_bps": 0.961,
+      "hygiene": {
+        "dropped_dates": [
+          "2007-12-30",
+          "2008-01-27",
+          "2008-02-17",
+          "2008-02-24",
+          "2008-04-27",
+          "2026-09-25"
+        ],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "VMID": {
       "uic": 1207647,
@@ -33,11 +47,21 @@
       "price_to_contract_factor": 1,
       "is_complex": false,
       "first": "2014-10-01",
-      "last": "2026-09-25",
-      "bars": 3029,
-      "density": 1.0030265076101266,
+      "last": "2026-09-24",
+      "bars": 3028,
+      "density": 1.0029245016105162,
       "half_spread_bps": 3.384,
-      "half_spread_median_bps": 3.384
+      "half_spread_median_bps": 3.384,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [
+          {
+            "date": "2014-10-17",
+            "factor": 0.01
+          }
+        ],
+        "holes": []
+      }
     },
     "CUKS": {
       "uic": 435060,
@@ -47,11 +71,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2010-09-22",
-      "last": "2026-09-25",
-      "bars": 3619,
-      "density": 0.8971089162533493,
+      "last": "2026-09-24",
+      "bars": 3618,
+      "density": 0.8970144421093788,
       "half_spread_bps": 21.164,
-      "half_spread_median_bps": 23.807
+      "half_spread_median_bps": 23.807,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "IUSA": {
       "uic": 19727,
@@ -61,11 +90,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2002-03-19",
-      "last": "2026-09-25",
-      "bars": 5880,
-      "density": 0.9515966949531041,
+      "last": "2026-09-24",
+      "bars": 5879,
+      "density": 0.9515411049958789,
       "half_spread_bps": 0.646,
-      "half_spread_median_bps": 1.076
+      "half_spread_median_bps": 1.076,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "CUS1": {
       "uic": 53915,
@@ -75,11 +109,21 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2011-08-01",
-      "last": "2026-09-25",
-      "bars": 3270,
-      "density": 0.8564426403015127,
+      "last": "2026-09-24",
+      "bars": 3269,
+      "density": 0.8563354720163865,
       "half_spread_bps": 7.851,
-      "half_spread_median_bps": 7.851
+      "half_spread_median_bps": 7.851,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": [],
+        "suspect_flips": {
+          "count": 65,
+          "from": "2011-08-05",
+          "to": "2013-05-03"
+        }
+      }
     },
     "IEUX": {
       "uic": 53888,
@@ -89,11 +133,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2011-08-02",
-      "last": "2026-09-25",
-      "bars": 3829,
-      "density": 1.003031056087716,
+      "last": "2026-09-24",
+      "bars": 3828,
+      "density": 1.0029503666976554,
       "half_spread_bps": 2.648,
-      "half_spread_median_bps": 2.648
+      "half_spread_median_bps": 2.648,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "IJPN": {
       "uic": 19726,
@@ -103,11 +152,29 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2004-10-04",
-      "last": "2026-09-25",
-      "bars": 5563,
-      "density": 1.0046148380857451,
+      "last": "2026-09-24",
+      "bars": 5551,
+      "density": 1.0025726895119418,
       "half_spread_bps": 5.192,
-      "half_spread_median_bps": 5.192
+      "half_spread_median_bps": 5.192,
+      "hygiene": {
+        "dropped_dates": [
+          "2007-08-19",
+          "2007-11-18",
+          "2007-12-02",
+          "2007-12-16",
+          "2007-12-23",
+          "2007-12-30",
+          "2008-01-06",
+          "2008-01-13",
+          "2008-02-17",
+          "2008-02-24",
+          "2008-03-09",
+          "2026-09-25"
+        ],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "CPJ1": {
       "uic": 969857,
@@ -117,11 +184,21 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2010-09-28",
-      "last": "2026-09-25",
-      "bars": 3246,
-      "density": 0.8054730109814856,
+      "last": "2026-09-24",
+      "bars": 3245,
+      "density": 0.8053627486953686,
       "half_spread_bps": 3.539,
-      "half_spread_median_bps": 4.084
+      "half_spread_median_bps": 4.084,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": [],
+        "suspect_flips": {
+          "count": 2,
+          "from": "2014-11-27",
+          "to": "2014-11-28"
+        }
+      }
     },
     "IEEM": {
       "uic": 21528,
@@ -131,11 +208,29 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2005-11-21",
-      "last": "2026-09-25",
-      "bars": 5277,
-      "density": 1.004664249122741,
+      "last": "2026-09-24",
+      "bars": 5265,
+      "density": 1.0025113073342842,
       "half_spread_bps": 3.687,
-      "half_spread_median_bps": 3.687
+      "half_spread_median_bps": 3.687,
+      "hygiene": {
+        "dropped_dates": [
+          "2007-08-05",
+          "2007-09-02",
+          "2007-11-11",
+          "2007-11-18",
+          "2007-12-02",
+          "2007-12-16",
+          "2007-12-30",
+          "2008-01-06",
+          "2008-01-20",
+          "2008-02-17",
+          "2008-02-24",
+          "2026-09-25"
+        ],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "IITU": {
       "uic": 9404259,
@@ -145,11 +240,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2016-06-21",
-      "last": "2026-09-25",
-      "bars": 2521,
-      "density": 0.9749064580474666,
+      "last": "2026-09-24",
+      "bars": 2520,
+      "density": 0.9747798238590872,
       "half_spread_bps": 6.177,
-      "half_spread_median_bps": 6.177
+      "half_spread_median_bps": 6.177,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "IESU": {
       "uic": 56577302,
@@ -159,11 +259,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2015-12-03",
-      "last": "2026-09-25",
-      "bars": 2472,
-      "density": 0.9073002206706942,
+      "last": "2026-09-24",
+      "bars": 2470,
+      "density": 0.9067957856901626,
       "half_spread_bps": 5.03,
-      "half_spread_median_bps": 5.03
+      "half_spread_median_bps": 5.03,
+      "hygiene": {
+        "dropped_dates": ["2017-01-01", "2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "UIFS": {
       "uic": 9140117,
@@ -173,11 +278,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2016-06-20",
-      "last": "2026-09-25",
-      "bars": 2523,
-      "density": 0.9754196357123804,
+      "last": "2026-09-24",
+      "bars": 2522,
+      "density": 0.9752931722315393,
       "half_spread_bps": 6.129,
-      "half_spread_median_bps": 6.129
+      "half_spread_median_bps": 6.129,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "ICDU": {
       "uic": 56577120,
@@ -187,11 +297,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2016-01-28",
-      "last": "2026-09-25",
-      "bars": 2199,
-      "density": 0.8187107812557337,
+      "last": "2026-09-24",
+      "bars": 2198,
+      "density": 0.8185487324426174,
       "half_spread_bps": 6.215,
-      "half_spread_median_bps": 6.215
+      "half_spread_median_bps": 6.215,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "SPGP": {
       "uic": 117643,
@@ -201,11 +316,21 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2011-09-22",
-      "last": "2026-09-25",
-      "bars": 3757,
-      "density": 0.9933261018745332,
+      "last": "2026-09-24",
+      "bars": 3756,
+      "density": 0.9932428910261422,
       "half_spread_bps": 10.692,
-      "half_spread_median_bps": 10.692
+      "half_spread_median_bps": 10.692,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": [],
+        "suspect_flips": {
+          "count": 65,
+          "from": "2012-01-11",
+          "to": "2012-11-06"
+        }
+      }
     },
     "SPOG": {
       "uic": 3669356,
@@ -215,11 +340,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2011-10-10",
-      "last": "2026-09-25",
-      "bars": 3551,
-      "density": 0.941953936589277,
+      "last": "2026-09-24",
+      "bars": 3550,
+      "density": 0.9418610479154136,
       "half_spread_bps": 9.577,
-      "half_spread_median_bps": 9.577
+      "half_spread_median_bps": 9.577,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "IUKP": {
       "uic": 37368,
@@ -229,11 +359,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": false,
       "first": "2007-03-20",
-      "last": "2026-09-25",
-      "bars": 4930,
-      "density": 1.0023236745953819,
+      "last": "2026-09-24",
+      "bars": 4929,
+      "density": 1.002260952781786,
       "half_spread_bps": 6.376,
-      "half_spread_median_bps": 6.376
+      "half_spread_median_bps": 6.376,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "IGLT": {
       "uic": 52706,
@@ -243,11 +378,21 @@
       "price_to_contract_factor": 1,
       "is_complex": false,
       "first": "2006-12-04",
-      "last": "2026-09-25",
-      "bars": 4793,
-      "density": 0.9601930924408464,
+      "last": "2026-09-24",
+      "bars": 4792,
+      "density": 0.960125465724028,
       "half_spread_bps": 2.626,
-      "half_spread_median_bps": 2.626
+      "half_spread_median_bps": 2.626,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [
+          {
+            "date": "2011-10-20",
+            "factor": 0.01
+          }
+        ],
+        "holes": []
+      }
     },
     "INXG": {
       "uic": 205626,
@@ -257,11 +402,16 @@
       "price_to_contract_factor": 1,
       "is_complex": false,
       "first": "2006-12-04",
-      "last": "2026-09-25",
-      "bars": 5002,
-      "density": 1.0020625596472175,
+      "last": "2026-09-24",
+      "bars": 5001,
+      "density": 1.0020007208025592,
       "half_spread_bps": 9.166,
-      "half_spread_median_bps": 9.166
+      "half_spread_median_bps": 9.166,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "SLXX": {
       "uic": 275764,
@@ -271,11 +421,16 @@
       "price_to_contract_factor": 1,
       "is_complex": false,
       "first": "2004-03-30",
-      "last": "2026-09-25",
-      "bars": 5680,
-      "density": 1.0022667455099887,
+      "last": "2026-09-24",
+      "bars": 5679,
+      "density": 1.0022123027952201,
       "half_spread_bps": 2.133,
-      "half_spread_median_bps": 2.56
+      "half_spread_median_bps": 2.56,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     },
     "VUTY": {
       "uic": 7962187,
@@ -285,11 +440,21 @@
       "price_to_contract_factor": 1,
       "is_complex": false,
       "first": "2016-03-03",
-      "last": "2026-09-25",
-      "bars": 2495,
-      "density": 0.9373418561307364,
+      "last": "2026-09-24",
+      "bars": 2494,
+      "density": 0.9372090941639813,
       "half_spread_bps": 2.898,
-      "half_spread_median_bps": 2.898
+      "half_spread_median_bps": 2.898,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": [],
+        "suspect_flips": {
+          "count": 2,
+          "from": "2016-03-11",
+          "to": "2016-03-16"
+        }
+      }
     },
     "SGLN": {
       "uic": 54130,
@@ -299,11 +464,21 @@
       "price_to_contract_factor": 0.01,
       "is_complex": true,
       "first": "2011-04-14",
-      "last": "2026-09-25",
-      "bars": 3878,
-      "density": 0.9960644456258492,
+      "last": "2026-09-24",
+      "bars": 3877,
+      "density": 0.995984094630408,
       "half_spread_bps": 1.584,
-      "half_spread_median_bps": 1.584
+      "half_spread_median_bps": 1.584,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [
+          {
+            "date": "2017-06-23",
+            "factor": 100
+          }
+        ],
+        "holes": []
+      }
     },
     "SSLN": {
       "uic": 117644,
@@ -313,11 +488,16 @@
       "price_to_contract_factor": 0.01,
       "is_complex": true,
       "first": "2011-04-14",
-      "last": "2026-09-25",
-      "bars": 3829,
-      "density": 0.9834787937858114,
+      "last": "2026-09-24",
+      "bars": 3828,
+      "density": 0.983396212082848,
       "half_spread_bps": 3.213,
-      "half_spread_median_bps": 3.213
+      "half_spread_median_bps": 3.213,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
     }
   },
   "excluded": {
@@ -325,7 +505,12 @@
       "uic": 25583531,
       "role": "US health sector",
       "first": "2021-10-21",
-      "bars": 1244,
+      "bars": 1243,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      },
       "reason": "GBX line starts 2021-10-21 (under ten years); sibling splice exceeds the pre-declared tolerance (mean abs return diff 15.00 bps/day > 1) — STOP for David",
       "spliced_from": {
         "tidm": "IUHC",
@@ -333,16 +518,21 @@
         "unit": "USD",
         "fx": "BoE XUDLUSS, same-day fix or last on or before",
         "sibling_first": "2016-06-21",
-        "sibling_last": "2026-09-25",
-        "sibling_bars": 2575,
+        "sibling_last": "2026-09-24",
+        "sibling_bars": 2574,
+        "sibling_hygiene": {
+          "dropped_dates": ["2026-09-25"],
+          "unit_breaks": [],
+          "holes": []
+        },
         "splice_date": "2021-10-21",
         "sibling_bars_used": 1331,
         "overlap": {
-          "sessions": 1243,
-          "meanAbsReturnDiffBps": 14.997434253862508,
-          "meanReturnDiffBps": -0.02018101812125756,
-          "returnCorrelation": 0.9755380190333072,
-          "cumulativeReturnDiffBps": -19.225449877813272
+          "sessions": 1242,
+          "meanAbsReturnDiffBps": 14.996007587216344,
+          "meanReturnDiffBps": -0.0066953714141090095,
+          "returnCorrelation": 0.9755506166442686,
+          "cumulativeReturnDiffBps": 5.18398590282354
         },
         "within_tolerance": false
       }
@@ -351,7 +541,12 @@
       "uic": 12264631,
       "role": "Broad commodities",
       "first": "2019-02-20",
-      "bars": 1917,
+      "bars": 1916,
+      "hygiene": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      },
       "reason": "GBX line starts 2019-02-20 (under ten years); sibling splice exceeds the pre-declared tolerance (mean abs return diff 16.39 bps/day > 1) — STOP for David",
       "spliced_from": {
         "tidm": "COMF",
@@ -359,29 +554,50 @@
         "unit": "USD",
         "fx": "BoE XUDLUSS, same-day fix or last on or before",
         "sibling_first": "2010-03-25",
-        "sibling_last": "2026-09-25",
-        "sibling_bars": 3442,
+        "sibling_last": "2026-09-24",
+        "sibling_bars": 3441,
+        "sibling_hygiene": {
+          "dropped_dates": ["2026-09-25"],
+          "unit_breaks": [
+            {
+              "date": "2010-04-06",
+              "factor": 100
+            },
+            {
+              "date": "2010-04-09",
+              "factor": 0.01
+            }
+          ],
+          "holes": []
+        },
         "splice_date": "2019-02-20",
         "sibling_bars_used": 1523,
         "overlap": {
-          "sessions": 1916,
-          "meanAbsReturnDiffBps": 16.391622529122245,
-          "meanReturnDiffBps": -0.01260766025052511,
-          "returnCorrelation": 0.9629182170985504,
-          "cumulativeReturnDiffBps": 8.357212340790454
+          "sessions": 1915,
+          "meanAbsReturnDiffBps": 16.39354568493095,
+          "meanReturnDiffBps": -0.005977805683839405,
+          "returnCorrelation": 0.9628883921483631,
+          "cumulativeReturnDiffBps": 38.70810289317905
         },
         "within_tolerance": false
       }
     }
   },
   "checks": {
+    "aux_hygiene": {
+      "CUKX": {
+        "dropped_dates": ["2026-09-25"],
+        "unit_breaks": [],
+        "holes": []
+      }
+    },
     "distribution_adjustment": {
       "pair": ["ISF", "CUKX"],
       "from": "2011-02-11",
-      "to": "2026-09-25",
+      "to": "2026-09-24",
       "ratio_first": 0.08588018694235944,
-      "ratio_last": 0.04711956521739131,
-      "annualised_drift": -0.037701540872642325,
+      "ratio_last": 0.047215650591446764,
+      "annualised_drift": -0.03758249086955867,
       "reading": "a distributing/accumulating close ratio that drifts down at roughly the dividend yield means Saxo closes are price-only (not total return); a flat ratio means they are distribution-adjusted"
     }
   }
