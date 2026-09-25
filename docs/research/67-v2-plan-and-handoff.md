@@ -50,11 +50,12 @@ All of these are on `main`.
   - Inputs: daily bars + news, plus sentiment and social, each a counted trial against a shadow without it (G18). A class-wide macro item never votes as a per-name read, one underlying view votes once, and a market-wide roundup is not scored once per tagged name (G18 (3)).
   - Shorts, bounded (Q8): Alpaca easy-to-borrow large caps sized so a +30% gap costs ≤ ~£150; Saxo via 1× inverse ETFs. Small caps are long-only, half a large-cap trade's risk, capped at a fixed share of the sleeve, floors exclude micro-caps (G18).
   - High-impact macro days (FOMC, US CPI, NFP, BoE rate decision, UK CPI): new entries at **half size**, not zero; exits unaffected; a counted trial against a no-gate shadow (G16).
+- *(2026-09-25, doc 66 D1–D8: the £ figures below are today's values of a yearly cap David sets each 1 January, tightened but never loosened mid-year (D8); bars move to Parquet read by DuckDB (D2); the runtime is a one-process modular monolith (D4). Step 3 below is re-planned as 3a–3e.)*
 - **Loss budget (Q6 as amended by G6):** net trading loss from start capital, both venues, GBP, open positions marked to market; GBP/USD moves on the Alpaca balance are excluded. £1,500 per calendar year, resets each year; deposits do not rebase start capital. −£500 → ½ size, −£1,000 → ¼, −£1,500 → halt for the year. Daily cap = exactly 1.0% of start capital, blocks new entries (exits still run). Profits never extend the limit. Loosening mid-year forbidden. The backtest runs with these rules inside it (G10).
 - **Self-improvement:** offline research loop over the trade journal/error log → walk-forward with global trial counter → gate → paper → approval request (G12) → live. Live frozen except pre-declared, backtested adaptation rules and risk-tightening. The loop's design is not ruled (G11, ticket #1717 open).
 - **Autonomy (G12, G13):** fully autonomous. Auto to paper. Anything reaching live (new sleeve, changed rule, capital increase) first passes the gate, then the system sends David an approval request on Telegram with the one-page summary; "no" blocks it; no reply in 24 hours approves it. The request, the reply or timeout, and the summary are written to a GitHub issue. There is no mandatory sign-off and no sign-off screen.
 - **Demotion (G7):** a live sleeve returns to paper when live return leaves the backtest's 95% band for 4 consecutive weeks, or drawdown exceeds 1.5× the backtest max.
-- **Host:** MacBook + external dead-man's switch + Saxo token-refresh/wake job; broker-resting stops. Cloud VM if any paper downtime fault.
+- **Host:** MacBook + external dead-man's switch + Saxo token-refresh/wake job; broker-resting stops. Cloud VM if any paper downtime fault. *(2026-09-25, doc 66 D1: Litestream backup and a healthchecks.io ping added; VPS decided at the live gate.)*
 - **Stack:** TypeScript only for everything that trades (backtest = live code). No LangGraph/CrewAI/LangSmith. An optional offline Python research sidecar is allowed (G3): it crosses only via parquet/ONNX/strategy-spec files, needs a TS parity test before paper, and is not built until needed.
 - **Tooling:** oxlint, biome, crap, fallow rules intact; "crap" = the CRAP score gate, ticket #1649 (G15), built 2026-09-25 as `npm run crap`, threshold 7 as a ratchet on added or touched functions with `server/apps/v2/` and `contracts/` gated in full, over a repo-wide floor of 15 (doc 66); fallow (not knip) for dead code.
 - **UI (G13):** a v2 dashboard with a rethought layout (the v3 Rail is not carried forward), required before paper starts.
@@ -119,41 +120,41 @@ New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, deb
 
 **Status 2026-09-25:** Session D (#1767) landed the debate-sleeve root in `server/apps/v2/` (dry-run cycle, books, journal, LLM panel over Nous, a `Sleeve` interface with `decide()` only). The design pass (doc 66 D1–D8) and strategy grill (S1–S7) re-plan the rest of Step 3 as 3a–3e below; they extend Session D's code, they do not replace it. Paper is allowed to slip for this (David, 2026-09-25).
 
-#### Step 3a — Module boundaries, risk gate, capital config (D4, D6, D8)
+#### Step 3a — Module boundaries, risk gate, capital config (D4, D6, D8; #1781)
 
-Split `server/apps/v2/` into the five modules D4 names — data, signal (sleeves), risk, execution, journal — each exporting one typed interface from `contracts/`; add lint import rules so a module reaches another only through that interface. Introduce `RiskApprovedOrder` as a type only the risk module can construct (branded type, constructor not exported) and make every venue adapter's submit accept only it (D6). Replace `START_CAPITAL_GBP` and every other capital or cap literal with a per-year capital config record in SQLite — start capital, loss cap (David sets it each 1 January), steps at ⅓, ⅔ and the full cap, daily cap 1.0% of start capital — written once per year, journalled, refused if changed mid-year (D8, Q13). This also settles the £1,000 vs £2,000 paper-capital mismatch (doc 66, "Paper start capital").
-=> lint fails a fixture that imports across a boundary; a type test (`@ts-expect-error`) proves an adapter rejects an unapproved order; `grep` finds no capital literal outside the config; mutation testing on the risk module; an e2e per venue path shows the order passed the gate.
+Split `server/apps/v2/` into the five modules D4 names — data, signal (sleeves), risk, execution, journal — each exporting one typed interface from `contracts/`; add lint import rules so a module reaches another only through that interface. Introduce `RiskApprovedOrder` as a type only the risk module can construct (branded type, constructor not exported) and make every venue adapter's submit accept only it (D6). Replace `START_CAPITAL_GBP` and every other capital or cap literal with a per-year capital config record in SQLite — start capital, loss cap (David sets it each 1 January), steps at ⅓, ⅔ and the full cap, daily cap 1.0% of start capital — written once per year, journalled; a mid-year loosening is refused, tightening allowed (D8, Q13). This also settles the £1,000 vs £2,000 paper-capital mismatch (doc 66, "Paper start capital").
+=> lint fails a fixture that imports across a boundary; a type test (`@ts-expect-error`) proves an adapter rejects an unapproved order; `grep` finds no capital literal outside the config in `server/apps/v2/` and `contracts/` (the loss-budget steps move into the v2 risk module and read the yearly config; the copy in `server/pipeline/momentum/loss-budget.ts` stays as it is so doc 70's backtests reproduce, and goes with Step 5); interfaces moved to `contracts/` import nothing from `server/` (`contracts/boundary.test.ts`); mutation testing on the risk module; an e2e per venue path shows the order passed the gate.
 
-#### Step 3b — Bar store: Parquet + DuckDB (D2)
+#### Step 3b — Bar store: Parquet + DuckDB (D2; #1782)
 
 Bars move from `data/bars/alpaca` <!-- cite-exempt: untracked — gitignored local data --> CSV to Parquet partitioned by venue, symbol and year; a DuckDB reader (`@duckdb/node-api`) serves backtests, gate statistics, journal analysis (attaching the SQLite store read-only), CGT reports and point-in-time replay. SQLite keeps all live state. Every windowed read keeps its coverage invariant (postmortem §2).
 => a parity test reads every migrated series from CSV and Parquet and gets identical bars; the coverage invariant test runs on the Parquet reader; the old CSV reader is deleted in the same PR.
 
-#### Step 3d — Sleeve contract and harness (D7, D8, S7)
+#### Step 3d — Sleeve contract and harness (D7, D8, S7; #1783)
 
 Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a capacity (D8). One harness takes any sleeve through backtest (walk-forward, global trial counter, DSR/PBO via `server/tools/backtest/overfitting.ts`, loss-budget rules inside), paper and live on the same code; only the venue and clock adapters differ. Sizing is risk-per-trade as a fraction of equity, capped by a pre-declared share of average daily volume, in the risk module (D8). The cost model gains a size-dependent market-impact term. The veto-plus-no-veto-shadow book pair (G5, S7) and the other shadow books become harness features any sleeve can declare, not debate-only code. The execution module gets an order-slicing seam that sends one child order. Port the debate sleeve onto the harness.
 => the debate sleeve runs a dry-run cycle through the harness with identical decisions to Session D's cycle; property tests on sizing (never above the ADV cap, never above equity fraction, zero below a sleeve's minimum capital); a sleeve whose minimum exceeds capital receives no allocation.
 
-#### Step 3e — Backup and monitoring (D1, D5)
+#### Step 3e — Backup and monitoring (D1, D5; #1784)
 
 Litestream streams the SQLite store to S3-compatible object storage, encrypted (the session proposes the provider; cheapest that works; David confirms). A healthchecks.io check is pinged at the end of each daily cycle and alerts David when a ping is missed. Telegram alerts carry a severity. Metrics panels (loss-budget state, gate statistics, LLM spend, reconcile diffs) join Step 3c's dashboard, not a separate tool.
 => restore drill: delete the local store, restore from Litestream, the next cycle reconciles clean against the brokers; a skipped cycle raises the healthchecks.io alert.
 
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
 
-### Step 1b — Candidate sleeves for the 70% (S1–S5, after 3b and 3d)
-
-Four rules-based, long-only, daily-swing candidates, run **one after another** in this order, each with **one pre-declared grid of up to 8 trials**, all counted in the global trial counter (S3): (1) cross-asset trend on LSE 1× ETFs/ETCs across equity indices, gold, bonds and commodities; (2) short-term mean reversion on US large caps and ETFs; (3) volatility-targeted index hold; (4) post-earnings drift on US large caps. **All four run** even if an early one passes (S4).
-
-Per candidate, first **propose and STOP for David**, as Step 1 did: instrument list, parameter grid, benchmark (risk-matched buy-and-hold of the same universe), cost model, and the doc 69 facts that disturb a ruling. Before the first US candidate (mean reversion), a research task picks the survivorship-free US history vendor and David approves the one-off purchase (D3). Before PEAD, a research task looks for free earnings-date and surprise history; paid only with David's approval (S5).
-=> **Kill line per candidate:** as Step 1 — beats its risk-matched buy-and-hold after the 40% haircut with DSR ≥ 0.95 and PBO ≤ 0.10 (G9), with Step 4b's backtest rows (look-ahead canary, 2× cost, regime split, locked holdout). Passers split the 70% in fixed equal-risk weights declared **before** the first candidate's result is known (S4). Each passer carries the LLM entry veto, judged only in paper against its no-veto shadow (S6, S7, G5).
-
-### Step 3c — UI (G13)
+#### Step 3c — UI (G13)
 
 G13: the layout is rethought in this spec (the v3 Rail is not carried forward); approvals are answered on Telegram and recorded to a GitHub issue, so there is **no sign-off screen**; the dashboard must exist **before paper starts** (Step 6 is blocked by this step).
 
-Write a v2 UI spec, then build alongside Step 3: loss-budget gauge (−£500/−£1,000/−£1,500, current size step), halt/pause control and halt state, live-vs-backtest band chart, per-sleeve vs benchmark, positions and cash for both venues (GBP and USD, total in GBP), decision journal (entered/skipped/vetoed and why), research-loop view (proposals, trial count, promotions/demotions), tax export (per disposal, GBP, share-matching). Step 5's teardown includes a client pass so the UI never reads deleted server fields.
+Write a v2 UI spec, then build alongside Step 3: loss-budget gauge (⅓ / ⅔ / the full configured cap, −£500/−£1,000/−£1,500 today, current size step), halt/pause control and halt state, live-vs-backtest band chart, per-sleeve vs benchmark, positions and cash for both venues (GBP and USD, total in GBP), decision journal (entered/skipped/vetoed and why), research-loop view (proposals, trial count, promotions/demotions), tax export (per disposal, GBP, share-matching). Step 5's teardown includes a client pass so the UI never reads deleted server fields.
 => each screen has component tests; e2e covers halt.
+
+### Step 1b — Candidate sleeves for the 70% (S1–S7, D3; after 3b and 3d; #1785)
+
+Four rules-based, long-only, daily-swing candidates, run **one after another** in this order, each with **one pre-declared grid of up to 8 trials**, all counted in the global trial counter (S3): (1) cross-asset trend on LSE 1× ETFs/ETCs across equity indices, gold, bonds and commodities; (2) short-term mean reversion on US large caps (US ETFs only once ADR §5 item 6 confirms access); (3) volatility-targeted index hold; (4) post-earnings drift on US large caps. **All four run** even if an early one passes (S4).
+
+Per candidate, first **propose and STOP for David**, as Step 1 did: instrument list, parameter grid, benchmark (risk-matched buy-and-hold of the same universe), cost model, and the doc 69 facts that disturb a ruling. Before the first US candidate (mean reversion), a research task picks the survivorship-free US history vendor and David approves the one-off purchase (D3). Before PEAD, a research task looks for free earnings-date and surprise history; paid only with David's approval (S5).
+=> **Kill line per candidate:** as Step 1 — beats its risk-matched buy-and-hold after the 40% haircut with DSR ≥ 0.95 and PBO ≤ 0.10 (G9), with Step 4b's backtest rows (look-ahead canary, 2× cost, regime split, locked holdout). Passers split the 70% in fixed equal-risk weights declared **before** the first candidate's result is known (S4). Each passer carries the LLM entry veto, judged only in paper against its no-veto shadow (S6, S7, G5).
 
 ### Step 4 — Protection before any paper trade
 
@@ -178,13 +179,13 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Resilience | Plumbing-fault ledger | Every missed stop, reconcile mismatch or stuck order logged; the gate counts 4 consecutive zero-fault weeks from it (Q7) |
 | Resilience | Fault matrix | Drills pass for: broker API down, partial fill, rejected order, stale data, clock/DST, holiday, duplicate run (idempotent), crash mid-order, Mac asleep |
 | Resilience | Reconcile every run | Broker positions/cash vs store each run; any mismatch halts entries and alerts |
-| Resilience | Loss-budget rehearsal | Simulated −£500 / −£1,000 / −£1,500 on paper → ½ size / ¼ size / halt, and the daily cap (1.0% of start capital) blocks entries; a GBP/USD move alone does not change the budget; the budget resets on 1 January; a deposit does not rebase it (G6) |
+| Resilience | Loss-budget rehearsal | Simulated losses at ⅓ / ⅔ / the full configured cap (−£500 / −£1,000 / −£1,500 today) on paper → ½ size / ¼ size / halt, and the daily cap (1.0% of start capital) blocks entries; a GBP/USD move alone does not change the budget; the budget resets on 1 January; a deposit does not rebase it (G6) |
 | Resilience | Approval-flow drill | A request with no reply approves itself at 24 hours; a "no" blocks it; no request can be sent while any gate condition fails; request, answer or timeout, and summary land in a GitHub issue (G12, G13) |
-| Resilience | Never-loosen guard | Any attempt to raise the £1,500 limit or the daily cap mid-year is refused by code, not by convention (Q13) |
+| Resilience | Never-loosen guard | Any attempt to raise the year's configured cap (£1,500 today) or the daily cap mid-year is refused by code, not by convention (Q13) |
 | Resilience | Backup restore drill | The SQLite store restores from Litestream and the next cycle reconciles clean (D1) |
 | Resilience | Dead-man alert | A missed daily cycle raises the healthchecks.io alert (D1) |
 | Resilience | Risk gate by type | No venue adapter compiles against an order the risk module did not approve (D6) |
-| Resilience | Capital config | No capital or cap literal in code; the year's config refuses a mid-year change (D8) |
+| Resilience | Capital config | No capital or cap literal in code; the year's config refuses a mid-year loosening (D8, Q13) |
 | Resilience | Separate sleeve books | Each sleeve's paper book is isolated; one sleeve's loss cannot size the other (Q14) |
 | Security | Keys and egress | Broker keys trade-only, withdrawals disabled, IP-restricted where offered; test that no account data or key leaves in any LLM request (Q16) |
 | Cost | LLM spend cap | ~$30/month cap enforced across providers; breach stops LLM calls, never trading exits (Q16) |
@@ -208,7 +209,7 @@ fallow + graphify reachability from the v2 root → reviewed list → delete in 
 
 ### Step 6 — Paper soak to the gate (Q7/Q19), then research loop
 
-Blocked by Step 4, Step 4b and Step 3c (G13: the v2 dashboard comes before paper).
+Blocked by Steps 3a–3e (3c per G13: the v2 dashboard comes before paper), Step 4 and Step 4b.
 
 *(2026-09-25, doc 66 S1–S7: the momentum paragraph below is historical. Each Step 1b passer runs paper as a veto book plus a no-veto shadow (S7, G5) under Q7's 8–12 weeks inside band + 4 clean plumbing weeks; the veto reaches live only if its book beats the shadow on the one-sided test. The debate sleeve's rule is unchanged.)*
 
@@ -278,7 +279,9 @@ The questions above are kept as asked. The answers are in `docs/research/69-v2-f
 - **Step 1 (Session B):** G9, G10, R12, R13, R14, R15 (all resolved; doc 69's disturbed rulings go to David inside Session B's proposal).
 - **Step 2 (Session C):** nothing — done (doc 71); verdict ruled 2026-09-22 (long and short, each side a counted trial vs arm 2; #1743 closed).
 - **Step 3:** G4, G5, G13, G16, G18, R1, R2, R3, R5, R6, R7, R8, R10, R17 (G18's ticket #1753 is still open).
-- **Paper start (Step 6):** Step 4 + 4b, Step 3c (G13), G12, R9, R16.
+- **Steps 3a–3e (doc 66 D1–D8):** 3a first; 3b after 3a; 3d after 3b; 3e and 3c alongside.
+- **Step 1b (doc 66 S1–S7):** Steps 3b and 3d; the D3 vendor purchase before mean reversion; the S5 data research before PEAD.
+- **Paper start (Step 6):** Steps 3a–3e, Step 4 + 4b, Step 3c (G13), G12, R9, R16.
 - **Live:** G1 (debate sleeve), G7, R11, and the G12 approval request (gate passes → Telegram → "no" blocks, no reply in 24 hours approves).
 - **Step 5 (Session F):** G17, G18.
 - **Research loop:** G11 (open).
