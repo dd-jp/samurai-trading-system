@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { SimulatedClock } from '../../../shared/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import {
   LLM_MONTHLY_BUDGET_USD,
   SqliteMonthlySpendCap,

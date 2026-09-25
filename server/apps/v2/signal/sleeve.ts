@@ -1,4 +1,4 @@
-import type { Direction } from '../../../contracts/index.js';
+import type { Direction } from '../../../../contracts/index.js';
 
 export type Venue = 'alpaca' | 'saxo';
 

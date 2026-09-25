@@ -8,12 +8,12 @@ import type {
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { PaperBooks } from './books.js';
 import { type CycleDeps, calendarDaysBetween, runCycle } from './cycle.js';
-import { DryRunBrokerAdapter } from './dry-run-broker.js';
-import { Journal } from './journal.js';
-import { CYCLE_LEVEL_PARAMETERS } from './parameters.js';
-import { type Sleeve, type SleeveDecision, SleeveRegistry } from './sleeve.js';
+import { DryRunBrokerAdapter } from './execution/index.js';
+import { Journal } from './journal/index.js';
+import { PaperBooks } from './risk/index.js';
+import { CYCLE_LEVEL_PARAMETERS } from './signal/index.js';
+import { type Sleeve, type SleeveDecision, SleeveRegistry } from './signal/sleeve.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 const FX = 1.25;

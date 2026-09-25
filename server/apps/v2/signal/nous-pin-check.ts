@@ -1,4 +1,4 @@
-import type { Logger } from '../../shared/index.js';
+import type { Logger } from '../../../shared/index.js';
 import type { ModelPin } from './models.js';
 
 const PIN_CHECK_TIMEOUT_MS = 30_000;

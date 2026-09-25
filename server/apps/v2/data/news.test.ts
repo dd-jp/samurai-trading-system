@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AlpacaNewsArticle } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
+import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/sources/alpaca-news-client.js';
 import { AlpacaNewsSource, MAX_HEADLINES_PER_NAME, NO_NEWS, perNameHeadlines } from './news.js';
 
 function article(id: number, headline: string, symbols: string[]): AlpacaNewsArticle {

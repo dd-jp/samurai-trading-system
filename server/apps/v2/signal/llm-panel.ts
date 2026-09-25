@@ -3,9 +3,9 @@ import type {
   LlmClient,
   LlmSpendSink,
   SpendCap,
-} from '../../pipeline/debate-engine/index.js';
-import { AnthropicLlmClient } from '../../pipeline/debate-engine/index.js';
-import type { Logger } from '../../shared/index.js';
+} from '../../../pipeline/debate-engine/index.js';
+import { AnthropicLlmClient } from '../../../pipeline/debate-engine/index.js';
+import type { Logger } from '../../../shared/index.js';
 import {
   ALL_PINS,
   DEBATER_MAX_TOKENS,

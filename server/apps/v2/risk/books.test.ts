@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { saxoCustodyAccrual } from '../../pipeline/momentum/index.js';
-import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
+import { SimulatedClock } from '../../../shared/index.js';
+import { openSharedStore } from '../../../shared/store/index.js';
 import { BOOK_SPECS, type BookFill, PaperBooks, START_CAPITAL_GBP } from './books.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));

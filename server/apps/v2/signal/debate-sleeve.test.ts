@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { UNCAPPED_SPEND } from '../../pipeline/debate-engine/index.js';
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
-import { SimulatedClock } from '../../shared/index.js';
+import { UNCAPPED_SPEND } from '../../../pipeline/debate-engine/index.js';
+import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
+import { SimulatedClock } from '../../../shared/index.js';
+import type { BarsSource } from '../data/index.js';
+import { addDays, NO_NEWS } from '../data/index.js';
+import { STOP_ATR_MULTIPLE } from '../risk/index.js';
 import {
   createDebateSleeve,
   directionFrom,
@@ -10,11 +13,7 @@ import {
   technicalRead,
 } from './debate-sleeve.js';
 import { buildLlmPanel } from './llm-panel.js';
-import { addDays } from './macro-calendar.js';
-import { NO_NEWS } from './news.js';
-import { STOP_ATR_MULTIPLE } from './position-size.js';
 import { BULLISH_SCRIPT, type Script, ScriptedTransport } from './scripted-transport.js';
-import type { BarsSource } from './universe.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 

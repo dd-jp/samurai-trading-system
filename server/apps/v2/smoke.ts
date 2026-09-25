@@ -1,13 +1,16 @@
 import { pathToFileURL } from 'node:url';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { BOOK_SPECS } from './books.js';
+import { macroGate } from './data/index.js';
 import { composeV2Root } from './index.js';
-import { macroGate } from './macro-calendar.js';
-import { ALL_PINS } from './models.js';
-import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
-import { DECLARED_PARAMETERS, isSet, SHORTS_ENABLED } from './parameters.js';
-import { positionSizeShares } from './position-size.js';
+import { BOOK_SPECS, positionSizeShares } from './risk/index.js';
+import {
+  ALL_PINS,
+  DECLARED_PARAMETERS,
+  isSet,
+  SHORTS_ENABLED,
+  SqliteMonthlySpendCap,
+} from './signal/index.js';
 
 export interface SmokeProbe {
   readonly name: string;

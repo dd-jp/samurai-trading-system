@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Direction } from '../../../contracts/index.js';
+import type { Direction } from '../../../../contracts/index.js';
 import type {
   AnalystView,
   DebatePersonas,
@@ -7,23 +7,24 @@ import type {
   MediatorAssessment,
   PersonaResponse,
   RoundContext,
-} from '../../pipeline/debate-engine/index.js';
+} from '../../../pipeline/debate-engine/index.js';
 import {
   runBearPersona,
   runBullPersona,
   runDebate,
   runMediatorPersona,
-} from '../../pipeline/debate-engine/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
-import { averageTrueRange, trailingReturn } from '../../pipeline/momentum/index.js';
-import type { Clock, Logger } from '../../shared/index.js';
-import { describeThrownSafely } from '../../shared/index.js';
-import { inputsHash } from './journal.js';
+} from '../../../pipeline/debate-engine/index.js';
+import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import { averageTrueRange, trailingReturn } from '../../../pipeline/momentum/index.js';
+import type { Clock, Logger } from '../../../shared/index.js';
+import { describeThrownSafely } from '../../../shared/index.js';
+import type { BarsSource, NewsSource } from '../data/index.js';
+import { barsBefore } from '../data/index.js';
+import { inputsHash } from '../journal/index.js';
+import { STOP_ATR_MULTIPLE } from '../risk/index.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
-import type { NewsSource } from './news.js';
 import { SHORTS_ENABLED } from './parameters.js';
-import { STOP_ATR_MULTIPLE } from './position-size.js';
 import type {
   Sleeve,
   SleeveAction,
@@ -32,8 +33,8 @@ import type {
   SleeveOutput,
   Venue,
 } from './sleeve.js';
-import type { BarsSource, UniverseSelection } from './universe.js';
-import { barsBefore, selectUniverse } from './universe.js';
+import type { UniverseSelection } from './universe.js';
+import { selectUniverse } from './universe.js';
 
 const DEBATE_SLEEVE_ID = 'debate';
 const DEBATE_MAX_ROUNDS = 1;

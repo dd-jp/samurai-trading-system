@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { AnalystView } from '../../pipeline/debate-engine/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
-import type { Clock } from '../../shared/index.js';
-import { digest } from '../../shared/index.js';
-import type { StoreHandle } from '../../shared/store/index.js';
-import { toStoredTimestamp } from '../../shared/store/index.js';
-import type { SleeveDecision } from './sleeve.js';
+import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
+import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import type { Clock } from '../../../shared/index.js';
+import { digest } from '../../../shared/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { toStoredTimestamp } from '../../../shared/store/index.js';
+import type { SleeveDecision } from '../signal/index.js';
 
 export type OrderOutcome = 'submitted' | 'refused_dry_run' | 'simulated' | 'rejected' | 'cancelled';
 export type OrderLeg = 'entry' | 'exit';

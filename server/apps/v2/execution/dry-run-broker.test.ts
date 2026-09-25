@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { BrokerAdapter } from '../../pipeline/execution/index.js';
-import { SimulatedClock } from '../../shared/index.js';
+import type { BrokerAdapter } from '../../../pipeline/execution/index.js';
+import { SimulatedClock } from '../../../shared/index.js';
 import { DryRunBrokerAdapter, DryRunRefusedError, spreadAdjusted } from './dry-run-broker.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));

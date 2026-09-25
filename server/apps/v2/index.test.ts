@@ -6,7 +6,7 @@ import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/i
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { CycleReport } from './cycle.js';
-import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
+import { NO_NEWS, parseBoeGbpUsdCsv, yearStartGbpUsd } from './data/index.js';
 import {
   composeV2Root,
   exitCodeFor,
@@ -15,9 +15,8 @@ import {
   parseCliArgs,
   runAfterPinCheck,
 } from './index.js';
-import type { ModelPin } from './models.js';
-import { NO_NEWS } from './news.js';
-import { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
+import type { ModelPin } from './signal/index.js';
+import { BULLISH_SCRIPT, ScriptedTransport } from './signal/index.js';
 
 const HEADER = 'date,open,high,low,close,volume,raw_close';
 

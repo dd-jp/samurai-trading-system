@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rateFor } from '../../shared/llm/index.js';
+import { rateFor } from '../../../shared/llm/index.js';
 import { ALL_PINS, DEBATER_PINS, JUDGE_PIN } from './models.js';
 
 describe('model pins', () => {

@@ -3,10 +3,10 @@ import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
-} from '../../pipeline/debate-engine/index.js';
-import { LlmProviderError, NousMessagesClient } from '../../pipeline/debate-engine/index.js';
-import type { Logger } from '../../shared/index.js';
-import type { LlmInFlightGate } from '../../shared/llm/index.js';
+} from '../../../pipeline/debate-engine/index.js';
+import { LlmProviderError, NousMessagesClient } from '../../../pipeline/debate-engine/index.js';
+import type { Logger } from '../../../shared/index.js';
+import type { LlmInFlightGate } from '../../../shared/llm/index.js';
 import type { ModelPin } from './models.js';
 
 export interface NousPinnedTransportOptions {

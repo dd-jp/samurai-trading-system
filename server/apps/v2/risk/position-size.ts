@@ -1,5 +1,5 @@
-import { wholeShares } from '../../pipeline/momentum/index.js';
-import { MACRO_DAY_SIZE_FRACTION } from './macro-calendar.js';
+import { wholeShares } from '../../../pipeline/momentum/index.js';
+import { MACRO_DAY_SIZE_FRACTION } from '../data/index.js';
 
 export const STOP_ATR_MULTIPLE = 2;
 export const MAX_POSITION_FRACTION_OF_EQUITY = 0.1;

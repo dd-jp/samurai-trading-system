@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LogEntry } from '../../shared/index.js';
+import type { LogEntry } from '../../../shared/index.js';
 import { ALL_PINS } from './models.js';
 import { verifyNousPins } from './nous-pin-check.js';
 

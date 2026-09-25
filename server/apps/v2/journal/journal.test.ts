@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
-import { PaperBooks } from './books.js';
+import { SimulatedClock } from '../../../shared/index.js';
+import { openSharedStore } from '../../../shared/store/index.js';
+import { PaperBooks } from '../risk/index.js';
+import type { SleeveDecision } from '../signal/index.js';
 import { inputsHash, Journal, type JournalledOrder } from './journal.js';
-import type { SleeveDecision } from './sleeve.js';
 
 const decision: SleeveDecision = {
   sleeve_id: 'debate',

@@ -19,26 +19,37 @@ import { SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
-import { PaperBooks } from './books.js';
 import { type CycleDeps, type CycleReport, runCycle } from './cycle.js';
-import { createDebateSleeve } from './debate-sleeve.js';
-import { DryRunBrokerAdapter } from './dry-run-broker.js';
-import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
-import { Journal } from './journal.js';
-import { buildLlmPanel, type LlmPanel } from './llm-panel.js';
-import { NousPinnedTransport } from './llm-transport.js';
-import { ALL_PINS, type ModelPin } from './models.js';
-import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
-import { AlpacaNewsSource, type NewsSource, NO_NEWS } from './news.js';
-import { verifyNousPins } from './nous-pin-check.js';
 import {
+  AlpacaNewsSource,
+  type BarsSource,
+  barsBefore,
+  CsvBarsSource,
+  currentConstituents,
+  type NewsSource,
+  NO_NEWS,
+  parseBoeGbpUsdCsv,
+  yearStartGbpUsd,
+} from './data/index.js';
+import { DryRunBrokerAdapter } from './execution/index.js';
+import { Journal } from './journal/index.js';
+import { PaperBooks } from './risk/index.js';
+import {
+  ALL_PINS,
+  BULLISH_SCRIPT,
+  buildLlmPanel,
+  createDebateSleeve,
   DEBATE_RISK_FRACTION,
   DEBATE_TARGET_ATR_MULTIPLE,
   DEBATE_TIME_STOP_TRADING_DAYS,
-} from './parameters.js';
-import { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
-import { SleeveRegistry } from './sleeve.js';
-import { type BarsSource, barsBefore, CsvBarsSource, currentConstituents } from './universe.js';
+  type LlmPanel,
+  type ModelPin,
+  NousPinnedTransport,
+  ScriptedTransport,
+  SleeveRegistry,
+  SqliteMonthlySpendCap,
+  verifyNousPins,
+} from './signal/index.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
