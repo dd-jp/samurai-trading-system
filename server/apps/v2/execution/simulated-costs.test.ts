@@ -83,7 +83,7 @@ describe('impactLookup', () => {
       gbpUsdAtYearStart: () => 1,
     };
     const log = vi.fn();
-    const impact = impactLookup(market, TRADING_DATE, { log });
+    const impact = impactLookup(market, () => TRADING_DATE, { log });
     expect(impact('OK', 1_000, 100)).toBe(
       marketImpactBps(window(alternating), 1_000, 100, TRADING_DATE),
     );
@@ -97,7 +97,7 @@ describe('impactLookup', () => {
       event: 'v2_impact_fallback',
       message: `GONE: no covered ${IMPACT_WINDOW_BARS}-bar window, impact charged at ${FALLBACK_IMPACT_BPS} bps`,
     });
-    expect(impactLookup(market, TRADING_DATE)('GONE', 1, 1)).toBe(FALLBACK_IMPACT_BPS);
+    expect(impactLookup(market, () => TRADING_DATE)('GONE', 1, 1)).toBe(FALLBACK_IMPACT_BPS);
   });
 });
 

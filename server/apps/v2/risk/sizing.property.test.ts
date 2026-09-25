@@ -56,6 +56,7 @@ function randomCase(random: () => number): Case {
     spec: {
       minimumCapitalGbp: 0,
       capacityGbp: Number.POSITIVE_INFINITY,
+      validation: 'forward-paper',
       sizing: {
         riskFraction: logUniform(random, 0.0005, 0.05),
         stopAtrMultiple: 0.5 + random() * 4,

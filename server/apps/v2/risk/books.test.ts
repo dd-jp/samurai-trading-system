@@ -14,6 +14,7 @@ const flat = () => undefined;
 const DEBATE_SPEC: SleeveSpec = {
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
   sizing: {
     riskFraction: 0.005,
     stopAtrMultiple: 2,
