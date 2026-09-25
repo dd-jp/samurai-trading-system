@@ -26,7 +26,6 @@ export { nousResponses } from './nous-responses.js';
 export type { AnthropicUsage } from './pricing.js';
 export {
   crossesPromptTier,
-  pricedModels,
   priceServerToolCalls,
   priceUsage,
   promptTokensOf,

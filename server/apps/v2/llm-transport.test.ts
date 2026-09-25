@@ -8,7 +8,7 @@ import {
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { NousAccountInFlightGate } from '../../shared/llm/index.js';
 import { AnthropicHttpTransport } from './anthropic-transport.js';
-import type { FetchLike } from './llm-transport.js';
+import { asRecord, type FetchLike, numberOr } from './llm-transport.js';
 import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, SONNET_5_PIN } from './models.js';
 import { OpenRouterHttpTransport } from './openrouter-transport.js';
 import { ScriptedTransport } from './scripted-transport.js';
@@ -57,7 +57,7 @@ describe('AnthropicHttpTransport', () => {
       fetchImpl: fakeFetch(
         200,
         {
-          model: 'claude-sonnet-5-20260601',
+          model: 'claude-sonnet-5',
           content: [{ type: 'text', text: '{"stance":"bullish","rationale":"x"}' }],
           usage: { input_tokens: 10, output_tokens: 5 },
           stop_reason: 'end_turn',
@@ -74,7 +74,7 @@ describe('AnthropicHttpTransport', () => {
       max_tokens: 64,
       messages: [{ role: 'user', content: 'hello' }],
     });
-    expect(reply.model).toBe('anthropic/claude-sonnet-5');
+    expect(reply.model).toBe('claude-sonnet-5');
     expect(reply.content[0]?.text).toBe('{"stance":"bullish","rationale":"x"}');
     expect(reply.usage).toEqual({
       input_tokens: 10,
@@ -114,6 +114,46 @@ describe('AnthropicHttpTransport', () => {
     );
   });
 
+  it('refuses a reply served by a model other than the pin', async () => {
+    const swapped = new AnthropicHttpTransport({
+      apiKey: 'k',
+      pin: JUDGE_PIN,
+      gate: gate(),
+      fetchImpl: fakeFetch(
+        200,
+        {
+          model: 'claude-opus-5-20260901',
+          content: [{ type: 'text', text: '{}' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+          stop_reason: 'end_turn',
+        },
+        [],
+      ),
+    });
+    await expect(swapped.createMessage(request('claude-opus-5'))).rejects.toThrow(
+      /answered for claude-opus-5 with model claude-opus-5-20260901/,
+    );
+  });
+
+  it('reads retry-after in whole seconds and ignores a non-numeric one', async () => {
+    const make = (retryAfter: string) =>
+      new AnthropicHttpTransport({
+        apiKey: 'k',
+        pin: JUDGE_PIN,
+        gate: gate(),
+        fetchImpl: fakeFetch(429, { error: 'slow' }, [], { 'retry-after': retryAfter }),
+      });
+    const numeric = await make('3')
+      .createMessage(request('claude-opus-5'))
+      .catch((e: unknown) => e);
+    expect((numeric as LlmRateLimitError).retryAfterMs).toBe(3000);
+    const dated = await make('Wed, 21 Oct 2026 07:28:00 GMT')
+      .createMessage(request('claude-opus-5'))
+      .catch((e: unknown) => e);
+    expect(dated).toBeInstanceOf(LlmRateLimitError);
+    expect((dated as LlmRateLimitError).retryAfterMs).toBeUndefined();
+  });
+
   it('maps 429 to a rate-limit error with retry-after and other statuses to provider errors', async () => {
     const limited = new AnthropicHttpTransport({
       apiKey: 'k',
@@ -136,6 +176,90 @@ describe('AnthropicHttpTransport', () => {
       .catch((e: unknown) => e);
     expect(providerError).toBeInstanceOf(LlmProviderError);
     expect((providerError as Error).message).not.toContain('sk-secret');
+  });
+
+  it('treats only 2xx as success and reports the reply shape', async () => {
+    const make = (status: number, stop_reason = 'end_turn') =>
+      new AnthropicHttpTransport({
+        apiKey: 'k',
+        pin: JUDGE_PIN,
+        gate: gate(),
+        fetchImpl: fakeFetch(
+          status,
+          {
+            content: [{ type: 'text', text: '{}' }],
+            usage: { input_tokens: 1, output_tokens: 1 },
+            stop_reason,
+          },
+          [],
+        ),
+      });
+    for (const status of [300, 599]) {
+      const error = await make(status)
+        .createMessage(request('claude-opus-5'))
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(LlmProviderError);
+      expect((error as Error).message).toContain(`HTTP ${status}`);
+    }
+    const ok = await make(299).createMessage(request('claude-opus-5'));
+    expect(ok.stop_reason).toBe('end_turn');
+    expect(ok.model).toBe('claude-opus-5');
+    expect(typeof ok.ttfb_ms).toBe('number');
+    const sequence = await make(200, 'stop_sequence').createMessage(request('claude-opus-5'));
+    expect(sequence.stop_reason).toBe('end_turn');
+    const other = await make(200, 'tool_use').createMessage(request('claude-opus-5'));
+    expect(other.stop_reason).toBe('other');
+  });
+
+  it('leaves retry-after undefined when the header is absent', async () => {
+    const limited = new AnthropicHttpTransport({
+      apiKey: 'k',
+      pin: JUDGE_PIN,
+      gate: gate(),
+      fetchImpl: fakeFetch(429, { error: 'slow' }, []),
+    });
+    const error = await limited.createMessage(request('claude-opus-5')).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(LlmRateLimitError);
+    expect((error as LlmRateLimitError).retryAfterMs).toBeUndefined();
+  });
+
+  it('previews at most 200 characters of a non-JSON error body', async () => {
+    const broken = new AnthropicHttpTransport({
+      apiKey: 'k',
+      pin: JUDGE_PIN,
+      gate: gate(),
+      fetchImpl: fakeFetch(502, `${'x'.repeat(250)}TAIL`, []),
+    });
+    const error = await broken.createMessage(request('claude-opus-5')).catch((e: unknown) => e);
+    const message = (error as Error).message;
+    expect(message).toContain('HTTP 502');
+    expect(message).toContain('x'.repeat(100));
+    expect(message).not.toContain('TAIL');
+    expect(message.length).toBeLessThan(300);
+  });
+
+  it('passes the caller signal through to fetch', async () => {
+    const seen: (AbortSignal | null | undefined)[] = [];
+    const transport = new AnthropicHttpTransport({
+      apiKey: 'k',
+      pin: JUDGE_PIN,
+      gate: gate(),
+      fetchImpl: (_url, init) => {
+        seen.push(init.signal);
+        if (init.signal?.aborted) return Promise.reject(new Error('aborted'));
+        return Promise.resolve(new Response('{}', { status: 500 }));
+      },
+    });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      transport.createMessage(request('claude-opus-5'), { signal: controller.signal }),
+    ).rejects.toThrow();
+    const untouched = await transport
+      .createMessage(request('claude-opus-5'))
+      .catch((e: unknown) => e);
+    expect(untouched).toBeInstanceOf(LlmProviderError);
+    expect(seen.at(-1)?.aborted).toBe(false);
   });
 
   it('releases the gate slot after a failure', async () => {
@@ -205,8 +329,12 @@ describe('OpenRouterHttpTransport', () => {
 });
 
 describe('ScriptedTransport', () => {
-  it('answers persona and mediator prompts with parseable JSON and records the call', async () => {
-    const transport = new ScriptedTransport(JUDGE_PIN);
+  it('answers persona and mediator prompts with the script and records the call', async () => {
+    const transport = new ScriptedTransport(JUDGE_PIN, (request) =>
+      (request.messages[0]?.content ?? '').includes('Mediator persona')
+        ? '{"stance":"neutral","rationale":"scripted","converged":true}'
+        : '{"stance":"neutral","rationale":"scripted"}',
+    );
     const mediator = await transport.createMessage(
       { ...request('claude-opus-5'), messages: [{ role: 'user', content: 'Mediator persona' }] },
       { stage: 'debate' },
@@ -223,6 +351,18 @@ describe('ScriptedTransport', () => {
     });
     expect(transport.calls).toHaveLength(2);
     expect(transport.calls[0]?.stage).toBe('debate');
-    expect(mediator.model).toBe('anthropic/claude-opus-5');
+    expect(mediator.model).toBe('claude-opus-5');
+  });
+});
+
+describe('wire helpers', () => {
+  it('asRecord yields {} for non-objects and numberOr falls back on non-finite values', () => {
+    expect(asRecord(null)).toEqual({});
+    expect(asRecord('x')).toEqual({});
+    expect(asRecord({ a: 1 })).toEqual({ a: 1 });
+    expect(numberOr(3, 0)).toBe(3);
+    expect(numberOr(Number.NaN, 7)).toBe(7);
+    expect(numberOr('3', 7)).toBe(7);
+    expect(numberOr(undefined, 7)).toBe(7);
   });
 });

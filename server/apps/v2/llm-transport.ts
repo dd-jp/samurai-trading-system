@@ -98,6 +98,13 @@ function raiseForStatus(result: PostResult, pin: ModelPin): void {
   );
 }
 
+function raiseForUpstreamModel(reply: WireReply, pin: ModelPin): void {
+  if (reply.upstreamModel === undefined || reply.upstreamModel === pin.wire) return;
+  throw new LlmProviderError(
+    `${pin.provider} answered for ${pin.wire} with model ${reply.upstreamModel}: refused, the pin is a trial`,
+  );
+}
+
 function raiseForFinish(reply: WireReply, request: AnthropicMessageRequest, pin: ModelPin): void {
   if (reply.finish === 'refusal') {
     throw new LlmRefusalError(`${pin.wire} refused the request`, 'refusal', reply.usage);
@@ -153,6 +160,7 @@ export class HttpMessagesTransport implements AnthropicMessagesClient {
       raiseForStatus(result, pin);
       const reply = this.codec.decode(result.json);
       this.#logUpstreamModel(reply, callOptions.stage);
+      raiseForUpstreamModel(reply, pin);
       raiseForFinish(reply, request, pin);
       return {
         content: [{ type: 'text', text: reply.text }],

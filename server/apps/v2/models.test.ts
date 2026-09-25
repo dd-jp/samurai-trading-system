@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pricedModels } from '../../shared/llm/index.js';
+import { rateFor } from '../../shared/llm/index.js';
 import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, OPENROUTER_PROVIDER_ROUTING } from './models.js';
 
 describe('model pins', () => {
@@ -8,8 +8,9 @@ describe('model pins', () => {
   });
 
   it('prices every pin against the pricing table', () => {
-    const priced = new Set(pricedModels());
-    for (const pin of ALL_PINS) expect(priced.has(pin.priced)).toBe(true);
+    for (const pin of ALL_PINS) expect(rateFor(pin.priced)).not.toBeNull();
+    expect(rateFor('claude-opus-5')).toEqual({ input: 5, output: 25 });
+    expect(rateFor('claude-sonnet-5')).toEqual({ input: 2, output: 10 });
   });
 
   it('seats Sonnet 5, GPT-5.5 and DeepSeek V4 Pro as debaters and Opus 5 as judge', () => {

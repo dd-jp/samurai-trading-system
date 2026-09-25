@@ -24,7 +24,7 @@ export const SONNET_5_PIN: ModelPin = {
   seat: 'sonnet',
   provider: 'anthropic',
   wire: 'claude-sonnet-5',
-  priced: 'anthropic/claude-sonnet-5',
+  priced: 'claude-sonnet-5',
 };
 
 const GPT_5_5_PIN: ModelPin = {
@@ -45,7 +45,7 @@ export const JUDGE_PIN: ModelPin = {
   seat: 'judge',
   provider: 'anthropic',
   wire: 'claude-opus-5',
-  priced: 'anthropic/claude-opus-5',
+  priced: 'claude-opus-5',
 };
 
 export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_PIN, GPT_5_5_PIN, DEEPSEEK_V4_PRO_PIN];

@@ -17,6 +17,13 @@ describe('rateFor', () => {
     expect(rateFor('anthropic/claude-haiku-4.5')).toEqual({ input: 0.8, output: 4 });
   });
 
+  it('prices first-party Anthropic ids at list rate and Nous ids at the Nous discount', () => {
+    expect(rateFor('claude-opus-5')).toEqual({ input: 5, output: 25 });
+    expect(rateFor('claude-sonnet-5')).toEqual({ input: 2, output: 10 });
+    expect(rateFor('anthropic/claude-opus-5')).toEqual({ input: 4, output: 20 });
+    expect(rateFor('anthropic/claude-sonnet-5')).toEqual({ input: 1.6, output: 8 });
+  });
+
   it('returns null for a model not in the table rather than guessing', () => {
     expect(rateFor('vendor/something-7')).toBeNull();
   });

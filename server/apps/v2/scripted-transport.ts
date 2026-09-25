@@ -12,13 +12,6 @@ export interface ScriptedCall {
 
 export type Script = (request: AnthropicMessageRequest) => string;
 
-export const NEUTRAL_SCRIPT: Script = (request) => {
-  const prompt = request.messages[0]?.content ?? '';
-  return prompt.includes('Mediator persona')
-    ? '{"stance":"neutral","rationale":"scripted","converged":true}'
-    : '{"stance":"neutral","rationale":"scripted"}';
-};
-
 export const BULLISH_SCRIPT: Script = (request) => {
   const prompt = request.messages[0]?.content ?? '';
   return prompt.includes('Mediator persona')
@@ -31,7 +24,7 @@ export class ScriptedTransport implements AnthropicMessagesClient {
 
   constructor(
     private readonly pin: ModelPin,
-    private readonly script: Script = NEUTRAL_SCRIPT,
+    private readonly script: Script,
   ) {}
 
   createMessage(
