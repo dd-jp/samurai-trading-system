@@ -130,6 +130,15 @@ Split `server/apps/v2/` into the five modules D4 names — data, signal (sleeves
 Bars move from `data/bars/alpaca` <!-- cite-exempt: untracked — gitignored local data --> CSV to Parquet partitioned by venue, symbol and year; a DuckDB reader (`@duckdb/node-api`) serves backtests, gate statistics, journal analysis (attaching the SQLite store read-only), CGT reports and point-in-time replay. SQLite keeps all live state. Every windowed read keeps its coverage invariant (postmortem §2).
 => a parity test reads every migrated series from CSV and Parquet and gets identical bars; the coverage invariant test runs on the Parquet reader; the old CSV reader is deleted in the same PR.
 
+**Status 2026-09-25 (Step 3b PR):**
+- Built: the store `server/providers/bar-store/`, with data at `data/bars/parquet/`.
+- Parity: all 768 series (746 alpaca, 22 saxo) read back identical to both CSV readers. Doc 70's verdicts re-ran byte-identical to a CSV re-run on the base commit (the committed `verdict-5000-whole.json` was already 1 ULP stale on main). The v2 smoke and four dry-run cycle reports are unchanged.
+- Callers now on the store: the momentum runner, the pullers, the spread tool and the v2 root.
+- Deleted: both CSV readers and the bar CSVs.
+- The `run.test.ts` coverage cases (`AlignedMarket` over `windowCoverage`) now read Parquet fixtures.
+- Not built yet, because nothing consumes them: the gate-statistics, journal (SQLite `ATTACH`), CGT and replay readers. Each comes with the step that needs it (3d harness, 4b, 5).
+- Gap, recorded and not fixed here: the v2 debate sleeve's bar reads check freshness (`isFresh`) but not window coverage. The harness in 3d should route them through `windowCoverage` ([#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791)).
+
 #### Step 3d — Sleeve contract and harness (D7, D8, S7; #1783)
 
 Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a capacity (D8). One harness takes any sleeve through backtest (walk-forward, global trial counter, DSR/PBO via `server/tools/backtest/overfitting.ts`, loss-budget rules inside), paper and live on the same code; only the venue and clock adapters differ. Sizing is risk-per-trade as a fraction of equity, capped by a pre-declared share of average daily volume, in the risk module (D8). The cost model gains a size-dependent market-impact term. The veto-plus-no-veto-shadow book pair (G5, S7) and the other shadow books become harness features any sleeve can declare, not debate-only code. The execution module gets an order-slicing seam that sends one child order. Port the debate sleeve onto the harness.

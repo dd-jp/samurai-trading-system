@@ -6,6 +6,7 @@ import type {
   SpendCap,
 } from '../../pipeline/debate-engine/index.js';
 import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
+import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
@@ -17,10 +18,10 @@ import {
   AlpacaNewsSource,
   BarsMarketData,
   type BarsSource,
-  CsvBarsSource,
   currentConstituents,
   type NewsSource,
   NO_NEWS,
+  ParquetBarsSource,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
 import { type AlpacaBrokerClient, createOrderExecutor } from './execution/index.js';
@@ -45,7 +46,6 @@ import {
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
-export const BARS_DIRECTORY = 'data/bars/alpaca';
 export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
 export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
@@ -58,7 +58,7 @@ export interface V2RootOptions {
   readonly dryRun: boolean;
   readonly storePath?: string | undefined;
   readonly store?: StoreHandle | undefined;
-  readonly barsDirectory?: string | undefined;
+  readonly barStoreRoot?: string | undefined;
   readonly constituentsPath?: string | undefined;
   readonly spreadsPath?: string | undefined;
   readonly fxPath?: string | undefined;
@@ -179,8 +179,13 @@ function storePathFor(options: V2RootOptions): string {
   return options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH);
 }
 
-function barsSourceFor(options: V2RootOptions): BarsSource {
-  return options.bars ?? new CsvBarsSource(options.barsDirectory ?? BARS_DIRECTORY);
+function barsSourceFor(options: V2RootOptions): {
+  bars: BarsSource;
+  prime: () => Promise<void>;
+} {
+  if (options.bars !== undefined) return { bars: options.bars, prime: () => Promise.resolve() };
+  const bars = new ParquetBarsSource(options.barStoreRoot ?? DEFAULT_BAR_STORE_ROOT, 'alpaca');
+  return { bars, prime: () => bars.prime() };
 }
 
 export function composeV2Root(options: V2RootOptions): V2Root {
@@ -200,7 +205,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     spendCap,
     logger,
   });
-  const bars = barsSourceFor(options);
+  const { bars, prime } = barsSourceFor(options);
   const constituents = options.constituents ?? constituentsFromCsv(options);
   const market = new BarsMarketData(
     bars,
@@ -245,8 +250,9 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     panel,
     db,
     scriptedTransports: scripted,
-    run: () =>
-      runCycle(
+    run: async () => {
+      await prime();
+      return runCycle(
         {
           registry,
           books,
@@ -260,7 +266,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
           logger,
         },
         options.tradingDate,
-      ),
+      );
+    },
     close: () => db.close(),
   };
 }

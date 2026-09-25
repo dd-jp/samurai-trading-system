@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
+import { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
-import { loadBarDirectory } from './bar-csv.js';
 import { findUnitBreaks } from './bar-hygiene.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import type { BookFx } from './fx.js';
@@ -12,7 +12,7 @@ import type { TrialConfig, Venue } from './grid.js';
 import { GRID_A, GRID_A_TRIAL_COUNT, gridForVenue, maxWarmupDays, trialHash } from './grid.js';
 import { AlignedMarket, monthEndIndices } from './market.js';
 import { DEFAULT_SPREAD_PATH, halfSpreadLookup, parseSpreadCsv } from './measure-alpaca-spread.js';
-import { DEFAULT_ALPACA_BARS_DIR, DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca-bars.js';
+import { DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca-bars.js';
 import { DEFAULT_SAXO_BARS_DIR } from './pull-saxo-bars.js';
 import { renderVerdictMarkdown } from './report.js';
 import type { SimulationResult, UniverseAt, VenueCosts } from './simulate.js';
@@ -24,6 +24,7 @@ import { subBookVerdict } from './verdict.js';
 const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 const DEFAULT_OUT_DIR = 'data/backtest/momentum';
 const LEDGER_FILE = 'trials.json';
+const STORE_VENUE = { us: 'alpaca', lse: 'saxo' } as const satisfies Record<Venue, string>;
 export const CAPITAL_PASSES_GBP = [1_000, 5_000] as const;
 
 interface SaxoBarsManifest {
@@ -68,7 +69,8 @@ export interface VenueData {
 
 export interface RunOptions {
   readonly venue: Venue;
-  readonly barsDir: string;
+  readonly barsRoot: string;
+  readonly lseManifestPath: string;
   readonly outDir: string;
   readonly capitals: readonly number[];
   readonly constituentsPath: string;
@@ -77,26 +79,33 @@ export interface RunOptions {
 }
 
 export function parseArgs(argv: readonly string[]): RunOptions {
-  const value = (flag: string): string | undefined => {
+  const value = (flag: string, fallback: string): string => {
     const index = argv.indexOf(flag);
-    return index === -1 ? undefined : argv[index + 1];
+    return index === -1 ? fallback : (argv[index + 1] ?? fallback);
   };
-  const venue = value('--venue');
+  const venue = value('--venue', '');
   if (venue !== 'us' && venue !== 'lse')
-    throw new Error('usage: run.ts --venue us|lse [--bars dir] [--out dir]');
-  const capitals = value('--capital')
-    ?.split(',')
-    .map(Number)
-    .filter((capital) => capital > 0);
+    throw new Error(
+      'usage: run.ts --venue us|lse [--bars parquet-root] [--manifest path] [--out dir]',
+    );
   return {
     venue,
-    barsDir: value('--bars') ?? (venue === 'us' ? DEFAULT_ALPACA_BARS_DIR : DEFAULT_SAXO_BARS_DIR),
-    outDir: value('--out') ?? DEFAULT_OUT_DIR,
-    capitals: capitals !== undefined && capitals.length > 0 ? capitals : CAPITAL_PASSES_GBP,
-    constituentsPath: value('--constituents') ?? DEFAULT_CONSTITUENTS_PATH,
-    fxPath: value('--fx') ?? DEFAULT_FX_PATH,
-    spreadPath: value('--spreads') ?? DEFAULT_SPREAD_PATH,
+    barsRoot: value('--bars', DEFAULT_BAR_STORE_ROOT),
+    lseManifestPath: value('--manifest', join(DEFAULT_SAXO_BARS_DIR, 'manifest.json')),
+    outDir: value('--out', DEFAULT_OUT_DIR),
+    capitals: capitalsFrom(value('--capital', '')),
+    constituentsPath: value('--constituents', DEFAULT_CONSTITUENTS_PATH),
+    fxPath: value('--fx', DEFAULT_FX_PATH),
+    spreadPath: value('--spreads', DEFAULT_SPREAD_PATH),
   };
+}
+
+function capitalsFrom(list: string): readonly number[] {
+  const capitals = list
+    .split(',')
+    .map(Number)
+    .filter((capital) => capital > 0);
+  return capitals.length > 0 ? capitals : CAPITAL_PASSES_GBP;
 }
 
 export function memberSessionCoverage(
@@ -119,10 +128,19 @@ export function memberSessionCoverage(
   };
 }
 
-function loadUsData(
-  options: Pick<RunOptions, 'barsDir' | 'constituentsPath' | 'fxPath' | 'spreadPath'>,
-): VenueData {
-  const series = loadBarDirectory(options.barsDir);
+async function readVenueBars(barsRoot: string, venue: Venue): Promise<Map<string, BarSeries>> {
+  const store = await ParquetBarStore.open(barsRoot);
+  try {
+    return await store.readVenue(STORE_VENUE[venue]);
+  } finally {
+    store.close();
+  }
+}
+
+async function loadUsData(
+  options: Pick<RunOptions, 'barsRoot' | 'constituentsPath' | 'fxPath' | 'spreadPath'>,
+): Promise<VenueData> {
+  const series = await readVenueBars(options.barsRoot, 'us');
   const reference = requireSeries(series, 'SPY');
   const membership = new PointInTimeMembership(
     parseConstituentsCsv(readFileSync(options.constituentsPath, 'utf8')),
@@ -143,8 +161,10 @@ function loadUsData(
   };
 }
 
-export function loadLseData(barsDir: string): VenueData {
-  const manifestPath = join(barsDir, 'manifest.json');
+export async function loadLseData(
+  options: Pick<RunOptions, 'barsRoot' | 'lseManifestPath'>,
+): Promise<VenueData> {
+  const manifestPath = options.lseManifestPath;
   if (!existsSync(manifestPath)) {
     throw new Error(
       `LSE bars not present: expected ${manifestPath} with calendar_reference and per-symbol half_spread_bps ` +
@@ -152,13 +172,13 @@ export function loadLseData(barsDir: string): VenueData {
     );
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as SaxoBarsManifest;
-  const series = loadBarDirectory(barsDir);
+  const series = await readVenueBars(options.barsRoot, 'lse');
   const reference = clipToWindow(
     requireSeries(series, manifest.calendar_reference),
     manifest.window_start,
   );
   const symbols = Object.keys(manifest.symbols).sort();
-  const halfSpreads = manifestHalfSpreads(manifest, symbols, series, barsDir);
+  const halfSpreads = manifestHalfSpreads(manifest, symbols, series);
   const market = new AlignedMarket(reference, series);
   assertLinesStartByWindow(market, symbols);
   const coverage = memberSessionCoverage(market, () => symbols);
@@ -180,19 +200,13 @@ function manifestHalfSpreads(
   manifest: SaxoBarsManifest,
   symbols: readonly string[],
   series: ReadonlyMap<string, BarSeries>,
-  barsDir: string,
 ): Map<string, number> {
   const halfSpreads = new Map<string, number>();
   for (const symbol of symbols) {
     const one = series.get(symbol);
     if (one === undefined)
-      throw new Error(`LSE manifest lists ${symbol} but ${barsDir}/${symbol}.csv is missing`);
-    const breaks = findUnitBreaks(one.bars);
-    if (breaks.length > 0) {
-      throw new Error(
-        `LSE bars: ${symbol} has a unit break at ${breaks.map((b) => `${b.date} ×${b.factor}`).join(', ')} — re-pull through the hygiene step`,
-      );
-    }
+      throw new Error(`LSE manifest lists ${symbol} but the bar store has no saxo ${symbol}`);
+    assertNoUnitBreak(one);
     const halfSpread = manifest.symbols[symbol]?.half_spread_bps;
     if (halfSpread === undefined || !(halfSpread >= 0)) {
       throw new Error(`LSE manifest: ${symbol} needs a measured half_spread_bps`);
@@ -200,6 +214,15 @@ function manifestHalfSpreads(
     halfSpreads.set(symbol, halfSpread);
   }
   return halfSpreads;
+}
+
+function assertNoUnitBreak(series: BarSeries): void {
+  const breaks = findUnitBreaks(series.bars);
+  if (breaks.length > 0) {
+    throw new Error(
+      `LSE bars: ${series.symbol} has a unit break at ${breaks.map((b) => `${b.date} ×${b.factor}`).join(', ')} — re-pull through the hygiene step`,
+    );
+  }
 }
 
 function assertLinesStartByWindow(market: AlignedMarket, symbols: readonly string[]): void {
@@ -255,8 +278,7 @@ function requireHalfSpread(halfSpreads: ReadonlyMap<string, number>, symbol: str
 
 function requireSeries(series: ReadonlyMap<string, BarSeries>, symbol: string): BarSeries {
   const found = series.get(symbol);
-  if (found === undefined)
-    throw new Error(`bars directory has no ${symbol}.csv calendar reference`);
+  if (found === undefined) throw new Error(`bar store has no ${symbol} calendar reference`);
   return found;
 }
 
@@ -323,8 +345,8 @@ function writeLedger(outDir: string): TrialLedger {
   return ledger;
 }
 
-export function runVenue(options: RunOptions): PassResult[] {
-  const data = options.venue === 'us' ? loadUsData(options) : loadLseData(options.barsDir);
+export async function runVenue(options: RunOptions): Promise<PassResult[]> {
+  const data = options.venue === 'us' ? await loadUsData(options) : await loadLseData(options);
   const venueDir = join(options.outDir, options.venue);
   mkdirSync(venueDir, { recursive: true });
   writeLedger(options.outDir);
@@ -343,7 +365,7 @@ export function runVenue(options: RunOptions): PassResult[] {
 
 if (isMainModule(import.meta.url)) {
   const options = parseArgs(process.argv.slice(2));
-  const passes = runVenue(options);
+  const passes = await runVenue(options);
   execFileSync('npx', ['biome', 'format', '--write', options.outDir], { stdio: 'ignore' });
   for (const pass of passes) {
     const { verdict } = pass;

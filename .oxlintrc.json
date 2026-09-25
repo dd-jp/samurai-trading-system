@@ -149,6 +149,10 @@
               "!**/market-intelligence/index.ts"
             ],
             "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+          },
+          {
+            "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+            "message": "reach server/providers/bar-store only via its index.ts barrel"
           }
         ]
       }
@@ -273,6 +277,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -397,6 +405,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -521,6 +533,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -645,6 +661,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -765,6 +785,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -889,6 +913,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1009,6 +1037,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1129,6 +1161,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1249,6 +1285,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1373,6 +1413,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1497,6 +1541,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1621,6 +1669,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1745,6 +1797,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1869,6 +1925,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -1989,6 +2049,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -2109,6 +2173,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -2233,6 +2301,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -2353,6 +2425,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -2473,6 +2549,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -2713,6 +2793,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -2940,6 +3024,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               }
             ]
           }
@@ -3072,6 +3160,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               },
               {
                 "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
@@ -3242,6 +3334,10 @@
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
               },
               {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
+              },
+              {
                 "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
                 "message": "reach server/apps/v2/data only via its index.ts barrel"
               },
@@ -3410,6 +3506,10 @@
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
               },
               {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
+              },
+              {
                 "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
                 "message": "reach server/apps/v2/data only via its index.ts barrel"
               },
@@ -3574,6 +3674,10 @@
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
               },
               {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
+              },
+              {
                 "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
                 "message": "reach server/apps/v2/data only via its index.ts barrel"
               },
@@ -3728,6 +3832,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               },
               {
                 "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
@@ -3888,6 +3996,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               },
               {
                 "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],
@@ -4052,6 +4164,10 @@
                   "!**/market-intelligence/index.ts"
                 ],
                 "message": "reach server/providers/market-intelligence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/*", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
               },
               {
                 "group": ["**/data/*", "!**/data/index.js", "!**/data/index.ts"],

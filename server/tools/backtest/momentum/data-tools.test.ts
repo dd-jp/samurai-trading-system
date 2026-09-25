@@ -1,6 +1,7 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import type { FetchResult, RawDailyBar } from './alpaca-bars-api.js';
 import {
   AlpacaBarsApi,
@@ -10,7 +11,7 @@ import {
   endOfDayUtc,
   parseBarsPage,
 } from './alpaca-bars-api.js';
-import { BAR_CSV_HEADER, barsToCsv, loadBarDirectory, parseBarCsv } from './bar-csv.js';
+import { BAR_CSV_HEADER, barsToCsv, roundBarPrices } from './bar-csv.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import { GBP_IDENTITY_FX, parseBoeXudlussCsv, YearFixedFx } from './fx.js';
 import {
@@ -32,6 +33,7 @@ import {
   halfSpreadBps,
   halfSpreadLookup,
   lastSessions,
+  measureAll,
   measureSymbol,
   median,
   newYorkUtcOffsetMinutes,
@@ -41,12 +43,14 @@ import {
   SPREAD_CSV_HEADER,
   sampleWindowUtc,
   spreadRowsToCsv,
+  spySessions,
 } from './measure-alpaca-spread.js';
 import {
   alpacaSymbolCandidates,
   barDate,
   joinAdjustedAndRaw,
   parsePullArgs,
+  pullInto,
   pullSymbol,
 } from './pull-alpaca-bars.js';
 import { distinctTrialCount, ledgerFromGrid, mergeLedger } from './trial-ledger.js';
@@ -232,40 +236,49 @@ describe('constituents', () => {
 describe('bar csv', () => {
   const bars = [
     { date: '2024-01-02', open: 1.5, high: 2, low: 1, close: 1.75, volume: 100, rawClose: 7 },
-    { date: '2024-01-03', open: 1.75, high: 2, low: 1.5, close: 1.9, volume: 200, rawClose: 7.6 },
+    {
+      date: '2024-01-03',
+      open: 1.23456,
+      high: 2,
+      low: 1.5,
+      close: 1.9,
+      volume: 2.5,
+      rawClose: 7.6,
+    },
   ];
 
-  it('round-trips through the Alpaca layout with raw_close', () => {
-    const text = barsToCsv(bars);
-    expect(text.split('\n')[0]).toBe(BAR_CSV_HEADER);
-    expect(parseBarCsv('X', text).bars).toEqual(bars);
+  it('writes the Alpaca layout with raw_close and prices rounded to four places', () => {
+    expect(barsToCsv(bars).split('\n')).toEqual([
+      BAR_CSV_HEADER,
+      '2024-01-02,1.5,2,1,1.75,100,7',
+      '2024-01-03,1.2346,2,1.5,1.9,2.5,7.6',
+      '',
+    ]);
   });
 
-  it('accepts the Saxo layout without raw_close, defaulting raw to close', () => {
-    const series = parseBarCsv('S', 'date,open,high,low,close,volume\n2024-01-02,1,2,0.5,1.5,10\n');
-    expect(series.bars[0]?.rawClose).toBe(1.5);
-  });
-
-  it('rejects a bad header, wrong cell count, non-numeric cells and unordered dates', () => {
-    expect(() => parseBarCsv('X', 'a,b\n')).toThrow(/unexpected bar CSV header/);
-    expect(() => parseBarCsv('X', `${BAR_CSV_HEADER}\n2024-01-02,1,2\n`)).toThrow(
-      /cells, expected 7/,
-    );
-    expect(() => parseBarCsv('X', `${BAR_CSV_HEADER}\n2024-01-02,1,2,0.5,x,10,1\n`)).toThrow(
-      /non-numeric/,
-    );
-    expect(() =>
-      parseBarCsv('X', `${BAR_CSV_HEADER}\n2024-01-03,1,2,0.5,1,10,1\n2024-01-02,1,2,0.5,1,10,1\n`),
-    ).toThrow(/not strictly ascending/);
-  });
-
-  it('loads every csv in a directory keyed by file name', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bars-'));
-    writeFileSync(join(dir, 'AAA.csv'), barsToCsv(bars));
-    writeFileSync(join(dir, 'manifest.json'), '{}');
-    const loaded = loadBarDirectory(dir);
-    expect([...loaded.keys()]).toEqual(['AAA']);
-    expect(loaded.get('AAA')?.bars.length).toBe(2);
+  it('rounds prices, not volume, to four places', () => {
+    const rounded = roundBarPrices([
+      {
+        date: '2024-01-02',
+        open: 1.00005,
+        high: 2.123449,
+        low: 0.99994,
+        close: 1.5,
+        volume: 1.23456,
+        rawClose: 3.33333,
+      },
+    ]);
+    expect(rounded).toEqual([
+      {
+        date: '2024-01-02',
+        open: 1.0001,
+        high: 2.1234,
+        low: 0.9999,
+        close: 1.5,
+        volume: 1.23456,
+        rawClose: 3.3333,
+      },
+    ]);
   });
 });
 
@@ -406,7 +419,55 @@ describe('pull-alpaca-bars helpers', () => {
     const args = parsePullArgs(['--end', '2026-09-23', '--out', 'x']);
     expect(args.end).toBe('2026-09-23');
     expect(args.outDir).toBe('x');
+    expect(args.storeRoot).toBe('data/bars/parquet');
+    expect(parsePullArgs(['--store', 's']).storeRoot).toBe('s');
     expect(args.constituents).toBe('data/bars/sp500-constituents.csv');
+  });
+
+  it('writes each pulled ticker to the store with rounded prices and lists the rest as missing', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pull-alpaca-'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const api = new AlpacaBarsApi(
+      { apiKey: 'k', apiSecret: 's' },
+      async (url) => {
+        const symbol = new URL(url).searchParams.get('symbols') as string;
+        const bars =
+          symbol === 'SPY'
+            ? [rawBar('2016-01-04T05:00:00Z', 10.123456), rawBar('2016-01-05T05:00:00Z', 11)]
+            : [];
+        return { status: 200, body: { bars: { [symbol]: bars } } };
+      },
+      async () => {},
+      0,
+    );
+    const missing = Array.from({ length: 24 }, (_, index) => `NONE${index}`);
+    const store = await ParquetBarStore.open(join(directory, 'store'));
+    try {
+      await pullInto(store, api, [...missing, 'SPY'], {
+        end: '2016-01-05',
+        constituents: 'unused',
+        outDir: directory,
+        storeRoot: join(directory, 'store'),
+      });
+      const stored = await store.readVenue('alpaca');
+      expect([...stored.keys()]).toEqual(['SPY']);
+      expect(stored.get('SPY')?.bars.map((bar) => [bar.date, bar.close])).toEqual([
+        ['2016-01-04', 10.1235],
+        ['2016-01-05', 11],
+      ]);
+      const manifest = JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8'));
+      expect(manifest.symbols).toEqual({
+        SPY: { alpaca_symbol: 'SPY', first: '2016-01-04', last: '2016-01-05', bars: 2 },
+      });
+      expect(manifest.missing).toEqual(missing);
+      expect(manifest.end).toBe('2016-01-05');
+      expect(log).toHaveBeenCalledWith('25/25 SPY: 2 bars');
+      expect(log).toHaveBeenLastCalledWith('pulled 1 symbols, 24 missing');
+    } finally {
+      store.close();
+      log.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 
@@ -471,5 +532,50 @@ describe('spread measurement', () => {
     expect(row?.sessions).toBe(2);
     expect(row?.medianHalfSpreadBps).toBeCloseTo(1, 3);
     expect(await measureSymbol(api, 'NONE', ['2026-09-23'])).toBeUndefined();
+  });
+
+  it('measures every ticker, drops the unquoted ones and sorts by symbol', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const api = new AlpacaBarsApi(
+      { apiKey: 'k', apiSecret: 's' },
+      async (url) => ({
+        status: 200,
+        body: /\/(ZZ|AA)\//.test(url) ? { quotes: [{ bp: 100, ap: 100.02 }] } : { quotes: [] },
+      }),
+      async () => {},
+      0,
+    );
+    const unquoted = Array.from({ length: 23 }, (_, index) => `N${index}`);
+    try {
+      const rows = await measureAll(api, ['ZZ', ...unquoted, 'AA'], ['2026-09-23']);
+      expect(rows.map((row) => row.symbol)).toEqual(['AA', 'ZZ']);
+      expect(log).toHaveBeenCalledWith('25/25 measured, 2 with quotes');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('takes the last sessions from the stored SPY calendar and refuses a store without SPY', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'spread-sessions-'));
+    const store = await ParquetBarStore.open(directory);
+    try {
+      await expect(spySessions(store, 2)).rejects.toThrow(/no alpaca SPY series/);
+      const bar = (date: string) => ({
+        date,
+        open: 1,
+        high: 1,
+        low: 1,
+        close: 1,
+        volume: 1,
+        rawClose: 1,
+      });
+      await store.write('alpaca', [
+        { symbol: 'SPY', bars: [bar('2026-09-21'), bar('2026-09-22'), bar('2026-09-23')] },
+      ]);
+      expect(await spySessions(store, 2)).toEqual(['2026-09-22', '2026-09-23']);
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

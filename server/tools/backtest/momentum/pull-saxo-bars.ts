@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { TRADING_DAYS_PER_YEAR } from '../../../pipeline/momentum/index.js';
+import { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
-import { barsToCsv } from './bar-csv.js';
+import { barsToCsv, roundBarPrices } from './bar-csv.js';
 import type { HygieneReport } from './bar-hygiene.js';
 import { applyBarHygiene } from './bar-hygiene.js';
 import type { FxRate } from './fx.js';
@@ -158,7 +159,7 @@ export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHist
 
 export interface PullContext {
   readonly api: SaxoBarsApi;
-  readonly outDir: string;
+  readonly store: ParquetBarStore;
   readonly auxDir: string;
   readonly rawDir: string;
   readonly fetchDate: string;
@@ -206,6 +207,7 @@ function spliceRecord(
 
 export function parseSaxoPullArgs(argv: readonly string[]): {
   outDir: string;
+  storeRoot: string;
   auxDir: string;
   spreads: string;
   fx: string;
@@ -217,6 +219,7 @@ export function parseSaxoPullArgs(argv: readonly string[]): {
   };
   return {
     outDir: value('--out') ?? DEFAULT_SAXO_BARS_DIR,
+    storeRoot: value('--store') ?? DEFAULT_BAR_STORE_ROOT,
     auxDir: value('--aux') ?? DEFAULT_SAXO_AUX_DIR,
     spreads: value('--spreads') ?? DEFAULT_SAXO_SPREAD_PATH,
     fx: value('--fx') ?? DEFAULT_FX_PATH,
@@ -256,41 +259,60 @@ export async function pullMomentumLine(
     return {
       kind: 'excluded',
       pulled: primary,
-      entry: {
-        uic: line.uic,
-        role: line.role,
-        first: primary.bars[0]?.date ?? '',
-        bars: primary.bars.length,
-        hygiene: primary.hygiene,
-        reason: `GBX line starts ${primary.bars[0]?.date ?? '?'} (under ten years); sibling splice exceeds the pre-declared tolerance (mean abs return diff ${splice.record.overlap.meanAbsReturnDiffBps.toFixed(2)} bps/day > ${SPLICE_MAX_MEAN_ABS_RETURN_DIFF_BPS}) — STOP for David`,
-        spliced_from: splice.record,
-      },
+      entry: excludedEntry(line, primary, splice.record),
     };
   }
   const bars = splice?.bars ?? primary.bars;
   const spread = ctx.spreads.get(line.tidm);
   if (spread === undefined)
     throw new Error(`${line.tidm}: no measured half spread in ${ctx.spreadsPath}`);
-  writeFileSync(join(ctx.outDir, `${line.tidm}.csv`), barsToCsv(bars));
+  await ctx.store.write('saxo', [{ symbol: line.tidm, bars: roundBarPrices(bars) }]);
   return {
     kind: 'included',
     pulled: { ...primary, bars },
-    entry: {
-      uic: line.uic,
-      asset_type: line.assetType,
-      role: line.role,
-      unit: line.unit,
-      price_to_contract_factor: primary.details.priceToContractFactor,
-      is_complex: primary.details.isComplex,
-      first: bars[0]?.date ?? '',
-      last: bars[bars.length - 1]?.date ?? '',
-      bars: bars.length,
-      density: density(bars),
-      half_spread_bps: spread.p25HalfSpreadBps,
-      half_spread_median_bps: spread.medianHalfSpreadBps,
-      hygiene: primary.hygiene,
-      ...(splice === undefined ? {} : { spliced_from: splice.record }),
-    },
+    entry: includedEntry(line, primary, bars, spread, splice?.record),
+  };
+}
+
+function excludedEntry(
+  line: SaxoLine,
+  primary: PulledLine,
+  record: SpliceRecord,
+): SaxoExcludedEntry {
+  const first = primary.bars[0]?.date;
+  return {
+    uic: line.uic,
+    role: line.role,
+    first: first ?? '',
+    bars: primary.bars.length,
+    hygiene: primary.hygiene,
+    reason: `GBX line starts ${first ?? '?'} (under ten years); sibling splice exceeds the pre-declared tolerance (mean abs return diff ${record.overlap.meanAbsReturnDiffBps.toFixed(2)} bps/day > ${SPLICE_MAX_MEAN_ABS_RETURN_DIFF_BPS}) — STOP for David`,
+    spliced_from: record,
+  };
+}
+
+function includedEntry(
+  line: SaxoLine,
+  primary: PulledLine,
+  bars: readonly DailyBar[],
+  spread: SaxoSpreadRow,
+  record: SpliceRecord | undefined,
+): SaxoSymbolEntry {
+  return {
+    uic: line.uic,
+    asset_type: line.assetType,
+    role: line.role,
+    unit: line.unit,
+    price_to_contract_factor: primary.details.priceToContractFactor,
+    is_complex: primary.details.isComplex,
+    first: bars[0]?.date ?? '',
+    last: bars[bars.length - 1]?.date ?? '',
+    bars: bars.length,
+    density: density(bars),
+    half_spread_bps: spread.p25HalfSpreadBps,
+    half_spread_median_bps: spread.medianHalfSpreadBps,
+    hygiene: primary.hygiene,
+    ...(record === undefined ? {} : { spliced_from: record }),
   };
 }
 
@@ -396,9 +418,10 @@ async function main(argv: readonly string[]): Promise<void> {
   const spreads = parseSaxoSpreadCsv(readFileSync(args.spreads, 'utf8'));
   const fxRates = parseBoeXudlussCsv(readFileSync(args.fx, 'utf8'));
   const tokens = liveTokenSource(process.env, args.tokenFile);
+  const store = await ParquetBarStore.open(args.storeRoot);
   const ctx: PullContext = {
     api: new SaxoReadOnlyApi(tokens, resolveSaxoOAuthConfig('live', process.env).gatewayBaseUrl),
-    outDir: args.outDir,
+    store,
     auxDir: args.auxDir,
     rawDir: join(args.auxDir, 'raw'),
     fetchDate: new Date().toISOString().slice(0, 10),
@@ -409,13 +432,16 @@ async function main(argv: readonly string[]): Promise<void> {
   mkdirSync(args.outDir, { recursive: true });
   mkdirSync(ctx.rawDir, { recursive: true });
 
-  const pulledLines = await pullAllLines(ctx).finally(() => tokens.stop());
+  const pulledLines = await pullAllLines(ctx).finally(() => {
+    tokens.stop();
+    store.close();
+  });
   const manifest = saxoBarsManifest(ctx, pulledLines, new Date().toISOString());
   writeFileSync(join(args.outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   execFileSync('npx', ['biome', 'format', '--write', join(args.outDir, 'manifest.json')], {
     stdio: 'ignore',
   });
-  console.log(saxoPullSummary(args.outDir, manifest));
+  console.log(saxoPullSummary(args.storeRoot, manifest));
 }
 
 if (isMainModule(import.meta.url)) {

@@ -1,15 +1,16 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { AlpacaBarsApi, credentialsFromEnv, type RawDailyBar } from './alpaca-bars-api.js';
-import { barsToCsv } from './bar-csv.js';
+import { roundBarPrices } from './bar-csv.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 
 const US_BARS_START = '2016-01-04';
 const US_CALENDAR_REFERENCE = 'SPY';
 export const DEFAULT_CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
-export const DEFAULT_ALPACA_BARS_DIR = 'data/bars/alpaca';
+const DEFAULT_ALPACA_BARS_DIR = 'data/bars/alpaca';
 
 interface SymbolManifestEntry {
   readonly alpaca_symbol: string;
@@ -81,6 +82,7 @@ export function parsePullArgs(argv: readonly string[]): {
   end: string;
   constituents: string;
   outDir: string;
+  storeRoot: string;
 } {
   const value = (flag: string, fallback: string): string => {
     const index = argv.indexOf(flag);
@@ -90,6 +92,7 @@ export function parsePullArgs(argv: readonly string[]): {
     end: value('--end', new Date().toISOString().slice(0, 10)),
     constituents: value('--constituents', DEFAULT_CONSTITUENTS_PATH),
     outDir: value('--out', DEFAULT_ALPACA_BARS_DIR),
+    storeRoot: value('--store', DEFAULT_BAR_STORE_ROOT),
   };
 }
 
@@ -101,7 +104,20 @@ async function main(argv: readonly string[]): Promise<void> {
   const tickers = [US_CALENDAR_REFERENCE, ...membership.allTickers()];
   const api = new AlpacaBarsApi(credentialsFromEnv(process.env));
   mkdirSync(args.outDir, { recursive: true });
+  const store = await ParquetBarStore.open(args.storeRoot);
+  try {
+    await pullInto(store, api, tickers, args);
+  } finally {
+    store.close();
+  }
+}
 
+export async function pullInto(
+  store: ParquetBarStore,
+  api: AlpacaBarsApi,
+  tickers: readonly string[],
+  args: ReturnType<typeof parsePullArgs>,
+): Promise<void> {
   const symbols: Record<string, SymbolManifestEntry> = {};
   const missing: string[] = [];
   let done = 0;
@@ -113,7 +129,7 @@ async function main(argv: readonly string[]): Promise<void> {
       console.log(`${done}/${tickers.length} ${ticker}: no SIP bars`);
       continue;
     }
-    writeFileSync(join(args.outDir, `${ticker}.csv`), barsToCsv(pulled.bars));
+    await store.write('alpaca', [{ symbol: ticker, bars: roundBarPrices(pulled.bars) }]);
     const first = pulled.bars[0]?.date ?? '';
     const last = pulled.bars[pulled.bars.length - 1]?.date ?? '';
     symbols[ticker] = { alpaca_symbol: pulled.alpacaSymbol, first, last, bars: pulled.bars.length };

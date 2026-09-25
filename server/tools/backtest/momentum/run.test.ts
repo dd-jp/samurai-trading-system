@@ -1,7 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { barsToCsv } from './bar-csv.js';
+import type { BarSeries } from '../../../pipeline/momentum/index.js';
+import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { roundBarPrices } from './bar-csv.js';
 import { syntheticSeries, tradingCalendar } from './fixture.js';
 import { GRID_A } from './grid.js';
 import { AlignedMarket } from './market.js';
@@ -20,36 +22,44 @@ import type { SubBookVerdict } from './verdict.js';
 const SESSIONS = 1_200;
 const calendar = tradingCalendar('2016-01-04', SESSIONS);
 
-function writeUsFixture(root: string): {
-  barsDir: string;
+async function writeBars(
+  barsRoot: string,
+  venue: string,
+  series: readonly BarSeries[],
+): Promise<void> {
+  const store = await ParquetBarStore.open(barsRoot);
+  try {
+    await store.write(
+      venue,
+      series.map((one) => ({ symbol: one.symbol, bars: roundBarPrices(one.bars) })),
+    );
+  } finally {
+    store.close();
+  }
+}
+
+async function writeUsFixture(root: string): Promise<{
+  barsRoot: string;
   constituents: string;
   fx: string;
   spreads: string;
-} {
-  const barsDir = join(root, 'alpaca');
-  mkdirSync(barsDir, { recursive: true });
+}> {
+  const barsRoot = join(root, 'parquet');
   const symbols = Array.from({ length: 12 }, (_, index) => `S${String(index).padStart(2, '0')}`);
-  writeFileSync(
-    join(barsDir, 'SPY.csv'),
-    barsToCsv(syntheticSeries({ symbol: 'SPY', calendar, seed: 1, volatility: 0.008 }).bars),
-  );
-  symbols.forEach((symbol, index) => {
-    const to = index === 11 ? 900 : SESSIONS;
-    writeFileSync(
-      join(barsDir, `${symbol}.csv`),
-      barsToCsv(
-        syntheticSeries({
-          symbol,
-          calendar,
-          seed: 10 + index,
-          drift: 0.0002 + index * 0.0001,
-          volatility: 0.02,
-          startPrice: 20 + index * 15,
-          to,
-        }).bars,
-      ),
-    );
-  });
+  await writeBars(barsRoot, 'alpaca', [
+    syntheticSeries({ symbol: 'SPY', calendar, seed: 1, volatility: 0.008 }),
+    ...symbols.map((symbol, index) =>
+      syntheticSeries({
+        symbol,
+        calendar,
+        seed: 10 + index,
+        drift: 0.0002 + index * 0.0001,
+        volatility: 0.02,
+        startPrice: 20 + index * 15,
+        to: index === 11 ? 900 : SESSIONS,
+      }),
+    ),
+  ]);
   const constituents = join(root, 'constituents.csv');
   writeFileSync(
     constituents,
@@ -62,39 +72,39 @@ function writeUsFixture(root: string): {
   );
   const spreads = join(root, 'spreads.csv');
   writeFileSync(spreads, `${SPREAD_CSV_HEADER}\nS00,10,1.5\nS01,10,2.5\n`);
-  return { barsDir, constituents, fx, spreads };
+  return { barsRoot, constituents, fx, spreads };
 }
 
-function writeLseFixture(root: string): string {
-  const barsDir = join(root, 'saxo');
-  mkdirSync(barsDir, { recursive: true });
+interface LseFixture {
+  readonly barsRoot: string;
+  readonly lseManifestPath: string;
+}
+
+async function writeLseFixture(root: string): Promise<LseFixture> {
+  const barsRoot = join(root, 'parquet');
   const lines = ['CSPX', 'VUSA', 'ISF', 'SGLN'];
+  await writeBars(barsRoot, 'saxo', [
+    syntheticSeries({ symbol: 'CSPX', calendar, seed: 3, volatility: 0.008 }),
+    ...lines.slice(1).map((line, index) =>
+      syntheticSeries({
+        symbol: line,
+        calendar,
+        seed: 40 + index,
+        drift: 0.0003,
+        volatility: 0.012,
+      }),
+    ),
+  ]);
+  mkdirSync(join(root, 'saxo'), { recursive: true });
+  const lseManifestPath = join(root, 'saxo', 'manifest.json');
   writeFileSync(
-    join(barsDir, 'CSPX.csv'),
-    barsToCsv(syntheticSeries({ symbol: 'CSPX', calendar, seed: 3, volatility: 0.008 }).bars),
-  );
-  lines.slice(1).forEach((line, index) => {
-    writeFileSync(
-      join(barsDir, `${line}.csv`),
-      barsToCsv(
-        syntheticSeries({
-          symbol: line,
-          calendar,
-          seed: 40 + index,
-          drift: 0.0003,
-          volatility: 0.012,
-        }).bars,
-      ),
-    );
-  });
-  writeFileSync(
-    join(barsDir, 'manifest.json'),
+    lseManifestPath,
     JSON.stringify({
       calendar_reference: 'CSPX',
       symbols: Object.fromEntries(lines.map((line) => [line, { half_spread_bps: 5 }])),
     }),
   );
-  return barsDir;
+  return { barsRoot, lseManifestPath };
 }
 
 function readVerdict(outDir: string, venue: string, name: string): SubBookVerdict {
@@ -102,13 +112,14 @@ function readVerdict(outDir: string, venue: string, name: string): SubBookVerdic
 }
 
 describe('momentum runner end to end on a synthetic fixture', () => {
-  it('runs the US sub-book at both capitals in both share modes and writes verdicts, ledger and report', () => {
+  it('runs the US sub-book at both capitals in both share modes and writes verdicts, ledger and report', async () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-us-'));
-    const fixture = writeUsFixture(root);
+    const fixture = await writeUsFixture(root);
     const outDir = join(root, 'out');
-    const passes = runVenue({
+    const passes = await runVenue({
       venue: 'us',
-      barsDir: fixture.barsDir,
+      barsRoot: fixture.barsRoot,
+      lseManifestPath: '',
       outDir,
       capitals: CAPITAL_PASSES_GBP,
       constituentsPath: fixture.constituents,
@@ -143,19 +154,20 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(report).toContain('## £5000 start capital, fractional');
   });
 
-  it('is reproducible: two runs over the same fixture produce byte-identical verdicts', () => {
+  it('is reproducible: two runs over the same fixture produce byte-identical verdicts', async () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-repro-'));
-    const fixture = writeUsFixture(root);
+    const fixture = await writeUsFixture(root);
     const options = {
       venue: 'us' as const,
-      barsDir: fixture.barsDir,
+      barsRoot: fixture.barsRoot,
+      lseManifestPath: '',
       capitals: [1_000],
       constituentsPath: fixture.constituents,
       fxPath: fixture.fx,
       spreadPath: fixture.spreads,
     };
-    runVenue({ ...options, outDir: join(root, 'a') });
-    runVenue({ ...options, outDir: join(root, 'b') });
+    await runVenue({ ...options, outDir: join(root, 'a') });
+    await runVenue({ ...options, outDir: join(root, 'b') });
     for (const name of ['verdict-1000-whole.json', 'verdict-1000-fractional.json']) {
       expect(readFileSync(join(root, 'a', 'us', name), 'utf8')).toBe(
         readFileSync(join(root, 'b', 'us', name), 'utf8'),
@@ -163,13 +175,13 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     }
   });
 
-  it('runs the LSE sub-book from a Saxo bar directory with per-line half spreads', () => {
+  it('runs the LSE sub-book from the Saxo bars in the store with per-line half spreads', async () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-lse-'));
-    const barsDir = writeLseFixture(root);
+    const fixture = await writeLseFixture(root);
     const outDir = join(root, 'out');
-    const passes = runVenue({
+    const passes = await runVenue({
       venue: 'lse',
-      barsDir,
+      ...fixture,
       outDir,
       capitals: [1_000],
       constituentsPath: '',
@@ -184,11 +196,13 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(verdict.trials.every((trial) => trial.custodyCost > 0)).toBe(true);
   });
 
-  it('clips the LSE calendar to the manifest window, reports splices and exclusions, and refuses a line starting after the window', () => {
+  it('clips the LSE calendar to the manifest window, reports splices and exclusions, and refuses a line starting after the window', async () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-lse-window-'));
-    const barsDir = writeLseFixture(root);
-    const late = syntheticSeries({ symbol: 'LATE', calendar, seed: 77, from: 300 }).bars;
-    writeFileSync(join(barsDir, 'LATE.csv'), barsToCsv(late));
+    const fixture = await writeLseFixture(root);
+    const late = roundBarPrices(
+      syntheticSeries({ symbol: 'LATE', calendar, seed: 77, from: 300 }).bars,
+    );
+    await writeBars(fixture.barsRoot, 'saxo', [{ symbol: 'LATE', bars: late }]);
     const manifest = {
       calendar_reference: 'CSPX',
       window_start: late[0]?.date,
@@ -201,8 +215,8 @@ describe('momentum runner end to end on a synthetic fixture', () => {
       },
       excluded: { GONE: { reason: 'splice exceeds tolerance' } },
     };
-    writeFileSync(join(barsDir, 'manifest.json'), JSON.stringify(manifest));
-    const data = loadLseData(barsDir);
+    writeFileSync(fixture.lseManifestPath, JSON.stringify(manifest));
+    const data = await loadLseData(fixture);
     expect(data.market.calendar[0]).toBe(late[0]?.date);
     expect(data.market.calendar.length).toBe(SESSIONS - 300);
     expect(data.lse).toEqual({
@@ -222,20 +236,22 @@ describe('momentum runner end to end on a synthetic fixture', () => {
       'LSE coverage: 0.0% of line-sessions without a Saxo bar inside the window.',
     );
     writeFileSync(
-      join(barsDir, 'manifest.json'),
+      fixture.lseManifestPath,
       JSON.stringify({ ...manifest, window_start: calendar[100] }),
     );
-    expect(() => loadLseData(barsDir)).toThrow(/LATE first bar .* is after the window start/);
+    await expect(loadLseData(fixture)).rejects.toThrow(
+      /LATE first bar .* is after the window start/,
+    );
     writeFileSync(
-      join(barsDir, 'manifest.json'),
+      fixture.lseManifestPath,
       JSON.stringify({ ...manifest, window_start: '2099-01-01' }),
     );
-    expect(() => loadLseData(barsDir)).toThrow(/after the last reference bar/);
+    await expect(loadLseData(fixture)).rejects.toThrow(/after the last reference bar/);
   });
 
-  it('refuses LSE bars that still carry a unit break', () => {
+  it('refuses LSE bars that still carry a unit break', async () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-lse-unit-'));
-    const barsDir = writeLseFixture(root);
+    const fixture = await writeLseFixture(root);
     const broken = syntheticSeries({ symbol: 'ISF', calendar, seed: 41 }).bars.map((b, i) =>
       i < 400
         ? {
@@ -248,27 +264,37 @@ describe('momentum runner end to end on a synthetic fixture', () => {
           }
         : b,
     );
-    writeFileSync(join(barsDir, 'ISF.csv'), barsToCsv(broken));
-    expect(() => loadLseData(barsDir)).toThrow(/ISF has a unit break at .* ×100/);
+    await writeBars(fixture.barsRoot, 'saxo', [{ symbol: 'ISF', bars: broken }]);
+    await expect(loadLseData(fixture)).rejects.toThrow(/ISF has a unit break at .* ×100/);
   });
 
-  it('refuses to run the LSE sub-book until the Saxo bars and manifest land', () => {
+  it('refuses to run the LSE sub-book until the Saxo bars and manifest land', async () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-nolse-'));
-    expect(() => loadLseData(join(root, 'saxo'))).toThrow(/LSE bars not present/);
-    const barsDir = writeLseFixture(root);
+    await expect(
+      loadLseData({
+        barsRoot: join(root, 'parquet'),
+        lseManifestPath: join(root, 'saxo', 'manifest.json'),
+      }),
+    ).rejects.toThrow(/LSE bars not present/);
+    const fixture = await writeLseFixture(root);
     writeFileSync(
-      join(barsDir, 'manifest.json'),
+      fixture.lseManifestPath,
       JSON.stringify({
         calendar_reference: 'CSPX',
         symbols: { CSPX: {}, VUSA: { half_spread_bps: 1 } },
       }),
     );
-    expect(() => loadLseData(barsDir)).toThrow(/CSPX needs a measured half_spread_bps/);
+    await expect(loadLseData(fixture)).rejects.toThrow(/CSPX needs a measured half_spread_bps/);
     writeFileSync(
-      join(barsDir, 'manifest.json'),
+      fixture.lseManifestPath,
       JSON.stringify({ calendar_reference: 'CSPX', symbols: { NOPE: { half_spread_bps: 1 } } }),
     );
-    expect(() => loadLseData(barsDir)).toThrow(/NOPE but .*NOPE\.csv is missing/);
+    await expect(loadLseData(fixture)).rejects.toThrow(/NOPE but the bar store has no saxo NOPE/);
+    writeFileSync(
+      fixture.lseManifestPath,
+      JSON.stringify({ calendar_reference: 'GONE', symbols: {} }),
+    );
+    await expect(loadLseData(fixture)).rejects.toThrow(/bar store has no GONE calendar reference/);
   });
 
   it('measures coverage over member-sessions, not over names with a file', () => {
@@ -297,12 +323,24 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(() => evaluationStartIndex(calendar.slice(0, 100), GRID_A)).toThrow(/too short/);
   });
 
-  it('parses CLI arguments with venue-specific defaults', () => {
-    expect(parseArgs(['--venue', 'lse']).barsDir).toBe('data/bars/saxo');
-    const us = parseArgs(['--venue', 'us', '--capital', '1000,5000,0', '--out', 'x']);
+  it('parses CLI arguments with the Parquet store and Saxo manifest as defaults', () => {
+    const lse = parseArgs(['--venue', 'lse']);
+    expect(lse.barsRoot).toBe('data/bars/parquet');
+    expect(lse.lseManifestPath).toBe('data/bars/saxo/manifest.json');
+    const us = parseArgs([
+      '--venue',
+      'us',
+      '--capital',
+      '1000,5000,0',
+      '--out',
+      'x',
+      '--bars',
+      'b',
+    ]);
     expect(us.capitals).toEqual([1_000, 5_000]);
     expect(us.outDir).toBe('x');
-    expect(us.barsDir).toBe('data/bars/alpaca');
+    expect(us.barsRoot).toBe('b');
+    expect(parseArgs(['--venue', 'lse', '--manifest', 'm']).lseManifestPath).toBe('m');
     expect(() => parseArgs([])).toThrow(/usage/);
   });
 });

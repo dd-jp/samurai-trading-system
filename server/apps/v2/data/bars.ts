@@ -1,52 +1,35 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
-import { assertSortedUniqueDates } from '../../../pipeline/momentum/index.js';
-
-const BAR_HEADER = 'date,open,high,low,close,volume,raw_close';
-
-export function parseBarsCsv(symbol: string, text: string): BarSeries {
-  const lines = text.split('\n').filter((line) => line.trim().length > 0);
-  const header = lines.shift();
-  if (header?.trim() !== BAR_HEADER) {
-    throw new Error(`bars ${symbol}: unexpected header ${JSON.stringify(header)}`);
-  }
-  const bars: DailyBar[] = lines.map((line) => {
-    const [date, open, high, low, close, volume, rawClose] = line.split(',').map((v) => v.trim());
-    const bar = {
-      date: date ?? '',
-      open: Number(open),
-      high: Number(high),
-      low: Number(low),
-      close: Number(close),
-      volume: Number(volume),
-      rawClose: Number(rawClose),
-    };
-    if (!(bar.close > 0) || !(bar.rawClose > 0) || !Number.isFinite(bar.volume)) {
-      throw new Error(`bars ${symbol}: bad row ${line}`);
-    }
-    return bar;
-  });
-  const series = { symbol, bars };
-  assertSortedUniqueDates(series);
-  return series;
-}
+import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 
 export interface BarsSource {
   load(symbol: string): BarSeries | undefined;
 }
 
-export class CsvBarsSource implements BarsSource {
-  readonly #cache = new Map<string, BarSeries | undefined>();
+export class ParquetBarsSource implements BarsSource {
+  #series: ReadonlyMap<string, BarSeries> | undefined;
 
-  constructor(private readonly directory: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly venue: string,
+  ) {}
+
+  async prime(): Promise<void> {
+    if (this.#series !== undefined) return;
+    const store = await ParquetBarStore.open(this.root);
+    try {
+      const series = await store.readVenue(this.venue);
+      if (series.size === 0) throw new Error(`bars: no ${this.venue} series under ${this.root}`);
+      this.#series = series;
+    } finally {
+      store.close();
+    }
+  }
 
   load(symbol: string): BarSeries | undefined {
-    if (this.#cache.has(symbol)) return this.#cache.get(symbol);
-    const path = join(this.directory, `${symbol}.csv`);
-    const series = existsSync(path) ? parseBarsCsv(symbol, readFileSync(path, 'utf8')) : undefined;
-    this.#cache.set(symbol, series);
-    return series;
+    if (this.#series === undefined) {
+      throw new Error(`bars: ${this.venue} read before prime()`);
+    }
+    return this.#series.get(symbol);
   }
 }
 

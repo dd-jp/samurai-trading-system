@@ -1,6 +1,8 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { roundBarPrices } from './bar-csv.js';
 import { tradingCalendar } from './fixture.js';
 import type { SaxoLine } from './lse-lines.js';
 import { gbpPerQuotedUnit, isSpliced, LSE_MOMENTUM_LINES } from './lse-lines.js';
@@ -97,6 +99,7 @@ function spreadRow(symbol: string): SaxoSpreadRow {
 }
 
 let root: string;
+let store: ParquetBarStore;
 
 function context(
   api: SaxoBarsApi,
@@ -104,7 +107,7 @@ function context(
 ): PullContext {
   const ctx: PullContext = {
     api,
-    outDir: join(root, 'saxo'),
+    store,
     auxDir: join(root, 'aux'),
     rawDir: join(root, 'aux', 'raw'),
     fetchDate: '2026-09-25',
@@ -112,7 +115,6 @@ function context(
     spreads: new Map(spreadTidms.map((tidm) => [tidm, spreadRow(tidm)])),
     spreadsPath: 'spreads.csv',
   };
-  mkdirSync(ctx.outDir, { recursive: true });
   mkdirSync(ctx.rawDir, { recursive: true });
   return ctx;
 }
@@ -123,12 +125,18 @@ function momentumLine(tidm: string) {
   return found;
 }
 
-beforeEach(() => {
+async function storedSymbols(): Promise<string[]> {
+  return [...(await store.readVenue('saxo')).keys()];
+}
+
+beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'saxo-pull-'));
+  store = await ParquetBarStore.open(join(root, 'parquet'));
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
 afterEach(() => {
+  store.close();
   rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -150,7 +158,10 @@ describe('pullMomentumLine', () => {
     });
     expect(outcome.entry).not.toHaveProperty('spliced_from');
     expect(outcome.pulled.bars[0]?.close).toBeCloseTo(gbpClose(0), 9);
-    expect(readdirSync(ctx.outDir)).toEqual(['ISF.csv']);
+    expect(await storedSymbols()).toEqual(['ISF']);
+    expect((await store.readSeries('saxo', 'ISF'))?.bars).toEqual(
+      roundBarPrices(outcome.pulled.bars),
+    );
     expect(readdirSync(ctx.rawDir)).toEqual(['ISF.csv']);
   });
 
@@ -159,7 +170,7 @@ describe('pullMomentumLine', () => {
     await expect(pullMomentumLine(ctx, momentumLine('ISF'))).rejects.toThrow(
       'ISF: no measured half spread in spreads.csv',
     );
-    expect(readdirSync(ctx.outDir)).toEqual([]);
+    expect(await storedSymbols()).toEqual([]);
   });
 
   it('splices the FX-converted USD sibling ahead of a short GBX line when the overlap is within tolerance', async () => {
@@ -175,7 +186,7 @@ describe('pullMomentumLine', () => {
       sibling_bars_used: SPLICED_START,
       within_tolerance: true,
     });
-    expect(readdirSync(ctx.outDir)).toEqual(['IHCU.csv']);
+    expect(await storedSymbols()).toEqual(['IHCU']);
     expect(readdirSync(ctx.auxDir).sort()).toEqual(['IHCU-spliced.csv', 'IUHC.csv', 'raw']);
   });
 
@@ -189,7 +200,7 @@ describe('pullMomentumLine', () => {
       /under ten years.*exceeds the pre-declared tolerance.*STOP for David/,
     );
     expect(outcome.entry.spliced_from?.within_tolerance).toBe(false);
-    expect(readdirSync(ctx.outDir)).toEqual([]);
+    expect(await storedSymbols()).toEqual([]);
     expect(readdirSync(ctx.auxDir)).toContain('CMFP.csv');
   });
 });
@@ -204,6 +215,7 @@ describe('pullAllLines and the manifest', () => {
     expect(pulled.pulled.has('CUKX')).toBe(true);
     expect(pulled.pulled.has('IHCU')).toBe(false);
     expect(readdirSync(ctx.auxDir)).toContain('CUKX.csv');
+    expect(await storedSymbols()).toEqual(Object.keys(pulled.symbols).sort());
 
     const manifest = saxoBarsManifest(ctx, pulled, '2026-09-25T12:00:00Z');
     expect(manifest.fetched_at).toBe('2026-09-25T12:00:00Z');
