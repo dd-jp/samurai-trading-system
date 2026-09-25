@@ -75,7 +75,7 @@ New entries at half size on FOMC decision days, US CPI, US Employment Situation,
 
 ## 7. Books, fills and exits (Q14, G5, G16, G18)
 
-Each instantiated book is a paper book at £1,000 start capital (ruled £2,000 on 2026-09-25, doc 66; code change #1771) with its own cash (`v2_books.cash_gbp`), positions (`v2_positions`) and `LossBudget`, rebuilt from `v2_book_days` on every start so a halt and the 1 January reference equity (ruling (j)) survive the once-a-day process. A shadow book runs the same decisions with one input removed; a shadow that would be a byte-identical copy of the primary is **not instantiated**, because it would burn LLM spend and prove nothing:
+Each instantiated book is a paper book seeded at the start capital of the year's capital config (`v2_capital_config`, set with `npm run v2:capital`; paper is £2,000 from 2026-09-25, doc 66 D8; no literal in code). No book opens, and no entry is sized, before a config is in force for the date. Each book has its own cash (`v2_books.cash_gbp`), positions (`v2_positions`) and `LossBudget`, rebuilt from `v2_book_days` on every start so a halt and the 1 January reference equity (ruling (j)) survive the once-a-day process. A shadow book runs the same decisions with one input removed; a shadow that would be a byte-identical copy of the primary is **not instantiated**, because it would burn LLM spend and prove nothing:
 
 | Book | Sleeve | Differs from primary by | Status |
 |---|---|---|---|
