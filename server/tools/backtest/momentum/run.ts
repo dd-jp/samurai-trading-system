@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { loadBarDirectory } from './bar-csv.js';
+import { findUnitBreaks } from './bar-hygiene.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import type { BookFx } from './fx.js';
 import { GBP_IDENTITY_FX, parseBoeXudlussCsv, YearFixedFx } from './fx.js';
@@ -183,8 +184,15 @@ function manifestHalfSpreads(
 ): Map<string, number> {
   const halfSpreads = new Map<string, number>();
   for (const symbol of symbols) {
-    if (!series.has(symbol))
+    const one = series.get(symbol);
+    if (one === undefined)
       throw new Error(`LSE manifest lists ${symbol} but ${barsDir}/${symbol}.csv is missing`);
+    const breaks = findUnitBreaks(one.bars);
+    if (breaks.length > 0) {
+      throw new Error(
+        `LSE bars: ${symbol} has a unit break at ${breaks.map((b) => `${b.date} ×${b.factor}`).join(', ')} — re-pull through the hygiene step`,
+      );
+    }
     const halfSpread = manifest.symbols[symbol]?.half_spread_bps;
     if (halfSpread === undefined || !(halfSpread >= 0)) {
       throw new Error(`LSE manifest: ${symbol} needs a measured half_spread_bps`);

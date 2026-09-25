@@ -6,6 +6,8 @@ import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { TRADING_DAYS_PER_YEAR } from '../../../pipeline/momentum/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { barsToCsv } from './bar-csv.js';
+import type { HygieneReport } from './bar-hygiene.js';
+import { applyBarHygiene } from './bar-hygiene.js';
 import type { FxRate } from './fx.js';
 import { parseBoeXudlussCsv } from './fx.js';
 import type { SaxoLine, SplicedLine } from './lse-lines.js';
@@ -44,6 +46,7 @@ interface SpliceRecord {
   readonly sibling_first: string;
   readonly sibling_last: string;
   readonly sibling_bars: number;
+  readonly sibling_hygiene: HygieneReport;
   readonly splice_date: string;
   readonly sibling_bars_used: number;
   readonly overlap: OverlapStats;
@@ -63,6 +66,7 @@ interface SaxoSymbolEntry {
   readonly density: number;
   readonly half_spread_bps: number;
   readonly half_spread_median_bps: number;
+  readonly hygiene: HygieneReport;
   readonly spliced_from?: SpliceRecord;
 }
 
@@ -72,6 +76,7 @@ interface SaxoExcludedEntry {
   readonly first: string;
   readonly bars: number;
   readonly reason: string;
+  readonly hygiene: HygieneReport;
   readonly spliced_from?: SpliceRecord;
 }
 
@@ -79,6 +84,8 @@ interface SaxoBarsManifest {
   readonly source: string;
   readonly fetched_at: string;
   readonly delayed_by_minutes: number | undefined;
+  readonly fetch_date_bars_dropped: string;
+  readonly hygiene: string;
   readonly calendar_reference: string;
   readonly window_start: string;
   readonly window_binding_line: string;
@@ -144,20 +151,34 @@ interface PulledLine {
   readonly details: InstrumentDetails;
   readonly page: ChartPage;
   readonly bars: DailyBar[];
+  readonly hygiene: HygieneReport;
 }
 
-async function pullLine(api: SaxoReadOnlyApi, line: SaxoLine): Promise<PulledLine> {
-  const details = await api.instrumentDetails(line.uic, line.assetType);
+interface PullContext {
+  readonly api: SaxoReadOnlyApi;
+  readonly outDir: string;
+  readonly auxDir: string;
+  readonly rawDir: string;
+  readonly fetchDate: string;
+  readonly fxRates: readonly FxRate[];
+  readonly spreads: ReadonlyMap<string, SaxoSpreadRow>;
+  readonly spreadsPath: string;
+}
+
+async function pullLine(ctx: PullContext, line: SaxoLine): Promise<PulledLine> {
+  const details = await ctx.api.instrumentDetails(line.uic, line.assetType);
   assertUnitMatchesSaxo(line, details);
-  const page = await api.dailyHistory(line.uic, line.assetType);
+  const page = await ctx.api.dailyHistory(line.uic, line.assetType);
   const factor = line.unit === 'USD' ? 1 : gbpPerQuotedUnit(line.unit);
-  const bars = samplesToBars(page.samples, factor);
+  const raw = samplesToBars(page.samples, factor);
+  writeFileSync(join(ctx.rawDir, `${line.tidm}.csv`), barsToCsv(raw));
+  const { bars, report } = applyBarHygiene(line.tidm, raw, { fetchDate: ctx.fetchDate });
   const first = bars[0];
   const last = bars[bars.length - 1];
   console.log(
-    `${line.tidm} (${line.uic}, ${line.unit}): ${bars.length} bars ${first?.date ?? '-'}..${last?.date ?? '-'}, FirstSampleTime ${page.firstSampleTime ?? '?'}, density ${(density(bars) * 100).toFixed(0)}%`,
+    `${line.tidm} (${line.uic}, ${line.unit}): ${bars.length} bars ${first?.date ?? '-'}..${last?.date ?? '-'}, FirstSampleTime ${page.firstSampleTime ?? '?'}, density ${(density(bars) * 100).toFixed(0)}%, dropped ${report.dropped_dates.length}, unit breaks ${report.unit_breaks.map((b) => `${b.date}×${b.factor}`).join(' ') || 'none'}, suspect flips ${report.suspect_flips?.count ?? 0}`,
   );
-  return { line, details, page, bars };
+  return { line, details, page, bars, hygiene: report };
 }
 
 function spliceRecord(
@@ -173,6 +194,7 @@ function spliceRecord(
     sibling_first: sibling.bars[0]?.date ?? '',
     sibling_last: sibling.bars[sibling.bars.length - 1]?.date ?? '',
     sibling_bars: sibling.bars.length,
+    sibling_hygiene: sibling.hygiene,
     splice_date: result.spliceDate,
     sibling_bars_used: result.siblingBarsUsed,
     overlap: result.overlap,
@@ -200,15 +222,6 @@ export function parseSaxoPullArgs(argv: readonly string[]): {
   };
 }
 
-interface PullContext {
-  readonly api: SaxoReadOnlyApi;
-  readonly outDir: string;
-  readonly auxDir: string;
-  readonly fxRates: readonly FxRate[];
-  readonly spreads: ReadonlyMap<string, SaxoSpreadRow>;
-  readonly spreadsPath: string;
-}
-
 type LineOutcome =
   | { readonly kind: 'included'; readonly pulled: PulledLine; readonly entry: SaxoSymbolEntry }
   | { readonly kind: 'excluded'; readonly pulled: PulledLine; readonly entry: SaxoExcludedEntry };
@@ -218,7 +231,7 @@ async function spliceLine(
   line: SplicedLine,
   primary: PulledLine,
 ): Promise<{ bars: DailyBar[]; record: SpliceRecord }> {
-  const sibling = await pullLine(ctx.api, line.spliceFrom);
+  const sibling = await pullLine(ctx, line.spliceFrom);
   writeFileSync(join(ctx.auxDir, `${sibling.line.tidm}.csv`), barsToCsv(sibling.bars));
   const converted = convertUsdBarsToGbp(sibling.bars, ctx.fxRates);
   const result = spliceSibling({ symbol: line.tidm, bars: primary.bars }, converted);
@@ -234,7 +247,7 @@ async function pullMomentumLine(
   ctx: PullContext,
   line: SaxoLine | SplicedLine,
 ): Promise<LineOutcome> {
-  const primary = await pullLine(ctx.api, line);
+  const primary = await pullLine(ctx, line);
   const splice = isSpliced(line) ? await spliceLine(ctx, line, primary) : undefined;
   if (splice !== undefined && !splice.record.within_tolerance) {
     writeFileSync(join(ctx.auxDir, `${line.tidm}.csv`), barsToCsv(primary.bars));
@@ -246,6 +259,7 @@ async function pullMomentumLine(
         role: line.role,
         first: primary.bars[0]?.date ?? '',
         bars: primary.bars.length,
+        hygiene: primary.hygiene,
         reason: `GBX line starts ${primary.bars[0]?.date ?? '?'} (under ten years); sibling splice exceeds the pre-declared tolerance (mean abs return diff ${splice.record.overlap.meanAbsReturnDiffBps.toFixed(2)} bps/day > ${SPLICE_MAX_MEAN_ABS_RETURN_DIFF_BPS}) — STOP for David`,
         spliced_from: splice.record,
       },
@@ -272,6 +286,7 @@ async function pullMomentumLine(
       density: density(bars),
       half_spread_bps: spread.p25HalfSpreadBps,
       half_spread_median_bps: spread.medianHalfSpreadBps,
+      hygiene: primary.hygiene,
       ...(splice === undefined ? {} : { spliced_from: splice.record }),
     },
   };
@@ -301,12 +316,14 @@ async function main(argv: readonly string[]): Promise<void> {
     api: new SaxoReadOnlyApi(tokens, resolveSaxoOAuthConfig('live', process.env).gatewayBaseUrl),
     outDir: args.outDir,
     auxDir: args.auxDir,
+    rawDir: join(args.auxDir, 'raw'),
+    fetchDate: new Date().toISOString().slice(0, 10),
     fxRates,
     spreads,
     spreadsPath: args.spreads,
   };
   mkdirSync(args.outDir, { recursive: true });
-  mkdirSync(args.auxDir, { recursive: true });
+  mkdirSync(ctx.rawDir, { recursive: true });
 
   const symbols: Record<string, SaxoSymbolEntry> = {};
   const excluded: Record<string, SaxoExcludedEntry> = {};
@@ -324,14 +341,21 @@ async function main(argv: readonly string[]): Promise<void> {
       pulled.set(line.tidm, outcome.pulled);
     }
     for (const aux of LSE_AUX_LINES) {
-      const line = await pullLine(ctx.api, aux);
+      const line = await pullLine(ctx, aux);
       writeFileSync(join(args.auxDir, `${aux.tidm}.csv`), barsToCsv(line.bars));
       pulled.set(aux.tidm, line);
     }
   } finally {
     await tokens.stop();
   }
-  const checks: Record<string, unknown> = {};
+  const checks: Record<string, unknown> = {
+    aux_hygiene: Object.fromEntries(
+      LSE_AUX_LINES.flatMap((aux) => {
+        const line = pulled.get(aux.tidm);
+        return line === undefined ? [] : [[aux.tidm, line.hygiene]];
+      }),
+    ),
+  };
   const isf = pulled.get('ISF');
   const cukx = pulled.get('CUKX');
   if (isf !== undefined && cukx !== undefined) {
@@ -346,6 +370,9 @@ async function main(argv: readonly string[]): Promise<void> {
       'Saxo OpenAPI GET /chart/v3/charts, Horizon=1440, Count=1200, paged back with Mode=UpTo; prices in GBP (GBX lines × 0.01 per the LSE instrument list currency, checked against PriceToContractFactor)',
     fetched_at: new Date().toISOString(),
     delayed_by_minutes: delayed,
+    fetch_date_bars_dropped: ctx.fetchDate,
+    hygiene:
+      'weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw',
     calendar_reference: LSE_CALENDAR_REFERENCE,
     window_start: windowStart,
     window_binding_line: binding,

@@ -233,6 +233,25 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(() => loadLseData(barsDir)).toThrow(/after the last reference bar/);
   });
 
+  it('refuses LSE bars that still carry a unit break', () => {
+    const root = mkdtempSync(join(tmpdir(), 'momentum-lse-unit-'));
+    const barsDir = writeLseFixture(root);
+    const broken = syntheticSeries({ symbol: 'ISF', calendar, seed: 41 }).bars.map((b, i) =>
+      i < 400
+        ? {
+            ...b,
+            open: b.open / 100,
+            high: b.high / 100,
+            low: b.low / 100,
+            close: b.close / 100,
+            rawClose: b.rawClose / 100,
+          }
+        : b,
+    );
+    writeFileSync(join(barsDir, 'ISF.csv'), barsToCsv(broken));
+    expect(() => loadLseData(barsDir)).toThrow(/ISF has a unit break at .* ×100/);
+  });
+
   it('refuses to run the LSE sub-book until the Saxo bars and manifest land', () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-nolse-'));
     expect(() => loadLseData(join(root, 'saxo'))).toThrow(/LSE bars not present/);
