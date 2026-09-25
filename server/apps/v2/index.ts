@@ -23,13 +23,7 @@ import {
   NO_NEWS,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
-import {
-  type AlpacaBrokerClient,
-  alpacaPaperBroker,
-  type BrokerAdapter,
-  DryRunBrokerAdapter,
-  V2OrderExecutor,
-} from './execution/index.js';
+import { type AlpacaBrokerClient, createOrderExecutor } from './execution/index.js';
 import { Journal } from './journal/index.js';
 import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import {
@@ -189,35 +183,6 @@ function barsSourceFor(options: V2RootOptions): BarsSource {
   return options.bars ?? new CsvBarsSource(options.barsDirectory ?? BARS_DIRECTORY);
 }
 
-function simulatedBrokerFor(
-  options: V2RootOptions,
-  market: BarsMarketData,
-  clock: Clock,
-): BrokerAdapter {
-  return new DryRunBrokerAdapter({
-    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
-    markPrice: (instrument) => market.lastBarBefore(instrument, options.tradingDate)?.rawClose,
-    clock,
-  });
-}
-
-function executorFor(
-  options: V2RootOptions,
-  db: StoreHandle,
-  market: BarsMarketData,
-  clock: Clock,
-  logger: Logger,
-): V2OrderExecutor {
-  const brokers = options.dryRun
-    ? {}
-    : { alpaca: alpacaPaperBroker({ client: options.alpacaClient, db, clock, logger }) };
-  return new V2OrderExecutor({
-    brokers,
-    simulatedBroker: simulatedBrokerFor(options, market, clock),
-    dryRun: options.dryRun,
-  });
-}
-
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -263,7 +228,15 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     riskFraction: DEBATE_RISK_FRACTION,
     targetAtrMultiple: DEBATE_TARGET_ATR_MULTIPLE,
   });
-  const executor = executorFor(options, db, market, clock, logger);
+  const executor = createOrderExecutor({
+    dryRun: options.dryRun,
+    client: options.alpacaClient,
+    db,
+    clock,
+    logger,
+    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+    markPrice: (instrument) => market.lastBarBefore(instrument, options.tradingDate)?.rawClose,
+  });
   return {
     registry,
     books,

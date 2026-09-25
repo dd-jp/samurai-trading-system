@@ -35,13 +35,13 @@ const FIXTURES: Record<string, string> = {
   'data/via-dot-segment.ts': "export { PaperBooks } from '.././risk/index.js';",
   'journal/via-apps-dir.ts': "export { macroGate } from '../../../apps/v2/data/index.js';",
   'execution/imports-signal.ts': "export { SleeveRegistry } from '../signal/index.js';",
-  'signal/imports-execution.ts': "export { V2OrderExecutor } from '../execution/index.js';",
+  'signal/imports-execution.ts': "export { createOrderExecutor } from '../execution/index.js';",
   'cycle.ts': "export { V2RiskGate } from './risk/index.js';",
   'risk/clean.ts': "export { macroGate } from '../data/index.js';",
   'signal/clean.ts': "export { STOP_ATR_MULTIPLE } from '../risk/index.js';",
   'execution/clean.ts':
     "export type { BrokerAdapter } from '../../../pipeline/execution/index.js';\nexport { isRiskApproved } from '../risk/index.js';",
-  'index.ts': "export { V2OrderExecutor } from './execution/index.js';",
+  'index.ts': "export { createOrderExecutor } from './execution/index.js';",
 };
 
 let root: string;
