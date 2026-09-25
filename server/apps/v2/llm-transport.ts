@@ -55,6 +55,7 @@ export class NousPinnedTransport implements AnthropicMessagesClient {
     if (response.upstream_model !== undefined && response.upstream_model !== pin.wire) {
       throw new LlmProviderError(
         `Nous answered for ${pin.wire} with model ${response.upstream_model}: refused, the pin is a trial`,
+        response.usage === undefined ? undefined : { usage: response.usage, model: pin.priced },
       );
     }
     return { ...response, model: pin.priced };

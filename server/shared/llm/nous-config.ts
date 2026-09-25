@@ -12,9 +12,12 @@ export const DEFAULT_NOUS_MODELS = {
   sentiment: 'x-ai/grok-4.5',
 } as const satisfies Record<NousRole, string>;
 
-export interface NousCredentials {
+export interface NousEndpoint {
   apiKey: string;
   baseUrl: string;
+}
+
+export interface NousCredentials extends NousEndpoint {
   model: string;
 }
 
@@ -28,10 +31,7 @@ function readEnv(name: string, env: NodeJS.ProcessEnv): string | undefined {
   return value === undefined || value === '' ? undefined : value;
 }
 
-export function nousCredentials(
-  role: NousRole,
-  env: NodeJS.ProcessEnv = process.env,
-): NousCredentials {
+export function nousEndpoint(role: NousRole, env: NodeJS.ProcessEnv = process.env): NousEndpoint {
   const vars = nousEnvVars(role);
 
   const baseUrl = readEnv(NOUS_BASE_URL_ENV_VAR, env);
@@ -50,6 +50,26 @@ export function nousCredentials(
     );
   }
 
+  return { apiKey, baseUrl };
+}
+
+export function tryNousEndpoint(
+  role: NousRole,
+  env: NodeJS.ProcessEnv = process.env,
+): NousEndpoint | undefined {
+  const vars = nousEnvVars(role);
+  const configured =
+    readEnv(NOUS_BASE_URL_ENV_VAR, env) !== undefined &&
+    (readEnv(vars.apiKey, env) ?? readEnv(NOUS_API_KEY_ENV_VAR, env)) !== undefined;
+  return configured ? nousEndpoint(role, env) : undefined;
+}
+
+export function nousCredentials(
+  role: NousRole,
+  env: NodeJS.ProcessEnv = process.env,
+): NousCredentials {
+  const vars = nousEnvVars(role);
+  const endpoint = nousEndpoint(role, env);
   const model =
     readEnv(vars.model, env) ?? readEnv(NOUS_MODEL_ENV_VAR, env) ?? DEFAULT_NOUS_MODELS[role];
   if (rateFor(model) === null) {
@@ -61,16 +81,12 @@ export function nousCredentials(
     );
   }
 
-  return { apiKey, baseUrl, model };
+  return { ...endpoint, model };
 }
 
 export function tryNousCredentials(
   role: NousRole,
   env: NodeJS.ProcessEnv = process.env,
 ): NousCredentials | undefined {
-  const vars = nousEnvVars(role);
-  const configured =
-    readEnv(NOUS_BASE_URL_ENV_VAR, env) !== undefined &&
-    (readEnv(vars.apiKey, env) ?? readEnv(NOUS_API_KEY_ENV_VAR, env)) !== undefined;
-  return configured ? nousCredentials(role, env) : undefined;
+  return tryNousEndpoint(role, env) === undefined ? undefined : nousCredentials(role, env);
 }

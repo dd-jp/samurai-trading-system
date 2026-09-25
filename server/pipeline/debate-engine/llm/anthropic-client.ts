@@ -130,6 +130,20 @@ const ALREADY_CLASSIFIED_ERROR_TYPES = [
   LlmAdmissionRefusedError,
 ];
 
+function billedUsageOf(
+  error: unknown,
+): { usage: AnthropicUsage; model: string | undefined } | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const { usage, model } = error as { usage?: unknown; model?: unknown };
+  if (typeof usage !== 'object' || usage === null) return undefined;
+  const { input_tokens, output_tokens } = usage as {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+  };
+  if (typeof input_tokens !== 'number' || typeof output_tokens !== 'number') return undefined;
+  return { usage: usage as AnthropicUsage, model: typeof model === 'string' ? model : undefined };
+}
+
 function statusOf(error: unknown): unknown {
   return typeof error === 'object' && error !== null
     ? (error as { status?: unknown }).status
@@ -215,7 +229,13 @@ export class AnthropicLlmClient implements LlmClient {
     const content = renderMessageContent(request);
     const attribution = request.context.attribution;
     const gateStage = attribution?.gate_stage ?? attribution?.stage;
-    const response = await this.callWithTimeout(content, request.signal, gateStage);
+    let response: AnthropicMessageResponse;
+    try {
+      response = await this.callWithTimeout(content, request.signal, gateStage);
+    } catch (error) {
+      this.recordBilledFailure(request, error, Date.now() - start, content);
+      throw error;
+    }
     const latency_ms = Date.now() - start;
 
     let rawText = '';
@@ -261,6 +281,19 @@ export class AnthropicLlmClient implements LlmClient {
       response: responseText,
       prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
     };
+  }
+
+  private recordBilledFailure<T>(
+    request: LlmRequest<T>,
+    error: unknown,
+    latency_ms: number,
+    prompt: string,
+  ): void {
+    const billed = billedUsageOf(error);
+    if (billed === undefined) return;
+    const response: AnthropicMessageResponse = { content: [], usage: billed.usage };
+    if (billed.model !== undefined) response.model = billed.model;
+    this.recordSpend(request, response, latency_ms, prompt, '');
   }
 
   private recordSpend<T>(

@@ -29,6 +29,7 @@ export type {
   AnthropicMessagesClient,
 } from './llm/anthropic-client.js';
 export { AnthropicLlmClient, WIRE_ENVELOPE_TEMPLATE_HASH } from './llm/anthropic-client.js';
+export type { BilledUsage } from './llm/errors.js';
 export {
   LlmAdmissionRefusedError,
   LlmCancelledError,

@@ -14,6 +14,7 @@ import {
   LlmRateLimitError,
   LlmRefusalError,
   LlmTimeoutError,
+  LlmTruncatedError,
 } from './errors.js';
 import { classifyFailureCause } from './failure-cause.js';
 import type { LlmSpendRecord } from './spend-sink.js';
@@ -999,5 +1000,104 @@ describe('AnthropicLlmClient spend metering', () => {
 
       await expect(client.complete(request())).rejects.toThrow('upstream 500');
     });
+  });
+});
+
+describe('AnthropicLlmClient bills replies the transport rejected', () => {
+  function recordingSink(): { records: LlmSpendRecord[]; record: (e: LlmSpendRecord) => void } {
+    const records: LlmSpendRecord[] = [];
+    return { records, record: (entry) => records.push(entry) };
+  }
+
+  function clientThrowing(error: Error, sink: { record: (e: LlmSpendRecord) => void }) {
+    return new AnthropicLlmClient(
+      { createMessage: vi.fn().mockRejectedValue(error) },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+  }
+
+  const usage = { input_tokens: 1_800, output_tokens: 400 };
+
+  it.each([
+    [
+      'truncation',
+      new LlmTruncatedError('cut', 'openai/gpt-5.6-luna', 100, usage),
+      LlmTruncatedError,
+    ],
+    ['refusal', new LlmRefusalError('no', 'message.refusal', usage), LlmRefusalError],
+    [
+      'echo mismatch',
+      new LlmProviderError('swapped', { usage, model: 'openai/gpt-5.6-luna' }),
+      LlmProviderError,
+    ],
+  ])(
+    'records one spend row for a %s that carries usage, then rethrows it',
+    async (_, error, type) => {
+      const sink = recordingSink();
+      await expect(clientThrowing(error, sink).complete(request())).rejects.toBeInstanceOf(type);
+      expect(sink.records).toHaveLength(1);
+      expect(sink.records[0]).toMatchObject({
+        model: 'openai/gpt-5.6-luna',
+        usage,
+        response: '',
+        stage: 'debate',
+      });
+      expect(sink.records[0]?.prompt).toContain('analyze this');
+      expect(typeof sink.records[0]?.latency_ms).toBe('number');
+    },
+  );
+
+  it('prices a rejected reply under the model the error names, else the configured model', async () => {
+    const named = recordingSink();
+    await clientThrowing(
+      new LlmProviderError('swapped', { usage, model: 'anthropic/claude-opus-5' }),
+      named,
+    )
+      .complete(request())
+      .catch(() => {});
+    expect(named.records[0]?.model).toBe('anthropic/claude-opus-5');
+    const unnamed = recordingSink();
+    await clientThrowing(new LlmRefusalError('no', 'message.refusal', usage), unnamed)
+      .complete(request())
+      .catch(() => {});
+    expect(unnamed.records[0]?.model).toBe('openai/gpt-5.6-luna');
+  });
+
+  it('records nothing for an error that carries no usage or a malformed one', async () => {
+    for (const error of [
+      new LlmProviderError('down'),
+      new LlmRateLimitError('slow'),
+      new LlmRefusalError('no', 'message.refusal'),
+      Object.assign(new Error('odd'), { usage: { input_tokens: '1', output_tokens: 2 } }),
+      Object.assign(new Error('odd'), { usage: null }),
+    ]) {
+      const sink = recordingSink();
+      await clientThrowing(error, sink)
+        .complete(request())
+        .catch(() => {});
+      expect(sink.records).toHaveLength(0);
+    }
+  });
+
+  it('does not bill a rate-limited retry twice: only the attempt that carried usage is recorded', async () => {
+    const sink = recordingSink();
+    const createMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new LlmRateLimitError('slow'))
+      .mockRejectedValueOnce(new LlmTruncatedError('cut', 'openai/gpt-5.6-luna', 100, usage));
+    const client = new AnthropicLlmClient(
+      { createMessage },
+      {
+        model: 'openai/gpt-5.6-luna',
+        max_tokens: 100,
+        timeoutMs: 1000,
+        retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
+      },
+      sink,
+    );
+    await expect(client.complete(request())).rejects.toBeInstanceOf(LlmTruncatedError);
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(sink.records).toHaveLength(1);
   });
 });

@@ -410,7 +410,7 @@ describe('composeV2Root', () => {
     const storePath = join(fixtures.directory, 'never.sqlite');
     expect(() =>
       composeV2Root({ ...fixtures, tradingDate: '2026-09-25', dryRun: false, storePath }),
-    ).toThrow(/without NOUS_BASE_URL and NOUS_DEBATE_API_KEY/);
+    ).toThrow(/without NOUS_BASE_URL and a Nous key \(NOUS_DEBATE_API_KEY or NOUS_API_KEY\)/);
     expect(() =>
       composeV2Root({
         ...fixtures,
@@ -420,7 +420,7 @@ describe('composeV2Root', () => {
         nousBaseUrl: '',
         nousApiKey: 'x',
       }),
-    ).toThrow(/without NOUS_BASE_URL and NOUS_DEBATE_API_KEY/);
+    ).toThrow(/without NOUS_BASE_URL and a Nous key \(NOUS_DEBATE_API_KEY or NOUS_API_KEY\)/);
     expect(() =>
       composeV2Root({
         ...fixtures,
@@ -430,7 +430,7 @@ describe('composeV2Root', () => {
         nousBaseUrl: 'https://nous.test/v1',
         nousApiKey: '',
       }),
-    ).toThrow(/without NOUS_BASE_URL and NOUS_DEBATE_API_KEY/);
+    ).toThrow(/without NOUS_BASE_URL and a Nous key \(NOUS_DEBATE_API_KEY or NOUS_API_KEY\)/);
     expect(existsSync(storePath)).toBe(false);
   });
 
@@ -505,6 +505,16 @@ describe('nousOptionsFrom', () => {
         NOUS_BASE_URL: 'https://nous.test/v1',
         NOUS_DEBATE_API_KEY: 'debate-key',
         NOUS_API_KEY: 'shared',
+      }),
+    ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
+  });
+
+  it("ignores v1's model knobs: an unpriced NOUS_DEBATE_MODEL does not stop a v2 run", () => {
+    expect(
+      nousOptionsFrom({
+        NOUS_BASE_URL: 'https://nous.test/v1',
+        NOUS_DEBATE_API_KEY: 'debate-key',
+        NOUS_DEBATE_MODEL: 'vendor/unpriced-model',
       }),
     ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
   });

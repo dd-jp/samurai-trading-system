@@ -6,11 +6,15 @@ import {
   LlmRateLimitError,
   LlmRefusalError,
   LlmTruncatedError,
+  SqliteLlmSpendStore,
 } from '../../pipeline/debate-engine/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
+import { SimulatedClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, NousApiError } from '../../shared/llm/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
 import { NousPinnedTransport } from './llm-transport.js';
 import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, type ModelPin, SONNET_5_PIN } from './models.js';
+import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
 import { ScriptedTransport } from './scripted-transport.js';
 
 interface Captured {
@@ -126,6 +130,53 @@ describe('NousPinnedTransport', () => {
     });
   });
 
+  it('bills a swapped-model reply to llm_spend under the priced id and the monthly cap counts it', async () => {
+    const swapped = completion('anthropic/claude-opus-5-20260723', '{"stance":"bullish"}');
+    swapped.usage = { prompt_tokens: 1_800_000, completion_tokens: 400_000 };
+    stubFetch(200, swapped);
+    const db = openSharedStore(':memory:');
+    const clock = new SimulatedClock(new Date('2026-09-25T08:00:00.000Z'));
+    const client = new AnthropicLlmClient(
+      transportFor(JUDGE_PIN),
+      {
+        model: 'anthropic/claude-opus-5',
+        max_tokens: 64,
+        timeoutMs: 1_000,
+        retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      },
+      new SqliteLlmSpendStore(db),
+    );
+    try {
+      await expect(
+        client.complete({
+          prompt: 'hello',
+          context: { analyst_views: [] },
+          parseResponse: (raw: string) => ({ valid: true as const, data: raw }),
+        }),
+      ).rejects.toBeInstanceOf(LlmProviderError);
+      const rows = db
+        .prepare('SELECT model, input_tokens, output_tokens, cost_usd FROM llm_spend')
+        .all() as {
+        model: string;
+        input_tokens: number;
+        output_tokens: number;
+        cost_usd: number;
+      }[];
+      expect(rows).toEqual([
+        {
+          model: 'anthropic/claude-opus-5',
+          input_tokens: 1_800_000,
+          output_tokens: 400_000,
+          cost_usd: 1.8 * 5 + 0.4 * 25,
+        },
+      ]);
+      const verdict = new SqliteMonthlySpendCap(db, clock, 19).check();
+      expect(verdict).toMatchObject({ admitted: false, kind: 'budget', spent_usd: 19 });
+    } finally {
+      db.close();
+    }
+  });
+
   it('accepts a reply whose model field is missing and logs it as unreported', async () => {
     const logs: LogEntry[] = [];
     const { model: _dropped, ...unreported } = completion('x', 'ok');
@@ -173,7 +224,7 @@ describe('NousPinnedTransport', () => {
     expect((broken as Error).message).not.toContain('nous-secret');
   });
 
-  it('is retried as a rate limit by the debate client the panel wraps it in', async () => {
+  it('is classified LlmRateLimitError by AnthropicLlmClient (maxAttempts: 1, so no retry runs here)', async () => {
     stubFetch(429, { error: { type: 'rate_limit', message: 'slow down' } });
     const client = new AnthropicLlmClient(transportFor(JUDGE_PIN), {
       model: 'anthropic/claude-opus-5',

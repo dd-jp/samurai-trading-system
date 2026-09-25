@@ -16,7 +16,7 @@ import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
-import { NousAccountInFlightGate, tryNousCredentials } from '../../shared/llm/index.js';
+import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { PaperBooks } from './books.js';
@@ -87,8 +87,8 @@ export function llmKeysPresent(options: V2RootOptions): boolean {
 export function nousOptionsFrom(
   env: NodeJS.ProcessEnv,
 ): Pick<V2RootOptions, 'nousBaseUrl' | 'nousApiKey'> {
-  const credentials = tryNousCredentials('debate', env);
-  return { nousBaseUrl: credentials?.baseUrl, nousApiKey: credentials?.apiKey };
+  const endpoint = tryNousEndpoint('debate', env);
+  return { nousBaseUrl: endpoint?.baseUrl, nousApiKey: endpoint?.apiKey };
 }
 
 function nousTransportFactory(
@@ -113,7 +113,7 @@ function nousTransportFactory(
 function refuseKeylessPaperRun(options: V2RootOptions): void {
   if (options.dryRun || options.transportFor !== undefined || llmKeysPresent(options)) return;
   throw new Error(
-    'v2 root refuses a paper run without NOUS_BASE_URL and NOUS_DEBATE_API_KEY: scripted verdicts never reach a broker',
+    'v2 root refuses a paper run without NOUS_BASE_URL and a Nous key (NOUS_DEBATE_API_KEY or NOUS_API_KEY): scripted verdicts never reach a broker',
   );
 }
 
