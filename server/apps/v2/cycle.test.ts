@@ -13,6 +13,7 @@ import { type CycleDeps, calendarDaysBetween, runCycle, vetoApplied } from './cy
 import { addDays } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
+import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
 import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { CYCLE_LEVEL_PARAMETERS, SleeveRegistry } from './signal/index.js';
@@ -149,12 +150,19 @@ const TEST_SPEC: SleeveSpec = {
   ],
 };
 
+const SPREAD_ONLY: FillPricing = {
+  halfSpreadBps: () => HALF_SPREAD_BPS,
+  impactBps: () => 0,
+  fee: () => 0,
+};
+
 function harness(
   decisions: readonly SleeveDecision[],
   dryRun: boolean,
   alpaca?: BrokerAdapter,
   capitalYears: readonly number[] = [2026],
   spec: SleeveSpec = TEST_SPEC,
+  pricing: FillPricing = SPREAD_ONLY,
 ): Harness {
   const db = openSharedStore(':memory:');
   const capital = new CapitalConfigStore(db, clock);
@@ -187,7 +195,6 @@ function harness(
     gbpUsdAtYearStart: () => FX,
   };
   const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
-  const pricing = { halfSpreadBps: () => HALF_SPREAD_BPS, impactBps: () => 0, fee: () => 0 };
   const simulatedBroker = new DryRunBrokerAdapter({
     venue: 'alpaca',
     pricing,
@@ -402,6 +409,29 @@ describe('runCycle', () => {
       deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
     ).toBeCloseTo(21.2, 9);
     expect(deps.books.positions('debate/primary')).toEqual([]);
+  });
+
+  it('a simulated target fills at the target and a stop across the spread and impact, both paying the fee', async () => {
+    const pricing: FillPricing = {
+      halfSpreadBps: () => HALF_SPREAD_BPS,
+      impactBps: () => 3,
+      fee: () => 0.5,
+    };
+    for (const [override, fill] of [
+      [{ low: 19.3, high: 21.3 }, 21.2],
+      [{ low: 19.0, high: 20.2 }, 19.2 * (1 - (HALF_SPREAD_BPS + 3) / 10_000)],
+    ] as const) {
+      const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, pricing);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      await runCycle(deps, '2026-09-28');
+      const entry = (6 * 20 * (1 + (HALF_SPREAD_BPS + 3) / 10_000)) / FX;
+      expect(deps.books.cash('debate/primary')).toBeCloseTo(
+        1_000 - entry + (6 * fill) / FX - (2 * 0.5) / FX,
+        9,
+      );
+    }
   });
 
   it('a bar touching the stop or the target exactly exits at that level', async () => {

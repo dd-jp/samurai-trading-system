@@ -64,7 +64,7 @@ export function marketImpactBps(
 ): number | undefined {
   const notional = averageDailyNotional(bars, IMPACT_WINDOW_BARS, tradingDate);
   const volatility = dailyReturnVolatility(bars);
-  if (notional === undefined || volatility === undefined || !(notional > 0)) return undefined;
+  if (notional === undefined || volatility === undefined) return undefined;
   const bps = IMPACT_K * volatility * Math.sqrt((qty * price) / notional) * BPS;
   return Number.isFinite(bps) ? bps : undefined;
 }

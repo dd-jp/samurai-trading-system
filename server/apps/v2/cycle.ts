@@ -227,6 +227,13 @@ class Cycle {
     const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
     const clientOrderId = this.exitOrderId(book, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
+    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
+      instrument: held.instrument,
+      side,
+      qty: Math.abs(held.qty),
+      price: trigger,
+      crossesSpread: exit.crossesSpread,
+    });
     this.tally.exits += 1;
     this.tally.simulated += 1;
     this.deps.journal.recordOrder({
@@ -245,13 +252,6 @@ class Cycle {
         detail: 'bracket_leg_on_daily_bar',
         price: trigger,
       },
-    });
-    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
-      instrument: held.instrument,
-      side,
-      qty: Math.abs(held.qty),
-      price: trigger,
-      crossesSpread: exit.crossesSpread,
     });
     this.ingest({
       client_order_id: clientOrderId,

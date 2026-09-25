@@ -5,16 +5,18 @@ import { DryRunBrokerAdapter, DryRunRefusedError } from './dry-run-broker.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 
-const fee = vi.fn(() => 7);
-
-function adapter(markPrice: () => number | undefined = () => 50): DryRunBrokerAdapter {
+function adapter(
+  markPrice: () => number | undefined = () => 50,
+  fee = vi.fn(() => 7),
+): DryRunBrokerAdapter {
   const pricing = { halfSpreadBps: () => 10, impactBps: () => 0, fee };
   return new DryRunBrokerAdapter({ venue: 'saxo', pricing, markPrice, clock });
 }
 
 describe('DryRunBrokerAdapter', () => {
   it('refuses every submission and simulates the fill across the spread with the venue fee', async () => {
-    const dryRun = adapter();
+    const fee = vi.fn(() => 7);
+    const dryRun = adapter(() => 50, fee);
     const broker: BrokerAdapter = dryRun;
     await expect(
       broker.submitBracket({

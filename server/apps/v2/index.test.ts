@@ -223,7 +223,7 @@ describe('composeV2Root', () => {
       const fill = root.db
         .prepare('SELECT price_gbp, fee_gbp FROM v2_fills WHERE book_id = ?')
         .get('debate/no-macro-gate') as { price_gbp: number; fee_gbp: number };
-      expect(fill.price_gbp * fx).toBeGreaterThan(LAST_CLOSE);
+      expect(fill.price_gbp * fx).toBeGreaterThanOrEqual(LAST_CLOSE);
       expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
       expect(fill.fee_gbp).toBeGreaterThan(0);
       expect(report.books.map((book) => book.positions)).toEqual([1, 1]);

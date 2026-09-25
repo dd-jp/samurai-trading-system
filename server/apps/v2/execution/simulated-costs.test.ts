@@ -47,7 +47,7 @@ describe('venueFee', () => {
 
 describe('dailyReturnVolatility', () => {
   it('is the sample standard deviation of close-to-close returns, undefined below two returns', () => {
-    expect(dailyReturnVolatility(window([100, 110, 99]))).toBeCloseTo(Math.sqrt(0.02), 12);
+    expect(dailyReturnVolatility(window([100, 110, 99, 99]))).toBeCloseTo(0.1, 12);
     expect(dailyReturnVolatility(window([100, 100, 100]))).toBe(0);
     expect(dailyReturnVolatility(window([100, 110]))).toBeUndefined();
   });
@@ -90,13 +90,13 @@ describe('impactLookup', () => {
     expect(barsBefore).toHaveBeenCalledWith('OK', TRADING_DATE, IMPACT_WINDOW_BARS + 1);
     expect(log).not.toHaveBeenCalled();
     expect(impact('GONE', 1_000, 100)).toBe(FALLBACK_IMPACT_BPS);
-    expect(log).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: 'warn',
-        event: 'v2_impact_fallback',
-        trace_id: `v2-${TRADING_DATE}`,
-      }),
-    );
+    expect(log).toHaveBeenCalledWith({
+      trace_id: `v2-${TRADING_DATE}`,
+      stage: 'v2',
+      level: 'warn',
+      event: 'v2_impact_fallback',
+      message: `GONE: no covered ${IMPACT_WINDOW_BARS}-bar window, impact charged at ${FALLBACK_IMPACT_BPS} bps`,
+    });
     expect(impactLookup(market, TRADING_DATE)('GONE', 1, 1)).toBe(FALLBACK_IMPACT_BPS);
   });
 });

@@ -171,10 +171,10 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - The debate's `atr_unavailable` branch is gone: a covered 200-session window always yields ATR(20) and the 200-day SMA.
   - Known limit: the calendar is US-only. Before Saxo LSE names join the universe, the calendar must be per venue, or UK holidays count as gaps and LSE bars on US holidays are ignored.
 - **PR 3b (simulated costs):**
-  - Every simulated fill moves against the order by half the spread plus impact (spec T9), and pays the venue fee: Alpaca regulatory fees, Saxo 0.08% per side.
+  - Every simulated fill moves against the order by half the spread plus impact (spec C1, v1's uncalibrated coefficient; it probably understates impact at larger capital), and pays the venue fee: Alpaca regulatory fees, Saxo 0.08% per side.
   - A bracket stop pays spread, impact and fee; a target (a resting limit) pays the fee only. Both used to fill at the leg price with no cost.
   - One simulated broker per venue; the cycle prices its bracket exits through `OrderExecutor.quoteSimulatedFill`.
-  - An uncovered impact window charges 25 bps (T10) with a logged warning; it never throws on an exit.
+  - An uncovered impact window charges 25 bps (C2) with a logged warning; it never throws on an exit.
   - Four dry-run dates: decisions and orders identical; primary equity lower by £0.0003–£0.0013 a day; no fallback fired.
   - Known limit: impact is unbounded in participation. A sell priced over 10,000 bps of impact would go negative; the ADV cap keeps entries at ≤ 1% participation, so only a position far larger than its entry could approach it.
 - Still to come:
