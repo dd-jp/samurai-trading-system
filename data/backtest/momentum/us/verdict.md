@@ -12,26 +12,26 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 
 | Check | Value | Result |
 | --- | --- | --- |
-| Walk-forward strategy Sharpe | 0.293 | |
-| minus delisting haircut 0.05 | 0.243 | |
-| × 0.6 haircut | 0.146 | does not beat |
-| Benchmark Sharpe (same window, fractional, same budget rules) | 0.677 | |
-| DSR (selected trial #7, N=8) | 0.806 | < 0.95 |
-| DSR (walk-forward path) | 0.283 | |
-| PBO (CSCV, 16 folds) | 0.476 | > 0.10 |
+| Walk-forward strategy Sharpe | 0.856 | |
+| minus delisting haircut 0.05 | 0.806 | |
+| × 0.6 haircut | 0.483 | does not beat |
+| Benchmark Sharpe (same window, fractional, same budget rules) | 0.679 | |
+| DSR (selected trial #7, N=8) | 0.883 | < 0.95 |
+| DSR (walk-forward path) | 0.865 | |
+| PBO (CSCV, 16 folds) | 0.255 | > 0.10 |
 | Coverage stop | 0.3% missing | within 2% |
-| Walk-forward max drawdown (strategy / benchmark) | 27.3% / 37.1% | |
-| Capital ceiling £1,500 / (selected max DD × 1.5) | £3669 | |
+| Walk-forward max drawdown (strategy / benchmark) | 21.7% / 37.1% | |
+| Capital ceiling £1,500 / (selected max DD × 1.5) | £4609 | |
 
-Walk-forward window 2017-09-07 to 2026-09-23; trial selected per fold: 7, 7, 7, 7, 7, 6, 8, 8, 6, 8, 7, 8, 8, 6, 7.
+Walk-forward window 2017-09-07 to 2026-09-23; trial selected per fold: 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7.
 
 | Trial | Sharpe | CAGR | Vol | Max DD | Final equity | Fills | Stops | Skipped fills | Zero-share targets | Cost | Half/Quarter/Halt/Cap days |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | #5 | 0.485 | 6.5% | 15.5% | 21.8% | 2257 | 578 | 0 | 0 | 532 | 7 | 0/0/0/252 |
-| #6 | 0.569 | 6.9% | 13.3% | 19.2% | 2334 | 769 | 185 | 0 | 514 | 9 | 0/0/0/216 |
-| #7 | 0.754 | 11.5% | 16.2% | 27.3% | 3515 | 854 | 0 | 1 | 441 | 16 | 0/0/0/329 |
-| #8 | 0.638 | 7.7% | 13.0% | 20.9% | 2520 | 1049 | 268 | 1 | 473 | 14 | 0/0/0/230 |
-| benchmark (fractional) | 0.688 | 11.2% | 17.8% | 37.1% | 3430 | 47837 | 0 | 403 | 0 | 3 | 0/0/0/458 |
+| #6 | 0.573 | 6.9% | 13.2% | 19.0% | 2342 | 767 | 184 | 0 | 515 | 9 | 0/0/0/216 |
+| #7 | 0.857 | 14.3% | 17.4% | 21.7% | 4463 | 897 | 0 | 1 | 402 | 18 | 0/0/0/368 |
+| #8 | 0.586 | 6.7% | 12.3% | 20.1% | 2288 | 1017 | 262 | 1 | 486 | 13 | 0/0/0/209 |
+| benchmark (fractional) | 0.690 | 11.3% | 17.8% | 37.1% | 3442 | 47855 | 0 | 0 | 0 | 3 | 0/0/0/460 |
 | benchmark (whole shares) | -0.590 | | | 0.7% | 1222 | 13 | | 6 | 58020 | 0 | |
 
 ## £1000 start capital, fractional: FAIL
@@ -40,27 +40,27 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 
 | Check | Value | Result |
 | --- | --- | --- |
-| Walk-forward strategy Sharpe | 0.570 | |
-| minus delisting haircut 0.05 | 0.520 | |
-| × 0.6 haircut | 0.312 | does not beat |
-| Benchmark Sharpe (same window, fractional, same budget rules) | 0.677 | |
-| DSR (selected trial #6, N=8) | 0.788 | < 0.95 |
-| DSR (walk-forward path) | 0.598 | |
-| PBO (CSCV, 16 folds) | 0.872 | > 0.10 |
+| Walk-forward strategy Sharpe | 0.601 | |
+| minus delisting haircut 0.05 | 0.551 | |
+| × 0.6 haircut | 0.330 | does not beat |
+| Benchmark Sharpe (same window, fractional, same budget rules) | 0.679 | |
+| DSR (selected trial #7, N=8) | 0.801 | < 0.95 |
+| DSR (walk-forward path) | 0.634 | |
+| PBO (CSCV, 16 folds) | 0.771 | > 0.10 |
 | Coverage stop | 0.3% missing | within 2% |
-| Walk-forward max drawdown (strategy / benchmark) | 39.9% / 37.1% | |
-| Capital ceiling £1,500 / (selected max DD × 1.5) | £2801 | |
+| Walk-forward max drawdown (strategy / benchmark) | 34.2% / 37.1% | |
+| Capital ceiling £1,500 / (selected max DD × 1.5) | £2888 | |
 
-Walk-forward window 2017-09-07 to 2026-09-23; trial selected per fold: 7, 7, 7, 8, 8, 8, 8, 7, 6, 7, 7, 6, 6, 6, 6.
+Walk-forward window 2017-09-07 to 2026-09-23; trial selected per fold: 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 7, 7, 6, 6, 7.
 
 | Trial | Sharpe | CAGR | Vol | Max DD | Final equity | Fills | Stops | Skipped fills | Zero-share targets | Cost | Half/Quarter/Halt/Cap days |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | #5 | 0.626 | 16.1% | 32.0% | 46.1% | 5151 | 1283 | 0 | 0 | 0 | 18 | 0/0/0/567 |
 | #6 | 0.731 | 17.0% | 26.1% | 35.7% | 5558 | 1480 | 302 | 0 | 0 | 23 | 0/0/0/546 |
-| #7 | 0.682 | 16.7% | 28.8% | 41.2% | 5450 | 1386 | 0 | 78 | 0 | 33 | 0/0/0/601 |
-| #8 | 0.517 | 9.9% | 23.7% | 39.4% | 3046 | 1727 | 416 | 79 | 0 | 28 | 0/0/0/454 |
-| benchmark (fractional) | 0.688 | 11.2% | 17.8% | 37.1% | 3430 | 47837 | 0 | 403 | 0 | 3 | 0/0/0/458 |
-| benchmark (fractional) | 0.688 | | | 37.1% | 3430 | 47837 | | 403 | 0 | 3 | |
+| #7 | 0.745 | 18.1% | 27.4% | 34.6% | 6103 | 1352 | 0 | 0 | 0 | 34 | 0/0/0/616 |
+| #8 | 0.657 | 13.2% | 22.9% | 31.7% | 4058 | 1669 | 390 | 1 | 0 | 32 | 0/0/0/486 |
+| benchmark (fractional) | 0.690 | 11.3% | 17.8% | 37.1% | 3442 | 47855 | 0 | 0 | 0 | 3 | 0/0/0/460 |
+| benchmark (fractional) | 0.690 | | | 37.1% | 3442 | 47855 | | 0 | 0 | 3 | |
 
 ## £5000 start capital, whole shares: FAIL
 
@@ -68,27 +68,27 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 
 | Check | Value | Result |
 | --- | --- | --- |
-| Walk-forward strategy Sharpe | 0.499 | |
-| minus delisting haircut 0.05 | 0.449 | |
-| × 0.6 haircut | 0.270 | does not beat |
-| Benchmark Sharpe (same window, fractional, same budget rules) | 0.634 | |
-| DSR (selected trial #6, N=8) | 0.655 | < 0.95 |
-| DSR (walk-forward path) | 0.516 | |
-| PBO (CSCV, 16 folds) | 0.993 | > 0.10 |
+| Walk-forward strategy Sharpe | 0.526 | |
+| minus delisting haircut 0.05 | 0.476 | |
+| × 0.6 haircut | 0.286 | does not beat |
+| Benchmark Sharpe (same window, fractional, same budget rules) | 0.635 | |
+| DSR (selected trial #7, N=8) | 0.713 | < 0.95 |
+| DSR (walk-forward path) | 0.548 | |
+| PBO (CSCV, 16 folds) | 0.824 | > 0.10 |
 | Coverage stop | 0.3% missing | within 2% |
-| Walk-forward max drawdown (strategy / benchmark) | 28.4% / 23.9% | |
-| Capital ceiling £1,500 / (selected max DD × 1.5) | £3997 | |
+| Walk-forward max drawdown (strategy / benchmark) | 29.3% / 23.9% | |
+| Capital ceiling £1,500 / (selected max DD × 1.5) | £2798 | |
 
-Walk-forward window 2017-09-07 to 2026-09-23; trial selected per fold: 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 6, 6, 8.
+Walk-forward window 2017-09-07 to 2026-09-23; trial selected per fold: 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 6, 6, 7.
 
 | Trial | Sharpe | CAGR | Vol | Max DD | Final equity | Fills | Stops | Skipped fills | Zero-share targets | Cost | Half/Quarter/Halt/Cap days |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | #5 | 0.535 | 10.9% | 25.4% | 47.5% | 16616 | 1054 | 0 | 0 | 83 | 60 | 17/4/201/415 |
-| #6 | 0.601 | 11.2% | 21.7% | 25.0% | 17145 | 1352 | 302 | 0 | 82 | 74 | 123/0/0/411 |
-| #7 | 0.572 | 11.9% | 25.2% | 45.4% | 18083 | 1315 | 0 | 0 | 80 | 106 | 277/7/0/430 |
-| #8 | 0.594 | 10.4% | 20.0% | 28.4% | 15890 | 1639 | 405 | 1 | 60 | 114 | 184/0/0/369 |
-| benchmark (fractional) | 0.654 | 8.5% | 13.9% | 23.9% | 13469 | 51893 | 0 | 403 | 0 | 18 | 233/113/0/363 |
-| benchmark (whole shares) | 0.563 | | | 1.5% | 6423 | 418 | | 6 | 57325 | 1 | |
+| #6 | 0.601 | 11.2% | 21.7% | 25.0% | 17146 | 1352 | 302 | 0 | 82 | 74 | 123/0/0/410 |
+| #7 | 0.653 | 13.9% | 24.7% | 35.7% | 21593 | 1335 | 0 | 0 | 58 | 122 | 231/13/0/478 |
+| #8 | 0.593 | 10.0% | 19.2% | 29.3% | 15415 | 1613 | 400 | 1 | 59 | 113 | 306/0/0/364 |
+| benchmark (fractional) | 0.655 | 8.5% | 13.9% | 23.9% | 13485 | 51894 | 0 | 0 | 0 | 18 | 235/113/0/370 |
+| benchmark (whole shares) | 0.509 | | | 1.5% | 6385 | 420 | | 6 | 57324 | 1 | |
 
 ## £5000 start capital, fractional: FAIL
 
@@ -96,13 +96,13 @@ Kill line: fails unless it beats the benchmark after a 40% Sharpe haircut with D
 
 | Check | Value | Result |
 | --- | --- | --- |
-| Walk-forward strategy Sharpe | 0.465 | |
-| minus delisting haircut 0.05 | 0.415 | |
-| × 0.6 haircut | 0.249 | does not beat |
-| Benchmark Sharpe (same window, fractional, same budget rules) | 0.634 | |
+| Walk-forward strategy Sharpe | 0.531 | |
+| minus delisting haircut 0.05 | 0.481 | |
+| × 0.6 haircut | 0.289 | does not beat |
+| Benchmark Sharpe (same window, fractional, same budget rules) | 0.635 | |
 | DSR (selected trial #6, N=8) | 0.690 | < 0.95 |
-| DSR (walk-forward path) | 0.475 | |
-| PBO (CSCV, 16 folds) | 0.944 | > 0.10 |
+| DSR (walk-forward path) | 0.554 | |
+| PBO (CSCV, 16 folds) | 0.952 | > 0.10 |
 | Coverage stop | 0.3% missing | within 2% |
 | Walk-forward max drawdown (strategy / benchmark) | 35.7% / 23.9% | |
 | Capital ceiling £1,500 / (selected max DD × 1.5) | £2801 | |
@@ -113,8 +113,8 @@ Walk-forward window 2017-09-07 to 2026-09-23; trial selected per fold: 7, 7, 7, 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | #5 | 0.550 | 12.8% | 30.4% | 52.6% | 19652 | 1219 | 0 | 0 | 0 | 72 | 26/7/201/472 |
 | #6 | 0.632 | 13.8% | 25.8% | 35.7% | 21413 | 1515 | 311 | 0 | 0 | 97 | 168/3/0/484 |
-| #7 | 0.575 | 13.2% | 28.7% | 47.3% | 20204 | 1437 | 0 | 78 | 0 | 128 | 252/9/0/499 |
-| #8 | 0.542 | 10.2% | 22.5% | 32.2% | 15599 | 1719 | 414 | 79 | 0 | 133 | 343/12/0/432 |
-| benchmark (fractional) | 0.654 | 8.5% | 13.9% | 23.9% | 13469 | 51893 | 0 | 403 | 0 | 18 | 233/113/0/363 |
-| benchmark (fractional) | 0.654 | | | 23.9% | 13469 | 51893 | | 403 | 0 | 18 | |
+| #7 | 0.550 | 11.9% | 27.4% | 44.0% | 18206 | 1315 | 0 | 0 | 0 | 118 | 76/2/203/455 |
+| #8 | 0.494 | 8.6% | 21.4% | 31.7% | 13632 | 1696 | 404 | 1 | 0 | 141 | 384/28/0/436 |
+| benchmark (fractional) | 0.655 | 8.5% | 13.9% | 23.9% | 13485 | 51894 | 0 | 0 | 0 | 18 | 235/113/0/370 |
+| benchmark (fractional) | 0.655 | | | 23.9% | 13485 | 51894 | | 0 | 0 | 18 | |
 

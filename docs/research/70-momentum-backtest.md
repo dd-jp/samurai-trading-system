@@ -455,22 +455,24 @@ Evaluated window 2017-01-31 to 2026-09-23 (**9.64 years**, ruling (g): bars from
 
 | Pass | WF strategy Sharpe | − 0.05 haircut, × 0.6 | Benchmark Sharpe (fractional, same budget) | Beats? | DSR (selected trial, N = 8) | DSR (WF path) | PBO (CSCV, 16 folds) | WF max DD strategy / benchmark | Capital ceiling £1,500 / (DD × 1.5) | Verdict |
 |---|---|---|---|---|---|---|---|---|---|---|
-| £1,000, whole shares | 0.293 | **0.146** | 0.677 | no | 0.806 (#7) | 0.283 | 0.476 | 27.3% / 37.1% | £3,669 | **FAIL** |
-| £1,000, fractional | 0.570 | **0.312** | 0.677 | no | 0.788 (#6) | 0.598 | 0.872 | 39.9% / 37.1% | £2,801 | **FAIL** |
-| £5,000, whole shares | 0.499 | **0.270** | 0.634 | no | 0.655 (#6) | 0.516 | 0.993 | 28.4% / 23.9% | £3,997 | **FAIL** |
-| £5,000, fractional | 0.465 | **0.249** | 0.634 | no | 0.690 (#6) | 0.475 | 0.944 | 35.7% / 23.9% | £2,801 | **FAIL** |
+| £1,000, whole shares | 0.856 | **0.483** | 0.679 | no | 0.883 (#7) | 0.865 | 0.255 | 21.7% / 37.1% | £4,609 | **FAIL** |
+| £1,000, fractional | 0.601 | **0.330** | 0.679 | no | 0.801 (#7) | 0.634 | 0.771 | 34.2% / 37.1% | £2,888 | **FAIL** |
+| £5,000, whole shares | 0.526 | **0.286** | 0.635 | no | 0.713 (#7) | 0.548 | 0.824 | 29.3% / 23.9% | £2,798 | **FAIL** |
+| £5,000, fractional | 0.531 | **0.289** | 0.635 | no | 0.690 (#6) | 0.554 | 0.952 | 35.7% / 23.9% | £2,801 | **FAIL** |
+
+Numbers above are the 2026-09-25 re-run after the three simulator fixes in §9.7; the first run's figures are in §9.7 for comparison.
 
 16 configurations were simulated (4 trials × 4 capital/share-mode passes) and N = 8 was used for DSR and MinBTL. Capital and share mode are selection dimensions, so if David authorises a second US grid the passes count in N against the MinBTL limit of 18.
 
-Every pass fails all three gates, not one: the haircut Sharpe is under half the benchmark's, DSR is 0.65–0.81 against 0.95, and PBO is 0.48–0.99 against 0.10. Per-trial full-window numbers (Sharpe, CAGR, vol, max DD, fills, stop hits, budget-step days) are in `data/backtest/momentum/us/verdict.md`; the JSON per pass carries the fold matrix and the per-fold selection.
+Every pass fails all three gates, not one: the haircut Sharpe is below the benchmark's, DSR is 0.69–0.88 against 0.95, and PBO is 0.26–0.95 against 0.10. Per-trial full-window numbers (Sharpe, CAGR, vol, max DD, fills, stop hits, budget-step days) are in `data/backtest/momentum/us/verdict.md`; the JSON per pass carries the fold matrix and the per-fold selection.
 
 What the numbers say, without spin:
 
-- **The 40% haircut is not what kills it.** Unhaircut walk-forward Sharpe (0.29–0.57) is already below the equal-weight buy-and-hold benchmark (0.63–0.68) in every pass. Trial #7 (K = 10, no stop) at £1,000 whole shares reaches 0.754 over the full window, but the walk-forward selection switches between #6, #7 and #8 and the stitched out-of-sample path lands at 0.293.
-- **PBO near 1 at £5,000** means the trial that looks best in training is, out of sample, usually the worst of the four — the four US trials are interchangeable noise around the benchmark plus turnover.
-- **Whole-share sizing at £1,000 is a different strategy.** With K = 10 equal weight, each slot is £100 and 441–532 monthly slot targets (of roughly 116 rebalances × 10 slots) round to zero shares (per-trial "zero-share targets" column), so the book holds about half its intended names. The fractional pass is the signal's true test and also fails.
-- **The loss budget binds at £5,000 and never at £1,000.** At £1,000 no year's loss reached −£500 (the equity curve in the verdict JSON never falls £500 below a 1 January mark); at £5,000 trial #5 halted for 201 days of one year (−£1,500 reached, ruling (j) halt latched to 31 December) and #6–#8 spent 123–343 days at half size. The daily 1% cap blocked entries on 216–601 sessions per trial across passes.
-- **Stops (trials 6 and 8, entry − 2 × ATR(20), never moved up) fired 185–416 times** per pass and reduced max drawdown (e.g. 25.0% vs 47.5% for #6 vs #5 at £5,000 whole) but not enough to change the verdict; the with-stop trials do not clear any gate either.
+- **The 40% haircut decides one pass; the other three fail before it.** At £1,000 whole shares the walk-forward path picks trial #7 (K = 10, no stop) in every fold and reaches 0.856 against the benchmark's 0.679, so it beats the benchmark unhaircut and fails only after the haircut (0.483), and on DSR (0.883) and PBO (0.255). In the other three passes the unhaircut walk-forward Sharpe (0.53–0.60) is already below the benchmark (0.64–0.68).
+- **PBO of 0.82–0.95 at £5,000** means the trial that looks best in training is, out of sample, usually the worst of the four — the four US trials are interchangeable noise around the benchmark plus turnover.
+- **Whole-share sizing at £1,000 is a different strategy.** With K = 10 equal weight, each slot is £100 and 441–532 monthly slot targets (of roughly 116 rebalances × 10 slots) round to zero shares (per-trial "zero-share targets" column), so the book holds about half its intended names (402–532 per trial after the §9.7 fixes). The fractional pass is the signal's true test and also fails.
+- **The loss budget binds at £5,000 and never at £1,000.** At £1,000 no year's loss reached −£500 (the equity curve in the verdict JSON never falls £500 below a 1 January mark); at £5,000 trial #5 halted for 201 days of one year (−£1,500 reached, ruling (j) halt latched to 31 December) and #6–#8 spent 76–384 days at half size; #7 fractional halted for 203 days. The daily 1% cap blocked entries on 216–601 sessions per trial across passes.
+- **Stops (trials 6 and 8, entry − 2 × ATR(20), never moved up) fired 184–404 times** per pass and reduced max drawdown (e.g. 25.0% vs 47.5% for #6 vs #5 at £5,000 whole) but not enough to change the verdict; the with-stop trials do not clear any gate either.
 
 **Per ruling (e) the US momentum sub-book is dropped from the momentum sleeve as specced.** What David may want to decide (not decided here): whether Grid A's US arm (§2.9) gets a second, pre-declared grid counted as trials 9–N against MinBTL 18, or whether the sleeve proceeds LSE-only if the LSE sub-book passes.
 
@@ -516,4 +518,21 @@ which writes `data/backtest/momentum/lse/verdict-{1000,5000}-{whole,fractional}.
 
 ### 9.6 Session eval (doc 68), run 2026-09-24 on the branch
 
-One independent read-only evaluator (Opus) re-ran the US command and reproduced the four summary lines and byte-identical outputs, verified every §9.1 cell against the committed JSON, ran its own future-invariance probe for look-ahead (bars after a cut rescaled; marks and fills before the cut unchanged), and checked folds, gates, costs, sources, guardrails and the definition of done. One CONFIRMED failure: `npm run check:citations` was red with nine violations in files this branch did not touch, because the checker resolves against the git index and tracking `data/bars/` made `data/` a citable root for the first time — fixed with `untracked` markers on those nine lines. Recorded, not fixed: a provisional US run with a placeholder 1 bps spread (before the measurement finished) gave 0.572/0.289 walk-forward Sharpe for the two £1,000 passes against the final 0.570/0.293 — the same verdict, and not a trial; the four capital × share-mode passes are not counted in N (pre-declared by rulings (d) and (f), immaterial while all four fail); the same-mode benchmark row duplicates the fractional row on fractional passes. The evaluator's look-ahead probe is now a committed test (`server/tools/backtest/momentum/simulate.test.ts`, "no look-ahead").
+One independent read-only evaluator (Opus) re-ran the US command and reproduced the four summary lines and byte-identical outputs, verified every §9.1 cell against the committed JSON, ran its own future-invariance probe for look-ahead (bars after a cut rescaled; marks and fills before the cut unchanged), and checked folds, gates, costs, sources, guardrails and the definition of done. One CONFIRMED failure: `npm run check:citations` was red with nine violations in files this branch did not touch, because the checker resolves against the git index and tracking `data/bars/` made `data/` a citable root for the first time — fixed with `untracked` markers on those nine lines. Recorded, not fixed: a provisional US run with a placeholder 1 bps spread (before the measurement finished) gave 0.572/0.289 walk-forward Sharpe for the two £1,000 passes against the first run's 0.570/0.293 (§9.7) — the same verdict, and not a trial; the four capital × share-mode passes are not counted in N (pre-declared by rulings (d) and (f), immaterial while all four fail); the same-mode benchmark row duplicates the fractional row on fractional passes. The evaluator's look-ahead probe is now a committed test (`server/tools/backtest/momentum/simulate.test.ts`, "no look-ahead").
+
+### 9.7 Simulator fixes after merge (2026-09-25)
+
+A code review of the merged simulator found three defects in `server/tools/backtest/momentum/simulate.ts`; all three are fixed with a test each, and §9.1 is re-run from the same bars. The verdict is unchanged, FAIL on all four passes.
+
+1. **Gaps longer than the carry-forward window.** A held line with no bar for more than five sessions but a later bar was valued at £0 and never exited. In the Alpaca set every such gap (nine: POM, CAM, PCL, CSRA, SPLS, NFX, APC, FB, BBBY) is a ticker retired and later reused, so a holding read as a total loss. The line now exits at its last close (reason `delisted`, half spread charged) on the first session with no bar inside the window, as a series that ends does. This fix accounts for nearly all the change in §9.1.
+2. **Halt exit on a session with no bar.** The −£1,500 halt queued an exit per position; one whose line had no bar on the next session was dropped, and nothing re-issues it while halted, so the position ran to 1 January against ruling (j). The halt exit now carries to the next session with a bar. No US pass halts on such a session, so the US numbers do not move.
+3. **Split between decision and fill (whole shares).** The whole-share target was counted in the decision day's raw shares and read in the fill day's, so a 4:1 split bought a quarter of the size. The target now carries in adjusted units and rounds to whole raw shares at the fill. Effect on the US numbers: PBO ±0.002.
+
+First run (2026-09-24), for comparison with §9.1:
+
+| Pass | WF strategy Sharpe | Haircut | Benchmark | DSR (selected) | DSR (WF) | PBO | WF max DD strategy / benchmark | Capital ceiling |
+|---|---|---|---|---|---|---|---|---|
+| £1,000, whole shares | 0.293 | 0.146 | 0.677 | 0.806 (#7) | 0.283 | 0.476 | 27.3% / 37.1% | £3,669 |
+| £1,000, fractional | 0.570 | 0.312 | 0.677 | 0.788 (#6) | 0.598 | 0.872 | 39.9% / 37.1% | £2,801 |
+| £5,000, whole shares | 0.499 | 0.270 | 0.634 | 0.655 (#6) | 0.516 | 0.993 | 28.4% / 23.9% | £3,997 |
+| £5,000, fractional | 0.465 | 0.249 | 0.634 | 0.690 (#6) | 0.475 | 0.944 | 35.7% / 23.9% | £2,801 |
