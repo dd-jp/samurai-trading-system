@@ -137,7 +137,7 @@ Bars move from `data/bars/alpaca` <!-- cite-exempt: untracked — gitignored loc
 - Deleted: both CSV readers and the bar CSVs.
 - The `run.test.ts` coverage cases (`AlignedMarket` over `windowCoverage`) now read Parquet fixtures.
 - Not built yet, because nothing consumes them: the gate-statistics, journal (SQLite `ATTACH`), CGT and replay readers. Each comes with the step that needs it (3d harness, 4b, 5).
-- Gap, recorded and not fixed here: the v2 debate sleeve's bar reads check freshness (`isFresh`) but not window coverage. The harness in 3d should route them through `windowCoverage` ([#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791)).
+- Gap, recorded and not fixed here: the v2 debate sleeve's bar reads check freshness (`isFresh`) but not window coverage. The harness in 3d should route them through `windowCoverage` ([#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791)). Fixed in Step 3d PR 3a.
 
 #### Step 3d — Sleeve contract and harness (D7, D8, S7; #1783)
 
@@ -162,9 +162,16 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - The gate also sizes to zero (`no_allocation`) for a sleeve below its minimum.
   - Seeded property tests over 2,000 cases check four things: whole non-negative shares, never above the ADV cap, never above 10% of equity by notional or the risk fraction at the stop, and zero below the minimum.
   - The four dry-run dates are unchanged row for row. The largest entry is 1.9 × 10⁻⁴ of its cap.
+- **PR 3a (window coverage, [#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791)):**
+  - The session calendar is SPY's bars before the entry date (`sessionsBefore`); without SPY every window fails closed.
+  - `windowCovered` runs `windowCoverage` over that calendar: at least 95% of the window's sessions carry a bar, and the last session does.
+  - Checked windows: the liquidity core's 20 sessions, a mover's prior 2 sessions, and the debate's 200-session SMA window, which is refused `window_coverage` before any LLM call.
+  - The freshness check stays alongside.
+  - Four dry-run dates: one change in 160 decisions. GEV on 2024-11-06 (152 bars since its 2024-04-02 listing) was debated on a partial SMA; it is now skipped `window_coverage` in both books that saw it. The 60 orders are unchanged.
+  - The debate's `atr_unavailable` branch is gone: a covered 200-session window always yields ATR(20).
 - Still to come:
-  - PR 3: the backtest driver on the same cycle (trial counter, walk-forward, DSR/PBO, loss budget) and the impact term.
-  - [#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791) goes with PR 3.
+  - PR 3b: fees and a size-dependent impact term on the simulated venue.
+  - PR 3c: the backtest driver on the same cycle (trial counter, walk-forward, DSR/PBO, loss budget).
 - Known limits, owned by later steps:
   - `sleeveAllocationGbp` seeds every sleeve at the whole start capital. That is right while debate is the only sleeve. Step 1b must add the S1 split (debate 30%, passers share the 70%) before a second sleeve registers, or the books would count the loss budget twice.
   - No sleeve sets `veto` yet. The G5 cap (a veto on at most 10% of entries) is still to be measured and enforced. It lands with the first sleeve that vetoes (Step 1b).

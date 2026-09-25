@@ -1,5 +1,11 @@
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
-import { addDays, type BarsSource, barsBefore } from '../data/index.js';
+import {
+  addDays,
+  type BarsSource,
+  barsBefore,
+  sessionsBefore,
+  windowCovered,
+} from '../data/index.js';
 import {
   G18_SMALL_CAP_FLOORS,
   isSet,
@@ -31,6 +37,20 @@ export interface UniverseSelection {
   readonly refusals: readonly UnsetParameterError[];
 }
 
+function coveredHistory(
+  bars: BarsSource,
+  symbol: string,
+  tradingDate: string,
+  sessions: readonly string[],
+  windowBars: number,
+): readonly DailyBar[] {
+  const series = bars.load(symbol);
+  const history = series === undefined ? [] : barsBefore(series, tradingDate);
+  const covered =
+    isFresh(history.at(-1), tradingDate) && windowCovered(history, sessions, windowBars);
+  return covered ? history : [];
+}
+
 export function liquidityCore(
   symbols: readonly string[],
   bars: BarsSource,
@@ -38,11 +58,9 @@ export function liquidityCore(
   count: number = LIQUIDITY_CORE_COUNT,
 ): readonly string[] {
   const scored: Array<[string, number]> = [];
+  const sessions = sessionsBefore(bars, tradingDate);
   for (const symbol of symbols) {
-    const series = bars.load(symbol);
-    if (series === undefined) continue;
-    const history = barsBefore(series, tradingDate);
-    if (!isFresh(history.at(-1), tradingDate)) continue;
+    const history = coveredHistory(bars, symbol, tradingDate, sessions, DOLLAR_VOLUME_WINDOW_DAYS);
     const adv = averageDollarVolume(history, DOLLAR_VOLUME_WINDOW_DAYS);
     if (adv !== undefined) scored.push([symbol, adv]);
   }
@@ -77,11 +95,10 @@ function moverCandidates(
   tradingDate: string,
 ): MoverCandidate[] {
   const candidates: MoverCandidate[] = [];
+  const sessions = sessionsBefore(bars, tradingDate);
   for (const symbol of symbols) {
-    const history = bars.load(symbol);
-    const window = history === undefined ? [] : barsBefore(history, tradingDate).slice(-2);
-    const [previous, last] = window;
-    if (previous === undefined || !isFresh(last, tradingDate)) continue;
+    const [previous, last] = coveredHistory(bars, symbol, tradingDate, sessions, 2).slice(-2);
+    if (previous === undefined || last === undefined) continue;
     candidates.push({
       symbol,
       dayReturn: last.close / previous.close - 1,

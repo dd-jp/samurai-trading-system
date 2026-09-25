@@ -42,8 +42,23 @@ function trending(symbol: string, days: number, slope: number, start = 100): Bar
   return { symbol, bars };
 }
 
+function withCalendar(all: readonly BarSeries[]): readonly BarSeries[] {
+  const dates = [...new Set(all.flatMap((entry) => entry.bars.map((bar) => bar.date)))].sort();
+  const reference = dates.map((date) => ({
+    date,
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+    volume: 1,
+    rawClose: 1,
+  }));
+  return [...all, { symbol: 'SPY', bars: reference }];
+}
+
 function source(all: readonly BarSeries[]): BarsSource {
-  return { load: (symbol) => all.find((entry) => entry.symbol === symbol) };
+  const withReference = withCalendar(all);
+  return { load: (symbol) => withReference.find((entry) => entry.symbol === symbol) };
 }
 
 const nextDate = (series: BarSeries) => addDays(series.bars.at(-1)?.date ?? '', 1);
@@ -260,9 +275,8 @@ describe('createDebateSleeve', () => {
     expect(transports.flatMap((t) => t.calls).length).toBe(before);
   });
 
-  it('skips a bullish judge when the ATR is unavailable and journals disagreement', async () => {
+  it('journals debater disagreement and the judge confidence it implies', async () => {
     const series = trending('UP', 260, 0.001);
-    const short = { symbol: 'UP', bars: series.bars.slice(-5) };
     const disagreeing: Script = (request) => {
       const prompt = request.messages[0]?.content ?? '';
       if (prompt.includes('Mediator persona'))
@@ -273,7 +287,7 @@ describe('createDebateSleeve', () => {
     };
     const sleeve = createDebateSleeve({
       panel: panelWith(disagreeing),
-      bars: source([short]),
+      bars: source([series]),
       constituents: () => ['UP'],
       venueFor: () => 'alpaca',
       news: NO_NEWS,
@@ -284,13 +298,31 @@ describe('createDebateSleeve', () => {
       macroDay: false,
       dryRun: true,
     });
-    expect(output.decisions[0]).toMatchObject({
-      action: 'skip',
-      reason: 'atr_unavailable',
-      stop_price: undefined,
-    });
+    expect(output.decisions[0]).toMatchObject({ action: 'enter_long', reason: 'judge bullish' });
     expect(output.decisions[0]?.payload.disagreement).toBe('bull and bear disagree on direction');
     expect(output.decisions[0]?.confidence).toBe(JUDGE_CONFIDENCE_BY_AGREEING_DEBATERS[1]);
+  });
+
+  it('skips a name whose 200-session window is not covered before any LLM call (#1791)', async () => {
+    const series = trending('UP', 260, 0.001);
+    const calendar = { symbol: 'SPY', bars: series.bars };
+    const gapped = { symbol: 'UP', bars: series.bars.filter((_, index) => index % 15 !== 0) };
+    const transports: ScriptedTransport[] = [];
+    const sleeve = createDebateSleeve({
+      panel: panelWith(BULLISH_SCRIPT, transports),
+      bars: source([calendar, gapped]),
+      constituents: () => ['UP'],
+      venueFor: () => 'alpaca',
+      news: NO_NEWS,
+      clock,
+    });
+    const output = await decideAll(sleeve, {
+      tradingDate: nextDate(series),
+      macroDay: false,
+      dryRun: true,
+    });
+    expect(output.decisions[0]).toMatchObject({ action: 'skip', reason: 'window_coverage' });
+    expect(transports.flatMap((transport) => transport.calls)).toEqual([]);
   });
 
   it('skips a bearish judge because shorts are off and does nothing on neutral', async () => {

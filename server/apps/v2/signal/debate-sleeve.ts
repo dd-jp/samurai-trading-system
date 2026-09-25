@@ -28,7 +28,7 @@ import { averageTrueRange, trailingReturn } from '../../../pipeline/momentum/ind
 import type { Clock, Logger } from '../../../shared/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { BarsSource, NewsSource } from '../data/index.js';
-import { barsBefore } from '../data/index.js';
+import { barsBefore, sessionsBefore, windowCovered } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
@@ -237,8 +237,8 @@ function decisionFrom(
     venue,
     direction: result.direction,
     confidence: result.confidence,
-    action: read.atr === undefined && action === 'enter_long' ? 'skip' : action,
-    reason: read.atr === undefined && action === 'enter_long' ? 'atr_unavailable' : reason,
+    action,
+    reason,
     price: read.price,
     atr: read.atr,
     stop_price: stop,
@@ -345,6 +345,9 @@ async function decideOne(
   const traceId = `v2-${context.tradingDate}-${symbol}`;
   const read = technicalRead(history, traceId, deps.clock.now());
   if (read === undefined) return skipped(symbol, venue, undefined, '', 'no_bars');
+  if (!windowCovered(history, sessionsBefore(deps.bars, context.tradingDate), SMA_LONG_WINDOW)) {
+    return skipped(symbol, venue, read, '', 'window_coverage');
+  }
   const news = await fetchHeadlines(deps, symbol, context.tradingDate);
   if ('failure' in news) return skipped(symbol, venue, read, '', news.failure);
   const views = [read.view, newsView(news.headlines, traceId, deps.clock.now())];

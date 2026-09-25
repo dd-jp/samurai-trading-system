@@ -21,8 +21,23 @@ function series(symbol: string, days: number, price: number, volume: number): Ba
   return { symbol, bars };
 }
 
+function withCalendar(all: readonly BarSeries[]): readonly BarSeries[] {
+  const dates = [...new Set(all.flatMap((entry) => entry.bars.map((bar) => bar.date)))].sort();
+  const reference = dates.map((date) => ({
+    date,
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+    volume: 1,
+    rawClose: 1,
+  }));
+  return [...all, { symbol: 'SPY', bars: reference }];
+}
+
 function memorySource(all: readonly BarSeries[]): BarsSource {
-  return { load: (symbol) => all.find((entry) => entry.symbol === symbol) };
+  const withReference = withCalendar(all);
+  return { load: (symbol) => withReference.find((entry) => entry.symbol === symbol) };
 }
 
 describe('liquidity core', () => {
@@ -50,6 +65,32 @@ describe('coverage invariant', () => {
     expect(liquidityCore(['STALE'], source, '2026-09-25', 1)).toEqual(['STALE']);
     expect(liquidityCore(['STALE'], source, '2026-09-26', 1)).toEqual([]);
     expect(selectUniverse(['STALE'], source, '2026-09-26').movers).toEqual([]);
+  });
+
+  it('refuses a window missing more than 5% of the reference calendar sessions (#1791)', () => {
+    const full = series('FULL', 25, 100, 1_000_000);
+    const missing = (symbol: string, days: readonly string[]) => ({
+      symbol,
+      bars: series(symbol, 25, 100, 1_000_000).bars.filter((bar) => !days.includes(bar.date)),
+    });
+    const source = memorySource([
+      full,
+      missing('ONE', ['2026-09-10']),
+      missing('TWO', ['2026-09-10', '2026-09-11']),
+    ]);
+    expect(liquidityCore(['FULL', 'ONE', 'TWO'], source, '2026-09-26', 3)).toEqual(['FULL', 'ONE']);
+  });
+
+  it('refuses a mover whose prior session is missing (#1791)', () => {
+    const core = Array.from({ length: 10 }, (_, i) => series(`L${i}`, 25, 100, 10_000_000 + i));
+    const gapped = moved(series('GAP', 25, 100, 1_000_000));
+    const source = memorySource([
+      ...core,
+      moved(series('MOVE', 25, 100, 1_000_000)),
+      { symbol: 'GAP', bars: gapped.bars.filter((bar) => bar.date !== '2026-09-24') },
+    ]);
+    const symbols = [...core.map((entry) => entry.symbol), 'MOVE', 'GAP'];
+    expect(selectUniverse(symbols, source, '2026-09-26').movers).toEqual(['MOVE']);
   });
 
   it('breaks an average-dollar-volume tie alphabetically', () => {

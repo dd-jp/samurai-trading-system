@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
-import { barsBefore, currentConstituents, ParquetBarsSource } from './bars.js';
+import {
+  barsBefore,
+  currentConstituents,
+  ParquetBarsSource,
+  sessionsBefore,
+  windowCovered,
+} from './bars.js';
 
 function series(symbol: string, days: number, price: number, volume: number): BarSeries {
   const bars: DailyBar[] = [];
@@ -81,5 +87,34 @@ describe('coverage invariant', () => {
     ).toBe('2026-09-24');
     expect(barsBefore(before, '2026-09-25')).toHaveLength(24);
     expect(barsBefore(before, '2026-09-01')).toEqual([]);
+  });
+});
+
+describe('window coverage against the SPY calendar (#1791)', () => {
+  const spy = series('SPY', 20, 1, 1);
+  const calendar = { load: (symbol: string) => (symbol === 'SPY' ? spy : undefined) };
+  const sessions = sessionsBefore(calendar, '2026-09-21');
+  const history = series('X', 20, 1, 1).bars;
+
+  it('reads sessions strictly before the date and fails closed without the reference', () => {
+    expect(sessions).toHaveLength(20);
+    expect(sessionsBefore(calendar, '2026-09-20').at(-1)).toBe('2026-09-19');
+    expect(sessionsBefore({ load: () => undefined }, '2026-09-21')).toEqual([]);
+    expect(windowCovered(history, [], 2)).toBe(false);
+  });
+
+  it('needs 95% of the window and a bar on the last session', () => {
+    expect(windowCovered(history, sessions, 20)).toBe(true);
+    expect(
+      windowCovered(
+        history.filter((bar) => bar.date !== '2026-09-05'),
+        sessions,
+        20,
+      ),
+    ).toBe(true);
+    const twoMissing = history.filter((bar) => !['2026-09-05', '2026-09-06'].includes(bar.date));
+    expect(windowCovered(twoMissing, sessions, 20)).toBe(false);
+    expect(windowCovered(history.slice(0, -1), sessions, 2)).toBe(false);
+    expect(windowCovered(history, sessions, 21)).toBe(false);
   });
 });
