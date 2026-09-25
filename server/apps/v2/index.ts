@@ -334,6 +334,14 @@ export function exitCodeFor(report: CycleReport): number {
   return report.dry_run && report.submitted_orders > 0 ? 1 : 0;
 }
 
+export async function runAfterPinCheck(
+  root: Pick<V2Root, 'run'>,
+  pinCheck: () => Promise<void>,
+): Promise<CycleReport> {
+  await pinCheck();
+  return root.run();
+}
+
 export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
   const clock = new SystemClock();
   const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
@@ -346,14 +354,15 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
     clock,
   });
   try {
-    await verifyNousPins({
-      dryRun,
-      baseUrl: nous.nousBaseUrl,
-      apiKey: nous.nousApiKey,
-      pins: ALL_PINS,
-      logger: STDERR_LOGGER,
-    });
-    const report = await root.run();
+    const report = await runAfterPinCheck(root, () =>
+      verifyNousPins({
+        dryRun,
+        baseUrl: nous.nousBaseUrl,
+        apiKey: nous.nousApiKey,
+        pins: ALL_PINS,
+        logger: STDERR_LOGGER,
+      }),
+    );
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);
   } finally {

@@ -13,6 +13,7 @@ import {
   llmKeysPresent,
   nousOptionsFrom,
   parseCliArgs,
+  runAfterPinCheck,
 } from './index.js';
 import type { ModelPin } from './models.js';
 import { NO_NEWS } from './news.js';
@@ -517,5 +518,34 @@ describe('nousOptionsFrom', () => {
         NOUS_DEBATE_MODEL: 'vendor/unpriced-model',
       }),
     ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
+  });
+});
+
+describe('runAfterPinCheck', () => {
+  it('runs no cycle when the pin check refuses', async () => {
+    const run = vi.fn();
+    await expect(
+      runAfterPinCheck({ run }, () => Promise.reject(new Error('snapshot swapped'))),
+    ).rejects.toThrow('snapshot swapped');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('runs the cycle only after the pin check settles', async () => {
+    const order: string[] = [];
+    const report = { dry_run: false } as CycleReport;
+    const result = await runAfterPinCheck(
+      {
+        run: () => {
+          order.push('run');
+          return Promise.resolve(report);
+        },
+      },
+      async () => {
+        await Promise.resolve();
+        order.push('pins');
+      },
+    );
+    expect(order).toEqual(['pins', 'run']);
+    expect(result).toBe(report);
   });
 });
