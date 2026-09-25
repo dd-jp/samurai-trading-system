@@ -36,7 +36,7 @@ export const DEFAULT_SAXO_BARS_DIR = 'data/bars/saxo';
 const DEFAULT_SAXO_AUX_DIR = 'data/bars/saxo-aux';
 const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 
-export interface SpliceRecord {
+interface SpliceRecord {
   readonly tidm: string;
   readonly uic: number;
   readonly unit: 'USD';
