@@ -187,13 +187,7 @@ describe('NousSentimentClient', () => {
 
   it('propagates a provider failure rather than reporting a silent zero', async () => {
     const fetchMock = vi.fn(
-      async () =>
-        ({
-          ok: false,
-          status: 503,
-          statusText: 'Service Unavailable',
-          json: async () => ({}),
-        }) as Response,
+      async () => new Response('{}', { status: 503, statusText: 'Service Unavailable' }),
     );
     vi.stubGlobal('fetch', fetchMock);
 

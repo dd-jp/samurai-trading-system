@@ -1,8 +1,8 @@
-import { parseRetryAfterMs } from '../http/response-errors.js';
+import { parseRetryAfterMs, truncateForError } from '../http/response-errors.js';
 import type { LlmInFlightGate } from './in-flight-gate.js';
 import { type AnthropicUsage, rateFor } from './pricing.js';
 
-const MAX_ERROR_BODY_CHARS = 500;
+export { truncateForError };
 
 export const DEFAULT_NOUS_TIMEOUT_MS = 60_000;
 
@@ -68,11 +68,6 @@ export class NousRefusalError extends Error {
   }
 }
 
-export function truncateForError(text: string): string {
-  return text.length > MAX_ERROR_BODY_CHARS
-    ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
-    : text;
-}
 
 function describeErrorBody(body: unknown): string | undefined {
   if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
