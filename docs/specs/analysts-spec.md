@@ -146,9 +146,28 @@ interface AnalystRunResult {
 
 **Primary + context per role** (from #23). Each analyst owns a primary data scope and always receives a fixed context frame:
 
-- **Technical** — primary: price/indicators (from Market Data Service); context: last-N-candles + volume (always). Mandatory. ~~Cheap/fast LLM tier.~~ **Deterministic (2026-08-16).**
+- **Technical** — primary: price/indicators (from Market Data Service); context: last-N-candles + volume (always). Mandatory. ~~Cheap/fast LLM tier.~~ **Deterministic (2026-08-16).** Its structure axis is upgraded 2026-09-25 — see "Structure axis upgrade: trend / break of structure / order block / tap" below.
 - **Fundamental** — primary: earnings/SEC filings/news (from Market Intelligence); context: contemporaneous price reaction (always). Mandatory. ~~Stronger/slower LLM tier.~~ **Deterministic (2026-08-16).** Stocks-only.
 - **Sentiment** — primary: social signals (from Market Intelligence); context: contemporaneous price/volume, to normalize (always). Optional. ~~Cheap/fast LLM tier.~~ **Deterministic (2026-08-16).**
+
+### Structure axis upgrade: trend / break of structure / order block / tap *(2026-09-25, wayfinder map [#1698](../../issues/1698))*
+
+**Decided by David:** the technical analyst's existing structure axis (Donchian channel position vs 0.3/0.7 thresholds, per #745) is upgraded to a named, deterministic price-action pattern — trend + break of structure (BOS) + order block ("mark zone") + tap entry, the ICT/Smart Money Concepts entry pattern — rather than left as the coarser Donchian read or split into a separate pipeline component.
+
+**Why an axis upgrade, not a new analyst, gate, or Risk Critic fold.** Three placements were weighed and rejected over the course of grilling before landing here:
+- A pre-Debate or pre-Trader **gate** was rejected — a binary veto starves Debate of borderline cases and can never be downweighted by the Feedback Loop the way a normal analyst axis can.
+- Folding into the **Risk Critic** (mirroring the #957/#994 devil's-advocate fold) was rejected — the Risk Critic vetoes/trims on top of the Trader's decision; this pattern is upstream evidence about the setup itself, the same kind of thing the existing structure axis already produces.
+- A **new pipeline component** was rejected as unnecessary — `assessAxes()` (`technical-analyst.ts`) already votes a "structure" axis into the same `net`/`confidence` computation every other axis feeds. BOS/order-block/tap is a sharper read of the same question the Donchian check already asks ("is this instrument's structure supporting a directional read"), not a new question.
+
+**Scope: narrow** ([#1700](../../issues/1700)). Trend, break of structure, order block, tap entry only — the wider SMC toolkit surfaced in research (fair value gap, liquidity sweep, market structure shift, premium/discount zone, breaker/mitigation block, optimal trade entry) is deliberately deferred, not adopted. A later ticket can widen this if the narrow version proves out.
+
+**Timeframe: 15m trend / 1m entry** ([#1701](../../issues/1701)). The trend leg (higher-timeframe context: is there a trend at all, and which direction) reads 15-minute bars. Break of structure, order-block identification, and the tap itself resolve on 1-minute bars. Both intraday; both flat-by-close under ADR-0014's horizon — there is no swing-trade timeframe anywhere in this pattern.
+
+**Detection basis: reference underlying, not the traded instrument** ([#1703](../../issues/1703)). ADR-0016's live universe is LSE leveraged ETPs (2×/3×). Trend/BOS/order-block detection runs on each instrument's **reference underlying** (e.g. AAPL for a 3× AAPL ETP, SPY for a 3× index ETP), not the ETP's own price — leverage decay and compounding noise on the ETP distort swing detection in a way the underlying doesn't have. The resulting signal is applied to the traded ETP. Every `LseEtpPoolRow` needs its underlying mapped to whatever bar feed the structure axis reads from; this is new wiring, not reuse of an existing lookup — `lse-etp-pool.ts` does not currently carry this mapping for sizing/detection purposes.
+
+**Output shape unchanged.** The upgraded axis still emits into the same `assessAxes()` net/confidence computation — direction and a confidence contribution, nothing more. It carries **no price levels** downstream by itself. Whether the order-block/next-structure-level price information also reaches the Trader's bracket construction is a separate, resolved decision — see [trader-spec.md](trader-spec.md) "Structure-derived bracket override" and [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md)'s 2026-09-25 amendment (D6, [#1704](../../issues/1704)). If that path is armed, the structure axis's underlying BOS/order-block computation is the same computation the bracket override reads price levels out of — one detector, two consumers (a confidence vote here, price levels there) — not two independent implementations that could disagree.
+
+**Implementation note carried to the ticket.** This is a spec-level decision, not shipped code. `technical-analyst.ts`'s `assessAxes()` needs: (a) a second bar-interval input (15m alongside whatever the axis reads today) for the trend leg, (b) the underlying-mapping lookup per instrument, and (c) the BOS/order-block/tap detection logic itself, none of which exist yet.
 
 ### Where the LLM belongs — the debate layer, not the analyst layer *(2026-08-16)*
 

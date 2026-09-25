@@ -331,6 +331,19 @@ Two constants carry the round count. `MAX_ROUNDS = 3` (`round-orchestrator.ts`) 
 
 **What this does not change.** Decisions 1–5, the 2026-09-14 charged bars, and every sizing figure above.
 
+## Amendment — 2026-09-25, wayfinder map [#1698](https://github.com/dd-jp/samurai-trading-system/issues/1698) (D6, [#1704](https://github.com/dd-jp/samurai-trading-system/issues/1704)): the neutral bracket gets a structure-derived override
+
+- **Amends:** Decision 3 — adds a second, conditional bracket path; the fixed neutral bracket itself (+2.00%/−2.16% index, +6.00%/−6.25% single-stock) is untouched as the fallback.
+- **Source:** wayfinder map #1698, chartered off David's 2026-09-21 request for a rule-based market-structure entry filter (trend + break of structure + order block + tap). D6 asked whether that structure also prices the exit, not just gates entry.
+
+**Decision:** when the new structure analyst (#1699, upgrading `technical-analyst.ts`'s structure axis — see analysts-spec.md) reads a valid trend + BOS + order-block + tap setup, the Trader's bracket is **structure-derived** instead of the fixed neutral bracket: stop at the order-block boundary, target at the next structure/liquidity level (the prior swing high/low the BOS broke). When no valid structure read exists, the fixed neutral bracket applies unchanged — this amendment adds a path, it does not remove the existing one.
+
+**Evidence, not proof.** Illustrated against real AAPL daily bars (2026-09-11 to 2026-09-18, one qualifying setup in the window): the structure-derived bracket returned +1.75% at ~3.2:1 reward:risk, against +1.08% at ~1:1 for the fixed bracket on the same entry. Single illustrative example, not a backtest — the mechanism argument (structure carries real price information, not just a directional read) is what's adopted here; the magnitude is not.
+
+**What this does not change.** The fixed neutral bracket stays the default and the only bracket for any instrument/tick where the structure analyst has no valid read — including every instrument until #1699/#1704's implementation tickets ship. D3's 4.33 pp / 3.35 pp bars, D5's sizing, and every other figure in this ADR are untouched; they describe the fallback path, which remains live.
+
+**What this does not settle.** The `priceBracket()` implementation — a second code path in `build-bracket.ts` alongside the existing frozen-subclass one — is implementation work, not decided here. `docs/specs/trader-spec.md` records the spec-level shape; `docs/specs/analysts-spec.md` records the upstream structure-analyst shape. Both need `/to-tickets` before this path exists in code.
+
 ## Known weaknesses
 
 **The baseline is an unconditional long at the open.** That is deliberately naive — it is the bar, not a prediction that the strategy loses money. It is also **long-only**; the short ETP lines are unmeasured.

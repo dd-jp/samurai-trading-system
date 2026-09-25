@@ -2,7 +2,7 @@
 
 **Status:** Draft (resolved wayfinder decisions synthesized)  
 **Owner:** David (Deepak)  
-**Date:** 2026-07-13, last amended 2026-09-10
+**Date:** 2026-07-13, last amended 2026-09-25
 
 **2026-08-16 — the four items this spec listed as "pending re-specification" are now decided, and the banner announcing them is deleted rather than extended.** A banner that says the body below is wrong leaves the body wrong; each item is resolved here in the body, at the section it affects.
 
@@ -471,6 +471,23 @@ The Trader consumes `DebateResult` and, being mechanical (no LLM), needs two fie
 - ~~**Asset-class risk scaling (fat-tail discipline):** an `asset_class_risk_multiplier` scales `max_risk_per_trade` down for fat-tailed markets — **crypto is sized more conservatively than stocks** (research: fat-tailed markets warrant quarter-Kelly or less). So the same conviction yields a smaller crypto position than an equivalent stock position. The exact multipliers are config, tuned in paper trading.~~
   > **Superseded 2026-08-16 by per-subclass sizing, once armed.** With crypto out of scope there is one asset class, so `asset_class_risk_multiplier` has exactly one live value and expresses nothing **on the armed path**. **The fat-tail discipline it encoded is not dropped — it moves to the subclass dimension**, where it now has more to do than before: a 3× leveraged ETP is a fat-tailed instrument in its own right, and the ~35%/~25% split between index and single-stock subclasses is that same conservatism, measured rather than tuned. **Do not delete the concept while deleting the key.** The dial that survives once armed is `risk_fraction` keyed on `subclass`; the one that goes inert **there** is the multiplier keyed on `AssetClass` — on the unarmed path (`DEFAULT_UNIVERSE` today) it is not inert: `decide.ts`'s `maxRiskFor` still multiplies `max_risk_per_trade` by `asset_class_risk_multiplier[assetClass]` for every trade, per the 2026-09-09 amendment at "Sizing math".
 - **Caps ownership:** the Trader enforces only its per-trade `max_risk_per_trade` (~~asset-class-scaled~~ **subclass-keyed** — *re-keyed 2026-08-16, two lines after the `asset_class_risk_multiplier` it referred to is struck as superseded; the surviving dial is `risk_fraction` keyed on `subclass`*) and the cosine multiplier bound. Portfolio + asset-class exposure caps and drawdown circuit breakers are the Risk Manager's (Stage 4) — not duplicated here.
+
+### Module: Structure-derived bracket override *(2026-09-25, wayfinder map [#1698](../../issues/1698), D6, [#1704](../../issues/1704))*
+
+**Decided by David:** when the structure analyst (see [analysts-spec.md](analysts-spec.md) "Structure axis upgrade") reads a valid trend + break-of-structure + order-block + tap setup for the instrument on the current tick, the bracket built here is **structure-derived** instead of ADR-0018 D3's fixed neutral bracket:
+
+- `stop_distance` = distance from entry to the order-block boundary (the zone's far edge), not the frozen `stop_pct`.
+- `target_distance` = distance from entry to the next structure/liquidity level — the prior swing high (long) or swing low (short) that the break of structure broke.
+
+**This is an override, not a replacement.** ADR-0018 D3's fixed neutral bracket (`+2.00%/−2.16%` index, `+6.00%/−6.25%` single-stock) remains the bracket for **every** tick where the structure analyst has no valid read — which, until #1699/#1704 ship, is every tick. The existing `frozen_bracket` fields on `OrderIntentMetadata.sizing` (`take_profit_pct`, `stop_pct`, `deployment_fraction`, `round_trip_cost_pct`) stay as-is for the fallback path.
+
+**What this adds to the `OrderIntentMetadata.sizing` shape.** A structure-overridden decision needs its own record, parallel to `frozen_bracket`, carrying the zone/structure levels the bracket was priced from (order-block boundary, next structure level, and which detector run produced them) — present exactly when the override fires, absent otherwise, mirroring how `frozen_bracket` itself is present/absent to tell the two existing geometries apart (2026-09-09 amendment above). Exact field shape is implementation work for the ticket, not fixed here.
+
+**Sizing (`risk_fraction`/deployment) is untouched.** D6 changes where the stop/target prices come from, not ADR-0018 D5's deployment fractions or the `risk_fraction` conversion — `stop_distance` in the sizing formula becomes the structure-derived distance in place of the frozen percentage stop, same formula, different input.
+
+**Evidence for the decision, not a specified magnitude.** Illustrated against real AAPL daily bars (one qualifying setup, 2026-09-11 to 2026-09-18): structure bracket +1.75% at ~3.2:1 R:R vs. the fixed bracket's +1.08% at ~1:1 on the identical entry. This motivated the decision; it is not a backtested parameter and no number from it is wired into code by this spec.
+
+**Implementation note carried to the ticket.** `build-bracket.ts`'s `priceBracket()` currently reads only `bracket.stop_pct`/`bracket.take_profit_pct` off the frozen per-subclass config (`resolveSubclassBracket`). It needs a second path: when the structure analyst's output for this tick carries a valid zone, `priceBracket()` prices off that zone's levels instead, falling back to `resolveSubclassBracket`'s frozen figures otherwise. ADR-0018's 2026-09-25 amendment records the authorizing decision; this spec records the shape; neither ships code.
 
 ### Module: Cosine Precedent Retrieval
 
