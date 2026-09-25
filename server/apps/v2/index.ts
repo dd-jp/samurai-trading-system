@@ -27,9 +27,10 @@ import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
 import { Journal } from './journal.js';
 import { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 import { NousPinnedTransport } from './llm-transport.js';
-import type { ModelPin } from './models.js';
+import { ALL_PINS, type ModelPin } from './models.js';
 import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
 import { AlpacaNewsSource, type NewsSource, NO_NEWS } from './news.js';
+import { verifyNousPins } from './nous-pin-check.js';
 import {
   DEBATE_RISK_FRACTION,
   DEBATE_TARGET_ATR_MULTIPLE,
@@ -306,14 +307,22 @@ export function exitCodeFor(report: CycleReport): number {
 export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
   const clock = new SystemClock();
   const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
+  const nous = nousOptionsFrom(env);
   const root = composeV2Root({
     tradingDate,
     dryRun,
-    ...nousOptionsFrom(env),
+    ...nous,
     samuraiMode: env.SAMURAI_MODE,
     clock,
   });
   try {
+    await verifyNousPins({
+      dryRun,
+      baseUrl: nous.nousBaseUrl,
+      apiKey: nous.nousApiKey,
+      pins: ALL_PINS,
+      logger: STDERR_LOGGER,
+    });
     const report = await root.run();
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);

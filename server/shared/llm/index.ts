@@ -7,7 +7,7 @@ export {
   NousAccountInFlightGate,
   UNGATED_LLM_IN_FLIGHT,
 } from './in-flight-gate.js';
-export type { NousChatResult } from './nous-chat.js';
+export type { NousChatOptions, NousChatResult } from './nous-chat.js';
 export {
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,

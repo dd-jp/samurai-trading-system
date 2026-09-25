@@ -130,24 +130,30 @@ const ALREADY_CLASSIFIED_ERROR_TYPES = [
   LlmAdmissionRefusedError,
 ];
 
+function fieldOf(error: unknown, key: string): unknown {
+  return typeof error === 'object' && error !== null
+    ? (error as Record<string, unknown>)[key]
+    : undefined;
+}
+
+function hasTokenCounts(usage: unknown): usage is AnthropicUsage {
+  if (typeof usage !== 'object' || usage === null) return false;
+  const { input_tokens, output_tokens } = usage as Record<string, unknown>;
+  return typeof input_tokens === 'number' && typeof output_tokens === 'number';
+}
+
 function billedUsageOf(
   error: unknown,
 ): { usage: AnthropicUsage; model: string | undefined } | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const { usage, model } = error as { usage?: unknown; model?: unknown };
-  if (typeof usage !== 'object' || usage === null) return undefined;
-  const { input_tokens, output_tokens } = usage as {
-    input_tokens?: unknown;
-    output_tokens?: unknown;
-  };
-  if (typeof input_tokens !== 'number' || typeof output_tokens !== 'number') return undefined;
-  return { usage: usage as AnthropicUsage, model: typeof model === 'string' ? model : undefined };
+  const usage = fieldOf(error, 'usage');
+  if (!hasTokenCounts(usage)) return undefined;
+  const model = fieldOf(error, 'model');
+  return { usage, model: typeof model === 'string' ? model : undefined };
 }
 
-function statusOf(error: unknown): unknown {
-  return typeof error === 'object' && error !== null
-    ? (error as { status?: unknown }).status
-    : undefined;
+function retryAfterHintOf(error: unknown): number | undefined {
+  const hint = fieldOf(error, 'retryAfterMs');
+  return typeof hint === 'number' && Number.isFinite(hint) && hint >= 0 ? hint : undefined;
 }
 
 function classifyProviderError(error: unknown): Error {
@@ -155,11 +161,11 @@ function classifyProviderError(error: unknown): Error {
     return error as Error;
   }
 
-  const status = statusOf(error);
+  const status = fieldOf(error, 'status');
   const message = error instanceof Error ? error.message : String(error);
 
   if (status === 429) {
-    return new LlmRateLimitError(message);
+    return new LlmRateLimitError(message, retryAfterHintOf(error));
   }
   if (status === 408 || status === 504) {
     return new LlmTimeoutError(message, 'status');

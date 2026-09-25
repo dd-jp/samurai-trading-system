@@ -27,4 +27,13 @@ describe('model pins', () => {
     expect(DEBATER_PINS.map((pin) => pin.seat)).toEqual(['sonnet', 'gpt', 'deepseek']);
     expect(JUDGE_PIN.seat).toBe('judge');
   });
+
+  it('pins the canonical_slug the debate-sleeve spec §4 table records for each Nous id', () => {
+    expect(ALL_PINS.map((pin) => [pin.wire, pin.canonicalSlug])).toEqual([
+      ['anthropic/claude-sonnet-5', 'anthropic/claude-sonnet-5'],
+      ['openai/gpt-5.5', 'openai/gpt-5.5-20260423'],
+      ['deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
+      ['anthropic/claude-opus-5', 'anthropic/claude-opus-5-20260723'],
+    ]);
+  });
 });

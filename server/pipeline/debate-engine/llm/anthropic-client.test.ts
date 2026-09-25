@@ -179,6 +179,33 @@ describe('AnthropicLlmClient', () => {
     await expect(client.complete(request())).rejects.toBeInstanceOf(LlmRateLimitError);
   });
 
+  it.each([
+    [3_000, 3_000],
+    [0, 0],
+    [-1, undefined],
+    [Number.NaN, undefined],
+    [Number.POSITIVE_INFINITY, undefined],
+    ['3000', undefined],
+  ])('carries a 429 retryAfterMs of %s through as %s', async (hint, expected) => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('rate limited'), { status: 429, retryAfterMs: hint }),
+        ),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: NO_RETRY,
+    });
+
+    const error = await client.complete(request()).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LlmRateLimitError);
+    expect((error as LlmRateLimitError).retryAfterMs).toBe(expected);
+  });
+
   it('classifies an unrecognized error as LlmProviderError', async () => {
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockRejectedValue(new Error('server exploded')),
