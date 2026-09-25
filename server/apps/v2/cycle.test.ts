@@ -8,12 +8,12 @@ import type {
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import type { MarketData, Sleeve, SleeveDecision } from '../../../contracts/index.js';
 import { type CycleDeps, calendarDaysBetween, runCycle } from './cycle.js';
-import { DryRunBrokerAdapter } from './execution/index.js';
+import { DryRunBrokerAdapter, V2OrderExecutor } from './execution/index.js';
 import { Journal } from './journal/index.js';
-import { PaperBooks } from './risk/index.js';
-import { CYCLE_LEVEL_PARAMETERS } from './signal/index.js';
-import { type Sleeve, type SleeveDecision, SleeveRegistry } from './signal/sleeve.js';
+import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import { CYCLE_LEVEL_PARAMETERS, SleeveRegistry } from './signal/index.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 const FX = 1.25;
@@ -125,6 +125,7 @@ class FakeAlpaca implements BrokerAdapter {
 
 interface Harness extends CycleDeps {
   readonly sleeve: Sleeve;
+  readonly simulatedBroker: BrokerAdapter;
   readonly barsByDate: Map<string, DailyBar>;
   readonly setDecisions: (next: readonly SleeveDecision[]) => void;
 }
@@ -133,8 +134,11 @@ function harness(
   decisions: readonly SleeveDecision[],
   dryRun: boolean,
   alpaca?: BrokerAdapter,
+  capitalYears: readonly number[] = [2026],
 ): Harness {
   const db = openSharedStore(':memory:');
+  const capital = new CapitalConfigStore(db, clock);
+  for (const year of capitalYears) capital.setYear(year, 1_000, 1_500);
   const registry = new SleeveRegistry();
   let current = decisions;
   const sleeve: Sleeve = {
@@ -153,6 +157,14 @@ function harness(
     const previous = new Date(Date.parse(tradingDate) - 86_400_000).toISOString().slice(0, 10);
     return bar(previous);
   };
+  const market: MarketData = { lastBarBefore: barFor, gbpUsdAtYearStart: () => FX };
+  const books = new PaperBooks(db, clock, capital, '2026-09-01');
+  const simulatedBroker = new DryRunBrokerAdapter({
+    halfSpreadBps: () => HALF_SPREAD_BPS,
+    markPrice: (instrument) =>
+      barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
+    clock,
+  });
   return {
     registry,
     sleeve,
@@ -160,19 +172,16 @@ function harness(
     setDecisions: (next) => {
       current = next;
     },
-    books: new PaperBooks(db, clock),
+    books,
     journal: new Journal(db, clock),
-    brokers: alpaca === undefined ? {} : { alpaca },
-    simulatedBroker: new DryRunBrokerAdapter({
-      halfSpreadBps: () => HALF_SPREAD_BPS,
-      markPrice: (instrument) =>
-        barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
-      clock,
+    risk: new V2RiskGate({ books, capital, market, riskFraction: 0.005, targetAtrMultiple: 3 }),
+    executor: new V2OrderExecutor({
+      brokers: alpaca === undefined ? {} : { alpaca },
+      simulatedBroker,
+      dryRun,
     }),
-    bar: barFor,
-    gbpUsdAtYearStart: FX,
-    riskFraction: 0.005,
-    targetAtrMultiple: 3,
+    simulatedBroker,
+    market,
     timeStopTradingDays: 10,
     clock,
     dryRun,
@@ -703,7 +712,7 @@ describe('runCycle', () => {
       orders(deps, 'debate/primary').map((o) => [o.client_order_id, JSON.parse(o.payload).target]),
     ).toEqual([
       ['v2-debate-primary-2026-09-25-AAPL', expect.closeTo(21.2, 9)],
-      ['v2-debate-primary-2026-09-25-CSP1', undefined],
+      ['v2-debate-primary-2026-09-25-CSP1', 23],
       ['v2-debate-primary-2026-09-25-NOSTOP', undefined],
     ]);
     expect(deps.books.position('debate/no-macro-gate', 'CSP1')?.venue).toBe('saxo');
@@ -795,6 +804,37 @@ describe('runCycle', () => {
     expect(blocked.books[0]?.size_multiplier).toBe(1);
     const resumed = await runCycle(deps, '2026-09-30');
     expect(resumed.entries).toBe(2);
+  });
+
+  it('refuses entries in a year with no capital config yet still time-stops the open position', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-12-14');
+    deps.setDecisions([{ ...longAapl, instrument: 'MSFT' }]);
+    for (const date of [
+      '2026-12-15',
+      '2026-12-16',
+      '2026-12-17',
+      '2026-12-18',
+      '2026-12-21',
+      '2026-12-22',
+      '2026-12-23',
+      '2026-12-24',
+    ]) {
+      await runCycle(deps, date);
+    }
+    deps.setDecisions([{ ...longAapl, instrument: 'NVDA' }]);
+    const newYear = await runCycle(deps, '2027-01-04');
+    expect(newYear.entries).toBe(0);
+    expect(newYear.refusals.some((refusal) => refusal.includes('no capital config'))).toBe(true);
+    expect(sizeShares(deps, 'debate/primary', '2027-01-04', 'NVDA')).toBe(0);
+    expect(deps.books.position('debate/primary', 'AAPL')?.marksHeld).toBe(10);
+    const timeStop = await runCycle(deps, '2027-01-05');
+    expect(timeStop).toMatchObject({ entries: 0, exits: 2 });
+    expect(deps.journal.orderFor('v2-debate-primary-2027-01-05-AAPL-exit')).toMatchObject({
+      outcome: 'refused_dry_run',
+      payload: { approval: 'exit:v2-debate-primary-2027-01-05-AAPL-exit:3' },
+    });
+    expect(deps.books.position('debate/no-macro-gate', 'AAPL')).toBeUndefined();
   });
 
   it('counts calendar days between marks and never negatively', () => {

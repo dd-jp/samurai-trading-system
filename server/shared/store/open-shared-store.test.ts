@@ -49,6 +49,7 @@ const TABLES = [
   'v2_orders',
   'v2_fills',
   'v2_refusals',
+  'v2_capital_config',
 ];
 
 const CONSOLIDATED_SCHEMA_TABLE_COUNT = 43;

@@ -15,4 +15,4 @@ export {
   UnsetParameterError,
 } from './parameters.js';
 export { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
-export { type SleeveDecision, SleeveRegistry, type Venue } from './sleeve.js';
+export { SleeveRegistry } from './sleeve.js';

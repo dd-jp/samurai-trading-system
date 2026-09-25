@@ -1,25 +1,32 @@
-import type { BrokerAdapter, NormalizedFill } from '../../pipeline/execution/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
+import type {
+  BookLedger,
+  BookSpec,
+  DecisionJournal,
+  EntryApproval,
+  MarketData,
+  OrderExecutor,
+  OrderOutcome,
+  OrderSide,
+  Position,
+  RiskGate,
+  SleeveDecision,
+  SleeveSource,
+  Submission,
+  V2Fill,
+  Venue,
+} from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
-import { describeThrownSafely, toBrokerFillId } from '../../shared/index.js';
-import { type MacroGateVerdict, macroGate } from './data/index.js';
-import { DryRunRefusedError } from './execution/index.js';
-import type { Journal, OrderOutcome, OrderSide } from './journal/index.js';
-import type { BookSpec, PaperBooks, Position } from './risk/index.js';
-import { positionSizeShares } from './risk/index.js';
-import type { SleeveDecision, SleeveRegistry, Venue } from './signal/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
+import { type MacroGateVerdict, macroGate, quotePerGbp } from './data/index.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 
 export interface CycleDeps {
-  readonly registry: SleeveRegistry;
-  readonly books: PaperBooks;
-  readonly journal: Journal;
-  readonly brokers: Partial<Readonly<Record<Venue, BrokerAdapter>>>;
-  readonly simulatedBroker: BrokerAdapter;
-  readonly bar: (instrument: string, tradingDate: string) => DailyBar | undefined;
-  readonly gbpUsdAtYearStart: number;
-  readonly riskFraction: number;
-  readonly targetAtrMultiple: number;
+  readonly registry: SleeveSource;
+  readonly books: BookLedger;
+  readonly journal: DecisionJournal;
+  readonly risk: RiskGate;
+  readonly executor: OrderExecutor;
+  readonly market: MarketData;
   readonly timeStopTradingDays: number;
   readonly clock: Clock;
   readonly dryRun: boolean;
@@ -53,7 +60,7 @@ export interface CycleReport {
 }
 
 const MS_PER_DAY = 86_400_000;
-const EPOCH = new Date(0);
+const EPOCH_ISO = new Date(0).toISOString();
 
 export function calendarDaysBetween(from: string | undefined, to: string): number {
   if (from === undefined) return 0;
@@ -80,13 +87,8 @@ function opposite(side: OrderSide): OrderSide {
   return side === 'buy' ? 'sell' : 'buy';
 }
 
-interface Submission {
-  readonly outcome: OrderOutcome;
-  readonly detail: string;
-}
-
-interface BracketSubmission extends Submission {
-  readonly target?: number | undefined;
+function routeOf(book: BookSpec, venue: Venue) {
+  return { bookVariant: book.variant, venue };
 }
 
 interface Tally {
@@ -117,44 +119,21 @@ class Cycle {
   ) {}
 
   fxFor(venue: Venue): number {
-    return venue === 'alpaca' ? this.deps.gbpUsdAtYearStart : 1;
+    return quotePerGbp(this.deps.market, venue, this.tradingDate);
   }
 
   markGbp(instrument: string, venue: Venue): number | undefined {
-    const bar = this.deps.bar(instrument, this.tradingDate);
+    const bar = this.deps.market.lastBarBefore(instrument, this.tradingDate);
     return bar === undefined ? undefined : bar.rawClose / this.fxFor(venue);
   }
 
-  simulated(book: BookSpec): boolean {
-    return this.deps.dryRun || book.variant !== 'primary';
-  }
-
-  brokerFor(book: BookSpec, venue: Venue): BrokerAdapter | undefined {
-    return this.simulated(book) ? this.deps.simulatedBroker : this.deps.brokers[venue];
-  }
-
-  brokers(): readonly BrokerAdapter[] {
-    const all = new Set<BrokerAdapter>([this.deps.simulatedBroker]);
-    if (!this.deps.dryRun) {
-      for (const broker of Object.values(this.deps.brokers)) all.add(broker);
-    }
-    return [...all];
-  }
-
   async sweepFills(): Promise<void> {
-    for (const broker of this.brokers()) {
-      let fills: NormalizedFill[];
-      try {
-        fills = await broker.fetchNewFills(this.since());
-      } catch (error) {
-        this.log('warn', 'v2_fill_sweep_failed', describeThrownSafely(error));
-        continue;
-      }
-      for (const fill of fills) this.ingest(fill);
-    }
+    const sweep = await this.deps.executor.fetchNewFills(this.since());
+    for (const failure of sweep.failures) this.log('warn', 'v2_fill_sweep_failed', failure);
+    for (const fill of sweep.fills) this.ingest(fill);
   }
 
-  since(): Date {
+  since(): string {
     let earliest: string | undefined;
     for (const bookId of this.deps.books.ids()) {
       const recordedAt = this.deps.books.lastDay(bookId)?.recordedAt;
@@ -162,10 +141,10 @@ class Cycle {
         earliest = recordedAt;
       }
     }
-    return earliest === undefined ? EPOCH : new Date(earliest);
+    return earliest === undefined ? EPOCH_ISO : new Date(earliest).toISOString();
   }
 
-  ingest(fill: NormalizedFill): void {
+  ingest(fill: V2Fill): void {
     const order = this.deps.journal.orderFor(fill.client_order_id);
     if (order === undefined) {
       this.log('warn', 'v2_fill_unmatched', `fill ${fill.broker_fill_id} matches no v2 order`);
@@ -207,10 +186,10 @@ class Cycle {
 
   async cancelStaleEntries(book: BookSpec): Promise<void> {
     for (const order of this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate)) {
-      const broker = this.brokerFor(book, order.venue as Venue);
-      if (broker === undefined) continue;
+      const route = routeOf(book, order.venue as Venue);
+      if (!this.deps.executor.canRoute(route)) continue;
       try {
-        await broker.cancel(order.client_order_id, order.instrument);
+        await this.deps.executor.cancel(route, order.client_order_id, order.instrument);
         this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       } catch (error) {
         this.log('warn', 'v2_cancel_failed', describeThrownSafely(error));
@@ -219,7 +198,7 @@ class Cycle {
   }
 
   simulatedBracketExit(book: BookSpec, held: Position): void {
-    const bar = this.deps.bar(held.instrument, this.tradingDate);
+    const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
     if (bar === undefined || bar.date < held.openedDate) return;
     const fx = this.fxFor(held.venue);
     const exitGbp = bracketExitGbp(held, bar.low / fx, bar.high / fx);
@@ -248,12 +227,11 @@ class Cycle {
     });
     this.ingest({
       client_order_id: clientOrderId,
-      broker_fill_id: toBrokerFillId(`sim-${clientOrderId}`),
+      broker_fill_id: `sim-${clientOrderId}`,
       leg: 'exit',
       price: exitGbp * fx,
       qty: Math.abs(held.qty),
       fee: 0,
-      timestamp: this.deps.clock.now(),
     });
   }
 
@@ -265,13 +243,17 @@ class Cycle {
     if (held.marksHeld < this.deps.timeStopTradingDays || held.exitClientOrderId !== undefined) {
       return;
     }
-    const broker = this.brokerFor(book, held.venue);
-    const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
     const clientOrderId = this.exitOrderId(book, held.instrument);
-    if (broker === undefined || this.deps.journal.orderFor(clientOrderId) !== undefined) return;
+    if (
+      !this.deps.executor.canRoute(routeOf(book, held.venue)) ||
+      this.deps.journal.orderFor(clientOrderId) !== undefined
+    ) {
+      return;
+    }
     this.tally.exits += 1;
-    const { outcome, detail } = await this.flatten(book, broker, held, side, clientOrderId);
-    this.count(outcome);
+    const order = this.deps.risk.approveExit({ book, held, clientOrderId });
+    const submission = await this.deps.executor.submit(order);
+    this.count(submission.outcome);
     this.deps.journal.recordOrder({
       client_order_id: clientOrderId,
       decision_id: null,
@@ -280,43 +262,19 @@ class Cycle {
       instrument: held.instrument,
       venue: held.venue,
       leg: 'exit',
-      side,
+      side: order.side,
       dry_run: this.deps.dryRun,
-      outcome,
-      payload: { size: Math.abs(held.qty), detail, marks_held: held.marksHeld },
+      outcome: submission.outcome,
+      payload: {
+        size: order.size,
+        detail: submission.detail,
+        marks_held: held.marksHeld,
+        approval: submission.approvalId,
+      },
     });
-    if (outcome !== 'rejected')
+    if (submission.outcome !== 'rejected') {
       this.deps.books.setExitPending(book.id, held.instrument, clientOrderId);
-  }
-
-  async flatten(
-    book: BookSpec,
-    broker: BrokerAdapter,
-    held: Position,
-    side: OrderSide,
-    clientOrderId: string,
-  ): Promise<Submission> {
-    try {
-      const ack = await broker.submitFlatten(
-        held.instrument,
-        side,
-        Math.abs(held.qty),
-        clientOrderId,
-      );
-      return { outcome: 'submitted', detail: ack.order_state };
-    } catch (error) {
-      return this.failedSubmission(book, error);
     }
-  }
-
-  failedSubmission(book: BookSpec, error: unknown): Submission {
-    if (error instanceof DryRunRefusedError) {
-      return {
-        outcome: book.variant === 'primary' ? 'refused_dry_run' : 'simulated',
-        detail: error.message,
-      };
-    }
-    return { outcome: 'rejected', detail: describeThrownSafely(error) };
   }
 
   count(outcome: OrderOutcome): void {
@@ -327,10 +285,13 @@ class Cycle {
   }
 
   async resumePendingExit(book: BookSpec, held: Position): Promise<void> {
-    if (held.exitClientOrderId === undefined || this.simulated(book)) return;
-    const broker = this.brokerFor(book, held.venue);
+    if (held.exitClientOrderId === undefined) return;
     try {
-      await broker?.resumeFlatten(held.exitClientOrderId, held.instrument);
+      await this.deps.executor.resumeFlatten(
+        routeOf(book, held.venue),
+        held.exitClientOrderId,
+        held.instrument,
+      );
     } catch (error) {
       this.log('warn', 'v2_resume_flatten_failed', describeThrownSafely(error));
     }
@@ -339,47 +300,33 @@ class Cycle {
   async exits(book: BookSpec): Promise<void> {
     for (const held of this.deps.books.positions(book.id)) {
       await this.resumePendingExit(book, held);
-      if (this.simulated(book)) this.simulatedBracketExit(book, held);
+      if (this.deps.executor.simulates(routeOf(book, held.venue))) {
+        this.simulatedBracketExit(book, held);
+      }
       const stillHeld = this.deps.books.position(book.id, held.instrument);
       if (stillHeld !== undefined) await this.timeStop(book, stillHeld);
     }
   }
 
-  sizeFor(book: BookSpec, decision: SleeveDecision, equityGbp: number): number {
-    if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return 0;
-    const previous = this.deps.books.lastDay(book.id)?.state;
-    let multiplier = previous?.sizeMultiplier ?? 1;
-    if (previous?.entriesBlockedAtNextFill === true) multiplier = 0;
-    const fx = this.fxFor(decision.venue);
-    return positionSizeShares({
-      equityGbp,
-      riskFraction: this.deps.riskFraction,
-      priceGbp: decision.price / fx,
-      atrGbp: (decision.atr ?? 0) / fx,
-      sizeMultiplier: multiplier,
-      macroDay: book.variant === 'no-macro-gate' ? false : this.macro.macroDay,
-    });
+  entryOrderId(book: BookSpec, instrument: string): string {
+    return `v2-${book.id.replaceAll('/', '-')}-${this.tradingDate}-${instrument}`;
   }
 
   async submitEntry(
     book: BookSpec,
     decision: SleeveDecision,
     decisionId: string,
-    size: number,
+    approval: EntryApproval,
   ): Promise<void> {
-    const clientOrderId = `v2-${book.id.replaceAll('/', '-')}-${this.tradingDate}-${decision.instrument}`;
+    const clientOrderId = this.entryOrderId(book, decision.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     if (this.deps.books.position(book.id, decision.instrument) !== undefined) return;
     this.tally.entries += 1;
-    const side: OrderSide = decision.action === 'enter_short' ? 'sell' : 'buy';
-    const { outcome, detail, target } = await this.placeBracket(
-      book,
-      decision,
-      clientOrderId,
-      side,
-      size,
-    );
-    this.count(outcome);
+    const submission: Submission =
+      approval.order === undefined
+        ? { outcome: 'rejected', detail: approval.refusal, approvalId: '' }
+        : await this.deps.executor.submit(approval.order);
+    this.count(submission.outcome);
     this.deps.journal.recordOrder({
       client_order_id: clientOrderId,
       decision_id: decisionId,
@@ -388,60 +335,38 @@ class Cycle {
       instrument: decision.instrument,
       venue: decision.venue,
       leg: 'entry',
-      side,
+      side: decision.action === 'enter_short' ? 'sell' : 'buy',
       dry_run: this.deps.dryRun,
-      outcome,
-      payload: { size, detail, price: decision.price, stop: decision.stop_price, target },
+      outcome: submission.outcome,
+      payload: {
+        size: approval.size,
+        detail: submission.detail,
+        price: decision.price,
+        stop: decision.stop_price,
+        target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
+        approval: approval.order === undefined ? undefined : submission.approvalId,
+      },
     });
-  }
-
-  async placeBracket(
-    book: BookSpec,
-    decision: SleeveDecision,
-    clientOrderId: string,
-    side: OrderSide,
-    size: number,
-  ): Promise<BracketSubmission> {
-    const stop = decision.stop_price;
-    const atr = decision.atr;
-    const broker = this.brokerFor(book, decision.venue);
-    if (stop === undefined || atr === undefined) {
-      return { outcome: 'rejected', detail: 'no_stop_price' };
-    }
-    if (broker === undefined) {
-      return { outcome: 'rejected', detail: `no_broker_for_venue:${decision.venue}` };
-    }
-    const distance = this.deps.targetAtrMultiple * atr;
-    const target = side === 'sell' ? decision.price - distance : decision.price + distance;
-    try {
-      const ack = await broker.submitBracket({
-        client_order_id: clientOrderId,
-        instrument: decision.instrument,
-        asset_class: 'stocks',
-        side,
-        size,
-        entry: decision.price,
-        stop,
-        target,
-        time_in_force: 'gtc',
-      });
-      return { outcome: 'submitted', detail: ack.order_state, target };
-    } catch (error) {
-      return { ...this.failedSubmission(book, error), target };
-    }
   }
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
     const { equityGbp } = this.deps.books.valuation(book.id, (i, v) => this.markGbp(i, v));
     for (const decision of decisions) {
-      const size = this.sizeFor(book, decision, equityGbp);
+      const approval = this.deps.risk.approveEntry({
+        book,
+        decision,
+        clientOrderId: this.entryOrderId(book, decision.instrument),
+        tradingDate: this.tradingDate,
+        equityGbp,
+        macroDay: this.macro.macroDay,
+      });
       const decisionId = this.deps.journal.recordDecision(
         book.id,
         this.tradingDate,
         decision,
-        size,
+        approval.size,
       );
-      if (size > 0) await this.submitEntry(book, decision, decisionId, size);
+      if (approval.size > 0) await this.submitEntry(book, decision, decisionId, approval);
     }
   }
 
@@ -473,29 +398,44 @@ class Cycle {
   }
 }
 
+function recordRefusal(
+  deps: CycleDeps,
+  tradingDate: string,
+  refusals: string[],
+  refusal: { scope: string; parameter: string; ticket: string; message: string },
+): void {
+  deps.journal.recordRefusal({ trading_date: tradingDate, ...refusal });
+  refusals.push(refusal.message);
+}
+
 function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVerdict): string[] {
   const refusals: string[] = [];
   for (const parameter of CYCLE_LEVEL_PARAMETERS) {
     if (isSet(parameter)) continue;
     const { message } = new UnsetParameterError(parameter.name, parameter.ticket);
-    deps.journal.recordRefusal({
-      trading_date: tradingDate,
+    recordRefusal(deps, tradingDate, refusals, {
       scope: 'parameter',
       parameter: parameter.name,
       ticket: parameter.ticket,
       message,
     });
-    refusals.push(message);
+  }
+  const capital = deps.risk.capitalRefusal(tradingDate);
+  if (capital !== undefined) {
+    recordRefusal(deps, tradingDate, refusals, {
+      scope: 'capital',
+      parameter: 'CAPITAL_CONFIG',
+      ticket: 'docs/research/66-v2-grill-decisions.md D8',
+      message: capital,
+    });
   }
   if (!macro.covered) {
-    deps.journal.recordRefusal({
-      trading_date: tradingDate,
+    recordRefusal(deps, tradingDate, refusals, {
       scope: 'macro',
       parameter: 'MACRO_CALENDARS',
       ticket: 'docs/specs/debate-sleeve-spec.md §6',
       message: macro.reason,
     });
-    refusals.push(macro.reason);
   }
   return refusals;
 }

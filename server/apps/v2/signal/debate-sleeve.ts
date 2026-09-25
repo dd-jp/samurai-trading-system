@@ -32,7 +32,7 @@ import type {
   SleeveDecision,
   SleeveOutput,
   Venue,
-} from './sleeve.js';
+} from '../../../../contracts/index.js';
 import type { UniverseSelection } from './universe.js';
 import { selectUniverse } from './universe.js';
 

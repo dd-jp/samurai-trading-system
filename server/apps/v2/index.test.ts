@@ -6,7 +6,9 @@ import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/i
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { CycleReport } from './cycle.js';
-import { NO_NEWS, parseBoeGbpUsdCsv, yearStartGbpUsd } from './data/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
+import { BarsMarketData, CsvBarsSource, NO_NEWS, parseBoeGbpUsdCsv } from './data/index.js';
 import {
   composeV2Root,
   exitCodeFor,
@@ -15,6 +17,7 @@ import {
   parseCliArgs,
   runAfterPinCheck,
 } from './index.js';
+import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
 import { BULLISH_SCRIPT, ScriptedTransport } from './signal/index.js';
 
@@ -53,6 +56,16 @@ function writeFixtures(): Fixtures {
 const LAST_CLOSE = 20 * (1 + 0.001 * 259);
 const ENTRY_DATE = new Date(Date.UTC(2025, 0, 1) + 260 * 86_400_000).toISOString().slice(0, 10);
 const NEXT_DATE = new Date(Date.UTC(2025, 0, 1) + 261 * 86_400_000).toISOString().slice(0, 10);
+
+function seededStore(path = ':memory:'): StoreHandle {
+  const db = openSharedStore(path);
+  new CapitalConfigStore(db, new SimulatedClock(new Date('2025-01-01T00:00:00.000Z'))).setYear(
+    2025,
+    1_000,
+    1_500,
+  );
+  return db;
+}
 
 function count(root: { db: { prepare: (sql: string) => { get: () => unknown } } }, table: string) {
   return (root.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
@@ -148,7 +161,7 @@ describe('composeV2Root', () => {
       ...fixtures,
       tradingDate: ENTRY_DATE,
       dryRun: true,
-      storePath: ':memory:',
+      store: seededStore(),
       clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
       logger,
     });
@@ -177,12 +190,22 @@ describe('composeV2Root', () => {
       expect(root.journal.orderFor(`v2-debate-primary-${ENTRY_DATE}-UP`)).toMatchObject({
         outcome: 'refused_dry_run',
         dry_run: true,
-        payload: { size: decision.size_shares },
+        payload: {
+          size: decision.size_shares,
+          approval: `entry:v2-debate-primary-${ENTRY_DATE}-UP:${decision.size_shares}`,
+        },
+      });
+      expect(root.journal.orderFor(`v2-debate-no-macro-gate-${ENTRY_DATE}-UP`)).toMatchObject({
+        outcome: 'simulated',
+        payload: { approval: expect.stringMatching(/^entry:v2-debate-no-macro-gate-/) },
       });
       expect(count(root, 'v2_orders')).toBe(2);
       expect(count(root, 'v2_fills')).toBe(2);
       expect(root.books.position('debate/primary', 'UP')?.qty).toBe(decision.size_shares);
-      const fx = yearStartGbpUsd(parseBoeGbpUsdCsv(readFileSync(fixtures.fxPath, 'utf8')), 2025);
+      const fx = new BarsMarketData(
+        new CsvBarsSource(fixtures.barsDirectory),
+        parseBoeGbpUsdCsv(readFileSync(fixtures.fxPath, 'utf8')),
+      ).gbpUsdAtYearStart(2025);
       const fill = root.db
         .prepare('SELECT price_gbp FROM v2_fills WHERE book_id = ?')
         .get('debate/no-macro-gate') as { price_gbp: number };
@@ -210,6 +233,7 @@ describe('composeV2Root', () => {
     const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
     const alpacaClient = fakeAlpacaClient(clock);
     const transports: ScriptedTransport[] = [];
+    seededStore(storePath).close();
     const open = (tradingDate: string, newsCalls: string[]) =>
       composeV2Root({
         ...fixtures,
@@ -259,6 +283,7 @@ describe('composeV2Root', () => {
       expect(first.journal.orderFor(`v2-debate-primary-${ENTRY_DATE}-UP`)).toMatchObject({
         outcome: 'submitted',
         dry_run: false,
+        payload: { approval: `entry:v2-debate-primary-${ENTRY_DATE}-UP:${qty}` },
       });
       expect(first.books.position('debate/primary', 'UP')?.qty).toBe(qty);
       expect(first.books.position('debate/no-macro-gate', 'UP')?.qty).toBe(qty);
@@ -282,6 +307,31 @@ describe('composeV2Root', () => {
       expect(second.books.position('debate/primary', 'UP')?.marksHeld).toBe(2);
     } finally {
       second.close();
+    }
+  });
+
+  it('refuses entries but still runs without a capital config in force', async () => {
+    const fixtures = writeFixtures();
+    directory = fixtures.directory;
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath: ':memory:',
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      logger: { log: () => {} },
+    });
+    try {
+      expect(root.books.ids()).toEqual([]);
+      const report = await root.run();
+      expect(report).toMatchObject({ entries: 0, submitted_orders: 0, simulated_orders: 0 });
+      expect(report.refusals.some((refusal) => refusal.includes('no capital config'))).toBe(true);
+      expect(
+        root.db.prepare("SELECT parameter FROM v2_refusals WHERE scope = 'capital'").get(),
+      ).toEqual({ parameter: 'CAPITAL_CONFIG' });
+      expect(count(root, 'v2_orders')).toBe(0);
+    } finally {
+      root.close();
     }
   });
 

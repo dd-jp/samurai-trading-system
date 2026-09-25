@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { SimulatedClock } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
-import { PaperBooks } from '../risk/index.js';
-import type { SleeveDecision } from '../signal/index.js';
-import { inputsHash, Journal, type JournalledOrder } from './journal.js';
+import type { JournalledOrder, SleeveDecision } from '../../../../contracts/index.js';
+import { CapitalConfigStore, PaperBooks } from '../risk/index.js';
+import { inputsHash, Journal } from './journal.js';
 
 const decision: SleeveDecision = {
   sleeve_id: 'debate',
@@ -26,7 +26,9 @@ describe('Journal', () => {
 
   it('records decisions, orders, fills and refusals and reads an order back by id', () => {
     const db = openSharedStore(':memory:');
-    new PaperBooks(db, clock);
+    const capital = new CapitalConfigStore(db, clock);
+    capital.setYear(2026, 1_000, 1_500);
+    new PaperBooks(db, clock, capital, '2026-09-25');
     const journal = new Journal(db, clock);
     const decisionId = journal.recordDecision('debate/primary', '2026-09-25', decision, 3);
     const order: JournalledOrder = {
@@ -80,7 +82,9 @@ describe('Journal', () => {
 
   it('lists submitted entries from earlier dates that never filled and marks them cancelled', () => {
     const db = openSharedStore(':memory:');
-    new PaperBooks(db, clock);
+    const capital = new CapitalConfigStore(db, clock);
+    capital.setYear(2026, 1_000, 1_500);
+    new PaperBooks(db, clock, capital, '2026-09-25');
     const journal = new Journal(db, clock);
     const base: JournalledOrder = {
       client_order_id: 'old',

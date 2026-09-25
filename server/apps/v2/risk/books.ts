@@ -1,25 +1,20 @@
-import type { LossBudgetState } from '../../../pipeline/momentum/index.js';
-import { LossBudget, saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
+import type {
+  BookDay,
+  BookFill,
+  BookLedger,
+  BookSpec,
+  CapitalYear,
+  LossBudgetState,
+  MarkPriceGbp,
+  Position,
+  Valuation,
+} from '../../../../contracts/index.js';
+import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import type { Clock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
-import type { OrderSide } from '../journal/index.js';
-import type { Venue } from '../signal/index.js';
-
-export type BookVariant =
-  | 'primary'
-  | 'no-macro-gate'
-  | 'no-sentiment'
-  | 'no-social'
-  | 'large-cap-only'
-  | 'no-veto';
-
-export interface BookSpec {
-  readonly id: string;
-  readonly sleeve: string;
-  readonly variant: BookVariant;
-  readonly instantiated: boolean;
-}
+import type { CapitalConfigStore } from './capital-config.js';
+import { LossBudget } from './loss-budget.js';
 
 export const BOOK_SPECS: readonly BookSpec[] = [
   { id: 'debate/primary', sleeve: 'debate', variant: 'primary', instantiated: true },
@@ -30,53 +25,7 @@ export const BOOK_SPECS: readonly BookSpec[] = [
   { id: 'momentum/no-veto', sleeve: 'momentum', variant: 'no-veto', instantiated: false },
 ];
 
-export const START_CAPITAL_GBP = 1_000;
 const FLAT_EPSILON = 1e-9;
-
-export interface BookDay {
-  readonly bookId: string;
-  readonly tradingDate: string;
-  readonly equityGbp: number;
-  readonly cashGbp: number;
-  readonly investedGbp: number;
-  readonly state: LossBudgetState;
-  readonly custodyAccrualGbp: number;
-  readonly recordedAt: string;
-}
-
-export interface Position {
-  readonly instrument: string;
-  readonly venue: Venue;
-  readonly qty: number;
-  readonly avgPriceGbp: number;
-  readonly stopGbp: number | undefined;
-  readonly targetGbp: number | undefined;
-  readonly clientOrderId: string;
-  readonly exitClientOrderId: string | undefined;
-  readonly openedDate: string;
-  readonly marksHeld: number;
-}
-
-export interface BookFill {
-  readonly instrument: string;
-  readonly venue: Venue;
-  readonly side: OrderSide;
-  readonly qty: number;
-  readonly priceGbp: number;
-  readonly feeGbp: number;
-  readonly clientOrderId: string;
-  readonly tradingDate: string;
-  readonly stopGbp?: number | undefined;
-  readonly targetGbp?: number | undefined;
-}
-
-export interface Valuation {
-  readonly equityGbp: number;
-  readonly investedGbp: number;
-  readonly investedSaxoGbp: number;
-}
-
-export type MarkPriceGbp = (instrument: string, venue: Venue) => number | undefined;
 
 interface BookDayRow {
   trading_date: string;
@@ -92,7 +41,7 @@ interface BookDayRow {
 
 interface PositionRow {
   instrument: string;
-  venue: Venue;
+  venue: Position['venue'];
   qty: number;
   avg_price_gbp: number;
   stop_gbp: number | null;
@@ -126,28 +75,53 @@ function averagePriceGbp(held: Position, fill: BookFill, qty: number): number {
     : held.avgPriceGbp;
 }
 
-export class PaperBooks {
+function rollYear(
+  budget: LossBudget,
+  previous: { trading_date: string; equity_gbp: number } | undefined,
+  tradingDate: string,
+): void {
+  if (previous === undefined || previous.trading_date.slice(0, 4) === tradingDate.slice(0, 4)) {
+    return;
+  }
+  budget.resetYear(previous.equity_gbp);
+}
+
+export class PaperBooks implements BookLedger {
   readonly #budgets = new Map<string, LossBudget>();
-  readonly #references = new Map<string, number>();
   readonly #specs: readonly BookSpec[];
 
   constructor(
     private readonly db: StoreHandle,
     private readonly clock: Clock,
+    private readonly capital: Pick<CapitalConfigStore, 'inForce' | 'lastKnown'>,
+    openingDate: string,
     specs: readonly BookSpec[] = BOOK_SPECS,
-    private readonly startCapitalGbp: number = START_CAPITAL_GBP,
   ) {
-    this.#specs = specs.filter((spec) => spec.instantiated);
+    const seedCapitalGbp = capital.inForce(openingDate)?.startCapitalGbp;
     const insert = db.prepare(
       `INSERT OR IGNORE INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
-    for (const spec of this.#specs) {
-      insert.run(spec.id, spec.sleeve, spec.variant, startCapitalGbp, startCapitalGbp, this.#now());
-      const budget = new LossBudget(startCapitalGbp);
+    const opened: BookSpec[] = [];
+    for (const spec of specs.filter((candidate) => candidate.instantiated)) {
+      if (seedCapitalGbp !== undefined) {
+        insert.run(spec.id, spec.sleeve, spec.variant, seedCapitalGbp, seedCapitalGbp, this.#now());
+      }
+      const bookStartCapitalGbp = this.#startCapital(spec.id);
+      if (bookStartCapitalGbp === undefined) continue;
+      const budget = new LossBudget(bookStartCapitalGbp);
       this.#budgets.set(spec.id, budget);
       this.#replay(spec.id, budget);
+      opened.push(spec);
     }
+    this.#specs = opened;
+  }
+
+  #startCapital(bookId: string): number | undefined {
+    const row = this.db
+      .prepare('SELECT start_capital_gbp FROM v2_books WHERE book_id = ?')
+      .get(bookId) as { start_capital_gbp: number } | undefined;
+    return row?.start_capital_gbp;
   }
 
   #replay(bookId: string, budget: LossBudget): void {
@@ -158,23 +132,22 @@ export class PaperBooks {
       .all(bookId) as { trading_date: string; equity_gbp: number }[];
     let previous: { trading_date: string; equity_gbp: number } | undefined;
     for (const row of rows) {
-      this.#rollYear(bookId, budget, previous, row.trading_date);
-      budget.markClose(row.equity_gbp, previous?.equity_gbp ?? row.equity_gbp);
+      rollYear(budget, previous, row.trading_date);
+      budget.markClose(
+        row.equity_gbp,
+        previous?.equity_gbp ?? row.equity_gbp,
+        this.#capitalOn(row.trading_date),
+      );
       previous = row;
     }
   }
 
-  #rollYear(
-    bookId: string,
-    budget: LossBudget,
-    previous: { trading_date: string; equity_gbp: number } | undefined,
-    tradingDate: string,
-  ): void {
-    if (previous === undefined || previous.trading_date.slice(0, 4) === tradingDate.slice(0, 4)) {
-      return;
+  #capitalOn(tradingDate: string): CapitalYear {
+    const capital = this.capital.lastKnown(tradingDate);
+    if (capital === undefined) {
+      throw new Error(`PaperBooks: no capital config on or before ${tradingDate}`);
     }
-    budget.resetYear(previous.equity_gbp);
-    this.#references.set(bookId, previous.equity_gbp);
+    return capital;
   }
 
   isMarked(tradingDate: string): boolean {
@@ -182,10 +155,6 @@ export class PaperBooks {
       const previous = this.lastDay(spec.id);
       return previous !== undefined && previous.tradingDate >= tradingDate;
     });
-  }
-
-  get startCapital(): number {
-    return this.startCapitalGbp;
   }
 
   ids(): readonly string[] {
@@ -312,7 +281,7 @@ export class PaperBooks {
       custodyAccrualGbp: row.custody_accrual_gbp,
       recordedAt: row.recorded_at,
       state: {
-        referenceEquityGbp: this.#references.get(bookId) ?? this.startCapitalGbp,
+        referenceEquityGbp: this.#budget(bookId).referenceEquityGbp,
         ytdLossGbp: row.ytd_loss_gbp,
         sizeMultiplier: row.size_multiplier as LossBudgetState['sizeMultiplier'],
         halted: row.size_multiplier === 0,
@@ -334,8 +303,8 @@ export class PaperBooks {
         `PaperBooks: ${bookId} already marked ${previous.tradingDate}, refusing ${tradingDate}`,
       );
     }
-    this.#rollYear(
-      bookId,
+    const capital = this.#capitalOn(tradingDate);
+    rollYear(
       budget,
       previous === undefined
         ? undefined
@@ -351,7 +320,7 @@ export class PaperBooks {
       this.#adjustCash(bookId, -custodyAccrualGbp);
       const equityGbp = before.equityGbp - custodyAccrualGbp;
       const cashGbp = this.cash(bookId);
-      const state = budget.markClose(equityGbp, previous?.equityGbp ?? equityGbp);
+      const state = budget.markClose(equityGbp, previous?.equityGbp ?? equityGbp, capital);
       const recordedAt = this.#now();
       this.db
         .prepare(

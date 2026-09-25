@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { type Sleeve, SleeveRegistry } from './sleeve.js';
+import type { Sleeve } from '../../../../contracts/index.js';
+import { SleeveRegistry } from './sleeve.js';
 
 const sleeve = (id: string): Sleeve => ({
   id,

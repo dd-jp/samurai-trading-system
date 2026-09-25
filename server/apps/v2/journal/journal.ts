@@ -5,47 +5,13 @@ import type { Clock } from '../../../shared/index.js';
 import { digest } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
-import type { SleeveDecision } from '../signal/index.js';
-
-export type OrderOutcome = 'submitted' | 'refused_dry_run' | 'simulated' | 'rejected' | 'cancelled';
-export type OrderLeg = 'entry' | 'exit';
-export type OrderSide = 'buy' | 'sell';
-
-export interface JournalledOrder {
-  readonly client_order_id: string;
-  readonly decision_id: string | null;
-  readonly book_id: string;
-  readonly trading_date: string;
-  readonly instrument: string;
-  readonly venue: string;
-  readonly leg: OrderLeg;
-  readonly side: OrderSide;
-  readonly dry_run: boolean;
-  readonly outcome: OrderOutcome;
-  readonly payload: Record<string, unknown>;
-}
-
-export interface JournalledFill {
-  readonly fill_id: string;
-  readonly client_order_id: string;
-  readonly book_id: string;
-  readonly trading_date: string;
-  readonly instrument: string;
-  readonly venue: string;
-  readonly leg: string;
-  readonly side: OrderSide;
-  readonly qty: number;
-  readonly price_gbp: number;
-  readonly fee_gbp: number;
-}
-
-export interface JournalledRefusal {
-  readonly trading_date: string;
-  readonly scope: string;
-  readonly parameter: string;
-  readonly ticket: string;
-  readonly message: string;
-}
+import type {
+  DecisionJournal,
+  JournalledFill,
+  JournalledOrder,
+  JournalledRefusal,
+  SleeveDecision,
+} from '../../../../contracts/index.js';
 
 export function inputsHash(
   bars: readonly DailyBar[],
@@ -65,7 +31,7 @@ export function inputsHash(
   });
 }
 
-export class Journal {
+export class Journal implements DecisionJournal {
   constructor(
     private readonly db: StoreHandle,
     private readonly clock: Clock,
