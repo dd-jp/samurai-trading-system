@@ -241,7 +241,7 @@ listed, not decided.
 
 ```
 You are working on Samurai. Read docs/research/67-v2-plan-and-handoff.md (Step 0, §5a, §6),
-docs/research/66-v2-grill-decisions.md (all of it: Q1–Q19, G1–G18 and "Still open"),
+docs/research/66-v2-grill-decisions.md (all of it: Q1–Q19, G1–G18, D1–D8, S1–S7 and "Still open"),
 docs/research/65-next-steps-plan.md (banner first), docs/research/69-v2-facts.md (last section),
 docs/research/71-debate-audit.md (Verdict), docs/samurai-postmortem.md, docs/samurai-vision-v2.md.
 
