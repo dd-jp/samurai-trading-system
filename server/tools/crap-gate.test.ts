@@ -33,9 +33,9 @@ function range(
   };
 }
 
-// outer: `function outer() {` on line 1 (name at 0-based column 9), body lines 1–20.
-// inner: `const inner = () => {` on line 5, body lines 5–8.
-// method: `method() {` on line 12 at column 2.
+// outer: `function outer() {` on line 1 (name at 0-based column 9), body lines 1–20
+// inner: `const inner = () => {` on line 5, body lines 5–8
+// method: `method() {` on line 12 at column 2
 function fixture(overrides: Partial<FileCoverage> = {}): FileCoverage {
   return {
     path: FILE,

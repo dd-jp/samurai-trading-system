@@ -56,7 +56,7 @@ All of these are on `main`.
 - **Demotion (G7):** a live sleeve returns to paper when live return leaves the backtest's 95% band for 4 consecutive weeks, or drawdown exceeds 1.5× the backtest max.
 - **Host:** MacBook + external dead-man's switch + Saxo token-refresh/wake job; broker-resting stops. Cloud VM if any paper downtime fault.
 - **Stack:** TypeScript only for everything that trades (backtest = live code). No LangGraph/CrewAI/LangSmith. An optional offline Python research sidecar is allowed (G3): it crosses only via parquet/ONNX/strategy-spec files, needs a TS parity test before paper, and is not built until needed.
-- **Tooling:** oxlint, biome, crap, fallow rules intact; "crap" = the CRAP score gate, ticket #1649, to be built (G15); fallow (not knip) for dead code.
+- **Tooling:** oxlint, biome, crap, fallow rules intact; "crap" = the CRAP score gate, ticket #1649 (G15), built 2026-09-25 as `npm run crap`, threshold 15; fallow (not knip) for dead code.
 - **UI (G13):** a v2 dashboard with a rethought layout (the v3 Rail is not carried forward), required before paper starts.
 
 ## 5. Ordered work

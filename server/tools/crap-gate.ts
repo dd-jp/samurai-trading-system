@@ -87,7 +87,7 @@ function comparePoint(aLine: number, aColumn: number, bLine: number, bColumn: nu
   return aLine === bLine ? aColumn - bColumn : aLine - bLine;
 }
 
-// Coverage columns are 0-based while Biome's are 1-based; a null end column means "to end of line".
+// Coverage columns are 0-based while Biome's are 1-based; a null end column means "to end of line"
 function rangeContains(range: Range, line: number, biomeColumn: number): boolean {
   const column = biomeColumn - 1;
   const startColumn = range.start.column ?? 0;
@@ -115,7 +115,7 @@ export type FunctionMatch =
   | { readonly kind: 'none' }
   | { readonly kind: 'ambiguous' };
 
-// V8-converted coverage starts `loc` at the body brace; Biome reports at the name, which is `decl`.
+// V8-converted coverage starts `loc` at the body brace; Biome reports at the name, which is `decl`
 function declToEnd(fn: FunctionEntry): Range {
   return { start: fn.decl?.start ?? fn.loc.start, end: fn.loc.end };
 }
