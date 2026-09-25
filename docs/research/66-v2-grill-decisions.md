@@ -107,6 +107,7 @@ Put to David from `docs/research/70-momentum-backtest.md` §4 (Step 1 ticket [#1
 | (j) | Loss-budget conventions G6 left open | **All three confirmed:** USD→GBP fixed each 1 January; reset reference = equity at 1 January; halt = flat at the next fill. Closes the "Left to the loss-budget spec by G6" item under Still open. |
 | (k) | Keeping Saxo bars locally (R7) | **"Github is private repo so you can commit"** — Saxo bars are committed to the repo, not gitignored; doc 70 §4k proposes `data/bars/saxo/<TIDM>.csv`. <!-- cite-exempt: planned — created in the build phase --> Closes the "whether Saxo `chart/v3` history may be kept locally" item under Still unknown. |
 | (l) | Saxo appropriateness test "Not Taken" for complex ETFs/ETCs/ETNs | **Take the test before paper; keep SGLN, SSLN, PHGP, PHSP.** David's admin; no order in a complex line until it is recorded as taken. |
+| (m) | US sub-book FAIL on all four passes (doc 70 §9.1, 2026-09-24, re-run 2026-09-25): second pre-declared US grid (trials 9–N against MinBTL 18), or momentum sleeve LSE-only? | **LSE-only (ruled 2026-09-25).** No second US grid: the US arm is dropped per ruling (e) and its 8 trials stay counted. The momentum sleeve is the LSE sub-book alone, if it passes the kill line; if the LSE sub-book also fails, the momentum sleeve is dead and v2 is debate-only until David rules otherwise. Sleeve weights (Q14: 70/30) are unchanged by this ruling. |
 
 ## Still open
 

@@ -100,6 +100,8 @@ Was blocked by G9 (PBO bar), G10 (budget path dependence) and research R12–R15
 Then: walk-forward, trial counter from trial #1, DSR/PBO via `server/tools/backtest/overfitting.ts` (G9 ruled the bar **0.10**: this step changes `KILL_LINE.maxPbo` in `server/tools/backtest/stage2-verdict.ts` and the `max_pbo` bound in `server/shared/threshold-bounds.ts`, both 0.05 today), costs Saxo 0.08%/side no minimum; Alpaca spread-only (measure it). Include R4: every configuration run with and without the resting stop, counted as trials. Run the loss-budget rules inside the backtest (G10: size steps, daily cap, G6 yearly reset). Report the max drawdown (capital ceiling input).
 => **Kill:** does not beat risk-matched buy-and-hold of the same universe after the 40% haircut with DSR ≥ 0.95 and PBO ≤ 0.10 (G9). Record every trial.
 
+**Status 2026-09-25:** US sub-book FAIL on all four passes (doc 70 §9.1; PRs #1759–#1762). David ruled LSE-only (doc 66, Session B (m)): no second US grid. LSE sub-book awaits bars for CMFP and IHCU on the route ruled 2026-09-23 — Saxo sibling Uics probe first (needs a `saxo:login`), EODHD one month as fallback (doc 70 §8.4). Step 3 waits on the LSE verdict; if it fails, momentum is dead and v2 is debate-only.
+
 ### Step 2 — D1 debate audit/fix (£0, no LLM)
 
 Offline replay of `debate_log` from `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — gitignored local file --> to find why bullish conviction caps at 0.473 < 0.55 (history: #625 stocks ceiling 0.5478, debate rounds moved conviction by zero, #683 mediator tie-break).
