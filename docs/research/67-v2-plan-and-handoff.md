@@ -157,7 +157,7 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - a sleeve below its minimum gets no books and no call.
 - **PR 2 (the ADV cap):**
   - The risk module computes each entry's 20-bar average daily notional (adjusted close × split-adjusted volume) from `MarketData.barsBefore`.
-  - A coverage invariant applies: 20 bars within 35 calendar days, the last within 5. A window that fails it is refused `no_adv`.
+  - A coverage invariant applies: 20 bars, the first no more than 35 calendar days before the entry and the last no more than 5. A window that fails it is refused `no_adv`, and the refusal is journalled to `v2_refusals`.
   - Size is capped at `advShare` of that notional; the debate sleeve declares 1% (T7).
   - The gate also sizes to zero (`no_allocation`) for a sleeve below its minimum.
   - Seeded property tests over 2,000 cases check four things: whole non-negative shares, never above the ADV cap, never above 10% of equity by notional or the risk fraction at the stop, and zero below the minimum.

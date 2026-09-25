@@ -117,7 +117,7 @@ function size(testCase: Case): number {
       reason: 'r',
       price: testCase.price,
       atr: testCase.atr,
-      stop_price: testCase.price - testCase.atr,
+      stop_price: testCase.price - testCase.spec.sizing.stopAtrMultiple * testCase.atr,
       inputs_hash: 'h',
       debate_id: undefined,
       payload: {},

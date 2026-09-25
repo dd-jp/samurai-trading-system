@@ -68,8 +68,8 @@ Every value below is a counted trial from #1 (ADR §5 item 9). Changing any valu
 | T4 | `DEBATE_TIME_STOP_TRADING_DAYS` | 10 marked sessions | `server/apps/v2/signal/parameters.ts` | doc 66 Q9 |
 | T5 | Judge confidence mapping | 0.5 / 0.75 / 1.0 by agreeing debaters | `JUDGE_CONFIDENCE_BY_AGREEING_DEBATERS` | this spec (journal only) |
 | T6 | Macro gate | half size on G16's five release days | `MACRO_DAY_SIZE_FRACTION` | G16 |
-| T7 | `DEBATE_ADV_SHARE` | 1% of average daily notional | `server/apps/v2/signal/parameters.ts` | D8. This spec's own choice. On the four Step 3d dry-run dates the largest entry is 1.9 × 10⁻⁴ of its cap, so the cap does not bind below ~£10M of equity. |
-| T8 | `DEBATE_ADV_WINDOW_BARS` | 20 bars, window within 35 calendar days, last bar within 5 days | `server/apps/v2/signal/parameters.ts` | matches ATR(20) and the liquidity core's 20-day dollar volume |
+| T7 | `DEBATE_ADV_SHARE` | 1% of average daily notional | `server/apps/v2/signal/parameters.ts` | D8. This spec's own choice. On the four Step 3d dry-run dates the largest entry is 1.9 × 10⁻⁴ of its cap, so the cap does not bind below ~£10M of equity. Notional over today's price, not share volume: after a fall inside the window it allows slightly more shares, bounded by the 20-day drift. |
+| T8 | `DEBATE_ADV_WINDOW_BARS` | 20 bars; the risk module refuses a window whose first bar is over 35 calendar days (⌈20 × 7/5⌉ + 7) or whose last bar is over 5 days before the entry, or with a non-finite volume | `server/apps/v2/signal/parameters.ts` (window), `server/apps/v2/risk/volume-cap.ts` (coverage) | matches ATR(20) and the liquidity core's 20-day dollar volume |
 
 ## 6. Macro gate (G16, doc 69 R17)
 

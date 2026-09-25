@@ -373,8 +373,21 @@ class Cycle {
         decision,
         approval.size,
       );
+      if (approval.order === undefined) this.journalSizingRefusal(book, decision, approval.refusal);
       if (approval.size > 0) await this.submitEntry(book, decision, decisionId, approval);
     }
+  }
+
+  journalSizingRefusal(book: BookSpec, decision: SleeveDecision, refusal?: string): void {
+    const parameter = SIZING_REFUSAL_PARAMETERS[refusal ?? ''];
+    if (parameter === undefined) return;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter,
+      ticket: 'docs/research/66-v2-grill-decisions.md D8',
+      message: `${book.id} ${decision.instrument}: ${refusal}`,
+    });
   }
 
   mark(book: BookSpec): BookReport {
@@ -404,6 +417,11 @@ class Cycle {
     });
   }
 }
+
+const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
+  no_adv: 'ADV_WINDOW_COVERAGE',
+  no_allocation: 'SLEEVE_MINIMUM_CAPITAL',
+};
 
 function recordRefusal(
   deps: CycleDeps,

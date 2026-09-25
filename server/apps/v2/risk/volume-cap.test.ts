@@ -21,7 +21,7 @@ describe('averageDailyNotional', () => {
     expect(averageDailyNotional(window, 3, '2026-09-29')).toBe(2_000 / 3);
     const gapped = [bar('2026-09-05', 10, 100), ...window.slice(1)];
     expect(averageDailyNotional(gapped, 3, '2026-09-25')).toBeUndefined();
-    const edge = [bar('2026-09-14', 10, 100), ...window.slice(1)];
+    const edge = [bar('2026-09-13', 10, 100), ...window.slice(1)];
     expect(averageDailyNotional(edge, 3, '2026-09-25')).toBe(2_000 / 3);
   });
 });

@@ -180,8 +180,10 @@ function harness(
   };
   const market: MarketData = {
     lastBarBefore: barFor,
-    barsBefore: (_instrument, tradingDate, count) =>
-      Array.from({ length: count }, (_, back) => bar(addDays(tradingDate, back - count))),
+    barsBefore: (instrument, tradingDate, count) =>
+      instrument === 'THIN'
+        ? []
+        : Array.from({ length: count }, (_, back) => bar(addDays(tradingDate, back - count))),
     gbpUsdAtYearStart: () => FX,
   };
   const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
@@ -693,6 +695,22 @@ describe('runCycle', () => {
     );
     expect(universe).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('journals an entry refused for uncovered volume and submits nothing for it', async () => {
+    const deps = harness([{ ...longAapl, instrument: 'THIN' }, longAapl], true);
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report).toMatchObject({ decisions: 2, entries: 2, simulated_orders: 1 });
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'THIN')).toBe(0);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db.prepare("SELECT parameter, message FROM v2_refusals WHERE scope = 'entry'").all(),
+    ).toEqual([
+      { parameter: 'ADV_WINDOW_COVERAGE', message: 'debate/primary THIN: no_adv' },
+      { parameter: 'ADV_WINDOW_COVERAGE', message: 'debate/no-macro-gate THIN: no_adv' },
+    ]);
   });
 
   it('a rerun of a marked date skips with a journal line and never touches the sleeve', async () => {

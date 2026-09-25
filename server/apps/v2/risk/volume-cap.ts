@@ -26,7 +26,7 @@ export function averageDailyNotional(
   if (!windowCovered(tail, window, tradingDate)) return undefined;
   let total = 0;
   for (const bar of tail) total += bar.close * bar.volume;
-  return total / window;
+  return Number.isFinite(total) ? total / window : undefined;
 }
 
 export function volumeCapShares(averageNotional: number, advShare: number, price: number): number {
