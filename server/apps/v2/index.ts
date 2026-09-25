@@ -32,9 +32,6 @@ import {
   BULLISH_SCRIPT,
   buildLlmPanel,
   createDebateSleeve,
-  DEBATE_RISK_FRACTION,
-  DEBATE_TARGET_ATR_MULTIPLE,
-  DEBATE_TIME_STOP_TRADING_DAYS,
   type LlmPanel,
   type ModelPin,
   NousPinnedTransport,
@@ -212,7 +209,6 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
   const capital = new CapitalConfigStore(v2Store, clock);
-  const books = new PaperBooks(v2Store, clock, capital, options.tradingDate);
   const journal = new Journal(v2Store, clock);
   const registry = new SleeveRegistry();
   registry.register(
@@ -226,12 +222,12 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       logger,
     }),
   );
+  const books = new PaperBooks(v2Store, clock, capital, options.tradingDate, registry.list());
   const risk = new V2RiskGate({
     books,
     capital,
     market,
-    riskFraction: DEBATE_RISK_FRACTION,
-    targetAtrMultiple: DEBATE_TARGET_ATR_MULTIPLE,
+    sizing: (sleeveId) => registry.spec(sleeveId).sizing,
   });
   const executor = createOrderExecutor({
     dryRun: options.dryRun,
@@ -260,7 +256,6 @@ export function composeV2Root(options: V2RootOptions): V2Root {
           risk,
           executor,
           market,
-          timeStopTradingDays: DEBATE_TIME_STOP_TRADING_DAYS,
           clock,
           dryRun: options.dryRun,
           logger,

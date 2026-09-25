@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { JournalledOrder, SleeveDecision } from '../../../../contracts/index.js';
+import type { JournalledOrder, Sleeve, SleeveDecision } from '../../../../contracts/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { CapitalConfigStore, PaperBooks } from '../risk/index.js';
@@ -21,6 +21,21 @@ const decision: SleeveDecision = {
   payload: { rounds: 1 },
 };
 
+const DEBATE: Pick<Sleeve, 'id' | 'spec'> = {
+  id: 'debate',
+  spec: {
+    minimumCapitalGbp: 0,
+    capacityGbp: Number.POSITIVE_INFINITY,
+    sizing: {
+      riskFraction: 0.005,
+      stopAtrMultiple: 2,
+      targetAtrMultiple: 3,
+      timeStopTradingDays: 10,
+    },
+    books: [{ variant: 'primary', instantiated: true }],
+  },
+};
+
 describe('Journal', () => {
   const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
 
@@ -28,7 +43,7 @@ describe('Journal', () => {
     const db = openSharedStore(':memory:');
     const capital = new CapitalConfigStore(db, clock);
     capital.setYear(2026, 1_000, 1_500);
-    new PaperBooks(db, clock, capital, '2026-09-25');
+    new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
     const journal = new Journal(db, clock);
     const decisionId = journal.recordDecision('debate/primary', '2026-09-25', decision, 3);
     const order: JournalledOrder = {
@@ -84,7 +99,7 @@ describe('Journal', () => {
     const db = openSharedStore(':memory:');
     const capital = new CapitalConfigStore(db, clock);
     capital.setYear(2026, 1_000, 1_500);
-    new PaperBooks(db, clock, capital, '2026-09-25');
+    new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
     const journal = new Journal(db, clock);
     const base: JournalledOrder = {
       client_order_id: 'old',

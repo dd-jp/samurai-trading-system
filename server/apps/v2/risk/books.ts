@@ -7,23 +7,16 @@ import type {
   LossBudgetState,
   MarkPriceGbp,
   Position,
+  Sleeve,
   Valuation,
 } from '../../../../contracts/index.js';
 import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import type { Clock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
+import { bookSpecsFor, sleeveAllocationGbp } from './allocation.js';
 import type { CapitalConfigStore } from './capital-config.js';
 import { LossBudget } from './loss-budget.js';
-
-export const BOOK_SPECS: readonly BookSpec[] = [
-  { id: 'debate/primary', sleeve: 'debate', variant: 'primary', instantiated: true },
-  { id: 'debate/no-macro-gate', sleeve: 'debate', variant: 'no-macro-gate', instantiated: true },
-  { id: 'debate/no-sentiment', sleeve: 'debate', variant: 'no-sentiment', instantiated: false },
-  { id: 'debate/no-social', sleeve: 'debate', variant: 'no-social', instantiated: false },
-  { id: 'debate/large-cap-only', sleeve: 'debate', variant: 'large-cap-only', instantiated: false },
-  { id: 'momentum/no-veto', sleeve: 'momentum', variant: 'no-veto', instantiated: false },
-];
 
 const FLAT_EPSILON = 1e-9;
 
@@ -92,26 +85,39 @@ export class PaperBooks implements BookLedger {
     private readonly clock: Clock,
     private readonly capital: Pick<CapitalConfigStore, 'inForce' | 'lastKnown'>,
     openingDate: string,
-    specs: readonly BookSpec[] = BOOK_SPECS,
+    sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[],
   ) {
-    const seedCapitalGbp = capital.inForce(openingDate)?.startCapitalGbp;
-    const insert = db.prepare(
+    const capitalYear = capital.inForce(openingDate);
+    const opened: BookSpec[] = [];
+    for (const sleeve of sleeves) {
+      const specs = bookSpecsFor([sleeve]).filter((candidate) => candidate.instantiated);
+      this.#seed(
+        specs,
+        capitalYear === undefined ? 0 : sleeveAllocationGbp(sleeve.spec, capitalYear),
+      );
+      opened.push(...specs.filter((spec) => this.#open(spec.id)));
+    }
+    this.#specs = opened;
+  }
+
+  #seed(specs: readonly BookSpec[], seedCapitalGbp: number): void {
+    if (seedCapitalGbp <= 0) return;
+    const insert = this.db.prepare(
       `INSERT OR IGNORE INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
-    const opened: BookSpec[] = [];
-    for (const spec of specs.filter((candidate) => candidate.instantiated)) {
-      if (seedCapitalGbp !== undefined) {
-        insert.run(spec.id, spec.sleeve, spec.variant, seedCapitalGbp, seedCapitalGbp, this.#now());
-      }
-      const bookStartCapitalGbp = this.#startCapital(spec.id);
-      if (bookStartCapitalGbp === undefined) continue;
-      const budget = new LossBudget(bookStartCapitalGbp);
-      this.#budgets.set(spec.id, budget);
-      this.#replay(spec.id, budget);
-      opened.push(spec);
+    for (const spec of specs) {
+      insert.run(spec.id, spec.sleeve, spec.variant, seedCapitalGbp, seedCapitalGbp, this.#now());
     }
-    this.#specs = opened;
+  }
+
+  #open(bookId: string): boolean {
+    const startCapitalGbp = this.#startCapital(bookId);
+    if (startCapitalGbp === undefined) return false;
+    const budget = new LossBudget(startCapitalGbp);
+    this.#budgets.set(bookId, budget);
+    this.#replay(bookId, budget);
+    return true;
   }
 
   #startCapital(bookId: string): number | undefined {

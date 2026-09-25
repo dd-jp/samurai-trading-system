@@ -71,8 +71,12 @@ function gate(
     books: { lastDay },
     capital: { inForce: () => capital },
     market,
-    riskFraction: 0.005,
-    targetAtrMultiple: 3,
+    sizing: () => ({
+      riskFraction: 0.005,
+      stopAtrMultiple: 2,
+      targetAtrMultiple: 3,
+      timeStopTradingDays: 10,
+    }),
   });
 }
 
@@ -202,6 +206,37 @@ describe('V2RiskGate', () => {
     expect(
       gate().approveEntry(request({ decision: { ...decision, stop_price: undefined } })),
     ).toEqual({ size: 6, order: undefined, refusal: 'no_stop_price' });
+  });
+
+  it('refuses an allocation only to a sleeve whose minimum exceeds the year start capital', () => {
+    const spec = {
+      minimumCapitalGbp: 2_000,
+      capacityGbp: 500,
+      sizing: {
+        riskFraction: 0.005,
+        stopAtrMultiple: 2,
+        targetAtrMultiple: 3,
+        timeStopTradingDays: 10,
+      },
+      books: [],
+    };
+    expect(gate().allocationRefusal({ id: 'debate', spec }, '2026-09-25')).toBeUndefined();
+    expect(
+      gate().allocationRefusal(
+        { id: 'trend', spec: { ...spec, minimumCapitalGbp: 2_001 } },
+        '2026-09-25',
+      ),
+    ).toBe(
+      "sleeve trend gets £0 of 2026's £2000 (minimum £2001, capacity £500): no allocation (doc 66 D8)",
+    );
+    expect(
+      gate().allocationRefusal({ id: 'full', spec: { ...spec, capacityGbp: 0 } }, '2026-09-25'),
+    ).toBe(
+      "sleeve full gets £0 of 2026's £2000 (minimum £2000, capacity £0): no allocation (doc 66 D8)",
+    );
+    expect(
+      gate({ capital: undefined }).allocationRefusal({ id: 'trend', spec }, '2027-01-04'),
+    ).toBeUndefined();
   });
 
   it('refuses every entry without a capital config in force but still approves exits', () => {

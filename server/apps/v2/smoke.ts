@@ -4,9 +4,10 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { macroGate } from './data/index.js';
 import { composeV2Root } from './index.js';
-import { BOOK_SPECS, CapitalConfigStore, positionSizeShares } from './risk/index.js';
+import { bookSpecsFor, CapitalConfigStore, positionSizeShares } from './risk/index.js';
 import {
   ALL_PINS,
+  DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
   SHORTS_ENABLED,
@@ -53,9 +54,10 @@ function probe(name: string, passed: boolean, detail: string): SmokeProbe {
 function staticProbes(): SmokeProbe[] {
   const size = {
     equityGbp: SMOKE_START_CAPITAL_GBP,
-    riskFraction: 0.005,
+    riskFraction: DEBATE_SLEEVE_SPEC.sizing.riskFraction,
     priceGbp: 10,
     atrGbp: 0.25,
+    stopAtrMultiple: DEBATE_SLEEVE_SPEC.sizing.stopAtrMultiple,
     sizeMultiplier: 1,
   };
   const fullSize = positionSizeShares({ ...size, macroDay: false });
@@ -68,6 +70,7 @@ function staticProbes(): SmokeProbe[] {
   ).run();
   const cap = new SqliteMonthlySpendCap(db, clock).check();
   db.close();
+  const declaredBooks = bookSpecsFor([{ id: 'debate', spec: DEBATE_SLEEVE_SPEC }]);
   return [
     probe(
       'model pins are dated or bare product ids and never a Fable model',
@@ -97,14 +100,11 @@ function staticProbes(): SmokeProbe[] {
       DECLARED_PARAMETERS.map((parameter) => parameter.name).join(', '),
     ),
     probe(
-      'G18 shadows and momentum/no-veto are declared but not instantiated',
-      [
-        'debate/no-sentiment',
-        'debate/no-social',
-        'debate/large-cap-only',
-        'momentum/no-veto',
-      ].every((id) => BOOK_SPECS.some((spec) => spec.id === id && !spec.instantiated)),
-      BOOK_SPECS.map((spec) => `${spec.id}${spec.instantiated ? '' : ' (declared)'}`).join(', '),
+      'G18 shadows are declared but not instantiated',
+      ['debate/no-sentiment', 'debate/no-social', 'debate/large-cap-only'].every((id) =>
+        declaredBooks.some((spec) => spec.id === id && !spec.instantiated),
+      ),
+      declaredBooks.map((spec) => `${spec.id}${spec.instantiated ? '' : ' (declared)'}`).join(', '),
     ),
   ];
 }

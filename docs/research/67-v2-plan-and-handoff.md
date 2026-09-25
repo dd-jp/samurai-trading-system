@@ -144,6 +144,28 @@ Bars move from `data/bars/alpaca` <!-- cite-exempt: untracked — gitignored loc
 Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a capacity (D8). One harness takes any sleeve through backtest (walk-forward, global trial counter, DSR/PBO via `server/tools/backtest/overfitting.ts`, loss-budget rules inside), paper and live on the same code; only the venue and clock adapters differ. Sizing is risk-per-trade as a fraction of equity, capped by a pre-declared share of average daily volume, in the risk module (D8). The cost model gains a size-dependent market-impact term. The veto-plus-no-veto-shadow book pair (G5, S7) and the other shadow books become harness features any sleeve can declare, not debate-only code. The execution module gets an order-slicing seam that sends one child order. Port the debate sleeve onto the harness.
 => the debate sleeve runs a dry-run cycle through the harness with identical decisions to Session D's cycle; property tests on sizing (never above the ADV cap, never above equity fraction, zero below a sleeve's minimum capital); a sleeve whose minimum exceeds capital receives no allocation.
 
+**Status 2026-09-25 (Step 3d PR 1 of 3, the contract):**
+- Built:
+  - `Sleeve` now declares `spec` (minimum capital, capacity, sizing, books), `universe` and `decide`.
+  - Books come from each sleeve's declared variants via `bookSpecsFor`, seeded at `sleeveAllocationGbp`.
+  - The risk gate sizes from the sleeve's declared sizing and refuses allocation below a sleeve's minimum (the cycle then never asks that sleeve for a universe).
+  - `SleeveDecision.veto`: every book except `no-veto` skips a vetoed entry.
+  - The executor sends each approved order through `childOrders` (one child).
+- Kill-line checks so far:
+  - dry-run cycles on four dates match the base commit row for row (160 decisions, 60 orders);
+  - the smoke differs only in the renamed G18 probe;
+  - a sleeve below its minimum gets no books and no call.
+- Still to come:
+  - PR 2: the ADV cap and the sizing property tests.
+  - PR 3: the backtest driver on the same cycle (trial counter, walk-forward, DSR/PBO, loss budget) and the impact term.
+  - [#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791) goes with PR 3.
+- Known limits, owned by later steps:
+  - `sleeveAllocationGbp` seeds every sleeve at the whole start capital. That is right while debate is the only sleeve. Step 1b must add the S1 split (debate 30%, passers share the 70%) before a second sleeve registers, or the books would count the loss budget twice.
+  - No sleeve sets `veto` yet. The G5 cap (a veto on at most 10% of entries) is still to be measured and enforced. It lands with the first sleeve that vetoes (Step 1b).
+  - `childOrders` sends one child today. Before it sends more than one:
+    - journal each child's client order id, or `ingest` logs the child fills as unmatched;
+    - report a mid-sequence throw as a partial submission, not `failed`.
+
 #### Step 3e — Backup and monitoring (D1, D5; #1784)
 
 Litestream streams the SQLite store to S3-compatible object storage, encrypted (the session proposes the provider; cheapest that works; David confirms). A healthchecks.io check is pinged at the end of each daily cycle and alerts David when a ping is missed. Telegram alerts carry a severity. Metrics panels (loss-budget state, gate statistics, LLM spend, reconcile diffs) join Step 3c's dashboard, not a separate tool.

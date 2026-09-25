@@ -29,7 +29,6 @@ export interface CycleDeps {
   readonly risk: RiskGate;
   readonly executor: OrderExecutor;
   readonly market: MarketData;
-  readonly timeStopTradingDays: number;
   readonly clock: Clock;
   readonly dryRun: boolean;
   readonly logger?: Logger | undefined;
@@ -91,6 +90,12 @@ function opposite(side: OrderSide): OrderSide {
 
 function routeOf(book: BookSpec, venue: Venue) {
   return { bookVariant: book.variant, venue };
+}
+
+export function vetoApplied(book: BookSpec, decision: SleeveDecision): SleeveDecision {
+  if (decision.veto === undefined || book.variant === 'no-veto') return decision;
+  if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return decision;
+  return { ...decision, action: 'skip', reason: `vetoed: ${decision.veto}` };
 }
 
 interface Tally {
@@ -242,9 +247,8 @@ class Cycle {
   }
 
   async timeStop(book: BookSpec, held: Position): Promise<void> {
-    if (held.marksHeld < this.deps.timeStopTradingDays || held.exitClientOrderId !== undefined) {
-      return;
-    }
+    const { timeStopTradingDays } = this.deps.registry.spec(book.sleeve).sizing;
+    if (held.marksHeld < timeStopTradingDays || held.exitClientOrderId !== undefined) return;
     const clientOrderId = this.exitOrderId(book, held.instrument);
     if (
       !this.deps.executor.canRoute(routeOf(book, held.venue)) ||
@@ -353,7 +357,8 @@ class Cycle {
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
     const { equityGbp } = this.deps.books.valuation(book.id, (i, v) => this.markGbp(i, v));
-    for (const decision of decisions) {
+    for (const proposed of decisions) {
+      const decision = vetoApplied(book, proposed);
       const approval = this.deps.risk.approveEntry({
         book,
         decision,
@@ -472,16 +477,34 @@ function skippedReport(deps: CycleDeps, tradingDate: string, macro: MacroGateVer
 
 const NO_SLEEVE_OUTPUT = { decisions: [], refusals: [] } as const;
 
-function decideUnlessRefused(
+async function decideUnlessRefused(
   deps: CycleDeps,
   sleeve: Sleeve,
   tradingDate: string,
   macro: MacroGateVerdict,
 ): Promise<SleeveOutput> {
-  if (!deps.dryRun && deps.risk.capitalRefusal(tradingDate) !== undefined) {
-    return Promise.resolve(NO_SLEEVE_OUTPUT);
+  if (!deps.dryRun && deps.risk.capitalRefusal(tradingDate) !== undefined) return NO_SLEEVE_OUTPUT;
+  const allocation = deps.risk.allocationRefusal(sleeve, tradingDate);
+  if (allocation !== undefined) {
+    return {
+      decisions: [],
+      refusals: [
+        {
+          scope: 'allocation',
+          parameter: 'SLEEVE_MINIMUM_CAPITAL',
+          ticket: 'docs/research/66-v2-grill-decisions.md D8',
+          message: allocation,
+        },
+      ],
+    };
   }
-  return sleeve.decide({ tradingDate, macroDay: macro.macroDay, dryRun: deps.dryRun });
+  const context = { tradingDate, macroDay: macro.macroDay, dryRun: deps.dryRun };
+  const universe = sleeve.universe(context);
+  const output = await sleeve.decide(context, universe.instruments);
+  return {
+    decisions: output.decisions,
+    refusals: [...universe.refusals, ...output.refusals],
+  };
 }
 
 export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<CycleReport> {

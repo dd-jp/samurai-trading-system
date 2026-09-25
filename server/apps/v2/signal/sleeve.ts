@@ -1,4 +1,4 @@
-import type { Sleeve, SleeveSource } from '../../../../contracts/index.js';
+import type { Sleeve, SleeveSource, SleeveSpec } from '../../../../contracts/index.js';
 
 export class SleeveRegistry implements SleeveSource {
   readonly #sleeves = new Map<string, Sleeve>();
@@ -16,5 +16,11 @@ export class SleeveRegistry implements SleeveSource {
 
   ids(): readonly string[] {
     return [...this.#sleeves.keys()];
+  }
+
+  spec(id: string): SleeveSpec {
+    const sleeve = this.#sleeves.get(id);
+    if (sleeve === undefined) throw new Error(`SleeveRegistry: no sleeve '${id}'`);
+    return sleeve.spec;
   }
 }

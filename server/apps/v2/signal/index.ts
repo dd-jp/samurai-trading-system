@@ -6,9 +6,7 @@ export { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';
 export {
   CYCLE_LEVEL_PARAMETERS,
-  DEBATE_RISK_FRACTION,
-  DEBATE_TARGET_ATR_MULTIPLE,
-  DEBATE_TIME_STOP_TRADING_DAYS,
+  DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
   SHORTS_ENABLED,

@@ -6,6 +6,7 @@ import type {
   SleeveContext,
   SleeveDecision,
   SleeveOutput,
+  SleeveUniverse,
   Venue,
 } from '../../../../contracts/index.js';
 import type {
@@ -29,11 +30,9 @@ import { describeThrownSafely } from '../../../shared/index.js';
 import type { BarsSource, NewsSource } from '../data/index.js';
 import { barsBefore } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
-import { STOP_ATR_MULTIPLE } from '../risk/index.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
-import { SHORTS_ENABLED } from './parameters.js';
-import type { UniverseSelection } from './universe.js';
+import { DEBATE_SLEEVE_SPEC, DEBATE_STOP_ATR_MULTIPLE, SHORTS_ENABLED } from './parameters.js';
 import { selectUniverse } from './universe.js';
 
 const DEBATE_SLEEVE_ID = 'debate';
@@ -217,8 +216,8 @@ function actionFor(direction: Direction): Pick<SleeveDecision, 'action' | 'reaso
 
 function stopFor(action: SleeveAction, read: TechnicalRead): number | undefined {
   if (read.atr === undefined) return undefined;
-  if (action === 'enter_long') return read.price - STOP_ATR_MULTIPLE * read.atr;
-  if (action === 'enter_short') return read.price + STOP_ATR_MULTIPLE * read.atr;
+  if (action === 'enter_long') return read.price - DEBATE_STOP_ATR_MULTIPLE * read.atr;
+  if (action === 'enter_short') return read.price + DEBATE_STOP_ATR_MULTIPLE * read.atr;
   return undefined;
 }
 
@@ -371,18 +370,15 @@ async function decideOne(
 export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
   return {
     id: DEBATE_SLEEVE_ID,
-    async decide(context): Promise<SleeveOutput> {
-      const selection: UniverseSelection = selectUniverse(
+    spec: DEBATE_SLEEVE_SPEC,
+    universe(context): SleeveUniverse {
+      const selection = selectUniverse(
         deps.constituents(context.tradingDate),
         deps.bars,
         context.tradingDate,
       );
-      const decisions: SleeveDecision[] = [];
-      for (const symbol of [...selection.liquidity, ...selection.movers]) {
-        decisions.push(await decideOne(deps, symbol, context));
-      }
       return {
-        decisions,
+        instruments: [...selection.liquidity, ...selection.movers],
         refusals: selection.refusals.map((refusal) => ({
           scope: 'universe',
           parameter: refusal.parameter,
@@ -390,6 +386,11 @@ export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
           message: refusal.message,
         })),
       };
+    },
+    async decide(context, instruments): Promise<SleeveOutput> {
+      const decisions: SleeveDecision[] = [];
+      for (const symbol of instruments) decisions.push(await decideOne(deps, symbol, context));
+      return { decisions, refusals: [] };
     },
   };
 }

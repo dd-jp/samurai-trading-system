@@ -36,6 +36,7 @@ export interface SleeveDecision {
   readonly stop_price: number | undefined;
   readonly inputs_hash: string;
   readonly debate_id: string | undefined;
+  readonly veto?: string | undefined;
   readonly payload: Record<string, unknown>;
 }
 
@@ -57,14 +58,41 @@ export interface SleeveOutput {
   readonly refusals: readonly SleeveRefusal[];
 }
 
+export interface SleeveUniverse {
+  readonly instruments: readonly string[];
+  readonly refusals: readonly SleeveRefusal[];
+}
+
+export interface SleeveSizing {
+  readonly riskFraction: number;
+  readonly stopAtrMultiple: number;
+  readonly targetAtrMultiple: number;
+  readonly timeStopTradingDays: number;
+}
+
+export interface SleeveBook {
+  readonly variant: BookVariant;
+  readonly instantiated: boolean;
+}
+
+export interface SleeveSpec {
+  readonly minimumCapitalGbp: number;
+  readonly capacityGbp: number;
+  readonly sizing: SleeveSizing;
+  readonly books: readonly SleeveBook[];
+}
+
 export interface Sleeve {
   readonly id: string;
-  decide(context: SleeveContext): Promise<SleeveOutput>;
+  readonly spec: SleeveSpec;
+  universe(context: SleeveContext): SleeveUniverse;
+  decide(context: SleeveContext, instruments: readonly string[]): Promise<SleeveOutput>;
 }
 
 export interface SleeveSource {
   list(): readonly Sleeve[];
   ids(): readonly string[];
+  spec(id: string): SleeveSpec;
 }
 
 export interface CapitalYear {
@@ -214,6 +242,7 @@ export interface RiskGate {
   approveEntry(request: EntryRequest): EntryApproval;
   approveExit(request: ExitRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;
+  allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined;
 }
 
 export interface ExecutionRoute {

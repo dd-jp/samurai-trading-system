@@ -1,14 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import type { BookFill } from '../../../../contracts/index.js';
+import type { BookFill, Sleeve, SleeveSpec } from '../../../../contracts/index.js';
 import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
-import { BOOK_SPECS, PaperBooks } from './books.js';
+import { bookSpecsFor } from './allocation.js';
+import { PaperBooks } from './books.js';
 import { CapitalConfigStore } from './capital-config.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
 const flat = () => undefined;
+
+const DEBATE_SPEC: SleeveSpec = {
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  sizing: {
+    riskFraction: 0.005,
+    stopAtrMultiple: 2,
+    targetAtrMultiple: 3,
+    timeStopTradingDays: 10,
+  },
+  books: [
+    { variant: 'primary', instantiated: true },
+    { variant: 'no-macro-gate', instantiated: true },
+    { variant: 'no-sentiment', instantiated: false },
+    { variant: 'no-social', instantiated: false },
+    { variant: 'large-cap-only', instantiated: false },
+  ],
+};
+const DEBATE: readonly Pick<Sleeve, 'id' | 'spec'>[] = [{ id: 'debate', spec: DEBATE_SPEC }];
 
 function seededStore(): StoreHandle {
   const db = openSharedStore(':memory:');
@@ -17,8 +37,12 @@ function seededStore(): StoreHandle {
   return db;
 }
 
-function openBooks(db: StoreHandle, openingDate = '2026-09-25'): PaperBooks {
-  return new PaperBooks(db, clock, new CapitalConfigStore(db, clock), openingDate);
+function openBooks(
+  db: StoreHandle,
+  openingDate = '2026-09-25',
+  sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[] = DEBATE,
+): PaperBooks {
+  return new PaperBooks(db, clock, new CapitalConfigStore(db, clock), openingDate, sleeves);
 }
 
 function fill(overrides: Partial<BookFill> = {}): BookFill {
@@ -38,15 +62,25 @@ function fill(overrides: Partial<BookFill> = {}): BookFill {
 }
 
 describe('PaperBooks', () => {
-  it('instantiates the primary and the no-macro-gate shadow only; the G18 shadows and momentum are declared', () => {
-    expect(BOOK_SPECS.map((spec) => [spec.id, spec.instantiated])).toEqual([
+  it('derives book ids from the sleeve and its declared variants, in declaration order', () => {
+    expect(bookSpecsFor(DEBATE).map((spec) => [spec.id, spec.instantiated])).toEqual([
       ['debate/primary', true],
       ['debate/no-macro-gate', true],
       ['debate/no-sentiment', false],
       ['debate/no-social', false],
       ['debate/large-cap-only', false],
-      ['momentum/no-veto', false],
     ]);
+  });
+
+  it('opens no book for a sleeve whose minimum exceeds the start capital and caps a seed at capacity', () => {
+    const db = seededStore();
+    const books = openBooks(db, '2026-09-25', [
+      { id: 'futures', spec: { ...DEBATE_SPEC, minimumCapitalGbp: 1_001 } },
+      { id: 'small', spec: { ...DEBATE_SPEC, capacityGbp: 400 } },
+    ]);
+    expect(books.forSleeve('futures')).toEqual([]);
+    expect(books.ids()).toEqual(['small/primary', 'small/no-macro-gate']);
+    expect(books.cash('small/primary')).toBe(400);
   });
 
   it('creates one v2_books row per instantiated book at start cash and is idempotent', () => {
@@ -303,6 +337,19 @@ describe('PaperBooks', () => {
       referenceEquityGbp: 2_000,
       sizeMultiplier: 1,
     });
+  });
+
+  it('reopens existing books with no capital in force or a sleeve now below its minimum', () => {
+    const db = seededStore();
+    openBooks(db).applyFill('debate/primary', fill());
+    const noCapital = openBooks(db, '2030-01-02');
+    expect(noCapital.ids()).toEqual(['debate/primary', 'debate/no-macro-gate']);
+    expect(noCapital.position('debate/primary', 'AAPL')?.qty).toBe(2);
+    const belowMinimum = openBooks(db, '2026-09-28', [
+      { id: 'debate', spec: { ...DEBATE_SPEC, minimumCapitalGbp: 5_000 } },
+    ]);
+    expect(belowMinimum.cash('debate/primary')).toBe(800);
+    db.close();
   });
 
   it('refuses to mark a day no capital config covers', () => {

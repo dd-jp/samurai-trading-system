@@ -1,3 +1,5 @@
+import type { SleeveSpec } from '../../../../contracts/index.js';
+
 export const UNSET: unique symbol = Symbol('unset');
 
 export interface Parameter<T> {
@@ -57,8 +59,27 @@ export const ARM2_ENTRY_THRESHOLDS = unset<Arm2EntryThresholds>(
 export const SHORTS_ENABLED = false;
 
 export const DEBATE_RISK_FRACTION = 0.005;
+export const DEBATE_STOP_ATR_MULTIPLE = 2;
 export const DEBATE_TARGET_ATR_MULTIPLE = 3;
 export const DEBATE_TIME_STOP_TRADING_DAYS = 10;
+
+export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  sizing: {
+    riskFraction: DEBATE_RISK_FRACTION,
+    stopAtrMultiple: DEBATE_STOP_ATR_MULTIPLE,
+    targetAtrMultiple: DEBATE_TARGET_ATR_MULTIPLE,
+    timeStopTradingDays: DEBATE_TIME_STOP_TRADING_DAYS,
+  },
+  books: [
+    { variant: 'primary', instantiated: true },
+    { variant: 'no-macro-gate', instantiated: true },
+    { variant: 'no-sentiment', instantiated: false },
+    { variant: 'no-social', instantiated: false },
+    { variant: 'large-cap-only', instantiated: false },
+  ],
+};
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
 
 export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
