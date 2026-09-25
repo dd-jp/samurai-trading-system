@@ -876,6 +876,29 @@ describe('runCycle', () => {
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ event: 'v2_fill_sweep_failed' }));
   });
 
+  it('journals a missing or stale calendar reference as a data refusal (#1791)', async () => {
+    const deps = harness([], true);
+    const market: MarketData = {
+      ...deps.market,
+      lastBarBefore: (instrument, tradingDate) =>
+        instrument === 'SPY'
+          ? bar('2026-09-19')
+          : deps.market.lastBarBefore(instrument, tradingDate),
+    };
+    const fresh = await runCycle({ ...deps, market }, '2026-09-24');
+    expect(fresh.refusals.some((refusal) => refusal.startsWith('SPY'))).toBe(false);
+    const stale = await runCycle({ ...deps, market }, '2026-09-25');
+    expect(stale.refusals).toContain(
+      'SPY has no bar in the 5 days before 2026-09-25: every windowed read fails closed (postmortem §2)',
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db.prepare("SELECT parameter, ticket FROM v2_refusals WHERE scope = 'data'").all(),
+    ).toEqual([{ parameter: 'CALENDAR_REFERENCE', ticket: '#1791' }]);
+  });
+
   it('blocks entries after a daily-cap breach and sizes by the previous mark multiplier', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-25');

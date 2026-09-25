@@ -3,6 +3,7 @@ export {
   barsBefore,
   CALENDAR_REFERENCE,
   currentConstituents,
+  isFresh,
   ParquetBarsSource,
   sessionsBefore,
   windowCovered,

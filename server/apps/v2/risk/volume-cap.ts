@@ -4,7 +4,7 @@ import { addDays } from '../data/index.js';
 const MAX_LAST_BAR_AGE_CALENDAR_DAYS = 5;
 const HOLIDAY_ALLOWANCE_CALENDAR_DAYS = 7;
 
-function windowCovered(bars: readonly V2Bar[], window: number, tradingDate: string): boolean {
+function spanCovered(bars: readonly V2Bar[], window: number, tradingDate: string): boolean {
   const first = bars[0];
   const last = bars.at(-1);
   if (bars.length < window || first === undefined || last === undefined) return false;
@@ -23,7 +23,7 @@ export function averageDailyNotional(
   tradingDate: string,
 ): number | undefined {
   const tail = bars.slice(-window);
-  if (!windowCovered(tail, window, tradingDate)) return undefined;
+  if (!spanCovered(tail, window, tradingDate)) return undefined;
   let total = 0;
   for (const bar of tail) total += bar.close * bar.volume;
   return Number.isFinite(total) ? total / window : undefined;

@@ -19,7 +19,13 @@ import type {
 } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
-import { type MacroGateVerdict, macroGate, quotePerGbp } from './data/index.js';
+import {
+  CALENDAR_REFERENCE,
+  isFresh,
+  type MacroGateVerdict,
+  macroGate,
+  quotePerGbp,
+} from './data/index.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 
 export interface CycleDeps {
@@ -452,6 +458,14 @@ function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVer
       parameter: 'CAPITAL_CONFIG',
       ticket: 'docs/research/66-v2-grill-decisions.md D8',
       message: capital,
+    });
+  }
+  if (!isFresh(deps.market.lastBarBefore(CALENDAR_REFERENCE, tradingDate), tradingDate)) {
+    recordRefusal(deps, tradingDate, refusals, {
+      scope: 'data',
+      parameter: 'CALENDAR_REFERENCE',
+      ticket: '#1791',
+      message: `${CALENDAR_REFERENCE} has no bar in the 5 days before ${tradingDate}: every windowed read fails closed (postmortem §2)`,
     });
   }
   if (!macro.covered) {

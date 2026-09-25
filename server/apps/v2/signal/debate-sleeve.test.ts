@@ -305,12 +305,12 @@ describe('createDebateSleeve', () => {
 
   it('skips a name whose 200-session window is not covered before any LLM call (#1791)', async () => {
     const series = trending('UP', 260, 0.001);
-    const calendar = { symbol: 'SPY', bars: series.bars };
+    const full = { symbol: 'FULL', bars: series.bars };
     const gapped = { symbol: 'UP', bars: series.bars.filter((_, index) => index % 15 !== 0) };
     const transports: ScriptedTransport[] = [];
     const sleeve = createDebateSleeve({
       panel: panelWith(BULLISH_SCRIPT, transports),
-      bars: source([calendar, gapped]),
+      bars: source([full, gapped]),
       constituents: () => ['UP'],
       venueFor: () => 'alpaca',
       news: NO_NEWS,

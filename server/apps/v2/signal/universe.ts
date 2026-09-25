@@ -1,8 +1,8 @@
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import {
-  addDays,
   type BarsSource,
   barsBefore,
+  isFresh,
   sessionsBefore,
   windowCovered,
 } from '../data/index.js';
@@ -16,12 +16,6 @@ import {
 const LIQUIDITY_CORE_COUNT = 10;
 const MOVERS_COUNT = 10;
 const DOLLAR_VOLUME_WINDOW_DAYS = 20;
-
-const MAX_BAR_AGE_CALENDAR_DAYS = 5;
-
-function isFresh(last: DailyBar | undefined, tradingDate: string): last is DailyBar {
-  return last !== undefined && addDays(last.date, MAX_BAR_AGE_CALENDAR_DAYS) >= tradingDate;
-}
 
 export function averageDollarVolume(bars: readonly DailyBar[], window: number): number | undefined {
   if (bars.length < window) return undefined;

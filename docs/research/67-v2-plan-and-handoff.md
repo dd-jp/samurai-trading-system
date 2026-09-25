@@ -163,12 +163,13 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - Seeded property tests over 2,000 cases check four things: whole non-negative shares, never above the ADV cap, never above 10% of equity by notional or the risk fraction at the stop, and zero below the minimum.
   - The four dry-run dates are unchanged row for row. The largest entry is 1.9 × 10⁻⁴ of its cap.
 - **PR 3a (window coverage, [#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791)):**
-  - The session calendar is SPY's bars before the entry date (`sessionsBefore`); without SPY every window fails closed.
-  - `windowCovered` runs `windowCoverage` over that calendar: at least 95% of the window's sessions carry a bar, and the last session does.
+  - The session calendar is SPY's bars before the entry date (`sessionsBefore`). A missing SPY, or one with no bar in the last 5 days, fails every window closed, and the cycle journals it as a `data` refusal (`CALENDAR_REFERENCE`).
+  - `windowCovered` runs `windowCoverage` over that calendar: the name has at least a window's worth of bars, at least 95% of the window's sessions carry a bar, and the last session does. Bars on dates SPY lacks are ignored.
   - Checked windows: the liquidity core's 20 sessions, a mover's prior 2 sessions, and the debate's 200-session SMA window, which is refused `window_coverage` before any LLM call.
   - The freshness check stays alongside.
   - Four dry-run dates: one change in 160 decisions. GEV on 2024-11-06 (152 bars since its 2024-04-02 listing) was debated on a partial SMA; it is now skipped `window_coverage` in both books that saw it. The 60 orders are unchanged.
-  - The debate's `atr_unavailable` branch is gone: a covered 200-session window always yields ATR(20).
+  - The debate's `atr_unavailable` branch is gone: a covered 200-session window always yields ATR(20) and the 200-day SMA.
+  - Known limit: the calendar is US-only. Before Saxo LSE names join the universe, the calendar must be per venue, or UK holidays count as gaps and LSE bars on US holidays are ignored.
 - Still to come:
   - PR 3b: fees and a size-dependent impact term on the simulated venue.
   - PR 3c: the backtest driver on the same cycle (trial counter, walk-forward, DSR/PBO, loss budget).
