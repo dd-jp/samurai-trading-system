@@ -13,7 +13,7 @@ import type { CapitalConfigStore } from './capital-config.js';
 import { positionSizeShares } from './position-size.js';
 
 export interface RiskGateDeps {
-  readonly books: BookLedger;
+  readonly books: Pick<BookLedger, 'lastDay'>;
   readonly capital: Pick<CapitalConfigStore, 'inForce'>;
   readonly market: MarketData;
   readonly riskFraction: number;

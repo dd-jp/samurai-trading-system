@@ -1,0 +1,199 @@
+import { describe, expect, it } from 'vitest';
+import type {
+  BookDay,
+  BookSpec,
+  CapitalYear,
+  EntryRequest,
+  LossBudgetState,
+  MarketData,
+  Position,
+  SleeveDecision,
+} from '../../../../contracts/index.js';
+import { isRiskApproved } from './approval.js';
+import { V2RiskGate } from './gate.js';
+
+const FX = 1.25;
+const primary: BookSpec = {
+  id: 'debate/primary',
+  sleeve: 'debate',
+  variant: 'primary',
+  instantiated: true,
+};
+const shadow: BookSpec = { ...primary, id: 'debate/no-macro-gate', variant: 'no-macro-gate' };
+const year: CapitalYear = {
+  year: 2026,
+  effectiveFrom: '2026-01-01',
+  startCapitalGbp: 2_000,
+  lossCapGbp: 1_500,
+};
+const market: MarketData = { lastBarBefore: () => undefined, gbpUsdAtYearStart: () => FX };
+const decision: SleeveDecision = {
+  sleeve_id: 'debate',
+  instrument: 'AAPL',
+  venue: 'alpaca',
+  direction: 'bullish',
+  confidence: 1,
+  action: 'enter_long',
+  reason: 'r',
+  price: 20,
+  atr: 0.4,
+  stop_price: 19.2,
+  inputs_hash: 'h',
+  debate_id: 'd',
+  payload: {},
+};
+
+function gate(
+  options: { state?: Partial<LossBudgetState>; capital?: CapitalYear | undefined } = {},
+) {
+  const lastDay = (): BookDay | undefined =>
+    options.state === undefined
+      ? undefined
+      : {
+          bookId: 'debate/primary',
+          tradingDate: '2026-09-24',
+          equityGbp: 1_000,
+          cashGbp: 1_000,
+          investedGbp: 0,
+          custodyAccrualGbp: 0,
+          recordedAt: '2026-09-24T21:00:00.000Z',
+          state: {
+            referenceEquityGbp: 1_000,
+            ytdLossGbp: 0,
+            sizeMultiplier: 1,
+            halted: false,
+            entriesBlockedAtNextFill: false,
+            ...options.state,
+          },
+        };
+  const capital = 'capital' in options ? options.capital : year;
+  return new V2RiskGate({
+    books: { lastDay },
+    capital: { inForce: () => capital },
+    market,
+    riskFraction: 0.005,
+    targetAtrMultiple: 3,
+  });
+}
+
+function request(overrides: Partial<EntryRequest> = {}): EntryRequest {
+  return {
+    book: primary,
+    decision,
+    clientOrderId: 'c1',
+    tradingDate: '2026-09-25',
+    equityGbp: 1_000,
+    macroDay: false,
+    ...overrides,
+  };
+}
+
+describe('V2RiskGate', () => {
+  it('mints a frozen bracket entry sized in GBP with the target at three ATR', () => {
+    const approval = gate().approveEntry(request());
+    expect(approval.size).toBe(6);
+    expect(approval.order).toEqual({
+      kind: 'bracket_entry',
+      approvalId: 'entry:c1:6',
+      clientOrderId: 'c1',
+      bookId: 'debate/primary',
+      bookVariant: 'primary',
+      venue: 'alpaca',
+      instrument: 'AAPL',
+      side: 'buy',
+      size: 6,
+      entry: 20,
+      stop: 19.2,
+      target: expect.closeTo(21.2, 9),
+    });
+    expect(approval.order !== undefined && isRiskApproved(approval.order)).toBe(true);
+    expect(Object.isFrozen(approval.order)).toBe(true);
+  });
+
+  it('mints shorts as sells with the target below the entry', () => {
+    const approval = gate().approveEntry(
+      request({ decision: { ...decision, action: 'enter_short', stop_price: 20.8 } }),
+    );
+    expect(approval.order).toMatchObject({ side: 'sell', target: expect.closeTo(18.8, 9) });
+  });
+
+  it('converts only US prices by the year-start rate', () => {
+    const saxo = { ...decision, venue: 'saxo' as const };
+    expect(gate().approveEntry(request({ decision: saxo })).size).toBe(5);
+    expect(gate().approveEntry(request()).size).toBe(6);
+  });
+
+  it('halves the primary on a macro day but never the no-macro-gate shadow', () => {
+    expect(gate().approveEntry(request({ macroDay: true })).size).toBe(3);
+    expect(gate().approveEntry(request({ macroDay: true, book: shadow })).size).toBe(6);
+  });
+
+  it('sizes by the previous mark multiplier and to zero when entries are blocked', () => {
+    expect(gate({ state: { sizeMultiplier: 0.5 } }).approveEntry(request()).size).toBe(3);
+    const blocked = gate({ state: { sizeMultiplier: 1, entriesBlockedAtNextFill: true } });
+    expect(blocked.approveEntry(request())).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'zero_size',
+    });
+  });
+
+  it('refuses non-entry actions, a missing ATR, and a missing stop', () => {
+    for (const action of ['skip', 'none'] as const) {
+      expect(gate().approveEntry(request({ decision: { ...decision, action } }))).toMatchObject({
+        size: 0,
+        refusal: 'zero_size',
+      });
+    }
+    expect(
+      gate().approveEntry(request({ decision: { ...decision, atr: undefined } })),
+    ).toMatchObject({ size: 0, refusal: 'zero_size' });
+    expect(
+      gate().approveEntry(request({ decision: { ...decision, stop_price: undefined } })),
+    ).toEqual({ size: 6, order: undefined, refusal: 'no_stop_price' });
+  });
+
+  it('refuses every entry without a capital config in force but still approves exits', () => {
+    const noCapital = gate({ capital: undefined });
+    expect(noCapital.capitalRefusal('2027-01-04')).toBe(
+      'no capital config in force on 2027-01-04: entries refused until David sets the year (doc 66 D8)',
+    );
+    expect(gate().capitalRefusal('2026-09-25')).toBeUndefined();
+    expect(noCapital.approveEntry(request())).toMatchObject({ size: 0, order: undefined });
+    const held: Position = {
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      qty: -4,
+      avgPriceGbp: 16,
+      stopGbp: undefined,
+      targetGbp: undefined,
+      clientOrderId: 'c0',
+      exitClientOrderId: undefined,
+      openedDate: '2026-09-01',
+      marksHeld: 10,
+    };
+    const exit = noCapital.approveExit({ book: shadow, held, clientOrderId: 'x1' });
+    expect(exit).toEqual({
+      kind: 'flatten',
+      approvalId: 'exit:x1:4',
+      clientOrderId: 'x1',
+      bookId: 'debate/no-macro-gate',
+      bookVariant: 'no-macro-gate',
+      venue: 'alpaca',
+      instrument: 'AAPL',
+      side: 'buy',
+      size: 4,
+    });
+    expect(isRiskApproved(exit)).toBe(true);
+    const halted = gate({ state: { halted: true, sizeMultiplier: 0 } });
+    expect(halted.approveExit({ book: primary, held: { ...held, qty: 4 }, clientOrderId: 'x2' }))
+      .toMatchObject({ side: 'sell', size: 4 });
+  });
+
+  it('never approves a copy or a look-alike', () => {
+    const order = gate().approveEntry(request()).order;
+    expect(order).toBeDefined();
+    expect(isRiskApproved({ ...order })).toBe(false);
+    expect(isRiskApproved({ kind: 'flatten', approvalId: 'exit:x:1' })).toBe(false);
+  });
+});
