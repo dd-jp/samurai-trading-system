@@ -11,6 +11,7 @@ export interface PositionSizeInput {
   readonly stopAtrMultiple: number;
   readonly sizeMultiplier: number;
   readonly macroDay: boolean;
+  readonly volumeCapShares: number;
 }
 
 export function positionSizeShares(input: PositionSizeInput): number {
@@ -21,6 +22,6 @@ export function positionSizeShares(input: PositionSizeInput): number {
   const riskCash = equityGbp * riskFraction * scale;
   const byRisk = Math.floor(riskCash / (atrGbp * stopAtrMultiple));
   const byNotional = wholeShares(equityGbp * MAX_POSITION_FRACTION_OF_EQUITY * scale, priceGbp);
-  const shares = Math.min(byRisk, byNotional);
+  const shares = Math.min(byRisk, byNotional, input.volumeCapShares);
   return Number.isFinite(shares) ? Math.max(0, shares) : 0;
 }

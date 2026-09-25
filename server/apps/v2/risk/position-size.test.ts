@@ -9,6 +9,7 @@ const base = {
   stopAtrMultiple: 2,
   sizeMultiplier: 1,
   macroDay: false,
+  volumeCapShares: Number.POSITIVE_INFINITY,
 };
 
 describe('positionSizeShares', () => {

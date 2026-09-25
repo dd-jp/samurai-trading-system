@@ -18,6 +18,7 @@ export interface V2Bar {
 
 export interface MarketData {
   lastBarBefore(instrument: string, tradingDate: string): V2Bar | undefined;
+  barsBefore(instrument: string, tradingDate: string, count: number): readonly V2Bar[];
   gbpUsdAtYearStart(year: number): number;
 }
 
@@ -68,6 +69,8 @@ export interface SleeveSizing {
   readonly stopAtrMultiple: number;
   readonly targetAtrMultiple: number;
   readonly timeStopTradingDays: number;
+  readonly advShare: number;
+  readonly advWindowBars: number;
 }
 
 export interface SleeveBook {

@@ -10,6 +10,7 @@ import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { type CycleDeps, calendarDaysBetween, runCycle, vetoApplied } from './cycle.js';
+import { addDays } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import { Journal } from './journal/index.js';
@@ -139,6 +140,8 @@ const TEST_SPEC: SleeveSpec = {
     stopAtrMultiple: 2,
     targetAtrMultiple: 3,
     timeStopTradingDays: 10,
+    advShare: 0.01,
+    advWindowBars: 20,
   },
   books: [
     { variant: 'primary', instantiated: true },
@@ -175,7 +178,12 @@ function harness(
     const previous = new Date(Date.parse(tradingDate) - 86_400_000).toISOString().slice(0, 10);
     return bar(previous);
   };
-  const market: MarketData = { lastBarBefore: barFor, gbpUsdAtYearStart: () => FX };
+  const market: MarketData = {
+    lastBarBefore: barFor,
+    barsBefore: (_instrument, tradingDate, count) =>
+      Array.from({ length: count }, (_, back) => bar(addDays(tradingDate, back - count))),
+    gbpUsdAtYearStart: () => FX,
+  };
   const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
   const simulatedBroker = new DryRunBrokerAdapter({
     halfSpreadBps: () => HALF_SPREAD_BPS,
@@ -191,7 +199,7 @@ function harness(
     },
     books,
     journal: new Journal(db, clock),
-    risk: new V2RiskGate({ books, capital, market, sizing: () => spec.sizing }),
+    risk: new V2RiskGate({ books, capital, market, spec: () => spec }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },
       simulatedBroker,

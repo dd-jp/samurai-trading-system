@@ -8,7 +8,8 @@ import type {
   RiskApprovedOrder,
   RiskGate,
   Sleeve,
-  SleeveSizing,
+  SleeveDecision,
+  SleeveSpec,
 } from '../../../../contracts/index.js';
 import { quotePerGbp } from '../data/index.js';
 import { sleeveAllocationGbp } from './allocation.js';
@@ -16,6 +17,12 @@ import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
 import { sizeMultiplierFor } from './loss-budget.js';
 import { positionSizeShares } from './position-size.js';
+import { averageDailyNotional, volumeCapShares } from './volume-cap.js';
+
+interface Sizing {
+  readonly size: number;
+  readonly refusal?: 'no_allocation' | 'no_adv';
+}
 
 function bracketRefusal(
   side: 'buy' | 'sell',
@@ -32,7 +39,7 @@ export interface RiskGateDeps {
   readonly books: Pick<BookLedger, 'lastDay'>;
   readonly capital: Pick<CapitalConfigStore, 'inForce'>;
   readonly market: MarketData;
-  readonly sizing: (sleeveId: string) => SleeveSizing;
+  readonly spec: (sleeveId: string) => SleeveSpec;
 }
 
 export class V2RiskGate implements RiskGate {
@@ -51,14 +58,15 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveEntry(request: EntryRequest): EntryApproval {
-    const size = this.#size(request);
+    const { size, refusal: sizingRefusal } = this.#size(request);
     const { decision } = request;
+    if (sizingRefusal !== undefined) return { size, order: undefined, refusal: sizingRefusal };
     if (size <= 0) return { size, order: undefined, refusal: 'zero_size' };
     if (decision.stop_price === undefined || decision.atr === undefined) {
       return { size, order: undefined, refusal: 'no_stop_price' };
     }
     const side = decision.action === 'enter_short' ? 'sell' : 'buy';
-    const distance = this.deps.sizing(request.book.sleeve).targetAtrMultiple * decision.atr;
+    const distance = this.deps.spec(request.book.sleeve).sizing.targetAtrMultiple * decision.atr;
     const target = side === 'sell' ? decision.price - distance : decision.price + distance;
     const refusal = bracketRefusal(side, decision.price, decision.stop_price, target);
     if (refusal !== undefined) return { size, order: undefined, refusal };
@@ -101,23 +109,34 @@ export class V2RiskGate implements RiskGate {
     });
   }
 
-  #size(request: EntryRequest): number {
+  #size(request: EntryRequest): Sizing {
     const { book, decision, tradingDate } = request;
-    if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return 0;
+    if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return { size: 0 };
     const capital = this.deps.capital.inForce(tradingDate);
-    if (capital === undefined) return 0;
-    const multiplier = this.#multiplier(book.id, capital);
+    if (capital === undefined) return { size: 0 };
+    const spec = this.deps.spec(book.sleeve);
+    if (sleeveAllocationGbp(spec, capital) <= 0) return { size: 0, refusal: 'no_allocation' };
+    const volumeCap = this.#volumeCap(decision, spec, tradingDate);
+    if (volumeCap === undefined) return { size: 0, refusal: 'no_adv' };
     const fx = quotePerGbp(this.deps.market, decision.venue, tradingDate);
-    const sizing = this.deps.sizing(book.sleeve);
-    return positionSizeShares({
+    const size = positionSizeShares({
       equityGbp: request.equityGbp,
-      riskFraction: sizing.riskFraction,
+      riskFraction: spec.sizing.riskFraction,
       priceGbp: decision.price / fx,
       atrGbp: (decision.atr ?? 0) / fx,
-      stopAtrMultiple: sizing.stopAtrMultiple,
-      sizeMultiplier: multiplier,
+      stopAtrMultiple: spec.sizing.stopAtrMultiple,
+      sizeMultiplier: this.#multiplier(book.id, capital),
       macroDay: book.variant === 'no-macro-gate' ? false : request.macroDay,
+      volumeCapShares: volumeCap,
     });
+    return { size };
+  }
+
+  #volumeCap(decision: SleeveDecision, spec: SleeveSpec, tradingDate: string): number | undefined {
+    const { advShare, advWindowBars } = spec.sizing;
+    const bars = this.deps.market.barsBefore(decision.instrument, tradingDate, advWindowBars);
+    const notional = averageDailyNotional(bars, advWindowBars, tradingDate);
+    return notional === undefined ? undefined : volumeCapShares(notional, advShare, decision.price);
   }
 
   #multiplier(bookId: string, capital: CapitalYear): number {

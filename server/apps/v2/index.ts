@@ -227,7 +227,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     books,
     capital,
     market,
-    sizing: (sleeveId) => registry.spec(sleeveId).sizing,
+    spec: (sleeveId) => registry.spec(sleeveId),
   });
   const executor = createOrderExecutor({
     dryRun: options.dryRun,
