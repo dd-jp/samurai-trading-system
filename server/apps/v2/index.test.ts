@@ -221,9 +221,11 @@ describe('composeV2Root', () => {
         parseBoeGbpUsdCsv(readFileSync(fixtures.fxPath, 'utf8')),
       ).gbpUsdAtYearStart(2025);
       const fill = root.db
-        .prepare('SELECT price_gbp FROM v2_fills WHERE book_id = ?')
-        .get('debate/no-macro-gate') as { price_gbp: number };
-      expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 9);
+        .prepare('SELECT price_gbp, fee_gbp FROM v2_fills WHERE book_id = ?')
+        .get('debate/no-macro-gate') as { price_gbp: number; fee_gbp: number };
+      expect(fill.price_gbp * fx).toBeGreaterThanOrEqual(LAST_CLOSE);
+      expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
+      expect(fill.fee_gbp).toBeGreaterThan(0);
       expect(report.books.map((book) => book.positions)).toEqual([1, 1]);
       const llmCalls = root.scriptedTransports.reduce((n, t) => n + t.calls.length, 0);
       expect(llmCalls).toBe(3);

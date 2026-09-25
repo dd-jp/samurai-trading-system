@@ -10,7 +10,10 @@ import { toBrokerFillId } from '../../../shared/index.js';
 import { V2RiskGate } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
 import { UnapprovedOrderError, V2OrderExecutor } from './executor.js';
+import { venueFee } from './simulated-costs.js';
 import { childOrders } from './slicing.js';
+
+const PRICING = { halfSpreadBps: () => 10, impactBps: () => 2, fee: venueFee };
 
 const primary: BookSpec = {
   id: 'debate/primary',
@@ -130,7 +133,8 @@ function executor(dryRun: boolean) {
     simulated,
     executor: new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca) },
-      simulatedBroker: asAdapter(simulated),
+      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      pricing: PRICING,
       dryRun,
     }),
   };
@@ -267,7 +271,8 @@ describe('V2OrderExecutor', () => {
     const simulated = fakeBroker('sim');
     const paper = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca), saxo: asAdapter(failing) },
-      simulatedBroker: asAdapter(simulated),
+      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      pricing: PRICING,
       dryRun: false,
     });
     expect(await paper.fetchNewFills('2026-09-24T21:00:00.000Z')).toEqual({
@@ -280,7 +285,8 @@ describe('V2OrderExecutor', () => {
     expect(simulated.fetchNewFills).toHaveBeenCalledTimes(1);
     const dry = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca) },
-      simulatedBroker: asAdapter(simulated),
+      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      pricing: PRICING,
       dryRun: true,
     });
     expect(await dry.fetchNewFills('2026-09-24T21:00:00.000Z')).toEqual({
@@ -290,7 +296,8 @@ describe('V2OrderExecutor', () => {
     expect(alpaca.fetchNewFills).toHaveBeenCalledTimes(1);
     const shared = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(simulated) },
-      simulatedBroker: asAdapter(simulated),
+      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      pricing: PRICING,
       dryRun: false,
     });
     await shared.fetchNewFills('2026-09-24T21:00:00.000Z');
@@ -302,5 +309,28 @@ describe('childOrders', () => {
   it('sends the whole approved order as one child under its own client order id', () => {
     const order = entry();
     expect(childOrders(order)).toEqual([{ clientOrderId: order.clientOrderId, size: order.size }]);
+  });
+});
+
+describe('quoteSimulatedFill', () => {
+  it('charges a crossing fill half a spread plus impact against it and a resting fill neither, both with the venue fee', () => {
+    const { executor: dry } = executor(true);
+    const request = {
+      instrument: 'AAPL',
+      side: 'buy' as const,
+      qty: 10,
+      price: 100,
+      crossesSpread: true,
+    };
+    expect(dry.quoteSimulatedFill('alpaca', request)).toEqual({
+      price: 100.12,
+      fee: venueFee('alpaca', 'buy', 10, 100.12),
+    });
+    expect(
+      dry.quoteSimulatedFill('saxo', { ...request, side: 'sell', crossesSpread: false }),
+    ).toEqual({
+      price: 100,
+      fee: 1000 * 0.0008,
+    });
   });
 });

@@ -84,9 +84,16 @@ function targetTouched(held: Position, lowGbp: number, highGbp: number): boolean
   return held.qty > 0 ? highGbp >= held.targetGbp : lowGbp <= held.targetGbp;
 }
 
-function bracketExitGbp(held: Position, lowGbp: number, highGbp: number): number | undefined {
-  if (stopTouched(held, lowGbp, highGbp)) return held.stopGbp;
-  if (targetTouched(held, lowGbp, highGbp)) return held.targetGbp;
+interface BracketExit {
+  readonly priceGbp: number | undefined;
+  readonly crossesSpread: boolean;
+}
+
+function bracketExit(held: Position, lowGbp: number, highGbp: number): BracketExit | undefined {
+  if (stopTouched(held, lowGbp, highGbp)) return { priceGbp: held.stopGbp, crossesSpread: true };
+  if (targetTouched(held, lowGbp, highGbp)) {
+    return { priceGbp: held.targetGbp, crossesSpread: false };
+  }
   return undefined;
 }
 
@@ -214,11 +221,19 @@ class Cycle {
     const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
     if (bar === undefined || bar.date < held.openedDate) return;
     const fx = this.fxFor(held.venue);
-    const exitGbp = bracketExitGbp(held, bar.low / fx, bar.high / fx);
-    if (exitGbp === undefined) return;
+    const exit = bracketExit(held, bar.low / fx, bar.high / fx);
+    if (exit?.priceGbp === undefined) return;
+    const trigger = exit.priceGbp * fx;
     const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
     const clientOrderId = this.exitOrderId(book, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
+    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
+      instrument: held.instrument,
+      side,
+      qty: Math.abs(held.qty),
+      price: trigger,
+      crossesSpread: exit.crossesSpread,
+    });
     this.tally.exits += 1;
     this.tally.simulated += 1;
     this.deps.journal.recordOrder({
@@ -235,16 +250,16 @@ class Cycle {
       payload: {
         size: Math.abs(held.qty),
         detail: 'bracket_leg_on_daily_bar',
-        price: exitGbp * fx,
+        price: trigger,
       },
     });
     this.ingest({
       client_order_id: clientOrderId,
       broker_fill_id: `sim-${clientOrderId}`,
       leg: 'exit',
-      price: exitGbp * fx,
+      price: quote.price,
       qty: Math.abs(held.qty),
-      fee: 0,
+      fee: quote.fee,
     });
   }
 

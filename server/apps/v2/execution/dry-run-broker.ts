@@ -1,3 +1,4 @@
+import type { OrderSide, Venue } from '../../../../contracts/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -8,6 +9,7 @@ import type {
 } from '../../../pipeline/execution/index.js';
 import type { Clock } from '../../../shared/index.js';
 import { toBrokerFillId } from '../../../shared/index.js';
+import { type FillPricing, quoteSimulatedFill } from './simulated-costs.js';
 
 export interface RefusedSubmission {
   readonly client_order_id: string;
@@ -23,16 +25,10 @@ export class DryRunRefusedError extends Error {
 }
 
 export interface DryRunBrokerDeps {
-  readonly halfSpreadBps: (instrument: string) => number;
+  readonly venue: Venue;
+  readonly pricing: FillPricing;
   readonly markPrice: (instrument: string) => number | undefined;
   readonly clock: Clock;
-}
-
-const BPS = 10_000;
-
-export function spreadAdjusted(price: number, side: 'buy' | 'sell', halfSpreadBps: number): number {
-  const adjustment = (price * halfSpreadBps) / BPS;
-  return side === 'buy' ? price + adjustment : price - adjustment;
 }
 
 export class DryRunBrokerAdapter implements BrokerAdapter {
@@ -45,8 +41,10 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
     this.#queue(
       order.client_order_id,
       'entry',
+      order.instrument,
+      order.side,
       order.size,
-      spreadAdjusted(order.entry, order.side, this.deps.halfSpreadBps(order.instrument)),
+      order.entry,
     );
     return this.#refuse({
       client_order_id: order.client_order_id,
@@ -83,12 +81,7 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
   ): Promise<BrokerAck> {
     const mark = this.deps.markPrice(instrument);
     if (mark !== undefined) {
-      this.#queue(
-        clientOrderId,
-        'exit',
-        size,
-        spreadAdjusted(mark, side, this.deps.halfSpreadBps(instrument)),
-      );
+      this.#queue(clientOrderId, 'exit', instrument, side, size, mark);
     }
     return this.#refuse({ client_order_id: clientOrderId, instrument, kind: 'flatten' });
   }
@@ -101,14 +94,26 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
     return Promise.resolve([]);
   }
 
-  #queue(clientOrderId: string, leg: 'entry' | 'exit', qty: number, price: number): void {
+  #queue(
+    clientOrderId: string,
+    leg: 'entry' | 'exit',
+    instrument: string,
+    side: OrderSide,
+    qty: number,
+    price: number,
+  ): void {
+    const quote = quoteSimulatedFill(
+      this.deps.venue,
+      { instrument, side, qty, price, crossesSpread: true },
+      this.deps.pricing,
+    );
     this.#pending.push({
       client_order_id: clientOrderId,
       broker_fill_id: toBrokerFillId(`dry-${clientOrderId}-${leg}`),
       leg,
-      price,
+      price: quote.price,
       qty,
-      fee: 0,
+      fee: quote.fee,
       timestamp: this.deps.clock.now(),
     });
   }

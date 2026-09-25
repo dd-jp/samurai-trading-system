@@ -1,17 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BrokerAdapter } from '../../../pipeline/execution/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import { DryRunBrokerAdapter, DryRunRefusedError, spreadAdjusted } from './dry-run-broker.js';
+import { DryRunBrokerAdapter, DryRunRefusedError } from './dry-run-broker.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 
-function adapter(markPrice: () => number | undefined = () => 50): DryRunBrokerAdapter {
-  return new DryRunBrokerAdapter({ halfSpreadBps: () => 10, markPrice, clock });
+function adapter(
+  markPrice: () => number | undefined = () => 50,
+  fee = vi.fn(() => 7),
+): DryRunBrokerAdapter {
+  const pricing = { halfSpreadBps: () => 10, impactBps: () => 0, fee };
+  return new DryRunBrokerAdapter({ venue: 'saxo', pricing, markPrice, clock });
 }
 
 describe('DryRunBrokerAdapter', () => {
-  it('refuses every submission and simulates the fill at the price plus or minus half a spread', async () => {
-    const dryRun = adapter();
+  it('refuses every submission and simulates the fill across the spread with the venue fee', async () => {
+    const fee = vi.fn(() => 7);
+    const dryRun = adapter(() => 50, fee);
     const broker: BrokerAdapter = dryRun;
     await expect(
       broker.submitBracket({
@@ -35,8 +40,12 @@ describe('DryRunBrokerAdapter', () => {
     expect(
       fills.map((fill) => [fill.client_order_id, fill.leg, fill.qty, fill.price, fill.fee]),
     ).toEqual([
-      ['o1', 'entry', 3, 100.1, 0],
-      ['f1', 'exit', 3, 49.95, 0],
+      ['o1', 'entry', 3, 100.1, 7],
+      ['f1', 'exit', 3, 49.95, 7],
+    ]);
+    expect(fee.mock.calls).toEqual([
+      ['saxo', 'buy', 3, 100.1],
+      ['saxo', 'sell', 3, 49.95],
     ]);
     expect(fills[0]?.timestamp).toEqual(clock.now());
     expect(fills.map((fill) => fill.broker_fill_id)).toEqual(['dry-o1-entry', 'dry-f1-exit']);
@@ -67,11 +76,5 @@ describe('DryRunBrokerAdapter', () => {
     await dryRun.submitFlatten('X', 'buy', 1, 'f2').catch(() => undefined);
     const fills = await dryRun.fetchNewFills(new Date(0));
     expect(fills.map((fill) => [fill.client_order_id, fill.price])).toEqual([['s1', 99.9]]);
-  });
-
-  it('spreadAdjusted moves a buy up and a sell down by the half spread', () => {
-    expect(spreadAdjusted(200, 'buy', 25)).toBeCloseTo(200.5, 9);
-    expect(spreadAdjusted(200, 'sell', 25)).toBeCloseTo(199.5, 9);
-    expect(spreadAdjusted(200, 'buy', 0)).toBe(200);
   });
 });

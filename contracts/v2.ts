@@ -273,8 +273,22 @@ export interface FillSweep {
   readonly failures: readonly string[];
 }
 
+export interface SimulatedFillRequest {
+  readonly instrument: string;
+  readonly side: OrderSide;
+  readonly qty: number;
+  readonly price: number;
+  readonly crossesSpread: boolean;
+}
+
+export interface SimulatedFillQuote {
+  readonly price: number;
+  readonly fee: number;
+}
+
 export interface OrderExecutor {
   simulates(route: ExecutionRoute): boolean;
+  quoteSimulatedFill(venue: Venue, request: SimulatedFillRequest): SimulatedFillQuote;
   canRoute(route: ExecutionRoute): boolean;
   submit(order: RiskApprovedOrder): Promise<Submission>;
   cancel(route: ExecutionRoute, clientOrderId: string, instrument: string): Promise<void>;

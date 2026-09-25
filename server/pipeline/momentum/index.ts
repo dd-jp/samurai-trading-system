@@ -3,6 +3,7 @@ export { assertSortedUniqueDates, coverageSatisfied, ISO_DATE, windowCoverage } 
 export type { Side } from './costs.js';
 export {
   alpacaFillCost,
+  alpacaRegulatoryFees,
   SAXO_COMMISSION_PER_SIDE,
   saxoCustodyAccrual,
   saxoFillCost,

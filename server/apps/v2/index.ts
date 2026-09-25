@@ -24,7 +24,12 @@ import {
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
-import { type AlpacaBrokerClient, createOrderExecutor } from './execution/index.js';
+import {
+  type AlpacaBrokerClient,
+  createOrderExecutor,
+  impactLookup,
+  venueFee,
+} from './execution/index.js';
 import { Journal } from './journal/index.js';
 import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import {
@@ -235,7 +240,11 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     db,
     clock,
     logger,
-    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+    pricing: {
+      halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+      impactBps: impactLookup(market, options.tradingDate, logger),
+      fee: venueFee,
+    },
     markPrice: (instrument) => market.lastBarBefore(instrument, options.tradingDate)?.rawClose,
   });
   return {
