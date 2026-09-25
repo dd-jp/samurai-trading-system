@@ -50,11 +50,12 @@ All of these are on `main`.
   - Inputs: daily bars + news, plus sentiment and social, each a counted trial against a shadow without it (G18). A class-wide macro item never votes as a per-name read, one underlying view votes once, and a market-wide roundup is not scored once per tagged name (G18 (3)).
   - Shorts, bounded (Q8): Alpaca easy-to-borrow large caps sized so a +30% gap costs ≤ ~£150; Saxo via 1× inverse ETFs. Small caps are long-only, half a large-cap trade's risk, capped at a fixed share of the sleeve, floors exclude micro-caps (G18).
   - High-impact macro days (FOMC, US CPI, NFP, BoE rate decision, UK CPI): new entries at **half size**, not zero; exits unaffected; a counted trial against a no-gate shadow (G16).
+- *(2026-09-25, doc 66 D1–D8: the £ figures below are today's values of a yearly cap David sets each 1 January, tightened but never loosened mid-year (D8); bars move to Parquet read by DuckDB (D2); the runtime is a one-process modular monolith (D4). Step 3 below is re-planned as 3a–3e.)*
 - **Loss budget (Q6 as amended by G6):** net trading loss from start capital, both venues, GBP, open positions marked to market; GBP/USD moves on the Alpaca balance are excluded. £1,500 per calendar year, resets each year; deposits do not rebase start capital. −£500 → ½ size, −£1,000 → ¼, −£1,500 → halt for the year. Daily cap = exactly 1.0% of start capital, blocks new entries (exits still run). Profits never extend the limit. Loosening mid-year forbidden. The backtest runs with these rules inside it (G10).
 - **Self-improvement:** offline research loop over the trade journal/error log → walk-forward with global trial counter → gate → paper → approval request (G12) → live. Live frozen except pre-declared, backtested adaptation rules and risk-tightening. The loop's design is not ruled (G11, ticket #1717 open).
 - **Autonomy (G12, G13):** fully autonomous. Auto to paper. Anything reaching live (new sleeve, changed rule, capital increase) first passes the gate, then the system sends David an approval request on Telegram with the one-page summary; "no" blocks it; no reply in 24 hours approves it. The request, the reply or timeout, and the summary are written to a GitHub issue. There is no mandatory sign-off and no sign-off screen.
 - **Demotion (G7):** a live sleeve returns to paper when live return leaves the backtest's 95% band for 4 consecutive weeks, or drawdown exceeds 1.5× the backtest max.
-- **Host:** MacBook + external dead-man's switch + Saxo token-refresh/wake job; broker-resting stops. Cloud VM if any paper downtime fault.
+- **Host:** MacBook + external dead-man's switch + Saxo token-refresh/wake job; broker-resting stops. Cloud VM if any paper downtime fault. *(2026-09-25, doc 66 D1: Litestream backup and a healthchecks.io ping added; VPS decided at the live gate.)*
 - **Stack:** TypeScript only for everything that trades (backtest = live code). No LangGraph/CrewAI/LangSmith. An optional offline Python research sidecar is allowed (G3): it crosses only via parquet/ONNX/strategy-spec files, needs a TS parity test before paper, and is not built until needed.
 - **Tooling:** oxlint, biome, crap, fallow rules intact; "crap" = the CRAP score gate, ticket #1649 (G15), built 2026-09-25 as `npm run crap`, threshold 7 as a ratchet on added or touched functions with `server/apps/v2/` and `contracts/` gated in full, over a repo-wide floor of 15 (doc 66); fallow (not knip) for dead code.
 - **UI (G13):** a v2 dashboard with a rethought layout (the v3 Rail is not carried forward), required before paper starts.
@@ -122,7 +123,7 @@ New slim root in this repo; reuse Alpaca + Saxo adapters, providers, stores, deb
 #### Step 3a — Module boundaries, risk gate, capital config (D4, D6, D8; #1781)
 
 Split `server/apps/v2/` into the five modules D4 names — data, signal (sleeves), risk, execution, journal — each exporting one typed interface from `contracts/`; add lint import rules so a module reaches another only through that interface. Introduce `RiskApprovedOrder` as a type only the risk module can construct (branded type, constructor not exported) and make every venue adapter's submit accept only it (D6). Replace `START_CAPITAL_GBP` and every other capital or cap literal with a per-year capital config record in SQLite — start capital, loss cap (David sets it each 1 January), steps at ⅓, ⅔ and the full cap, daily cap 1.0% of start capital — written once per year, journalled; a mid-year loosening is refused, tightening allowed (D8, Q13). This also settles the £1,000 vs £2,000 paper-capital mismatch (doc 66, "Paper start capital").
-=> lint fails a fixture that imports across a boundary; a type test (`@ts-expect-error`) proves an adapter rejects an unapproved order; `grep` finds no capital literal outside the config; mutation testing on the risk module; an e2e per venue path shows the order passed the gate.
+=> lint fails a fixture that imports across a boundary; a type test (`@ts-expect-error`) proves an adapter rejects an unapproved order; `grep` finds no capital literal outside the config in `server/apps/v2/` and `contracts/` (the loss-budget steps move into the v2 risk module and read the yearly config; the copy in `server/pipeline/momentum/loss-budget.ts` stays as it is so doc 70's backtests reproduce, and goes with Step 5); interfaces moved to `contracts/` import nothing from `server/` (`contracts/boundary.test.ts`); mutation testing on the risk module; an e2e per venue path shows the order passed the gate.
 
 #### Step 3b — Bar store: Parquet + DuckDB (D2; #1782)
 
@@ -141,11 +142,11 @@ Litestream streams the SQLite store to S3-compatible object storage, encrypted (
 
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
 
-### Step 3c — UI (G13)
+#### Step 3c — UI (G13)
 
 G13: the layout is rethought in this spec (the v3 Rail is not carried forward); approvals are answered on Telegram and recorded to a GitHub issue, so there is **no sign-off screen**; the dashboard must exist **before paper starts** (Step 6 is blocked by this step).
 
-Write a v2 UI spec, then build alongside Step 3: loss-budget gauge (−£500/−£1,000/−£1,500, current size step), halt/pause control and halt state, live-vs-backtest band chart, per-sleeve vs benchmark, positions and cash for both venues (GBP and USD, total in GBP), decision journal (entered/skipped/vetoed and why), research-loop view (proposals, trial count, promotions/demotions), tax export (per disposal, GBP, share-matching). Step 5's teardown includes a client pass so the UI never reads deleted server fields.
+Write a v2 UI spec, then build alongside Step 3: loss-budget gauge (⅓ / ⅔ / the full configured cap, −£500/−£1,000/−£1,500 today, current size step), halt/pause control and halt state, live-vs-backtest band chart, per-sleeve vs benchmark, positions and cash for both venues (GBP and USD, total in GBP), decision journal (entered/skipped/vetoed and why), research-loop view (proposals, trial count, promotions/demotions), tax export (per disposal, GBP, share-matching). Step 5's teardown includes a client pass so the UI never reads deleted server fields.
 => each screen has component tests; e2e covers halt.
 
 ### Step 1b — Candidate sleeves for the 70% (S1–S7, D3; after 3b and 3d; #1785)
@@ -208,7 +209,7 @@ fallow + graphify reachability from the v2 root → reviewed list → delete in 
 
 ### Step 6 — Paper soak to the gate (Q7/Q19), then research loop
 
-Blocked by Steps 3a–3e, Step 4, Step 4b and Step 3c (G13: the v2 dashboard comes before paper).
+Blocked by Steps 3a–3e (3c per G13: the v2 dashboard comes before paper), Step 4 and Step 4b.
 
 *(2026-09-25, doc 66 S1–S7: the momentum paragraph below is historical. Each Step 1b passer runs paper as a veto book plus a no-veto shadow (S7, G5) under Q7's 8–12 weeks inside band + 4 clean plumbing weeks; the veto reaches live only if its book beats the shadow on the one-sided test. The debate sleeve's rule is unchanged.)*
 
