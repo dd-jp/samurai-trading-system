@@ -143,9 +143,9 @@ describe('V2RiskGate', () => {
 
   it('refuses a stop on the wrong side of the entry and a target at or below zero', () => {
     for (const stop_price of [20, 20.4]) {
-      expect(
-        gate().approveEntry(request({ decision: { ...decision, stop_price } })),
-      ).toMatchObject({ order: undefined, refusal: 'stop_wrong_side' });
+      expect(gate().approveEntry(request({ decision: { ...decision, stop_price } }))).toMatchObject(
+        { order: undefined, refusal: 'stop_wrong_side' },
+      );
     }
     for (const stop_price of [20, 19.6]) {
       expect(

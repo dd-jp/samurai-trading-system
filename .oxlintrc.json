@@ -3110,19 +3110,19 @@
                 "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*signal(/|$)",
                 "message": "v2 data may not import v2 signal (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*risk(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*risk(/|$)",
                 "message": "v2 data may not import v2 risk (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*execution(/|$)",
                 "message": "v2 data may not import v2 execution (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*journal(/|$)",
                 "message": "v2 data may not import v2 journal (doc 67 Step 3a module boundaries)"
               },
               {
@@ -3278,19 +3278,19 @@
                 "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*data(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*data(/|$)",
                 "message": "v2 journal may not import v2 data (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*signal(/|$)",
                 "message": "v2 journal may not import v2 signal (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*risk(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*risk(/|$)",
                 "message": "v2 journal may not import v2 risk (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*execution(/|$)",
                 "message": "v2 journal may not import v2 execution (doc 67 Step 3a module boundaries)"
               },
               {
@@ -3446,15 +3446,15 @@
                 "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*signal(/|$)",
                 "message": "v2 risk may not import v2 signal (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*execution(/|$)",
                 "message": "v2 risk may not import v2 execution (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*journal(/|$)",
                 "message": "v2 risk may not import v2 journal (doc 67 Step 3a module boundaries)"
               },
               {
@@ -3610,7 +3610,7 @@
                 "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*execution(/|$)",
                 "message": "v2 signal may not import v2 execution (doc 67 Step 3a module boundaries)"
               },
               {
@@ -3762,15 +3762,15 @@
           {
             "patterns": [
               {
-                "regex": "^\\.\\.?/(\\.\\./)*data(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*data(/|$)",
                 "message": "v2 execution may not import v2 data (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*signal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*signal(/|$)",
                 "message": "v2 execution may not import v2 signal (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*journal(/|$)",
                 "message": "v2 execution may not import v2 journal (doc 67 Step 3a module boundaries)"
               },
               {
@@ -3926,15 +3926,15 @@
                 "message": "only server/apps/v2/execution may reach the v1 broker adapters (doc 67 Step 3a)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*risk(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*risk(/|$)",
                 "message": "v2 cycle may not import v2 risk (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*execution(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*execution(/|$)",
                 "message": "v2 cycle may not import v2 execution (doc 67 Step 3a module boundaries)"
               },
               {
-                "regex": "^\\.\\.?/(\\.\\./)*journal(/|$)",
+                "regex": "^\\.{1,2}/(\\.{1,2}/)*((apps/)?v2/)?(\\.{1,2}/)*journal(/|$)",
                 "message": "v2 cycle may not import v2 journal (doc 67 Step 3a module boundaries)"
               },
               {

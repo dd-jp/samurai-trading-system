@@ -75,7 +75,9 @@ export class V2RiskGate implements RiskGate {
   approveExit(request: ExitRequest): RiskApprovedOrder {
     const size = Math.abs(request.held.qty);
     if (!(size > 0)) {
-      throw new Error(`risk gate: no exit for ${request.held.instrument} at qty ${request.held.qty}`);
+      throw new Error(
+        `risk gate: no exit for ${request.held.instrument} at qty ${request.held.qty}`,
+      );
     }
     return mintApproval({
       kind: 'flatten',
