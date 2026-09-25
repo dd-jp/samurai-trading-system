@@ -45,11 +45,13 @@ const TABLES = [
   'v2_books',
   'v2_book_days',
   'v2_decisions',
+  'v2_positions',
   'v2_orders',
+  'v2_fills',
   'v2_refusals',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 41;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 43;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);

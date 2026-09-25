@@ -57,7 +57,15 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   risk: ['breaker_state', 'risk_critic_log', 'risk_log'],
   'service-api': [],
   trader: ['cosine_setups', 'trader_log'],
-  v2: ['v2_books', 'v2_book_days', 'v2_decisions', 'v2_orders', 'v2_refusals'],
+  v2: [
+    'v2_books',
+    'v2_book_days',
+    'v2_positions',
+    'v2_decisions',
+    'v2_orders',
+    'v2_fills',
+    'v2_refusals',
+  ],
   verdict: ['verdict_log'],
 };
 
