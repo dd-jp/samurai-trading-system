@@ -36,8 +36,8 @@ F (Step 5 teardown) — after D runs end to end
 L (research loop) — after G11
 ```
 
-Every session: reply to David in caveman-ultra style, normal prose in docs and commits; open PRs,
-never merge (merges are David's); never write "Closes #n" or "closed #n"; stop at any kill line
+Every session: reply to David in caveman-ultra style, normal prose in docs and commits; merge only
+under doc 66's merge-authority ruling (2026-09-25), else open the PR for David; never write "Closes #n" or "closed #n"; stop at any kill line
 or ambiguity and ask David. Each step's PR meets doc 67 §5's definition of done (own tests, e2e
 where runtime paths change, oxlint + biome + fallow + CRAP gate, mutation testing on risk code).
 Every session ends with the **Session eval** below; each prompt's last line names its goal.
@@ -485,8 +485,8 @@ You are working on Samurai (repo dd-jp/samurai-trading-system). Read
 docs/research/67-v2-plan-and-handoff.md Step 6 and, in docs/research/66-v2-grill-decisions.md,
 Q7, Q19, G1, G6, G7, G12 and G13. Review
 the week's paper data: band position, realised vs modelled cost, order-level fidelity, the
-plumbing-fault ledger, loss budget. Report to David. Go-live conditions: momentum sleeve = Q7
-(1)–(3) with Q19's numbers; debate sleeve = G1 (at least 100 closed paper trades and a
+plumbing-fault ledger, loss budget. Report to David. Go-live condition (momentum dropped,
+doc 66 (n)): debate sleeve = G1 (at least 100 closed paper trades and a
 one-sided test at 95% vs arm 2). Q7 (4), David's mandatory sign-off, is superseded by G12. When
 a sleeve's conditions are met, produce the one-page approval summary (change, haircut backtest,
 paper fidelity, worst case vs £1,500) that the system's G12 Telegram request and G13 GitHub

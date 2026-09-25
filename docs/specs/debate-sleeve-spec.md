@@ -10,7 +10,7 @@ Composition root: `server/apps/v2/index.ts`. The sleeve is `server/apps/v2/debat
 
 ## 2. Universe (G4 + G18)
 
-Pool: current S&P 500 constituents (`data/bars/sp500-constituents.csv`, last row on or before the decision date), all on the Alpaca leg (`venueFor` maps every name to Alpaca). The LSE ETF leg is empty until Session B's LSE line table lands (doc 70 §10); no Saxo adapter is built in this step (§7).
+Pool: current S&P 500 constituents (`data/bars/sp500-constituents.csv`, last row on or before the decision date), all on the Alpaca leg (`venueFor` maps every name to Alpaca). The LSE ETF/ETC leg is empty until the Saxo paper adapter is built over the 22 committed LSE lines (doc 70 §10.4; ruled 2026-09-25, doc 66, ADR §5 item 13); no Saxo adapter is built in this step (§7).
 
 Per day, at most 20 names:
 
@@ -84,7 +84,7 @@ Each instantiated book is a paper book at £1,000 start capital with its own cas
 | `debate/no-sentiment` | debate | sentiment input off (G18) | declared, not instantiated: there is no sentiment input to remove until `G18_SENTIMENT_DEDUP_RULE` is set (#961) |
 | `debate/no-social` | debate | social input off (G18) | declared, not instantiated: no social input until `G18_SOCIAL_SOURCE` is set (#1753) |
 | `debate/large-cap-only` | debate | small caps excluded (G18) | declared, not instantiated: the pool is large-cap only until `G18_SMALL_CAP_FLOORS` is set (#1753) |
-| `momentum/no-veto` | momentum | Opus veto off (G5) | declared, not instantiated while momentum is unregistered (§8) |
+| `momentum/no-veto` | momentum | Opus veto off (G5) | declared, not instantiated; momentum dropped (§8), row to be removed |
 
 `BOOK_SPECS` in `server/apps/v2/books.ts` carries all six with an `instantiated` flag; flipping a flag is the whole change once the input exists.
 

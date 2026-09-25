@@ -40,7 +40,7 @@ A step's PR ships its own unit tests, e2e tests where it touches a runtime path,
 | ------ | --------- |
 | `CONTEXT.md` (repo root) | North Star first, then the v2 glossary: terms, relationships, invariants. No implementation detail. |
 | `docs/adr/` | One ADR, `0001-samurai-v2.md`. Amend it when David rules; do not add ADRs unless a decision is hard to reverse, surprising without context and a real trade-off. Never scanned by the citation checker. |
-| `docs/specs/` | v2 specs only, written in the step that needs them: `momentum-sleeve-spec.md`, `debate-sleeve-spec.md`, `loss-budget-spec.md`, and the Step 3c UI spec (G13). `debate-sleeve-spec.md` landed with Step 3; the rest are written in their own steps. |
+| `docs/specs/` | v2 specs only, written in the step that needs them: `debate-sleeve-spec.md`, `loss-budget-spec.md`, and the Step 3c UI spec (G13). `debate-sleeve-spec.md` landed with Step 3; the rest are written in their own steps. |
 | `docs/research/` | `NN-slug.md`, numbered, banded by track; navigation starts at `docs/research/README.md`. v2 docs are 61 onward; 69 = facts (Session R), 70 = momentum backtest (Session B), 71 = debate audit (Session C). Archive is `docs/research/archive/`, never deleted. |
 | `docs/reviews/` | Audit reports, dated; start at `docs/reviews/README.md`. Immutable record. |
 | `docs/wayfinder/` | Historical only. Maps are GitHub issues. |
@@ -52,9 +52,9 @@ When in doubt, grep existing docs before writing new ones. Backticked paths in t
 
 1. One wayfinder map issue, [Samurai v2 #1706](https://github.com/dd-jp/samurai-trading-system/issues/1706), carries the rulings as closed decisions; each unruled item has a child ticket. New decisions are grilled one question at a time with David, recorded as a comment on the ticket, in doc 66 and in the ADR.
 2. Tickets per build step (doc 67 §5), each with its kill line. Claim by assignment; never `Closes #n` / `closed #n` in a PR body or commit — use `Refs #n`.
-3. Specs only for the two sleeves, the loss-budget machinery and the UI, written in the step that builds them.
+3. Specs only for the debate sleeve, the loss-budget machinery and the UI, written in the step that builds them.
 4. Every step: `what => verify / kill line`. Stop at any kill line or ambiguity and ask David; never decide what is his (the ADR's open list says what that is).
-5. Local gates green (lint, typecheck, test, smoke, fallow, citations) before the PR. Merge only under doc 66's merge-authority ruling: a general-purpose subagent review using `code-review-graph`, its comments fixed, and local green on the full tests, mutation testing, the CRAP gate (#1649, not yet built — no code PR self-merges until it lands), fallow and the doc 68 session eval. Otherwise open the PR and leave the merge to David.
+5. Local gates green (lint, typecheck, test, smoke, fallow, citations) before the PR. Merge only under doc 66's merge-authority ruling: a general-purpose subagent review using `code-review-graph`, its comments fixed, and local green on the full tests, mutation testing, the CRAP gate, fallow and the doc 68 session eval. The CRAP gate (#1649) is built next; until it lands no code PR self-merges, and a docs-only PR merges after the review, its comments fixed, citations and the session eval. Otherwise open the PR and leave the merge to David.
 6. Chat replies to David in caveman-ultra style; normal prose in docs and commits. Never commit secrets (`data/saxo-tokens/` <!-- cite-exempt: untracked — gitignored local file -->, `.env*`).
 
 ## Key Constraints

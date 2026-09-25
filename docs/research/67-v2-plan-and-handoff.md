@@ -44,6 +44,7 @@ All of these are on `main`.
 ## 4. The v2 system in one page (from doc 66)
 
 - **Venues:** Saxo GIA → LSE 1× ETFs/ETCs. Alpaca live (GBP wired once, trade USD) → US large caps (+ US ETFs if UK access confirmed; the debate sleeve may also hold bounded small caps, G18). No 3× ETPs, no UK single stocks, no CFDs, no intraday sleeve (Q9, G2).
+- *(2026-09-25, doc 66 Session B (n): momentum dropped, v2 is debate-only, momentum's 70% unassigned; the momentum text in this section and in Step 6 is historical.)*
 - **Sleeves:** (1) **Momentum** — rules only, long/flat, LLM veto (Opus 5) only, 70% of live capital, benchmark = risk-matched buy-and-hold of the same universe. The veto is capped at ≤ 10% of entries and runs against a no-veto shadow book; it is dropped if the shadow beats it (G5). (2) **Debate** — LLM entry (debaters Sonnet 5 + DeepSeek + GPT, judge Opus 5), swing (one debate/name/day pre-open, days–weeks hold, resting stop + time stop), 30%, benchmark = arm 2 no-LLM control, validated **forward only** (LLM look-ahead leak): live needs ≥ 100 closed paper trades and a one-sided test at 95% vs arm 2, and its 30% stays in cash until then (G1).
   - Universe: ~20 names/day = ~10 by liquidity rank + ~10 movers/news names (G4); the sentiment score helps pick the movers/news half (G18).
   - Inputs: daily bars + news, plus sentiment and social, each a counted trial against a shadow without it (G18). A class-wide macro item never votes as a per-name read, one underlying view votes once, and a market-wide roundup is not scored once per tagged name (G18 (3)).
@@ -215,7 +216,7 @@ The **Question** and **Recommendation** columns are what was asked and proposed 
 |---|---|---|
 | R1 | **Trading vs investing (HMRC badges of trade).** Frequent automated trading may be taxed as trading income (income tax + NI), not CGT. Needs research and likely an accountant's view. | Step 3 |
 | R2 | **Alpaca order limits.** Fractional quantities are refused for bracket/OCO/OTO orders (memory alpaca-fractional-bars-brackets); confirm whether a plain stop order on a fractional position is allowed. Also: whole-share **short** brackets (SPY 6, QQQ 7) were refused for an unknown reason — this bears directly on Q8's debate-sleeve shorts. | Step 3 |
-| R3 | **Whole-share granularity.** At £1,000–£5,000 total and 70% to momentum (£700–£3,500) across ~25 ETFs, positions are ~£28–£140; LSE share prices of £50–100+ make target weights unreachable. Find the minimum viable capital per holdings count on both venues. | Step 3 |
+| R3 | **Whole-share granularity.** At £1,000–£5,000 total and 70% to momentum (£700–£3,500; momentum dropped, doc 66 (n)) across ~25 ETFs, positions are ~£28–£140; LSE share prices of £50–100+ make target weights unreachable. Find the minimum viable capital per holdings count on both venues. | Step 3 |
 | R5 | **Evidence that an LLM news/debate signal works at a daily horizon,** from academic studies free of look-ahead (tested after the model's training cutoff). If none, the debate sleeve rests on hope. | Step 3 |
 | R6 | **News source for LSE ETFs** for the debate (Alpaca news is US-only; Saxo news is unreachable over OpenAPI, memory saxo-platform-oapi-vs-openapi). | Step 3 |
 | R7 | **Live end-of-day price source for LSE** that permits automated use (Yahoo terms; Saxo is 15-min delayed). | Step 3 |
@@ -251,7 +252,7 @@ The questions above are kept as asked. The answers are in `docs/research/69-v2-f
 - Paper DB lives in the **main checkout's** `data/`, not the worktree's (memory service-reads-worktree-store).
 - Doc numbers: 61–68 are taken. Pre-assigned to avoid parallel collisions: **69 = Session R (on main), 70 = Session B, 71 = Session C (on main)**; anything else takes the next free number on `origin/main`.
 - `Closes #N` / "closed #N" in a PR body auto-closes issues at merge — grep the body.
-- Merges are David's. No live money until the gate passes and the G12 approval request has run its course; paper only until then. Caveman-ultra style for chat replies to David; normal prose in docs/commits. Never commit secrets (Saxo live token is in `data/saxo-tokens/live.json` <!-- cite-exempt: untracked — gitignored local file -->).
+- Merges follow doc 66's merge-authority ruling (2026-09-25). No live money until the gate passes and the G12 approval request has run its course; paper only until then. Caveman-ultra style for chat replies to David; normal prose in docs/commits. Never commit secrets (Saxo live token is in `data/saxo-tokens/live.json` <!-- cite-exempt: untracked — gitignored local file -->).
 - Rate-limit hard stop rule applies.
 
 ## 7. Where this lives
