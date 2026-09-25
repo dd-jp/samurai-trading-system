@@ -41,6 +41,7 @@ export interface AnthropicMessageResponse {
   usage?: AnthropicUsage;
   stop_reason?: string;
   model?: string;
+  upstream_model?: string | undefined;
   ttfb_ms?: number;
 }
 

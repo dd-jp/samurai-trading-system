@@ -75,6 +75,7 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       content: [{ type: 'text', text: result.text }],
       usage: result.usage,
       model: result.model,
+      upstream_model: result.upstream_model,
       ttfb_ms: result.ttfb_ms,
     };
   }

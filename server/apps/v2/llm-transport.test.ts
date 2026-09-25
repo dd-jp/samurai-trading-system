@@ -1,39 +1,47 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  AnthropicLlmClient,
+  classifyFailureCause,
   LlmProviderError,
   LlmRateLimitError,
   LlmRefusalError,
   LlmTruncatedError,
 } from '../../pipeline/debate-engine/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
-import { NousAccountInFlightGate } from '../../shared/llm/index.js';
-import { AnthropicHttpTransport } from './anthropic-transport.js';
-import { asRecord, type FetchLike, numberOr } from './llm-transport.js';
-import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, SONNET_5_PIN } from './models.js';
-import { OpenRouterHttpTransport } from './openrouter-transport.js';
+import { NousAccountInFlightGate, NousApiError } from '../../shared/llm/index.js';
+import { NousPinnedTransport } from './llm-transport.js';
+import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, type ModelPin, SONNET_5_PIN } from './models.js';
 import { ScriptedTransport } from './scripted-transport.js';
 
 interface Captured {
   url: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  signal: AbortSignal | null | undefined;
 }
 
-function fakeFetch(
-  status: number,
-  body: unknown,
-  captured: Captured[],
-  headers: Record<string, string> = {},
-): FetchLike {
-  return (url, init) => {
-    captured.push({
-      url,
-      headers: init.headers as Record<string, string>,
-      body: JSON.parse(init.body as string) as Record<string, unknown>,
-    });
-    return Promise.resolve(
-      new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers }),
-    );
+function stubFetch(status: number, body: unknown, captured: Captured[] = []): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init: RequestInit) => {
+      captured.push({
+        url,
+        headers: init.headers as Record<string, string>,
+        body: JSON.parse(init.body as string) as Record<string, unknown>,
+        signal: init.signal,
+      });
+      return Promise.resolve(
+        new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }),
+      );
+    }),
+  );
+}
+
+function completion(model: string, text: string, finish_reason = 'stop', refusal?: string) {
+  return {
+    model,
+    choices: [{ message: { content: text, refusal }, finish_reason }],
+    usage: { prompt_tokens: 10, completion_tokens: 5 },
   };
 }
 
@@ -43,288 +51,166 @@ const request = (model: string) => ({
   max_tokens: 64,
   messages: [{ role: 'user' as const, content: 'hello' }],
 });
+const transportFor = (pin: ModelPin, logger?: Logger, shared = gate()) =>
+  new NousPinnedTransport({
+    pin,
+    apiKey: 'nous-secret',
+    baseUrl: 'https://nous.test/v1',
+    gate: shared,
+    logger,
+  });
 
-describe('AnthropicHttpTransport', () => {
-  it('posts the Messages API shape and echoes the priced id', async () => {
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('NousPinnedTransport', () => {
+  it('posts the Nous chat-completions shape with the bearer key and echoes the priced id', async () => {
     const captured: Captured[] = [];
     const logs: LogEntry[] = [];
-    const logger: Logger = { log: (entry) => logs.push(entry) };
-    const transport = new AnthropicHttpTransport({
-      apiKey: 'sk-secret',
-      pin: SONNET_5_PIN,
-      gate: gate(),
-      logger,
-      fetchImpl: fakeFetch(
-        200,
-        {
-          model: 'claude-sonnet-5',
-          content: [{ type: 'text', text: '{"stance":"bullish","rationale":"x"}' }],
-          usage: { input_tokens: 10, output_tokens: 5 },
-          stop_reason: 'end_turn',
-        },
-        captured,
-      ),
-    });
-    const reply = await transport.createMessage(request('claude-sonnet-5'), { stage: 'debate' });
-    expect(captured[0]?.url).toBe('https://api.anthropic.com/v1/messages');
-    expect(captured[0]?.headers['x-api-key']).toBe('sk-secret');
-    expect(captured[0]?.headers['anthropic-version']).toBe('2023-06-01');
+    stubFetch(
+      200,
+      completion('anthropic/claude-sonnet-5', '{"stance":"bullish","rationale":"x"}'),
+      captured,
+    );
+    const reply = await transportFor(SONNET_5_PIN, {
+      log: (entry) => logs.push(entry),
+    }).createMessage(request('anthropic/claude-sonnet-5'), { stage: 'debate' });
+    expect(captured[0]?.url).toBe('https://nous.test/v1/chat/completions');
+    expect(captured[0]?.headers.authorization).toBe('Bearer nous-secret');
     expect(captured[0]?.body).toEqual({
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 64,
       messages: [{ role: 'user', content: 'hello' }],
     });
-    expect(reply.model).toBe('claude-sonnet-5');
+    expect(reply.model).toBe('anthropic/claude-sonnet-5');
+    expect(reply.upstream_model).toBe('anthropic/claude-sonnet-5');
     expect(reply.content[0]?.text).toBe('{"stance":"bullish","rationale":"x"}');
-    expect(reply.usage).toEqual({
-      input_tokens: 10,
-      output_tokens: 5,
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: 0,
-    });
-    expect(logs[0]?.event).toBe('v2_llm_upstream_model');
-    expect(JSON.stringify(logs)).not.toContain('sk-secret');
+    expect(reply.usage).toEqual({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0 });
+    expect(typeof reply.ttfb_ms).toBe('number');
+    expect(logs).toMatchObject([
+      {
+        trace_id: 'v2-llm',
+        level: 'info',
+        event: 'v2_llm_upstream_model',
+        stage: 'debate',
+        message: 'anthropic/claude-sonnet-5 answered as anthropic/claude-sonnet-5',
+        payload: { pinned: 'anthropic/claude-sonnet-5', upstream: 'anthropic/claude-sonnet-5' },
+      },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain('nous-secret');
   });
 
-  it('refuses a request for a model other than its pin', async () => {
-    const transport = new AnthropicHttpTransport({
-      apiKey: 'k',
-      pin: SONNET_5_PIN,
-      gate: gate(),
-      fetchImpl: fakeFetch(200, {}, []),
-    });
-    await expect(transport.createMessage(request('claude-fable-5-1'))).rejects.toBeInstanceOf(
-      LlmProviderError,
-    );
+  it('refuses a request for a model other than its pin before calling Nous', async () => {
+    const captured: Captured[] = [];
+    stubFetch(200, {}, captured);
+    await expect(
+      transportFor(SONNET_5_PIN).createMessage(request('anthropic/claude-fable-5')),
+    ).rejects.toThrow(/transport for anthropic\/claude-sonnet-5 refused a request for model/);
+    expect(captured).toHaveLength(0);
   });
 
-  it('maps refusal and max_tokens stop reasons to typed errors', async () => {
-    const make = (stop_reason: string) =>
-      new AnthropicHttpTransport({
-        apiKey: 'k',
-        pin: JUDGE_PIN,
-        gate: gate(),
-        fetchImpl: fakeFetch(200, { content: [], usage: {}, stop_reason }, []),
-      });
-    await expect(make('refusal').createMessage(request('claude-opus-5'))).rejects.toBeInstanceOf(
-      LlmRefusalError,
-    );
-    await expect(make('max_tokens').createMessage(request('claude-opus-5'))).rejects.toBeInstanceOf(
-      LlmTruncatedError,
-    );
-  });
-
-  it('refuses a reply served by a model other than the pin', async () => {
-    const swapped = new AnthropicHttpTransport({
-      apiKey: 'k',
-      pin: JUDGE_PIN,
-      gate: gate(),
-      fetchImpl: fakeFetch(
-        200,
-        {
-          model: 'claude-opus-5-20260901',
-          content: [{ type: 'text', text: '{}' }],
-          usage: { input_tokens: 1, output_tokens: 1 },
-          stop_reason: 'end_turn',
-        },
-        [],
-      ),
-    });
-    await expect(swapped.createMessage(request('claude-opus-5'))).rejects.toThrow(
-      /answered for claude-opus-5 with model claude-opus-5-20260901/,
-    );
-  });
-
-  it('reads retry-after in whole seconds and ignores a non-numeric one', async () => {
-    const make = (retryAfter: string) =>
-      new AnthropicHttpTransport({
-        apiKey: 'k',
-        pin: JUDGE_PIN,
-        gate: gate(),
-        fetchImpl: fakeFetch(429, { error: 'slow' }, [], { 'retry-after': retryAfter }),
-      });
-    const numeric = await make('3')
-      .createMessage(request('claude-opus-5'))
+  it('refuses a reply served by a model other than the pin and logs the swap', async () => {
+    const logs: LogEntry[] = [];
+    stubFetch(200, completion('anthropic/claude-opus-5-20260723', '{}'));
+    const error = await transportFor(JUDGE_PIN, { log: (entry) => logs.push(entry) })
+      .createMessage(request('anthropic/claude-opus-5'))
       .catch((e: unknown) => e);
-    expect((numeric as LlmRateLimitError).retryAfterMs).toBe(3000);
-    const dated = await make('Wed, 21 Oct 2026 07:28:00 GMT')
-      .createMessage(request('claude-opus-5'))
+    expect(error).toBeInstanceOf(LlmProviderError);
+    expect((error as Error).message).toMatch(
+      /Nous answered for anthropic\/claude-opus-5 with model anthropic\/claude-opus-5-20260723/,
+    );
+    expect(logs[0]?.payload).toEqual({
+      pinned: 'anthropic/claude-opus-5',
+      upstream: 'anthropic/claude-opus-5-20260723',
+    });
+  });
+
+  it('accepts a reply whose model field is missing and logs it as unreported', async () => {
+    const logs: LogEntry[] = [];
+    const { model: _dropped, ...unreported } = completion('x', 'ok');
+    stubFetch(200, unreported);
+    const reply = await transportFor(JUDGE_PIN, { log: (entry) => logs.push(entry) }).createMessage(
+      request('anthropic/claude-opus-5'),
+    );
+    expect(reply.model).toBe('anthropic/claude-opus-5');
+    expect(reply.upstream_model).toBeUndefined();
+    expect(logs[0]?.message).toBe('anthropic/claude-opus-5 answered as unreported');
+    expect(logs[0]?.stage).toBe('v2');
+  });
+
+  it('maps length, content_filter and message.refusal finishes to the typed errors', async () => {
+    const wire = 'deepseek/deepseek-v4-pro-0813';
+    stubFetch(200, completion(wire, '{"stan', 'length'));
+    await expect(
+      transportFor(DEEPSEEK_V4_PRO_PIN).createMessage(request(wire)),
+    ).rejects.toBeInstanceOf(LlmTruncatedError);
+    stubFetch(200, completion(wire, '', 'content_filter'));
+    await expect(
+      transportFor(DEEPSEEK_V4_PRO_PIN).createMessage(request(wire)),
+    ).rejects.toBeInstanceOf(LlmRefusalError);
+    stubFetch(200, completion(wire, '', 'stop', 'no'));
+    await expect(
+      transportFor(DEEPSEEK_V4_PRO_PIN).createMessage(request(wire)),
+    ).rejects.toBeInstanceOf(LlmRefusalError);
+  });
+
+  it('surfaces a 429 as rate-limited and other statuses as transport failures without leaking the key', async () => {
+    stubFetch(429, { error: { type: 'rate_limit', message: 'slow down' } });
+    const limited = await transportFor(JUDGE_PIN)
+      .createMessage(request('anthropic/claude-opus-5'))
       .catch((e: unknown) => e);
-    expect(dated).toBeInstanceOf(LlmRateLimitError);
-    expect((dated as LlmRateLimitError).retryAfterMs).toBeUndefined();
-  });
+    expect(limited).toBeInstanceOf(NousApiError);
+    expect((limited as NousApiError).status).toBe(429);
+    expect(classifyFailureCause(limited)).toBe('rate_limited');
 
-  it('maps 429 to a rate-limit error with retry-after and other statuses to provider errors', async () => {
-    const limited = new AnthropicHttpTransport({
-      apiKey: 'k',
-      pin: JUDGE_PIN,
-      gate: gate(),
-      fetchImpl: fakeFetch(429, { error: 'slow down' }, [], { 'retry-after': '2' }),
-    });
-    const error = await limited.createMessage(request('claude-opus-5')).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(LlmRateLimitError);
-    expect((error as LlmRateLimitError).retryAfterMs).toBe(2000);
-
-    const broken = new AnthropicHttpTransport({
-      apiKey: 'sk-secret',
-      pin: JUDGE_PIN,
-      gate: gate(),
-      fetchImpl: fakeFetch(500, 'not json', []),
-    });
-    const providerError = await broken
-      .createMessage(request('claude-opus-5'))
+    stubFetch(502, 'not json');
+    const broken = await transportFor(JUDGE_PIN)
+      .createMessage(request('anthropic/claude-opus-5'))
       .catch((e: unknown) => e);
-    expect(providerError).toBeInstanceOf(LlmProviderError);
-    expect((providerError as Error).message).not.toContain('sk-secret');
+    expect(broken).toBeInstanceOf(NousApiError);
+    expect(classifyFailureCause(broken)).toBe('transport');
+    expect((broken as Error).message).not.toContain('nous-secret');
   });
 
-  it('treats only 2xx as success and reports the reply shape', async () => {
-    const make = (status: number, stop_reason = 'end_turn') =>
-      new AnthropicHttpTransport({
-        apiKey: 'k',
-        pin: JUDGE_PIN,
-        gate: gate(),
-        fetchImpl: fakeFetch(
-          status,
-          {
-            content: [{ type: 'text', text: '{}' }],
-            usage: { input_tokens: 1, output_tokens: 1 },
-            stop_reason,
-          },
-          [],
-        ),
-      });
-    for (const status of [300, 599]) {
-      const error = await make(status)
-        .createMessage(request('claude-opus-5'))
-        .catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(LlmProviderError);
-      expect((error as Error).message).toContain(`HTTP ${status}`);
-    }
-    const ok = await make(299).createMessage(request('claude-opus-5'));
-    expect(ok.stop_reason).toBe('end_turn');
-    expect(ok.model).toBe('claude-opus-5');
-    expect(typeof ok.ttfb_ms).toBe('number');
-    const sequence = await make(200, 'stop_sequence').createMessage(request('claude-opus-5'));
-    expect(sequence.stop_reason).toBe('end_turn');
-    const other = await make(200, 'tool_use').createMessage(request('claude-opus-5'));
-    expect(other.stop_reason).toBe('other');
-  });
-
-  it('leaves retry-after undefined when the header is absent', async () => {
-    const limited = new AnthropicHttpTransport({
-      apiKey: 'k',
-      pin: JUDGE_PIN,
-      gate: gate(),
-      fetchImpl: fakeFetch(429, { error: 'slow' }, []),
+  it('is retried as a rate limit by the debate client the panel wraps it in', async () => {
+    stubFetch(429, { error: { type: 'rate_limit', message: 'slow down' } });
+    const client = new AnthropicLlmClient(transportFor(JUDGE_PIN), {
+      model: 'anthropic/claude-opus-5',
+      max_tokens: 64,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
     });
-    const error = await limited.createMessage(request('claude-opus-5')).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(LlmRateLimitError);
-    expect((error as LlmRateLimitError).retryAfterMs).toBeUndefined();
-  });
-
-  it('previews at most 200 characters of a non-JSON error body', async () => {
-    const broken = new AnthropicHttpTransport({
-      apiKey: 'k',
-      pin: JUDGE_PIN,
-      gate: gate(),
-      fetchImpl: fakeFetch(502, `${'x'.repeat(250)}TAIL`, []),
-    });
-    const error = await broken.createMessage(request('claude-opus-5')).catch((e: unknown) => e);
-    const message = (error as Error).message;
-    expect(message).toContain('HTTP 502');
-    expect(message).toContain('x'.repeat(100));
-    expect(message).not.toContain('TAIL');
-    expect(message.length).toBeLessThan(300);
+    await expect(
+      client.complete({
+        prompt: 'hello',
+        context: { analyst_views: [] },
+        parseResponse: (raw: string) => ({ valid: true as const, data: raw }),
+      }),
+    ).rejects.toBeInstanceOf(LlmRateLimitError);
   });
 
   it('passes the caller signal through to fetch', async () => {
-    const seen: (AbortSignal | null | undefined)[] = [];
-    const transport = new AnthropicHttpTransport({
-      apiKey: 'k',
-      pin: JUDGE_PIN,
-      gate: gate(),
-      fetchImpl: (_url, init) => {
-        seen.push(init.signal);
-        if (init.signal?.aborted) return Promise.reject(new Error('aborted'));
-        return Promise.resolve(new Response('{}', { status: 500 }));
-      },
-    });
+    const captured: Captured[] = [];
+    stubFetch(200, completion('anthropic/claude-opus-5', 'ok'), captured);
     const controller = new AbortController();
+    await transportFor(JUDGE_PIN).createMessage(request('anthropic/claude-opus-5'), {
+      signal: controller.signal,
+    });
+    expect(captured[0]?.signal).toBeInstanceOf(AbortSignal);
+    expect(captured[0]?.signal?.aborted).toBe(false);
     controller.abort();
-    await expect(
-      transport.createMessage(request('claude-opus-5'), { signal: controller.signal }),
-    ).rejects.toThrow();
-    const untouched = await transport
-      .createMessage(request('claude-opus-5'))
-      .catch((e: unknown) => e);
-    expect(untouched).toBeInstanceOf(LlmProviderError);
-    expect(seen.at(-1)?.aborted).toBe(false);
+    expect(captured[0]?.signal?.aborted).toBe(true);
   });
 
-  it('releases the gate slot after a failure', async () => {
+  it('releases the account gate slot after a failure', async () => {
     const shared = gate();
-    const transport = new AnthropicHttpTransport({
-      apiKey: 'k',
-      pin: JUDGE_PIN,
-      gate: shared,
-      fetchImpl: fakeFetch(500, {}, []),
-    });
-    await expect(transport.createMessage(request('claude-opus-5'))).rejects.toThrow();
+    stubFetch(500, {});
+    await expect(
+      transportFor(JUDGE_PIN, undefined, shared).createMessage(request('anthropic/claude-opus-5')),
+    ).rejects.toThrow();
     const slot = await shared.acquire({ budgetMs: 1 });
     slot.release();
-  });
-});
-
-describe('OpenRouterHttpTransport', () => {
-  it('posts chat completions with pinned routing and decodes the OpenAI shape', async () => {
-    const captured: Captured[] = [];
-    const transport = new OpenRouterHttpTransport({
-      apiKey: 'or-secret',
-      pin: DEEPSEEK_V4_PRO_PIN,
-      gate: gate(),
-      fetchImpl: fakeFetch(
-        200,
-        {
-          model: 'deepseek/deepseek-v4-pro-0813',
-          choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 7, completion_tokens: 3 },
-        },
-        captured,
-      ),
-    });
-    const reply = await transport.createMessage(request('deepseek/deepseek-v4-pro-0813'));
-    expect(captured[0]?.url).toBe('https://openrouter.ai/api/v1/chat/completions');
-    expect(captured[0]?.headers.authorization).toBe('Bearer or-secret');
-    expect(captured[0]?.body.provider).toEqual({ allow_fallbacks: false, data_collection: 'deny' });
-    expect(captured[0]?.body.model).toBe('deepseek/deepseek-v4-pro-0813');
-    expect(reply.model).toBe('deepseek/deepseek-v4-pro');
-    expect(reply.content[0]?.text).toBe('ok');
-    expect(reply.usage).toEqual({ input_tokens: 7, output_tokens: 3 });
-  });
-
-  it('maps length and content_filter finishes', async () => {
-    const make = (finish_reason: string, refusal?: string) =>
-      new OpenRouterHttpTransport({
-        apiKey: 'k',
-        pin: DEEPSEEK_V4_PRO_PIN,
-        gate: gate(),
-        fetchImpl: fakeFetch(
-          200,
-          { choices: [{ message: { content: '', refusal }, finish_reason }] },
-          [],
-        ),
-      });
-    const wire = 'deepseek/deepseek-v4-pro-0813';
-    await expect(make('length').createMessage(request(wire))).rejects.toBeInstanceOf(
-      LlmTruncatedError,
-    );
-    await expect(make('content_filter').createMessage(request(wire))).rejects.toBeInstanceOf(
-      LlmRefusalError,
-    );
-    await expect(make('stop', 'no').createMessage(request(wire))).rejects.toBeInstanceOf(
-      LlmRefusalError,
-    );
   });
 });
 
@@ -336,7 +222,10 @@ describe('ScriptedTransport', () => {
         : '{"stance":"neutral","rationale":"scripted"}',
     );
     const mediator = await transport.createMessage(
-      { ...request('claude-opus-5'), messages: [{ role: 'user', content: 'Mediator persona' }] },
+      {
+        ...request('anthropic/claude-opus-5'),
+        messages: [{ role: 'user', content: 'Mediator persona' }],
+      },
       { stage: 'debate' },
     );
     expect(JSON.parse(mediator.content[0]?.text ?? '')).toEqual({
@@ -344,25 +233,13 @@ describe('ScriptedTransport', () => {
       rationale: 'scripted',
       converged: true,
     });
-    const debater = await transport.createMessage(request('claude-opus-5'));
+    const debater = await transport.createMessage(request('anthropic/claude-opus-5'));
     expect(JSON.parse(debater.content[0]?.text ?? '')).toEqual({
       stance: 'neutral',
       rationale: 'scripted',
     });
     expect(transport.calls).toHaveLength(2);
     expect(transport.calls[0]?.stage).toBe('debate');
-    expect(mediator.model).toBe('claude-opus-5');
-  });
-});
-
-describe('wire helpers', () => {
-  it('asRecord yields {} for non-objects and numberOr falls back on non-finite values', () => {
-    expect(asRecord(null)).toEqual({});
-    expect(asRecord('x')).toEqual({});
-    expect(asRecord({ a: 1 })).toEqual({ a: 1 });
-    expect(numberOr(3, 0)).toBe(3);
-    expect(numberOr(Number.NaN, 7)).toBe(7);
-    expect(numberOr('3', 7)).toBe(7);
-    expect(numberOr(undefined, 7)).toBe(7);
+    expect(mediator.model).toBe('anthropic/claude-opus-5');
   });
 });

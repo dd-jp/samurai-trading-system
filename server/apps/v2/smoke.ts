@@ -80,7 +80,9 @@ function keylessPaperRunRefused(): boolean {
     composeV2Root({ tradingDate: SMOKE_TRADING_DATE, dryRun: false, storePath: ':memory:' });
     return false;
   } catch (error) {
-    return error instanceof Error && /without ANTHROPIC_API_KEY/.test(error.message);
+    return (
+      error instanceof Error && /without NOUS_BASE_URL and NOUS_DEBATE_API_KEY/.test(error.message)
+    );
   }
 }
 
@@ -146,7 +148,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
       probe(
         'a paper run without LLM keys is refused for that reason',
         keylessPaperRunRefused(),
-        'composeV2Root threw /without ANTHROPIC_API_KEY/',
+        'composeV2Root threw /without NOUS_BASE_URL and NOUS_DEBATE_API_KEY/',
       ),
     );
   } finally {

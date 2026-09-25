@@ -9,15 +9,11 @@ const GROK_LARGE_PROMPT_TIER = {
   tier: { above_prompt_tokens: 200_000, input: 4, output: 12 },
 } as const;
 
-// First-party Claude API list rates (claude-api skill, shared/model-migration.md: Opus 5 $5/$25,
-// Sonnet 5 $2/$10 per MTok); the 'anthropic/' keys below are the Nous-discounted rates
 export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
-  'claude-opus-5': { input: 5, output: 25 },
-  'claude-sonnet-5': { input: 2, output: 10 },
   'anthropic/claude-fable-5': { input: 8, output: 40 },
-  'anthropic/claude-opus-5': { input: 4, output: 20 },
+  'anthropic/claude-opus-5': { input: 5, output: 25 },
   'anthropic/claude-opus-4.8': { input: 4, output: 20 },
-  'anthropic/claude-sonnet-5': { input: 1.6, output: 8 },
+  'anthropic/claude-sonnet-5': { input: 2, output: 10 },
   'anthropic/claude-haiku-4.5': { input: 0.8, output: 4 },
   'openai/gpt-5.6-sol': { input: 4, output: 24 },
   'openai/gpt-5.6-sol-pro': { input: 4, output: 24 },
@@ -25,7 +21,7 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   'openai/gpt-5.6-terra-pro': { input: 1, output: 6 },
   'openai/gpt-5.6-luna': { input: 0.1, output: 0.6 },
   'openai/gpt-5.6-luna-pro': { input: 0.1, output: 0.6 },
-  'openai/gpt-5.5': { input: 4, output: 24 },
+  'openai/gpt-5.5': { input: 5, output: 30 },
   'openai/gpt-5.5-pro': { input: 24, output: 144 },
   'openai/gpt-5.4-mini': { input: 0.6, output: 3.6 },
   'google/gemini-3.1-pro-preview': { input: 1.6, output: 9.6 },
@@ -33,6 +29,7 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   'x-ai/grok-4.5': { input: 1.6, output: 4.8, cache_read: 0.4, ...GROK_LARGE_PROMPT_TIER },
   '~x-ai/grok-latest': { input: 1.6, output: 4.8, cache_read: 0.4, ...GROK_LARGE_PROMPT_TIER },
   'deepseek/deepseek-v4-pro': { input: 0.35, output: 0.7 },
+  'deepseek/deepseek-v4-pro-0813': { input: 0.58, output: 1.74 },
   'deepseek/deepseek-v4-flash': { input: 0.07, output: 0.14 },
   'deepseek/deepseek-v4-flash-0731': { input: 0.01, output: 0.02 },
   'qwen/qwen3.8-max': { input: 1.6, output: 4.8 },

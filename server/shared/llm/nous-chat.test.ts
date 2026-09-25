@@ -235,14 +235,16 @@ describe('nousChat', () => {
       const result = await nousChat(OPTIONS, REQUEST);
 
       expect(result.model).toBe('anthropic/claude-haiku-4.5');
+      expect(result.upstream_model).toBe('anthropic/claude-haiku-4.5');
     });
 
-    it('falls back to the requested id when the echo is not priceable', async () => {
+    it('falls back to the requested id when the echo is not priceable, keeping the raw echo', async () => {
       stubFetch(completion({ model: 'claude-haiku-4-5-20251001' }));
 
       const result = await nousChat(OPTIONS, REQUEST);
 
       expect(result.model).toBe('openai/gpt-5.6-luna');
+      expect(result.upstream_model).toBe('claude-haiku-4-5-20251001');
     });
 
     it('falls back when the provider echoes no model at all', async () => {
@@ -251,6 +253,7 @@ describe('nousChat', () => {
       const result = await nousChat(OPTIONS, REQUEST);
 
       expect(result.model).toBe('openai/gpt-5.6-luna');
+      expect(result.upstream_model).toBeUndefined();
     });
   });
 

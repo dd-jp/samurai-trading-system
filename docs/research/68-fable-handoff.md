@@ -382,6 +382,8 @@ of this eval.
 
 ## Session D — Step 3: v2 composition root · effort **high**
 
+**Status 2026-09-25: built (PR #1767); transport corrected the same day.** The build shipped Anthropic first-party + OpenRouter HTTP transports off the prompt's wording; David ruled all four seats go through the existing Nous account (spec §4, doc 66 Q16 note). The follow-up (branch `fix/v2-nous-transport`) replaced them with `NousPinnedTransport` over `NousMessagesClient` behind one `NousAccountInFlightGate({ maxInFlight: 1 })`, repinned the seats to Nous ids, updated `pricing.ts` to the 2026-09-25 catalogue and rekeyed the root on `NOUS_BASE_URL` + `NOUS_DEBATE_API_KEY`.
+
 ```
 You are working on Samurai (repo dd-jp/samurai-trading-system). Read
 docs/research/67-v2-plan-and-handoff.md (§4, Step 3, §5a, §6), all of
@@ -392,8 +394,10 @@ long and short, each side its own counted trial vs arm 2; shorts large-cap easy-
 (Q8) and none until the Alpaca $2,000 equity floor is resolved (still open). If an item under
 "Still open" blocks a choice you need, STOP and ask.
 Build Step 3 exactly: slim v2 root; reuse broker adapters, providers, stores, debate core behind a real module
-interface; Saxo simulated paper adapter at the live tariff; Alpaca paper; Anthropic + OpenRouter
-clients with pinned versions; separate paper book per sleeve plus the shadow books (no-veto G5,
+interface; Saxo simulated paper adapter at the live tariff; Alpaca paper; all four LLM seats over
+the existing Nous account (`NousMessagesClient`, one per-account in-flight gate) with pinned Nous ids
+[amended 2026-09-25 by David's ruling — this line said "Anthropic + OpenRouter clients", a doc
+wording error, not a ruling; no first-party or OpenRouter keys exist]; separate paper book per sleeve plus the shadow books (no-veto G5,
 no-macro-gate G16, one per G18 input trial); debate universe per G4 + G18; macro days at half
 size (G16); wire only sleeves that survived B and C; stop the v1 paper soak. Verify with a dry run that submits no orders. One PR per area.
 

@@ -37,6 +37,7 @@ export interface NousChatResult {
   usage: AnthropicUsage;
   server_tool_calls?: number;
   model: string;
+  upstream_model: string | undefined;
   finish_reason: string | null;
   ttfb_ms: number;
 }
@@ -133,6 +134,7 @@ async function dispatch(
     text: typeof choice.message?.content === 'string' ? choice.message.content : '',
     usage,
     model: resolveMeteredModel(parsed.model, request.model),
+    upstream_model: typeof parsed.model === 'string' ? parsed.model : undefined,
     finish_reason,
     ttfb_ms,
   };
