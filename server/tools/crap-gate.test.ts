@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -12,6 +13,7 @@ import {
   formatDistribution,
   functionCoverage,
   gateReport,
+  gitChangedLines,
   innermostFunction,
   isGated,
   main,
@@ -19,6 +21,7 @@ import {
   parseBiomeComplexity,
   parseUnifiedDiff,
   percentile,
+  reconcileChangedFiles,
   withinScope,
 } from './crap-gate.js';
 
@@ -189,6 +192,11 @@ describe('evaluateCrap', () => {
     expect(result.uncovered).toEqual([]);
   });
 
+  it('starts the gated span at the declaration when Biome reports below it', () => {
+    const [row] = evaluateCrap([{ path: FILE, line: 7, column: 5, complexity: 3 }], coverage).rows;
+    expect(row).toMatchObject({ name: 'inner', line: 7, startLine: 5, endLine: 8 });
+  });
+
   it('reports a production file missing from coverage as uncovered', () => {
     const missing = { path: '/repo/server/index.ts', line: 1, column: 1, complexity: 9 };
     expect(evaluateCrap([missing], coverage).uncovered).toEqual([missing]);
@@ -240,7 +248,16 @@ describe('formatDistribution', () => {
     const text = formatDistribution(
       {
         rows: [
-          { path: FILE, line: 5, endLine: 8, name: 'inner', complexity: 8, coverage: 0, crap: 16 },
+          {
+            path: FILE,
+            line: 5,
+            startLine: 5,
+            endLine: 8,
+            name: 'inner',
+            complexity: 8,
+            coverage: 0,
+            crap: 16,
+          },
         ],
         unmatched: [],
         ambiguous: [],
@@ -423,6 +440,76 @@ describe('parseUnifiedDiff', () => {
     expect([...changed.keys()]).toEqual([FILE]);
     expect([...(changed.get(FILE) as Set<number>)]).toEqual([3, 4, 5, 11, 21, 22]);
   });
+
+  it('drops the tab git appends to a path containing a space', () => {
+    const diff = ['--- a/server/sp ace.ts\t', '+++ b/server/sp ace.ts\t', '@@ -1 +1 @@'].join('\n');
+    expect([...parseUnifiedDiff(diff, ROOT).keys()]).toEqual(['/repo/server/sp ace.ts']);
+  });
+});
+
+describe('reconcileChangedFiles', () => {
+  it('throws when the parse produced a file git did not report', () => {
+    const parsed = new Map<string, Set<number> | 'all'>([['/repo/erver/a.ts', new Set([1])]]);
+    expect(() => reconcileChangedFiles(parsed, [FILE])).toThrow('diff parse disagrees');
+  });
+
+  it('gates a reported file the parse missed in full', () => {
+    const parsed = new Map<string, Set<number> | 'all'>([[FILE, new Set([1])]]);
+    const result = reconcileChangedFiles(parsed, [FILE, '/repo/server/mode-only.ts']);
+    expect(result.get('/repo/server/mode-only.ts')).toBe('all');
+    expect(result.get(FILE)).toEqual(new Set([1]));
+  });
+});
+
+describe('gitChangedLines', () => {
+  function gitIn(dir: string, ...args: string[]): string {
+    return execFileSync(
+      'git',
+      [
+        '-C',
+        dir,
+        '-c',
+        'user.email=t@t',
+        '-c',
+        'user.name=t',
+        '-c',
+        'commit.gpgsign=false',
+        ...args,
+      ],
+      { encoding: 'utf8' },
+    );
+  }
+
+  it('reads modified, spaced, non-ASCII, renamed and untracked files despite hostile diff config', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'crap-gate-git-')));
+    gitIn(dir, 'init', '-q');
+    mkdirSync(join(dir, 'server'));
+    const body = ['a', 'b', 'c', 'd', 'e', 'f'].join('\n');
+    for (const name of ['kept.ts', 'sp ace.ts', 'café.ts', 'moved.ts']) {
+      writeFileSync(join(dir, 'server', name), `${body}\n`);
+    }
+    gitIn(dir, 'add', '-A');
+    gitIn(dir, 'commit', '-q', '--no-verify', '-m', 'base');
+    gitIn(dir, 'tag', 'base');
+    gitIn(dir, 'config', 'diff.noprefix', 'true');
+    gitIn(dir, 'config', 'diff.mnemonicPrefix', 'true');
+
+    writeFileSync(join(dir, 'server', 'kept.ts'), 'a\nB\nc\nd\ne\nf\n');
+    writeFileSync(join(dir, 'server', 'sp ace.ts'), 'a\nb\nc\nD\ne\nf\n');
+    writeFileSync(join(dir, 'server', 'café.ts'), 'a\nb\nc\nd\ne\nF\n');
+    renameSync(join(dir, 'server', 'moved.ts'), join(dir, 'server', 'renamed.ts'));
+    gitIn(dir, 'add', '-A');
+    gitIn(dir, 'commit', '-q', '--no-verify', '-m', 'change');
+    writeFileSync(join(dir, 'server', 'new.ts'), 'x\n');
+
+    const changed = gitChangedLines(join(dir, 'server'), 'base');
+    expect(changed.get(join(dir, 'server/kept.ts'))).toEqual(new Set([2]));
+    expect(changed.get(join(dir, 'server/sp ace.ts'))).toEqual(new Set([4]));
+    expect(changed.get(join(dir, 'server/café.ts'))).toEqual(new Set([6]));
+    expect(changed.get(join(dir, 'server/renamed.ts'))).toEqual(new Set([1, 2, 3, 4, 5, 6]));
+    expect(changed.get(join(dir, 'server/new.ts'))).toBe('all');
+    expect(changed.has(join(dir, 'server/moved.ts'))).toBe(false);
+  });
 });
 
 describe('isGated', () => {
@@ -450,6 +537,7 @@ describe('gateReport', () => {
   const row = {
     path: FILE,
     line: 5,
+    startLine: 5,
     endLine: 8,
     name: 'inner',
     complexity: 8,

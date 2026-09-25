@@ -29,7 +29,7 @@
     "test:local": "vitest run --changed origin/main",
     "test:watch": "vitest",
     "mutation:local": "tsx server/tools/mutation-local.ts",
-    "crap": "vitest run --coverage --coverage.reporter=json && tsx server/tools/crap-gate.ts --threshold 7 --changed-since origin/main",
+    "crap": "vitest run --coverage --coverage.reporter=json && tsx server/tools/crap-gate.ts --threshold 15 && tsx server/tools/crap-gate.ts --threshold 7 --changed-since origin/main --strict server/apps/v2 --strict contracts",
     "crap:report": "tsx server/tools/crap-gate.ts",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "check:citations": "tsx server/tools/check-path-citations.ts",

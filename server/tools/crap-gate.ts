@@ -50,6 +50,7 @@ export interface ComplexityFinding {
 export interface CrapRow {
   readonly path: string;
   readonly line: number;
+  readonly startLine: number;
   readonly endLine: number;
   readonly name: string;
   readonly complexity: number;
@@ -192,12 +193,19 @@ type ScoredFinding =
   | { readonly kind: 'row'; readonly row: CrapRow }
   | { readonly kind: UnscoredKind | 'test-file' };
 
+// Biome reports an arrow function at its `=>` line, below a multi-line parameter list
+function spanStart(finding: ComplexityFinding, fn: FunctionEntry | undefined): number {
+  const decl = fn?.decl?.start.line ?? finding.line;
+  return Math.min(finding.line, decl, fn?.loc.start.line ?? finding.line);
+}
+
 function toRow(finding: ComplexityFinding, file: FileCoverage, key: string): CrapRow {
   const fn = file.fnMap[key];
   const covered = functionCoverage(file, key);
   return {
     path: finding.path,
     line: finding.line,
+    startLine: spanStart(finding, fn),
     endLine: fn?.loc.end.line ?? finding.line,
     name: fn?.name ?? key,
     complexity: finding.complexity,
@@ -332,7 +340,8 @@ const FILE_HEADER = /^--- [^\n]*\n\+\+\+ /m;
 export function parseUnifiedDiff(diff: string, root: string): Map<string, Set<number> | 'all'> {
   const changed = new Map<string, Set<number> | 'all'>();
   for (const section of diff.split(FILE_HEADER).slice(1)) {
-    const [target = '', ...rest] = section.split('\n');
+    const [header = '', ...rest] = section.split('\n');
+    const target = header.replace(/\t$/, '');
     if (target === '/dev/null') continue;
     changed.set(resolve(root, target.slice('b/'.length)), new Set(rest.flatMap(hunkLines)));
   }
@@ -340,19 +349,47 @@ export function parseUnifiedDiff(diff: string, root: string): Map<string, Set<nu
 }
 
 function git(root: string, args: readonly string[]): string {
-  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
+  return execFileSync('git', ['-C', root, '-c', 'core.quotePath=false', ...args], {
+    encoding: 'utf8',
+    maxBuffer: 1 << 28,
+  });
+}
+
+function nulSeparated(output: string, top: string): string[] {
+  return output
+    .split('\0')
+    .filter((entry) => entry.length > 0)
+    .map((entry) => resolve(top, entry));
+}
+
+export function reconcileChangedFiles(
+  changed: Map<string, Set<number> | 'all'>,
+  expectedFiles: readonly string[],
+): Map<string, Set<number> | 'all'> {
+  const expected = new Set(expectedFiles);
+  const stray = [...changed.keys()].filter((path) => !expected.has(path));
+  if (stray.length > 0) {
+    throw new Error(`diff parse disagrees with git --name-only: ${stray.join(', ')}`);
+  }
+  for (const path of expectedFiles) {
+    if (!changed.has(path)) changed.set(path, 'all');
+  }
+  return changed;
 }
 
 export function gitChangedLines(root: string, ref: string): ChangedLines {
-  const base = git(root, ['merge-base', ref, 'HEAD']).trim();
-  const changed = parseUnifiedDiff(
-    git(root, ['diff', '-U0', '--no-color', '--no-ext-diff', base]),
-    root,
+  const top = git(root, ['rev-parse', '--show-toplevel']).trim();
+  const base = git(top, ['merge-base', ref, 'HEAD']).trim();
+  const diffArgs = ['diff', '--no-renames', '--no-ext-diff', base];
+  const changed = reconcileChangedFiles(
+    parseUnifiedDiff(
+      git(top, [...diffArgs, '-U0', '--no-color', '--src-prefix=a/', '--dst-prefix=b/']),
+      top,
+    ),
+    nulSeparated(git(top, [...diffArgs, '--name-only', '-z', '--diff-filter=d']), top),
   );
-  const untracked = git(root, ['ls-files', '--others', '--exclude-standard']).split('\n');
-  for (const path of untracked.filter((entry) => entry.length > 0)) {
-    changed.set(resolve(root, path), 'all');
-  }
+  const untracked = git(top, ['ls-files', '--others', '--exclude-standard', '-z']);
+  for (const path of nulSeparated(untracked, top)) changed.set(path, 'all');
   return changed;
 }
 
@@ -461,7 +498,9 @@ export function gateReport(
       text: 'crap gate: no complexity findings scored; refusing to pass an empty run\n',
     };
   }
-  const gated = evaluation.rows.filter((row) => isGated(policy, row.path, row.line, row.endLine));
+  const gated = evaluation.rows.filter((row) =>
+    isGated(policy, row.path, row.startLine, row.endLine),
+  );
   const offenders = gated.filter((row) => row.crap > limit);
   const unscored = [
     ...evaluation.unmatched,
