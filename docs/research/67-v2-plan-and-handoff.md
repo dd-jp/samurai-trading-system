@@ -161,6 +161,7 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - [#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791) goes with PR 3.
 - Known limits, owned by later steps:
   - `sleeveAllocationGbp` seeds every sleeve at the whole start capital. That is right while debate is the only sleeve. Step 1b must add the S1 split (debate 30%, passers share the 70%) before a second sleeve registers, or the books would count the loss budget twice.
+  - No sleeve sets `veto` yet. The G5 cap (a veto on at most 10% of entries) is still to be measured and enforced. It lands with the first sleeve that vetoes (Step 1b).
   - `childOrders` sends one child today. Before it sends more than one:
     - journal each child's client order id, or `ingest` logs the child fills as unmatched;
     - report a mid-sequence throw as a partial submission, not `failed`.
