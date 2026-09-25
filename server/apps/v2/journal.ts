@@ -7,16 +7,36 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 import type { SleeveDecision } from './sleeve.js';
 
-export type OrderOutcome = 'submitted' | 'refused_dry_run' | 'rejected';
+export type OrderOutcome = 'submitted' | 'refused_dry_run' | 'simulated' | 'rejected' | 'cancelled';
+export type OrderLeg = 'entry' | 'exit';
+export type OrderSide = 'buy' | 'sell';
 
 export interface JournalledOrder {
   readonly client_order_id: string;
-  readonly decision_id: string;
+  readonly decision_id: string | null;
   readonly book_id: string;
+  readonly trading_date: string;
+  readonly instrument: string;
   readonly venue: string;
+  readonly leg: OrderLeg;
+  readonly side: OrderSide;
   readonly dry_run: boolean;
   readonly outcome: OrderOutcome;
   readonly payload: Record<string, unknown>;
+}
+
+export interface JournalledFill {
+  readonly fill_id: string;
+  readonly client_order_id: string;
+  readonly book_id: string;
+  readonly trading_date: string;
+  readonly instrument: string;
+  readonly venue: string;
+  readonly leg: string;
+  readonly side: OrderSide;
+  readonly qty: number;
+  readonly price_gbp: number;
+  readonly fee_gbp: number;
 }
 
 export interface JournalledRefusal {
@@ -86,19 +106,87 @@ export class Journal {
   recordOrder(order: JournalledOrder): void {
     this.db
       .prepare(
-        `INSERT INTO v2_orders (client_order_id, decision_id, book_id, venue, dry_run, outcome, payload, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+           leg, side, dry_run, outcome, payload, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         order.client_order_id,
         order.decision_id,
         order.book_id,
+        order.trading_date,
+        order.instrument,
         order.venue,
+        order.leg,
+        order.side,
         order.dry_run ? 1 : 0,
         order.outcome,
         JSON.stringify(order.payload),
         this.#now(),
       );
+  }
+
+  orderFor(clientOrderId: string): JournalledOrder | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT client_order_id, decision_id, book_id, trading_date, instrument, venue, leg, side,
+           dry_run, outcome, payload
+         FROM v2_orders WHERE client_order_id = ?`,
+      )
+      .get(clientOrderId) as
+      | (Omit<JournalledOrder, 'dry_run' | 'payload'> & { dry_run: number; payload: string })
+      | undefined;
+    if (row === undefined) return undefined;
+    return {
+      ...row,
+      dry_run: row.dry_run === 1,
+      payload: JSON.parse(row.payload) as Record<string, unknown>,
+    };
+  }
+
+  unfilledEntriesBefore(bookId: string, tradingDate: string): readonly JournalledOrder[] {
+    const rows = this.db
+      .prepare(
+        `SELECT client_order_id FROM v2_orders o
+         WHERE book_id = ? AND leg = 'entry' AND outcome = 'submitted' AND trading_date < ?
+           AND NOT EXISTS (SELECT 1 FROM v2_fills f WHERE f.client_order_id = o.client_order_id)
+         ORDER BY client_order_id`,
+      )
+      .all(bookId, tradingDate) as { client_order_id: string }[];
+    return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
+  }
+
+  markCancelled(clientOrderId: string, detail: string): void {
+    this.db
+      .prepare(
+        `UPDATE v2_orders SET outcome = 'cancelled',
+           payload = json_set(payload, '$.cancelled', ?) WHERE client_order_id = ?`,
+      )
+      .run(detail, clientOrderId);
+  }
+
+  recordFill(fill: JournalledFill): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument,
+           venue, leg, side, qty, price_gbp, fee_gbp, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        fill.fill_id,
+        fill.client_order_id,
+        fill.book_id,
+        fill.trading_date,
+        fill.instrument,
+        fill.venue,
+        fill.leg,
+        fill.side,
+        fill.qty,
+        fill.price_gbp,
+        fill.fee_gbp,
+        this.#now(),
+      );
+    return result.changes === 1;
   }
 
   recordRefusal(refusal: JournalledRefusal): void {
@@ -115,59 +203,6 @@ export class Journal {
         refusal.message,
         this.#now(),
       );
-  }
-
-  countOrders(outcome: OrderOutcome): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) AS n FROM v2_orders WHERE outcome = ?')
-      .get(outcome) as { n: number };
-    return row.n;
-  }
-
-  decisionsFor(
-    bookId: string,
-    tradingDate: string,
-  ): readonly { instrument: string; action: string; inputs_hash: string }[] {
-    return this.db
-      .prepare(
-        'SELECT instrument, action, inputs_hash FROM v2_decisions WHERE book_id = ? AND trading_date = ? ORDER BY instrument',
-      )
-      .all(bookId, tradingDate) as { instrument: string; action: string; inputs_hash: string }[];
-  }
-
-  refusalsFor(tradingDate: string): readonly JournalledRefusal[] {
-    return this.db
-      .prepare(
-        `SELECT trading_date, scope, parameter, ticket, message FROM v2_refusals
-         WHERE trading_date = ? ORDER BY refusal_id`,
-      )
-      .all(tradingDate) as JournalledRefusal[];
-  }
-
-  ordersFor(bookId: string): readonly JournalledOrder[] {
-    const rows = this.db
-      .prepare(
-        `SELECT client_order_id, decision_id, book_id, venue, dry_run, outcome, payload
-         FROM v2_orders WHERE book_id = ? ORDER BY client_order_id`,
-      )
-      .all(bookId) as (Omit<JournalledOrder, 'dry_run' | 'payload'> & {
-      dry_run: number;
-      payload: string;
-    })[];
-    return rows.map((row) => ({
-      ...row,
-      dry_run: row.dry_run === 1,
-      payload: JSON.parse(row.payload) as Record<string, unknown>,
-    }));
-  }
-
-  sizeShares(bookId: string, tradingDate: string, instrument: string): number | undefined {
-    const row = this.db
-      .prepare(
-        'SELECT size_shares FROM v2_decisions WHERE book_id = ? AND trading_date = ? AND instrument = ?',
-      )
-      .get(bookId, tradingDate, instrument) as { size_shares: number } | undefined;
-    return row?.size_shares;
   }
 
   #now(): string {

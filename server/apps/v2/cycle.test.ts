@@ -1,16 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { BrokerAdapter } from '../../pipeline/execution/index.js';
-import { SimulatedClock } from '../../shared/index.js';
+import type {
+  BrokerAck,
+  BrokerAdapter,
+  NativeBracketRequest,
+  NormalizedFill,
+} from '../../pipeline/execution/index.js';
+import type { DailyBar } from '../../pipeline/momentum/index.js';
+import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { PaperBooks } from './books.js';
 import { type CycleDeps, calendarDaysBetween, runCycle } from './cycle.js';
 import { DryRunBrokerAdapter } from './dry-run-broker.js';
 import { Journal } from './journal.js';
 import { CYCLE_LEVEL_PARAMETERS } from './parameters.js';
-import { SaxoPaperBrokerAdapter } from './saxo-paper-adapter.js';
 import { type Sleeve, type SleeveDecision, SleeveRegistry } from './sleeve.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
+const FX = 1.25;
+const HALF_SPREAD_BPS = 5;
 
 const longAapl: SleeveDecision = {
   sleeve_id: 'debate',
@@ -28,283 +35,684 @@ const longAapl: SleeveDecision = {
   payload: {},
 };
 
-function deps(
+function bar(date: string, overrides: Partial<DailyBar> = {}): DailyBar {
+  return {
+    date,
+    open: 20,
+    high: 20.5,
+    low: 19.5,
+    close: 20,
+    volume: 1_000_000,
+    rawClose: 20,
+    ...overrides,
+  };
+}
+
+class FakeAlpaca implements BrokerAdapter {
+  readonly brackets: NativeBracketRequest[] = [];
+  readonly flattens: string[] = [];
+  readonly cancelled: string[] = [];
+  readonly pending: NormalizedFill[] = [];
+  readonly sinceSeen: Date[] = [];
+  flattenError: Error | undefined;
+
+  submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
+    this.brackets.push(order);
+    return Promise.resolve({
+      client_order_id: order.client_order_id,
+      broker_order_ids: ['a1'],
+      order_state: 'submitted',
+    });
+  }
+
+  fill(clientOrderId: string, leg: NormalizedFill['leg'], qty: number, price: number): void {
+    this.pending.push({
+      client_order_id: clientOrderId,
+      broker_fill_id: toBrokerFillId(`alp-${clientOrderId}-${leg}`),
+      leg,
+      price,
+      qty,
+      fee: 0.5,
+      timestamp: clock.now(),
+    });
+  }
+
+  getOrder(): Promise<null> {
+    return Promise.resolve(null);
+  }
+
+  resumeFlatten(): Promise<null> {
+    return Promise.resolve(null);
+  }
+
+  fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    this.sinceSeen.push(since);
+    return Promise.resolve(this.pending.splice(0));
+  }
+
+  resizeProtectiveLegs(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  rearmProtectiveLegs(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  submitFlatten(
+    _instrument: string,
+    _side: 'buy' | 'sell',
+    _size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    if (this.flattenError !== undefined) return Promise.reject(this.flattenError);
+    this.flattens.push(clientOrderId);
+    return Promise.resolve({
+      client_order_id: clientOrderId,
+      broker_order_ids: ['f1'],
+      order_state: 'submitted',
+    });
+  }
+
+  cancel(clientOrderId: string): Promise<void> {
+    this.cancelled.push(clientOrderId);
+    return Promise.resolve();
+  }
+
+  getOpenPositions(): Promise<[]> {
+    return Promise.resolve([]);
+  }
+}
+
+interface Harness extends CycleDeps {
+  readonly sleeve: Sleeve;
+  readonly barsByDate: Map<string, DailyBar>;
+  readonly setDecisions: (next: readonly SleeveDecision[]) => void;
+}
+
+function harness(
   decisions: readonly SleeveDecision[],
-  brokers: Record<'alpaca' | 'saxo', BrokerAdapter>,
   dryRun: boolean,
-): CycleDeps {
+  alpaca?: BrokerAdapter,
+): Harness {
   const db = openSharedStore(':memory:');
   const registry = new SleeveRegistry();
+  let current = decisions;
   const sleeve: Sleeve = {
     id: 'debate',
     decide: () =>
       Promise.resolve({
-        decisions,
+        decisions: current,
         refusals: [{ scope: 'universe', parameter: 'P', ticket: '#1', message: 'unset' }],
       }),
   };
   registry.register(sleeve);
+  const barsByDate = new Map<string, DailyBar>();
+  const barFor = (_instrument: string, tradingDate: string) => {
+    const dated = barsByDate.get(tradingDate);
+    if (dated !== undefined) return dated;
+    const previous = new Date(Date.parse(tradingDate) - 86_400_000).toISOString().slice(0, 10);
+    return bar(previous);
+  };
   return {
     registry,
+    sleeve,
+    barsByDate,
+    setDecisions: (next) => {
+      current = next;
+    },
     books: new PaperBooks(db, clock),
     journal: new Journal(db, clock),
-    brokers,
-    gbpUsdAtYearStart: 1.25,
+    brokers: alpaca === undefined ? {} : { alpaca },
+    simulatedBroker: new DryRunBrokerAdapter({
+      halfSpreadBps: () => HALF_SPREAD_BPS,
+      markPrice: (instrument) =>
+        barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
+      clock,
+    }),
+    bar: barFor,
+    gbpUsdAtYearStart: FX,
     riskFraction: 0.005,
     targetAtrMultiple: 3,
+    timeStopTradingDays: 10,
     clock,
     dryRun,
   };
 }
 
+function orders(deps: CycleDeps, bookId: string) {
+  const db = (
+    deps.journal as unknown as {
+      db: { prepare: (sql: string) => { all: (id: string) => unknown[] } };
+    }
+  ).db;
+  return db
+    .prepare(
+      'SELECT client_order_id, leg, side, outcome, payload FROM v2_orders WHERE book_id = ? ORDER BY client_order_id',
+    )
+    .all(bookId) as {
+    client_order_id: string;
+    leg: string;
+    side: string;
+    outcome: string;
+    payload: string;
+  }[];
+}
+
+function sizeShares(deps: CycleDeps, bookId: string, tradingDate: string, instrument: string) {
+  const db = (
+    deps.journal as unknown as {
+      db: { prepare: (sql: string) => { get: (...a: unknown[]) => unknown } };
+    }
+  ).db;
+  const row = db
+    .prepare(
+      'SELECT size_shares FROM v2_decisions WHERE book_id = ? AND trading_date = ? AND instrument = ?',
+    )
+    .get(bookId, tradingDate, instrument) as { size_shares: number } | undefined;
+  return row?.size_shares;
+}
+
+const ENTRY_COST_GBP = (6 * 20 * (1 + HALF_SPREAD_BPS / 10_000)) / FX;
+
 describe('runCycle', () => {
-  it('dry run journals every book and refuses every submission', async () => {
-    const alpaca = new DryRunBrokerAdapter();
-    const cycle = deps([longAapl], { alpaca, saxo: new DryRunBrokerAdapter() }, true);
-    const report = await runCycle(cycle, '2026-09-25');
+  it('dry run: sizes, reaches the dry-run broker, submits nothing, and ingests simulated fills', async () => {
+    const deps = harness([longAapl], true);
+    const report = await runCycle(deps, '2026-09-25');
     expect(report).toMatchObject({
       dry_run: true,
+      skipped: false,
       sleeves: ['debate'],
       decisions: 1,
-      entries: 1,
+      entries: 2,
+      exits: 0,
+      fills: 2,
       submitted_orders: 0,
+      simulated_orders: 1,
       dry_run_refusals: 1,
       rejected_orders: 0,
       macro: { macroDay: false, covered: true },
     });
-    expect(report.books.map((book) => book.book_id)).toEqual([
-      'debate/primary',
-      'debate/no-macro-gate',
-      'debate/no-sentiment',
-      'debate/no-social',
-      'debate/large-cap-only',
-    ]);
     expect(report.refusals).toEqual([
       ...CYCLE_LEVEL_PARAMETERS.map(
         (parameter) => `${parameter.name} is not set: needs David (${parameter.ticket})`,
       ),
       'P: unset',
     ]);
-    expect(alpaca.refused).toHaveLength(1);
-    expect(alpaca.refused[0]?.client_order_id).toBe('v2-debate-primary-2026-09-25-AAPL');
-    expect(alpaca.refused[0]?.payload.size).toBe(6);
-    expect(cycle.journal.sizeShares('debate/primary', '2026-09-25', 'AAPL')).toBe(6);
-    expect(cycle.journal.countOrders('refused_dry_run')).toBe(1);
-    expect(cycle.journal.countOrders('submitted')).toBe(0);
-    for (const book of report.books) {
-      expect(cycle.journal.decisionsFor(book.book_id, '2026-09-25')).toEqual([
-        { instrument: 'AAPL', action: 'enter_long', inputs_hash: 'h' },
-      ]);
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'AAPL')).toBe(6);
+    expect(orders(deps, 'debate/primary')).toMatchObject([
+      { client_order_id: 'v2-debate-primary-2026-09-25-AAPL', outcome: 'refused_dry_run' },
+    ]);
+    expect(orders(deps, 'debate/no-macro-gate')).toMatchObject([
+      { client_order_id: 'v2-debate-no-macro-gate-2026-09-25-AAPL', outcome: 'simulated' },
+    ]);
+    expect(JSON.parse(orders(deps, 'debate/primary')[0]?.payload ?? '{}')).toMatchObject({
+      size: 6,
+      price: 20,
+      stop: 19.2,
+      target: expect.closeTo(21.2, 9),
+    });
+    for (const bookId of ['debate/primary', 'debate/no-macro-gate']) {
+      expect(deps.books.position(bookId, 'AAPL')).toMatchObject({
+        qty: 6,
+        avgPriceGbp: expect.closeTo(ENTRY_COST_GBP / 6, 9),
+        stopGbp: expect.closeTo(19.2 / FX, 9),
+        targetGbp: expect.closeTo(21.2 / FX, 9),
+        marksHeld: 1,
+      });
+      expect(deps.books.cash(bookId)).toBeCloseTo(1_000 - ENTRY_COST_GBP, 9);
+    }
+    expect(report.books).toMatchObject([
+      {
+        book_id: 'debate/primary',
+        positions: 1,
+        equity_gbp: expect.closeTo(1_000 - ENTRY_COST_GBP + 96, 9),
+        size_multiplier: 1,
+      },
+      { book_id: 'debate/no-macro-gate', positions: 1 },
+    ]);
+  });
+
+  it('paper mode: the primary reaches the real broker, shadows stay simulated, macro days halve the primary only', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    const fomc = await runCycle(deps, '2026-09-16');
+    expect(fomc.macro).toMatchObject({ macroDay: true, sources: ['fomc'] });
+    expect(fomc).toMatchObject({
+      entries: 2,
+      submitted_orders: 1,
+      simulated_orders: 1,
+      dry_run_refusals: 0,
+      fills: 1,
+    });
+    expect(alpaca.brackets).toEqual([
+      {
+        client_order_id: 'v2-debate-primary-2026-09-16-AAPL',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'buy',
+        size: 3,
+        entry: 20,
+        stop: 19.2,
+        target: expect.closeTo(21.2, 9),
+        time_in_force: 'gtc',
+      },
+    ]);
+    expect(sizeShares(deps, 'debate/primary', '2026-09-16', 'AAPL')).toBe(3);
+    expect(sizeShares(deps, 'debate/no-macro-gate', '2026-09-16', 'AAPL')).toBe(6);
+    expect(orders(deps, 'debate/primary')).toMatchObject([{ outcome: 'submitted', leg: 'entry' }]);
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+    expect(deps.books.position('debate/no-macro-gate', 'AAPL')?.qty).toBe(6);
+    alpaca.fill('v2-debate-primary-2026-09-16-AAPL', 'entry', 3, 20.01);
+    deps.setDecisions([]);
+    const next = await runCycle(deps, '2026-09-17');
+    expect(next.fills).toBe(1);
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: 3,
+      avgPriceGbp: expect.closeTo(20.01 / FX, 9),
+    });
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (3 * 20.01 + 0.5) / FX, 9);
+    expect(alpaca.cancelled).toEqual([]);
+  });
+
+  it('paper mode: an entry that never fills is cancelled on the next cycle and journalled as such', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-24');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-25');
+    expect(alpaca.cancelled).toEqual(['v2-debate-primary-2026-09-24-AAPL']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-24-AAPL')).toMatchObject({
+      outcome: 'cancelled',
+      payload: { cancelled: '2026-09-25' },
+    });
+    await runCycle(deps, '2026-09-26');
+    expect(alpaca.cancelled).toHaveLength(1);
+  });
+
+  it('simulated books exit at the stop on the next daily bar and the loss reaches the book', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-28', bar('2026-09-25', { low: 19.0, high: 20.2 }));
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report).toMatchObject({ exits: 2, simulated_orders: 2, fills: 2, submitted_orders: 0 });
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    const exitPrice = 19.2 / FX;
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - ENTRY_COST_GBP + 6 * exitPrice,
+      9,
+    );
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')).toMatchObject({
+      leg: 'exit',
+      side: 'sell',
+      outcome: 'simulated',
+      payload: { size: 6, detail: 'bracket_leg_on_daily_bar', price: expect.closeTo(19.2, 9) },
+    });
+    expect(report.books[0]?.equity_gbp).toBeCloseTo(1_000 - ENTRY_COST_GBP + 6 * exitPrice, 9);
+    const again = await runCycle(deps, '2026-09-29');
+    expect(again.exits).toBe(0);
+  });
+
+  it('simulated books exit at the target when the stop is not touched, shorts mirrored', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-28', bar('2026-09-25', { low: 19.3, high: 21.3 }));
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report.exits).toBe(2);
+    expect(
+      deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
+    ).toBeCloseTo(21.2, 9);
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+  });
+
+  it('a bar touching the stop or the target exactly exits at that level', async () => {
+    for (const [override, price] of [
+      [{ low: 19.2, high: 20.2 }, 19.2],
+      [{ low: 19.3, high: 21.2 }, 21.2],
+    ] as const) {
+      const deps = harness([longAapl], true);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      const report = await runCycle(deps, '2026-09-28');
+      expect(report.exits).toBe(2);
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
+      ).toBeCloseTo(price, 9);
     }
   });
 
-  it('submits to the Saxo paper adapter outside a dry run and halves size on a macro day', async () => {
-    const saxo = new SaxoPaperBrokerAdapter({ clock, halfSpreadBps: () => 0 });
-    const lse: SleeveDecision = {
-      ...longAapl,
-      instrument: 'CSP1',
-      venue: 'saxo',
-      price: 20,
-      atr: 1,
-      stop_price: 18,
-    };
-    const skipped: SleeveDecision = {
-      ...longAapl,
-      instrument: 'SKIP',
-      action: 'skip',
-      reason: 'x',
-    };
-    const cycle = deps([lse], { alpaca: new DryRunBrokerAdapter(), saxo }, false);
-    const fomc = await runCycle(cycle, '2026-09-16');
-    expect(fomc.macro).toMatchObject({ macroDay: true, sources: ['fomc'] });
-    expect(fomc.submitted_orders).toBe(1);
-    const positions = await saxo.getOpenPositions();
-    expect(positions[0]?.qty).toBe(1);
-    const shadow = cycle.journal.decisionsFor('debate/no-macro-gate', '2026-09-16');
-    expect(shadow).toHaveLength(1);
-    expect(cycle.journal.sizeShares('debate/primary', '2026-09-16', 'CSP1')).toBe(1);
-    expect(cycle.journal.sizeShares('debate/no-macro-gate', '2026-09-16', 'CSP1')).toBe(2);
+  it('paper mode: a bracket stop-leg fill on the entry order closes the position in GBP', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    expect(alpaca.sinceSeen.every((since) => since.getTime() === 0)).toBe(true);
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.sinceSeen.at(-1)).toEqual(
+      new Date(deps.books.lastDay('debate/primary')?.recordedAt ?? ''),
+    );
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: 6,
+      stopGbp: expect.closeTo(19.2 / FX, 9),
+      targetGbp: expect.closeTo(21.2 / FX, 9),
+    });
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 6, 19.2);
+    const report = await runCycle(deps, '2026-09-29');
+    expect(report.fills).toBe(1);
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - (6 * 20 + 0.5) / FX + (6 * 19.2 - 0.5) / FX,
+      9,
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT leg, side, price_gbp, fee_gbp FROM v2_fills WHERE book_id = 'debate/primary' ORDER BY leg",
+        )
+        .all(),
+    ).toEqual([
+      { leg: 'entry', side: 'buy', price_gbp: 20 / FX, fee_gbp: 0.5 / FX },
+      { leg: 'stop', side: 'sell', price_gbp: 19.2 / FX, fee_gbp: 0.5 / FX },
+    ]);
   });
 
-  it('converts US prices at the year-start FX, sends shorts as sells, and skips zero-size entries', async () => {
-    const alpaca = new DryRunBrokerAdapter();
-    const saxo = new SaxoPaperBrokerAdapter({ clock, halfSpreadBps: () => 0 });
-    const lse: SleeveDecision = {
+  it('dry run never sweeps the paper broker', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], true, alpaca);
+    await runCycle(deps, '2026-09-25');
+    expect(alpaca.sinceSeen).toEqual([]);
+    expect(alpaca.brackets).toEqual([]);
+  });
+
+  it('a bar dated before the entry never triggers a simulated exit', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-28', bar('2026-09-23', { low: 1, high: 100 }));
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report.exits).toBe(0);
+    expect(deps.books.position('debate/primary', 'AAPL')?.qty).toBe(6);
+  });
+
+  it('time-stops a position after ten marks through the broker flatten path', async () => {
+    const deps = harness([longAapl], true);
+    const flatten = vi.spyOn(deps.simulatedBroker, 'submitFlatten');
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const dates = [
+      '2026-09-28',
+      '2026-09-29',
+      '2026-09-30',
+      '2026-10-01',
+      '2026-10-02',
+      '2026-10-05',
+      '2026-10-06',
+      '2026-10-07',
+      '2026-10-08',
+    ];
+    for (const date of dates) {
+      expect((await runCycle(deps, date)).exits).toBe(0);
+    }
+    expect(deps.books.position('debate/primary', 'AAPL')?.marksHeld).toBe(10);
+    const report = await runCycle(deps, '2026-10-09');
+    expect(report).toMatchObject({ exits: 2, dry_run_refusals: 1, simulated_orders: 1, fills: 2 });
+    expect(flatten).toHaveBeenCalledWith(
+      'AAPL',
+      'sell',
+      6,
+      'v2-debate-primary-2026-10-09-AAPL-exit',
+    );
+    expect(deps.journal.orderFor('v2-debate-primary-2026-10-09-AAPL-exit')).toMatchObject({
+      outcome: 'refused_dry_run',
+      payload: { marks_held: 10 },
+    });
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-10-09-AAPL-exit')?.outcome).toBe(
+      'simulated',
+    );
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - ENTRY_COST_GBP + (6 * 20 * (1 - HALF_SPREAD_BPS / 10_000)) / FX,
+      9,
+    );
+  });
+
+  it('paper mode: the time stop leaves the exit pending until the broker fill arrives', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    const dates = [
+      '2026-09-28',
+      '2026-09-29',
+      '2026-09-30',
+      '2026-10-01',
+      '2026-10-02',
+      '2026-10-05',
+      '2026-10-06',
+      '2026-10-07',
+      '2026-10-08',
+      '2026-10-09',
+    ];
+    for (const date of dates) await runCycle(deps, date);
+    const resume = vi.spyOn(alpaca, 'resumeFlatten');
+    const report = await runCycle(deps, '2026-10-12');
+    expect(report).toMatchObject({ exits: 1, submitted_orders: 1 });
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-10-12-AAPL-exit']);
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-10-12-AAPL-exit',
+    );
+    const held = await runCycle(deps, '2026-10-13');
+    expect(held.exits).toBe(0);
+    expect(alpaca.flattens).toHaveLength(1);
+    expect(resume).toHaveBeenCalledWith('v2-debate-primary-2026-10-12-AAPL-exit', 'AAPL');
+    alpaca.fill('v2-debate-primary-2026-10-12-AAPL-exit', 'exit', 6, 19);
+    await runCycle(deps, '2026-10-14');
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+  });
+
+  it('paper mode: a rejected flatten leaves no exit pending and is retried next cycle', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    for (const day of [28, 29, 30]) await runCycle(deps, `2026-09-${day}`);
+    for (const day of [1, 2, 5, 6, 7, 8, 9]) {
+      await runCycle(deps, `2026-10-${String(day).padStart(2, '0')}`);
+    }
+    alpaca.flattenError = new Error('venue closed');
+    const rejected = await runCycle(deps, '2026-10-12');
+    expect(rejected).toMatchObject({ exits: 1, rejected_orders: 1, submitted_orders: 0 });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-10-12-AAPL-exit')).toMatchObject({
+      outcome: 'rejected',
+      payload: { detail: expect.stringContaining('venue closed') },
+    });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBeUndefined();
+    alpaca.flattenError = undefined;
+    const retried = await runCycle(deps, '2026-10-13');
+    expect(retried).toMatchObject({ exits: 1, submitted_orders: 1 });
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-10-13-AAPL-exit']);
+  });
+
+  it('a rerun of a marked date skips with a journal line and never touches the sleeve', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    const decide = vi.spyOn(deps.sleeve, 'decide');
+    const rerun = await runCycle(deps, '2026-09-25');
+    expect(rerun).toMatchObject({
+      skipped: true,
+      entries: 0,
+      refusals: ['cycle 2026-09-25 already marked: skipped'],
+      books: [],
+    });
+    expect((await runCycle(deps, '2026-09-24')).skipped).toBe(true);
+    expect(decide).not.toHaveBeenCalled();
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db.prepare("SELECT parameter, message FROM v2_refusals WHERE scope = 'cycle'").all(),
+    ).toEqual([
+      { parameter: 'TRADING_DATE', message: 'cycle 2026-09-25 already marked: skipped' },
+      { parameter: 'TRADING_DATE', message: 'cycle 2026-09-24 already marked: skipped' },
+    ]);
+    await expect(runCycle(deps, 'nope')).rejects.toThrow(/bad ISO date/);
+  });
+
+  it('a crash between submit and mark does not resubmit or lose the day on retry', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    vi.spyOn(deps.books, 'markDay').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    await expect(runCycle(deps, '2026-09-25')).rejects.toThrow(/disk full/);
+    expect(alpaca.brackets).toHaveLength(1);
+    expect(deps.books.isMarked('2026-09-25')).toBe(false);
+    const retry = await runCycle(deps, '2026-09-25');
+    expect(retry).toMatchObject({ skipped: false, entries: 0, submitted_orders: 0 });
+    expect(alpaca.brackets).toHaveLength(1);
+    expect(deps.books.isMarked('2026-09-25')).toBe(true);
+    expect(orders(deps, 'debate/primary')).toHaveLength(1);
+  });
+
+  it('skips an entry while a position in the name is open', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report.entries).toBe(0);
+    expect(deps.books.position('debate/primary', 'AAPL')?.qty).toBe(6);
+  });
+
+  it('rejects an entry for a venue without a broker, without a stop, and on a broker error', async () => {
+    const saxo: SleeveDecision = {
       ...longAapl,
       instrument: 'CSP1',
       venue: 'saxo',
-      price: 20,
       atr: 1,
       stop_price: 18,
     };
-    const skipped: SleeveDecision = {
-      ...longAapl,
-      instrument: 'SKIP',
-      action: 'skip',
-      reason: 'x',
-    };
+    const noStop: SleeveDecision = { ...longAapl, instrument: 'NOSTOP', stop_price: undefined };
+    const noAtr: SleeveDecision = { ...longAapl, instrument: 'NOATR', atr: undefined };
+    const rejecting = new FakeAlpaca();
+    vi.spyOn(rejecting, 'submitBracket').mockRejectedValue(new Error('422 target required'));
+    const deps = harness([saxo, noStop, noAtr, longAapl], false, rejecting);
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report).toMatchObject({
+      decisions: 4,
+      entries: 6,
+      rejected_orders: 4,
+      simulated_orders: 2,
+      submitted_orders: 0,
+    });
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'NOATR')).toBe(0);
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'CSP1')).toBe(2);
+    expect(
+      orders(deps, 'debate/primary').map((o) => [
+        o.client_order_id,
+        o.outcome,
+        JSON.parse(o.payload).detail,
+      ]),
+    ).toEqual([
+      ['v2-debate-primary-2026-09-25-AAPL', 'rejected', expect.stringContaining('422')],
+      ['v2-debate-primary-2026-09-25-CSP1', 'rejected', 'no_broker_for_venue:saxo'],
+      ['v2-debate-primary-2026-09-25-NOSTOP', 'rejected', 'no_stop_price'],
+    ]);
+    expect(deps.books.position('debate/no-macro-gate', 'CSP1')?.venue).toBe('saxo');
+  });
+
+  it('sends shorts as sells with the target below, and skips zero-size names', async () => {
     const short: SleeveDecision = {
       ...longAapl,
       instrument: 'SHRT',
       action: 'enter_short',
       stop_price: 20.8,
     };
-    const unaffordable: SleeveDecision = {
+    const pricy: SleeveDecision = {
       ...longAapl,
       instrument: 'PRICY',
       price: 5_000,
       atr: 100,
       stop_price: 4_800,
     };
-    const cycle = deps([longAapl, lse, short, unaffordable, skipped], { alpaca, saxo }, false);
-    const report = await runCycle(cycle, '2026-09-25');
-    expect(report.decisions).toBe(5);
-    expect(cycle.journal.sizeShares('debate/primary', '2026-09-25', 'SKIP')).toBe(0);
-    expect(cycle.journal.sizeShares('debate/primary', '2026-09-25', 'CSP1')).toBe(2);
-    expect(cycle.journal.sizeShares('debate/primary', '2026-09-25', 'AAPL')).toBe(6);
-    expect(cycle.journal.sizeShares('debate/primary', '2026-09-25', 'PRICY')).toBe(0);
-    expect(report.entries).toBe(3);
-    expect(report.submitted_orders).toBe(1);
-    expect(report.dry_run_refusals).toBe(2);
-    expect(alpaca.refused.map((entry) => [entry.instrument, entry.payload.side])).toEqual([
-      ['AAPL', 'buy'],
-      ['SHRT', 'sell'],
+    const skipped: SleeveDecision = {
+      ...longAapl,
+      instrument: 'SKIP',
+      action: 'skip',
+      reason: 'x',
+    };
+    const deps = harness([short, pricy, skipped], true);
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report).toMatchObject({ decisions: 3, entries: 2, dry_run_refusals: 1 });
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'PRICY')).toBe(0);
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'SKIP')).toBe(0);
+    expect(orders(deps, 'debate/primary')).toMatchObject([
+      { client_order_id: 'v2-debate-primary-2026-09-25-SHRT', side: 'sell' },
     ]);
-    expect(alpaca.refused[0]?.payload).toMatchObject({
-      asset_class: 'stocks',
-      time_in_force: 'gtc',
-      entry: 20,
-      stop: 19.2,
-      target: expect.closeTo(21.2, 9),
-    });
-    expect(cycle.journal.countOrders('refused_dry_run')).toBe(2);
-    expect(cycle.journal.countOrders('submitted')).toBe(1);
-    expect(
-      cycle.journal
-        .ordersFor('debate/primary')
-        .map((order) => [order.client_order_id, order.outcome, order.payload]),
-    ).toEqual([
-      [
-        'v2-debate-primary-2026-09-25-AAPL',
-        'refused_dry_run',
-        {
-          size: 6,
-          detail: 'dry run refused bracket v2-debate-primary-2026-09-25-AAPL',
-          price: 20,
-          stop: 19.2,
-          target: expect.closeTo(21.2, 9),
-        },
-      ],
-      [
-        'v2-debate-primary-2026-09-25-CSP1',
-        'submitted',
-        { size: 2, detail: expect.any(String), price: 20, stop: 18, target: 23 },
-      ],
-      [
-        'v2-debate-primary-2026-09-25-SHRT',
-        'refused_dry_run',
-        {
-          size: 6,
-          detail: 'dry run refused bracket v2-debate-primary-2026-09-25-SHRT',
-          price: 20,
-          stop: 20.8,
-          target: expect.closeTo(18.8, 9),
-        },
-      ],
-    ]);
-    expect(cycle.journal.ordersFor('debate/no-social')).toEqual([]);
+    expect(JSON.parse(orders(deps, 'debate/primary')[0]?.payload ?? '{}').target).toBeCloseTo(
+      18.8,
+      9,
+    );
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({ qty: -6 });
   });
 
-  it('rejects an entry without a stop or ATR and journals an uncovered macro calendar', async () => {
-    const noStop: SleeveDecision = { ...longAapl, stop_price: undefined };
-    const noAtr: SleeveDecision = { ...longAapl, instrument: 'NOATR', atr: undefined };
-    const noAtrCycle = deps(
-      [noAtr],
-      { alpaca: new DryRunBrokerAdapter(), saxo: new DryRunBrokerAdapter() },
-      false,
-    );
-    await runCycle(noAtrCycle, '2026-09-25');
-    expect(noAtrCycle.journal.sizeShares('debate/primary', '2026-09-25', 'NOATR')).toBe(0);
-    expect(noAtrCycle.journal.ordersFor('debate/primary')).toEqual([]);
-    const cycle = deps(
-      [noStop],
-      { alpaca: new DryRunBrokerAdapter(), saxo: new DryRunBrokerAdapter() },
-      false,
-    );
+  it('journals an uncovered macro calendar, logs the report, and warns on unmatched fills and sweep failures', async () => {
+    const alpaca = new FakeAlpaca();
+    alpaca.fill('unknown-order', 'entry', 1, 1);
+    const deps = harness([], false, alpaca);
     const log = vi.fn();
-    const report = await runCycle({ ...cycle, logger: { log } }, '2026-12-02');
+    const report = await runCycle({ ...deps, logger: { log } }, '2026-12-02');
     expect(report.macro).toMatchObject({ macroDay: true, covered: false });
-    expect(report.rejected_orders).toBe(1);
-    expect(cycle.journal.ordersFor('debate/primary')).toMatchObject([
-      { outcome: 'rejected', dry_run: false, payload: { detail: 'no_stop_price' } },
-    ]);
+    expect(report.refusals.some((refusal) => refusal.includes('fail-closed'))).toBe(true);
     expect(log).toHaveBeenCalledWith({
       trace_id: 'v2-2026-12-02',
       stage: 'v2',
       level: 'info',
       event: 'v2_cycle_complete',
-      message: 'v2 cycle 2026-12-02: 1 decisions, 0 submitted',
+      message: 'v2 cycle 2026-12-02: 0 decisions, 0 submitted',
       payload: report,
     });
-    expect(report.refusals.some((refusal) => refusal.includes('fail-closed'))).toBe(true);
-    expect(cycle.journal.refusalsFor('2026-12-02')).toEqual([
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'v2_fill_unmatched', level: 'warn' }),
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(db.prepare('SELECT scope, parameter FROM v2_refusals ORDER BY rowid').all()).toEqual([
       ...CYCLE_LEVEL_PARAMETERS.map((parameter) => ({
-        trading_date: '2026-12-02',
         scope: 'parameter',
         parameter: parameter.name,
-        ticket: parameter.ticket,
-        message: `${parameter.name} is not set: needs David (${parameter.ticket})`,
       })),
-      {
-        trading_date: '2026-12-02',
-        scope: 'macro',
-        parameter: 'MACRO_CALENDARS',
-        ticket: 'docs/specs/debate-sleeve-spec.md §6',
-        message: report.macro.reason,
-      },
-      {
-        trading_date: '2026-12-02',
-        scope: 'universe',
-        parameter: 'P',
-        ticket: '#1',
-        message: 'unset',
-      },
+      { scope: 'macro', parameter: 'MACRO_CALENDARS' },
+      { scope: 'universe', parameter: 'P' },
     ]);
+    vi.spyOn(alpaca, 'fetchNewFills').mockRejectedValue(new Error('alpaca down'));
+    await runCycle({ ...deps, logger: { log } }, '2026-12-03');
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ event: 'v2_fill_sweep_failed' }));
   });
 
-  it('journals a broker rejection and never counts it as submitted', async () => {
-    class Rejecting extends DryRunBrokerAdapter {
-      override submitBracket() {
-        return Promise.reject(new Error('422 target required'));
-      }
-    }
-    const rejecting: BrokerAdapter = new Rejecting();
-    const cycle = deps([longAapl], { alpaca: rejecting, saxo: new DryRunBrokerAdapter() }, false);
-    const report = await runCycle(cycle, '2026-09-25');
-    expect(report.rejected_orders).toBe(1);
-    expect(report.submitted_orders).toBe(0);
-    expect(cycle.journal.countOrders('rejected')).toBe(1);
-  });
-
-  it('sizes nothing without a risk fraction and submits nothing without a target multiple', async () => {
-    const alpaca = new DryRunBrokerAdapter();
-    const brokers = { alpaca, saxo: new DryRunBrokerAdapter() };
-    const noRisk = { ...deps([longAapl], brokers, true), riskFraction: undefined };
-    expect(await runCycle(noRisk, '2026-09-25')).toMatchObject({
-      decisions: 1,
-      entries: 0,
-      dry_run_refusals: 0,
-    });
-    expect(noRisk.journal.sizeShares('debate/primary', '2026-09-25', 'AAPL')).toBe(0);
-    const noTarget = { ...deps([longAapl], brokers, true), targetAtrMultiple: undefined };
-    expect(await runCycle(noTarget, '2026-09-25')).toMatchObject({
-      decisions: 1,
-      entries: 0,
-      dry_run_refusals: 0,
-    });
-    expect(noTarget.journal.sizeShares('debate/primary', '2026-09-25', 'AAPL')).toBe(6);
-    expect(noTarget.journal.ordersFor('debate/primary')).toEqual([]);
-    expect(alpaca.refused).toEqual([]);
+  it('blocks entries after a daily-cap breach and sizes by the previous mark multiplier', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.barsByDate.set(
+      '2026-09-28',
+      bar('2026-09-25', { low: 19.3, high: 20, close: 17, rawClose: 17 }),
+    );
+    const drop = await runCycle(deps, '2026-09-28');
+    expect(drop.books[0]?.size_multiplier).toBe(0);
+    deps.setDecisions([{ ...longAapl, instrument: 'MSFT' }]);
+    const blocked = await runCycle(deps, '2026-09-29');
+    expect(blocked.entries).toBe(0);
+    expect(sizeShares(deps, 'debate/primary', '2026-09-29', 'MSFT')).toBe(0);
+    expect(blocked.books[0]?.size_multiplier).toBe(1);
+    const resumed = await runCycle(deps, '2026-09-30');
+    expect(resumed.entries).toBe(2);
   });
 
   it('counts calendar days between marks and never negatively', () => {
@@ -312,19 +720,5 @@ describe('runCycle', () => {
     expect(calendarDaysBetween('2026-09-22', '2026-09-25')).toBe(3);
     expect(calendarDaysBetween('2026-09-25', '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-26', '2026-09-25')).toBe(0);
-  });
-
-  it('rejects a malformed date and refuses to run a date twice', async () => {
-    const cycle = deps(
-      [],
-      { alpaca: new DryRunBrokerAdapter(), saxo: new DryRunBrokerAdapter() },
-      true,
-    );
-    await expect(runCycle(cycle, 'nope')).rejects.toThrow(/bad ISO date/);
-    await runCycle(cycle, '2026-09-25');
-    const decide = vi.spyOn(cycle.registry.list()[0] as Sleeve, 'decide');
-    await expect(runCycle(cycle, '2026-09-25')).rejects.toThrow(/already marked/);
-    await expect(runCycle(cycle, '2026-09-24')).rejects.toThrow(/already marked/);
-    expect(decide).not.toHaveBeenCalled();
   });
 });
