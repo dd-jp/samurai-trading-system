@@ -7,8 +7,14 @@ import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { CycleReport } from './cycle.js';
 import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
-import { composeV2Root, exitCodeFor, llmKeysPresent, parseCliArgs } from './index.js';
-import type { FetchLike } from './llm-transport.js';
+import {
+  composeV2Root,
+  exitCodeFor,
+  llmKeysPresent,
+  nousOptionsFrom,
+  parseCliArgs,
+  runAfterPinCheck,
+} from './index.js';
 import type { ModelPin } from './models.js';
 import { NO_NEWS } from './news.js';
 import { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
@@ -211,8 +217,8 @@ describe('composeV2Root', () => {
         tradingDate,
         dryRun: false,
         storePath,
-        anthropicApiKey: 'present',
-        openrouterApiKey: 'present',
+        nousBaseUrl: 'https://nous.test/v1',
+        nousApiKey: 'present',
         clock,
         logger: { log: () => {} },
         transportFor: scriptedFactory(transports),
@@ -280,45 +286,42 @@ describe('composeV2Root', () => {
     }
   });
 
-  it('caps LLM calls at one in flight per provider account on the real transport factory', async () => {
+  it('caps LLM calls at one in flight for the whole Nous account on the real transport factory', async () => {
     const fixtures = writeFixtures();
     directory = fixtures.directory;
-    const inFlight = new Map<string, number>();
-    const peak = new Map<string, number>();
-    const fetchImpl: FetchLike = async (url, init) => {
-      const host = new URL(url).host;
-      inFlight.set(host, (inFlight.get(host) ?? 0) + 1);
-      peak.set(host, Math.max(peak.get(host) ?? 0, inFlight.get(host) ?? 0));
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      inFlight.set(host, (inFlight.get(host) ?? 0) - 1);
-      const model = (JSON.parse(init.body as string) as { model: string }).model;
-      const body = host.includes('anthropic')
-        ? {
-            model,
-            content: [{ type: 'text', text: '{"stance":"bullish","rationale":"x"}' }],
-            usage: { input_tokens: 1, output_tokens: 1 },
-            stop_reason: 'end_turn',
-          }
-        : {
-            model,
-            choices: [
-              {
-                message: { content: '{"stance":"bullish","rationale":"x"}' },
-                finish_reason: 'stop',
-              },
-            ],
-            usage: { prompt_tokens: 1, completion_tokens: 1 },
-          };
-      return new Response(JSON.stringify(body), { status: 200 });
-    };
+    const urls = new Set<string>();
+    const authorizations = new Set<string>();
+    const models: string[] = [];
+    let inFlight = 0;
+    let peak = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        urls.add(url);
+        authorizations.add((init.headers as Record<string, string>).authorization);
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        inFlight -= 1;
+        const model = (JSON.parse(init.body as string) as { model: string }).model;
+        models.push(model);
+        const body = {
+          model,
+          choices: [
+            { message: { content: '{"stance":"bullish","rationale":"x"}' }, finish_reason: 'stop' },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
     const root = composeV2Root({
       ...fixtures,
       tradingDate: ENTRY_DATE,
       dryRun: false,
       storePath: ':memory:',
-      anthropicApiKey: 'present',
-      openrouterApiKey: 'present',
-      fetchImpl,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'nous-secret-key',
       alpacaClient: fakeAlpacaClient(new SimulatedClock(new Date())),
       newsSource: NO_NEWS,
       logger: { log: () => {} },
@@ -335,10 +338,69 @@ describe('composeV2Root', () => {
         root.panel.debaters.gpt.complete(request),
         root.panel.debaters.deepseek.complete(request),
       ]);
-      expect(peak.get('api.anthropic.com')).toBe(1);
-      expect(peak.get('openrouter.ai')).toBe(1);
+      expect(peak).toBe(1);
+      expect([...urls]).toEqual(['https://nous.test/v1/chat/completions']);
+      expect([...authorizations]).toEqual(['Bearer nous-secret-key']);
+      expect(models.sort()).toEqual([
+        'anthropic/claude-opus-5',
+        'anthropic/claude-sonnet-5',
+        'deepseek/deepseek-v4-pro-0813',
+        'openai/gpt-5.5',
+      ]);
       expect(count(root, 'llm_spend')).toBe(4);
     } finally {
+      vi.unstubAllGlobals();
+      root.close();
+    }
+  });
+
+  it('logs each upstream model to stderr when the root is composed without a logger', async () => {
+    const fixtures = writeFixtures();
+    directory = fixtures.directory;
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => {
+        const model = (JSON.parse(init.body as string) as { model: string }).model;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              model,
+              choices: [{ message: { content: '{"stance":"bullish"}' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+            { status: 200 },
+          ),
+        );
+      }),
+    );
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: false,
+      storePath: ':memory:',
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      alpacaClient: fakeAlpacaClient(new SimulatedClock(new Date())),
+      newsSource: NO_NEWS,
+    });
+    try {
+      await root.panel.judge.complete({
+        prompt: 'hello',
+        context: { analyst_views: [] },
+        parseResponse: (raw: string) => ({ valid: true as const, data: raw }),
+      });
+      const lines = stderr.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes('v2_llm_upstream_model'));
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? '')).toMatchObject({
+        event: 'v2_llm_upstream_model',
+        payload: { pinned: 'anthropic/claude-opus-5', upstream: 'anthropic/claude-opus-5' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      stderr.mockRestore();
       root.close();
     }
   });
@@ -349,27 +411,27 @@ describe('composeV2Root', () => {
     const storePath = join(fixtures.directory, 'never.sqlite');
     expect(() =>
       composeV2Root({ ...fixtures, tradingDate: '2026-09-25', dryRun: false, storePath }),
-    ).toThrow(/without ANTHROPIC_API_KEY/);
+    ).toThrow(/without NOUS_BASE_URL and a Nous key \(NOUS_DEBATE_API_KEY or NOUS_API_KEY\)/);
     expect(() =>
       composeV2Root({
         ...fixtures,
         tradingDate: '2026-09-25',
         dryRun: false,
         storePath,
-        anthropicApiKey: '',
-        openrouterApiKey: 'x',
+        nousBaseUrl: '',
+        nousApiKey: 'x',
       }),
-    ).toThrow(/without ANTHROPIC_API_KEY/);
+    ).toThrow(/without NOUS_BASE_URL and a Nous key \(NOUS_DEBATE_API_KEY or NOUS_API_KEY\)/);
     expect(() =>
       composeV2Root({
         ...fixtures,
         tradingDate: '2026-09-25',
         dryRun: false,
         storePath,
-        anthropicApiKey: 'x',
-        openrouterApiKey: '',
+        nousBaseUrl: 'https://nous.test/v1',
+        nousApiKey: '',
       }),
-    ).toThrow(/without ANTHROPIC_API_KEY/);
+    ).toThrow(/without NOUS_BASE_URL and a Nous key \(NOUS_DEBATE_API_KEY or NOUS_API_KEY\)/);
     expect(existsSync(storePath)).toBe(false);
   });
 
@@ -394,16 +456,96 @@ describe('composeV2Root', () => {
     expect(() => parseCliArgs(['--bogus'], '2026-09-25')).toThrow(/unknown argument/);
     expect(llmKeysPresent({ tradingDate: 'd', dryRun: true })).toBe(false);
     expect(
+      llmKeysPresent({ tradingDate: 'd', dryRun: true, nousBaseUrl: 'a', nousApiKey: ' ' }),
+    ).toBe(false);
+    expect(
+      llmKeysPresent({ tradingDate: 'd', dryRun: true, nousBaseUrl: ' ', nousApiKey: 'b' }),
+    ).toBe(false);
+    expect(
       llmKeysPresent({
         tradingDate: 'd',
         dryRun: true,
-        anthropicApiKey: 'a',
-        openrouterApiKey: 'b',
+        nousBaseUrl: 'a',
+        nousApiKey: 'b',
       }),
     ).toBe(true);
     const base = { submitted_orders: 0, dry_run: true } as CycleReport;
     expect(exitCodeFor(base)).toBe(0);
     expect(exitCodeFor({ ...base, submitted_orders: 1 })).toBe(1);
     expect(exitCodeFor({ ...base, submitted_orders: 1, dry_run: false })).toBe(0);
+  });
+});
+
+describe('nousOptionsFrom', () => {
+  it('reads the Nous env exactly as v1 does: trimmed, NOUS_DEBATE_API_KEY first, NOUS_API_KEY as fallback', () => {
+    expect(nousOptionsFrom({})).toEqual({ nousBaseUrl: undefined, nousApiKey: undefined });
+    expect(
+      nousOptionsFrom({ NOUS_BASE_URL: 'https://nous.test/v1', NOUS_DEBATE_API_KEY: '  ' }),
+    ).toEqual({
+      nousBaseUrl: undefined,
+      nousApiKey: undefined,
+    });
+    expect(nousOptionsFrom({ NOUS_BASE_URL: '  ', NOUS_DEBATE_API_KEY: 'k' })).toEqual({
+      nousBaseUrl: undefined,
+      nousApiKey: undefined,
+    });
+    expect(
+      nousOptionsFrom({
+        NOUS_BASE_URL: ' https://nous.test/v1 ',
+        NOUS_DEBATE_API_KEY: ' debate-key ',
+      }),
+    ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
+    expect(
+      nousOptionsFrom({ NOUS_BASE_URL: 'https://nous.test/v1', NOUS_API_KEY: 'shared' }),
+    ).toEqual({
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'shared',
+    });
+    expect(
+      nousOptionsFrom({
+        NOUS_BASE_URL: 'https://nous.test/v1',
+        NOUS_DEBATE_API_KEY: 'debate-key',
+        NOUS_API_KEY: 'shared',
+      }),
+    ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
+  });
+
+  it("ignores v1's model knobs: an unpriced NOUS_DEBATE_MODEL does not stop a v2 run", () => {
+    expect(
+      nousOptionsFrom({
+        NOUS_BASE_URL: 'https://nous.test/v1',
+        NOUS_DEBATE_API_KEY: 'debate-key',
+        NOUS_DEBATE_MODEL: 'vendor/unpriced-model',
+      }),
+    ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
+  });
+});
+
+describe('runAfterPinCheck', () => {
+  it('runs no cycle when the pin check refuses', async () => {
+    const run = vi.fn();
+    await expect(
+      runAfterPinCheck({ run }, () => Promise.reject(new Error('snapshot swapped'))),
+    ).rejects.toThrow('snapshot swapped');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('runs the cycle only after the pin check settles', async () => {
+    const order: string[] = [];
+    const report = { dry_run: false } as CycleReport;
+    const result = await runAfterPinCheck(
+      {
+        run: () => {
+          order.push('run');
+          return Promise.resolve(report);
+        },
+      },
+      async () => {
+        await Promise.resolve();
+        order.push('pins');
+      },
+    );
+    expect(order).toEqual(['pins', 'run']);
+    expect(result).toBe(report);
   });
 });

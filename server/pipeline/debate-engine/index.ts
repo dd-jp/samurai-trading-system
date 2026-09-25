@@ -23,7 +23,9 @@ export {
 } from './latency-budget.js';
 export type {
   AnthropicLlmClientConfig,
+  AnthropicMessageOptions,
   AnthropicMessageRequest,
+  AnthropicMessageResponse,
   AnthropicMessagesClient,
 } from './llm/anthropic-client.js';
 export { AnthropicLlmClient, WIRE_ENVELOPE_TEMPLATE_HASH } from './llm/anthropic-client.js';

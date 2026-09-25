@@ -1,19 +1,22 @@
+import { parseRetryAfterMs, truncateForError } from '../http/response-errors.js';
 import type { LlmInFlightGate } from './in-flight-gate.js';
 import { type AnthropicUsage, rateFor } from './pricing.js';
 
-const MAX_ERROR_BODY_CHARS = 500;
+export { truncateForError };
 
 export const DEFAULT_NOUS_TIMEOUT_MS = 60_000;
 
 export class NousApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  readonly retryAfterMs: number | undefined;
 
-  constructor(status: number, message: string, body?: unknown) {
+  constructor(status: number, message: string, body?: unknown, retryAfterMs?: number) {
     super(message);
     this.name = 'NousApiError';
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -65,19 +68,24 @@ export class NousRefusalError extends Error {
   }
 }
 
-export function truncateForError(text: string): string {
-  return text.length > MAX_ERROR_BODY_CHARS
-    ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
-    : text;
+interface NousErrorBody {
+  readonly error?: { readonly type?: unknown; readonly message?: unknown } | null;
 }
 
 function describeErrorBody(body: unknown): string | undefined {
-  if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
-  const detail = (body as { error?: { type?: unknown; message?: unknown } }).error;
-  if (typeof detail !== 'object' || detail === null) return undefined;
-  const type = typeof detail.type === 'string' ? detail.type : 'error';
-  const message = typeof detail.message === 'string' ? detail.message : undefined;
-  return message === undefined ? undefined : `${type}: ${message}`;
+  const detail = (body as NousErrorBody | null | undefined)?.error;
+  const message = detail?.message;
+  if (typeof message !== 'string') return undefined;
+  return `${typeof detail?.type === 'string' ? detail.type : 'error'}: ${message}`;
+}
+
+const HTTP_DATE_PATTERN = /[a-z]/i;
+
+function retryAfterMsOf(response: Response, nowMs: number): number | undefined {
+  const header = response.headers.get('retry-after') ?? '';
+  if (!HTTP_DATE_PATTERN.test(header)) return parseRetryAfterMs(response);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - nowMs);
 }
 
 export async function buildApiError(response: Response): Promise<NousApiError> {
@@ -88,7 +96,12 @@ export async function buildApiError(response: Response): Promise<NousApiError> {
     body = undefined;
   }
   const detail = truncateForError(describeErrorBody(body) ?? response.statusText);
-  return new NousApiError(response.status, `Nous API error: ${response.status} ${detail}`, body);
+  return new NousApiError(
+    response.status,
+    `Nous API error: ${response.status} ${detail}`,
+    body,
+    retryAfterMsOf(response, Date.now()),
+  );
 }
 
 function toTokenCount(value: unknown): number {

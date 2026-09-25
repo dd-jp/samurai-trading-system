@@ -6,7 +6,12 @@ import {
   UNGATED_LLM_IN_FLIGHT,
 } from '../../../shared/llm/index.js';
 import { AnthropicLlmClient } from './anthropic-client.js';
-import { LlmAdmissionRefusedError, LlmRefusalError, LlmTruncatedError } from './errors.js';
+import {
+  LlmAdmissionRefusedError,
+  LlmRateLimitError,
+  LlmRefusalError,
+  LlmTruncatedError,
+} from './errors.js';
 import { classifyFailureCause } from './failure-cause.js';
 import { NousMessagesClient } from './nous-messages-client.js';
 import type { LlmSpendRecord, LlmSpendSink } from './spend-sink.js';
@@ -360,5 +365,86 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
     const after = await gate.acquire({ budgetMs: 28_000 });
     after.release();
     expect(LlmInFlightRefusedError.name).toBe('LlmInFlightRefusedError');
+  });
+});
+
+describe('a Nous 429 carries its retry-after hint to LlmRateLimitError', () => {
+  const RETRY_DATE = 'Wed, 21 Oct 2026 07:28:00 GMT';
+
+  function rateLimited(headers: Record<string, string>) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { type: 'rate_limit', message: 'slow down' } }), {
+            status: 429,
+            statusText: 'Too Many Requests',
+            headers,
+          }),
+      ),
+    );
+    const client = new AnthropicLlmClient(new NousMessagesClient(OPTIONS), {
+      model: 'openai/gpt-5.6-luna',
+      max_tokens: 1024,
+      timeoutMs: 5_000,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    return client.complete(request()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  }
+
+  it.each([
+    ['delta seconds', { 'retry-after': '7' }, 7_000],
+    ['an HTTP date 12s ahead', { 'retry-after': RETRY_DATE }, 12_000],
+    ['an HTTP date already past', { 'retry-after': 'Wed, 21 Oct 2026 07:27:00 GMT' }, 0],
+    ['no header', {}, undefined],
+    ['a negative number', { 'retry-after': '-5' }, undefined],
+    ['an unparseable word', { 'retry-after': 'soon' }, undefined],
+  ])('%s', async (_label, headers, expected) => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse(RETRY_DATE) - 12_000);
+    try {
+      const error = await rateLimited(headers);
+      expect(error).toBeInstanceOf(LlmRateLimitError);
+      expect((error as LlmRateLimitError).retryAfterMs).toBe(expected);
+      expect((error as LlmRateLimitError).message).toBe(
+        'Nous API error: 429 rate_limit: slow down',
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('waits out the hint before retrying', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response('{}', { status: 429, headers: { 'retry-after': '2' } }))
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: '{"stance":"bullish"}' }, finish_reason: 'stop' }],
+            }),
+            { status: 200 },
+          ),
+        );
+      vi.stubGlobal('fetch', fetchMock);
+      const client = new AnthropicLlmClient(new NousMessagesClient(OPTIONS), {
+        model: 'openai/gpt-5.6-luna',
+        max_tokens: 1024,
+        timeoutMs: 60_000,
+        retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 10_000 },
+      });
+      const pending = client.complete(request());
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toMatchObject({ data: { stance: 'bullish' } });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

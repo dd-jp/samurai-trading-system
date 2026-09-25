@@ -158,6 +158,8 @@ This document answers the facts-research questions of [doc 67](67-v2-plan-and-ha
 
 ## R10 — Pinning GPT and DeepSeek via OpenRouter; retention; rate limits (#1732)
 
+*2026-09-25: superseded on routing — David ruled all four seats go through the existing Nous account, with no OpenRouter or first-party keys (doc 66 Q16 amendment, spec §4). The OpenRouter pin tuple below is kept as the record of what was researched, not the pin in use.*
+
 **q1. Pinning — verified.**
 
 - `GET https://openrouter.ai/api/v1/models` returns a dated `canonical_slug` per model (for example `openai/gpt-5.5-20260423`, `deepseek/deepseek-v4-pro-20260423`), and `/api/v1/models/<dated slug>/endpoints` resolves — read directly, no key. A completion against a dated slug was not sent (no key use in this session).

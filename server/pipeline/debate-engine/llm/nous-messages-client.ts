@@ -1,4 +1,4 @@
-import type { LlmInFlightGate, NousChatResult } from '../../../shared/llm/index.js';
+import type { LlmInFlightGate, NousChatOptions } from '../../../shared/llm/index.js';
 import {
   LlmInFlightRefusedError,
   NousRefusalError,
@@ -12,6 +12,19 @@ import type {
   AnthropicMessagesClient,
 } from './anthropic-client.js';
 import { LlmAdmissionRefusedError, LlmRefusalError, LlmTruncatedError } from './errors.js';
+
+function toLlmError(error: unknown): unknown {
+  if (error instanceof NousRefusalError) {
+    return new LlmRefusalError(error.message, error.signal, error.usage);
+  }
+  if (error instanceof NousTruncatedError) {
+    return new LlmTruncatedError(error.message, error.model, error.max_tokens, error.usage);
+  }
+  if (error instanceof LlmInFlightRefusedError) {
+    return new LlmAdmissionRefusedError(error);
+  }
+  return error;
+}
 
 export interface NousMessagesClientOptions {
   apiKey: string;
@@ -40,42 +53,31 @@ export class NousMessagesClient implements AnthropicMessagesClient {
     request: AnthropicMessageRequest,
     options: AnthropicMessageOptions = {},
   ): Promise<AnthropicMessageResponse> {
-    let result: NousChatResult;
-    try {
-      result = await nousChat(
-        {
-          apiKey: this.#apiKey,
-          baseUrl: this.#baseUrl,
-          ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
-          signal: options.signal,
-          gate: this.#gate,
-          gateBudgetMs: this.#gateBudgetMs,
-          llmStage: options.stage ?? 'debate',
-        },
-        {
-          model: request.model,
-          messages: request.messages,
-          max_tokens: request.max_tokens,
-        },
-      );
-    } catch (error) {
-      if (error instanceof NousRefusalError) {
-        throw new LlmRefusalError(error.message, error.signal, error.usage);
-      }
-      if (error instanceof NousTruncatedError) {
-        throw new LlmTruncatedError(error.message, error.model, error.max_tokens, error.usage);
-      }
-      if (error instanceof LlmInFlightRefusedError) {
-        throw new LlmAdmissionRefusedError(error);
-      }
-      throw error;
-    }
-
+    const result = await nousChat(this.#chatOptions(options), {
+      model: request.model,
+      messages: request.messages,
+      max_tokens: request.max_tokens,
+    }).catch((error: unknown) => {
+      throw toLlmError(error);
+    });
     return {
       content: [{ type: 'text', text: result.text }],
       usage: result.usage,
       model: result.model,
+      upstream_model: result.upstream_model,
       ttfb_ms: result.ttfb_ms,
+    };
+  }
+
+  #chatOptions(options: AnthropicMessageOptions): NousChatOptions {
+    return {
+      apiKey: this.#apiKey,
+      baseUrl: this.#baseUrl,
+      ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
+      signal: options.signal,
+      gate: this.#gate,
+      gateBudgetMs: this.#gateBudgetMs,
+      llmStage: options.stage ?? 'debate',
     };
   }
 }

@@ -17,11 +17,13 @@ describe('rateFor', () => {
     expect(rateFor('anthropic/claude-haiku-4.5')).toEqual({ input: 0.8, output: 4 });
   });
 
-  it('prices first-party Anthropic ids at list rate and Nous ids at the Nous discount', () => {
-    expect(rateFor('claude-opus-5')).toEqual({ input: 5, output: 25 });
-    expect(rateFor('claude-sonnet-5')).toEqual({ input: 2, output: 10 });
-    expect(rateFor('anthropic/claude-opus-5')).toEqual({ input: 4, output: 20 });
-    expect(rateFor('anthropic/claude-sonnet-5')).toEqual({ input: 1.6, output: 8 });
+  it('carries the Nous catalogue rates for the v2 seats (checked 2026-09-25)', () => {
+    expect(rateFor('anthropic/claude-opus-5')).toEqual({ input: 5, output: 25 });
+    expect(rateFor('anthropic/claude-sonnet-5')).toEqual({ input: 2, output: 10 });
+    expect(rateFor('openai/gpt-5.5')).toEqual({ input: 5, output: 30 });
+    expect(rateFor('deepseek/deepseek-v4-pro-0813')).toEqual({ input: 0.58, output: 1.74 });
+    expect(rateFor('claude-opus-5')).toBeNull();
+    expect(rateFor('claude-sonnet-5')).toBeNull();
   });
 
   it('returns null for a model not in the table rather than guessing', () => {

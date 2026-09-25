@@ -16,10 +16,9 @@ import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
-import { NousAccountInFlightGate } from '../../shared/llm/index.js';
+import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
-import { AnthropicHttpTransport } from './anthropic-transport.js';
 import { PaperBooks } from './books.js';
 import { type CycleDeps, type CycleReport, runCycle } from './cycle.js';
 import { createDebateSleeve } from './debate-sleeve.js';
@@ -27,11 +26,11 @@ import { DryRunBrokerAdapter } from './dry-run-broker.js';
 import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
 import { Journal } from './journal.js';
 import { buildLlmPanel, type LlmPanel } from './llm-panel.js';
-import type { FetchLike } from './llm-transport.js';
-import type { ModelPin } from './models.js';
+import { NousPinnedTransport } from './llm-transport.js';
+import { ALL_PINS, type ModelPin } from './models.js';
 import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
 import { AlpacaNewsSource, type NewsSource, NO_NEWS } from './news.js';
-import { OpenRouterHttpTransport } from './openrouter-transport.js';
+import { verifyNousPins } from './nous-pin-check.js';
 import {
   DEBATE_RISK_FRACTION,
   DEBATE_TARGET_ATR_MULTIPLE,
@@ -59,15 +58,14 @@ export interface V2RootOptions {
   readonly constituentsPath?: string | undefined;
   readonly spreadsPath?: string | undefined;
   readonly fxPath?: string | undefined;
-  readonly anthropicApiKey?: string | undefined;
-  readonly openrouterApiKey?: string | undefined;
+  readonly nousBaseUrl?: string | undefined;
+  readonly nousApiKey?: string | undefined;
   readonly samuraiMode?: string | undefined;
   readonly clock?: Clock | undefined;
   readonly logger?: Logger | undefined;
   readonly bars?: BarsSource | undefined;
   readonly constituents?: ((tradingDate: string) => readonly string[]) | undefined;
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
-  readonly fetchImpl?: FetchLike | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly newsSource?: NewsSource | undefined;
 }
@@ -84,59 +82,55 @@ export interface V2Root {
 }
 
 export function llmKeysPresent(options: V2RootOptions): boolean {
-  return (options.anthropicApiKey ?? '') !== '' && (options.openrouterApiKey ?? '') !== '';
+  return (options.nousBaseUrl ?? '').trim() !== '' && (options.nousApiKey ?? '').trim() !== '';
 }
 
-function httpTransportFactory(options: V2RootOptions): (pin: ModelPin) => AnthropicMessagesClient {
-  const gates = {
-    anthropic: new NousAccountInFlightGate({
-      maxInFlight: LLM_MAX_IN_FLIGHT_PER_ACCOUNT,
-      expectedCallMs: LLM_EXPECTED_CALL_MS,
-      logger: options.logger,
-    }),
-    openrouter: new NousAccountInFlightGate({
-      maxInFlight: LLM_MAX_IN_FLIGHT_PER_ACCOUNT,
-      expectedCallMs: LLM_EXPECTED_CALL_MS,
-      logger: options.logger,
-    }),
-  };
+export function nousOptionsFrom(
+  env: NodeJS.ProcessEnv,
+): Pick<V2RootOptions, 'nousBaseUrl' | 'nousApiKey'> {
+  const endpoint = tryNousEndpoint('debate', env);
+  return { nousBaseUrl: endpoint?.baseUrl, nousApiKey: endpoint?.apiKey };
+}
+
+function nousTransportFactory(
+  options: V2RootOptions,
+  logger: Logger,
+): (pin: ModelPin) => AnthropicMessagesClient {
+  const accountGate = new NousAccountInFlightGate({
+    maxInFlight: LLM_MAX_IN_FLIGHT_PER_ACCOUNT,
+    expectedCallMs: LLM_EXPECTED_CALL_MS,
+    logger,
+  });
   return (pin) =>
-    pin.provider === 'anthropic'
-      ? new AnthropicHttpTransport({
-          apiKey: options.anthropicApiKey ?? '',
-          pin,
-          gate: gates.anthropic,
-          logger: options.logger,
-          fetchImpl: options.fetchImpl,
-        })
-      : new OpenRouterHttpTransport({
-          apiKey: options.openrouterApiKey ?? '',
-          pin,
-          gate: gates.openrouter,
-          logger: options.logger,
-          fetchImpl: options.fetchImpl,
-        });
+    new NousPinnedTransport({
+      pin,
+      apiKey: options.nousApiKey ?? '',
+      baseUrl: options.nousBaseUrl ?? '',
+      gate: accountGate,
+      logger,
+    });
 }
 
 function refuseKeylessPaperRun(options: V2RootOptions): void {
   if (options.dryRun || options.transportFor !== undefined || llmKeysPresent(options)) return;
   throw new Error(
-    'v2 root refuses a paper run without ANTHROPIC_API_KEY and OPENROUTER_API_KEY: scripted verdicts never reach a broker',
+    'v2 root refuses a paper run without NOUS_BASE_URL and a Nous key (NOUS_DEBATE_API_KEY or NOUS_API_KEY): scripted verdicts never reach a broker',
   );
 }
 
 function transportsFor(
   options: V2RootOptions,
   scripted: ScriptedTransport[],
+  logger: Logger,
 ): (pin: ModelPin) => AnthropicMessagesClient {
   if (options.transportFor !== undefined) return options.transportFor;
-  if (!options.dryRun) return httpTransportFactory(options);
-  options.logger?.log({
+  if (!options.dryRun) return nousTransportFactory(options, logger);
+  logger.log({
     trace_id: 'v2-root',
     stage: 'v2',
     level: 'warn',
     event: 'v2_llm_transport_scripted',
-    message: 'dry run: LLM transports are scripted, no provider is called',
+    message: 'dry run: LLM transports are scripted, Nous is not called',
   });
   return (pin) => {
     const transport = new ScriptedTransport(pin, BULLISH_SCRIPT);
@@ -259,7 +253,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const spendSink: LlmSpendSink = new SqliteLlmSpendStore(db, logger, true);
   const spendCap: SpendCap = new SqliteMonthlySpendCap(db, clock, undefined, logger);
   const panel = buildLlmPanel({
-    transportFor: transportsFor(options, scripted),
+    transportFor: transportsFor(options, scripted, logger),
     spendSink,
     spendCap,
     logger,
@@ -340,19 +334,35 @@ export function exitCodeFor(report: CycleReport): number {
   return report.dry_run && report.submitted_orders > 0 ? 1 : 0;
 }
 
+export async function runAfterPinCheck(
+  root: Pick<V2Root, 'run'>,
+  pinCheck: () => Promise<void>,
+): Promise<CycleReport> {
+  await pinCheck();
+  return root.run();
+}
+
 export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
   const clock = new SystemClock();
   const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
+  const nous = nousOptionsFrom(env);
   const root = composeV2Root({
     tradingDate,
     dryRun,
-    anthropicApiKey: env.ANTHROPIC_API_KEY,
-    openrouterApiKey: env.OPENROUTER_API_KEY,
+    ...nous,
     samuraiMode: env.SAMURAI_MODE,
     clock,
   });
   try {
-    const report = await root.run();
+    const report = await runAfterPinCheck(root, () =>
+      verifyNousPins({
+        dryRun,
+        baseUrl: nous.nousBaseUrl,
+        apiKey: nous.nousApiKey,
+        pins: ALL_PINS,
+        logger: STDERR_LOGGER,
+      }),
+    );
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);
   } finally {

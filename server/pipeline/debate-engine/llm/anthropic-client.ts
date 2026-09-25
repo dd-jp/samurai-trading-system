@@ -41,6 +41,7 @@ export interface AnthropicMessageResponse {
   usage?: AnthropicUsage;
   stop_reason?: string;
   model?: string;
+  upstream_model?: string | undefined;
   ttfb_ms?: number;
 }
 
@@ -129,10 +130,30 @@ const ALREADY_CLASSIFIED_ERROR_TYPES = [
   LlmAdmissionRefusedError,
 ];
 
-function statusOf(error: unknown): unknown {
+function fieldOf(error: unknown, key: string): unknown {
   return typeof error === 'object' && error !== null
-    ? (error as { status?: unknown }).status
+    ? (error as Record<string, unknown>)[key]
     : undefined;
+}
+
+function hasTokenCounts(usage: unknown): usage is AnthropicUsage {
+  if (typeof usage !== 'object' || usage === null) return false;
+  const { input_tokens, output_tokens } = usage as Record<string, unknown>;
+  return typeof input_tokens === 'number' && typeof output_tokens === 'number';
+}
+
+function billedUsageOf(
+  error: unknown,
+): { usage: AnthropicUsage; model: string | undefined } | undefined {
+  const usage = fieldOf(error, 'usage');
+  if (!hasTokenCounts(usage)) return undefined;
+  const model = fieldOf(error, 'model');
+  return { usage, model: typeof model === 'string' ? model : undefined };
+}
+
+function retryAfterHintOf(error: unknown): number | undefined {
+  const hint = fieldOf(error, 'retryAfterMs');
+  return typeof hint === 'number' && Number.isFinite(hint) && hint >= 0 ? hint : undefined;
 }
 
 function classifyProviderError(error: unknown): Error {
@@ -140,11 +161,11 @@ function classifyProviderError(error: unknown): Error {
     return error as Error;
   }
 
-  const status = statusOf(error);
+  const status = fieldOf(error, 'status');
   const message = error instanceof Error ? error.message : String(error);
 
   if (status === 429) {
-    return new LlmRateLimitError(message);
+    return new LlmRateLimitError(message, retryAfterHintOf(error));
   }
   if (status === 408 || status === 504) {
     return new LlmTimeoutError(message, 'status');
@@ -214,7 +235,13 @@ export class AnthropicLlmClient implements LlmClient {
     const content = renderMessageContent(request);
     const attribution = request.context.attribution;
     const gateStage = attribution?.gate_stage ?? attribution?.stage;
-    const response = await this.callWithTimeout(content, request.signal, gateStage);
+    let response: AnthropicMessageResponse;
+    try {
+      response = await this.callWithTimeout(content, request.signal, gateStage);
+    } catch (error) {
+      this.recordBilledFailure(request, error, Date.now() - start, content);
+      throw error;
+    }
     const latency_ms = Date.now() - start;
 
     let rawText = '';
@@ -260,6 +287,19 @@ export class AnthropicLlmClient implements LlmClient {
       response: responseText,
       prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
     };
+  }
+
+  private recordBilledFailure<T>(
+    request: LlmRequest<T>,
+    error: unknown,
+    latency_ms: number,
+    prompt: string,
+  ): void {
+    const billed = billedUsageOf(error);
+    if (billed === undefined) return;
+    const response: AnthropicMessageResponse = { content: [], usage: billed.usage };
+    if (billed.model !== undefined) response.model = billed.model;
+    this.recordSpend(request, response, latency_ms, prompt, '');
   }
 
   private recordSpend<T>(

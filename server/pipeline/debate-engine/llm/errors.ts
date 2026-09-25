@@ -1,4 +1,4 @@
-import type { LlmInFlightRefusalReason } from '../../../shared/llm/index.js';
+import type { AnthropicUsage, LlmInFlightRefusalReason } from '../../../shared/llm/index.js';
 
 export type LlmTimeoutSource = 'deadline' | 'status';
 
@@ -57,10 +57,20 @@ export class LlmAdmissionRefusedError extends Error {
   }
 }
 
+export interface BilledUsage {
+  readonly usage: AnthropicUsage;
+  readonly model?: string | undefined;
+}
+
 export class LlmProviderError extends Error {
-  constructor(message: string) {
+  readonly usage: AnthropicUsage | undefined;
+  readonly model: string | undefined;
+
+  constructor(message: string, billed?: BilledUsage) {
     super(message);
     this.name = 'LlmProviderError';
+    this.usage = billed?.usage;
+    this.model = billed?.model;
   }
 }
 

@@ -12,9 +12,12 @@ export const DEFAULT_NOUS_MODELS = {
   sentiment: 'x-ai/grok-4.5',
 } as const satisfies Record<NousRole, string>;
 
-export interface NousCredentials {
+export interface NousEndpoint {
   apiKey: string;
   baseUrl: string;
+}
+
+export interface NousCredentials extends NousEndpoint {
   model: string;
 }
 
@@ -23,15 +26,15 @@ function nousEnvVars(role: NousRole): { model: string; apiKey: string } {
   return { model: `${prefix}_MODEL`, apiKey: `${prefix}_API_KEY` };
 }
 
-function readEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
+function readEnv(name: string, env: NodeJS.ProcessEnv): string | undefined {
+  const value = env[name]?.trim();
   return value === undefined || value === '' ? undefined : value;
 }
 
-export function nousCredentials(role: NousRole): NousCredentials {
+export function nousEndpoint(role: NousRole, env: NodeJS.ProcessEnv = process.env): NousEndpoint {
   const vars = nousEnvVars(role);
 
-  const baseUrl = readEnv(NOUS_BASE_URL_ENV_VAR);
+  const baseUrl = readEnv(NOUS_BASE_URL_ENV_VAR, env);
   if (baseUrl === undefined) {
     throw new Error(
       `Nous: ${NOUS_BASE_URL_ENV_VAR} is not set. Provide it via the environment (.env.local) — ` +
@@ -39,7 +42,7 @@ export function nousCredentials(role: NousRole): NousCredentials {
     );
   }
 
-  const apiKey = readEnv(vars.apiKey) ?? readEnv(NOUS_API_KEY_ENV_VAR);
+  const apiKey = readEnv(vars.apiKey, env) ?? readEnv(NOUS_API_KEY_ENV_VAR, env);
   if (apiKey === undefined) {
     throw new Error(
       `Nous: no API key for the "${role}" role. Set ${vars.apiKey} for a key specific to this ` +
@@ -47,7 +50,28 @@ export function nousCredentials(role: NousRole): NousCredentials {
     );
   }
 
-  const model = readEnv(vars.model) ?? readEnv(NOUS_MODEL_ENV_VAR) ?? DEFAULT_NOUS_MODELS[role];
+  return { apiKey, baseUrl };
+}
+
+export function tryNousEndpoint(
+  role: NousRole,
+  env: NodeJS.ProcessEnv = process.env,
+): NousEndpoint | undefined {
+  const vars = nousEnvVars(role);
+  const configured =
+    readEnv(NOUS_BASE_URL_ENV_VAR, env) !== undefined &&
+    (readEnv(vars.apiKey, env) ?? readEnv(NOUS_API_KEY_ENV_VAR, env)) !== undefined;
+  return configured ? nousEndpoint(role, env) : undefined;
+}
+
+export function nousCredentials(
+  role: NousRole,
+  env: NodeJS.ProcessEnv = process.env,
+): NousCredentials {
+  const vars = nousEnvVars(role);
+  const endpoint = nousEndpoint(role, env);
+  const model =
+    readEnv(vars.model, env) ?? readEnv(NOUS_MODEL_ENV_VAR, env) ?? DEFAULT_NOUS_MODELS[role];
   if (rateFor(model) === null) {
     throw new Error(
       `Nous: model "${model}" (from ${vars.model}/${NOUS_MODEL_ENV_VAR}) has no rate in ` +
@@ -57,13 +81,12 @@ export function nousCredentials(role: NousRole): NousCredentials {
     );
   }
 
-  return { apiKey, baseUrl, model };
+  return { ...endpoint, model };
 }
 
-export function tryNousCredentials(role: NousRole): NousCredentials | undefined {
-  const vars = nousEnvVars(role);
-  const configured =
-    readEnv(NOUS_BASE_URL_ENV_VAR) !== undefined &&
-    (readEnv(vars.apiKey) ?? readEnv(NOUS_API_KEY_ENV_VAR)) !== undefined;
-  return configured ? nousCredentials(role) : undefined;
+export function tryNousCredentials(
+  role: NousRole,
+  env: NodeJS.ProcessEnv = process.env,
+): NousCredentials | undefined {
+  return tryNousEndpoint(role, env) === undefined ? undefined : nousCredentials(role, env);
 }

@@ -163,7 +163,13 @@ describe('nousChat', () => {
         completion({ choices: [{ message: { content: '' }, finish_reason: 'content_filter' }] }),
       );
 
-      await expect(nousChat(OPTIONS, REQUEST)).rejects.toThrow(NousRefusalError);
+      const error = await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(NousRefusalError);
+      expect((error as NousRefusalError).signal).toBe('finish_reason="content_filter"');
+      expect((error as NousRefusalError).message).toMatch(
+        /signalled finish_reason="content_filter" after 22 output tokens\. Not retried/,
+      );
     });
 
     it('throws on a message.refusal string even when finish_reason is "stop"', async () => {
@@ -235,14 +241,16 @@ describe('nousChat', () => {
       const result = await nousChat(OPTIONS, REQUEST);
 
       expect(result.model).toBe('anthropic/claude-haiku-4.5');
+      expect(result.upstream_model).toBe('anthropic/claude-haiku-4.5');
     });
 
-    it('falls back to the requested id when the echo is not priceable', async () => {
+    it('falls back to the requested id when the echo is not priceable, keeping the raw echo', async () => {
       stubFetch(completion({ model: 'claude-haiku-4-5-20251001' }));
 
       const result = await nousChat(OPTIONS, REQUEST);
 
       expect(result.model).toBe('openai/gpt-5.6-luna');
+      expect(result.upstream_model).toBe('claude-haiku-4-5-20251001');
     });
 
     it('falls back when the provider echoes no model at all', async () => {
@@ -251,6 +259,16 @@ describe('nousChat', () => {
       const result = await nousChat(OPTIONS, REQUEST);
 
       expect(result.model).toBe('openai/gpt-5.6-luna');
+      expect(result.upstream_model).toBeUndefined();
+    });
+
+    it('reports no upstream model when the echo is not a string', async () => {
+      stubFetch(completion({ model: 42 }));
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      expect(result.model).toBe('openai/gpt-5.6-luna');
+      expect(result.upstream_model).toBeUndefined();
     });
   });
 
@@ -472,6 +490,35 @@ describe('nousChat', () => {
       expect(JSON.stringify(error.body)).toContain(huge);
     });
 
+    it.each([
+      [
+        'a typed error',
+        { error: { type: 'invalid_request', message: 'bad' } },
+        'invalid_request: bad',
+      ],
+      ['an untyped error', { error: { message: 'bad' } }, 'error: bad'],
+      ['a non-string message', { error: { type: 'invalid_request', message: 5 } }, 'OK'],
+      ['a null error', { error: null }, 'OK'],
+      ['a string error', { error: 'bad' }, 'OK'],
+      ['a string body', 'bad', 'OK'],
+      ['a null body', null, 'OK'],
+    ])('describes %s in the error message', async (_label, body, detail) => {
+      stubFetch(body, { status: 400 });
+
+      const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as NousApiError;
+
+      expect(error.message).toBe(`Nous API error: 400 ${detail}`);
+    });
+
+    it('falls back to the status text when the error body is not JSON', async () => {
+      stubFetch({}, { status: 502, jsonOverride: () => Promise.reject(new SyntaxError('<html>')) });
+
+      const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as NousApiError;
+
+      expect(error.message).toBe('Nous API error: 502 OK');
+      expect(error.body).toBeUndefined();
+    });
+
     it('never puts the API key in an error message', async () => {
       stubFetch({ error: { type: 'invalid_request', message: 'bad' } }, { status: 400 });
 
@@ -496,6 +543,24 @@ describe('nousChat', () => {
       stubFetch(completion({ choices: [] }));
 
       await expect(nousChat(OPTIONS, REQUEST)).rejects.toThrow(/choices/);
+    });
+
+    it('rejects a 2xx whose body has no choices field as a NousApiError', async () => {
+      stubFetch({ model: 'openai/gpt-5.6-luna' });
+
+      const error = await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(NousApiError);
+      expect((error as NousApiError).status).toBe(200);
+    });
+
+    it('reads a choice with no message and a non-string finish_reason as empty text, no reason', async () => {
+      stubFetch(completion({ choices: [{ finish_reason: 42 }] }));
+
+      const result = await nousChat(OPTIONS, REQUEST);
+
+      expect(result.text).toBe('');
+      expect(result.finish_reason).toBeNull();
     });
   });
 });
