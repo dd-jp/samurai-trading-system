@@ -7,7 +7,6 @@ export {
   saxoCustodyAccrual,
   saxoFillCost,
 } from './costs.js';
-export type { LossBudgetState } from './loss-budget.js';
 export { LossBudget } from './loss-budget.js';
 export { crossSectionalTopK, timeSeriesTrend, trailingReturn } from './signal.js';
 export {
