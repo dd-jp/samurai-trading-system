@@ -4,16 +4,20 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   type BiomeReport,
+  type ChangedLines,
   type CoverageReport,
   crapScore,
   evaluateCrap,
   type FileCoverage,
   formatDistribution,
   functionCoverage,
+  gateReport,
   innermostFunction,
+  isGated,
   main,
   parseArgs,
   parseBiomeComplexity,
+  parseUnifiedDiff,
   percentile,
   withinScope,
 } from './crap-gate.js';
@@ -235,7 +239,9 @@ describe('formatDistribution', () => {
   it('prints counts, percentiles, threshold tallies and the worst rows', () => {
     const text = formatDistribution(
       {
-        rows: [{ path: FILE, line: 5, name: 'inner', complexity: 8, coverage: 0, crap: 16 }],
+        rows: [
+          { path: FILE, line: 5, endLine: 8, name: 'inner', complexity: 8, coverage: 0, crap: 16 },
+        ],
         unmatched: [],
         ambiguous: [],
         uncovered: [],
@@ -256,6 +262,7 @@ describe('parseArgs', () => {
       coveragePath: 'coverage/coverage-final.json',
       top: 25,
       scope: [],
+      strict: [],
     });
     expect(
       parseArgs([
@@ -269,8 +276,19 @@ describe('parseArgs', () => {
         'a',
         '--scope',
         'b',
+        '--strict',
+        'server/apps/v2',
+        '--changed-since',
+        'origin/main',
       ]),
-    ).toEqual({ coveragePath: 'c.json', threshold: 15, top: 3, scope: ['a', 'b'] });
+    ).toEqual({
+      coveragePath: 'c.json',
+      threshold: 15,
+      top: 3,
+      scope: ['a', 'b'],
+      strict: ['server/apps/v2'],
+      changedSince: 'origin/main',
+    });
   });
 
   it('rejects unknown flags, missing values and non-numeric numbers', () => {
@@ -292,16 +310,20 @@ describe('main', () => {
     return { root, file };
   }
 
-  function run(argv: string[], report: BiomeReport, root: string): { code: number; out: string } {
+  function run(
+    argv: string[],
+    report: BiomeReport,
+    root: string,
+    changed: ChangedLines = new Map(),
+  ): { code: number; out: string } {
     let out = '';
-    const code = main(
-      argv,
-      root,
-      () => report,
-      (text) => {
+    const code = main(argv, root, {
+      runBiome: () => report,
+      changedLines: () => changed,
+      write: (text) => {
         out += text;
       },
-    );
+    });
     return { code, out };
   }
 
@@ -322,6 +344,7 @@ describe('main', () => {
     const failing = run(['--coverage', 'coverage.json', '--threshold', '15'], report, root);
     expect(failing.code).toBe(1);
     expect(failing.out).toContain('CRAP 16.0 > 15  server/a.ts:5  inner');
+    expect(failing.out).toContain('1 function(s) above 15 of 1 gated');
     expect(run(['--coverage', 'coverage.json', '--threshold', '16'], report, root).code).toBe(0);
   });
 
@@ -329,11 +352,27 @@ describe('main', () => {
     const { root } = setup();
     const { code, out } = run(
       ['--coverage', 'coverage.json', '--threshold', '15'],
-      { diagnostics: [diagnostic('server/a.ts', 40, 1, 2)] },
+      { diagnostics: [diagnostic('server/a.ts', 12, 3, 2), diagnostic('server/a.ts', 40, 1, 2)] },
       root,
     );
     expect(code).toBe(1);
     expect(out).toContain('unscored: server/a.ts:40');
+  });
+
+  it('under --changed-since gates only touched or strict functions', () => {
+    const { root, file } = setup();
+    const report = {
+      diagnostics: [diagnostic('server/a.ts', 5, 22, 8), diagnostic('server/a.ts', 12, 3, 4)],
+    };
+    const argv = ['--coverage', 'coverage.json', '--threshold', '7', '--changed-since', 'main'];
+
+    const untouched = run(argv, report, root, new Map([[file, new Set([13])]]));
+    expect(untouched.code).toBe(0);
+    expect(untouched.out).toContain('0 function(s) above 7 of 1 gated');
+    expect(untouched.out).toContain('1 above 7 outside the ratchet');
+
+    expect(run(argv, report, root, new Map([[file, new Set([6])]])).code).toBe(1);
+    expect(run([...argv, '--strict', 'server'], report, root).code).toBe(1);
   });
 
   it('fails closed on a production file missing from coverage', () => {
@@ -363,5 +402,81 @@ describe('main', () => {
       run(['--coverage', 'coverage.json', '--threshold', '16', '--scope', 'server'], report, root)
         .code,
     ).toBe(0);
+  });
+});
+
+describe('parseUnifiedDiff', () => {
+  it('collects added and modified lines per file, marking pure deletions at their seam', () => {
+    const diff = [
+      'diff --git a/server/a.ts b/server/a.ts',
+      '--- a/server/a.ts',
+      '+++ b/server/a.ts',
+      '@@ -3,2 +3,3 @@ function outer() {',
+      '@@ -10 +11 @@',
+      '@@ -20,4 +21,0 @@',
+      'diff --git a/server/gone.ts b/server/gone.ts',
+      '--- a/server/gone.ts',
+      '+++ /dev/null',
+      '@@ -1,5 +0,0 @@',
+    ].join('\n');
+    const changed = parseUnifiedDiff(diff, ROOT);
+    expect([...changed.keys()]).toEqual([FILE]);
+    expect([...(changed.get(FILE) as Set<number>)]).toEqual([3, 4, 5, 11, 21, 22]);
+  });
+});
+
+describe('isGated', () => {
+  const changed: ChangedLines = new Map<string, Set<number> | 'all'>([
+    [FILE, new Set([7])],
+    ['/repo/server/new.ts', 'all'],
+  ]);
+
+  it('gates everything when no ratchet is set', () => {
+    expect(isGated({ root: ROOT, strict: [] }, '/repo/server/x.ts', 1, 2)).toBe(true);
+  });
+
+  it('gates strict prefixes, touched spans and new files only', () => {
+    const policy = { root: ROOT, strict: ['contracts'], changed };
+    expect(isGated(policy, '/repo/contracts/x.ts', 1, 2)).toBe(true);
+    expect(isGated(policy, FILE, 5, 8)).toBe(true);
+    expect(isGated(policy, FILE, 8, 9)).toBe(false);
+    expect(isGated(policy, '/repo/server/new.ts', 1, 1)).toBe(true);
+    expect(isGated(policy, '/repo/server/x.ts', 1, 99)).toBe(false);
+    expect(isGated({ root: ROOT, strict: [], changed }, '/repo/contracts/x.ts', 1, 2)).toBe(false);
+  });
+});
+
+describe('gateReport', () => {
+  const row = {
+    path: FILE,
+    line: 5,
+    endLine: 8,
+    name: 'inner',
+    complexity: 8,
+    coverage: 0,
+    crap: 16,
+  };
+
+  it('refuses an empty run', () => {
+    const result = gateReport({ rows: [], unmatched: [], ambiguous: [], uncovered: [] }, 7, {
+      root: ROOT,
+      strict: [],
+    });
+    expect(result.code).toBe(1);
+  });
+
+  it('ignores unscored findings outside the ratchet and fails on gated ones', () => {
+    const lost = { path: '/repo/server/b.ts', line: 3, column: 1, complexity: 9 };
+    const evaluation = { rows: [], unmatched: [], ambiguous: [], uncovered: [lost] };
+    const withRow = { ...evaluation, rows: [{ ...row, crap: 5 }] };
+    const outside = gateReport(withRow, 7, { root: ROOT, strict: [], changed: new Map() });
+    expect(outside.code).toBe(0);
+    const inside = gateReport(withRow, 7, {
+      root: ROOT,
+      strict: ['server/b.ts'],
+      changed: new Map(),
+    });
+    expect(inside.code).toBe(1);
+    expect(inside.text).toContain('unscored: server/b.ts:3');
   });
 });

@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -50,6 +50,7 @@ export interface ComplexityFinding {
 export interface CrapRow {
   readonly path: string;
   readonly line: number;
+  readonly endLine: number;
   readonly name: string;
   readonly complexity: number;
   readonly coverage: number;
@@ -185,41 +186,52 @@ export function crapScore(complexity: number, coverage: number): number {
   return complexity * (1 - coverage) ** 2 + complexity;
 }
 
+type UnscoredKind = 'unmatched' | 'ambiguous' | 'uncovered';
+
+type ScoredFinding =
+  | { readonly kind: 'row'; readonly row: CrapRow }
+  | { readonly kind: UnscoredKind | 'test-file' };
+
+function toRow(finding: ComplexityFinding, file: FileCoverage, key: string): CrapRow {
+  const fn = file.fnMap[key];
+  const covered = functionCoverage(file, key);
+  return {
+    path: finding.path,
+    line: finding.line,
+    endLine: fn?.loc.end.line ?? finding.line,
+    name: fn?.name ?? key,
+    complexity: finding.complexity,
+    coverage: covered,
+    crap: crapScore(finding.complexity, covered),
+  };
+}
+
+function scoreFinding(finding: ComplexityFinding, coverage: CoverageReport): ScoredFinding {
+  const file = coverage[finding.path];
+  if (file === undefined) return { kind: TEST_FILE.test(finding.path) ? 'test-file' : 'uncovered' };
+  const match = innermostFunction(file, finding.line, finding.column);
+  if (match.kind === 'none') return { kind: 'unmatched' };
+  if (match.kind === 'ambiguous') return { kind: 'ambiguous' };
+  return { kind: 'row', row: toRow(finding, file, match.key) };
+}
+
 export function evaluateCrap(
   findings: readonly ComplexityFinding[],
   coverage: CoverageReport,
 ): CrapEvaluation {
   const rows: CrapRow[] = [];
-  const unmatched: ComplexityFinding[] = [];
-  const ambiguous: ComplexityFinding[] = [];
-  const uncovered: ComplexityFinding[] = [];
+  const unscored: Record<UnscoredKind, ComplexityFinding[]> = {
+    unmatched: [],
+    ambiguous: [],
+    uncovered: [],
+  };
   for (const finding of findings) {
-    const file = coverage[finding.path];
-    if (file === undefined) {
-      if (!TEST_FILE.test(finding.path)) uncovered.push(finding);
-      continue;
-    }
-    const match = innermostFunction(file, finding.line, finding.column);
-    if (match.kind === 'none') {
-      unmatched.push(finding);
-      continue;
-    }
-    if (match.kind === 'ambiguous') {
-      ambiguous.push(finding);
-      continue;
-    }
-    const covered = functionCoverage(file, match.key);
-    rows.push({
-      path: finding.path,
-      line: finding.line,
-      name: file.fnMap[match.key]?.name ?? match.key,
-      complexity: finding.complexity,
-      coverage: covered,
-      crap: crapScore(finding.complexity, covered),
-    });
+    const scored = scoreFinding(finding, coverage);
+    if (scored.kind === 'row') rows.push(scored.row);
+    else if (scored.kind !== 'test-file') unscored[scored.kind].push(finding);
   }
   rows.sort((a, b) => b.crap - a.crap);
-  return { rows, unmatched, ambiguous, uncovered };
+  return { rows, ...unscored };
 }
 
 export function percentile(sortedAscending: readonly number[], p: number): number {
@@ -302,11 +314,76 @@ function runBiomeAtThresholdOne(root: string, paths: readonly string[]): BiomeRe
   return JSON.parse(result.stdout) as BiomeReport;
 }
 
+export type ChangedLines = ReadonlyMap<string, ReadonlySet<number> | 'all'>;
+
+const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+function hunkLines(header: string): number[] {
+  const match = HUNK_HEADER.exec(header);
+  if (match === null) return [];
+  const first = Number(match[1]);
+  const count = match[2] === undefined ? 1 : Number(match[2]);
+  if (count === 0) return [first, first + 1];
+  return Array.from({ length: count }, (_, i) => first + i);
+}
+
+const FILE_HEADER = /^--- [^\n]*\n\+\+\+ /m;
+
+export function parseUnifiedDiff(diff: string, root: string): Map<string, Set<number> | 'all'> {
+  const changed = new Map<string, Set<number> | 'all'>();
+  for (const section of diff.split(FILE_HEADER).slice(1)) {
+    const [target = '', ...rest] = section.split('\n');
+    if (target === '/dev/null') continue;
+    changed.set(resolve(root, target.slice('b/'.length)), new Set(rest.flatMap(hunkLines)));
+  }
+  return changed;
+}
+
+function git(root: string, args: readonly string[]): string {
+  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
+}
+
+export function gitChangedLines(root: string, ref: string): ChangedLines {
+  const base = git(root, ['merge-base', ref, 'HEAD']).trim();
+  const changed = parseUnifiedDiff(
+    git(root, ['diff', '-U0', '--no-color', '--no-ext-diff', base]),
+    root,
+  );
+  const untracked = git(root, ['ls-files', '--others', '--exclude-standard']).split('\n');
+  for (const path of untracked.filter((entry) => entry.length > 0)) {
+    changed.set(resolve(root, path), 'all');
+  }
+  return changed;
+}
+
+export interface GatePolicy {
+  readonly root: string;
+  readonly strict: readonly string[];
+  readonly changed?: ChangedLines;
+}
+
+function touches(
+  lines: ReadonlySet<number> | 'all' | undefined,
+  from: number,
+  to: number,
+): boolean {
+  if (lines === 'all') return true;
+  return [...(lines ?? [])].some((line) => line >= from && line <= to);
+}
+
+export function isGated(policy: GatePolicy, path: string, from: number, to: number): boolean {
+  if (policy.changed === undefined) return true;
+  if (policy.strict.length > 0 && withinScope(path, policy.root, policy.strict)) return true;
+  return touches(policy.changed.get(path), from, to);
+}
+
 interface CliOptions {
   readonly coveragePath: string;
   readonly threshold?: number;
   readonly top: number;
   readonly scope: readonly string[];
+  readonly strict: readonly string[];
+  readonly changedSince?: string;
 }
 
 interface MutableCliOptions {
@@ -314,6 +391,8 @@ interface MutableCliOptions {
   threshold?: number;
   top: number;
   scope: string[];
+  strict: string[];
+  changedSince?: string;
 }
 
 function finiteNumber(flag: string, value: string): number {
@@ -336,6 +415,12 @@ const FLAG_HANDLERS: Readonly<Record<string, (options: MutableCliOptions, value:
     '--scope': (options, value) => {
       options.scope.push(value);
     },
+    '--strict': (options, value) => {
+      options.strict.push(value);
+    },
+    '--changed-since': (options, value) => {
+      options.changedSince = value;
+    },
   };
 
 export function parseArgs(argv: readonly string[]): CliOptions {
@@ -343,6 +428,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     coveragePath: 'coverage/coverage-final.json',
     top: 25,
     scope: [],
+    strict: [],
   };
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i] ?? '';
@@ -355,45 +441,89 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   return options;
 }
 
+export interface GateResult {
+  readonly code: number;
+  readonly text: string;
+}
+
+function relative(root: string, path: string): string {
+  return path.replace(`${root}/`, '');
+}
+
+export function gateReport(
+  evaluation: CrapEvaluation,
+  limit: number,
+  policy: GatePolicy,
+): GateResult {
+  if (evaluation.rows.length === 0) {
+    return {
+      code: 1,
+      text: 'crap gate: no complexity findings scored; refusing to pass an empty run\n',
+    };
+  }
+  const gated = evaluation.rows.filter((row) => isGated(policy, row.path, row.line, row.endLine));
+  const offenders = gated.filter((row) => row.crap > limit);
+  const unscored = [
+    ...evaluation.unmatched,
+    ...evaluation.ambiguous,
+    ...evaluation.uncovered,
+  ].filter((finding) => isGated(policy, finding.path, finding.line, finding.line));
+  const outside = evaluation.rows.filter((row) => row.crap > limit).length - offenders.length;
+  const lines = [
+    ...offenders.map(
+      (row) =>
+        `CRAP ${row.crap.toFixed(1)} > ${limit}  ${relative(policy.root, row.path)}:${row.line}  ${row.name}`,
+    ),
+    ...unscored.map(
+      (finding) => `unscored: ${relative(policy.root, finding.path)}:${finding.line}`,
+    ),
+    `crap gate: ${offenders.length} function(s) above ${limit} of ${gated.length} gated (${evaluation.rows.length} scored; ${outside} above ${limit} outside the ratchet, not gated)`,
+  ];
+  const pass = offenders.length === 0 && unscored.length === 0;
+  return { code: pass ? 0 : 1, text: `${lines.join('\n')}\n` };
+}
+
 export type BiomeRunner = (root: string, paths: readonly string[]) => BiomeReport;
+
+export interface GateDeps {
+  readonly runBiome: BiomeRunner;
+  readonly changedLines: (root: string, ref: string) => ChangedLines;
+  readonly write: (text: string) => void;
+}
+
+const DEFAULT_DEPS: GateDeps = {
+  runBiome: runBiomeAtThresholdOne,
+  changedLines: gitChangedLines,
+  write: (text) => process.stdout.write(text),
+};
 
 export function main(
   argv: readonly string[],
   root = process.cwd(),
-  runBiome: BiomeRunner = runBiomeAtThresholdOne,
-  write: (text: string) => void = (text) => process.stdout.write(text),
+  overrides: Partial<GateDeps> = {},
 ): number {
+  const deps = { ...DEFAULT_DEPS, ...overrides };
   const options = parseArgs(argv);
   const coverage = JSON.parse(
     readFileSync(resolve(root, options.coveragePath), 'utf8'),
   ) as CoverageReport;
-  const findings = parseBiomeComplexity(runBiome(root, ['server', 'contracts']), root).filter(
+  const findings = parseBiomeComplexity(deps.runBiome(root, ['server', 'contracts']), root).filter(
     (finding) => withinScope(finding.path, root, options.scope),
   );
   const evaluation = evaluateCrap(findings, coverage);
   if (options.threshold === undefined) {
-    write(`${formatDistribution(evaluation, root, options.top, [15, 20, 30])}\n`);
+    deps.write(`${formatDistribution(evaluation, root, options.top, [7, 15, 20])}\n`);
     return 0;
   }
-  const limit = options.threshold;
-  const offenders = evaluation.rows.filter((row) => row.crap > limit);
-  for (const row of offenders) {
-    write(
-      `CRAP ${row.crap.toFixed(1)} > ${limit}  ${row.path.replace(`${root}/`, '')}:${row.line}  ${row.name}\n`,
-    );
-  }
-  const unscored = [...evaluation.unmatched, ...evaluation.ambiguous, ...evaluation.uncovered];
-  for (const finding of unscored) {
-    write(`unscored: ${finding.path.replace(`${root}/`, '')}:${finding.line}\n`);
-  }
-  if (evaluation.rows.length === 0) {
-    write('crap gate: no complexity findings scored; refusing to pass an empty run\n');
-    return 1;
-  }
-  write(
-    `crap gate: ${offenders.length} function(s) above ${limit} of ${evaluation.rows.length} scored\n`,
-  );
-  return offenders.length === 0 && unscored.length === 0 ? 0 : 1;
+  const changed =
+    options.changedSince === undefined ? undefined : deps.changedLines(root, options.changedSince);
+  const result = gateReport(evaluation, options.threshold, {
+    root,
+    strict: options.strict,
+    ...(changed === undefined ? {} : { changed }),
+  });
+  deps.write(result.text);
+  return result.code;
 }
 
 if (isMainModule(import.meta.url)) {

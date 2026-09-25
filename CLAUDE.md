@@ -28,7 +28,7 @@ David has 15 years of professional experience — code does not need narration. 
 
 ## Lint Tooling Rule
 
-All existing oxlint, biome, crap and fallow rules stay intact and bind v2 from its first commit (doc 66 Tooling row, Q18a). "crap" is the CRAP score gate (complexity × coverage), ticket [#1649](https://github.com/dd-jp/samurai-trading-system/issues/1649) (G15): `npm run crap` runs full coverage, then `server/tools/crap-gate.ts` fails on any `server/` or `contracts/` function with CRAP above 15, on any complexity finding it cannot attribute to a covered function, and on a run that scores nothing. fallow, not knip, for dead code. Never loosen a rule to get a PR green; fix the code or record the finding.
+All existing oxlint, biome, crap and fallow rules stay intact and bind v2 from its first commit (doc 66 Tooling row, Q18a). "crap" is the CRAP score gate (complexity × coverage), ticket [#1649](https://github.com/dd-jp/samurai-trading-system/issues/1649) (G15): threshold **7** as a ratchet (doc 66, 2026-09-25): `npm run crap` runs full coverage, then `server/tools/crap-gate.ts` fails on any `server/` or `contracts/` function the branch adds or touches (diff against the merge-base with `origin/main`, uncommitted and untracked files included) with CRAP above 7, on any such complexity finding it cannot attribute to a covered function, and on a run that scores nothing. Functions the diff does not touch are reported, not failed. `server/apps/v2/` and `contracts/` are to be gated in full (`--strict`) once their nine offenders are refactored, after #1769 lands. fallow, not knip, for dead code. Never loosen a rule to get a PR green; fix the code or record the finding.
 
 ## Definition of Done (every step, doc 67 §5)
 
