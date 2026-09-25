@@ -74,7 +74,9 @@ describe('CapitalConfigStore', () => {
     expect(() => capital.tighten('2026-10-01', 800)).toThrow(/and after 2026-10-01/);
     expect(() => capital.tighten('2026-09-30', 800)).toThrow(/and after 2026-10-01/);
     expect(() => capital.tighten('2027-02-01', 800)).toThrow(/2027 has no cap to tighten/);
-    expect(() => capital.tighten('2026-1-01', 800)).toThrow(/effective date must be YYYY-MM-DD/);
+    for (const malformed of ['2026-1-01', 'x2026-10-02', '2026-10-02x']) {
+      expect(() => capital.tighten(malformed, 800)).toThrow(/effective date must be YYYY-MM-DD/);
+    }
     expect(() => capital.tighten('2026-10-02', 0)).toThrow(/loss cap must be a positive/);
     expect(capital.inForce('2026-12-31')?.lossCapGbp).toBe(900);
   });

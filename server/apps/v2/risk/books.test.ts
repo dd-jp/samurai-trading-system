@@ -192,6 +192,27 @@ describe('PaperBooks', () => {
     expect(newYear.state.sizeMultiplier).toBe(1);
   });
 
+  it('replays the year roll so a loss taken before a restart is measured from the new year reference', () => {
+    const db = seededStore();
+    const first = openBooks(db);
+    first.applyFill('debate/primary', fill({ qty: 1, priceGbp: 500 }));
+    first.applyFill('debate/primary', fill({ side: 'sell', qty: 1, priceGbp: 0 }));
+    first.markDay('debate/primary', '2026-12-31', flat, 0);
+    first.markDay('debate/primary', '2027-01-04', flat, 0);
+    const second = openBooks(db);
+    second.applyFill('debate/primary', fill({ qty: 1, priceGbp: 100, clientOrderId: 'b' }));
+    second.applyFill(
+      'debate/primary',
+      fill({ side: 'sell', qty: 1, priceGbp: 0, clientOrderId: 'b' }),
+    );
+    expect(second.markDay('debate/primary', '2027-01-05', flat, 1).state).toMatchObject({
+      referenceEquityGbp: 500,
+      ytdLossGbp: 100,
+      sizeMultiplier: 1,
+    });
+    db.close();
+  });
+
   it('refuses to mark a date at or before the last mark and an unknown book', () => {
     const db = seededStore();
     const books = openBooks(db);
