@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { isMainModule } from './cli-entrypoint.js';
 
 export interface Position {
@@ -60,10 +60,12 @@ export interface CrapEvaluation {
   readonly rows: readonly CrapRow[];
   readonly unmatched: readonly ComplexityFinding[];
   readonly ambiguous: readonly ComplexityFinding[];
+  readonly uncovered: readonly ComplexityFinding[];
 }
 
 const COMPLEXITY_CATEGORY = 'lint/complexity/noExcessiveCognitiveComplexity';
 const COMPLEXITY_MESSAGE = /Excessive complexity of (\d+) detected/;
+const TEST_FILE = /\.test\.tsx?$/;
 
 export function parseBiomeComplexity(report: BiomeReport, root: string): ComplexityFinding[] {
   const findings: ComplexityFinding[] = [];
@@ -72,7 +74,9 @@ export function parseBiomeComplexity(report: BiomeReport, root: string): Complex
     const match = COMPLEXITY_MESSAGE.exec(diagnostic.message ?? '');
     const path = diagnostic.location?.path;
     const start = diagnostic.location?.start;
-    if (match === null || path === undefined || start === undefined) continue;
+    if (match === null || path === undefined || start === undefined) {
+      throw new Error(`unreadable complexity diagnostic: ${JSON.stringify(diagnostic)}`);
+    }
     findings.push({
       path: resolve(root, path),
       line: start.line,
@@ -139,18 +143,42 @@ export function innermostFunction(file: FileCoverage, line: number, column: numb
   return { kind: 'matched', key: first[0] };
 }
 
+function endPoint(range: Range): [number, number] {
+  return [range.end.line, range.end.column ?? Number.POSITIVE_INFINITY];
+}
+
+function strictlyInside(inner: Range, outer: Range): boolean {
+  const startCompare = comparePoint(
+    inner.start.line,
+    inner.start.column ?? 0,
+    outer.start.line,
+    outer.start.column ?? 0,
+  );
+  const endCompare = comparePoint(...endPoint(inner), ...endPoint(outer));
+  return startCompare >= 0 && endCompare <= 0 && (startCompare > 0 || endCompare < 0);
+}
+
+function ownStatementIds(file: FileCoverage, fn: FunctionEntry): string[] {
+  const nested = Object.values(file.fnMap)
+    .map((other) => other.loc)
+    .filter((loc) => strictlyInside(loc, fn.loc));
+  return Object.entries(file.statementMap)
+    .filter(([, range]) => {
+      const column = (range.start.column ?? 0) + 1;
+      return (
+        rangeContains(fn.loc, range.start.line, column) &&
+        !nested.some((loc) => rangeContains(loc, range.start.line, column))
+      );
+    })
+    .map(([id]) => id);
+}
+
 export function functionCoverage(file: FileCoverage, key: string): number {
   const fn = file.fnMap[key];
   if (fn === undefined) throw new Error(`no function ${key} in ${file.path}`);
-  let total = 0;
-  let covered = 0;
-  for (const [id, range] of Object.entries(file.statementMap)) {
-    if (!rangeContains(fn.loc, range.start.line, (range.start.column ?? 0) + 1)) continue;
-    total += 1;
-    if ((file.s[id] ?? 0) > 0) covered += 1;
-  }
-  if (total === 0) return (file.f[key] ?? 0) > 0 ? 1 : 0;
-  return covered / total;
+  const ids = ownStatementIds(file, fn);
+  if (ids.length === 0) return (file.f[key] ?? 0) > 0 ? 1 : 0;
+  return ids.filter((id) => (file.s[id] ?? 0) > 0).length / ids.length;
 }
 
 export function crapScore(complexity: number, coverage: number): number {
@@ -164,9 +192,13 @@ export function evaluateCrap(
   const rows: CrapRow[] = [];
   const unmatched: ComplexityFinding[] = [];
   const ambiguous: ComplexityFinding[] = [];
+  const uncovered: ComplexityFinding[] = [];
   for (const finding of findings) {
     const file = coverage[finding.path];
-    if (file === undefined) continue;
+    if (file === undefined) {
+      if (!TEST_FILE.test(finding.path)) uncovered.push(finding);
+      continue;
+    }
     const match = innermostFunction(file, finding.line, finding.column);
     if (match.kind === 'none') {
       unmatched.push(finding);
@@ -187,7 +219,7 @@ export function evaluateCrap(
     });
   }
   rows.sort((a, b) => b.crap - a.crap);
-  return { rows, unmatched, ambiguous };
+  return { rows, unmatched, ambiguous, uncovered };
 }
 
 export function percentile(sortedAscending: readonly number[], p: number): number {
@@ -201,7 +233,10 @@ export function percentile(sortedAscending: readonly number[], p: number): numbe
 
 export function withinScope(path: string, root: string, prefixes: readonly string[]): boolean {
   if (prefixes.length === 0) return true;
-  return prefixes.some((prefix) => path.startsWith(resolve(root, prefix)));
+  return prefixes.some((prefix) => {
+    const base = resolve(root, prefix);
+    return path === base || path.startsWith(`${base}${sep}`);
+  });
 }
 
 export function formatDistribution(
@@ -347,9 +382,13 @@ export function main(
       `CRAP ${row.crap.toFixed(1)} > ${limit}  ${row.path.replace(`${root}/`, '')}:${row.line}  ${row.name}\n`,
     );
   }
-  const unscored = [...evaluation.unmatched, ...evaluation.ambiguous];
+  const unscored = [...evaluation.unmatched, ...evaluation.ambiguous, ...evaluation.uncovered];
   for (const finding of unscored) {
     write(`unscored: ${finding.path.replace(`${root}/`, '')}:${finding.line}\n`);
+  }
+  if (evaluation.rows.length === 0) {
+    write('crap gate: no complexity findings scored; refusing to pass an empty run\n');
+    return 1;
   }
   write(
     `crap gate: ${offenders.length} function(s) above ${limit} of ${evaluation.rows.length} scored\n`,

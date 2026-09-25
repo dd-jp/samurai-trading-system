@@ -72,19 +72,27 @@ describe('parseBiomeComplexity', () => {
     ).toEqual([{ path: FILE, line: 1, column: 10, complexity: 7 }]);
   });
 
-  it('skips other rules, unparseable messages and diagnostics without a location', () => {
+  it('skips other rules', () => {
     const report: BiomeReport = {
-      diagnostics: [
-        { ...diagnostic('server/a.ts', 1, 10, 7), category: 'lint/style/useConst' },
-        { ...diagnostic('server/a.ts', 1, 10, 7), message: 'something else' },
-        {
-          category: 'lint/complexity/noExcessiveCognitiveComplexity',
-          message: 'Excessive complexity of 3 detected',
-        },
-        { ...diagnostic('server/a.ts', 1, 10, 7), location: { path: 'server/a.ts' } },
-      ],
+      diagnostics: [{ ...diagnostic('server/a.ts', 1, 10, 7), category: 'lint/style/useConst' }],
     };
     expect(parseBiomeComplexity(report, ROOT)).toEqual([]);
+  });
+
+  it.each([
+    ['an unparseable message', { ...diagnostic('server/a.ts', 1, 10, 7), message: 'reworded' }],
+    [
+      'no location',
+      {
+        category: 'lint/complexity/noExcessiveCognitiveComplexity',
+        message: 'Excessive complexity of 3 detected',
+      },
+    ],
+    ['no start', { ...diagnostic('server/a.ts', 1, 10, 7), location: { path: 'server/a.ts' } }],
+  ])('throws on a complexity diagnostic with %s rather than dropping it', (_label, entry) => {
+    expect(() => parseBiomeComplexity({ diagnostics: [entry] }, ROOT)).toThrow(
+      'unreadable complexity diagnostic',
+    );
   });
 
   it('treats a report with no diagnostics as empty and a null column as column 1', () => {
@@ -127,10 +135,15 @@ describe('innermostFunction', () => {
 });
 
 describe('functionCoverage', () => {
-  it('is the share of statements inside the function body that ran', () => {
+  it('is the share of statements the function itself owns that ran, excluding nested functions', () => {
     expect(functionCoverage(fixture(), '1')).toBe(0);
     expect(functionCoverage(fixture(), '2')).toBe(1);
-    expect(functionCoverage(fixture(), '0')).toBe(0.4);
+    expect(functionCoverage(fixture(), '0')).toBe(0.5);
+  });
+
+  it('does not let a well-covered nested function raise its parent', () => {
+    const covered = fixture({ s: { '0': 0, '1': 0, '2': 5, '3': 5, '4': 5 } });
+    expect(functionCoverage(covered, '0')).toBe(0);
   });
 
   it('falls back to the call count when the body has no statements', () => {
@@ -155,7 +168,7 @@ describe('crapScore', () => {
 describe('evaluateCrap', () => {
   const coverage: CoverageReport = { [FILE]: fixture() };
 
-  it('scores matched findings worst first and ignores files outside coverage', () => {
+  it('scores matched findings worst first and ignores test files outside coverage', () => {
     const result = evaluateCrap(
       [
         { path: FILE, line: 12, column: 3, complexity: 4 },
@@ -169,6 +182,12 @@ describe('evaluateCrap', () => {
       ['method', 4],
     ]);
     expect(result.unmatched).toEqual([]);
+    expect(result.uncovered).toEqual([]);
+  });
+
+  it('reports a production file missing from coverage as uncovered', () => {
+    const missing = { path: '/repo/server/index.ts', line: 1, column: 1, complexity: 9 };
+    expect(evaluateCrap([missing], coverage).uncovered).toEqual([missing]);
   });
 
   it('separates unmatched and ambiguous findings', () => {
@@ -206,7 +225,9 @@ describe('withinScope', () => {
   it('passes everything with no scope and filters by path prefix otherwise', () => {
     expect(withinScope(FILE, ROOT, [])).toBe(true);
     expect(withinScope(FILE, ROOT, ['server/apps'])).toBe(false);
-    expect(withinScope(FILE, ROOT, ['server/apps', 'server/a'])).toBe(true);
+    expect(withinScope(FILE, ROOT, ['server/apps', 'server/a.ts'])).toBe(true);
+    expect(withinScope(FILE, ROOT, ['server'])).toBe(true);
+    expect(withinScope('/repo/server/apps/x.ts', ROOT, ['server/app'])).toBe(false);
   });
 });
 
@@ -217,6 +238,7 @@ describe('formatDistribution', () => {
         rows: [{ path: FILE, line: 5, name: 'inner', complexity: 8, coverage: 0, crap: 16 }],
         unmatched: [],
         ambiguous: [],
+        uncovered: [],
       },
       ROOT,
       5,
@@ -314,15 +336,32 @@ describe('main', () => {
     expect(out).toContain('unscored: server/a.ts:40');
   });
 
-  it('applies --scope before scoring', () => {
+  it('fails closed on a production file missing from coverage', () => {
+    const { root } = setup();
+    const { code, out } = run(
+      ['--coverage', 'coverage.json', '--threshold', '15'],
+      {
+        diagnostics: [diagnostic('server/a.ts', 12, 3, 2), diagnostic('server/index.ts', 3, 1, 9)],
+      },
+      root,
+    );
+    expect(code).toBe(1);
+    expect(out).toContain('unscored: server/index.ts:3');
+  });
+
+  it('applies --scope before scoring and refuses a run that scores nothing', () => {
     const { root } = setup();
     const report = { diagnostics: [diagnostic('server/a.ts', 5, 22, 8)] };
+    const scopedOut = run(
+      ['--coverage', 'coverage.json', '--threshold', '15', '--scope', 'contracts'],
+      report,
+      root,
+    );
+    expect(scopedOut.code).toBe(1);
+    expect(scopedOut.out).toContain('no complexity findings scored');
     expect(
-      run(
-        ['--coverage', 'coverage.json', '--threshold', '15', '--scope', 'contracts'],
-        report,
-        root,
-      ).code,
+      run(['--coverage', 'coverage.json', '--threshold', '16', '--scope', 'server'], report, root)
+        .code,
     ).toBe(0);
   });
 });

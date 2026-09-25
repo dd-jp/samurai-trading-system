@@ -37,10 +37,15 @@ describe('AlpacaNewsClient construction', () => {
     );
   });
 
-  it('falls back to the environment for credentials', () => {
+  it('falls back to the environment for credentials', async () => {
     vi.stubEnv('ALPACA_API_KEY', 'env-key');
     vi.stubEnv('ALPACA_API_SECRET', 'env-secret');
-    expect(() => new AlpacaNewsClient()).not.toThrow();
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ news: [] }));
+    await new AlpacaNewsClient({ fetchImpl }).fetchNews(['AAPL'], START, END);
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toEqual({
+      'APCA-API-KEY-ID': 'env-key',
+      'APCA-API-SECRET-KEY': 'env-secret',
+    });
   });
 });
 
