@@ -17,7 +17,7 @@
     "start": "npm run build && node --env-file=.env.local dist/server/apps/supervisor/index.js",
     "orchestrator": "npm run build && node --env-file=.env.local dist/server/apps/orchestrator/index.js",
     "api": "npm run build && node --env-file=.env.local dist/server/apps/service-api/index.js",
-    "smoke": "npm run build && node dist/server/apps/orchestrator/smoke-run.js",
+    "smoke": "npm run build && node dist/server/apps/orchestrator/smoke-run.js && node dist/server/apps/v2/smoke.js",
     "serve": "npm run start",
     "dashboard": "npm run api",
     "data": "npm run build && node --env-file=.env.local dist/server/tools/data-cli.js",
