@@ -1,13 +1,17 @@
 import { pathToFileURL } from 'node:url';
 import { SimulatedClock } from '../../shared/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { BOOK_SPECS } from './books.js';
+import { macroGate } from './data/index.js';
 import { composeV2Root } from './index.js';
-import { macroGate } from './macro-calendar.js';
-import { ALL_PINS } from './models.js';
-import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
-import { DECLARED_PARAMETERS, isSet, SHORTS_ENABLED } from './parameters.js';
-import { positionSizeShares } from './position-size.js';
+import { BOOK_SPECS, CapitalConfigStore, positionSizeShares } from './risk/index.js';
+import {
+  ALL_PINS,
+  DECLARED_PARAMETERS,
+  isSet,
+  SHORTS_ENABLED,
+  SqliteMonthlySpendCap,
+} from './signal/index.js';
 
 export interface SmokeProbe {
   readonly name: string;
@@ -16,6 +20,31 @@ export interface SmokeProbe {
 }
 
 export const SMOKE_TRADING_DATE = '2026-09-24';
+const SMOKE_START_CAPITAL_GBP = 2_000;
+const SMOKE_LOSS_CAP_GBP = 1_500;
+const SMOKE_CLOCK = new SimulatedClock(new Date(`${SMOKE_TRADING_DATE}T07:00:00.000Z`));
+
+function seededSmokeStore(): StoreHandle {
+  const db = openSharedStore(':memory:');
+  new CapitalConfigStore(db, SMOKE_CLOCK).setYear(
+    Number(SMOKE_TRADING_DATE.slice(0, 4)),
+    SMOKE_START_CAPITAL_GBP,
+    SMOKE_LOSS_CAP_GBP,
+  );
+  return db;
+}
+
+function midYearLooseningRefused(): boolean {
+  const db = seededSmokeStore();
+  try {
+    new CapitalConfigStore(db, SMOKE_CLOCK).tighten(SMOKE_TRADING_DATE, SMOKE_LOSS_CAP_GBP + 1);
+    return false;
+  } catch (error) {
+    return error instanceof Error && /loosening mid-year is refused/.test(error.message);
+  } finally {
+    db.close();
+  }
+}
 
 function probe(name: string, passed: boolean, detail: string): SmokeProbe {
   return { name, passed, detail };
@@ -23,7 +52,7 @@ function probe(name: string, passed: boolean, detail: string): SmokeProbe {
 
 function staticProbes(): SmokeProbe[] {
   const size = {
-    equityGbp: 1_000,
+    equityGbp: SMOKE_START_CAPITAL_GBP,
     riskFraction: 0.005,
     priceGbp: 10,
     atrGbp: 0.25,
@@ -55,6 +84,11 @@ function staticProbes(): SmokeProbe[] {
       'FOMC day is a macro day',
       macroGate('2026-09-16').macroDay,
       macroGate('2026-09-16').reason,
+    ),
+    probe(
+      'a mid-year loosening of the loss cap is refused',
+      midYearLooseningRefused(),
+      `tighten £${SMOKE_LOSS_CAP_GBP} to £${SMOKE_LOSS_CAP_GBP + 1}`,
     ),
     probe('shorts are off', !SHORTS_ENABLED, String(SHORTS_ENABLED)),
     probe(
@@ -89,8 +123,8 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
   const root = composeV2Root({
     tradingDate: SMOKE_TRADING_DATE,
     dryRun: true,
-    storePath: ':memory:',
-    clock: new SimulatedClock(new Date(`${SMOKE_TRADING_DATE}T07:00:00.000Z`)),
+    store: seededSmokeStore(),
+    clock: SMOKE_CLOCK,
     logger: { log: () => {} },
   });
   try {

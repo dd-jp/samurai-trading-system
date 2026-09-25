@@ -6,39 +6,42 @@ import type {
   SpendCap,
 } from '../../pipeline/debate-engine/index.js';
 import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
-import type { AlpacaBrokerClient, BrokerAdapter } from '../../pipeline/execution/index.js';
-import {
-  AlpacaBrokerAdapter,
-  AlpacaHttpBrokerClient,
-  SqliteBrokerStateStore,
-} from '../../pipeline/execution/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
-import { PaperBooks } from './books.js';
-import { type CycleDeps, type CycleReport, runCycle } from './cycle.js';
-import { createDebateSleeve } from './debate-sleeve.js';
-import { DryRunBrokerAdapter } from './dry-run-broker.js';
-import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
-import { Journal } from './journal.js';
-import { buildLlmPanel, type LlmPanel } from './llm-panel.js';
-import { NousPinnedTransport } from './llm-transport.js';
-import { ALL_PINS, type ModelPin } from './models.js';
-import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
-import { AlpacaNewsSource, type NewsSource, NO_NEWS } from './news.js';
-import { verifyNousPins } from './nous-pin-check.js';
+import { type CycleReport, runCycle } from './cycle.js';
 import {
+  AlpacaNewsSource,
+  BarsMarketData,
+  type BarsSource,
+  CsvBarsSource,
+  currentConstituents,
+  type NewsSource,
+  NO_NEWS,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
+import { type AlpacaBrokerClient, createOrderExecutor } from './execution/index.js';
+import { Journal } from './journal/index.js';
+import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import {
+  ALL_PINS,
+  BULLISH_SCRIPT,
+  buildLlmPanel,
+  createDebateSleeve,
   DEBATE_RISK_FRACTION,
   DEBATE_TARGET_ATR_MULTIPLE,
   DEBATE_TIME_STOP_TRADING_DAYS,
-} from './parameters.js';
-import { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
-import { SleeveRegistry } from './sleeve.js';
-import { type BarsSource, barsBefore, CsvBarsSource, currentConstituents } from './universe.js';
+  type LlmPanel,
+  type ModelPin,
+  NousPinnedTransport,
+  ScriptedTransport,
+  SleeveRegistry,
+  SqliteMonthlySpendCap,
+  verifyNousPins,
+} from './signal/index.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
@@ -54,6 +57,7 @@ export interface V2RootOptions {
   readonly tradingDate: string;
   readonly dryRun: boolean;
   readonly storePath?: string | undefined;
+  readonly store?: StoreHandle | undefined;
   readonly barsDirectory?: string | undefined;
   readonly constituentsPath?: string | undefined;
   readonly spreadsPath?: string | undefined;
@@ -73,6 +77,7 @@ export interface V2RootOptions {
 export interface V2Root {
   readonly registry: SleeveRegistry;
   readonly books: PaperBooks;
+  readonly capital: CapitalConfigStore;
   readonly journal: Journal;
   readonly panel: LlmPanel;
   readonly db: StoreHandle;
@@ -148,37 +153,6 @@ function halfSpreadLookup(path: string): (instrument: string) => number {
   return (instrument) => spreads.get(instrument) ?? DEFAULT_HALF_SPREAD_BPS;
 }
 
-function alpacaPaperBroker(
-  options: V2RootOptions,
-  db: StoreHandle,
-  clock: Clock,
-  logger: Logger,
-): BrokerAdapter {
-  return new AlpacaBrokerAdapter({
-    client: options.alpacaClient ?? new AlpacaHttpBrokerClient({ environment: 'paper' }),
-    state: new SqliteBrokerStateStore(db),
-    unpricedFillAlerts: {
-      postUnpricedFillAlert: (alert) =>
-        Promise.resolve(logAlert(logger, 'v2_unpriced_fill', alert)),
-    },
-    ocoDoubleFillAlerts: {
-      postOcoDoubleFillAlert: (alert) =>
-        Promise.resolve(logAlert(logger, 'v2_oco_double_fill', alert)),
-    },
-    clock,
-    logger,
-  });
-}
-
-function lastBarBefore(
-  bars: BarsSource,
-): (instrument: string, tradingDate: string) => DailyBar | undefined {
-  return (instrument, tradingDate) => {
-    const series = bars.load(instrument);
-    return series === undefined ? undefined : barsBefore(series, tradingDate).at(-1);
-  };
-}
-
 function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => readonly string[] {
   const csv = readFileSync(options.constituentsPath ?? CONSTITUENTS_PATH, 'utf8');
   return (tradingDate) => currentConstituents(csv, tradingDate);
@@ -187,17 +161,6 @@ function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => r
 function newsSourceFor(options: V2RootOptions): NewsSource {
   if (options.newsSource !== undefined) return options.newsSource;
   return options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient());
-}
-
-function logAlert(logger: Logger, event: string, alert: unknown): void {
-  logger.log({
-    trace_id: 'v2-root',
-    stage: 'v2',
-    level: 'error',
-    event,
-    message: event,
-    payload: alert,
-  });
 }
 
 const STDERR_LOGGER: Logger = {
@@ -220,34 +183,13 @@ function barsSourceFor(options: V2RootOptions): BarsSource {
   return options.bars ?? new CsvBarsSource(options.barsDirectory ?? BARS_DIRECTORY);
 }
 
-function simulatedBrokerFor(
-  options: V2RootOptions,
-  bar: (instrument: string, tradingDate: string) => DailyBar | undefined,
-  clock: Clock,
-): BrokerAdapter {
-  return new DryRunBrokerAdapter({
-    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
-    markPrice: (instrument) => bar(instrument, options.tradingDate)?.rawClose,
-    clock,
-  });
-}
-
-function paperBrokersFor(
-  options: V2RootOptions,
-  db: StoreHandle,
-  clock: Clock,
-  logger: Logger,
-): CycleDeps['brokers'] {
-  return options.dryRun ? {} : { alpaca: alpacaPaperBroker(options, db, clock, logger) };
-}
-
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
   const clock = options.clock ?? new SystemClock();
   const logger = options.logger ?? STDERR_LOGGER;
   const news = newsSourceFor(options);
-  const db = openSharedStore(storePathFor(options));
+  const db = options.store ?? openSharedStore(storePathFor(options));
   const v2Store = guardedStore(db, 'v2');
   const scripted: ScriptedTransport[] = [];
   const spendSink: LlmSpendSink = new SqliteLlmSpendStore(db, logger, true);
@@ -259,10 +201,13 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     logger,
   });
   const bars = barsSourceFor(options);
-  const bar = lastBarBefore(bars);
   const constituents = options.constituents ?? constituentsFromCsv(options);
-  const fx = parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8'));
-  const books = new PaperBooks(v2Store, clock);
+  const market = new BarsMarketData(
+    bars,
+    parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
+  );
+  const capital = new CapitalConfigStore(v2Store, clock);
+  const books = new PaperBooks(v2Store, clock, capital, options.tradingDate);
   const journal = new Journal(v2Store, clock);
   const registry = new SleeveRegistry();
   registry.register(
@@ -276,11 +221,26 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       logger,
     }),
   );
-  const simulatedBroker = simulatedBrokerFor(options, bar, clock);
-  const brokers = paperBrokersFor(options, db, clock, logger);
+  const risk = new V2RiskGate({
+    books,
+    capital,
+    market,
+    riskFraction: DEBATE_RISK_FRACTION,
+    targetAtrMultiple: DEBATE_TARGET_ATR_MULTIPLE,
+  });
+  const executor = createOrderExecutor({
+    dryRun: options.dryRun,
+    client: options.alpacaClient,
+    db,
+    clock,
+    logger,
+    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+    markPrice: (instrument) => market.lastBarBefore(instrument, options.tradingDate)?.rawClose,
+  });
   return {
     registry,
     books,
+    capital,
     journal,
     panel,
     db,
@@ -291,12 +251,9 @@ export function composeV2Root(options: V2RootOptions): V2Root {
           registry,
           books,
           journal,
-          brokers,
-          simulatedBroker,
-          bar,
-          gbpUsdAtYearStart: yearStartGbpUsd(fx, Number(options.tradingDate.slice(0, 4))),
-          riskFraction: DEBATE_RISK_FRACTION,
-          targetAtrMultiple: DEBATE_TARGET_ATR_MULTIPLE,
+          risk,
+          executor,
+          market,
           timeStopTradingDays: DEBATE_TIME_STOP_TRADING_DAYS,
           clock,
           dryRun: options.dryRun,

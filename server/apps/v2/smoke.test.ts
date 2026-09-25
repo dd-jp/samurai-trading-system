@@ -6,7 +6,7 @@ describe('v2 smoke', () => {
     const result = await runV2Smoke();
     expect(result.probes.filter((probe) => !probe.passed)).toEqual([]);
     expect(result.passed).toBe(true);
-    expect(result.probes).toHaveLength(16);
+    expect(result.probes).toHaveLength(17);
   });
 
   it('prints one line per probe and exits 0 on green, 1 on red', () => {
