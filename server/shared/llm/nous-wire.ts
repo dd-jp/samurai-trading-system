@@ -68,13 +68,15 @@ export class NousRefusalError extends Error {
   }
 }
 
+interface NousErrorBody {
+  readonly error?: { readonly type?: unknown; readonly message?: unknown } | null;
+}
+
 function describeErrorBody(body: unknown): string | undefined {
-  if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
-  const detail = (body as { error?: { type?: unknown; message?: unknown } }).error;
-  if (typeof detail !== 'object' || detail === null) return undefined;
-  const type = typeof detail.type === 'string' ? detail.type : 'error';
-  const message = typeof detail.message === 'string' ? detail.message : undefined;
-  return message === undefined ? undefined : `${type}: ${message}`;
+  const detail = (body as NousErrorBody | null | undefined)?.error;
+  const message = detail?.message;
+  if (typeof message !== 'string') return undefined;
+  return `${typeof detail?.type === 'string' ? detail.type : 'error'}: ${message}`;
 }
 
 const HTTP_DATE_PATTERN = /[a-z]/i;

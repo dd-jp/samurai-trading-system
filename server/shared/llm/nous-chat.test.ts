@@ -490,6 +490,35 @@ describe('nousChat', () => {
       expect(JSON.stringify(error.body)).toContain(huge);
     });
 
+    it.each([
+      [
+        'a typed error',
+        { error: { type: 'invalid_request', message: 'bad' } },
+        'invalid_request: bad',
+      ],
+      ['an untyped error', { error: { message: 'bad' } }, 'error: bad'],
+      ['a non-string message', { error: { type: 'invalid_request', message: 5 } }, 'OK'],
+      ['a null error', { error: null }, 'OK'],
+      ['a string error', { error: 'bad' }, 'OK'],
+      ['a string body', 'bad', 'OK'],
+      ['a null body', null, 'OK'],
+    ])('describes %s in the error message', async (_label, body, detail) => {
+      stubFetch(body, { status: 400 });
+
+      const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as NousApiError;
+
+      expect(error.message).toBe(`Nous API error: 400 ${detail}`);
+    });
+
+    it('falls back to the status text when the error body is not JSON', async () => {
+      stubFetch({}, { status: 502, jsonOverride: () => Promise.reject(new SyntaxError('<html>')) });
+
+      const error = (await nousChat(OPTIONS, REQUEST).catch((e: unknown) => e)) as NousApiError;
+
+      expect(error.message).toBe('Nous API error: 502 OK');
+      expect(error.body).toBeUndefined();
+    });
+
     it('never puts the API key in an error message', async () => {
       stubFetch({ error: { type: 'invalid_request', message: 'bad' } }, { status: 400 });
 
