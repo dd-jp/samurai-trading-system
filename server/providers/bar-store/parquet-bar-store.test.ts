@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -74,6 +74,12 @@ describe('ParquetBarStore', () => {
     expect(await store.readSeries('alpaca', 'SPY')).toBeUndefined();
     expect(await store.readSeries('saxo', 'ISF')).toBeUndefined();
     expect((await store.readVenue('saxo')).get('SPY')).toEqual(SPY);
+  });
+
+  it('reports an empty venue directory as empty rather than failing the read', async () => {
+    const { store, root } = await openStore();
+    mkdirSync(join(root, 'venue=alpaca'), { recursive: true });
+    expect(await store.readVenue('alpaca')).toEqual(new Map());
   });
 
   it('replaces a rewritten symbol whole and leaves the others alone', async () => {

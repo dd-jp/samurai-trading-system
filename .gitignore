@@ -272,6 +272,7 @@ playwright/.cache/
 graphify-out
 .claude/
 .code-review-graph/
+data/bars/parquet/.staging-*
 # Research bar cache (#787). Backtest bars are committed under data/bars/ (doc 70 ruling (k));
 # only this scratch cache stays out.
 docs/research/data/

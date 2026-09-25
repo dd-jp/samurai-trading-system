@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { type DuckDBConnection, DuckDBInstance, JSDuckDBValueConverter } from '@duckdb/node-api';
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
@@ -23,7 +23,12 @@ export class ParquetBarStore {
   static async open(root = DEFAULT_BAR_STORE_ROOT): Promise<ParquetBarStore> {
     // A multi-threaded partitioned COPY can split one partition across data_0/data_1 at a thread boundary, so the files are not reproducible
     const instance = await DuckDBInstance.create(':memory:', { threads: '1' });
-    return new ParquetBarStore(root, instance, await instance.connect());
+    try {
+      return new ParquetBarStore(root, instance, await instance.connect());
+    } catch (error) {
+      instance.closeSync();
+      throw error;
+    }
   }
 
   async write(venue: string, series: readonly BarSeries[]): Promise<void> {
@@ -46,11 +51,8 @@ export class ParquetBarStore {
       );
       const venueDir = join(this.root, `venue=${venue}`);
       mkdirSync(venueDir, { recursive: true });
-      for (const symbol of [...symbols].sort()) {
-        const target = join(venueDir, `symbol=${symbol}`);
-        rmSync(target, { recursive: true, force: true });
-        renameSync(join(staging, `venue=${venue}`, `symbol=${symbol}`), target);
-      }
+      for (const symbol of [...symbols].sort())
+        swapIn(this.root, staging, venue, `symbol=${symbol}`);
     } finally {
       rmSync(staging, { recursive: true, force: true });
       await this.db.run('DROP TABLE IF EXISTS staged');
@@ -60,7 +62,7 @@ export class ParquetBarStore {
   async readVenue(venue: string): Promise<Map<string, BarSeries>> {
     requireVenue(venue);
     const venueDir = join(this.root, `venue=${venue}`);
-    if (!existsSync(venueDir)) return new Map();
+    if (!existsSync(venueDir) || readdirSync(venueDir).length === 0) return new Map();
     return this.query(join(venueDir, 'symbol=*', 'year=*', '*.parquet'));
   }
 
@@ -120,6 +122,20 @@ export class ParquetBarStore {
       series.set(symbol, one);
     }
     return series;
+  }
+}
+
+// Parking the old directory instead of deleting it first means a failed rename puts it back rather than losing the symbol
+function swapIn(root: string, staging: string, venue: string, symbolDir: string): void {
+  const target = join(root, `venue=${venue}`, symbolDir);
+  const parked = join(staging, 'replaced', symbolDir);
+  mkdirSync(join(staging, 'replaced'), { recursive: true });
+  if (existsSync(target)) renameSync(target, parked);
+  try {
+    renameSync(join(staging, `venue=${venue}`, symbolDir), target);
+  } catch (error) {
+    if (existsSync(parked)) renameSync(parked, target);
+    throw error;
   }
 }
 

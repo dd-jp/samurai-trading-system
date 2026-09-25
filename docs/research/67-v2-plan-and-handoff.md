@@ -132,12 +132,12 @@ Bars move from `data/bars/alpaca` <!-- cite-exempt: untracked — gitignored loc
 
 **Status 2026-09-25 (Step 3b PR):**
 - Built: the store `server/providers/bar-store/`, with data at `data/bars/parquet/`.
-- Parity: all 768 series (746 alpaca, 22 saxo) read back identical to both CSV readers. Doc 70's verdicts re-ran byte-identical. The v2 smoke and four dry-run cycle reports are unchanged.
+- Parity: all 768 series (746 alpaca, 22 saxo) read back identical to both CSV readers. Doc 70's verdicts re-ran byte-identical to a CSV re-run on the base commit (the committed `verdict-5000-whole.json` was already 1 ULP stale on main). The v2 smoke and four dry-run cycle reports are unchanged.
 - Callers now on the store: the momentum runner, the pullers, the spread tool and the v2 root.
 - Deleted: both CSV readers and the bar CSVs.
 - The `run.test.ts` coverage cases (`AlignedMarket` over `windowCoverage`) now read Parquet fixtures.
 - Not built yet, because nothing consumes them: the gate-statistics, journal (SQLite `ATTACH`), CGT and replay readers. Each comes with the step that needs it (3d harness, 4b, 5).
-- Gap, recorded and not fixed here: the v2 debate sleeve's bar reads check freshness (`isFresh`) but not window coverage. The harness in 3d should route them through `windowCoverage`.
+- Gap, recorded and not fixed here: the v2 debate sleeve's bar reads check freshness (`isFresh`) but not window coverage. The harness in 3d should route them through `windowCoverage` ([#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791)).
 
 #### Step 3d — Sleeve contract and harness (D7, D8, S7; #1783)
 
