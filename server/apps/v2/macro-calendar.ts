@@ -8,8 +8,9 @@ export interface MacroSourceCalendar {
 
 // Verified 2026-09-25 against federalreserve.gov (FOMC, decision = second meeting day),
 // bankofengland.co.uk (MPC dates), bls.gov (2026 CPI and Employment Situation schedules) and the
-// ons.gov.uk release calendar (UK CPI; Jul–Sep 2026 not read); coverageThrough is where each
-// published schedule ends
+// ons.gov.uk release calendar (UK CPI, read from 2026-10-21 on; the Jul–Sep 2026 releases were
+// not retrievable on 2026-09-25, so replay of those months under-gates); coverageThrough is where
+// each published schedule ends
 export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   {
     source: 'fomc',

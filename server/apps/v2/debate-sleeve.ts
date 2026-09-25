@@ -21,6 +21,7 @@ import { describeThrownSafely } from '../../shared/index.js';
 import { inputsHash } from './journal.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
+import type { NewsSource } from './news.js';
 import { SHORTS_ENABLED } from './parameters.js';
 import { STOP_ATR_MULTIPLE } from './position-size.js';
 import type {
@@ -47,6 +48,7 @@ export interface DebateSleeveDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly venueFor: (symbol: string) => Venue;
+  readonly news: NewsSource;
   readonly clock: Clock;
   readonly logger?: Logger | undefined;
 }
@@ -64,7 +66,11 @@ function simpleMovingAverage(bars: readonly DailyBar[], window: number): number 
   return total / window;
 }
 
-function directionFrom(close: number, sma: number | undefined, r63: number | undefined): Direction {
+export function directionFrom(
+  close: number,
+  sma: number | undefined,
+  r63: number | undefined,
+): Direction {
   if (sma === undefined || r63 === undefined) return 'neutral';
   if (close > sma && r63 > 0) return 'bullish';
   if (close < sma && r63 < 0) return 'bearish';
@@ -113,9 +119,23 @@ export function technicalRead(
   };
 }
 
+export const JUDGE_CONFIDENCE_BY_AGREEING_DEBATERS = [0.5, 0.75, 1] as const;
+
 function judgeConfidence(bull: PersonaResponse, bear: PersonaResponse, judge: Direction): number {
   const agreeing = [bull.stance, bear.stance].filter((stance) => stance === judge).length;
-  return 0.5 + agreeing * 0.25;
+  return JUDGE_CONFIDENCE_BY_AGREEING_DEBATERS[agreeing] ?? 0.5;
+}
+
+export function newsView(headlines: readonly string[], traceId: string, now: Date): AnalystView {
+  return {
+    trace_id: traceId,
+    analyst_id: 'news',
+    analyst_type: 'news',
+    direction: 'neutral',
+    confidence: 0.5,
+    key_points: headlines.length === 0 ? ['no per-name headlines in the window'] : [...headlines],
+    timestamp: now,
+  };
 }
 
 function buildPersonas(
@@ -207,6 +227,7 @@ function decisionFrom(
   read: TechnicalRead,
   hash: string,
   result: DebateResult,
+  headlines: number,
 ): SleeveDecision {
   const { action, reason } = actionFor(result.direction);
   const stop = stopFor(action, read);
@@ -228,6 +249,8 @@ function decisionFrom(
       rounds: result.rounds_completed,
       converged: result.converged,
       technical: read.view.key_points,
+      headlines,
+      disagreement: result.disagreement_summary,
     },
   };
 }
@@ -264,9 +287,16 @@ export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
     const traceId = `v2-${context.tradingDate}-${symbol}`;
     const read = technicalRead(history, traceId, deps.clock.now());
     if (read === undefined) return skipped(symbol, venue, undefined, '', 'no_bars');
+    let headlines: readonly string[];
+    try {
+      headlines = await deps.news.headlines(symbol, context.tradingDate, deps.clock.now());
+    } catch (error) {
+      return skipped(symbol, venue, read, '', `news_error:${describeThrownSafely(error)}`);
+    }
+    const views = [read.view, newsView(headlines, traceId, deps.clock.now())];
     const hash = inputsHash(
       history.slice(-HASHED_HISTORY_DAYS),
-      [read.view],
+      views,
       seatModels(context.tradingDate),
     );
     const cap = deps.panel.spendCap.check();
@@ -275,14 +305,14 @@ export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
     try {
       const result = await runDebate(
         {
-          views: [read.view],
+          views,
           instrument: symbol,
           bar: new Date(`${context.tradingDate}T00:00:00.000Z`),
         },
         buildPersonas(deps.panel, context.tradingDate, traceId, debateId, deps.clock),
         { maxRounds: DEBATE_MAX_ROUNDS },
       );
-      return decisionFrom(symbol, venue, read, hash, result);
+      return decisionFrom(symbol, venue, read, hash, result, headlines.length);
     } catch (error) {
       deps.logger?.log({
         trace_id: traceId,

@@ -4,11 +4,9 @@ import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { assertSortedUniqueDates } from '../../pipeline/momentum/index.js';
 import { addDays } from './macro-calendar.js';
 import {
-  G4_MOVERS_SELECTION_RULE,
   G18_SMALL_CAP_FLOORS,
   isSet,
-  type MoverCandidate,
-  requireSet,
+  MOVERS_MIN_DOLLAR_VOLUME_USD,
   UnsetParameterError,
 } from './parameters.js';
 
@@ -124,6 +122,25 @@ export function liquidityCore(
     .map(([symbol]) => symbol);
 }
 
+export interface MoverCandidate {
+  readonly symbol: string;
+  readonly dayReturn: number;
+  readonly dollarVolume: number;
+}
+
+export function selectMovers(
+  candidates: readonly MoverCandidate[],
+  count: number = MOVERS_COUNT,
+): readonly string[] {
+  return candidates
+    .filter((candidate) => candidate.dollarVolume >= MOVERS_MIN_DOLLAR_VOLUME_USD)
+    .sort(
+      (a, b) => Math.abs(b.dayReturn) - Math.abs(a.dayReturn) || a.symbol.localeCompare(b.symbol),
+    )
+    .slice(0, count)
+    .map((candidate) => candidate.symbol);
+}
+
 function moverCandidates(
   symbols: readonly string[],
   bars: BarsSource,
@@ -154,14 +171,7 @@ export function selectUniverse(
     refusals.push(new UnsetParameterError(G18_SMALL_CAP_FLOORS.name, G18_SMALL_CAP_FLOORS.ticket));
   }
   const liquidity = liquidityCore(constituents, bars, tradingDate);
-  let movers: readonly string[] = [];
-  try {
-    const rule = requireSet(G4_MOVERS_SELECTION_RULE);
-    const remaining = constituents.filter((symbol) => !liquidity.includes(symbol));
-    movers = rule(moverCandidates(remaining, bars, tradingDate), MOVERS_COUNT);
-  } catch (error) {
-    if (!(error instanceof UnsetParameterError)) throw error;
-    refusals.push(error);
-  }
+  const remaining = constituents.filter((symbol) => !liquidity.includes(symbol));
+  const movers = selectMovers(moverCandidates(remaining, bars, tradingDate));
   return { liquidity, movers, refusals };
 }

@@ -27,17 +27,6 @@ export function requireSet<T>(parameter: Parameter<T>): T {
   return parameter.value;
 }
 
-export interface MoverCandidate {
-  readonly symbol: string;
-  readonly dayReturn: number;
-  readonly dollarVolume: number;
-}
-
-type MoversSelectionRule = (
-  candidates: readonly MoverCandidate[],
-  count: number,
-) => readonly string[];
-
 interface SmallCapFloors {
   readonly minAverageDollarVolumeUsd: number;
   readonly minPriceUsd: number;
@@ -53,10 +42,6 @@ function unset<T>(name: string, ticket: string): Parameter<T> {
   return { name, ticket, value: UNSET };
 }
 
-export const G4_MOVERS_SELECTION_RULE = unset<MoversSelectionRule>(
-  'G4_MOVERS_SELECTION_RULE',
-  '#1710',
-);
 export const G18_SOCIAL_SOURCE = unset<string>('G18_SOCIAL_SOURCE', '#1753');
 export const G18_SMALL_CAP_FLOORS = unset<SmallCapFloors>('G18_SMALL_CAP_FLOORS', '#1753');
 export const G18_SENTIMENT_DEDUP_RULE = unset<string>('G18_SENTIMENT_DEDUP_RULE', '#961');
@@ -69,23 +54,19 @@ export const ARM2_ENTRY_THRESHOLDS = unset<Arm2EntryThresholds>(
   'doc 71 §6',
 );
 
-export const DEBATE_RISK_FRACTION = unset<number>('DEBATE_RISK_FRACTION', 'doc 66 G18 (2)');
-export const DEBATE_TARGET_ATR_MULTIPLE = unset<number>(
-  'DEBATE_TARGET_ATR_MULTIPLE',
-  'ADR 0001 §5 item 9',
-);
-
 export const SHORTS_ENABLED = false;
 
+export const DEBATE_RISK_FRACTION = 0.005;
+export const DEBATE_TARGET_ATR_MULTIPLE = 3;
+export const DEBATE_TIME_STOP_TRADING_DAYS = 10;
+export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
+
 export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
-  G4_MOVERS_SELECTION_RULE,
   G18_SOCIAL_SOURCE,
   G18_SMALL_CAP_FLOORS,
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
-  DEBATE_RISK_FRACTION,
-  DEBATE_TARGET_ATR_MULTIPLE,
 ];
 
 export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
@@ -93,6 +74,4 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SOCIAL_SOURCE,
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,
-  DEBATE_RISK_FRACTION,
-  DEBATE_TARGET_ATR_MULTIPLE,
 ];

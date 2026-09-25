@@ -2,21 +2,24 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { BarSeries } from '../../pipeline/momentum/index.js';
+import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
+import { MOVERS_MIN_DOLLAR_VOLUME_USD } from './parameters.js';
 import {
   averageDollarVolume,
   type BarsSource,
+  barsBefore,
   CsvBarsSource,
   currentConstituents,
   liquidityCore,
   parseBarsCsv,
+  selectMovers,
   selectUniverse,
 } from './universe.js';
 
 const HEADER = 'date,open,high,low,close,volume,raw_close';
 
 function series(symbol: string, days: number, price: number, volume: number): BarSeries {
-  const bars = [];
+  const bars: DailyBar[] = [];
   for (let i = 0; i < days; i += 1) {
     const day = String(i + 1).padStart(2, '0');
     bars.push({
@@ -101,15 +104,84 @@ describe('liquidity core', () => {
   });
 });
 
+describe('coverage invariant', () => {
+  it('reads only bars strictly before the entry date, so a bar dated the entry day is excluded', () => {
+    const before = series('X', 26, 100, 1);
+    expect(
+      barsBefore(before, '2026-09-26')
+        .map((bar) => bar.date)
+        .at(-1),
+    ).toBe('2026-09-25');
+    expect(
+      barsBefore(before, '2026-09-25')
+        .map((bar) => bar.date)
+        .at(-1),
+    ).toBe('2026-09-24');
+    expect(barsBefore(before, '2026-09-25')).toHaveLength(24);
+    expect(barsBefore(before, '2026-09-01')).toEqual([]);
+  });
+
+  it('refuses a series whose last bar is more than five calendar days old', () => {
+    const source = memorySource([series('STALE', 20, 100, 100_000)]);
+    expect(liquidityCore(['STALE'], source, '2026-09-25', 1)).toEqual(['STALE']);
+    expect(liquidityCore(['STALE'], source, '2026-09-26', 1)).toEqual([]);
+    expect(selectUniverse(['STALE'], source, '2026-09-26').movers).toEqual([]);
+  });
+
+  it('breaks an average-dollar-volume tie alphabetically', () => {
+    const source = memorySource([series('B', 25, 10, 100), series('A', 25, 10, 100)]);
+    expect(liquidityCore(['B', 'A'], source, '2026-09-26', 1)).toEqual(['A']);
+    expect(liquidityCore(['B', 'A'], source, '2026-09-26', 2)).toEqual(['A', 'B']);
+  });
+});
+
+function moved(input: BarSeries): BarSeries {
+  const last = input.bars.at(-1);
+  if (last === undefined) return input;
+  return { symbol: input.symbol, bars: [...input.bars.slice(0, -1), { ...last, close: 110 }] };
+}
+
+describe('movers', () => {
+  it('ranks by absolute prior-day return above the dollar-volume floor, ties alphabetically', () => {
+    const candidates = [
+      { symbol: 'UP', dayReturn: 0.05, dollarVolume: MOVERS_MIN_DOLLAR_VOLUME_USD },
+      { symbol: 'DOWN', dayReturn: -0.08, dollarVolume: MOVERS_MIN_DOLLAR_VOLUME_USD },
+      { symbol: 'THIN', dayReturn: 0.5, dollarVolume: MOVERS_MIN_DOLLAR_VOLUME_USD - 1 },
+      { symbol: 'B', dayReturn: 0.05, dollarVolume: MOVERS_MIN_DOLLAR_VOLUME_USD * 2 },
+      { symbol: 'A', dayReturn: -0.05, dollarVolume: MOVERS_MIN_DOLLAR_VOLUME_USD * 2 },
+    ];
+    expect(selectMovers(candidates)).toEqual(['DOWN', 'A', 'B', 'UP']);
+    expect(selectMovers(candidates, 2)).toEqual(['DOWN', 'A']);
+  });
+});
+
 describe('selectUniverse', () => {
-  it('fills the liquidity half and refuses the movers half and small caps until David sets them', () => {
-    const source = memorySource([series('BIG', 25, 100, 1_000)]);
-    const selection = selectUniverse(['BIG'], source, '2026-09-26');
-    expect(selection.liquidity).toEqual(['BIG']);
+  it('fills the liquidity half first, so a thin constituent list leaves no movers', () => {
+    const source = memorySource([
+      series('BIG', 25, 100, 10_000_000),
+      moved(series('MOVE', 25, 100, 1_000_000)),
+      series('FLAT', 25, 100, 1_000_000),
+    ]);
+    const selection = selectUniverse(['BIG', 'MOVE', 'FLAT'], source, '2026-09-26');
+    expect(selection.liquidity).toEqual(['BIG', 'FLAT', 'MOVE']);
     expect(selection.movers).toEqual([]);
     expect(selection.refusals.map((refusal) => refusal.parameter)).toEqual([
       'G18_SMALL_CAP_FLOORS',
-      'G4_MOVERS_SELECTION_RULE',
     ]);
+  });
+
+  it('picks movers from the pool outside the liquidity core, disjoint from it', () => {
+    const core = Array.from({ length: 10 }, (_, i) => series(`L${i}`, 25, 100, 10_000_000 + i));
+    const source = memorySource([
+      ...core,
+      moved(series('MOVE', 25, 100, 1_000_000)),
+      series('FLAT', 25, 100, 1_000_000),
+      series('THIN', 25, 100, 1_000),
+    ]);
+    const symbols = [...core.map((entry) => entry.symbol), 'MOVE', 'FLAT', 'THIN'];
+    const selection = selectUniverse(symbols, source, '2026-09-26');
+    expect(selection.liquidity).toHaveLength(10);
+    expect(selection.liquidity).not.toContain('MOVE');
+    expect(selection.movers).toEqual(['MOVE', 'FLAT']);
   });
 });

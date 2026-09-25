@@ -5,12 +5,13 @@ import {
   CYCLE_LEVEL_PARAMETERS,
   DEBATE_RISK_FRACTION,
   DEBATE_TARGET_ATR_MULTIPLE,
+  DEBATE_TIME_STOP_TRADING_DAYS,
   DECLARED_PARAMETERS,
-  G4_MOVERS_SELECTION_RULE,
   G18_SENTIMENT_DEDUP_RULE,
   G18_SMALL_CAP_FLOORS,
   G18_SOCIAL_SOURCE,
   isSet,
+  MOVERS_MIN_DOLLAR_VOLUME_USD,
   type Parameter,
   requireSet,
   SHORTS_ENABLED,
@@ -19,20 +20,20 @@ import {
 } from './parameters.js';
 
 describe('parameters', () => {
-  it('every declared parameter is unset and names its ticket', () => {
+  it('every David-owned parameter is unset and names its ticket', () => {
     expect(DECLARED_PARAMETERS).toEqual([
-      G4_MOVERS_SELECTION_RULE,
       G18_SOCIAL_SOURCE,
       G18_SMALL_CAP_FLOORS,
       G18_SENTIMENT_DEDUP_RULE,
       ALPACA_SHORT_EQUITY_FLOOR_USD,
       ARM2_ENTRY_THRESHOLDS,
-      DEBATE_RISK_FRACTION,
-      DEBATE_TARGET_ATR_MULTIPLE,
     ]);
-    expect(
-      CYCLE_LEVEL_PARAMETERS.every((parameter) => DECLARED_PARAMETERS.includes(parameter)),
-    ).toBe(true);
+    expect(CYCLE_LEVEL_PARAMETERS).toEqual([
+      ARM2_ENTRY_THRESHOLDS,
+      G18_SOCIAL_SOURCE,
+      G18_SENTIMENT_DEDUP_RULE,
+      ALPACA_SHORT_EQUITY_FLOOR_USD,
+    ]);
     for (const parameter of DECLARED_PARAMETERS) {
       expect(parameter.value).toBe(UNSET);
       expect(isSet(parameter)).toBe(false);
@@ -41,17 +42,24 @@ describe('parameters', () => {
     }
   });
 
+  it('carries the pre-declared Step 3 trial values from the spec', () => {
+    expect(DEBATE_RISK_FRACTION).toBe(0.005);
+    expect(DEBATE_TARGET_ATR_MULTIPLE).toBe(3);
+    expect(DEBATE_TIME_STOP_TRADING_DAYS).toBe(10);
+    expect(MOVERS_MIN_DOLLAR_VOLUME_USD).toBe(50_000_000);
+  });
+
   it('requireSet throws naming the parameter and ticket', () => {
     let caught: unknown;
     try {
-      requireSet(G4_MOVERS_SELECTION_RULE);
+      requireSet(G18_SMALL_CAP_FLOORS);
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(UnsetParameterError);
     const error = caught as UnsetParameterError;
-    expect(error.parameter).toBe('G4_MOVERS_SELECTION_RULE');
-    expect(error.ticket).toBe('#1710');
+    expect(error.parameter).toBe('G18_SMALL_CAP_FLOORS');
+    expect(error.ticket).toBe('#1753');
     expect(error.message).toContain('needs David');
   });
 
