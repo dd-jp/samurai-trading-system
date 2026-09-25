@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { type DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
+import { type DuckDBConnection, DuckDBInstance, JSDuckDBValueConverter } from '@duckdb/node-api';
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { assertSortedUniqueDates } from '../../pipeline/momentum/index.js';
 
@@ -11,7 +11,7 @@ const SYMBOL = /^[A-Z0-9][A-Z0-9.]*$/;
 const HIVE_TYPES = "{'venue': VARCHAR, 'symbol': VARCHAR, 'year': INTEGER}";
 const COLUMNS = 'symbol, CAST(date AS VARCHAR) AS date, open, high, low, close, volume, raw_close';
 
-type BarRow = [string, string, number, number, number, number, number, number];
+type BarColumns = [string[], string[], number[], number[], number[], number[], number[], number[]];
 
 export class ParquetBarStore {
   private constructor(
@@ -101,19 +101,17 @@ export class ParquetBarStore {
   }
 
   private async query(glob: string): Promise<Map<string, BarSeries>> {
-    const reader = await this.db.runAndReadAll(
+    const result = await this.db.stream(
       `SELECT ${COLUMNS} FROM read_parquet(${literal(glob)}, hive_partitioning = true, ` +
         `hive_types = ${HIVE_TYPES}) ORDER BY symbol, date`,
     );
     const bySymbol = new Map<string, DailyBar[]>();
-    for (const row of reader.getRowsJS() as BarRow[]) {
-      const [symbol, date, open, high, low, close, volume, rawClose] = row;
-      let bars = bySymbol.get(symbol);
-      if (bars === undefined) {
-        bars = [];
-        bySymbol.set(symbol, bars);
-      }
-      bars.push({ date, open, high, low, close, volume, rawClose });
+    for (
+      let chunk = await result.fetchChunk();
+      chunk !== null && chunk.rowCount > 0;
+      chunk = await result.fetchChunk()
+    ) {
+      appendChunk(bySymbol, chunk.convertColumns(JSDuckDBValueConverter) as unknown as BarColumns);
     }
     const series = new Map<string, BarSeries>();
     for (const [symbol, bars] of bySymbol) {
@@ -123,6 +121,28 @@ export class ParquetBarStore {
     }
     return series;
   }
+}
+
+function appendChunk(bySymbol: Map<string, DailyBar[]>, columns: BarColumns): void {
+  const [symbols, dates, opens, highs, lows, closes, volumes, rawCloses] = columns;
+  let bars: DailyBar[] = [];
+  let current: string | undefined;
+  symbols.forEach((symbol, row) => {
+    if (symbol !== current) {
+      current = symbol;
+      bars = bySymbol.get(symbol) ?? [];
+      bySymbol.set(symbol, bars);
+    }
+    bars.push({
+      date: dates[row] as string,
+      open: opens[row] as number,
+      high: highs[row] as number,
+      low: lows[row] as number,
+      close: closes[row] as number,
+      volume: volumes[row] as number,
+      rawClose: rawCloses[row] as number,
+    });
+  });
 }
 
 function requireVenue(venue: string): void {

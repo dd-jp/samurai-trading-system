@@ -17,7 +17,9 @@ export class ParquetBarsSource implements BarsSource {
     if (this.#series !== undefined) return;
     const store = await ParquetBarStore.open(this.root);
     try {
-      this.#series = await store.readVenue(this.venue);
+      const series = await store.readVenue(this.venue);
+      if (series.size === 0) throw new Error(`bars: no ${this.venue} series under ${this.root}`);
+      this.#series = series;
     } finally {
       store.close();
     }

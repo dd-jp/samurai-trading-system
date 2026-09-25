@@ -27,6 +27,13 @@ describe('ParquetBarsSource', () => {
   let directory: string;
   afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
+  it('refuses to prime from a venue with no series rather than serve nothing', async () => {
+    directory = mkdtempSync(join(tmpdir(), 'v2-bars-'));
+    const source = new ParquetBarsSource(join(directory, 'absent'), 'alpaca');
+    await expect(source.prime()).rejects.toThrow(/no alpaca series under .*absent/);
+    expect(() => source.load('AAPL')).toThrow(/before prime/);
+  });
+
   it('serves a whole venue after prime() and reports a missing symbol as undefined', async () => {
     directory = mkdtempSync(join(tmpdir(), 'v2-bars-'));
     const store = await ParquetBarStore.open(directory);

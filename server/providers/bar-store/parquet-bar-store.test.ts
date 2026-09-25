@@ -100,7 +100,7 @@ describe('ParquetBarStore', () => {
     }
   });
 
-  it('writes one file per partition however many rows a write carries', async () => {
+  it('writes one file per partition and reads back across chunks however many rows a write carries', async () => {
     const { store, root } = await openStore();
     const dates = Array.from({ length: 500 }, (_, day) =>
       new Date(Date.UTC(2019, 0, 1 + day)).toISOString().slice(0, 10),
@@ -113,6 +113,7 @@ describe('ParquetBarStore', () => {
     const files = filesUnder(root);
     expect(files).toHaveLength(3000);
     expect(files.every((file) => file.endsWith('data_0.parquet'))).toBe(true);
+    expect(await store.readVenue('alpaca')).toEqual(new Map(many.map((one) => [one.symbol, one])));
   });
 
   it('handles a root path containing a quote', async () => {
