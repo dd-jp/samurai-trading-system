@@ -327,9 +327,9 @@ Session B rulings (a)–(m). David ruled (m): momentum is LSE-only, no second US
 Get the missing CMFP/IHCU history on the ruled route: ask David for a saxo:login, probe the Saxo
 sibling Uics (IUHC, COMF and other listings) for bars reaching 2016-09-22; if none does, confirm both
 tickers on the EODHD free key, read its retained-data terms, then STOP and ask David to buy one month
-(£19.99). Commit bars per ruling (k). Run the pre-declared LSE grid (Grid A, same kill line), trials
-counted on from #9; no change to the list without recording it first. Report per sub-book with max
-drawdown. Base the PR on main, not on a doc branch. End with the Session eval.
+(£19.99). Commit bars per ruling (k). Run the pre-declared LSE grid (Grid A trials 1–4, already
+counted in N = 8; same kill line); no change to the list without recording it first. Report per
+sub-book with max drawdown. Base the PR on main, not on a doc branch. End with the Session eval.
 ```
 
 ```
