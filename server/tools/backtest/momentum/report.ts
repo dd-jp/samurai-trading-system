@@ -1,4 +1,4 @@
-import type { PassResult, VenueData } from './run.js';
+import type { LseWindow, PassResult, VenueData } from './run.js';
 import { annualisedSharpe, maxDrawdown } from './stats.js';
 import type { TrialSummary } from './verdict.js';
 
@@ -14,6 +14,7 @@ export function renderVerdictMarkdown(
     | 'missingNames'
     | 'spreadFallbackBps'
     | 'spreadMeasuredNames'
+    | 'lse'
   >,
   passes: readonly PassResult[],
 ): string {
@@ -27,17 +28,50 @@ export function renderVerdictMarkdown(
       '',
     );
   }
-  if (data.venue === 'us') {
-    lines.push(
-      `US coverage: ${pct(data.missingCoverageFraction)} of member-sessions without a bar, across ${data.missingNames.length} names; ` +
-        `2% stop ${data.missingCoverageFraction > 0.02 ? 'FAILED' : 'within'}; 0.05 Sharpe delisting haircut applied. ` +
-        `Half-spread measured for ${data.spreadMeasuredNames} names, fallback median ${num(data.spreadFallbackBps, 2)} bps for the rest.`,
-      '',
-    );
-    if (data.missingNames.length > 0) lines.push(`Missing: ${data.missingNames.join(', ')}`, '');
-  }
+  if (data.venue === 'us') lines.push(...renderUsHeader(data));
+  if (data.lse !== undefined) lines.push(...renderLseHeader(data.lse, data));
   for (const pass of passes) lines.push(...renderPass(pass));
   return `${lines.join('\n')}\n`;
+}
+
+function renderUsHeader(
+  data: Pick<
+    VenueData,
+    'missingCoverageFraction' | 'missingNames' | 'spreadFallbackBps' | 'spreadMeasuredNames'
+  >,
+): string[] {
+  const lines = [
+    `US coverage: ${pct(data.missingCoverageFraction)} of member-sessions without a bar, across ${data.missingNames.length} names; ` +
+      `2% stop ${data.missingCoverageFraction > 0.02 ? 'FAILED' : 'within'}; 0.05 Sharpe delisting haircut applied. ` +
+      `Half-spread measured for ${data.spreadMeasuredNames} names, fallback median ${num(data.spreadFallbackBps, 2)} bps for the rest.`,
+    '',
+  ];
+  if (data.missingNames.length > 0) lines.push(`Missing: ${data.missingNames.join(', ')}`, '');
+  return lines;
+}
+
+function renderLseHeader(
+  lse: LseWindow,
+  data: Pick<VenueData, 'missingCoverageFraction' | 'missingNames' | 'spreadMeasuredNames'>,
+): string[] {
+  const lines = [
+    `LSE window from ${lse.windowStart} (binding line ${lse.bindingLine}); ${data.spreadMeasuredNames} lines, each with a measured half spread (${lse.spreadSource}); custody 0.12%/yr accrued daily; no delisting haircut and no coverage stop (ruling (h)).`,
+    '',
+    `LSE coverage: ${pct(data.missingCoverageFraction)} of line-sessions without a Saxo bar inside the window` +
+      (data.missingNames.length === 0 ? '.' : `, on ${data.missingNames.join(', ')}.`),
+    '',
+    lse.splices.length === 0
+      ? 'Spliced lines: none.'
+      : `Spliced lines (coverage discontinuity at the splice date): ${lse.splices.map((splice) => `${splice.tidm} from ${splice.from} before ${splice.spliceDate}`).join('; ')}.`,
+    '',
+  ];
+  if (lse.excluded.length > 0) {
+    lines.push(
+      `Excluded from the run: ${lse.excluded.map((entry) => `${entry.tidm} — ${entry.reason}`).join('; ')}.`,
+      '',
+    );
+  }
+  return lines;
 }
 
 function renderPass(pass: PassResult): string[] {

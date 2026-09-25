@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { loadBarDirectory } from './bar-csv.js';
+import { findUnitBreaks } from './bar-hygiene.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import type { BookFx } from './fx.js';
 import { GBP_IDENTITY_FX, parseBoeXudlussCsv, YearFixedFx } from './fx.js';
@@ -12,6 +13,7 @@ import { GRID_A, GRID_A_TRIAL_COUNT, gridForVenue, maxWarmupDays, trialHash } fr
 import { AlignedMarket, monthEndIndices } from './market.js';
 import { DEFAULT_SPREAD_PATH, halfSpreadLookup, parseSpreadCsv } from './measure-alpaca-spread.js';
 import { DEFAULT_ALPACA_BARS_DIR, DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca-bars.js';
+import { DEFAULT_SAXO_BARS_DIR } from './pull-saxo-bars.js';
 import { renderVerdictMarkdown } from './report.js';
 import type { SimulationResult, UniverseAt, VenueCosts } from './simulate.js';
 import { simulate } from './simulate.js';
@@ -19,7 +21,6 @@ import { ledgerFromGrid, mergeLedger, type TrialLedger } from './trial-ledger.js
 import type { SubBookVerdict } from './verdict.js';
 import { subBookVerdict } from './verdict.js';
 
-const DEFAULT_SAXO_BARS_DIR = 'data/bars/saxo';
 const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 const DEFAULT_OUT_DIR = 'data/backtest/momentum';
 const LEDGER_FILE = 'trials.json';
@@ -27,7 +28,29 @@ export const CAPITAL_PASSES_GBP = [1_000, 5_000] as const;
 
 interface SaxoBarsManifest {
   readonly calendar_reference: string;
-  readonly symbols: Record<string, { readonly half_spread_bps: number }>;
+  readonly window_start?: string;
+  readonly window_binding_line?: string;
+  readonly spread?: { readonly source: string; readonly statistic: string };
+  readonly symbols: Record<
+    string,
+    {
+      readonly half_spread_bps: number;
+      readonly spliced_from?: { readonly tidm: string; readonly splice_date: string };
+    }
+  >;
+  readonly excluded?: Record<string, { readonly reason: string }>;
+}
+
+export interface LseWindow {
+  readonly windowStart: string;
+  readonly bindingLine: string;
+  readonly splices: readonly {
+    readonly tidm: string;
+    readonly from: string;
+    readonly spliceDate: string;
+  }[];
+  readonly excluded: readonly { readonly tidm: string; readonly reason: string }[];
+  readonly spreadSource: string;
 }
 
 export interface VenueData {
@@ -40,6 +63,7 @@ export interface VenueData {
   readonly missingNames: readonly string[];
   readonly spreadFallbackBps: number;
   readonly spreadMeasuredNames: number;
+  readonly lse?: LseWindow;
 }
 
 export interface RunOptions {
@@ -129,29 +153,97 @@ export function loadLseData(barsDir: string): VenueData {
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as SaxoBarsManifest;
   const series = loadBarDirectory(barsDir);
-  const reference = requireSeries(series, manifest.calendar_reference);
+  const reference = clipToWindow(
+    requireSeries(series, manifest.calendar_reference),
+    manifest.window_start,
+  );
   const symbols = Object.keys(manifest.symbols).sort();
+  const halfSpreads = manifestHalfSpreads(manifest, symbols, series, barsDir);
+  const market = new AlignedMarket(reference, series);
+  assertLinesStartByWindow(market, symbols);
+  const coverage = memberSessionCoverage(market, () => symbols);
+  return {
+    venue: 'lse',
+    market,
+    universe: () => symbols,
+    costs: { venue: 'lse', halfSpreadBps: (symbol) => requireHalfSpread(halfSpreads, symbol) },
+    fx: GBP_IDENTITY_FX,
+    missingCoverageFraction: coverage.missingFraction,
+    missingNames: coverage.missingNames,
+    spreadFallbackBps: Number.NaN,
+    spreadMeasuredNames: symbols.length,
+    lse: lseWindow(manifest, market, symbols),
+  };
+}
+
+function manifestHalfSpreads(
+  manifest: SaxoBarsManifest,
+  symbols: readonly string[],
+  series: ReadonlyMap<string, BarSeries>,
+  barsDir: string,
+): Map<string, number> {
   const halfSpreads = new Map<string, number>();
   for (const symbol of symbols) {
-    if (!series.has(symbol))
+    const one = series.get(symbol);
+    if (one === undefined)
       throw new Error(`LSE manifest lists ${symbol} but ${barsDir}/${symbol}.csv is missing`);
+    const breaks = findUnitBreaks(one.bars);
+    if (breaks.length > 0) {
+      throw new Error(
+        `LSE bars: ${symbol} has a unit break at ${breaks.map((b) => `${b.date} ×${b.factor}`).join(', ')} — re-pull through the hygiene step`,
+      );
+    }
     const halfSpread = manifest.symbols[symbol]?.half_spread_bps;
     if (halfSpread === undefined || !(halfSpread >= 0)) {
       throw new Error(`LSE manifest: ${symbol} needs a measured half_spread_bps`);
     }
     halfSpreads.set(symbol, halfSpread);
   }
+  return halfSpreads;
+}
+
+function assertLinesStartByWindow(market: AlignedMarket, symbols: readonly string[]): void {
+  for (const symbol of symbols) {
+    const first = market.bars(symbol)[0]?.date ?? '';
+    if (first > (market.calendar[0] as string)) {
+      throw new Error(
+        `LSE manifest: ${symbol} first bar ${first} is after the window start ${market.calendar[0]} — the window must start at the latest first bar`,
+      );
+    }
+  }
+}
+
+function lseWindow(
+  manifest: SaxoBarsManifest,
+  market: AlignedMarket,
+  symbols: readonly string[],
+): LseWindow {
   return {
-    venue: 'lse',
-    market: new AlignedMarket(reference, series),
-    universe: () => symbols,
-    costs: { venue: 'lse', halfSpreadBps: (symbol) => requireHalfSpread(halfSpreads, symbol) },
-    fx: GBP_IDENTITY_FX,
-    missingCoverageFraction: 0,
-    missingNames: [],
-    spreadFallbackBps: Number.NaN,
-    spreadMeasuredNames: symbols.length,
+    windowStart: market.calendar[0] as string,
+    bindingLine: manifest.window_binding_line ?? manifest.calendar_reference,
+    splices: symbols.flatMap((symbol) => {
+      const splice = manifest.symbols[symbol]?.spliced_from;
+      return splice === undefined
+        ? []
+        : [{ tidm: symbol, from: splice.tidm, spliceDate: splice.splice_date }];
+    }),
+    excluded: Object.entries(manifest.excluded ?? {}).map(([tidm, entry]) => ({
+      tidm,
+      reason: entry.reason,
+    })),
+    spreadSource:
+      manifest.spread === undefined
+        ? 'manifest half_spread_bps'
+        : `${manifest.spread.statistic}; ${manifest.spread.source}`,
   };
+}
+
+function clipToWindow(reference: BarSeries, windowStart: string | undefined): BarSeries {
+  if (windowStart === undefined) return reference;
+  const bars = reference.bars.filter((bar) => bar.date >= windowStart);
+  if (bars.length === 0)
+    throw new Error(`LSE manifest: window_start ${windowStart} is after the last reference bar`);
+  return { symbol: reference.symbol, bars };
 }
 
 function requireHalfSpread(halfSpreads: ReadonlyMap<string, number>, symbol: string): number {

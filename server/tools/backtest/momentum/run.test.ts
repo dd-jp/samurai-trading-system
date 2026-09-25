@@ -6,6 +6,7 @@ import { syntheticSeries, tradingCalendar } from './fixture.js';
 import { GRID_A } from './grid.js';
 import { AlignedMarket } from './market.js';
 import { SPREAD_CSV_HEADER } from './measure-alpaca-spread.js';
+import { renderVerdictMarkdown } from './report.js';
 import {
   CAPITAL_PASSES_GBP,
   evaluationStartIndex,
@@ -181,6 +182,74 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(verdict.delistingHaircutApplied).toBe(0);
     expect(verdict.checks.coverageWithinStop).toBe(true);
     expect(verdict.trials.every((trial) => trial.custodyCost > 0)).toBe(true);
+  });
+
+  it('clips the LSE calendar to the manifest window, reports splices and exclusions, and refuses a line starting after the window', () => {
+    const root = mkdtempSync(join(tmpdir(), 'momentum-lse-window-'));
+    const barsDir = writeLseFixture(root);
+    const late = syntheticSeries({ symbol: 'LATE', calendar, seed: 77, from: 300 }).bars;
+    writeFileSync(join(barsDir, 'LATE.csv'), barsToCsv(late));
+    const manifest = {
+      calendar_reference: 'CSPX',
+      window_start: late[0]?.date,
+      window_binding_line: 'LATE',
+      spread: { source: 'infoprices burst', statistic: 'p25' },
+      symbols: {
+        CSPX: { half_spread_bps: 1 },
+        VUSA: { half_spread_bps: 2, spliced_from: { tidm: 'VUSD', splice_date: '2016-03-01' } },
+        LATE: { half_spread_bps: 3 },
+      },
+      excluded: { GONE: { reason: 'splice exceeds tolerance' } },
+    };
+    writeFileSync(join(barsDir, 'manifest.json'), JSON.stringify(manifest));
+    const data = loadLseData(barsDir);
+    expect(data.market.calendar[0]).toBe(late[0]?.date);
+    expect(data.market.calendar.length).toBe(SESSIONS - 300);
+    expect(data.lse).toEqual({
+      windowStart: late[0]?.date,
+      bindingLine: 'LATE',
+      splices: [{ tidm: 'VUSA', from: 'VUSD', spliceDate: '2016-03-01' }],
+      excluded: [{ tidm: 'GONE', reason: 'splice exceeds tolerance' }],
+      spreadSource: 'p25; infoprices burst',
+    });
+    expect(data.costs.halfSpreadBps('LATE')).toBe(3);
+    expect(() => data.costs.halfSpreadBps('ISF')).toThrow(/no half_spread_bps for ISF/);
+    const report = renderVerdictMarkdown(data, []);
+    expect(report).toContain(`LSE window from ${late[0]?.date} (binding line LATE)`);
+    expect(report).toContain('VUSA from VUSD before 2016-03-01');
+    expect(report).toContain('Excluded from the run: GONE — splice exceeds tolerance');
+    expect(report).toContain(
+      'LSE coverage: 0.0% of line-sessions without a Saxo bar inside the window.',
+    );
+    writeFileSync(
+      join(barsDir, 'manifest.json'),
+      JSON.stringify({ ...manifest, window_start: calendar[100] }),
+    );
+    expect(() => loadLseData(barsDir)).toThrow(/LATE first bar .* is after the window start/);
+    writeFileSync(
+      join(barsDir, 'manifest.json'),
+      JSON.stringify({ ...manifest, window_start: '2099-01-01' }),
+    );
+    expect(() => loadLseData(barsDir)).toThrow(/after the last reference bar/);
+  });
+
+  it('refuses LSE bars that still carry a unit break', () => {
+    const root = mkdtempSync(join(tmpdir(), 'momentum-lse-unit-'));
+    const barsDir = writeLseFixture(root);
+    const broken = syntheticSeries({ symbol: 'ISF', calendar, seed: 41 }).bars.map((b, i) =>
+      i < 400
+        ? {
+            ...b,
+            open: b.open / 100,
+            high: b.high / 100,
+            low: b.low / 100,
+            close: b.close / 100,
+            rawClose: b.rawClose / 100,
+          }
+        : b,
+    );
+    writeFileSync(join(barsDir, 'ISF.csv'), barsToCsv(broken));
+    expect(() => loadLseData(barsDir)).toThrow(/ISF has a unit break at .* ×100/);
   });
 
   it('refuses to run the LSE sub-book until the Saxo bars and manifest land', () => {

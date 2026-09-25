@@ -1,5 +1,7 @@
 # 70 — Momentum backtest: proposal (Session B, Step 1)
 
+> **LSE sub-book run 2026-09-25 — FAILS the kill line on all four passes, on 22 of the 24 lines; the verdict is provisional on IHCU and CMFP, whose sibling splice missed the pre-declared 1 bp/day tolerance and needs David's call. See §10.** The first run of the day carried a ×100 unit break inside SGLN's history (§10.9); the numbers in §10.1 are the re-run on bars that passed the unit-break guard, and the verdict did not move. Combined Step 1 verdict: **US FAIL (§9), LSE FAIL (§10)** — under doc 68 Step 3 ("wire only sleeves that survived B and C") no momentum sub-book is wired in Step 3 as specced. The two banners below are the state as of 2026-09-24 and 2026-09-23 and stand as the record of those days.
+>
 > **Build phase run 2026-09-24 — US sub-book FAILS the kill line on all four passes; LSE not run. See §9.** The banner below is the state as of 2026-09-23 and stands as the record of that day.
 >
 > **PROPOSAL, RULED 2026-09-23 — STOP branch entered, nothing built.** David answered all twelve questions in §4 on 2026-09-23 (each carries its "Ruled" line). Ruling (a) chose a paid vendor for the two lines Saxo cannot supply, which is doc 68's STOP branch: §8 is the vendor cost-and-depth report it requires, ending in options David has not yet chosen between. No backtest has been executed, no code has been changed, no data has been stored beyond the read-only probes recorded in §6. The build phase (doc 68 Session B, second paragraph) starts only after David picks from §8.4.
@@ -480,7 +482,7 @@ What the numbers say, without spin:
 
 Ruling (a) routes CMFP and IHCU through Saxo sibling Uics first, EODHD one month as the fallback. Neither has happened: there was no valid Saxo live token this session (`data/saxo-tokens/live.json` <!-- cite-exempt: untracked — token store is gitignored --> holds a dead refresh token; the Saxo API was not called and `saxo:login` was not run, per the session brief). The window was not shortened and no proxy was substituted. The code path is built and tested on synthetic fixtures (`server/tools/backtest/momentum/run.test.ts`, "runs the LSE sub-book from a Saxo bar directory").
 
-To run it once bars land, put one `<TIDM>.csv` per line under `data/bars/saxo/` <!-- cite-exempt: planned — created when the LSE bars land --> (header `date,open,high,low,close,volume` or the seven-column Alpaca layout) with a `manifest.json` of the form `{ "calendar_reference": "<TIDM>", "symbols": { "<TIDM>": { "half_spread_bps": <measured> } } }`.
+To run it once bars land, put one `<TIDM>.csv` per line under `data/bars/saxo/` (header `date,open,high,low,close,volume` or the seven-column Alpaca layout) with a `manifest.json` of the form `{ "calendar_reference": "<TIDM>", "symbols": { "<TIDM>": { "half_spread_bps": <measured> } } }`.
 The format is also in `data/bars/README.md`. Then
 
 ```
@@ -536,3 +538,133 @@ First run (2026-09-24), for comparison with §9.1:
 | £1,000, fractional | 0.570 | 0.312 | 0.677 | 0.788 (#6) | 0.598 | 0.872 | 39.9% / 37.1% | £2,801 |
 | £5,000, whole shares | 0.499 | 0.270 | 0.634 | 0.655 (#6) | 0.516 | 0.993 | 28.4% / 23.9% | £3,997 |
 | £5,000, fractional | 0.465 | 0.249 | 0.634 | 0.690 (#6) | 0.475 | 0.944 | 35.7% / 23.9% | £2,801 |
+
+## 10. LSE sub-book result (run 2026-09-25)
+
+Branch `build/v2-session-b-lse`, run from the committed bars with `npx tsx server/tools/backtest/momentum/run.ts --venue lse`; a second run is byte-identical on the four verdict JSONs and `verdict.md`. The numbers below are the **second pull of 2026-09-25**, after the unit-break guard of §10.9 was added; the first pull's numbers are kept in §10.9 for the record. Read-only Saxo calls only (`chart/v3/charts`, `ref/v1/instruments`, `ref/v1/instruments/details`, `trade/v1/infoprices/list`); no orders, no LLM calls, no paid data. Nothing was bought from EODHD and nothing was signed up for.
+
+### 10.1 Verdict: FAIL, all four passes, on 22 of 24 lines — provisional
+
+**Kill line, verbatim (doc 68 Session B):** *"fails unless it beats the benchmark after a 40% Sharpe haircut with DSR >= 0.95 and PBO <= 0.10 (G9). Report pass/fail with numbers and the max drawdown. No LLM calls, no paid data."*
+
+Evaluated window **2017-06-30 to 2026-09-24 (9.23 years)**: bars from 2016-06-21 (the latest first bar among the 22 included lines, IITU — the window binds there, ruling (g)), the first 252 sessions are lookback; the fetch-day bar (2026-09-25, pulled intraday) is dropped. Walk-forward out-of-sample path 2018-01-26 to 2026-09-24 (folds 2–16 of 16). Trials 1–4 of Grid A (§2.9: lookback 252/126 × stop none/2 × ATR(20)), counted 8 from #1 (ruling (f)); MinBTL at target Sharpe 0.6 is 16 trials, 8 is within (ruling (i)). As in §9.6: the four capital × share-mode passes are selection dimensions and are **not** counted in N — pre-declared by rulings (d) and (f), immaterial while all four fail, and they would count against MinBTL 16 if David authorised a second LSE grid. No delisting haircut and no coverage stop on LSE (ruling (h)); custody 0.12%/yr accrued daily on invested value (ruling (c)). Coverage: **1.5% of line-sessions** inside the window have no Saxo bar (§10.5).
+
+| Pass | WF strategy Sharpe | × 0.6 haircut | Benchmark Sharpe (fractional, same budget) | Beats? | DSR (selected trial, N = 8) | DSR (WF path) | PBO (CSCV, 16 folds) | WF max DD strategy / benchmark | Capital ceiling £1,500 / (DD × 1.5) | Verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| £1,000, whole shares | 0.537 | **0.322** | 0.565 | no | 0.636 (#1) | 0.549 | **0.044** | 12.7% / 20.9% | £7,898 | **FAIL** |
+| £1,000, fractional | 0.414 | **0.248** | 0.565 | no | 0.509 (#1) | 0.407 | 0.245 | 20.9% / 20.9% | £5,288 | **FAIL** |
+| £5,000, whole shares | 0.293 | **0.176** | 0.455 | no | 0.519 (#1) | 0.277 | 0.222 | 21.9% / 20.9% | £5,555 | **FAIL** |
+| £5,000, fractional | 0.273 | **0.164** | 0.455 | no | 0.447 (#1) | 0.259 | 0.255 | 21.5% / 20.9% | £5,108 | **FAIL** |
+
+Full-window per-trial numbers (Sharpe, CAGR, vol, max DD, fills, stop hits, zero-share targets, cost, budget-step days) are in `data/backtest/momentum/lse/verdict.md`; the per-pass JSON carries the fold matrix and the per-fold selection.
+
+What the numbers say, without spin:
+
+- **No pass beats the benchmark even before the haircut.** The best walk-forward Sharpe (0.537, £1,000 whole shares) is below the fractional benchmark's 0.565; the other three are 0.27–0.41 against 0.46–0.57. The haircut is not what decides it.
+- **PBO passes once, on the pass that fails the other two gates.** At £1,000 whole shares the walk-forward picks trial #1 (252-day lookback, no stop) in 11 of 15 folds and PBO is 0.044 — the trials are not interchangeable there, #1 is consistently the least bad — but DSR is 0.636 and the Sharpe does not beat the benchmark. The other passes have PBO 0.22–0.26.
+- **Full-window trial #1 (0.595 Sharpe at £1,000 whole) sits just above the fractional benchmark (0.588) with 12.7% drawdown against 20.9%.** That is the strongest line in the LSE result: the long/flat trend rule roughly matched buy-and-hold at 60% of the drawdown over the full window. It does not survive walk-forward selection (0.537) or the deflation over 8 trials (0.636).
+- **Stops (trials 2 and 4) fired 254–357 times per pass and lowered neither drawdown enough nor Sharpe at all** (#2 0.489 vs #1 0.595; #4 0.132 vs #3 0.221 at £1,000 whole).
+- **Whole shares at £1,000 bind less than on the US book.** 257–276 zero-share targets per trial (22 lines, ~111 rebalances); the fractional pass, which is the signal's true test, is *worse* (0.414 vs 0.537 walk-forward), so rounding did not hide a passing signal.
+- **The loss budget binds only at £5,000**: 40–225 half-size days per trial, no quarter-size day and no halt in any pass. The daily 1% cap blocked entries on 48–176 sessions per trial.
+- **Custody is small**: over 9.23 years, whole shares £6.71–£9.19 per trial at £1,000 and £44.50–£55.56 at £5,000; fractional £9.70–£12.20 and £46.41–£58.38; the fractional benchmark £13.29 and £60.25. All inside the cost column.
+
+**Provisional because two roles are missing.** IHCU (US health) and CMFP (broad commodities) are not in the run (§10.3). The verdict on 22 lines is the same kind of FAIL on all three gates as the US book; adding two lines to a 22-line inverse-vol long/flat book would have to move the walk-forward Sharpe from 0.54 past 0.94 (0.565 / 0.6) to change it, and that is an interpretation, not a measurement — the run with them is one command once David rules.
+
+### 10.2 Sibling-Uic probe (ruling (a), step 1) — outcome per line
+
+`ref/v1/instruments?Keywords=<ISIN>` on the live gateway, then details and `chart/v3` earliest-bar paging per Uic (raw JSON `saxo-siblings.json` in the session scratch). Every listing of both funds at Saxo:
+
+| Line | Listing (Uic) | Exchange | Currency | Earliest Saxo bar | Bars to 2026-09-24 (LSE lines after §10.9's hygiene; other exchanges as probed) | Reaches 2016-09-22? |
+|---|---|---|---|---|---|---|
+| **IHCU** (IE00B43HR379) | IHCU:xlon (25583531) | LSE_ETF | GBP (GBX, factor 0.01) | 2021-10-21 | 1,243 | no |
+| | **IUHC:xlon (4925944)** | LSE_ETF | USD | **2016-06-21** | 2,574 | **yes** — chosen sibling (same exchange, same fund) |
+| | IUHC:xswx (34934627) | SWX_ETF | USD | 2016-04-12 | 2,033 | yes, but SIX and 77% density |
+| | QDVG:xetr (14096141) | XETR_ETF | EUR | 2019-06-19 | 1,851 | no |
+| **CMFP** (IE00B4WPHX27) | CMFP:xlon (12264631) | LSE_ETF | GBP (GBX) | 2019-02-20 | 1,916 | no |
+| | **COMF:xlon (46434)** | LSE_ETF | USD | **2010-03-25** | 3,441 (83% density; a three-bar ×100 spike 2010-04-06→08 rescaled by §10.9's guard) | **yes** — chosen sibling |
+| | ETL2:xetr (5205444) | XETR_ETF | EUR | 2010-05-06 | 4,117 | yes, but Xetra/EUR |
+| | COMF:xams (21364808) | AMS | EUR | 2014-10-13 | — | no |
+| | COMF:xswx (10477255) | SWX_ETF | CHF | 2018-08-17 | — | no |
+| | COMF:xmil (19872347) | MIL | EUR | 2014-10-17 | — | no |
+
+So §8.1's "sibling lines — not probed" is closed: for **both** roles a same-exchange USD line reaches 2016-09-22 at Saxo, and the EODHD fallback was not needed to *obtain* history. Whether that history can be *used* is §10.3.
+
+### 10.3 Splice test — both siblings exceed the pre-declared tolerance; STOP for David
+
+Method: convert the USD sibling to GBP at the BoE XUDLUSS daily fix (same-day fix, else the last fix on or before; the series was extended back to 2010-01-04 for COMF), splice it onto the GBX line at the GBX line's first bar, require ≥ 60 overlap sessions, and report the mean absolute daily return difference over the overlap; **if > 1 bp/day, say so and stop.** The ≥ 60-session and 1 bp/day bars are **not in doc 70 at the branch base and were not ruled by David**: they come from the coordinator's session brief for this run, written before any bar was pulled, and entered the tree as `SPLICE_MIN_OVERLAP_SESSIONS` and `SPLICE_MAX_MEAN_ABS_RETURN_DIFF_BPS` in `server/tools/backtest/momentum/splice.ts` in commit 4fa5c6a5 on this branch. They are pre-declared in that sense only.
+
+| Line ← sibling | Overlap sessions | Mean abs return diff | Mean (signed) return diff | Return correlation | Cumulative return diff over the overlap | Sibling bars that would be spliced in | Within 1 bp/day? |
+|---|---|---|---|---|---|---|---|
+| IHCU ← IUHC:xlon | 1,242 (2021-10-22 → 2026-09-24) | **15.00 bp/day** | −0.01 bp/day | 0.9756 | −19 bp | 1,331 (2016-06-21 → 2021-10-20) | **no** |
+| CMFP ← COMF:xlon | 1,915 (2019-02-21 → 2026-09-24) | **16.39 bp/day** | −0.01 bp/day | 0.9629 | +8 bp | 1,523 (2010-03-25 → 2019-02-19) | **no** |
+
+Both lines are therefore **excluded from the run** and the GBX-only series, the raw USD siblings and the spliced candidates are committed under `data/bars/saxo-aux/` so the run can be repeated with them on one manifest edit. Interpretation, not measurement: 15–16 bp/day of absolute daily difference with a signed mean of ~0 and correlation 0.96–0.98 is what two closing prints of the same fund on two order books, converted at a 4 pm fix that is not the close, look like; the 1 bp/day bar is below the noise floor of any two such lines, and a splice at this level would not bias a 126/252-day trend signal, but it would add ~15 bp/day of noise to the history of two of 24 lines. **The bar was pre-declared, so it is David's to relax, not the session's.** Per the brief, EODHD was not signed up for, not paid, not called; §8.4 options 1 and 2 remain exactly as written.
+
+### 10.4 Data pulled and committed (ruling (k))
+
+- `data/bars/saxo/`: **22 lines, 4.3 MB** (`manifest.json` alongside), 2000-04-28 (ISF) to 2026-09-24, 15-minute-delayed feed. Prices are in GBP **after the hygiene step of §10.9**: GBX × 0.01 once at ingest, each line checked against Saxo's `PriceToContractFactor` for today's unit, and then every close/close ratio scanned for a mid-series unit change — `PriceToContractFactor` is a property of the instrument today and says nothing about the unit Saxo stored older bars in. `data/bars/saxo-aux/`: the 7 derived series (IHCU, CMFP, IUHC, COMF, the two spliced candidates, CUKX) plus `raw/` with the **27 pre-hygiene series exactly as Saxo returned them** (5.0 MB), so every transformation is auditable. `data/bars/fx/gbpusd-boe-xudluss.csv` extended from 2015-12-01 back to 2010-01-04 (4,226 rows; the old file is a strict subset). `data/bars/saxo-spreads.csv`: 24 rows. Total committed for this run: **~10.3 MB** on disk (5.9 MB aux of which 5.0 MB raw).
+- **Per line: earliest bar, bars, density (bars ÷ (years × 252)), last bar.** All last bars are 2026-09-24 (the fetch-day bar is dropped, §10.5 (7)).
+
+| Line | First bar | Bars | Density | | Line | First bar | Bars | Density |
+|---|---|---|---|---|---|---|---|---|
+| ISF | 2000-04-28 | 6,672 | 100% | | UIFS | 2016-06-20 | 2,522 | 98% |
+| VMID | 2014-10-01 | 3,028 | 100% | | ICDU | 2016-01-28 | 2,198 | **82%** |
+| CUKS | 2010-09-22 | 3,618 | **90%** | | SPGP | 2011-09-22 | 3,756 | 99% |
+| IUSA | 2002-03-19 | 5,879 | 95% | | SPOG | 2011-10-10 | 3,550 | 94% |
+| CUS1 | 2011-08-01 | 3,269 | **86%** | | IUKP | 2007-03-20 | 4,929 | 100% |
+| IEUX | 2011-08-02 | 3,828 | 100% | | IGLT | 2006-12-04 | 4,792 | 96% |
+| IJPN | 2004-10-04 | 5,551 | 100% | | INXG | 2006-12-04 | 5,001 | 100% |
+| CPJ1 | 2010-09-28 | 3,245 | **81%** | | SLXX | 2004-03-30 | 5,679 | 100% |
+| IEEM | 2005-11-21 | 5,265 | 100% | | VUTY | 2016-03-03 | 2,494 | 94% |
+| IITU | 2016-06-21 | 2,520 | 97% | | SGLN | 2011-04-14 | 3,877 | 100% |
+| IESU | 2015-12-03 | 2,470 | **91%** | | SSLN | 2011-04-14 | 3,828 | 98% |
+| *excluded:* IHCU | 2021-10-21 | 1,243 | 100% | | *excluded:* CMFP | 2019-02-20 | 1,916 | 100% |
+
+  **What the hygiene step found and did, per line** (`manifest.json` `symbols.<TIDM>.hygiene`, raw under `data/bars/saxo-aux/raw/`): **SGLN** ×100 unit break at 2017-06-23 (raw close 0.1946 → 19.425; the 1,540 bars from 2011-04-14 were stored in pounds-per-hundredth and are rescaled ×100 — 255 of them inside the evaluated window, which is what falsified the first run, §10.9); **IGLT** ÷100 break at 2011-10-20 (earlier segment rescaled ×0.01); **VMID** ÷100 break at 2014-10-17 (its first 12 bars, rescaled ×0.01); **COMF** (sibling) a three-bar ×100 spike 2010-04-06→08, rescaled back to the surrounding unit and therefore also gone from `CMFP-spliced.csv`. All three primary breaks except SGLN's are before the window. **Suspect flips** (adjacent closes ±35% or more, not a unit break): **CUS1** 65 between 2011-08-05 and 2013-05-03, **SPGP** 65 between 2012-01-11 and 2012-11-06, CPJ1 2 (2014-11-27/28), VUTY 2 (2016-03-11/16) — all before the window, recorded and left in the series (they are alternating prints, not a unit change; a run over a window that reaches them must treat them as a data hole). **Dropped bars**: weekend-dated bars in 2007–08 on ISF (5), IEEM (11), IJPN (11), IESU's 2017-01-01 (a Sunday), and every line's 2026-09-25 fetch-day bar. No line hit the > 3× hole refusal.
+
+  The four lowest densities (CPJ1 81%, ICDU 82%, CUS1 86%, CUKS 90%) match §6.1's probe. **Inside the evaluated window the picture differs**: CPJ1, CUS1 and CUKS have no missing session against ISF's calendar from 2016-06-21 — their thinness is pre-2016 — while the window's gaps sit on ICDU (408 sessions, 15.7%, longest run 19 sessions, 22 runs longer than the 5-session carry-forward), IESU (170, 6.6%, longest 18), VUTY (119, 4.6%), IITU (74, 2.9%), UIFS (73, 2.8%), and a handful on SGLN, SPOG, SSLN. 1.49% of all line-sessions.
+- **Half spreads** (`data/bars/saxo-spreads.csv`): one `infoprices/list` burst of 5 reads spaced 2 s at 2026-09-25T11:14:26Z (market open, 15-minute delayed), **p25 per line**, measured once. p25 half spreads run from 0.65 bp (IUSA) and 0.96 bp (ISF) through 2–7 bp for most lines to 9.2 (INXG), 9.6 (SPOG), 10.7 (SPGP), 21.2 (CUKS) and 54.8 bp (CMFP, excluded anyway); median of the 22 p25s 4.9 bp. Doc 44 §5's caveat applies: a single time point is not a session profile, and the universe median of one snapshot swings 1.68× across time points; the run's cost model reads these once and does not re-measure. A session-profile measurement (doc 44's method, 20+ time points) is the upgrade if the spread ever decides a verdict — here the sub-book fails before costs matter (the benchmark, which pays the same spreads, wins).
+- **Saxo closes are price-only, not distribution-adjusted.** ISF (distributing) against CUKX (accumulating, same index): the close ratio drifts **−3.77%/yr** from 2011-02-11 to 2026-09-25 (`manifest.json` `checks.distribution_adjustment`), which is the FTSE 100 dividend yield. So on the 11 distributing lines in the run (ISF, VMID, IUSA, IEUX, IJPN, IEEM, IUKP, IGLT, INXG, SLXX, VUTY) the trend signal and the P&L are price return, not total return, and the same is true of the benchmark. Doc 69 R8 q3 left Saxo's adjustment behaviour unknown; it is now measured. R8 q1's rule — signals on total-return series so Acc and Dist classes rank identically — is therefore not met on those 11 lines by Saxo's own bars, and cannot be met from Saxo alone. This under-states both sides equally on a long/flat rule but under-states the always-long benchmark's carry more, so if anything the comparison flatters the strategy.
+
+### 10.5 Interpretations made in this run (re-runnable the other way)
+
+1. **The window starts at the latest first bar among included lines (IITU, 2016-06-21), not at 2016-09-22.** Ruling (g) says the window is what the bars allow; 21 lines reach further back, one binds. The run therefore evaluates 9.24 years, not 10; the 10-year requirement (Q7) is met by 21 of 22 lines individually and by the sub-book to the day IITU listed on LSE at Saxo.
+2. **Coverage is measured, not asserted.** The first build (§9.2) returned 0% missing for LSE by construction; this run measures member-sessions without a bar against ISF's calendar the same way the US run does (1.5%). The 2% *stop* stays US-only per ruling (h) — the number is reported, it does not gate. Inside the simulator the per-line 95% window coverage invariant (`coverageOk`) already excludes a line from a decision whose lookback is under-covered, which is why ICDU's 15.7% gap rate did not become a position problem.
+3. **A gap longer than the 5-session carry-forward exits the line as `delisted`** (§9.7 fix 1). On LSE that path fired **exactly once per line held, on 2023-08-14, for ICDU (every trial) and IESU (trials 1–2), and on the benchmark too (both lines, both share modes)**. The only in-window gap longer than five sessions that is held is 2023-08-07 → 2023-08-18, and it is **identical on ICDU and IESU** — two iShares US sector lines going dark for the same ten sessions is a probable Saxo data hole, not illiquidity. Effect on Sharpe, measured two ways in scratch: (a) *carry instead of exit* — the simulator's gap exit switched off so a held line with no bar is marked at its last close until a bar returns (the only change): full-window Sharpe moves by **+0.004 to −0.004** on every trial and pass except #4 at £5,000 fractional (−0.026), and by +0.001 on the benchmark — immaterial; (b) *hole filled* — the ten missing sessions on both lines inserted as carried closes in a copy of the bars: walk-forward Sharpe moves by **−0.066 (£1k whole), −0.159 (£1k fractional), −0.165 (£5k whole), −0.047 (£5k fractional)** and the benchmark by −0.006 to −0.008. (b) is not the hole's effect: filling ten sessions lifts ICDU's rolling 252-day coverage past the 95% invariant for the months that follow, so ICDU (15.7% missing in the window) enters the book where the committed run leaves it out, and the delta is ICDU's inclusion. Neither changes the verdict; (a) is the exit path's cost and it is ~0.
+4. **Spliced lines carry no coverage discontinuity marker because none is in the run.** The manifest and report print `Spliced lines: none`; the mechanism (manifest `spliced_from`, report line, run-time assertion that every line's first bar is on or before the window start) is built and tested for the re-run.
+5. **Benchmark is fractional-share** (§9.3 interpretation 1) — the whole-share benchmark on 22 lines at £1,000 is *not* degenerate here (0.585 Sharpe against 0.594) and is printed alongside.
+6. **GBP-quoted lines (VMID, IGLT, INXG, SLXX, VUTY) are stored as quoted; GBX lines are scaled by 0.01 once at ingest**, so a bar file never carries pence, `raw_close` equals `close`, and whole-share rounding, the 0.08%/side commission and the half spread all act on pounds. Each line's unit was asserted against Saxo's `PriceToContractFactor` at pull time — which, the first run showed, only vouches for today's unit (§10.9). The per-bar unit-break guard (§10.4) is what makes the sentence true across the whole series, and `loadLseData` now refuses any bar file that still carries a break.
+7. **The fetch-day bar is dropped.** Saxo's daily bar for the pull date is the session so far (the first pull was at 11:16Z, the second at 11:43Z, LSE closes 16:30 London), so every line ends at 2026-09-24. The first run kept a partial 2026-09-25 bar on every line.
+
+### 10.6 Questions for David (nothing below is decided)
+
+1. **IHCU and CMFP.** Three options, none taken: (i) **accept the sibling splice at 15–16 bp/day** mean absolute overlap difference (signed mean ~0, correlation 0.96–0.98) and re-run on 24 lines — one manifest edit, the spliced series are committed, and that edit is safe only because the window binds at IITU's 2016-06-21 first bar, which both spliced candidates (IUHC from 2016-06-21, COMF from 2010-03-25) reach, so neither the window nor the evaluated span moves; (ii) **EODHD one month (£19.99)** per §8.4 option 1, still with its unverified ticker coverage and retained-data terms, and with the same overlap question against Saxo's own series (§8.3); (iii) **let the provisional 22-line verdict stand** as the Step 1 LSE result. The session's reading: (i) is the cheapest honest answer and cannot change a three-gate FAIL into a PASS on two lines, but the tolerance was pre-declared and the session does not move it.
+2. **Does the provisional 22/24-line FAIL stand as the Step 1 LSE verdict** if no option in (1) is taken?
+3. **Price-only bars on the 11 distributing lines** (§10.4). The pre-declared list took the oldest line per role, not the share class; §2.2's alternate column already names Acc classes for four of them (CUKX for ISF, CSP1 for IUSA, CSJP for IJPN, SEMA for IEEM), each with ten years at Saxo per §6.1. Swapping to Acc classes would change the pre-declared list (a recorded change before any trial, per §8.4 option 4's rule) and would give total-return signals on those roles, as R8 q1 asks; the other seven Dist lines have no Acc alternate at Saxo in §2.2 and would stay price-only. Keep the list as declared, or swap where an Acc class exists?
+4. **Whether the momentum sleeve continues at all** now both sub-books fail: doc 68 wires only sleeves that pass B into Step 3. The choices §9.1 raised for the US arm (a second pre-declared grid counted against MinBTL) apply to LSE as well — MinBTL here is 16, so a second LSE grid of 8 would reach the limit.
+
+### 10.7 Code shipped
+
+- `server/tools/backtest/momentum/lse-lines.ts` (the 24 lines with Uic, asset type, quote unit and the two sibling declarations; CUKX as the aux line), `saxo-api.ts` (read-only client: chart paging, details, infoprices; 429 backoff, 401 retry, 100 chart calls/min pacing; the live token source refuses to start on a dead token with "Saxo token dead, needs `npm run saxo:login`"), `splice.ts` (BoE conversion, overlap statistics, splice with the pre-declared tolerance), `measure-saxo-spread.ts` (burst, p25, CSV), `pull-saxo-bars.ts` (pull, unit assertion, splice-or-exclude, distribution check, manifest), `bar-hygiene.ts` (§10.9: weekend and fetch-day drop, per-bar unit-break detection and rescale, hole refusal, suspect-flip count; raw series kept). `run.ts` clips the calendar to the manifest window, asserts every line starts by it, measures coverage; `report.ts` prints the LSE header, splices, exclusions and coverage. 23 new unit tests in `saxo-tools.test.ts` plus runner tests for the window/splice/exclusion path and for refusing a bar file with a unit break; 111 tests in the momentum tool directory.
+- The first pull finished inside one access-token lifetime; the second pull's refresh rotated the tokens and `SaxoTokenRefresher` wrote them back to `data/saxo-tokens/live.json` <!-- cite-exempt: untracked — token store is gitignored --> (mode 0600), as the login tool does. No token was printed or committed.
+
+### 10.8 Combined Step 1 verdict
+
+**US sub-book: FAIL (§9.1). LSE sub-book: FAIL on 22 of 24 lines (§10.1), provisional pending §10.6 (1).** Doc 68 Step 3, verbatim: *"wire only sleeves that survived B and C"* — so, as specced, **no momentum sub-book is wired into the v2 composition root** unless David takes an option in §10.6 (1) or (4) and the re-run passes. The kill line was applied as written; nothing was shortened, substituted or bought.
+
+### 10.9 Fix round after the session eval (2026-09-25): a ×100 unit break inside SGLN
+
+The doc 68 eval on the first push (5f3507db) found that `data/bars/saxo/SGLN.csv` was **100× too small from 2011-04-14 to 2017-06-22** (raw close 0.1946 on 2017-06-22, 19.425 on 2017-06-23): Saxo stores that segment of SGLN's history in a different unit from the rest, and `assertUnitMatchesSaxo` only compares the declared unit with today's `PriceToContractFactor`, so nothing looked at the series itself. 255 of the mis-scaled bars sit inside the clipped window, and the 252-day trend signal read a ~+10,000% return on SGLN through mid-2018 on the walk-forward path. §10.4's "prices in GBP", §10.5 (6) and the README's "Prices in GBP" were false for that segment. Confirmed by scanning every committed series for adjacent-close ratios: the scan also found the pre-window breaks in IGLT (2011-10-20), VMID (2014-10-17) and COMF (2010-04-06→09, carried into `CMFP-spliced.csv`), the alternating ±40–60% flips in CUS1 and SPGP in 2011–13, and weekend-dated bars (IESU 2017-01-01; ISF, IEEM, IJPN in 2007–08).
+
+What changed: `server/tools/backtest/momentum/bar-hygiene.ts` — a close/close ratio inside (90, 110) or its inverse is a unit break and every earlier bar is rescaled to the latest unit (×100 or ×0.01, composed across multiple breaks so COMF's three-bar spike returns to unity); a ratio beyond 3× or under 1/3 that is not a unit break refuses the pull unless the line is allow-listed with a reason (no line needed it); ratios beyond 1.35× are counted as suspect flips; weekend-dated and fetch-day bars are dropped; each line's report goes into `manifest.json` and the raw series into `data/bars/saxo-aux/raw/`. `loadLseData` refuses a bar file that still carries a break. Tests: a ×100 break, a ÷100 break, a three-bar ×100 spike, a genuine 4× move (throws), the weekend/fetch-day drop, and the runner's refusal. Every line was re-pulled through the guard (read-only, 2026-09-25T11:43Z) rather than patched, and the four passes were re-run; a second run is byte-identical.
+
+First run of 2026-09-25 (SGLN mis-scaled, partial fetch-day bar kept), for the record:
+
+| Pass | WF strategy Sharpe | × 0.6 | Benchmark | DSR (selected) | DSR (WF) | PBO | WF max DD strategy / benchmark | Capital ceiling |
+|---|---|---|---|---|---|---|---|---|
+| £1,000, whole shares | 0.548 | 0.329 | 0.571 | 0.647 (#1) | 0.561 | 0.050 | 12.4% / 20.9% | £8,052 |
+| £1,000, fractional | 0.356 | 0.214 | 0.571 | 0.510 (#1) | 0.342 | 0.264 | 22.6% / 20.9% | £5,288 |
+| £5,000, whole shares | 0.288 | 0.173 | 0.462 | 0.522 (#1) | 0.273 | 0.188 | 21.5% / 20.9% | £5,748 |
+| £5,000, fractional | 0.210 | 0.126 | 0.462 | 0.449 (#1) | 0.202 | 0.301 | 23.3% / 20.9% | £5,175 |
+
+The corrected numbers are §10.1's. The verdict on every pass is unchanged (FAIL on all three gates); the largest moves are the fractional passes (£1,000: 0.356 → 0.414; £5,000: 0.210 → 0.273), where the phantom SGLN return had been sized at full weight. The evaluator's hand-patched preview (0.541 / 0.419 / 0.296 / 0.277) was within 0.01 of the re-pull on three passes and 0.004 on the fourth.

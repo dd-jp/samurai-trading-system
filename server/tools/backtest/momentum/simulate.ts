@@ -337,8 +337,6 @@ class Simulation {
 
   private processDelistings(index: number): void {
     for (const [symbol, position] of [...this.positions].sort(([a], [b]) => a.localeCompare(b))) {
-      // A gap past the carry-forward window is a delisting: in the Alpaca set every such gap is a
-      // ticker retired and later reused (FB, POM, BBBY), so waiting would mark the line at £0
       const gone =
         this.market.seriesEndedBefore(symbol, index) ||
         this.market.barAtOrBefore(symbol, index) === undefined;
