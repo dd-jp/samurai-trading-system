@@ -249,6 +249,34 @@ describe('runBacktest', () => {
     expect(capped.verdict.capitalCeilingGbp).toBeLessThan(uncapped.verdict.capitalCeilingGbp);
   });
 
+  it('refuses an entry priced off the adjusted close', async () => {
+    const adjusted = trendSleeve('trend-5', 'UP', 5);
+    const run = input({
+      trials: [
+        {
+          config: { lookback: 5 },
+          sleeve: {
+            ...adjusted,
+            decide: async (context, instruments) => {
+              const output = await adjusted.decide(context, instruments);
+              return {
+                ...output,
+                decisions: output.decisions.map((decision) => ({
+                  ...decision,
+                  price: decision.price * 0.9,
+                })),
+              };
+            },
+          },
+        },
+        { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
+      ],
+    });
+    await expect(runBacktest(run)).rejects.toThrow(
+      /^backtest refuses sleeve 'trend-5': UP entry at [\d.]+ is not the last raw close [\d.]+; bars are dividend-adjusted, fills are at quoted prices$/,
+    );
+  });
+
   it('refuses a window with no sessions', async () => {
     await expect(runBacktest(input({ from: '2030-01-01', to: '2030-02-01' }))).rejects.toThrow(
       'backtest: no sessions from 2030-01-01 to 2030-02-01',

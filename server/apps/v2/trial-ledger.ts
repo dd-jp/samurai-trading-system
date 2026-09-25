@@ -1,12 +1,23 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import type { Clock } from '../../shared/index.js';
+import { SystemClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { guardedStore, toStoredTimestamp } from '../../shared/store/index.js';
+import { guardedStore, openSharedStore, toStoredTimestamp } from '../../shared/store/index.js';
 
 export const V2_RESEARCH_STORE_PATH = 'data/samurai-v2-research.sqlite';
 export const SESSION_B_TRIALS_PATH = 'data/backtest/momentum/trials.json';
 
 export type TrialConfig = Readonly<Record<string, unknown>>;
+
+export interface TrialRow {
+  readonly trial: number;
+  readonly candidate: string;
+  readonly config_hash: string;
+  readonly source: string;
+  readonly recorded_at: string;
+}
 
 export interface SessionBLedger {
   readonly entries: readonly {
@@ -48,6 +59,14 @@ export class TrialLedger {
 
   count(): number {
     return (this.#db.prepare('SELECT COUNT(*) AS n FROM v2_trials').get() as { n: number }).n;
+  }
+
+  list(): readonly TrialRow[] {
+    return this.#db
+      .prepare(
+        'SELECT trial, candidate, config_hash, source, recorded_at FROM v2_trials ORDER BY trial',
+      )
+      .all() as TrialRow[];
   }
 
   record(candidate: string, config: TrialConfig): number {
@@ -106,4 +125,25 @@ export class TrialLedger {
       );
     return trial;
   }
+}
+
+export function sessionBLedger(path: string = SESSION_B_TRIALS_PATH): SessionBLedger {
+  return JSON.parse(readFileSync(path, 'utf8')) as SessionBLedger;
+}
+
+export function main(storePath: string = V2_RESEARCH_STORE_PATH): number {
+  const db = openSharedStore(storePath);
+  try {
+    const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());
+    process.stdout.write(
+      `${JSON.stringify({ trials_counted: ledger.count(), trials: ledger.list() }, null, 2)}\n`,
+    );
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(main());
 }

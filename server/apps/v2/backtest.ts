@@ -1,4 +1,9 @@
-import type { MarketData, Sleeve, SleeveContext } from '../../../contracts/index.js';
+import type {
+  MarketData,
+  Sleeve,
+  SleeveContext,
+  SleeveDecision,
+} from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
@@ -46,17 +51,35 @@ function refuseForwardPaper(sleeves: readonly Sleeve[]): void {
   }
 }
 
-function rulesOnly(sleeve: Sleeve): Sleeve {
+function assertBacktestable(
+  sleeve: Sleeve,
+  decision: SleeveDecision,
+  market: MarketData,
+  tradingDate: string,
+): void {
+  if (decision.veto !== undefined) {
+    throw new Error(
+      `backtest refuses sleeve '${sleeve.id}': a veto cannot be backtested, only its rules (doc 66 S7)`,
+    );
+  }
+  if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return;
+  const quoted = market.lastBarBefore(decision.instrument, tradingDate)?.rawClose;
+  if (decision.price !== quoted) {
+    throw new Error(
+      `backtest refuses sleeve '${sleeve.id}': ${decision.instrument} entry at ${decision.price} is not the last raw close ${quoted}; bars are dividend-adjusted, fills are at quoted prices`,
+    );
+  }
+}
+
+function rulesOnly(sleeve: Sleeve, market: MarketData): Sleeve {
   return {
     id: sleeve.id,
     spec: sleeve.spec,
     universe: (context: SleeveContext) => sleeve.universe(context),
     decide: async (context, instruments) => {
       const output = await sleeve.decide(context, instruments);
-      if (output.decisions.some((decision) => decision.veto !== undefined)) {
-        throw new Error(
-          `backtest refuses sleeve '${sleeve.id}': a veto cannot be backtested, only its rules (doc 66 S7)`,
-        );
+      for (const decision of output.decisions) {
+        assertBacktestable(sleeve, decision, market, context.tradingDate);
       }
       return output;
     },
@@ -102,7 +125,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       clock,
       logger: input.logger,
       market: input.market,
-      sleeves: sleeves.map(rulesOnly),
+      sleeves: sleeves.map((sleeve) => rulesOnly(sleeve, input.market)),
       openingDate: first,
       tradingDate: () => current,
       dryRun: true,

@@ -452,6 +452,21 @@ describe('runCycle', () => {
     }
   });
 
+  it('checks the legs against the bar rescaled from adjusted to raw prices', async () => {
+    for (const [override, exits] of [
+      [{ close: 10, low: 9.8, high: 10.3 }, 0],
+      [{ close: 10, low: 9.55, high: 10.3 }, 2],
+      [{ close: 10, low: 9.8, high: 10.62 }, 2],
+    ] as const) {
+      const deps = harness([longAapl], true);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', { ...override, rawClose: 20 }));
+      const report = await runCycle(deps, '2026-09-28');
+      expect(report.exits).toBe(exits);
+    }
+  });
+
   it('a bar touching both legs exits at the stop, for longs and shorts', async () => {
     const short: SleeveDecision = {
       ...longAapl,

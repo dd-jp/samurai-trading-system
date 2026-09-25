@@ -221,7 +221,8 @@ class Cycle {
     const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
     if (bar === undefined || bar.date < held.openedDate) return;
     const fx = this.fxFor(held.venue);
-    const exit = bracketExit(held, bar.low / fx, bar.high / fx);
+    const toRawGbp = bar.rawClose / bar.close / fx;
+    const exit = bracketExit(held, bar.low * toRawGbp, bar.high * toRawGbp);
     if (exit?.priceGbp === undefined) return;
     const trigger = exit.priceGbp * fx;
     const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';

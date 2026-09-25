@@ -1,17 +1,14 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import {
-  SESSION_B_TRIALS_PATH,
-  type SessionBLedger,
-  TrialLedger,
-  trialHash,
-} from './trial-ledger.js';
+import { main, sessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
 
 const clock = new SimulatedClock(new Date('2026-09-26T08:00:00.000Z'));
-const SESSION_B = JSON.parse(readFileSync(SESSION_B_TRIALS_PATH, 'utf8')) as SessionBLedger;
+const SESSION_B = sessionBLedger();
 
 function rows(db: StoreHandle) {
   return db
@@ -71,6 +68,19 @@ describe('TrialLedger', () => {
     });
   });
 
+  it('lists the trials in order', () => {
+    const ledger = new TrialLedger(openSharedStore(':memory:'), clock, SESSION_B);
+    ledger.record('trend', { lookback: 60 });
+    expect(ledger.list().map((row) => row.trial)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(ledger.list().at(-1)).toEqual({
+      trial: 9,
+      candidate: 'trend',
+      config_hash: trialHash('trend', { lookback: 60 }),
+      source: 'v2',
+      recorded_at: '2026-09-26T08:00:00.000Z',
+    });
+  });
+
   it('reopens an existing ledger without reseeding', () => {
     const db = openSharedStore(':memory:');
     new TrialLedger(db, clock, SESSION_B).record('trend', { lookback: 60 });
@@ -100,5 +110,26 @@ describe('TrialLedger', () => {
         )
         .run(),
     ).toThrow('v2_trials: trial numbers are contiguous from 1');
+  });
+});
+
+describe('main', () => {
+  it('opens the research ledger file seeded with Session B and prints it', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'v2-trials-'));
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    try {
+      expect(main(join(directory, 'research.sqlite'))).toBe(0);
+      const printed = JSON.parse(String(write.mock.calls[0]?.[0])) as {
+        trials_counted: number;
+        trials: { trial: number; source: string }[];
+      };
+      expect(printed.trials_counted).toBe(8);
+      expect(printed.trials.map((row) => row.source)).toEqual(
+        Array.from({ length: 8 }, () => 'session-b'),
+      );
+    } finally {
+      write.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

@@ -90,9 +90,9 @@ describe('backtestVerdict', () => {
   });
 
   it('scores a flat trial with no deflated Sharpe', () => {
-    const flat = { trial: 1, ...book(new Array(LENGTH).fill(0)) };
+    const flat = { trial: 1, ...book(Array.from({ length: LENGTH }, () => 0)) };
     const verdict = backtestVerdict(
-      input({ trials: [flat, { trial: 2, ...book(new Array(LENGTH).fill(0)) }] }),
+      input({ trials: [flat, { trial: 2, ...book(Array.from({ length: LENGTH }, () => 0)) }] }),
     );
     expect(verdict.deflatedSharpe).toBe(0);
     expect(verdict.deflatedSharpeWalkForward).toBe(0);

@@ -177,8 +177,26 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - An uncovered impact window charges 25 bps (C2) with a logged warning; it never throws on an exit.
   - Four dry-run dates: decisions and orders identical; primary equity lower by £0.0003–£0.0013 a day; no fallback fired.
   - Known limit: impact is unbounded in participation. A sell priced over 10,000 bps of impact would go negative; the ADV cap keeps entries at ≤ 1% participation, so only a position far larger than its entry could approach it.
-- Still to come:
-  - PR 3c: the backtest driver on the same cycle (trial counter, walk-forward, DSR/PBO, loss budget).
+- **PR 3c (the backtest driver):**
+  - `SleeveSpec.validation` is `'backtest'` or `'forward-paper'`. The debate sleeve is forward-paper (Q15), and the driver refuses it before recording anything.
+  - `runBacktest` (`server/apps/v2/backtest.ts`) runs every trial sleeve and the benchmark sleeve through `runCycle`, one cycle per calendar-reference session, on a scratch in-memory store. It uses a simulated clock, a forced dry run and no broker client; a submitted order throws. The root and the driver share one composition (`server/apps/v2/compose.ts`). The loss budget is the books' own, with a capital row per year.
+  - The driver refuses two kinds of decision:
+    - a vetoed decision, because only the rules are backtested (S7);
+    - an entry not priced at the last raw close, because the bars are dividend-adjusted and a sleeve pricing off `close` books an instant gain (found while timing: a five-name hold showed Sharpe 6 for 2021, and 1.5 once priced at `rawClose`).
+  - The cycle checks simulated bracket legs against the bar rescaled to quoted prices. This is a no-op on the four dry-run dates; over history, adjusted lows would trip stops that never traded.
+  - Trial ledger:
+    - The trial counter is `v2_trials` (migration 0069): append-only, and contiguous from 1, both enforced by triggers.
+    - It lives in its own file, `data/samurai-v2-research.sqlite` (`npm run v2:trials` prints it), and opens with Session B's 8 committed trials (`data/backtest/momentum/trials.json`), refusing any ledger that does not.  <!-- cite-exempt: untracked — gitignored runtime database -->
+    - A trial is the hash of the candidate, its config and the sleeve's spec, so a changed stop multiple is a new trial and a repeat is not. R4's stop on/off must be a config field.
+  - Verdict (`server/apps/v2/backtest-verdict.ts`): walk-forward over 16 folds, DSR of the selected trial deflated over the whole ledger, PBO by CSCV, strategy Sharpe × 0.6 vs the benchmark over the same walk-forward window, max drawdown, and capital ceiling = the capital config's loss cap ÷ (DD × 1.5). This mirrors Session B's gate (doc 70 §2.13, ruled (e)).
+  - Time: one ten-year pass (2016-06-21 to 2025-12-31, three sleeves, five names) takes 12 s.
+  - Four dry-run dates: decisions, orders, fills and smoke identical to PR 3b.
+- Known limits of PR 3c, owned by Step 1b:
+  - Each candidate's matched benchmark (risk-matched buy-and-hold of the same universe, same budget rules; Q1, ruled (e)) is a sleeve 1b builds per candidate; the driver takes it as an input.
+  - There is no `v2:backtest` command until a candidate exists.
+  - Simulated entries have no execution lag ([#1797](https://github.com/dd-jp/samurai-trading-system/issues/1797)); fix it before the first verdict.
+  - Every sleeve in a run is seeded at the whole start capital. When 1b adds the S1 split, the driver must still seed each trial at the capital it would get alone.
+  - Step 3e's Litestream stream must include the research store as well as the paper store.
 - Known limits, owned by later steps:
   - `sleeveAllocationGbp` seeds every sleeve at the whole start capital. That is right while debate is the only sleeve. Step 1b must add the S1 split (debate 30%, passers share the 70%) before a second sleeve registers, or the books would count the loss budget twice.
   - No sleeve sets `veto` yet. The G5 cap (a veto on at most 10% of entries) is still to be measured and enforced. It lands with the first sleeve that vetoes (Step 1b).

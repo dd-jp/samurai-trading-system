@@ -14,8 +14,8 @@ import {
 } from '../../tools/backtest/index.js';
 
 // Q7: beat the benchmark after a 40% Sharpe haircut, applied as strategy × 0.6 > benchmark (doc 66 Session B (e))
-export const SHARPE_HAIRCUT_MULTIPLIER = 0.6;
-export const MIN_DEFLATED_SHARPE = 0.95;
+const SHARPE_HAIRCUT_MULTIPLIER = 0.6;
+const MIN_DEFLATED_SHARPE = 0.95;
 export const CAPITAL_CEILING_DRAWDOWN_MULTIPLE = 1.5;
 
 export interface BookSeries {
