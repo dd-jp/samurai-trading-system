@@ -4,8 +4,8 @@ import { syntheticSeries, tradingCalendar } from './fixture.js';
 import { GBP_IDENTITY_FX } from './fx.js';
 import type { TrialConfig } from './grid.js';
 import { gridForVenue } from './grid.js';
-import { AlignedMarket, monthEndIndices } from './market.js';
-import type { SimulationInput } from './simulate.js';
+import { AlignedMarket, MAX_CARRY_FORWARD_DAYS, monthEndIndices } from './market.js';
+import type { SimulationInput, SimulationResult } from './simulate.js';
 import { calendarDaysBetween, simulate } from './simulate.js';
 
 const calendar = tradingCalendar('2020-01-01', 420);
@@ -196,6 +196,29 @@ describe('simulate: whole shares', () => {
     const after = result.equity[11] as number;
     expect(Math.abs(after / before - 1)).toBeLessThan(0.02);
   });
+
+  it('buys the intended size when a split lands between the decision and the fill', () => {
+    const split = syntheticSeries({
+      symbol: 'SPLIT',
+      calendar,
+      seed: 7,
+      drift: 0.002,
+      volatility: 0.001,
+      splitAt: { index: firstDecision + 1, ratio: 4 },
+    });
+    const result = simulate(
+      input([split], {
+        config: { ...lseNoStop, targetVolatility: 1 },
+        book: { startCapitalGbp: 1_000, wholeShares: true, fx: GBP_IDENTITY_FX },
+      }),
+    );
+    const decision = split.bars[firstDecision] as DailyBar;
+    const fillBar = split.bars[firstDecision + 1] as DailyBar;
+    const fill = result.fills[0] as SimulationResult['fills'][number];
+    expect(fill.date).toBe(fillBar.date);
+    const rawSharesBought = (fill.quantity * fillBar.close) / fillBar.rawClose;
+    expect(rawSharesBought).toBeCloseTo(4 * Math.floor(1_000 / decision.rawClose), 6);
+  });
 });
 
 describe('simulate: loss budget', () => {
@@ -253,6 +276,18 @@ describe('simulate: loss budget', () => {
     );
     expect(buysAfterHalt.every((fill) => fill.date >= '2022-01-01')).toBe(true);
     expect(buysAfterHalt.length).toBeGreaterThan(0);
+  });
+
+  it('carries a halt exit past a session with no bar instead of holding to the new year', () => {
+    const series = crashThenRecover(firstDecision + 2, -0.03, firstDecision + 40);
+    const baseline = simulate(longInput(series, { config: fullSize, book }));
+    const haltDate = baseline.fills.find((fill) => fill.reason === 'halt')?.date as string;
+    const gapped = { ...series, bars: series.bars.filter((bar) => bar.date !== haltDate) };
+    const result = simulate(longInput(gapped, { config: fullSize, book }));
+    const haltFills = result.fills.filter((fill) => fill.reason === 'halt');
+    expect(haltFills.length).toBe(1);
+    expect(haltFills[0]?.date).toBe(longCalendar[longCalendar.indexOf(haltDate) + 1]);
+    expect(result.skippedFills).toBeGreaterThan(0);
   });
 
   it('halves then quarters size before halting', () => {
@@ -341,6 +376,24 @@ describe('simulate: delisting', () => {
     expect(forced.date).toBe(calendar[endIndex]);
     expect(forced.price).toBeCloseTo(ending.bars[endIndex - 1]?.close as number);
     expect(result.equity[result.equity.length - 1]).toBeGreaterThan(0);
+  });
+});
+
+describe('simulate: data gaps', () => {
+  it('exits at the last close once a held line has no bar inside the carry-forward window', () => {
+    const series = trendingSeries('UP', 0.001);
+    const gapFrom = firstDecision + 10;
+    const gapped = {
+      symbol: 'UP',
+      bars: series.bars.filter((_, index) => index < gapFrom || index >= gapFrom + 10),
+    };
+    const result = simulate(input([gapped], { config: { ...lseNoStop, targetVolatility: 1 } }));
+    const exit = result.fills.find(
+      (fill) => fill.reason === 'delisted',
+    ) as (typeof result.fills)[number];
+    expect(exit.date).toBe(calendar[gapFrom + MAX_CARRY_FORWARD_DAYS]);
+    expect(exit.price).toBeCloseTo(series.bars[gapFrom - 1]?.close as number);
+    for (const mark of result.equity.slice(9, 21)) expect(mark).toBeGreaterThan(900);
   });
 });
 

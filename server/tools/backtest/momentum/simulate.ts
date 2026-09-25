@@ -89,7 +89,7 @@ interface Position {
 
 interface Order {
   readonly symbol: string;
-  readonly targetShares: number | undefined;
+  readonly targetUnits: number | undefined;
   readonly targetCash: number | undefined;
   readonly reason: FillReason;
 }
@@ -293,7 +293,7 @@ class Simulation {
     const held = this.positions.get(symbol);
     const heldValue = held === undefined ? 0 : this.value(symbol, index, held);
     if (this.entriesBlocked && targetCash > heldValue) return undefined;
-    return { symbol, targetShares: undefined, targetCash, reason: 'rebalance' };
+    return { symbol, targetUnits: undefined, targetCash, reason: 'rebalance' };
   }
 
   private wholeShareOrder(symbol: string, index: number, targetCash: number): Order | undefined {
@@ -305,7 +305,8 @@ class Simulation {
     const heldShares =
       held === undefined ? 0 : Math.round((held.quantity * bar.close) / bar.rawClose);
     if (this.entriesBlocked && targetShares > heldShares) return undefined;
-    return { symbol, targetShares, targetCash: undefined, reason: 'rebalance' };
+    const targetUnits = adjustedQuantity(targetShares, bar.rawClose, bar.close);
+    return { symbol, targetUnits, targetCash: undefined, reason: 'rebalance' };
   }
 
   private value(symbol: string, index: number, position: Position): number {
@@ -315,7 +316,7 @@ class Simulation {
   private exitAllOrders(reason: FillReason): Order[] {
     return [...this.positions.keys()].sort().map((symbol) => ({
       symbol,
-      targetShares: this.input.book.wholeShares ? 0 : undefined,
+      targetUnits: this.input.book.wholeShares ? 0 : undefined,
       targetCash: this.input.book.wholeShares ? undefined : 0,
       reason,
     }));
@@ -336,8 +337,13 @@ class Simulation {
 
   private processDelistings(index: number): void {
     for (const [symbol, position] of [...this.positions].sort(([a], [b]) => a.localeCompare(b))) {
-      if (!this.market.seriesEndedBefore(symbol, index)) continue;
-      const bar = this.market.barAtOrBefore(symbol, index - 1) ?? this.lastBar(symbol);
+      // A gap past the carry-forward window is a delisting: in the Alpaca set every such gap is a
+      // ticker retired and later reused (FB, POM, BBBY), so waiting would mark the line at £0
+      const gone =
+        this.market.seriesEndedBefore(symbol, index) ||
+        this.market.barAtOrBefore(symbol, index) === undefined;
+      if (!gone) continue;
+      const bar = this.market.lastBarAtOrBefore(symbol, index - 1) as DailyBar;
       this.execute(
         index,
         symbol,
@@ -351,47 +357,50 @@ class Simulation {
     }
   }
 
-  private lastBar(symbol: string): DailyBar {
-    const bars = this.market.bars(symbol);
-    return bars[bars.length - 1] as DailyBar;
-  }
-
   private halfSpread(symbol: string): number {
     return this.input.costs.halfSpreadBps(symbol);
   }
 
   private fillPending(index: number): void {
     const orders = this.pending;
-    this.pending = [];
+    const carried: Order[] = [];
     const sells: Order[] = [];
     const buys: Order[] = [];
     for (const order of orders) {
-      const delta = this.deltaFor(order, index);
+      const bar = this.market.barAt(order.symbol, index);
+      if (bar === undefined) {
+        this.skippedFills++;
+        // Nothing re-issues a halt exit while halted, so a dropped one would hold the line to 1 January
+        if (order.reason === 'halt') carried.push(order);
+        continue;
+      }
+      const delta = this.deltaFor(order, bar);
       if (delta === undefined) continue;
       (delta < 0 ? sells : buys).push(order);
     }
+    this.pending = carried;
     for (const order of sells) this.fillOrder(order, index);
     for (const order of buys) this.fillOrder(order, index);
   }
 
-  private deltaFor(order: Order, index: number): number | undefined {
-    const bar = this.market.barAt(order.symbol, index);
-    if (bar === undefined) {
-      this.skippedFills++;
-      return undefined;
-    }
+  private deltaFor(order: Order, bar: DailyBar): number | undefined {
     const held = this.positions.get(order.symbol)?.quantity ?? 0;
     const target =
       order.targetCash !== undefined
         ? order.targetCash / bar.close
-        : adjustedQuantity(order.targetShares ?? 0, bar.rawClose, bar.close);
+        : this.wholeShareQuantity(order.targetUnits ?? 0, bar);
     const delta = target - held;
     return Math.abs(delta) * bar.close < 0.01 ? undefined : delta;
   }
 
+  private wholeShareQuantity(targetUnits: number, bar: DailyBar): number {
+    const shares = Math.round((targetUnits * bar.close) / bar.rawClose);
+    return adjustedQuantity(shares, bar.rawClose, bar.close);
+  }
+
   private fillOrder(order: Order, index: number): void {
     const bar = this.market.barAt(order.symbol, index) as DailyBar;
-    let delta = this.deltaFor(order, index) ?? 0;
+    let delta = this.deltaFor(order, bar) ?? 0;
     if (delta === 0) return;
     if (delta > 0) delta = this.affordable(delta, bar);
     if (delta === 0) return;

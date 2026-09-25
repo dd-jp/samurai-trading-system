@@ -66,9 +66,17 @@ export class AlignedMarket {
     return bar?.close;
   }
 
+  lastBarAtOrBefore(symbol: string, calendarIndex: number): DailyBar | undefined {
+    return this.scanBack(symbol, calendarIndex, 0);
+  }
+
   barAtOrBefore(symbol: string, calendarIndex: number): DailyBar | undefined {
+    return this.scanBack(symbol, calendarIndex, calendarIndex - MAX_CARRY_FORWARD_DAYS);
+  }
+
+  private scanBack(symbol: string, calendarIndex: number, oldest: number): DailyBar | undefined {
     const aligned = this.require(symbol);
-    const floor = Math.max(0, calendarIndex - MAX_CARRY_FORWARD_DAYS);
+    const floor = Math.max(0, oldest);
     for (let index = calendarIndex; index >= floor; index--) {
       const barIndex = aligned.indexByCalendar[index];
       if (barIndex !== undefined) return aligned.series.bars[barIndex];
