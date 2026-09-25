@@ -11,6 +11,7 @@ export const STORE_OWNER_STAGES = [
   'risk',
   'service-api',
   'trader',
+  'v2',
   'verdict',
 ] as const;
 
@@ -56,6 +57,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   risk: ['breaker_state', 'risk_critic_log', 'risk_log'],
   'service-api': [],
   trader: ['cosine_setups', 'trader_log'],
+  v2: ['v2_books', 'v2_book_days', 'v2_decisions', 'v2_orders', 'v2_refusals'],
   verdict: ['verdict_log'],
 };
 

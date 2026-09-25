@@ -42,13 +42,18 @@ const TABLES = [
   'llm_spend_cap',
   'debate_round_log',
   'llm_gate_refusals',
+  'v2_books',
+  'v2_book_days',
+  'v2_decisions',
+  'v2_orders',
+  'v2_refusals',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 36;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 41;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 66;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 67;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));

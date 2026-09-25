@@ -32,8 +32,10 @@ export {
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
+  LlmRateLimitError,
   LlmRefusalError,
   LlmTimeoutError,
+  LlmTruncatedError,
 } from './llm/errors.js';
 export type { FailureCause } from './llm/failure-cause.js';
 export { classifyFailureCause } from './llm/failure-cause.js';
@@ -52,7 +54,7 @@ export {
   spendCapRefusalRemedy,
   UNCAPPED_SPEND,
 } from './llm/spend-cap.js';
-export type { LlmSpendSink } from './llm/spend-sink.js';
+export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';
 export { SqliteLlmSpendStore } from './llm/spend-sink.js';
 export type {
   LlmClient,
