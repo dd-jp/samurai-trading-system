@@ -8,7 +8,7 @@
 > - **"David signs off"** (§5b row D5): replaced by G12's Telegram approval request, which approves itself after 24 hours without a reply.
 > - **§3 Step 1's two TSMOM configurations and the 16 bps cost line:** the momentum backtest is now doc 67 Step 1. **§5b row D1** is done: see [doc 71](71-debate-audit.md).
 
-**Status:** PLAN (2026-09-19). **Implements nothing and decides nothing.** The fork in §5 is David's decision. Draws on [`61-five-topics-safest-max-profit.md`](61-five-topics-safest-max-profit.md), [`62-rewrite-safer-profitable-bot.md`](62-rewrite-safer-profitable-bot.md), [`63-qanat-adaptation.md`](63-qanat-adaptation.md), docs [11](11-trend-signal-measurement.md) and [13](13-stage2-proxy-verdict.md), and a read-only query of `data/samurai-paper.sqlite` taken 2026-09-19.
+**Status:** PLAN (2026-09-19). **Implements nothing and decides nothing.** The fork in §5 is David's decision. Draws on [`61-five-topics-safest-max-profit.md`](61-five-topics-safest-max-profit.md), [`62-rewrite-safer-profitable-bot.md`](62-rewrite-safer-profitable-bot.md), [`63-qanat-adaptation.md`](63-qanat-adaptation.md), docs [11](11-trend-signal-measurement.md) and [13](13-stage2-proxy-verdict.md), and a read-only query of `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — gitignored local file --> taken 2026-09-19.
 
 **Labels.** **[verified]** means read from the repo, the DB, or GitHub during this pass. **[derived]** means arithmetic on verified inputs. **[inferred]** means an interpretation. **[assumed]** means a modelling choice.
 

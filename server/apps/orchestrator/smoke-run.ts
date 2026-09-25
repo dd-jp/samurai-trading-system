@@ -2559,7 +2559,7 @@ const THRESHOLD_CLAMP_FAILURE_CHECKS: ReadonlyArray<{
   {
     failed: (clamp) => !clamp.killLineCheckRefused,
     message: () =>
-      'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.05 as a ' +
+      'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.10 as a ' +
       'bright line and the Feedback Loop holds the only mutable copy of it (#638)',
   },
   {

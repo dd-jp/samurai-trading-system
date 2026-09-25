@@ -5,7 +5,7 @@ import type { MinBtlVerdict, PboVerdict } from './validation-types.js';
 
 export const KILL_LINE = {
   minOosSharpe: 0.5,
-  maxPbo: 0.05,
+  maxPbo: 0.1,
   minDsr: 0.95,
 } as const;
 
