@@ -62,6 +62,8 @@ export const DEBATE_RISK_FRACTION = 0.005;
 export const DEBATE_STOP_ATR_MULTIPLE = 2;
 export const DEBATE_TARGET_ATR_MULTIPLE = 3;
 export const DEBATE_TIME_STOP_TRADING_DAYS = 10;
+const DEBATE_ADV_SHARE = 0.01;
+const DEBATE_ADV_WINDOW_BARS = 20;
 
 export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
   minimumCapitalGbp: 0,
@@ -71,6 +73,8 @@ export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
     stopAtrMultiple: DEBATE_STOP_ATR_MULTIPLE,
     targetAtrMultiple: DEBATE_TARGET_ATR_MULTIPLE,
     timeStopTradingDays: DEBATE_TIME_STOP_TRADING_DAYS,
+    advShare: DEBATE_ADV_SHARE,
+    advWindowBars: DEBATE_ADV_WINDOW_BARS,
   },
   books: [
     { variant: 'primary', instantiated: true },

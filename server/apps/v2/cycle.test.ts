@@ -10,6 +10,7 @@ import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { type CycleDeps, calendarDaysBetween, runCycle, vetoApplied } from './cycle.js';
+import { addDays } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import { Journal } from './journal/index.js';
@@ -139,6 +140,8 @@ const TEST_SPEC: SleeveSpec = {
     stopAtrMultiple: 2,
     targetAtrMultiple: 3,
     timeStopTradingDays: 10,
+    advShare: 0.01,
+    advWindowBars: 20,
   },
   books: [
     { variant: 'primary', instantiated: true },
@@ -175,7 +178,14 @@ function harness(
     const previous = new Date(Date.parse(tradingDate) - 86_400_000).toISOString().slice(0, 10);
     return bar(previous);
   };
-  const market: MarketData = { lastBarBefore: barFor, gbpUsdAtYearStart: () => FX };
+  const market: MarketData = {
+    lastBarBefore: barFor,
+    barsBefore: (instrument, tradingDate, count) =>
+      instrument === 'THIN'
+        ? []
+        : Array.from({ length: count }, (_, back) => bar(addDays(tradingDate, back - count))),
+    gbpUsdAtYearStart: () => FX,
+  };
   const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
   const simulatedBroker = new DryRunBrokerAdapter({
     halfSpreadBps: () => HALF_SPREAD_BPS,
@@ -191,7 +201,7 @@ function harness(
     },
     books,
     journal: new Journal(db, clock),
-    risk: new V2RiskGate({ books, capital, market, sizing: () => spec.sizing }),
+    risk: new V2RiskGate({ books, capital, market, spec: () => spec }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },
       simulatedBroker,
@@ -685,6 +695,22 @@ describe('runCycle', () => {
     );
     expect(universe).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('journals an entry refused for uncovered volume and submits nothing for it', async () => {
+    const deps = harness([{ ...longAapl, instrument: 'THIN' }, longAapl], true);
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report).toMatchObject({ decisions: 2, entries: 2, simulated_orders: 1 });
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'THIN')).toBe(0);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db.prepare("SELECT parameter, message FROM v2_refusals WHERE scope = 'entry'").all(),
+    ).toEqual([
+      { parameter: 'ADV_WINDOW_COVERAGE', message: 'debate/primary THIN: no_adv' },
+      { parameter: 'ADV_WINDOW_COVERAGE', message: 'debate/no-macro-gate THIN: no_adv' },
+    ]);
   });
 
   it('a rerun of a marked date skips with a journal line and never touches the sleeve', async () => {

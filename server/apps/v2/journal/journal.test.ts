@@ -31,6 +31,8 @@ const DEBATE: Pick<Sleeve, 'id' | 'spec'> = {
       stopAtrMultiple: 2,
       targetAtrMultiple: 3,
       timeStopTradingDays: 10,
+      advShare: 0.01,
+      advWindowBars: 20,
     },
     books: [{ variant: 'primary', instantiated: true }],
   },

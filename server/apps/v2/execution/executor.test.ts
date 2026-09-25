@@ -57,12 +57,32 @@ const gate = new V2RiskGate({
       lossCapGbp: 1_500,
     }),
   },
-  market: { lastBarBefore: () => undefined, gbpUsdAtYearStart: () => 1 },
-  sizing: () => ({
-    riskFraction: 0.005,
-    stopAtrMultiple: 2,
-    targetAtrMultiple: 3,
-    timeStopTradingDays: 10,
+  market: {
+    lastBarBefore: () => undefined,
+    barsBefore: (_instrument, _tradingDate, count) =>
+      Array.from({ length: count }, (_, back) => ({
+        date: `2026-09-${String(24 - back).padStart(2, '0')}`,
+        open: 20,
+        high: 20,
+        low: 20,
+        close: 20,
+        volume: 1_000_000,
+        rawClose: 20,
+      })).reverse(),
+    gbpUsdAtYearStart: () => 1,
+  },
+  spec: () => ({
+    minimumCapitalGbp: 0,
+    capacityGbp: Number.POSITIVE_INFINITY,
+    sizing: {
+      riskFraction: 0.005,
+      stopAtrMultiple: 2,
+      targetAtrMultiple: 3,
+      timeStopTradingDays: 10,
+      advShare: 0.01,
+      advWindowBars: 20,
+    },
+    books: [],
   }),
 });
 

@@ -8,6 +8,8 @@ import type {
   MarketData,
   Position,
   SleeveDecision,
+  SleeveSpec,
+  V2Bar,
 } from '../../../../contracts/index.js';
 import { isRiskApproved } from './approval.js';
 import { V2RiskGate } from './gate.js';
@@ -26,7 +28,40 @@ const year: CapitalYear = {
   startCapitalGbp: 2_000,
   lossCapGbp: 1_500,
 };
-const market: MarketData = { lastBarBefore: () => undefined, gbpUsdAtYearStart: () => FX };
+const SPEC: SleeveSpec = {
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  sizing: {
+    riskFraction: 0.005,
+    stopAtrMultiple: 2,
+    targetAtrMultiple: 3,
+    timeStopTradingDays: 10,
+    advShare: 0.01,
+    advWindowBars: 20,
+  },
+  books: [],
+};
+
+function liquidBars(count = 20, volume = 1_000_000, lastDate = '2026-09-24'): V2Bar[] {
+  const last = Date.parse(`${lastDate}T00:00:00.000Z`);
+  return Array.from({ length: count }, (_, index) => ({
+    date: new Date(last - (count - 1 - index) * 86_400_000).toISOString().slice(0, 10),
+    open: 20,
+    high: 20,
+    low: 20,
+    close: 20,
+    volume,
+    rawClose: 20,
+  }));
+}
+
+function marketWith(bars: readonly V2Bar[]): MarketData {
+  return {
+    lastBarBefore: () => undefined,
+    barsBefore: (_instrument, _tradingDate, count) => bars.slice(-count),
+    gbpUsdAtYearStart: () => FX,
+  };
+}
 const decision: SleeveDecision = {
   sleeve_id: 'debate',
   instrument: 'AAPL',
@@ -44,7 +79,12 @@ const decision: SleeveDecision = {
 };
 
 function gate(
-  options: { state?: Partial<LossBudgetState>; capital?: CapitalYear | undefined } = {},
+  options: {
+    state?: Partial<LossBudgetState>;
+    capital?: CapitalYear | undefined;
+    bars?: readonly V2Bar[];
+    spec?: SleeveSpec;
+  } = {},
 ) {
   const lastDay = (): BookDay | undefined =>
     options.state === undefined
@@ -70,13 +110,8 @@ function gate(
   return new V2RiskGate({
     books: { lastDay },
     capital: { inForce: () => capital },
-    market,
-    sizing: () => ({
-      riskFraction: 0.005,
-      stopAtrMultiple: 2,
-      targetAtrMultiple: 3,
-      timeStopTradingDays: 10,
-    }),
+    market: marketWith(options.bars ?? liquidBars()),
+    spec: () => options.spec ?? SPEC,
   });
 }
 
@@ -209,17 +244,7 @@ describe('V2RiskGate', () => {
   });
 
   it('refuses an allocation only to a sleeve whose minimum exceeds the year start capital', () => {
-    const spec = {
-      minimumCapitalGbp: 2_000,
-      capacityGbp: 500,
-      sizing: {
-        riskFraction: 0.005,
-        stopAtrMultiple: 2,
-        targetAtrMultiple: 3,
-        timeStopTradingDays: 10,
-      },
-      books: [],
-    };
+    const spec = { ...SPEC, minimumCapitalGbp: 2_000, capacityGbp: 500 };
     expect(gate().allocationRefusal({ id: 'debate', spec }, '2026-09-25')).toBeUndefined();
     expect(
       gate().allocationRefusal(
@@ -237,6 +262,38 @@ describe('V2RiskGate', () => {
     expect(
       gate({ capital: undefined }).allocationRefusal({ id: 'trend', spec }, '2027-01-04'),
     ).toBeUndefined();
+  });
+
+  it('refuses an entry for a sleeve with no allocation before sizing it', () => {
+    const starved = gate({ spec: { ...SPEC, minimumCapitalGbp: 2_001 } });
+    expect(starved.approveEntry(request())).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'no_allocation',
+    });
+  });
+
+  it('caps size at the declared share of average daily notional and refuses without covered volume', () => {
+    const thin = gate({ bars: liquidBars(20, 300) });
+    expect(thin.approveEntry(request()).size).toBe(3);
+    expect(gate({ bars: liquidBars(20, 0) }).approveEntry(request())).toMatchObject({
+      size: 0,
+      refusal: 'zero_size',
+    });
+    for (const bars of [
+      liquidBars(19),
+      liquidBars(20, 1_000_000, '2026-09-19'),
+      [...liquidBars(1, 1_000_000, '2026-08-01'), ...liquidBars(19)],
+    ]) {
+      expect(gate({ bars }).approveEntry(request())).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'no_adv',
+      });
+    }
+    expect(
+      gate({ bars: liquidBars(20, 1_000_000, '2026-09-20') }).approveEntry(request()).size,
+    ).toBe(6);
   });
 
   it('refuses every entry without a capital config in force but still approves exits', () => {

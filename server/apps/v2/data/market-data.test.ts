@@ -22,6 +22,14 @@ describe('BarsMarketData', () => {
     expect(market.lastBarBefore('MISSING', '2026-09-25')).toBeUndefined();
   });
 
+  it('reads at most the last count bars strictly before the trading date', () => {
+    expect(market.barsBefore('UP', '2026-09-25', 1).map((b) => b.rawClose)).toEqual([11]);
+    expect(market.barsBefore('UP', '2026-09-25', 5).map((b) => b.rawClose)).toEqual([10, 11]);
+    expect(market.barsBefore('UP', '2026-09-24', 5).map((b) => b.rawClose)).toEqual([10]);
+    expect(market.barsBefore('UP', '2026-09-25', 0)).toEqual([]);
+    expect(market.barsBefore('MISSING', '2026-09-25', 5)).toEqual([]);
+  });
+
   it('caches the year-start rate and quotes only US venues in dollars', () => {
     const first = market.gbpUsdAtYearStart(2026);
     expect(market.gbpUsdAtYearStart(2026)).toBe(first);

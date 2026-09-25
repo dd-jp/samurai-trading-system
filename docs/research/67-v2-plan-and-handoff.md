@@ -155,8 +155,14 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - dry-run cycles on four dates match the base commit row for row (160 decisions, 60 orders);
   - the smoke differs only in the renamed G18 probe;
   - a sleeve below its minimum gets no books and no call.
+- **PR 2 (the ADV cap):**
+  - The risk module computes each entry's 20-bar average daily notional (adjusted close × split-adjusted volume) from `MarketData.barsBefore`.
+  - A coverage invariant applies: 20 bars, the first no more than 35 calendar days before the entry and the last no more than 5. A window that fails it is refused `no_adv`, and the refusal is journalled to `v2_refusals`.
+  - Size is capped at `advShare` of that notional; the debate sleeve declares 1% (T7).
+  - The gate also sizes to zero (`no_allocation`) for a sleeve below its minimum.
+  - Seeded property tests over 2,000 cases check four things: whole non-negative shares, never above the ADV cap, never above 10% of equity by notional or the risk fraction at the stop, and zero below the minimum.
+  - The four dry-run dates are unchanged row for row. The largest entry is 1.9 × 10⁻⁴ of its cap.
 - Still to come:
-  - PR 2: the ADV cap and the sizing property tests.
   - PR 3: the backtest driver on the same cycle (trial counter, walk-forward, DSR/PBO, loss budget) and the impact term.
   - [#1791](https://github.com/dd-jp/samurai-trading-system/issues/1791) goes with PR 3.
 - Known limits, owned by later steps:

@@ -59,6 +59,7 @@ function staticProbes(): SmokeProbe[] {
     atrGbp: 0.25,
     stopAtrMultiple: DEBATE_SLEEVE_SPEC.sizing.stopAtrMultiple,
     sizeMultiplier: 1,
+    volumeCapShares: Number.POSITIVE_INFINITY,
   };
   const fullSize = positionSizeShares({ ...size, macroDay: false });
   const halfSize = positionSizeShares({ ...size, macroDay: true });
