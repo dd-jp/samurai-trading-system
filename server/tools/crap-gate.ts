@@ -530,6 +530,16 @@ export interface GateDeps {
   readonly write: (text: string) => void;
 }
 
+// Changed paths resolve against git's real top level and rows against `root`; a mismatch
+// (a symlinked checkout) would leave every non-strict function ungated and the gate green
+function changedUnder(root: string, changed: ChangedLines): ChangedLines {
+  const outside = [...changed.keys()].filter((path) => !path.startsWith(`${root}/`));
+  if (outside.length > 0) {
+    throw new Error(`changed paths outside ${root}: ${outside.join(', ')}`);
+  }
+  return changed;
+}
+
 const DEFAULT_DEPS: GateDeps = {
   runBiome: runBiomeAtThresholdOne,
   changedLines: gitChangedLines,
@@ -555,7 +565,9 @@ export function main(
     return 0;
   }
   const changed =
-    options.changedSince === undefined ? undefined : deps.changedLines(root, options.changedSince);
+    options.changedSince === undefined
+      ? undefined
+      : changedUnder(root, deps.changedLines(root, options.changedSince));
   const result = gateReport(evaluation, options.threshold, {
     root,
     strict: options.strict,

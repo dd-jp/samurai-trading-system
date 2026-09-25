@@ -344,6 +344,19 @@ describe('main', () => {
     return { code, out };
   }
 
+  it('throws when a changed path is outside the root it scores', () => {
+    const { root } = setup();
+    const changed: ChangedLines = new Map([['/elsewhere/server/a.ts', 'all']]);
+    expect(() =>
+      run(
+        ['--coverage', 'coverage.json', '--threshold', '7', '--changed-since', 'origin/main'],
+        { diagnostics: [diagnostic('server/a.ts', 5, 22, 8)] },
+        root,
+        changed,
+      ),
+    ).toThrow('changed paths outside');
+  });
+
   it('prints the distribution and exits 0 without a threshold', () => {
     const { root } = setup();
     const { code, out } = run(
