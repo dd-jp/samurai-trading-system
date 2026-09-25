@@ -7,7 +7,13 @@ import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { CycleReport } from './cycle.js';
 import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
-import { composeV2Root, exitCodeFor, llmKeysPresent, parseCliArgs } from './index.js';
+import {
+  composeV2Root,
+  exitCodeFor,
+  llmKeysPresent,
+  nousOptionsFrom,
+  parseCliArgs,
+} from './index.js';
 import type { ModelPin } from './models.js';
 import { NO_NEWS } from './news.js';
 import { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
@@ -283,6 +289,7 @@ describe('composeV2Root', () => {
     const fixtures = writeFixtures();
     directory = fixtures.directory;
     const urls = new Set<string>();
+    const authorizations = new Set<string>();
     const models: string[] = [];
     let inFlight = 0;
     let peak = 0;
@@ -290,6 +297,7 @@ describe('composeV2Root', () => {
       'fetch',
       vi.fn(async (url: string, init: RequestInit) => {
         urls.add(url);
+        authorizations.add((init.headers as Record<string, string>).authorization);
         inFlight += 1;
         peak = Math.max(peak, inFlight);
         await new Promise((resolve) => setTimeout(resolve, 15));
@@ -312,7 +320,7 @@ describe('composeV2Root', () => {
       dryRun: false,
       storePath: ':memory:',
       nousBaseUrl: 'https://nous.test/v1',
-      nousApiKey: 'present',
+      nousApiKey: 'nous-secret-key',
       alpacaClient: fakeAlpacaClient(new SimulatedClock(new Date())),
       newsSource: NO_NEWS,
       logger: { log: () => {} },
@@ -331,6 +339,7 @@ describe('composeV2Root', () => {
       ]);
       expect(peak).toBe(1);
       expect([...urls]).toEqual(['https://nous.test/v1/chat/completions']);
+      expect([...authorizations]).toEqual(['Bearer nous-secret-key']);
       expect(models.sort()).toEqual([
         'anthropic/claude-opus-5',
         'anthropic/claude-sonnet-5',
@@ -446,6 +455,12 @@ describe('composeV2Root', () => {
     expect(() => parseCliArgs(['--bogus'], '2026-09-25')).toThrow(/unknown argument/);
     expect(llmKeysPresent({ tradingDate: 'd', dryRun: true })).toBe(false);
     expect(
+      llmKeysPresent({ tradingDate: 'd', dryRun: true, nousBaseUrl: 'a', nousApiKey: ' ' }),
+    ).toBe(false);
+    expect(
+      llmKeysPresent({ tradingDate: 'd', dryRun: true, nousBaseUrl: ' ', nousApiKey: 'b' }),
+    ).toBe(false);
+    expect(
       llmKeysPresent({
         tradingDate: 'd',
         dryRun: true,
@@ -457,5 +472,40 @@ describe('composeV2Root', () => {
     expect(exitCodeFor(base)).toBe(0);
     expect(exitCodeFor({ ...base, submitted_orders: 1 })).toBe(1);
     expect(exitCodeFor({ ...base, submitted_orders: 1, dry_run: false })).toBe(0);
+  });
+});
+
+describe('nousOptionsFrom', () => {
+  it('reads the Nous env exactly as v1 does: trimmed, NOUS_DEBATE_API_KEY first, NOUS_API_KEY as fallback', () => {
+    expect(nousOptionsFrom({})).toEqual({ nousBaseUrl: undefined, nousApiKey: undefined });
+    expect(
+      nousOptionsFrom({ NOUS_BASE_URL: 'https://nous.test/v1', NOUS_DEBATE_API_KEY: '  ' }),
+    ).toEqual({
+      nousBaseUrl: undefined,
+      nousApiKey: undefined,
+    });
+    expect(nousOptionsFrom({ NOUS_BASE_URL: '  ', NOUS_DEBATE_API_KEY: 'k' })).toEqual({
+      nousBaseUrl: undefined,
+      nousApiKey: undefined,
+    });
+    expect(
+      nousOptionsFrom({
+        NOUS_BASE_URL: ' https://nous.test/v1 ',
+        NOUS_DEBATE_API_KEY: ' debate-key ',
+      }),
+    ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
+    expect(
+      nousOptionsFrom({ NOUS_BASE_URL: 'https://nous.test/v1', NOUS_API_KEY: 'shared' }),
+    ).toEqual({
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'shared',
+    });
+    expect(
+      nousOptionsFrom({
+        NOUS_BASE_URL: 'https://nous.test/v1',
+        NOUS_DEBATE_API_KEY: 'debate-key',
+        NOUS_API_KEY: 'shared',
+      }),
+    ).toEqual({ nousBaseUrl: 'https://nous.test/v1', nousApiKey: 'debate-key' });
   });
 });

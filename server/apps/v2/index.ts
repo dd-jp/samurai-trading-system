@@ -16,7 +16,7 @@ import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
-import { NousAccountInFlightGate } from '../../shared/llm/index.js';
+import { NousAccountInFlightGate, tryNousCredentials } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { PaperBooks } from './books.js';
@@ -81,7 +81,14 @@ export interface V2Root {
 }
 
 export function llmKeysPresent(options: V2RootOptions): boolean {
-  return (options.nousBaseUrl ?? '') !== '' && (options.nousApiKey ?? '') !== '';
+  return (options.nousBaseUrl ?? '').trim() !== '' && (options.nousApiKey ?? '').trim() !== '';
+}
+
+export function nousOptionsFrom(
+  env: NodeJS.ProcessEnv,
+): Pick<V2RootOptions, 'nousBaseUrl' | 'nousApiKey'> {
+  const credentials = tryNousCredentials('debate', env);
+  return { nousBaseUrl: credentials?.baseUrl, nousApiKey: credentials?.apiKey };
 }
 
 function nousTransportFactory(
@@ -302,8 +309,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
   const root = composeV2Root({
     tradingDate,
     dryRun,
-    nousBaseUrl: env.NOUS_BASE_URL,
-    nousApiKey: env.NOUS_DEBATE_API_KEY,
+    ...nousOptionsFrom(env),
     samuraiMode: env.SAMURAI_MODE,
     clock,
   });
