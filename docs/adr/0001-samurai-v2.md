@@ -116,7 +116,7 @@ Each item is open until David rules or the named ticket closes it. This ADR take
 11. **G15's CRAP gate** is built as `npm run crap` (PR #1776; threshold 7 as a ratchet since doc 66's 2026-09-25 ruling); the item closes when ticket [#1649](https://github.com/dd-jp/samurai-trading-system/issues/1649) is closed.
 12. **Paper start capital** £2,000 per book (**ruled 2026-09-25**, doc 66); live capital stays derived. **Capital share after momentum was dropped** (Session B (n)): open — whether the debate sleeve keeps Q14's 30% with the rest in cash, or takes more.
 13. **Debate universe beyond the S&P 500** (David's 2026-09-25 target: commodities, indices, ETFs, equities): route **closed 2026-09-25** (doc 66) — LSE ETF/ETC leg at Saxo on the 22 committed lines, Saxo paper adapter to build; the LSE leg's liquidity screen is a pre-declared trial.
-14. **Sonnet 5 dated pin** (ruled 2026-09-25, doc 66): open — awaiting David. Nous lists no dated Sonnet 5 `id`; the dated slug is served only on the `:batch` row and, in 4 of 18 listings, on the undated row, so the current undated-slug pin check refuses about one paper start in five.
+14. **Sonnet 5 dated pin** (David, 2026-09-25, doc 66: *"pin sonnet 5 dated, keep 15 floor repowide"*): open — awaiting David. Nous lists no dated Sonnet 5 `id`; the dated slug is served only on the `:batch` row and, in 4 of 18 listings, on the undated row, so the current undated-slug pin check refuses about one paper start in five.
 
 ## 6. Consequences
 
