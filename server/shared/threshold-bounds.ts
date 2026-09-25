@@ -29,8 +29,8 @@ export const GUARDED_THRESHOLD_BOUNDS = {
     source: 'engineering choice, derived from max_drawdown_pct (cross-spec-contracts.md)',
   },
   max_pbo: {
-    max: 0.05,
-    source: "CONTEXT.md 'Kill if PBO > 0.05'; feedback-loop-spec.md story 13",
+    max: 0.1,
+    source: "CONTEXT.md gate 'PBO ≤ 0.10'; doc 66 G9",
   },
   min_oos_sharpe: {
     min: 0.5,

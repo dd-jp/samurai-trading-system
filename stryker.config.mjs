@@ -9,6 +9,7 @@ export default {
     'server/pipeline/risk-manager/**/*.ts',
     'server/pipeline/verdict/**/*.ts',
     'server/pipeline/execution/**/*.ts',
+    'server/pipeline/momentum/**/*.ts',
     '!**/*.test.ts',
   ],
   tsconfigFile: '.stryker-tsconfig-unused.json',

@@ -33,7 +33,7 @@ North Star section.
 
 All of these are on `main`.
 
-## 3. Evidence that drove the rulings (paper DB `data/samurai-paper.sqlite`, read 2026-09-19)
+## 3. Evidence that drove the rulings (paper DB `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — gitignored local file -->, read 2026-09-19)
 
 - 267 `debate_log` rows: 209 neutral (mean conf 0.133), 42 bearish (mean 0.67), 16 bullish (**max 0.473** vs entry floor **0.55**). No debate-originated long ever fired. → D1 audit. *(Doc 71, 2026-09-21: 135 of the 267 rows are debates that never ran (confidence 0), so 132 ran: 74 neutral, 42 bearish, 16 bullish. The cap is not a formula defect.)*
 - Closed trades — control: long 37 (+£444, of which +£891 from MSTR/MARA/COIN, so ex-those ≈ −£447), short 42 (+£355, ex-those ≈ +£84). Live arm: 7 trades, 6 short, −£112. Sample far too small to conclude anything.
@@ -71,7 +71,7 @@ Do on a **new branch off fresh `origin/main`**, one PR, David merges.
 **Status 2026-09-22: done by Session A (ticket #1741, branch docs/v2-session-a).** Tag `v1-final` = `38ee499d`; the paper DB archive is at `~/samurai-archive/v1-final/samurai-paper.sqlite` (integrity_check ok, 267 `debate_log` rows, 86 `closed_trades`); `docs/v1-postmortem.md` and `docs/v2-vision.md` are the renamed files. The evidence per item is in that PR's body.
 
 1. `git tag v1-final origin/main && git push origin v1-final` => tag visible on origin.
-2. Archive `data/samurai-paper.sqlite` (main checkout) to the location ruled in G14, outside git, with `sqlite3 <db> ".backup '<dest>'"` — never `cp` (WAL mode) => the copy opens with `sqlite3` and its row counts match.
+2. Archive `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — gitignored local file --> (main checkout) to the location ruled in G14, outside git, with `sqlite3 <db> ".backup '<dest>'"` — never `cp` (WAL mode) => the copy opens with `sqlite3` and its row counts match.
 3. Per ruling G8: delete all of `docs/specs/*` (20 files) and `docs/adr/*` (21 files) => `docs/specs/` is empty and `docs/adr/` holds only the new v2 ADR (item 4). v2 specs are written in later steps, not in this PR. <!-- cite-exempt: historical — v1 record; the file was deleted per ruling G8 and is preserved at tag v1-final -->
 4. Write **`docs/adr/0001-samurai-v2.md`**: all doc-66 rulings as the decision; supersedes the entire v1 ADR set; restates the still-true v1 decisions one line each — money-math precision (old 0005), daily equity return series (old 0006), client/server layout + `contracts/` wire model (old 0012), dashboard hosting (old 0019). Old 0021 (dashboard v3 rail) is **not** restated: G13 rethinks the layout. Record every still-open item (§5a, and doc 66 "Still open") as "open — ticket #n", never as decided. Cite `v1-final` for the originals.
 5. Rewrite **`CONTEXT.md`** from scratch as the v2 glossary (sleeve, loss budget, gate, band, trial counter, arm 2, veto, venue-resting stop, research loop, promotion…). No implementation detail.
@@ -102,7 +102,7 @@ Then: walk-forward, trial counter from trial #1, DSR/PBO via `server/tools/backt
 
 ### Step 2 — D1 debate audit/fix (£0, no LLM)
 
-Offline replay of `debate_log` from `data/samurai-paper.sqlite` to find why bullish conviction caps at 0.473 < 0.55 (history: #625 stocks ceiling 0.5478, debate rounds moved conviction by zero, #683 mediator tie-break).
+Offline replay of `debate_log` from `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — gitignored local file --> to find why bullish conviction caps at 0.473 < 0.55 (history: #625 stocks ceiling 0.5478, debate rounds moved conviction by zero, #683 mediator tie-break).
 The floor is `conviction_floor` in `server/pipeline/trader/types.ts`. Also: explain doc 65's scoreboard defects (control-arm oversizing; `arm_comparison_samples` −18.8% vs `closed_trades` +£799 disagree in sign), and propose arm 2's entry rule for a daily swing horizon — the debate sleeve is judged against arm 2.
 Caveat: v1 debates ran on hourly bars over the 3× ETP/single-stock book; a "long setups are weak" verdict may not transfer to daily swing — say so in the report.
 => If formula bug: fix, re-replay, bullish must be able to clear the floor. If no bug and long setups genuinely weak: debate sleeve becomes short-only or veto-only (David decides).
@@ -249,7 +249,7 @@ The questions above are kept as asked. The answers are in `docs/research/69-v2-f
 - Paper DB lives in the **main checkout's** `data/`, not the worktree's (memory service-reads-worktree-store).
 - Doc numbers: 61–68 are taken. Pre-assigned to avoid parallel collisions: **69 = Session R (on main), 70 = Session B, 71 = Session C (on main)**; anything else takes the next free number on `origin/main`.
 - `Closes #N` / "closed #N" in a PR body auto-closes issues at merge — grep the body.
-- Merges are David's. No live money until the gate passes and the G12 approval request has run its course; paper only until then. Caveman-ultra style for chat replies to David; normal prose in docs/commits. Never commit secrets (Saxo live token is in `data/saxo-tokens/live.json`).
+- Merges are David's. No live money until the gate passes and the G12 approval request has run its course; paper only until then. Caveman-ultra style for chat replies to David; normal prose in docs/commits. Never commit secrets (Saxo live token is in `data/saxo-tokens/live.json` <!-- cite-exempt: untracked — gitignored local file -->).
 - Rate-limit hard stop rule applies.
 
 ## 7. Where this lives

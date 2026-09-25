@@ -1,0 +1,176 @@
+{
+  "venue": "us",
+  "startCapitalGbp": 1000,
+  "wholeShares": false,
+  "evaluatedFrom": "2017-01-31",
+  "evaluatedTo": "2026-09-23",
+  "evaluatedYears": 9.64271047227926,
+  "trialsCounted": 8,
+  "trials": [
+    {
+      "trial": 5,
+      "hash": "763abd04e6c056ea",
+      "sharpe": 0.6260401051932974,
+      "annualReturn": 0.160516364563408,
+      "annualVol": 0.32018523087680956,
+      "maxDrawdown": 0.4610801839966676,
+      "finalEquity": 5151.036862844403,
+      "fills": 1283,
+      "stopHits": 0,
+      "skippedFills": 0,
+      "zeroShareTargets": 0,
+      "totalCost": 18.042232079654887,
+      "custodyCost": 0,
+      "budgetDays": {
+        "half": 0,
+        "quarter": 0,
+        "halted": 0,
+        "capBlocked": 567
+      },
+      "foldSharpes": [
+        -0.10305339720705983, 1.0540135359718001, -0.605727484975499, 0.8458528728732158,
+        0.16696739558730359, -0.38785348250864693, 0.38674470768358826, -0.08410687600960383,
+        0.02333368762882356, 1.148746739721005, 0.6911799386861636, 2.0876397595383107,
+        2.0688102083389905, 0.4649012160527804, 1.3939868194831042, 1.515886626848671
+      ]
+    },
+    {
+      "trial": 6,
+      "hash": "fbb804dd7bd4f692",
+      "sharpe": 0.7310862551725147,
+      "annualReturn": 0.1697348541621544,
+      "annualVol": 0.2614275724550773,
+      "maxDrawdown": 0.35704580071272285,
+      "finalEquity": 5558.367550034962,
+      "fills": 1480,
+      "stopHits": 302,
+      "skippedFills": 0,
+      "zeroShareTargets": 0,
+      "totalCost": 23.241605100311133,
+      "custodyCost": 0,
+      "budgetDays": {
+        "half": 0,
+        "quarter": 0,
+        "halted": 0,
+        "capBlocked": 546
+      },
+      "foldSharpes": [
+        -0.34449819074276333, 1.0847062834518537, -0.3624797508786012, 1.3262734578859814,
+        0.35693378228653394, 1.0111972518521872, -0.3941700298029661, 0.08633442574263572,
+        0.45273994250966854, 0.5278444706283377, 0.5739005271188993, 2.1228567463686487,
+        1.6011938413475568, 0.7744045249166832, 1.0531159111427248, 1.4523355946237768
+      ]
+    },
+    {
+      "trial": 7,
+      "hash": "632bea230bdae475",
+      "sharpe": 0.6824203357223119,
+      "annualReturn": 0.16734464753551226,
+      "annualVol": 0.28764231532702683,
+      "maxDrawdown": 0.41198250730974695,
+      "finalEquity": 5450.0731540544475,
+      "fills": 1386,
+      "stopHits": 0,
+      "skippedFills": 78,
+      "zeroShareTargets": 0,
+      "totalCost": 32.55931955085072,
+      "custodyCost": 0,
+      "budgetDays": {
+        "half": 0,
+        "quarter": 0,
+        "halted": 0,
+        "capBlocked": 601
+      },
+      "foldSharpes": [
+        1.4005196579964765, 1.5126757809888915, -0.6835360701156458, 0.658630604757083,
+        -0.7626215911594586, 0.366608174878075, 1.475572787210437, 0.5429601977061442,
+        -0.7839614903580276, 1.9635295093244385, 0.9882029284270212, 0.5748570945344808,
+        0.28201934453474325, 0.15920479461579876, 2.367454344695693, 1.182433015171848
+      ]
+    },
+    {
+      "trial": 8,
+      "hash": "e121183fe35e6e88",
+      "sharpe": 0.5170855976152261,
+      "annualReturn": 0.09882010765430649,
+      "annualVol": 0.2368191596359115,
+      "maxDrawdown": 0.3936765948990659,
+      "finalEquity": 3045.691562192096,
+      "fills": 1727,
+      "stopHits": 416,
+      "skippedFills": 79,
+      "zeroShareTargets": 0,
+      "totalCost": 28.208158380827236,
+      "custodyCost": 0,
+      "budgetDays": {
+        "half": 0,
+        "quarter": 0,
+        "halted": 0,
+        "capBlocked": 454
+      },
+      "foldSharpes": [
+        0.9603820264103076, 1.1922713966439729, -0.5401593552732197, 1.4025048677225227,
+        -0.31328018650816797, 0.9221700510775848, 0.21500737023832645, -0.4682028560214177,
+        -0.558920817519155, 1.1387016256859004, -0.40577423733189383, 0.7970573168590589,
+        -0.09752214154540717, -0.2451164137357373, 2.596925262439272, 0.9863435638086333
+      ]
+    }
+  ],
+  "benchmark": {
+    "sharpe": 0.6878251337778399,
+    "annualReturn": 0.11246993774262526,
+    "annualVol": 0.1781436073474391,
+    "maxDrawdown": 0.3712489559447032,
+    "finalEquity": 3429.732358032254,
+    "fills": 47837,
+    "stopHits": 0,
+    "skippedFills": 403,
+    "zeroShareTargets": 0,
+    "totalCost": 2.5381977762839436,
+    "custodyCost": 0,
+    "budgetDays": {
+      "half": 0,
+      "quarter": 0,
+      "halted": 0,
+      "capBlocked": 458
+    },
+    "foldSharpes": [
+      1.3294413114861285, 1.1844154953822523, 0.2667043907620714, 0.8420995455516924,
+      1.1947483904825844, -0.06631531470168983, 3.09733060775766, 1.3691654533234083,
+      -1.050719593407117, 1.1984079186616057, -0.140817224607247, 1.359348823695191,
+      2.1516218182093865, 0.14952690845117367, 1.3861001361867862, 0.8808328744388445
+    ]
+  },
+  "selectedTrial": 6,
+  "walkForward": {
+    "from": "2017-09-07",
+    "to": "2026-09-23",
+    "selectedByFold": [7, 7, 7, 8, 8, 8, 8, 7, 6, 7, 7, 6, 6, 6, 6],
+    "strategySharpe": 0.5695594738776057,
+    "strategySharpeAfterDelistingHaircut": 0.5195594738776057,
+    "strategySharpeHaircut": 0.3117356843265634,
+    "benchmarkSharpe": 0.6770046994385529,
+    "strategyMaxDrawdown": 0.39890142577191245,
+    "benchmarkMaxDrawdown": 0.3712489559447033,
+    "beatsBenchmark": false
+  },
+  "deflatedSharpe": 0.7882269623449184,
+  "deflatedSharpeWalkForward": 0.5984374716458292,
+  "pbo": 0.8724941724941725,
+  "minbtl": {
+    "limit": 18,
+    "distinct_configs": 8,
+    "exceeded": false
+  },
+  "delistingHaircutApplied": 0.05,
+  "missingCoverageFraction": 0.003214445664395988,
+  "coverageStopFailed": false,
+  "capitalCeilingGbp": 2800.76112925522,
+  "checks": {
+    "beatsBenchmarkAfterHaircut": false,
+    "dsrAtLeast095": false,
+    "pboAtMost010": false,
+    "coverageWithinStop": true
+  },
+  "pass": false
+}
