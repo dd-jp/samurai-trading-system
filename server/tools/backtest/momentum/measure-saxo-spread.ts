@@ -97,6 +97,33 @@ export function parseSaxoSpreadCsv(text: string): Map<string, SaxoSpreadRow> {
   return rows;
 }
 
+export type SaxoQuoteApi = Pick<SaxoReadOnlyApi, 'infoPrices'>;
+
+export async function readQuoteBursts(
+  api: SaxoQuoteApi,
+  uics: readonly number[],
+  sleep: (ms: number) => Promise<void>,
+): Promise<InfoPriceQuote[][]> {
+  const bursts: InfoPriceQuote[][] = [];
+  for (let read = 0; read < BURST_READS; read++) {
+    if (read > 0) await sleep(BURST_SPACING_MS);
+    const quotes = await api.infoPrices(uics);
+    bursts.push(quotes);
+    console.log(
+      `read ${read + 1}/${BURST_READS}: ${quotes.length} quotes, delayed ${quotes[0]?.delayedByMinutes ?? '?'} min, state ${quotes[0]?.marketState ?? '?'}`,
+    );
+  }
+  return bursts;
+}
+
+export function spreadSummary(rows: readonly SaxoSpreadRow[], path: string): string {
+  const missing = LSE_MOMENTUM_LINES.filter((line) => !rows.some((row) => row.uic === line.uic));
+  return (
+    `wrote ${rows.length} rows to ${path}; p25 across lines median ${median(rows.map((row) => row.p25HalfSpreadBps)).toFixed(2)} bps` +
+    (missing.length > 0 ? `; no quote for ${missing.map((line) => line.tidm).join(', ')}` : '')
+  );
+}
+
 async function main(argv: readonly string[]): Promise<void> {
   const value = (flag: string): string | undefined => {
     const index = argv.indexOf(flag);
@@ -109,29 +136,17 @@ async function main(argv: readonly string[]): Promise<void> {
     resolveSaxoOAuthConfig('live', process.env).gatewayBaseUrl,
   );
   const uics = LSE_MOMENTUM_LINES.map((line) => line.uic);
-  const bursts: InfoPriceQuote[][] = [];
   const measuredAt = new Date().toISOString();
-  try {
-    for (let read = 0; read < BURST_READS; read++) {
-      if (read > 0) await new Promise((resolve) => setTimeout(resolve, BURST_SPACING_MS));
-      const quotes = await api.infoPrices(uics);
-      bursts.push(quotes);
-      console.log(
-        `read ${read + 1}/${BURST_READS}: ${quotes.length} quotes, delayed ${quotes[0]?.delayedByMinutes ?? '?'} min, state ${quotes[0]?.marketState ?? '?'}`,
-      );
-    }
-  } finally {
-    await tokens.stop();
-  }
+  const bursts = await readQuoteBursts(
+    api,
+    uics,
+    (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  ).finally(() => tokens.stop());
   const rows = burstRows(bursts, measuredAt);
   writeFileSync(DEFAULT_SAXO_SPREAD_PATH, saxoSpreadRowsToCsv(rows));
   if (rawPath !== undefined)
     writeFileSync(rawPath, `${JSON.stringify({ measuredAt, bursts }, null, 1)}\n`);
-  const missing = LSE_MOMENTUM_LINES.filter((line) => !rows.some((row) => row.uic === line.uic));
-  console.log(
-    `wrote ${rows.length} rows to ${DEFAULT_SAXO_SPREAD_PATH}; p25 across lines median ${median(rows.map((row) => row.p25HalfSpreadBps)).toFixed(2)} bps` +
-      (missing.length > 0 ? `; no quote for ${missing.map((line) => line.tidm).join(', ')}` : ''),
-  );
+  console.log(spreadSummary(rows, DEFAULT_SAXO_SPREAD_PATH));
 }
 
 if (isMainModule(import.meta.url)) {

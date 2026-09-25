@@ -80,7 +80,12 @@ export function sampleDates(window: DateRange, count: number): Date[] {
   return dates;
 }
 
-class AlpacaQuoteClient {
+export interface QuoteSource {
+  stockQuotes(symbol: string, start: Date, end: Date): Promise<AlpacaQuote[]>;
+  cryptoQuotes(symbol: string, start: Date, end: Date): Promise<AlpacaQuote[]>;
+}
+
+class AlpacaQuoteClient implements QuoteSource {
   constructor(
     private readonly keyId: string,
     private readonly secret: string,
@@ -143,15 +148,33 @@ function atrAt(bars: readonly Bar[], at: Date, timeframe: string): number | unde
   return value > 0 ? value : undefined;
 }
 
-interface SpreadCalibrationDeps {
+type BarStore = Pick<Stage2HistoricalStore, 'ingest' | 'bars'>;
+type AggregatesSource = Pick<FreeStackAggregatesClient, 'fetchAggregates'>;
+
+export interface SpreadCalibrationDeps {
   window?: DateRange;
   sampleDays?: number;
   dbPath?: string;
   print?: (line: string) => void;
+  env?: NodeJS.ProcessEnv;
+  store?: BarStore;
+  quotes?: QuoteSource;
+}
+
+function alpacaCredentials(
+  env: NodeJS.ProcessEnv,
+  caller: string,
+): { keyId: string; secret: string } {
+  const keyId = env.ALPACA_API_KEY;
+  const secret = env.ALPACA_API_SECRET;
+  if (keyId === undefined || secret === undefined) {
+    throw new Error(`${caller}: ALPACA_API_KEY and ALPACA_API_SECRET are required.`);
+  }
+  return { keyId, secret };
 }
 
 async function ingestSymbolBars(
-  store: Stage2HistoricalStore,
+  store: BarStore,
   symbols: readonly string[],
   window: DateRange,
 ): Promise<Map<string, Bar[]>> {
@@ -174,7 +197,7 @@ async function sampleDateSpread(
   symbol: string,
   isCrypto: boolean,
   date: Date,
-  quotes: AlpacaQuoteClient,
+  quotes: QuoteSource,
   print: (line: string) => void,
 ): Promise<DateSpreadSample | undefined> {
   const end = isCrypto
@@ -209,7 +232,7 @@ async function sampleSymbolSpreads(
   isCrypto: boolean,
   dates: readonly Date[],
   symbolBars: Bar[],
-  quotes: AlpacaQuoteClient,
+  quotes: QuoteSource,
   print: (line: string) => void,
 ): Promise<SymbolSpreadStats> {
   const dailySpreads: number[] = [];
@@ -279,20 +302,20 @@ function printFittedCoefficients(
   print(`  crypto: ${fitted.crypto.toFixed(4)}   (fixture: 0.5)`);
 }
 
-async function runSpreadCalibration(deps: SpreadCalibrationDeps = {}): Promise<SpreadCalibration> {
+export async function runSpreadCalibration(
+  deps: SpreadCalibrationDeps = {},
+): Promise<SpreadCalibration> {
   const print = deps.print ?? console.log;
   const window = deps.window ?? CALIBRATION_WINDOW;
-  const keyId = process.env.ALPACA_API_KEY;
-  const secret = process.env.ALPACA_API_SECRET;
-  if (keyId === undefined || secret === undefined) {
-    throw new Error('runSpreadCalibration: ALPACA_API_KEY and ALPACA_API_SECRET are required.');
-  }
+  const { keyId, secret } = alpacaCredentials(deps.env ?? process.env, 'runSpreadCalibration');
 
-  const store = new Stage2HistoricalStore(new HttpPolygonClient(), {
-    timeframe: DEFAULT_STAGE2_TIMEFRAME,
-    dbPath: deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
-  });
-  const quotes = new AlpacaQuoteClient(keyId, secret);
+  const store =
+    deps.store ??
+    new Stage2HistoricalStore(new HttpPolygonClient(), {
+      timeframe: DEFAULT_STAGE2_TIMEFRAME,
+      dbPath: deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
+    });
+  const quotes = deps.quotes ?? new AlpacaQuoteClient(keyId, secret);
 
   const allSymbols = [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS];
   const bars = await ingestSymbolBars(store, allSymbols, window);
@@ -372,14 +395,17 @@ interface IntradaySpreadCalibration {
   p90_stocks: number;
 }
 
-interface IntradaySpreadCalibrationDeps {
+export interface IntradaySpreadCalibrationDeps {
   window?: DateRange;
   sampleDays?: number;
   print?: (line: string) => void;
+  env?: NodeJS.ProcessEnv;
+  bars?: AggregatesSource;
+  quotes?: QuoteSource;
 }
 
 async function sessionBars(
-  client: FreeStackAggregatesClient,
+  client: AggregatesSource,
   symbol: string,
   window: DateRange,
 ): Promise<Bar[]> {
@@ -416,7 +442,7 @@ async function sampleBucketSpread(
   date: Date,
   bucket: (typeof SESSION_BUCKETS)[number],
   minuteBars: Bar[],
-  quotes: AlpacaQuoteClient,
+  quotes: QuoteSource,
   print: (line: string) => void,
 ): Promise<BucketSpreadSample | undefined> {
   const end = bucketSampleEnd(date, bucket.minutesAfterOpen);
@@ -443,8 +469,8 @@ async function sampleSessionForDate(
   symbol: string,
   date: Date,
   perBucket: Map<SessionBucketName, SessionBucketCell>,
-  bars: FreeStackAggregatesClient,
-  quotes: AlpacaQuoteClient,
+  bars: AggregatesSource,
+  quotes: QuoteSource,
   print: (line: string) => void,
 ): Promise<void> {
   const sessionOpen = usEquityOpenUtc(date);
@@ -559,21 +585,19 @@ function printIntradayFitted(
   );
 }
 
-async function runIntradaySpreadCalibration(
+export async function runIntradaySpreadCalibration(
   deps: IntradaySpreadCalibrationDeps = {},
 ): Promise<IntradaySpreadCalibration> {
   const print = deps.print ?? console.log;
   const window = deps.window ?? INTRADAY_CALIBRATION_WINDOW;
-  const keyId = process.env.ALPACA_API_KEY;
-  const secret = process.env.ALPACA_API_SECRET;
-  if (keyId === undefined || secret === undefined) {
-    throw new Error(
-      'runIntradaySpreadCalibration: ALPACA_API_KEY and ALPACA_API_SECRET are required.',
-    );
-  }
+  const { keyId, secret } = alpacaCredentials(
+    deps.env ?? process.env,
+    'runIntradaySpreadCalibration',
+  );
 
-  const bars = new FreeStackAggregatesClient({ alpacaKeyId: keyId, alpacaSecretKey: secret });
-  const quotes = new AlpacaQuoteClient(keyId, secret);
+  const bars =
+    deps.bars ?? new FreeStackAggregatesClient({ alpacaKeyId: keyId, alpacaSecretKey: secret });
+  const quotes = deps.quotes ?? new AlpacaQuoteClient(keyId, secret);
 
   const dates = sampleDates(window, deps.sampleDays ?? DEFAULT_SAMPLE_DAYS);
   print(

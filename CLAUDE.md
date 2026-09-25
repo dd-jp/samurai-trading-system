@@ -28,7 +28,7 @@ David has 15 years of professional experience — code does not need narration. 
 
 ## Lint Tooling Rule
 
-All existing oxlint, biome, crap and fallow rules stay intact and bind v2 from its first commit (doc 66 Tooling row, Q18a). "crap" is the CRAP score gate (complexity × coverage), ticket [#1649](https://github.com/dd-jp/samurai-trading-system/issues/1649) — to be built and made binding (G15). fallow, not knip, for dead code. Never loosen a rule to get a PR green; fix the code or record the finding.
+All existing oxlint, biome, crap and fallow rules stay intact and bind v2 from its first commit (doc 66 Tooling row, Q18a). "crap" is the CRAP score gate (complexity × coverage), ticket [#1649](https://github.com/dd-jp/samurai-trading-system/issues/1649) (G15): `npm run crap` runs full coverage, then `server/tools/crap-gate.ts` fails on any `server/` or `contracts/` function with CRAP above 15, on any complexity finding it cannot attribute to a covered function, and on a run that scores nothing. fallow, not knip, for dead code. Never loosen a rule to get a PR green; fix the code or record the finding.
 
 ## Definition of Done (every step, doc 67 §5)
 
@@ -54,7 +54,7 @@ When in doubt, grep existing docs before writing new ones. Backticked paths in t
 2. Tickets per build step (doc 67 §5), each with its kill line. Claim by assignment; never `Closes #n` / `closed #n` in a PR body or commit — use `Refs #n`.
 3. Specs only for the debate sleeve, the loss-budget machinery and the UI, written in the step that builds them.
 4. Every step: `what => verify / kill line`. Stop at any kill line or ambiguity and ask David; never decide what is his (the ADR's open list says what that is).
-5. Local gates green (lint, typecheck, test, smoke, fallow, citations) before the PR. Merge only under doc 66's merge-authority ruling: a general-purpose subagent review using `code-review-graph`, its comments fixed, and local green on the full tests, mutation testing, the CRAP gate, fallow and the doc 68 session eval. The CRAP gate (#1649) is built next; until it lands no code PR self-merges, and a docs-only PR merges after the review, its comments fixed, citations and the session eval. Otherwise open the PR and leave the merge to David.
+5. Local gates green (lint, typecheck, test, smoke, fallow, citations) before the PR. Merge only under doc 66's merge-authority ruling: a general-purpose subagent review using `code-review-graph`, its comments fixed, and local green on the full tests, mutation testing, the CRAP gate, fallow and the doc 68 session eval. A docs-only PR merges after the review, its comments fixed, citations and the session eval. Otherwise open the PR and leave the merge to David.
 6. Chat replies to David in caveman-ultra style; normal prose in docs and commits. Never commit secrets (`data/saxo-tokens/` <!-- cite-exempt: untracked — gitignored local file -->, `.env*`).
 
 ## Key Constraints

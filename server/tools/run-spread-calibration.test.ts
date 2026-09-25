@@ -1,8 +1,13 @@
+import type { Bar } from '../providers/market-data-service/index.js';
 import {
   bucketSampleEnd,
   CALIBRATION_WINDOW,
   INTRADAY_CALIBRATION_WINDOW,
+  type QuoteSource,
+  runIntradaySpreadCalibration,
+  runSpreadCalibration,
   SESSION_BUCKETS,
+  type SpreadCalibrationDeps,
   sampleDates,
   usEquityCloseUtc,
   usEquityOpenUtc,
@@ -194,5 +199,156 @@ describe('costConfigFromEnv', () => {
 
   it('treats an unrecognised value as the default rather than silently picking one', () => {
     expect(costConfigFromEnv({ SAMURAI_STAGE2_COST_CONFIG: 'cheap' })).toBe(CALIBRATED_COST_CONFIG);
+  });
+});
+
+const KEYS = { ALPACA_API_KEY: 'key', ALPACA_API_SECRET: 'secret' };
+const DAY_MS = 86_400_000;
+
+function quote(bp: number, ap: number) {
+  return { bp, ap, t: '2025-06-01T00:00:00Z' };
+}
+
+function dailyBars(symbol: string, from: Date, days: number): Bar[] {
+  return Array.from({ length: days }, (_, i) => {
+    const open_time = new Date(from.getTime() + i * DAY_MS);
+    return {
+      instrument: symbol,
+      source: 'test',
+      timeframe: '1d',
+      open_time,
+      close_time: new Date(open_time.getTime() + DAY_MS),
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 1,
+    };
+  });
+}
+
+describe('runSpreadCalibration', () => {
+  const window = {
+    start: new Date('2025-06-01T00:00:00Z'),
+    end: new Date('2025-06-05T00:00:00Z'),
+  };
+
+  it('refuses to run without Alpaca credentials', async () => {
+    await expect(runSpreadCalibration({ env: {}, print: () => {} })).rejects.toThrow(
+      'runSpreadCalibration: ALPACA_API_KEY and ALPACA_API_SECRET are required.',
+    );
+  });
+
+  it('measures spread in bps and over ATR, skipping failed, empty and ATR-less days', async () => {
+    const store: NonNullable<SpreadCalibrationDeps['store']> = {
+      ingest: vi.fn(async () => {}),
+      bars: vi.fn((symbol: string) =>
+        symbol === 'TSLA' ? [] : dailyBars(symbol, new Date('2025-04-01T00:00:00Z'), 60),
+      ),
+    };
+    const quotes: QuoteSource = {
+      stockQuotes: vi.fn(async (symbol: string) =>
+        symbol === 'QQQ' ? [] : [quote(99.9, 100.1), quote(0, 100.1), quote(100, 100)],
+      ),
+      cryptoQuotes: vi.fn(async (symbol: string) => {
+        if (symbol === 'ETH-USD') throw new Error('quotes down');
+        return [quote(99.9, 100.1)];
+      }),
+    };
+    const lines: string[] = [];
+
+    const result = await runSpreadCalibration({
+      env: KEYS,
+      window,
+      sampleDays: 2,
+      store,
+      quotes,
+      print: (line) => lines.push(line),
+    });
+
+    const bySymbol = new Map(result.symbols.map((s) => [s.symbol, s]));
+    expect(bySymbol.get('SPY')).toMatchObject({
+      asset_class: 'stocks',
+      days_sampled: 2,
+      quotes_sampled: 2,
+      days_with_atr: 2,
+    });
+    expect(bySymbol.get('SPY')?.median_spread_bps).toBeCloseTo(20);
+    expect(bySymbol.get('SPY')?.median_spread_over_atr).toBeCloseTo(0.1);
+    expect(bySymbol.get('QQQ')?.days_sampled).toBe(0);
+    expect(bySymbol.get('TSLA')).toMatchObject({ days_sampled: 2, days_with_atr: 0 });
+    expect(bySymbol.get('BTC-USD')?.asset_class).toBe('crypto');
+    expect(bySymbol.get('ETH-USD')?.days_sampled).toBe(0);
+    expect(result.fitted.stocks).toBeCloseTo(0.1);
+    expect(result.fitted.crypto).toBeCloseTo(0.1);
+
+    const cryptoEnd = vi.mocked(quotes.cryptoQuotes).mock.calls[0]?.[2];
+    expect(cryptoEnd?.toISOString()).toMatch(/T23:59:00\.000Z$/);
+    expect(lines.some((line) => line.includes('ETH-USD') && line.includes('quotes down'))).toBe(
+      true,
+    );
+    expect(lines).toContain('=== Fitted spreadVolatilityCoefficient (from medians) ===');
+  });
+});
+
+describe('runIntradaySpreadCalibration', () => {
+  const window = {
+    start: new Date('2025-06-02T00:00:00Z'),
+    end: new Date('2025-06-06T00:00:00Z'),
+  };
+
+  function minuteAggregates(range: { start: Date; end: Date }) {
+    const out = [];
+    for (let t = range.start.getTime(); t < range.end.getTime(); t += 60_000) {
+      out.push({ t, o: 100, h: 100.5, l: 99.5, c: 100, v: 1 });
+    }
+    return out;
+  }
+
+  it('refuses to run without Alpaca credentials', async () => {
+    await expect(
+      runIntradaySpreadCalibration({ env: { ALPACA_API_KEY: 'key' }, print: () => {} }),
+    ).rejects.toThrow(
+      'runIntradaySpreadCalibration: ALPACA_API_KEY and ALPACA_API_SECRET are required.',
+    );
+  });
+
+  it('pools per-bucket spread over minute ATR and skips failed or empty sessions', async () => {
+    const bars = {
+      fetchAggregates: vi.fn(async (symbol: string, range: { start: Date; end: Date }) => {
+        if (symbol === 'QQQ') throw new Error('bars down');
+        return symbol === 'AAPL' ? [] : minuteAggregates(range);
+      }),
+    };
+    const quotes: QuoteSource = {
+      stockQuotes: vi.fn(async (symbol: string) => {
+        if (symbol === 'TSLA') throw new Error('quotes down');
+        return [quote(99.9, 100.1)];
+      }),
+      cryptoQuotes: vi.fn(async () => []),
+    };
+    const lines: string[] = [];
+
+    const result = await runIntradaySpreadCalibration({
+      env: KEYS,
+      window,
+      sampleDays: 2,
+      bars,
+      quotes,
+      print: (line) => lines.push(line),
+    });
+
+    const spy = result.symbols.find((s) => s.symbol === 'SPY');
+    expect(spy?.samples).toBe(2 * SESSION_BUCKETS.length);
+    expect(spy?.median_spread_over_atr).toBeCloseTo(0.2);
+    expect(spy?.median_spread_bps).toBeCloseTo(20);
+    expect(spy?.buckets.map((b) => b.quotes_sampled)).toEqual([2, 2, 2]);
+    expect(result.symbols.find((s) => s.symbol === 'QQQ')?.samples).toBe(0);
+    expect(result.symbols.find((s) => s.symbol === 'AAPL')?.samples).toBe(0);
+    expect(result.symbols.find((s) => s.symbol === 'TSLA')?.samples).toBe(0);
+    expect(result.fitted_stocks).toBeCloseTo(0.2);
+    expect(result.timeframe).toBe('1m');
+    expect(lines.some((line) => line.includes('QQQ') && line.includes('bars down'))).toBe(true);
+    expect(lines.some((line) => line.includes('TSLA') && line.includes('quotes down'))).toBe(true);
   });
 });
