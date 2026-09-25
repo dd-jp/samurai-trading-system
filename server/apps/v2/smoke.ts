@@ -63,8 +63,13 @@ function staticProbes(): SmokeProbe[] {
       DECLARED_PARAMETERS.map((parameter) => parameter.name).join(', '),
     ),
     probe(
-      'momentum/no-veto shadow is declared but not instantiated',
-      BOOK_SPECS.some((spec) => spec.id === 'momentum/no-veto' && !spec.instantiated),
+      'G18 shadows and momentum/no-veto are declared but not instantiated',
+      [
+        'debate/no-sentiment',
+        'debate/no-social',
+        'debate/large-cap-only',
+        'momentum/no-veto',
+      ].every((id) => BOOK_SPECS.some((spec) => spec.id === id && !spec.instantiated)),
       BOOK_SPECS.map((spec) => `${spec.id}${spec.instantiated ? '' : ' (declared)'}`).join(', '),
     ),
   ];
@@ -74,8 +79,8 @@ function keylessPaperRunRefused(): boolean {
   try {
     composeV2Root({ tradingDate: SMOKE_TRADING_DATE, dryRun: false, storePath: ':memory:' });
     return false;
-  } catch {
-    return true;
+  } catch (error) {
+    return error instanceof Error && /without ANTHROPIC_API_KEY/.test(error.message);
   }
 }
 
@@ -117,8 +122,8 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         `${llmCalls} calls, ${spendRows.n} llm_spend rows`,
       ),
       probe(
-        'each debate book has its own paper book',
-        root.books.ids().length === 5,
+        'primary and no-macro-gate each have their own paper book',
+        root.books.ids().join(',') === 'debate/primary,debate/no-macro-gate',
         root.books.ids().join(', '),
       ),
       probe(
@@ -129,14 +134,19 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         report.refusals.join(' | '),
       ),
       probe(
-        'no entry is attempted while risk fraction and target are unset',
-        report.entries === 0,
-        `entries=${report.entries}`,
+        'entries reach the dry-run broker and every one is refused',
+        report.entries > 0 && report.dry_run_refusals > 0 && report.rejected_orders === 0,
+        `entries=${report.entries} refused=${report.dry_run_refusals} simulated=${report.simulated_orders}`,
       ),
       probe(
-        'a paper run without LLM keys is refused',
+        'simulated fills reach the books',
+        report.fills === report.entries && report.books.every((book) => book.positions > 0),
+        report.books.map((book) => `${book.book_id}: ${book.positions} positions`).join(', '),
+      ),
+      probe(
+        'a paper run without LLM keys is refused for that reason',
         keylessPaperRunRefused(),
-        'composeV2Root threw',
+        'composeV2Root threw /without ANTHROPIC_API_KEY/',
       ),
     );
   } finally {

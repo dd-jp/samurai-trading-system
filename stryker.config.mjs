@@ -10,6 +10,8 @@ export default {
     'server/pipeline/verdict/**/*.ts',
     'server/pipeline/execution/**/*.ts',
     'server/pipeline/momentum/**/*.ts',
+    'server/apps/v2/**/*.ts',
+    '!server/apps/v2/smoke.ts',
     '!**/*.test.ts',
   ],
   tsconfigFile: '.stryker-tsconfig-unused.json',

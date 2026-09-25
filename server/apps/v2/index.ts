@@ -6,8 +6,14 @@ import type {
   SpendCap,
 } from '../../pipeline/debate-engine/index.js';
 import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
-import type { BrokerAdapter } from '../../pipeline/execution/index.js';
-import { AlpacaBrokerAdapter, AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
+import type { AlpacaBrokerClient, BrokerAdapter } from '../../pipeline/execution/index.js';
+import {
+  AlpacaBrokerAdapter,
+  AlpacaHttpBrokerClient,
+  SqliteBrokerStateStore,
+} from '../../pipeline/execution/index.js';
+import type { DailyBar } from '../../pipeline/momentum/index.js';
+import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate } from '../../shared/llm/index.js';
@@ -21,14 +27,19 @@ import { DryRunBrokerAdapter } from './dry-run-broker.js';
 import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
 import { Journal } from './journal.js';
 import { buildLlmPanel, type LlmPanel } from './llm-panel.js';
+import type { FetchLike } from './llm-transport.js';
 import type { ModelPin } from './models.js';
 import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
+import { AlpacaNewsSource, type NewsSource, NO_NEWS } from './news.js';
 import { OpenRouterHttpTransport } from './openrouter-transport.js';
-import { DEBATE_RISK_FRACTION, DEBATE_TARGET_ATR_MULTIPLE, isSet } from './parameters.js';
-import { SaxoPaperBrokerAdapter } from './saxo-paper-adapter.js';
+import {
+  DEBATE_RISK_FRACTION,
+  DEBATE_TARGET_ATR_MULTIPLE,
+  DEBATE_TIME_STOP_TRADING_DAYS,
+} from './parameters.js';
 import { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
 import { SleeveRegistry } from './sleeve.js';
-import { type BarsSource, CsvBarsSource, currentConstituents } from './universe.js';
+import { type BarsSource, barsBefore, CsvBarsSource, currentConstituents } from './universe.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
@@ -56,7 +67,9 @@ export interface V2RootOptions {
   readonly bars?: BarsSource | undefined;
   readonly constituents?: ((tradingDate: string) => readonly string[]) | undefined;
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
-  readonly brokers?: Partial<Record<'alpaca' | 'saxo', BrokerAdapter>> | undefined;
+  readonly fetchImpl?: FetchLike | undefined;
+  readonly alpacaClient?: AlpacaBrokerClient | undefined;
+  readonly newsSource?: NewsSource | undefined;
 }
 
 export interface V2Root {
@@ -94,13 +107,22 @@ function httpTransportFactory(options: V2RootOptions): (pin: ModelPin) => Anthro
           pin,
           gate: gates.anthropic,
           logger: options.logger,
+          fetchImpl: options.fetchImpl,
         })
       : new OpenRouterHttpTransport({
           apiKey: options.openrouterApiKey ?? '',
           pin,
           gate: gates.openrouter,
           logger: options.logger,
+          fetchImpl: options.fetchImpl,
         });
+}
+
+function refuseKeylessPaperRun(options: V2RootOptions): void {
+  if (options.dryRun || options.transportFor !== undefined || llmKeysPresent(options)) return;
+  throw new Error(
+    'v2 root refuses a paper run without ANTHROPIC_API_KEY and OPENROUTER_API_KEY: scripted verdicts never reach a broker',
+  );
 }
 
 function transportsFor(
@@ -108,14 +130,7 @@ function transportsFor(
   scripted: ScriptedTransport[],
 ): (pin: ModelPin) => AnthropicMessagesClient {
   if (options.transportFor !== undefined) return options.transportFor;
-  if (!options.dryRun) {
-    if (!llmKeysPresent(options)) {
-      throw new Error(
-        'v2 root refuses a paper run without ANTHROPIC_API_KEY and OPENROUTER_API_KEY: scripted verdicts never reach a broker',
-      );
-    }
-    return httpTransportFactory(options);
-  }
+  if (!options.dryRun) return httpTransportFactory(options);
   options.logger?.log({
     trace_id: 'v2-root',
     stage: 'v2',
@@ -139,34 +154,45 @@ function halfSpreadLookup(path: string): (instrument: string) => number {
   return (instrument) => spreads.get(instrument) ?? DEFAULT_HALF_SPREAD_BPS;
 }
 
-function brokersFor(
+function alpacaPaperBroker(
   options: V2RootOptions,
+  db: StoreHandle,
   clock: Clock,
   logger: Logger,
-): Record<'alpaca' | 'saxo', BrokerAdapter> {
-  if (options.dryRun) return { alpaca: new DryRunBrokerAdapter(), saxo: new DryRunBrokerAdapter() };
-  const saxo =
-    options.brokers?.saxo ??
-    new SaxoPaperBrokerAdapter({
-      clock,
-      halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
-    });
-  const alpaca =
-    options.brokers?.alpaca ??
-    new AlpacaBrokerAdapter({
-      client: new AlpacaHttpBrokerClient({ environment: 'paper' }),
-      unpricedFillAlerts: {
-        postUnpricedFillAlert: (alert) =>
-          Promise.resolve(logAlert(logger, 'v2_unpriced_fill', alert)),
-      },
-      ocoDoubleFillAlerts: {
-        postOcoDoubleFillAlert: (alert) =>
-          Promise.resolve(logAlert(logger, 'v2_oco_double_fill', alert)),
-      },
-      clock,
-      logger,
-    });
-  return { alpaca, saxo };
+): BrokerAdapter {
+  return new AlpacaBrokerAdapter({
+    client: options.alpacaClient ?? new AlpacaHttpBrokerClient({ environment: 'paper' }),
+    state: new SqliteBrokerStateStore(db),
+    unpricedFillAlerts: {
+      postUnpricedFillAlert: (alert) =>
+        Promise.resolve(logAlert(logger, 'v2_unpriced_fill', alert)),
+    },
+    ocoDoubleFillAlerts: {
+      postOcoDoubleFillAlert: (alert) =>
+        Promise.resolve(logAlert(logger, 'v2_oco_double_fill', alert)),
+    },
+    clock,
+    logger,
+  });
+}
+
+function lastBarBefore(
+  bars: BarsSource,
+): (instrument: string, tradingDate: string) => DailyBar | undefined {
+  return (instrument, tradingDate) => {
+    const series = bars.load(instrument);
+    return series === undefined ? undefined : barsBefore(series, tradingDate).at(-1);
+  };
+}
+
+function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => readonly string[] {
+  const csv = readFileSync(options.constituentsPath ?? CONSTITUENTS_PATH, 'utf8');
+  return (tradingDate) => currentConstituents(csv, tradingDate);
+}
+
+function newsSourceFor(options: V2RootOptions): NewsSource {
+  if (options.newsSource !== undefined) return options.newsSource;
+  return options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient());
 }
 
 function logAlert(logger: Logger, event: string, alert: unknown): void {
@@ -190,8 +216,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   if (options.samuraiMode === 'live') {
     throw new Error('v2 root refuses SAMURAI_MODE=live: nothing has passed the gate (doc 66 Q10)');
   }
+  refuseKeylessPaperRun(options);
   const clock = options.clock ?? new SystemClock();
   const logger = options.logger ?? STDERR_LOGGER;
+  const news = newsSourceFor(options);
   const db = openSharedStore(
     options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH),
   );
@@ -206,20 +234,29 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     logger,
   });
   const bars = options.bars ?? new CsvBarsSource(options.barsDirectory ?? BARS_DIRECTORY);
-  const constituentsCsv =
-    options.constituents === undefined
-      ? readFileSync(options.constituentsPath ?? CONSTITUENTS_PATH, 'utf8')
-      : '';
-  const constituents =
-    options.constituents ?? ((date: string) => currentConstituents(constituentsCsv, date));
+  const bar = lastBarBefore(bars);
+  const constituents = options.constituents ?? constituentsFromCsv(options);
   const fx = parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8'));
   const books = new PaperBooks(v2Store, clock);
   const journal = new Journal(v2Store, clock);
   const registry = new SleeveRegistry();
   registry.register(
-    createDebateSleeve({ panel, bars, constituents, venueFor: () => 'alpaca', clock, logger }),
+    createDebateSleeve({
+      panel,
+      bars,
+      constituents,
+      venueFor: () => 'alpaca',
+      news,
+      clock,
+      logger,
+    }),
   );
-  const brokers = brokersFor(options, clock, logger);
+  const simulatedBroker = new DryRunBrokerAdapter({
+    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+    markPrice: (instrument) => bar(instrument, options.tradingDate)?.rawClose,
+    clock,
+  });
+  const brokers = options.dryRun ? {} : { alpaca: alpacaPaperBroker(options, db, clock, logger) };
   return {
     registry,
     books,
@@ -234,11 +271,12 @@ export function composeV2Root(options: V2RootOptions): V2Root {
           books,
           journal,
           brokers,
+          simulatedBroker,
+          bar,
           gbpUsdAtYearStart: yearStartGbpUsd(fx, Number(options.tradingDate.slice(0, 4))),
-          riskFraction: isSet(DEBATE_RISK_FRACTION) ? DEBATE_RISK_FRACTION.value : undefined,
-          targetAtrMultiple: isSet(DEBATE_TARGET_ATR_MULTIPLE)
-            ? DEBATE_TARGET_ATR_MULTIPLE.value
-            : undefined,
+          riskFraction: DEBATE_RISK_FRACTION,
+          targetAtrMultiple: DEBATE_TARGET_ATR_MULTIPLE,
+          timeStopTradingDays: DEBATE_TIME_STOP_TRADING_DAYS,
           clock,
           dryRun: options.dryRun,
           logger,
@@ -268,6 +306,10 @@ export function parseCliArgs(
   return { dryRun, tradingDate };
 }
 
+export function exitCodeFor(report: CycleReport): number {
+  return report.dry_run && report.submitted_orders > 0 ? 1 : 0;
+}
+
 export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
   const clock = new SystemClock();
   const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
@@ -282,7 +324,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
   try {
     const report = await root.run();
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    return report.submitted_orders > 0 && dryRun ? 1 : 0;
+    return exitCodeFor(report);
   } finally {
     root.close();
   }
