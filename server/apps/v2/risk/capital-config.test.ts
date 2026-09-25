@@ -102,13 +102,24 @@ describe('CapitalConfigStore', () => {
       /append-only/,
     );
     expect(() => db.prepare('DELETE FROM v2_capital_config').run()).toThrow(/append-only/);
-    expect(() =>
+    const insert = (year: number, from: string, start: number, cap: number) => () =>
       db
         .prepare(
           `INSERT INTO v2_capital_config (year, effective_from, start_capital_gbp, loss_cap_gbp, recorded_at)
-           VALUES (2027, '2026-12-31', 1, 1, 'x')`,
+           VALUES (?, ?, ?, ?, 'x')`,
         )
-        .run(),
-    ).toThrow(/CHECK/);
+        .run(year, from, start, cap);
+    expect(insert(2026, '2027-01-02', 2_000, 1_000)).toThrow(/CHECK/);
+    expect(insert(2027, '2027-02-01', 2_000, 1_500)).toThrow(/a year is set from 1 January/);
+    for (const [from, start, cap] of [
+      ['2026-10-05', 2_000, 9_999],
+      ['2026-10-05', 2_000, 1_500],
+      ['2026-10-05', 3_000, 1_000],
+      ['2026-01-01', 2_000, 1_000],
+    ] as const) {
+      expect(insert(2026, from, start, cap)).toThrow(/mid-year the cap may only be tightened/);
+    }
+    insert(2026, '2026-10-05', 2_000, 1_000)();
+    expect(capital.inForce('2026-10-05')?.lossCapGbp).toBe(1_000);
   });
 });

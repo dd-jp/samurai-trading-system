@@ -824,9 +824,9 @@ describe('runCycle', () => {
     }
     deps.setDecisions([{ ...longAapl, instrument: 'NVDA' }]);
     const newYear = await runCycle(deps, '2027-01-04');
-    expect(newYear.entries).toBe(0);
+    expect(newYear).toMatchObject({ entries: 0, decisions: 0 });
     expect(newYear.refusals.some((refusal) => refusal.includes('no capital config'))).toBe(true);
-    expect(sizeShares(deps, 'debate/primary', '2027-01-04', 'NVDA')).toBe(0);
+    expect(sizeShares(deps, 'debate/primary', '2027-01-04', 'NVDA')).toBeUndefined();
     expect(deps.books.position('debate/primary', 'AAPL')?.marksHeld).toBe(10);
     const timeStop = await runCycle(deps, '2027-01-05');
     expect(timeStop).toMatchObject({ entries: 0, exits: 2 });

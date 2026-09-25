@@ -68,11 +68,9 @@ function positionFromRow(row: PositionRow): Position {
 }
 
 function averagePriceGbp(held: Position, fill: BookFill, qty: number): number {
-  const sameDirection =
-    Math.sign(held.qty) === Math.sign(qty) && Math.abs(qty) > Math.abs(held.qty);
-  return sameDirection
-    ? (held.avgPriceGbp * Math.abs(held.qty) + fill.priceGbp * fill.qty) / Math.abs(qty)
-    : held.avgPriceGbp;
+  if (Math.sign(held.qty) !== Math.sign(qty)) return fill.priceGbp;
+  if (Math.abs(qty) <= Math.abs(held.qty)) return held.avgPriceGbp;
+  return (held.avgPriceGbp * Math.abs(held.qty) + fill.priceGbp * fill.qty) / Math.abs(qty);
 }
 
 function rollYear(
@@ -145,7 +143,9 @@ export class PaperBooks implements BookLedger {
   #capitalOn(tradingDate: string): CapitalYear {
     const capital = this.capital.lastKnown(tradingDate);
     if (capital === undefined) {
-      throw new Error(`PaperBooks: no capital config on or before ${tradingDate}`);
+      throw new Error(
+        `PaperBooks: no capital config on or before ${tradingDate}; set one with npm run v2:capital (doc 66 D8)`,
+      );
     }
     return capital;
   }

@@ -5,7 +5,8 @@ import { SystemClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { V2_STORE_PATH } from './index.js';
-import { CapitalConfigStore } from './risk/index.js';
+import { Journal } from './journal/index.js';
+import { CapitalConfigError, CapitalConfigStore } from './risk/index.js';
 
 export type CapitalCommand =
   | {
@@ -75,7 +76,27 @@ export function applyCapitalCommand(
   db: StoreHandle,
   clock: Clock,
 ): CapitalYear | undefined {
-  const capital = new CapitalConfigStore(guardedStore(db, 'v2'), clock);
+  const store = guardedStore(db, 'v2');
+  try {
+    return runCapitalCommand(command, new CapitalConfigStore(store, clock));
+  } catch (error) {
+    if (error instanceof CapitalConfigError) {
+      new Journal(store, clock).recordRefusal({
+        trading_date: clock.now().toISOString().slice(0, 10),
+        scope: 'capital',
+        parameter: `CAPITAL_CONFIG:${command.kind}`,
+        ticket: 'docs/research/66-v2-grill-decisions.md D8',
+        message: error.message,
+      });
+    }
+    throw error;
+  }
+}
+
+function runCapitalCommand(
+  command: CapitalCommand,
+  capital: CapitalConfigStore,
+): CapitalYear | undefined {
   if (command.kind === 'set')
     return capital.setYear(command.year, command.startGbp, command.capGbp);
   if (command.kind === 'tighten') return capital.tighten(command.from, command.capGbp);

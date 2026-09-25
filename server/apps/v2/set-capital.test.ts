@@ -55,6 +55,16 @@ describe('applyCapitalCommand', () => {
       lossCapGbp: 1_000,
     });
     expect(applyCapitalCommand({ kind: 'show', date: '2027-01-04' }, db, clock)).toBeUndefined();
+    expect(
+      db.prepare('SELECT trading_date, scope, parameter, message FROM v2_refusals').all(),
+    ).toEqual([
+      {
+        trading_date: '2026-09-25',
+        scope: 'capital',
+        parameter: 'CAPITAL_CONFIG:tighten',
+        message: expect.stringMatching(/loosening mid-year is refused/),
+      },
+    ]);
     db.close();
   });
 });

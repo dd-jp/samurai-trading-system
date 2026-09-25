@@ -15,3 +15,7 @@ export function mintApproval(fields: ApprovedBracketEntry | ApprovedFlatten): Ri
 export function isRiskApproved(order: object): boolean {
   return minted.has(order);
 }
+
+export function consumeApproval(order: object): boolean {
+  return minted.delete(order);
+}

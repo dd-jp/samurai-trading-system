@@ -9,7 +9,7 @@ import type {
 } from '../../../../contracts/index.js';
 import type { BrokerAck, BrokerAdapter } from '../../../pipeline/execution/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
-import { isRiskApproved } from '../risk/index.js';
+import { consumeApproval } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
 
 export interface ExecutorDeps {
@@ -63,7 +63,7 @@ export class V2OrderExecutor implements OrderExecutor {
   }
 
   async submit(order: RiskApprovedOrder): Promise<Submission> {
-    if (!isRiskApproved(order)) throw new UnapprovedOrderError(order.clientOrderId);
+    if (!consumeApproval(order)) throw new UnapprovedOrderError(order.clientOrderId);
     const { approvalId } = order;
     const broker = this.#brokerFor(order);
     if (broker === undefined) {

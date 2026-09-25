@@ -141,6 +141,17 @@ describe('V2RiskGate', () => {
     });
   });
 
+  it("starts a new year at full size but keeps the previous close's daily-cap block", () => {
+    const state = { ytdLossGbp: 1_400, sizeMultiplier: 0.25 as const };
+    const nextYear = { ...year, year: 2027, effectiveFrom: '2027-01-01' };
+    expect(gate({ state, capital: nextYear }).approveEntry(request()).size).toBe(6);
+    const blocked = gate({
+      state: { ...state, entriesBlockedAtNextFill: true },
+      capital: nextYear,
+    });
+    expect(blocked.approveEntry(request()).size).toBe(0);
+  });
+
   it('refuses a stop on the wrong side of the entry and a target at or below zero', () => {
     for (const stop_price of [20, 20.4]) {
       expect(gate().approveEntry(request({ decision: { ...decision, stop_price } }))).toMatchObject(

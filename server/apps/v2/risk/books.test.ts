@@ -100,6 +100,18 @@ describe('PaperBooks', () => {
     expect(() => books.applyFill('nope', fill())).toThrow(/unknown book/);
   });
 
+  it('prices a position that flips through zero at the flipping fill', () => {
+    const books = openBooks(seededStore());
+    books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 100 }));
+    expect(
+      books.applyFill('debate/primary', fill({ side: 'sell', qty: 5, priceGbp: 120 })),
+    ).toMatchObject({ qty: -3, avgPriceGbp: 120 });
+    expect(books.applyFill('debate/primary', fill({ qty: 1, priceGbp: 110 }))).toMatchObject({
+      qty: -2,
+      avgPriceGbp: 120,
+    });
+  });
+
   it('values positions at the mark, falls back to the entry price, and holds shorts as negative qty', () => {
     const db = seededStore();
     const books = openBooks(db);

@@ -137,6 +137,14 @@ describe('V2OrderExecutor', () => {
     expect(alpaca.submitFlatten).not.toHaveBeenCalled();
   });
 
+  it('spends an approval on its first submission', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const once = entry();
+    expect((await paper.submit(once)).outcome).toBe('submitted');
+    await expect(paper.submit(once)).rejects.toThrow(UnapprovedOrderError);
+    expect(alpaca.submitBracket).toHaveBeenCalledTimes(1);
+  });
+
   it('routes the primary to its venue broker and every shadow to the simulated broker', async () => {
     const { executor: paper, alpaca, simulated } = executor(false);
     expect(paper.simulates({ bookVariant: 'primary', venue: 'alpaca' })).toBe(false);

@@ -468,6 +468,8 @@ function skippedReport(deps: CycleDeps, tradingDate: string, macro: MacroGateVer
   };
 }
 
+const NO_SLEEVE_OUTPUT = { decisions: [], refusals: [] } as const;
+
 export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<CycleReport> {
   const macro = macroGate(tradingDate);
   const report = deps.books.isMarked(tradingDate)
@@ -490,16 +492,15 @@ async function runUnmarked(
   macro: MacroGateVerdict,
 ): Promise<CycleReport> {
   const refusals = cycleRefusals(deps, tradingDate, macro);
+  const entriesRefused = deps.risk.capitalRefusal(tradingDate) !== undefined;
   const cycle = new Cycle(deps, tradingDate, macro);
   await cycle.sweepFills();
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {
-    const output = await sleeve.decide({
-      tradingDate,
-      macroDay: macro.macroDay,
-      dryRun: deps.dryRun,
-    });
+    const output = entriesRefused
+      ? NO_SLEEVE_OUTPUT
+      : await sleeve.decide({ tradingDate, macroDay: macro.macroDay, dryRun: deps.dryRun });
     decisionCount += output.decisions.length;
     for (const refusal of output.refusals) {
       deps.journal.recordRefusal({ trading_date: tradingDate, ...refusal });

@@ -110,12 +110,11 @@ export class V2RiskGate implements RiskGate {
   }
 
   #multiplier(bookId: string, capital: CapitalYear): number {
-    const previous = this.deps.books.lastDay(bookId)?.state;
+    const previous = this.deps.books.lastDay(bookId);
     if (previous === undefined) return 1;
-    if (previous.entriesBlockedAtNextFill) return 0;
-    return Math.min(
-      previous.sizeMultiplier,
-      sizeMultiplierFor(previous.ytdLossGbp, capital.lossCapGbp),
-    );
+    const { state } = previous;
+    if (state.entriesBlockedAtNextFill) return 0;
+    if (Number(previous.tradingDate.slice(0, 4)) !== capital.year) return 1;
+    return Math.min(state.sizeMultiplier, sizeMultiplierFor(state.ytdLossGbp, capital.lossCapGbp));
   }
 }
