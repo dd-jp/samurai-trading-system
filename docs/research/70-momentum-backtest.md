@@ -474,7 +474,7 @@ What the numbers say, without spin:
 - **The loss budget binds at £5,000 and never at £1,000.** At £1,000 no year's loss reached −£500 (the equity curve in the verdict JSON never falls £500 below a 1 January mark); at £5,000 trial #5 halted for 201 days of one year (−£1,500 reached, ruling (j) halt latched to 31 December) and #6–#8 spent 76–384 days at half size; #7 fractional halted for 203 days. The daily 1% cap blocked entries on 216–601 sessions per trial across passes.
 - **Stops (trials 6 and 8, entry − 2 × ATR(20), never moved up) fired 184–404 times** per pass and reduced max drawdown (e.g. 25.0% vs 47.5% for #6 vs #5 at £5,000 whole) but not enough to change the verdict; the with-stop trials do not clear any gate either.
 
-**Per ruling (e) the US momentum sub-book is dropped from the momentum sleeve as specced.** What David may want to decide (not decided here): whether Grid A's US arm (§2.9) gets a second, pre-declared grid counted as trials 9–N against MinBTL 18, or whether the sleeve proceeds LSE-only if the LSE sub-book passes.
+**Per ruling (e) the US momentum sub-book is dropped from the momentum sleeve as specced.** The open question here — a second pre-declared US grid (trials 9–N against MinBTL 18) or LSE-only — was **ruled 2026-09-25 (doc 66, Session B (m)): LSE-only.** No second US grid; the momentum sleeve is the LSE sub-book alone if it passes; if it fails too, the momentum sleeve is dead and v2 is debate-only pending a further ruling.
 
 ### 9.2 LSE sub-book: not run — awaiting bars (STOP branch route)
 
