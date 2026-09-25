@@ -113,8 +113,10 @@ export class V2RiskGate implements RiskGate {
     const previous = this.deps.books.lastDay(bookId);
     if (previous === undefined) return 1;
     const { state } = previous;
+    if (Number(previous.tradingDate.slice(0, 4)) !== capital.year) {
+      return state.entriesBlockedAtNextFill && !state.halted ? 0 : 1;
+    }
     if (state.entriesBlockedAtNextFill) return 0;
-    if (Number(previous.tradingDate.slice(0, 4)) !== capital.year) return 1;
     return Math.min(state.sizeMultiplier, sizeMultiplierFor(state.ytdLossGbp, capital.lossCapGbp));
   }
 }

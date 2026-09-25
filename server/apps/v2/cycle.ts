@@ -492,7 +492,7 @@ async function runUnmarked(
   macro: MacroGateVerdict,
 ): Promise<CycleReport> {
   const refusals = cycleRefusals(deps, tradingDate, macro);
-  const entriesRefused = deps.risk.capitalRefusal(tradingDate) !== undefined;
+  const entriesRefused = !deps.dryRun && deps.risk.capitalRefusal(tradingDate) !== undefined;
   const cycle = new Cycle(deps, tradingDate, macro);
   await cycle.sweepFills();
   const books: BookSpec[] = [];

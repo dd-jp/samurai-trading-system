@@ -150,6 +150,11 @@ describe('V2RiskGate', () => {
       capital: nextYear,
     });
     expect(blocked.approveEntry(request()).size).toBe(0);
+    const halted = gate({
+      state: { ...state, sizeMultiplier: 0, halted: true, entriesBlockedAtNextFill: true },
+      capital: nextYear,
+    });
+    expect(halted.approveEntry(request()).size).toBe(6);
   });
 
   it('refuses a stop on the wrong side of the entry and a target at or below zero', () => {

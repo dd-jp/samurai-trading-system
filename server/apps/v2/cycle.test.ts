@@ -806,6 +806,15 @@ describe('runCycle', () => {
     expect(resumed.entries).toBe(2);
   });
 
+  it('runs no paper debate while no capital config is in force', async () => {
+    const report = await runCycle(harness([longAapl], false, undefined, []), '2026-09-25');
+    expect(report).toMatchObject({ decisions: 0, entries: 0, submitted_orders: 0 });
+    expect(report.refusals).toContainEqual(
+      expect.stringContaining('no capital config in force on 2026-09-25'),
+    );
+    expect(report.refusals).not.toContain('P: unset');
+  });
+
   it('refuses entries in a year with no capital config yet still time-stops the open position', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-12-14');
@@ -824,9 +833,9 @@ describe('runCycle', () => {
     }
     deps.setDecisions([{ ...longAapl, instrument: 'NVDA' }]);
     const newYear = await runCycle(deps, '2027-01-04');
-    expect(newYear).toMatchObject({ entries: 0, decisions: 0 });
+    expect(newYear).toMatchObject({ entries: 0, decisions: 1 });
     expect(newYear.refusals.some((refusal) => refusal.includes('no capital config'))).toBe(true);
-    expect(sizeShares(deps, 'debate/primary', '2027-01-04', 'NVDA')).toBeUndefined();
+    expect(sizeShares(deps, 'debate/primary', '2027-01-04', 'NVDA')).toBe(0);
     expect(deps.books.position('debate/primary', 'AAPL')?.marksHeld).toBe(10);
     const timeStop = await runCycle(deps, '2027-01-05');
     expect(timeStop).toMatchObject({ entries: 0, exits: 2 });

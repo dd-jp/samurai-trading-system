@@ -105,7 +105,7 @@ describe('PaperBooks', () => {
     books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 100 }));
     expect(
       books.applyFill('debate/primary', fill({ side: 'sell', qty: 5, priceGbp: 120 })),
-    ).toMatchObject({ qty: -3, avgPriceGbp: 120 });
+    ).toMatchObject({ qty: -3, avgPriceGbp: 120, marksHeld: 0, exitClientOrderId: undefined });
     expect(books.applyFill('debate/primary', fill({ qty: 1, priceGbp: 110 }))).toMatchObject({
       qty: -2,
       avgPriceGbp: 120,

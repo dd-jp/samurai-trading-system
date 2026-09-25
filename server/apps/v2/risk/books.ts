@@ -68,7 +68,6 @@ function positionFromRow(row: PositionRow): Position {
 }
 
 function averagePriceGbp(held: Position, fill: BookFill, qty: number): number {
-  if (Math.sign(held.qty) !== Math.sign(qty)) return fill.priceGbp;
   if (Math.abs(qty) <= Math.abs(held.qty)) return held.avgPriceGbp;
   return (held.avgPriceGbp * Math.abs(held.qty) + fill.priceGbp * fill.qty) / Math.abs(qty);
 }
@@ -198,8 +197,12 @@ export class PaperBooks implements BookLedger {
         this.#closePosition(bookId, fill.instrument);
         return undefined;
       }
-      if (held === undefined) this.#openPosition(bookId, fill, qty);
-      else this.#resizePosition(bookId, held, fill, qty);
+      if (held !== undefined && Math.sign(held.qty) === Math.sign(qty)) {
+        this.#resizePosition(bookId, held, fill, qty);
+      } else {
+        this.#closePosition(bookId, fill.instrument);
+        this.#openPosition(bookId, fill, qty);
+      }
       return this.position(bookId, fill.instrument);
     });
     return apply();

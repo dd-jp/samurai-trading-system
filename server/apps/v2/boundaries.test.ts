@@ -40,7 +40,7 @@ const FIXTURES: Record<string, string> = {
   'risk/clean.ts': "export { macroGate } from '../data/index.js';",
   'signal/clean.ts': "export { STOP_ATR_MULTIPLE } from '../risk/index.js';",
   'execution/clean.ts':
-    "export type { BrokerAdapter } from '../../../pipeline/execution/index.js';\nexport { isRiskApproved } from '../risk/index.js';",
+    "export type { BrokerAdapter } from '../../../pipeline/execution/index.js';\nexport { consumeApproval } from '../risk/index.js';",
   'index.ts': "export { createOrderExecutor } from './execution/index.js';",
 };
 
