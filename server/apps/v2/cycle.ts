@@ -60,22 +60,33 @@ export function calendarDaysBetween(from: string | undefined, to: string): numbe
   return Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / MS_PER_DAY));
 }
 
+function stopTouched(held: Position, lowGbp: number, highGbp: number): boolean {
+  if (held.stopGbp === undefined) return false;
+  return held.qty > 0 ? lowGbp <= held.stopGbp : highGbp >= held.stopGbp;
+}
+
+function targetTouched(held: Position, lowGbp: number, highGbp: number): boolean {
+  if (held.targetGbp === undefined) return false;
+  return held.qty > 0 ? highGbp >= held.targetGbp : lowGbp <= held.targetGbp;
+}
+
 function bracketExitGbp(held: Position, lowGbp: number, highGbp: number): number | undefined {
-  const long = held.qty > 0;
-  if (held.stopGbp !== undefined && (long ? lowGbp <= held.stopGbp : highGbp >= held.stopGbp)) {
-    return held.stopGbp;
-  }
-  if (
-    held.targetGbp !== undefined &&
-    (long ? highGbp >= held.targetGbp : lowGbp <= held.targetGbp)
-  ) {
-    return held.targetGbp;
-  }
+  if (stopTouched(held, lowGbp, highGbp)) return held.stopGbp;
+  if (targetTouched(held, lowGbp, highGbp)) return held.targetGbp;
   return undefined;
 }
 
 function opposite(side: OrderSide): OrderSide {
   return side === 'buy' ? 'sell' : 'buy';
+}
+
+interface Submission {
+  readonly outcome: OrderOutcome;
+  readonly detail: string;
+}
+
+interface BracketSubmission extends Submission {
+  readonly target?: number | undefined;
 }
 
 interface Tally {
@@ -259,20 +270,7 @@ class Cycle {
     const clientOrderId = this.exitOrderId(book, held.instrument);
     if (broker === undefined || this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     this.tally.exits += 1;
-    let outcome: OrderOutcome;
-    let detail: string;
-    try {
-      const ack = await broker.submitFlatten(
-        held.instrument,
-        side,
-        Math.abs(held.qty),
-        clientOrderId,
-      );
-      outcome = 'submitted';
-      detail = ack.order_state;
-    } catch (error) {
-      ({ outcome, detail } = this.failedSubmission(book, error));
-    }
+    const { outcome, detail } = await this.flatten(book, broker, held, side, clientOrderId);
     this.count(outcome);
     this.deps.journal.recordOrder({
       client_order_id: clientOrderId,
@@ -291,7 +289,27 @@ class Cycle {
       this.deps.books.setExitPending(book.id, held.instrument, clientOrderId);
   }
 
-  failedSubmission(book: BookSpec, error: unknown): { outcome: OrderOutcome; detail: string } {
+  async flatten(
+    book: BookSpec,
+    broker: BrokerAdapter,
+    held: Position,
+    side: OrderSide,
+    clientOrderId: string,
+  ): Promise<Submission> {
+    try {
+      const ack = await broker.submitFlatten(
+        held.instrument,
+        side,
+        Math.abs(held.qty),
+        clientOrderId,
+      );
+      return { outcome: 'submitted', detail: ack.order_state };
+    } catch (error) {
+      return this.failedSubmission(book, error);
+    }
+  }
+
+  failedSubmission(book: BookSpec, error: unknown): Submission {
     if (error instanceof DryRunRefusedError) {
       return {
         outcome: book.variant === 'primary' ? 'refused_dry_run' : 'simulated',
@@ -354,40 +372,13 @@ class Cycle {
     if (this.deps.books.position(book.id, decision.instrument) !== undefined) return;
     this.tally.entries += 1;
     const side: OrderSide = decision.action === 'enter_short' ? 'sell' : 'buy';
-    const stop = decision.stop_price;
-    const atr = decision.atr;
-    let outcome: OrderOutcome;
-    let detail: string;
-    let target: number | undefined;
-    const broker = this.brokerFor(book, decision.venue);
-    if (stop === undefined || atr === undefined) {
-      ({ outcome, detail } = { outcome: 'rejected', detail: 'no_stop_price' });
-    } else if (broker === undefined) {
-      ({ outcome, detail } = {
-        outcome: 'rejected',
-        detail: `no_broker_for_venue:${decision.venue}`,
-      });
-    } else {
-      const distance = this.deps.targetAtrMultiple * atr;
-      target = side === 'sell' ? decision.price - distance : decision.price + distance;
-      try {
-        const ack = await broker.submitBracket({
-          client_order_id: clientOrderId,
-          instrument: decision.instrument,
-          asset_class: 'stocks',
-          side,
-          size,
-          entry: decision.price,
-          stop,
-          target,
-          time_in_force: 'gtc',
-        });
-        outcome = 'submitted';
-        detail = ack.order_state;
-      } catch (error) {
-        ({ outcome, detail } = this.failedSubmission(book, error));
-      }
-    }
+    const { outcome, detail, target } = await this.placeBracket(
+      book,
+      decision,
+      clientOrderId,
+      side,
+      size,
+    );
     this.count(outcome);
     this.deps.journal.recordOrder({
       client_order_id: clientOrderId,
@@ -400,8 +391,44 @@ class Cycle {
       side,
       dry_run: this.deps.dryRun,
       outcome,
-      payload: { size, detail, price: decision.price, stop, target },
+      payload: { size, detail, price: decision.price, stop: decision.stop_price, target },
     });
+  }
+
+  async placeBracket(
+    book: BookSpec,
+    decision: SleeveDecision,
+    clientOrderId: string,
+    side: OrderSide,
+    size: number,
+  ): Promise<BracketSubmission> {
+    const stop = decision.stop_price;
+    const atr = decision.atr;
+    const broker = this.brokerFor(book, decision.venue);
+    if (stop === undefined || atr === undefined) {
+      return { outcome: 'rejected', detail: 'no_stop_price' };
+    }
+    if (broker === undefined) {
+      return { outcome: 'rejected', detail: `no_broker_for_venue:${decision.venue}` };
+    }
+    const distance = this.deps.targetAtrMultiple * atr;
+    const target = side === 'sell' ? decision.price - distance : decision.price + distance;
+    try {
+      const ack = await broker.submitBracket({
+        client_order_id: clientOrderId,
+        instrument: decision.instrument,
+        asset_class: 'stocks',
+        side,
+        size,
+        entry: decision.price,
+        stop,
+        target,
+        time_in_force: 'gtc',
+      });
+      return { outcome: 'submitted', detail: ack.order_state, target };
+    } catch (error) {
+      return { ...this.failedSubmission(book, error), target };
+    }
   }
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {

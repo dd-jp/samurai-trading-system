@@ -20,7 +20,7 @@ import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { PaperBooks } from './books.js';
-import { type CycleReport, runCycle } from './cycle.js';
+import { type CycleDeps, type CycleReport, runCycle } from './cycle.js';
 import { createDebateSleeve } from './debate-sleeve.js';
 import { DryRunBrokerAdapter } from './dry-run-broker.js';
 import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
@@ -206,17 +206,48 @@ const STDERR_LOGGER: Logger = {
   },
 };
 
-export function composeV2Root(options: V2RootOptions): V2Root {
+function refuseLiveMode(options: V2RootOptions): void {
   if (options.samuraiMode === 'live') {
     throw new Error('v2 root refuses SAMURAI_MODE=live: nothing has passed the gate (doc 66 Q10)');
   }
+}
+
+function storePathFor(options: V2RootOptions): string {
+  return options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH);
+}
+
+function barsSourceFor(options: V2RootOptions): BarsSource {
+  return options.bars ?? new CsvBarsSource(options.barsDirectory ?? BARS_DIRECTORY);
+}
+
+function simulatedBrokerFor(
+  options: V2RootOptions,
+  bar: (instrument: string, tradingDate: string) => DailyBar | undefined,
+  clock: Clock,
+): BrokerAdapter {
+  return new DryRunBrokerAdapter({
+    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+    markPrice: (instrument) => bar(instrument, options.tradingDate)?.rawClose,
+    clock,
+  });
+}
+
+function paperBrokersFor(
+  options: V2RootOptions,
+  db: StoreHandle,
+  clock: Clock,
+  logger: Logger,
+): CycleDeps['brokers'] {
+  return options.dryRun ? {} : { alpaca: alpacaPaperBroker(options, db, clock, logger) };
+}
+
+export function composeV2Root(options: V2RootOptions): V2Root {
+  refuseLiveMode(options);
   refuseKeylessPaperRun(options);
   const clock = options.clock ?? new SystemClock();
   const logger = options.logger ?? STDERR_LOGGER;
   const news = newsSourceFor(options);
-  const db = openSharedStore(
-    options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH),
-  );
+  const db = openSharedStore(storePathFor(options));
   const v2Store = guardedStore(db, 'v2');
   const scripted: ScriptedTransport[] = [];
   const spendSink: LlmSpendSink = new SqliteLlmSpendStore(db, logger, true);
@@ -227,7 +258,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     spendCap,
     logger,
   });
-  const bars = options.bars ?? new CsvBarsSource(options.barsDirectory ?? BARS_DIRECTORY);
+  const bars = barsSourceFor(options);
   const bar = lastBarBefore(bars);
   const constituents = options.constituents ?? constituentsFromCsv(options);
   const fx = parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8'));
@@ -245,12 +276,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       logger,
     }),
   );
-  const simulatedBroker = new DryRunBrokerAdapter({
-    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
-    markPrice: (instrument) => bar(instrument, options.tradingDate)?.rawClose,
-    clock,
-  });
-  const brokers = options.dryRun ? {} : { alpaca: alpacaPaperBroker(options, db, clock, logger) };
+  const simulatedBroker = simulatedBrokerFor(options, bar, clock);
+  const brokers = paperBrokersFor(options, db, clock, logger);
   return {
     registry,
     books,
@@ -291,13 +318,16 @@ export function parseCliArgs(
     const arg = argv[index];
     if (arg === '--dry-run') dryRun = true;
     else if (arg === '--date') {
-      const value = argv[index + 1];
-      if (value === undefined) throw new Error('--date needs a YYYY-MM-DD value');
-      tradingDate = value;
+      tradingDate = dateArgument(argv[index + 1]);
       index += 1;
     } else throw new Error(`unknown argument ${arg}`);
   }
   return { dryRun, tradingDate };
+}
+
+function dateArgument(value: string | undefined): string {
+  if (value === undefined) throw new Error('--date needs a YYYY-MM-DD value');
+  return value;
 }
 
 export function exitCodeFor(report: CycleReport): number {

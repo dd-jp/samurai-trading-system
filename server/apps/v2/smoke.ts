@@ -155,15 +155,20 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
   return { probes, passed: probes.every((entry) => entry.passed) };
 }
 
+export function printSmoke(
+  result: { probes: readonly SmokeProbe[]; passed: boolean },
+  write: (line: string) => void,
+): number {
+  for (const entry of result.probes) {
+    write(`${entry.passed ? 'PASS' : 'FAIL'} ${entry.name} — ${entry.detail}\n`);
+  }
+  write(`v2 smoke: ${result.passed ? 'GREEN' : 'RED'}\n`);
+  return result.passed ? 0 : 1;
+}
+
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runV2Smoke()
-    .then(({ probes, passed }) => {
-      for (const entry of probes) {
-        process.stdout.write(`${entry.passed ? 'PASS' : 'FAIL'} ${entry.name} — ${entry.detail}\n`);
-      }
-      process.stdout.write(`v2 smoke: ${passed ? 'GREEN' : 'RED'}\n`);
-      process.exit(passed ? 0 : 1);
-    })
+    .then((result) => process.exit(printSmoke(result, (line) => process.stdout.write(line))))
     .catch((error: unknown) => {
       process.stderr.write(
         `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
