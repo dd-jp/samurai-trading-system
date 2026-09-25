@@ -3,6 +3,8 @@ import type {
   FillSweep,
   OrderExecutor,
   RiskApprovedOrder,
+  SimulatedFillQuote,
+  SimulatedFillRequest,
   Submission,
   V2Fill,
   Venue,
@@ -11,11 +13,13 @@ import type { BrokerAck, BrokerAdapter } from '../../../pipeline/execution/index
 import { describeThrownSafely } from '../../../shared/index.js';
 import { consumeApproval } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
+import { type FillPricing, quoteSimulatedFill } from './simulated-costs.js';
 import { type ChildOrder, childOrders } from './slicing.js';
 
 export interface ExecutorDeps {
   readonly brokers: Partial<Readonly<Record<Venue, BrokerAdapter>>>;
-  readonly simulatedBroker: BrokerAdapter;
+  readonly simulatedBrokers: Readonly<Record<Venue, BrokerAdapter>>;
+  readonly pricing: FillPricing;
   readonly dryRun: boolean;
 }
 
@@ -61,6 +65,10 @@ export class V2OrderExecutor implements OrderExecutor {
 
   simulates(route: ExecutionRoute): boolean {
     return this.deps.dryRun || route.bookVariant !== 'primary';
+  }
+
+  quoteSimulatedFill(venue: Venue, request: SimulatedFillRequest): SimulatedFillQuote {
+    return quoteSimulatedFill(venue, request, this.deps.pricing);
   }
 
   canRoute(route: ExecutionRoute): boolean {
@@ -121,11 +129,13 @@ export class V2OrderExecutor implements OrderExecutor {
   }
 
   #brokerFor(route: ExecutionRoute): BrokerAdapter | undefined {
-    return this.simulates(route) ? this.deps.simulatedBroker : this.deps.brokers[route.venue];
+    return this.simulates(route)
+      ? this.deps.simulatedBrokers[route.venue]
+      : this.deps.brokers[route.venue];
   }
 
   #sweptBrokers(): readonly BrokerAdapter[] {
-    const all = new Set<BrokerAdapter>([this.deps.simulatedBroker]);
+    const all = new Set<BrokerAdapter>(Object.values(this.deps.simulatedBrokers));
     if (!this.deps.dryRun) {
       for (const broker of Object.values(this.deps.brokers)) {
         if (broker !== undefined) all.add(broker);

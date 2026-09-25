@@ -187,8 +187,10 @@ function harness(
     gbpUsdAtYearStart: () => FX,
   };
   const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
+  const pricing = { halfSpreadBps: () => HALF_SPREAD_BPS, impactBps: () => 0, fee: () => 0 };
   const simulatedBroker = new DryRunBrokerAdapter({
-    halfSpreadBps: () => HALF_SPREAD_BPS,
+    venue: 'alpaca',
+    pricing,
     markPrice: (instrument) => barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
     clock,
   });
@@ -204,7 +206,8 @@ function harness(
     risk: new V2RiskGate({ books, capital, market, spec: () => spec }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },
-      simulatedBroker,
+      simulatedBrokers: { alpaca: simulatedBroker, saxo: simulatedBroker },
+      pricing,
       dryRun,
     }),
     simulatedBroker,
@@ -364,7 +367,7 @@ describe('runCycle', () => {
     expect(alpaca.cancelled).toHaveLength(1);
   });
 
-  it('simulated books exit at the stop on the next daily bar and the loss reaches the book', async () => {
+  it('simulated books exit at the stop less half a spread on the next daily bar and the loss reaches the book', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-25');
     deps.setDecisions([]);
@@ -372,7 +375,7 @@ describe('runCycle', () => {
     const report = await runCycle(deps, '2026-09-28');
     expect(report).toMatchObject({ exits: 2, simulated_orders: 2, fills: 2, submitted_orders: 0 });
     expect(deps.books.positions('debate/primary')).toEqual([]);
-    const exitPrice = 19.2 / FX;
+    const exitPrice = (19.2 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
     expect(deps.books.cash('debate/primary')).toBeCloseTo(
       1_000 - ENTRY_COST_GBP + 6 * exitPrice,
       9,

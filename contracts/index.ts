@@ -99,6 +99,8 @@ export type {
   Position,
   RiskApprovedOrder,
   RiskGate,
+  SimulatedFillQuote,
+  SimulatedFillRequest,
   SizeMultiplier,
   Sleeve,
   SleeveAction,

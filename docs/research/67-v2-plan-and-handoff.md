@@ -170,8 +170,14 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - Four dry-run dates: one change in 160 decisions. GEV on 2024-11-06 (152 bars since its 2024-04-02 listing) was debated on a partial SMA; it is now skipped `window_coverage` in both books that saw it. The 60 orders are unchanged.
   - The debate's `atr_unavailable` branch is gone: a covered 200-session window always yields ATR(20) and the 200-day SMA.
   - Known limit: the calendar is US-only. Before Saxo LSE names join the universe, the calendar must be per venue, or UK holidays count as gaps and LSE bars on US holidays are ignored.
+- **PR 3b (simulated costs):**
+  - Every simulated fill moves against the order by half the spread plus impact (spec T9), and pays the venue fee: Alpaca regulatory fees, Saxo 0.08% per side.
+  - A bracket stop pays spread, impact and fee; a target (a resting limit) pays the fee only. Both used to fill at the leg price with no cost.
+  - One simulated broker per venue; the cycle prices its bracket exits through `OrderExecutor.quoteSimulatedFill`.
+  - An uncovered impact window charges 25 bps (T10) with a logged warning; it never throws on an exit.
+  - Four dry-run dates: decisions and orders identical; primary equity lower by £0.0003–£0.0013 a day; no fallback fired.
+  - Known limit: impact is unbounded in participation. A sell priced over 10,000 bps of impact would go negative; the ADV cap keeps entries at ≤ 1% participation, so only a position far larger than its entry could approach it.
 - Still to come:
-  - PR 3b: fees and a size-dependent impact term on the simulated venue.
   - PR 3c: the backtest driver on the same cycle (trial counter, walk-forward, DSR/PBO, loss budget).
 - Known limits, owned by later steps:
   - `sleeveAllocationGbp` seeds every sleeve at the whole start capital. That is right while debate is the only sleeve. Step 1b must add the S1 split (debate 30%, passers share the 70%) before a second sleeve registers, or the books would count the loss budget twice.
