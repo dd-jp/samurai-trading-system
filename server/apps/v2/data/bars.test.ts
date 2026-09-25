@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
-import { barsBefore, currentConstituents, ParquetBarsSource } from './bars.js';
+import {
+  barsBefore,
+  currentConstituents,
+  ParquetBarsSource,
+  sessionsBefore,
+  windowCovered,
+} from './bars.js';
 
 function series(symbol: string, days: number, price: number, volume: number): BarSeries {
   const bars: DailyBar[] = [];
@@ -81,5 +87,44 @@ describe('coverage invariant', () => {
     ).toBe('2026-09-24');
     expect(barsBefore(before, '2026-09-25')).toHaveLength(24);
     expect(barsBefore(before, '2026-09-01')).toEqual([]);
+  });
+});
+
+describe('window coverage against the SPY calendar (#1791)', () => {
+  const spy = series('SPY', 25, 1, 1);
+  const calendar = { load: (symbol: string) => (symbol === 'SPY' ? spy : undefined) };
+  const sessions = sessionsBefore(calendar, '2026-09-26');
+  const history = series('X', 25, 1, 1).bars;
+
+  it('reads sessions strictly before the date and fails closed on a missing or stale reference', () => {
+    expect(sessions).toHaveLength(25);
+    expect(sessionsBefore(calendar, '2026-09-20').at(-1)).toBe('2026-09-19');
+    expect(sessionsBefore(calendar, '2026-09-30')).toHaveLength(25);
+    expect(sessionsBefore(calendar, '2026-10-01')).toEqual([]);
+    expect(sessionsBefore({ load: () => undefined }, '2026-09-26')).toEqual([]);
+    expect(windowCovered(history, [], 2)).toBe(false);
+  });
+
+  it('needs 95% of the window, a bar on the last session and a full window of bars', () => {
+    expect(windowCovered(history, sessions, 20)).toBe(true);
+    expect(
+      windowCovered(
+        history.filter((bar) => bar.date !== '2026-09-10'),
+        sessions,
+        20,
+      ),
+    ).toBe(true);
+    const twoMissing = history.filter((bar) => !['2026-09-10', '2026-09-11'].includes(bar.date));
+    expect(windowCovered(twoMissing, sessions, 20)).toBe(false);
+    expect(windowCovered(history.slice(0, -1), sessions, 2)).toBe(false);
+    expect(windowCovered(history.slice(-19), sessions, 19)).toBe(true);
+    expect(windowCovered(history.slice(-19), sessions, 20)).toBe(false);
+    expect(windowCovered(history, sessions, 26)).toBe(false);
+  });
+
+  it('ignores a bar on a date the calendar lacks', () => {
+    const gapped = { symbol: 'SPY', bars: spy.bars.filter((bar) => bar.date !== '2026-09-24') };
+    const withoutDay = sessionsBefore({ load: () => gapped }, '2026-09-26');
+    expect(windowCovered(history, withoutDay, 2)).toBe(true);
   });
 });

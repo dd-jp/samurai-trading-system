@@ -1,5 +1,7 @@
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
+import { coverageSatisfied, windowCoverage } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { addDays } from './macro-calendar.js';
 
 export interface BarsSource {
   load(symbol: string): BarSeries | undefined;
@@ -51,4 +53,29 @@ export function currentConstituents(csvText: string, tradingDate: string): reado
 
 export function barsBefore(series: BarSeries, tradingDate: string): readonly DailyBar[] {
   return series.bars.filter((bar) => bar.date < tradingDate);
+}
+
+const MAX_BAR_AGE_CALENDAR_DAYS = 5;
+
+export function isFresh(last: DailyBar | undefined, tradingDate: string): last is DailyBar {
+  return last !== undefined && addDays(last.date, MAX_BAR_AGE_CALENDAR_DAYS) >= tradingDate;
+}
+
+export const CALENDAR_REFERENCE = 'SPY';
+
+export function sessionsBefore(bars: BarsSource, tradingDate: string): readonly string[] {
+  const reference = bars.load(CALENDAR_REFERENCE);
+  const history = reference === undefined ? [] : barsBefore(reference, tradingDate);
+  return isFresh(history.at(-1), tradingDate) ? history.map((bar) => bar.date) : [];
+}
+
+export function windowCovered(
+  history: readonly DailyBar[],
+  sessions: readonly string[],
+  windowBars: number,
+): boolean {
+  if (sessions.length === 0 || history.length < windowBars) return false;
+  const barDates = new Set(history.map((bar) => bar.date));
+  const coverage = windowCoverage(sessions, barDates, sessions.length - 1, windowBars - 1);
+  return coverageSatisfied(coverage);
 }

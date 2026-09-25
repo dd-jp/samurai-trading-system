@@ -50,7 +50,10 @@ async function writeFixtures(): Promise<Fixtures> {
   }
   const barStoreRoot = join(directory, 'parquet');
   const store = await ParquetBarStore.open(barStoreRoot);
-  await store.write('alpaca', [{ symbol: 'UP', bars }]);
+  await store.write('alpaca', [
+    { symbol: 'UP', bars },
+    { symbol: 'SPY', bars },
+  ]);
   store.close();
   const constituentsPath = join(directory, 'constituents.csv');
   writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,MISSING"\n');
