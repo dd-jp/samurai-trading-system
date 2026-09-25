@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MarketData, Sleeve, SleeveDecision } from '../../../contracts/index.js';
+import type { MarketData, Sleeve, SleeveDecision, SleeveSpec } from '../../../contracts/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -9,7 +9,7 @@ import type {
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { type CycleDeps, calendarDaysBetween, runCycle } from './cycle.js';
+import { type CycleDeps, calendarDaysBetween, runCycle, vetoApplied } from './cycle.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import { Journal } from './journal/index.js';
@@ -131,11 +131,27 @@ interface Harness extends CycleDeps {
   readonly setDecisions: (next: readonly SleeveDecision[]) => void;
 }
 
+const TEST_SPEC: SleeveSpec = {
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  sizing: {
+    riskFraction: 0.005,
+    stopAtrMultiple: 2,
+    targetAtrMultiple: 3,
+    timeStopTradingDays: 10,
+  },
+  books: [
+    { variant: 'primary', instantiated: true },
+    { variant: 'no-macro-gate', instantiated: true },
+  ],
+};
+
 function harness(
   decisions: readonly SleeveDecision[],
   dryRun: boolean,
   alpaca?: BrokerAdapter,
   capitalYears: readonly number[] = [2026],
+  spec: SleeveSpec = TEST_SPEC,
 ): Harness {
   const db = openSharedStore(':memory:');
   const capital = new CapitalConfigStore(db, clock);
@@ -144,11 +160,12 @@ function harness(
   let current = decisions;
   const sleeve: Sleeve = {
     id: 'debate',
-    decide: () =>
-      Promise.resolve({
-        decisions: current,
-        refusals: [{ scope: 'universe', parameter: 'P', ticket: '#1', message: 'unset' }],
-      }),
+    spec,
+    universe: () => ({
+      instruments: current.map((decision) => decision.instrument),
+      refusals: [{ scope: 'universe', parameter: 'P', ticket: '#1', message: 'unset' }],
+    }),
+    decide: () => Promise.resolve({ decisions: current, refusals: [] }),
   };
   registry.register(sleeve);
   const barsByDate = new Map<string, DailyBar>();
@@ -159,7 +176,7 @@ function harness(
     return bar(previous);
   };
   const market: MarketData = { lastBarBefore: barFor, gbpUsdAtYearStart: () => FX };
-  const books = new PaperBooks(db, clock, capital, '2026-09-01');
+  const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
   const simulatedBroker = new DryRunBrokerAdapter({
     halfSpreadBps: () => HALF_SPREAD_BPS,
     markPrice: (instrument) => barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
@@ -174,7 +191,7 @@ function harness(
     },
     books,
     journal: new Journal(db, clock),
-    risk: new V2RiskGate({ books, capital, market, riskFraction: 0.005, targetAtrMultiple: 3 }),
+    risk: new V2RiskGate({ books, capital, market, sizing: () => spec.sizing }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },
       simulatedBroker,
@@ -182,7 +199,6 @@ function harness(
     }),
     simulatedBroker,
     market,
-    timeStopTradingDays: 10,
     clock,
     dryRun,
   };
@@ -623,6 +639,50 @@ describe('runCycle', () => {
     expect(deps.journal.orderFor('v2-debate-primary-2026-10-12-AAPL-exit')?.outcome).toBe(
       'rejected',
     );
+  });
+
+  it('skips a vetoed entry in every book but the no-veto shadow', async () => {
+    const deps = harness([{ ...longAapl, veto: 'judge blocks' }], true, undefined, [2026], {
+      ...TEST_SPEC,
+      books: [
+        { variant: 'primary', instantiated: true },
+        { variant: 'no-veto', instantiated: true },
+      ],
+    });
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report).toMatchObject({ decisions: 1, entries: 1, simulated_orders: 1 });
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'AAPL')).toBe(0);
+    expect(orders(deps, 'debate/primary')).toEqual([]);
+    expect(orders(deps, 'debate/no-veto')).toMatchObject([
+      { client_order_id: 'v2-debate-no-veto-2026-09-25-AAPL', outcome: 'simulated' },
+    ]);
+    const primary = {
+      id: 'debate/primary',
+      sleeve: 'debate',
+      variant: 'primary',
+      instantiated: true,
+    } as const;
+    expect(vetoApplied(primary, { ...longAapl, veto: 'x' })).toMatchObject({
+      action: 'skip',
+      reason: 'vetoed: x',
+    });
+    expect(vetoApplied(primary, longAapl)).toBe(longAapl);
+  });
+
+  it('gives a sleeve below its minimum capital no books and never asks it for a universe or decisions', async () => {
+    const deps = harness([longAapl], true, undefined, [2026], {
+      ...TEST_SPEC,
+      minimumCapitalGbp: 1_001,
+    });
+    const universe = vi.spyOn(deps.sleeve, 'universe');
+    const decide = vi.spyOn(deps.sleeve, 'decide');
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report).toMatchObject({ decisions: 0, entries: 0, books: [] });
+    expect(report.refusals.at(-1)).toBe(
+      'SLEEVE_MINIMUM_CAPITAL: sleeve debate needs £1001 but 2026 starts at £1000: no allocation (doc 66 D8)',
+    );
+    expect(universe).not.toHaveBeenCalled();
+    expect(decide).not.toHaveBeenCalled();
   });
 
   it('a rerun of a marked date skips with a journal line and never touches the sleeve', async () => {

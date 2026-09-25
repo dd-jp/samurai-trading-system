@@ -10,6 +10,7 @@ import { toBrokerFillId } from '../../../shared/index.js';
 import { V2RiskGate } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
 import { UnapprovedOrderError, V2OrderExecutor } from './executor.js';
+import { childOrders } from './slicing.js';
 
 const primary: BookSpec = {
   id: 'debate/primary',
@@ -57,8 +58,12 @@ const gate = new V2RiskGate({
     }),
   },
   market: { lastBarBefore: () => undefined, gbpUsdAtYearStart: () => 1 },
-  riskFraction: 0.005,
-  targetAtrMultiple: 3,
+  sizing: () => ({
+    riskFraction: 0.005,
+    stopAtrMultiple: 2,
+    targetAtrMultiple: 3,
+    timeStopTradingDays: 10,
+  }),
 });
 
 function entry(book: BookSpec = primary, venue: SleeveDecision['venue'] = 'alpaca') {
@@ -270,5 +275,12 @@ describe('V2OrderExecutor', () => {
     });
     await shared.fetchNewFills('2026-09-24T21:00:00.000Z');
     expect(simulated.fetchNewFills).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('childOrders', () => {
+  it('sends the whole approved order as one child under its own client order id', () => {
+    const order = entry();
+    expect(childOrders(order)).toEqual([{ clientOrderId: order.clientOrderId, size: order.size }]);
   });
 });

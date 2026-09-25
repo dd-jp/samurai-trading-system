@@ -11,6 +11,7 @@ import type { BrokerAck, BrokerAdapter } from '../../../pipeline/execution/index
 import { describeThrownSafely } from '../../../shared/index.js';
 import { consumeApproval } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
+import { type ChildOrder, childOrders } from './slicing.js';
 
 export interface ExecutorDeps {
   readonly brokers: Partial<Readonly<Record<Venue, BrokerAdapter>>>;
@@ -25,16 +26,20 @@ export class UnapprovedOrderError extends Error {
   }
 }
 
-function send(broker: BrokerAdapter, order: RiskApprovedOrder): Promise<BrokerAck> {
+function send(
+  broker: BrokerAdapter,
+  order: RiskApprovedOrder,
+  child: ChildOrder,
+): Promise<BrokerAck> {
   if (order.kind === 'flatten') {
-    return broker.submitFlatten(order.instrument, order.side, order.size, order.clientOrderId);
+    return broker.submitFlatten(order.instrument, order.side, child.size, child.clientOrderId);
   }
   return broker.submitBracket({
-    client_order_id: order.clientOrderId,
+    client_order_id: child.clientOrderId,
     instrument: order.instrument,
     asset_class: 'stocks',
     side: order.side,
-    size: order.size,
+    size: child.size,
     entry: order.entry,
     stop: order.stop,
     target: order.target,
@@ -70,8 +75,11 @@ export class V2OrderExecutor implements OrderExecutor {
       return { outcome: 'rejected', detail: `no_broker_for_venue:${order.venue}`, approvalId };
     }
     try {
-      const ack = await send(broker, order);
-      return { outcome: 'submitted', detail: ack.order_state, approvalId };
+      const states: string[] = [];
+      for (const child of childOrders(order)) {
+        states.push((await send(broker, order, child)).order_state);
+      }
+      return { outcome: 'submitted', detail: states.join(','), approvalId };
     } catch (error) {
       return failedSubmission(order, error);
     }

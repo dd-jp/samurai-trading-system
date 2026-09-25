@@ -7,8 +7,11 @@ import type {
   MarketData,
   RiskApprovedOrder,
   RiskGate,
+  Sleeve,
+  SleeveSizing,
 } from '../../../../contracts/index.js';
 import { quotePerGbp } from '../data/index.js';
+import { sleeveAllocationGbp } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
 import { sizeMultiplierFor } from './loss-budget.js';
@@ -29,8 +32,7 @@ export interface RiskGateDeps {
   readonly books: Pick<BookLedger, 'lastDay'>;
   readonly capital: Pick<CapitalConfigStore, 'inForce'>;
   readonly market: MarketData;
-  readonly riskFraction: number;
-  readonly targetAtrMultiple: number;
+  readonly sizing: (sleeveId: string) => SleeveSizing;
 }
 
 export class V2RiskGate implements RiskGate {
@@ -41,6 +43,12 @@ export class V2RiskGate implements RiskGate {
     return `no capital config in force on ${tradingDate}: entries refused until David sets the year (doc 66 D8)`;
   }
 
+  allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined {
+    const capital = this.deps.capital.inForce(tradingDate);
+    if (capital === undefined || sleeveAllocationGbp(sleeve.spec, capital) > 0) return undefined;
+    return `sleeve ${sleeve.id} needs £${sleeve.spec.minimumCapitalGbp} but ${capital.year} starts at £${capital.startCapitalGbp}: no allocation (doc 66 D8)`;
+  }
+
   approveEntry(request: EntryRequest): EntryApproval {
     const size = this.#size(request);
     const { decision } = request;
@@ -49,7 +57,7 @@ export class V2RiskGate implements RiskGate {
       return { size, order: undefined, refusal: 'no_stop_price' };
     }
     const side = decision.action === 'enter_short' ? 'sell' : 'buy';
-    const distance = this.deps.targetAtrMultiple * decision.atr;
+    const distance = this.deps.sizing(request.book.sleeve).targetAtrMultiple * decision.atr;
     const target = side === 'sell' ? decision.price - distance : decision.price + distance;
     const refusal = bracketRefusal(side, decision.price, decision.stop_price, target);
     if (refusal !== undefined) return { size, order: undefined, refusal };
@@ -99,11 +107,13 @@ export class V2RiskGate implements RiskGate {
     if (capital === undefined) return 0;
     const multiplier = this.#multiplier(book.id, capital);
     const fx = quotePerGbp(this.deps.market, decision.venue, tradingDate);
+    const sizing = this.deps.sizing(book.sleeve);
     return positionSizeShares({
       equityGbp: request.equityGbp,
-      riskFraction: this.deps.riskFraction,
+      riskFraction: sizing.riskFraction,
       priceGbp: decision.price / fx,
       atrGbp: (decision.atr ?? 0) / fx,
+      stopAtrMultiple: sizing.stopAtrMultiple,
       sizeMultiplier: multiplier,
       macroDay: book.variant === 'no-macro-gate' ? false : request.macroDay,
     });

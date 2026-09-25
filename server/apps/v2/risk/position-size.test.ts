@@ -1,23 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import {
-  MAX_POSITION_FRACTION_OF_EQUITY,
-  positionSizeShares,
-  STOP_ATR_MULTIPLE,
-} from './position-size.js';
+import { MAX_POSITION_FRACTION_OF_EQUITY, positionSizeShares } from './position-size.js';
 
 const base = {
   equityGbp: 1_000,
   riskFraction: 0.005,
   priceGbp: 10,
   atrGbp: 0.25,
+  stopAtrMultiple: 2,
   sizeMultiplier: 1,
   macroDay: false,
 };
 
 describe('positionSizeShares', () => {
   it('risks 0.5% of equity at a 2-ATR stop', () => {
-    expect(STOP_ATR_MULTIPLE).toBe(2);
     expect(positionSizeShares(base)).toBe(10);
+  });
+
+  it('divides the risk budget by the sleeve stop multiple', () => {
+    expect(positionSizeShares({ ...base, stopAtrMultiple: 4 })).toBe(5);
+    expect(positionSizeShares({ ...base, stopAtrMultiple: 2.5 })).toBe(8);
   });
 
   it('caps notional at 10% of equity', () => {

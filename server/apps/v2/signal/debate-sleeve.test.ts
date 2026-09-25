@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { Sleeve, SleeveContext, SleeveOutput } from '../../../../contracts/index.js';
 import { UNCAPPED_SPEND } from '../../../pipeline/debate-engine/index.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { addDays, NO_NEWS } from '../data/index.js';
-import { STOP_ATR_MULTIPLE } from '../risk/index.js';
 import {
   createDebateSleeve,
   directionFrom,
@@ -13,7 +13,14 @@ import {
   technicalRead,
 } from './debate-sleeve.js';
 import { buildLlmPanel } from './llm-panel.js';
+import { DEBATE_SLEEVE_SPEC } from './parameters.js';
 import { BULLISH_SCRIPT, type Script, ScriptedTransport } from './scripted-transport.js';
+
+async function decideAll(sleeve: Sleeve, context: SleeveContext): Promise<SleeveOutput> {
+  const universe = sleeve.universe(context);
+  const output = await sleeve.decide(context, universe.instruments);
+  return { decisions: output.decisions, refusals: [...universe.refusals, ...output.refusals] };
+}
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 
@@ -152,7 +159,7 @@ describe('createDebateSleeve', () => {
       news: NO_NEWS,
       clock,
     });
-    const output = await sleeve.decide({
+    const output = await decideAll(sleeve, {
       tradingDate: nextDate(series),
       macroDay: false,
       dryRun: true,
@@ -168,7 +175,7 @@ describe('createDebateSleeve', () => {
       reason: 'judge bullish',
     });
     expect(decision?.stop_price).toBeCloseTo(
-      (decision?.price ?? 0) - STOP_ATR_MULTIPLE * (decision?.atr ?? 0),
+      (decision?.price ?? 0) - DEBATE_SLEEVE_SPEC.sizing.stopAtrMultiple * (decision?.atr ?? 0),
       9,
     );
     expect(decision?.confidence).toBe(1);
@@ -198,7 +205,7 @@ describe('createDebateSleeve', () => {
         news: NO_NEWS,
         clock,
       });
-      const output = await sleeve.decide({
+      const output = await decideAll(sleeve, {
         tradingDate: nextDate(series),
         macroDay: false,
         dryRun: true,
@@ -227,7 +234,10 @@ describe('createDebateSleeve', () => {
         clock,
       });
     const context = { tradingDate: nextDate(series), macroDay: false, dryRun: true };
-    const withNews = await make(() => Promise.resolve(['UP raises guidance'])).decide(context);
+    const withNews = await decideAll(
+      make(() => Promise.resolve(['UP raises guidance'])),
+      context,
+    );
     expect(withNews.decisions[0]?.payload).toMatchObject({ headlines: 1 });
     expect(
       transports
@@ -235,10 +245,16 @@ describe('createDebateSleeve', () => {
         .every((call) => call.prompt.includes('UP raises guidance')),
     ).toBe(true);
     const withoutHash = withNews.decisions[0]?.inputs_hash;
-    const noNews = await make(() => Promise.resolve([])).decide(context);
+    const noNews = await decideAll(
+      make(() => Promise.resolve([])),
+      context,
+    );
     expect(noNews.decisions[0]?.inputs_hash).not.toBe(withoutHash);
     const before = transports.flatMap((t) => t.calls).length;
-    const failed = await make(() => Promise.reject(new Error('alpaca news 500'))).decide(context);
+    const failed = await decideAll(
+      make(() => Promise.reject(new Error('alpaca news 500'))),
+      context,
+    );
     expect(failed.decisions[0]?.action).toBe('skip');
     expect(failed.decisions[0]?.reason).toMatch(/^news_error:.*alpaca news 500/);
     expect(transports.flatMap((t) => t.calls).length).toBe(before);
@@ -263,7 +279,7 @@ describe('createDebateSleeve', () => {
       news: NO_NEWS,
       clock,
     });
-    const output = await sleeve.decide({
+    const output = await decideAll(sleeve, {
       tradingDate: nextDate(series),
       macroDay: false,
       dryRun: true,
@@ -293,13 +309,13 @@ describe('createDebateSleeve', () => {
         clock,
       });
     const context = { tradingDate: nextDate(series), macroDay: false, dryRun: true };
-    const short = (await make(bearish).decide(context)).decisions[0];
+    const short = (await decideAll(make(bearish), context)).decisions[0];
     expect(short).toMatchObject({
       action: 'skip',
       reason: 'shorts_disabled',
       direction: 'bearish',
     });
-    const neutral = (await make(NEUTRAL_SCRIPT).decide(context)).decisions[0];
+    const neutral = (await decideAll(make(NEUTRAL_SCRIPT), context)).decisions[0];
     expect(neutral).toMatchObject({
       action: 'none',
       reason: 'judge neutral',
@@ -320,7 +336,7 @@ describe('createDebateSleeve', () => {
       news: NO_NEWS,
       clock,
     });
-    const output = await sleeve.decide({
+    const output = await decideAll(sleeve, {
       tradingDate: nextDate(series),
       macroDay: false,
       dryRun: true,
@@ -339,7 +355,7 @@ describe('createDebateSleeve', () => {
       news: NO_NEWS,
       clock,
     });
-    const output = await sleeve.decide({
+    const output = await decideAll(sleeve, {
       tradingDate: nextDate(series),
       macroDay: false,
       dryRun: true,

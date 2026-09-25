@@ -121,6 +121,7 @@ const CAPITAL_LITERAL =
   /\b(\w*(?:capital|CAPITAL|Capital|lossCap|LOSS_CAP|_CAP_GBP|CapGbp)\w*)\s*[:=]\s*-?\d[\d_]*(?:\.\d+)?\b/g;
 const ALLOWED_CAPITAL_LITERALS = new Set([
   'server/apps/v2/risk/loss-budget.ts:DAILY_CAP_FRACTION_OF_START_CAPITAL',
+  'server/apps/v2/signal/parameters.ts:minimumCapitalGbp',
   'server/apps/v2/smoke.ts:SMOKE_START_CAPITAL_GBP',
   'server/apps/v2/smoke.ts:SMOKE_LOSS_CAP_GBP',
 ]);
