@@ -127,7 +127,7 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 | `TIINGO_API_KEY` | `npm run ingest-history` — Stage-2 history ingestion |
 | `WORLDMONITOR_API_KEY` | WorldMonitor CII feed (ADR-0002). The adapter stays parked until this is set |
 | `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`). Binding `HOST` to anything other than `127.0.0.1`/`::1` refuses to start unless `SAMURAI_DASHBOARD_TOKEN` (below) is also set — see #887/ADR-0019 |
-| `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/shared/http/bind-guard.ts` and `request-auth.ts` |
+| `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/apps/service-api/bind-guard.ts` and `request-auth.ts` |
 
 #### Optional — venue pacing
 

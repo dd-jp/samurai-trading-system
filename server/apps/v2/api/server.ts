@@ -5,13 +5,8 @@ import {
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
 } from '../../../../contracts/index.js';
-import {
-  DASHBOARD_CREDENTIAL_ENV_VAR,
-  describeThrownSafely,
-  isAuthorizedRequest,
-  isConfiguredCredential,
-  sanitizeLogText,
-} from '../../../shared/index.js';
+import { describeThrownSafely, sanitizeLogText } from '../../../shared/index.js';
+import { carriesToken, DASHBOARD_TOKEN_ENV_VAR, isConfiguredToken } from './auth.js';
 import {
   type ControlWriteResult,
   type ControlWriter,
@@ -165,7 +160,7 @@ function dispatch(
   token: string,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
-    if (isAuthorizedRequest(req.headers.authorization, token)) {
+    if (carriesToken(req.headers.authorization, token)) {
       await resolveHandler(routes, req)(req, res);
     } else {
       sendError(res, 401, 'unauthorized', { 'WWW-Authenticate': 'Bearer' });
@@ -193,9 +188,9 @@ function respondToFault(res: ServerResponse, error: unknown): void {
 
 export function createV2DashboardServer(opts: V2DashboardServerOptions): V2DashboardServer {
   const { token } = opts;
-  if (!isConfiguredCredential(token)) {
+  if (!isConfiguredToken(token)) {
     throw new Error(
-      `v2 dashboard refuses to start: ${DASHBOARD_CREDENTIAL_ENV_VAR} is not set. Every request, ` +
+      `v2 dashboard refuses to start: ${DASHBOARD_TOKEN_ENV_VAR} is not set. Every request, ` +
         'loopback included, must carry it as `Authorization: Bearer <value>` (dashboard spec §5).',
     );
   }

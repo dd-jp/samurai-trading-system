@@ -1,9 +1,10 @@
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { V2ModeWire } from '../../../../contracts/index.js';
-import { type Clock, DASHBOARD_CREDENTIAL_ENV_VAR, SystemClock } from '../../../shared/index.js';
+import { type Clock, SystemClock } from '../../../shared/index.js';
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
+import { DASHBOARD_TOKEN_ENV_VAR } from './auth.js';
 import { ControlWriter } from './control-writer.js';
 import { OverviewReader } from './overview.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
@@ -57,7 +58,7 @@ export function composeV2Dashboard(
     const server = createV2DashboardServer({
       host: args.host,
       port: args.port,
-      token: env[DASHBOARD_CREDENTIAL_ENV_VAR],
+      token: env[DASHBOARD_TOKEN_ENV_VAR],
       overview: () => reader.read(),
       controls: new ControlWriter(store, clock),
     });
