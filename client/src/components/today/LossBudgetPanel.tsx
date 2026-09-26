@@ -7,15 +7,19 @@ function share(value: number, cap: number): number {
   return Math.min(Math.max(value / cap, 0), 1) * 100;
 }
 
+type StepMarks = LossBudgetWire['step_marks_gbp'];
+
+const STEP_LABELS = ['½ size', '¼ size', 'halt'] as const;
+
 interface MeterProps {
   readonly label: string;
   readonly loss: number;
   readonly cap: number;
-  readonly marks: readonly number[];
+  readonly marks: StepMarks | null;
 }
 
 function Meter({ label, loss, cap, marks }: MeterProps) {
-  const over = loss >= cap;
+  const over = cap > 0 && loss >= cap;
   return (
     <div className="meter">
       <div className="meter-head">
@@ -34,9 +38,9 @@ function Meter({ label, loss, cap, marks }: MeterProps) {
       >
         <rect className="meter-ground" x="0" y="2" width="100" height="6" />
         <rect className="meter-fill" x="0" y="2" width={share(loss, cap)} height="6" />
-        {marks.map((mark) => (
+        {marks?.map((mark, index) => (
           <line
-            key={mark}
+            key={STEP_LABELS[index]}
             className="meter-mark"
             x1={share(mark, cap)}
             x2={share(mark, cap)}
@@ -45,12 +49,11 @@ function Meter({ label, loss, cap, marks }: MeterProps) {
           />
         ))}
       </svg>
-      {marks.length > 0 && (
+      {marks !== null && (
         <ul className="meter-marks" aria-label="Size steps">
           {marks.map((mark, index) => (
-            <li key={mark}>
-              {gbp(-mark)}:{' '}
-              {index === marks.length - 1 ? 'halt' : `${sizeStep(0.5 ** (index + 1))} size`}
+            <li key={STEP_LABELS[index]}>
+              {gbp(-mark)}: {STEP_LABELS[index]}
             </li>
           ))}
         </ul>
@@ -107,7 +110,7 @@ function LossBudget({ budget }: { budget: LossBudgetWire }) {
         label={`Today's loss (${budget.trading_date})`}
         loss={budget.day_loss_gbp}
         cap={budget.daily_cap_gbp}
-        marks={[]}
+        marks={null}
       />
       <p className="panel-note">
         Start capital {gbp(budget.start_capital_gbp)}; daily cap blocks entries.

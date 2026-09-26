@@ -27,8 +27,10 @@ const TOKEN = 'test-dashboard-token';
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
 const JSON_AUTH = { ...AUTH, 'Content-Type': 'application/json' };
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
-const BUNDLE = mkdtempSync(join(tmpdir(), 'v2-bundle-'));
-mkdirSync(join(BUNDLE, 'assets'));
+const BUNDLE_PARENT = mkdtempSync(join(tmpdir(), 'v2-bundle-'));
+const BUNDLE = join(BUNDLE_PARENT, 'client');
+mkdirSync(join(BUNDLE, 'assets'), { recursive: true });
+writeFileSync(join(BUNDLE_PARENT, 'leak.html'), 'outside the bundle');
 writeFileSync(join(BUNDLE, 'index.html'), '<!doctype html><title>v2</title>');
 writeFileSync(join(BUNDLE, 'assets', 'app.js'), 'export {};');
 writeFileSync(join(BUNDLE, 'secret.sqlite'), 'rows');
@@ -173,12 +175,27 @@ describe('createV2DashboardServer auth and routing', () => {
   it.each([
     ['/nowhere.js', 404],
     ['/secret.sqlite', 404],
-    ['/assets/..%2f..%2findex.html', 404],
+    ['/assets/..%2f..%2fleak.html', 404],
     ['/%E0%A4%A', 400],
     ['/index.html%00.js', 400],
   ])('serves nothing outside the bundle for %s', async (path, status) => {
     const url = await start();
     expect((await fetch(`${url}${path}`)).status).toBe(status);
+  });
+
+  it('answers 400, not a fault, to a request target that is no URL path', async () => {
+    const url = await start();
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const { port } = new URL(url);
+      httpRequest({ host: '127.0.0.1', port, path: '//' }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      })
+        .on('error', reject)
+        .end();
+    });
+    expect(status).toBe(400);
+    expect(faults).toEqual([]);
   });
 
   it('requires the token for any other method on a bundle path', async () => {

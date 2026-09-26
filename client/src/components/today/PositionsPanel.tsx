@@ -57,6 +57,8 @@ function PositionRows({ positions }: { positions: readonly PositionWire[] }) {
 }
 
 function Positions({ positions }: { positions: PositionsWire }) {
+  const primaryCash = positions.cash.filter((cash) => cash.variant === 'primary');
+  const shadowCash = positions.cash.filter((cash) => cash.variant !== 'primary');
   return (
     <>
       <PositionRows positions={positions.positions} />
@@ -74,11 +76,9 @@ function Positions({ positions }: { positions: PositionsWire }) {
               <td>{gbp(venue.positions_value_gbp)}</td>
             </tr>
           ))}
-          {positions.cash.map((cash) => (
+          {primaryCash.map((cash) => (
             <tr key={cash.book_id}>
-              <th scope="row">
-                Cash, {cash.variant === 'primary' ? cash.book_id : `${cash.variant} (shadow)`}
-              </th>
+              <th scope="row">Cash, {cash.book_id}</th>
               <td />
               <td>{gbp(cash.cash_gbp)}</td>
             </tr>
@@ -94,6 +94,19 @@ function Positions({ positions }: { positions: PositionsWire }) {
           </tr>
         </tbody>
       </table>
+      {shadowCash.length > 0 && (
+        <table className="grid">
+          <caption>Shadow books' cash, not in the total</caption>
+          <tbody>
+            {shadowCash.map((cash) => (
+              <tr key={cash.book_id}>
+                <th scope="row">{cash.book_id}</th>
+                <td>{gbp(cash.cash_gbp)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       <p className="panel-note">
         As of {positions.as_of}.{' '}
         {positions.fx === null

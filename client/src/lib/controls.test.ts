@@ -61,6 +61,19 @@ describe('sendControl', () => {
     });
   });
 
+  it.each([
+    ['7', 7],
+    ['soon', 10],
+    [null, 10],
+  ])('reads Retry-After %s as %s seconds', async (header, seconds) => {
+    const headers: Record<string, string> = header === null ? {} : { 'Retry-After': header };
+    const tooSoon = new Response('{}', { status: 429, headers });
+    expect(await sendControl(request, 't', answering(tooSoon))).toEqual({
+      kind: 'too-soon',
+      retryAfterSeconds: seconds,
+    });
+  });
+
   it('refuses to report a control recorded under another contract', async () => {
     const other = new Response(
       JSON.stringify({ contract_version: 'v0', control: {}, replayed: false }),

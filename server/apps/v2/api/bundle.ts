@@ -71,7 +71,7 @@ export async function serveBundle(
   if (file.kind === 'file' && body !== null) {
     res.writeHead(200, { ...BUNDLE_HEADERS, 'Content-Type': file.contentType }).end(body);
   } else if ((await readOrNull(join(resolve(root), 'index.html'))) === null) {
-    sendText(res, 503, `dashboard bundle not built: run \`npm run build:web\` (${resolve(root)})`);
+    sendText(res, 503, 'dashboard bundle not built: run `npm run build:web`');
   } else {
     sendText(res, 404, 'not found');
   }

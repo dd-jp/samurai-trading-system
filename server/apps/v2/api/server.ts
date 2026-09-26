@@ -199,6 +199,14 @@ function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Hand
   ]);
 }
 
+function requestPath(req: IncomingMessage): string | null {
+  try {
+    return new URL(req.url ?? '/', 'http://localhost').pathname;
+  } catch {
+    return null;
+  }
+}
+
 function isBundleRequest(req: IncomingMessage, path: string): boolean {
   return req.method === 'GET' && path !== '/api' && !path.startsWith('/api/');
 }
@@ -209,8 +217,10 @@ function dispatch(
   bundleRoot: string,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
-    if (isBundleRequest(req, path)) {
+    const path = requestPath(req);
+    if (path === null) {
+      refuseAndClose(req, res, 400, 'bad request');
+    } else if (isBundleRequest(req, path)) {
       await serveBundle(bundleRoot, path, res);
     } else if (carriesToken(req.headers.authorization, token)) {
       await resolveHandler(routes, req)(req, res);

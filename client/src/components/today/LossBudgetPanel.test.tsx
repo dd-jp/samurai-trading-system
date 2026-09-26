@@ -51,6 +51,15 @@ describe('LossBudgetPanel (P1)', () => {
     expect(region().textContent).toContain('−£20.00 of −£20.00 (reached)');
   });
 
+  it('does not call a zero daily cap reached before any loss', () => {
+    render(
+      <LossBudgetPanel
+        panel={{ status: 'fed', ...LOSS_BUDGET, daily_cap_gbp: 0, day_loss_gbp: 0 }}
+      />,
+    );
+    expect(region().textContent).not.toContain('(reached)');
+  });
+
   it('says no cycle has run when empty', () => {
     render(<LossBudgetPanel panel={{ status: 'empty' }} />);
     expect(region().textContent).toContain('No cycle has run yet.');

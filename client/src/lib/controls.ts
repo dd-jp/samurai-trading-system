@@ -50,8 +50,12 @@ async function errorOf(response: Response): Promise<string> {
 async function outcomeOf(response: Response): Promise<ControlOutcome> {
   if (response.status === 401) return { kind: 'unauthorized' };
   if (response.status === 429) {
-    const retryAfterSeconds = Number(response.headers.get('Retry-After') ?? 10);
-    return { kind: 'too-soon', retryAfterSeconds };
+    const retryAfterSeconds = Number(response.headers.get('Retry-After'));
+    return {
+      kind: 'too-soon',
+      retryAfterSeconds:
+        Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds : 10,
+    };
   }
   if (!response.ok) return { kind: 'refused', error: await errorOf(response) };
   const body = (await response.json()) as ControlResponseWire;

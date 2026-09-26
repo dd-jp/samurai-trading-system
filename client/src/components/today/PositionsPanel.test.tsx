@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { PositionWire } from '@contracts';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { POSITIONS } from '../../test-wire.ts';
 import { PositionsPanel } from './PositionsPanel.tsx';
@@ -57,6 +57,24 @@ describe('PositionsPanel (P3)', () => {
     expect(screen.getByRole('row', { name: 'alpaca — —' })).toBeTruthy();
     expect(text()).toContain('unavailable (a mark is missing)');
     expect(text()).toContain('No GBP/USD rate');
+  });
+
+  it("lists shadow books' cash apart from the primary rows that make the total", () => {
+    render(
+      <PositionsPanel
+        panel={{
+          status: 'fed',
+          ...POSITIONS,
+          cash: [
+            ...POSITIONS.cash,
+            { book_id: 'debate/no-veto', variant: 'no-veto', cash_gbp: 900 },
+          ],
+        }}
+      />,
+    );
+    const shadows = screen.getByRole('table', { name: "Shadow books' cash, not in the total" });
+    expect(within(shadows).getByRole('row').textContent).toBe('debate/no-veto£900.00');
+    expect(screen.getByRole('row', { name: 'Total £1,000.00' })).toBeTruthy();
   });
 
   it('says there are no open positions', () => {
