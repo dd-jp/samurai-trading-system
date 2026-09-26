@@ -31,6 +31,7 @@ export interface JournalQuery {
   readonly book?: string;
   readonly instrument?: string;
   readonly action?: JournalActionFilterWire;
+  readonly veto?: string;
   readonly limit: number;
 }
 
@@ -68,6 +69,7 @@ const PARAMS: Readonly<Record<string, (raw: string) => Parsed>> = {
   book: parseText,
   instrument: parseText,
   action: parseAction,
+  veto: parseText,
   limit: parseLimit,
 };
 
@@ -142,15 +144,25 @@ function actionFilters(action: JournalActionFilterWire | undefined): Filter[] {
   return [{ sql: 'd.action = ?', params: [action] }];
 }
 
+function vetoFilters(veto: string | undefined): Filter[] {
+  if (veto === undefined) return [];
+  return [
+    {
+      sql: `d.action = 'skip' AND ${IS_VETO} AND trim(substr(d.reason, ?)) = ?`,
+      params: [...VETO_PARAMS, VETO_PREFIX.length + 1, veto],
+    },
+  ];
+}
+
 function decisionFilters(query: JournalQuery): Filter[] {
-  return [...scopeFilters(query, 'd'), ...actionFilters(query.action)];
+  return [...scopeFilters(query, 'd'), ...actionFilters(query.action), ...vetoFilters(query.veto)];
 }
 
 function includesUnlinkedOrders(query: JournalQuery): boolean {
-  return query.action === undefined;
+  return query.action === undefined && query.veto === undefined;
 }
 
-function includesRefusals(query: JournalQuery): boolean {
+function refusalsSelectDays(query: JournalQuery): boolean {
   return (
     includesUnlinkedOrders(query) && query.book === undefined && query.instrument === undefined
   );
@@ -188,7 +200,7 @@ function daySources(query: JournalQuery): Filter[] {
       params: orders.params,
     });
   }
-  if (includesRefusals(query)) {
+  if (refusalsSelectDays(query)) {
     const refusals = where(dateFilters(query, 'r'));
     sources.push({
       sql: `SELECT r.trading_date FROM v2_refusals r ${refusals.sql}`,
@@ -317,7 +329,7 @@ export class JournalReader {
     );
     const fills = this.#fills([...linked, ...unlinked]);
     const ordersByDecision = groupBy(linked, (row) => row.decision_id);
-    const refusals = includesRefusals(query) ? this.#refusals(days) : [];
+    const refusals = this.#refusals(days);
     const toOrder = (order: OrderRow) => orderWire(order, fills);
     const decisionsByDay = groupBy(
       decisions.map((row) => ({

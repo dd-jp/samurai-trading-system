@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { TrialLedger } from '../trial-ledger.js';
@@ -99,6 +99,18 @@ describe('ResearchReader (P10)', () => {
     const after = new BetterSqlite3(path, { readonly: true });
     expect(after.pragma('journal_mode', { simple: true })).toBe('wal');
     after.close();
+  });
+
+  it('closes the store after every read', () => {
+    const path = storePath();
+    openSharedStore(path).close();
+    const close = vi.spyOn(BetterSqlite3.prototype, 'close');
+    try {
+      read(path);
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      close.mockRestore();
+    }
   });
 
   it('is empty without creating the store when none exists yet', () => {

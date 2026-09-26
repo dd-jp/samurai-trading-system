@@ -137,6 +137,7 @@ describe('parseJournalQuery', () => {
           book: 'debate/primary',
           instrument: 'x'.repeat(64),
           action: 'vetoed',
+          veto: 'earnings',
           limit: '31',
         }),
       ),
@@ -149,12 +150,13 @@ describe('parseJournalQuery', () => {
         book: 'debate/primary',
         instrument: 'x'.repeat(64),
         action: 'vetoed',
+        veto: 'earnings',
         limit: 31,
       },
     });
-    expect(parseJournalQuery(new URLSearchParams({ limit: '1' }))).toEqual({
+    expect(parseJournalQuery(new URLSearchParams({ limit: '1', action: 'none' }))).toEqual({
       ok: true,
-      query: { limit: 1 },
+      query: { limit: 1, action: 'none' },
     });
   });
 
@@ -166,13 +168,20 @@ describe('parseJournalQuery', () => {
     ['limit=0', 'limit is invalid'],
     ['limit=32', 'limit is invalid'],
     ['limit=1.5', 'limit is invalid'],
+    ['from=x2026-10-01', 'from is invalid'],
     ['limit=100', 'limit is invalid'],
     ['book=', 'book is invalid'],
     [`instrument=${'x'.repeat(65)}`, 'instrument is invalid'],
     ['action=exit', 'action is invalid'],
     ['book=a&book=b', 'book is given more than once'],
-    ['toString=1', 'unknown parameter; allowed: from, to, before, book, instrument, action, limit'],
-    ['sort=date', 'unknown parameter; allowed: from, to, before, book, instrument, action, limit'],
+    [
+      'toString=1',
+      'unknown parameter; allowed: from, to, before, book, instrument, action, veto, limit',
+    ],
+    [
+      'sort=date',
+      'unknown parameter; allowed: from, to, before, book, instrument, action, veto, limit',
+    ],
   ])('refuses %s', (raw, reason) => {
     expect(parseJournalQuery(new URLSearchParams(raw))).toEqual({ ok: false, reason });
   });
@@ -331,7 +340,7 @@ describe('JournalReader (P9)', () => {
     expect(instruments('enter_long')).toEqual([]);
   });
 
-  it('drops exits and refusals under an action filter, since neither has an action', () => {
+  it('drops exits under an action filter, and lets only decisions pick the days', () => {
     open();
     decide('2026-10-05', 'AAPL');
     order('exit-1', '2026-10-05', null);
@@ -340,10 +349,10 @@ describe('JournalReader (P9)', () => {
     refuse('2026-10-03', 'Q');
     const page = read({ action: 'enter_long' });
     expect(datesOf(page)).toEqual(['2026-10-05']);
-    expect(page.days[0]).toMatchObject({ unlinked_orders: [], refusals: [] });
+    expect(page.days[0]).toMatchObject({ unlinked_orders: [], refusals: [{ parameter: 'P' }] });
   });
 
-  it('narrows decisions and exits to a book or instrument, and drops cycle-wide refusals', () => {
+  it('narrows decisions and exits to a book or instrument, keeping the served days refusals', () => {
     open();
     decide('2026-10-05', 'AAPL');
     decide('2026-10-05', 'AAPL', 'enter_long', 'x', 'debate/no-veto');
@@ -352,6 +361,7 @@ describe('JournalReader (P9)', () => {
     order('exit-msft', '2026-10-04', null, 'MSFT');
     order('exit-shadow', '2026-10-04', null, 'AAPL', 'debate/no-veto');
     refuse('2026-10-03', 'P');
+    refuse('2026-10-05', 'debate/primary AAPL: below the volume cap');
     const byInstrument = read({ instrument: 'aapl' });
     expect(datesOf(byInstrument)).toEqual(['2026-10-05', '2026-10-04']);
     expect(byInstrument.days[0]?.decisions.map((row) => row.book_id)).toEqual([
@@ -362,11 +372,46 @@ describe('JournalReader (P9)', () => {
       'exit-aapl',
       'exit-shadow',
     ]);
+    expect(byInstrument.days[0]?.refusals.map((row) => row.parameter)).toEqual([
+      'debate/primary AAPL: below the volume cap',
+    ]);
+    expect(read({ book: "' OR 1=1 --" }).days).toEqual([]);
     const byBook = read({ book: 'debate/no-veto' });
     expect(datesOf(byBook)).toEqual(['2026-10-05', '2026-10-04']);
     expect(byBook.days[0]?.decisions.map((row) => row.instrument)).toEqual(['AAPL']);
     expect(byBook.days[1]?.unlinked_orders.map((row) => row.client_order_id)).toEqual([
       'exit-shadow',
+    ]);
+  });
+
+  it('finds vetoes by category, and only vetoes', () => {
+    open();
+    decide('2026-10-05', 'AAPL', 'skip', 'vetoed: earnings');
+    decide('2026-10-05', 'MSFT', 'skip', 'vetoed: liquidity');
+    decide('2026-10-04', 'AAPL', 'skip', 'earnings');
+    order('exit-1', '2026-10-03', null);
+    const page = read({ veto: 'earnings' });
+    expect(datesOf(page)).toEqual(['2026-10-05']);
+    expect(page.days[0]?.decisions.map((row) => row.veto)).toEqual(['earnings']);
+  });
+
+  it('serves a dry-run order and one not yet filled', () => {
+    open();
+    journal.recordOrder({
+      client_order_id: 'dry-1',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-10-05',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'exit',
+      side: 'sell',
+      dry_run: true,
+      outcome: 'simulated',
+      payload: {},
+    });
+    expect(read().days[0]?.unlinked_orders).toEqual([
+      expect.objectContaining({ dry_run: true, fills: [] }),
     ]);
   });
 
