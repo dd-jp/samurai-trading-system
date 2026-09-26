@@ -362,7 +362,7 @@ describe('runBacktest', () => {
     );
   });
 
-  it('runs the loss budget inside: a tight cap halts entries and bounds the loss', async () => {
+  it('runs the loss budget inside: a tight cap steps size down and keeps each calendar year under it', async () => {
     const run = (lossCapGbp: number) =>
       runBacktest(
         input({
@@ -373,13 +373,22 @@ describe('runBacktest', () => {
           ],
         }),
       );
+    const yearLosses = (result: Awaited<ReturnType<typeof run>>) => {
+      const equity = result.trials[0]?.equity as readonly number[];
+      const losses: Record<string, number> = {};
+      let reference = 1_000;
+      result.dates.forEach((date, index) => {
+        if (result.dates[index + 1]?.slice(0, 4) === date.slice(0, 4)) return;
+        losses[date.slice(0, 4)] = reference - (equity[index] as number);
+        reference = equity[index] as number;
+      });
+      return losses;
+    };
     const capped = await run(30);
     const uncapped = await run(100_000);
-    const lossOf = (result: Awaited<ReturnType<typeof run>>) =>
-      1_000 - (result.trials[0]?.equity.at(-1) as number);
-    expect(lossOf(uncapped)).toBeGreaterThan(60);
-    expect(lossOf(capped)).toBeGreaterThan(30);
-    expect(lossOf(capped)).toBeLessThan(50);
+    expect(Object.keys(yearLosses(capped))).toEqual(['2024', '2025']);
+    for (const loss of Object.values(yearLosses(capped))) expect(loss).toBeLessThan(30);
+    expect(yearLosses(uncapped)['2024']).toBeGreaterThan(60);
     expect(capped.verdict.capitalCeilingGbp).toBeLessThan(uncapped.verdict.capitalCeilingGbp);
   });
 

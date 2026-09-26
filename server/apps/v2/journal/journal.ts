@@ -134,6 +134,19 @@ export class Journal implements DecisionJournal {
     return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
   }
 
+  restingEntries(bookId: string): readonly JournalledOrder[] {
+    const rows = this.db
+      .prepare(
+        `SELECT client_order_id FROM v2_orders o
+         WHERE book_id = ? AND leg = 'entry'
+           AND outcome IN ('submitted', 'simulated', 'refused_dry_run')
+           AND NOT EXISTS (SELECT 1 FROM v2_fills f WHERE f.client_order_id = o.client_order_id)
+         ORDER BY trading_date, client_order_id`,
+      )
+      .all(bookId) as { client_order_id: string }[];
+    return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
+  }
+
   markCancelled(clientOrderId: string, detail: string): void {
     this.db
       .prepare(

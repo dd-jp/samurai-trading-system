@@ -5,6 +5,7 @@ import type {
   DecisionJournal,
   EntryApproval,
   JournalledOrder,
+  LossBudgetState,
   ManualControl,
   MarketData,
   OrderExecutor,
@@ -328,16 +329,39 @@ class Cycle {
   }
 
   async cancelStaleEntries(book: BookSpec): Promise<void> {
-    for (const order of this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate)) {
+    await this.cancelEntries(book, this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate));
+  }
+
+  async cancelEntries(book: BookSpec, orders: readonly JournalledOrder[]): Promise<number> {
+    let cancelled = 0;
+    for (const order of orders) {
       const route = routeOf(book, order.venue as Venue);
       if (!this.deps.executor.canRoute(route)) continue;
       try {
         await this.deps.executor.cancel(route, order.client_order_id, order.instrument);
         this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
+        cancelled += 1;
       } catch (error) {
         this.log('warn', 'v2_cancel_failed', describeThrownSafely(error));
       }
     }
+    return cancelled;
+  }
+
+  async cancelRestingEntriesOnBlock(book: BookSpec, state: LossBudgetState): Promise<void> {
+    if (!state.halted && !state.entriesBlockedAtNextFill) return;
+    const cancelled = await this.cancelEntries(book, this.deps.journal.restingEntries(book.id));
+    if (cancelled === 0) return;
+    const cause = state.halted ? 'loss budget halt' : 'daily loss cap';
+    const message = `${book.id}: ${cause} at the ${this.tradingDate} mark cancelled ${cancelled} resting entries`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter: 'LOSS_BUDGET',
+      ticket: '#1813',
+      message,
+    });
+    this.refusals.push(message);
   }
 
   simulatedBracketExit(book: BookSpec, held: Position): void {
@@ -573,7 +597,7 @@ class Cycle {
     });
   }
 
-  mark(book: BookSpec): BookReport {
+  async mark(book: BookSpec): Promise<BookReport> {
     const previous = this.deps.books.lastDay(book.id);
     const day = this.deps.books.markDay(
       book.id,
@@ -581,6 +605,7 @@ class Cycle {
       (i, v) => this.markGbp(i, v),
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
     );
+    await this.cancelRestingEntriesOnBlock(book, day.state);
     return {
       book_id: book.id,
       equity_gbp: day.equityGbp,
@@ -784,6 +809,8 @@ async function runUnmarked(
     }
   }
   await cycle.sweepFills();
+  const bookReports: BookReport[] = [];
+  for (const book of books) bookReports.push(await cycle.mark(book));
   refusals.push(...cycle.refusals);
   const { tally } = cycle;
   return {
@@ -801,6 +828,6 @@ async function runUnmarked(
     dry_run_refusals: tally.refused,
     rejected_orders: tally.rejected,
     refusals,
-    books: books.map((book) => cycle.mark(book)),
+    books: bookReports,
   };
 }

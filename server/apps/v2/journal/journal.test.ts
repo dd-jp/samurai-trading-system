@@ -194,6 +194,14 @@ describe('Journal', () => {
     expect(journal.unfilledSimulatedEntriesBefore('2026-09-24')).toMatchObject([
       { client_order_id: 'z-early', dry_run: true, payload: {} },
     ]);
+    expect(journal.restingEntries('debate/primary').map((o) => o.client_order_id)).toEqual([
+      'z-early',
+      'a-dry',
+      'b-sim',
+      'submitted',
+      'today',
+    ]);
+    expect(journal.restingEntries('debate/no-macro-gate')).toEqual([]);
   });
 
   it('hashes the same inputs to the same digest and different inputs differently', () => {

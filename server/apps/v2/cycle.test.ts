@@ -64,6 +64,7 @@ class FakeAlpaca implements BrokerAdapter {
   readonly pending: NormalizedFill[] = [];
   readonly sinceSeen: Date[] = [];
   flattenError: Error | undefined;
+  cancelError: Error | undefined;
 
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     this.brackets.push(order);
@@ -123,6 +124,7 @@ class FakeAlpaca implements BrokerAdapter {
   }
 
   cancel(clientOrderId: string): Promise<void> {
+    if (this.cancelError !== undefined) return Promise.reject(this.cancelError);
     this.cancelled.push(clientOrderId);
     return Promise.resolve();
   }
@@ -1032,15 +1034,21 @@ describe('runCycle', () => {
     ).toEqual([{ parameter: 'CALENDAR_REFERENCE', ticket: '#1791' }]);
   });
 
-  it('blocks entries after a daily-cap breach and sizes by the previous mark multiplier', async () => {
+  it('blocks entries after a daily-cap breach, cancels the entries resting at that mark, and sizes by the previous mark multiplier', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-25');
     deps.barsByDate.set(
       '2026-09-28',
       bar('2026-09-25', { low: 19.3, high: 20, close: 17, rawClose: 17 }),
     );
+    deps.setDecisions([longAapl, { ...longAapl, instrument: 'MSFT' }]);
     const drop = await runCycle(deps, '2026-09-28');
     expect(drop.books[0]?.size_multiplier).toBe(0);
+    expect(drop.entries).toBe(2);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('cancelled');
+    expect(drop.refusals).toContain(
+      'debate/primary: daily loss cap at the 2026-09-28 mark cancelled 1 resting entries',
+    );
     deps.setDecisions([{ ...longAapl, instrument: 'MSFT' }]);
     const blocked = await runCycle(deps, '2026-09-29');
     expect(blocked.entries).toBe(0);
@@ -1536,5 +1544,91 @@ describe('runCycle under a manual control', () => {
     const resumed = await runCycle(deps, '2026-09-30');
     expect(sizeShares(deps, 'debate/primary', '2026-09-30', 'MSFT')).toBe(0);
     expect(resumed.books[0]?.size_multiplier).toBe(0);
+  });
+});
+
+describe('runCycle: a mark that blocks entries cancels the resting ones', () => {
+  const drop = () => bar('2026-09-25', { low: 19.3, high: 20, close: 17, rawClose: 17 });
+  const msft: SleeveDecision = { ...longAapl, instrument: 'MSFT' };
+
+  function budgetRows(deps: CycleDeps) {
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    return db
+      .prepare(
+        "SELECT trading_date, ticket, message FROM v2_refusals WHERE parameter = 'LOSS_BUDGET' ORDER BY message",
+      )
+      .all();
+  }
+
+  it('simulated books: the halting mark cancels the entry sent that cycle, so it never fills', async () => {
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    deps.barsByDate.set('2026-09-28', drop());
+    deps.setDecisions([msft]);
+    const halted = await runCycle(deps, '2026-09-28');
+    expect(halted.entries).toBe(2);
+    expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(true);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')).toMatchObject({
+      outcome: 'cancelled',
+      payload: { cancelled: '2026-09-28' },
+    });
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-28-MSFT')?.outcome).toBe(
+      'cancelled',
+    );
+    expect(budgetRows(deps)).toEqual([
+      {
+        trading_date: '2026-09-28',
+        ticket: '#1813',
+        message:
+          'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
+      },
+      {
+        trading_date: '2026-09-28',
+        ticket: '#1813',
+        message: 'debate/primary: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
+      },
+    ]);
+    const next = await runCycle(deps, '2026-09-29');
+    expect(next.fills).toBe(0);
+    expect(deps.books.position('debate/primary', 'MSFT')).toBeUndefined();
+    expect(budgetRows(deps)).toHaveLength(2);
+  });
+
+  it('paper: the halting mark cancels the Alpaca entry sent that cycle', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.barsByDate.set('2026-09-28', drop());
+    deps.setDecisions([msft]);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toEqual(['v2-debate-primary-2026-09-28-MSFT']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('cancelled');
+  });
+
+  it('paper: a cancel the venue refuses is logged, left resting, and not counted', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.barsByDate.set('2026-09-28', drop());
+    deps.setDecisions([msft]);
+    alpaca.cancelError = new Error('venue closed');
+    const log = vi.fn();
+    await runCycle({ ...deps, logger: { log } }, '2026-09-28');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('submitted');
+    expect(
+      log.mock.calls.filter(([entry]) => entry.event === 'v2_cancel_failed' && entry.level === 'warn'),
+    ).toHaveLength(1);
+    expect(budgetRows(deps)).toEqual([
+      {
+        trading_date: '2026-09-28',
+        ticket: '#1813',
+        message:
+          'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
+      },
+    ]);
   });
 });
