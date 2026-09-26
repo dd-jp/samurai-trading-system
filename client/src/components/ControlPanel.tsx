@@ -22,7 +22,7 @@ const STATE_WORDS: Readonly<Record<ControlDisplayStateWire, string>> = {
 
 const ACTION_LABELS: Readonly<Record<ControlAction, string>> = {
   pause: 'Pause entries',
-  halt: 'Halt and flatten',
+  halt: 'Halt: flat at next fill',
   resume: 'Resume',
 };
 

@@ -20,20 +20,18 @@ function acquireFreePort(host: string): Promise<number> {
   });
 }
 
-const PORT_ENV_VAR = 'SAMURAI_E2E_PORT';
-
-export async function resolveE2ePort(host: string): Promise<number> {
-  const existing = process.env[PORT_ENV_VAR];
+export async function resolveE2ePort(host: string, portEnv: string): Promise<number> {
+  const existing = process.env[portEnv];
   if (existing !== undefined && existing !== '') {
     const port = Number(existing);
     if (!Number.isInteger(port) || port < 1 || port > 65_535) {
       throw new Error(
-        `resolveE2ePort: ${PORT_ENV_VAR}="${existing}" is not a valid port; unset it and rerun`,
+        `resolveE2ePort: ${portEnv}="${existing}" is not a valid port; unset it and rerun`,
       );
     }
     return port;
   }
   const port = await acquireFreePort(host);
-  process.env[PORT_ENV_VAR] = String(port);
+  process.env[portEnv] = String(port);
   return port;
 }
