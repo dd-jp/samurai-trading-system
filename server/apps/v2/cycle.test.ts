@@ -1186,6 +1186,26 @@ describe('runCycle', () => {
         payload: { detail: 'stop_on_entry_bar', price: expect.closeTo(price, 9) },
       });
     }
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-28', bar('2026-09-25', { low: 19.0, high: 20.2 }));
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - ENTRY_COST_GBP + (6 * 19.2 * (1 - HALF_SPREAD_BPS / 10_000)) / FX,
+      9,
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare("SELECT leg, side FROM v2_fills WHERE book_id = 'debate/primary' ORDER BY leg")
+        .all(),
+    ).toEqual([
+      { leg: 'entry', side: 'buy' },
+      { leg: 'exit', side: 'sell' },
+    ]);
   });
 
   it('counts calendar days between marks and never negatively', () => {
