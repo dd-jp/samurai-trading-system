@@ -10,11 +10,11 @@ let db: StoreHandle;
 
 afterEach(() => db?.close());
 
-function seedCapital(startCapitalGbp = 2_000, lossCapGbp = 1_500): void {
+function seedCapital(startCapitalGbp = 2_000, lossCapGbp = 1_500, year = 2026): void {
   db.prepare(
     `INSERT INTO v2_capital_config (year, effective_from, start_capital_gbp, loss_cap_gbp, recorded_at)
-     VALUES (2026, '2026-01-01', ?, ?, '2026-01-01T00:00:00.000Z')`,
-  ).run(startCapitalGbp, lossCapGbp);
+     VALUES (?, ?, ?, ?, '2026-01-01T00:00:00.000Z')`,
+  ).run(year, `${year}-01-01`, startCapitalGbp, lossCapGbp);
 }
 
 function seedBook(bookId: string, variant: string, startCapitalGbp = 1_000): void {
@@ -137,6 +137,7 @@ describe('OverviewReader loss budget (P1)', () => {
     expect(reader().read().loss_budget).toEqual({
       status: 'fed',
       year: 2026,
+      capital_stale: false,
       trading_date: '2026-10-05',
       start_capital_gbp: 2_000,
       loss_cap_gbp: 1_500,
@@ -151,6 +152,7 @@ describe('OverviewReader loss budget (P1)', () => {
           variant: 'primary',
           trading_date: '2026-10-05',
           ytd_loss_gbp: 530,
+          day_loss_gbp: 30,
           size_multiplier: 0.5,
           entries_blocked: true,
         },
@@ -160,6 +162,7 @@ describe('OverviewReader loss budget (P1)', () => {
           variant: 'no-macro-gate',
           trading_date: '2026-10-05',
           ytd_loss_gbp: 600,
+          day_loss_gbp: 400,
           size_multiplier: 0.5,
           entries_blocked: false,
         },
@@ -167,7 +170,7 @@ describe('OverviewReader loss budget (P1)', () => {
     });
   });
 
-  it('sums every primary book and measures a first day against its start capital', () => {
+  it('sums every primary book, and a first day loses nothing, as the cycle marks it', () => {
     db = openSharedStore(':memory:');
     seedCapital(3_000, 900);
     seedBook('debate/primary', 'primary', 1_000);
@@ -178,9 +181,49 @@ describe('OverviewReader loss budget (P1)', () => {
     expect(budget).toMatchObject({
       status: 'fed',
       ytd_loss_gbp: -10,
-      day_loss_gbp: -10,
+      day_loss_gbp: 0,
       step_marks_gbp: [300, 600, 900],
       daily_cap_gbp: 30,
+    });
+  });
+
+  it('shows each book at its own latest day, so a lagging book keeps its date', () => {
+    db = openSharedStore(':memory:');
+    seedCapital();
+    seedBook('debate/primary', 'primary');
+    seedBook('trend/primary', 'primary');
+    seedDay('debate/primary', '2026-10-01', { equity: 1_000, ytdLoss: 0 });
+    seedDay('debate/primary', '2026-10-02', { equity: 950, ytdLoss: 50 });
+    seedDay('trend/primary', '2026-10-01', { equity: 1_000, ytdLoss: 0 });
+    seedDay('trend/primary', '2026-10-05', { equity: 990, ytdLoss: 10 });
+    const budget = reader().read().loss_budget;
+    expect(budget).toMatchObject({
+      trading_date: '2026-10-05',
+      ytd_loss_gbp: 60,
+      day_loss_gbp: 60,
+      books: [
+        { book_id: 'debate/primary', trading_date: '2026-10-02', day_loss_gbp: 50 },
+        { book_id: 'trend/primary', trading_date: '2026-10-05', day_loss_gbp: 10 },
+      ],
+    });
+  });
+
+  it("carries last year's capital into a new year, flagged stale until the new year is set", () => {
+    db = openSharedStore(':memory:');
+    seedCapital(2_000, 1_500, 2026);
+    seedBook('debate/primary', 'primary');
+    seedDay('debate/primary', '2027-01-04', { equity: 1_000, ytdLoss: 0 });
+    expect(reader().read().loss_budget).toMatchObject({
+      year: 2026,
+      capital_stale: true,
+      trading_date: '2027-01-04',
+      loss_cap_gbp: 1_500,
+    });
+    seedCapital(2_500, 1_200, 2027);
+    expect(reader().read().loss_budget).toMatchObject({
+      year: 2027,
+      capital_stale: false,
+      loss_cap_gbp: 1_200,
     });
   });
 
@@ -293,6 +336,7 @@ describe('OverviewReader decisions (P4)', () => {
       decisions: [
         {
           book_id: 'debate/primary',
+          trading_date: '2026-10-05',
           instrument: 'AAPL',
           venue: 'alpaca',
           direction: 'long',
@@ -303,6 +347,22 @@ describe('OverviewReader decisions (P4)', () => {
         },
         expect.objectContaining({ instrument: 'MSFT', action: 'skip', vetoed: true }),
         expect.objectContaining({ instrument: 'NVDA', action: 'skip', vetoed: false }),
+      ],
+    });
+  });
+
+  it("shows each primary book's own latest decisions, so a lagging book is not hidden", () => {
+    db = openSharedStore(':memory:');
+    seedBook('debate/primary', 'primary');
+    seedBook('trend/primary', 'primary');
+    seedDecision('debate/primary', '2026-10-01', 'AAPL', 'enter_long', 'old');
+    seedDecision('debate/primary', '2026-10-02', 'MSFT', 'none', 'hold');
+    seedDecision('trend/primary', '2026-10-05', 'SPY', 'enter_long', 'trend');
+    expect(reader().read().decisions).toMatchObject({
+      trading_date: '2026-10-05',
+      decisions: [
+        { book_id: 'debate/primary', trading_date: '2026-10-02', instrument: 'MSFT' },
+        { book_id: 'trend/primary', trading_date: '2026-10-05', instrument: 'SPY' },
       ],
     });
   });
@@ -339,6 +399,13 @@ describe('OverviewReader LLM spend (P11)', () => {
     });
     seedSpend('opus', 5, '2026-10-06T09:00:00.000Z');
     expect(reader().read().llm_spend).toMatchObject({ spent_usd: 30, calls_stopped: true });
+  });
+
+  it('serves a non-finite month total as null, with calls stopped', () => {
+    db = openSharedStore(':memory:');
+    seedSpend('opus', 1e308, '2026-10-01T08:00:00.000Z');
+    seedSpend('opus', 1e308, '2026-10-02T08:00:00.000Z');
+    expect(reader().read().llm_spend).toMatchObject({ spent_usd: null, calls_stopped: true });
   });
 
   it('orders models of equal spend by name', () => {

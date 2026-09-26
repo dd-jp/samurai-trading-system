@@ -1,6 +1,14 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { V2_CONTRACT_VERSION, type V2OverviewWire } from '../../../../contracts/index.js';
+import {
+  CONTROL_REASON_MAX_CHARS,
+  V2_CONTRACT_VERSION,
+  type V2OverviewWire,
+} from '../../../../contracts/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { ControlWriter } from './control-writer.js';
 import { OverviewReader } from './overview.js';
@@ -17,15 +25,19 @@ const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 
 let db: StoreHandle;
 let server: V2DashboardServer | undefined;
+let faults: unknown[] = [];
+const cleanups: (() => void)[] = [];
 
 afterEach(async () => {
   await server?.stop();
   server = undefined;
   db?.close();
+  faults = [];
+  for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-async function start(overview?: () => V2OverviewWire): Promise<string> {
-  db = openSharedStore(':memory:');
+async function start(overview?: () => V2OverviewWire, storePath = ':memory:'): Promise<string> {
+  db = openSharedStore(storePath);
   const store = guardedStore(db, 'dashboard', { enabled: true });
   const reader = new OverviewReader(store, clock, 'paper');
   server = createV2DashboardServer({
@@ -34,6 +46,7 @@ async function start(overview?: () => V2OverviewWire): Promise<string> {
     token: TOKEN,
     overview: overview ?? (() => reader.read()),
     controls: new ControlWriter(store, clock),
+    onFault: (error) => faults.push(error),
   });
   await server.start();
   return server.url;
@@ -60,6 +73,7 @@ describe('createV2DashboardServer start-up', () => {
           throw new Error('unused');
         },
         controls: {} as ControlWriter,
+        onFault: () => undefined,
       }),
     ).toThrow(/SAMURAI_DASHBOARD_TOKEN is not set.*loopback included/s);
   });
@@ -74,6 +88,7 @@ describe('createV2DashboardServer start-up', () => {
         throw new Error('unused');
       },
       controls: {} as ControlWriter,
+      onFault: () => undefined,
     });
     await expect(clash.start()).rejects.toThrow(/EADDRINUSE/);
   });
@@ -86,6 +101,7 @@ describe('createV2DashboardServer auth and routing', () => {
       const response = await fetch(`${url}${path}`);
       expect(response.status).toBe(401);
       expect(response.headers.get('www-authenticate')).toBe('Bearer');
+      expect(response.headers.get('connection')).toBe('close');
     }
     const wrong = await fetch(`${url}/api/v2/overview`, {
       headers: { Authorization: 'Bearer nope' },
@@ -110,22 +126,43 @@ describe('createV2DashboardServer auth and routing', () => {
 
   it('answers an unknown path 404 and a wrong method 405 with Allow', async () => {
     const url = await start();
-    expect((await fetch(`${url}/api/v2/nothing`, { headers: AUTH })).status).toBe(404);
+    const nothing = await fetch(`${url}/api/v2/nothing`, { headers: AUTH });
+    expect(nothing.status).toBe(404);
+    expect(nothing.headers.get('connection')).toBe('close');
     const getControls = await fetch(`${url}/api/v2/controls`, { headers: AUTH });
     expect(getControls.status).toBe(405);
     expect(getControls.headers.get('allow')).toBe('POST');
+    expect(getControls.headers.get('connection')).toBe('close');
     const postOverview = await fetch(`${url}/api/v2/overview`, { method: 'POST', headers: AUTH });
     expect(postOverview.status).toBe(405);
     expect(postOverview.headers.get('allow')).toBe('GET');
   });
 
-  it('turns a fault into a 500 with a sanitized message', async () => {
+  it('answers a fault with a bare 500 and hands the detail to the fault hook only', async () => {
+    const fault = new Error('disk gone at /Users/someone/secret.sqlite');
     const url = await start(() => {
-      throw new Error('disk gone');
+      throw fault;
     });
     const response = await fetch(`${url}/api/v2/overview`, { headers: AUTH });
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: expect.stringContaining('disk gone') });
+    expect(await response.json()).toEqual({ error: 'internal error' });
+    expect(faults).toEqual([fault]);
+  });
+
+  it('answers 503 with Retry-After while another connection holds the write lock', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'v2-dashboard-busy-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const url = await start(undefined, join(dir, 'v2.sqlite'));
+    db.pragma('busy_timeout = 0');
+    const cycle = new BetterSqlite3(join(dir, 'v2.sqlite'));
+    cleanups.push(() => cycle.close());
+    cycle.exec('BEGIN IMMEDIATE');
+    const response = await postControl(url, halt);
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('1');
+    expect(await response.json()).toEqual({ error: 'store busy' });
+    cycle.exec('ROLLBACK');
+    expect((await postControl(url, halt)).status).toBe(201);
   });
 });
 
@@ -194,6 +231,17 @@ describe('POST /api/v2/controls', () => {
     });
     expect(response.status).toBe(413);
     expect(db.prepare('SELECT COUNT(*) AS n FROM v2_controls').get()).toEqual({ n: 0 });
+  });
+
+  it('fits the longest reason of three-byte characters and the longest key under the cap', async () => {
+    const url = await start();
+    const widest = JSON.stringify({
+      action: 'halt',
+      reason: '€'.repeat(CONTROL_REASON_MAX_CHARS),
+      idempotency_key: 'k'.repeat(128),
+    });
+    expect(Buffer.byteLength(widest)).toBeLessThanOrEqual(CONTROL_BODY_MAX_BYTES);
+    expect((await postControl(url, widest)).status).toBe(201);
   });
 
   it('accepts a body of exactly the cap', async () => {

@@ -14,12 +14,14 @@ export interface LossBudgetBookWire {
   readonly variant: string;
   readonly trading_date: string;
   readonly ytd_loss_gbp: number;
+  readonly day_loss_gbp: number;
   readonly size_multiplier: number;
   readonly entries_blocked: boolean;
 }
 
 export interface LossBudgetWire {
   readonly year: number;
+  readonly capital_stale: boolean;
   readonly trading_date: string;
   readonly start_capital_gbp: number;
   readonly loss_cap_gbp: number;
@@ -49,6 +51,7 @@ export interface ControlWire {
 
 export interface DecisionWire {
   readonly book_id: string;
+  readonly trading_date: string;
   readonly instrument: string;
   readonly venue: string;
   readonly direction: string;
@@ -75,7 +78,7 @@ export interface LlmSpendDayWire {
 
 export interface LlmSpendWire {
   readonly month_start: string;
-  readonly spent_usd: number;
+  readonly spent_usd: number | null;
   readonly budget_usd: number;
   readonly calls_stopped: boolean;
   readonly by_model: readonly LlmSpendModelWire[];
@@ -112,7 +115,7 @@ export interface V2OverviewWire {
   readonly heartbeat: HeartbeatWire;
 }
 
-export const CONTROL_REASON_MAX_CHARS = 500;
+export const CONTROL_REASON_MAX_CHARS = 250;
 
 export interface ControlRequestWire {
   readonly action: ControlAction;
@@ -148,6 +151,7 @@ const V2_WIRE_FIELD_NAMES = {
   ]),
   lossBudget: fieldsOf<LossBudgetWire>()([
     'year',
+    'capital_stale',
     'trading_date',
     'start_capital_gbp',
     'loss_cap_gbp',
@@ -163,6 +167,7 @@ const V2_WIRE_FIELD_NAMES = {
     'variant',
     'trading_date',
     'ytd_loss_gbp',
+    'day_loss_gbp',
     'size_multiplier',
     'entries_blocked',
   ]),
@@ -171,6 +176,7 @@ const V2_WIRE_FIELD_NAMES = {
   decisions: fieldsOf<DecisionsWire>()(['trading_date', 'decisions']),
   decision: fieldsOf<DecisionWire>()([
     'book_id',
+    'trading_date',
     'instrument',
     'venue',
     'direction',

@@ -1,7 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { V2ModeWire } from '../../../../contracts/index.js';
-import { type Clock, SystemClock } from '../../../shared/index.js';
+import {
+  type Clock,
+  describeThrownSafely,
+  SystemClock,
+  sanitizeLogText,
+} from '../../../shared/index.js';
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { DASHBOARD_TOKEN_ENV_VAR } from './auth.js';
@@ -29,6 +34,11 @@ export function parseDashboardArgs(
     strict: true,
   });
   const dryRun = values['dry-run'];
+  if (dryRun && values.store !== undefined) {
+    throw new Error(
+      '--store and --dry-run are exclusive: --dry-run always reads the dry-run store',
+    );
+  }
   const port = Number(env.V2_DASHBOARD_PORT ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error(`V2_DASHBOARD_PORT must be an integer port (got ${env.V2_DASHBOARD_PORT})`);
@@ -44,6 +54,7 @@ export function parseDashboardArgs(
 export interface ComposedDashboard {
   readonly server: V2DashboardServer;
   readonly db: StoreHandle;
+  readonly store: StoreHandle;
 }
 
 export function composeV2Dashboard(
@@ -53,7 +64,7 @@ export function composeV2Dashboard(
 ): ComposedDashboard {
   const db = openMigratedStore(args.storePath, CONTROLS_SCHEMA_VERSION);
   try {
-    const store = guardedStore(db, 'dashboard');
+    const store = guardedStore(db, 'dashboard', { enabled: true });
     const reader = new OverviewReader(store, clock, args.mode);
     const server = createV2DashboardServer({
       host: args.host,
@@ -61,8 +72,12 @@ export function composeV2Dashboard(
       token: env[DASHBOARD_TOKEN_ENV_VAR],
       overview: () => reader.read(),
       controls: new ControlWriter(store, clock),
+      onFault: (error) =>
+        process.stderr.write(
+          `v2 dashboard fault: ${sanitizeLogText(describeThrownSafely(error))}\n`,
+        ),
     });
-    return { server, db };
+    return { server, db, store };
   } catch (error) {
     db.close();
     throw error;

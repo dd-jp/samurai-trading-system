@@ -73,14 +73,15 @@ function ensureParentDirectory(dbPath: string): void {
 }
 
 // Two processes share one v2 store (the cycle and the dashboard API); without a busy timeout
-// the loser of a write race fails with SQLITE_BUSY at once instead of waiting
+// the loser of a write race fails with SQLITE_BUSY at once instead of waiting. It is set before
+// journal_mode because switching to WAL takes a lock the other process may hold
 const BUSY_TIMEOUT_MS = 5_000;
 
 function applyPragmas(db: StoreHandle): void {
+  db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = FULL');
   db.pragma('foreign_keys = ON');
-  db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
 }
 
 export function openSharedStore(dbPath: string): StoreHandle {

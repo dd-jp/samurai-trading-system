@@ -37,7 +37,7 @@ describe('parseControlRequest', () => {
     [{ ...valid, action: undefined }, 'action must be pause, halt or resume'],
     [{ ...valid, reason: '   ' }, 'reason is required'],
     [{ ...valid, reason: 7 }, 'reason is required'],
-    [{ ...valid, reason: 'x'.repeat(501) }, 'reason is longer than 500 characters'],
+    [{ ...valid, reason: 'x'.repeat(251) }, 'reason is longer than 250 characters'],
     [
       { ...valid, idempotency_key: 'short' },
       'idempotency_key must be 8-128 letters, digits, - or _',
@@ -59,7 +59,7 @@ describe('parseControlRequest', () => {
   });
 
   it('accepts the boundary lengths', () => {
-    const edge = { ...valid, reason: 'x'.repeat(500), idempotency_key: 'k'.repeat(128) };
+    const edge = { ...valid, reason: 'x'.repeat(250), idempotency_key: 'k'.repeat(128) };
     expect(parseControlRequest(edge).ok).toBe(true);
     expect(parseControlRequest({ ...valid, idempotency_key: 'k'.repeat(8) }).ok).toBe(true);
   });

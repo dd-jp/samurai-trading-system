@@ -45,24 +45,23 @@ interface DecisionRow {
 }
 
 const LATEST_BOOK_DAYS = `
+  WITH latest AS (SELECT book_id, MAX(trading_date) AS trading_date FROM v2_book_days GROUP BY book_id)
   SELECT d.book_id, b.sleeve_id, b.variant, d.trading_date, d.equity_gbp, d.ytd_loss_gbp,
          d.size_multiplier, d.entries_blocked,
          COALESCE(
            (SELECT p.equity_gbp FROM v2_book_days p
              WHERE p.book_id = d.book_id AND p.trading_date < d.trading_date
              ORDER BY p.trading_date DESC LIMIT 1),
-           b.start_capital_gbp) AS previous_equity_gbp
-    FROM v2_book_days d JOIN v2_books b USING (book_id)
-   WHERE d.trading_date = (SELECT MAX(trading_date) FROM v2_book_days)
+           d.equity_gbp) AS previous_equity_gbp
+    FROM v2_book_days d JOIN latest USING (book_id, trading_date) JOIN v2_books b USING (book_id)
    ORDER BY b.sleeve_id, b.variant <> 'primary', d.book_id`;
 
 const LATEST_PRIMARY_DECISIONS = `
+  WITH latest AS (SELECT book_id, MAX(trading_date) AS trading_date FROM v2_decisions GROUP BY book_id)
   SELECT d.trading_date, d.book_id, d.instrument, d.venue, d.direction, d.action, d.reason,
          d.confidence
-    FROM v2_decisions d JOIN v2_books b USING (book_id)
+    FROM v2_decisions d JOIN latest USING (book_id, trading_date) JOIN v2_books b USING (book_id)
    WHERE b.variant = 'primary'
-     AND d.trading_date = (SELECT MAX(d2.trading_date) FROM v2_decisions d2
-                             JOIN v2_books b2 USING (book_id) WHERE b2.variant = 'primary')
    ORDER BY d.book_id, d.instrument`;
 
 function isPrimary(row: BookDayRow): boolean {
@@ -73,6 +72,14 @@ function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
 
+function dayLoss(row: BookDayRow): number {
+  return row.previous_equity_gbp - row.equity_gbp;
+}
+
+function latestDate(rows: readonly { trading_date: string }[]): string {
+  return rows.reduce((latest, row) => (row.trading_date > latest ? row.trading_date : latest), '');
+}
+
 function bookWire(row: BookDayRow): LossBudgetBookWire {
   return {
     book_id: row.book_id,
@@ -80,6 +87,7 @@ function bookWire(row: BookDayRow): LossBudgetBookWire {
     variant: row.variant,
     trading_date: row.trading_date,
     ytd_loss_gbp: row.ytd_loss_gbp,
+    day_loss_gbp: dayLoss(row),
     size_multiplier: row.size_multiplier,
     entries_blocked: row.entries_blocked === 1,
   };
@@ -107,6 +115,10 @@ export class OverviewReader {
   }
 
   read(): V2OverviewWire {
+    return this.db.transaction(() => this.#snapshot())();
+  }
+
+  #snapshot(): V2OverviewWire {
     const bookDays = this.db.prepare(LATEST_BOOK_DAYS).all() as BookDayRow[];
     return {
       contract_version: V2_CONTRACT_VERSION,
@@ -121,9 +133,9 @@ export class OverviewReader {
   }
 
   lossBudget(bookDays: readonly BookDayRow[]): PanelWire<LossBudgetWire> {
-    const [first] = bookDays;
-    if (first === undefined) return { status: 'empty' };
-    const capital = this.capital.inForce(first.trading_date);
+    if (bookDays.length === 0) return { status: 'empty' };
+    const tradingDate = latestDate(bookDays);
+    const capital = this.capital.lastKnown(tradingDate);
     if (capital === undefined) {
       return { status: 'not-yet-fed', owner: 'npm run v2:capital (D8)', ticket: '#1745' };
     }
@@ -131,13 +143,14 @@ export class OverviewReader {
     return {
       status: 'fed',
       year: capital.year,
-      trading_date: first.trading_date,
+      capital_stale: capital.year !== Number(tradingDate.slice(0, 4)),
+      trading_date: tradingDate,
       start_capital_gbp: capital.startCapitalGbp,
       loss_cap_gbp: capital.lossCapGbp,
       step_marks_gbp: sizeStepMarksGbp(capital.lossCapGbp),
       daily_cap_gbp: dailyCapGbp(capital),
       ytd_loss_gbp: sum(primaries.map((row) => row.ytd_loss_gbp)),
-      day_loss_gbp: sum(primaries.map((row) => row.previous_equity_gbp - row.equity_gbp)),
+      day_loss_gbp: sum(primaries.map(dayLoss)),
       books: bookDays.map(bookWire),
     };
   }
@@ -161,12 +174,11 @@ export class OverviewReader {
 
   decisions(): PanelWire<DecisionsWire> {
     const rows = this.db.prepare(LATEST_PRIMARY_DECISIONS).all() as DecisionRow[];
-    const [first] = rows;
-    if (first === undefined) return { status: 'empty' };
+    if (rows.length === 0) return { status: 'empty' };
     return {
       status: 'fed',
-      trading_date: first.trading_date,
-      decisions: rows.map(({ trading_date: _date, ...row }) => ({
+      trading_date: latestDate(rows),
+      decisions: rows.map((row) => ({
         ...row,
         vetoed: row.action === 'skip' && row.reason.startsWith('vetoed:'),
       })),
@@ -191,7 +203,7 @@ export class OverviewReader {
     return {
       status: 'fed',
       month_start: since,
-      spent_usd: verdict.spent_usd,
+      spent_usd: Number.isFinite(verdict.spent_usd) ? verdict.spent_usd : null,
       budget_usd: verdict.budget_usd,
       calls_stopped: !verdict.admitted,
       by_model: byModel,

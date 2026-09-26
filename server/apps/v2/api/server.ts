@@ -5,7 +5,6 @@ import {
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
 } from '../../../../contracts/index.js';
-import { describeThrownSafely, sanitizeLogText } from '../../../shared/index.js';
 import { carriesToken, DASHBOARD_TOKEN_ENV_VAR, isConfiguredToken } from './auth.js';
 import {
   type ControlWriteResult,
@@ -14,6 +13,7 @@ import {
 } from './control-writer.js';
 
 export const CONTROL_BODY_MAX_BYTES = 1_024;
+const BUSY_RETRY_AFTER_SECONDS = 1;
 
 const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -27,6 +27,7 @@ export interface V2DashboardServerOptions {
   readonly token: string | undefined;
   readonly overview: () => V2OverviewWire;
   readonly controls: ControlWriter;
+  readonly onFault: (error: unknown) => void;
 }
 
 export interface V2DashboardServer {
@@ -45,11 +46,15 @@ function sendError(res: ServerResponse, status: number, error: string, headers =
   sendJson(res, status, { error }, headers);
 }
 
-function refuseOversized(req: IncomingMessage, res: ServerResponse): void {
+function refuseAndClose(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  error: string,
+  headers = {},
+): void {
   res.on('finish', () => req.destroy());
-  sendError(res, 413, `body is larger than ${CONTROL_BODY_MAX_BYTES} bytes`, {
-    Connection: 'close',
-  });
+  sendError(res, status, error, { ...headers, Connection: 'close' });
 }
 
 function declaredTooLarge(req: IncomingMessage): boolean {
@@ -113,6 +118,8 @@ type BodyOutcome =
   | { readonly ok: true; readonly request: ControlRequestWire }
   | { readonly ok: false; readonly status: 400 | 413 | 415; readonly error: string };
 
+const UNREAD_BODY_STATUSES: ReadonlySet<number> = new Set([413, 415]);
+
 const OVERSIZED: BodyOutcome = {
   ok: false,
   status: 413,
@@ -140,8 +147,8 @@ function postControl(controls: ControlWriter): Handler {
     if (outcome.ok) {
       const source = `dashboard ${req.socket.remoteAddress ?? 'unknown'}`;
       sendWriteResult(res, controls.write(outcome.request, source));
-    } else if (outcome.status === 413) {
-      refuseOversized(req, res);
+    } else if (UNREAD_BODY_STATUSES.has(outcome.status)) {
+      refuseAndClose(req, res, outcome.status, outcome.error);
     } else {
       sendError(res, outcome.status, outcome.error);
     }
@@ -163,27 +170,33 @@ function dispatch(
     if (carriesToken(req.headers.authorization, token)) {
       await resolveHandler(routes, req)(req, res);
     } else {
-      sendError(res, 401, 'unauthorized', { 'WWW-Authenticate': 'Bearer' });
+      refuseAndClose(req, res, 401, 'unauthorized', { 'WWW-Authenticate': 'Bearer' });
     }
   };
 }
 
 function resolveHandler(routes: Map<string, Map<string, Handler>>, req: IncomingMessage): Handler {
   const methods = routes.get(new URL(req.url ?? '/', 'http://localhost').pathname);
-  if (methods === undefined) return (_req, res) => sendError(res, 404, 'not found');
+  if (methods === undefined) return (req, res) => refuseAndClose(req, res, 404, 'not found');
   const allow = [...methods.keys()].join(', ');
   return (
     methods.get(req.method ?? '') ??
-    ((_req, res) => sendError(res, 405, 'method not allowed', { Allow: allow }))
+    ((req, res) => refuseAndClose(req, res, 405, 'method not allowed', { Allow: allow }))
   );
+}
+
+function isStoreBusy(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'SQLITE_BUSY';
 }
 
 function respondToFault(res: ServerResponse, error: unknown): void {
   if (res.headersSent) {
     res.end();
-    return;
+  } else if (isStoreBusy(error)) {
+    sendError(res, 503, 'store busy', { 'Retry-After': String(BUSY_RETRY_AFTER_SECONDS) });
+  } else {
+    sendError(res, 500, 'internal error');
   }
-  sendError(res, 500, sanitizeLogText(describeThrownSafely(error)));
 }
 
 export function createV2DashboardServer(opts: V2DashboardServerOptions): V2DashboardServer {
@@ -198,7 +211,10 @@ export function createV2DashboardServer(opts: V2DashboardServerOptions): V2Dashb
   const server: Server = createServer((req, res) => {
     Promise.resolve()
       .then(() => handle(req, res))
-      .catch((error: unknown) => respondToFault(res, error));
+      .catch((error: unknown) => {
+        respondToFault(res, error);
+        opts.onFault(error);
+      });
   });
   let port = opts.port;
   return {

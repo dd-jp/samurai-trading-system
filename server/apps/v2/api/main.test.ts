@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { composeV2Dashboard, parseDashboardArgs } from './main.js';
@@ -18,6 +18,7 @@ function migratedStore(): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -45,6 +46,12 @@ describe('parseDashboardArgs', () => {
     expect(() => parseDashboardArgs([], { V2_DASHBOARD_PORT: port })).toThrow(/V2_DASHBOARD_PORT/);
   });
 
+  it('refuses --store with --dry-run, which always reads the dry-run store', () => {
+    expect(() => parseDashboardArgs(['--dry-run', '--store', 'x.sqlite'], {})).toThrow(
+      /--store and --dry-run are exclusive/,
+    );
+  });
+
   it('refuses an unknown flag', () => {
     expect(() => parseDashboardArgs(['--live'], {})).toThrow();
   });
@@ -70,6 +77,24 @@ describe('composeV2Dashboard', () => {
       expect(db.prepare('SELECT action FROM v2_controls').all()).toEqual([{ action: 'pause' }]);
     } finally {
       await server.stop();
+      db.close();
+    }
+  });
+
+  it.each([
+    ['NODE_ENV', 'production'],
+    ['SAMURAI_MODE', 'live'],
+    ['SAMURAI_STORE_GUARD', 'off'],
+  ])('keeps the write guard on when %s=%s switches it off elsewhere', (name, value) => {
+    vi.stubEnv(name, value);
+    const { db, store } = composeV2Dashboard(
+      { storePath: migratedStore(), mode: 'paper', host: '127.0.0.1', port: 0 },
+      { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' },
+      clock,
+    );
+    try {
+      expect(() => store.prepare('DELETE FROM v2_book_days').run()).toThrow(/v2_book_days/);
+    } finally {
       db.close();
     }
   });
