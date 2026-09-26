@@ -51,9 +51,10 @@ export function StatusStrip({
   fetchImpl,
   onRecorded,
 }: StatusStripProps) {
-  const problem = status === 'failed' ? `The last refresh failed: ${error}.` : FEED_PROBLEMS[status];
+  const problem =
+    status === 'failed' ? `The last refresh failed: ${error}.` : FEED_PROBLEMS[status];
   return (
-    <header className="strip" aria-label="Status">
+    <header className="strip">
       {problem !== undefined && (
         <p className="warn" role="alert">
           {problem}

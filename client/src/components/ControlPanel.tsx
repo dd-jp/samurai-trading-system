@@ -117,8 +117,8 @@ export function ControlPanel({
       </p>
       {control.loss_budget_halted_books.length > 0 && (
         <p className="warn" role="note">
-          The loss budget has halted {control.loss_budget_halted_books.join(', ')}. Resume does
-          not lift it.
+          The loss budget has halted {control.loss_budget_halted_books.join(', ')}. Resume does not
+          lift it.
         </p>
       )}
       <label className="reason">

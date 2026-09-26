@@ -1,11 +1,25 @@
 import type { NotYetFedWire, PanelWire } from '@contracts';
 import type { ReactNode } from 'react';
 
-export function NotYetFed({ panel }: { panel: NotYetFedWire }) {
+function NotYetFed({ panel }: { panel: NotYetFedWire }) {
   return (
     <p className="panel-note" data-status="not-yet-fed">
       Not yet fed: {panel.owner} ({panel.ticket}).
     </p>
+  );
+}
+
+export function TableHead({ columns }: { columns: readonly string[] }) {
+  return (
+    <thead>
+      <tr>
+        {columns.map((column) => (
+          <th key={column} scope="col">
+            {column}
+          </th>
+        ))}
+      </tr>
+    </thead>
   );
 }
 

@@ -10,7 +10,7 @@ import {
 } from './lib/dashboard-token.ts';
 import './App.css';
 
-export const OVERVIEW_URL = '/api/v2/overview';
+const OVERVIEW_URL = '/api/v2/overview';
 
 const VIEWS = [{ id: 'today', label: 'Today' }] as const;
 
@@ -35,9 +35,7 @@ const safeSessionStorage: TokenStorage = {
 };
 
 function useDashboardToken(): string | null {
-  const [token] = useState(() =>
-    resolveDashboardToken(window.location.search, safeSessionStorage),
-  );
+  const [token] = useState(() => resolveDashboardToken(window.location.search, safeSessionStorage));
   useEffect(() => {
     const search = stripTokenParam(window.location.search);
     if (search !== window.location.search) {
@@ -77,12 +75,18 @@ export function App(options: PollOptions = {}) {
       />
       <nav className="views" aria-label="Views">
         {VIEWS.map((entry) => (
-          <a key={entry.id} href={`#${entry.id}`} aria-current={view === entry.id ? 'page' : undefined}>
+          <a
+            key={entry.id}
+            href={`#${entry.id}`}
+            aria-current={view === entry.id ? 'page' : undefined}
+          >
             {entry.label}
           </a>
         ))}
       </nav>
-      <main>{view === 'today' && overview.data !== null && <TodayView overview={overview.data} />}</main>
+      <main>
+        {view === 'today' && overview.data !== null && <TodayView overview={overview.data} />}
+      </main>
     </div>
   );
 }

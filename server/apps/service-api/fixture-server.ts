@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url';
 import type { TradingArm } from '../../shared/index.js';
 import { resolveStoreMode } from '../../shared/store/index.js';
 import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
@@ -88,7 +87,6 @@ const server = createDashboardServer({
   port: resolvePort(),
   host: process.env.HOST ?? '127.0.0.1',
   store: new E2eFixtureStore(),
-  bundleRoot: fileURLToPath(new URL('../../../client/', import.meta.url)),
   mode,
   providers,
   dashboardCredential: process.env[DASHBOARD_CREDENTIAL_ENV_VAR],

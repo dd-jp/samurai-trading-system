@@ -1,6 +1,6 @@
 import type { LossBudgetBookWire, LossBudgetWire, PanelWire } from '@contracts';
 import { gbp, sizeStep } from '../../lib/format.ts';
-import { Panel } from '../Panel.tsx';
+import { Panel, TableHead } from '../Panel.tsx';
 
 function share(value: number, cap: number): number {
   if (cap <= 0) return 0;
@@ -35,14 +35,22 @@ function Meter({ label, loss, cap, marks }: MeterProps) {
         <rect className="meter-ground" x="0" y="2" width="100" height="6" />
         <rect className="meter-fill" x="0" y="2" width={share(loss, cap)} height="6" />
         {marks.map((mark) => (
-          <line key={mark} className="meter-mark" x1={share(mark, cap)} x2={share(mark, cap)} y1="0" y2="10" />
+          <line
+            key={mark}
+            className="meter-mark"
+            x1={share(mark, cap)}
+            x2={share(mark, cap)}
+            y1="0"
+            y2="10"
+          />
         ))}
       </svg>
       {marks.length > 0 && (
         <ul className="meter-marks" aria-label="Size steps">
           {marks.map((mark, index) => (
             <li key={mark}>
-              {gbp(-mark)}: {index === marks.length - 1 ? 'halt' : `${sizeStep(0.5 ** (index + 1))} size`}
+              {gbp(-mark)}:{' '}
+              {index === marks.length - 1 ? 'halt' : `${sizeStep(0.5 ** (index + 1))} size`}
             </li>
           ))}
         </ul>
@@ -58,15 +66,7 @@ function sleevesOf(books: readonly LossBudgetBookWire[]): string[] {
 function BookRows({ books }: { books: readonly LossBudgetBookWire[] }) {
   return (
     <table className="grid">
-      <thead>
-        <tr>
-          <th scope="col">Book</th>
-          <th scope="col">YTD loss</th>
-          <th scope="col">Today</th>
-          <th scope="col">Size</th>
-          <th scope="col">Entries</th>
-        </tr>
-      </thead>
+      <TableHead columns={['Book', 'YTD loss', 'Today', 'Size', 'Entries']} />
       <tbody>
         {sleevesOf(books).flatMap((sleeve) =>
           books

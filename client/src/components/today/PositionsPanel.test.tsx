@@ -40,7 +40,12 @@ describe('PositionsPanel (P3)', () => {
             },
           ],
           venues: [
-            { venue: 'alpaca', currency: 'USD', positions_value_quote: null, positions_value_gbp: null },
+            {
+              venue: 'alpaca',
+              currency: 'USD',
+              positions_value_quote: null,
+              positions_value_gbp: null,
+            },
           ],
           total_gbp: null,
         }}
@@ -62,7 +67,9 @@ describe('PositionsPanel (P3)', () => {
   it('says there are no books when empty, and names the owner when not yet fed', () => {
     const { rerender } = render(<PositionsPanel panel={{ status: 'empty' }} />);
     expect(text()).toContain('No books yet.');
-    rerender(<PositionsPanel panel={{ status: 'not-yet-fed', owner: 'bar store', ticket: '#1' }} />);
+    rerender(
+      <PositionsPanel panel={{ status: 'not-yet-fed', owner: 'bar store', ticket: '#1' }} />,
+    );
     expect(text()).toContain('Not yet fed: bar store (#1).');
   });
 });

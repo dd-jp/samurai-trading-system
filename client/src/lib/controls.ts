@@ -8,7 +8,7 @@ import {
 } from '@contracts';
 import { authHeaders } from './api.ts';
 
-export const CONTROLS_URL = '/api/v2/controls';
+const CONTROLS_URL = '/api/v2/controls';
 
 export type ControlOutcome =
   | { readonly kind: 'recorded'; readonly control: ControlRowWire; readonly replayed: boolean }

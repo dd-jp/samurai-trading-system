@@ -20,7 +20,9 @@ describe('usePoll', () => {
     expect(result.current.status).toBe('waiting');
     await waitFor(() => expect(result.current.status).toBe('ok'));
     expect(result.current).toMatchObject({ data: body, lastSuccessAt: 1_000, error: null });
-    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ headers: { Authorization: 'Bearer tok' } });
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: 'Bearer tok' },
+    });
 
     expect(POLL_INTERVAL_MS).toBe(30_000);
     await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));

@@ -29,13 +29,12 @@ describe('App', () => {
     window.history.replaceState(null, '', '/#nowhere');
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(overview()));
     render(<App fetchImpl={fetchImpl} />);
-    await waitFor(() => expect(screen.getByRole('region', { name: "Today's decisions" })).toBeTruthy());
-    expect(screen.getAllByRole('region').map((region) => region.getAttribute('aria-label'))).toEqual([
-      'Halt and pause',
-      'Loss budget',
-      'Positions and cash',
-      "Today's decisions",
-    ]);
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: "Today's decisions" })).toBeTruthy(),
+    );
+    expect(
+      screen.getAllByRole('region').map((region) => region.getAttribute('aria-label')),
+    ).toEqual(['Halt and pause', 'Loss budget', 'Positions and cash', "Today's decisions"]);
     expect(screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current')).toBe('page');
   });
 

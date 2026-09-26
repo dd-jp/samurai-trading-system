@@ -73,7 +73,10 @@ describe('ControlPanel (P2)', () => {
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/v2/controls');
     expect(init.method).toBe('POST');
-    expect(init.headers).toEqual({ Authorization: 'Bearer tok', 'Content-Type': 'application/json' });
+    expect(init.headers).toEqual({
+      Authorization: 'Bearer tok',
+      'Content-Type': 'application/json',
+    });
     expect(sentBody(fetchImpl)).toEqual({
       action: 'pause',
       reason: 'earnings week',
@@ -123,10 +126,17 @@ describe('ControlPanel (P2)', () => {
 
   it('shows the control in force, offers resume, and lists the history', () => {
     setup({
-      control: { state: 'paused', in_force: PAUSE_ROW, loss_budget_halted_books: [], history: [PAUSE_ROW] },
+      control: {
+        state: 'paused',
+        in_force: PAUSE_ROW,
+        loss_budget_halted_books: [],
+        history: [PAUSE_ROW],
+      },
     });
     expect(screen.getByText('PAUSED')).toBeTruthy();
-    expect(screen.getByText(/since 2026-10-06 09:00Z from dashboard 127\.0\.0\.1: earnings week/)).toBeTruthy();
+    expect(
+      screen.getByText(/since 2026-10-06 09:00Z from dashboard 127\.0\.0\.1: earnings week/),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
     expect(screen.getByText('Control history (1)')).toBeTruthy();
   });

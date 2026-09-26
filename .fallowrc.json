@@ -3,6 +3,7 @@
   "entry": [
     "server/apps/*/index.ts",
     "server/apps/service-api/fixture-server.ts",
+    "server/apps/v2/api/fixture-server.ts",
     "server/apps/v2/smoke.ts",
     "server/apps/v2/set-capital.ts",
     "server/apps/v2/trial-ledger.ts",

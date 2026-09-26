@@ -1,6 +1,6 @@
 import type { DecisionsWire, DecisionWire, PanelWire, SleeveAction } from '@contracts';
 import { percent } from '../../lib/format.ts';
-import { Panel } from '../Panel.tsx';
+import { Panel, TableHead } from '../Panel.tsx';
 
 const OUTCOMES: Readonly<Record<SleeveAction, string>> = {
   enter_long: 'entered long',
@@ -17,15 +17,7 @@ function Decisions({ decisions }: { decisions: DecisionsWire }) {
   return (
     <table className="grid">
       <caption>Cycle {decisions.trading_date}, primary books</caption>
-      <thead>
-        <tr>
-          <th scope="col">Instrument</th>
-          <th scope="col">Book</th>
-          <th scope="col">Outcome</th>
-          <th scope="col">Confidence</th>
-          <th scope="col">Reason</th>
-        </tr>
-      </thead>
+      <TableHead columns={['Instrument', 'Book', 'Outcome', 'Confidence', 'Reason']} />
       <tbody>
         {decisions.decisions.map((decision) => (
           <tr key={`${decision.book_id}/${decision.instrument}`} data-outcome={outcome(decision)}>

@@ -1,7 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
-import { DASHBOARD_CREDENTIAL_ENV_VAR } from '../server/apps/service-api/bind-guard.ts';
+import { DASHBOARD_TOKEN_ENV_VAR } from '../server/apps/v2/api/auth.ts';
 import { resolveE2ePort } from './support/port.ts';
+import { E2E_TOKEN } from './support/token.ts';
 
 const HOST = '127.0.0.1';
 const PORT = await resolveE2ePort(HOST);
@@ -34,16 +35,15 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'npm run build && node dist/server/apps/service-api/fixture-server.js',
+    command: 'npm run build && node dist/server/apps/v2/api/fixture-server.js',
     cwd: repoRoot,
-    url: `${BASE_URL}/api/snapshot`,
+    url: `${BASE_URL}/`,
     timeout: 300_000,
     reuseExistingServer: false,
     env: {
-      SAMURAI_MODE: 'paper',
       PORT: String(PORT),
       HOST,
-      [DASHBOARD_CREDENTIAL_ENV_VAR]: '',
+      [DASHBOARD_TOKEN_ENV_VAR]: E2E_TOKEN,
     },
     stdout: 'pipe',
     stderr: 'pipe',

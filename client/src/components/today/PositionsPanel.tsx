@@ -1,6 +1,6 @@
 import type { MarkWire, PanelWire, PositionsWire, PositionWire } from '@contracts';
 import { fixed, gbp, quote, UNKNOWN } from '../../lib/format.ts';
-import { Panel } from '../Panel.tsx';
+import { Panel, TableHead } from '../Panel.tsx';
 
 function markCells(mark: MarkWire, currency: PositionWire['currency']) {
   if (mark.status === 'fresh') {
@@ -27,18 +27,9 @@ function PositionRows({ positions }: { positions: readonly PositionWire[] }) {
   if (positions.length === 0) return <p className="panel-note">No open positions.</p>;
   return (
     <table className="grid">
-      <thead>
-        <tr>
-          <th scope="col">Instrument</th>
-          <th scope="col">Book</th>
-          <th scope="col">Qty</th>
-          <th scope="col">Entry</th>
-          <th scope="col">Stop</th>
-          <th scope="col">Held</th>
-          <th scope="col">Mark</th>
-          <th scope="col">Unrealised</th>
-        </tr>
-      </thead>
+      <TableHead
+        columns={['Instrument', 'Book', 'Qty', 'Entry', 'Stop', 'Held', 'Mark', 'Unrealised']}
+      />
       <tbody>
         {positions.map((position) => (
           <tr
@@ -48,7 +39,9 @@ function PositionRows({ positions }: { positions: readonly PositionWire[] }) {
             <th scope="row">
               {position.instrument} <small>{position.venue}</small>
             </th>
-            <td>{position.variant === 'primary' ? position.book_id : `${position.variant} (shadow)`}</td>
+            <td>
+              {position.variant === 'primary' ? position.book_id : `${position.variant} (shadow)`}
+            </td>
             <td>{position.qty}</td>
             <td>{gbp(position.entry_gbp)}</td>
             <td>{position.stop_gbp === null ? 'none' : gbp(position.stop_gbp)}</td>
@@ -93,7 +86,11 @@ function Positions({ positions }: { positions: PositionsWire }) {
           <tr className="total">
             <th scope="row">Total</th>
             <td />
-            <td>{positions.total_gbp === null ? 'unavailable (a mark is missing)' : gbp(positions.total_gbp)}</td>
+            <td>
+              {positions.total_gbp === null
+                ? 'unavailable (a mark is missing)'
+                : gbp(positions.total_gbp)}
+            </td>
           </tr>
         </tbody>
       </table>

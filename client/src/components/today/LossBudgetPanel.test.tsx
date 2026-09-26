@@ -27,7 +27,9 @@ describe('LossBudgetPanel (P1)', () => {
     expect(
       screen.getByRole('img', { name: /Year-to-date loss.*−£120\.00 against −£3,000\.00/ }),
     ).toBeTruthy();
-    expect(screen.getByRole('img', { name: /Today's loss.*−£5\.00 against −£40\.00/ })).toBeTruthy();
+    expect(
+      screen.getByRole('img', { name: /Today's loss.*−£5\.00 against −£40\.00/ }),
+    ).toBeTruthy();
   });
 
   it('lists each primary book with its shadows under it, with size step and entry block', () => {

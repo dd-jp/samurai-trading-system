@@ -1,5 +1,4 @@
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
 import type { LogEventCode } from '../../shared/index.js';
 import {
@@ -12,7 +11,7 @@ import { JsonLogger } from '../orchestrator/index.js';
 import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 import { ProviderStatusPoller } from './provider-status.js';
-import { bundleDiagnostic, createDashboardServer } from './server.js';
+import { createDashboardServer } from './server.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
 
 watchDashboardStdout();
@@ -37,20 +36,6 @@ bootLog('info', 'dashboard_store_resolved', `Samurai dashboard store → ${resol
   store_path: resolve(dbPath),
   mode,
 });
-
-const bundleRoot = fileURLToPath(new URL('../../../client/', import.meta.url));
-
-const bundleProblem = bundleDiagnostic(bundleRoot);
-if (bundleProblem !== null) {
-  bootLog(
-    'error',
-    'dashboard_bundle_unservable',
-    'dashboard UI not servable — /api/snapshot is still up',
-    {
-      bundle_problem: bundleProblem,
-    },
-  );
-}
 
 function buildAlpacaClient(): AlpacaHttpBrokerClient | undefined {
   try {
@@ -88,7 +73,6 @@ const server = createDashboardServer({
   port,
   host,
   store: new SqliteQueryStore(db, 30, alertChatId),
-  bundleRoot,
   mode,
   providers,
   dashboardCredential,

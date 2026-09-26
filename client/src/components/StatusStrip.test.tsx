@@ -8,8 +8,10 @@ const noop = () => undefined;
 
 describe('StatusStrip (P14 and the feed state)', () => {
   it('shows the mode, the last cycle, the unfed schedule and ping, and the data time', () => {
-    render(<StatusStrip overview={overview()} status="ok" error={null} token="t" onRecorded={noop} />);
-    const line = screen.getByRole('banner', { name: 'Status' }).querySelector('.strip-line');
+    render(
+      <StatusStrip overview={overview()} status="ok" error={null} token="t" onRecorded={noop} />,
+    );
+    const line = screen.getByRole('banner').querySelector('.strip-line');
     expect(line?.textContent).toBe(
       'PAPERLast cycle 2026-10-05, recorded 2026-10-05 21:40ZNext due not yet fed (#1784)Ping not yet fed (#1784)Data as of 2026-10-06 21:40Z',
     );
@@ -46,7 +48,9 @@ describe('StatusStrip (P14 and the feed state)', () => {
     ['contract-mismatch', null, 'different contract version'],
     ['failed', 'HTTP 503', 'The last refresh failed: HTTP 503.'],
   ] as const)('warns when the feed is %s', (status, error, message) => {
-    render(<StatusStrip overview={null} status={status} error={error} token={null} onRecorded={noop} />);
+    render(
+      <StatusStrip overview={null} status={status} error={error} token={null} onRecorded={noop} />,
+    );
     expect(screen.getByRole('alert').textContent).toContain(message);
   });
 });
