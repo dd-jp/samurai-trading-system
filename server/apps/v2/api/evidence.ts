@@ -11,7 +11,7 @@ import {
 } from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
 import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index.js';
-import { annualisedSharpe, maxDrawdown } from '../../../tools/backtest/index.js';
+import { annualisedSharpe, maxDrawdown, moments } from '../../../tools/backtest/index.js';
 
 const G1_CLOSED_TRADES = 100;
 
@@ -41,7 +41,8 @@ function dailyReturns(equity: readonly number[]): number[] | null {
 
 function sharpeOf(equity: readonly number[]): number | null {
   const returns = dailyReturns(equity);
-  return returns === null || returns.length < 2 ? null : annualisedSharpe(returns);
+  if (returns === null || returns.length < 2 || moments(returns).stdev === 0) return null;
+  return annualisedSharpe(returns);
 }
 
 function bookPerformance(book: BookRow, points: readonly EquityPointWire[]): BookPerformanceWire {
@@ -92,16 +93,13 @@ export class EvidenceReader {
       )
       .all() as DayRow[];
     if (days.length === 0) return { status: 'empty' };
+    const byBook = new Map<string, EquityPointWire[]>();
+    for (const { book_id, trading_date, equity_gbp } of days) {
+      byBook.set(book_id, [...(byBook.get(book_id) ?? []), { trading_date, equity_gbp }]);
+    }
     return {
       status: 'fed',
-      books: books.map((book) =>
-        bookPerformance(
-          book,
-          days
-            .filter((day) => day.book_id === book.book_id)
-            .map(({ trading_date, equity_gbp }) => ({ trading_date, equity_gbp })),
-        ),
-      ),
+      books: books.map((book) => bookPerformance(book, byBook.get(book.book_id) ?? [])),
     };
   }
 
@@ -109,10 +107,8 @@ export class EvidenceReader {
     const books = this.db
       .prepare(
         `SELECT b.book_id, b.variant,
-                (SELECT COUNT(*) FROM v2_orders o
-                  WHERE o.book_id = b.book_id AND o.leg = 'exit'
-                    AND EXISTS (SELECT 1 FROM v2_fills f WHERE f.client_order_id = o.client_order_id)
-                ) AS closed_trades
+                (SELECT COUNT(DISTINCT f.client_order_id) FROM v2_fills f
+                  WHERE f.book_id = b.book_id AND f.leg <> 'entry') AS closed_trades
            FROM v2_books b
           ORDER BY b.sleeve_id, b.variant <> 'primary', b.book_id`,
       )

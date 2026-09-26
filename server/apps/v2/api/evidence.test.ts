@@ -46,7 +46,12 @@ function exitOrder(id: string, bookId: string, leg: 'entry' | 'exit' = 'exit'): 
   });
 }
 
-function fillOf(fillId: string, orderId: string, bookId: string): void {
+function fillOf(
+  fillId: string,
+  orderId: string,
+  bookId: string,
+  leg: 'entry' | 'stop' | 'target' | 'exit' = 'exit',
+): void {
   new Journal(db, clock).recordFill({
     fill_id: fillId,
     client_order_id: orderId,
@@ -54,7 +59,7 @@ function fillOf(fillId: string, orderId: string, bookId: string): void {
     trading_date: '2026-10-05',
     instrument: 'AAPL',
     venue: 'alpaca',
-    leg: 'exit',
+    leg,
     side: 'sell',
     qty: 1,
     price_gbp: 100,
@@ -136,6 +141,25 @@ describe('EvidenceReader (P5–P8)', () => {
     });
   });
 
+  it('has no Sharpe for a flat book, which is not a measured zero', () => {
+    open();
+    book('debate/primary', 'primary');
+    for (const date of ['2026-10-01', '2026-10-02', '2026-10-05'])
+      day('debate/primary', date, 1000);
+    expect(read().performance).toMatchObject({ books: [{ days: 3, sharpe: null }] });
+  });
+
+  it('takes one return per recorded cycle, so a missed cycle folds into the next return', () => {
+    open();
+    book('debate/primary', 'primary');
+    day('debate/primary', '2026-10-01', 1000);
+    day('debate/primary', '2026-10-02', 1010);
+    day('debate/primary', '2026-10-09', 1000);
+    expect(read().performance).toMatchObject({
+      books: [{ days: 3, sharpe: annualisedSharpe([1010 / 1000 - 1, 1000 / 1010 - 1]) }],
+    });
+  });
+
   it('measures the deepest fall from a running peak', () => {
     open();
     book('debate/primary', 'primary');
@@ -150,7 +174,7 @@ describe('EvidenceReader (P5–P8)', () => {
     expect(read().performance).toMatchObject({ books: [{ max_drawdown: 0.25 }] });
   });
 
-  it('counts closed round trips per book: exits that filled, once each', () => {
+  it('counts closed round trips per book: bracket legs and exits that filled, once per order', () => {
     open();
     book('debate/primary', 'primary');
     book('debate/no-veto', 'no-veto');
@@ -161,14 +185,20 @@ describe('EvidenceReader (P5–P8)', () => {
     fillOf('f3', 'exit-2', 'debate/primary');
     exitOrder('exit-unfilled', 'debate/primary');
     exitOrder('entry-1', 'debate/primary', 'entry');
-    fillOf('f4', 'entry-1', 'debate/primary');
+    fillOf('f4', 'entry-1', 'debate/primary', 'entry');
+    exitOrder('bracket-stopped', 'debate/primary', 'entry');
+    fillOf('f6', 'bracket-stopped', 'debate/primary', 'entry');
+    fillOf('f7', 'bracket-stopped', 'debate/primary', 'stop');
+    fillOf('f8', 'bracket-stopped', 'debate/primary', 'stop');
+    exitOrder('bracket-target', 'debate/primary', 'entry');
+    fillOf('f9', 'bracket-target', 'debate/primary', 'target');
     exitOrder('exit-shadow', 'debate/no-veto');
     fillOf('f5', 'exit-shadow', 'debate/no-veto');
     expect(read().trade_count).toEqual({
       status: 'fed',
       target: 100,
       books: [
-        { book_id: 'debate/primary', variant: 'primary', closed_trades: 2 },
+        { book_id: 'debate/primary', variant: 'primary', closed_trades: 4 },
         { book_id: 'debate/no-veto', variant: 'no-veto', closed_trades: 1 },
       ],
     });
