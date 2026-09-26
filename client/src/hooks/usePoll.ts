@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchWire } from '../lib/api.ts';
+import { type FetchOutcome, fetchWire } from '../lib/api.ts';
 
 export const POLL_INTERVAL_MS = 30_000;
 
@@ -24,6 +24,23 @@ interface HeldState<T> extends PollState<T> {
   readonly url: string;
 }
 
+function nextHeld<T>(
+  previous: HeldState<T>,
+  outcome: FetchOutcome<T>,
+  url: string,
+  at: number,
+): HeldState<T> {
+  if (outcome.kind === 'ok') {
+    return { data: outcome.body, status: 'ok', error: null, lastSuccessAt: at, url };
+  }
+  return {
+    ...(previous.url === url ? previous : WAITING),
+    status: outcome.kind,
+    error: outcome.kind === 'failed' ? outcome.error : null,
+    url,
+  };
+}
+
 export function usePoll<T>(
   url: string,
   token: string | null,
@@ -44,22 +61,8 @@ export function usePoll<T>(
     const poll = async () => {
       const outcome = await fetchWire<T>(url, token, latest.current.fetchImpl, controller.signal);
       if (controller.signal.aborted) return;
-      setHeld((previous) =>
-        outcome.kind === 'ok'
-          ? {
-              data: outcome.body,
-              status: 'ok',
-              error: null,
-              lastSuccessAt: latest.current.now(),
-              url,
-            }
-          : {
-              ...(previous.url === url ? previous : WAITING),
-              status: outcome.kind,
-              error: outcome.kind === 'failed' ? outcome.error : null,
-              url,
-            },
-      );
+      const at = latest.current.now();
+      setHeld((previous) => nextHeld(previous, outcome, url, at));
       timer = setTimeout(() => void poll(), intervalMs);
     };
     void poll();
