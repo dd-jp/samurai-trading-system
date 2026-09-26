@@ -124,6 +124,7 @@ export type {
   Venue,
 } from './v2.js';
 export type {
+  BookCashWire,
   ControlDisplayStateWire,
   ControlRequestWire,
   ControlResponseWire,
@@ -131,6 +132,8 @@ export type {
   ControlWire,
   DecisionsWire,
   DecisionWire,
+  FreshMarkWire,
+  FxRateWire,
   HeartbeatWire,
   LastCycleWire,
   LlmSpendDayWire,
@@ -138,11 +141,16 @@ export type {
   LlmSpendWire,
   LossBudgetBookWire,
   LossBudgetWire,
+  MarkWire,
   NextCycleWire,
   PanelWire,
   PingWire,
+  PositionsWire,
+  PositionWire,
+  QuoteCurrencyWire,
   V2ModeWire,
   V2OverviewWire,
+  VenueTotalWire,
 } from './v2-wire.js';
 export { CONTROL_REASON_MAX_CHARS, V2_CONTRACT_VERSION } from './v2-wire.js';
 export { contractVersionOf } from './version.js';

@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { V2ModeWire } from '../../../../contracts/index.js';
+import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import {
   type Clock,
   describeThrownSafely,
@@ -8,10 +10,12 @@ import {
   sanitizeLogText,
 } from '../../../shared/index.js';
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
-import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
+import { BarsMarketData, ParquetMarkSource, parseBoeGbpUsdCsv } from '../data/index.js';
+import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { DASHBOARD_TOKEN_ENV_VAR } from './auth.js';
 import { ControlWriter } from './control-writer.js';
 import { OverviewReader } from './overview.js';
+import { PositionsPanel } from './positions.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
 
 const CONTROLS_SCHEMA_VERSION = 70;
@@ -19,6 +23,8 @@ const DEFAULT_PORT = 8788;
 
 export interface V2DashboardArgs {
   readonly storePath: string;
+  readonly barStoreRoot: string;
+  readonly fxPath: string;
   readonly mode: V2ModeWire;
   readonly host: string;
   readonly port: number;
@@ -48,12 +54,19 @@ export function parseDashboardArgs(
 ): V2DashboardArgs {
   const { values } = parseArgs({
     args: [...argv],
-    options: { 'dry-run': { type: 'boolean', default: false }, store: { type: 'string' } },
+    options: {
+      'dry-run': { type: 'boolean', default: false },
+      store: { type: 'string' },
+      bars: { type: 'string', default: DEFAULT_BAR_STORE_ROOT },
+      fx: { type: 'string', default: FX_PATH },
+    },
     strict: true,
   });
   const dryRun = values['dry-run'];
   return {
     storePath: storePathFor(dryRun, values.store),
+    barStoreRoot: values.bars,
+    fxPath: values.fx,
     mode: dryRun ? 'dry-run' : 'paper',
     host: env.HOST ?? '127.0.0.1',
     port: parsePort(env.V2_DASHBOARD_PORT),
@@ -71,10 +84,15 @@ export function composeV2Dashboard(
   env: NodeJS.ProcessEnv,
   clock: Clock,
 ): ComposedDashboard {
+  const fx = parseBoeGbpUsdCsv(readFileSync(args.fxPath, 'utf8'));
+  const positions = new PositionsPanel(
+    new ParquetMarkSource(args.barStoreRoot),
+    new BarsMarketData({ load: () => undefined }, fx),
+  );
   const db = openMigratedStore(args.storePath, CONTROLS_SCHEMA_VERSION);
   try {
     const store = guardedStore(db, 'dashboard', { enabled: true });
-    const reader = new OverviewReader(store, clock, args.mode);
+    const reader = new OverviewReader(store, clock, args.mode, positions);
     const server = createV2DashboardServer({
       host: args.host,
       port: args.port,

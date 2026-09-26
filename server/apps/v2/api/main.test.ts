@@ -2,10 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
-import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
+import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { composeV2Dashboard, parseDashboardArgs } from './main.js';
 
+const PATHS = { barStoreRoot: DEFAULT_BAR_STORE_ROOT, fxPath: FX_PATH };
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 const dirs: string[] = [];
 
@@ -25,6 +27,7 @@ afterEach(() => {
 describe('parseDashboardArgs', () => {
   it('defaults to the paper store on loopback', () => {
     expect(parseDashboardArgs([], {})).toEqual({
+      ...PATHS,
       storePath: V2_STORE_PATH,
       mode: 'paper',
       host: '127.0.0.1',
@@ -39,7 +42,7 @@ describe('parseDashboardArgs', () => {
     });
     expect(
       parseDashboardArgs(['--store', 'x.sqlite'], { HOST: '0.0.0.0', V2_DASHBOARD_PORT: '9000' }),
-    ).toEqual({ storePath: 'x.sqlite', mode: 'paper', host: '0.0.0.0', port: 9000 });
+    ).toEqual({ ...PATHS, storePath: 'x.sqlite', mode: 'paper', host: '0.0.0.0', port: 9000 });
   });
 
   it.each([
@@ -69,7 +72,7 @@ describe('composeV2Dashboard', () => {
     const storePath = migratedStore();
     const env = { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' };
     const { server, db } = composeV2Dashboard(
-      { storePath, mode: 'paper', host: '127.0.0.1', port: 0 },
+      { ...PATHS, storePath, mode: 'paper', host: '127.0.0.1', port: 0 },
       env,
       clock,
     );
@@ -99,7 +102,7 @@ describe('composeV2Dashboard', () => {
   ])('keeps the write guard on when %s=%s switches it off elsewhere', (name, value) => {
     vi.stubEnv(name, value);
     const { db, store } = composeV2Dashboard(
-      { storePath: migratedStore(), mode: 'paper', host: '127.0.0.1', port: 0 },
+      { ...PATHS, storePath: migratedStore(), mode: 'paper', host: '127.0.0.1', port: 0 },
       { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' },
       clock,
     );
@@ -113,8 +116,37 @@ describe('composeV2Dashboard', () => {
   it('closes the store when the server refuses to start without a token', () => {
     const storePath = migratedStore();
     expect(() =>
-      composeV2Dashboard({ storePath, mode: 'paper', host: '127.0.0.1', port: 0 }, {}, clock),
+      composeV2Dashboard(
+        { ...PATHS, storePath, mode: 'paper', host: '127.0.0.1', port: 0 },
+        {},
+        clock,
+      ),
     ).toThrow(/SAMURAI_DASHBOARD_TOKEN is not set/);
+  });
+
+  it('refuses to start without the FX file, before opening the store', () => {
+    const storePath = migratedStore();
+    expect(() =>
+      composeV2Dashboard(
+        {
+          ...PATHS,
+          fxPath: join(dirs[0] ?? '', 'missing-fx.csv'),
+          storePath,
+          mode: 'paper',
+          host: '127.0.0.1',
+          port: 0,
+        },
+        { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' },
+        clock,
+      ),
+    ).toThrow(/ENOENT/);
+  });
+
+  it('reads --bars and --fx', () => {
+    expect(parseDashboardArgs(['--bars', 'b', '--fx', 'f.csv'], {})).toMatchObject({
+      barStoreRoot: 'b',
+      fxPath: 'f.csv',
+    });
   });
 
   it('refuses a store that does not exist rather than creating an empty one', () => {
@@ -122,7 +154,13 @@ describe('composeV2Dashboard', () => {
     dirs.push(dir);
     expect(() =>
       composeV2Dashboard(
-        { storePath: join(dir, 'missing.sqlite'), mode: 'paper', host: '127.0.0.1', port: 0 },
+        {
+          ...PATHS,
+          storePath: join(dir, 'missing.sqlite'),
+          mode: 'paper',
+          host: '127.0.0.1',
+          port: 0,
+        },
         { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' },
         clock,
       ),

@@ -10,8 +10,10 @@ import {
   type V2OverviewWire,
 } from '../../../../contracts/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { BarsMarketData } from '../data/index.js';
 import { ControlWriter } from './control-writer.js';
 import { OverviewReader } from './overview.js';
+import { PositionsPanel } from './positions.js';
 import {
   CONTROL_BODY_MAX_BYTES,
   createV2DashboardServer,
@@ -36,10 +38,21 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-async function start(overview?: () => V2OverviewWire, storePath = ':memory:'): Promise<string> {
+async function start(
+  overview?: () => Promise<V2OverviewWire>,
+  storePath = ':memory:',
+): Promise<string> {
   db = openSharedStore(storePath);
   const store = guardedStore(db, 'dashboard', { enabled: true });
-  const reader = new OverviewReader(store, clock, 'paper');
+  const reader = new OverviewReader(
+    store,
+    clock,
+    'paper',
+    new PositionsPanel(
+      { lastBarsBefore: () => Promise.resolve(new Map()) },
+      new BarsMarketData({ load: () => undefined }, [{ date: '2025-12-31', gbpUsd: 1.25 }]),
+    ),
+  );
   server = createV2DashboardServer({
     host: '127.0.0.1',
     port: 0,
@@ -143,9 +156,7 @@ describe('createV2DashboardServer auth and routing', () => {
 
   it('answers a fault with a bare 500 and hands the detail to the fault hook only', async () => {
     const fault = new Error('disk gone at /Users/someone/secret.sqlite');
-    const url = await start(() => {
-      throw fault;
-    });
+    const url = await start(() => Promise.reject(fault));
     const response = await fetch(`${url}/api/v2/overview`, { headers: AUTH });
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'internal error' });

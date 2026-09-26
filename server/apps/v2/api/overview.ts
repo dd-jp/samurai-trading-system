@@ -17,6 +17,7 @@ import type { Clock } from '../../../shared/index.js';
 import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index.js';
 import { CapitalConfigStore, ControlStore, dailyCapGbp, sizeStepMarksGbp } from '../risk/index.js';
 import { SqliteMonthlySpendCap, utcMonthStart } from '../signal/index.js';
+import { type Holdings, type PositionsPanel, readHoldings } from './positions.js';
 
 const CONTROL_HISTORY_ROWS = 20;
 const SCHEDULE_OWNER = { status: 'not-yet-fed', owner: 'Step 3e', ticket: '#1784' } as const;
@@ -108,19 +109,21 @@ export class OverviewReader {
     private readonly db: StoreHandle,
     private readonly clock: Clock,
     private readonly mode: V2ModeWire,
+    private readonly positions: PositionsPanel,
   ) {
     this.capital = new CapitalConfigStore(db, clock);
     this.controls = new ControlStore(db);
     this.spendCap = new SqliteMonthlySpendCap(db, clock);
   }
 
-  read(): V2OverviewWire {
-    return this.db.transaction(() => this.#snapshot())();
+  async read(): Promise<V2OverviewWire> {
+    const { overview, holdings } = this.db.transaction(() => this.#snapshot())();
+    return { ...overview, positions: await this.positions.present(holdings) };
   }
 
-  #snapshot(): V2OverviewWire {
+  #snapshot(): { overview: Omit<V2OverviewWire, 'positions'>; holdings: Holdings } {
     const bookDays = this.db.prepare(LATEST_BOOK_DAYS).all() as BookDayRow[];
-    return {
+    const overview = {
       contract_version: V2_CONTRACT_VERSION,
       generated_at: this.clock.now().toISOString(),
       mode: this.mode,
@@ -130,6 +133,7 @@ export class OverviewReader {
       llm_spend: this.llmSpend(),
       heartbeat: this.heartbeat(),
     };
+    return { overview, holdings: readHoldings(this.db) };
   }
 
   lossBudget(bookDays: readonly BookDayRow[]): PanelWire<LossBudgetWire> {

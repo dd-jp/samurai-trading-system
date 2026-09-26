@@ -25,7 +25,7 @@ export interface V2DashboardServerOptions {
   readonly host: string;
   readonly port: number;
   readonly token: string | undefined;
-  readonly overview: () => V2OverviewWire;
+  readonly overview: () => Promise<V2OverviewWire>;
   readonly controls: ControlWriter;
   readonly onFault: (error: unknown) => void;
 }
@@ -157,7 +157,10 @@ function postControl(controls: ControlWriter): Handler {
 
 function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Handler>> {
   return new Map([
-    ['/api/v2/overview', new Map([['GET', (_req, res) => sendJson(res, 200, opts.overview())]])],
+    [
+      '/api/v2/overview',
+      new Map([['GET', async (_req, res) => sendJson(res, 200, await opts.overview())]]),
+    ],
     ['/api/v2/controls', new Map([['POST', postControl(opts.controls)]])],
   ]);
 }

@@ -1,4 +1,4 @@
-import type { ControlAction, SleeveAction } from './v2.js';
+import type { ControlAction, SleeveAction, Venue } from './v2.js';
 import { contractVersionOf } from './version.js';
 
 export type PanelWire<T> =
@@ -104,12 +104,71 @@ export interface HeartbeatWire {
   readonly last_ping: PanelWire<PingWire>;
 }
 
+export type MarkWire =
+  | {
+      readonly status: 'fresh';
+      readonly bar_date: string;
+      readonly price_quote: number;
+      readonly price_gbp: number;
+      readonly market_value_gbp: number;
+      readonly unrealised_gbp: number;
+    }
+  | { readonly status: 'stale'; readonly bar_date: string | null }
+  | { readonly status: 'unavailable' };
+
+export type FreshMarkWire = Extract<MarkWire, { status: 'fresh' }>;
+
+export type QuoteCurrencyWire = 'USD' | 'GBP';
+
+export interface PositionWire {
+  readonly book_id: string;
+  readonly variant: string;
+  readonly instrument: string;
+  readonly venue: Venue;
+  readonly currency: QuoteCurrencyWire;
+  readonly qty: number;
+  readonly entry_gbp: number;
+  readonly stop_gbp: number | null;
+  readonly opened_date: string;
+  readonly marks_held: number;
+  readonly mark: MarkWire;
+}
+
+export interface VenueTotalWire {
+  readonly venue: Venue;
+  readonly currency: QuoteCurrencyWire;
+  readonly positions_value_quote: number | null;
+  readonly positions_value_gbp: number | null;
+}
+
+export interface BookCashWire {
+  readonly book_id: string;
+  readonly variant: string;
+  readonly cash_gbp: number;
+}
+
+export interface FxRateWire {
+  readonly gbp_usd: number;
+  readonly year: number;
+  readonly source: string;
+}
+
+export interface PositionsWire {
+  readonly as_of: string;
+  readonly fx: FxRateWire | null;
+  readonly positions: readonly PositionWire[];
+  readonly cash: readonly BookCashWire[];
+  readonly venues: readonly VenueTotalWire[];
+  readonly total_gbp: number | null;
+}
+
 export interface V2OverviewWire {
   readonly contract_version: string;
   readonly generated_at: string;
   readonly mode: V2ModeWire;
   readonly loss_budget: PanelWire<LossBudgetWire>;
   readonly control: ControlWire;
+  readonly positions: PanelWire<PositionsWire>;
   readonly decisions: PanelWire<DecisionsWire>;
   readonly llm_spend: PanelWire<LlmSpendWire>;
   readonly heartbeat: HeartbeatWire;
@@ -145,10 +204,41 @@ const V2_WIRE_FIELD_NAMES = {
     'mode',
     'loss_budget',
     'control',
+    'positions',
     'decisions',
     'llm_spend',
     'heartbeat',
   ]),
+  positions: fieldsOf<PositionsWire>()(['as_of', 'fx', 'positions', 'cash', 'venues', 'total_gbp']),
+  position: fieldsOf<PositionWire>()([
+    'book_id',
+    'variant',
+    'instrument',
+    'venue',
+    'currency',
+    'qty',
+    'entry_gbp',
+    'stop_gbp',
+    'opened_date',
+    'marks_held',
+    'mark',
+  ]),
+  freshMark: fieldsOf<FreshMarkWire>()([
+    'status',
+    'bar_date',
+    'price_quote',
+    'price_gbp',
+    'market_value_gbp',
+    'unrealised_gbp',
+  ]),
+  venueTotal: fieldsOf<VenueTotalWire>()([
+    'venue',
+    'currency',
+    'positions_value_quote',
+    'positions_value_gbp',
+  ]),
+  bookCash: fieldsOf<BookCashWire>()(['book_id', 'variant', 'cash_gbp']),
+  fxRate: fieldsOf<FxRateWire>()(['gbp_usd', 'year', 'source']),
   lossBudget: fieldsOf<LossBudgetWire>()([
     'year',
     'capital_stale',
