@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,11 @@ const TOKEN = 'test-dashboard-token';
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
 const JSON_AUTH = { ...AUTH, 'Content-Type': 'application/json' };
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
+const BUNDLE = mkdtempSync(join(tmpdir(), 'v2-bundle-'));
+mkdirSync(join(BUNDLE, 'assets'));
+writeFileSync(join(BUNDLE, 'index.html'), '<!doctype html><title>v2</title>');
+writeFileSync(join(BUNDLE, 'assets', 'app.js'), 'export {};');
+writeFileSync(join(BUNDLE, 'secret.sqlite'), 'rows');
 
 let db: StoreHandle;
 let server: V2DashboardServer | undefined;
@@ -60,6 +65,7 @@ async function start(
     host: '127.0.0.1',
     port: 0,
     token: TOKEN,
+    bundleRoot: BUNDLE,
     overview: overview ?? (() => reader.read()),
     controls: new ControlWriter(store, clock),
     journal: (query) => new JournalReader(store).read(query),
@@ -92,6 +98,7 @@ describe('createV2DashboardServer start-up', () => {
         host: '127.0.0.1',
         port: 0,
         token,
+        bundleRoot: BUNDLE,
         overview: () => {
           throw new Error('unused');
         },
@@ -110,6 +117,7 @@ describe('createV2DashboardServer start-up', () => {
       host: '127.0.0.1',
       port: Number(new URL(url).port),
       token: TOKEN,
+      bundleRoot: BUNDLE,
       overview: () => {
         throw new Error('unused');
       },
@@ -134,7 +142,8 @@ describe('createV2DashboardServer auth and routing', () => {
       '/api/v2/evidence',
       '/api/v2/reconcile',
       '/api/v2/tax',
-      '/nowhere',
+      '/api',
+      '/api/nowhere',
     ]) {
       const response = await fetch(`${url}${path}`);
       expect(response.status).toBe(401);
@@ -147,6 +156,34 @@ describe('createV2DashboardServer auth and routing', () => {
     });
     expect(wrong.status).toBe(401);
     expect((await postControl(url, halt, { 'Content-Type': 'application/json' })).status).toBe(401);
+  });
+
+  it('serves the built client without a token, since a page load cannot carry one', async () => {
+    const url = await start();
+    const page = await fetch(`${url}/`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(page.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await page.text()).toContain('<title>v2</title>');
+    const script = await fetch(`${url}/assets/app.js`);
+    expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    expect(await script.text()).toBe('export {};');
+  });
+
+  it.each([
+    ['/nowhere.js', 404],
+    ['/secret.sqlite', 404],
+    ['/assets/..%2f..%2findex.html', 404],
+    ['/%E0%A4%A', 400],
+    ['/index.html%00.js', 400],
+  ])('serves nothing outside the bundle for %s', async (path, status) => {
+    const url = await start();
+    expect((await fetch(`${url}${path}`)).status).toBe(status);
+  });
+
+  it('requires the token for any other method on a bundle path', async () => {
+    const url = await start();
+    expect((await fetch(`${url}/`, { method: 'POST' })).status).toBe(401);
   });
 
   it('serves the overview as uncached JSON with no CORS grant', async () => {

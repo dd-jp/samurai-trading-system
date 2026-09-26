@@ -9,6 +9,7 @@ import {
   type V2OverviewWire,
 } from '../../../../contracts/index.js';
 import { carriesToken, DASHBOARD_TOKEN_ENV_VAR, isConfiguredToken } from './auth.js';
+import { serveBundle } from './bundle.js';
 import {
   type ControlWriteResult,
   type ControlWriter,
@@ -30,6 +31,7 @@ export interface V2DashboardServerOptions {
   readonly host: string;
   readonly port: number;
   readonly token: string | undefined;
+  readonly bundleRoot: string;
   readonly overview: () => Promise<V2OverviewWire>;
   readonly controls: ControlWriter;
   readonly journal: (query: JournalQuery) => JournalWire;
@@ -197,12 +199,20 @@ function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Hand
   ]);
 }
 
+function isBundleRequest(req: IncomingMessage, path: string): boolean {
+  return req.method === 'GET' && path !== '/api' && !path.startsWith('/api/');
+}
+
 function dispatch(
   routes: Map<string, Map<string, Handler>>,
   token: string,
+  bundleRoot: string,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
-    if (carriesToken(req.headers.authorization, token)) {
+    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+    if (isBundleRequest(req, path)) {
+      await serveBundle(bundleRoot, path, res);
+    } else if (carriesToken(req.headers.authorization, token)) {
       await resolveHandler(routes, req)(req, res);
     } else {
       refuseAndClose(req, res, 401, 'unauthorized', { 'WWW-Authenticate': 'Bearer' });
@@ -242,7 +252,7 @@ export function createV2DashboardServer(opts: V2DashboardServerOptions): V2Dashb
         'loopback included, must carry it as `Authorization: Bearer <value>` (dashboard spec §5).',
     );
   }
-  const handle = dispatch(routesFor(opts), token);
+  const handle = dispatch(routesFor(opts), token, opts.bundleRoot);
   const server: Server = createServer((req, res) => {
     Promise.resolve()
       .then(() => handle(req, res))
