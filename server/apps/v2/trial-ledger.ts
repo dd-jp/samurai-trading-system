@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Clock } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore, toStoredTimestamp } from '../../shared/store/index.js';
 
-export const V2_RESEARCH_STORE_PATH = 'data/samurai-v2-research.sqlite';
 export const SESSION_B_TRIALS_PATH = 'data/backtest/momentum/trials.json';
 
 export type TrialConfig = Readonly<Record<string, unknown>>;
@@ -131,7 +132,16 @@ export function sessionBLedger(path: string = SESSION_B_TRIALS_PATH): SessionBLe
   return JSON.parse(readFileSync(path, 'utf8')) as SessionBLedger;
 }
 
-export function main(storePath: string = V2_RESEARCH_STORE_PATH): number {
+// One ledger per machine, outside every checkout: a store under a worktree's data/ would count
+// only that worktree's trials and deflate the DSR over too few
+export function researchStorePath(env: NodeJS.ProcessEnv = process.env): string {
+  return (
+    env.SAMURAI_RESEARCH_STORE ?? join(homedir(), 'samurai-research', 'samurai-v2-research.sqlite')
+  );
+}
+
+export function main(storePath: string = researchStorePath()): number {
+  mkdirSync(dirname(storePath), { recursive: true });
   const db = openSharedStore(storePath);
   try {
     const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());

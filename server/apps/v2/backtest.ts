@@ -8,21 +8,23 @@ import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { type BacktestVerdict, type BookSeries, backtestVerdict } from './backtest-verdict.js';
-import { composeCycle } from './compose.js';
-import { runCycle } from './cycle.js';
+import { type CycleComposition, composeCycle } from './compose.js';
+import { type CycleReport, runCycle } from './cycle.js';
 import { addDays, CALENDAR_REFERENCE } from './data/index.js';
 import { CapitalConfigStore, sleeveAllocationGbp } from './risk/index.js';
 import type { TrialConfig, TrialLedger } from './trial-ledger.js';
 
+export type SleeveFactory = (market: MarketData) => Sleeve;
+
 export interface BacktestTrial {
   readonly config: TrialConfig;
-  readonly sleeve: Sleeve;
+  readonly sleeve: SleeveFactory;
 }
 
 export interface BacktestInput {
   readonly candidate: string;
   readonly trials: readonly BacktestTrial[];
-  readonly benchmark: Sleeve;
+  readonly benchmark: BacktestTrial;
   readonly from: string;
   readonly to: string;
   readonly startCapitalGbp: number;
@@ -39,6 +41,32 @@ export interface BacktestResult {
   readonly trials: readonly (BookSeries & { readonly trial: number; readonly sleeve: string })[];
   readonly benchmark: BookSeries;
   readonly verdict: BacktestVerdict;
+}
+
+const MAX_SESSION_GAP_CALENDAR_DAYS = 5;
+
+export function fencedMarket(market: MarketData, today: () => string): MarketData {
+  const fence = (tradingDate: string) => {
+    if (tradingDate > today()) {
+      throw new Error(
+        `backtest: a sleeve read bars before ${tradingDate} on ${today()} (lookahead)`,
+      );
+    }
+  };
+  return {
+    lastBarBefore: (instrument, tradingDate) => {
+      fence(tradingDate);
+      return market.lastBarBefore(instrument, tradingDate);
+    },
+    barsBefore: (instrument, tradingDate, count) => {
+      fence(tradingDate);
+      return market.barsBefore(instrument, tradingDate, count);
+    },
+    gbpUsdAtYearStart: (year) => {
+      fence(`${year}-01-01`);
+      return market.gbpUsdAtYearStart(year);
+    },
+  };
 }
 
 function refuseForwardPaper(sleeves: readonly Sleeve[]): void {
@@ -86,11 +114,29 @@ function rulesOnly(sleeve: Sleeve, market: MarketData): Sleeve {
   };
 }
 
+function assertSessionsCover(dates: readonly string[], from: string, to: string): void {
+  const gaps: [string, string][] = [
+    [from, dates[0] ?? to],
+    ...dates.slice(1).map((date, index): [string, string] => [dates[index] as string, date]),
+    [dates.at(-1) ?? from, to],
+  ];
+  for (const [before, after] of gaps) {
+    if (addDays(before, MAX_SESSION_GAP_CALENDAR_DAYS) < after) {
+      throw new Error(
+        `backtest: ${CALENDAR_REFERENCE} has no session from ${before} to ${after}; the calendar does not cover ${from} to ${to} (postmortem §2)`,
+      );
+    }
+  }
+}
+
 export function backtestSessions(market: MarketData, from: string, to: string): string[] {
-  return market
+  const dates = market
     .barsBefore(CALENDAR_REFERENCE, addDays(to, 1), Number.MAX_SAFE_INTEGER)
     .map((bar) => bar.date)
     .filter((date) => date >= from);
+  if (dates.length === 0) throw new Error(`backtest: no sessions from ${from} to ${to}`);
+  assertSessionsCover(dates, from, to);
+  return dates;
 }
 
 function seriesFrom(startEquity: number, marks: readonly number[]): BookSeries {
@@ -101,25 +147,83 @@ function seriesFrom(startEquity: number, marks: readonly number[]): BookSeries {
   };
 }
 
+function primaryEquity(report: CycleReport, sleeve: Sleeve, date: string): number {
+  if (report.submitted_orders > 0) {
+    throw new Error(`backtest: ${date} submitted ${report.submitted_orders} orders to a broker`);
+  }
+  const book = report.books.find((row) => row.book_id === `${sleeve.id}/primary`);
+  if (book === undefined) throw new Error(`backtest: ${sleeve.id} has no primary book on ${date}`);
+  return book.equity_gbp;
+}
+
+function seedCapital(
+  capital: CapitalConfigStore,
+  input: BacktestInput,
+  first: string,
+): ReturnType<CapitalConfigStore['inForce']> {
+  for (let year = Number(first.slice(0, 4)); year <= Number(input.to.slice(0, 4)); year += 1) {
+    capital.setYear(year, input.startCapitalGbp, input.lossCapGbp);
+  }
+  return capital.inForce(first);
+}
+
+async function replay(
+  cycle: CycleComposition,
+  clock: SimulatedClock,
+  sleeves: readonly Sleeve[],
+  dates: readonly string[],
+  today: { current: string },
+): Promise<Map<string, number[]>> {
+  const marks = new Map<string, number[]>(sleeves.map((sleeve) => [sleeve.id, []]));
+  for (const date of dates) {
+    today.current = date;
+    clock.advanceTo(new Date(`${date}T00:00:00.000Z`));
+    const report = await runCycle(cycle, date);
+    for (const sleeve of sleeves) marks.get(sleeve.id)?.push(primaryEquity(report, sleeve, date));
+  }
+  return marks;
+}
+
+function recordTrials(
+  input: BacktestInput,
+  trials: readonly Sleeve[],
+  benchmark: Sleeve,
+): number[] {
+  const run = {
+    from: input.from,
+    to: input.to,
+    folds: input.folds ?? null,
+    startCapitalGbp: input.startCapitalGbp,
+    lossCapGbp: input.lossCapGbp,
+    benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
+  };
+  return input.trials.map((trial, index) =>
+    input.ledger.record(input.candidate, {
+      ...trial.config,
+      spec: (trials[index] as Sleeve).spec,
+      run,
+    }),
+  );
+}
+
 export async function runBacktest(input: BacktestInput): Promise<BacktestResult> {
-  const sleeves = [...input.trials.map((trial) => trial.sleeve), input.benchmark];
+  const today = { current: input.from };
+  const market = fencedMarket(input.market, () => today.current);
+  const trialSleeves = input.trials.map((trial) => trial.sleeve(market));
+  const benchmarkSleeve = input.benchmark.sleeve(market);
+  const sleeves = [...trialSleeves, benchmarkSleeve];
   refuseForwardPaper(sleeves);
   const dates = backtestSessions(input.market, input.from, input.to);
-  const first = dates[0];
-  if (first === undefined)
-    throw new Error(`backtest: no sessions from ${input.from} to ${input.to}`);
-  const trialNumbers = input.trials.map((trial) =>
-    input.ledger.record(input.candidate, { ...trial.config, spec: trial.sleeve.spec }),
-  );
+  const first = dates[0] as string;
+  const trialNumbers = recordTrials(input, trialSleeves, benchmarkSleeve);
   const db = openSharedStore(':memory:');
   try {
     const clock = new SimulatedClock(new Date(`${first}T00:00:00.000Z`));
-    const capital = new CapitalConfigStore(guardedStore(db, 'v2'), clock);
-    for (let year = Number(first.slice(0, 4)); year <= Number(input.to.slice(0, 4)); year += 1) {
-      capital.setYear(year, input.startCapitalGbp, input.lossCapGbp);
-    }
-    const opening = capital.inForce(first);
-    let current = first;
+    const opening = seedCapital(
+      new CapitalConfigStore(guardedStore(db, 'v2'), clock),
+      input,
+      first,
+    );
     const cycle = composeCycle({
       db,
       clock,
@@ -127,38 +231,22 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       market: input.market,
       sleeves: sleeves.map((sleeve) => rulesOnly(sleeve, input.market)),
       openingDate: first,
-      tradingDate: () => current,
+      tradingDate: () => today.current,
       dryRun: true,
       halfSpreadBps: input.halfSpreadBps,
     });
-    const marks = new Map<string, number[]>(sleeves.map((sleeve) => [sleeve.id, []]));
-    for (const date of dates) {
-      current = date;
-      clock.advanceTo(new Date(`${date}T00:00:00.000Z`));
-      const report = await runCycle(cycle, date);
-      if (report.submitted_orders > 0) {
-        throw new Error(
-          `backtest: ${date} submitted ${report.submitted_orders} orders to a broker`,
-        );
-      }
-      for (const sleeve of sleeves) {
-        const book = report.books.find((row) => row.book_id === `${sleeve.id}/primary`);
-        if (book === undefined)
-          throw new Error(`backtest: ${sleeve.id} has no primary book on ${date}`);
-        marks.get(sleeve.id)?.push(book.equity_gbp);
-      }
-    }
+    const marks = await replay(cycle, clock, sleeves, dates, today);
     const series = (sleeve: Sleeve) =>
       seriesFrom(
         opening === undefined ? 0 : sleeveAllocationGbp(sleeve.spec, opening),
         marks.get(sleeve.id) ?? [],
       );
-    const trials = input.trials.map((trial, index) => ({
+    const trials = trialSleeves.map((sleeve, index) => ({
       trial: trialNumbers[index] as number,
-      sleeve: trial.sleeve.id,
-      ...series(trial.sleeve),
+      sleeve: sleeve.id,
+      ...series(sleeve),
     }));
-    const benchmark = series(input.benchmark);
+    const benchmark = series(benchmarkSleeve);
     return {
       dates,
       trials,

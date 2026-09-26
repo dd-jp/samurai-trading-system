@@ -468,6 +468,24 @@ describe('runCycle', () => {
     }
   });
 
+  it('checks short legs against the rescaled bar too', async () => {
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    for (const [override, price] of [
+      [{ close: 10, low: 9.5, high: 10.3 }, undefined],
+      [{ close: 10, low: 9.5, high: 10.45 }, 20.8],
+      [{ close: 10, low: 9.35, high: 10.3 }, 18.8],
+    ] as const) {
+      const deps = harness([short], true);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', { ...override, rawClose: 20 }));
+      await runCycle(deps, '2026-09-28');
+      const exit = deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit');
+      if (price === undefined) expect(exit).toBeUndefined();
+      else expect(exit?.payload.price).toBeCloseTo(price, 9);
+    }
+  });
+
   it('a bar touching both legs exits at the stop, for longs and shorts', async () => {
     const short: SleeveDecision = {
       ...longAapl,

@@ -179,24 +179,34 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - Known limit: impact is unbounded in participation. A sell priced over 10,000 bps of impact would go negative; the ADV cap keeps entries at ≤ 1% participation, so only a position far larger than its entry could approach it.
 - **PR 3c (the backtest driver):**
   - `SleeveSpec.validation` is `'backtest'` or `'forward-paper'`. The debate sleeve is forward-paper (Q15), and the driver refuses it before recording anything.
-  - `runBacktest` (`server/apps/v2/backtest.ts`) runs every trial sleeve and the benchmark sleeve through `runCycle`, one cycle per calendar-reference session, on a scratch in-memory store. It uses a simulated clock, a forced dry run and no broker client; a submitted order throws. The root and the driver share one composition (`server/apps/v2/compose.ts`). The loss budget is the books' own, with a capital row per year.
+  - `runBacktest` (`server/apps/v2/backtest.ts`) runs every trial sleeve and the benchmark sleeve through `runCycle`, one cycle per calendar-reference session, on a scratch in-memory store. Sleeves are factories handed a fenced `MarketData` that throws on any read past the cycle's session (lookahead). The session list carries a coverage invariant: no gap over five calendar days at either end of the window or between sessions (postmortem §2). It uses a simulated clock, a forced dry run and no broker client; a submitted order throws. The root and the driver share one composition (`server/apps/v2/compose.ts`). The loss budget is the books' own, with a capital row per year.
   - The driver refuses two kinds of decision:
     - a vetoed decision, because only the rules are backtested (S7);
     - an entry not priced at the last raw close, because the bars are dividend-adjusted and a sleeve pricing off `close` books an instant gain (found while timing: a five-name hold showed Sharpe 6 for 2021, and 1.5 once priced at `rawClose`).
+  - `SleeveSpec.macroGate` scopes the G16 macro halving to the sleeves that declare it (debate). The macro table starts 2026-01-01 and fails closed before it as well as 30 days past its end; a backtest of a rules sleeve is therefore not halved on pre-2026 history, and a debate replay before 2026 runs at half size.
   - The cycle checks simulated bracket legs against the bar rescaled to quoted prices. This is a no-op on the four dry-run dates; over history, adjusted lows would trip stops that never traded.
   - Trial ledger:
     - The trial counter is `v2_trials` (migration 0069): append-only, and contiguous from 1, both enforced by triggers.
-    - It lives in its own file, `data/samurai-v2-research.sqlite` (`npm run v2:trials` prints it), and opens with Session B's 8 committed trials (`data/backtest/momentum/trials.json`), refusing any ledger that does not.  <!-- cite-exempt: untracked — gitignored runtime database -->
-    - A trial is the hash of the candidate, its config and the sleeve's spec, so a changed stop multiple is a new trial and a repeat is not. R4's stop on/off must be a config field.
+    - It lives in one file per machine, outside every checkout: `~/samurai-research/samurai-v2-research.sqlite`, or `SAMURAI_RESEARCH_STORE` (`npm run v2:trials` prints it). A store under a worktree's `data/` would count only that worktree's trials. It opens with Session B's 8 committed trials (`data/backtest/momentum/trials.json`), refusing any ledger that does not.  <!-- cite-exempt: untracked — runtime database outside the repo -->
+    - A trial is the hash of the candidate, its config, the sleeve's spec and the run: window, folds, start capital, loss cap, and the benchmark's id, spec and config. A changed stop multiple or a shifted window is a new trial; a repeat is not. R4's stop on/off must be a config field.
   - Verdict (`server/apps/v2/backtest-verdict.ts`): walk-forward over 16 folds, DSR of the selected trial deflated over the whole ledger, PBO by CSCV, strategy Sharpe × 0.6 vs the benchmark over the same walk-forward window, max drawdown, and capital ceiling = the capital config's loss cap ÷ (DD × 1.5). This mirrors Session B's gate (doc 70 §2.13, ruled (e)).
   - Time: one ten-year pass (2016-06-21 to 2025-12-31, three sleeves, five names) takes 12 s.
-  - Four dry-run dates: decisions, orders, fills and smoke identical to PR 3b.
+  - Four dry-run dates: the two 2026 dates and smoke are identical to PR 3b. On 2025-03-03 and 2024-11-06 the macro table now fails closed, so the primary book enters at half size (15 and 17 entries across both books, from 20 and 24); decisions and the `no-macro-gate` shadow are unchanged.
 - Known limits of PR 3c, owned by Step 1b:
   - Each candidate's matched benchmark (risk-matched buy-and-hold of the same universe, same budget rules; Q1, ruled (e)) is a sleeve 1b builds per candidate; the driver takes it as an input.
   - There is no `v2:backtest` command until a candidate exists.
   - Simulated entries have no execution lag ([#1797](https://github.com/dd-jp/samurai-trading-system/issues/1797)); fix it before the first verdict.
   - Every sleeve in a run is seeded at the whole start capital. When 1b adds the S1 split, the driver must still seed each trial at the capital it would get alone.
   - Step 3e's Litestream stream must include the research store as well as the paper store.
+  - No delisting haircut, no stop on a name whose bars end mid-run, and no MinBTL check on the window length: candidate-level work (doc 70 §2 did all three for momentum).
+  - The cycle cannot host a pure buy-and-hold benchmark: every entry gets a bracket and the time stop. A matched benchmark needs a sleeve that re-enters, or a books variant without either.
+  - The session calendar is SPY's, so an LSE-only candidate is run on US sessions (known since PR 3a).
+  - Minor, recorded not fixed (review of PR 3c):
+    - the raw-price guard checks the entry price only, not `stop_price` or `atr`, which a sleeve could still take from adjusted bars;
+    - `trialHash` drops `undefined` fields and hashes `Infinity` as `null` (JSON), so those configs collide;
+    - Session B's seed rows are not written in one transaction; a crash mid-seed leaves a ledger that refuses to reopen;
+    - trials are recorded before the run, so a run that then throws (a veto, a bad fold count) still counts them; that errs towards more deflation;
+    - a cycle labelled with session D marks the books at D−1's close, so series dates are one session later than the returns they carry.
 - Known limits, owned by later steps:
   - `sleeveAllocationGbp` seeds every sleeve at the whole start capital. That is right while debate is the only sleeve. Step 1b must add the S1 split (debate 30%, passers share the 70%) before a second sleeve registers, or the books would count the loss budget twice.
   - No sleeve sets `veto` yet. The G5 cap (a veto on at most 10% of entries) is still to be measured and enforced. It lands with the first sleeve that vetoes (Step 1b).

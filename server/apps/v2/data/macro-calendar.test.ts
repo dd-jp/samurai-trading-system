@@ -53,8 +53,18 @@ describe('macro calendar', () => {
   it('fails closed when the 30-day horizon leaves coverage', () => {
     expect(
       macroGate('2026-03-03', [
-        { source: 'fomc', coverageFrom: '2026-01-01', coverageThrough: '2027-12-31', dates: ['2026-03-03'] },
-        { source: 'bls_cpi', coverageFrom: '2026-01-01', coverageThrough: '2027-12-31', dates: ['2026-03-03'] },
+        {
+          source: 'fomc',
+          coverageFrom: '2026-01-01',
+          coverageThrough: '2027-12-31',
+          dates: ['2026-03-03'],
+        },
+        {
+          source: 'bls_cpi',
+          coverageFrom: '2026-01-01',
+          coverageThrough: '2027-12-31',
+          dates: ['2026-03-03'],
+        },
       ]),
     ).toMatchObject({
       macroDay: true,

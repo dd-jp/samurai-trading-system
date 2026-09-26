@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
-  Sleeve,
+  MarketData,
   SleeveDecision,
   SleeveSpec,
   SleeveValidation,
@@ -9,8 +9,14 @@ import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { type BacktestInput, backtestSessions, runBacktest } from './backtest.js';
-import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
+import {
+  type BacktestInput,
+  backtestSessions,
+  fencedMarket,
+  runBacktest,
+  type SleeveFactory,
+} from './backtest.js';
+import { addDays, BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { type SessionBLedger, TrialLedger } from './trial-ledger.js';
 
 const SESSION_B: SessionBLedger = {
@@ -83,8 +89,8 @@ function trendSleeve(
   lookback: number,
   validation: SleeveValidation = 'backtest',
   veto?: string,
-): Sleeve {
-  return {
+): SleeveFactory {
+  return (market) => ({
     id,
     spec: spec(validation),
     universe: () => ({ instruments: [instrument], refusals: [] }),
@@ -114,6 +120,19 @@ function trendSleeve(
       };
       return Promise.resolve({ decisions: [decision], refusals: [] });
     },
+  });
+}
+
+function reading(read: (market: MarketData, tradingDate: string) => void): SleeveFactory {
+  return (market) => {
+    const inner = trendSleeve('peek', 'UP', 5)(market);
+    return {
+      ...inner,
+      decide: (context, instruments) => {
+        read(market, context.tradingDate);
+        return inner.decide(context, instruments);
+      },
+    };
   };
 }
 
@@ -133,7 +152,7 @@ function input(overrides: Partial<BacktestInput> = {}): BacktestInput {
       { config: { lookback: 5 }, sleeve: trendSleeve('trend-5', 'UP', 5) },
       { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
     ],
-    benchmark: trendSleeve('hold', 'UP', 1),
+    benchmark: { config: { lookback: 1 }, sleeve: trendSleeve('hold', 'UP', 1) },
     from: DATES[40] as string,
     to: DATES[DATES.length - 1] as string,
     startCapitalGbp: 1_000,
@@ -151,6 +170,47 @@ describe('backtestSessions', () => {
   it('lists the calendar reference sessions from the first date through the last', () => {
     expect(backtestSessions(market, DATES[10] as string, DATES[12] as string)).toEqual(
       DATES.slice(10, 13),
+    );
+  });
+
+  it('refuses a window the calendar does not cover at either end or in the middle', () => {
+    const first = DATES[0] as string;
+    const last = DATES.at(-1) as string;
+    expect(() => backtestSessions(market, addDays(first, -6), DATES[5] as string)).toThrow(
+      `backtest: SPY has no session from ${addDays(first, -6)} to ${first}; the calendar does not cover ${addDays(first, -6)} to ${DATES[5]} (postmortem §2)`,
+    );
+    expect(backtestSessions(market, addDays(first, -5), DATES[5] as string)[0]).toBe(first);
+    expect(() => backtestSessions(market, DATES[5] as string, addDays(last, 6))).toThrow(
+      `backtest: SPY has no session from ${last} to ${addDays(last, 6)}`,
+    );
+    expect(backtestSessions(market, DATES[5] as string, addDays(last, 5)).at(-1)).toBe(last);
+    const holed = new BarsMarketData(
+      {
+        load: (symbol) => {
+          const full = BARS.get(symbol);
+          return full && { ...full, bars: full.bars.filter((_, i) => i < 20 || i > 24) };
+        },
+      },
+      parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'),
+    );
+    expect(() => backtestSessions(holed, DATES[10] as string, DATES[40] as string)).toThrow(
+      `backtest: SPY has no session from ${DATES[19]} to ${DATES[25]}`,
+    );
+  });
+});
+
+describe('fencedMarket', () => {
+  it('passes reads up to today through and refuses later ones', () => {
+    const fenced = fencedMarket(market, () => DATES[30] as string);
+    expect(fenced.barsBefore('UP', DATES[30] as string, 2)).toEqual(
+      market.barsBefore('UP', DATES[30] as string, 2),
+    );
+    expect(fenced.lastBarBefore('UP', DATES[30] as string)?.date).toBe(DATES[29]);
+    expect(fenced.gbpUsdAtYearStart(2024)).toBe(market.gbpUsdAtYearStart(2024));
+    expect(() => fenced.lastBarBefore('UP', DATES[31] as string)).toThrow(/lookahead/);
+    expect(() => fenced.barsBefore('UP', DATES[31] as string, 1)).toThrow(/lookahead/);
+    expect(() => fenced.gbpUsdAtYearStart(2025)).toThrow(
+      `backtest: a sleeve read bars before 2025-01-01 on ${DATES[30]} (lookahead)`,
     );
   });
 });
@@ -193,10 +253,12 @@ describe('runBacktest', () => {
   it('counts a changed sizing as a new trial', async () => {
     const shared = ledger();
     await runBacktest(input({ ledger: shared }));
-    const resized = trendSleeve('trend-5', 'UP', 5);
-    const wider = {
-      ...resized,
-      spec: { ...resized.spec, sizing: { ...resized.spec.sizing, stopAtrMultiple: 3 } },
+    const wider: SleeveFactory = (m) => {
+      const resized = trendSleeve('trend-5', 'UP', 5)(m);
+      return {
+        ...resized,
+        spec: { ...resized.spec, sizing: { ...resized.spec.sizing, stopAtrMultiple: 3 } },
+      };
     };
     const result = await runBacktest(
       input({
@@ -210,8 +272,49 @@ describe('runBacktest', () => {
     expect(result.trials.map((trial) => trial.trial)).toEqual([5, 4]);
   });
 
+  it('counts a changed window, fold count, capital or benchmark as new trials', async () => {
+    const shared = ledger();
+    const from = DATES[200] as string;
+    await runBacktest(input({ ledger: shared, from }));
+    const numbers = async (overrides: Partial<BacktestInput>) =>
+      (await runBacktest(input({ ledger: shared, from, ...overrides }))).trials.map((t) => t.trial);
+    expect(await numbers({ from: DATES[201] as string })).toEqual([5, 6]);
+    expect(await numbers({ to: DATES[DATES.length - 2] as string })).toEqual([7, 8]);
+    expect(await numbers({ folds: 6 })).toEqual([9, 10]);
+    expect(await numbers({ startCapitalGbp: 2_000 })).toEqual([11, 12]);
+    expect(await numbers({ lossCapGbp: 1_000 })).toEqual([13, 14]);
+    expect(
+      await numbers({
+        benchmark: { config: { lookback: 2 }, sleeve: trendSleeve('hold', 'UP', 2) },
+      }),
+    ).toEqual([15, 16]);
+    expect(await numbers({})).toEqual([3, 4]);
+  }, 20_000);
+
+  it('fences each sleeve from bars after its session', async () => {
+    const future = reading((m, date) => m.barsBefore('UP', addDays(date, 1), 1));
+    await expect(
+      runBacktest(input({ trials: [{ config: {}, sleeve: future }, input().trials[1]!] })),
+    ).rejects.toThrow(
+      `backtest: a sleeve read bars before ${addDays(DATES[40] as string, 1)} on ${DATES[40]} (lookahead)`,
+    );
+    const nextYear = reading((m, date) => m.gbpUsdAtYearStart(Number(date.slice(0, 4)) + 1));
+    await expect(
+      runBacktest(input({ trials: [{ config: {}, sleeve: nextYear }, input().trials[1]!] })),
+    ).rejects.toThrow(/\(lookahead\)$/);
+    const today = reading((m, date) => {
+      m.lastBarBefore('UP', date);
+      m.gbpUsdAtYearStart(Number(date.slice(0, 4)));
+    });
+    await expect(
+      runBacktest(input({ trials: [{ config: {}, sleeve: today }, input().trials[1]!] })),
+    ).resolves.toBeDefined();
+  });
+
   it('refuses a forward-paper sleeve before recording any trial', async () => {
-    const run = input({ benchmark: trendSleeve('debate', 'UP', 1, 'forward-paper') });
+    const run = input({
+      benchmark: { config: {}, sleeve: trendSleeve('debate', 'UP', 1, 'forward-paper') },
+    });
     await expect(runBacktest(run)).rejects.toThrow(
       "backtest refuses sleeve 'debate': it is validated by forward paper only (doc 66 Q15, S7)",
     );
@@ -251,25 +354,25 @@ describe('runBacktest', () => {
   });
 
   it('refuses an entry priced off the adjusted close', async () => {
-    const adjusted = trendSleeve('trend-5', 'UP', 5);
+    const mispriced: SleeveFactory = (m) => {
+      const adjusted = trendSleeve('trend-5', 'UP', 5)(m);
+      return {
+        ...adjusted,
+        decide: async (context, instruments) => {
+          const output = await adjusted.decide(context, instruments);
+          return {
+            ...output,
+            decisions: output.decisions.map((decision) => ({
+              ...decision,
+              price: decision.price * 0.9,
+            })),
+          };
+        },
+      };
+    };
     const run = input({
       trials: [
-        {
-          config: { lookback: 5 },
-          sleeve: {
-            ...adjusted,
-            decide: async (context, instruments) => {
-              const output = await adjusted.decide(context, instruments);
-              return {
-                ...output,
-                decisions: output.decisions.map((decision) => ({
-                  ...decision,
-                  price: decision.price * 0.9,
-                })),
-              };
-            },
-          },
-        },
+        { config: { lookback: 5 }, sleeve: mispriced },
         { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
       ],
     });

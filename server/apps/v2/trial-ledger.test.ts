@@ -1,11 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { main, sessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
+import { main, researchStorePath, sessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
 
 const clock = new SimulatedClock(new Date('2026-09-26T08:00:00.000Z'));
 const SESSION_B = sessionBLedger();
@@ -114,11 +114,18 @@ describe('TrialLedger', () => {
 });
 
 describe('main', () => {
+  it('keeps one research ledger per machine outside the checkout unless overridden', () => {
+    expect(researchStorePath({})).toBe(
+      join(homedir(), 'samurai-research', 'samurai-v2-research.sqlite'),
+    );
+    expect(researchStorePath({ SAMURAI_RESEARCH_STORE: '/x/r.sqlite' })).toBe('/x/r.sqlite');
+  });
+
   it('opens the research ledger file seeded with Session B and prints it', () => {
     const directory = mkdtempSync(join(tmpdir(), 'v2-trials-'));
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     try {
-      expect(main(join(directory, 'research.sqlite'))).toBe(0);
+      expect(main(join(directory, 'nested', 'research.sqlite'))).toBe(0);
       const printed = JSON.parse(String(write.mock.calls[0]?.[0])) as {
         trials_counted: number;
         trials: { trial: number; source: string }[];

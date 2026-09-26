@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { annualisedSharpe } from '../../tools/backtest/index.js';
 import {
   type BookSeries,
   backtestVerdict,
@@ -76,6 +77,15 @@ describe('backtestVerdict', () => {
       verdict.walkForward.strategySharpeHaircut,
     );
     expect(verdict.pass).toBe(false);
+  });
+
+  it('compares against the benchmark over the walk-forward window only', () => {
+    const inSample = noisy(LENGTH / 4, 0.02, 0.001, 0);
+    const outOfSample = noisy((LENGTH * 3) / 4, -0.001, 0.01, 2);
+    const verdict = backtestVerdict(input({ benchmark: book([...inSample, ...outOfSample]) }));
+    expect(verdict.walkForward.benchmarkSharpe).toBeCloseTo(annualisedSharpe(outOfSample), 12);
+    expect(verdict.benchmarkSharpe).toBeGreaterThan(verdict.walkForward.benchmarkSharpe);
+    expect(verdict.checks.beatsBenchmarkAfterHaircut).toBe(true);
   });
 
   it('deflates harder as the global trial counter grows', () => {
