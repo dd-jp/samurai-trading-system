@@ -15,6 +15,7 @@ import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { researchStorePath } from '../trial-ledger.js';
 import { DASHBOARD_TOKEN_ENV_VAR } from './auth.js';
 import { ControlWriter } from './control-writer.js';
+import { EvidenceReader } from './evidence.js';
 import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
@@ -112,6 +113,7 @@ export function composeV2Dashboard(
     const reader = new OverviewReader(store, clock, args.mode, positions);
     const journal = new JournalReader(store);
     const research = new ResearchReader(args.researchStorePath, clock);
+    const evidence = new EvidenceReader(store, clock);
     const server = createV2DashboardServer({
       host: args.host,
       port: args.port,
@@ -120,6 +122,7 @@ export function composeV2Dashboard(
       controls: new ControlWriter(store, clock),
       journal: (query) => journal.read(query),
       research: () => research.read(),
+      evidence: () => evidence.read(),
       onFault: (error) =>
         process.stderr.write(
           `v2 dashboard fault: ${sanitizeLogText(describeThrownSafely(error))}\n`,

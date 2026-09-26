@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import {
   type ControlRequestWire,
   type ControlResponseWire,
+  type EvidenceWire,
   type JournalWire,
   type ResearchWire,
   V2_CONTRACT_VERSION,
@@ -14,6 +15,7 @@ import {
   parseControlRequest,
 } from './control-writer.js';
 import { type JournalQuery, parseJournalQuery } from './journal-reader.js';
+import { parseTaxQuery, reconcileWire, TAX_CSV_NOT_FED, taxWire } from './records.js';
 
 export const CONTROL_BODY_MAX_BYTES = 1_024;
 const BUSY_RETRY_AFTER_SECONDS = 1;
@@ -32,6 +34,7 @@ export interface V2DashboardServerOptions {
   readonly controls: ControlWriter;
   readonly journal: (query: JournalQuery) => JournalWire;
   readonly research: () => ResearchWire;
+  readonly evidence: () => EvidenceWire;
   readonly onFault: (error: unknown) => void;
 }
 
@@ -162,11 +165,22 @@ function postControl(controls: ControlWriter): Handler {
 
 function getJournal(journal: (query: JournalQuery) => JournalWire): Handler {
   return (req, res) => {
-    const parsed = parseJournalQuery(new URL(req.url ?? '/', 'http://localhost').searchParams);
+    const parsed = parseJournalQuery(searchParams(req));
     if (parsed.ok) sendJson(res, 200, journal(parsed.query));
     else sendError(res, 400, parsed.reason);
   };
 }
+
+function searchParams(req: IncomingMessage): URLSearchParams {
+  return new URL(req.url ?? '/', 'http://localhost').searchParams;
+}
+
+const getTax: Handler = (req, res) => {
+  const parsed = parseTaxQuery(searchParams(req));
+  if (!parsed.ok) sendError(res, 400, parsed.reason);
+  else if (parsed.query.format === 'csv') sendError(res, 501, TAX_CSV_NOT_FED);
+  else sendJson(res, 200, taxWire(parsed.query));
+};
 
 function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Handler>> {
   return new Map([
@@ -177,6 +191,9 @@ function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Hand
     ['/api/v2/controls', new Map([['POST', postControl(opts.controls)]])],
     ['/api/v2/journal', new Map([['GET', getJournal(opts.journal)]])],
     ['/api/v2/research', new Map([['GET', (_req, res) => sendJson(res, 200, opts.research())]])],
+    ['/api/v2/evidence', new Map([['GET', (_req, res) => sendJson(res, 200, opts.evidence())]])],
+    ['/api/v2/reconcile', new Map([['GET', (_req, res) => sendJson(res, 200, reconcileWire())]])],
+    ['/api/v2/tax', new Map([['GET', getTax]])],
   ]);
 }
 
