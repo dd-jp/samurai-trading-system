@@ -11,6 +11,7 @@ import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import {
   type BacktestInput,
+  type BacktestTrial,
   backtestSessions,
   fencedMarket,
   runBacktest,
@@ -144,6 +145,11 @@ function ledger(): TrialLedger {
   );
 }
 
+const FLAT_TRIAL: BacktestTrial = {
+  config: { lookback: 20 },
+  sleeve: trendSleeve('trend-20', 'FLAT', 20),
+};
+
 function input(overrides: Partial<BacktestInput> = {}): BacktestInput {
   const logs: LogEntry[] = [];
   return {
@@ -259,7 +265,7 @@ describe('runBacktest', () => {
       m.barsBefore('UP', DATES[45] as string, 1);
       return trendSleeve('trend-5', 'UP', 5)(m);
     };
-    const run = input({ trials: [{ config: {}, sleeve: eager }, input().trials[1]!] });
+    const run = input({ trials: [{ config: {}, sleeve: eager }, FLAT_TRIAL] });
     await expect(runBacktest(run)).rejects.toThrow(/\(lookahead\)$/);
     expect(run.ledger.count()).toBe(2);
   });
@@ -317,20 +323,20 @@ describe('runBacktest', () => {
   it('fences each sleeve from bars after its session', async () => {
     const future = reading((m, date) => m.barsBefore('UP', addDays(date, 1), 1));
     await expect(
-      runBacktest(input({ trials: [{ config: {}, sleeve: future }, input().trials[1]!] })),
+      runBacktest(input({ trials: [{ config: {}, sleeve: future }, FLAT_TRIAL] })),
     ).rejects.toThrow(
       `backtest: a sleeve read bars before ${addDays(DATES[40] as string, 1)} on ${DATES[40]} (lookahead)`,
     );
     const nextYear = reading((m, date) => m.gbpUsdAtYearStart(Number(date.slice(0, 4)) + 1));
     await expect(
-      runBacktest(input({ trials: [{ config: {}, sleeve: nextYear }, input().trials[1]!] })),
+      runBacktest(input({ trials: [{ config: {}, sleeve: nextYear }, FLAT_TRIAL] })),
     ).rejects.toThrow(/\(lookahead\)$/);
     const today = reading((m, date) => {
       m.lastBarBefore('UP', date);
       m.gbpUsdAtYearStart(Number(date.slice(0, 4)));
     });
     await expect(
-      runBacktest(input({ trials: [{ config: {}, sleeve: today }, input().trials[1]!] })),
+      runBacktest(input({ trials: [{ config: {}, sleeve: today }, FLAT_TRIAL] })),
     ).resolves.toBeDefined();
   });
 
@@ -390,7 +396,7 @@ describe('runBacktest', () => {
         };
       };
     const run = (map: (decision: SleeveDecision) => SleeveDecision) =>
-      runBacktest(input({ trials: [{ config: {}, sleeve: remapped(map) }, input().trials[1]!] }));
+      runBacktest(input({ trials: [{ config: {}, sleeve: remapped(map) }, FLAT_TRIAL] }));
     await expect(run((decision) => ({ ...decision, price: decision.price * 0.9 }))).rejects.toThrow(
       /^backtest refuses sleeve 'trend-0': UP entry at /,
     );

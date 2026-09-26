@@ -194,7 +194,10 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - Four dry-run dates: the two 2026 dates and smoke are identical to PR 3b. On 2025-03-03 and 2024-11-06 the macro table now fails closed, so the primary book enters at half size (15 and 17 entries across both books, from 20 and 24); decisions and the `no-macro-gate` shadow are unchanged.
 - Known limits of PR 3c, owned by Step 1b:
   - Each candidate's matched benchmark (risk-matched buy-and-hold of the same universe, same budget rules; Q1, ruled (e)) is a sleeve 1b builds per candidate; the driver takes it as an input.
-  - There is no `v2:backtest` command until a candidate exists.
+  - There is no `v2:backtest` command until a candidate exists, so `runBacktest`, `backtestVerdict` and `TrialLedger.record` have no caller outside tests. Kill line for Step 1b: the first candidate ships with a `v2:backtest` entry point that records to the machine-wide ledger, or its verdict does not count.
+  - `TrialLedger` does not enforce S3's cap of 8 counted trials per candidate; a ninth records silently. Step 1b refuses it.
+  - The driver sets every year's capital row to the same `startCapitalGbp`, so the daily cap and the size steps stay anchored to the first year's capital, not the equity at each 1 January.
+  - `SESSION_B_TRIALS_PATH` is relative to the working directory, so `npm run v2:trials` must run from the repo root.
   - Simulated entries have no execution lag ([#1797](https://github.com/dd-jp/samurai-trading-system/issues/1797)); fix it before the first verdict.
   - Every sleeve in a run is seeded at the whole start capital. When 1b adds the S1 split, the driver must still seed each trial at the capital it would get alone.
   - Step 3e's Litestream stream must include the research store as well as the paper store.
