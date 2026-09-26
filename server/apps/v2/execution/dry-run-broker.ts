@@ -38,14 +38,6 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
   constructor(private readonly deps: DryRunBrokerDeps) {}
 
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
-    this.#queue(
-      order.client_order_id,
-      'entry',
-      order.instrument,
-      order.side,
-      order.size,
-      order.entry,
-    );
     return this.#refuse({
       client_order_id: order.client_order_id,
       instrument: order.instrument,
@@ -81,7 +73,7 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
   ): Promise<BrokerAck> {
     const mark = this.deps.markPrice(instrument);
     if (mark !== undefined) {
-      this.#queue(clientOrderId, 'exit', instrument, side, size, mark);
+      this.#queueExit(clientOrderId, instrument, side, size, mark);
     }
     return this.#refuse({ client_order_id: clientOrderId, instrument, kind: 'flatten' });
   }
@@ -94,9 +86,8 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
     return Promise.resolve([]);
   }
 
-  #queue(
+  #queueExit(
     clientOrderId: string,
-    leg: 'entry' | 'exit',
     instrument: string,
     side: OrderSide,
     qty: number,
@@ -109,8 +100,8 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
     );
     this.#pending.push({
       client_order_id: clientOrderId,
-      broker_fill_id: toBrokerFillId(`dry-${clientOrderId}-${leg}`),
-      leg,
+      broker_fill_id: toBrokerFillId(`dry-${clientOrderId}-exit`),
+      leg: 'exit',
       price: quote.price,
       qty,
       fee: quote.fee,

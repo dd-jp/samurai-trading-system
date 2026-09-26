@@ -20,7 +20,8 @@ export interface SmokeProbe {
   readonly detail: string;
 }
 
-export const SMOKE_TRADING_DATE = '2026-09-24';
+export const SMOKE_TRADING_DATE = '2026-09-23';
+const SMOKE_NEXT_DATE = '2026-09-24';
 const SMOKE_START_CAPITAL_GBP = 2_000;
 const SMOKE_LOSS_CAP_GBP = 1_500;
 const SMOKE_CLOCK = new SimulatedClock(new Date(`${SMOKE_TRADING_DATE}T07:00:00.000Z`));
@@ -119,15 +120,29 @@ function keylessPaperRunRefused(): boolean {
   }
 }
 
+function settledEntries(store: StoreHandle): { filled: number; cancelled: number } {
+  return store
+    .prepare(
+      `SELECT
+         SUM(EXISTS (SELECT 1 FROM v2_fills f WHERE f.client_order_id = o.client_order_id)) AS filled,
+         SUM(o.outcome = 'cancelled') AS cancelled
+       FROM v2_orders o WHERE o.leg = 'entry' AND o.trading_date = ?`,
+    )
+    .get(SMOKE_TRADING_DATE) as { filled: number; cancelled: number };
+}
+
 export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: boolean }> {
   const probes = staticProbes();
-  const root = composeV2Root({
-    tradingDate: SMOKE_TRADING_DATE,
-    dryRun: true,
-    store: seededSmokeStore(),
-    clock: SMOKE_CLOCK,
-    logger: { log: () => {} },
-  });
+  const store = seededSmokeStore();
+  const dryRunOn = (tradingDate: string) =>
+    composeV2Root({
+      tradingDate,
+      dryRun: true,
+      store,
+      clock: new SimulatedClock(new Date(`${tradingDate}T07:00:00.000Z`)),
+      logger: { log: () => {} },
+    });
+  const root = dryRunOn(SMOKE_TRADING_DATE);
   try {
     const report = await root.run();
     const llmCalls = root.scriptedTransports.reduce(
@@ -174,14 +189,27 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         `entries=${report.entries} refused=${report.dry_run_refusals} simulated=${report.simulated_orders}`,
       ),
       probe(
-        'simulated fills reach the books',
-        report.fills === report.entries && report.books.every((book) => book.positions > 0),
-        report.books.map((book) => `${book.book_id}: ${book.positions} positions`).join(', '),
+        'dry run fills nothing on the day it enters',
+        report.fills === 0,
+        `${report.fills} fills`,
       ),
       probe(
         'a paper run without LLM keys is refused for that reason',
         keylessPaperRunRefused(),
         'composeV2Root threw /without NOUS_BASE_URL and a Nous key/',
+      ),
+    );
+    const next = await dryRunOn(SMOKE_NEXT_DATE).run();
+    const { filled, cancelled } = settledEntries(store);
+    probes.push(
+      probe(
+        'every simulated entry fills or is cancelled on the next bar, and fills reach the books',
+        filled > 0 &&
+          filled + cancelled === report.entries &&
+          next.books.some((b) => b.positions > 0),
+        `${filled} filled, ${cancelled} cancelled of ${report.entries}; ${next.books
+          .map((book) => `${book.book_id}: ${book.positions} positions`)
+          .join(', ')}`,
       ),
     );
   } finally {

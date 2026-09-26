@@ -122,6 +122,18 @@ export class Journal implements DecisionJournal {
     return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
   }
 
+  unfilledSimulatedEntriesBefore(tradingDate: string): readonly JournalledOrder[] {
+    const rows = this.db
+      .prepare(
+        `SELECT client_order_id FROM v2_orders o
+         WHERE leg = 'entry' AND outcome IN ('simulated', 'refused_dry_run') AND trading_date < ?
+           AND NOT EXISTS (SELECT 1 FROM v2_fills f WHERE f.client_order_id = o.client_order_id)
+         ORDER BY trading_date, client_order_id`,
+      )
+      .all(tradingDate) as { client_order_id: string }[];
+    return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
+  }
+
   markCancelled(clientOrderId: string, detail: string): void {
     this.db
       .prepare(

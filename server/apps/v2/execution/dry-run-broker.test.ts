@@ -14,7 +14,7 @@ function adapter(
 }
 
 describe('DryRunBrokerAdapter', () => {
-  it('refuses every submission and simulates the fill across the spread with the venue fee', async () => {
+  it('refuses every submission, queues no entry fill, and fills a flatten at the mark across the spread with the venue fee', async () => {
     const fee = vi.fn(() => 7);
     const dryRun = adapter(() => 50, fee);
     const broker: BrokerAdapter = dryRun;
@@ -39,16 +39,10 @@ describe('DryRunBrokerAdapter', () => {
     const fills = await broker.fetchNewFills(new Date(0));
     expect(
       fills.map((fill) => [fill.client_order_id, fill.leg, fill.qty, fill.price, fill.fee]),
-    ).toEqual([
-      ['o1', 'entry', 3, 100.1, 7],
-      ['f1', 'exit', 3, 49.95, 7],
-    ]);
-    expect(fee.mock.calls).toEqual([
-      ['saxo', 'buy', 3, 100.1],
-      ['saxo', 'sell', 3, 49.95],
-    ]);
+    ).toEqual([['f1', 'exit', 3, 49.95, 7]]);
+    expect(fee.mock.calls).toEqual([['saxo', 'sell', 3, 49.95]]);
     expect(fills[0]?.timestamp).toEqual(clock.now());
-    expect(fills.map((fill) => fill.broker_fill_id)).toEqual(['dry-o1-entry', 'dry-f1-exit']);
+    expect(fills.map((fill) => fill.broker_fill_id)).toEqual(['dry-f1-exit']);
     expect(await broker.fetchNewFills(new Date(0))).toEqual([]);
     expect(await broker.getOpenPositions()).toEqual([]);
     expect(await broker.getOrder('o1', 'AAPL')).toBeNull();
@@ -58,23 +52,15 @@ describe('DryRunBrokerAdapter', () => {
     await broker.rearmProtectiveLegs('o1', 'AAPL', 'buy', 1, 0.5, 0);
   });
 
-  it('sells short entries below the price and leaves a flatten unfilled without a mark', async () => {
-    const dryRun = adapter(() => undefined);
-    await dryRun
-      .submitBracket({
-        client_order_id: 's1',
-        instrument: 'X',
-        asset_class: 'stocks',
-        side: 'sell',
-        size: 1,
-        entry: 100,
-        stop: 105,
-        target: 90,
-        time_in_force: 'gtc',
-      })
-      .catch(() => undefined);
+  it('buys a short flatten back above the mark and leaves it unfilled without a mark', async () => {
+    let mark: number | undefined = 100;
+    const dryRun = adapter(() => mark);
     await dryRun.submitFlatten('X', 'buy', 1, 'f2').catch(() => undefined);
+    mark = undefined;
+    await dryRun.submitFlatten('X', 'buy', 1, 'f3').catch(() => undefined);
     const fills = await dryRun.fetchNewFills(new Date(0));
-    expect(fills.map((fill) => [fill.client_order_id, fill.price])).toEqual([['s1', 99.9]]);
+    expect(fills.map((fill) => [fill.client_order_id, fill.leg, fill.price])).toEqual([
+      ['f2', 'exit', 100.1],
+    ]);
   });
 });

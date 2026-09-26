@@ -373,7 +373,7 @@ describe('runBacktest', () => {
           ],
         }),
       );
-    const capped = await run(30);
+    const capped = await run(20);
     const uncapped = await run(100_000);
     const lossOf = (result: Awaited<ReturnType<typeof run>>) =>
       1_000 - (result.trials[0]?.equity.at(-1) as number);

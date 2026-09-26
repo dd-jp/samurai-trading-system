@@ -35,7 +35,7 @@ async function writeFixtures(): Promise<Fixtures> {
   const directory = mkdtempSync(join(tmpdir(), 'v2-root-'));
   const bars: DailyBar[] = [];
   const origin = Date.UTC(2026, 0, 1);
-  for (let i = 0; i < 260; i += 1) {
+  for (let i = 0; i <= 260; i += 1) {
     const close = 20 * (1 + 0.001 * i);
     const date = new Date(origin + i * 86_400_000).toISOString().slice(0, 10);
     bars.push({
@@ -171,14 +171,12 @@ describe('composeV2Root', () => {
     directory = fixtures.directory;
     const logs: LogEntry[] = [];
     const logger: Logger = { log: (entry) => logs.push(entry) };
-    const root = composeV2Root({
-      ...fixtures,
-      tradingDate: ENTRY_DATE,
-      dryRun: true,
-      store: seededStore(),
-      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
-      logger,
-    });
+    const storePath = join(fixtures.directory, 'dry.sqlite');
+    seededStore(storePath).close();
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const open = (tradingDate: string) =>
+      composeV2Root({ ...fixtures, tradingDate, dryRun: true, storePath, clock, logger });
+    const root = open(ENTRY_DATE);
     try {
       expect(root.registry.ids()).toEqual(['debate']);
       expect(root.books.ids()).toEqual(['debate/primary', 'debate/no-macro-gate']);
@@ -190,7 +188,7 @@ describe('composeV2Root', () => {
         dry_run_refusals: 1,
         simulated_orders: 1,
         rejected_orders: 0,
-        fills: 2,
+        fills: 0,
         sleeves: ['debate'],
       });
       expect(exitCodeFor(report)).toBe(0);
@@ -214,19 +212,8 @@ describe('composeV2Root', () => {
         payload: { approval: expect.stringMatching(/^entry:v2-debate-no-macro-gate-/) },
       });
       expect(count(root, 'v2_orders')).toBe(2);
-      expect(count(root, 'v2_fills')).toBe(2);
-      expect(root.books.position('debate/primary', 'UP')?.qty).toBe(decision.size_shares);
-      const fx = new BarsMarketData(
-        new ParquetBarsSource(fixtures.barStoreRoot, 'alpaca'),
-        parseBoeGbpUsdCsv(readFileSync(fixtures.fxPath, 'utf8')),
-      ).gbpUsdAtYearStart(2026);
-      const fill = root.db
-        .prepare('SELECT price_gbp, fee_gbp FROM v2_fills WHERE book_id = ?')
-        .get('debate/no-macro-gate') as { price_gbp: number; fee_gbp: number };
-      expect(fill.price_gbp * fx).toBeGreaterThanOrEqual(LAST_CLOSE);
-      expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
-      expect(fill.fee_gbp).toBeGreaterThan(0);
-      expect(report.books.map((book) => book.positions)).toEqual([1, 1]);
+      expect(count(root, 'v2_fills')).toBe(0);
+      expect(report.books.map((book) => book.positions)).toEqual([0, 0]);
       const llmCalls = root.scriptedTransports.reduce((n, t) => n + t.calls.length, 0);
       expect(llmCalls).toBe(3);
       expect(count(root, 'llm_spend')).toBe(llmCalls);
@@ -239,6 +226,31 @@ describe('composeV2Root', () => {
       }
     } finally {
       root.close();
+    }
+    clock.advanceTo(new Date(`${NEXT_DATE}T07:00:00.000Z`));
+    const next = open(NEXT_DATE);
+    try {
+      const report = await next.run();
+      expect(report).toMatchObject({ fills: 2, entries: 0 });
+      const size = next.journal.orderFor(`v2-debate-primary-${ENTRY_DATE}-UP`)?.payload.size;
+      expect(next.books.position('debate/primary', 'UP')?.qty).toBe(size);
+      const fx = new BarsMarketData(
+        new ParquetBarsSource(fixtures.barStoreRoot, 'alpaca'),
+        parseBoeGbpUsdCsv(readFileSync(fixtures.fxPath, 'utf8')),
+      ).gbpUsdAtYearStart(2026);
+      const fill = next.db
+        .prepare('SELECT price_gbp, fee_gbp, trading_date FROM v2_fills WHERE book_id = ?')
+        .get('debate/no-macro-gate') as {
+        price_gbp: number;
+        fee_gbp: number;
+        trading_date: string;
+      };
+      expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
+      expect(fill.fee_gbp).toBeGreaterThan(0);
+      expect(fill.trading_date).toBe(NEXT_DATE);
+      expect(report.books.map((book) => book.positions)).toEqual([1, 1]);
+    } finally {
+      next.close();
     }
   });
 
@@ -280,7 +292,7 @@ describe('composeV2Root', () => {
         submitted_orders: 1,
         simulated_orders: 1,
         dry_run_refusals: 0,
-        fills: 2,
+        fills: 1,
       });
       expect(exitCodeFor(report)).toBe(0);
       expect(newsCalls).toEqual(['UP']);
@@ -302,8 +314,8 @@ describe('composeV2Root', () => {
         payload: { approval: `entry:v2-debate-primary-${ENTRY_DATE}-UP:${qty}` },
       });
       expect(first.books.position('debate/primary', 'UP')?.qty).toBe(qty);
-      expect(first.books.position('debate/no-macro-gate', 'UP')?.qty).toBe(qty);
-      expect(count(first, 'v2_fills')).toBe(2);
+      expect(first.books.position('debate/no-macro-gate', 'UP')).toBeUndefined();
+      expect(count(first, 'v2_fills')).toBe(1);
       expect(count(first, 'broker_brackets')).toBe(1);
       expect(
         transports
@@ -321,6 +333,10 @@ describe('composeV2Root', () => {
       expect(alpacaClient.getOrder).toHaveBeenCalled();
       expect(alpacaClient.submitOrder).toHaveBeenCalledTimes(1);
       expect(second.books.position('debate/primary', 'UP')?.marksHeld).toBe(2);
+      expect(second.books.position('debate/no-macro-gate', 'UP')).toMatchObject({
+        qty: Number(alpacaClient.orders[0]?.qty),
+        marksHeld: 1,
+      });
     } finally {
       second.close();
     }
