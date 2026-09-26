@@ -34,7 +34,11 @@ async function webServer(server: FixtureServer, command: string) {
   };
 }
 
-const dashboard = await webServer(DASHBOARD_SERVER, `npm run build && ${FIXTURE_COMMAND}`);
+const webServers = [
+  await webServer(DASHBOARD_SERVER, `npm run build && ${FIXTURE_COMMAND}`),
+  await webServer(CONTROLS_SERVER, FIXTURE_COMMAND),
+  await webServer(LOSS_BUDGET_SERVER, FIXTURE_COMMAND),
+];
 
 export default defineConfig({
   testDir: fileURLToPath(new URL('.', import.meta.url)),
@@ -60,9 +64,5 @@ export default defineConfig({
     contextOptions: { reducedMotion: 'no-preference' },
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: [
-    dashboard,
-    await webServer(CONTROLS_SERVER, FIXTURE_COMMAND),
-    await webServer(LOSS_BUDGET_SERVER, FIXTURE_COMMAND),
-  ],
+  webServer: webServers,
 });

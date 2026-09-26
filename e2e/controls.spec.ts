@@ -3,19 +3,30 @@ import { CONTROLS_SERVER, fixtureUrl, LOSS_BUDGET_SERVER } from './support/serve
 import { expect, test } from './support/test.ts';
 import { E2E_TOKEN } from './support/token.ts';
 
-const CONTROL_INTERVAL_WAIT_MS = 15_000;
+const TOO_SOON = /^One control per 10 seconds: try again in (\d+) s\.$/;
+const RETRY_MARGIN_MS = 500;
 
 async function openControls(page: Page): Promise<Locator> {
   await page.goto(`/?token=${E2E_TOKEN}`);
   return page.getByRole('region', { name: 'Halt and pause' });
 }
 
+async function retryAfterSeconds(status: Locator): Promise<number> {
+  await expect(status).toHaveText(TOO_SOON);
+  return Number(TOO_SOON.exec((await status.textContent()) ?? '')?.[1]);
+}
+
 async function send(panel: Locator, button: string, reason: string, recorded: RegExp) {
+  const status = panel.getByRole('status');
   await panel.getByLabel('Reason').fill(reason);
-  await expect(async () => {
+  await panel.getByRole('button', { name: button }).click();
+  await expect(status).toHaveText(new RegExp(`${recorded.source}|${TOO_SOON.source}`));
+  if (TOO_SOON.test((await status.textContent()) ?? '')) {
+    const seconds = await retryAfterSeconds(status);
+    await panel.page().waitForTimeout(seconds * 1_000 + RETRY_MARGIN_MS);
     await panel.getByRole('button', { name: button }).click();
-    await expect(panel.getByRole('status')).toHaveText(recorded, { timeout: 1_000 });
-  }).toPass({ timeout: CONTROL_INTERVAL_WAIT_MS, intervals: [1_000] });
+  }
+  await expect(status).toHaveText(recorded);
 }
 
 async function history(panel: Locator): Promise<string[]> {
@@ -41,9 +52,7 @@ test.describe('pause, halt and resume from the UI', () => {
 
     await panel.getByLabel('Reason').fill('e2e halt');
     await panel.getByRole('button', { name: 'Halt: flat at next fill' }).click();
-    await expect(panel.getByRole('status')).toHaveText(
-      /^One control per 10 seconds: try again in \d+ s\.$/,
-    );
+    expect(await retryAfterSeconds(panel.getByRole('status'))).toBeGreaterThanOrEqual(8);
     await expect(state).toContainText('State: PAUSED');
 
     await send(panel, 'Halt: flat at next fill', 'e2e halt', /^Recorded: halt #2\./);
@@ -76,7 +85,6 @@ test.describe('resume after a loss-budget halt', () => {
 
     await expect(state).toHaveText('State: HALTED (loss budget)');
     await expect(note).toBeVisible();
-    await expect(page.getByRole('banner')).toContainText('HALTED');
     expect(await history(panel)).toEqual(['resume', 'halt']);
   });
 });

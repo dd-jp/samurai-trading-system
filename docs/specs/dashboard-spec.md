@@ -119,7 +119,7 @@ Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 scre
 
 - A component test per panel covering fed, empty and not-yet-fed (vitest + testing-library, jsdom), and the gauge's marks computed from a non-default cap (D8).
 - Server route tests against a seeded v2 store; a test that every wire field the client reads is written by the server (the eval greps both sides); a test that the server refuses to start without a token and refuses an unauthenticated POST on loopback.
-- Playwright e2e over a v2 fixture server: pause, then halt, then resume from the UI; the state and history update; resume after a loss-budget halt leaves the book halted. Each control flow runs against its own fixture server (`V2_FIXTURE_SCENARIO` selects `default` or `loss-budget-halted`), so control writes and the 10 s interval never touch the shared read-only fixture.
+- Playwright e2e over a v2 fixture server: pause, then halt, then resume from the UI; the state and history update; resume after a loss-budget halt leaves the book halted. Each control flow runs against its own fixture server (`V2_FIXTURE_SCENARIO` selects `default` or `loss-budget-halted`), so control writes and the 10 s interval never touch the fixture the read-only specs share.
 - Cycle test: a paused control blocks entries on every book of the sleeve and keeps exits; a halt control exits every position at the next cycle (in paper, subject to #1801); resume never lifts `size_multiplier = 0`.
 - Stryker on the control reader and the cycle's control paths; oxlint, biome, fallow (including CSS health), CRAP ≤ 7 on touched `server/apps/v2` and `contracts` code.
 - No sign-off screen and no v1-only concept on any screen.
