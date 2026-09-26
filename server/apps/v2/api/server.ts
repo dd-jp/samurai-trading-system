@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
+  type ControlRequestWire,
   type ControlResponseWire,
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
@@ -113,18 +114,42 @@ function sendWriteResult(res: ServerResponse, result: ControlWriteResult): void 
   sendJson(res, result.kind === 'created' ? 201 : 200, body);
 }
 
+type BodyOutcome =
+  | { readonly ok: true; readonly request: ControlRequestWire }
+  | { readonly ok: false; readonly status: 400 | 413 | 415; readonly error: string };
+
+const OVERSIZED: BodyOutcome = {
+  ok: false,
+  status: 413,
+  error: `body is larger than ${CONTROL_BODY_MAX_BYTES} bytes`,
+};
+
+function parseBody(text: string): BodyOutcome {
+  const json = parseJson(text);
+  if (!json.ok) return { ok: false, status: 400, error: 'body is not valid JSON' };
+  const parsed = parseControlRequest(json.value);
+  return parsed.ok ? parsed : { ok: false, status: 400, error: parsed.reason };
+}
+
+async function readControlRequest(req: IncomingMessage): Promise<BodyOutcome> {
+  if (!isJsonRequest(req)) {
+    return { ok: false, status: 415, error: 'content-type must be application/json' };
+  }
+  const text = declaredTooLarge(req) ? null : await readCappedBody(req);
+  return text === null ? OVERSIZED : parseBody(text);
+}
+
 function postControl(controls: ControlWriter): Handler {
   return async (req, res) => {
-    if (!isJsonRequest(req)) return sendError(res, 415, 'content-type must be application/json');
-    if (declaredTooLarge(req)) return refuseOversized(req, res);
-    const text = await readCappedBody(req);
-    if (text === null) return refuseOversized(req, res);
-    const json = parseJson(text);
-    if (!json.ok) return sendError(res, 400, 'body is not valid JSON');
-    const parsed = parseControlRequest(json.value);
-    if (!parsed.ok) return sendError(res, 400, parsed.reason);
-    const source = `dashboard ${req.socket.remoteAddress ?? 'unknown'}`;
-    sendWriteResult(res, controls.write(parsed.request, source));
+    const outcome = await readControlRequest(req);
+    if (outcome.ok) {
+      const source = `dashboard ${req.socket.remoteAddress ?? 'unknown'}`;
+      sendWriteResult(res, controls.write(outcome.request, source));
+    } else if (outcome.status === 413) {
+      refuseOversized(req, res);
+    } else {
+      sendError(res, outcome.status, outcome.error);
+    }
   };
 }
 
@@ -140,18 +165,22 @@ function dispatch(
   token: string,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
-    if (!isAuthorizedRequest(req.headers.authorization, token)) {
-      return sendError(res, 401, 'unauthorized', { 'WWW-Authenticate': 'Bearer' });
+    if (isAuthorizedRequest(req.headers.authorization, token)) {
+      await resolveHandler(routes, req)(req, res);
+    } else {
+      sendError(res, 401, 'unauthorized', { 'WWW-Authenticate': 'Bearer' });
     }
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
-    const methods = routes.get(path);
-    if (methods === undefined) return sendError(res, 404, 'not found');
-    const handler = methods.get(req.method ?? '');
-    if (handler === undefined) {
-      return sendError(res, 405, 'method not allowed', { Allow: [...methods.keys()].join(', ') });
-    }
-    await handler(req, res);
   };
+}
+
+function resolveHandler(routes: Map<string, Map<string, Handler>>, req: IncomingMessage): Handler {
+  const methods = routes.get(new URL(req.url ?? '/', 'http://localhost').pathname);
+  if (methods === undefined) return (_req, res) => sendError(res, 404, 'not found');
+  const allow = [...methods.keys()].join(', ');
+  return (
+    methods.get(req.method ?? '') ??
+    ((_req, res) => sendError(res, 405, 'method not allowed', { Allow: allow }))
+  );
 }
 
 function respondToFault(res: ServerResponse, error: unknown): void {
