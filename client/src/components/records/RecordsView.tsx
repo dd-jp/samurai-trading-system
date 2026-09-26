@@ -1,5 +1,5 @@
-import type { LlmSpendWire, PanelWire, ReconcileWire, ResearchWire, TaxWire } from '@contracts';
-import { type PollOptions, usePoll } from '../../hooks/usePoll.ts';
+import type { ReconcileWire, ResearchWire, TaxWire, V2OverviewWire } from '@contracts';
+import { type PollOptions, type PollState, usePoll } from '../../hooks/usePoll.ts';
 import { FeedPanel, OwnedPanel } from '../Panel.tsx';
 import { JournalPanel } from './JournalPanel.tsx';
 import { LlmSpendPanel } from './LlmSpendPanel.tsx';
@@ -55,13 +55,15 @@ function Tax({ token, options }: FeedProps) {
 export function RecordsView({
   token,
   options,
-  llmSpend,
-}: FeedProps & { llmSpend: PanelWire<LlmSpendWire> }) {
+  overview,
+}: FeedProps & { overview: PollState<V2OverviewWire> }) {
   return (
     <div className="view" id="view-records">
       <JournalPanel token={token} options={options} />
       <Research token={token} options={options} />
-      <LlmSpendPanel panel={llmSpend} />
+      <FeedPanel title="LLM spend" state={overview}>
+        {(served, note) => <LlmSpendPanel panel={served.llm_spend} note={note} />}
+      </FeedPanel>
       <Reconcile token={token} options={options} />
       <Tax token={token} options={options} />
     </div>

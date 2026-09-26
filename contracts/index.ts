@@ -173,5 +173,10 @@ export type {
   V2OverviewWire,
   VenueTotalWire,
 } from './v2-wire.js';
-export { CONTROL_REASON_MAX_CHARS, V2_CONTRACT_VERSION, V2_WIRE_FIELD_NAMES } from './v2-wire.js';
+export {
+  CONTROL_REASON_MAX_CHARS,
+  JOURNAL_FILTER_MAX_CHARS,
+  V2_CONTRACT_VERSION,
+  V2_WIRE_FIELD_NAMES,
+} from './v2-wire.js';
 export { contractVersionOf } from './version.js';

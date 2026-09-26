@@ -1,4 +1,5 @@
 import {
+  JOURNAL_FILTER_MAX_CHARS,
   type JournalActionFilterWire,
   type JournalDayWire,
   type JournalDecisionWire,
@@ -14,7 +15,6 @@ import type { StoreHandle } from '../../../shared/store/index.js';
 const VETO_PREFIX = 'vetoed:';
 const DEFAULT_DAYS = 7;
 const MAX_DAYS = 31;
-const MAX_TEXT_CHARS = 64;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ACTIONS: ReadonlySet<string> = new Set<JournalActionFilterWire>([
   'enter_long',
@@ -50,7 +50,7 @@ function parseDate(raw: string): Parsed {
 }
 
 function parseText(raw: string): Parsed {
-  return raw !== '' && raw.length <= MAX_TEXT_CHARS ? raw : INVALID;
+  return raw !== '' && raw.length <= JOURNAL_FILTER_MAX_CHARS ? raw : INVALID;
 }
 
 function parseAction(raw: string): Parsed {

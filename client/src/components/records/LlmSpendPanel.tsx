@@ -1,4 +1,5 @@
 import type { LlmSpendWire, PanelWire } from '@contracts';
+import type { ReactNode } from 'react';
 import { usd } from '../../lib/format.ts';
 import { Panel, TableHead } from '../Panel.tsx';
 
@@ -55,9 +56,15 @@ function Spend({ spend }: { spend: LlmSpendWire }) {
   );
 }
 
-export function LlmSpendPanel({ panel }: { panel: PanelWire<LlmSpendWire> }) {
+export function LlmSpendPanel({
+  panel,
+  note,
+}: {
+  panel: PanelWire<LlmSpendWire>;
+  note?: ReactNode;
+}) {
   return (
-    <Panel title="LLM spend" panel={panel} empty="No LLM calls this month.">
+    <Panel title="LLM spend" panel={panel} empty="No LLM calls this month." after={note}>
       {(spend) => <Spend spend={spend} />}
     </Panel>
   );

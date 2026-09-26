@@ -1,9 +1,10 @@
-import type {
-  JournalActionFilterWire,
-  JournalDayWire,
-  JournalDecisionWire,
-  JournalOrderWire,
-  JournalWire,
+import {
+  JOURNAL_FILTER_MAX_CHARS,
+  type JournalActionFilterWire,
+  type JournalDayWire,
+  type JournalDecisionWire,
+  type JournalOrderWire,
+  type JournalWire,
 } from '@contracts';
 import { type FormEvent, type ReactNode, useState } from 'react';
 import { type PollOptions, usePoll } from '../../hooks/usePoll.ts';
@@ -47,7 +48,7 @@ function Order({ order }: { order: JournalOrderWire }) {
         <ul>
           {order.fills.map((fill) => (
             <li key={fill.fill_id}>
-              Fill {fixed(fill.qty, 0)} at {gbp(fill.price_gbp)}, fee {gbp(fill.fee_gbp)},{' '}
+              Fill {fill.qty} at {gbp(fill.price_gbp)}, fee {gbp(fill.fee_gbp)},{' '}
               {utcMinute(fill.recorded_at)}
             </li>
           ))}
@@ -141,7 +142,7 @@ function Search({ onSearch }: { onSearch: (filters: JournalFilters) => void }) {
           {field.label}
           <input
             type="text"
-            maxLength={100}
+            maxLength={JOURNAL_FILTER_MAX_CHARS}
             value={draft[field.key]}
             onChange={(e) => set(field.key)(e.target.value)}
           />

@@ -176,6 +176,7 @@ export interface V2OverviewWire {
 }
 
 export const CONTROL_REASON_MAX_CHARS = 250;
+export const JOURNAL_FILTER_MAX_CHARS = 64;
 
 export interface ControlRequestWire {
   readonly action: ControlAction;

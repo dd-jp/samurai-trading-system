@@ -93,9 +93,7 @@ export function App(options: PollOptions = {}) {
       <main>
         {view === 'today' && overview.data !== null && <TodayView overview={overview.data} />}
         {view === 'evidence' && <EvidenceView token={token} options={options} />}
-        {view === 'records' && overview.data !== null && (
-          <RecordsView token={token} options={options} llmSpend={overview.data.llm_spend} />
-        )}
+        {view === 'records' && <RecordsView token={token} options={options} overview={overview} />}
       </main>
     </div>
   );

@@ -31,6 +31,26 @@ describe('usePoll', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('drops the last good body when the URL changes, even if the new URL fails', async () => {
+    const body = overview();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(body))
+      .mockResolvedValueOnce(jsonResponse({ error: 'from is after to' }, 400));
+    const { result, rerender } = renderHook(({ url }) => usePoll(url, 'tok', { fetchImpl }), {
+      initialProps: { url: '/a' },
+    });
+    await waitFor(() => expect(result.current.status).toBe('ok'));
+    rerender({ url: '/b' });
+    expect(result.current).toMatchObject({ data: null, status: 'waiting' });
+    await waitFor(() => expect(result.current.status).toBe('failed'));
+    expect(result.current).toMatchObject({
+      data: null,
+      error: 'from is after to',
+      lastSuccessAt: null,
+    });
+  });
+
   it('refuses a body from a different contract version', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

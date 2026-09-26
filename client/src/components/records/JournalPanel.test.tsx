@@ -71,10 +71,31 @@ describe('JournalPanel (P9)', () => {
     expect(urls(fetchImpl)[0]).toBe('/api/v2/journal');
   });
 
-  it('pages to older days and back to the newest', async () => {
+  it('caps each text filter at the server limit', async () => {
+    const panel = mount(serving());
+    const form = await within(panel).findByRole('form', { name: 'Search the journal' });
+    for (const name of ['Book', 'Instrument', 'Veto category']) {
+      expect((within(form).getByLabelText(name) as HTMLInputElement).maxLength).toBe(64);
+    }
+  });
+
+  it('searches from the newest page after paging', async () => {
     const fetchImpl = serving();
     const panel = mount(fetchImpl);
     fireEvent.click(await within(panel).findByRole('button', { name: 'Older' }));
+    await waitFor(() => expect(urls(fetchImpl).at(-1)).toBe('/api/v2/journal?before=2026-10-05'));
+    const form = await within(panel).findByRole('form', { name: 'Search the journal' });
+    fireEvent.change(within(form).getByLabelText('Instrument'), { target: { value: 'AAPL' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(urls(fetchImpl).at(-1)).toBe('/api/v2/journal?instrument=AAPL'));
+  });
+
+  it('pages to older days and back to the newest', async () => {
+    const fetchImpl = serving();
+    const panel = mount(fetchImpl);
+    await within(panel).findByRole('button', { name: 'Older' });
+    expect(within(panel).queryByRole('button', { name: 'Newest' })).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Older' }));
     await waitFor(() => expect(urls(fetchImpl).at(-1)).toBe('/api/v2/journal?before=2026-10-05'));
     fireEvent.click(await within(panel).findByRole('button', { name: 'Newest' }));
     await waitFor(() => expect(urls(fetchImpl).at(-1)).toBe('/api/v2/journal'));

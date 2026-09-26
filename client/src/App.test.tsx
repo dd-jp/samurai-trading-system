@@ -38,7 +38,7 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current')).toBe('page');
   });
 
-  it('switches to Evidence and Records on the hash, polling only the shown view', async () => {
+  it('switches to Evidence and Records on the hash, fetching the routes of each view', async () => {
     const bodies: Record<string, unknown> = {
       '/api/v2/overview': overview(),
       '/api/v2/evidence': evidence(),

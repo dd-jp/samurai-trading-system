@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import type { LlmSpendWire, PanelWire } from '@contracts';
+import type { LlmSpendWire, PanelWire, V2OverviewWire } from '@contracts';
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import type { PollState } from '../../hooks/usePoll.ts';
 import { JOURNAL, jsonResponse, overview, research } from '../../test-wire.ts';
 import { RecordsView } from './RecordsView.tsx';
 
@@ -27,8 +28,21 @@ function routes(researchBody: unknown = research()): typeof fetch {
 
 const SPEND = overview().llm_spend;
 
-function mount(fetchImpl: typeof fetch, llmSpend: PanelWire<LlmSpendWire> = SPEND) {
-  render(<RecordsView token="tok" options={{ fetchImpl }} llmSpend={llmSpend} />);
+function served(llmSpend: PanelWire<LlmSpendWire>): PollState<V2OverviewWire> {
+  return {
+    data: { ...overview(), llm_spend: llmSpend },
+    status: 'ok',
+    error: null,
+    lastSuccessAt: 1,
+  };
+}
+
+function mount(
+  fetchImpl: typeof fetch,
+  llmSpend: PanelWire<LlmSpendWire> = SPEND,
+  overviewState: PollState<V2OverviewWire> = served(llmSpend),
+) {
+  render(<RecordsView token="tok" options={{ fetchImpl }} overview={overviewState} />);
 }
 
 describe('RecordsView (P9–P13)', () => {
@@ -109,6 +123,19 @@ describe('RecordsView (P9–P13)', () => {
         .map((note) => note.textContent),
     ).toEqual(['The spend could not be read, so LLM calls are refused. Exits are unaffected.']);
     expect(panel.textContent).toContain('— of $30.00');
+  });
+
+  it('shows the journal while the overview cannot be read, and says so on LLM spend', async () => {
+    mount(routes(), SPEND, {
+      data: null,
+      status: 'failed',
+      error: 'store unavailable',
+      lastSuccessAt: null,
+    });
+    await screen.findByRole('article', { name: 'Cycle 2026-10-05' });
+    expect(screen.getByRole('region', { name: 'LLM spend' }).textContent).toBe(
+      'LLM spendCould not read it: store unavailable.',
+    );
   });
 
   it('shows reconcile and tax as owned by their steps (P12, P13)', async () => {
