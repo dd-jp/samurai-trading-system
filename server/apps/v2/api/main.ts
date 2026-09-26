@@ -24,6 +24,24 @@ export interface V2DashboardArgs {
   readonly port: number;
 }
 
+function parsePort(raw: string | undefined): number {
+  const port = Number(raw ?? DEFAULT_PORT);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new Error(`V2_DASHBOARD_PORT must be an integer port (got ${raw})`);
+  }
+  return port;
+}
+
+function storePathFor(dryRun: boolean, store: string | undefined): string {
+  if (store === undefined) return dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH;
+  if (dryRun) {
+    throw new Error(
+      '--store and --dry-run are exclusive: --dry-run always reads the dry-run store',
+    );
+  }
+  return store;
+}
+
 export function parseDashboardArgs(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
@@ -34,20 +52,11 @@ export function parseDashboardArgs(
     strict: true,
   });
   const dryRun = values['dry-run'];
-  if (dryRun && values.store !== undefined) {
-    throw new Error(
-      '--store and --dry-run are exclusive: --dry-run always reads the dry-run store',
-    );
-  }
-  const port = Number(env.V2_DASHBOARD_PORT ?? DEFAULT_PORT);
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new Error(`V2_DASHBOARD_PORT must be an integer port (got ${env.V2_DASHBOARD_PORT})`);
-  }
   return {
-    storePath: values.store ?? (dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH),
+    storePath: storePathFor(dryRun, values.store),
     mode: dryRun ? 'dry-run' : 'paper',
     host: env.HOST ?? '127.0.0.1',
-    port,
+    port: parsePort(env.V2_DASHBOARD_PORT),
   };
 }
 
