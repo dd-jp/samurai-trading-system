@@ -72,8 +72,9 @@ function fieldsOf(type: WireType, fed = false): string[] {
 }
 
 function first<T>(rows: readonly T[]): T {
-  expect(rows.length).toBeGreaterThan(0);
-  return rows[0] as T;
+  const [row] = rows;
+  if (row === undefined) throw new Error('the fixture serves no row to check');
+  return row;
 }
 
 describe('the overview the client reads, served over the seeded fixture', () => {
