@@ -57,3 +57,8 @@ export function simulateLimitEntry(entry: LimitEntry, bars: readonly V2Bar[]): L
   }
   return { kind: 'cancelled' };
 }
+
+export function simulateMarketExit(bars: readonly V2Bar[]): number | undefined {
+  const [first] = bars;
+  return first === undefined ? undefined : quoted(first).open;
+}

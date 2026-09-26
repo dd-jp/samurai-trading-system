@@ -210,12 +210,7 @@ function harness(
     gbpUsdAtYearStart: () => FX,
   };
   const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
-  const simulatedBroker = new DryRunBrokerAdapter({
-    venue: 'alpaca',
-    pricing,
-    markPrice: (instrument) => barFor(instrument, clock.now().toISOString().slice(0, 10))?.rawClose,
-    clock,
-  });
+  const simulatedBroker = new DryRunBrokerAdapter();
   return {
     registry,
     sleeve,
@@ -280,6 +275,17 @@ function sizeShares(deps: CycleDeps, bookId: string, tradingDate: string, instru
 }
 
 const ENTRY_COST_GBP = (6 * 20) / FX;
+
+function exitFill(deps: CycleDeps, clientOrderId: string) {
+  const db = (
+    deps.journal as unknown as {
+      db: { prepare: (sql: string) => { get: (id: string) => unknown } };
+    }
+  ).db;
+  return db
+    .prepare("SELECT side, qty, price_gbp FROM v2_fills WHERE client_order_id = ? AND leg = 'exit'")
+    .get(clientOrderId);
+}
 
 async function openBooks(deps: Harness): Promise<void> {
   await runCycle(deps, '2026-09-24');
@@ -615,7 +621,7 @@ describe('runCycle', () => {
     expect(deps.books.position('debate/primary', 'AAPL')?.qty).toBe(6);
   });
 
-  it('time-stops a position after ten marks through the broker flatten path', async () => {
+  it('time-stops a position after ten marks and fills the flatten at the next open, across the spread', async () => {
     const deps = harness([longAapl], true);
     const flatten = vi.spyOn(deps.simulatedBroker, 'submitFlatten');
     await openBooks(deps);
@@ -635,7 +641,7 @@ describe('runCycle', () => {
     }
     expect(deps.books.position('debate/primary', 'AAPL')?.marksHeld).toBe(10);
     const report = await runCycle(deps, '2026-10-09');
-    expect(report).toMatchObject({ exits: 2, dry_run_refusals: 1, simulated_orders: 1, fills: 2 });
+    expect(report).toMatchObject({ exits: 2, dry_run_refusals: 1, simulated_orders: 1, fills: 0 });
     expect(flatten).toHaveBeenCalledWith(
       'AAPL',
       'sell',
@@ -649,9 +655,17 @@ describe('runCycle', () => {
     expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-10-09-AAPL-exit')?.outcome).toBe(
       'simulated',
     );
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-10-09-AAPL-exit',
+    );
+    deps.barsByDate.set('2026-10-12', bar('2026-10-09', { open: 19, low: 18.9, high: 19.4 }));
+    const filled = await runCycle(deps, '2026-10-12');
+    expect(filled).toMatchObject({ exits: 0, fills: 2 });
+    expect(flatten).toHaveBeenCalledTimes(2);
     expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.positions('debate/no-macro-gate')).toEqual([]);
     expect(deps.books.cash('debate/primary')).toBeCloseTo(
-      1_000 - ENTRY_COST_GBP + (6 * 20 * (1 - HALF_SPREAD_BPS / 10_000)) / FX,
+      1_000 - ENTRY_COST_GBP + (6 * 19 * (1 - HALF_SPREAD_BPS / 10_000)) / FX,
       9,
     );
   });
@@ -1074,6 +1088,7 @@ describe('runCycle', () => {
       outcome: 'refused_dry_run',
       payload: { approval: 'exit:v2-debate-primary-2027-01-05-AAPL-exit:3' },
     });
+    await runCycle(deps, '2027-01-06');
     expect(deps.books.position('debate/no-macro-gate', 'AAPL')).toBeUndefined();
   });
 
@@ -1125,12 +1140,16 @@ describe('runCycle', () => {
     expect(shorts.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20 / FX, 9);
   });
 
-  it('under a halt, a simulated entry filled this cycle is flattened in the same cycle', async () => {
+  it('under a halt, a simulated entry filled this cycle gets its flatten in the same cycle', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-24');
     deps.setControl('halt');
     const report = await runCycle(deps, '2026-09-25');
     expect(report).toMatchObject({ entries: 0, exits: 2 });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-25-AAPL-exit',
+    );
+    await runCycle(deps, '2026-09-28');
     expect(deps.books.positions('debate/primary')).toEqual([]);
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL-exit')?.payload.reason).toBe(
       'manual_halt',
@@ -1305,22 +1324,69 @@ describe('runCycle under a manual control', () => {
       outcome: 'simulated',
       payload: { reason: 'manual_halt' },
     });
-    expect(deps.books.positions('debate/primary')).toEqual([]);
-    expect(deps.books.positions('debate/no-macro-gate')).toEqual([]);
     expect(refusalRows(deps, '2026-09-28')[0]?.message).toMatch(
       /^manual halt since .* \(going away\): no sleeve decides and every open position is exited$/,
     );
     const next = await runCycle(deps, '2026-09-29');
-    expect(next).toMatchObject({ exits: 0, entries: 0 });
+    expect(next).toMatchObject({ exits: 0, entries: 0, fills: 2 });
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.positions('debate/no-macro-gate')).toEqual([]);
   });
 
-  it('halt shorts: the exit buys back', async () => {
+  it('halt shorts: the exit buys back at the next open, across the spread', async () => {
     const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
     const deps = harness([short], true);
-    await runCycle(deps, '2026-09-25');
+    await openBooks(deps);
     deps.setControl('halt');
     await runCycle(deps, '2026-09-28');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.side).toBe('buy');
+    deps.barsByDate.set('2026-09-29', bar('2026-09-28', { open: 20.4, low: 20.3, high: 20.9 }));
+    await runCycle(deps, '2026-09-29');
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(exitFill(deps, 'v2-debate-primary-2026-09-28-AAPL-exit')).toEqual({
+      side: 'buy',
+      qty: 6,
+      price_gbp: expect.closeTo((20.4 * (1 + HALF_SPREAD_BPS / 10_000)) / FX, 9),
+    });
+  });
+
+  it('a simulated flatten fills at the first bar on or after its date, however many cycles were missed', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    deps.barsByDate.set('before the flatten', bar('2026-09-25', { open: 1, low: 1 }));
+    deps.barsByDate.set('flatten day', bar('2026-09-28', { open: 19.5, low: 19.4 }));
+    deps.barsByDate.set('2026-10-01', bar('2026-09-30', { open: 18 }));
+    await runCycle(deps, '2026-10-01');
+    expect(exitFill(deps, 'v2-debate-primary-2026-09-28-AAPL-exit')).toMatchObject({
+      price_gbp: expect.closeTo((19.5 * (1 - HALF_SPREAD_BPS / 10_000)) / FX, 9),
+    });
+  });
+
+  it('keeps a simulated flatten pending while no bar has come in: no second flatten, no bracket exit', async () => {
+    const deps = harness([longAapl], true);
+    const flatten = vi.spyOn(deps.simulatedBroker, 'submitFlatten');
+    await openBooks(deps);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    const real = deps.market.barsBefore;
+    const noBarsYet = vi
+      .spyOn(deps.market, 'barsBefore')
+      .mockImplementation((instrument, date, count) =>
+        count < 10 ? [] : real(instrument, date, count),
+      );
+    deps.barsByDate.set('2026-09-29', bar('2026-09-28', { low: 1 }));
+    const waiting = await runCycle(deps, '2026-09-29');
+    expect(waiting).toMatchObject({ exits: 0, fills: 0 });
+    expect(flatten).toHaveBeenCalledTimes(2);
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-28-AAPL-exit',
+    );
+    noBarsYet.mockRestore();
+    deps.setControl('resume');
+    const filled = await runCycle(deps, '2026-09-30');
+    expect(filled.fills).toBe(2);
     expect(deps.books.positions('debate/primary')).toEqual([]);
   });
 
@@ -1340,6 +1406,9 @@ describe('runCycle under a manual control', () => {
     const pending = await runCycle(deps, '2026-09-29');
     expect(pending.exits).toBe(0);
     expect(alpaca.flattens).toHaveLength(1);
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-28-AAPL-exit',
+    );
   });
 
   it('paper mode: a rejected halt flatten leaves no exit pending and is retried next cycle', async () => {
