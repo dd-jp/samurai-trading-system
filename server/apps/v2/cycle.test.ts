@@ -651,6 +651,32 @@ describe('runCycle', () => {
     );
   });
 
+  it('the time stop sends nothing for a position it cannot route', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    for (const date of [
+      '2026-09-28',
+      '2026-09-29',
+      '2026-09-30',
+      '2026-10-01',
+      '2026-10-02',
+      '2026-10-05',
+      '2026-10-06',
+      '2026-10-07',
+      '2026-10-08',
+      '2026-10-09',
+    ]) {
+      await runCycle(deps, date);
+    }
+    vi.spyOn(deps.executor, 'canRoute').mockReturnValue(false);
+    const report = await runCycle(deps, '2026-10-12');
+    expect(report.exits).toBe(0);
+    expect(alpaca.flattens).toEqual([]);
+  });
+
   it('paper mode: the time stop leaves the exit pending until the broker fill arrives', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
