@@ -39,7 +39,7 @@ One page, three hash views, no router library. A status strip sits above every v
 
 Width: one column under 720 px, two above. Every panel has three states: **fed** (data), **empty** (fed, nothing yet: "no closed trades"), **not yet fed** (the server says which step or ruling owns the data, with its ticket). A panel never reads a field nobody writes; "not yet fed" is itself a served value (§6).
 
-Refresh: poll every 30 s. The v2 cycle runs once per trading day, so nothing faster is needed; the status strip shows the age of the data.
+Refresh: poll every 30 s. The v2 cycle runs once per trading day, so nothing faster is needed; the status strip shows the age of the data. Its "next due" and heartbeat fields come from P14; until Step 3e schedules the cycle (#1784) they read not yet fed.
 
 ## 4. Panels
 
@@ -47,42 +47,51 @@ Every Step 3c item and each D5 panel has a row. **Served now** = the data exists
 
 | # | Panel | Shows | Source | Status |
 |---|---|---|---|---|
-| P1 | Loss-budget gauge | Per sleeve (primary book): year-to-date loss against three marks at ⅓, ⅔ and the full configured cap; today's loss against the daily cap; current size step (1, ½, ¼, halted) and whether entries are blocked at the next fill. Marks are computed from the year's `loss_cap_gbp` and `start_capital_gbp` — never literals (D8); with today's config they read −£500 / −£1,000 / −£1,500. | `v2_capital_config` (the year's latest row), `v2_book_days` (`ytd_loss_gbp`, `size_multiplier`, `entries_blocked`) | Served now |
-| P2 | Halt/pause state and control | Current control state (RUNNING / PAUSED / HALTED-manual / HALTED-loss-budget), who set it, when, why; the two buttons; the history of controls. | New `v2_controls` (§5), `v2_book_days.size_multiplier` | New in this step |
-| P3 | Positions and cash | Per venue (Alpaca, Saxo): each position's qty, entry, mark, stop, P&L, days held, book; each book's cash; totals per venue in its currency and one total in GBP. | `v2_positions`, `v2_books.cash_gbp`, latest `v2_book_days`; USD figures per §9 item 3 | Served now (GBP); USD per §9 |
-| P4 | Today's decisions | This cycle's decisions for the primary book: entered / skipped / vetoed / none, with the reason and confidence. | `v2_decisions` for the last `trading_date` | Served now |
-| P5 | Sleeve vs benchmark | Per sleeve: primary book vs each shadow book (no-veto, no-macro-gate, and the G18 shadows once instantiated) and vs arm 2 once it runs; Sharpe and max drawdown of daily equity returns, and equity curves. Risk-adjusted, never return-only. | `v2_book_days.equity_gbp` per book | Served now for shadows; arm 2 owned by #1773 |
+| P1 | Loss-budget gauge | Headline: the account-wide year-to-date loss (every primary book, both venues, Q6/G6's one budget) against three marks at ⅓, ⅔ and the full configured cap, and today's loss against the daily cap (1.0% of the year's start capital). Under it, one row per sleeve's primary book: its loss, current size step (1, ½, ¼, halted) and whether entries are blocked at the next fill; shadow books' size steps listed under their sleeve. Marks are computed from the year's `loss_cap_gbp` and `start_capital_gbp`, never literals (D8); with today's config they read −£500 / −£1,000 / −£1,500. | `v2_capital_config` (the year's latest row), `v2_book_days` (`ytd_loss_gbp`, `size_multiplier`, `entries_blocked`) | Served now. The code enforces the budget per book, each against the full cap (§9 item 6) |
+| P2 | Halt/pause state and control | Current state (RUNNING / PAUSED / HALTED-manual / HALTED-loss-budget), when it was set, from where, why; the two buttons and resume; the history of controls. | New `v2_controls` (§5), `v2_book_days.size_multiplier` | New in this step |
+| P3 | Positions and cash | Per venue (Alpaca, Saxo): each position's qty, entry, stop, days held, book, and mark and unrealised P&L; each book's cash; totals per venue in its currency and one total in GBP. | `v2_positions` (qty, `avg_price_gbp`, `stop_gbp`, `opened_date`, `marks_held`), `v2_books.cash_gbp`, latest `v2_book_days`. `v2_positions` stores no mark: the mark is the last close from the bar store the cycle marks with, under the same coverage invariant (postmortem §2; a stale bar shows as stale, not as a price). USD figures per §9 item 3 | Served now except the mark (new read in this step); USD per §9 |
+| P4 | Today's decisions | This cycle's decisions for each primary book: entered / skipped / vetoed / none, with the reason and confidence. | `v2_decisions` for the last `trading_date` | Served now |
+| P5 | Sleeve vs benchmark | Per sleeve: primary book vs each shadow book (no-veto, no-macro-gate, and the G18 shadows once instantiated), vs arm 2 once it runs, and for a Step 1b candidate vs its risk-matched buy-and-hold benchmark over the same universe; Sharpe and max drawdown of daily equity returns, and equity curves. Risk-adjusted, never return-only. | `v2_book_days.equity_gbp` per book; the candidate benchmark series from Step 1b | Served now for shadows; arm 2 owned by #1773; candidate benchmark owned by Step 1b (#1785) |
 | P6 | Debate G1 progress | Closed paper trades toward 100; one-sided 95% test vs arm 2 (statistic, p-value, pass/fail) once arm 2 has trades. | `v2_fills` (closed round trips), arm 2's book | Trade count served now; the test is not yet fed until arm 2 runs (#1773) |
-| P7 | Live-vs-backtest band | For a backtest-validated sleeve: its paper equity against the backtest's 90% and 95% predictive bands for the same window (Q7, G7), with weeks inside the band. The debate sleeve is forward-paper (Q15) and has no band; P6 is its evidence. | Paper: `v2_book_days`. Band: a persisted band written by Step 1b's `v2:backtest` (today computed in memory only, `server/apps/v2/backtest-verdict.ts`) | Not yet fed — owned by Step 1b (#1785) |
-| P8 | Gate statistics (D5) | Per candidate: haircut Sharpe vs benchmark, DSR over the whole trial ledger, PBO, capital ceiling = cap ÷ (DD × 1.5), fault-free weeks, realised vs modelled costs. | Persisted verdict from Step 1b; fault weeks and costs from Step 4 | Not yet fed — owned by Step 1b (#1785) and Step 4 |
-| P9 | Decision journal | Searchable by date, name, book, action, veto category; each row expands to the reason, `inputs_hash`, debate id and payload; linked orders and fills. Vetoed = `action='skip'` with `reason` starting `vetoed:`. Refusals (`v2_refusals`) listed per cycle, including unset parameters and their tickets. | `v2_decisions`, `v2_orders`, `v2_fills`, `v2_refusals` | Served now |
-| P10 | Research loop | Trial count, per candidate and in total (the DSR deflator); the ledger rows (candidate, config hash, recorded at). Proposals, promotions and demotions show "not yet fed — G11 not ruled (#1717)". | `v2_trials` in the machine-wide research store (`researchStorePath` in `server/apps/v2/trial-ledger.ts`), a different file from the v2 store | Ledger served now; proposals/promotions blocked on G11 |
-| P11 | LLM spend (D5) | Month to date vs the ~$30 cap, per seat and per day; whether the cap has stopped calls. | `llm_spend` in the v2 store, as `server/apps/v2/signal/monthly-spend-cap.ts` reads it | Served now |
-| P12 | Reconcile diffs (D5) | Each run's broker-vs-book differences per venue: position qty, cash, open orders; zero-diff runs shown as clean. | Reconcile log written by Step 4 / Step 3e (#1784); no v2 table exists | Not yet fed — owned by Step 4 / #1784 |
-| P13 | Tax export | Per disposal: date, instrument, venue, qty, proceeds and cost in GBP, the FX rate used, the matching rule applied (same-day / 30-day / section 104), gain; a download as CSV for a tax year. | Step 4's per-disposal GBP tax log; matching per `docs/cgt-disposal-matching.md`. v1's `server/tools/report-cgt-disposals.ts` reads v1 fill legs and is not reused. | Not yet fed — owned by Step 4 |
-| P14 | Heartbeat | Last cycle start/end, last healthchecks.io ping, the process's own uptime. | Last `v2_book_days.recorded_at`; ping time from Step 3e (#1784) | Cycle time served now; ping owned by #1784 |
+| P7 | Live-vs-backtest band | For a backtest-validated sleeve: its paper equity against the backtest's 90% band (Q7) and 95% band (G7) for the same window; weeks inside the 90% band; consecutive weeks outside the 95% band and drawdown against 1.5× the backtest max (G7's demotion triggers). The debate sleeve is forward-paper (Q15) and has no band; P6 is its evidence. | Paper: `v2_book_days`. Band: none is computed yet. Step 1b must add the predictive band to the verdict and persist it with the `v2:backtest` entry point it owes (doc 67, Known limits of PR 3c) | Not yet fed, owned by Step 1b (#1785) |
+| P8 | Gate statistics (D5) | Per candidate: haircut Sharpe vs benchmark, DSR over the whole trial ledger, PBO, capital ceiling = cap ÷ (DD × 1.5), fault-free weeks, realised vs modelled costs. | Persisted verdict from Step 1b; fault weeks and costs from Step 4 | Not yet fed, owned by Step 1b (#1785) and Step 4 |
+| P9 | Decision journal | Searchable by date, name, book, action, veto category; each row expands to the reason, `inputs_hash`, the debate id (from `payload`) and the payload; linked orders and fills. Vetoed = `action='skip'` with `reason` starting `vetoed:`. Refusals (`v2_refusals`) listed per cycle, including unset parameters and their tickets. | `v2_decisions`, `v2_orders`, `v2_fills`, `v2_refusals` | Served now |
+| P10 | Research loop | Trial count, per candidate and in total (the DSR deflator); the ledger rows (candidate, config hash, recorded at). Proposals, promotions and demotions show "not yet fed: G11 not ruled (#1717)". | `v2_trials` in the machine-wide research store (`researchStorePath` in `server/apps/v2/trial-ledger.ts`), a different file from the v2 store | Ledger served now; proposals and promotions blocked on G11 |
+| P11 | LLM spend (D5) | Month to date vs the ~$30 cap, per model and per day; whether the cap has stopped calls. | `llm_spend` (`model`, `cost_usd`, `timestamp`) in the v2 store, as `server/apps/v2/signal/monthly-spend-cap.ts` reads it | Served now |
+| P12 | Reconcile diffs (D5) | Each run's broker-vs-book differences per venue: position qty, cash, open orders; zero-diff runs shown as clean. | Reconcile log written by Step 4 / Step 3e (#1784); no v2 table exists | Not yet fed, owned by Step 4 / #1784 |
+| P13 | Tax export | Per disposal: date, instrument, venue, qty, proceeds and cost in GBP, the FX rate used, the matching rule applied (same-day / 30-day / section 104), gain; a download as CSV for a tax year. | Step 4's per-disposal GBP tax log; matching per `docs/cgt-disposal-matching.md`. v1's `server/tools/report-cgt-disposals.ts` reads v1 fill legs and is not reused. | Not yet fed, owned by Step 4 |
+| P14 | Heartbeat | The v2 root's last completed cycle (its trading date and the time it was recorded), the next cycle due, the last healthchecks.io ping. | Last `v2_book_days.recorded_at`; the schedule and ping from Step 3e (#1784) | Last cycle served now; next-due and ping not yet fed, owned by #1784 |
 
-Shadow books have their own loss budget (each book's `#budget` in `server/apps/v2/risk/books.ts`); P1 shows the primary book's gauge per sleeve and lists shadow books' size steps underneath (§9 item 4).
+Each book has its own `LossBudget` (the `#budgets` map in `server/apps/v2/risk/books.ts`), measured against the full cap. That matches Q6/G6's one budget only while one primary book trades; P1's headline sums the primary books so the gauge shows the ruled measure either way.
 
 ## 5. Halt and pause
 
-No manual control exists in v2 today; the only halt is the automatic loss-budget halt (`size_multiplier = 0`). This step adds one.
+No manual control exists in v2 today. The only halt is the automatic loss-budget halt, and it is incomplete: `size_multiplier = 0` zeroes entry sizing in the gate, but nothing closes open positions. Positions leave only through their brackets and the time stop (`approveExit` in `server/apps/v2/risk/gate.ts`). Session B (j)'s "halt = flat at the next fill" is unbuilt.
 
 **Semantics (proposed, §9 item 1):**
 
-- **Pause** blocks new entries for every sleeve. Exits, broker-resting stops and time stops keep running.
-- **Halt** blocks new entries and closes every position at the next fill, the same meaning as the loss-budget halt (Session B (j): halt = flat at the next fill).
+- **Pause** blocks new entries for every sleeve and every book of each sleeve, shadows included, so the veto and macro-gate comparisons stay like for like. Exits, broker-resting stops and time stops keep running.
+- **Halt** does what pause does, and also closes every position at the next cycle through the existing exit order (`approveExit`, a `flatten` approval).
 - **Resume** clears a manual pause or halt. It can never clear the loss-budget halt, and it cannot change the cap or the daily cap (Q13: never loosened mid-year). If the loss budget has halted a book, resume leaves it halted and the UI says so.
 
-**Mechanism:** an append-only `v2_controls` table (`control_id`, `action` pause/halt/resume, `reason`, `set_by`, `set_at`), with update and delete refused by triggers like `v2_capital_config`. The cycle reads the latest control once at its start; the gate refuses entries while paused or halted; halted exits every position through the existing exit path. Every control and the cycle's reading of it is journalled. This is risk code: its tests are unit (gate), cycle (e2e over the dry run) and Stryker on the gate and control reader.
+**Mechanism:** an append-only `v2_controls` table (`control_id`, `action` pause/halt/resume, `reason`, `source` = `dashboard` plus the remote address, `idempotency_key` unique, `set_at`), with update and delete refused by triggers like `v2_capital_config`. The cycle reads the latest control once at its start; the gate refuses entries while paused or halted; while halted the cycle requests an exit for every open position. Every control and the cycle's reading of it is journalled. This is risk code: unit tests on the gate and the control reader, a cycle test over the dry run, and Stryker on both.
 
-**Latency:** the v2 root runs one cycle per trading day, so a control set during the day takes effect at the next cycle. Resting stops already protect open positions between cycles (postmortem §3). The control confirms with the time the next cycle is due.
+**Latency:** the v2 root runs one cycle per trading day, so a control set during the day takes effect at the next cycle. Resting stops protect open positions between cycles (postmortem §3). The UI says the control is recorded and takes effect at the next cycle.
 
-**Endpoint:** `POST /api/v2/controls` is the first write the dashboard server has. It keeps the hosting rule: LAN-only bind, the fail-closed bind guard, a Bearer token required on every request (not only off-loopback), a JSON body validated against the wire type, a reason required. Any other method or path stays 405/404.
+**Endpoint:** `POST /api/v2/controls` is the first write the dashboard server has. It keeps the hosting rule (LAN-only bind, the fail-closed bind guard) and tightens it:
+
+- Today `isAuthorizedRequest` (`server/apps/service-api/request-auth.ts`) admits every request when `SAMURAI_DASHBOARD_TOKEN` is unset, and the bind guard allows loopback with no token. The v2 server refuses to start without a configured token, so every request carries a Bearer token, loopback included. A test pins it.
+- The body is capped (1 KiB), validated against the wire type, and needs a reason and an idempotency key; a repeated key returns the first result. At most one control per 10 s.
+- The client removes the token from the URL (`history.replaceState`) once `client/src/lib/dashboard-token.ts` has stored it.
+- Any other method or path stays 405/404.
 
 ## 6. Server and wire
 
-**Where it runs (proposed, §9 item 2):** a v2 read API module under `server/apps/v2/api/` <!-- cite-exempt: planned — built after the spec is approved -->, started by `npm run v2:dashboard` next to the v2 root, serving the built client and the routes below. It opens the v2 store read-only except for `v2_controls`, and the research store read-only. The bind guard and Bearer check move from `server/apps/service-api/` to a shared module so both servers use one implementation until Step 5 deletes v1's. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
+**Where it runs (proposed, §9 item 2):** a v2 API module, started by `npm run v2:dashboard` next to the v2 root, serving the built client and the routes below.
+
+Module path: `server/apps/v2/api/` <!-- cite-exempt: planned — built after the spec is approved -->
+
+It opens the v2 store through `guardedStore` (`server/shared/store/write-guard.ts`) with a write allowlist of `v2_controls` only, in WAL mode with a busy timeout, because the v2 root writes the same file. It opens the research store read-only. The bind guard and Bearer check move from `server/apps/service-api/` to a shared module, so both servers use one implementation until Step 5 deletes v1's. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
 
 **Routes (GET unless stated):**
 
@@ -96,18 +105,22 @@ No manual control exists in v2 today; the only halt is the automatic loss-budget
 | `/api/v2/tax?year` (JSON; `&format=csv` downloads) | P13 |
 | `POST /api/v2/controls` | P2 |
 
-**Wire types:** new types in `contracts/` (for example `contracts/v2-wire.ts` <!-- cite-exempt: planned — built after the spec is approved -->) exported through the barrel, with `CONTRACT_VERSION` bumped; the client refuses a mismatched version as it does today. Every panel's payload is a union `{ status: 'fed', … } | { status: 'empty' } | { status: 'not-yet-fed', owner: string, ticket: string }`, so an unbuilt source is a served value, never a missing field. Money is GBP unless the field name says `Usd`; totals in GBP state the rate and its source.
+**Wire types:** new types in `contracts/`, exported through the barrel.
+
+Wire file: `contracts/v2-wire.ts` <!-- cite-exempt: planned — built after the spec is approved -->
+
+The v2 wire derives its own version from its field names, as `contractVersionOf` does for the v1 snapshot; the client refuses a mismatched version as it does today. Every panel's payload is a union `{ status: 'fed', … } | { status: 'empty' } | { status: 'not-yet-fed', owner: string, ticket: string }`, so an unbuilt source is a served value, never a missing field. Money is GBP unless the field name says `Usd`; totals in GBP state the rate and its source.
 
 ## 7. Client
 
-Replaces the v1 client in `client/` in the build PR (§9 item 5): the v1 screens are deleted then, not in Step 5. v1's `service-api` stops being built into the dashboard bundle; Step 5 deletes the server side. Hash routes `#today`, `#evidence`, `#records`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept.
+Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 screens are deleted then rather than in Step 5. This moves part of Step 5's client pass earlier. v1's `service-api` stops serving the dashboard bundle; Step 5 deletes its server side. Hash routes `#today`, `#evidence`, `#records`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept, with the URL clean-up in §5.
 
 ## 8. Tests and definition of done
 
 - A component test per panel covering fed, empty and not-yet-fed (vitest + testing-library, jsdom), and the gauge's marks computed from a non-default cap (D8).
-- Server route tests against a seeded v2 store; a test that every wire field the client reads is written by the server (the eval greps both sides).
+- Server route tests against a seeded v2 store; a test that every wire field the client reads is written by the server (the eval greps both sides); a test that the server refuses to start without a token and refuses an unauthenticated POST on loopback.
 - Playwright e2e over a v2 fixture server: pause, then halt, then resume from the UI; the state and history update; resume after a loss-budget halt leaves the book halted.
-- Cycle test: a paused control blocks entries and keeps exits; a halt control flattens at the next fill; resume never lifts `size_multiplier = 0`.
+- Cycle test: a paused control blocks entries on every book of the sleeve and keeps exits; a halt control exits every position at the next cycle; resume never lifts `size_multiplier = 0`.
 - Stryker on the control reader and the gate's control check; oxlint, biome, fallow (including CSS health), CRAP ≤ 7 on touched `server/apps/v2` and `contracts` code.
 - No sign-off screen and no v1-only concept on any screen.
 
@@ -115,8 +128,9 @@ Build order after approval: (1) wire types, API and controls with their tests; (
 
 ## 9. Needs David
 
-1. **Halt/pause semantics (§5).** Pause = entries blocked, exits run; halt = flat at the next fill; resume clears only a manual control, never the loss-budget halt. Scope: all sleeves at once, or per sleeve too? Proposed: all sleeves only.
-2. **Where the API runs (§6).** Proposed: a v2 module started by `npm run v2:dashboard` now, mounted in the v2 process once it is long-running. Alternative: extend v1's `service-api` to open the v2 store.
+1. **Halt/pause semantics (§5).** Pause = entries blocked on every book, exits run; halt = every position exited at the next cycle; resume clears only a manual control, never the loss-budget halt. Scope: all sleeves at once, or per sleeve too? Proposed: all sleeves only. A control takes effect at the next daily cycle, not immediately. Should resume need a Telegram confirm on top of the dashboard token? Proposed: no; the token plus the journal is enough while the dashboard is LAN-only.
+2. **Where the API runs (§6).** Proposed: a v2 module started by `npm run v2:dashboard` now, mounted in the v2 process once that process runs continuously. Alternative: extend v1's `service-api` to open the v2 store. Either way, the token becomes mandatory on loopback too, which tightens the restated hosting rule.
 3. **USD figures (P3).** v2 books are kept in GBP. Proposed: show each venue's broker cash in its own currency from the reconcile read (Step 4), and convert USD to GBP at the day's rate for the total (the tax rule's rate), with the loss budget's fixed 1 January rate shown separately where the gauge uses it. Alternative: one rate (the 1 January one) everywhere.
-4. **Which book the gauge shows (P1).** Proposed: each sleeve's primary book; shadow books' size steps listed underneath.
-5. **Phasing and replacement.** Proposed: panels owned by other steps (P7, P8, P12, P13, the P6 test, the P14 ping) ship in the not-yet-fed state and light up when their step lands; the v1 client is replaced in the build PR rather than kept alongside until Step 5.
+4. **Gauge (P1).** Proposed: the account-wide sum of primary books as the headline, per-sleeve rows under it, shadow books' size steps listed per sleeve.
+5. **Phasing and replacement.** Proposed: panels owned by other steps (P5's arm 2 and candidate benchmark, the P6 test, P7, P8, P12, P13, P14's schedule and ping) ship in the not-yet-fed state and light up when their step lands; the v1 client is replaced in the build PR rather than kept alongside until Step 5.
+6. **Not UI, found while writing this spec; ticketed, not fixed here.** (a) Each book's loss budget runs against the full cap, so with more than one primary book trading the account could lose more than the cap before any book halts. (b) The loss-budget halt does not flatten (§5). Both are Step 4 loss-budget machinery ([#1799](https://github.com/dd-jp/samurai-trading-system/issues/1799)). (c) Whether manual pause or halt days count against G1's 100 trades, the paper-band weeks, or Q7(3)'s fault-free weeks is David's call.
