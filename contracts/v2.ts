@@ -245,6 +245,22 @@ export interface ExitRequest {
   readonly clientOrderId: string;
 }
 
+export type ControlAction = 'pause' | 'halt' | 'resume';
+
+export type ControlState = 'running' | 'paused' | 'halted';
+
+export type ManualControl =
+  | { readonly state: 'running' }
+  | {
+      readonly state: Exclude<ControlState, 'running'>;
+      readonly reason: string;
+      readonly setAt: string;
+    };
+
+export interface ControlReader {
+  current(): ManualControl;
+}
+
 export interface RiskGate {
   approveEntry(request: EntryRequest): EntryApproval;
   approveExit(request: ExitRequest): RiskApprovedOrder;
