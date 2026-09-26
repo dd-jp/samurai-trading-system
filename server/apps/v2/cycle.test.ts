@@ -1377,8 +1377,10 @@ describe('runCycle under a manual control', () => {
         count < 10 ? [] : real(instrument, date, count),
       );
     deps.barsByDate.set('2026-09-29', bar('2026-09-28', { low: 1 }));
+    const quote = vi.spyOn(deps.executor, 'quoteSimulatedFill');
     const waiting = await runCycle(deps, '2026-09-29');
     expect(waiting).toMatchObject({ exits: 0, fills: 0 });
+    expect(quote).not.toHaveBeenCalled();
     expect(flatten).toHaveBeenCalledTimes(2);
     expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
       'v2-debate-primary-2026-09-28-AAPL-exit',
