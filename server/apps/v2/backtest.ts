@@ -1,4 +1,5 @@
 import type {
+  CapitalYear,
   MarketData,
   Sleeve,
   SleeveContext,
@@ -160,11 +161,16 @@ function seedCapital(
   capital: CapitalConfigStore,
   input: BacktestInput,
   first: string,
-): ReturnType<CapitalConfigStore['inForce']> {
-  for (let year = Number(first.slice(0, 4)); year <= Number(input.to.slice(0, 4)); year += 1) {
+): CapitalYear {
+  const opening = capital.setYear(
+    Number(first.slice(0, 4)),
+    input.startCapitalGbp,
+    input.lossCapGbp,
+  );
+  for (let year = opening.year + 1; year <= Number(input.to.slice(0, 4)); year += 1) {
     capital.setYear(year, input.startCapitalGbp, input.lossCapGbp);
   }
-  return capital.inForce(first);
+  return opening;
 }
 
 async function replay(
@@ -173,13 +179,13 @@ async function replay(
   sleeves: readonly Sleeve[],
   dates: readonly string[],
   today: { current: string },
-): Promise<Map<string, number[]>> {
-  const marks = new Map<string, number[]>(sleeves.map((sleeve) => [sleeve.id, []]));
+): Promise<number[][]> {
+  const marks = sleeves.map((): number[] => []);
   for (const date of dates) {
     today.current = date;
     clock.advanceTo(new Date(`${date}T00:00:00.000Z`));
     const report = await runCycle(cycle, date);
-    for (const sleeve of sleeves) marks.get(sleeve.id)?.push(primaryEquity(report, sleeve, date));
+    sleeves.forEach((sleeve, index) => marks[index]?.push(primaryEquity(report, sleeve, date)));
   }
   return marks;
 }
@@ -236,17 +242,16 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       halfSpreadBps: input.halfSpreadBps,
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
-    const series = (sleeve: Sleeve) =>
-      seriesFrom(
-        opening === undefined ? 0 : sleeveAllocationGbp(sleeve.spec, opening),
-        marks.get(sleeve.id) ?? [],
-      );
+    const series = (index: number) => {
+      const sleeve = sleeves[index] as Sleeve;
+      return seriesFrom(sleeveAllocationGbp(sleeve.spec, opening), marks[index] as number[]);
+    };
     const trials = trialSleeves.map((sleeve, index) => ({
       trial: trialNumbers[index] as number,
       sleeve: sleeve.id,
-      ...series(sleeve),
+      ...series(index),
     }));
-    const benchmark = series(benchmarkSleeve);
+    const benchmark = series(trialSleeves.length);
     return {
       dates,
       trials,

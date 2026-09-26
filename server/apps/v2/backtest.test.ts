@@ -236,9 +236,32 @@ describe('runBacktest', () => {
     }
     expect(result.trials[0]?.equity.at(-1)).not.toBe(1_000);
     expect(result.benchmark.equity.at(-1)).not.toBe(1_000);
+    expect(
+      new Set([...result.trials, result.benchmark].map((book) => book.equity.at(-1))).size,
+    ).toBe(3);
     expect(result.verdict.trialsCounted).toBe(4);
     expect(result.verdict.from).toBe(DATES[40]);
     expect(run.ledger.count()).toBe(4);
+  });
+
+  it('has a capital row every year and a covered impact window on every fill', async () => {
+    const logs: LogEntry[] = [];
+    await runBacktest(input({ logger: { log: (entry) => logs.push(entry) } }));
+    expect(logs.filter((entry) => entry.event === 'v2_impact_fallback')).toEqual([]);
+    const cycles = logs.filter((entry) => entry.event === 'v2_cycle_complete');
+    expect(cycles).toHaveLength(DATES.length - 40);
+    const refusals = cycles.flatMap((entry) => (entry.payload as { refusals: string[] }).refusals);
+    expect(refusals.filter((refusal) => refusal.includes('no capital config'))).toEqual([]);
+  });
+
+  it('fences a sleeve factory that reads ahead while it is built', async () => {
+    const eager: SleeveFactory = (m) => {
+      m.barsBefore('UP', DATES[45] as string, 1);
+      return trendSleeve('trend-5', 'UP', 5)(m);
+    };
+    const run = input({ trials: [{ config: {}, sleeve: eager }, input().trials[1]!] });
+    await expect(runBacktest(run)).rejects.toThrow(/\(lookahead\)$/);
+    expect(run.ledger.count()).toBe(2);
   });
 
   it('is deterministic and records a repeated configuration once', async () => {
@@ -351,6 +374,35 @@ describe('runBacktest', () => {
     expect(lossOf(uncapped)).toBeGreaterThan(60);
     expect(lossOf(capped)).toBeLessThan(lossOf(uncapped) / 2);
     expect(capped.verdict.capitalCeilingGbp).toBeLessThan(uncapped.verdict.capitalCeilingGbp);
+  });
+
+  it('checks the price of long and short entries only, and refuses a name with no bar', async () => {
+    const remapped =
+      (map: (decision: SleeveDecision) => SleeveDecision): SleeveFactory =>
+      (m) => {
+        const inner = trendSleeve('trend-0', 'UP', 0)(m);
+        return {
+          ...inner,
+          decide: async (context, instruments) => {
+            const output = await inner.decide(context, instruments);
+            return { ...output, decisions: output.decisions.map(map) };
+          },
+        };
+      };
+    const run = (map: (decision: SleeveDecision) => SleeveDecision) =>
+      runBacktest(input({ trials: [{ config: {}, sleeve: remapped(map) }, input().trials[1]!] }));
+    await expect(run((decision) => ({ ...decision, price: decision.price * 0.9 }))).rejects.toThrow(
+      /^backtest refuses sleeve 'trend-0': UP entry at /,
+    );
+    await expect(
+      run((decision) => ({ ...decision, action: 'enter_short', price: decision.price * 0.9 })),
+    ).rejects.toThrow(/^backtest refuses sleeve 'trend-0': UP entry at /);
+    await expect(
+      run((decision) => ({ ...decision, action: 'none', price: decision.price * 0.9 })),
+    ).resolves.toBeDefined();
+    await expect(run((decision) => ({ ...decision, instrument: 'NOPE' }))).rejects.toThrow(
+      /^backtest refuses sleeve 'trend-0': NOPE entry at [\d.]+ is not the last raw close undefined;/,
+    );
   });
 
   it('refuses an entry priced off the adjusted close', async () => {

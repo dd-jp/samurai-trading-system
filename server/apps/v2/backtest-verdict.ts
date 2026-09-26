@@ -96,9 +96,7 @@ function assertAligned(input: VerdictInput): void {
 }
 
 export function capitalCeilingGbp(lossCapGbp: number, drawdown: number): number {
-  return drawdown > 0
-    ? lossCapGbp / (drawdown * CAPITAL_CEILING_DRAWDOWN_MULTIPLE)
-    : Number.POSITIVE_INFINITY;
+  return lossCapGbp / (drawdown * CAPITAL_CEILING_DRAWDOWN_MULTIPLE);
 }
 
 export function backtestVerdict(input: VerdictInput): BacktestVerdict {

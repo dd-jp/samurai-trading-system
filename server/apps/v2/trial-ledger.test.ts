@@ -29,6 +29,7 @@ describe('trialHash', () => {
     expect(hash).toMatch(/^[0-9a-f]{16}$/);
     expect(trialHash('trend', { b: { c: [1, { e: 3, d: 2 }] }, a: 1 })).toBe(hash);
     expect(trialHash('pead', { a: 1, b: { c: [1, { d: 2, e: 3 }] } })).not.toBe(hash);
+    expect(trialHash('trend', { a: [1, 2] })).not.toBe(trialHash('trend', { a: { 0: 1, 1: 2 } }));
     expect(trialHash('trend', { a: 1, b: { c: [{ d: 2, e: 3 }, 1] } })).not.toBe(hash);
   });
 });
@@ -125,7 +126,7 @@ describe('main', () => {
     const directory = mkdtempSync(join(tmpdir(), 'v2-trials-'));
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     try {
-      expect(main(join(directory, 'nested', 'research.sqlite'))).toBe(0);
+      expect(main(join(directory, 'a', 'b', 'research.sqlite'))).toBe(0);
       const printed = JSON.parse(String(write.mock.calls[0]?.[0])) as {
         trials_counted: number;
         trials: { trial: number; source: string }[];

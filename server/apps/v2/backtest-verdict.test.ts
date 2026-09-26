@@ -117,6 +117,13 @@ describe('backtestVerdict', () => {
     expect(() =>
       backtestVerdict(input({ benchmark: book(noisy(LENGTH - 1, 0, 0.01, 0)) })),
     ).toThrow('backtestVerdict: every series must cover the same dates');
+    const shortReturns = {
+      ...book(noisy(LENGTH, 0, 0.01, 0)),
+      returns: noisy(LENGTH - 1, 0, 0.01, 0),
+    };
+    expect(() => backtestVerdict(input({ benchmark: shortReturns }))).toThrow(
+      'backtestVerdict: every series must cover the same dates',
+    );
     const shortEquity = { ...book(noisy(LENGTH, 0, 0.01, 0)), equity: [1] };
     expect(() => backtestVerdict(input({ benchmark: shortEquity }))).toThrow(
       'backtestVerdict: every series must cover the same dates',
