@@ -185,7 +185,9 @@ async function replay(
     today.current = date;
     clock.advanceTo(new Date(`${date}T00:00:00.000Z`));
     const report = await runCycle(cycle, date);
-    sleeves.forEach((sleeve, index) => marks[index]?.push(primaryEquity(report, sleeve, date)));
+    sleeves.forEach((sleeve, index) => {
+      (marks[index] as number[]).push(primaryEquity(report, sleeve, date));
+    });
   }
   return marks;
 }

@@ -88,6 +88,26 @@ describe('backtestVerdict', () => {
     expect(verdict.checks.beatsBenchmarkAfterHaircut).toBe(true);
   });
 
+  it('fails PBO when the in-sample winner loses out of sample', () => {
+    const half = LENGTH / 2;
+    const flip = (sign: number, phase: number) =>
+      book([
+        ...noisy(half, 0.004 * sign, 0.002, phase),
+        ...noisy(half, -0.004 * sign, 0.002, phase),
+      ]);
+    const verdict = backtestVerdict(
+      input({
+        trials: [
+          { trial: 9, ...flip(1, 0) },
+          { trial: 10, ...flip(-1, 1) },
+        ],
+      }),
+    );
+    expect(verdict.pbo).toBeGreaterThan(0.1);
+    expect(verdict.checks.pboAtMost010).toBe(false);
+    expect(verdict.pass).toBe(false);
+  });
+
   it('deflates harder as the global trial counter grows', () => {
     const weak = [
       { trial: 1, ...book(noisy(LENGTH, 0.0008, 0.01, 0)) },
