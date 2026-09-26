@@ -1557,7 +1557,7 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     ).db;
     return db
       .prepare(
-        "SELECT trading_date, ticket, message FROM v2_refusals WHERE parameter = 'LOSS_BUDGET' ORDER BY message",
+        "SELECT trading_date, scope, ticket, message FROM v2_refusals WHERE parameter = 'LOSS_BUDGET' ORDER BY message",
       )
       .all();
   }
@@ -1580,12 +1580,14 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     expect(budgetRows(deps)).toEqual([
       {
         trading_date: '2026-09-28',
+        scope: 'entry',
         ticket: '#1813',
         message:
           'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
       },
       {
         trading_date: '2026-09-28',
+        scope: 'entry',
         ticket: '#1813',
         message:
           'debate/primary: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
@@ -1609,6 +1611,26 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('cancelled');
   });
 
+  it('paper: a resting entry on a route the executor cannot reach is left alone', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.barsByDate.set('2026-09-28', drop());
+    deps.setDecisions([msft]);
+    const real = deps.executor.canRoute.bind(deps.executor);
+    vi.spyOn(deps.executor, 'canRoute').mockImplementation(
+      (route) =>
+        !(
+          route.bookVariant === 'primary' &&
+          deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT') !== undefined
+        ) && real(route),
+    );
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toEqual([]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('submitted');
+  });
+
   it('paper: a cancel the venue refuses is logged, left resting, and not counted', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
@@ -1628,6 +1650,7 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     expect(budgetRows(deps)).toEqual([
       {
         trading_date: '2026-09-28',
+        scope: 'entry',
         ticket: '#1813',
         message:
           'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
