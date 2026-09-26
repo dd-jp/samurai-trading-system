@@ -31,6 +31,8 @@ const year: CapitalYear = {
 const SPEC: SleeveSpec = {
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
+  macroGate: true,
   sizing: {
     riskFraction: 0.005,
     stopAtrMultiple: 2,
@@ -165,6 +167,8 @@ describe('V2RiskGate', () => {
   it('halves the primary on a macro day but never the no-macro-gate shadow', () => {
     expect(gate().approveEntry(request({ macroDay: true })).size).toBe(3);
     expect(gate().approveEntry(request({ macroDay: true, book: shadow })).size).toBe(6);
+    const ungated = gate({ spec: { ...SPEC, macroGate: false } });
+    expect(ungated.approveEntry(request({ macroDay: true })).size).toBe(6);
   });
 
   it('applies a same-day tightening to entries before the next mark', () => {

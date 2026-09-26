@@ -10,7 +10,15 @@ export { FreeStackAggregatesClient } from './free-stack-aggregates-client.js';
 export { HttpPolygonClient } from './http-polygon-client.js';
 export { HttpTiingoClient } from './http-tiingo-client.js';
 export { computeMetrics } from './metrics.js';
-export { minbtl } from './overfitting.js';
+export {
+  argMaxIndex,
+  foldRanges,
+  foldSharpeMatrix,
+  WALK_FORWARD_FOLDS,
+  walkForwardPath,
+} from './momentum/folds.js';
+export { annualisedSharpe, maxDrawdown, moments, perPeriodSharpe } from './momentum/stats.js';
+export { deflatedSharpe, minbtl, PBO_REJECT_THRESHOLD, pbo } from './overfitting.js';
 export type { ReplayRunResult } from './replay-driver.js';
 export { ReplayDriver } from './replay-driver.js';
 export { SqliteStage2SelectionStore } from './sqlite-stage2-selection-store.js';

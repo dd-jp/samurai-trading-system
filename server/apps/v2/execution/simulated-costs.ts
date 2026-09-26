@@ -71,10 +71,11 @@ export function marketImpactBps(
 
 export function impactLookup(
   market: MarketData,
-  tradingDate: string,
+  tradingDateOf: () => string,
   logger?: Logger,
 ): FillPricing['impactBps'] {
   return (instrument, qty, price) => {
+    const tradingDate = tradingDateOf();
     const bars = market.barsBefore(instrument, tradingDate, IMPACT_WINDOW_BARS + 1);
     const bps = marketImpactBps(bars, qty, price, tradingDate);
     if (bps !== undefined) return bps;

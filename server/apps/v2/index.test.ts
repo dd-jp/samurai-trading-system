@@ -34,7 +34,7 @@ interface Fixtures {
 async function writeFixtures(): Promise<Fixtures> {
   const directory = mkdtempSync(join(tmpdir(), 'v2-root-'));
   const bars: DailyBar[] = [];
-  const origin = Date.UTC(2025, 0, 1);
+  const origin = Date.UTC(2026, 0, 1);
   for (let i = 0; i < 260; i += 1) {
     const close = 20 * (1 + 0.001 * i);
     const date = new Date(origin + i * 86_400_000).toISOString().slice(0, 10);
@@ -58,7 +58,7 @@ async function writeFixtures(): Promise<Fixtures> {
   const constituentsPath = join(directory, 'constituents.csv');
   writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,MISSING"\n');
   const fxPath = join(directory, 'fx.csv');
-  writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2024,1.25\n02 Jan 2025,1.26\n');
+  writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(
     spreadsPath,
@@ -68,13 +68,13 @@ async function writeFixtures(): Promise<Fixtures> {
 }
 
 const LAST_CLOSE = 20 * (1 + 0.001 * 259);
-const ENTRY_DATE = new Date(Date.UTC(2025, 0, 1) + 260 * 86_400_000).toISOString().slice(0, 10);
-const NEXT_DATE = new Date(Date.UTC(2025, 0, 1) + 261 * 86_400_000).toISOString().slice(0, 10);
+const ENTRY_DATE = new Date(Date.UTC(2026, 0, 1) + 260 * 86_400_000).toISOString().slice(0, 10);
+const NEXT_DATE = new Date(Date.UTC(2026, 0, 1) + 261 * 86_400_000).toISOString().slice(0, 10);
 
 function seededStore(path = ':memory:'): StoreHandle {
   const db = openSharedStore(path);
-  new CapitalConfigStore(db, new SimulatedClock(new Date('2025-01-01T00:00:00.000Z'))).setYear(
-    2025,
+  new CapitalConfigStore(db, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
+    2026,
     1_000,
     1_500,
   );
@@ -219,7 +219,7 @@ describe('composeV2Root', () => {
       const fx = new BarsMarketData(
         new ParquetBarsSource(fixtures.barStoreRoot, 'alpaca'),
         parseBoeGbpUsdCsv(readFileSync(fixtures.fxPath, 'utf8')),
-      ).gbpUsdAtYearStart(2025);
+      ).gbpUsdAtYearStart(2026);
       const fill = root.db
         .prepare('SELECT price_gbp, fee_gbp FROM v2_fills WHERE book_id = ?')
         .get('debate/no-macro-gate') as { price_gbp: number; fee_gbp: number };

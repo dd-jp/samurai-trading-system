@@ -78,9 +78,13 @@ export interface SleeveBook {
   readonly instantiated: boolean;
 }
 
+export type SleeveValidation = 'backtest' | 'forward-paper';
+
 export interface SleeveSpec {
   readonly minimumCapitalGbp: number;
   readonly capacityGbp: number;
+  readonly validation: SleeveValidation;
+  readonly macroGate: boolean;
   readonly sizing: SleeveSizing;
   readonly books: readonly SleeveBook[];
 }

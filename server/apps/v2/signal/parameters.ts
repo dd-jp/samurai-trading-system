@@ -68,6 +68,8 @@ const DEBATE_ADV_WINDOW_BARS = 20;
 export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
+  macroGate: true,
   sizing: {
     riskFraction: DEBATE_RISK_FRACTION,
     stopAtrMultiple: DEBATE_STOP_ATR_MULTIPLE,

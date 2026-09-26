@@ -113,6 +113,7 @@ export type {
   SleeveSource,
   SleeveSpec,
   SleeveUniverse,
+  SleeveValidation,
   Submission,
   V2Bar,
   V2Fill,

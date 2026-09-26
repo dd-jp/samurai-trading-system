@@ -3,6 +3,7 @@ import {
   addDays,
   MACRO_CALENDARS,
   MACRO_DAY_SIZE_FRACTION,
+  macroCoverageFrom,
   macroCoverageThrough,
   macroGate,
 } from './macro-calendar.js';
@@ -16,6 +17,7 @@ describe('macro calendar', () => {
       for (const date of calendar.dates) {
         expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
         expect(date <= calendar.coverageThrough).toBe(true);
+        expect(date >= calendar.coverageFrom).toBe(true);
       }
     }
   });
@@ -24,8 +26,8 @@ describe('macro calendar', () => {
     expect(macroCoverageThrough()).toBe('2026-12-31');
     expect(
       macroCoverageThrough([
-        { source: 'boe_mpc', coverageThrough: '2027-12-31', dates: [] },
-        { source: 'fomc', coverageThrough: '2026-06-30', dates: [] },
+        { source: 'boe_mpc', coverageFrom: '2026-01-01', coverageThrough: '2027-12-31', dates: [] },
+        { source: 'fomc', coverageFrom: '2026-01-01', coverageThrough: '2026-06-30', dates: [] },
       ]),
     ).toBe('2026-06-30');
     expect(macroCoverageThrough([])).toBe('0000-00-00');
@@ -51,8 +53,18 @@ describe('macro calendar', () => {
   it('fails closed when the 30-day horizon leaves coverage', () => {
     expect(
       macroGate('2026-03-03', [
-        { source: 'fomc', coverageThrough: '2027-12-31', dates: ['2026-03-03'] },
-        { source: 'bls_cpi', coverageThrough: '2027-12-31', dates: ['2026-03-03'] },
+        {
+          source: 'fomc',
+          coverageFrom: '2026-01-01',
+          coverageThrough: '2027-12-31',
+          dates: ['2026-03-03'],
+        },
+        {
+          source: 'bls_cpi',
+          coverageFrom: '2026-01-01',
+          coverageThrough: '2027-12-31',
+          dates: ['2026-03-03'],
+        },
       ]),
     ).toMatchObject({
       macroDay: true,
@@ -63,6 +75,23 @@ describe('macro calendar', () => {
     expect(verdict).toMatchObject({ macroDay: true, covered: false, sources: [] });
     expect(verdict.reason).toContain('fail-closed');
     expect(macroGate('2026-12-01').covered).toBe(true);
+  });
+
+  it('fails closed before the latest source starts', () => {
+    expect(macroCoverageFrom()).toBe('2026-01-01');
+    expect(
+      macroCoverageFrom([
+        { source: 'fomc', coverageFrom: '2026-03-01', coverageThrough: '2027-12-31', dates: [] },
+        { source: 'boe_mpc', coverageFrom: '2025-01-01', coverageThrough: '2027-12-31', dates: [] },
+      ]),
+    ).toBe('2026-03-01');
+    expect(macroCoverageFrom([])).toBe('9999-99-99');
+    const verdict = macroGate('2025-12-31');
+    expect(verdict).toMatchObject({ macroDay: true, covered: false, sources: [] });
+    expect(verdict.reason).toBe(
+      'macro calendar covers from 2026-01-01, after 2025-12-31; treating 2025-12-31 as a macro day (fail-closed)',
+    );
+    expect(macroGate('2026-01-01').covered).toBe(true);
   });
 
   it('adds calendar days across a month boundary and rejects junk', () => {

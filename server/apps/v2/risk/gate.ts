@@ -126,7 +126,7 @@ export class V2RiskGate implements RiskGate {
       atrGbp: (decision.atr ?? 0) / fx,
       stopAtrMultiple: spec.sizing.stopAtrMultiple,
       sizeMultiplier: this.#multiplier(book.id, capital),
-      macroDay: book.variant === 'no-macro-gate' ? false : request.macroDay,
+      macroDay: spec.macroGate && book.variant !== 'no-macro-gate' && request.macroDay,
       volumeCapShares: volumeCap,
     });
     return { size };

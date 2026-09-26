@@ -5,6 +5,7 @@
     "server/apps/service-api/fixture-server.ts",
     "server/apps/v2/smoke.ts",
     "server/apps/v2/set-capital.ts",
+    "server/apps/v2/trial-ledger.ts",
     "e2e/**/*.spec.ts",
     "server/tools/data-cli.ts",
     "client/src/main.tsx"

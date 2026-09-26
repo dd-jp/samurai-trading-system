@@ -12,7 +12,8 @@ import type { Clock, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { guardedStore, openSharedStore } from '../../shared/store/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
+import { composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import {
   AlpacaNewsSource,
@@ -24,14 +25,9 @@ import {
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
-import {
-  type AlpacaBrokerClient,
-  createOrderExecutor,
-  impactLookup,
-  venueFee,
-} from './execution/index.js';
-import { Journal } from './journal/index.js';
-import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import type { AlpacaBrokerClient } from './execution/index.js';
+import type { Journal } from './journal/index.js';
+import type { CapitalConfigStore, PaperBooks } from './risk/index.js';
 import {
   ALL_PINS,
   BULLISH_SCRIPT,
@@ -41,7 +37,7 @@ import {
   type ModelPin,
   NousPinnedTransport,
   ScriptedTransport,
-  SleeveRegistry,
+  type SleeveRegistry,
   SqliteMonthlySpendCap,
   verifyNousPins,
 } from './signal/index.js';
@@ -197,7 +193,6 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const logger = options.logger ?? STDERR_LOGGER;
   const news = newsSourceFor(options);
   const db = options.store ?? openSharedStore(storePathFor(options));
-  const v2Store = guardedStore(db, 'v2');
   const scripted: ScriptedTransport[] = [];
   const spendSink: LlmSpendSink = new SqliteLlmSpendStore(db, logger, true);
   const spendCap: SpendCap = new SqliteMonthlySpendCap(db, clock, undefined, logger);
@@ -213,64 +208,39 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     bars,
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
-  const capital = new CapitalConfigStore(v2Store, clock);
-  const journal = new Journal(v2Store, clock);
-  const registry = new SleeveRegistry();
-  registry.register(
-    createDebateSleeve({
-      panel,
-      bars,
-      constituents,
-      venueFor: () => 'alpaca',
-      news,
-      clock,
-      logger,
-    }),
-  );
-  const books = new PaperBooks(v2Store, clock, capital, options.tradingDate, registry.list());
-  const risk = new V2RiskGate({
-    books,
-    capital,
-    market,
-    spec: (sleeveId) => registry.spec(sleeveId),
-  });
-  const executor = createOrderExecutor({
-    dryRun: options.dryRun,
-    client: options.alpacaClient,
+  const cycle = composeCycle({
     db,
     clock,
     logger,
-    pricing: {
-      halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
-      impactBps: impactLookup(market, options.tradingDate, logger),
-      fee: venueFee,
-    },
-    markPrice: (instrument) => market.lastBarBefore(instrument, options.tradingDate)?.rawClose,
+    market,
+    sleeves: [
+      createDebateSleeve({
+        panel,
+        bars,
+        constituents,
+        venueFor: () => 'alpaca',
+        news,
+        clock,
+        logger,
+      }),
+    ],
+    openingDate: options.tradingDate,
+    tradingDate: () => options.tradingDate,
+    dryRun: options.dryRun,
+    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+    alpacaClient: options.alpacaClient,
   });
   return {
-    registry,
-    books,
-    capital,
-    journal,
+    registry: cycle.registry,
+    books: cycle.books,
+    capital: cycle.capital,
+    journal: cycle.journal,
     panel,
     db,
     scriptedTransports: scripted,
     run: async () => {
       await prime();
-      return runCycle(
-        {
-          registry,
-          books,
-          journal,
-          risk,
-          executor,
-          market,
-          clock,
-          dryRun: options.dryRun,
-          logger,
-        },
-        options.tradingDate,
-      );
+      return runCycle(cycle, options.tradingDate);
     },
     close: () => db.close(),
   };

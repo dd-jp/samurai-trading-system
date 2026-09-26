@@ -136,6 +136,8 @@ interface Harness extends CycleDeps {
 const TEST_SPEC: SleeveSpec = {
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
+  macroGate: true,
   sizing: {
     riskFraction: 0.005,
     stopAtrMultiple: 2,
@@ -448,6 +450,39 @@ describe('runCycle', () => {
       expect(
         deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
       ).toBeCloseTo(price, 9);
+    }
+  });
+
+  it('checks the legs against the bar rescaled from adjusted to raw prices', async () => {
+    for (const [override, exits] of [
+      [{ close: 10, low: 9.8, high: 10.3 }, 0],
+      [{ close: 10, low: 9.55, high: 10.3 }, 2],
+      [{ close: 10, low: 9.8, high: 10.62 }, 2],
+    ] as const) {
+      const deps = harness([longAapl], true);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', { ...override, rawClose: 20 }));
+      const report = await runCycle(deps, '2026-09-28');
+      expect(report.exits).toBe(exits);
+    }
+  });
+
+  it('checks short legs against the rescaled bar too', async () => {
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    for (const [override, price] of [
+      [{ close: 10, low: 9.5, high: 10.3 }, undefined],
+      [{ close: 10, low: 9.5, high: 10.45 }, 20.8],
+      [{ close: 10, low: 9.35, high: 10.3 }, 18.8],
+    ] as const) {
+      const deps = harness([short], true);
+      await runCycle(deps, '2026-09-25');
+      deps.setDecisions([]);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', { ...override, rawClose: 20 }));
+      await runCycle(deps, '2026-09-28');
+      const exit = deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit');
+      if (price === undefined) expect(exit).toBeUndefined();
+      else expect(exit?.payload.price).toBeCloseTo(price, 9);
     }
   });
 
