@@ -3,15 +3,24 @@ import type { CapitalYear, LossBudgetState, SizeMultiplier } from '../../../../c
 // G6 (4): exactly 1.0% of the year's start capital; D8 keeps it when the cap is re-set
 const DAILY_CAP_FRACTION_OF_START_CAPITAL = 0.01;
 
+export function sizeStepMarksGbp(lossCapGbp: number): readonly [number, number, number] {
+  return [lossCapGbp / 3, (lossCapGbp * 2) / 3, lossCapGbp];
+}
+
 export function sizeMultiplierFor(ytdLossGbp: number, lossCapGbp: number): SizeMultiplier {
-  if (ytdLossGbp >= lossCapGbp) return 0;
-  if (ytdLossGbp >= (lossCapGbp * 2) / 3) return 0.25;
-  if (ytdLossGbp >= lossCapGbp / 3) return 0.5;
+  const [halfSize, quarterSize, halt] = sizeStepMarksGbp(lossCapGbp);
+  if (ytdLossGbp >= halt) return 0;
+  if (ytdLossGbp >= quarterSize) return 0.25;
+  if (ytdLossGbp >= halfSize) return 0.5;
   return 1;
 }
 
+export function dailyCapGbp(capital: CapitalYear): number {
+  return DAILY_CAP_FRACTION_OF_START_CAPITAL * capital.startCapitalGbp;
+}
+
 export function dailyCapBreached(dayLossGbp: number, capital: CapitalYear): boolean {
-  return dayLossGbp >= DAILY_CAP_FRACTION_OF_START_CAPITAL * capital.startCapitalGbp;
+  return dayLossGbp >= dailyCapGbp(capital);
 }
 
 export class LossBudget {

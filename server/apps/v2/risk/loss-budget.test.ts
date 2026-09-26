@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CapitalYear } from '../../../../contracts/index.js';
-import { dailyCapBreached, LossBudget, sizeMultiplierFor } from './loss-budget.js';
+import {
+  dailyCapBreached,
+  dailyCapGbp,
+  LossBudget,
+  sizeMultiplierFor,
+  sizeStepMarksGbp,
+} from './loss-budget.js';
 
 const capital: CapitalYear = {
   year: 2026,
@@ -22,6 +28,20 @@ describe('sizeMultiplierFor', () => {
     expect(sizeMultiplierFor(300, 900)).toBe(0.5);
     expect(sizeMultiplierFor(600, 900)).toBe(0.25);
     expect(sizeMultiplierFor(900, 900)).toBe(0);
+  });
+});
+
+describe('sizeStepMarksGbp', () => {
+  it('marks a third, two thirds and the whole of whatever cap is configured', () => {
+    expect(sizeStepMarksGbp(1_500)).toEqual([500, 1_000, 1_500]);
+    expect(sizeStepMarksGbp(900)).toEqual([300, 600, 900]);
+  });
+});
+
+describe('dailyCapGbp', () => {
+  it('is 1% of the year start capital', () => {
+    expect(dailyCapGbp(capital)).toBe(20);
+    expect(dailyCapGbp({ ...capital, startCapitalGbp: 5_000 })).toBe(50);
   });
 });
 

@@ -67,7 +67,6 @@ export type {
 } from './snapshot.js';
 export {
   CONTRACT_VERSION,
-  contractVersionOf,
   EXIT_CLASSES_WIRE,
 } from './snapshot.js';
 export type {
@@ -124,3 +123,4 @@ export type {
   Valuation,
   Venue,
 } from './v2.js';
+export { contractVersionOf } from './version.js';

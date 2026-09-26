@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { listMigrations, MIGRATIONS_DIR, runMigrations } from './migrate.js';
-import { openSharedStore, STORE_MODES, sharedStorePath } from './open-shared-store.js';
+import {
+  openMigratedStore,
+  openSharedStore,
+  STORE_MODES,
+  sharedStorePath,
+} from './open-shared-store.js';
 
 const TABLES = [
   'bars',
@@ -665,6 +670,50 @@ describe('openSharedStore', () => {
     expect(() =>
       insert.run('debate-1', 'key-2', 'AAPL', 'stocks', '[1]', '[1]', '2026-07-26T00:00:00.000Z'),
     ).toThrow();
+  });
+});
+
+describe('openMigratedStore', () => {
+  it('opens a migrated store without migrating it, with the shared pragmas', () => {
+    const path = tempDbPath();
+    openSharedStore(path).close();
+    const db = openMigratedStore(path, HIGHEST_KNOWN_MIGRATION_VERSION);
+    expect(db.pragma('busy_timeout', { simple: true })).toBe(5_000);
+    expect(db.pragma('journal_mode', { simple: true })).toBe('wal');
+    expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+    db.close();
+  });
+
+  it('refuses a store below the version it needs and never migrates it', () => {
+    const path = tempDbPath();
+    const partial = new BetterSqlite3(path);
+    runMigrations(partial, copyMigrationsUpTo(69));
+    partial.close();
+    expect(() => openMigratedStore(path, 70)).toThrow(/schema version 69, below 70/);
+    const after = new BetterSqlite3(path);
+    const table = after.prepare("SELECT name FROM sqlite_master WHERE name = 'v2_controls'").get();
+    after.close();
+    expect(table).toBeUndefined();
+  });
+
+  it('refuses a file with no migration ledger as version 0', () => {
+    const path = tempDbPath();
+    new BetterSqlite3(path).close();
+    expect(() => openMigratedStore(path, 1)).toThrow(/schema version 0, below 1/);
+  });
+
+  it('refuses a missing file instead of creating one', () => {
+    const path = tempDbPath();
+    expect(() => openMigratedStore(path, 1)).toThrow();
+    expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('openSharedStore busy timeout', () => {
+  it('waits for a second writer instead of failing at once', () => {
+    const db = openSharedStore(tempDbPath());
+    expect(db.pragma('busy_timeout', { simple: true })).toBe(5_000);
+    db.close();
   });
 });
 

@@ -15,6 +15,7 @@ export {
   parseModelledCostBreakdownColumn,
 } from './open-position-row.js';
 export {
+  openMigratedStore,
   openSharedStore,
   resolveStoreMode,
   type StoreHandle,

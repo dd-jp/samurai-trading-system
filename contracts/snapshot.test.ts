@@ -1,4 +1,5 @@
-import { CONTRACT_VERSION, contractVersionOf, DASHBOARD_SNAPSHOT_FIELD_NAMES } from './snapshot.js';
+import { CONTRACT_VERSION, DASHBOARD_SNAPSHOT_FIELD_NAMES } from './snapshot.js';
+import { contractVersionOf } from './version.js';
 
 describe('contractVersionOf', () => {
   it('is deterministic for the same field list', () => {

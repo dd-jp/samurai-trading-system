@@ -254,6 +254,28 @@ describe('guardedStore', () => {
     }
   });
 
+  it('lets the dashboard write v2_controls and nothing else', () => {
+    const { db, guarded } = openGuarded('dashboard');
+    try {
+      expect(() =>
+        guarded
+          .prepare(
+            `INSERT INTO v2_controls (action, reason, source, idempotency_key, set_at)
+               VALUES (?, ?, ?, ?, ?)`,
+          )
+          .run('pause', 'test', 'dashboard', 'k1', SEEN_AT),
+      ).not.toThrow();
+      expect(() => guarded.prepare('UPDATE v2_book_days SET size_multiplier = 1')).toThrow(
+        /the 'dashboard' handle wrote to 'v2_book_days'/,
+      );
+      expect(() => guarded.prepare('INSERT INTO v2_capital_config (year) VALUES (1)')).toThrow(
+        /v2_capital_config/,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it('never blocks a read, whoever owns the table', () => {
     const { db, guarded } = openGuarded('service-api');
     try {
