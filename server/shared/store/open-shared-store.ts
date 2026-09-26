@@ -72,12 +72,47 @@ function ensureParentDirectory(dbPath: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
-export function openSharedStore(dbPath: string): StoreHandle {
-  ensureParentDirectory(dbPath);
-  const db = new BetterSqlite3(dbPath);
+// Two processes share one v2 store (the cycle and the dashboard API); without a busy timeout
+// the loser of a write race fails with SQLITE_BUSY at once instead of waiting. It is set before
+// journal_mode because switching to WAL takes a lock the other process may hold
+const BUSY_TIMEOUT_MS = 5_000;
+
+function applyPragmas(db: StoreHandle): void {
+  db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = FULL');
   db.pragma('foreign_keys = ON');
+}
+
+export function openSharedStore(dbPath: string): StoreHandle {
+  ensureParentDirectory(dbPath);
+  const db = new BetterSqlite3(dbPath);
+  applyPragmas(db);
   runMigrations(db);
+  return db;
+}
+
+function appliedSchemaVersion(db: StoreHandle): number {
+  const hasLedger =
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
+      .get() !== undefined;
+  if (!hasLedger) return 0;
+  const row = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as {
+    version: number | null;
+  };
+  return row.version ?? 0;
+}
+
+export function openMigratedStore(dbPath: string, minimumVersion: number): StoreHandle {
+  const db = new BetterSqlite3(dbPath, { fileMustExist: true });
+  applyPragmas(db);
+  const version = appliedSchemaVersion(db);
+  if (version < minimumVersion) {
+    db.close();
+    throw new Error(
+      `${dbPath} is at schema version ${version}, below ${minimumVersion}; run the process that owns it to migrate first`,
+    );
+  }
   return db;
 }

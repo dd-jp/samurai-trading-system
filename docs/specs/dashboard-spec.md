@@ -47,7 +47,7 @@ Every Step 3c item and each D5 panel has a row. **Served now** = the data exists
 
 | # | Panel | Shows | Source | Status |
 |---|---|---|---|---|
-| P1 | Loss-budget gauge | Headline: the account-wide year-to-date loss (every primary book, both venues, Q6/G6's one budget) against three marks at ⅓, ⅔ and the full configured cap, and today's loss against the daily cap (1.0% of the year's start capital). Under it, one row per sleeve's primary book: its loss, current size step (1, ½, ¼, halted) and whether entries are blocked at the next fill; shadow books' size steps listed under their sleeve. Marks are computed from the year's `loss_cap_gbp` and `start_capital_gbp`, never literals (D8); with today's config they read −£500 / −£1,000 / −£1,500. | `v2_capital_config` (the year's latest row), `v2_book_days` (`ytd_loss_gbp`, `size_multiplier`, `entries_blocked`) | Served now. The code enforces the budget per book, each against the full cap (§9 item 6) |
+| P1 | Loss-budget gauge | Headline: the account-wide year-to-date loss (every primary book, both venues, Q6/G6's one budget) against three marks at ⅓, ⅔ and the full configured cap, and today's loss against the daily cap (1.0% of the year's start capital). Under it, one row per sleeve's primary book: its loss, current size step (1, ½, ¼, halted) and whether entries are blocked at the next fill; shadow books' size steps listed under their sleeve. Marks are computed from the year's `loss_cap_gbp` and `start_capital_gbp`, never literals (D8); with today's config they read −£500 / −£1,000 / −£1,500. | `v2_capital_config` (the year's latest row; until the new year's row is set, the last one before it, flagged stale), `v2_book_days` (`ytd_loss_gbp`, `size_multiplier`, `entries_blocked`) | Served now. The code enforces the budget per book, each against the full cap (§9 item 6) |
 | P2 | Halt/pause state and control | Current state (RUNNING / PAUSED / HALTED-manual / HALTED-loss-budget), when it was set, from where, why; the two buttons and resume; the history of controls. | New `v2_controls` (§5), `v2_book_days.size_multiplier` | New in this step |
 | P3 | Positions and cash | Per venue (Alpaca, Saxo): each position's qty, entry, stop, days held, book, and mark and unrealised P&L; each book's cash; totals per venue in its currency and one total in GBP. | `v2_positions` (qty, `avg_price_gbp`, `stop_gbp`, `opened_date`, `marks_held`), `v2_books.cash_gbp`, latest `v2_book_days`. `v2_positions` stores no mark: the mark is the last close from the bar store the cycle marks with, under the same coverage invariant (postmortem §2; a stale bar shows as stale, not as a price). USD figures per §9 item 3 | Served now except the mark (new read in this step); USD per §9 |
 | P4 | Today's decisions | This cycle's decisions for each primary book: entered / skipped / vetoed / none, with the reason and confidence. | `v2_decisions` for the last `trading_date` | Served now |
@@ -89,9 +89,9 @@ Besides the manual control below, v2 has the automatic loss-budget halt, and it 
 
 **Where it runs (proposed, §9 item 2):** a v2 API module, started by `npm run v2:dashboard` next to the v2 root, serving the built client and the routes below.
 
-Module path: `server/apps/v2/api/` <!-- cite-exempt: planned — built after the spec is approved -->
+Module path: `server/apps/v2/api/`. The first PR serves `/api/v2/overview` without P3 (P3's mark needs the bar read and its coverage test) and `POST /api/v2/controls`; the other routes, P3 and the built client follow.
 
-It opens the v2 store through `guardedStore` (`server/shared/store/write-guard.ts`) with a write allowlist of `v2_controls` only, in WAL mode with a busy timeout, because the v2 root writes the same file. It opens the research store read-only. The bind guard and Bearer check are copied from `server/apps/service-api/` into the v2 module (U2), so Step 5 deletes v1's without touching v2. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
+It opens the v2 store with `openMigratedStore` (`server/shared/store/open-shared-store.ts`), which never migrates and refuses a store below the schema version it needs, then through `guardedStore` (`server/shared/store/write-guard.ts`) as the `dashboard` owner, whose only writable table is `v2_controls`. Both processes open the file in WAL mode with a 5 s busy timeout, because the v2 root writes the same file. It opens the research store read-only. The v2 module carries its own Bearer check (`server/apps/v2/api/auth.ts`), not shared with `service-api` (U2), so Step 5 deletes v1's without touching v2. With the token mandatory, the bind guard's loopback exemption never applies, so v2 needs none. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
 
 **Routes (GET unless stated):**
 
@@ -107,7 +107,7 @@ It opens the v2 store through `guardedStore` (`server/shared/store/write-guard.t
 
 **Wire types:** new types in `contracts/`, exported through the barrel.
 
-Wire file: `contracts/v2-wire.ts` <!-- cite-exempt: planned — built after the spec is approved -->
+Wire file: `contracts/v2-wire.ts`.
 
 The v2 wire derives its own version from its field names, as `contractVersionOf` does for the v1 snapshot; the client refuses a mismatched version as it does today. Every panel's payload is a union `{ status: 'fed', … } | { status: 'empty' } | { status: 'not-yet-fed', owner: string, ticket: string }`, so an unbuilt source is a served value, never a missing field. Money is GBP unless the field name says `Usd`; totals in GBP state the rate and its source.
 

@@ -3,6 +3,7 @@ import type { StoreHandle } from './open-shared-store.js';
 export const STORE_OWNER_STAGES = [
   'backtest',
   'control-arm',
+  'dashboard',
   'debate-engine',
   'execution',
   'feedback-loop',
@@ -20,6 +21,7 @@ export type StoreOwnerStage = (typeof STORE_OWNER_STAGES)[number];
 export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   backtest: ['config_trials', 'stage2_selected_config'],
   'control-arm': [],
+  dashboard: ['v2_controls'],
   'debate-engine': [
     'debate_log',
     'debate_round_log',

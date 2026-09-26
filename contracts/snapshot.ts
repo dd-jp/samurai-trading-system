@@ -2,6 +2,7 @@ import type { MetricsSuite, ProfitFactorWire } from './metrics.js';
 import type { PipelineStage, PipelineView } from './pipeline.js';
 import type { AssetClass, Direction, OrderState, StoreMode } from './primitives.js';
 import type { ProviderStatusPanel } from './providers.js';
+import { contractVersionOf } from './version.js';
 
 export interface TickStatus {
   instrument: string;
@@ -297,18 +298,5 @@ type _MissingDashboardSnapshotFieldNames = Exclude<
 const _assertDashboardSnapshotFieldNamesCoverAllKeys: {
   [K in _MissingDashboardSnapshotFieldNames]: never;
 } = {};
-
-function fnv1aHex(input: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-export function contractVersionOf(fieldNames: readonly string[]): string {
-  return fnv1aHex(fieldNames.join(','));
-}
 
 export const CONTRACT_VERSION = contractVersionOf(DASHBOARD_SNAPSHOT_FIELD_NAMES);

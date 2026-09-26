@@ -67,7 +67,6 @@ export type {
 } from './snapshot.js';
 export {
   CONTRACT_VERSION,
-  contractVersionOf,
   EXIT_CLASSES_WIRE,
 } from './snapshot.js';
 export type {
@@ -124,3 +123,26 @@ export type {
   Valuation,
   Venue,
 } from './v2.js';
+export type {
+  ControlDisplayStateWire,
+  ControlRequestWire,
+  ControlResponseWire,
+  ControlRowWire,
+  ControlWire,
+  DecisionsWire,
+  DecisionWire,
+  HeartbeatWire,
+  LastCycleWire,
+  LlmSpendDayWire,
+  LlmSpendModelWire,
+  LlmSpendWire,
+  LossBudgetBookWire,
+  LossBudgetWire,
+  NextCycleWire,
+  PanelWire,
+  PingWire,
+  V2ModeWire,
+  V2OverviewWire,
+} from './v2-wire.js';
+export { CONTROL_REASON_MAX_CHARS, V2_CONTRACT_VERSION } from './v2-wire.js';
+export { contractVersionOf } from './version.js';
