@@ -17,10 +17,16 @@ export {
   totalQty,
   weightedAvgPrice,
 } from './held-quantity.js';
+export {
+  assertBindAllowed,
+  DASHBOARD_CREDENTIAL_ENV_VAR,
+  isConfiguredCredential,
+} from './http/bind-guard.js';
 export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export type { RawPolygonAggregate } from './http/polygon-aggregates.js';
 export { toPolygonDate, validateRawPolygonAggregate } from './http/polygon-aggregates.js';
+export { isAuthorizedRequest } from './http/request-auth.js';
 export {
   classifyStatus,
   isServerErrorStatus,

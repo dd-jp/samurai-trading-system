@@ -1,7 +1,6 @@
 import { fileURLToPath } from 'node:url';
-import type { TradingArm } from '../../shared/index.js';
+import { DASHBOARD_CREDENTIAL_ENV_VAR, type TradingArm } from '../../shared/index.js';
 import { resolveStoreMode } from '../../shared/store/index.js';
-import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { FIXTURE_NOW, InMemoryQueryStore } from './fixture-store.js';
 import type { ProviderStatusPanel, ProviderStatusReader } from './provider-status.js';
 import { createDashboardServer } from './server.js';

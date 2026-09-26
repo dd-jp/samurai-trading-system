@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
-import { DASHBOARD_CREDENTIAL_ENV_VAR } from '../server/apps/service-api/bind-guard.ts';
+import { DASHBOARD_CREDENTIAL_ENV_VAR } from '../server/shared/http/bind-guard.ts';
 import { resolveE2ePort } from './support/port.ts';
 
 const HOST = '127.0.0.1';

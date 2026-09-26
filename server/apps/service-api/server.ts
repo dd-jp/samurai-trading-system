@@ -2,11 +2,15 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
-import { describeThrownSafely, sanitizeLogText, type TradingArm } from '../../shared/index.js';
+import {
+  assertBindAllowed,
+  describeThrownSafely,
+  isAuthorizedRequest,
+  sanitizeLogText,
+  type TradingArm,
+} from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
-import { assertBindAllowed } from './bind-guard.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
-import { isAuthorizedRequest } from './request-auth.js';
 import { buildSnapshot } from './snapshot.js';
 import type { DashboardQueryStore } from './types.js';
 
