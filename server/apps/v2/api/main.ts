@@ -14,6 +14,7 @@ import { BarsMarketData, ParquetMarkSource, parseBoeGbpUsdCsv } from '../data/in
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { researchStorePath } from '../trial-ledger.js';
 import { DASHBOARD_TOKEN_ENV_VAR } from './auth.js';
+import { DEFAULT_BUNDLE_ROOT } from './bundle.js';
 import { ControlWriter } from './control-writer.js';
 import { EvidenceReader } from './evidence.js';
 import { JournalReader } from './journal-reader.js';
@@ -30,6 +31,7 @@ export interface V2DashboardArgs {
   readonly barStoreRoot: string;
   readonly fxPath: string;
   readonly researchStorePath: string;
+  readonly bundleRoot: string;
   readonly mode: V2ModeWire;
   readonly host: string;
   readonly port: number;
@@ -65,6 +67,7 @@ export function parseDashboardArgs(
       bars: { type: 'string', default: DEFAULT_BAR_STORE_ROOT },
       fx: { type: 'string', default: FX_PATH },
       research: { type: 'string' },
+      bundle: { type: 'string', default: DEFAULT_BUNDLE_ROOT },
     },
     strict: true,
   });
@@ -74,6 +77,7 @@ export function parseDashboardArgs(
     barStoreRoot: values.bars,
     fxPath: values.fx,
     researchStorePath: values.research ?? researchStorePath(env),
+    bundleRoot: values.bundle,
     mode: dryRun ? 'dry-run' : 'paper',
     host: env.HOST ?? '127.0.0.1',
     port: parsePort(env.V2_DASHBOARD_PORT),
@@ -118,6 +122,7 @@ export function composeV2Dashboard(
       host: args.host,
       port: args.port,
       token: env[DASHBOARD_TOKEN_ENV_VAR],
+      bundleRoot: args.bundleRoot,
       overview: () => reader.read(),
       controls: new ControlWriter(store, clock),
       journal: (query) => journal.read(query),

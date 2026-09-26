@@ -80,7 +80,7 @@ Besides the manual control below, v2 has the automatic loss-budget halt, and it 
 
 **Endpoint:** `POST /api/v2/controls` is the first write the dashboard server has. It keeps the hosting rule (LAN-only bind, the fail-closed bind guard) and tightens it:
 
-- Today `isAuthorizedRequest` (`server/apps/service-api/request-auth.ts`) admits every request when `SAMURAI_DASHBOARD_TOKEN` is unset, and the bind guard allows loopback with no token. The v2 server refuses to start without a configured token, so every request carries a Bearer token, loopback included. A test pins it.
+- Today `isAuthorizedRequest` (`server/apps/service-api/request-auth.ts`) admits every request when `SAMURAI_DASHBOARD_TOKEN` is unset, and the bind guard allows loopback with no token. The v2 server refuses to start without a configured token, so every API request (any path under `/api`, known or not, and any method but `GET`) carries a Bearer token, loopback included. The built client is the one exception: a `GET` outside `/api` is served without a token, because a page load cannot carry a header and the bundle holds no data. That route serves only files inside the bundle root with a known content type. Tests pin both.
 - The body is capped (1 KiB), validated against the wire type, and needs a reason and an idempotency key; a repeated key returns the first result. At most one control per 10 s.
 - The client removes the token from the URL (`history.replaceState`) once `client/src/lib/dashboard-token.ts` has stored it.
 - Any other method or path stays 405/404.
@@ -89,7 +89,7 @@ Besides the manual control below, v2 has the automatic loss-budget halt, and it 
 
 **Where it runs (proposed, §9 item 2):** a v2 API module, started by `npm run v2:dashboard` next to the v2 root, serving the built client and the routes below.
 
-Module path: `server/apps/v2/api/`. The first PR serves `/api/v2/overview` without P3 (P3's mark needs the bar read and its coverage test) and `POST /api/v2/controls`; the other routes, P3 and the built client follow.
+Module path: `server/apps/v2/api/`. It serves the routes below and the built client from `dist/client` (`--bundle` names another directory; the path is relative to the working directory, so it resolves the same run from source or from `dist/`).
 
 It opens the v2 store with `openMigratedStore` (`server/shared/store/open-shared-store.ts`), which never migrates and refuses a store below the schema version it needs, then through `guardedStore` (`server/shared/store/write-guard.ts`) as the `dashboard` owner, whose only writable table is `v2_controls`. Both processes open the file in WAL mode with a 5 s busy timeout, because the v2 root writes the same file. It opens the research store read-only on each request (`openReadOnlyStore`: no migration, no pragma but the busy timeout), at `researchStorePath` unless `--research` names another file. The v2 module carries its own Bearer check (`server/apps/v2/api/auth.ts`), not shared with `service-api` (U2), so Step 5 deletes v1's without touching v2. With the token mandatory, the bind guard's loopback exemption never applies, so v2 needs none. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
 
@@ -113,7 +113,7 @@ The v2 wire derives its own version from its field names, as `contractVersionOf`
 
 ## 7. Client
 
-Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 screens are deleted then rather than in Step 5. This moves part of Step 5's client pass earlier. v1's `service-api` stops serving the dashboard bundle; Step 5 deletes its server side. Hash routes `#today`, `#evidence`, `#records`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept, with the URL clean-up in §5.
+Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 screens are deleted then rather than in Step 5. This moves part of Step 5's client pass earlier. v1's `service-api` stops serving the dashboard bundle; Step 5 deletes its server side. Hash routes `#today`, `#evidence`, `#records`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept, with the URL clean-up in §5. `npm run dev:web` proxies `/api` to `V2_DASHBOARD_PORT` (default 8788). The Today view lands first (part 3a); Evidence and Records follow (part 3b).
 
 ## 8. Tests and definition of done
 

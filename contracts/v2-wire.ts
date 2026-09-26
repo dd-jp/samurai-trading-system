@@ -25,7 +25,7 @@ export interface LossBudgetWire {
   readonly trading_date: string;
   readonly start_capital_gbp: number;
   readonly loss_cap_gbp: number;
-  readonly step_marks_gbp: readonly number[];
+  readonly step_marks_gbp: readonly [number, number, number];
   readonly daily_cap_gbp: number;
   readonly ytd_loss_gbp: number;
   readonly day_loss_gbp: number;
@@ -347,7 +347,7 @@ function fieldsOf<T>() {
   ): K => keys;
 }
 
-const V2_WIRE_FIELD_NAMES = {
+export const V2_WIRE_FIELD_NAMES = {
   panel: fieldsOf<Record<PanelFields, unknown>>()(['status', 'owner', 'ticket']),
   overview: fieldsOf<V2OverviewWire>()([
     'contract_version',

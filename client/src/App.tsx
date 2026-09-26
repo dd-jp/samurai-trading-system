@@ -1,233 +1,92 @@
-import type { TradingArmWire, VerdictRow } from '@contracts';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ColdStart } from './components/ColdStart.tsx';
-import { ARMS, Rail, TABS, type Tab } from './components/Rail.tsx';
-import { GlanceTab } from './components/tabs/GlanceTab.tsx';
-import { LiveTab } from './components/tabs/LiveTab.tsx';
-import { ReviewTab } from './components/tabs/ReviewTab.tsx';
-import { useEquitySamples } from './hooks/useEquitySamples.ts';
-import { useLedger } from './hooks/useLedger.ts';
-import {
-  feedView,
-  type LiveFeed,
-  type UseSnapshotOptions,
-  useSnapshot,
-} from './hooks/useSnapshot.ts';
+import type { V2OverviewWire } from '@contracts';
+import { useEffect, useState } from 'react';
+import { StatusStrip } from './components/StatusStrip.tsx';
+import { TodayView } from './components/today/TodayView.tsx';
+import { type PollOptions, usePoll } from './hooks/usePoll.ts';
 import {
   resolveDashboardToken,
   stripTokenParam,
   type TokenStorage,
 } from './lib/dashboard-token.ts';
-import type { Selection } from './lib/resolve-trace.ts';
 import './App.css';
 
-function isTab(value: string): value is Tab {
-  return TABS.some((entry) => entry.id === value);
+const OVERVIEW_URL = '/api/v2/overview';
+
+const VIEWS = [{ id: 'today', label: 'Today' }] as const;
+
+type View = (typeof VIEWS)[number]['id'];
+
+function viewFromHash(): View {
+  const id = window.location.hash.replace(/^#/, '');
+  return VIEWS.find((view) => view.id === id)?.id ?? 'today';
 }
 
-function isArm(value: string | undefined): value is TradingArmWire {
-  return value !== undefined && ARMS.some((entry) => entry.id === value);
-}
-
-function hashSegments(): [tab: string, arm: string | undefined] {
-  const raw = window.location.hash.replace(/^#/, '');
-  const [tab = '', arm] = raw.split('/');
-  return [tab, arm];
-}
-
-function tabFromHash(): Tab {
-  const [tab] = hashSegments();
-  return isTab(tab) ? tab : 'glance';
-}
-
-function armFromHash(): TradingArmWire {
-  const [, arm] = hashSegments();
-  return isArm(arm) ? arm : 'live';
-}
-
-function hashFor(tab: Tab, arm: TradingArmWire): string {
-  return arm === 'control' ? `#${tab}/control` : `#${tab}`;
-}
-
-function safeSessionStorage(): TokenStorage {
-  let store: TokenStorage;
+function orFallback<T>(read: () => T, fallback: T): T {
   try {
-    store = window.sessionStorage;
+    return read();
   } catch {
-    return { getItem: () => null, setItem: () => {} };
+    return fallback;
   }
-  return {
-    getItem: (key) => {
-      try {
-        return store.getItem(key);
-      } catch {
-        return null;
-      }
-    },
-    setItem: (key, value) => {
-      try {
-        store.setItem(key, value);
-      } catch {}
-    },
-  };
 }
 
-interface DashboardProps {
-  live: LiveFeed;
-  arm: TradingArmWire;
-  onArm: (next: TradingArmWire) => void;
-  tab: Tab;
-  onTab: (next: Tab) => void;
-  onOpenTrace: (selection: Selection) => void;
-  liveSelection: Selection | null;
-  onSelectLive: (selection: Selection) => void;
-  reviewKey: string | null;
-  onSelectReview: (key: string | null) => void;
-}
-
-function Dashboard(props: DashboardProps) {
-  const {
-    live,
-    arm,
-    onArm,
-    tab,
-    onTab,
-    onOpenTrace,
-    liveSelection,
-    onSelectLive,
-    reviewKey,
-    onSelectReview,
-  } = props;
-  const { snapshot } = live;
-  const isControl = arm === 'control';
-
-  const ledger = useLedger(snapshot);
-  const equitySamples = useEquitySamples(snapshot);
-  const verdictsByTrace = useMemo(
-    () => new Map<string, VerdictRow>(snapshot.verdicts.map((v) => [v.trace_id, v])),
-    [snapshot],
-  );
-
-  return (
-    <div className={isControl ? 'app-shell app-control' : 'app-shell'}>
-      {isControl && (
-        <div className="control-banner" role="status" data-field="control-banner">
-          CONTROL ARM — simulated fills, no money
-        </div>
-      )}
-      <div className={`app app-${tab}`}>
-        <Rail feed={live} tab={tab} onTab={onTab} arm={arm} onArm={onArm} />
-        <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
-          {tab === 'glance' && (
-            <GlanceTab
-              snapshot={snapshot}
-              equitySamples={equitySamples}
-              ledger={ledger}
-              verdictsByTrace={verdictsByTrace}
-              onOpenTrace={onOpenTrace}
-            />
-          )}
-          {tab === 'live' && (
-            <LiveTab snapshot={snapshot} selection={liveSelection} onSelect={onSelectLive} />
-          )}
-          {tab === 'review' && (
-            <ReviewTab snapshot={snapshot} selectedKey={reviewKey} onSelect={onSelectReview} />
-          )}
-        </main>
-      </div>
-    </div>
-  );
-}
-
-type ArmViewProps = Omit<DashboardProps, 'live'> & {
-  authToken: string | null;
-  snapshotOptions: UseSnapshotOptions | undefined;
+const safeSessionStorage: TokenStorage = {
+  getItem: (key) => orFallback(() => window.sessionStorage.getItem(key), null),
+  setItem: (key, value) => orFallback(() => window.sessionStorage.setItem(key, value), undefined),
 };
 
-function ArmView(props: ArmViewProps) {
-  const { arm, onArm, authToken, snapshotOptions, ...rest } = props;
-  const feed = useSnapshot({ authToken, ...snapshotOptions, arm });
-
-  const view = feedView(feed);
-  if (view.kind === 'cold') return <ColdStart feed={view.feed} />;
-
-  return <Dashboard live={view.feed} arm={arm} onArm={onArm} {...rest} />;
-}
-
-export interface AppProps {
-  snapshotOptions?: UseSnapshotOptions;
-}
-
-export function App({ snapshotOptions }: AppProps = {}) {
-  const [authToken] = useState<string | null>(() =>
-    resolveDashboardToken(window.location.search, safeSessionStorage()),
-  );
+function useDashboardToken(): string | null {
+  const [token] = useState(() => resolveDashboardToken(window.location.search, safeSessionStorage));
   useEffect(() => {
-    const nextSearch = stripTokenParam(window.location.search);
-    if (nextSearch !== window.location.search) {
+    const search = stripTokenParam(window.location.search);
+    if (search !== window.location.search) {
       window.history.replaceState(
         null,
         '',
-        `${window.location.pathname}${nextSearch}${window.location.hash}`,
+        `${window.location.pathname}${search}${window.location.hash}`,
       );
     }
   }, []);
+  return token;
+}
 
-  const [tab, setTab] = useState<Tab>(tabFromHash);
-  const [arm, setArm] = useState<TradingArmWire>(armFromHash);
+function useView(): View {
+  const [view, setView] = useState<View>(viewFromHash);
   useEffect(() => {
-    const onHash = () => {
-      setTab(tabFromHash());
-      setArm(armFromHash());
-    };
+    const onHash = () => setView(viewFromHash());
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  const openTab = useCallback(
-    (next: Tab) => {
-      setTab(next);
-      const nextHash = hashFor(next, arm);
-      if (window.location.hash !== nextHash) {
-        window.history.replaceState(null, '', nextHash);
-      }
-    },
-    [arm],
-  );
-  const openArm = useCallback(
-    (next: TradingArmWire) => {
-      setArm(next);
-      const nextHash = hashFor(tab, next);
-      if (window.location.hash !== nextHash) {
-        window.history.replaceState(null, '', nextHash);
-      }
-    },
-    [tab],
-  );
+  return view;
+}
 
-  const [liveSelection, setLiveSelection] = useState<Selection | null>(null);
-  const [reviewKey, setReviewKey] = useState<string | null>(null);
-  const openTrace = useCallback(
-    (selection: Selection) => {
-      setLiveSelection(selection);
-      openTab('live');
-    },
-    [openTab],
-  );
-
+export function App(options: PollOptions = {}) {
+  const token = useDashboardToken();
+  const view = useView();
+  const overview = usePoll<V2OverviewWire>(OVERVIEW_URL, token, options);
   return (
-    <ArmView
-      key={arm}
-      arm={arm}
-      onArm={openArm}
-      authToken={authToken}
-      snapshotOptions={snapshotOptions}
-      tab={tab}
-      onTab={openTab}
-      onOpenTrace={openTrace}
-      liveSelection={liveSelection}
-      onSelectLive={setLiveSelection}
-      reviewKey={reviewKey}
-      onSelectReview={setReviewKey}
-    />
+    <div className="app">
+      <StatusStrip
+        overview={overview.data}
+        status={overview.status}
+        error={overview.error}
+        token={token}
+        fetchImpl={options.fetchImpl}
+        onRecorded={overview.refresh}
+      />
+      <nav className="views" aria-label="Views">
+        {VIEWS.map((entry) => (
+          <a
+            key={entry.id}
+            href={`#${entry.id}`}
+            aria-current={view === entry.id ? 'page' : undefined}
+          >
+            {entry.label}
+          </a>
+        ))}
+      </nav>
+      <main>
+        {view === 'today' && overview.data !== null && <TodayView overview={overview.data} />}
+      </main>
+    </div>
   );
 }

@@ -1,1313 +1,237 @@
-/*
- * Samurai dashboard v3 — the Rail layout.
- *
- * Desktop only, 1440 wide: a 240px rail on the left of every tab, the tab's
- * content in the middle, and on Live and Review a 460px drawer on the right.
- * Type is 14px body, labels never below 11px, key figures 28–40px. The only
- * motif is the hanko seal and the brand mark; there is no animation.
- *
- * Every colour comes from tokens.css. Colour is never the only carrier of a
- * signal — every state has a word beside it.
- */
-
-/*
- * `--control-banner-h` is the ONE place the banner's height is stated
- * (#1593 round-1 review): `.control-banner` sets its own height from it, and
- * every element below that used to assume its box started at the true
- * viewport top (`.app`'s `min-height`, `.rail`/`.live`/`.review`'s `100vh`)
- * subtracts it instead. Without this, `.app-shell`'s `min-height: 100vh` and
- * `.app`'s own `min-height: 100vh` stacked BELOW the banner in normal flow —
- * not "doubled", but each independently forcing at least 100vh starting
- * below a banner that itself took more room, so the page was a banner-height
- * taller than the viewport: a permanent scrollbar, and the sticky rail
- * (height 100vh, `position: sticky; top: 0`) bottomed out below the fold
- * because its own forced height still assumed no banner existed above it.
- * Defaults to `0px` so a component rendered without the `.app-shell`
- * ancestor (e.g. `Rail.test.tsx`) resolves the same `100vh` this had before
- * arms existed.
- */
-.app-shell {
-  --control-banner-h: 0px;
-  min-height: 100vh;
-}
-
-.app-shell.app-control {
-  --control-banner-h: 36px;
-}
-
 .app {
-  min-height: calc(100vh - var(--control-banner-h, 0px));
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 100vh;
   color: var(--text);
   font-family: var(--font-body);
   font-size: 14px;
-  line-height: 1.5;
-  background: var(--bg);
-}
-
-/*
- * The tint is deliberately faint (#1593 — "the banner is the signal, the
- * tint redundant"): it must never be the only thing telling an operator
- * which arm they are looking at, so it is a wash over the ground colour, not
- * a state colour of its own like `.rail-stale`/`.rail-mismatch` are.
- */
-.app-control .app {
-  background: rgb(var(--amber-rgb) / 0.04);
-}
-
-.control-banner {
-  height: var(--control-banner-h);
+  padding: var(--space-4);
   box-sizing: border-box;
+}
+
+.strip {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.strip-line {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgb(var(--amber-rgb) / 0.18);
-  border-bottom: 1px solid rgb(var(--amber-rgb) / 0.5);
-  color: var(--amber);
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  text-align: center;
-  padding: 0 var(--space-4);
-}
-
-.mono {
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-2);
   font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.display {
-  font-family: var(--font-display);
-  font-weight: 600;
-}
-
-.muted {
+  font-size: 12px;
   color: var(--muted);
 }
 
-.small {
-  font-size: 12px;
+.strip-line strong {
+  font-family: var(--font-display);
+  color: var(--cyan);
 }
 
-.gain {
+.state {
+  margin: 0 0 var(--space-2);
+}
+
+.state strong {
+  font-family: var(--font-display);
+  letter-spacing: 0.06em;
+}
+
+.state[data-state="running"] strong {
   color: var(--go);
 }
 
-.loss {
+.state[data-state="paused"] strong {
+  color: var(--amber);
+}
+
+.state[data-state^="halted"] strong {
   color: var(--vermilion);
+}
+
+.reason {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.reason input {
+  flex: 1;
+  min-width: 0;
+  background: rgb(var(--ink-rgb) / 0.6);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  padding: var(--space-1) var(--space-2);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.actions button {
+  font-family: var(--font-display);
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+
+.actions .action-pause {
+  border-color: var(--amber);
+}
+
+.actions .action-halt {
+  border-color: var(--vermilion);
+}
+
+.actions .action-resume {
+  border-color: var(--go);
+}
+
+.actions button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.history summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: var(--space-2);
+}
+
+.views {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+  font-family: var(--font-display);
+}
+
+.views a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.views a[aria-current="page"] {
+  color: var(--text);
+  border-bottom: 2px solid var(--gold);
+}
+
+.view {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+
+@media (min-width: 720px) {
+  .view {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.panel {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.panel h2 {
+  font-family: var(--font-accent);
+  font-size: 16px;
+  margin: 0 0 var(--space-2);
+}
+
+.panel-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel-note[data-status="not-yet-fed"] {
+  font-style: italic;
 }
 
 .warn {
   color: var(--amber);
 }
 
-.label {
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-:focus-visible {
-  outline: 2px solid var(--gold);
-  outline-offset: 2px;
-}
-
-code {
+.grid {
+  width: 100%;
+  border-collapse: collapse;
   font-family: var(--font-mono);
-  font-size: 13px;
-}
-
-/* ---------- rail ---------- */
-
-.rail {
-  position: sticky;
-  top: 0;
-  height: calc(100vh - var(--control-banner-h, 0px));
-  box-sizing: border-box;
-  border-right: 1px solid var(--border);
-  background: var(--panel);
-  padding: var(--space-5) 20px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.rail-stale {
-  border-right-color: var(--amber);
-}
-
-/*
- * Distinct from `.rail-stale` on purpose (#1316): staleness means "the
- * numbers are old"; a contract mismatch means "this client cannot trust
- * what these numbers mean at all". Vermilion, not amber — the rail's
- * existing "something is wrong, not just aging" colour (reject/over-cap
- * states below), so the two never look like variants of the same state.
- */
-.rail-mismatch {
-  border-right-color: var(--vermilion);
-}
-
-.brand {
-  font-family: var(--font-accent);
-  font-weight: 700;
-  font-size: 18px;
-  letter-spacing: 0.08em;
-}
-
-.brand i {
-  font-style: normal;
-  color: var(--cyan);
-}
-
-/* ---------- arm selector (#1593) ---------- */
-
-.arm-toggle {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.arm-btn {
-  flex: 1;
-  font: inherit;
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  margin-top: var(--space-2);
+}
+
+.grid caption {
+  text-align: left;
+  color: var(--muted);
+}
+
+.grid th,
+.grid td {
+  text-align: left;
   padding: var(--space-1) var(--space-2);
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.arm-btn + .arm-btn {
-  border-left: 1px solid var(--border);
-}
-
-.arm-btn:hover {
-  color: var(--text);
-}
-
-.arm-btn-on {
-  color: var(--text);
-  background: rgb(var(--amber-rgb) / 0.16);
-}
-
-/* The visible word pairing `.arm-btn-on`'s colour (#1593 round-1 review) —
-   plays no part in the accessible name, which `aria-label` already owns. */
-.arm-btn-mark {
-  font-weight: 500;
-  opacity: 0.85;
-}
-
-.rail-tabs [role="tablist"] {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.tab {
-  font: inherit;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--text);
-}
-
-.tab-on {
-  color: var(--text);
-  background: rgb(var(--border-rgb) / 0.6);
-}
-
-.rail-status {
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.rail-block {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 13px;
-}
-
-.rail-health {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 20px;
-  line-height: 1.2;
-}
-
-.rail-health-alive {
-  color: var(--go);
-}
-
-.rail-health-stale {
-  color: var(--amber);
-}
-
-.rail-health-waiting {
-  color: var(--muted);
-}
-
-.rail-health-contract-mismatch {
-  color: var(--vermilion);
-}
-
-/* Replaces a health-derived tile's value in the mismatch state — never
- * hidden (a blank field reads as zero, dashboard-spec.md "Layout — the
- * Rail"), always this explicit "unknown" reading (#1316). */
-.rail-contract-mismatch {
-  border-left: 2px solid var(--vermilion);
-  padding-left: var(--space-2);
-}
-
-.rail-mismatch-value {
-  color: var(--vermilion);
-}
-
-.rail-note {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.rail-value {
-  font-size: 13px;
-}
-
-.pill {
-  display: inline-block;
-  align-self: flex-start;
-  margin-top: var(--space-1);
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  border: 1px solid var(--amber);
-  color: var(--amber);
-  border-radius: 6px;
-  padding: 3px 10px;
-}
-
-.pill-live {
-  border-color: var(--vermilion);
-  color: var(--vermilion);
-}
-
-.rail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-/* Off the 8px scale on purpose: the figures sit inside `.rail-block`, whose
-   own 2px gap sets the spacing of the provider rows they line up with. */
-.rail-figures {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: var(--space-1);
-}
-
-.provider-ok {
-  color: var(--go);
-}
-
-.provider-rate_limited,
-.provider-not_configured {
-  color: var(--amber);
-}
-
-.provider-unauthorized,
-.provider-forbidden,
-.provider-error {
-  color: var(--vermilion);
-}
-
-/* #1108: the alert channel's own degraded state — only rendered when there is one. */
-.rail-alert-degraded [data-alert-degraded="true"] {
-  color: var(--vermilion);
-}
-
-.rail-meter-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-}
-
-.track {
-  display: block;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
-  position: relative;
-  overflow: hidden;
-  margin-top: 5px;
-}
-
-.track-thick {
-  height: 8px;
-}
-
-.track-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  border-radius: 3px;
-  background: var(--cyan);
-}
-
-.track-cyan {
-  background: var(--cyan);
-}
-
-.track-amber {
-  background: var(--amber);
-}
-
-.track-bad,
-.track-loss {
-  background: var(--vermilion);
-}
-
-.track-gain {
-  background: var(--go);
-}
-
-.rail-foot {
-  margin-top: auto;
-  font-size: 12px;
-  display: flex;
-  flex-direction: column;
-}
-
-/* ---------- shared content chrome ---------- */
-
-main {
-  min-width: 0;
-}
-
-/*
- * The whole page before the first snapshot (#1520). Deliberately not the
- * dashboard grid with empty cards in it: a cold start is one state, and
- * showing the rail and three tabs with nothing in them is how "nothing has
- * arrived yet" gets read as "the book is empty".
- */
-.cold-start {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  color: var(--text);
-  font-family: var(--font-body);
-  font-size: 14px;
-  background: var(--bg);
-  text-align: center;
-}
-
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  padding: 20px var(--space-5);
-}
-
-.panel h2,
-.section-head h2 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  margin: 0 0 14px;
-  color: var(--muted);
-}
-
-.section-head {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-}
-
-.section-head h2 {
-  margin: 0;
-}
-
-.h2-note {
-  text-transform: none;
-  letter-spacing: 0;
-  font-family: var(--font-body);
-  font-weight: 400;
-}
-
-.card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgb(var(--ink-rgb) / 0.5);
-  padding: 14px var(--space-4);
-}
-
-.card h3,
-.drawer h3,
-.panel h3 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0 0 10px;
-}
-
-.panel-secondary {
-  border-style: dashed;
-}
-
-.empty-state {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.state {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 1px 7px;
-  border-radius: 4px;
-  border: 1px solid;
-  line-height: 1.5;
-}
-
-.state-done {
-  color: var(--go);
-  border-color: rgb(var(--go-rgb) / 0.45);
-}
-
-.state-live {
-  color: var(--cyan);
-  border-color: rgb(var(--cyan-rgb) / 0.55);
-  background: rgb(var(--cyan-rgb) / 0.08);
-}
-
-.state-stop {
-  color: var(--vermilion);
-  border-color: rgb(var(--vermilion-rgb) / 0.5);
-}
-
-.state-skip,
-.state-wait {
-  color: var(--muted);
-  border-color: var(--border);
-}
-
-.seal {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-accent);
-  font-size: 13px;
-  font-weight: 700;
-  border: 1.5px solid;
-  transform: rotate(-6deg);
-  box-shadow: 0 0 0 1px rgb(var(--gold-rgb) / 0.45);
-  flex: none;
-}
-
-.seal-go {
-  color: var(--cyan);
-  border-color: var(--cyan);
-  background: rgb(var(--cyan-rgb) / 0.08);
-}
-
-.seal-no_go {
-  color: var(--amber);
-  border-color: var(--amber);
-  background: rgb(var(--amber-rgb) / 0.08);
-}
-
-.seal-stopped {
-  color: var(--vermilion);
-  border-color: var(--vermilion);
-  background: rgb(var(--vermilion-rgb) / 0.1);
-}
-
-.seal-quorum_skip {
-  color: var(--muted);
-  border-color: var(--muted);
-}
-
-.outcome-go {
-  color: var(--cyan);
-}
-
-.outcome-no_go {
-  color: var(--amber);
-}
-
-.outcome-stopped {
-  color: var(--vermilion);
-}
-
-.outcome-quorum_skip,
-.outcome-idle {
-  color: var(--muted);
-}
-
-.outcome-in_flight {
-  color: var(--cyan);
-}
-
-.hitl {
-  display: inline-block;
-  margin-left: var(--space-2);
-  font-family: var(--font-display);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--amber);
-  border: 1px solid var(--amber);
-  border-radius: 4px;
-  padding: 0 5px;
-}
-
-.kv-list {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  font-size: 13px;
-}
-
-.kv {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.kv dt {
-  color: var(--muted);
-}
-
-.kv dd {
-  margin: 0;
-  min-width: 0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.kv-list[data-section="trade"] dd:not(.mono) {
-  text-align: left;
-  font-variant-numeric: normal;
-}
-
-/* text-overflow: ellipsis only paints at the inline-end; a right-aligned
-   nowrap cell overflows and clips silently on the left instead. */
-.kv dd.kv-truncate {
-  text-align: left;
-}
-
-.kv-truncate,
-.stance-name,
-.fill-id {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.kv-total {
-  border-top: 1px solid var(--border);
-  padding-top: 5px;
-}
-
-.kv-total dt {
-  color: var(--text);
-}
-
-/* ---------- glance ---------- */
-
-.glance {
-  padding: var(--space-6);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.glance-top {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-5);
-}
-
-.big-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-4);
-}
-
-.big {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  font-size: 40px;
-  line-height: 1.1;
-}
-
-.figure-row {
-  display: flex;
-  gap: 28px;
-  margin-top: 14px;
-  font-size: 13px;
-}
-
-.figure-row > div {
-  display: flex;
-  flex-direction: column;
-}
-
-.glance .small {
-  margin: 10px 0 0;
-}
-
-.pnl-block + .pnl-block {
-  margin-top: var(--space-4);
-}
-
-.spark-figure {
-  margin: var(--space-4) 0 0;
-}
-
-.spark {
-  display: block;
-  width: 100%;
-  height: 60px;
-}
-
-.spark-line {
-  fill: none;
-  stroke: var(--go);
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-.spark-fill {
-  fill: rgb(var(--go-rgb) / 0.12);
-}
-
-.spark-loss .spark-line {
-  stroke: var(--vermilion);
-}
-
-.spark-loss .spark-fill {
-  fill: rgb(var(--vermilion-rgb) / 0.12);
-}
-
-.spark-figure figcaption {
-  font-size: 12px;
-  margin-top: var(--space-1);
-}
-
-.risk-list,
-.verdict-list,
-.lane-list,
-.trade-list,
-.arm-list,
-.benchmark-list,
-.analyst-list,
-.stance-list,
-.condition-list,
-.fill-list,
-.timeline,
-.tile-grid,
-.arm-trend {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.risk-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.risk-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  margin-bottom: 5px;
-}
-
-.risk-foot {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  margin-top: var(--space-1);
-}
-
-.verdict-row {
-  width: 100%;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  display: grid;
-  grid-template-columns: 34px 80px 90px 1fr;
-  gap: 14px;
-  align-items: center;
-  padding: 9px 0;
-  font-size: 13px;
-}
-
-.verdict-row:hover {
-  background: rgb(var(--border-rgb) / 0.25);
-}
-
-.verdict-list li + li .verdict-row {
-  border-top: 1px solid rgb(var(--border-rgb) / 0.6);
-}
-
-/* ---------- live ---------- */
-
-.live,
-.review {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 460px;
-  /* Pinned to the viewport: the main column and the drawer each scroll on
-     their own; the page does not. Subtracts the Control banner's height
-     (`--control-banner-h`, defaults to 0px in Live) for the same reason
-     `.rail` does — see `.app-shell`'s doc comment above. */
-  height: calc(100vh - var(--control-banner-h, 0px));
-  min-height: 0;
-}
-
-.lanes,
-.review-main {
-  padding: var(--space-6) var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* Wide content scrolls inside its own box; the page body never scrolls sideways (spec, accessibility floor). */
-.lane-list,
-.trade-list {
-  overflow-x: auto;
-}
-
-.lane-head {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.lane {
-  display: grid;
-  grid-template-columns: 96px repeat(6, minmax(0, 1fr));
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.lane-header {
-  padding: var(--space-1) 14px 0;
-}
-
-.lane-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.lane-list .lane {
-  width: 100%;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgb(var(--ink-rgb) / 0.5);
-  padding: 10px 14px;
-}
-
-.lane-list .lane:hover {
-  border-color: var(--muted);
-}
-
-.lane-in_flight {
-  border-color: rgb(var(--cyan-rgb) / 0.4);
-}
-
-.lane-idle {
-  opacity: 0.6;
-}
-
-.lane-selected,
-.lane-list .lane-selected {
-  background: rgb(var(--lacquer-rgb) / 0.14);
-  border-color: rgb(var(--gold-rgb) / 0.5);
-}
-
-.lane-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  min-width: 0;
-}
-
-.lane-decision {
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-
-/* Colour is never the sole carrier here (dashboard-spec.md's accessibility
-   floor) — the amber tint pairs with the `.lane-degraded-mark` glyph. */
-.lane-cell[data-degraded] .lane-decision {
-  color: var(--amber);
-}
-
-.lane-degraded-mark {
-  margin-right: 2px;
-}
-
-/* ---------- drawer ---------- */
-
-.drawer {
-  border-left: 1px solid var(--border);
-  background: var(--panel);
-  padding: 28px var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.drawer h3 {
-  margin-bottom: 0;
-}
-
-.drawer h3 + * {
-  margin-top: -10px;
-}
-
-.drawer-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.drawer-head h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.drawer-pnl {
-  margin-left: auto;
-  font-size: 16px;
-  white-space: nowrap;
-}
-
-.drawer-trace {
-  margin-left: auto;
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.drawer-line {
-  margin: 0;
-  font-size: 13px;
-}
-
-.drawer-caveat {
-  margin: 0;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.timeline {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
-
-.timeline-row {
-  display: grid;
-  grid-template-columns: 130px 1fr auto;
-  gap: var(--space-2);
-  align-items: baseline;
-}
-
-.timeline-stage {
-  display: grid;
-  grid-template-columns: 68px auto;
-  gap: 6px;
-  align-items: baseline;
-  justify-items: start;
-}
-
-.timeline-decision {
-  color: var(--muted);
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* A fixed badge column, so every line's text starts on one left edge whatever the word's width. */
-.gate-line,
-.condition-list li {
-  display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
-  margin: 0;
-  font-size: 13px;
-}
-
-.gate-line > .state,
-.condition-list li > .state {
-  justify-self: start;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.gate-line + .gate-line,
-.condition-list {
-  margin-top: 6px;
-}
-
-.condition-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.stance-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 13px;
-}
-
-.stance-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 56px max-content;
-  gap: 10px;
-  align-items: center;
-}
-
-.stance-strip {
-  display: inline-flex;
-  gap: 3px;
-}
-
-.stance-mark {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: var(--muted);
-}
-
-.stance-bullish {
-  background: var(--go);
-}
-
-.stance-bearish {
-  background: var(--vermilion);
-}
-
-.stance-neutral {
-  background: var(--muted);
-}
-
-.stance-empty {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.stance-final,
-.stance-influence {
-  font-size: 12px;
-  color: var(--muted);
-  text-align: right;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.fill-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.fill-row {
-  display: grid;
-  grid-template-columns: 76px 56px minmax(0, 1fr) auto;
-  column-gap: 10px;
-  align-items: baseline;
-  font-variant-numeric: tabular-nums;
-}
-
-.fill-price {
-  text-align: right;
-}
-
-.fill-id {
-  grid-column: 1 / -1;
-  font-size: 11px;
-}
-
-/* ---------- review ---------- */
-
-.review-main {
-  gap: 20px;
-}
-
-.review-title {
-  font-size: 16px;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--text);
-}
-
-.review-cards {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-4);
-  align-items: start;
-}
-
-.review-arms {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.tile-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 16px;
-}
-
-.tile {
-  display: flex;
-  flex-direction: column;
-}
-
-.tile-value {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.card .kv-list {
-  margin-top: 12px;
-}
-
-.card .small {
-  margin: 10px 0 0;
-}
-
-.arm-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  font-size: 13px;
-}
-
-.arm-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px var(--space-3);
-}
-
-.arm-row .small {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-
-.arm-pnl {
-  font-weight: 600;
-  font-size: 16px;
-}
-
-.arm-verdict {
-  margin: 10px 0 0;
-  font-size: 13px;
-}
-
-.arm-diverged {
-  color: var(--vermilion);
-}
-
-.arm-below-floor {
-  color: var(--muted);
-}
-
-.arm-trend {
-  margin-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 12px;
-}
-
-.arm-trend li {
-  display: flex;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-.arm-trend-diverged {
-  color: var(--vermilion);
-}
-
-.arm-trend-below-floor {
-  color: var(--muted);
-}
-
-.benchmark-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-  margin-top: 10px;
-}
-
-.benchmark-row {
-  display: flex;
-  flex-direction: column;
-}
-
-.analyst-list {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  font-size: 13px;
-}
-
-.analyst-row {
-  display: grid;
-  grid-template-columns: 110px 1fr 44px;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.analyst-row .track {
-  margin-top: 0;
-}
-
-.analyst-weight {
-  text-align: right;
-}
-
-.analyst-row .small {
-  grid-column: 1 / -1;
-  margin: -4px 0 0;
-}
-
-.trade-row {
-  display: grid;
-  grid-template-columns: 90px 80px 60px 70px 110px 1fr 90px;
-  gap: var(--space-3);
-  align-items: center;
-  padding: 10px var(--space-3);
-  font-size: 13px;
-}
-
-.trade-header {
-  padding-top: 0;
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border);
-}
-
-.trade-list li .trade-row {
-  width: 100%;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  background: transparent;
-  border: 0;
   border-bottom: 1px solid rgb(var(--border-rgb) / 0.6);
-  border-radius: 4px;
-  cursor: pointer;
 }
 
-.trade-list li .trade-row:hover {
-  background: rgb(var(--border-rgb) / 0.25);
+.grid .shadow {
+  color: var(--muted);
 }
 
-.trade-list li .trade-row-selected {
-  background: rgb(var(--lacquer-rgb) / 0.14);
-  outline: 1px solid rgb(var(--gold-rgb) / 0.5);
-}
-
-.trade-why {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.trade-pnl {
-  text-align: right;
+.grid .total th,
+.grid .total td {
   font-weight: 600;
 }
 
-/*
- * There is no `prefers-reduced-motion` block because there is nothing to
- * reduce: v3 declares no transition and no animation anywhere. Keep it that
- * way — a page that watches live money must never pulse.
- */
+.meter {
+  margin-bottom: var(--space-3);
+}
+
+.meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.meter-value.over {
+  color: var(--vermilion);
+}
+
+.meter-track {
+  width: 100%;
+  height: 14px;
+  display: block;
+}
+
+.meter-ground {
+  fill: rgb(var(--ink-rgb) / 0.72);
+}
+
+.meter-fill {
+  fill: var(--amber);
+}
+
+.meter-mark {
+  stroke: var(--text);
+  stroke-width: 0.6;
+}
+
+.meter-marks {
+  display: flex;
+  gap: var(--space-4);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-1) 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}

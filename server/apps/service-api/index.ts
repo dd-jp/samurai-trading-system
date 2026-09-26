@@ -1,6 +1,4 @@
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
 import type { LogEventCode } from '../../shared/index.js';
 import {
   guardedStore,
@@ -9,10 +7,11 @@ import {
   sharedStorePath,
 } from '../../shared/store/index.js';
 import { JsonLogger } from '../orchestrator/index.js';
+import { alpacaClientOrNone } from './alpaca-client.js';
 import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 import { ProviderStatusPoller } from './provider-status.js';
-import { bundleDiagnostic, createDashboardServer } from './server.js';
+import { createDashboardServer } from './server.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
 
 watchDashboardStdout();
@@ -38,34 +37,11 @@ bootLog('info', 'dashboard_store_resolved', `Samurai dashboard store → ${resol
   mode,
 });
 
-const bundleRoot = fileURLToPath(new URL('../../../client/', import.meta.url));
-
-const bundleProblem = bundleDiagnostic(bundleRoot);
-if (bundleProblem !== null) {
-  bootLog(
-    'error',
-    'dashboard_bundle_unservable',
-    'dashboard UI not servable — /api/snapshot is still up',
-    {
-      bundle_problem: bundleProblem,
-    },
-  );
-}
-
-function buildAlpacaClient(): AlpacaHttpBrokerClient | undefined {
-  try {
-    return new AlpacaHttpBrokerClient({
-      environment: mode === 'live' ? 'live' : 'paper',
-    });
-  } catch (error) {
-    bootLog('warn', 'dashboard_balance_tile_disabled', 'Alpaca balance tile disabled', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
-  }
-}
-
-const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
+const providers = new ProviderStatusPoller({
+  alpaca: alpacaClientOrNone(mode, (error) =>
+    bootLog('warn', 'dashboard_balance_tile_disabled', 'Alpaca balance tile disabled', { error }),
+  ),
+});
 
 const alertChatId = ((): string | undefined => {
   const raw = (process.env.TELEGRAM_CHAT_ID ?? '').trim();
@@ -88,7 +64,6 @@ const server = createDashboardServer({
   port,
   host,
   store: new SqliteQueryStore(db, 30, alertChatId),
-  bundleRoot,
   mode,
   providers,
   dashboardCredential,

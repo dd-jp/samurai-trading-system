@@ -12,6 +12,7 @@ const PATHS = {
   barStoreRoot: DEFAULT_BAR_STORE_ROOT,
   fxPath: FX_PATH,
   researchStorePath: researchStorePath({}),
+  bundleRoot: 'dist/client',
 };
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 const dirs: string[] = [];
@@ -165,10 +166,18 @@ describe('composeV2Dashboard', () => {
     }
   });
 
-  it('reads --bars, --fx and --research', () => {
+  it('reads --bars, --fx, --research and --bundle', () => {
     expect(
-      parseDashboardArgs(['--bars', 'b', '--fx', 'f.csv', '--research', 'r.sqlite'], {}),
-    ).toMatchObject({ barStoreRoot: 'b', fxPath: 'f.csv', researchStorePath: 'r.sqlite' });
+      parseDashboardArgs(
+        ['--bars', 'b', '--fx', 'f.csv', '--research', 'r.sqlite', '--bundle', 'web'],
+        {},
+      ),
+    ).toMatchObject({
+      barStoreRoot: 'b',
+      fxPath: 'f.csv',
+      researchStorePath: 'r.sqlite',
+      bundleRoot: 'web',
+    });
   });
 
   it('defaults the research store to SAMURAI_RESEARCH_STORE, as the trial ledger does', () => {
