@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { V2Bar } from '../../../contracts/index.js';
-import { type LimitEntry, simulateLimitEntry } from './simulated-entry.js';
+import { type LimitEntry, simulateLimitEntry, simulateMarketExit } from './simulated-entry.js';
 
 function bar(date: string, overrides: Partial<V2Bar> = {}): V2Bar {
   return {
@@ -98,5 +98,16 @@ describe('simulateLimitEntry', () => {
         stoppedAt,
       });
     }
+  });
+});
+
+describe('simulateMarketExit', () => {
+  it('waits while no bar has come in', () => {
+    expect(simulateMarketExit([])).toBeUndefined();
+  });
+
+  it('fills at the first bar open, rescaled to the quoted price', () => {
+    const bars = [bar('d1', { open: 18, close: 19, rawClose: 38 }), bar('d2', { open: 5 })];
+    expect(simulateMarketExit(bars)).toBe(36);
   });
 });

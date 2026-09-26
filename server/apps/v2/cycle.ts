@@ -17,6 +17,7 @@ import type {
   SleeveOutput,
   SleeveSource,
   Submission,
+  V2Bar,
   V2Fill,
   Venue,
 } from '../../../contracts/index.js';
@@ -30,7 +31,7 @@ import {
   quotePerGbp,
 } from './data/index.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
-import { simulateLimitEntry } from './simulated-entry.js';
+import { simulateLimitEntry, simulateMarketExit } from './simulated-entry.js';
 
 export interface CycleDeps {
   readonly registry: SleeveSource;
@@ -72,7 +73,7 @@ export interface CycleReport {
 }
 
 const MS_PER_DAY = 86_400_000;
-const MAX_PENDING_ENTRY_CALENDAR_DAYS = 5;
+const MAX_PENDING_CALENDAR_DAYS = 5;
 const EPOCH_ISO = new Date(0).toISOString();
 
 export function calendarDaysBetween(from: string | undefined, to: string): number {
@@ -142,6 +143,8 @@ function numberOrUndefined(value: unknown): number | undefined {
 function withinLimit(side: OrderSide, limit: number, price: number): number {
   return side === 'buy' ? Math.min(limit, price) : Math.max(limit, price);
 }
+
+const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'refused_dry_run']);
 
 class Cycle {
   readonly refusals: string[] = [];
@@ -239,14 +242,11 @@ class Cycle {
     const limit = order.payload.price as number;
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
-    const window = this.deps.market
-      .barsBefore(order.instrument, this.tradingDate, daysOpen + 1)
-      .filter((bar) => bar.date >= order.trading_date);
     const outcome = simulateLimitEntry(
       { side, limit, stop: numberOrUndefined(order.payload.stop) },
-      window,
+      this.barsSince(order),
     );
-    if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_ENTRY_CALENDAR_DAYS) {
+    if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_CALENDAR_DAYS) {
       this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
       return;
     }
@@ -276,6 +276,57 @@ class Cycle {
     }
   }
 
+  barsSince(order: JournalledOrder): readonly V2Bar[] {
+    const days = calendarDaysBetween(order.trading_date, this.tradingDate) + 1;
+    return this.deps.market
+      .barsBefore(order.instrument, this.tradingDate, days)
+      .filter((bar) => bar.date >= order.trading_date);
+  }
+
+  fillSimulatedExits(): void {
+    for (const bookId of this.deps.books.ids()) {
+      for (const held of this.deps.books.positions(bookId)) this.fillSimulatedExit(held);
+    }
+  }
+
+  fillSimulatedExit(held: Position): void {
+    if (held.exitClientOrderId === undefined) return;
+    const order = this.deps.journal.orderFor(held.exitClientOrderId);
+    if (order === undefined || !SIMULATED_OUTCOMES.has(order.outcome)) return;
+    const price = simulateMarketExit(this.barsSince(order));
+    if (price === undefined) {
+      this.warnIfStale(order);
+      return;
+    }
+    const qty = Math.abs(held.qty);
+    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
+      instrument: held.instrument,
+      side: order.side,
+      qty,
+      price,
+      crossesSpread: true,
+    });
+    this.ingest({
+      client_order_id: order.client_order_id,
+      broker_fill_id: `sim-${order.client_order_id}`,
+      leg: 'exit',
+      price: quote.price,
+      qty,
+      fee: quote.fee,
+    });
+  }
+
+  warnIfStale(order: JournalledOrder): void {
+    if (calendarDaysBetween(order.trading_date, this.tradingDate) <= MAX_PENDING_CALENDAR_DAYS) {
+      return;
+    }
+    this.log(
+      'warn',
+      'v2_simulated_flatten_stale',
+      `${order.book_id} ${order.instrument}: flatten ${order.client_order_id} has had no bar since ${order.trading_date}`,
+    );
+  }
+
   async cancelStaleEntries(book: BookSpec): Promise<void> {
     for (const order of this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate)) {
       const route = routeOf(book, order.venue as Venue);
@@ -290,6 +341,7 @@ class Cycle {
   }
 
   simulatedBracketExit(book: BookSpec, held: Position): void {
+    if (held.exitClientOrderId !== undefined) return;
     const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
     if (bar === undefined || bar.date < held.openedDate) return;
     const fx = this.fxFor(held.venue);
@@ -711,6 +763,7 @@ async function runUnmarked(
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
   cycle.fillSimulatedEntries();
+  cycle.fillSimulatedExits();
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {

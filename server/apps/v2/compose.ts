@@ -58,7 +58,6 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
       impactBps: impactLookup(market, tradingDate, logger),
       fee: venueFee,
     },
-    markPrice: (instrument) => market.lastBarBefore(instrument, tradingDate())?.rawClose,
   });
   return {
     registry,

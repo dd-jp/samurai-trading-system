@@ -198,7 +198,7 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - `TrialLedger` does not enforce S3's cap of 8 counted trials per candidate; a ninth records silently. Step 1b refuses it.
   - The driver sets every year's capital row to the same `startCapitalGbp`, so the daily cap and the size steps stay anchored to the first year's capital, not the equity at each 1 January.
   - `SESSION_B_TRIALS_PATH` is relative to the working directory, so `npm run v2:trials` must run from the repo root.
-  - Simulated entries now fill as the paper limit order would, from the next bar (#1797, `docs/specs/debate-sleeve-spec.md` §7). Simulated time-stop and halt flattens still fill at the prior close with no lag ([#1812](https://github.com/dd-jp/samurai-trading-system/issues/1812)); fix it before the first verdict.
+  - Simulated entries now fill as the paper limit order would, from the next bar (#1797, `docs/specs/debate-sleeve-spec.md` §7). Simulated time-stop and halt flattens fill at the next bar's open ([#1812](https://github.com/dd-jp/samurai-trading-system/issues/1812), §7).
   - Every sleeve in a run is seeded at the whole start capital. When 1b adds the S1 split, the driver must still seed each trial at the capital it would get alone.
   - Step 3e's Litestream stream must include the research store as well as the paper store.
   - No delisting haircut, no stop on a name whose bars end mid-run, and no MinBTL check on the window length: candidate-level work (doc 70 §2 did all three for momentum).
