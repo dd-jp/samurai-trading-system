@@ -17,6 +17,7 @@ import type { Clock } from '../../../shared/index.js';
 import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index.js';
 import { CapitalConfigStore, ControlStore, dailyCapGbp, sizeStepMarksGbp } from '../risk/index.js';
 import { SqliteMonthlySpendCap, utcMonthStart } from '../signal/index.js';
+import { vetoOf } from './journal-reader.js';
 import { type Holdings, type PositionsPanel, readHoldings } from './positions.js';
 
 const CONTROL_HISTORY_ROWS = 20;
@@ -184,7 +185,7 @@ export class OverviewReader {
       trading_date: latestDate(rows),
       decisions: rows.map((row) => ({
         ...row,
-        vetoed: row.action === 'skip' && row.reason.startsWith('vetoed:'),
+        vetoed: vetoOf(row.action, row.reason) !== null,
       })),
     };
   }

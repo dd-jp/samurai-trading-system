@@ -116,3 +116,9 @@ export function openMigratedStore(dbPath: string, minimumVersion: number): Store
   }
   return db;
 }
+
+export function openReadOnlyStore(dbPath: string): StoreHandle {
+  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true });
+  db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  return db;
+}

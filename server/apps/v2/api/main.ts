@@ -12,10 +12,13 @@ import {
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { BarsMarketData, ParquetMarkSource, parseBoeGbpUsdCsv } from '../data/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
+import { researchStorePath } from '../trial-ledger.js';
 import { DASHBOARD_TOKEN_ENV_VAR } from './auth.js';
 import { ControlWriter } from './control-writer.js';
+import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
+import { ResearchReader } from './research.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
 
 const CONTROLS_SCHEMA_VERSION = 70;
@@ -25,6 +28,7 @@ export interface V2DashboardArgs {
   readonly storePath: string;
   readonly barStoreRoot: string;
   readonly fxPath: string;
+  readonly researchStorePath: string;
   readonly mode: V2ModeWire;
   readonly host: string;
   readonly port: number;
@@ -59,6 +63,7 @@ export function parseDashboardArgs(
       store: { type: 'string' },
       bars: { type: 'string', default: DEFAULT_BAR_STORE_ROOT },
       fx: { type: 'string', default: FX_PATH },
+      research: { type: 'string' },
     },
     strict: true,
   });
@@ -67,6 +72,7 @@ export function parseDashboardArgs(
     storePath: storePathFor(dryRun, values.store),
     barStoreRoot: values.bars,
     fxPath: values.fx,
+    researchStorePath: values.research ?? researchStorePath(env),
     mode: dryRun ? 'dry-run' : 'paper',
     host: env.HOST ?? '127.0.0.1',
     port: parsePort(env.V2_DASHBOARD_PORT),
@@ -104,12 +110,16 @@ export function composeV2Dashboard(
   try {
     const store = guardedStore(db, 'dashboard', { enabled: true });
     const reader = new OverviewReader(store, clock, args.mode, positions);
+    const journal = new JournalReader(store);
+    const research = new ResearchReader(args.researchStorePath, clock);
     const server = createV2DashboardServer({
       host: args.host,
       port: args.port,
       token: env[DASHBOARD_TOKEN_ENV_VAR],
       overview: () => reader.read(),
       controls: new ControlWriter(store, clock),
+      journal: (query) => journal.read(query),
+      research: () => research.read(),
       onFault: (error) =>
         process.stderr.write(
           `v2 dashboard fault: ${sanitizeLogText(describeThrownSafely(error))}\n`,
