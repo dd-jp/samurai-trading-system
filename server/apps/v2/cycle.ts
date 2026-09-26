@@ -600,6 +600,12 @@ class Cycle {
     });
   }
 
+  async markAll(books: readonly BookSpec[]): Promise<BookReport[]> {
+    const reports: BookReport[] = [];
+    for (const book of books) reports.push(await this.mark(book));
+    return reports;
+  }
+
   async mark(book: BookSpec): Promise<BookReport> {
     const previous = this.deps.books.lastDay(book.id);
     const day = this.deps.books.markDay(
@@ -812,8 +818,7 @@ async function runUnmarked(
     }
   }
   await cycle.sweepFills();
-  const bookReports: BookReport[] = [];
-  for (const book of books) bookReports.push(await cycle.mark(book));
+  const bookReports = await cycle.markAll(books);
   refusals.push(...cycle.refusals);
   const { tally } = cycle;
   return {
