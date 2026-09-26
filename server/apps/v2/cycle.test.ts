@@ -1587,7 +1587,8 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
       {
         trading_date: '2026-09-28',
         ticket: '#1813',
-        message: 'debate/primary: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
+        message:
+          'debate/primary: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
       },
     ]);
     const next = await runCycle(deps, '2026-09-29');
@@ -1620,7 +1621,9 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     await runCycle({ ...deps, logger: { log } }, '2026-09-28');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('submitted');
     expect(
-      log.mock.calls.filter(([entry]) => entry.event === 'v2_cancel_failed' && entry.level === 'warn'),
+      log.mock.calls.filter(
+        ([entry]) => entry.event === 'v2_cancel_failed' && entry.level === 'warn',
+      ),
     ).toHaveLength(1);
     expect(budgetRows(deps)).toEqual([
       {

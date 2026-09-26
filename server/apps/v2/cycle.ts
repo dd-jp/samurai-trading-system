@@ -329,7 +329,10 @@ class Cycle {
   }
 
   async cancelStaleEntries(book: BookSpec): Promise<void> {
-    await this.cancelEntries(book, this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate));
+    await this.cancelEntries(
+      book,
+      this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate),
+    );
   }
 
   async cancelEntries(book: BookSpec, orders: readonly JournalledOrder[]): Promise<number> {
