@@ -347,7 +347,7 @@ function fieldsOf<T>() {
   ): K => keys;
 }
 
-const V2_WIRE_FIELD_NAMES = {
+export const V2_WIRE_FIELD_NAMES = {
   panel: fieldsOf<Record<PanelFields, unknown>>()(['status', 'owner', 'ticket']),
   overview: fieldsOf<V2OverviewWire>()([
     'contract_version',
