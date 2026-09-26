@@ -141,6 +141,19 @@ describe('EvidenceReader (P5–P8)', () => {
     });
   });
 
+  it('lists a book with no cycle yet as empty-handed, beside one that has run', () => {
+    open();
+    book('debate/primary', 'primary');
+    book('debate/no-veto', 'no-veto');
+    day('debate/primary', '2026-10-01', 1000);
+    expect(read().performance).toMatchObject({
+      books: [
+        { book_id: 'debate/primary', days: 1 },
+        { book_id: 'debate/no-veto', days: 0, sharpe: null, max_drawdown: 0, equity: [] },
+      ],
+    });
+  });
+
   it('has no Sharpe for a flat book, which is not a measured zero', () => {
     open();
     book('debate/primary', 'primary');
