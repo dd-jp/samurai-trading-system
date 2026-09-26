@@ -1,11 +1,18 @@
 import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { V2_WIRE_FIELD_NAMES, type V2OverviewWire } from '../../../../contracts/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { BarsMarketData } from '../data/index.js';
-import { createFixtureStore } from './fixture-server.js';
+import { Journal } from '../journal/journal.js';
+import { TrialLedger } from '../trial-ledger.js';
+import { EvidenceReader } from './evidence.js';
+import { createFixtureStore, FIXTURE_TRADING_DATE } from './fixture-server.js';
+import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
+import { reconcileWire, taxWire } from './records.js';
+import { ResearchReader } from './research.js';
 
 type WireType = keyof typeof V2_WIRE_FIELD_NAMES;
 
@@ -125,5 +132,108 @@ describe('the overview the client reads, served over the seeded fixture', () => 
       ticket: '#1784',
     });
     expect(keysOf(overview.heartbeat.last_ping)).toEqual(fieldsOf('panel'));
+  });
+});
+
+describe('the Evidence and Records routes the client reads, served over the seeded fixture', () => {
+  let routeDir: string;
+  let routeDb: StoreHandle;
+  let researchPath: string;
+  const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
+
+  beforeAll(() => {
+    const fixture = createFixtureStore();
+    routeDir = fixture.dir;
+    routeDb = openSharedStore(fixture.storePath);
+    const journal = new Journal(routeDb, clock);
+    journal.recordOrder({
+      client_order_id: 'exit-1',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: FIXTURE_TRADING_DATE,
+      instrument: 'MSFT',
+      venue: 'alpaca',
+      leg: 'exit',
+      side: 'sell',
+      dry_run: false,
+      outcome: 'submitted',
+      payload: {},
+    });
+    journal.recordFill({
+      fill_id: 'fill-1',
+      client_order_id: 'exit-1',
+      book_id: 'debate/primary',
+      trading_date: FIXTURE_TRADING_DATE,
+      instrument: 'MSFT',
+      venue: 'alpaca',
+      leg: 'exit',
+      side: 'sell',
+      qty: 2,
+      price_gbp: 300,
+      fee_gbp: 0.4,
+    });
+    journal.recordRefusal({
+      trading_date: FIXTURE_TRADING_DATE,
+      scope: 'control',
+      parameter: 'MANUAL_PAUSE',
+      ticket: '#1745',
+      message: 'paused',
+    });
+    researchPath = join(routeDir, 'research.sqlite');
+    const research = openSharedStore(researchPath);
+    new TrialLedger(research, clock, { entries: [] }).record('trend', { lookback: 50 });
+    research.close();
+  });
+
+  afterAll(() => {
+    routeDb.close();
+    rmSync(routeDir, { recursive: true, force: true });
+  });
+
+  it('writes every field of every Evidence wire type', () => {
+    const served = new EvidenceReader(routeDb, clock).read();
+    expect(keysOf(served)).toEqual(fieldsOf('evidence'));
+    const performance = served.performance;
+    if (performance.status !== 'fed') throw new Error(`performance ${performance.status}`);
+    expect(keysOf(performance)).toEqual(fieldsOf('performance', true));
+    const book = first(performance.books);
+    expect(keysOf(book)).toEqual(fieldsOf('bookPerformance'));
+    expect(keysOf(first(book.equity))).toEqual(fieldsOf('equityPoint'));
+    const count = served.trade_count;
+    if (count.status !== 'fed') throw new Error(`trade count ${count.status}`);
+    expect(keysOf(count)).toEqual(fieldsOf('tradeCount', true));
+    expect(keysOf(first(count.books))).toEqual(fieldsOf('closedTradesBook'));
+    for (const owned of [served.vs_arm2, served.vs_benchmark, served.arm2_test, served.band]) {
+      expect(keysOf(owned)).toEqual(fieldsOf('panel'));
+    }
+  });
+
+  it('writes every field of every journal wire type', () => {
+    const served = new JournalReader(routeDb).read({ limit: 7 });
+    expect(keysOf(served)).toEqual(fieldsOf('journal'));
+    const day = first(served.days);
+    expect(keysOf(day)).toEqual(fieldsOf('journalDay'));
+    expect(keysOf(first(day.decisions))).toEqual(fieldsOf('journalDecision'));
+    const order = first(day.unlinked_orders);
+    expect(keysOf(order)).toEqual(fieldsOf('journalOrder'));
+    expect(keysOf(first(order.fills))).toEqual(fieldsOf('journalFill'));
+    expect(keysOf(first(day.refusals))).toEqual(fieldsOf('journalRefusal'));
+  });
+
+  it('writes every field of every research wire type', () => {
+    const served = new ResearchReader(researchPath, clock).read();
+    expect(keysOf(served)).toEqual(fieldsOf('research'));
+    const ledger = served.ledger;
+    if (ledger.status !== 'fed') throw new Error(`ledger ${ledger.status}`);
+    expect(keysOf(ledger)).toEqual(fieldsOf('researchLedger', true));
+    expect(keysOf(first(ledger.by_candidate))).toEqual(fieldsOf('candidateTrials'));
+    expect(keysOf(first(ledger.trials))).toEqual(fieldsOf('trial'));
+  });
+
+  it('writes every field of the reconcile and tax wire types', () => {
+    expect(keysOf(reconcileWire())).toEqual(fieldsOf('reconcile'));
+    const tax = taxWire({ year: null, format: 'json' });
+    expect(keysOf(tax)).toEqual(fieldsOf('tax'));
+    expect(keysOf(tax.disposals)).toEqual(fieldsOf('panel'));
   });
 });
