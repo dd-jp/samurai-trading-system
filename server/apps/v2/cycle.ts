@@ -73,7 +73,7 @@ export interface CycleReport {
 }
 
 const MS_PER_DAY = 86_400_000;
-const MAX_PENDING_ENTRY_CALENDAR_DAYS = 5;
+const MAX_PENDING_CALENDAR_DAYS = 5;
 const EPOCH_ISO = new Date(0).toISOString();
 
 export function calendarDaysBetween(from: string | undefined, to: string): number {
@@ -246,7 +246,7 @@ class Cycle {
       { side, limit, stop: numberOrUndefined(order.payload.stop) },
       this.barsSince(order),
     );
-    if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_ENTRY_CALENDAR_DAYS) {
+    if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_CALENDAR_DAYS) {
       this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
       return;
     }
@@ -294,7 +294,10 @@ class Cycle {
     const order = this.deps.journal.orderFor(held.exitClientOrderId);
     if (order === undefined || !SIMULATED_OUTCOMES.has(order.outcome)) return;
     const price = simulateMarketExit(this.barsSince(order));
-    if (price === undefined) return;
+    if (price === undefined) {
+      this.warnIfStale(order);
+      return;
+    }
     const qty = Math.abs(held.qty);
     const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
       instrument: held.instrument,
@@ -311,6 +314,17 @@ class Cycle {
       qty,
       fee: quote.fee,
     });
+  }
+
+  warnIfStale(order: JournalledOrder): void {
+    if (calendarDaysBetween(order.trading_date, this.tradingDate) <= MAX_PENDING_CALENDAR_DAYS) {
+      return;
+    }
+    this.log(
+      'warn',
+      'v2_simulated_flatten_stale',
+      `${order.book_id} ${order.instrument}: flatten ${order.client_order_id} has had no bar since ${order.trading_date}`,
+    );
   }
 
   async cancelStaleEntries(book: BookSpec): Promise<void> {

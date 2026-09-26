@@ -1299,6 +1299,8 @@ describe('runCycle under a manual control', () => {
     expect(deps.journal.orderFor('v2-debate-primary-2026-10-09-AAPL-exit')).toMatchObject({
       payload: { reason: 'time_stop' },
     });
+    expect((await runCycle(deps, '2026-10-12')).fills).toBe(2);
+    expect(deps.books.positions('debate/primary')).toEqual([]);
   });
 
   it('halt exits every position in every book at the next cycle and journals the reason', async () => {
@@ -1364,7 +1366,7 @@ describe('runCycle under a manual control', () => {
     });
   });
 
-  it('keeps a simulated flatten pending while no bar has come in: no second flatten, no bracket exit', async () => {
+  it('keeps a simulated flatten pending while no bar has come in: no second flatten, no bracket exit, a warning once stale', async () => {
     const deps = harness([longAapl], true);
     const flatten = vi.spyOn(deps.simulatedBroker, 'submitFlatten');
     await openBooks(deps);
@@ -1374,20 +1376,30 @@ describe('runCycle under a manual control', () => {
     const noBarsYet = vi
       .spyOn(deps.market, 'barsBefore')
       .mockImplementation((instrument, date, count) =>
-        count < 10 ? [] : real(instrument, date, count),
+        date > '2026-09-28' ? [] : real(instrument, date, count),
       );
     deps.barsByDate.set('2026-09-29', bar('2026-09-28', { low: 1 }));
     const quote = vi.spyOn(deps.executor, 'quoteSimulatedFill');
-    const waiting = await runCycle(deps, '2026-09-29');
+    const log = vi.fn();
+    const waiting = await runCycle({ ...deps, logger: { log } }, '2026-09-29');
     expect(waiting).toMatchObject({ exits: 0, fills: 0 });
     expect(quote).not.toHaveBeenCalled();
     expect(flatten).toHaveBeenCalledTimes(2);
     expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
       'v2-debate-primary-2026-09-28-AAPL-exit',
     );
+    await runCycle({ ...deps, logger: { log } }, '2026-10-03');
+    const stale = (event: string) =>
+      log.mock.calls.filter(([entry]) => entry.event === event).map(([entry]) => entry.message);
+    expect(stale('v2_simulated_flatten_stale')).toEqual([]);
+    await runCycle({ ...deps, logger: { log } }, '2026-10-05');
+    expect(stale('v2_simulated_flatten_stale')).toEqual([
+      'debate/primary AAPL: flatten v2-debate-primary-2026-09-28-AAPL-exit has had no bar since 2026-09-28',
+      'debate/no-macro-gate AAPL: flatten v2-debate-no-macro-gate-2026-09-28-AAPL-exit has had no bar since 2026-09-28',
+    ]);
     noBarsYet.mockRestore();
     deps.setControl('resume');
-    const filled = await runCycle(deps, '2026-09-30');
+    const filled = await runCycle(deps, '2026-10-06');
     expect(filled.fills).toBe(2);
     expect(deps.books.positions('debate/primary')).toEqual([]);
   });
