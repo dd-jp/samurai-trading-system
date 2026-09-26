@@ -151,6 +151,19 @@ What fills the 70% share that Q14 gave momentum (dropped, Session B (n)). Ticket
 | S6 | LLM role in these sleeves | **"LLM veto on entries"** (the recommendation was rules only): the debate panel may block an entry, as Q4 had for momentum; the veto seat is the Opus 5 judge (Q16). |
 | S7 | How the veto is judged | **"Paper vs no-veto shadow (Recommended)"**: the veto cannot be honestly backtested (Q15's leak), so the gate backtests the rules alone; in paper each sleeve runs a veto book and a no-veto shadow on the same entries, and the veto reaches live only if the veto book beats the shadow on the one-sided test. This tightens G5 for the S2 sleeves: G5 kept the veto unless the shadow beat it, S7 keeps it only if it beats the shadow. G5's cap of ≤ 10% of entries vetoed carries over; the veto is a counted trial and its spend sits inside the ~$30/month cap. |
 
+## Rulings — dashboard spec U1–U6 (2026-09-26)
+
+David's answers to `docs/specs/dashboard-spec.md` §9 (Step 3c, ticket [#1745](https://github.com/dd-jp/samurai-trading-system/issues/1745), PR #1800). His words are quoted; the reading follows.
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| U1 | Halt/pause semantics and scope | **"All sleeve"**: one control for all sleeves at once, no per-sleeve control. The proposed semantics stand: pause blocks entries on every book, shadows included, and exits run; halt also exits every position at the next cycle; resume clears only a manual control, never the loss-budget halt (Q13). |
+| U2 | Where the dashboard API runs | **"v2:dashboard or whichever easy to knip dead v1 code after v2 works"**: a v2 module started by `npm run v2:dashboard`, sharing nothing with v1's `service-api` that Step 5 would have to untangle; the bind guard and Bearer check are copied into the v2 module rather than shared, so deleting v1 leaves no dangling import. |
+| U3 | USD figures and the GBP total | **"Will do a bulk transfer on 1 jan and use it"**: David converts GBP to USD once each 1 January; the dashboard converts USD to GBP at that year's fixed 1 January rate everywhere, the same rate the loss budget uses (Session B (j)). The per-disposal tax log keeps its own rate rule (Step 4). |
+| U4 | What the gauge shows | **"Yes"**: the account-wide sum of primary books as the headline, per-sleeve rows under it, shadow books' size steps listed per sleeve. |
+| U5 | Phasing and v1 replacement | **"Yes"**: panels owned by other steps ship in the not-yet-fed state; the v1 client is replaced in the build PR, not kept alongside until Step 5. |
+| U6 | Whether manual pause/halt days count toward G1's trades, the paper-band weeks or Q7(3)'s fault-free weeks | **"Band weeks"**: read as: manual pause/halt days count toward the paper-band weeks only; they do not count toward the fault-free weeks. G1 counts closed trades, so it is unaffected. |
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

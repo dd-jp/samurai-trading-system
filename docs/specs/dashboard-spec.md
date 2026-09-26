@@ -1,6 +1,6 @@
 # v2 dashboard — spec (Step 3c)
 
-Written in the step that builds it (doc 67 Step 3c, G13). Authority: `docs/research/66-v2-grill-decisions.md` (G12, G13, D5, D8, Q6 as amended by G6, Q13, Session B (j)), then `docs/adr/0001-samurai-v2.md` for what is still open. Map: [#1706](https://github.com/dd-jp/samurai-trading-system/issues/1706); ticket [#1745](https://github.com/dd-jp/samurai-trading-system/issues/1745). Status: **proposed — awaiting David's approval (Session U STOP)**. Nothing in §4–§8 is built until David approves; §9 lists what he decides.
+Written in the step that builds it (doc 67 Step 3c, G13). Authority: `docs/research/66-v2-grill-decisions.md` (G12, G13, D5, D8, Q6 as amended by G6, Q13, Session B (j)), then `docs/adr/0001-samurai-v2.md` for what is still open. Map: [#1706](https://github.com/dd-jp/samurai-trading-system/issues/1706); ticket [#1745](https://github.com/dd-jp/samurai-trading-system/issues/1745). Status: **approved 2026-09-26**; David's answers to §9 are rulings U1–U6 in doc 66.
 
 ## 1. What the dashboard is for
 
@@ -91,7 +91,7 @@ No manual control exists in v2 today. The only halt is the automatic loss-budget
 
 Module path: `server/apps/v2/api/` <!-- cite-exempt: planned — built after the spec is approved -->
 
-It opens the v2 store through `guardedStore` (`server/shared/store/write-guard.ts`) with a write allowlist of `v2_controls` only, in WAL mode with a busy timeout, because the v2 root writes the same file. It opens the research store read-only. The bind guard and Bearer check move from `server/apps/service-api/` to a shared module, so both servers use one implementation until Step 5 deletes v1's. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
+It opens the v2 store through `guardedStore` (`server/shared/store/write-guard.ts`) with a write allowlist of `v2_controls` only, in WAL mode with a busy timeout, because the v2 root writes the same file. It opens the research store read-only. The bind guard and Bearer check are copied from `server/apps/service-api/` into the v2 module (U2), so Step 5 deletes v1's without touching v2. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
 
 **Routes (GET unless stated):**
 
@@ -126,11 +126,11 @@ Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 scre
 
 Build order after approval: (1) wire types, API and controls with their tests; (2) Today view; (3) Evidence and Records views with the not-yet-fed states; (4) e2e. One PR per numbered part if the diff is large.
 
-## 9. Needs David
+## 9. Rulings (doc 66 U1–U6, 2026-09-26)
 
-1. **Halt/pause semantics (§5).** Pause = entries blocked on every book, exits run; halt = every position exited at the next cycle; resume clears only a manual control, never the loss-budget halt. Scope: all sleeves at once, or per sleeve too? Proposed: all sleeves only. A control takes effect at the next daily cycle, not immediately. Should resume need a Telegram confirm on top of the dashboard token? Proposed: no; the token plus the journal is enough while the dashboard is LAN-only.
-2. **Where the API runs (§6).** Proposed: a v2 module started by `npm run v2:dashboard` now, mounted in the v2 process once that process runs continuously. Alternative: extend v1's `service-api` to open the v2 store. Either way, the token becomes mandatory on loopback too, which tightens the restated hosting rule.
-3. **USD figures (P3).** v2 books are kept in GBP. Proposed: show each venue's broker cash in its own currency from the reconcile read (Step 4), and convert USD to GBP at the day's rate for the total (the tax rule's rate), with the loss budget's fixed 1 January rate shown separately where the gauge uses it. Alternative: one rate (the 1 January one) everywhere.
-4. **Gauge (P1).** Proposed: the account-wide sum of primary books as the headline, per-sleeve rows under it, shadow books' size steps listed per sleeve.
-5. **Phasing and replacement.** Proposed: panels owned by other steps (P5's arm 2 and candidate benchmark, the P6 test, P7, P8, P12, P13, P14's schedule and ping) ship in the not-yet-fed state and light up when their step lands; the v1 client is replaced in the build PR rather than kept alongside until Step 5.
-6. **Not UI, found while writing this spec; ticketed, not fixed here.** (a) Each book's loss budget runs against the full cap, so with more than one primary book trading the account could lose more than the cap before any book halts. (b) The loss-budget halt does not flatten (§5). Both are Step 4 loss-budget machinery ([#1799](https://github.com/dd-jp/samurai-trading-system/issues/1799)). (c) Whether manual pause or halt days count against G1's 100 trades, the paper-band weeks, or Q7(3)'s fault-free weeks is David's call.
+1. **U1.** One control for all sleeves; the §5 semantics stand.
+2. **U2.** `npm run v2:dashboard`. The bind guard and Bearer check are copied into the v2 module, not shared with `service-api`, so Step 5 deletes v1 without touching v2. This replaces §6's "move to a shared module".
+3. **U3.** USD converts to GBP at the year's fixed 1 January rate everywhere on the dashboard (David makes one transfer each 1 January). P13's tax export shows the tax log's own rate per disposal.
+4. **U4.** Account-wide headline, per-sleeve rows, shadow size steps per sleeve.
+5. **U5.** Not-yet-fed panels ship; the v1 client is replaced in the build PR.
+6. **U6.** Manual pause/halt days count toward the paper-band weeks, not toward the fault-free weeks. The per-book budget and the halt that does not flatten are [#1799](https://github.com/dd-jp/samurai-trading-system/issues/1799) (Step 4).
