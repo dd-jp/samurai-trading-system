@@ -189,7 +189,104 @@ export interface ControlResponseWire {
   readonly replayed: boolean;
 }
 
-type PanelFields = keyof Extract<PanelWire<object>, { status: 'not-yet-fed' }>;
+export type NotYetFedWire = Extract<PanelWire<object>, { status: 'not-yet-fed' }>;
+
+export type JournalActionFilterWire = SleeveAction | 'vetoed';
+
+export interface JournalFillWire {
+  readonly fill_id: string;
+  readonly qty: number;
+  readonly price_gbp: number;
+  readonly fee_gbp: number;
+  readonly recorded_at: string;
+}
+
+export interface JournalOrderWire {
+  readonly client_order_id: string;
+  readonly book_id: string;
+  readonly instrument: string;
+  readonly venue: string;
+  readonly leg: string;
+  readonly side: string;
+  readonly dry_run: boolean;
+  readonly outcome: string;
+  readonly payload: unknown;
+  readonly recorded_at: string;
+  readonly fills: readonly JournalFillWire[];
+}
+
+export interface JournalDecisionWire {
+  readonly decision_id: string;
+  readonly book_id: string;
+  readonly variant: string;
+  readonly instrument: string;
+  readonly venue: string;
+  readonly direction: string;
+  readonly action: SleeveAction;
+  readonly vetoed: boolean;
+  readonly veto: string | null;
+  readonly reason: string;
+  readonly confidence: number;
+  readonly size_shares: number;
+  readonly stop_price: number | null;
+  readonly inputs_hash: string;
+  readonly debate_id: string | null;
+  readonly payload: unknown;
+  readonly recorded_at: string;
+  readonly orders: readonly JournalOrderWire[];
+}
+
+export interface JournalRefusalWire {
+  readonly refusal_id: number;
+  readonly scope: string;
+  readonly parameter: string;
+  readonly ticket: string;
+  readonly message: string;
+  readonly recorded_at: string;
+}
+
+export interface JournalDayWire {
+  readonly trading_date: string;
+  readonly decisions: readonly JournalDecisionWire[];
+  readonly unlinked_orders: readonly JournalOrderWire[];
+  readonly refusals: readonly JournalRefusalWire[];
+}
+
+export interface JournalWire {
+  readonly contract_version: string;
+  readonly days: readonly JournalDayWire[];
+  readonly next_before: string | null;
+}
+
+export interface TrialWire {
+  readonly trial: number;
+  readonly candidate: string;
+  readonly config_hash: string;
+  readonly source: string;
+  readonly recorded_at: string;
+}
+
+export interface CandidateTrialsWire {
+  readonly candidate: string;
+  readonly trials: number;
+}
+
+export interface ResearchLedgerWire {
+  readonly total_trials: number;
+  readonly by_candidate: readonly CandidateTrialsWire[];
+  readonly trials: readonly TrialWire[];
+}
+
+export interface ResearchWire {
+  readonly contract_version: string;
+  readonly generated_at: string;
+  readonly ledger: PanelWire<ResearchLedgerWire>;
+  readonly proposals: NotYetFedWire;
+  readonly promotions: NotYetFedWire;
+  readonly demotions: NotYetFedWire;
+}
+
+type PanelFields = keyof NotYetFedWire;
 
 function fieldsOf<T>() {
   return <const K extends readonly (keyof T & string)[]>(
@@ -293,6 +390,72 @@ const V2_WIRE_FIELD_NAMES = {
   ping: fieldsOf<PingWire>()(['pinged_at']),
   controlRequest: fieldsOf<ControlRequestWire>()(['action', 'reason', 'idempotency_key']),
   controlResponse: fieldsOf<ControlResponseWire>()(['contract_version', 'control', 'replayed']),
+  journal: fieldsOf<JournalWire>()(['contract_version', 'days', 'next_before']),
+  journalDay: fieldsOf<JournalDayWire>()([
+    'trading_date',
+    'decisions',
+    'unlinked_orders',
+    'refusals',
+  ]),
+  journalDecision: fieldsOf<JournalDecisionWire>()([
+    'decision_id',
+    'book_id',
+    'variant',
+    'instrument',
+    'venue',
+    'direction',
+    'action',
+    'vetoed',
+    'veto',
+    'reason',
+    'confidence',
+    'size_shares',
+    'stop_price',
+    'inputs_hash',
+    'debate_id',
+    'payload',
+    'recorded_at',
+    'orders',
+  ]),
+  journalOrder: fieldsOf<JournalOrderWire>()([
+    'client_order_id',
+    'book_id',
+    'instrument',
+    'venue',
+    'leg',
+    'side',
+    'dry_run',
+    'outcome',
+    'payload',
+    'recorded_at',
+    'fills',
+  ]),
+  journalFill: fieldsOf<JournalFillWire>()([
+    'fill_id',
+    'qty',
+    'price_gbp',
+    'fee_gbp',
+    'recorded_at',
+  ]),
+  journalRefusal: fieldsOf<JournalRefusalWire>()([
+    'refusal_id',
+    'scope',
+    'parameter',
+    'ticket',
+    'message',
+    'recorded_at',
+  ]),
+  research: fieldsOf<ResearchWire>()([
+    'contract_version',
+    'generated_at',
+    'ledger',
+    'proposals',
+    'promotions',
+    'demotions',
+  ]),
+  researchLedger: fieldsOf<ResearchLedgerWire>()(['total_trials', 'by_candidate', 'trials']),
+  candidateTrials: fieldsOf<CandidateTrialsWire>()(['candidate', 'trials']),
+  trial: fieldsOf<TrialWire>()(['trial', 'candidate', 'config_hash', 'source', 'recorded_at']),
 };
 
 export function v2WireFieldPaths(): string[] {

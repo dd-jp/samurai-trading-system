@@ -5,6 +5,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { listMigrations, MIGRATIONS_DIR, runMigrations } from './migrate.js';
 import {
   openMigratedStore,
+  openReadOnlyStore,
   openSharedStore,
   STORE_MODES,
   sharedStorePath,
@@ -705,6 +706,27 @@ describe('openMigratedStore', () => {
   it('refuses a missing file instead of creating one', () => {
     const path = tempDbPath();
     expect(() => openMigratedStore(path, 1)).toThrow();
+    expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('openReadOnlyStore', () => {
+  it('reads a store without writing to it or changing its journal mode', () => {
+    const path = tempDbPath();
+    const writer = new BetterSqlite3(path);
+    writer.exec('CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);');
+    writer.close();
+    const db = openReadOnlyStore(path);
+    expect(db.prepare('SELECT x FROM t').all()).toEqual([{ x: 1 }]);
+    expect(db.pragma('busy_timeout', { simple: true })).toBe(5_000);
+    expect(db.pragma('journal_mode', { simple: true })).toBe('delete');
+    expect(() => db.exec('INSERT INTO t VALUES (2)')).toThrow(/readonly/);
+    db.close();
+  });
+
+  it('refuses a missing file instead of creating one', () => {
+    const path = tempDbPath();
+    expect(() => openReadOnlyStore(path)).toThrow();
     expect(existsSync(path)).toBe(false);
   });
 });

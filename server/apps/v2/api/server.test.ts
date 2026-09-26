@@ -12,8 +12,10 @@ import {
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { BarsMarketData } from '../data/index.js';
 import { ControlWriter } from './control-writer.js';
+import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
+import { ResearchReader } from './research.js';
 import {
   CONTROL_BODY_MAX_BYTES,
   createV2DashboardServer,
@@ -59,6 +61,8 @@ async function start(
     token: TOKEN,
     overview: overview ?? (() => reader.read()),
     controls: new ControlWriter(store, clock),
+    journal: (query) => new JournalReader(store).read(query),
+    research: () => new ResearchReader(join(tmpdir(), 'no-such-research.sqlite'), clock).read(),
     onFault: (error) => faults.push(error),
   });
   await server.start();
@@ -73,6 +77,10 @@ function postControl(url: string, body: unknown, headers: Record<string, string>
   });
 }
 
+const UNUSED = () => {
+  throw new Error('unused');
+};
+
 const halt = { action: 'halt', reason: 'news shock', idempotency_key: 'key-0001' };
 
 describe('createV2DashboardServer start-up', () => {
@@ -86,6 +94,8 @@ describe('createV2DashboardServer start-up', () => {
           throw new Error('unused');
         },
         controls: {} as ControlWriter,
+        journal: UNUSED,
+        research: UNUSED,
         onFault: () => undefined,
       }),
     ).toThrow(/SAMURAI_DASHBOARD_TOKEN is not set.*loopback included/s);
@@ -101,6 +111,8 @@ describe('createV2DashboardServer start-up', () => {
         throw new Error('unused');
       },
       controls: {} as ControlWriter,
+      journal: UNUSED,
+      research: UNUSED,
       onFault: () => undefined,
     });
     await expect(clash.start()).rejects.toThrow(/EADDRINUSE/);
@@ -110,7 +122,13 @@ describe('createV2DashboardServer start-up', () => {
 describe('createV2DashboardServer auth and routing', () => {
   it('refuses every request without the token, loopback included, before routing', async () => {
     const url = await start();
-    for (const path of ['/api/v2/overview', '/api/v2/controls', '/nowhere']) {
+    for (const path of [
+      '/api/v2/overview',
+      '/api/v2/controls',
+      '/api/v2/journal',
+      '/api/v2/research',
+      '/nowhere',
+    ]) {
       const response = await fetch(`${url}${path}`);
       expect(response.status).toBe(401);
       expect(response.headers.get('www-authenticate')).toBe('Bearer');
@@ -177,6 +195,48 @@ describe('createV2DashboardServer auth and routing', () => {
     expect(await response.json()).toEqual({ error: 'store busy' });
     cycle.exec('ROLLBACK');
     expect((await postControl(url, halt)).status).toBe(201);
+  });
+});
+
+describe('GET /api/v2/journal and /api/v2/research', () => {
+  it('serves a journal page for the query, and the research panels', async () => {
+    const url = await start();
+    db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES ('2026-10-05', 'cycle', 'P', '#1', 'm', 'x'), ('2026-10-04', 'cycle', 'Q', '#1', 'm', 'x')`,
+    ).run();
+    const journal = await fetch(`${url}/api/v2/journal?limit=1`, { headers: AUTH });
+    expect(journal.status).toBe(200);
+    expect(journal.headers.get('cache-control')).toBe('no-store');
+    expect(await journal.json()).toMatchObject({
+      contract_version: V2_CONTRACT_VERSION,
+      days: [{ trading_date: '2026-10-05' }],
+      next_before: '2026-10-05',
+    });
+    const research = await fetch(`${url}/api/v2/research`, { headers: AUTH });
+    expect(research.status).toBe(200);
+    expect(await research.json()).toMatchObject({
+      contract_version: V2_CONTRACT_VERSION,
+      ledger: { status: 'empty' },
+      proposals: { status: 'not-yet-fed', ticket: '#1717' },
+    });
+  });
+
+  it('refuses a bad journal query with 400 and the reason, keeping the connection', async () => {
+    const url = await start();
+    const response = await fetch(`${url}/api/v2/journal?from=2026-02-30`, { headers: AUTH });
+    expect(response.status).toBe(400);
+    expect(response.headers.get('connection')).not.toBe('close');
+    expect(await response.json()).toEqual({ error: 'from is invalid' });
+  });
+
+  it('allows only GET on both', async () => {
+    const url = await start();
+    for (const path of ['/api/v2/journal', '/api/v2/research']) {
+      const response = await fetch(`${url}${path}`, { method: 'POST', headers: AUTH });
+      expect(response.status).toBe(405);
+      expect(response.headers.get('allow')).toBe('GET');
+    }
   });
 });
 

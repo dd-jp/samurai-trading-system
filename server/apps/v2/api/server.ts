@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import {
   type ControlRequestWire,
   type ControlResponseWire,
+  type JournalWire,
+  type ResearchWire,
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
 } from '../../../../contracts/index.js';
@@ -11,6 +13,7 @@ import {
   type ControlWriter,
   parseControlRequest,
 } from './control-writer.js';
+import { type JournalQuery, parseJournalQuery } from './journal-reader.js';
 
 export const CONTROL_BODY_MAX_BYTES = 1_024;
 const BUSY_RETRY_AFTER_SECONDS = 1;
@@ -27,6 +30,8 @@ export interface V2DashboardServerOptions {
   readonly token: string | undefined;
   readonly overview: () => Promise<V2OverviewWire>;
   readonly controls: ControlWriter;
+  readonly journal: (query: JournalQuery) => JournalWire;
+  readonly research: () => ResearchWire;
   readonly onFault: (error: unknown) => void;
 }
 
@@ -155,6 +160,14 @@ function postControl(controls: ControlWriter): Handler {
   };
 }
 
+function getJournal(journal: (query: JournalQuery) => JournalWire): Handler {
+  return (req, res) => {
+    const parsed = parseJournalQuery(new URL(req.url ?? '/', 'http://localhost').searchParams);
+    if (parsed.ok) sendJson(res, 200, journal(parsed.query));
+    else sendError(res, 400, parsed.reason);
+  };
+}
+
 function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Handler>> {
   return new Map([
     [
@@ -162,6 +175,8 @@ function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Hand
       new Map([['GET', async (_req, res) => sendJson(res, 200, await opts.overview())]]),
     ],
     ['/api/v2/controls', new Map([['POST', postControl(opts.controls)]])],
+    ['/api/v2/journal', new Map([['GET', getJournal(opts.journal)]])],
+    ['/api/v2/research', new Map([['GET', (_req, res) => sendJson(res, 200, opts.research())]])],
   ]);
 }
 

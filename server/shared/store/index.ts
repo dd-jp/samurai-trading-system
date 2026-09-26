@@ -16,6 +16,7 @@ export {
 } from './open-position-row.js';
 export {
   openMigratedStore,
+  openReadOnlyStore,
   openSharedStore,
   resolveStoreMode,
   type StoreHandle,

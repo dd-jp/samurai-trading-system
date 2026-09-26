@@ -1,13 +1,18 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
+import { researchStorePath } from '../trial-ledger.js';
 import { composeV2Dashboard, parseDashboardArgs } from './main.js';
 
-const PATHS = { barStoreRoot: DEFAULT_BAR_STORE_ROOT, fxPath: FX_PATH };
+const PATHS = {
+  barStoreRoot: DEFAULT_BAR_STORE_ROOT,
+  fxPath: FX_PATH,
+  researchStorePath: researchStorePath({}),
+};
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 const dirs: string[] = [];
 
@@ -160,11 +165,58 @@ describe('composeV2Dashboard', () => {
     }
   });
 
-  it('reads --bars and --fx', () => {
-    expect(parseDashboardArgs(['--bars', 'b', '--fx', 'f.csv'], {})).toMatchObject({
-      barStoreRoot: 'b',
-      fxPath: 'f.csv',
-    });
+  it('reads --bars, --fx and --research', () => {
+    expect(
+      parseDashboardArgs(['--bars', 'b', '--fx', 'f.csv', '--research', 'r.sqlite'], {}),
+    ).toMatchObject({ barStoreRoot: 'b', fxPath: 'f.csv', researchStorePath: 'r.sqlite' });
+  });
+
+  it('defaults the research store to SAMURAI_RESEARCH_STORE, as the trial ledger does', () => {
+    expect(
+      parseDashboardArgs([], { SAMURAI_RESEARCH_STORE: '/r/ledger.sqlite' }).researchStorePath,
+    ).toBe('/r/ledger.sqlite');
+  });
+
+  it('serves the journal and the research store it was pointed at', async () => {
+    const storePath = migratedStore();
+    const research = join(dirname(storePath), 'research.sqlite');
+    const ledger = openSharedStore(research);
+    ledger
+      .prepare(
+        `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
+         VALUES (1, 'trend', 'h1', '{}', 'v2', 'x')`,
+      )
+      .run();
+    ledger.close();
+    const { server, db } = composeV2Dashboard(
+      {
+        ...PATHS,
+        researchStorePath: research,
+        storePath,
+        mode: 'paper',
+        host: '127.0.0.1',
+        port: 0,
+      },
+      { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' },
+      clock,
+    );
+    try {
+      db.prepare(
+        `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+         VALUES ('2026-10-05', 'cycle', 'P', '#1', 'm', 'x')`,
+      ).run();
+      await server.start();
+      const headers = { Authorization: 'Bearer tok-123456' };
+      const journal = await fetch(`${server.url}/api/v2/journal?limit=1`, { headers });
+      expect(await journal.json()).toMatchObject({
+        days: [{ trading_date: '2026-10-05', refusals: [{ parameter: 'P' }] }],
+      });
+      const served = await fetch(`${server.url}/api/v2/research`, { headers });
+      expect(await served.json()).toMatchObject({ ledger: { status: 'fed', total_trials: 1 } });
+    } finally {
+      await server.stop();
+      db.close();
+    }
   });
 
   it('refuses a store that does not exist rather than creating an empty one', () => {
