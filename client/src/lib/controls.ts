@@ -6,7 +6,7 @@ import {
   type ControlRowWire,
   V2_CONTRACT_VERSION,
 } from '@contracts';
-import { authHeaders } from './api.ts';
+import { authHeaders, errorOf } from './api.ts';
 
 const CONTROLS_URL = '/api/v2/controls';
 
@@ -36,15 +36,6 @@ export function controlRequest(
   }
   const retry = previous !== null && previous.action === action && previous.reason === reason;
   return { action, reason, idempotency_key: retry ? previous.idempotency_key : newKey() };
-}
-
-async function errorOf(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: unknown };
-    return typeof body.error === 'string' ? body.error : `HTTP ${response.status}`;
-  } catch {
-    return `HTTP ${response.status}`;
-  }
 }
 
 async function outcomeOf(response: Response): Promise<ControlOutcome> {

@@ -1,17 +1,7 @@
-import type { DecisionsWire, DecisionWire, PanelWire, SleeveAction } from '@contracts';
+import type { DecisionsWire, PanelWire } from '@contracts';
 import { percent } from '../../lib/format.ts';
+import { outcomeOf } from '../../lib/journal.ts';
 import { Panel, TableHead } from '../Panel.tsx';
-
-const OUTCOMES: Readonly<Record<SleeveAction, string>> = {
-  enter_long: 'entered long',
-  enter_short: 'entered short',
-  skip: 'skipped',
-  none: 'none',
-};
-
-function outcome(decision: DecisionWire): string {
-  return decision.vetoed ? 'vetoed' : OUTCOMES[decision.action];
-}
 
 function Decisions({ decisions }: { decisions: DecisionsWire }) {
   return (
@@ -20,12 +10,12 @@ function Decisions({ decisions }: { decisions: DecisionsWire }) {
       <TableHead columns={['Instrument', 'Book', 'Outcome', 'Confidence', 'Reason']} />
       <tbody>
         {decisions.decisions.map((decision) => (
-          <tr key={`${decision.book_id}/${decision.instrument}`} data-outcome={outcome(decision)}>
+          <tr key={`${decision.book_id}/${decision.instrument}`} data-outcome={outcomeOf(decision)}>
             <th scope="row">
               {decision.instrument} <small>{decision.direction}</small>
             </th>
             <td>{decision.book_id}</td>
-            <td>{outcome(decision)}</td>
+            <td>{outcomeOf(decision)}</td>
             <td>{percent(decision.confidence, 0)}</td>
             <td>{decision.reason}</td>
           </tr>

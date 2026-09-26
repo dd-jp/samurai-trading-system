@@ -13,7 +13,7 @@ describe('usePoll', () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(body))
-      .mockResolvedValueOnce(jsonResponse({ error: 'x' }, 503));
+      .mockResolvedValueOnce(jsonResponse({ error: 'store unavailable' }, 503));
     const { result } = renderHook(() =>
       usePoll('/api/v2/overview', 'tok', { fetchImpl, now: () => 1_000 }),
     );
@@ -27,7 +27,7 @@ describe('usePoll', () => {
     expect(POLL_INTERVAL_MS).toBe(30_000);
     await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
     await waitFor(() => expect(result.current.status).toBe('failed'));
-    expect(result.current).toMatchObject({ data: body, error: 'HTTP 503' });
+    expect(result.current).toMatchObject({ data: body, error: 'store unavailable' });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

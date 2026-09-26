@@ -16,9 +16,18 @@ function servedVersion(body: unknown): string | null {
   return typeof version === 'string' ? version : null;
 }
 
+export async function errorOf(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === 'string' ? body.error : `HTTP ${response.status}`;
+  } catch {
+    return `HTTP ${response.status}`;
+  }
+}
+
 async function readWire<T>(response: Response): Promise<FetchOutcome<T>> {
   if (response.status === 401) return { kind: 'unauthorized' };
-  if (!response.ok) return { kind: 'failed', error: `HTTP ${response.status}` };
+  if (!response.ok) return { kind: 'failed', error: await errorOf(response) };
   const body: unknown = await response.json();
   const served = servedVersion(body);
   if (served !== V2_CONTRACT_VERSION) return { kind: 'contract-mismatch', served };

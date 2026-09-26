@@ -16,7 +16,7 @@ export function gbp(value: number | null): string {
   return value === null ? UNKNOWN : signed(value, '£');
 }
 
-function usd(value: number | null): string {
+export function usd(value: number | null): string {
   return value === null ? UNKNOWN : signed(value, '$');
 }
 
