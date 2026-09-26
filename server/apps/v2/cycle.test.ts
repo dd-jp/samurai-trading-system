@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MarketData, Sleeve, SleeveDecision, SleeveSpec } from '../../../contracts/index.js';
+import type {
+  ControlAction,
+  MarketData,
+  Sleeve,
+  SleeveDecision,
+  SleeveSpec,
+} from '../../../contracts/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -15,7 +21,7 @@ import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
-import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { CYCLE_LEVEL_PARAMETERS, SleeveRegistry } from './signal/index.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
@@ -131,6 +137,7 @@ interface Harness extends CycleDeps {
   readonly simulatedBroker: BrokerAdapter;
   readonly barsByDate: Map<string, DailyBar>;
   readonly setDecisions: (next: readonly SleeveDecision[]) => void;
+  readonly setControl: (action: ControlAction, reason?: string) => void;
 }
 
 const TEST_SPEC: SleeveSpec = {
@@ -165,10 +172,12 @@ function harness(
   capitalYears: readonly number[] = [2026],
   spec: SleeveSpec = TEST_SPEC,
   pricing: FillPricing = SPREAD_ONLY,
+  lossCapGbp = 1_500,
 ): Harness {
   const db = openSharedStore(':memory:');
   const capital = new CapitalConfigStore(db, clock);
-  for (const year of capitalYears) capital.setYear(year, 1_000, 1_500);
+  for (const year of capitalYears) capital.setYear(year, 1_000, lossCapGbp);
+  let controlKey = 0;
   const registry = new SleeveRegistry();
   let current = decisions;
   const sleeve: Sleeve = {
@@ -210,6 +219,13 @@ function harness(
     setDecisions: (next) => {
       current = next;
     },
+    setControl: (action, reason = 'test') => {
+      controlKey += 1;
+      db.prepare(
+        'INSERT INTO v2_controls (action, reason, source, idempotency_key, set_at) VALUES (?, ?, ?, ?, ?)',
+      ).run(action, reason, 'test', `k${controlKey}`, clock.now().toISOString());
+    },
+    controls: new ControlStore(db),
     books,
     journal: new Journal(db, clock),
     risk: new V2RiskGate({ books, capital, market, spec: () => spec }),
@@ -635,6 +651,32 @@ describe('runCycle', () => {
     );
   });
 
+  it('the time stop sends nothing for a position it cannot route', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    for (const date of [
+      '2026-09-28',
+      '2026-09-29',
+      '2026-09-30',
+      '2026-10-01',
+      '2026-10-02',
+      '2026-10-05',
+      '2026-10-06',
+      '2026-10-07',
+      '2026-10-08',
+      '2026-10-09',
+    ]) {
+      await runCycle(deps, date);
+    }
+    vi.spyOn(deps.executor, 'canRoute').mockReturnValue(false);
+    const report = await runCycle(deps, '2026-10-12');
+    expect(report.exits).toBe(0);
+    expect(alpaca.flattens).toEqual([]);
+  });
+
   it('paper mode: the time stop leaves the exit pending until the broker fill arrives', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
@@ -1030,5 +1072,244 @@ describe('runCycle', () => {
     expect(calendarDaysBetween('2026-09-22', '2026-09-25')).toBe(3);
     expect(calendarDaysBetween('2026-09-25', '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-26', '2026-09-25')).toBe(0);
+  });
+});
+
+describe('runCycle under a manual control', () => {
+  const TEN_MARKS = [
+    '2026-09-28',
+    '2026-09-29',
+    '2026-09-30',
+    '2026-10-01',
+    '2026-10-02',
+    '2026-10-05',
+    '2026-10-06',
+    '2026-10-07',
+    '2026-10-08',
+  ];
+
+  function refusalRows(deps: CycleDeps, tradingDate: string) {
+    const db = (
+      deps.journal as unknown as {
+        db: { prepare: (sql: string) => { all: (date: string) => unknown[] } };
+      }
+    ).db;
+    return db
+      .prepare(
+        "SELECT parameter, message FROM v2_refusals WHERE trading_date = ? AND scope = 'control'",
+      )
+      .all(tradingDate) as { parameter: string; message: string }[];
+  }
+
+  it('pause asks no sleeve to decide, enters nothing in any book, and journals why', async () => {
+    const deps = harness([longAapl], true);
+    const decide = vi.spyOn(deps.sleeve, 'decide');
+    deps.setControl('pause', 'checking fills');
+    const report = await runCycle(deps, '2026-09-25');
+    expect(decide).not.toHaveBeenCalled();
+    expect(report).toMatchObject({ decisions: 0, entries: 0, exits: 0 });
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.positions('debate/no-macro-gate')).toEqual([]);
+    const [row] = refusalRows(deps, '2026-09-25');
+    expect(row?.parameter).toBe('MANUAL_CONTROL');
+    expect(row?.message).toMatch(
+      /^manual pause since .* \(checking fills\): no sleeve decides; exits and resting stops run$/,
+    );
+    expect(report.refusals).toContain(row?.message);
+  });
+
+  it('pause keeps exits running: a stop touched while paused still closes every book', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setControl('pause');
+    deps.barsByDate.set('2026-09-28', bar('2026-09-25', { low: 19.0, high: 20.2 }));
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report).toMatchObject({ exits: 2, decisions: 0 });
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.positions('debate/no-macro-gate')).toEqual([]);
+  });
+
+  it('pause keeps the time stop running', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    for (const date of TEN_MARKS) await runCycle(deps, date);
+    deps.setControl('pause');
+    const report = await runCycle(deps, '2026-10-09');
+    expect(report.exits).toBe(2);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-10-09-AAPL-exit')).toMatchObject({
+      payload: { reason: 'time_stop' },
+    });
+  });
+
+  it('halt exits every position in every book at the next cycle and journals the reason', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    const decide = vi.spyOn(deps.sleeve, 'decide');
+    deps.setControl('halt', 'going away');
+    const report = await runCycle(deps, '2026-09-28');
+    expect(decide).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      exits: 2,
+      entries: 0,
+      dry_run_refusals: 1,
+      simulated_orders: 1,
+    });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')).toMatchObject({
+      leg: 'exit',
+      side: 'sell',
+      outcome: 'refused_dry_run',
+      payload: { reason: 'manual_halt', size: 6 },
+    });
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-28-AAPL-exit')).toMatchObject({
+      outcome: 'simulated',
+      payload: { reason: 'manual_halt' },
+    });
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.positions('debate/no-macro-gate')).toEqual([]);
+    expect(refusalRows(deps, '2026-09-28')[0]?.message).toMatch(
+      /^manual halt since .* \(going away\): no sleeve decides and every open position is exited$/,
+    );
+    const next = await runCycle(deps, '2026-09-29');
+    expect(next).toMatchObject({ exits: 0, entries: 0 });
+  });
+
+  it('halt shorts: the exit buys back', async () => {
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const deps = harness([short], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.side).toBe('buy');
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+  });
+
+  it('paper mode: halt cancels unfilled entries from earlier days and flattens the held position', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl, { ...longAapl, instrument: 'MSFT' }], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report).toMatchObject({ exits: 3, submitted_orders: 1, entries: 0 });
+    expect(alpaca.cancelled).toEqual(['v2-debate-primary-2026-09-25-MSFT']);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-28-AAPL-exit']);
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-28-AAPL-exit',
+    );
+    const pending = await runCycle(deps, '2026-09-29');
+    expect(pending.exits).toBe(0);
+    expect(alpaca.flattens).toHaveLength(1);
+  });
+
+  it('paper mode: a rejected halt flatten leaves no exit pending and is retried next cycle', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    alpaca.flattenError = new Error('venue closed');
+    const rejected = await runCycle(deps, '2026-09-28');
+    expect(rejected).toMatchObject({ rejected_orders: 1, submitted_orders: 0 });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBeUndefined();
+    alpaca.flattenError = undefined;
+    await runCycle(deps, '2026-09-29');
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+  });
+
+  it('halt leaves a position whose exit is already pending to that exit', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    for (const date of [...TEN_MARKS, '2026-10-09']) await runCycle(deps, date);
+    await runCycle(deps, '2026-10-12');
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-10-12-AAPL-exit']);
+    deps.setControl('halt');
+    const resume = vi.spyOn(alpaca, 'resumeFlatten');
+    const halted = await runCycle(deps, '2026-10-13');
+    expect(halted.exits).toBe(0);
+    expect(alpaca.flattens).toHaveLength(1);
+    expect(resume).toHaveBeenCalledWith('v2-debate-primary-2026-10-12-AAPL-exit', 'AAPL');
+  });
+
+  it('a same-day retry under halt never resubmits an exit already journalled', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    alpaca.flattenError = new Error('venue closed');
+    vi.spyOn(deps.books, 'markDay').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    await expect(runCycle(deps, '2026-09-28')).rejects.toThrow(/disk full/);
+    alpaca.flattenError = undefined;
+    const retry = await runCycle(deps, '2026-09-28');
+    expect(retry.submitted_orders).toBe(0);
+    expect(alpaca.flattens).toEqual([]);
+  });
+
+  it('halt journals every position it cannot route instead of passing over it', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    await runCycle(deps, '2026-09-28');
+    deps.setControl('halt');
+    const real = deps.executor.canRoute.bind(deps.executor);
+    vi.spyOn(deps.executor, 'canRoute').mockImplementation((route) =>
+      route.bookVariant === 'primary' ? false : real(route),
+    );
+    const report = await runCycle(deps, '2026-09-29');
+    const message = 'halt could not exit AAPL in debate/primary: no route to alpaca';
+    expect(report.refusals).toContain(message);
+    expect(refusalRows(deps, '2026-09-29')).toContainEqual({ parameter: 'MANUAL_HALT', message });
+    expect(alpaca.flattens).toEqual([]);
+  });
+
+  it('reads the control once per cycle: a halt set mid-cycle acts from the next cycle', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    vi.spyOn(deps.sleeve, 'decide').mockImplementationOnce(() => {
+      deps.setControl('halt');
+      return Promise.resolve({ decisions: [], refusals: [] });
+    });
+    const during = await runCycle(deps, '2026-09-28');
+    expect(during.exits).toBe(0);
+    expect(deps.books.positions('debate/primary')).toHaveLength(1);
+    const after = await runCycle(deps, '2026-09-29');
+    expect(after.exits).toBe(2);
+  });
+
+  it('resume lets sleeves decide and enter again', async () => {
+    const deps = harness([longAapl], true);
+    deps.setControl('pause');
+    await runCycle(deps, '2026-09-25');
+    deps.setControl('resume');
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report.entries).toBe(2);
+    expect(refusalRows(deps, '2026-09-28')).toEqual([]);
+  });
+
+  it('resume never lifts a loss-budget halt', async () => {
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    deps.barsByDate.set(
+      '2026-09-28',
+      bar('2026-09-25', { low: 19.3, high: 20, close: 17, rawClose: 17 }),
+    );
+    const loss = await runCycle(deps, '2026-09-28');
+    expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(true);
+    expect(loss.books[0]?.size_multiplier).toBe(0);
+    deps.setControl('pause');
+    await runCycle(deps, '2026-09-29');
+    deps.setControl('resume');
+    deps.setDecisions([{ ...longAapl, instrument: 'MSFT' }]);
+    const resumed = await runCycle(deps, '2026-09-30');
+    expect(sizeShares(deps, 'debate/primary', '2026-09-30', 'MSFT')).toBe(0);
+    expect(resumed.books[0]?.size_multiplier).toBe(0);
   });
 });

@@ -10,7 +10,7 @@ import {
   venueFee,
 } from './execution/index.js';
 import { Journal } from './journal/index.js';
-import { CapitalConfigStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { SleeveRegistry } from './signal/index.js';
 
 export interface CycleCompositionOptions {
@@ -67,6 +67,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     journal,
     risk,
     executor,
+    controls: new ControlStore(v2Store),
     market,
     clock,
     dryRun: options.dryRun,

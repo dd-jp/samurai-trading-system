@@ -1,8 +1,10 @@
 import type {
   BookLedger,
   BookSpec,
+  ControlReader,
   DecisionJournal,
   EntryApproval,
+  ManualControl,
   MarketData,
   OrderExecutor,
   OrderOutcome,
@@ -34,6 +36,7 @@ export interface CycleDeps {
   readonly journal: DecisionJournal;
   readonly risk: RiskGate;
   readonly executor: OrderExecutor;
+  readonly controls: ControlReader;
   readonly market: MarketData;
   readonly clock: Clock;
   readonly dryRun: boolean;
@@ -121,7 +124,12 @@ interface Tally {
   fills: number;
 }
 
+type ExitReason = 'time_stop' | 'manual_halt';
+
+const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
+
 class Cycle {
+  readonly refusals: string[] = [];
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -136,6 +144,7 @@ class Cycle {
     private readonly deps: CycleDeps,
     private readonly tradingDate: string,
     private readonly macro: MacroGateVerdict,
+    private readonly control: ManualControl,
   ) {}
 
   fxFor(venue: Venue): number {
@@ -271,13 +280,32 @@ class Cycle {
   async timeStop(book: BookSpec, held: Position): Promise<void> {
     const { timeStopTradingDays } = this.deps.registry.spec(book.sleeve).sizing;
     if (held.marksHeld < timeStopTradingDays || held.exitClientOrderId !== undefined) return;
-    const clientOrderId = this.exitOrderId(book, held.instrument);
-    if (
-      !this.deps.executor.canRoute(routeOf(book, held.venue)) ||
-      this.deps.journal.orderFor(clientOrderId) !== undefined
-    ) {
-      return;
+    if (!this.deps.executor.canRoute(routeOf(book, held.venue))) return;
+    await this.submitExit(book, held, 'time_stop');
+  }
+
+  async haltExits(book: BookSpec): Promise<void> {
+    for (const held of this.deps.books.positions(book.id)) {
+      if (held.exitClientOrderId !== undefined) continue;
+      if (this.deps.executor.canRoute(routeOf(book, held.venue))) {
+        await this.submitExit(book, held, 'manual_halt');
+        continue;
+      }
+      const message = `halt could not exit ${held.instrument} in ${book.id}: no route to ${held.venue}`;
+      this.deps.journal.recordRefusal({
+        trading_date: this.tradingDate,
+        scope: 'control',
+        parameter: 'MANUAL_HALT',
+        ticket: CONTROL_TICKET,
+        message,
+      });
+      this.refusals.push(message);
     }
+  }
+
+  async submitExit(book: BookSpec, held: Position, reason: ExitReason): Promise<void> {
+    const clientOrderId = this.exitOrderId(book, held.instrument);
+    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     this.tally.exits += 1;
     const order = this.deps.risk.approveExit({ book, held, clientOrderId });
     const submission = await this.deps.executor.submit(order);
@@ -297,6 +325,7 @@ class Cycle {
         size: order.size,
         detail: submission.detail,
         marks_held: held.marksHeld,
+        reason,
         approval: submission.approvalId,
       },
     });
@@ -334,6 +363,7 @@ class Cycle {
       const stillHeld = this.deps.books.position(book.id, held.instrument);
       if (stillHeld !== undefined) await this.timeStop(book, stillHeld);
     }
+    if (this.control.state === 'halted') await this.haltExits(book);
   }
 
   entryOrderId(book: BookSpec, instrument: string): string {
@@ -555,6 +585,24 @@ async function decideUnlessRefused(
   };
 }
 
+function controlRefusals(deps: CycleDeps, tradingDate: string, control: ManualControl): string[] {
+  if (control.state === 'running') return [];
+  const effect =
+    control.state === 'halted'
+      ? 'no sleeve decides and every open position is exited'
+      : 'no sleeve decides; exits and resting stops run';
+  const action = control.state === 'halted' ? 'halt' : 'pause';
+  const message = `manual ${action} since ${control.setAt} (${control.reason}): ${effect}`;
+  deps.journal.recordRefusal({
+    trading_date: tradingDate,
+    scope: 'control',
+    parameter: 'MANUAL_CONTROL',
+    ticket: CONTROL_TICKET,
+    message,
+  });
+  return [message];
+}
+
 export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<CycleReport> {
   const macro = macroGate(tradingDate);
   const report = deps.books.isMarked(tradingDate)
@@ -576,13 +624,20 @@ async function runUnmarked(
   tradingDate: string,
   macro: MacroGateVerdict,
 ): Promise<CycleReport> {
-  const refusals = cycleRefusals(deps, tradingDate, macro);
-  const cycle = new Cycle(deps, tradingDate, macro);
+  const control = deps.controls.current();
+  const refusals = [
+    ...cycleRefusals(deps, tradingDate, macro),
+    ...controlRefusals(deps, tradingDate, control),
+  ];
+  const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {
-    const output = await decideUnlessRefused(deps, sleeve, tradingDate, macro);
+    const output =
+      control.state === 'running'
+        ? await decideUnlessRefused(deps, sleeve, tradingDate, macro)
+        : NO_SLEEVE_OUTPUT;
     decisionCount += output.decisions.length;
     for (const refusal of output.refusals) {
       deps.journal.recordRefusal({ trading_date: tradingDate, ...refusal });
@@ -596,6 +651,7 @@ async function runUnmarked(
     }
   }
   await cycle.sweepFills();
+  refusals.push(...cycle.refusals);
   const { tally } = cycle;
   return {
     trading_date: tradingDate,

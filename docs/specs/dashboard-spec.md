@@ -66,15 +66,15 @@ Each book has its own `LossBudget` (the `#budgets` map in `server/apps/v2/risk/b
 
 ## 5. Halt and pause
 
-No manual control exists in v2 today. The only halt is the automatic loss-budget halt, and it is incomplete: `size_multiplier = 0` zeroes entry sizing in the gate, but nothing closes open positions. Positions leave only through their brackets and the time stop (`approveExit` in `server/apps/v2/risk/gate.ts`). Session B (j)'s "halt = flat at the next fill" is unbuilt.
+Besides the manual control below, v2 has the automatic loss-budget halt, and it is incomplete: `size_multiplier = 0` zeroes entry sizing in the gate, but nothing closes open positions. Positions leave only through their brackets and the time stop (`approveExit` in `server/apps/v2/risk/gate.ts`). Session B (j)'s "halt = flat at the next fill" is unbuilt for it ([#1799](https://github.com/dd-jp/samurai-trading-system/issues/1799)).
 
-**Semantics (proposed, §9 item 1):**
+**Semantics (ruled U1):**
 
 - **Pause** blocks new entries for every sleeve and every book of each sleeve, shadows included, so the veto and macro-gate comparisons stay like for like. Exits, broker-resting stops and time stops keep running.
 - **Halt** does what pause does, and also closes every position at the next cycle through the existing exit order (`approveExit`, a `flatten` approval).
 - **Resume** clears a manual pause or halt. It can never clear the loss-budget halt, and it cannot change the cap or the daily cap (Q13: never loosened mid-year). If the loss budget has halted a book, resume leaves it halted and the UI says so.
 
-**Mechanism:** an append-only `v2_controls` table (`control_id`, `action` pause/halt/resume, `reason`, `source` = `dashboard` plus the remote address, `idempotency_key` unique, `set_at`), with update and delete refused by triggers like `v2_capital_config`. The cycle reads the latest control once at its start; the gate refuses entries while paused or halted; while halted the cycle requests an exit for every open position. Every control and the cycle's reading of it is journalled. This is risk code: unit tests on the gate and the control reader, a cycle test over the dry run, and Stryker on both.
+**Mechanism:** an append-only `v2_controls` table (`control_id`, `action` pause/halt/resume, `reason`, `source` = `dashboard` plus the remote address, `idempotency_key` unique, `set_at`), with update and delete refused by triggers like `v2_capital_config`. The cycle (`server/apps/v2/cycle.ts`) reads the latest control once at its start (`ControlStore` in `server/apps/v2/risk/controls.ts`). While paused or halted no sleeve is asked to decide, so no book enters and no LLM call is made; allocation and universe refusals are not journalled on those days. Exits, marks and fill sweeps still run. While halted the cycle also exits every open position through the time stop's exit path (`approveExit`, a `flatten` approval), after the day's bracket and time-stop checks, and journals any position it cannot route. A cycle with a control in force journals one `control` refusal saying so. In paper mode that exit path sends its flatten while the position's bracket still rests, which a venue may refuse; making it cancel and re-arm the legs safely is Step 4's [#1801](https://github.com/dd-jp/samurai-trading-system/issues/1801), shared with the time stop and the loss-budget halt. Dry-run and shadow books exit as simulated. Tests: the control reader, the cycle over the dry run and paper, and Stryker on both.
 
 **Latency:** the v2 root runs one cycle per trading day, so a control set during the day takes effect at the next cycle. Resting stops protect open positions between cycles (postmortem §3). The UI says the control is recorded and takes effect at the next cycle.
 
@@ -120,8 +120,8 @@ Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 scre
 - A component test per panel covering fed, empty and not-yet-fed (vitest + testing-library, jsdom), and the gauge's marks computed from a non-default cap (D8).
 - Server route tests against a seeded v2 store; a test that every wire field the client reads is written by the server (the eval greps both sides); a test that the server refuses to start without a token and refuses an unauthenticated POST on loopback.
 - Playwright e2e over a v2 fixture server: pause, then halt, then resume from the UI; the state and history update; resume after a loss-budget halt leaves the book halted.
-- Cycle test: a paused control blocks entries on every book of the sleeve and keeps exits; a halt control exits every position at the next cycle; resume never lifts `size_multiplier = 0`.
-- Stryker on the control reader and the gate's control check; oxlint, biome, fallow (including CSS health), CRAP ≤ 7 on touched `server/apps/v2` and `contracts` code.
+- Cycle test: a paused control blocks entries on every book of the sleeve and keeps exits; a halt control exits every position at the next cycle (in paper, subject to #1801); resume never lifts `size_multiplier = 0`.
+- Stryker on the control reader and the cycle's control paths; oxlint, biome, fallow (including CSS health), CRAP ≤ 7 on touched `server/apps/v2` and `contracts` code.
 - No sign-off screen and no v1-only concept on any screen.
 
 Build order after approval: (1) wire types, API and controls with their tests; (2) Today view; (3) Evidence and Records views with the not-yet-fed states; (4) e2e. One PR per numbered part if the diff is large.
