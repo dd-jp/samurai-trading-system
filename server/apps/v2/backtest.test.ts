@@ -64,6 +64,7 @@ function spec(validation: SleeveValidation): SleeveSpec {
     minimumCapitalGbp: 0,
     capacityGbp: Number.POSITIVE_INFINITY,
     validation,
+    macroGate: false,
     sizing: {
       riskFraction: 0.01,
       stopAtrMultiple: 2,

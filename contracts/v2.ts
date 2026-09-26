@@ -84,6 +84,7 @@ export interface SleeveSpec {
   readonly minimumCapitalGbp: number;
   readonly capacityGbp: number;
   readonly validation: SleeveValidation;
+  readonly macroGate: boolean;
   readonly sizing: SleeveSizing;
   readonly books: readonly SleeveBook[];
 }

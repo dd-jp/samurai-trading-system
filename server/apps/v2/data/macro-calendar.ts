@@ -2,6 +2,7 @@ export type MacroSource = 'fomc' | 'boe_mpc' | 'bls_cpi' | 'bls_employment' | 'o
 
 export interface MacroSourceCalendar {
   readonly source: MacroSource;
+  readonly coverageFrom: string;
   readonly coverageThrough: string;
   readonly dates: readonly string[];
 }
@@ -14,6 +15,7 @@ export interface MacroSourceCalendar {
 export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   {
     source: 'fomc',
+    coverageFrom: '2026-01-01',
     coverageThrough: '2026-12-31',
     dates: [
       '2026-01-28',
@@ -28,6 +30,7 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   },
   {
     source: 'boe_mpc',
+    coverageFrom: '2026-01-01',
     coverageThrough: '2027-12-31',
     dates: [
       '2026-02-05',
@@ -50,6 +53,7 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   },
   {
     source: 'bls_cpi',
+    coverageFrom: '2026-01-01',
     coverageThrough: '2026-12-31',
     dates: [
       '2026-01-13',
@@ -68,6 +72,7 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   },
   {
     source: 'bls_employment',
+    coverageFrom: '2026-01-01',
     coverageThrough: '2026-12-31',
     dates: [
       '2026-01-09',
@@ -86,6 +91,7 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   },
   {
     source: 'ons_cpi',
+    coverageFrom: '2026-01-01',
     coverageThrough: '2027-12-31',
     dates: [
       '2026-02-18',
@@ -136,10 +142,30 @@ export function macroCoverageThrough(
   return calendars.map((calendar) => calendar.coverageThrough).sort()[0] ?? '0000-00-00';
 }
 
+export function macroCoverageFrom(
+  calendars: readonly MacroSourceCalendar[] = MACRO_CALENDARS,
+): string {
+  return (
+    calendars
+      .map((calendar) => calendar.coverageFrom)
+      .sort()
+      .at(-1) ?? '9999-99-99'
+  );
+}
+
 export function macroGate(
   tradingDate: string,
   calendars: readonly MacroSourceCalendar[] = MACRO_CALENDARS,
 ): MacroGateVerdict {
+  const from = macroCoverageFrom(calendars);
+  if (tradingDate < from) {
+    return {
+      macroDay: true,
+      covered: false,
+      sources: [],
+      reason: `macro calendar covers from ${from}, after ${tradingDate}; treating ${tradingDate} as a macro day (fail-closed)`,
+    };
+  }
   const horizon = addDays(tradingDate, MACRO_COVERAGE_HORIZON_DAYS);
   const coverage = macroCoverageThrough(calendars);
   if (horizon > coverage) {
