@@ -47,6 +47,10 @@ describe('fetchWire', () => {
       kind: 'failed',
       error: 'HTTP 503',
     });
+    expect(await fetchWire('/u', 'ok', serving({ error: 'from is after to' }, 400))).toEqual({
+      kind: 'failed',
+      error: 'from is after to',
+    });
   });
 
   it('turns a network error into a failure', async () => {

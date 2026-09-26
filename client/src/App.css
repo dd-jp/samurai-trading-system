@@ -235,3 +235,82 @@
   font-size: 11px;
   color: var(--muted);
 }
+
+@media (min-width: 720px) {
+  .panel.wide {
+    grid-column: 1 / -1;
+  }
+}
+
+.panel-lead {
+  margin: 0 0 var(--space-2);
+}
+
+.curve {
+  width: 120px;
+  height: 20px;
+  display: block;
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: end;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: var(--space-3);
+}
+
+.search label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.search input,
+.search select,
+.search button,
+.pager button {
+  background: rgb(var(--ink-rgb) / 0.6);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  padding: var(--space-1) var(--space-2);
+}
+
+.day h3 {
+  font-size: 13px;
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.entry summary {
+  cursor: pointer;
+}
+
+.entry dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  font-size: 12px;
+}
+
+.entry dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.entry pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pager {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}

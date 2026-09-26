@@ -13,7 +13,7 @@ describe('usePoll', () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(body))
-      .mockResolvedValueOnce(jsonResponse({ error: 'x' }, 503));
+      .mockResolvedValueOnce(jsonResponse({ error: 'store unavailable' }, 503));
     const { result } = renderHook(() =>
       usePoll('/api/v2/overview', 'tok', { fetchImpl, now: () => 1_000 }),
     );
@@ -27,8 +27,28 @@ describe('usePoll', () => {
     expect(POLL_INTERVAL_MS).toBe(30_000);
     await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
     await waitFor(() => expect(result.current.status).toBe('failed'));
-    expect(result.current).toMatchObject({ data: body, error: 'HTTP 503' });
+    expect(result.current).toMatchObject({ data: body, error: 'store unavailable' });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops the last good body when the URL changes, even if the new URL fails', async () => {
+    const body = overview();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(body))
+      .mockResolvedValueOnce(jsonResponse({ error: 'from is after to' }, 400));
+    const { result, rerender } = renderHook(({ url }) => usePoll(url, 'tok', { fetchImpl }), {
+      initialProps: { url: '/a' },
+    });
+    await waitFor(() => expect(result.current.status).toBe('ok'));
+    rerender({ url: '/b' });
+    expect(result.current).toMatchObject({ data: null, status: 'waiting' });
+    await waitFor(() => expect(result.current.status).toBe('failed'));
+    expect(result.current).toMatchObject({
+      data: null,
+      error: 'from is after to',
+      lastSuccessAt: null,
+    });
   });
 
   it('refuses a body from a different contract version', async () => {

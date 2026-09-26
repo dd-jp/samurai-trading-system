@@ -1,7 +1,10 @@
 import {
   type ControlWire,
+  type EvidenceWire,
+  type JournalWire,
   type LossBudgetWire,
   type PositionsWire,
+  type ResearchWire,
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
 } from '@contracts';
@@ -132,4 +135,143 @@ export function jsonResponse(body: unknown, status = 200, headers: Record<string
     status,
     headers: { 'Content-Type': 'application/json', ...headers },
   });
+}
+
+const ARM2_OWNER = { status: 'not-yet-fed', owner: 'arm 2', ticket: '#1773' } as const;
+const STEP_1B_OWNER = { status: 'not-yet-fed', owner: 'Step 1b', ticket: '#1785' } as const;
+
+export function evidence(overrides: Partial<EvidenceWire> = {}): EvidenceWire {
+  return {
+    contract_version: V2_CONTRACT_VERSION,
+    generated_at: '2026-10-06T21:40:00.000Z',
+    performance: {
+      status: 'fed',
+      books: [
+        {
+          book_id: 'debate/no-veto',
+          sleeve_id: 'debate',
+          variant: 'no-veto',
+          days: 3,
+          sharpe: null,
+          max_drawdown: 0,
+          equity: [{ trading_date: '2026-10-05', equity_gbp: 1_000 }],
+        },
+        {
+          book_id: 'debate/primary',
+          sleeve_id: 'debate',
+          variant: 'primary',
+          days: 3,
+          sharpe: 1.234,
+          max_drawdown: 0.05,
+          equity: [
+            { trading_date: '2026-10-01', equity_gbp: 2_000 },
+            { trading_date: '2026-10-02', equity_gbp: 1_900 },
+            { trading_date: '2026-10-05', equity_gbp: 1_940 },
+          ],
+        },
+      ],
+    },
+    vs_arm2: ARM2_OWNER,
+    vs_benchmark: STEP_1B_OWNER,
+    trade_count: {
+      status: 'fed',
+      target: 100,
+      books: [{ book_id: 'debate/primary', variant: 'primary', closed_trades: 12 }],
+    },
+    arm2_test: ARM2_OWNER,
+    band: STEP_1B_OWNER,
+    gate: { status: 'not-yet-fed', owner: 'Step 1b and Step 4', ticket: '#1785' },
+    ...overrides,
+  };
+}
+
+export const JOURNAL: JournalWire = {
+  contract_version: V2_CONTRACT_VERSION,
+  days: [
+    {
+      trading_date: '2026-10-05',
+      decisions: [
+        {
+          decision_id: 'd-1',
+          book_id: 'debate/primary',
+          variant: 'primary',
+          instrument: 'AAPL',
+          venue: 'alpaca',
+          direction: 'long',
+          action: 'skip',
+          vetoed: true,
+          veto: 'earnings',
+          reason: 'vetoed:earnings',
+          confidence: 0.64,
+          size_shares: 0,
+          stop_price: null,
+          inputs_hash: 'abc123',
+          debate_id: 'debate-9',
+          payload: { judge: 'opus' },
+          recorded_at: '2026-10-05T21:40:00.000Z',
+          orders: [],
+        },
+      ],
+      unlinked_orders: [
+        {
+          client_order_id: 'exit-1',
+          book_id: 'debate/primary',
+          instrument: 'MSFT',
+          venue: 'alpaca',
+          leg: 'exit',
+          side: 'sell',
+          dry_run: false,
+          outcome: 'filled',
+          payload: {},
+          recorded_at: '2026-10-05T21:41:00.000Z',
+          fills: [
+            {
+              fill_id: 'f-1',
+              qty: 2,
+              price_gbp: 310,
+              fee_gbp: 0.5,
+              recorded_at: '2026-10-05T21:42:00.000Z',
+            },
+          ],
+        },
+      ],
+      refusals: [
+        {
+          refusal_id: 7,
+          scope: 'universe',
+          parameter: 'saxo_universe',
+          ticket: '#1740',
+          message: 'unset',
+          recorded_at: '2026-10-05T21:40:00.000Z',
+        },
+      ],
+    },
+  ],
+  next_before: '2026-10-05',
+};
+
+export function research(overrides: Partial<ResearchWire> = {}): ResearchWire {
+  const loop = { status: 'not-yet-fed', owner: 'G11 not ruled', ticket: '#1717' } as const;
+  return {
+    contract_version: V2_CONTRACT_VERSION,
+    generated_at: '2026-10-06T21:40:00.000Z',
+    ledger: {
+      status: 'fed',
+      total_trials: 2,
+      by_candidate: [{ candidate: 'trend', trials: 2 }],
+      trials: [
+        {
+          trial: 1,
+          candidate: 'trend',
+          config_hash: 'h1',
+          source: 'backtest',
+          recorded_at: '2026-10-01T09:00:00.000Z',
+        },
+      ],
+    },
+    proposals: loop,
+    promotions: loop,
+    demotions: loop,
+    ...overrides,
+  };
 }

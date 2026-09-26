@@ -113,7 +113,7 @@ The v2 wire derives its own version from its field names, as `contractVersionOf`
 
 ## 7. Client
 
-Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 screens are deleted then rather than in Step 5. This moves part of Step 5's client pass earlier. v1's `service-api` stops serving the dashboard bundle; Step 5 deletes its server side. Hash routes `#today`, `#evidence`, `#records`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept, with the URL clean-up in §5. `npm run dev:web` proxies `/api` to `V2_DASHBOARD_PORT` (default 8788). The Today view lands first (part 3a); Evidence and Records follow (part 3b).
+Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 screens are deleted then rather than in Step 5. This moves part of Step 5's client pass earlier. v1's `service-api` stops serving the dashboard bundle; Step 5 deletes its server side. Hash routes `#today`, `#evidence`, `#records`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept, with the URL clean-up in §5. `npm run dev:web` proxies `/api` to `V2_DASHBOARD_PORT` (default 8788). The Today view landed first (part 3a, #1809); Evidence and Records followed (part 3b).
 
 ## 8. Tests and definition of done
 

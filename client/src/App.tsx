@@ -1,5 +1,7 @@
 import type { V2OverviewWire } from '@contracts';
 import { useEffect, useState } from 'react';
+import { EvidenceView } from './components/evidence/EvidenceView.tsx';
+import { RecordsView } from './components/records/RecordsView.tsx';
 import { StatusStrip } from './components/StatusStrip.tsx';
 import { TodayView } from './components/today/TodayView.tsx';
 import { type PollOptions, usePoll } from './hooks/usePoll.ts';
@@ -12,7 +14,11 @@ import './App.css';
 
 const OVERVIEW_URL = '/api/v2/overview';
 
-const VIEWS = [{ id: 'today', label: 'Today' }] as const;
+const VIEWS = [
+  { id: 'today', label: 'Today' },
+  { id: 'evidence', label: 'Evidence' },
+  { id: 'records', label: 'Records' },
+] as const;
 
 type View = (typeof VIEWS)[number]['id'];
 
@@ -86,6 +92,8 @@ export function App(options: PollOptions = {}) {
       </nav>
       <main>
         {view === 'today' && overview.data !== null && <TodayView overview={overview.data} />}
+        {view === 'evidence' && <EvidenceView token={token} options={options} />}
+        {view === 'records' && <RecordsView token={token} options={options} overview={overview} />}
       </main>
     </div>
   );
