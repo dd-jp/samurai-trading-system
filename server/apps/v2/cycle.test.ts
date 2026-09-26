@@ -1081,6 +1081,7 @@ describe('runCycle', () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-24');
     deps.setDecisions([]);
+    deps.barsByDate.set('before the order', bar('2026-09-23', { open: 19, low: 18 }));
     deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.3, low: 20.01, high: 20.6 }));
     const report = await runCycle(deps, '2026-09-25');
     expect(report.fills).toBe(0);
@@ -1104,6 +1105,35 @@ describe('runCycle', () => {
     expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(
       (19.6 * (1 + HALF_SPREAD_BPS / 10_000)) / FX,
       9,
+    );
+  });
+
+  it('never fills a simulated buy above its limit, even when the open inside it crosses the spread', async () => {
+    const pricing: FillPricing = { halfSpreadBps: () => 50, impactBps: () => 0, fee: () => 0 };
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, pricing);
+    await runCycle(deps, '2026-09-24');
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 19.99, low: 19.9 }));
+    await runCycle(deps, '2026-09-25');
+    expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20 / FX, 9);
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const shorts = harness([short], true, undefined, [2026], TEST_SPEC, pricing);
+    await runCycle(shorts, '2026-09-24');
+    shorts.setDecisions([]);
+    shorts.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.01, high: 20.1 }));
+    await runCycle(shorts, '2026-09-25');
+    expect(shorts.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20 / FX, 9);
+  });
+
+  it('under a halt, a simulated entry filled this cycle is flattened in the same cycle', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-24');
+    deps.setControl('halt');
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report).toMatchObject({ entries: 0, exits: 2 });
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL-exit')?.payload.reason).toBe(
+      'manual_halt',
     );
   });
 

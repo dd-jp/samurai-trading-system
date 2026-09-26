@@ -139,6 +139,10 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
 
+function withinLimit(side: OrderSide, limit: number, price: number): number {
+  return side === 'buy' ? Math.min(limit, price) : Math.max(limit, price);
+}
+
 class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
@@ -232,21 +236,14 @@ class Cycle {
   }
 
   fillSimulatedEntry(order: JournalledOrder): void {
-    const limit = numberOrUndefined(order.payload.price);
-    const qty = numberOrUndefined(order.payload.size);
-    if (limit === undefined || qty === undefined) {
-      this.deps.journal.markCancelled(
-        order.client_order_id,
-        `${this.tradingDate}: no limit or size`,
-      );
-      return;
-    }
+    const limit = order.payload.price as number;
+    const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const window = this.deps.market
       .barsBefore(order.instrument, this.tradingDate, daysOpen + 1)
       .filter((bar) => bar.date >= order.trading_date);
     const outcome = simulateLimitEntry(
-      { side: order.side as OrderSide, limit, stop: numberOrUndefined(order.payload.stop) },
+      { side, limit, stop: numberOrUndefined(order.payload.stop) },
       window,
     );
     if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_ENTRY_CALENDAR_DAYS) {
@@ -257,10 +254,10 @@ class Cycle {
       this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       return;
     }
-    const venue = order.venue as Venue;
-    const quote = this.deps.executor.quoteSimulatedFill(venue, {
+    const qty = order.payload.size as number;
+    const quote = this.deps.executor.quoteSimulatedFill(order.venue as Venue, {
       instrument: order.instrument,
-      side: order.side as OrderSide,
+      side,
       qty,
       price: outcome.price,
       crossesSpread: outcome.crossesSpread,
@@ -269,7 +266,7 @@ class Cycle {
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
       leg: 'entry',
-      price: quote.price,
+      price: withinLimit(side, limit, quote.price),
       qty,
       fee: quote.fee,
     });
