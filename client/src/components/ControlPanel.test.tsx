@@ -52,14 +52,14 @@ describe('ControlPanel (P2)', () => {
     expect(screen.getByText('RUNNING')).toBeTruthy();
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
       'Pause entries',
-      'Halt and flatten',
+      'Halt: flat at next fill',
     ]);
   });
 
   it('refuses to send without a reason', () => {
     const { fetchImpl } = setup();
     typeReason('   ');
-    fireEvent.click(screen.getByRole('button', { name: 'Halt and flatten' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Halt: flat at next fill' }));
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(screen.getByRole('status').textContent).toBe('A reason is required.');
   });
@@ -102,7 +102,7 @@ describe('ControlPanel (P2)', () => {
 
     fetchImpl.mockResolvedValueOnce(jsonResponse({ error: 'nope' }, 409));
     typeReason('earnings week');
-    fireEvent.click(screen.getByRole('button', { name: 'Halt and flatten' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Halt: flat at next fill' }));
     await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Refused: nope.'));
     expect(sentBody(fetchImpl, 2)).toMatchObject({ action: 'halt', idempotency_key: 'key-0002' });
   });
@@ -111,14 +111,14 @@ describe('ControlPanel (P2)', () => {
     const { fetchImpl } = setup();
     fetchImpl.mockResolvedValueOnce(jsonResponse({ error: 'x' }, 429, { 'Retry-After': '7' }));
     typeReason('shock');
-    fireEvent.click(screen.getByRole('button', { name: 'Halt and flatten' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Halt: flat at next fill' }));
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe(
         'One control per 10 seconds: try again in 7 s.',
       ),
     );
     fetchImpl.mockResolvedValueOnce(jsonResponse({ error: 'unauthorized' }, 401));
-    fireEvent.click(screen.getByRole('button', { name: 'Halt and flatten' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Halt: flat at next fill' }));
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe('The dashboard token was rejected.'),
     );

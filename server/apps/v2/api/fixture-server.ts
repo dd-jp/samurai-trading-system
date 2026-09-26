@@ -9,17 +9,56 @@ import { composeV2Dashboard } from './main.js';
 
 export const FIXTURE_TRADING_DATE = '2026-10-05';
 
-const BOOKS = [
-  { bookId: 'debate/primary', variant: 'primary', equity: 1_940, ytdLoss: 60 },
-  { bookId: 'debate/no-veto', variant: 'no-veto', equity: 1_880, ytdLoss: 120 },
-] as const;
+export const FIXTURE_SCENARIOS = ['default', 'loss-budget-halted'] as const;
+export type FixtureScenario = (typeof FIXTURE_SCENARIOS)[number];
 
-export function seedFixtureStore(db: StoreHandle): void {
+interface FixtureBook {
+  readonly bookId: string;
+  readonly variant: string;
+  readonly equity: number;
+  readonly ytdLoss: number;
+  readonly sizeMultiplier: number;
+}
+
+const NO_VETO: FixtureBook = {
+  bookId: 'debate/no-veto',
+  variant: 'no-veto',
+  equity: 1_880,
+  ytdLoss: 120,
+  sizeMultiplier: 1,
+};
+
+const BOOKS: Readonly<Record<FixtureScenario, readonly FixtureBook[]>> = {
+  default: [
+    { bookId: 'debate/primary', variant: 'primary', equity: 1_940, ytdLoss: 60, sizeMultiplier: 1 },
+    NO_VETO,
+  ],
+  'loss-budget-halted': [
+    {
+      bookId: 'debate/primary',
+      variant: 'primary',
+      equity: 500,
+      ytdLoss: 1_500,
+      sizeMultiplier: 0,
+    },
+    NO_VETO,
+  ],
+};
+
+export function fixtureScenarioOf(raw: string | undefined): FixtureScenario {
+  const scenario = FIXTURE_SCENARIOS.find((name) => name === (raw ?? 'default'));
+  if (scenario === undefined) {
+    throw new Error(`V2_FIXTURE_SCENARIO must be one of ${FIXTURE_SCENARIOS.join(', ')}`);
+  }
+  return scenario;
+}
+
+export function seedFixtureStore(db: StoreHandle, scenario: FixtureScenario = 'default'): void {
   db.prepare(
     `INSERT INTO v2_capital_config (year, effective_from, start_capital_gbp, loss_cap_gbp, recorded_at)
      VALUES (2026, '2026-01-01', 2000, 1500, '2026-01-01T00:00:00.000Z')`,
   ).run();
-  for (const { bookId, variant, equity, ytdLoss } of BOOKS) {
+  for (const { bookId, variant, equity, ytdLoss, sizeMultiplier } of BOOKS[scenario]) {
     db.prepare(
       `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
        VALUES (?, 'debate', ?, 2000, ?, '2026-09-01T00:00:00.000Z')`,
@@ -27,13 +66,15 @@ export function seedFixtureStore(db: StoreHandle): void {
     db.prepare(
       `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
          size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
-       VALUES (?, ?, ?, ?, 300, ?, 1, 0, 0, ?)`,
+       VALUES (?, ?, ?, ?, 300, ?, ?, ?, 0, ?)`,
     ).run(
       bookId,
       FIXTURE_TRADING_DATE,
       equity,
       equity - 300,
       ytdLoss,
+      sizeMultiplier,
+      sizeMultiplier === 0 ? 1 : 0,
       `${FIXTURE_TRADING_DATE}T21:40:00.000Z`,
     );
   }
@@ -51,12 +92,15 @@ export function seedFixtureStore(db: StoreHandle): void {
   ).run(FIXTURE_TRADING_DATE, `${FIXTURE_TRADING_DATE}T21:40:00.000Z`);
 }
 
-export function createFixtureStore(): { storePath: string; dir: string } {
+export function createFixtureStore(scenario: FixtureScenario = 'default'): {
+  storePath: string;
+  dir: string;
+} {
   const dir = mkdtempSync(join(tmpdir(), 'v2-dashboard-fixture-'));
   const storePath = join(dir, 'v2.sqlite');
   const db = openSharedStore(storePath);
   try {
-    seedFixtureStore(db);
+    seedFixtureStore(db, scenario);
   } finally {
     db.close();
   }
@@ -64,7 +108,7 @@ export function createFixtureStore(): { storePath: string; dir: string } {
 }
 
 async function main(env: NodeJS.ProcessEnv): Promise<void> {
-  const { storePath, dir } = createFixtureStore();
+  const { storePath, dir } = createFixtureStore(fixtureScenarioOf(env.V2_FIXTURE_SCENARIO));
   const { server } = composeV2Dashboard(
     {
       storePath,
