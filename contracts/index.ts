@@ -148,6 +148,7 @@ export type {
   PositionsWire,
   PositionWire,
   QuoteCurrencyWire,
+  StaleMarkWire,
   V2ModeWire,
   V2OverviewWire,
   VenueTotalWire,

@@ -17,6 +17,7 @@ import { heldKey, isFresh, type LastBar, type MarkSource, quotePerGbp } from '..
 
 const VENUE_CURRENCY: Readonly<Record<Venue, QuoteCurrencyWire>> = { alpaca: 'USD', saxo: 'GBP' };
 const VENUES: readonly Venue[] = ['alpaca', 'saxo'];
+const MARK_READ_TIMEOUT_MS = 5_000;
 const FX_SOURCE = 'Bank of England XUDLUSS, last observation on or before 1 January';
 
 interface HoldingRow {
@@ -114,6 +115,7 @@ export class PositionsPanel {
   constructor(
     private readonly marks: MarkSource,
     private readonly market: MarketData,
+    private readonly timeoutMs = MARK_READ_TIMEOUT_MS,
   ) {}
 
   async present(holdings: Holdings): Promise<PanelWire<PositionsWire>> {
@@ -141,11 +143,17 @@ export class PositionsPanel {
     held: readonly HoldingRow[],
     asOf: string,
   ): Promise<ReadonlyMap<string, LastBar>> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('mark read timed out')), this.timeoutMs);
+    });
     try {
-      return await this.marks.lastBarsBefore(held, asOf);
+      return await Promise.race([this.marks.lastBarsBefore(held, asOf), timeout]);
     } catch (error) {
       const fault = error instanceof Error ? error : new Error(String(error));
       return new Map(held.map((row) => [heldKey(row), fault]));
+    } finally {
+      clearTimeout(timer);
     }
   }
 

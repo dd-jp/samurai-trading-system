@@ -124,22 +124,40 @@ describe('composeV2Dashboard', () => {
     ).toThrow(/SAMURAI_DASHBOARD_TOKEN is not set/);
   });
 
-  it('refuses to start without the FX file, before opening the store', () => {
-    const storePath = migratedStore();
-    expect(() =>
-      composeV2Dashboard(
-        {
-          ...PATHS,
-          fxPath: join(dirs[0] ?? '', 'missing-fx.csv'),
-          storePath,
-          mode: 'paper',
-          host: '127.0.0.1',
-          port: 0,
-        },
-        { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' },
-        clock,
-      ),
-    ).toThrow(/ENOENT/);
+  it('starts without the FX file, so the controls stay up, with USD marks unavailable', async () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const { server, db } = composeV2Dashboard(
+      {
+        ...PATHS,
+        fxPath: join(tmpdir(), 'no-such-fx.csv'),
+        storePath: migratedStore(),
+        mode: 'paper',
+        host: '127.0.0.1',
+        port: 0,
+      },
+      { SAMURAI_DASHBOARD_TOKEN: 'tok-123456' },
+      clock,
+    );
+    try {
+      db.prepare(
+        `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+         VALUES ('debate/primary', 'debate', 'primary', 1000, 1000, 'x')`,
+      ).run();
+      db.prepare(
+        `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
+           size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+         VALUES ('debate/primary', '2026-10-05', 1000, 1000, 0, 0, 1, 0, 0, 'x')`,
+      ).run();
+      await server.start();
+      const response = await fetch(`${server.url}/api/v2/overview`, {
+        headers: { Authorization: 'Bearer tok-123456' },
+      });
+      expect(await response.json()).toMatchObject({ positions: { status: 'fed', fx: null } });
+      expect(process.stderr.write).toHaveBeenCalledWith(expect.stringMatching(/no FX rates/));
+    } finally {
+      await server.stop();
+      db.close();
+    }
   });
 
   it('reads --bars and --fx', () => {

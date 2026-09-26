@@ -172,6 +172,32 @@ describe('PositionsPanel (P3)', () => {
     });
   });
 
+  it('asks for the bars before the latest cycle date, for every holding', async () => {
+    db = openSharedStore(':memory:');
+    seedBook('debate/primary', 'primary', 0);
+    seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
+    const asked: { held: string[]; date: string }[] = [];
+    const recording: MarkSource = {
+      lastBarsBefore: (held, date) => {
+        asked.push({ held: held.map((one) => `${one.venue}:${one.instrument}`), date });
+        return Promise.resolve(new Map());
+      },
+    };
+    await present(recording);
+    expect(asked).toEqual([{ held: ['alpaca:AAPL'], date: AS_OF }]);
+  });
+
+  it('gives up on a mark read that hangs and serves it as unavailable', async () => {
+    db = openSharedStore(':memory:');
+    seedBook('debate/primary', 'primary', 0);
+    seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
+    const hanging: MarkSource = { lastBarsBefore: () => new Promise(() => undefined) };
+    const slow = new PositionsPanel(hanging, new BarsMarketData({ load: () => undefined }, FX), 10);
+    expect(await slow.present(readHoldings(db))).toMatchObject({
+      positions: [{ mark: { status: 'unavailable' } }],
+    });
+  });
+
   it('serves marks it cannot read as unavailable, without failing the panel', async () => {
     db = openSharedStore(':memory:');
     seedBook('debate/primary', 'primary', 0);

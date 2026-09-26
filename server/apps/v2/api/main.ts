@@ -73,6 +73,17 @@ export function parseDashboardArgs(
   };
 }
 
+function readFxOrNone(fxPath: string): ReturnType<typeof parseBoeGbpUsdCsv> {
+  try {
+    return parseBoeGbpUsdCsv(readFileSync(fxPath, 'utf8'));
+  } catch (error) {
+    process.stderr.write(
+      `v2 dashboard: no FX rates (${sanitizeLogText(describeThrownSafely(error))}); USD marks unavailable\n`,
+    );
+    return [];
+  }
+}
+
 export interface ComposedDashboard {
   readonly server: V2DashboardServer;
   readonly db: StoreHandle;
@@ -84,7 +95,7 @@ export function composeV2Dashboard(
   env: NodeJS.ProcessEnv,
   clock: Clock,
 ): ComposedDashboard {
-  const fx = parseBoeGbpUsdCsv(readFileSync(args.fxPath, 'utf8'));
+  const fx = readFxOrNone(args.fxPath);
   const positions = new PositionsPanel(
     new ParquetMarkSource(args.barStoreRoot),
     new BarsMarketData({ load: () => undefined }, fx),

@@ -87,9 +87,21 @@ describe('ParquetMarkSource', () => {
     expect(found.get(heldKey(AAPL))).toEqual(new Error('duckdb gone'));
   });
 
-  it('reads nothing when nothing is held', async () => {
+  it('reads nothing, and opens no store, when nothing is held', async () => {
+    const open = vi.spyOn(ParquetBarStore, 'open');
     expect(
       (await new ParquetMarkSource('/nonexistent').lastBarsBefore([], '2026-10-06')).size,
     ).toBe(0);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('closes the store it opened, even when a read faults', async () => {
+    const root = await storeWith('alpaca', 'AAPL', [bar('2026-10-01', 100)]);
+    const close = vi.spyOn(ParquetBarStore.prototype, 'close');
+    await new ParquetMarkSource(root).lastBarsBefore(
+      [AAPL, { venue: 'alpaca', instrument: 'not a symbol' }],
+      '2026-10-06',
+    );
+    expect(close).toHaveBeenCalledOnce();
   });
 });

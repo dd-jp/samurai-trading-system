@@ -117,6 +117,7 @@ export type MarkWire =
   | { readonly status: 'unavailable' };
 
 export type FreshMarkWire = Extract<MarkWire, { status: 'fresh' }>;
+export type StaleMarkWire = Extract<MarkWire, { status: 'stale' }>;
 
 export type QuoteCurrencyWire = 'USD' | 'GBP';
 
@@ -231,6 +232,7 @@ const V2_WIRE_FIELD_NAMES = {
     'market_value_gbp',
     'unrealised_gbp',
   ]),
+  staleMark: fieldsOf<StaleMarkWire>()(['status', 'bar_date']),
   venueTotal: fieldsOf<VenueTotalWire>()([
     'venue',
     'currency',
