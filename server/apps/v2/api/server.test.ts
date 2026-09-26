@@ -102,6 +102,7 @@ describe('createV2DashboardServer auth and routing', () => {
       expect(response.status).toBe(401);
       expect(response.headers.get('www-authenticate')).toBe('Bearer');
       expect(response.headers.get('connection')).toBe('close');
+      expect(await response.json()).toEqual({ error: 'unauthorized' });
     }
     const wrong = await fetch(`${url}/api/v2/overview`, {
       headers: { Authorization: 'Bearer nope' },
@@ -129,10 +130,12 @@ describe('createV2DashboardServer auth and routing', () => {
     const nothing = await fetch(`${url}/api/v2/nothing`, { headers: AUTH });
     expect(nothing.status).toBe(404);
     expect(nothing.headers.get('connection')).toBe('close');
+    expect(await nothing.json()).toEqual({ error: 'not found' });
     const getControls = await fetch(`${url}/api/v2/controls`, { headers: AUTH });
     expect(getControls.status).toBe(405);
     expect(getControls.headers.get('allow')).toBe('POST');
     expect(getControls.headers.get('connection')).toBe('close');
+    expect(await getControls.json()).toEqual({ error: 'method not allowed' });
     const postOverview = await fetch(`${url}/api/v2/overview`, { method: 'POST', headers: AUTH });
     expect(postOverview.status).toBe(405);
     expect(postOverview.headers.get('allow')).toBe('GET');
@@ -199,6 +202,7 @@ describe('POST /api/v2/controls', () => {
     const soon = await postControl(url, { ...halt, idempotency_key: 'key-0002' });
     expect(soon.status).toBe(429);
     expect(soon.headers.get('retry-after')).toBe('10');
+    expect(await soon.json()).toEqual({ error: 'one control per 10 seconds' });
   });
 
   it('refuses a body that is not JSON, not a valid request or not labelled JSON', async () => {
@@ -214,6 +218,8 @@ describe('POST /api/v2/controls', () => {
       'Content-Type': 'application/x-www-form-urlencoded',
     });
     expect(form.status).toBe(415);
+    expect(form.headers.get('connection')).toBe('close');
+    expect(await form.json()).toEqual({ error: 'content-type must be application/json' });
     const unlabelled = await postControl(url, halt, AUTH);
     expect(unlabelled.status).toBe(415);
     const charset = await postControl(url, halt, {
@@ -230,6 +236,10 @@ describe('POST /api/v2/controls', () => {
       reason: 'x'.repeat(CONTROL_BODY_MAX_BYTES),
     });
     expect(response.status).toBe(413);
+    expect(response.headers.get('connection')).toBe('close');
+    expect(await response.json()).toEqual({
+      error: `body is larger than ${CONTROL_BODY_MAX_BYTES} bytes`,
+    });
     expect(db.prepare('SELECT COUNT(*) AS n FROM v2_controls').get()).toEqual({ n: 0 });
   });
 

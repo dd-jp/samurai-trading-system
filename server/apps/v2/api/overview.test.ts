@@ -187,6 +187,20 @@ describe('OverviewReader loss budget (P1)', () => {
     });
   });
 
+  it('headlines the latest date whichever book sorts last', () => {
+    db = openSharedStore(':memory:');
+    seedCapital();
+    seedBook('debate/primary', 'primary');
+    seedBook('trend/primary', 'primary');
+    seedDay('debate/primary', '2026-10-05', { equity: 1_000, ytdLoss: 0 });
+    seedDay('trend/primary', '2026-10-02', { equity: 1_000, ytdLoss: 0 });
+    seedDecision('debate/primary', '2026-10-05', 'AAPL', 'none', 'hold');
+    seedDecision('trend/primary', '2026-10-02', 'SPY', 'none', 'hold');
+    const overview = reader().read();
+    expect(overview.loss_budget).toMatchObject({ trading_date: '2026-10-05' });
+    expect(overview.decisions).toMatchObject({ trading_date: '2026-10-05' });
+  });
+
   it('shows each book at its own latest day, so a lagging book keeps its date', () => {
     db = openSharedStore(':memory:');
     seedCapital();

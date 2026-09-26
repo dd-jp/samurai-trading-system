@@ -33,6 +33,8 @@ describe('parseControlRequest', () => {
     [[valid], 'body must be a JSON object'],
     ['halt', 'body must be a JSON object'],
     [{ ...valid, source: 'x' }, 'unexpected field(s): source'],
+    [{ ...valid, source: 'x', set_at: 'y' }, 'unexpected field(s): source, set_at'],
+    [{ ...valid, action: '' }, 'action must be pause, halt or resume'],
     [{ ...valid, action: 'flatten' }, 'action must be pause, halt or resume'],
     [{ ...valid, action: undefined }, 'action must be pause, halt or resume'],
     [{ ...valid, reason: '   ' }, 'reason is required'],

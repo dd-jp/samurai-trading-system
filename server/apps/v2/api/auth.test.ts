@@ -24,4 +24,9 @@ describe('carriesToken', () => {
     expect(carriesToken(undefined, 't0ken')).toBe(false);
     expect(carriesToken('Bearer ', 't0ken')).toBe(false);
   });
+
+  it('compares the whole UTF-8 token, not a truncated or re-encoded form', () => {
+    expect(carriesToken('Bearer tök€n', 'tök€n')).toBe(true);
+    expect(carriesToken('Bearer tok€n', 'tök€n')).toBe(false);
+  });
 });

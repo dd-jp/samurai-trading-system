@@ -8,11 +8,10 @@ export function isConfiguredToken(token: string | undefined): token is string {
 }
 
 function digest(value: string): Buffer {
-  return createHash('sha256').update(value, 'utf8').digest();
+  return createHash('sha256').update(value).digest();
 }
 
 export function carriesToken(authorization: string | undefined, token: string): boolean {
   if (authorization === undefined || !authorization.startsWith(BEARER_PREFIX)) return false;
-  const provided = authorization.slice(BEARER_PREFIX.length);
-  return provided !== '' && timingSafeEqual(digest(provided), digest(token));
+  return timingSafeEqual(digest(authorization.slice(BEARER_PREFIX.length)), digest(token));
 }

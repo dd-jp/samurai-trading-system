@@ -42,6 +42,13 @@ describe('parseDashboardArgs', () => {
     ).toEqual({ storePath: 'x.sqlite', mode: 'paper', host: '0.0.0.0', port: 9000 });
   });
 
+  it.each([
+    ['0', 0],
+    ['65535', 65_535],
+  ])('accepts the boundary port %j', (raw, port) => {
+    expect(parseDashboardArgs([], { V2_DASHBOARD_PORT: raw }).port).toBe(port);
+  });
+
   it.each(['abc', '1.5', '-1', '65536'])('refuses a bad port %j', (port) => {
     expect(() => parseDashboardArgs([], { V2_DASHBOARD_PORT: port })).toThrow(/V2_DASHBOARD_PORT/);
   });
@@ -75,6 +82,10 @@ describe('composeV2Dashboard', () => {
       });
       expect(response.status).toBe(201);
       expect(db.prepare('SELECT action FROM v2_controls').all()).toEqual([{ action: 'pause' }]);
+      const overview = await fetch(`${server.url}/api/v2/overview`, {
+        headers: { Authorization: 'Bearer tok-123456' },
+      });
+      expect(await overview.json()).toMatchObject({ control: { state: 'paused' } });
     } finally {
       await server.stop();
       db.close();
