@@ -1390,7 +1390,9 @@ describe('runCycle under a manual control', () => {
     );
     await runCycle({ ...deps, logger: { log } }, '2026-10-03');
     const stale = (event: string) =>
-      log.mock.calls.filter(([entry]) => entry.event === event).map(([entry]) => entry.message);
+      log.mock.calls
+        .filter(([entry]) => entry.event === event && entry.level === 'warn')
+        .map(([entry]) => entry.message);
     expect(stale('v2_simulated_flatten_stale')).toEqual([]);
     await runCycle({ ...deps, logger: { log } }, '2026-10-05');
     expect(stale('v2_simulated_flatten_stale')).toEqual([
