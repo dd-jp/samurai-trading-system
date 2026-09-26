@@ -66,9 +66,9 @@ Each book has its own `LossBudget` (the `#budgets` map in `server/apps/v2/risk/b
 
 ## 5. Halt and pause
 
-No manual control exists in v2 today. The only halt is the automatic loss-budget halt, and it is incomplete: `size_multiplier = 0` zeroes entry sizing in the gate, but nothing closes open positions. Positions leave only through their brackets and the time stop (`approveExit` in `server/apps/v2/risk/gate.ts`). Session B (j)'s "halt = flat at the next fill" is unbuilt.
+Besides the manual control below, v2 has the automatic loss-budget halt, and it is incomplete: `size_multiplier = 0` zeroes entry sizing in the gate, but nothing closes open positions. Positions leave only through their brackets and the time stop (`approveExit` in `server/apps/v2/risk/gate.ts`). Session B (j)'s "halt = flat at the next fill" is unbuilt for it ([#1799](https://github.com/dd-jp/samurai-trading-system/issues/1799)).
 
-**Semantics (proposed, §9 item 1):**
+**Semantics (ruled U1):**
 
 - **Pause** blocks new entries for every sleeve and every book of each sleeve, shadows included, so the veto and macro-gate comparisons stay like for like. Exits, broker-resting stops and time stops keep running.
 - **Halt** does what pause does, and also closes every position at the next cycle through the existing exit order (`approveExit`, a `flatten` approval).
@@ -121,7 +121,7 @@ Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 scre
 - Server route tests against a seeded v2 store; a test that every wire field the client reads is written by the server (the eval greps both sides); a test that the server refuses to start without a token and refuses an unauthenticated POST on loopback.
 - Playwright e2e over a v2 fixture server: pause, then halt, then resume from the UI; the state and history update; resume after a loss-budget halt leaves the book halted.
 - Cycle test: a paused control blocks entries on every book of the sleeve and keeps exits; a halt control exits every position at the next cycle (in paper, subject to #1801); resume never lifts `size_multiplier = 0`.
-- Stryker on the control reader and the gate's control check; oxlint, biome, fallow (including CSS health), CRAP ≤ 7 on touched `server/apps/v2` and `contracts` code.
+- Stryker on the control reader and the cycle's control paths; oxlint, biome, fallow (including CSS health), CRAP ≤ 7 on touched `server/apps/v2` and `contracts` code.
 - No sign-off screen and no v1-only concept on any screen.
 
 Build order after approval: (1) wire types, API and controls with their tests; (2) Today view; (3) Evidence and Records views with the not-yet-fed states; (4) e2e. One PR per numbered part if the diff is large.
