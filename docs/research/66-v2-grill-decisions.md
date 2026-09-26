@@ -164,6 +164,16 @@ David's answers to `docs/specs/dashboard-spec.md` §9 (Step 3c, ticket [#1745](h
 | U5 | Phasing and v1 replacement | **"Yes"**: panels owned by other steps ship in the not-yet-fed state; the v1 client is replaced in the build PR, not kept alongside until Step 5. |
 | U6 | Whether manual pause/halt days count toward G1's trades, the paper-band weeks or Q7(3)'s fault-free weeks | **"Band weeks"**: read as: manual pause/halt days count toward the paper-band weeks only; they do not count toward the fault-free weeks. G1 counts closed trades, so it is unaffected. |
 
+## Rulings of 2026-09-27
+
+Asked by the Step 3d session after #1812 merged. Each answer is the option David chose.
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| Litestream target (D1, [#1784](https://github.com/dd-jp/samurai-trading-system/issues/1784)) | Where the SQLite store is replicated | **"Cloudflare R2 (Recommended)"**. The account, bucket, token path and where the encryption key's copy lives are David's to supply before Step 3e wires it. |
+| Resting entries on a block ([#1813](https://github.com/dd-jp/samurai-trading-system/issues/1813)) | Whether a mark that halts a book or trips the daily cap cancels the entries still resting | **"Cancel resting entries (Recommended)"**: every book, real and simulated. The question was asked with a wrong example: a backtest fixture losing £46 against a £30 cap, called an overshoot. It was two calendar years' loss under a per-year cap, each year inside it; the fixture never halts. The mechanism the ruling covers is real either way: an entry sent the cycle the mark blocks would otherwise fill the next day. |
+| Paper entry order ([#1815](https://github.com/dd-jp/samurai-trading-system/issues/1815)) | Whether the entry stays a limit at the prior close | **"Marketable limit with a cap"**. The offset and the reference price it is measured from are not set; until they are, the entry stays a limit at the prior close. |
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

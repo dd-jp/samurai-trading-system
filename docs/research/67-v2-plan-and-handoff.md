@@ -219,7 +219,7 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
 
 #### Step 3e — Backup and monitoring (D1, D5; #1784)
 
-Litestream streams the SQLite store to S3-compatible object storage, encrypted (the session proposes the provider; cheapest that works; David confirms). A healthchecks.io check is pinged at the end of each daily cycle and alerts David when a ping is missed. Telegram alerts carry a severity. Metrics panels (loss-budget state, gate statistics, LLM spend, reconcile diffs) join Step 3c's dashboard, not a separate tool.
+Litestream streams the SQLite store to S3-compatible object storage, encrypted (Cloudflare R2, ruled 2026-09-27, doc 66). A healthchecks.io check is pinged at the end of each daily cycle and alerts David when a ping is missed. Telegram alerts carry a severity. Metrics panels (loss-budget state, gate statistics, LLM spend, reconcile diffs) join Step 3c's dashboard, not a separate tool.
 => restore drill: delete the local store, restore from Litestream, the next cycle reconciles clean against the brokers; a skipped cycle raises the healthchecks.io alert.
 
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
