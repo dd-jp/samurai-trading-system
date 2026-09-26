@@ -59,6 +59,15 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
   const providers = opts.providers ?? NULL_PROVIDER_STATUS;
   const requestedPort = opts.port;
 
+  function snapshotBody(arm: TradingArm): { status: 200 | 500; body: string } {
+    try {
+      const snapshot = buildSnapshot(store, new Date(), mode, arm, providers);
+      return { status: 200, body: JSON.stringify(snapshot) };
+    } catch (err) {
+      return { status: 500, body: JSON.stringify({ error: renderResponderError(err) }) };
+    }
+  }
+
   function handleSnapshotRequest(req: IncomingMessage, res: ServerResponse, parsedUrl: URL) {
     if (!isAuthorizedRequest(req.headers.authorization, opts.dashboardCredential)) {
       res
@@ -71,16 +80,8 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
       res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: parsedArm.reason }));
       return;
     }
-    try {
-      const snapshot = buildSnapshot(store, new Date(), mode, parsedArm.arm, providers);
-      res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
-    } catch (err) {
-      if (res.headersSent) {
-        res.end();
-        return;
-      }
-      res.writeHead(500, JSON_HEADERS).end(JSON.stringify({ error: renderResponderError(err) }));
-    }
+    const { status, body } = snapshotBody(parsedArm.arm);
+    res.writeHead(status, JSON_HEADERS).end(body);
   }
 
   const server: Server = createServer((req, res) => {

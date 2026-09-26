@@ -20,6 +20,12 @@ afterAll(async () => {
 });
 
 describe('dashboard server — no client bundle', () => {
+  it('400s a request path that does not decode', async () => {
+    const r = await fetch(`${base}/api/%E0%A4%A`);
+    expect(r.status).toBe(400);
+    expect(await r.json()).toEqual({ error: 'bad request' });
+  });
+
   it('serves no page: the v2 dashboard serves the client (dashboard spec §7)', async () => {
     for (const path of ['/', '/index.html', '/assets/index.js']) {
       const r = await fetch(`${base}${path}`);
@@ -201,7 +207,7 @@ describe('dashboard server — /api/snapshot error responder guard (#1355)', () 
   }, 10_000);
 });
 
-describe('dashboard server — /api/snapshot headersSent guard (#1355 round 1)', () => {
+describe('dashboard server — /api/snapshot unserialisable snapshot (#1355 round 1)', () => {
   class BigIntPoisonedStore extends InMemoryQueryStore {
     override getOpenPositions(asOf: Date) {
       const [first, ...rest] = super.getOpenPositions(asOf, 'live');
@@ -228,7 +234,7 @@ describe('dashboard server — /api/snapshot headersSent guard (#1355 round 1)',
     await poisonedServer.stop();
   });
 
-  it('completes the response instead of throwing ERR_HTTP_HEADERS_SENT out of the catch', async () => {
+  it('answers 500 before sending any header, instead of throwing ERR_HTTP_HEADERS_SENT', async () => {
     const result = await fetch(`${poisonedServer.url}/api/snapshot`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(2_000),
@@ -238,8 +244,8 @@ describe('dashboard server — /api/snapshot headersSent guard (#1355 round 1)',
     );
     expect(result.completed).toBe(true);
     if (result.completed) {
-      expect(result.status).toBe(200);
-      expect(result.body).toBe('');
+      expect(result.status).toBe(500);
+      expect(JSON.parse(result.body)).toEqual({ error: expect.stringMatching(/BigInt/) });
     }
   }, 10_000);
 });
