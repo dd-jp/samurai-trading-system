@@ -12,6 +12,7 @@ import {
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { BarsMarketData } from '../data/index.js';
 import { ControlWriter } from './control-writer.js';
+import { EvidenceReader } from './evidence.js';
 import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
@@ -63,6 +64,7 @@ async function start(
     controls: new ControlWriter(store, clock),
     journal: (query) => new JournalReader(store).read(query),
     research: () => new ResearchReader(join(tmpdir(), 'no-such-research.sqlite'), clock).read(),
+    evidence: () => new EvidenceReader(store, clock).read(),
     onFault: (error) => faults.push(error),
   });
   await server.start();
@@ -96,6 +98,7 @@ describe('createV2DashboardServer start-up', () => {
         controls: {} as ControlWriter,
         journal: UNUSED,
         research: UNUSED,
+        evidence: UNUSED,
         onFault: () => undefined,
       }),
     ).toThrow(/SAMURAI_DASHBOARD_TOKEN is not set.*loopback included/s);
@@ -113,6 +116,7 @@ describe('createV2DashboardServer start-up', () => {
       controls: {} as ControlWriter,
       journal: UNUSED,
       research: UNUSED,
+      evidence: UNUSED,
       onFault: () => undefined,
     });
     await expect(clash.start()).rejects.toThrow(/EADDRINUSE/);
@@ -127,6 +131,9 @@ describe('createV2DashboardServer auth and routing', () => {
       '/api/v2/controls',
       '/api/v2/journal',
       '/api/v2/research',
+      '/api/v2/evidence',
+      '/api/v2/reconcile',
+      '/api/v2/tax',
       '/nowhere',
     ]) {
       const response = await fetch(`${url}${path}`);
@@ -233,6 +240,43 @@ describe('GET /api/v2/journal and /api/v2/research', () => {
   it('allows only GET on both', async () => {
     const url = await start();
     for (const path of ['/api/v2/journal', '/api/v2/research']) {
+      const response = await fetch(`${url}${path}`, { method: 'POST', headers: AUTH });
+      expect(response.status).toBe(405);
+      expect(response.headers.get('allow')).toBe('GET');
+    }
+  });
+});
+
+describe('GET /api/v2/evidence, /api/v2/reconcile and /api/v2/tax', () => {
+  it('serves the evidence and the records panels', async () => {
+    const url = await start();
+    const evidence = await fetch(`${url}/api/v2/evidence`, { headers: AUTH });
+    expect(evidence.status).toBe(200);
+    expect(await evidence.json()).toMatchObject({
+      contract_version: V2_CONTRACT_VERSION,
+      performance: { status: 'empty' },
+      gate: { status: 'not-yet-fed' },
+    });
+    const reconcile = await fetch(`${url}/api/v2/reconcile`, { headers: AUTH });
+    expect(await reconcile.json()).toMatchObject({ reconcile: { ticket: '#1784' } });
+    const tax = await fetch(`${url}/api/v2/tax?year=2026`, { headers: AUTH });
+    expect(tax.status).toBe(200);
+    expect(await tax.json()).toMatchObject({ year: 2026, disposals: { ticket: '#1746' } });
+  });
+
+  it('refuses a bad tax query with 400, and a CSV it cannot build yet with 501', async () => {
+    const url = await start();
+    const bad = await fetch(`${url}/api/v2/tax?year=26`, { headers: AUTH });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: 'year is invalid' });
+    const csv = await fetch(`${url}/api/v2/tax?format=csv`, { headers: AUTH });
+    expect(csv.status).toBe(501);
+    expect(await csv.json()).toEqual({ error: 'tax log not yet fed: Step 4 (#1746)' });
+  });
+
+  it('allows only GET on each', async () => {
+    const url = await start();
+    for (const path of ['/api/v2/evidence', '/api/v2/reconcile', '/api/v2/tax']) {
       const response = await fetch(`${url}${path}`, { method: 'POST', headers: AUTH });
       expect(response.status).toBe(405);
       expect(response.headers.get('allow')).toBe('GET');

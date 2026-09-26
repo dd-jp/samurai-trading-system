@@ -286,6 +286,59 @@ export interface ResearchWire {
   readonly demotions: NotYetFedWire;
 }
 
+export interface EquityPointWire {
+  readonly trading_date: string;
+  readonly equity_gbp: number;
+}
+
+export interface BookPerformanceWire {
+  readonly book_id: string;
+  readonly sleeve_id: string;
+  readonly variant: string;
+  readonly days: number;
+  readonly sharpe: number | null;
+  readonly max_drawdown: number;
+  readonly equity: readonly EquityPointWire[];
+}
+
+export interface PerformanceWire {
+  readonly books: readonly BookPerformanceWire[];
+}
+
+export interface ClosedTradesBookWire {
+  readonly book_id: string;
+  readonly variant: string;
+  readonly closed_trades: number;
+}
+
+export interface TradeCountWire {
+  readonly target: number;
+  readonly books: readonly ClosedTradesBookWire[];
+}
+
+export interface EvidenceWire {
+  readonly contract_version: string;
+  readonly generated_at: string;
+  readonly performance: PanelWire<PerformanceWire>;
+  readonly vs_arm2: NotYetFedWire;
+  readonly vs_benchmark: NotYetFedWire;
+  readonly trade_count: PanelWire<TradeCountWire>;
+  readonly arm2_test: NotYetFedWire;
+  readonly band: NotYetFedWire;
+  readonly gate: NotYetFedWire;
+}
+
+export interface ReconcileWire {
+  readonly contract_version: string;
+  readonly reconcile: NotYetFedWire;
+}
+
+export interface TaxWire {
+  readonly contract_version: string;
+  readonly year: number | null;
+  readonly disposals: NotYetFedWire;
+}
+
 type PanelFields = keyof NotYetFedWire;
 
 function fieldsOf<T>() {
@@ -456,6 +509,32 @@ const V2_WIRE_FIELD_NAMES = {
   researchLedger: fieldsOf<ResearchLedgerWire>()(['total_trials', 'by_candidate', 'trials']),
   candidateTrials: fieldsOf<CandidateTrialsWire>()(['candidate', 'trials']),
   trial: fieldsOf<TrialWire>()(['trial', 'candidate', 'config_hash', 'source', 'recorded_at']),
+  equityPoint: fieldsOf<EquityPointWire>()(['trading_date', 'equity_gbp']),
+  bookPerformance: fieldsOf<BookPerformanceWire>()([
+    'book_id',
+    'sleeve_id',
+    'variant',
+    'days',
+    'sharpe',
+    'max_drawdown',
+    'equity',
+  ]),
+  performance: fieldsOf<PerformanceWire>()(['books']),
+  closedTradesBook: fieldsOf<ClosedTradesBookWire>()(['book_id', 'variant', 'closed_trades']),
+  tradeCount: fieldsOf<TradeCountWire>()(['target', 'books']),
+  evidence: fieldsOf<EvidenceWire>()([
+    'contract_version',
+    'generated_at',
+    'performance',
+    'vs_arm2',
+    'vs_benchmark',
+    'trade_count',
+    'arm2_test',
+    'band',
+    'gate',
+  ]),
+  reconcile: fieldsOf<ReconcileWire>()(['contract_version', 'reconcile']),
+  tax: fieldsOf<TaxWire>()(['contract_version', 'year', 'disposals']),
 };
 
 export function v2WireFieldPaths(): string[] {
