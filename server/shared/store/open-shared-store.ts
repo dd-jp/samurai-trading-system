@@ -73,7 +73,7 @@ function ensureParentDirectory(dbPath: string): void {
 }
 
 // Two processes share one v2 store (the cycle and the dashboard API); without a busy timeout
-// the loser of a write race fails with SQLITE_BUSY at once instead of waiting.
+// the loser of a write race fails with SQLITE_BUSY at once instead of waiting
 const BUSY_TIMEOUT_MS = 5_000;
 
 function applyPragmas(db: StoreHandle): void {

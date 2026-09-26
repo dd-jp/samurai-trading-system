@@ -89,9 +89,9 @@ Besides the manual control below, v2 has the automatic loss-budget halt, and it 
 
 **Where it runs (ruled U2):** a v2 API module, started by `npm run v2:dashboard` next to the v2 root, serving the built client and the routes below.
 
-Module path: `server/apps/v2/api/` <!-- cite-exempt: planned — built after the spec is approved -->
+Module path: `server/apps/v2/api/`. The first PR serves `/api/v2/overview` without P3 (P3's mark needs the bar read and its coverage test) and `POST /api/v2/controls`; the other routes, P3 and the built client follow.
 
-It opens the v2 store through `guardedStore` (`server/shared/store/write-guard.ts`) with a write allowlist of `v2_controls` only, in WAL mode with a busy timeout, because the v2 root writes the same file. It opens the research store read-only. The bind guard and Bearer check live in `server/shared/http/` (`bind-guard.ts`, `request-auth.ts`), imported by v1 and v2 alike, so Step 5 deletes v1's server without touching them. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
+It opens the v2 store with `openMigratedStore` (`server/shared/store/open-shared-store.ts`), which never migrates and refuses a store below the schema version it needs, then through `guardedStore` (`server/shared/store/write-guard.ts`) as the `dashboard` owner, whose only writable table is `v2_controls`. Both processes open the file in WAL mode with a 5 s busy timeout, because the v2 root writes the same file. It opens the research store read-only. The bind guard and Bearer check live in `server/shared/http/` (`bind-guard.ts`, `request-auth.ts`), imported by v1 and v2 alike, so Step 5 deletes v1's server without touching them. When the v2 root becomes a long-running process, the same module mounts inside it (D4: one process).
 
 **Routes (GET unless stated):**
 
@@ -107,7 +107,7 @@ It opens the v2 store through `guardedStore` (`server/shared/store/write-guard.t
 
 **Wire types:** new types in `contracts/`, exported through the barrel.
 
-Wire file: `contracts/v2-wire.ts` <!-- cite-exempt: planned — built after the spec is approved -->
+Wire file: `contracts/v2-wire.ts`.
 
 The v2 wire derives its own version from its field names, as `contractVersionOf` does for the v1 snapshot; the client refuses a mismatched version as it does today. Every panel's payload is a union `{ status: 'fed', … } | { status: 'empty' } | { status: 'not-yet-fed', owner: string, ticket: string }`, so an unbuilt source is a served value, never a missing field. Money is GBP unless the field name says `Usd`; totals in GBP state the rate and its source.
 
