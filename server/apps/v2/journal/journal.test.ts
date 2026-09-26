@@ -147,6 +147,55 @@ describe('Journal', () => {
     expect(journal.unfilledEntriesBefore('debate/primary', '2026-09-25')).toEqual([]);
   });
 
+  it('lists unfilled simulated and dry-run entries from earlier dates, oldest first', () => {
+    const db = openSharedStore(':memory:');
+    const capital = new CapitalConfigStore(db, clock);
+    capital.setYear(2026, 1_000, 1_500);
+    new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
+    const journal = new Journal(db, clock);
+    const base: JournalledOrder = {
+      client_order_id: 'b-sim',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-24',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: true,
+      outcome: 'simulated',
+      payload: {},
+    };
+    journal.recordOrder(base);
+    journal.recordOrder({ ...base, client_order_id: 'a-dry', outcome: 'refused_dry_run' });
+    journal.recordOrder({ ...base, client_order_id: 'z-early', trading_date: '2026-09-23' });
+    journal.recordOrder({ ...base, client_order_id: 'today', trading_date: '2026-09-25' });
+    journal.recordOrder({ ...base, client_order_id: 'submitted', outcome: 'submitted' });
+    journal.recordOrder({ ...base, client_order_id: 'rejected', outcome: 'rejected' });
+    journal.recordOrder({ ...base, client_order_id: 'cancelled', outcome: 'cancelled' });
+    journal.recordOrder({ ...base, client_order_id: 'exit', leg: 'exit', side: 'sell' });
+    journal.recordOrder({ ...base, client_order_id: 'filled' });
+    journal.recordFill({
+      fill_id: 'alpaca:sim-filled',
+      client_order_id: 'filled',
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      qty: 1,
+      price_gbp: 1,
+      fee_gbp: 0,
+    });
+    expect(
+      journal.unfilledSimulatedEntriesBefore('2026-09-25').map((o) => o.client_order_id),
+    ).toEqual(['z-early', 'a-dry', 'b-sim']);
+    expect(journal.unfilledSimulatedEntriesBefore('2026-09-24')).toMatchObject([
+      { client_order_id: 'z-early', dry_run: true, payload: {} },
+    ]);
+  });
+
   it('hashes the same inputs to the same digest and different inputs differently', () => {
     const bar = {
       date: '2026-09-25',

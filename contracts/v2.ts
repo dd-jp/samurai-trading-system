@@ -362,6 +362,7 @@ export interface DecisionJournal {
   recordOrder(order: JournalledOrder): void;
   orderFor(clientOrderId: string): JournalledOrder | undefined;
   unfilledEntriesBefore(bookId: string, tradingDate: string): readonly JournalledOrder[];
+  unfilledSimulatedEntriesBefore(tradingDate: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
   recordFill(fill: JournalledFill): boolean;
   recordRefusal(refusal: JournalledRefusal): void;

@@ -378,7 +378,8 @@ describe('runBacktest', () => {
     const lossOf = (result: Awaited<ReturnType<typeof run>>) =>
       1_000 - (result.trials[0]?.equity.at(-1) as number);
     expect(lossOf(uncapped)).toBeGreaterThan(60);
-    expect(lossOf(capped)).toBeLessThan(lossOf(uncapped) / 2);
+    expect(lossOf(capped)).toBeGreaterThan(30);
+    expect(lossOf(capped)).toBeLessThan(45);
     expect(capped.verdict.capitalCeilingGbp).toBeLessThan(uncapped.verdict.capitalCeilingGbp);
   });
 

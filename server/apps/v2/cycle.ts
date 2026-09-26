@@ -4,6 +4,7 @@ import type {
   ControlReader,
   DecisionJournal,
   EntryApproval,
+  JournalledOrder,
   ManualControl,
   MarketData,
   OrderExecutor,
@@ -29,6 +30,7 @@ import {
   quotePerGbp,
 } from './data/index.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
+import { simulateLimitEntry } from './simulated-entry.js';
 
 export interface CycleDeps {
   readonly registry: SleeveSource;
@@ -70,6 +72,7 @@ export interface CycleReport {
 }
 
 const MS_PER_DAY = 86_400_000;
+const MAX_PENDING_ENTRY_CALENDAR_DAYS = 5;
 const EPOCH_ISO = new Date(0).toISOString();
 
 export function calendarDaysBetween(from: string | undefined, to: string): number {
@@ -128,8 +131,21 @@ type ExitReason = 'time_stop' | 'manual_halt';
 
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
 
+function positionKey(bookId: string, instrument: string): string {
+  return `${bookId}|${instrument}`;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined;
+}
+
+function withinLimit(side: OrderSide, limit: number, price: number): number {
+  return side === 'buy' ? Math.min(limit, price) : Math.max(limit, price);
+}
+
 class Cycle {
   readonly refusals: string[] = [];
+  readonly #pendingEntries = new Set<string>();
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -213,6 +229,53 @@ class Cycle {
     });
   }
 
+  fillSimulatedEntries(): void {
+    for (const order of this.deps.journal.unfilledSimulatedEntriesBefore(this.tradingDate)) {
+      this.fillSimulatedEntry(order);
+    }
+  }
+
+  fillSimulatedEntry(order: JournalledOrder): void {
+    const limit = order.payload.price as number;
+    const side = order.side as OrderSide;
+    const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
+    const window = this.deps.market
+      .barsBefore(order.instrument, this.tradingDate, daysOpen + 1)
+      .filter((bar) => bar.date >= order.trading_date);
+    const outcome = simulateLimitEntry(
+      { side, limit, stop: numberOrUndefined(order.payload.stop) },
+      window,
+    );
+    if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_ENTRY_CALENDAR_DAYS) {
+      this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
+      return;
+    }
+    if (outcome.kind !== 'filled') {
+      this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
+      return;
+    }
+    const qty = order.payload.size as number;
+    const quote = this.deps.executor.quoteSimulatedFill(order.venue as Venue, {
+      instrument: order.instrument,
+      side,
+      qty,
+      price: outcome.price,
+      crossesSpread: outcome.crossesSpread,
+    });
+    this.ingest({
+      client_order_id: order.client_order_id,
+      broker_fill_id: `sim-${order.client_order_id}`,
+      leg: 'entry',
+      price: withinLimit(side, limit, quote.price),
+      qty,
+      fee: quote.fee,
+    });
+    const held = this.deps.books.position(order.book_id, order.instrument);
+    if (outcome.stoppedAt !== undefined && held !== undefined) {
+      this.simulatedExit(order.book_id, held, outcome.stoppedAt, true, 'stop_on_entry_bar');
+    }
+  }
+
   async cancelStaleEntries(book: BookSpec): Promise<void> {
     for (const order of this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate)) {
       const route = routeOf(book, order.venue as Venue);
@@ -233,23 +296,38 @@ class Cycle {
     const toRawGbp = bar.rawClose / bar.close / fx;
     const exit = bracketExit(held, bar.low * toRawGbp, bar.high * toRawGbp);
     if (exit?.priceGbp === undefined) return;
-    const trigger = exit.priceGbp * fx;
+    this.simulatedExit(
+      book.id,
+      held,
+      exit.priceGbp * fx,
+      exit.crossesSpread,
+      'bracket_leg_on_daily_bar',
+    );
+  }
+
+  simulatedExit(
+    bookId: string,
+    held: Position,
+    trigger: number,
+    crossesSpread: boolean,
+    detail: string,
+  ): void {
     const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
-    const clientOrderId = this.exitOrderId(book, held.instrument);
+    const clientOrderId = this.exitOrderId(bookId, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
       instrument: held.instrument,
       side,
       qty: Math.abs(held.qty),
       price: trigger,
-      crossesSpread: exit.crossesSpread,
+      crossesSpread,
     });
     this.tally.exits += 1;
     this.tally.simulated += 1;
     this.deps.journal.recordOrder({
       client_order_id: clientOrderId,
       decision_id: null,
-      book_id: book.id,
+      book_id: bookId,
       trading_date: this.tradingDate,
       instrument: held.instrument,
       venue: held.venue,
@@ -259,7 +337,7 @@ class Cycle {
       outcome: 'simulated',
       payload: {
         size: Math.abs(held.qty),
-        detail: 'bracket_leg_on_daily_bar',
+        detail,
         price: trigger,
       },
     });
@@ -273,8 +351,8 @@ class Cycle {
     });
   }
 
-  exitOrderId(book: BookSpec, instrument: string): string {
-    return `v2-${book.id.replaceAll('/', '-')}-${this.tradingDate}-${instrument}-exit`;
+  exitOrderId(bookId: string, instrument: string): string {
+    return `v2-${bookId.replaceAll('/', '-')}-${this.tradingDate}-${instrument}-exit`;
   }
 
   async timeStop(book: BookSpec, held: Position): Promise<void> {
@@ -304,7 +382,7 @@ class Cycle {
   }
 
   async submitExit(book: BookSpec, held: Position, reason: ExitReason): Promise<void> {
-    const clientOrderId = this.exitOrderId(book, held.instrument);
+    const clientOrderId = this.exitOrderId(book.id, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     this.tally.exits += 1;
     const order = this.deps.risk.approveExit({ book, held, clientOrderId });
@@ -379,6 +457,7 @@ class Cycle {
     const clientOrderId = this.entryOrderId(book, decision.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     if (this.deps.books.position(book.id, decision.instrument) !== undefined) return;
+    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return;
     this.tally.entries += 1;
     const submission: Submission =
       approval.order === undefined
@@ -631,6 +710,7 @@ async function runUnmarked(
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
+  cycle.fillSimulatedEntries();
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {
