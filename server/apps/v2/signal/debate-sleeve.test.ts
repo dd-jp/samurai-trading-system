@@ -198,8 +198,7 @@ describe('createDebateSleeve', () => {
     expect(decision?.debate_id).toBeDefined();
     const called = transports.flatMap((transport) => transport.calls.map((call) => call.model));
     expect(called).toHaveLength(3);
-    expect(called).toContain('anthropic/claude-opus-5');
-    expect(called.join(' ')).not.toContain('fable');
+    expect(called.filter((model) => /fable/.test(model))).toEqual(['anthropic/claude-fable-5.1']);
     for (const transport of transports) {
       for (const call of transport.calls) {
         expect(call.prompt).not.toMatch(/api[_-]?key|ALPACA|SAXO|account/i);

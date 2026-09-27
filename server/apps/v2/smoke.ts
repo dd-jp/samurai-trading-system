@@ -75,8 +75,8 @@ function staticProbes(): SmokeProbe[] {
   const declaredBooks = bookSpecsFor([{ id: 'debate', spec: DEBATE_SLEEVE_SPEC }]);
   return [
     probe(
-      'model pins are dated or bare product ids and never a Fable model',
-      ALL_PINS.every((pin) => !/fable/.test(pin.wire)),
+      'Fable sits only in the judge seat',
+      ALL_PINS.every((pin) => /fable/.test(pin.wire) === (pin.seat === 'judge')),
       ALL_PINS.map((pin) => pin.wire).join(', '),
     ),
     probe('monthly LLM cap refuses at $30', !cap.admitted, JSON.stringify(cap)),

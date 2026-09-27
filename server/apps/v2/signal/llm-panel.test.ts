@@ -40,7 +40,7 @@ describe('rotateSeats', () => {
     expect(seatModels('2026-09-25')).toEqual([
       'deepseek/deepseek-v4-pro-0813',
       'openai/gpt-5.5',
-      'anthropic/claude-opus-5',
+      'anthropic/claude-fable-5.1',
     ]);
   });
 
@@ -68,7 +68,7 @@ describe('buildLlmPanel', () => {
       'anthropic/claude-sonnet-5',
       'openai/gpt-5.5',
       'deepseek/deepseek-v4-pro-0813',
-      'anthropic/claude-opus-5',
+      'anthropic/claude-fable-5.1',
     ]);
 
     const response = await runBullPersona(panel.debaters.gpt, {
@@ -115,7 +115,7 @@ describe('buildLlmPanel failure and limits', () => {
     });
     expect(requests.map((request) => [request.model, request.max_tokens])).toEqual([
       ['anthropic/claude-sonnet-5', DEBATER_MAX_TOKENS],
-      ['anthropic/claude-opus-5', JUDGE_MAX_TOKENS],
+      ['anthropic/claude-fable-5.1', JUDGE_MAX_TOKENS],
     ]);
     failing = true;
     await expect(
