@@ -91,7 +91,7 @@ function fill(id: string, orderId: string, date: string): void {
 function refuse(
   date: string,
   parameter: string,
-  scoped?: { readonly book: string; readonly instrument: string },
+  scoped?: { readonly book: string; readonly instrument?: string },
 ): void {
   journal.recordRefusal({
     trading_date: date,
@@ -420,6 +420,15 @@ describe('JournalReader (P9)', () => {
     expect(byInstrument.days[0]?.refusals.map((row) => row.parameter)).toEqual(['MANUAL_PAUSE']);
     const byBook = read({ book: 'debate/primary' });
     expect(byBook.days[0]?.refusals.map((row) => row.parameter)).toEqual(['MANUAL_PAUSE']);
+  });
+
+  it('shows a book-only refusal (no single instrument) under a combined book and instrument filter', () => {
+    open();
+    decide('2026-10-05', 'AAPL');
+    refuse('2026-10-05', 'LOSS_BUDGET', { book: 'debate/primary' });
+    refuse('2026-10-05', 'OTHER_LOSS_BUDGET', { book: 'debate/no-veto' });
+    const page = read({ book: 'debate/primary', instrument: 'AAPL' });
+    expect(page.days[0]?.refusals.map((row) => row.parameter)).toEqual(['LOSS_BUDGET']);
   });
 
   it('finds vetoes by category, and only vetoes', () => {

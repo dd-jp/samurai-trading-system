@@ -162,7 +162,10 @@ function includesUnlinkedOrders(query: JournalQuery): boolean {
   return query.action === undefined && query.veto === undefined;
 }
 
-function refusalScopeFilters(query: JournalQuery): Filter[] {
+// NULL book_id/instrument means cycle-wide: once a day is selected, a cycle-wide
+// refusal must still display under any book/instrument filter, so unlike scopeFilters
+// this widens with IS NULL rather than excluding unscoped rows
+function refusalDisplayFilters(query: JournalQuery): Filter[] {
   const filters: Filter[] = [];
   if (query.book !== undefined) {
     filters.push({ sql: 'r.book_id IS NULL OR r.book_id = ?', params: [query.book] });
@@ -209,6 +212,8 @@ function daySources(query: JournalQuery): Filter[] {
     });
   }
   if (includesUnlinkedOrders(query)) {
+    // Exact-match here, not refusalDisplayFilters: a cycle-wide refusal must not
+    // make every day match a book/instrument filter
     const refusals = where([...dateFilters(query, 'r'), ...scopeFilters(query, 'r')]);
     sources.push({
       sql: `SELECT r.trading_date FROM v2_refusals r ${refusals.sql}`,
@@ -414,7 +419,7 @@ export class JournalReader {
   }
 
   #refusals(query: JournalQuery, days: readonly string[]): RefusalRow[] {
-    const filter = where([inDays('r', days), ...refusalScopeFilters(query)]);
+    const filter = where([inDays('r', days), ...refusalDisplayFilters(query)]);
     return this.#all<RefusalRow>(
       `SELECT r.refusal_id, r.trading_date, r.scope, r.parameter, r.ticket, r.message, r.book_id,
               r.instrument, r.recorded_at
