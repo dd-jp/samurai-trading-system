@@ -638,6 +638,33 @@ describe('runCycle', () => {
         'where no position was held; a fill must never flip or open a position outside a ' +
         'fresh entry (#1778)',
     );
+    const db = (
+      deps.journal as unknown as {
+        db: { prepare: (sql: string) => { all: () => unknown[] } };
+      }
+    ).db;
+    expect(
+      db
+        .prepare("SELECT book_id, instrument FROM v2_refusals WHERE parameter = 'CROSSING_FILL'")
+        .all(),
+    ).toEqual([{ book_id: 'debate/primary', instrument: 'AAPL' }]);
+  });
+
+  it('#1778: a partial stop fill resizes the position and keeps its stop/target', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 4, 19.2);
+    const report = await runCycle(deps, '2026-09-29');
+    expect(report.refusals.some((refusal) => refusal.includes('(#1778)'))).toBe(false);
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: 2,
+      stopGbp: expect.closeTo(19.2 / FX, 9),
+      targetGbp: expect.closeTo(21.2 / FX, 9),
+    });
   });
 
   it('#1778: a cancel that keeps failing blocks a same-day opposite entry on the same instrument', async () => {

@@ -278,6 +278,8 @@ class Cycle {
       parameter: 'CROSSING_FILL',
       ticket: '#1778',
       message,
+      book_id: order.book_id,
+      instrument: order.instrument,
     });
     this.refusals.push(message);
   }
