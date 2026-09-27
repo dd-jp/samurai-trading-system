@@ -627,8 +627,9 @@ class Cycle {
   journalStaleMarks(book: BookSpec): void {
     for (const held of this.deps.books.positions(book.id)) {
       const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
+      const barDate = bar?.date;
       if (isFresh(bar, this.tradingDate)) continue;
-      const price = bar === undefined ? 'the entry price' : `the ${bar.date} close`;
+      const price = barDate === undefined ? 'the entry price' : `the ${barDate} close`;
       const message = `${book.id} ${held.instrument}: marked at ${price}, no bar in the 5 days before ${this.tradingDate}`;
       this.deps.journal.recordRefusal({
         trading_date: this.tradingDate,
