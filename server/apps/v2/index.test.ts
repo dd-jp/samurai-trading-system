@@ -16,7 +16,7 @@ import {
   composeV2Root,
   exitCodeFor,
   llmKeysPresent,
-  logRefusals,
+  logNewRefusals,
   main,
   nousOptionsFrom,
   parseCliArgs,
@@ -634,20 +634,30 @@ describe('runAfterPinCheck', () => {
   });
 });
 
-describe('logRefusals', () => {
-  it("warns once with the cycle's refusals, and stays silent without any", () => {
+describe('logNewRefusals', () => {
+  it('warns once with the new refusals, and stays silent without any', () => {
     const entries: LogEntry[] = [];
     const logger = { log: (entry: LogEntry) => entries.push(entry) };
-    const report = { trading_date: '2026-09-28', refusals: ['a', 'b'] } as unknown as CycleReport;
-    logRefusals(report, logger);
-    logRefusals({ ...report, refusals: [] }, logger);
+    const refusal = (parameter: string, message: string) => ({
+      trading_date: '2026-09-28',
+      scope: 'data',
+      parameter,
+      ticket: '#1',
+      message,
+    });
+    const days: Record<string, ReturnType<typeof refusal>[]> = {
+      '2026-09-28': [refusal('A', 'a'), refusal('B', 'b')],
+    };
+    const journal = { newRefusals: (date: string) => days[date] ?? [] };
+    logNewRefusals(journal, '2026-09-28', logger);
+    logNewRefusals(journal, '2026-09-29', logger);
     expect(entries).toEqual([
       {
         trace_id: 'v2-2026-09-28',
         stage: 'v2',
         level: 'warn',
-        event: 'v2_cycle_refusals',
-        message: 'a\nb',
+        event: 'v2_new_refusals',
+        message: 'A: a\nB: b',
       },
     ]);
   });

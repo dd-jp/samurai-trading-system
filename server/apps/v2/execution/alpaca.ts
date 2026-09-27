@@ -1,4 +1,9 @@
-import type { AlpacaBrokerClient, BrokerAdapter } from '../../../pipeline/execution/index.js';
+import type {
+  AlpacaBrokerClient,
+  BrokerAdapter,
+  OcoDoubleFillAlertChannel,
+  UnpricedFillAlertChannel,
+} from '../../../pipeline/execution/index.js';
 import {
   AlpacaBrokerAdapter,
   AlpacaHttpBrokerClient,
@@ -14,15 +19,20 @@ export interface AlpacaPaperBrokerOptions {
   readonly logger: Logger;
 }
 
-function logAlert(logger: Logger, event: string, alert: unknown): void {
-  logger.log({
-    trace_id: 'v2-root',
-    stage: 'v2',
-    level: 'error',
-    event,
-    message: event,
-    payload: alert,
-  });
+type UnpricedFillAlert = Parameters<UnpricedFillAlertChannel['postUnpricedFillAlert']>[0];
+type OcoDoubleFillAlert = Parameters<OcoDoubleFillAlertChannel['postOcoDoubleFillAlert']>[0];
+
+export function unpricedFillMessage(alert: UnpricedFillAlert): string {
+  const minutes = Math.round(alert.unpriced_for_ms / 60_000);
+  return `${alert.instrument} ${alert.leg} fill ${alert.broker_fill_id} (order ${alert.client_order_id}, qty ${alert.qty}) unpriced for ${minutes} min`;
+}
+
+export function ocoDoubleFillMessage(alert: OcoDoubleFillAlert): string {
+  return `${alert.instrument}: stop ${alert.stop_order_id} and target ${alert.target_order_id} both filled (order ${alert.client_order_id})`;
+}
+
+function logAlert(logger: Logger, event: string, message: string, alert: unknown): void {
+  logger.log({ trace_id: 'v2-root', stage: 'v2', level: 'error', event, message, payload: alert });
 }
 
 export function alpacaPaperBroker(options: AlpacaPaperBrokerOptions): BrokerAdapter {
@@ -32,11 +42,11 @@ export function alpacaPaperBroker(options: AlpacaPaperBrokerOptions): BrokerAdap
     state: new SqliteBrokerStateStore(options.db),
     unpricedFillAlerts: {
       postUnpricedFillAlert: (alert) =>
-        Promise.resolve(logAlert(logger, 'v2_unpriced_fill', alert)),
+        Promise.resolve(logAlert(logger, 'v2_unpriced_fill', unpricedFillMessage(alert), alert)),
     },
     ocoDoubleFillAlerts: {
       postOcoDoubleFillAlert: (alert) =>
-        Promise.resolve(logAlert(logger, 'v2_oco_double_fill', alert)),
+        Promise.resolve(logAlert(logger, 'v2_oco_double_fill', ocoDoubleFillMessage(alert), alert)),
     },
     clock: options.clock,
     logger,

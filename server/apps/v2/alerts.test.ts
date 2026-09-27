@@ -103,10 +103,21 @@ describe('alertText', () => {
     );
   });
 
-  it('stays inside the Telegram message limit', () => {
-    const text = alertText('warning', [alert('v2_a', 'y'.repeat(5000))], '');
-    expect(text).toHaveLength(4096);
-    expect(text.startsWith('Samurai v2 warning\nv2_a: yyy')).toBe(true);
+  it('counts an event that repeats with different messages, keeping the first', () => {
+    expect(
+      alertText('warning', [alert('v2_a', 'x'), alert('v2_a', 'y'), alert('v2_a', 'x')], ''),
+    ).toBe('Samurai v2 warning\nv2_a (x3), first: x');
+  });
+
+  it('stays inside the Telegram message limit, marks the cut and never splits a character', () => {
+    const text = alertText('warning', [alert('v2_a', '😀'.repeat(5000))], '');
+    const chars = Array.from(text);
+    expect(chars).toHaveLength(4096);
+    expect(text.startsWith('Samurai v2 warning\nv2_a: 😀')).toBe(true);
+    expect(text.endsWith('😀\n…(truncated)')).toBe(true);
+    const exact = alertText('warning', [alert('v2_a', 'y'.repeat(4096 - 25))], '');
+    expect(exact).toHaveLength(4096);
+    expect(exact.endsWith('y')).toBe(true);
   });
 });
 
@@ -163,7 +174,7 @@ describe('alertsFor', () => {
     await alerts.flush();
     expect(sentBodies(fetchImpl).map((body) => body.text)).toEqual([
       'Samurai v2 CRITICAL\nv2_e: two',
-      'Samurai v2 warning\nv2_w: one\nv2_w: three',
+      'Samurai v2 warning\nv2_w (x2), first: one',
     ]);
   });
 
@@ -188,19 +199,33 @@ describe('alertsFor', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(`https://api.telegram.org/bot${TOKEN}/sendMessage`);
   });
 
-  it('sends nothing on a dry run or with SAMURAI_ALERTS=log-only', async () => {
+  it('sends nothing on a dry run, and says so when SAMURAI_ALERTS=log-only', async () => {
     const fetchImpl = okFetch();
-    for (const [argv, env] of [
-      [['--dry-run'], ENV],
-      [[], { ...ENV, SAMURAI_ALERTS: ' log-only ' }],
+    for (const [argv, env, logged] of [
+      [['--dry-run'], { ...ENV, SAMURAI_ALERTS: 'log-only' }, ['v2_e']],
+      [[], { ...ENV, SAMURAI_ALERTS: ' log-only ' }, ['v2_alerts_log_only', 'v2_e']],
     ] as const) {
       const { entries, logger } = recorder();
       const alerts = alertsFor(argv, env, fetchImpl, logger);
       alerts.logger.log(entry('error', 'v2_e'));
       await alerts.flush();
-      expect(entries.map((logged) => logged.event)).toEqual(['v2_e']);
+      expect(entries.map((each) => each.event)).toEqual(logged);
     }
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('warns that log-only mutes Telegram', () => {
+    const { entries, logger } = recorder();
+    alertsFor([], { SAMURAI_ALERTS: 'log-only' }, okFetch(), logger);
+    expect(entries).toEqual([
+      {
+        trace_id: 'v2-alerts',
+        stage: 'v2',
+        level: 'warn',
+        event: 'v2_alerts_log_only',
+        message: 'SAMURAI_ALERTS=log-only: no Telegram alert is sent',
+      },
+    ]);
   });
 
   it('warns once per severity when the bot token or chat is unset', async () => {
@@ -245,6 +270,13 @@ describe('withAlerts', () => {
     expect(sentBodies(fetchImpl).map((body) => body.text)).toEqual([
       'Samurai v2 warning\nv2_w: slow',
     ]);
+  });
+
+  it('keeps the run outcome when the flush itself fails', async () => {
+    const failing = { logger: recorder().logger, flush: () => Promise.reject(new Error('flush')) };
+    await expect(withAlerts(() => Promise.resolve(0), failing)).resolves.toBe(0);
+    const cycle = new Error('cycle');
+    await expect(withAlerts(() => Promise.reject(cycle), failing)).rejects.toBe(cycle);
   });
 
   it('turns a thrown run into a critical alert, sends it, and rethrows', async () => {

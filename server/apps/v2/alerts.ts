@@ -28,6 +28,7 @@ export interface Alerts {
 const SEND_TIMEOUT_MS = 10_000;
 // Telegram Bot API sendMessage rejects text longer than 4096 characters
 const TELEGRAM_MAX_CHARS = 4096;
+const TRUNCATED = '\n…(truncated)';
 
 const SEVERITIES: readonly Severity[] = ['critical', 'warning'];
 
@@ -69,16 +70,29 @@ export class AlertingLogger implements Logger {
   }
 }
 
+function eventLine(event: string, messages: readonly string[]): string {
+  const [first = ''] = messages;
+  if (messages.length === 1) return `${event}: ${first}`;
+  const distinct = new Set(messages).size;
+  const count = `(x${messages.length})`;
+  return distinct === 1 ? `${event}: ${first} ${count}` : `${event} ${count}, first: ${first}`;
+}
+
+function truncated(text: string): string {
+  const chars = Array.from(text);
+  if (chars.length <= TELEGRAM_MAX_CHARS) return text;
+  return chars.slice(0, TELEGRAM_MAX_CHARS - TRUNCATED.length).join('') + TRUNCATED;
+}
+
 export function alertText(severity: Severity, alerts: readonly Alert[], secret: string): string {
-  const counts = new Map<string, number>();
+  const byEvent = new Map<string, string[]>();
   for (const alert of alerts) {
-    const line = `${alert.event}: ${alert.message}`;
-    counts.set(line, (counts.get(line) ?? 0) + 1);
+    byEvent.set(alert.event, [...(byEvent.get(alert.event) ?? []), alert.message]);
   }
-  const lines = [...counts].map(([line, count]) => (count === 1 ? line : `${line} (x${count})`));
+  const lines = [...byEvent].map(([event, messages]) => eventLine(event, messages));
   const text = [HEADERS[severity], ...lines].join('\n');
   const unsecret = secret === '' ? text : text.split(secret).join('[TELEGRAM_BOT_TOKEN]');
-  return maskCredentials(unsecret).slice(0, TELEGRAM_MAX_CHARS);
+  return truncated(maskCredentials(unsecret));
 }
 
 function logAlerts(logger: Logger, event: string, message: string): void {
@@ -121,7 +135,11 @@ function senderFor(
   fetchImpl: AlertFetch,
   logger: Logger,
 ): AlertSender {
-  if (argv.includes('--dry-run') || env.SAMURAI_ALERTS?.trim() === 'log-only') return NO_SEND;
+  if (argv.includes('--dry-run')) return NO_SEND;
+  if (env.SAMURAI_ALERTS?.trim() === 'log-only') {
+    logAlerts(logger, 'v2_alerts_log_only', 'SAMURAI_ALERTS=log-only: no Telegram alert is sent');
+    return NO_SEND;
+  }
   const token = env.TELEGRAM_BOT_TOKEN?.trim() ?? '';
   const chatId = env.TELEGRAM_CHAT_ID?.trim() ?? '';
   if (token === '' || chatId === '') {
@@ -173,6 +191,6 @@ export async function withAlerts(run: () => Promise<number>, alerts: Alerts): Pr
     });
     throw error;
   } finally {
-    await alerts.flush();
+    await alerts.flush().catch(() => undefined);
   }
 }

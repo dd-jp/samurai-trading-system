@@ -196,6 +196,21 @@ export class Journal implements DecisionJournal {
       );
   }
 
+  newRefusals(tradingDate: string): readonly JournalledRefusal[] {
+    return this.db
+      .prepare(
+        `SELECT trading_date, scope, parameter, ticket, message FROM v2_refusals today
+         WHERE trading_date = ? AND scope <> 'entry'
+           AND NOT EXISTS (
+             SELECT 1 FROM v2_refusals before
+             WHERE before.trading_date =
+                   (SELECT MAX(trading_date) FROM v2_refusals WHERE trading_date < ?)
+               AND before.parameter = today.parameter AND before.message = today.message)
+         ORDER BY today.rowid`,
+      )
+      .all(tradingDate, tradingDate) as JournalledRefusal[];
+  }
+
   #now(): string {
     return toStoredTimestamp(this.clock.now());
   }

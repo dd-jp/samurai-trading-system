@@ -230,12 +230,12 @@ Litestream streams the SQLite store to S3-compatible object storage, encrypted (
 - **Critical** (an `error` line, or the run throwing) notifies with sound.
 - **Warning** (a `warn` line) arrives silently.
 
-`info` lines are never sent. Repeats are counted, the bot token and credentials are masked, and text is cut at Telegram's 4,096-character limit. Any level not listed alerts by default; only the dry-run and simulated-cost fallback notices are kept quiet. The loss budget now logs its changes:
+`info` lines are never sent. Repeats are counted, the bot token and credentials are masked, and text is cut at Telegram's 4,096-character limit. Every `warn` or `error` event alerts unless it is on the quiet list, which holds only the dry-run and simulated-cost fallback notices. An event that repeats is counted, with its first message. The loss budget now logs its changes:
 - a halt, once, as critical;
 - a size step-down, as a warning;
 - a daily-cap block, as a warning.
 
-The cycle's refusals go out as one warning. Dry runs and `SAMURAI_ALERTS=log-only` send nothing. A missing token or chat logs a warning instead, and a failed send is logged and never changes the exit code. v2 never reads v1's `TELEGRAM_HEARTBEAT_CHAT_ID`: the healthchecks.io ping replaced that channel. The levels and routing are this plan's proposal, not a ruling; David can change them. The daily summary is Step 4b's row.
+Refusals that were not already journalled on the previous recorded day go out as one warning, so standing ones (a parameter still unset) are sent once. Entry-level sizing refusals are not sent. `SAMURAI_ALERTS=log-only` logs that it is on. Dry runs and `log-only` send nothing. A missing token or chat logs a warning instead, and a failed send is logged and never changes the exit code. v2 never reads v1's `TELEGRAM_HEARTBEAT_CHAT_ID`: the healthchecks.io ping replaced that channel. The levels and routing are this plan's proposal, not a ruling; David can change them. The daily summary is Step 4b's row.
 
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
 

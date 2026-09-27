@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   ControlAction,
+  LossBudgetState,
   MarketData,
   Sleeve,
   SleeveDecision,
@@ -15,7 +16,13 @@ import type {
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { type LogEntry, SimulatedClock, toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { type CycleDeps, calendarDaysBetween, runCycle, vetoApplied } from './cycle.js';
+import {
+  budgetChanges,
+  type CycleDeps,
+  calendarDaysBetween,
+  runCycle,
+  vetoApplied,
+} from './cycle.js';
 import { addDays } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
@@ -1580,6 +1587,45 @@ describe('runCycle under a manual control', () => {
     const resumed = await runCycle(deps, '2026-09-30');
     expect(sizeShares(deps, 'debate/primary', '2026-09-30', 'MSFT')).toBe(0);
     expect(resumed.books[0]?.size_multiplier).toBe(0);
+  });
+});
+
+describe('budgetChanges', () => {
+  const state = (over: Partial<LossBudgetState>): LossBudgetState => ({
+    referenceEquityGbp: 1_000,
+    ytdLossGbp: 600,
+    sizeMultiplier: 1,
+    halted: false,
+    entriesBlockedAtNextFill: false,
+    ...over,
+  });
+  const events = (before: LossBudgetState | undefined, after: LossBudgetState) =>
+    budgetChanges('b', before, after).map((change) => [change.level, change.event]);
+
+  it('alerts a book whose first-ever mark is already halted or stepped down', () => {
+    expect(events(undefined, state({ halted: true, sizeMultiplier: 0 }))).toEqual([
+      ['error', 'v2_loss_budget_halt'],
+    ]);
+    expect(events(undefined, state({ sizeMultiplier: 0.5 }))).toEqual([
+      ['warn', 'v2_loss_budget_step'],
+    ]);
+    expect(events(undefined, state({}))).toEqual([]);
+  });
+
+  it('stays quiet while a halt or a size holds, and after a reset lifts it', () => {
+    const halted = state({ halted: true, sizeMultiplier: 0 });
+    expect(events(halted, halted)).toEqual([]);
+    expect(events(state({ sizeMultiplier: 0.5 }), state({ sizeMultiplier: 0.5 }))).toEqual([]);
+    expect(events(state({ sizeMultiplier: 0.25 }), state({ sizeMultiplier: 1 }))).toEqual([]);
+    expect(events(state({ sizeMultiplier: 0.5 }), state({ sizeMultiplier: 0.25 }))).toEqual([
+      ['warn', 'v2_loss_budget_step'],
+    ]);
+  });
+
+  it('never reports the daily cap under a halt', () => {
+    expect(
+      events(undefined, state({ halted: true, sizeMultiplier: 0, entriesBlockedAtNextFill: true })),
+    ).toEqual([['error', 'v2_loss_budget_halt']]);
   });
 });
 

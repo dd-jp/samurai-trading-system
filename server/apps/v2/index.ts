@@ -304,14 +304,19 @@ export async function main(
   );
 }
 
-export function logRefusals(report: CycleReport, logger: Logger): void {
-  if (report.refusals.length === 0) return;
+export function logNewRefusals(
+  journal: Pick<Journal, 'newRefusals'>,
+  tradingDate: string,
+  logger: Logger,
+): void {
+  const refusals = journal.newRefusals(tradingDate);
+  if (refusals.length === 0) return;
   logger.log({
-    trace_id: `v2-${report.trading_date}`,
+    trace_id: `v2-${tradingDate}`,
     stage: 'v2',
     level: 'warn',
-    event: 'v2_cycle_refusals',
-    message: report.refusals.join('\n'),
+    event: 'v2_new_refusals',
+    message: refusals.map((refusal) => `${refusal.parameter}: ${refusal.message}`).join('\n'),
   });
 }
 
@@ -341,7 +346,7 @@ async function runOnce(
         logger,
       }),
     );
-    logRefusals(report, logger);
+    logNewRefusals(root.journal, tradingDate, logger);
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);
   } finally {
