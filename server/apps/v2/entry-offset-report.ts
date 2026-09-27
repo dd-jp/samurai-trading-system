@@ -70,29 +70,27 @@ export function entryOffsetReport(
   holdDays: number,
 ): EntryOffsetReport {
   const offsets: readonly (number | 'open')[] = [...REPORT_OFFSETS_BPS, 'open'];
-  const filled = offsets.map(() => 0);
-  const excess = offsets.map(() => 0);
+  const tallies = offsets.map((offset) => ({ offset, filled: 0, excess: 0 }));
   let scored = 0;
   for (const entry of entries) {
     const path = pathFor(entry, barsFrom, benchmark, holdDays);
     if (path === undefined) continue;
     scored += 1;
     const sign = entry.side === 'buy' ? 1 : -1;
-    offsets.forEach((offset, index) => {
-      const price = adjustedFill(entry, offset, path.first);
-      if (price === undefined) return;
-      filled[index] = (filled[index] ?? 0) + 1;
-      const move = path.exitClose / price - 1 - path.benchmarkReturn;
-      excess[index] = (excess[index] ?? 0) + sign * move;
-    });
+    for (const tally of tallies) {
+      const price = adjustedFill(entry, tally.offset, path.first);
+      if (price === undefined) continue;
+      tally.filled += 1;
+      tally.excess += sign * (path.exitClose / price - 1 - path.benchmarkReturn);
+    }
   }
   return {
     scored,
     pending: entries.length - scored,
-    rows: offsets.map((offset, index) => ({
+    rows: tallies.map(({ offset, filled, excess }) => ({
       offset,
-      filled: filled[index] ?? 0,
-      meanExcessBps: scored === 0 ? 0 : ((excess[index] ?? 0) / scored) * 10_000,
+      filled,
+      meanExcessBps: scored === 0 ? 0 : (excess / scored) * 10_000,
     })),
   };
 }

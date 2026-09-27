@@ -59,7 +59,10 @@ describe('reportEntryOffsets', () => {
   it('scores journalled entries against the bar store over the time-stop hold', async () => {
     const dir = scratch();
     const storePath = join(dir, 'v2.sqlite');
-    journal(storePath, [['a', 'debate/primary', '2026-09-01', 'AAA', 'alpaca', 'entry']]).close();
+    journal(storePath, [
+      ['a', 'debate/primary', '2026-09-01', 'AAA', 'alpaca', 'entry'],
+      ['z', 'debate/primary', '2026-09-01', 'ZZZ', 'alpaca', 'entry'],
+    ]).close();
     const dates = Array.from(
       { length: 12 },
       (_, day) => `2026-09-${String(day + 1).padStart(2, '0')}`,
@@ -82,7 +85,7 @@ describe('reportEntryOffsets', () => {
     store.close();
     const text = await reportEntryOffsets(storePath, join(dir, 'bars'));
     expect(text.split('\n')).toEqual([
-      'entries scored: 1, awaiting 10 bars: 0',
+      'entries scored: 1, awaiting 10 bars: 1',
       'offset      filled   mean excess per entry (bps, a miss counts 0)',
       '0 bps       100.0%   0.00',
       '50 bps      100.0%   0.00',

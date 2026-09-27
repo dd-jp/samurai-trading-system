@@ -73,7 +73,7 @@ describe('entryOffsetReport', () => {
 
   it('nets the benchmark from the open to the exit close, and reads the quoted limit on the adjusted scale', () => {
     const barsFrom = source({
-      CCC: [bar('2026-09-28', 100, 100, 99, 100, 2), bar('2026-09-29', 102, 102, 102, 102, 2)],
+      CCC: [bar('2026-09-28', 101, 101, 100, 100, 2), bar('2026-09-29', 102, 102, 102, 102, 2)],
       SPY: [bar('2026-09-28', 100, 100, 100, 100), bar('2026-09-29', 101, 101, 101, 101)],
     });
     const entry: JournalledEntry = {
@@ -125,6 +125,22 @@ describe('entryOffsetReport', () => {
     const report = entryOffsetReport([entry], barsFrom, 'SPY', 2);
     expect([report.scored, report.pending]).toEqual([0, 1]);
     expect(report.rows.every((row) => row.filled === 0 && row.meanExcessBps === 0)).toBe(true);
+  });
+});
+
+describe('entryOffsetReport at the touch', () => {
+  it('fills a short whose limit equals the next high', () => {
+    const barsFrom = source({
+      FFF: [bar('2026-09-28', 99, 100, 98, 99), bar('2026-09-29', 98, 98, 98, 98)],
+      SPY: FLAT_SPY,
+    });
+    const entry: JournalledEntry = {
+      tradingDate: '2026-09-28',
+      instrument: 'FFF',
+      side: 'sell',
+      limit: 100,
+    };
+    expect(excessByOffset([entry], barsFrom)[0]).toEqual([0, 1, 200]);
   });
 });
 
