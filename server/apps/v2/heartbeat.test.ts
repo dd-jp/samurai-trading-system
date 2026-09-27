@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../shared/index.js';
-import { healthchecksHeartbeat, NO_HEARTBEAT, withHeartbeat } from './heartbeat.js';
+import { healthchecksHeartbeat, heartbeatFor, NO_HEARTBEAT, withHeartbeat } from './heartbeat.js';
 
 const SECRET = 'https://hc-ping.com/secret-uuid';
 
@@ -72,7 +72,28 @@ describe('healthchecksHeartbeat', () => {
 describe('NO_HEARTBEAT', () => {
   it('resolves without sending', async () => {
     await expect(NO_HEARTBEAT('success')).resolves.toBeUndefined();
-    expect(NO_HEARTBEAT('fail')).toBeInstanceOf(Promise);
+    await expect(NO_HEARTBEAT('fail')).resolves.toBeUndefined();
+  });
+});
+
+describe('heartbeatFor', () => {
+  const env = { HEALTHCHECKS_PING_URL: SECRET };
+
+  it('never pings on a dry run, even with the URL set', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await heartbeatFor(
+      ['--date', '2026-09-28', '--dry-run'],
+      env,
+      fetchImpl,
+      recorder().logger,
+    )('success');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('pings the configured URL once on a real run', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await heartbeatFor(['--date', '2026-09-28'], env, fetchImpl, recorder().logger)('success');
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([SECRET]);
   });
 });
 
@@ -84,5 +105,11 @@ describe('withHeartbeat', () => {
     const boom = new Error('cycle failed');
     await expect(withHeartbeat(() => Promise.reject(boom), beat)).rejects.toBe(boom);
     expect(beat.mock.calls).toEqual([['success'], ['fail'], ['fail']]);
+  });
+
+  it('rethrows the cycle error when the fail beat itself throws', async () => {
+    const boom = new Error('cycle failed');
+    const beat = vi.fn().mockRejectedValue(new Error('logger down'));
+    await expect(withHeartbeat(() => Promise.reject(boom), beat)).rejects.toBe(boom);
   });
 });

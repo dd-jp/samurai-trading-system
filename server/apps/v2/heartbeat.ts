@@ -16,6 +16,17 @@ const PING_TIMEOUT_MS = 10_000;
 
 export const NO_HEARTBEAT: Heartbeat = () => Promise.resolve();
 
+export function heartbeatFor(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv,
+  fetchImpl: Fetch,
+  logger: Logger,
+): Heartbeat {
+  return argv.includes('--dry-run')
+    ? NO_HEARTBEAT
+    : healthchecksHeartbeat(env.HEALTHCHECKS_PING_URL, fetchImpl, logger);
+}
+
 export function healthchecksHeartbeat(
   pingUrl: string | undefined,
   fetchImpl: Fetch,
@@ -51,7 +62,7 @@ export async function withHeartbeat(run: () => Promise<number>, beat: Heartbeat)
   try {
     code = await run();
   } catch (error) {
-    await beat('fail');
+    await beat('fail').catch(() => undefined);
     throw error;
   }
   await beat(code === 0 ? 'success' : 'fail');
