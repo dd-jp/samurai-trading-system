@@ -21,8 +21,8 @@ function bar(
 const FLAT_SPY = [bar('2026-09-28', 50, 50, 50, 50), bar('2026-09-29', 50, 50, 50, 50)];
 
 function source(series: Record<string, readonly V2Bar[]>): BarsFrom {
-  return (instrument, tradingDate, count) =>
-    (series[instrument] ?? []).filter((one) => one.date >= tradingDate).slice(0, count);
+  return (instrument, tradingDate) =>
+    (series[instrument] ?? []).filter((one) => one.date >= tradingDate);
 }
 
 function excessByOffset(entries: readonly JournalledEntry[], barsFrom: BarsFrom) {

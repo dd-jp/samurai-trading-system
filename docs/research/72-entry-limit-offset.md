@@ -5,7 +5,7 @@
 **Result:**
 - **Reference price:** the decision close.
 - **Offset:** 0 bps. The entry stays a limit at the prior close.
-- **Paper test:** each paper day, `npm run v2:entry-offsets` scores the debate's own journalled entries at 0, 50, 100 and 200 bps and at the open.
+- **Paper test:** run by hand during paper (nothing schedules it), `npm run v2:entry-offsets` scores the debate's own journalled entries at 0, 50, 100 and 200 bps and at the open.
 - **When to decide again:** once about 100 paper entries have a full 10-bar hold.
 
 ## 1. The question
@@ -60,7 +60,7 @@ Mean excess per signal, in bps, relative to market-on-open, with the 95% CI:
 
 **Reading.**
 - In every cut, the limit at the close does best, and its CI excludes zero.
-- Each step up in the offset moves the result toward market-on-open.
+- Wider offsets move the result toward market-on-open; past 200 bps the steps are within noise and not strictly ordered.
 - The fills a limit misses are the names that gap through it. From the open, those names then underperform the market over the hold, so missing them helps.
 - The "up days" and "down days" rows proxy a sleeve that buys strength or sells weakness. The effect there is the same or larger.
 - On this data, the premise of the #1815 ruling does not hold.

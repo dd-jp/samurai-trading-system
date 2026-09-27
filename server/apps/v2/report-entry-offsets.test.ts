@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { readJournalledEntries, reportEntryOffsets } from './report-entry-offsets.js';
+import { main, readJournalledEntries, reportEntryOffsets } from './report-entry-offsets.js';
 
 const dirs: string[] = [];
 
@@ -114,5 +114,45 @@ describe('reportEntryOffsets', () => {
 
   it('refuses a store that does not exist', async () => {
     await expect(reportEntryOffsets(join(scratch(), 'missing.sqlite'), 'bars')).rejects.toThrow();
+  });
+});
+
+describe('main', () => {
+  it('defaults to the paper store and the bar store, and prints the report', async () => {
+    const lines: string[] = [];
+    const calls: string[][] = [];
+    const code = await main(
+      [],
+      (line) => lines.push(line),
+      async (store, bars) => {
+        calls.push([store, bars]);
+        return 'report';
+      },
+    );
+    expect([code, lines, calls]).toEqual([
+      0,
+      ['report'],
+      [['data/samurai-v2-paper.sqlite', 'data/bars/parquet']],
+    ]);
+  });
+
+  it('passes explicit paths through and prints a failure with exit 1', async () => {
+    const lines: string[] = [];
+    const code = await main(
+      ['store.sqlite', 'bars'],
+      (line) => lines.push(line),
+      (store, bars) => Promise.reject(new Error(`no ${store} or ${bars}`)),
+    );
+    expect([code, lines]).toEqual([1, ['no store.sqlite or bars']]);
+  });
+
+  it('prints a non-Error rejection as text', async () => {
+    const lines: string[] = [];
+    await main(
+      [],
+      (line) => lines.push(line),
+      () => Promise.reject('plain'),
+    );
+    expect(lines).toEqual(['plain']);
   });
 });

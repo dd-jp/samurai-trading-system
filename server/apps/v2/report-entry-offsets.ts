@@ -58,8 +58,8 @@ export function readJournalledEntries(db: StoreHandle): readonly JournalledEntry
 }
 
 export function barsFromSource(source: ParquetBarsSource): BarsFrom {
-  return (instrument, tradingDate, count) =>
-    (source.load(instrument)?.bars ?? []).filter((bar) => bar.date >= tradingDate).slice(0, count);
+  return (instrument, tradingDate) =>
+    (source.load(instrument)?.bars ?? []).filter((bar) => bar.date >= tradingDate);
 }
 
 export async function reportEntryOffsets(storePath: string, barRoot: string): Promise<string> {
@@ -79,12 +79,21 @@ export async function reportEntryOffsets(storePath: string, barRoot: string): Pr
   }
 }
 
+export async function main(
+  argv: readonly string[],
+  write: (line: string) => void,
+  report = reportEntryOffsets,
+): Promise<number> {
+  const [storePath = V2_STORE_PATH, barRoot = DEFAULT_BAR_STORE_ROOT] = argv;
+  try {
+    write(await report(storePath, barRoot));
+    return 0;
+  } catch (error) {
+    write(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [storePath = V2_STORE_PATH, barRoot = DEFAULT_BAR_STORE_ROOT] = process.argv.slice(2);
-  reportEntryOffsets(storePath, barRoot)
-    .then((text) => console.log(text))
-    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : error);
-      process.exitCode = 1;
-    });
+  process.exitCode = await main(process.argv.slice(2), (line) => console.log(line));
 }

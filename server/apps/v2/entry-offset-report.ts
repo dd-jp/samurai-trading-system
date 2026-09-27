@@ -9,7 +9,7 @@ export interface JournalledEntry {
   readonly limit: number;
 }
 
-export type BarsFrom = (instrument: string, tradingDate: string, count: number) => readonly V2Bar[];
+export type BarsFrom = (instrument: string, tradingDate: string) => readonly V2Bar[];
 
 export interface OffsetRow {
   readonly offset: number | 'open';
@@ -46,8 +46,8 @@ function pathFor(
   benchmark: string,
   holdDays: number,
 ): Path | undefined {
-  const own = holdFor(barsFrom(entry.instrument, entry.tradingDate, holdDays), holdDays);
-  const bench = holdFor(barsFrom(benchmark, entry.tradingDate, holdDays), holdDays);
+  const own = holdFor(barsFrom(entry.instrument, entry.tradingDate), holdDays);
+  const bench = holdFor(barsFrom(benchmark, entry.tradingDate), holdDays);
   if (own === undefined || bench === undefined) return undefined;
   if (own.first.date !== bench.first.date || own.exit.date !== bench.exit.date) return undefined;
   return {
