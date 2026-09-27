@@ -425,7 +425,7 @@ describe('composeV2Root', () => {
       expect([...urls]).toEqual(['https://nous.test/v1/chat/completions']);
       expect([...authorizations]).toEqual(['Bearer nous-secret-key']);
       expect(models.sort()).toEqual([
-        'anthropic/claude-fable-5.1',
+        'anthropic/claude-opus-5.5',
         'anthropic/claude-sonnet-5',
         'deepseek/deepseek-v4-pro-0813',
         'openai/gpt-5.5',
@@ -479,7 +479,7 @@ describe('composeV2Root', () => {
       expect(lines).toHaveLength(1);
       expect(JSON.parse(lines[0] ?? '')).toMatchObject({
         event: 'v2_llm_upstream_model',
-        payload: { pinned: 'anthropic/claude-fable-5.1', upstream: 'anthropic/claude-fable-5.1' },
+        payload: { pinned: 'anthropic/claude-opus-5.5', upstream: 'anthropic/claude-opus-5.5' },
       });
     } finally {
       vi.unstubAllGlobals();

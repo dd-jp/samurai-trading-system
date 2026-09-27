@@ -31,9 +31,9 @@ export const DEEPSEEK_V4_PRO_PIN: ModelPin = {
 
 export const JUDGE_PIN: ModelPin = {
   seat: 'judge',
-  wire: 'anthropic/claude-fable-5.1',
-  priced: 'anthropic/claude-fable-5.1',
-  canonicalSlug: 'anthropic/claude-fable-5.1-20260831',
+  wire: 'anthropic/claude-opus-5.5',
+  priced: 'anthropic/claude-opus-5.5',
+  canonicalSlug: 'anthropic/claude-opus-5.5-20260921',
 };
 
 export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_PIN, GPT_5_5_PIN, DEEPSEEK_V4_PRO_PIN];
@@ -41,4 +41,4 @@ export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_PIN, GPT_5_5_PIN, DEE
 export const ALL_PINS: readonly ModelPin[] = [...DEBATER_PINS, JUDGE_PIN];
 
 export const DEBATER_MAX_TOKENS = 1024;
-export const JUDGE_MAX_TOKENS = 1024;
+export const JUDGE_MAX_TOKENS = 2048;
