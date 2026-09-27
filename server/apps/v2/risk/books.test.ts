@@ -151,6 +151,34 @@ describe('PaperBooks', () => {
     });
   });
 
+  it('#1778: a flip takes the new stop/target from the flipping fill, not the stale long ones', () => {
+    const books = openBooks(seededStore());
+    books.applyFill(
+      'debate/primary',
+      fill({ qty: 10, priceGbp: 100, stopGbp: 95, targetGbp: 115 }),
+    );
+    expect(
+      books.applyFill(
+        'debate/primary',
+        fill({ side: 'sell', qty: 15, priceGbp: 110, stopGbp: 112, targetGbp: 90 }),
+      ),
+    ).toMatchObject({ qty: -5, avgPriceGbp: 110, stopGbp: 112, targetGbp: 90 });
+  });
+
+  it('#1778: a flip fill carrying no stop/target opens the new side unbracketed, not stale', () => {
+    const books = openBooks(seededStore());
+    books.applyFill(
+      'debate/primary',
+      fill({ qty: 10, priceGbp: 100, stopGbp: 95, targetGbp: 115 }),
+    );
+    expect(
+      books.applyFill(
+        'debate/primary',
+        fill({ side: 'sell', qty: 15, priceGbp: 110, stopGbp: undefined, targetGbp: undefined }),
+      ),
+    ).toMatchObject({ qty: -5, avgPriceGbp: 110, stopGbp: undefined, targetGbp: undefined });
+  });
+
   it('values positions at the mark, falls back to the entry price, and holds shorts as negative qty', () => {
     const db = seededStore();
     const books = openBooks(db);
