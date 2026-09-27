@@ -1,10 +1,16 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { SimulatedClock } from '../../server/shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../server/shared/store/index.js';
-import { backupTargets, execRunner, litestreamFor, replicateOnce, restoreMissing } from '../../server/apps/v2/backup.js';
+import {
+  backupTargets,
+  execRunner,
+  litestreamFor,
+  replicateOnce,
+  restoreMissing,
+} from '../../server/apps/v2/backup.js';
 import { composeV2Root } from '../../server/apps/v2/index.js';
 import { CapitalConfigStore } from '../../server/apps/v2/risk/index.js';
+import { SimulatedClock } from '../../server/shared/index.js';
+import { openSharedStore, type StoreHandle } from '../../server/shared/store/index.js';
 
 const dir = '/Users/ddjp/.claude/jobs/5f005ff2/tmp/restore-drill';
 rmSync(dir, { recursive: true, force: true });
@@ -25,7 +31,10 @@ function dump(path: string): string {
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
     .all() as { name: string }[];
-  const out = tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]);
+  const out = tables.map(({ name }) => [
+    name,
+    db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all(),
+  ]);
   db.close();
   return JSON.stringify(out);
 }
@@ -69,7 +78,11 @@ async function cycle(storePath: string, date: string) {
 }
 
 const seed = openSharedStore(paper);
-new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-09-01T07:00:00.000Z'))).setYear(2026, 2_000, 1_500);
+new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-09-01T07:00:00.000Z'))).setYear(
+  2026,
+  2_000,
+  1_500,
+);
 seed.close();
 const research0 = openSharedStore(research);
 research0.exec('CREATE TABLE IF NOT EXISTS drill_marker (v TEXT)');
@@ -80,22 +93,48 @@ console.log('replica root', root);
 for (const date of DAYS) {
   const report = await cycle(paper, date);
   await replicateOnce(tool, targets, quiet);
-  console.log(date, 'decisions', report.decisions, 'entries', report.entries, 'refusals', report.dry_run_refusals, 'replicated');
+  console.log(
+    date,
+    'decisions',
+    report.decisions,
+    'entries',
+    report.entries,
+    'refusals',
+    report.dry_run_refusals,
+    'replicated',
+  );
 }
 copyFileSync(paper, control);
 console.log('before delete', rowCounts(paper));
 const beforePaper = dump(paper);
 const beforeResearch = dump(research);
-for (const path of [paper, research]) for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true });
+for (const path of [paper, research])
+  for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true });
 console.log('deleted, exists:', existsSync(paper), existsSync(research));
 await restoreMissing(tool, targets);
 console.log('restored, exists:', existsSync(paper), existsSync(research));
-console.log('paper identical:', dump(paper) === beforePaper, 'research identical:', dump(research) === beforeResearch);
+console.log(
+  'paper identical:',
+  dump(paper) === beforePaper,
+  'research identical:',
+  dump(research) === beforeResearch,
+);
 await restoreMissing(tool, targets);
 console.log('second restore left stores untouched:', dump(paper) === beforePaper);
 const restoredReport = await cycle(paper, NEXT);
 const controlReport = await cycle(control, NEXT);
-console.log(NEXT, 'reports identical:', JSON.stringify(restoredReport) === JSON.stringify(controlReport), 'decisions', restoredReport.decisions);
-console.log('stores identical after next cycle:', dump(paper) === dump(control), 'identical but for UUIDs and wall-clock stamps:', normalised(paper) === normalised(control));
+console.log(
+  NEXT,
+  'reports identical:',
+  JSON.stringify(restoredReport) === JSON.stringify(controlReport),
+  'decisions',
+  restoredReport.decisions,
+);
+console.log(
+  'stores identical after next cycle:',
+  dump(paper) === dump(control),
+  'identical but for UUIDs and wall-clock stamps:',
+  normalised(paper) === normalised(control),
+);
 await replicateOnce(tool, targets, quiet);
 console.log('post-restore replicate ok');

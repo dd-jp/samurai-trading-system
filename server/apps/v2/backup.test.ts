@@ -43,8 +43,8 @@ afterEach(() => {
 interface Call {
   readonly bin: string;
   readonly args: readonly string[];
-  readonly config?: string;
-  readonly configMode?: number;
+  readonly config: string | undefined;
+  readonly configMode: number | undefined;
 }
 
 function fakeRunner(answers: Record<string, { code: number; output: string }> = {}) {
@@ -150,6 +150,16 @@ describe('backup configuration', () => {
     expect(scrubbed('token=abc', {})).toBe('[REDACTED]');
   });
 
+  it('matches a secret without the whitespace around it, and ignores a blank one', () => {
+    expect(scrubbed('bucket-x ok', { R2_BUCKET: ' bucket-x\n', R2_ENDPOINT: '' })).toBe(
+      '[R2_BUCKET] ok',
+    );
+  });
+
+  it('pins the Litestream version the drills ran', () => {
+    expect(LITESTREAM_VERSION).toBe('0.5.17');
+  });
+
   it('refuses a paper run without its backup variables, naming them and nothing else', () => {
     expect(() => litestreamFor({ R2_BUCKET: 'bucket-x' }, fakeRunner().run)).toThrow(
       'paper run refuses without its Litestream backup: set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, LITESTREAM_SSE_C_KEY',
@@ -174,10 +184,27 @@ describe('replicateOnce', () => {
     expect(replicate?.args).toEqual(['replicate', '-once', '-config', fake.configs[0]]);
     expect(replicate?.configMode).toBe(0o600);
     expect(replicate?.config).toBe(litestreamConfig([targets[0] as BackupTarget]));
+    expect(fake.configs[0]).toContain(join(tmpdir(), 'samurai-litestream-'));
     expect(existsSync(fake.configs[0] as string)).toBe(false);
-    expect(entries.map((entry) => [entry.level, entry.event, entry.message])).toEqual([
-      ['info', 'v2_backup_replicated', 'replicated v2/paper'],
+    expect(entries).toEqual([
+      {
+        trace_id: 'v2-backup',
+        stage: 'v2',
+        level: 'info',
+        event: 'v2_backup_replicated',
+        message: 'replicated v2/paper',
+      },
     ]);
+  });
+
+  it('names every store it replicated', async () => {
+    const { entries, logger } = silent();
+    await replicateOnce(
+      litestreamFor(ENV, fakeRunner().run),
+      storesIn(scratch(), ['paper.sqlite', 'research.sqlite']),
+      logger,
+    );
+    expect(entries.map((entry) => entry.message)).toEqual(['replicated v2/paper, v2/research']);
   });
 
   it('does nothing when no store exists yet', async () => {

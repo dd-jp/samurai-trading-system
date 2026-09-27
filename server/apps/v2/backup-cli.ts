@@ -35,10 +35,8 @@ export async function main(
 }
 
 if (isMainModule(import.meta.url)) {
-  main(process.argv.slice(2), process.env)
-    .then((code) => process.exit(code))
-    .catch((error: unknown) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(1);
-    });
+  process.exitCode = await main(process.argv.slice(2), process.env).catch((error: unknown) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  });
 }

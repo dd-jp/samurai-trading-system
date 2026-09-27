@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type CommandRunner, LITESTREAM_VERSION } from './backup.js';
 import { main } from './backup-cli.js';
 
@@ -39,11 +39,34 @@ function researchStore(): string {
 }
 
 describe('backup CLI', () => {
-  it('refuses an unknown command', async () => {
+  it('refuses an unknown command with its usage', async () => {
     const { run, commands } = recorder();
-    expect(await main(['sync'], ENV, run, quiet)).toBe(1);
-    expect(await main([], ENV, run, quiet)).toBe(1);
+    const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await main(['sync'], ENV, run, quiet)).toBe(1);
+      expect(await main([], ENV, run, quiet)).toBe(1);
+      expect(written.mock.calls.map(([text]) => text)).toEqual([
+        'usage: backup-cli backup | restore\n',
+        'usage: backup-cli backup | restore\n',
+      ]);
+    } finally {
+      written.mockRestore();
+    }
     expect(commands).toEqual([]);
+  });
+
+  it('logs to stderr as JSON by default', async () => {
+    const { run } = recorder();
+    const env = { ...ENV, SAMURAI_RESEARCH_STORE: researchStore() };
+    const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await main(['backup'], env, run);
+      const [line] = written.mock.calls.map(([text]) => String(text));
+      expect(JSON.parse(line ?? '')).toMatchObject({ event: 'v2_backup_replicated' });
+      expect(line?.endsWith('\n')).toBe(true);
+    } finally {
+      written.mockRestore();
+    }
   });
 
   it('replicates the stores on backup', async () => {
