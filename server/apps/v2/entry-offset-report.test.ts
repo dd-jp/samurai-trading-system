@@ -112,11 +112,11 @@ describe('entryOffsetReport', () => {
   });
 
   it.each([
-    ['entry day', ['2026-09-29', '2026-09-30']],
-    ['exit day', ['2026-09-28', '2026-09-30']],
-  ])('leaves an entry pending when the benchmark misses the %s', (_, spyDates) => {
+    ['entry day', '2026-09-30', ['2026-09-29', '2026-09-30']],
+    ['exit day', '2026-09-29', ['2026-09-28', '2026-09-30']],
+  ])('leaves an entry pending when the benchmark misses the %s', (_, exitDate, spyDates) => {
     const barsFrom = source({
-      AAA: [bar('2026-09-28', 101.5, 103, 100.8, 102), bar('2026-09-29', 103, 105, 102, 104)],
+      AAA: [bar('2026-09-28', 101.5, 103, 100.8, 102), bar(exitDate, 103, 105, 102, 104)],
       SPY: spyDates.map((date) => bar(date, 50, 50, 50, 50)),
     });
     const entry: JournalledEntry = {
