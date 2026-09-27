@@ -10,7 +10,7 @@ import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { CommandRunner } from './backup.js';
-import type { BarRefresh } from './bar-refresh.js';
+import { type BarRefresh, NO_BAR_REFRESH } from './bar-refresh.js';
 import type { CycleReport } from './cycle.js';
 import { BarsMarketData, NO_NEWS, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
 import {
@@ -681,7 +681,7 @@ describe('main', () => {
   ) {
     const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      return await main(argv, env, run, barRefresh);
+      return await main(argv, env, run, undefined, barRefresh);
     } finally {
       written.mockRestore();
     }
@@ -749,9 +749,9 @@ describe('main', () => {
     };
     const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      await expect(main(['--date', '2026-09-28'], env, run, fetchImpl)).rejects.toThrow(
-        /without NOUS_BASE_URL/,
-      );
+      await expect(
+        main(['--date', '2026-09-28'], env, run, fetchImpl, NO_BAR_REFRESH),
+      ).rejects.toThrow(/without NOUS_BASE_URL/);
     } finally {
       written.mockRestore();
     }
