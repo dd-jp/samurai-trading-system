@@ -104,6 +104,23 @@ export function normaliseUnitBreaks(bars: readonly DailyBar[]): {
   return { bars: scaled.reverse(), breaks };
 }
 
+type RatioClass = 'unit-break' | 'hole' | 'suspect' | 'ok';
+
+function classifyRatio(ratio: number): RatioClass {
+  if (isUnitBreakRatio(ratio)) return 'unit-break';
+  if (isHoleRatio(ratio)) return 'hole';
+  if (isSuspectRatio(ratio)) return 'suspect';
+  return 'ok';
+}
+
+function flipsFrom(flipDates: readonly string[]): SuspectFlips | undefined {
+  const first = flipDates[0];
+  const last = flipDates[flipDates.length - 1];
+  return first === undefined || last === undefined
+    ? undefined
+    : { count: flipDates.length, from: first, to: last };
+}
+
 export function findHolesAndFlips(bars: readonly DailyBar[]): {
   holes: HoleRecord[];
   flips: SuspectFlips | undefined;
@@ -113,19 +130,11 @@ export function findHolesAndFlips(bars: readonly DailyBar[]): {
   for (let index = 1; index < bars.length; index++) {
     const date = (bars[index] as DailyBar).date;
     const ratio = (bars[index] as DailyBar).close / (bars[index - 1] as DailyBar).close;
-    if (isUnitBreakRatio(ratio)) continue;
-    if (isHoleRatio(ratio)) holes.push({ date, ratio });
-    else if (isSuspectRatio(ratio)) flipDates.push(date);
+    const kind = classifyRatio(ratio);
+    if (kind === 'hole') holes.push({ date, ratio });
+    else if (kind === 'suspect') flipDates.push(date);
   }
-  const first = flipDates[0];
-  const last = flipDates[flipDates.length - 1];
-  return {
-    holes,
-    flips:
-      first === undefined || last === undefined
-        ? undefined
-        : { count: flipDates.length, from: first, to: last },
-  };
+  return { holes, flips: flipsFrom(flipDates) };
 }
 
 export function applyBarHygiene(

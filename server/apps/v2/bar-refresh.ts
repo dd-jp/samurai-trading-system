@@ -73,6 +73,22 @@ function shrinksHistory(existing: BarSeries, next: readonly DailyBar[]): boolean
   );
 }
 
+function assertNoShrink(symbol: string, existing: BarSeries, rounded: readonly DailyBar[]): void {
+  if (!shrinksHistory(existing, rounded)) return;
+  throw new Error(
+    `${symbol}: refresh would shrink history (had ${existing.bars.length} bars from ` +
+      `${existing.bars[0]?.date}, got ${rounded.length} from ${rounded[0]?.date ?? 'none'}) — refusing to overwrite`,
+  );
+}
+
+function assertCalendarFresh(rounded: readonly DailyBar[], tradingDate: string): void {
+  if (isFresh(rounded.at(-1), tradingDate)) return;
+  throw new Error(
+    `v2 bar refresh: ${CALENDAR_REFERENCE} still stale after refresh (last bar ` +
+      `${rounded.at(-1)?.date ?? 'none'}, trading date ${tradingDate})`,
+  );
+}
+
 async function refreshOne(
   symbol: string,
   existing: BarSeries | undefined,
@@ -83,67 +99,89 @@ async function refreshOne(
   const hygiene = applyBarHygiene(symbol, pulled.bars, { fetchDate: options.tradingDate });
   if (hygiene.bars.length === 0) return undefined;
   const rounded = roundPrices(hygiene.bars);
-  if (existing !== undefined && shrinksHistory(existing, rounded)) {
-    throw new Error(
-      `${symbol}: refresh would shrink history (had ${existing.bars.length} bars from ` +
-        `${existing.bars[0]?.date}, got ${rounded.length} from ${rounded[0]?.date ?? 'none'}) — refusing to overwrite`,
-    );
-  }
+  if (existing !== undefined) assertNoShrink(symbol, existing, rounded);
   await options.store.write('alpaca', [{ symbol, bars: rounded }]);
-  if (symbol === CALENDAR_REFERENCE && !isFresh(rounded.at(-1), options.tradingDate)) {
-    throw new Error(
-      `v2 bar refresh: ${CALENDAR_REFERENCE} still stale after refresh (last bar ` +
-        `${rounded.at(-1)?.date ?? 'none'}, trading date ${options.tradingDate})`,
-    );
-  }
+  if (symbol === CALENDAR_REFERENCE) assertCalendarFresh(rounded, options.tradingDate);
   return { symbol, bars: rounded.length, unitBreaks: hygiene.report.unit_breaks.length };
 }
 
-// SPY (the calendar reference) gates every name's freshness check, so it refreshes first
-// and a failure there aborts the run; every other symbol fails in isolation so one bad
-// print never blocks the rest of the universe
-export async function refreshAlpacaBars(options: BarRefreshOptions): Promise<BarRefreshReport> {
-  const existing = await options.store.readVenue('alpaca');
-  const universe = new Set([CALENDAR_REFERENCE, ...options.constituents, ...existing.keys()]);
-  const ordered = [
+function orderedUniverse(
+  constituents: readonly string[],
+  existing: ReadonlyMap<string, BarSeries>,
+): string[] {
+  const universe = new Set([CALENDAR_REFERENCE, ...constituents, ...existing.keys()]);
+  return [
     CALENDAR_REFERENCE,
     ...[...universe].filter((symbol) => symbol !== CALENDAR_REFERENCE).sort(),
   ];
+}
 
-  const updated: BarRefreshSymbolResult[] = [];
-  const noNewBars: string[] = [];
-  const failed: { symbol: string; reason: string }[] = [];
+type SymbolOutcome =
+  | { readonly kind: 'updated'; readonly result: BarRefreshSymbolResult }
+  | { readonly kind: 'unchanged'; readonly symbol: string }
+  | { readonly kind: 'failed'; readonly symbol: string; readonly reason: string };
+
+// SPY (the calendar reference) gates every name's freshness check, so a failure there
+// aborts the run; every other symbol fails in isolation so one bad print never blocks
+// the rest of the universe
+async function refreshSymbolSafely(
+  symbol: string,
+  existing: BarSeries | undefined,
+  options: BarRefreshOptions,
+): Promise<SymbolOutcome> {
+  try {
+    const result = await refreshOne(symbol, existing, options);
+    return result === undefined ? { kind: 'unchanged', symbol } : { kind: 'updated', result };
+  } catch (error) {
+    if (symbol === CALENDAR_REFERENCE) throw error;
+    return { kind: 'failed', symbol, reason: messageOf(error) };
+  }
+}
+
+interface Buckets {
+  readonly updated: BarRefreshSymbolResult[];
+  readonly noNewBars: string[];
+  readonly failed: { readonly symbol: string; readonly reason: string }[];
+}
+
+function recordOutcome(outcome: SymbolOutcome, buckets: Buckets, logger: Logger): void {
+  if (outcome.kind === 'unchanged') {
+    buckets.noNewBars.push(outcome.symbol);
+    return;
+  }
+  if (outcome.kind === 'failed') {
+    buckets.failed.push({ symbol: outcome.symbol, reason: outcome.reason });
+    logRefresh(logger, 'warn', 'v2_bar_refresh_failed', `${outcome.symbol}: ${outcome.reason}`);
+    return;
+  }
+  buckets.updated.push(outcome.result);
+  if (outcome.result.unitBreaks > 0) {
+    logRefresh(
+      logger,
+      'warn',
+      'v2_bar_refresh_unit_break',
+      `${outcome.result.symbol}: ${outcome.result.unitBreaks} unit break(s) normalised`,
+    );
+  }
+}
+
+export async function refreshAlpacaBars(options: BarRefreshOptions): Promise<BarRefreshReport> {
+  const existing = await options.store.readVenue('alpaca');
+  const ordered = orderedUniverse(options.constituents, existing);
+  const buckets: Buckets = { updated: [], noNewBars: [], failed: [] };
 
   for (const symbol of ordered) {
-    try {
-      const result = await refreshOne(symbol, existing.get(symbol), options);
-      if (result === undefined) {
-        noNewBars.push(symbol);
-        continue;
-      }
-      updated.push(result);
-      if (result.unitBreaks > 0) {
-        logRefresh(
-          options.logger,
-          'warn',
-          'v2_bar_refresh_unit_break',
-          `${symbol}: ${result.unitBreaks} unit break(s) normalised`,
-        );
-      }
-    } catch (error) {
-      if (symbol === CALENDAR_REFERENCE) throw error;
-      failed.push({ symbol, reason: messageOf(error) });
-      logRefresh(options.logger, 'warn', 'v2_bar_refresh_failed', `${symbol}: ${messageOf(error)}`);
-    }
+    const outcome = await refreshSymbolSafely(symbol, existing.get(symbol), options);
+    recordOutcome(outcome, buckets, options.logger);
   }
 
   logRefresh(
     options.logger,
     'info',
     'v2_bar_refresh_summary',
-    `refreshed ${updated.length}/${ordered.length} symbols, ${noNewBars.length} unchanged, ${failed.length} failed`,
+    `refreshed ${buckets.updated.length}/${ordered.length} symbols, ${buckets.noNewBars.length} unchanged, ${buckets.failed.length} failed`,
   );
-  return { attempted: ordered.length, updated, noNewBars, failed };
+  return { attempted: ordered.length, ...buckets };
 }
 
 export function barRefreshFor(
