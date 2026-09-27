@@ -59,12 +59,12 @@ describe('alpaca bars api', () => {
 
   it('throws malformed bar when exactly one numeric field is not finite', () => {
     const base = { t: '2016-01-04T05:00:00Z', o: 1, h: 1, l: 1, c: 1, v: 1 };
-    expect(() =>
-      parseBarsPage({ bars: { SPY: [{ ...base, o: Number.NaN }] } }, 'SPY'),
-    ).toThrow(/malformed bar/);
-    expect(() =>
-      parseBarsPage({ bars: { SPY: [{ ...base, c: Number.NaN }] } }, 'SPY'),
-    ).toThrow(/malformed bar/);
+    expect(() => parseBarsPage({ bars: { SPY: [{ ...base, o: Number.NaN }] } }, 'SPY')).toThrow(
+      /malformed bar/,
+    );
+    expect(() => parseBarsPage({ bars: { SPY: [{ ...base, c: Number.NaN }] } }, 'SPY')).toThrow(
+      /malformed bar/,
+    );
     expect(() =>
       parseBarsPage({ bars: { SPY: [{ ...base, v: Number.POSITIVE_INFINITY }] } }, 'SPY'),
     ).toThrow(/malformed bar/);
