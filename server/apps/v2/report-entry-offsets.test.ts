@@ -79,7 +79,20 @@ describe('reportEntryOffsets', () => {
       }));
     const store = await ParquetBarStore.open(join(dir, 'bars'));
     await store.write('alpaca', [
-      { symbol: 'AAA', bars: [{ ...flat(50)[0], date: '2026-08-31' }, ...flat(100)] },
+      {
+        symbol: 'AAA',
+        bars: [
+          { ...flat(50)[0], date: '2026-08-31' },
+          ...flat(100).map((one, day) => ({
+            ...one,
+            open: 100 + day,
+            high: 100 + day,
+            low: 100 + day,
+            close: 100 + day,
+            rawClose: 100 + day,
+          })),
+        ],
+      },
       { symbol: 'SPY', bars: flat(400) },
     ]);
     store.close();
@@ -87,11 +100,11 @@ describe('reportEntryOffsets', () => {
     expect(text.split('\n')).toEqual([
       'entries scored: 1, awaiting 10 bars: 1',
       'offset      filled   mean excess per entry (bps, a miss counts 0)',
-      '0 bps       100.0%   0.00',
-      '50 bps      100.0%   0.00',
-      '100 bps     100.0%   0.00',
-      '200 bps     100.0%   0.00',
-      'at the open 100.0%   0.00',
+      '0 bps       100.0%   900.00',
+      '50 bps      100.0%   900.00',
+      '100 bps     100.0%   900.00',
+      '200 bps     100.0%   900.00',
+      'at the open 100.0%   900.00',
     ]);
   });
 
