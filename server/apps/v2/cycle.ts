@@ -624,7 +624,25 @@ class Cycle {
     return reports;
   }
 
+  journalStaleMarks(book: BookSpec): void {
+    for (const held of this.deps.books.positions(book.id)) {
+      const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
+      if (isFresh(bar, this.tradingDate)) continue;
+      const price = bar === undefined ? 'the entry price' : `the ${bar.date} close`;
+      const message = `${book.id} ${held.instrument}: marked at ${price}, no bar in the 5 days before ${this.tradingDate}`;
+      this.deps.journal.recordRefusal({
+        trading_date: this.tradingDate,
+        scope: 'data',
+        parameter: 'MARK_FRESHNESS',
+        ticket: '#1804',
+        message,
+      });
+      this.refusals.push(message);
+    }
+  }
+
   async mark(book: BookSpec): Promise<BookReport> {
+    this.journalStaleMarks(book);
     const previous = this.deps.books.lastDay(book.id);
     const day = this.deps.books.markDay(
       book.id,
