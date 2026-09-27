@@ -25,6 +25,7 @@ The evidence behind the reframe (doc 65 §1, doc 67 §3, doc 71):
 
 - **Q1 — No daily % target.** The objective is a positive net-of-cost return that beats the matched benchmark under the £1,500 hard loss constraint. 0.5–2%/day is rejected as incompatible with the replication prior (Sharpe 0.4–0.8 ≈ 6–12%/yr) and with the loss limit.
 - **Q6 as amended by G6 — Loss budget.** Net trading loss from start capital, both venues, in GBP, open positions marked to market. £1,500 per calendar year, resetting each year; deposits do not rebase start capital; GBP/USD moves on the Alpaca balance are excluded (trading P&L only, no hedge). −£500 → half size; −£1,000 → quarter size; −£1,500 → halt for the year. Daily cap exactly 1.0% of start capital, blocking new entries (exits still run). Profits never extend the limit. Loosening the £1,500 or the daily cap mid-year is never permitted (Q13).
+- **Caps by sleeve share (doc 66, 2026-09-27).** Each sleeve's books hold its capital share of start capital, and its yearly loss cap, size steps and daily cap are the same share of the account's, on paper and live; the debate sleeve's share is 30%. The sleeves' caps together never exceed the account's.
 - **G10 — Budget in the backtest.** The backtest runs with the loss-budget rules inside it (size steps, daily cap, yearly reset) so the predicted band already reflects them.
 
 ### 2.2 Venues, instruments, universe

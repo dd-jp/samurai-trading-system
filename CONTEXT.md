@@ -69,6 +69,9 @@ The budget's response to loss: −£500 halves position size, −£1,000 quarter
 **Daily cap**
 A loss of 1.0% of start capital in one day blocks new entries for that day. Exits still run.
 
+**Sleeve share**
+Each sleeve's book holds its capital share of start capital, and its budget, size steps and daily cap are the same share of the account's (debate 30%: £450 a year, steps at −£150/−£300, £6 a day on a £2,000 start). The sleeves' caps together never exceed the account's, on paper and live.
+
 **Halt**
 The state after −£1,500: no new entries until the next calendar year. Protective exits keep running.
 

@@ -255,6 +255,7 @@ describe('PaperBooks', () => {
       sizeMultiplier: 1,
       entriesBlockedAtNextFill: false,
     });
+    expect(books.lastDay('debate/primary')?.state.entriesBlockedAtNextFill).toBe(false);
     expect(lose('2026-09-15', 6, 'b')).toMatchObject({
       sizeMultiplier: 1,
       entriesBlockedAtNextFill: true,
