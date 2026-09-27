@@ -653,6 +653,7 @@ class Cycle {
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
     );
     await this.cancelRestingEntriesOnBlock(book, day.state, this.tradingDate);
+    this.logBudgetChange(book.id, previous?.state, day.state);
     return {
       book_id: book.id,
       equity_gbp: day.equityGbp,
@@ -662,7 +663,13 @@ class Cycle {
     };
   }
 
-  log(level: 'warn' | 'info', event: string, message: string): void {
+  logBudgetChange(bookId: string, before: LossBudgetState | undefined, after: LossBudgetState) {
+    for (const change of budgetChanges(bookId, before, after)) {
+      this.log(change.level, change.event, change.message);
+    }
+  }
+
+  log(level: 'error' | 'warn' | 'info', event: string, message: string): void {
     this.deps.logger?.log({
       trace_id: `v2-${this.tradingDate}`,
       stage: 'v2',
@@ -671,6 +678,42 @@ class Cycle {
       message,
     });
   }
+}
+
+export interface BudgetChange {
+  readonly level: 'error' | 'warn';
+  readonly event: string;
+  readonly message: string;
+}
+
+export function budgetChanges(
+  bookId: string,
+  before: LossBudgetState | undefined,
+  after: LossBudgetState,
+): BudgetChange[] {
+  const loss = `year-to-date loss £${after.ytdLossGbp.toFixed(2)}`;
+  const changes: BudgetChange[] = [];
+  if (after.halted && before?.halted !== true) {
+    changes.push({
+      level: 'error',
+      event: 'v2_loss_budget_halt',
+      message: `${bookId}: loss budget halts entries, ${loss}`,
+    });
+  } else if (after.sizeMultiplier < (before?.sizeMultiplier ?? 1)) {
+    changes.push({
+      level: 'warn',
+      event: 'v2_loss_budget_step',
+      message: `${bookId}: entries sized at ${after.sizeMultiplier}x, ${loss}`,
+    });
+  }
+  if (after.entriesBlockedAtNextFill && !after.halted) {
+    changes.push({
+      level: 'warn',
+      event: 'v2_daily_loss_cap',
+      message: `${bookId}: daily loss cap blocks new entries`,
+    });
+  }
+  return changes;
 }
 
 const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {

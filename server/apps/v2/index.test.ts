@@ -16,6 +16,7 @@ import {
   composeV2Root,
   exitCodeFor,
   llmKeysPresent,
+  logNewRefusals,
   main,
   nousOptionsFrom,
   parseCliArgs,
@@ -633,6 +634,35 @@ describe('runAfterPinCheck', () => {
   });
 });
 
+describe('logNewRefusals', () => {
+  it('warns once with the new refusals, and stays silent without any', () => {
+    const entries: LogEntry[] = [];
+    const logger = { log: (entry: LogEntry) => entries.push(entry) };
+    const refusal = (parameter: string, message: string) => ({
+      trading_date: '2026-09-28',
+      scope: 'data',
+      parameter,
+      ticket: '#1',
+      message,
+    });
+    const days: Record<string, ReturnType<typeof refusal>[]> = {
+      '2026-09-28': [refusal('A', 'a'), refusal('B', 'b')],
+    };
+    const journal = { newRefusals: (date: string) => days[date] ?? [] };
+    logNewRefusals(journal, '2026-09-28', logger);
+    logNewRefusals(journal, '2026-09-29', logger);
+    expect(entries).toEqual([
+      {
+        trace_id: 'v2-2026-09-28',
+        stage: 'v2',
+        level: 'warn',
+        event: 'v2_new_refusals',
+        message: 'A: a\nB: b',
+      },
+    ]);
+  });
+});
+
 describe('main', () => {
   const R2 = {
     R2_ACCESS_KEY_ID: 'a',
@@ -672,5 +702,38 @@ describe('main', () => {
       mainQuietly(['--date', '2026-09-28'], { ...R2, SAMURAI_RESEARCH_STORE: research }, run),
     ).rejects.toThrow(/without NOUS_BASE_URL and a Nous key/);
     expect(commands).toEqual(['version', 'restore', 'restore']);
+  });
+
+  it('sends a failed cycle to Telegram as critical and its warnings silently', async () => {
+    const run: CommandRunner = (_bin, args) =>
+      Promise.resolve({ code: 0, output: args[0] === 'version' ? '0.5.17' : '' });
+    const research = join(mkdtempSync(join(tmpdir(), 'main-alerts-')), 'research.sqlite');
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const env = {
+      ...R2,
+      SAMURAI_RESEARCH_STORE: research,
+      TELEGRAM_BOT_TOKEN: 'bot-token',
+      TELEGRAM_CHAT_ID: 'chat',
+    };
+    const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await expect(main(['--date', '2026-09-28'], env, run, fetchImpl)).rejects.toThrow(
+        /without NOUS_BASE_URL/,
+      );
+    } finally {
+      written.mockRestore();
+    }
+    const sent = fetchImpl.mock.calls.map(([url, init]) => [url, JSON.parse(init.body)]);
+    expect(sent.map(([url]) => url)).toEqual([
+      'https://api.telegram.org/botbot-token/sendMessage',
+      'https://api.telegram.org/botbot-token/sendMessage',
+    ]);
+    const [critical, warning] = sent.map(([, body]) => body);
+    expect(critical.disable_notification).toBe(false);
+    expect(critical.text).toMatch(
+      /^Samurai v2 CRITICAL\nv2_cycle_failed: v2 root refuses a paper run without NOUS_BASE_URL/,
+    );
+    expect(warning).toMatchObject({ chat_id: 'chat', disable_notification: true });
+    expect(warning.text).toContain('v2_heartbeat_unset: HEALTHCHECKS_PING_URL is not set');
   });
 });

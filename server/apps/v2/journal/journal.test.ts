@@ -43,6 +43,38 @@ const DEBATE: Pick<Sleeve, 'id' | 'spec'> = {
 describe('Journal', () => {
   const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
 
+  it('names only the refusals the previous recorded day did not already carry, never entry sizing', () => {
+    const journal = new Journal(openSharedStore(':memory:'), clock);
+    const refuse = (trading_date: string, scope: string, parameter: string, message: string) =>
+      journal.recordRefusal({ trading_date, scope, parameter, ticket: '#1', message });
+    refuse('2026-09-24', 'data', 'OLD', 'gone');
+    refuse('2026-09-25', 'parameter', 'UNSET', 'not set');
+    refuse('2026-09-25', 'data', 'MARK', 'AAPL stale');
+    refuse('2026-09-28', 'parameter', 'UNSET', 'not set');
+    refuse('2026-09-28', 'data', 'MARK', 'MSFT stale');
+    refuse('2026-09-28', 'entry', 'ADV_WINDOW_COVERAGE', 'AAPL no_adv');
+    refuse('2026-09-28', 'data', 'OLD', 'gone');
+    refuse('2026-09-29', 'parameter', 'UNSET', 'not set');
+    const shape = (parameter: string, scope: string, message: string, date = '2026-09-28') => ({
+      trading_date: date,
+      scope,
+      parameter,
+      ticket: '#1',
+      message,
+    });
+    expect(journal.newRefusals('2026-09-28')).toEqual([
+      shape('MARK', 'data', 'MSFT stale'),
+      shape('OLD', 'data', 'gone'),
+    ]);
+    expect(journal.newRefusals('2026-09-25')).toEqual([
+      shape('UNSET', 'parameter', 'not set', '2026-09-25'),
+      shape('MARK', 'data', 'AAPL stale', '2026-09-25'),
+    ]);
+    expect(journal.newRefusals('2026-09-24')).toEqual([shape('OLD', 'data', 'gone', '2026-09-24')]);
+    expect(journal.newRefusals('2026-09-29')).toEqual([]);
+    expect(journal.newRefusals('2026-09-30')).toEqual([]);
+  });
+
   it('records decisions, orders, fills and refusals and reads an order back by id', () => {
     const db = openSharedStore(':memory:');
     const capital = new CapitalConfigStore(db, clock);
