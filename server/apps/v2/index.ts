@@ -26,6 +26,7 @@ import {
   parseBoeGbpUsdCsv,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
+import { heartbeatFor, withHeartbeat } from './heartbeat.js';
 import type { Journal } from './journal/index.js';
 import type { CapitalConfigStore, PaperBooks } from './risk/index.js';
 import {
@@ -281,8 +282,20 @@ export async function runAfterPinCheck(
 }
 
 export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
-  const clock = new SystemClock();
-  const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
+  const heartbeat = heartbeatFor(argv, env, fetch, STDERR_LOGGER);
+  return withHeartbeat(() => {
+    const clock = new SystemClock();
+    const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
+    return runOnce(dryRun, tradingDate, env, clock);
+  }, heartbeat);
+}
+
+async function runOnce(
+  dryRun: boolean,
+  tradingDate: string,
+  env: NodeJS.ProcessEnv,
+  clock: Clock,
+): Promise<number> {
   const nous = nousOptionsFrom(env);
   const root = composeV2Root({
     tradingDate,

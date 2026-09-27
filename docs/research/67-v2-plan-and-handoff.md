@@ -222,6 +222,8 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
 Litestream streams the SQLite store to S3-compatible object storage, encrypted (Cloudflare R2, ruled 2026-09-27, doc 66). A healthchecks.io check is pinged at the end of each daily cycle and alerts David when a ping is missed. Telegram alerts carry a severity. Metrics panels (loss-budget state, gate statistics, LLM spend, reconcile diffs) join Step 3c's dashboard, not a separate tool.
 => restore drill: delete the local store, restore from Litestream, the next cycle reconciles clean against the brokers; a skipped cycle raises the healthchecks.io alert.
 
+**Status 2026-09-27 (Step 3e PR 1, the ping):** the paper run pings healthchecks.io at its end (`server/apps/v2/heartbeat.ts`, `HEALTHCHECKS_PING_URL` in `.env.local` <!-- cite-exempt: untracked — gitignored local env file -->); dry runs never ping. Litestream to R2 with the restore drill is PR 2, Telegram severities PR 3. Nothing schedules the cycle until Step 4/4b clears paper.
+
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
 
 #### Step 3c — UI (G13)
