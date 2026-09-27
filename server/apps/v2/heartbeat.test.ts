@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../shared/index.js';
-import { healthchecksHeartbeat, withHeartbeat } from './heartbeat.js';
+import { healthchecksHeartbeat, NO_HEARTBEAT, withHeartbeat } from './heartbeat.js';
 
 const SECRET = 'https://hc-ping.com/secret-uuid';
 
@@ -18,7 +18,7 @@ describe('healthchecksHeartbeat', () => {
   it('posts success to the ping URL and fail to its /fail endpoint', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     const { entries, logger } = recorder();
-    const beat = healthchecksHeartbeat(`${SECRET}/`, fetchImpl, logger);
+    const beat = healthchecksHeartbeat(`${SECRET}//`, fetchImpl, logger);
     await beat('success');
     await beat('fail');
     expect(fetchImpl.mock.calls.map(([url, init]) => [url, init.method])).toEqual([
@@ -30,6 +30,7 @@ describe('healthchecksHeartbeat', () => {
       ['info', 'v2_heartbeat_sent', 'healthchecks success ping sent'],
       ['info', 'v2_heartbeat_sent', 'healthchecks fail ping sent'],
     ]);
+    expect(entries.every((entry) => entry.trace_id === 'v2-heartbeat' && entry.stage === 'v2')).toBe(true);
   });
 
   it('warns on a non-2xx answer or a thrown fetch, and never logs the URL', async () => {
@@ -59,10 +60,17 @@ describe('healthchecksHeartbeat', () => {
     await healthchecksHeartbeat(undefined, fetchImpl, logger)('success');
     await healthchecksHeartbeat('  ', fetchImpl, logger)('fail');
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(entries.map((entry) => [entry.level, entry.event])).toEqual([
-      ['warn', 'v2_heartbeat_unset'],
-      ['warn', 'v2_heartbeat_unset'],
+    expect(entries.map((entry) => [entry.level, entry.event, entry.message])).toEqual([
+      ['warn', 'v2_heartbeat_unset', 'HEALTHCHECKS_PING_URL is not set: no dead-man ping sent'],
+      ['warn', 'v2_heartbeat_unset', 'HEALTHCHECKS_PING_URL is not set: no dead-man ping sent'],
     ]);
+  });
+});
+
+describe('NO_HEARTBEAT', () => {
+  it('resolves without sending', async () => {
+    await expect(NO_HEARTBEAT('success')).resolves.toBeUndefined();
+    expect(NO_HEARTBEAT('fail')).toBeInstanceOf(Promise);
   });
 });
 
