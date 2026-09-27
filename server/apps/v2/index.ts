@@ -15,6 +15,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
+import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
 import { composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import {
@@ -290,6 +291,7 @@ export async function main(
   env: NodeJS.ProcessEnv,
   litestream: CommandRunner = execRunner,
   fetchImpl: AlertFetch = fetch,
+  barRefresh?: BarRefresh,
 ): Promise<number> {
   const alerts = alertsFor(argv, env, fetchImpl, STDERR_LOGGER);
   const logger = alerts.logger;
@@ -300,7 +302,20 @@ export async function main(
         const clock = new SystemClock();
         const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
         const backup = backupFor(argv, V2_STORE_PATH, env, litestream, logger);
-        return withBackup(() => runOnce(dryRun, tradingDate, env, clock, logger), backup);
+        // barRefresh is constructed lazily, inside the callback withBackup invokes after restore,
+        // so a paper run without Alpaca keys still restores the store before it refuses
+        return withBackup(
+          () =>
+            runOnce(
+              dryRun,
+              tradingDate,
+              env,
+              clock,
+              logger,
+              barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+            ),
+          backup,
+        );
       }, heartbeat),
     alerts,
   );
@@ -328,7 +343,9 @@ async function runOnce(
   env: NodeJS.ProcessEnv,
   clock: Clock,
   logger: Logger,
+  barRefresh: BarRefresh,
 ): Promise<number> {
+  await barRefresh.run();
   const nous = nousOptionsFrom(env);
   const root = composeV2Root({
     tradingDate,

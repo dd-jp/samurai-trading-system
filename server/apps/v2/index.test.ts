@@ -10,6 +10,7 @@ import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { CommandRunner } from './backup.js';
+import { type BarRefresh, NO_BAR_REFRESH } from './bar-refresh.js';
 import type { CycleReport } from './cycle.js';
 import { BarsMarketData, NO_NEWS, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
 import {
@@ -672,10 +673,15 @@ describe('main', () => {
     LITESTREAM_SSE_C_KEY: 'e',
   };
 
-  async function mainQuietly(argv: readonly string[], env: NodeJS.ProcessEnv, run?: CommandRunner) {
+  async function mainQuietly(
+    argv: readonly string[],
+    env: NodeJS.ProcessEnv,
+    run?: CommandRunner,
+    barRefresh?: BarRefresh,
+  ) {
     const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      return await main(argv, env, run);
+      return await main(argv, env, run, undefined, barRefresh);
     } finally {
       written.mockRestore();
     }
@@ -697,10 +703,36 @@ describe('main', () => {
       commands.push(args[0] ?? '');
       return Promise.resolve({ code: 0, output: args[0] === 'version' ? '0.5.17' : '' });
     };
+    const calls: string[] = [];
+    const barRefresh: BarRefresh = {
+      run: () => {
+        calls.push('refreshed');
+        return Promise.resolve({ attempted: 0, updated: [], noNewBars: [], failed: [] });
+      },
+    };
+    const research = join(mkdtempSync(join(tmpdir(), 'main-backup-')), 'research.sqlite');
+    await expect(
+      mainQuietly(
+        ['--date', '2026-09-28'],
+        { ...R2, SAMURAI_RESEARCH_STORE: research },
+        run,
+        barRefresh,
+      ),
+    ).rejects.toThrow(/without NOUS_BASE_URL and a Nous key/);
+    expect(commands).toEqual(['version', 'restore', 'restore']);
+    expect(calls).toEqual(['refreshed']);
+  });
+
+  it('restores the stores before refusing a paper run without Alpaca keys', async () => {
+    const commands: string[] = [];
+    const run: CommandRunner = (_bin, args) => {
+      commands.push(args[0] ?? '');
+      return Promise.resolve({ code: 0, output: args[0] === 'version' ? '0.5.17' : '' });
+    };
     const research = join(mkdtempSync(join(tmpdir(), 'main-backup-')), 'research.sqlite');
     await expect(
       mainQuietly(['--date', '2026-09-28'], { ...R2, SAMURAI_RESEARCH_STORE: research }, run),
-    ).rejects.toThrow(/without NOUS_BASE_URL and a Nous key/);
+    ).rejects.toThrow(/ALPACA_API_KEY and ALPACA_API_SECRET must be set/);
     expect(commands).toEqual(['version', 'restore', 'restore']);
   });
 
@@ -717,9 +749,9 @@ describe('main', () => {
     };
     const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      await expect(main(['--date', '2026-09-28'], env, run, fetchImpl)).rejects.toThrow(
-        /without NOUS_BASE_URL/,
-      );
+      await expect(
+        main(['--date', '2026-09-28'], env, run, fetchImpl, NO_BAR_REFRESH),
+      ).rejects.toThrow(/without NOUS_BASE_URL/);
     } finally {
       written.mockRestore();
     }

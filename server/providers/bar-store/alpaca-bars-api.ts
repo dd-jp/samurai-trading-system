@@ -1,4 +1,4 @@
-import { isFiniteNumber } from '../../../shared/index.js';
+import { isFiniteNumber } from '../../shared/index.js';
 
 export const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
 const ALPACA_REQUESTS_PER_MINUTE = 200;

@@ -4,11 +4,14 @@ import { join } from 'node:path';
 import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { TRADING_DAYS_PER_YEAR } from '../../../pipeline/momentum/index.js';
-import { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from '../../../providers/bar-store/index.js';
+import type { HygieneReport } from '../../../providers/bar-store/index.js';
+import {
+  applyBarHygiene,
+  DEFAULT_BAR_STORE_ROOT,
+  ParquetBarStore,
+} from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { barsToCsv, roundBarPrices } from './bar-csv.js';
-import type { HygieneReport } from './bar-hygiene.js';
-import { applyBarHygiene } from './bar-hygiene.js';
 import type { FxRate } from './fx.js';
 import { parseBoeXudlussCsv } from './fx.js';
 import type { SaxoLine, SplicedLine } from './lse-lines.js';
