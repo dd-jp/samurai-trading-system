@@ -9,12 +9,14 @@ import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import type { CommandRunner } from './backup.js';
 import type { CycleReport } from './cycle.js';
 import { BarsMarketData, NO_NEWS, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
 import {
   composeV2Root,
   exitCodeFor,
   llmKeysPresent,
+  main,
   nousOptionsFrom,
   parseCliArgs,
   runAfterPinCheck,
@@ -628,5 +630,47 @@ describe('runAfterPinCheck', () => {
     );
     expect(order).toEqual(['pins', 'run']);
     expect(result).toBe(report);
+  });
+});
+
+describe('main', () => {
+  const R2 = {
+    R2_ACCESS_KEY_ID: 'a',
+    R2_SECRET_ACCESS_KEY: 'b',
+    R2_ENDPOINT: 'https://c.example',
+    R2_BUCKET: 'd',
+    LITESTREAM_SSE_C_KEY: 'e',
+  };
+
+  async function mainQuietly(argv: readonly string[], env: NodeJS.ProcessEnv, run?: CommandRunner) {
+    const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      return await main(argv, env, run);
+    } finally {
+      written.mockRestore();
+    }
+  }
+
+  it('reports a bad argument before asking for backup variables', async () => {
+    await expect(mainQuietly(['--bogus'], {})).rejects.toThrow('unknown argument --bogus');
+  });
+
+  it('refuses a paper run without its backup variables', async () => {
+    await expect(mainQuietly(['--date', '2026-09-28'], {})).rejects.toThrow(
+      /paper run refuses without its Litestream backup/,
+    );
+  });
+
+  it('restores missing stores before the cycle and still backs up when the cycle fails', async () => {
+    const commands: string[] = [];
+    const run: CommandRunner = (_bin, args) => {
+      commands.push(args[0] ?? '');
+      return Promise.resolve({ code: 0, output: args[0] === 'version' ? '0.5.17' : '' });
+    };
+    const research = join(mkdtempSync(join(tmpdir(), 'main-backup-')), 'research.sqlite');
+    await expect(
+      mainQuietly(['--date', '2026-09-28'], { ...R2, SAMURAI_RESEARCH_STORE: research }, run),
+    ).rejects.toThrow(/without NOUS_BASE_URL and a Nous key/);
+    expect(commands).toEqual(['version', 'restore', 'restore']);
   });
 });

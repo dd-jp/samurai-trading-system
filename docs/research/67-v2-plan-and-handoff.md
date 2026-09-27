@@ -224,6 +224,8 @@ Litestream streams the SQLite store to S3-compatible object storage, encrypted (
 
 **Status 2026-09-27 (Step 3e PR 1, the ping):** the paper run pings healthchecks.io at its end (`server/apps/v2/heartbeat.ts`, `HEALTHCHECKS_PING_URL` in `.env.local` <!-- cite-exempt: untracked — gitignored local env file -->); dry runs never ping. Litestream to R2 with the restore drill is PR 2, Telegram severities PR 3. Nothing schedules the cycle until Step 4/4b clears paper.
 
+**Status 2026-09-27 (Step 3e PR 2, Litestream):** each paper cycle restores any missing store from R2 first, and afterwards replicates the paper and research stores to R2 with SSE-C (`server/apps/v2/backup.ts`, `litestream replicate -once`, no daemon); a paper run refuses without the R2 variables and a failed backup sends the `/fail` ping. `npm run v2:backup` and `npm run v2:restore` run it by hand. Doc 73 records the live proofs: without the key, R2 refuses; incremental restores are identical; a deleted store restores identically and the next cycle's report matches. Still open: the real-broker reconcile half of the drill (Step 4b), the skipped-cycle alert (the healthchecks.io check is paused) and the off-Mac copy of the SSE-C key (David's).
+
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
 
 #### Step 3c — UI (G13)
@@ -239,6 +241,9 @@ Four rules-based, long-only, daily-swing candidates, run **one after another** i
 
 Per candidate, first **propose and STOP for David**, as Step 1 did: instrument list, parameter grid, benchmark (risk-matched buy-and-hold of the same universe), cost model, and the doc 69 facts that disturb a ruling. Before the first US candidate (mean reversion), a research task picks the survivorship-free US history vendor and David approves the one-off purchase (D3). Before PEAD, a research task looks for free earnings-date and surprise history; paid only with David's approval (S5).
 => **Kill line per candidate:** as Step 1 — beats its risk-matched buy-and-hold after the 40% haircut with DSR ≥ 0.95 and PBO ≤ 0.10 (G9), with Step 4b's backtest rows (look-ahead canary, 2× cost, regime split, locked holdout). Passers split the 70% in fixed equal-risk weights declared **before** the first candidate's result is known (S4). Each passer carries the LLM entry veto, judged only in paper against its no-veto shadow (S6, S7, G5).
+
+Before a passing trend sleeve runs beside debate, build the contradiction rule (doc 66, 2026-09-27): the debate short or 1× inverse ETF against an exposure trend holds long reruns both sleeves once; a clash that remains sends David a Telegram asking what to do, and no reply before the next cycle skips the conflicting entry. Paper and live alike; both debate answers are journalled.
+=> verify: a fixture clash reruns each sleeve exactly once, sends one request, and skips the entry on timeout; a clash resolved by the rerun sends nothing.
 
 ### Step 4 — Protection before any paper trade
 
