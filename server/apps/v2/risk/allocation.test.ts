@@ -52,6 +52,12 @@ describe('sleeve capital share', () => {
 
   it('refuses shares that overrun the account or fall outside (0, 1]', () => {
     expect(() => assertCapitalShares([sleeve('debate', 0.3), sleeve('trend', 0.7)])).not.toThrow();
+    expect(() =>
+      assertCapitalShares([sleeve('debate', 0.3), sleeve('trend', 0.7 + 1e-12)]),
+    ).not.toThrow();
+    expect(() => assertCapitalShares([sleeve('debate', 0.3), sleeve('trend', 0.7 + 1e-6)])).toThrow(
+      /more than 1/,
+    );
     expect(() => assertCapitalShares([sleeve('debate', 0.3), sleeve('trend', 0.71)])).toThrow(
       /sleeves declare 1\.01 of the account, more than 1/,
     );
