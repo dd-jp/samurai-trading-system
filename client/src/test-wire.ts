@@ -242,6 +242,8 @@ export const JOURNAL: JournalWire = {
           parameter: 'saxo_universe',
           ticket: '#1740',
           message: 'unset',
+          book_id: null,
+          instrument: null,
           recorded_at: '2026-10-05T21:40:00.000Z',
         },
       ],

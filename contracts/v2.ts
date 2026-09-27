@@ -351,6 +351,8 @@ export interface JournalledRefusal {
   readonly parameter: string;
   readonly ticket: string;
   readonly message: string;
+  readonly book_id?: string | undefined;
+  readonly instrument?: string | undefined;
 }
 
 export interface DecisionJournal {

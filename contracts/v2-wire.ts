@@ -243,6 +243,8 @@ export interface JournalRefusalWire {
   readonly parameter: string;
   readonly ticket: string;
   readonly message: string;
+  readonly book_id: string | null;
+  readonly instrument: string | null;
   readonly recorded_at: string;
 }
 
@@ -497,6 +499,8 @@ export const V2_WIRE_FIELD_NAMES = {
     'parameter',
     'ticket',
     'message',
+    'book_id',
+    'instrument',
     'recorded_at',
   ]),
   research: fieldsOf<ResearchWire>()([

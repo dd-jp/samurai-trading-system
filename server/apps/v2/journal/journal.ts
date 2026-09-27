@@ -183,8 +183,9 @@ export class Journal implements DecisionJournal {
   recordRefusal(refusal: JournalledRefusal): void {
     this.db
       .prepare(
-        `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, book_id, instrument,
+           recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         refusal.trading_date,
@@ -192,6 +193,8 @@ export class Journal implements DecisionJournal {
         refusal.parameter,
         refusal.ticket,
         refusal.message,
+        refusal.book_id ?? null,
+        refusal.instrument ?? null,
         this.#now(),
       );
   }

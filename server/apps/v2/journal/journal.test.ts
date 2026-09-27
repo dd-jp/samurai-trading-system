@@ -132,6 +132,35 @@ describe('Journal', () => {
     expect(refusal).toEqual({ parameter: 'G18_SMALL_CAP_FLOORS', ticket: '#1753' });
   });
 
+  it('records a refusal scoped to a book and instrument, and leaves both NULL when unset', () => {
+    const db = openSharedStore(':memory:');
+    const journal = new Journal(db, clock);
+    journal.recordRefusal({
+      trading_date: '2026-09-25',
+      scope: 'entry',
+      parameter: 'ADV_WINDOW_COVERAGE',
+      ticket: '#1806',
+      message: 'debate/primary THIN: no_adv',
+      book_id: 'debate/primary',
+      instrument: 'THIN',
+    });
+    journal.recordRefusal({
+      trading_date: '2026-09-25',
+      scope: 'control',
+      parameter: 'MANUAL_PAUSE',
+      ticket: '#1745',
+      message: 'paused',
+    });
+    expect(
+      db
+        .prepare('SELECT parameter, book_id, instrument FROM v2_refusals ORDER BY refusal_id')
+        .all(),
+    ).toEqual([
+      { parameter: 'ADV_WINDOW_COVERAGE', book_id: 'debate/primary', instrument: 'THIN' },
+      { parameter: 'MANUAL_PAUSE', book_id: null, instrument: null },
+    ]);
+  });
+
   it('lists submitted entries from earlier dates that never filled and marks them cancelled', () => {
     const db = openSharedStore(':memory:');
     const capital = new CapitalConfigStore(db, clock);

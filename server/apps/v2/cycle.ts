@@ -382,6 +382,7 @@ class Cycle {
       parameter: 'LOSS_BUDGET',
       ticket: '#1813',
       message,
+      book_id: book.id,
     });
     this.refusals.push(message);
   }
@@ -474,6 +475,8 @@ class Cycle {
         parameter: 'MANUAL_HALT',
         ticket: CONTROL_TICKET,
         message,
+        book_id: book.id,
+        instrument: held.instrument,
       });
       this.refusals.push(message);
     }
@@ -616,6 +619,8 @@ class Cycle {
       parameter,
       ticket: 'docs/research/66-v2-grill-decisions.md D8',
       message: `${book.id} ${decision.instrument}: ${refusal}`,
+      book_id: book.id,
+      instrument: decision.instrument,
     });
   }
 
@@ -638,6 +643,8 @@ class Cycle {
         parameter: 'MARK_FRESHNESS',
         ticket: '#1804',
         message,
+        book_id: book.id,
+        instrument: held.instrument,
       });
       this.refusals.push(message);
     }
