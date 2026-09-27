@@ -30,7 +30,9 @@ describe('healthchecksHeartbeat', () => {
       ['info', 'v2_heartbeat_sent', 'healthchecks success ping sent'],
       ['info', 'v2_heartbeat_sent', 'healthchecks fail ping sent'],
     ]);
-    expect(entries.every((entry) => entry.trace_id === 'v2-heartbeat' && entry.stage === 'v2')).toBe(true);
+    expect(
+      entries.every((entry) => entry.trace_id === 'v2-heartbeat' && entry.stage === 'v2'),
+    ).toBe(true);
   });
 
   it('warns on a non-2xx answer or a thrown fetch, and never logs the URL', async () => {
