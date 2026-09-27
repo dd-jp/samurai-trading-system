@@ -4,6 +4,7 @@ export {
   CALENDAR_REFERENCE,
   currentConstituents,
   isFresh,
+  MAX_BAR_AGE_CALENDAR_DAYS,
   ParquetBarsSource,
   sessionsBefore,
   windowCovered,

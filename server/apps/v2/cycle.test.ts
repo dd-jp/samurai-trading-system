@@ -1034,6 +1034,42 @@ describe('runCycle', () => {
     ).toEqual([{ parameter: 'CALENDAR_REFERENCE', ticket: '#1791' }]);
   });
 
+  it('journals each position marked from a stale bar or its entry price (#1804)', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([]);
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeDefined();
+    const withAapl = (aapl: DailyBar | undefined): MarketData => ({
+      ...deps.market,
+      lastBarBefore: (instrument, tradingDate) =>
+        instrument === 'AAPL' ? aapl : deps.market.lastBarBefore(instrument, tradingDate),
+    });
+    const fresh = await runCycle({ ...deps, market: withAapl(bar('2026-09-24')) }, '2026-09-29');
+    expect(fresh.refusals.filter((refusal) => refusal.includes('marked at'))).toEqual([]);
+    const stale = await runCycle({ ...deps, market: withAapl(bar('2026-09-24')) }, '2026-09-30');
+    expect(stale.refusals).toContain(
+      'debate/primary AAPL: marked at the 2026-09-24 close, no bar in the 5 days before 2026-09-30',
+    );
+    const missing = await runCycle({ ...deps, market: withAapl(undefined) }, '2026-10-01');
+    expect(missing.refusals).toContain(
+      'debate/no-macro-gate AAPL: marked at the entry price, no bar in the 5 days before 2026-10-01',
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT trading_date, scope, ticket, COUNT(*) AS n FROM v2_refusals WHERE parameter = 'MARK_FRESHNESS' GROUP BY trading_date",
+        )
+        .all(),
+    ).toEqual([
+      { trading_date: '2026-09-30', scope: 'data', ticket: '#1804', n: 2 },
+      { trading_date: '2026-10-01', scope: 'data', ticket: '#1804', n: 2 },
+    ]);
+  });
+
   it('blocks entries after a daily-cap breach, cancels the entries resting at that mark, and sizes by the previous mark multiplier', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-25');

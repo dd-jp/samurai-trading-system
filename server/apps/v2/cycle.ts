@@ -27,6 +27,7 @@ import { describeThrownSafely } from '../../shared/index.js';
 import {
   CALENDAR_REFERENCE,
   isFresh,
+  MAX_BAR_AGE_CALENDAR_DAYS,
   type MacroGateVerdict,
   macroGate,
   quotePerGbp,
@@ -624,7 +625,26 @@ class Cycle {
     return reports;
   }
 
+  journalStaleMarks(book: BookSpec): void {
+    for (const held of this.deps.books.positions(book.id)) {
+      const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
+      const barDate = bar?.date;
+      if (isFresh(bar, this.tradingDate)) continue;
+      const price = barDate === undefined ? 'the entry price' : `the ${barDate} close`;
+      const message = `${book.id} ${held.instrument}: marked at ${price}, no bar in the ${MAX_BAR_AGE_CALENDAR_DAYS} days before ${this.tradingDate}`;
+      this.deps.journal.recordRefusal({
+        trading_date: this.tradingDate,
+        scope: 'data',
+        parameter: 'MARK_FRESHNESS',
+        ticket: '#1804',
+        message,
+      });
+      this.refusals.push(message);
+    }
+  }
+
   async mark(book: BookSpec): Promise<BookReport> {
+    this.journalStaleMarks(book);
     const previous = this.deps.books.lastDay(book.id);
     const day = this.deps.books.markDay(
       book.id,
@@ -694,7 +714,7 @@ function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVer
       scope: 'data',
       parameter: 'CALENDAR_REFERENCE',
       ticket: '#1791',
-      message: `${CALENDAR_REFERENCE} has no bar in the 5 days before ${tradingDate}: every windowed read fails closed (postmortem §2)`,
+      message: `${CALENDAR_REFERENCE} has no bar in the ${MAX_BAR_AGE_CALENDAR_DAYS} days before ${tradingDate}: every windowed read fails closed (postmortem §2)`,
     });
   }
   if (!macro.covered) {
