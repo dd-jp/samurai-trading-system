@@ -41,6 +41,8 @@ describe('readJournalledEntries', () => {
       ['e', 'debate/primary', '2026-09-29', 'CCC', 'alpaca', 'entry'],
     ]);
     db.prepare(`UPDATE v2_orders SET payload = '{}' WHERE client_order_id = 'e'`).run();
+    db.prepare(`UPDATE v2_orders SET payload = 'not json' WHERE client_order_id = 'c'`).run();
+    db.prepare(`UPDATE v2_orders SET venue = 'alpaca' WHERE client_order_id = 'c'`).run();
     db.prepare(
       `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
          leg, side, dry_run, outcome, payload, recorded_at)

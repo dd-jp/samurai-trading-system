@@ -111,6 +111,19 @@ describe('entryOffsetReport', () => {
     ]);
   });
 
+  it('leaves an entry pending when the benchmark window does not cover the same dates', () => {
+    const barsFrom = source({
+      AAA: [bar('2026-09-28', 101.5, 103, 100.8, 102), bar('2026-09-29', 103, 105, 102, 104)],
+      SPY: [bar('2026-09-29', 50, 50, 50, 50), bar('2026-09-30', 50, 50, 50, 50)],
+      BBB: [bar('2026-09-28', 100, 100, 100, 100), bar('2026-09-30', 100, 100, 100, 100)],
+    });
+    const entries: JournalledEntry[] = [
+      { tradingDate: '2026-09-28', instrument: 'AAA', side: 'buy', limit: 100 },
+      { tradingDate: '2026-09-29', instrument: 'BBB', side: 'buy', limit: 100 },
+    ];
+    expect(entryOffsetReport(entries, barsFrom, 'SPY', 2).pending).toBe(2);
+  });
+
   it('leaves an entry pending when the benchmark lacks the bars', () => {
     const barsFrom = source({
       AAA: [bar('2026-09-28', 101.5, 103, 100.8, 102), bar('2026-09-29', 103, 105, 102, 104)],

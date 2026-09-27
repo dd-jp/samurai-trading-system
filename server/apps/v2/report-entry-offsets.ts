@@ -24,6 +24,15 @@ interface EntryRow {
   readonly payload: string;
 }
 
+function limitFrom(payload: string): number | undefined {
+  try {
+    const { price } = JSON.parse(payload) as { price?: unknown };
+    return typeof price === 'number' ? price : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function readJournalledEntries(db: StoreHandle): readonly JournalledEntry[] {
   const rows = db
     .prepare(
@@ -35,8 +44,8 @@ export function readJournalledEntries(db: StoreHandle): readonly JournalledEntry
   const entries: JournalledEntry[] = [];
   for (const row of rows) {
     const key = `${row.trading_date}|${row.instrument}|${row.side}`;
-    const limit = (JSON.parse(row.payload) as { price?: unknown }).price;
-    if (seen.has(key) || typeof limit !== 'number') continue;
+    const limit = limitFrom(row.payload);
+    if (seen.has(key) || limit === undefined) continue;
     seen.add(key);
     entries.push({
       tradingDate: row.trading_date,

@@ -19,7 +19,7 @@ The ruling's premise came from the #1797 kill-line run: a limit at yesterday's c
 
 ## 2. Data and method
 
-**Data.** Alpaca SIP daily bars, all adjustments, from `data/bars/parquet/venue=alpaca` <!-- cite-exempt: untracked — local bar store, not committed -->: 745 symbols (the S&P 500 point-in-time list with delisted names), 2016-01-04 to 2026-09-23. That gives 1,754,121 symbol-days in total, 422,796 of them since 2024-01-01.
+**Data.** Alpaca SIP daily bars, all adjustments, from `data/bars/parquet/venue=alpaca` <!-- cite-exempt: untracked — local bar store, not committed -->: 745 symbols (every name on the S&P 500 list at any point since 2016, delisted ones included, each over its full history in the store rather than only while a member), 2016-01-04 to 2026-09-23. That gives 1,754,121 symbol-days in total, 422,796 of them since 2024-01-01.
 
 **Setup.** Every symbol-day is a hypothetical entry at the close, c. Day-count filter: the next bar is at most 5 calendar days away.
 
@@ -86,10 +86,10 @@ At an offset of 0 the target is always beyond the limit.
 ## 5. The paper test
 
 `npm run v2:entry-offsets [store] [bar root]` (`server/apps/v2/report-entry-offsets.ts`):
-- Reads every Alpaca entry order in the v2 journal, one per date, instrument and side across books.
+- Reads every Alpaca entry order in the v2 journal, one per date, instrument and side across books, whatever its outcome (submitted, rejected or dry run): the question is the price the signal asked for, not whether the order went out.
 - Replays each against the bars at 0, 50, 100 and 200 bps and at the open.
 - Scores the same 10-bar excess, over SPY rather than the universe mean.
-- An entry without 10 bars yet is counted as awaiting.
+- An entry without 10 bars yet, or whose SPY bars do not cover the same dates, is counted as awaiting. A row with an unreadable payload is skipped.
 
 Once about 100 entries are scored, a 0-bps mean below the others by more than its noise reopens #1815. Changing the offset is a new trial (Q16).
 
@@ -102,10 +102,13 @@ CREATE TABLE p AS
 SELECT symbol, d, c, lag(c) OVER w pc, lead(o) OVER w nxo, lead(h) OVER w nh, lead(l) OVER w nl,
        lead(c, 10) OVER w nhc, lead(d) OVER w nd
 FROM bars WINDOW w AS (PARTITION BY symbol ORDER BY d);
+CREATE TABLE m AS SELECT d, avg(nhc/nxo - 1) mkt FROM p GROUP BY d;
 -- per day, buy side:
 SELECT d, avg((CASE WHEN nl <= c*(1+x/1e4) THEN nhc/least(nxo, c*(1+x/1e4)) - 1 - mkt ELSE 0 END)
               - (nhc/nxo - 1 - mkt)) * 1e4
 FROM p JOIN m USING (d) GROUP BY d;
+-- up days only: add WHERE c > pc; the short side mirrors with nh, greatest, 1-x/1e4, a negated
+-- excess and, for down days, WHERE c < pc.
 ```
 
 The bootstrap resamples those per-day values, with seed 1815 and 1,000 draws.

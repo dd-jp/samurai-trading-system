@@ -29,24 +29,31 @@ interface Path {
   readonly benchmarkReturn: number;
 }
 
+interface Hold {
+  readonly first: V2Bar;
+  readonly exit: V2Bar;
+}
+
+function holdFor(bars: readonly V2Bar[], holdDays: number): Hold | undefined {
+  const [first] = bars;
+  const exit = bars[holdDays - 1];
+  return first === undefined || exit === undefined ? undefined : { first, exit };
+}
+
 function pathFor(
   entry: JournalledEntry,
   barsFrom: BarsFrom,
   benchmark: string,
   holdDays: number,
 ): Path | undefined {
-  const bars = barsFrom(entry.instrument, entry.tradingDate, holdDays);
-  const bench = barsFrom(benchmark, entry.tradingDate, holdDays);
-  const [first] = bars;
-  const [benchFirst] = bench;
-  const exit = bars[holdDays - 1];
-  const benchExit = bench[holdDays - 1];
-  if (first === undefined || exit === undefined) return undefined;
-  if (benchFirst === undefined || benchExit === undefined) return undefined;
+  const own = holdFor(barsFrom(entry.instrument, entry.tradingDate, holdDays), holdDays);
+  const bench = holdFor(barsFrom(benchmark, entry.tradingDate, holdDays), holdDays);
+  if (own === undefined || bench === undefined) return undefined;
+  if (own.first.date !== bench.first.date || own.exit.date !== bench.exit.date) return undefined;
   return {
-    first,
-    exitClose: exit.close,
-    benchmarkReturn: benchExit.close / benchFirst.open - 1,
+    first: own.first,
+    exitClose: own.exit.close,
+    benchmarkReturn: bench.exit.close / bench.first.open - 1,
   };
 }
 
