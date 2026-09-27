@@ -13,6 +13,7 @@ import { SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { backupFor, execRunner, thenBackup } from './backup.js';
 import { composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import {
@@ -284,9 +285,10 @@ export async function runAfterPinCheck(
 export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
   const heartbeat = heartbeatFor(argv, env, fetch, STDERR_LOGGER);
   return withHeartbeat(() => {
+    const backup = backupFor(argv, V2_STORE_PATH, env, execRunner, STDERR_LOGGER);
     const clock = new SystemClock();
     const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
-    return runOnce(dryRun, tradingDate, env, clock);
+    return thenBackup(() => runOnce(dryRun, tradingDate, env, clock), backup);
   }, heartbeat);
 }
 
