@@ -144,7 +144,13 @@ describe('refreshAlpacaBars', () => {
     });
     expect(report.failed).toEqual([{ symbol: 'AAPL', reason: expect.stringMatching(/data hole/) }]);
     expect(report.updated.map((u) => u.symbol)).toEqual(['SPY', 'MSFT']);
-    expect(entries.map((e) => e.event)).toContain('v2_bar_refresh_failed');
+    const failure = entries.find((e) => e.event === 'v2_bar_refresh_failed');
+    expect(failure).toMatchObject({
+      trace_id: 'v2-bar-refresh',
+      stage: 'v2',
+      level: 'warn',
+      message: expect.stringMatching(/^AAPL: .*data hole/),
+    });
   });
 
   it('records symbols with no Alpaca data as no-new-bars instead of failing', async () => {
@@ -162,10 +168,47 @@ describe('refreshAlpacaBars', () => {
     expect(report.failed).toEqual([]);
   });
 
-  it('refuses a response shorter than the stored history, and leaves the store untouched', async () => {
+  it('treats an all-dropped response as no new bars, not a write', async () => {
     const store = await openStore();
-    const longHistory = ['2015-12-28', '2015-12-29', '2015-12-30', '2015-12-31', ...DATES];
-    await store.write('alpaca', [existingSeries('AAPL', longHistory, 90)]);
+    const api = fakeApi({
+      SPY: flat(DATES, 200),
+      AAPL: flat([TRADING_DATE], 100),
+    });
+    const { logger } = recorder();
+    const report = await refreshAlpacaBars({
+      api,
+      store,
+      tradingDate: TRADING_DATE,
+      constituents: ['AAPL'],
+      logger,
+    });
+    expect(report.noNewBars).toContain('AAPL');
+    expect(report.failed).toEqual([]);
+    expect(await store.readSeries('alpaca', 'AAPL')).toBeUndefined();
+  });
+
+  it('does not gate a non-SPY name on freshness, only SPY', async () => {
+    const store = await openStore();
+    const staleTradingDate = '2016-01-20';
+    const api = fakeApi({
+      SPY: flat(['2016-01-18', '2016-01-19'], 200),
+      AAPL: flat(DATES, 100),
+    });
+    const { logger } = recorder();
+    const report = await refreshAlpacaBars({
+      api,
+      store,
+      tradingDate: staleTradingDate,
+      constituents: ['AAPL'],
+      logger,
+    });
+    expect(report.failed).toEqual([]);
+    expect(report.updated.map((u) => u.symbol)).toEqual(['SPY', 'AAPL']);
+  });
+
+  it('refuses a same-start response shorter than the stored history (paused pagination)', async () => {
+    const store = await openStore();
+    await store.write('alpaca', [existingSeries('AAPL', DATES, 90)]);
     const api = fakeApi({
       SPY: flat(DATES, 200),
       AAPL: flat(DATES.slice(0, 2), 100),
@@ -179,11 +222,40 @@ describe('refreshAlpacaBars', () => {
       logger,
     });
     expect(report.failed).toEqual([
-      { symbol: 'AAPL', reason: expect.stringMatching(/shrink history/) },
+      {
+        symbol: 'AAPL',
+        reason:
+          'AAPL: refresh would shrink history (had 3 bars from 2016-01-04, got 2 from 2016-01-04) — refusing to overwrite',
+      },
     ]);
-    expect((await store.readSeries('alpaca', 'AAPL'))?.bars.map((b) => b.date)).toEqual(
-      longHistory,
-    );
+    expect((await store.readSeries('alpaca', 'AAPL'))?.bars.map((b) => b.date)).toEqual(DATES);
+  });
+
+  it('refuses a same-length response starting later than the stored history (truncated head)', async () => {
+    const store = await openStore();
+    await store.write('alpaca', [existingSeries('AAPL', DATES, 90)]);
+    const laterDates = ['2016-01-05', '2016-01-06', '2016-01-07'];
+    const laterTradingDate = '2016-01-08';
+    const api = fakeApi({
+      SPY: flat(laterDates, 200),
+      AAPL: flat(laterDates, 100),
+    });
+    const { logger } = recorder();
+    const report = await refreshAlpacaBars({
+      api,
+      store,
+      tradingDate: laterTradingDate,
+      constituents: ['AAPL'],
+      logger,
+    });
+    expect(report.failed).toEqual([
+      {
+        symbol: 'AAPL',
+        reason:
+          'AAPL: refresh would shrink history (had 3 bars from 2016-01-04, got 3 from 2016-01-05) — refusing to overwrite',
+      },
+    ]);
+    expect((await store.readSeries('alpaca', 'AAPL'))?.bars.map((b) => b.date)).toEqual(DATES);
   });
 
   it('aborts the run when SPY is still stale after refresh', async () => {
@@ -192,7 +264,83 @@ describe('refreshAlpacaBars', () => {
     const { logger } = recorder();
     await expect(
       refreshAlpacaBars({ api, store, tradingDate: '2016-02-01', constituents: [], logger }),
-    ).rejects.toThrow(/SPY still stale/);
+    ).rejects.toThrow(
+      'v2 bar refresh: SPY still stale after refresh (last bar 2016-01-06, trading date 2016-02-01)',
+    );
+  });
+
+  it('logs the summary event with trace_id, stage and exact counts', async () => {
+    const store = await openStore();
+    const api = fakeApi({ SPY: flat(DATES, 200), MSFT: flat(DATES, 50) });
+    const { logger, entries } = recorder();
+    await refreshAlpacaBars({
+      api,
+      store,
+      tradingDate: TRADING_DATE,
+      constituents: ['MSFT', 'DELISTED'],
+      logger,
+    });
+    const summary = entries.find((e) => e.event === 'v2_bar_refresh_summary');
+    expect(summary).toMatchObject({
+      trace_id: 'v2-bar-refresh',
+      stage: 'v2',
+      level: 'info',
+      message: 'refreshed 2/3 symbols, 1 unchanged, 0 failed',
+    });
+  });
+
+  it('does not log a unit-break event when there are none', async () => {
+    const store = await openStore();
+    const api = fakeApi({ SPY: flat(DATES, 200), MSFT: flat(DATES, 50) });
+    const { logger, entries } = recorder();
+    await refreshAlpacaBars({
+      api,
+      store,
+      tradingDate: TRADING_DATE,
+      constituents: ['MSFT'],
+      logger,
+    });
+    expect(entries.map((e) => e.event)).not.toContain('v2_bar_refresh_unit_break');
+  });
+
+  it('logs the unit-break event with the exact symbol and count', async () => {
+    const store = await openStore();
+    const api = fakeApi({
+      SPY: flat(DATES, 200),
+      AAPL: {
+        adjusted: [
+          rawBar(`${DATES[0]}T05:00:00Z`, 100),
+          rawBar(`${DATES[1]}T05:00:00Z`, 100),
+          rawBar(`${DATES[2]}T05:00:00Z`, 10_000),
+        ],
+      },
+    });
+    const { logger, entries } = recorder();
+    await refreshAlpacaBars({
+      api,
+      store,
+      tradingDate: TRADING_DATE,
+      constituents: ['AAPL'],
+      logger,
+    });
+    const unitBreak = entries.find((e) => e.event === 'v2_bar_refresh_unit_break');
+    expect(unitBreak).toMatchObject({
+      trace_id: 'v2-bar-refresh',
+      stage: 'v2',
+      level: 'warn',
+      message: 'AAPL: 1 unit break(s) normalised',
+    });
+  });
+});
+
+describe('NO_BAR_REFRESH', () => {
+  it('resolves an empty report', async () => {
+    await expect(NO_BAR_REFRESH.run()).resolves.toEqual({
+      attempted: 0,
+      updated: [],
+      noNewBars: [],
+      failed: [],
+    });
   });
 });
 
