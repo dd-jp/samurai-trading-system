@@ -8,13 +8,14 @@ import type {
   MarkPriceGbp,
   Position,
   Sleeve,
+  SleeveSpec,
   Valuation,
 } from '../../../../contracts/index.js';
 import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import type { Clock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
-import { bookSpecsFor, sleeveAllocationGbp } from './allocation.js';
+import { bookSpecsFor, sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import type { CapitalConfigStore } from './capital-config.js';
 import { LossBudget } from './loss-budget.js';
 
@@ -77,7 +78,7 @@ function rollYear(
 }
 
 export class PaperBooks implements BookLedger {
-  readonly #budgets = new Map<string, LossBudget>();
+  readonly #budgets = new Map<string, { budget: LossBudget; sleeve: SleeveSpec }>();
   readonly #specs: readonly BookSpec[];
 
   constructor(
@@ -95,7 +96,7 @@ export class PaperBooks implements BookLedger {
         specs,
         capitalYear === undefined ? 0 : sleeveAllocationGbp(sleeve.spec, capitalYear),
       );
-      opened.push(...specs.filter((spec) => this.#open(spec.id)));
+      opened.push(...specs.filter((spec) => this.#open(spec.id, sleeve.spec)));
     }
     this.#specs = opened;
   }
@@ -111,12 +112,12 @@ export class PaperBooks implements BookLedger {
     }
   }
 
-  #open(bookId: string): boolean {
+  #open(bookId: string, sleeve: SleeveSpec): boolean {
     const startCapitalGbp = this.#startCapital(bookId);
     if (startCapitalGbp === undefined) return false;
     const budget = new LossBudget(startCapitalGbp);
-    this.#budgets.set(bookId, budget);
-    this.#replay(bookId, budget);
+    this.#budgets.set(bookId, { budget, sleeve });
+    this.#replay(bookId, budget, sleeve);
     return true;
   }
 
@@ -127,7 +128,7 @@ export class PaperBooks implements BookLedger {
     return row?.start_capital_gbp;
   }
 
-  #replay(bookId: string, budget: LossBudget): void {
+  #replay(bookId: string, budget: LossBudget, sleeve: SleeveSpec): void {
     const rows = this.db
       .prepare(
         'SELECT trading_date, equity_gbp FROM v2_book_days WHERE book_id = ? ORDER BY trading_date',
@@ -139,20 +140,20 @@ export class PaperBooks implements BookLedger {
       budget.markClose(
         row.equity_gbp,
         previous?.equity_gbp ?? row.equity_gbp,
-        this.#capitalOn(row.trading_date),
+        this.#capitalOn(sleeve, row.trading_date),
       );
       previous = row;
     }
   }
 
-  #capitalOn(tradingDate: string): CapitalYear {
+  #capitalOn(sleeve: SleeveSpec, tradingDate: string): CapitalYear {
     const capital = this.capital.lastKnown(tradingDate);
     if (capital === undefined) {
       throw new Error(
         `PaperBooks: no capital config on or before ${tradingDate}; set one with npm run v2:capital (doc 66 D8)`,
       );
     }
-    return capital;
+    return sleeveCapitalYear(sleeve, capital);
   }
 
   isMarked(tradingDate: string): boolean {
@@ -290,7 +291,7 @@ export class PaperBooks implements BookLedger {
       custodyAccrualGbp: row.custody_accrual_gbp,
       recordedAt: row.recorded_at,
       state: {
-        referenceEquityGbp: this.#budget(bookId).referenceEquityGbp,
+        referenceEquityGbp: this.#book(bookId).budget.referenceEquityGbp,
         ytdLossGbp: row.ytd_loss_gbp,
         sizeMultiplier: row.size_multiplier as LossBudgetState['sizeMultiplier'],
         halted: row.size_multiplier === 0,
@@ -305,14 +306,14 @@ export class PaperBooks implements BookLedger {
     markGbp: MarkPriceGbp,
     calendarDaysSinceLastMark: number,
   ): BookDay {
-    const budget = this.#budget(bookId);
+    const { budget, sleeve } = this.#book(bookId);
     const previous = this.lastDay(bookId);
     if (previous !== undefined && previous.tradingDate >= tradingDate) {
       throw new Error(
         `PaperBooks: ${bookId} already marked ${previous.tradingDate}, refusing ${tradingDate}`,
       );
     }
-    const capital = this.#capitalOn(tradingDate);
+    const capital = this.#capitalOn(sleeve, tradingDate);
     rollYear(
       budget,
       previous === undefined
@@ -373,10 +374,10 @@ export class PaperBooks implements BookLedger {
     if (result.changes !== 1) throw new Error(`PaperBooks: unknown book ${bookId}`);
   }
 
-  #budget(bookId: string): LossBudget {
-    const budget = this.#budgets.get(bookId);
-    if (budget === undefined) throw new Error(`PaperBooks: unknown book ${bookId}`);
-    return budget;
+  #book(bookId: string): { budget: LossBudget; sleeve: SleeveSpec } {
+    const book = this.#budgets.get(bookId);
+    if (book === undefined) throw new Error(`PaperBooks: unknown book ${bookId}`);
+    return book;
   }
 
   #now(): string {

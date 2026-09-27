@@ -1,6 +1,7 @@
 import type { CapitalYear, LossBudgetState, SizeMultiplier } from '../../../../contracts/index.js';
 
-// G6 (4): exactly 1.0% of the year's start capital; D8 keeps it when the cap is re-set
+// G6 (4): exactly 1.0% of the start capital passed in, which for a book is its sleeve's share
+// (doc 66 2026-09-27); D8 keeps it when the cap is re-set
 const DAILY_CAP_FRACTION_OF_START_CAPITAL = 0.01;
 
 export function sizeStepMarksGbp(lossCapGbp: number): readonly [number, number, number] {

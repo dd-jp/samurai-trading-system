@@ -24,6 +24,7 @@ const decision: SleeveDecision = {
 const DEBATE: Pick<Sleeve, 'id' | 'spec'> = {
   id: 'debate',
   spec: {
+    capitalShare: 1,
     minimumCapitalGbp: 0,
     capacityGbp: Number.POSITIVE_INFINITY,
     validation: 'forward-paper',

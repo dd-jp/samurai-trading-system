@@ -211,7 +211,7 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
     - trials are recorded before the run, so a run that then throws (a veto, a bad fold count) still counts them; that errs towards more deflation;
     - a cycle labelled with session D marks the books at D−1's close, so series dates are one session later than the returns they carry.
 - Known limits, owned by later steps:
-  - `sleeveAllocationGbp` seeds every sleeve at the whole start capital. That is right while debate is the only sleeve. Step 1b must add the S1 split (debate 30%, passers share the 70%) before a second sleeve registers, or the books would count the loss budget twice.
+  - ~~`sleeveAllocationGbp` seeds every sleeve at the whole start capital.~~ Done 2026-09-27 (doc 66): each `SleeveSpec` declares `capitalShare` (debate 0.3), books seed at that share and their loss caps scale with it, and paper/live composition refuses shares summing above 1. Each Step 1b passer declares its part of the 0.7.
   - No sleeve sets `veto` yet. The G5 cap (a veto on at most 10% of entries) is still to be measured and enforced. It lands with the first sleeve that vetoes (Step 1b).
   - `childOrders` sends one child today. Before it sends more than one:
     - journal each child's client order id, or `ingest` logs the child fills as unmatched;

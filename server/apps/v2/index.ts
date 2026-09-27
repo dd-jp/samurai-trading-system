@@ -30,7 +30,7 @@ import {
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
 import type { Journal } from './journal/index.js';
-import type { CapitalConfigStore, PaperBooks } from './risk/index.js';
+import { assertCapitalShares, type CapitalConfigStore, type PaperBooks } from './risk/index.js';
 import {
   ALL_PINS,
   BULLISH_SCRIPT,
@@ -211,22 +211,24 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     bars,
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
+  const sleeves = [
+    createDebateSleeve({
+      panel,
+      bars,
+      constituents,
+      venueFor: () => 'alpaca',
+      news,
+      clock,
+      logger,
+    }),
+  ];
+  assertCapitalShares(sleeves);
   const cycle = composeCycle({
     db,
     clock,
     logger,
     market,
-    sleeves: [
-      createDebateSleeve({
-        panel,
-        bars,
-        constituents,
-        venueFor: () => 'alpaca',
-        news,
-        clock,
-        logger,
-      }),
-    ],
+    sleeves,
     openingDate: options.tradingDate,
     tradingDate: () => options.tradingDate,
     dryRun: options.dryRun,

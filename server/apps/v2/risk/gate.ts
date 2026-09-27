@@ -12,7 +12,7 @@ import type {
   SleeveSpec,
 } from '../../../../contracts/index.js';
 import { quotePerGbp } from '../data/index.js';
-import { sleeveAllocationGbp } from './allocation.js';
+import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
 import { sizeMultiplierFor } from './loss-budget.js';
@@ -53,7 +53,8 @@ export class V2RiskGate implements RiskGate {
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined {
     const capital = this.deps.capital.inForce(tradingDate);
     if (capital === undefined || sleeveAllocationGbp(sleeve.spec, capital) > 0) return undefined;
-    const allocation = `sleeve ${sleeve.id} gets £0 of ${capital.year}'s £${capital.startCapitalGbp}`;
+    const share = sleeveCapitalYear(sleeve.spec, capital).startCapitalGbp;
+    const allocation = `sleeve ${sleeve.id} gets £0 of its £${share} share of ${capital.year}'s £${capital.startCapitalGbp}`;
     return `${allocation} (minimum £${sleeve.spec.minimumCapitalGbp}, capacity £${sleeve.spec.capacityGbp}): no allocation (doc 66 D8)`;
   }
 
@@ -125,7 +126,7 @@ export class V2RiskGate implements RiskGate {
       priceGbp: decision.price / fx,
       atrGbp: (decision.atr ?? 0) / fx,
       stopAtrMultiple: spec.sizing.stopAtrMultiple,
-      sizeMultiplier: this.#multiplier(book.id, capital),
+      sizeMultiplier: this.#multiplier(book.id, sleeveCapitalYear(spec, capital)),
       macroDay: spec.macroGate && book.variant !== 'no-macro-gate' && request.macroDay,
       volumeCapShares: volumeCap,
     });

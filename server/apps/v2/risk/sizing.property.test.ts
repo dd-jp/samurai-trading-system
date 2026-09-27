@@ -54,6 +54,7 @@ function randomCase(random: () => number): Case {
     variant: random() < 0.5 ? 'primary' : 'no-macro-gate',
     macroDay: random() < 0.3,
     spec: {
+      capitalShare: random() < 0.5 ? 1 : 0.05 + random() * 0.95,
       minimumCapitalGbp: 0,
       capacityGbp: Number.POSITIVE_INFINITY,
       validation: 'forward-paper',
@@ -166,9 +167,13 @@ describe('entry sizing properties (doc 67 Step 3d kill line)', () => {
     }
   });
 
-  it('is zero whenever the start capital is below the sleeve minimum', () => {
+  it("is zero whenever the sleeve's share of start capital is below its minimum", () => {
     const starved = cases.filter(
-      (testCase) => testCase.startCapitalGbp < testCase.minimumCapitalGbp,
+      (testCase) =>
+        testCase.startCapitalGbp * testCase.spec.capitalShare < testCase.minimumCapitalGbp,
+    );
+    expect(starved.some((testCase) => testCase.startCapitalGbp >= testCase.minimumCapitalGbp)).toBe(
+      true,
     );
     expect(starved.length).toBeGreaterThan(50);
     for (const testCase of starved) expect(size(testCase)).toBe(0);

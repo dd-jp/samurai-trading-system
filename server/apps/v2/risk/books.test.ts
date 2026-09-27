@@ -12,6 +12,7 @@ const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
 const flat = () => undefined;
 
 const DEBATE_SPEC: SleeveSpec = {
+  capitalShare: 1,
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
   validation: 'forward-paper',
@@ -227,6 +228,45 @@ describe('PaperBooks', () => {
     expect(books.lastDay('debate/primary')?.state).toMatchObject({
       halted: true,
       sizeMultiplier: 0,
+    });
+  });
+
+  it('seeds each sleeve at its share and steps a book against that share of the loss cap', () => {
+    const db = openSharedStore(':memory:');
+    new CapitalConfigStore(db, clock).setYear(2026, 2_000, 1_500);
+    const books = openBooks(db, '2026-09-25', [
+      { id: 'debate', spec: { ...DEBATE_SPEC, capitalShare: 0.3 } },
+      { id: 'trend', spec: { ...DEBATE_SPEC, capitalShare: 0.7 } },
+    ]);
+    expect(books.cash('debate/primary')).toBe(600);
+    expect(books.cash('trend/primary')).toBe(1_400);
+    const lose = (date: string, loss: number, orderId: string) => {
+      books.applyFill(
+        'debate/primary',
+        fill({ qty: 1, priceGbp: 100 + loss, clientOrderId: orderId }),
+      );
+      books.applyFill(
+        'debate/primary',
+        fill({ side: 'sell', qty: 1, priceGbp: 100, clientOrderId: orderId }),
+      );
+      return books.markDay('debate/primary', date, flat, 1).state;
+    };
+    expect(lose('2026-09-14', 5, 'a')).toMatchObject({
+      sizeMultiplier: 1,
+      entriesBlockedAtNextFill: false,
+    });
+    expect(books.lastDay('debate/primary')?.state.entriesBlockedAtNextFill).toBe(false);
+    expect(lose('2026-09-15', 6, 'b')).toMatchObject({
+      sizeMultiplier: 1,
+      entriesBlockedAtNextFill: true,
+    });
+    expect(lose('2026-09-16', 138, 'c').sizeMultiplier).toBe(1);
+    expect(lose('2026-09-17', 1, 'd').sizeMultiplier).toBe(0.5);
+    expect(lose('2026-09-18', 150, 'e').sizeMultiplier).toBe(0.25);
+    expect(lose('2026-09-21', 150, 'f')).toMatchObject({ halted: true, ytdLossGbp: 450 });
+    expect(books.markDay('trend/primary', '2026-09-21', flat, 1).state).toMatchObject({
+      halted: false,
+      sizeMultiplier: 1,
     });
   });
 

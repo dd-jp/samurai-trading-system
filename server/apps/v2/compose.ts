@@ -10,7 +10,13 @@ import {
   venueFee,
 } from './execution/index.js';
 import { Journal } from './journal/index.js';
-import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import {
+  assertCapitalShareRanges,
+  CapitalConfigStore,
+  ControlStore,
+  PaperBooks,
+  V2RiskGate,
+} from './risk/index.js';
 import { SleeveRegistry } from './signal/index.js';
 
 export interface CycleCompositionOptions {
@@ -35,6 +41,7 @@ export interface CycleComposition extends CycleDeps {
 
 export function composeCycle(options: CycleCompositionOptions): CycleComposition {
   const { db, clock, logger, market, tradingDate } = options;
+  assertCapitalShareRanges(options.sleeves);
   const v2Store = guardedStore(db, 'v2');
   const capital = new CapitalConfigStore(v2Store, clock);
   const journal = new Journal(v2Store, clock);

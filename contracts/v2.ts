@@ -81,6 +81,7 @@ export interface SleeveBook {
 export type SleeveValidation = 'backtest' | 'forward-paper';
 
 export interface SleeveSpec {
+  readonly capitalShare: number;
   readonly minimumCapitalGbp: number;
   readonly capacityGbp: number;
   readonly validation: SleeveValidation;
