@@ -79,7 +79,7 @@ describe('reportEntryOffsets', () => {
       }));
     const store = await ParquetBarStore.open(join(dir, 'bars'));
     await store.write('alpaca', [
-      { symbol: 'AAA', bars: flat(100) },
+      { symbol: 'AAA', bars: [{ ...flat(50)[0], date: '2026-08-31' }, ...flat(100)] },
       { symbol: 'SPY', bars: flat(400) },
     ]);
     store.close();
