@@ -18,6 +18,7 @@
     "orchestrator": "npm run build && node --env-file=.env.local dist/server/apps/orchestrator/index.js",
     "api": "npm run build && node --env-file=.env.local dist/server/apps/service-api/index.js",
     "v2:capital": "tsx server/apps/v2/set-capital.ts",
+    "v2:entry-offsets": "tsx server/apps/v2/report-entry-offsets.ts",
     "v2:dashboard": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/api/main.ts",
     "v2:trials": "tsx server/apps/v2/trial-ledger.ts",
     "smoke": "npm run build && node dist/server/apps/orchestrator/smoke-run.js && node dist/server/apps/v2/smoke.js",
