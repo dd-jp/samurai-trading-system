@@ -11,6 +11,7 @@ const GROK_LARGE_PROMPT_TIER = {
 
 export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   'anthropic/claude-fable-5': { input: 8, output: 40 },
+  'anthropic/claude-opus-5.5': { input: 4, output: 20 },
   'anthropic/claude-opus-5': { input: 5, output: 25 },
   'anthropic/claude-opus-4.8': { input: 4, output: 20 },
   'anthropic/claude-sonnet-5': { input: 2, output: 10 },

@@ -18,6 +18,7 @@ describe('rateFor', () => {
   });
 
   it('carries the Nous catalogue rates for the v2 seats (checked 2026-09-25)', () => {
+    expect(rateFor('anthropic/claude-opus-5.5')).toEqual({ input: 4, output: 20 });
     expect(rateFor('anthropic/claude-opus-5')).toEqual({ input: 5, output: 25 });
     expect(rateFor('anthropic/claude-sonnet-5')).toEqual({ input: 2, output: 10 });
     expect(rateFor('openai/gpt-5.5')).toEqual({ input: 5, output: 30 });

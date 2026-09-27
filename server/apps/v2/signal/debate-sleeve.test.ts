@@ -198,7 +198,7 @@ describe('createDebateSleeve', () => {
     expect(decision?.debate_id).toBeDefined();
     const called = transports.flatMap((transport) => transport.calls.map((call) => call.model));
     expect(called).toHaveLength(3);
-    expect(called).toContain('anthropic/claude-opus-5');
+    expect(called).toContain('anthropic/claude-opus-5.5');
     expect(called.join(' ')).not.toContain('fable');
     for (const transport of transports) {
       for (const call of transport.calls) {
