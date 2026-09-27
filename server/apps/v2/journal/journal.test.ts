@@ -175,6 +175,12 @@ describe('Journal', () => {
     journal.recordOrder({ ...base, client_order_id: 'cancelled', outcome: 'cancelled' });
     journal.recordOrder({ ...base, client_order_id: 'exit', leg: 'exit', side: 'sell' });
     journal.recordOrder({ ...base, client_order_id: 'filled' });
+    journal.recordOrder({
+      ...base,
+      client_order_id: 'shadow',
+      book_id: 'debate/no-macro-gate',
+      trading_date: '2026-09-25',
+    });
     journal.recordFill({
       fill_id: 'alpaca:sim-filled',
       client_order_id: 'filled',
@@ -193,6 +199,16 @@ describe('Journal', () => {
     ).toEqual(['z-early', 'a-dry', 'b-sim']);
     expect(journal.unfilledSimulatedEntriesBefore('2026-09-24')).toMatchObject([
       { client_order_id: 'z-early', dry_run: true, payload: {} },
+    ]);
+    expect(journal.restingEntries('debate/primary').map((o) => o.client_order_id)).toEqual([
+      'z-early',
+      'a-dry',
+      'b-sim',
+      'submitted',
+      'today',
+    ]);
+    expect(journal.restingEntries('debate/no-macro-gate').map((o) => o.client_order_id)).toEqual([
+      'shadow',
     ]);
   });
 
