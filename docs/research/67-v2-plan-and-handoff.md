@@ -224,6 +224,8 @@ Litestream streams the SQLite store to S3-compatible object storage, encrypted (
 
 **Status 2026-09-27 (Step 3e PR 1, the ping):** the paper run pings healthchecks.io at its end (`server/apps/v2/heartbeat.ts`, `HEALTHCHECKS_PING_URL` in `.env.local` <!-- cite-exempt: untracked — gitignored local env file -->); dry runs never ping. Litestream to R2 with the restore drill is PR 2, Telegram severities PR 3. Nothing schedules the cycle until Step 4/4b clears paper.
 
+**Status 2026-09-27 (Step 3e PR 2, Litestream):** after each paper cycle the paper and research stores replicate to R2 with SSE-C (`server/apps/v2/backup.ts`, `litestream replicate -once`, no daemon); a paper run refuses without the R2 variables and a failed backup sends the `/fail` ping. `npm run v2:backup` and `npm run v2:restore` run it by hand. Doc 73 records the live proofs: without the key, R2 refuses; incremental restores are identical; a deleted store restores identically and the next cycle's report matches. Still open: the real-broker reconcile half of the drill (Step 4b), the skipped-cycle alert (the healthchecks.io check is paused) and the off-Mac copy of the SSE-C key (David's).
+
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
 
 #### Step 3c — UI (G13)
