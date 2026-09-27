@@ -55,7 +55,7 @@ export function barsBefore(series: BarSeries, tradingDate: string): readonly Dai
   return series.bars.filter((bar) => bar.date < tradingDate);
 }
 
-const MAX_BAR_AGE_CALENDAR_DAYS = 5;
+export const MAX_BAR_AGE_CALENDAR_DAYS = 5;
 
 export function isFresh(last: DailyBar | undefined, tradingDate: string): last is DailyBar {
   return last !== undefined && addDays(last.date, MAX_BAR_AGE_CALENDAR_DAYS) >= tradingDate;

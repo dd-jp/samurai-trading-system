@@ -27,6 +27,7 @@ import { describeThrownSafely } from '../../shared/index.js';
 import {
   CALENDAR_REFERENCE,
   isFresh,
+  MAX_BAR_AGE_CALENDAR_DAYS,
   type MacroGateVerdict,
   macroGate,
   quotePerGbp,
@@ -630,7 +631,7 @@ class Cycle {
       const barDate = bar?.date;
       if (isFresh(bar, this.tradingDate)) continue;
       const price = barDate === undefined ? 'the entry price' : `the ${barDate} close`;
-      const message = `${book.id} ${held.instrument}: marked at ${price}, no bar in the 5 days before ${this.tradingDate}`;
+      const message = `${book.id} ${held.instrument}: marked at ${price}, no bar in the ${MAX_BAR_AGE_CALENDAR_DAYS} days before ${this.tradingDate}`;
       this.deps.journal.recordRefusal({
         trading_date: this.tradingDate,
         scope: 'data',
@@ -713,7 +714,7 @@ function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVer
       scope: 'data',
       parameter: 'CALENDAR_REFERENCE',
       ticket: '#1791',
-      message: `${CALENDAR_REFERENCE} has no bar in the 5 days before ${tradingDate}: every windowed read fails closed (postmortem §2)`,
+      message: `${CALENDAR_REFERENCE} has no bar in the ${MAX_BAR_AGE_CALENDAR_DAYS} days before ${tradingDate}: every windowed read fails closed (postmortem §2)`,
     });
   }
   if (!macro.covered) {
