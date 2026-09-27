@@ -75,6 +75,7 @@ const gate = new V2RiskGate({
     gbpUsdAtYearStart: () => 1,
   },
   spec: () => ({
+    capitalShare: 1,
     minimumCapitalGbp: 0,
     capacityGbp: Number.POSITIVE_INFINITY,
     validation: 'forward-paper',

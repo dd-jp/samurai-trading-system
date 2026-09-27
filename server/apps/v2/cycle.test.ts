@@ -143,6 +143,7 @@ interface Harness extends CycleDeps {
 }
 
 const TEST_SPEC: SleeveSpec = {
+  capitalShare: 1,
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
   validation: 'forward-paper',
@@ -822,7 +823,7 @@ describe('runCycle', () => {
     const report = await runCycle(deps, '2026-09-25');
     expect(report).toMatchObject({ decisions: 0, entries: 0, books: [] });
     expect(report.refusals.at(-1)).toBe(
-      "SLEEVE_MINIMUM_CAPITAL: sleeve debate gets £0 of 2026's £1000 (minimum £1001, capacity £Infinity): no allocation (doc 66 D8)",
+      "SLEEVE_MINIMUM_CAPITAL: sleeve debate gets £0 of its £1000 share of 2026's £1000 (minimum £1001, capacity £Infinity): no allocation (doc 66 D8)",
     );
     expect(universe).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();

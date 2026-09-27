@@ -29,6 +29,7 @@ const year: CapitalYear = {
   lossCapGbp: 1_500,
 };
 const SPEC: SleeveSpec = {
+  capitalShare: 1,
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
   validation: 'forward-paper',
@@ -256,16 +257,39 @@ describe('V2RiskGate', () => {
         '2026-09-25',
       ),
     ).toBe(
-      "sleeve trend gets £0 of 2026's £2000 (minimum £2001, capacity £500): no allocation (doc 66 D8)",
+      "sleeve trend gets £0 of its £2000 share of 2026's £2000 (minimum £2001, capacity £500): no allocation (doc 66 D8)",
     );
     expect(
       gate().allocationRefusal({ id: 'full', spec: { ...spec, capacityGbp: 0 } }, '2026-09-25'),
     ).toBe(
-      "sleeve full gets £0 of 2026's £2000 (minimum £2000, capacity £0): no allocation (doc 66 D8)",
+      "sleeve full gets £0 of its £2000 share of 2026's £2000 (minimum £2000, capacity £0): no allocation (doc 66 D8)",
     );
     expect(
       gate({ capital: undefined }).allocationRefusal({ id: 'trend', spec }, '2027-01-04'),
     ).toBeUndefined();
+  });
+
+  it('refuses a sleeve whose share of start capital, not the whole of it, is below its minimum', () => {
+    const spec = { ...SPEC, capitalShare: 0.3, minimumCapitalGbp: 601 };
+    expect(gate({ spec }).allocationRefusal({ id: 'debate', spec }, '2026-09-25')).toBe(
+      "sleeve debate gets £0 of its £600 share of 2026's £2000 (minimum £601, capacity £Infinity): no allocation (doc 66 D8)",
+    );
+    expect(gate({ spec }).approveEntry(request())).toMatchObject({ refusal: 'no_allocation' });
+    const covered = { ...spec, minimumCapitalGbp: 600 };
+    expect(
+      gate({ spec: covered }).allocationRefusal({ id: 'debate', spec: covered }, '2026-09-25'),
+    ).toBeUndefined();
+  });
+
+  it("steps size against the sleeve's share of the loss cap, not the account's", () => {
+    const state = { ytdLossGbp: 150 };
+    const whole = gate({ state }).approveEntry(request()).size;
+    const halved = gate({ state: { ...state, sizeMultiplier: 0.5 } }).approveEntry(request()).size;
+    const shared = gate({ state, spec: { ...SPEC, capitalShare: 0.3 } }).approveEntry(request());
+    expect(halved).toBeLessThan(whole);
+    expect(shared.size).toBe(halved);
+    const halt = gate({ state: { ytdLossGbp: 450 }, spec: { ...SPEC, capitalShare: 0.3 } });
+    expect(halt.approveEntry(request())).toMatchObject({ size: 0, refusal: 'zero_size' });
   });
 
   it('refuses an entry for a sleeve with no allocation before sizing it', () => {

@@ -8,13 +8,14 @@ import type {
   MarkPriceGbp,
   Position,
   Sleeve,
+  SleeveSpec,
   Valuation,
 } from '../../../../contracts/index.js';
 import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import type { Clock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
-import { bookSpecsFor, sleeveAllocationGbp } from './allocation.js';
+import { bookSpecsFor, sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import type { CapitalConfigStore } from './capital-config.js';
 import { LossBudget } from './loss-budget.js';
 
@@ -79,6 +80,7 @@ function rollYear(
 export class PaperBooks implements BookLedger {
   readonly #budgets = new Map<string, LossBudget>();
   readonly #specs: readonly BookSpec[];
+  readonly #sleeveSpecs: ReadonlyMap<string, SleeveSpec>;
 
   constructor(
     private readonly db: StoreHandle,
@@ -87,6 +89,9 @@ export class PaperBooks implements BookLedger {
     openingDate: string,
     sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[],
   ) {
+    this.#sleeveSpecs = new Map(
+      sleeves.flatMap((sleeve) => bookSpecsFor([sleeve]).map((book) => [book.id, sleeve.spec])),
+    );
     const capitalYear = capital.inForce(openingDate);
     const opened: BookSpec[] = [];
     for (const sleeve of sleeves) {
@@ -139,20 +144,27 @@ export class PaperBooks implements BookLedger {
       budget.markClose(
         row.equity_gbp,
         previous?.equity_gbp ?? row.equity_gbp,
-        this.#capitalOn(row.trading_date),
+        this.#capitalOn(bookId, row.trading_date),
       );
       previous = row;
     }
   }
 
-  #capitalOn(tradingDate: string): CapitalYear {
+  #capitalOn(bookId: string, tradingDate: string): CapitalYear {
     const capital = this.capital.lastKnown(tradingDate);
     if (capital === undefined) {
       throw new Error(
         `PaperBooks: no capital config on or before ${tradingDate}; set one with npm run v2:capital (doc 66 D8)`,
       );
     }
-    return capital;
+    return sleeveCapitalYear(this.#sleeveSpec(bookId), capital);
+  }
+
+  #sleeveSpec(bookId: string): SleeveSpec {
+    const spec = this.#sleeveSpecs.get(bookId);
+    if (spec === undefined)
+      throw new Error(`PaperBooks: ${bookId} belongs to no registered sleeve`);
+    return spec;
   }
 
   isMarked(tradingDate: string): boolean {
@@ -312,7 +324,7 @@ export class PaperBooks implements BookLedger {
         `PaperBooks: ${bookId} already marked ${previous.tradingDate}, refusing ${tradingDate}`,
       );
     }
-    const capital = this.#capitalOn(tradingDate);
+    const capital = this.#capitalOn(bookId, tradingDate);
     rollYear(
       budget,
       previous === undefined

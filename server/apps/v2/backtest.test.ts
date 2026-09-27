@@ -68,6 +68,7 @@ const market = new BarsMarketData(
 
 function spec(validation: SleeveValidation): SleeveSpec {
   return {
+    capitalShare: 1,
     minimumCapitalGbp: 0,
     capacityGbp: Number.POSITIVE_INFINITY,
     validation,

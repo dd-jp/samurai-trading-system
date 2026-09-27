@@ -1,4 +1,4 @@
-export { bookSpecsFor, sleeveAllocationGbp } from './allocation.js';
+export { assertCapitalShares, bookSpecsFor, sleeveAllocationGbp } from './allocation.js';
 export { consumeApproval } from './approval.js';
 export { PaperBooks } from './books.js';
 export { CapitalConfigError, CapitalConfigStore } from './capital-config.js';

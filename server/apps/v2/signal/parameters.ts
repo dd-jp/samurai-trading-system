@@ -65,7 +65,11 @@ export const DEBATE_TIME_STOP_TRADING_DAYS = 10;
 const DEBATE_ADV_SHARE = 0.01;
 const DEBATE_ADV_WINDOW_BARS = 20;
 
+// Q14: 30% to debate, the 70% to S2 passers; S1 holds it in cash until one passes
+const DEBATE_CAPITAL_SHARE = 0.3;
+
 export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
+  capitalShare: DEBATE_CAPITAL_SHARE,
   minimumCapitalGbp: 0,
   capacityGbp: Number.POSITIVE_INFINITY,
   validation: 'forward-paper',
