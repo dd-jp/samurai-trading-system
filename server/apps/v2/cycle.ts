@@ -110,9 +110,7 @@ function opposite(side: OrderSide): OrderSide {
   return side === 'buy' ? 'sell' : 'buy';
 }
 
-// A resting-order sign flip (via a failed cancel, #1778) or a broker double-fill on an
-// already-closed bracket leg both land here as "unexpected" whether or not the fill's own
-// leg is 'entry' — only a fresh open from flat, by an entry-leg fill, is the normal case
+// A sign change, or a flat->nonzero open by a non-entry leg, is a crossing fill (#1778)
 function crossedUnexpectedly(leg: V2Fill['leg'], beforeQty: number, afterQty: number): boolean {
   const beforeSign = Math.sign(beforeQty);
   const afterSign = Math.sign(afterQty);
