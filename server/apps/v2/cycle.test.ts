@@ -614,6 +614,30 @@ describe('runCycle', () => {
     ]);
   });
 
+  it('#1778: one oversized fill that flips long straight to short is journaled loudly, unbracketed', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')?.qty).toBe(6);
+    // Never passes through flat: one fill both closes the long and opens a short
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+    const report = await runCycle(deps, '2026-09-29');
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: -9,
+      avgPriceGbp: expect.closeTo(18 / FX, 9),
+      stopGbp: undefined,
+      targetGbp: undefined,
+    });
+    expect(report.refusals).toContainEqual(
+      'debate/primary AAPL: a stop fill on v2-debate-primary-2026-09-25-AAPL left qty -9 ' +
+        'where qty 6 held; a fill must never flip or open a position outside a fresh entry ' +
+        '(#1778)',
+    );
+  });
+
   it('#1778: a stray closing fill on an already-flat position opens unbracketed and is journaled loudly', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
