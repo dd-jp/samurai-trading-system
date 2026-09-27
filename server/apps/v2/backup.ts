@@ -45,18 +45,23 @@ export const NO_BACKUP: Backup = {
   replicate: () => Promise.resolve(),
 };
 
-export function failureReason(error: ExecFileException | null): string {
-  if (error === null) return '';
-  const code = typeof error.code === 'string' ? error.code : '';
-  return [code, error.signal ?? ''].filter((part) => part !== '').join(' ');
+function failureReason(error: ExecFileException): string {
+  return typeof error.code === 'string' ? error.code : (error.signal ?? '');
+}
+
+function resultOf(error: ExecFileException | null, output: string): CommandResult {
+  if (error === null) return { code: 0, output };
+  const reason = failureReason(error);
+  return {
+    code: typeof error.code === 'number' ? error.code : 1,
+    output: reason === '' ? output : `${output}\n${reason}`,
+  };
 }
 
 export const execRunner: CommandRunner = (bin, args, env) =>
   new Promise((done) => {
     execFile(bin, [...args], { env, timeout: 300_000 }, (error, stdout, stderr) => {
-      const code = error === null ? 0 : typeof error.code === 'number' ? error.code : 1;
-      const reason = failureReason(error);
-      done({ code, output: `${stdout}${stderr}${reason === '' ? '' : `\n${reason}`}` });
+      done(resultOf(error, `${stdout}${stderr}`));
     });
   });
 
@@ -115,8 +120,7 @@ function secretsIn(env: NodeJS.ProcessEnv): [string, string][] {
     const value = env[name]?.trim().replace(/\/+$/, '');
     if (value) pairs.push([name, value]);
   }
-  for (const part of endpointParts(env.R2_ENDPOINT?.trim() ?? ''))
-    pairs.push(['R2_ENDPOINT', part]);
+  for (const part of endpointParts(env.R2_ENDPOINT ?? '')) pairs.push(['R2_ENDPOINT', part]);
   return pairs.sort(([, a], [, b]) => b.length - a.length);
 }
 
@@ -159,7 +163,7 @@ async function withConfig<T>(
   try {
     return await use(configPath);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true });
   }
 }
 
@@ -195,6 +199,24 @@ export async function replicateOnce(
   );
 }
 
+async function restoreOne(
+  tool: Litestream,
+  configPath: string,
+  target: BackupTarget,
+  logger: Logger,
+): Promise<void> {
+  await litestream(
+    tool,
+    ['restore', '-config', configPath, '-if-db-not-exists', '-if-replica-exists', target.dbPath],
+    `restore of ${target.replicaPath}`,
+  );
+  if (existsSync(target.dbPath)) {
+    logBackup(logger, 'v2_backup_restored', `${target.replicaPath}: restored`);
+  } else {
+    logBackup(logger, 'v2_backup_no_replica', `${target.replicaPath}: no replica to restore`);
+  }
+}
+
 export async function restoreMissing(
   tool: Litestream,
   targets: readonly BackupTarget[],
@@ -203,26 +225,7 @@ export async function restoreMissing(
   const missing = targets.filter((target) => !existsSync(target.dbPath));
   if (missing.length === 0) return;
   await withConfig(tool, missing, async (configPath) => {
-    for (const target of missing) {
-      await litestream(
-        tool,
-        [
-          'restore',
-          '-config',
-          configPath,
-          '-if-db-not-exists',
-          '-if-replica-exists',
-          target.dbPath,
-        ],
-        `restore of ${target.replicaPath}`,
-      );
-      const restored = existsSync(target.dbPath);
-      logBackup(
-        logger,
-        restored ? 'v2_backup_restored' : 'v2_backup_no_replica',
-        `${target.replicaPath}: ${restored ? 'restored' : 'no replica to restore'}`,
-      );
-    }
+    for (const target of missing) await restoreOne(tool, configPath, target, logger);
   });
 }
 

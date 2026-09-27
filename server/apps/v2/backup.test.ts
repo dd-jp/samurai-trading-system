@@ -122,10 +122,10 @@ describe('backup configuration', () => {
   it('puts both replicas under LITESTREAM_REPLICA_ROOT when it is set', () => {
     expect(
       backupTargets('p.sqlite', {
-        LITESTREAM_REPLICA_ROOT: 'drill/x',
+        LITESTREAM_REPLICA_ROOT: 'drill/run-1',
         SAMURAI_RESEARCH_STORE: 'r.sqlite',
       }).map((target) => target.replicaPath),
-    ).toEqual(['drill/x/paper', 'drill/x/research']);
+    ).toEqual(['drill/run-1/paper', 'drill/run-1/research']);
     expect(
       backupTargets('p.sqlite', { LITESTREAM_REPLICA_ROOT: ' ' }).map(
         (target) => target.replicaPath,
@@ -161,7 +161,7 @@ describe('backup configuration', () => {
       backupTargets('p.sqlite', { LITESTREAM_REPLICA_ROOT: root }).map(
         (target) => target.replicaPath,
       );
-    expect(paths('drill/x//')).toEqual(['drill/x/paper', 'drill/x/research']);
+    expect(paths('drill/run-1//')).toEqual(['drill/run-1/paper', 'drill/run-1/research']);
     for (const root of ['a\n  sse-customer-key: ""', 'a: b', 'a#b', '../up', '/abs']) {
       expect(() => paths(root)).toThrow(
         'LITESTREAM_REPLICA_ROOT may hold only letters, digits, _, - and /',
@@ -191,7 +191,19 @@ describe('backup configuration', () => {
       { ...ENV, PATH: '/bin', HOME: '/h', NOUS_API_KEY: 'llm', ALPACA_SECRET: 'broker' },
       fakeRunner().run,
     );
-    expect(tool.env).toEqual({ PATH: '/bin', HOME: '/h', ...ENV });
+    expect(tool.env).toStrictEqual({ PATH: '/bin', HOME: '/h', ...ENV });
+    expect(Object.keys(litestreamFor(ENV, fakeRunner().run).env)).toEqual(Object.keys(ENV));
+  });
+
+  it('replaces the longer of two overlapping secrets whole', () => {
+    const env = { ...ENV, R2_ACCESS_KEY_ID: 'abc', R2_SECRET_ACCESS_KEY: 'abcdef' };
+    expect(scrubbed('id abc secret abcdef', env)).toBe(
+      'id [R2_ACCESS_KEY_ID] secret [R2_SECRET_ACCESS_KEY]',
+    );
+  });
+
+  it('matches a secret echoed without its trailing slashes', () => {
+    expect(scrubbed('bucket-x/v2', { ...ENV, R2_BUCKET: 'bucket-x//' })).toBe('[R2_BUCKET]/v2');
   });
 
   it('pins the Litestream version the drills ran', () => {
@@ -272,7 +284,10 @@ describe('replicateOnce', () => {
       litestreamFor(ENV, fake.run),
       storesIn(scratch(), ['paper.sqlite']),
       silent().logger,
-    ).catch((caught: unknown) => caught as Error);
+    ).then(
+      () => new Error('resolved'),
+      (caught: unknown) => caught as Error,
+    );
     expect(error.message).toBe(
       `litestream [R2_ENDPOINT] ${'x'.repeat(66)} found, ${LITESTREAM_VERSION} is pinned`,
     );
@@ -432,7 +447,8 @@ describe('withBackup', () => {
 
   it('reports both failures when the cycle and its backup both fail', async () => {
     const failing = recordingBackup([], () => Promise.reject(new Error('R2 down')));
-    const error = await withBackup(() => Promise.reject(new Error('cycle')), failing).catch(
+    const error = await withBackup(() => Promise.reject(new Error('cycle')), failing).then(
+      () => new Error('resolved'),
       (caught: unknown) => caught as Error,
     );
     expect(error.message).toBe('cycle; the backup after it also failed: R2 down');
@@ -440,7 +456,10 @@ describe('withBackup', () => {
     const plain = await withBackup(
       () => Promise.reject('text'),
       recordingBackup([], () => Promise.reject('down')),
-    ).catch((caught: unknown) => caught as Error);
+    ).then(
+      () => new Error('resolved'),
+      (caught: unknown) => caught as Error,
+    );
     expect(plain.message).toBe('text; the backup after it also failed: down');
   });
 
