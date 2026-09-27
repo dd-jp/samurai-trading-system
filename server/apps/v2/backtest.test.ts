@@ -362,7 +362,7 @@ describe('runBacktest', () => {
     );
   });
 
-  it('runs the loss budget inside: a tight cap steps size down and keeps each calendar year under it', async () => {
+  it('runs the loss budget inside: a tight cap keeps each calendar year under it', async () => {
     const run = (lossCapGbp: number) =>
       runBacktest(
         input({

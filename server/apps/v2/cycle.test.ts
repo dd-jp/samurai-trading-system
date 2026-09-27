@@ -1047,7 +1047,7 @@ describe('runCycle', () => {
     expect(drop.entries).toBe(2);
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('cancelled');
     expect(drop.refusals).toContain(
-      'debate/primary: daily loss cap at the 2026-09-28 mark cancelled 1 resting entries',
+      'debate/primary: daily loss cap at the 2026-09-28 mark cancelled resting entries: 1',
     );
     deps.setDecisions([{ ...longAapl, instrument: 'MSFT' }]);
     const blocked = await runCycle(deps, '2026-09-29');
@@ -1583,19 +1583,45 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
         scope: 'entry',
         ticket: '#1813',
         message:
-          'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
+          'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled resting entries: 1',
       },
       {
         trading_date: '2026-09-28',
         scope: 'entry',
         ticket: '#1813',
         message:
-          'debate/primary: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
+          'debate/primary: loss budget halt at the 2026-09-28 mark cancelled resting entries: 1',
       },
     ]);
     const next = await runCycle(deps, '2026-09-29');
     expect(next.fills).toBe(0);
     expect(deps.books.position('debate/primary', 'MSFT')).toBeUndefined();
+    expect(budgetRows(deps)).toHaveLength(2);
+  });
+
+  it('a crash between the mark and its cancels is repaired before the next cycle fills anything', async () => {
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    deps.barsByDate.set('2026-09-28', drop());
+    deps.setDecisions([msft]);
+    vi.spyOn(deps.journal, 'restingEntries').mockReturnValueOnce([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe(
+      'refused_dry_run',
+    );
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')).toMatchObject({
+      outcome: 'cancelled',
+      payload: { cancelled: '2026-09-29' },
+    });
+    expect(deps.books.position('debate/primary', 'MSFT')).toBeUndefined();
+    expect(budgetRows(deps)).toContainEqual({
+      trading_date: '2026-09-29',
+      scope: 'entry',
+      ticket: '#1813',
+      message:
+        'debate/primary: loss budget halt at the 2026-09-28 mark cancelled resting entries: 1',
+    });
     expect(budgetRows(deps)).toHaveLength(2);
   });
 
@@ -1653,7 +1679,7 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
         scope: 'entry',
         ticket: '#1813',
         message:
-          'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled 1 resting entries',
+          'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled resting entries: 1',
       },
     ]);
   });
