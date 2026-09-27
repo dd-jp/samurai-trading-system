@@ -1,6 +1,6 @@
 import type { OrderSide, V2Bar } from '../../../contracts/index.js';
 
-export const REPORT_OFFSETS_BPS: readonly number[] = [0, 50, 100, 200];
+const REPORT_OFFSETS_BPS: readonly number[] = [0, 50, 100, 200];
 
 export interface JournalledEntry {
   readonly tradingDate: string;
