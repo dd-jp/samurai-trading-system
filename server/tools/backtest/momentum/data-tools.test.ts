@@ -1,16 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ParquetBarStore } from '../../../providers/bar-store/index.js';
-import type { FetchResult, RawDailyBar } from './alpaca-bars-api.js';
-import {
-  AlpacaBarsApi,
-  authHeaders,
-  barsUrl,
-  credentialsFromEnv,
-  endOfDayUtc,
-  parseBarsPage,
-} from './alpaca-bars-api.js';
+import type { RawDailyBar } from '../../../providers/bar-store/index.js';
+import { AlpacaBarsApi, ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { BAR_CSV_HEADER, barsToCsv, roundBarPrices } from './bar-csv.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import { GBP_IDENTITY_FX, parseBoeXudlussCsv, YearFixedFx } from './fx.js';
@@ -45,14 +37,7 @@ import {
   spreadRowsToCsv,
   spySessions,
 } from './measure-alpaca-spread.js';
-import {
-  alpacaSymbolCandidates,
-  barDate,
-  joinAdjustedAndRaw,
-  parsePullArgs,
-  pullInto,
-  pullSymbol,
-} from './pull-alpaca-bars.js';
+import { parsePullArgs, pullInto } from './pull-alpaca-bars.js';
 import { distinctTrialCount, ledgerFromGrid, mergeLedger } from './trial-ledger.js';
 
 describe('grid', () => {
@@ -282,138 +267,8 @@ describe('bar csv', () => {
   });
 });
 
-describe('alpaca bars api', () => {
-  const rawBar = (t: string, c: number): RawDailyBar => ({ t, o: c, h: c, l: c, c, v: 1 });
-
-  it('reads credentials from the environment and builds auth headers', () => {
-    expect(() => credentialsFromEnv({})).toThrow(/ALPACA_API_KEY/);
-    const credentials = credentialsFromEnv({ ALPACA_API_KEY: 'k', ALPACA_API_SECRET: 's' });
-    expect(authHeaders(credentials)).toEqual({
-      'APCA-API-KEY-ID': 'k',
-      'APCA-API-SECRET-KEY': 's',
-      accept: 'application/json',
-    });
-  });
-
-  it('builds a SIP daily-bars URL with an end-of-day UTC end so a date-only end is never in the future', () => {
-    expect(endOfDayUtc('2026-09-23')).toBe('2026-09-23T23:59:59Z');
-    const url = new URL(
-      barsUrl({ symbol: 'SPY', start: '2016-01-04', end: '2026-09-23', adjustment: 'all' }, 'tok'),
-    );
-    expect(url.pathname).toBe('/v2/stocks/bars');
-    expect(url.searchParams.get('feed')).toBe('sip');
-    expect(url.searchParams.get('timeframe')).toBe('1Day');
-    expect(url.searchParams.get('end')).toBe('2026-09-23T23:59:59Z');
-    expect(url.searchParams.get('page_token')).toBe('tok');
-    expect(url.searchParams.get('adjustment')).toBe('all');
-  });
-
-  it('parses a page and tolerates a symbol with no bars', () => {
-    const page = parseBarsPage(
-      { bars: { SPY: [rawBar('2016-01-04T05:00:00Z', 1)] }, next_page_token: 'n' },
-      'SPY',
-    );
-    expect(page.bars.length).toBe(1);
-    expect(page.nextPageToken).toBe('n');
-    expect(parseBarsPage({ bars: {} }, 'SPY')).toEqual({ bars: [], nextPageToken: undefined });
-    expect(() => parseBarsPage('x', 'SPY')).toThrow(/non-object/);
-    expect(() => parseBarsPage({ bars: { SPY: 'x' } }, 'SPY')).toThrow(/not an array/);
-    expect(() => parseBarsPage({ bars: { SPY: [{ t: 1 }] } }, 'SPY')).toThrow(/malformed bar/);
-  });
-
-  it('paginates, paces requests and backs off on 429', async () => {
-    const calls: string[] = [];
-    const sleeps: number[] = [];
-    let attempt = 0;
-    const fetcher = async (url: string): Promise<FetchResult> => {
-      calls.push(url);
-      attempt++;
-      if (attempt === 1) return { status: 429, body: 'slow down' };
-      if (url.includes('page_token=p2')) {
-        return { status: 200, body: { bars: { SPY: [rawBar('2016-01-05T05:00:00Z', 2)] } } };
-      }
-      return {
-        status: 200,
-        body: { bars: { SPY: [rawBar('2016-01-04T05:00:00Z', 1)] }, next_page_token: 'p2' },
-      };
-    };
-    const api = new AlpacaBarsApi(
-      { apiKey: 'k', apiSecret: 's' },
-      fetcher,
-      async (ms) => {
-        sleeps.push(ms);
-      },
-      0,
-    );
-    const bars = await api.dailyBars({
-      symbol: 'SPY',
-      start: '2016-01-04',
-      end: '2016-01-05',
-      adjustment: 'all',
-    });
-    expect(bars.map((bar) => bar.c)).toEqual([1, 2]);
-    expect(calls.length).toBe(3);
-    expect(sleeps).toContain(20_000);
-  });
-
-  it('throws on a non-retryable status and after repeated 429s', async () => {
-    const forbidden = new AlpacaBarsApi(
-      { apiKey: 'k', apiSecret: 's' },
-      async () => ({ status: 403, body: { message: 'no' } }),
-      async () => {},
-      0,
-    );
-    await expect(forbidden.getWithRetry('u')).rejects.toThrow(/Alpaca 403/);
-    const throttled = new AlpacaBarsApi(
-      { apiKey: 'k', apiSecret: 's' },
-      async () => ({ status: 429, body: '' }),
-      async () => {},
-      0,
-    );
-    await expect(throttled.getWithRetry('u')).rejects.toThrow(/rate-limited 5 times/);
-  });
-});
-
 describe('pull-alpaca-bars helpers', () => {
   const rawBar = (t: string, c: number): RawDailyBar => ({ t, o: c, h: c, l: c, c, v: 1 });
-
-  it('joins adjusted OHLCV with the raw close by date', () => {
-    const joined = joinAdjustedAndRaw(
-      'X',
-      [rawBar('2016-01-04T05:00:00Z', 10)],
-      [rawBar('2016-01-04T05:00:00Z', 40)],
-    );
-    expect(joined).toEqual([
-      { date: '2016-01-04', open: 10, high: 10, low: 10, close: 10, volume: 1, rawClose: 40 },
-    ]);
-    expect(() => joinAdjustedAndRaw('X', [rawBar('2016-01-04T05:00:00Z', 10)], [])).toThrow(
-      /no raw counterpart/,
-    );
-    expect(barDate('2016-01-04T05:00:00Z')).toBe('2016-01-04');
-  });
-
-  it('tries the dotted ticker then the dot-stripped Alpaca symbol', async () => {
-    expect(alpacaSymbolCandidates('BRK.B')).toEqual(['BRK.B', 'BRKB']);
-    expect(alpacaSymbolCandidates('AAPL')).toEqual(['AAPL']);
-    const requested: string[] = [];
-    const api = new AlpacaBarsApi(
-      { apiKey: 'k', apiSecret: 's' },
-      async (url) => {
-        const symbol = new URL(url).searchParams.get('symbols') as string;
-        requested.push(symbol);
-        return {
-          status: 200,
-          body: { bars: symbol === 'BRKB' ? { BRKB: [rawBar('2016-01-04T05:00:00Z', 1)] } : {} },
-        };
-      },
-      async () => {},
-      0,
-    );
-    const pulled = await pullSymbol(api, 'BRK.B', '2016-01-04', '2016-01-05');
-    expect(pulled?.alpacaSymbol).toBe('BRKB');
-    expect(requested).toEqual(['BRK.B', 'BRKB', 'BRKB']);
-    expect(await pullSymbol(api, 'NONE', '2016-01-04', '2016-01-05')).toBeUndefined();
-  });
 
   it('parses CLI flags with defaults', () => {
     const args = parsePullArgs(['--end', '2026-09-23', '--out', 'x']);

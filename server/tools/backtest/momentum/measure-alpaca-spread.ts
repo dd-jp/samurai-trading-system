@@ -1,9 +1,14 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import {
+  ALPACA_DATA_BASE_URL,
+  AlpacaBarsApi,
+  alpacaSymbolCandidates,
+  credentialsFromEnv,
+  ParquetBarStore,
+} from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
-import { ALPACA_DATA_BASE_URL, AlpacaBarsApi, credentialsFromEnv } from './alpaca-bars-api.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
-import { alpacaSymbolCandidates, DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca-bars.js';
+import { DEFAULT_CONSTITUENTS_PATH } from './pull-alpaca-bars.js';
 
 export const DEFAULT_SPREAD_PATH = 'data/bars/alpaca-spreads.csv';
 export const SPREAD_CSV_HEADER = 'symbol,sessions,median_half_spread_bps';

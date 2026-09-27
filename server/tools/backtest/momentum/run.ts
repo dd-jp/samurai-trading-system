@@ -2,9 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
-import { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from '../../../providers/bar-store/index.js';
+import {
+  DEFAULT_BAR_STORE_ROOT,
+  findUnitBreaks,
+  ParquetBarStore,
+} from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
-import { findUnitBreaks } from './bar-hygiene.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import type { BookFx } from './fx.js';
 import { GBP_IDENTITY_FX, parseBoeXudlussCsv, YearFixedFx } from './fx.js';
