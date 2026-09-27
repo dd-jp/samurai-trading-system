@@ -18,7 +18,7 @@ export function sleeveAllocationGbp(spec: SleeveSpec, capital: CapitalYear): num
   return Math.min(startCapitalGbp, spec.capacityGbp);
 }
 
-export function assertCapitalShares(sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[]): void {
+export function assertCapitalShareRanges(sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[]): void {
   for (const { id, spec } of sleeves) {
     if (!(spec.capitalShare > 0 && spec.capitalShare <= 1)) {
       throw new Error(
@@ -26,6 +26,10 @@ export function assertCapitalShares(sleeves: readonly Pick<Sleeve, 'id' | 'spec'
       );
     }
   }
+}
+
+export function assertCapitalShares(sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[]): void {
+  assertCapitalShareRanges(sleeves);
   const total = sleeves.reduce((sum, { spec }) => sum + spec.capitalShare, 0);
   if (total > 1 + SHARE_TOLERANCE) {
     throw new Error(`capital share: sleeves declare ${total} of the account, more than 1`);

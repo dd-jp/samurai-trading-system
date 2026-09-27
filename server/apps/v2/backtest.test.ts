@@ -341,6 +341,24 @@ describe('runBacktest', () => {
     ).resolves.toBeDefined();
   });
 
+  it('runs trials whose shares sum above 1 side by side but refuses a share outside (0, 1]', async () => {
+    const withShare =
+      (share: number): SleeveFactory =>
+      (m) => {
+        const sleeve = trendSleeve('trend-5', 'UP', 5)(m);
+        return { ...sleeve, spec: { ...sleeve.spec, capitalShare: share } };
+      };
+    const trials = (share: number) => [
+      { config: { lookback: 5 }, sleeve: withShare(share) },
+      { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
+    ];
+    const result = await runBacktest(input({ trials: trials(0.7) }));
+    expect(result.trials).toHaveLength(2);
+    await expect(runBacktest(input({ trials: trials(Number.NaN) }))).rejects.toThrow(
+      "capital share: sleeve 'trend-5' declares NaN, outside (0, 1]",
+    );
+  });
+
   it('refuses a forward-paper sleeve before recording any trial', async () => {
     const run = input({
       benchmark: { config: {}, sleeve: trendSleeve('debate', 'UP', 1, 'forward-paper') },
