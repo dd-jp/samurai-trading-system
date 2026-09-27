@@ -17,6 +17,7 @@ import {
   runBacktest,
   type SleeveFactory,
 } from './backtest.js';
+import { capitalCeilingGbp } from './backtest-verdict.js';
 import { addDays, BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { type SessionBLedger, TrialLedger } from './trial-ledger.js';
 
@@ -343,20 +344,44 @@ describe('runBacktest', () => {
 
   it('runs trials whose shares sum above 1 side by side but refuses a share outside (0, 1]', async () => {
     const withShare =
-      (share: number): SleeveFactory =>
+      (share: number, id: string, instrument: string, lookback: number): SleeveFactory =>
       (m) => {
-        const sleeve = trendSleeve('trend-5', 'UP', 5)(m);
+        const sleeve = trendSleeve(id, instrument, lookback)(m);
         return { ...sleeve, spec: { ...sleeve.spec, capitalShare: share } };
       };
     const trials = (share: number) => [
-      { config: { lookback: 5 }, sleeve: withShare(share) },
-      { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
+      { config: { lookback: 5 }, sleeve: withShare(share, 'trend-5', 'UP', 5) },
+      { config: { lookback: 20 }, sleeve: withShare(share, 'trend-20', 'FLAT', 20) },
     ];
     const result = await runBacktest(input({ trials: trials(0.7) }));
     expect(result.trials).toHaveLength(2);
     await expect(runBacktest(input({ trials: trials(Number.NaN) }))).rejects.toThrow(
       "capital share: sleeve 'trend-5' declares NaN, outside (0, 1]",
     );
+  });
+
+  it("sets the capital ceiling from the trials' share of the loss cap and refuses mixed shares", async () => {
+    const shared =
+      (share: number, id: string, lookback: number): SleeveFactory =>
+      (m) => {
+        const sleeve = trendSleeve(id, 'UP', lookback)(m);
+        return { ...sleeve, spec: { ...sleeve.spec, capitalShare: share } };
+      };
+    const grid = (first: number, second: number) => [
+      { config: { lookback: 5 }, sleeve: shared(first, 'trend-5', 5) },
+      { config: { lookback: 20 }, sleeve: shared(second, 'trend-20', 20) },
+    ];
+    const { verdict } = await runBacktest(input({ trials: grid(0.5, 0.5) }));
+    expect(verdict.maxDrawdown).toBeGreaterThan(0);
+    expect(verdict.capitalCeilingGbp).toBeCloseTo(
+      capitalCeilingGbp(1_500 * 0.5, verdict.maxDrawdown),
+      9,
+    );
+    const mixed = input({ trials: grid(0.5, 0.7) });
+    await expect(runBacktest(mixed)).rejects.toThrow(
+      'backtest: trials declare capital shares 0.5, 0.7; one grid takes one share',
+    );
+    expect(mixed.ledger.count()).toBe(2);
   });
 
   it('refuses a forward-paper sleeve before recording any trial', async () => {

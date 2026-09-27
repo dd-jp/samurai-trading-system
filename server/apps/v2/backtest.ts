@@ -80,6 +80,16 @@ function refuseForwardPaper(sleeves: readonly Sleeve[]): void {
   }
 }
 
+function trialsShare(trials: readonly Sleeve[]): number {
+  const shares = new Set(trials.map((sleeve) => sleeve.spec.capitalShare));
+  if (shares.size !== 1) {
+    throw new Error(
+      `backtest: trials declare capital shares ${[...shares].join(', ')}; one grid takes one share`,
+    );
+  }
+  return [...shares][0] as number;
+}
+
 function assertBacktestable(
   sleeve: Sleeve,
   decision: SleeveDecision,
@@ -221,6 +231,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
   const benchmarkSleeve = input.benchmark.sleeve(market);
   const sleeves = [...trialSleeves, benchmarkSleeve];
   refuseForwardPaper(sleeves);
+  const share = trialsShare(trialSleeves);
   const dates = backtestSessions(input.market, input.from, input.to);
   const first = dates[0] as string;
   const trialNumbers = recordTrials(input, trialSleeves, benchmarkSleeve);
@@ -263,7 +274,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
         trials,
         benchmark,
         trialsCounted: input.ledger.count(),
-        lossCapGbp: input.lossCapGbp,
+        lossCapGbp: input.lossCapGbp * share,
         folds: input.folds,
       }),
     };
