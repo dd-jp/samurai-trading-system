@@ -17,7 +17,7 @@ import {
   replicateOnce,
   restoreMissing,
   scrubbed,
-  thenBackup,
+  withBackup,
 } from './backup.js';
 
 const ENV = {
@@ -102,7 +102,7 @@ describe('backup configuration', () => {
       '    replica:',
       '      type: s3',
       '      bucket: $' + '{R2_BUCKET}',
-      `      path: ${path}`,
+      `      path: "${path}"`,
       '      endpoint: $' + '{R2_ENDPOINT}',
       '      region: auto',
       '      access-key-id: $' + '{R2_ACCESS_KEY_ID}',
@@ -154,6 +154,44 @@ describe('backup configuration', () => {
     expect(scrubbed('bucket-x ok', { R2_BUCKET: ' bucket-x\n', R2_ENDPOINT: '' })).toBe(
       '[R2_BUCKET] ok',
     );
+  });
+
+  it('strips a trailing slash from the replica root and refuses one that could break the config', () => {
+    const paths = (root: string) =>
+      backupTargets('p.sqlite', { LITESTREAM_REPLICA_ROOT: root }).map(
+        (target) => target.replicaPath,
+      );
+    expect(paths('drill/x//')).toEqual(['drill/x/paper', 'drill/x/research']);
+    for (const root of ['a\n  sse-customer-key: ""', 'a: b', 'a#b', '../up', '/abs']) {
+      expect(() => paths(root)).toThrow(
+        'LITESTREAM_REPLICA_ROOT may hold only letters, digits, _, - and /',
+      );
+    }
+  });
+
+  it('refuses a store path Litestream would expand', () => {
+    expect(() =>
+      backupTargets('/tmp/$HOME/p.sqlite', { SAMURAI_RESEARCH_STORE: 'r.sqlite' }),
+    ).toThrow('Litestream would expand the $ in /tmp/$HOME/p.sqlite');
+    expect(() => backupTargets('p.sqlite', { SAMURAI_RESEARCH_STORE: '/r/$X.sqlite' })).toThrow(
+      'Litestream would expand the $ in /r/$X.sqlite',
+    );
+  });
+
+  it('scrubs the endpoint host and account id when only they are echoed', () => {
+    const env = { ...ENV, R2_ENDPOINT: 'https://acct123.r2.cloudflarestorage.com/' };
+    expect(
+      scrubbed('lookup acct123.r2.cloudflarestorage.com: no such host; account acct123', env),
+    ).toBe('lookup [R2_ENDPOINT]: no such host; account [R2_ENDPOINT]');
+    expect(scrubbed('fine', { ...ENV, R2_ENDPOINT: 'not a url' })).toBe('fine');
+  });
+
+  it('hands litestream only PATH, HOME and the backup variables', () => {
+    const tool = litestreamFor(
+      { ...ENV, PATH: '/bin', HOME: '/h', NOUS_API_KEY: 'llm', ALPACA_SECRET: 'broker' },
+      fakeRunner().run,
+    );
+    expect(tool.env).toEqual({ PATH: '/bin', HOME: '/h', ...ENV });
   });
 
   it('pins the Litestream version the drills ran', () => {
@@ -226,6 +264,20 @@ describe('replicateOnce', () => {
     expect(fake.calls).toHaveLength(1);
   });
 
+  it('scrubs and caps an unexpected version string', async () => {
+    const fake = fakeRunner({
+      version: { code: 0, output: `${ENV.R2_ENDPOINT} ${'x'.repeat(200)}` },
+    });
+    const error = await replicateOnce(
+      litestreamFor(ENV, fake.run),
+      storesIn(scratch(), ['paper.sqlite']),
+      silent().logger,
+    ).catch((caught: unknown) => caught as Error);
+    expect(error.message).toBe(
+      `litestream [R2_ENDPOINT] ${'x'.repeat(66)} found, ${LITESTREAM_VERSION} is pinned`,
+    );
+  });
+
   it('fails with the exit code and scrubbed output, and still deletes the config', async () => {
     const fake = fakeRunner({
       replicate: { code: 2, output: `PutObject ${ENV.R2_ENDPOINT}: AccessDenied` },
@@ -253,28 +305,58 @@ describe('replicateOnce', () => {
 });
 
 describe('restoreMissing', () => {
-  it('restores each store only where it is missing and a replica exists', async () => {
-    const fake = fakeRunner();
-    const targets = storesIn(scratch(), []);
-    await restoreMissing(litestreamFor(ENV, fake.run), targets);
-    expect(fake.calls.map((call) => call.args)).toEqual([
+  it('restores only the missing stores and says which it restored', async () => {
+    const dir = scratch();
+    const targets = storesIn(dir, ['research.sqlite']);
+    const calls: (readonly string[])[] = [];
+    const run: CommandRunner = (_bin, args) => {
+      calls.push(args);
+      if (args[0] === 'restore') writeFileSync(args[args.length - 1] as string, '');
+      return Promise.resolve({ code: 0, output: args[0] === 'version' ? LITESTREAM_VERSION : '' });
+    };
+    const { entries, logger } = silent();
+    await restoreMissing(litestreamFor(ENV, run), targets, logger);
+    expect(calls.map((args) => args.filter((arg) => !arg.endsWith('litestream.yml')))).toEqual([
       ['version'],
-      ...targets.map((target) => [
-        'restore',
-        '-config',
-        fake.configs[0],
-        '-if-db-not-exists',
-        '-if-replica-exists',
-        target.dbPath,
-      ]),
+      ['restore', '-config', '-if-db-not-exists', '-if-replica-exists', join(dir, 'paper.sqlite')],
     ]);
+    expect(entries).toEqual([
+      {
+        trace_id: 'v2-backup',
+        stage: 'v2',
+        level: 'info',
+        event: 'v2_backup_restored',
+        message: 'v2/paper: restored',
+      },
+    ]);
+  });
+
+  it('says when a missing store has no replica', async () => {
+    const fake = fakeRunner();
+    const { entries, logger } = silent();
+    const targets = storesIn(scratch(), []);
+    await restoreMissing(litestreamFor(ENV, fake.run), targets, logger);
     expect(fake.calls[1]?.config).toBe(litestreamConfig(targets));
+    expect(entries.map((entry) => [entry.event, entry.message])).toEqual([
+      ['v2_backup_no_replica', 'v2/paper: no replica to restore'],
+      ['v2_backup_no_replica', 'v2/research: no replica to restore'],
+    ]);
+  });
+
+  it('never calls litestream when every store is present', async () => {
+    const fake = fakeRunner();
+    await restoreMissing(
+      litestreamFor(ENV, fake.run),
+      storesIn(scratch(), ['paper.sqlite', 'research.sqlite']),
+      silent().logger,
+    );
+    expect(fake.calls).toEqual([]);
   });
 
   it('names the replica whose restore failed', async () => {
     const fake = fakeRunner({ restore: { code: 1, output: 'InvalidRequest' } });
     await expect(
-      restoreMissing(litestreamFor(ENV, fake.run), storesIn(scratch(), [])),
+      restoreMissing(litestreamFor(ENV, fake.run), storesIn(scratch(), []), silent().logger),
     ).rejects.toThrow('litestream restore of v2/paper failed (1): InvalidRequest');
   });
 });
@@ -286,12 +368,11 @@ describe('backupFor', () => {
     );
   });
 
-  it('checks the variables before the cycle and replicates the paper store after it', async () => {
+  it('checks the variables before the cycle, restores a missing store, and replicates', async () => {
     expect(() => backupFor([], 'x.sqlite', {}, fakeRunner().run, silent().logger)).toThrow(
       /paper run refuses without its Litestream backup/,
     );
     const dir = scratch();
-    writeFileSync(join(dir, 'paper.sqlite'), '');
     const fake = fakeRunner();
     const backup = backupFor(
       ['--date', '2026-09-28'],
@@ -301,48 +382,86 @@ describe('backupFor', () => {
       silent().logger,
     );
     expect(fake.calls).toEqual([]);
-    await backup();
-    expect(fake.calls[1]?.config).toContain(`path: ${JSON.stringify(join(dir, 'paper.sqlite'))}`);
-    expect(fake.calls[1]?.config).not.toContain('research.sqlite');
+    await backup.restore();
+    expect(fake.calls.map((call) => call.args[0])).toEqual(['version', 'restore', 'restore']);
+    writeFileSync(join(dir, 'paper.sqlite'), '');
+    await backup.replicate();
+    expect(fake.calls[4]?.config).toContain(`path: ${JSON.stringify(join(dir, 'paper.sqlite'))}`);
+    expect(fake.calls[4]?.config).not.toContain('research.sqlite');
   });
 
   it('resolves the no-op backup', async () => {
-    await expect(NO_BACKUP()).resolves.toBeUndefined();
+    await expect(NO_BACKUP.restore()).resolves.toBeUndefined();
+    await expect(NO_BACKUP.replicate()).resolves.toBeUndefined();
   });
 });
 
-describe('thenBackup', () => {
-  it('backs up after the cycle and returns its exit code', async () => {
+function recordingBackup(
+  order: string[],
+  replicate: () => Promise<void> = () => Promise.resolve(),
+) {
+  return {
+    restore: async () => {
+      order.push('restore');
+    },
+    replicate: async () => {
+      order.push('replicate');
+      await replicate();
+    },
+  };
+}
+
+describe('withBackup', () => {
+  it('restores before the cycle, replicates after it and returns its exit code', async () => {
     const order: string[] = [];
-    const code = await thenBackup(
-      async () => {
-        order.push('cycle');
-        return 1;
-      },
-      async () => {
-        order.push('backup');
-      },
-    );
-    expect([code, order]).toEqual([1, ['cycle', 'backup']]);
+    const code = await withBackup(async () => {
+      order.push('cycle');
+      return 1;
+    }, recordingBackup(order));
+    expect([code, order]).toEqual([1, ['restore', 'cycle', 'replicate']]);
   });
 
-  it('skips the backup when the cycle throws, and fails when the backup does', async () => {
-    let backedUp = false;
+  it('still replicates when the cycle throws, then rethrows the cycle error', async () => {
+    const order: string[] = [];
+    const cycleError = new Error('cycle');
+    await expect(withBackup(() => Promise.reject(cycleError), recordingBackup(order))).rejects.toBe(
+      cycleError,
+    );
+    expect(order).toEqual(['restore', 'replicate']);
+  });
+
+  it('reports both failures when the cycle and its backup both fail', async () => {
+    const failing = recordingBackup([], () => Promise.reject(new Error('R2 down')));
+    const error = await withBackup(() => Promise.reject(new Error('cycle')), failing).catch(
+      (caught: unknown) => caught as Error,
+    );
+    expect(error.message).toBe('cycle; the backup after it also failed: R2 down');
+    expect((error.cause as Error).message).toBe('cycle');
+    const plain = await withBackup(
+      () => Promise.reject('text'),
+      recordingBackup([], () => Promise.reject('down')),
+    ).catch((caught: unknown) => caught as Error);
+    expect(plain.message).toBe('text; the backup after it also failed: down');
+  });
+
+  it('fails when the backup after a clean cycle fails, and never runs the cycle if restore fails', async () => {
     await expect(
-      thenBackup(
-        () => Promise.reject(new Error('cycle')),
-        async () => {
-          backedUp = true;
-        },
-      ),
-    ).rejects.toThrow('cycle');
-    expect(backedUp).toBe(false);
-    await expect(
-      thenBackup(
+      withBackup(
         () => Promise.resolve(0),
-        () => Promise.reject(new Error('backup')),
+        recordingBackup([], () => Promise.reject(new Error('backup'))),
       ),
     ).rejects.toThrow('backup');
+    let ran = false;
+    await expect(
+      withBackup(
+        async () => {
+          ran = true;
+          return 0;
+        },
+        { restore: () => Promise.reject(new Error('restore')), replicate: () => Promise.resolve() },
+      ),
+    ).rejects.toThrow('restore');
+    expect(ran).toBe(false);
   });
 });
 
@@ -361,9 +480,20 @@ describe('execRunner', () => {
     });
   });
 
-  it('reports a binary that cannot start as exit 1', async () => {
-    const result = await execRunner(join(scratch(), 'missing-bin'), [], process.env);
-    expect(result.code).toBe(1);
+  it('reports a binary that cannot start as exit 1 with the reason', async () => {
+    await expect(execRunner(join(scratch(), 'missing-bin'), [], process.env)).resolves.toEqual({
+      code: 1,
+      output: '\nENOENT',
+    });
+  });
+
+  it('names a signal that killed the process', async () => {
+    const result = await execRunner(
+      process.execPath,
+      ['-e', "process.kill(process.pid, 'SIGTERM')"],
+      process.env,
+    );
+    expect(result.output).toBe('\nSIGTERM');
   });
 
   it('passes the environment it is given', async () => {

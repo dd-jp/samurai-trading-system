@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   backupTargets,
@@ -12,9 +13,7 @@ import { CapitalConfigStore } from '../../server/apps/v2/risk/index.js';
 import { SimulatedClock } from '../../server/shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../server/shared/store/index.js';
 
-const dir = '/Users/ddjp/.claude/jobs/5f005ff2/tmp/restore-drill';
-rmSync(dir, { recursive: true, force: true });
-mkdirSync(dir, { recursive: true });
+const dir = mkdtempSync(join(tmpdir(), 'restore-drill-'));
 const paper = join(dir, 'paper.sqlite');
 const control = join(dir, 'control.sqlite');
 const research = join(dir, 'research.sqlite');
@@ -42,7 +41,7 @@ function dump(path: string): string {
 function normalised(path: string): string {
   return dump(path)
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'uuid')
-    .replace(/2026-09-27T\d\d:\d\d:\d\d\.\d+Z/g, 'wall-clock')
+    .replace(new RegExp(`${new Date().toISOString().slice(0, 10)}T[0-9:.]+Z`, 'g'), 'wall-clock')
     .replace(/"latency_ms":\d+/g, '"latency_ms":0')
     .replace(/\["_litestream_seq",\[[^\]]*\]\],?/g, '');
 }
@@ -111,7 +110,7 @@ const beforeResearch = dump(research);
 for (const path of [paper, research])
   for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true });
 console.log('deleted, exists:', existsSync(paper), existsSync(research));
-await restoreMissing(tool, targets);
+await restoreMissing(tool, targets, quiet);
 console.log('restored, exists:', existsSync(paper), existsSync(research));
 console.log(
   'paper identical:',
@@ -119,7 +118,7 @@ console.log(
   'research identical:',
   dump(research) === beforeResearch,
 );
-await restoreMissing(tool, targets);
+await restoreMissing(tool, targets, quiet);
 console.log('second restore left stores untouched:', dump(paper) === beforePaper);
 const restoredReport = await cycle(paper, NEXT);
 const controlReport = await cycle(control, NEXT);

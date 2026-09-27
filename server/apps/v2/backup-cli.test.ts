@@ -76,11 +76,11 @@ describe('backup CLI', () => {
     expect(commands).toEqual(['version', 'replicate']);
   });
 
-  it('restores each store on restore', async () => {
+  it('restores each missing store on restore', async () => {
     const { run, commands } = recorder();
     const env = { ...ENV, SAMURAI_RESEARCH_STORE: researchStore() };
     expect(await main(['restore'], env, run, quiet)).toBe(0);
-    expect(commands).toEqual(['version', 'restore', 'restore']);
+    expect(commands).toEqual(['version', 'restore']);
   });
 
   it('refuses without the backup variables', async () => {

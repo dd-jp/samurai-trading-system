@@ -30,7 +30,7 @@ export async function main(
   const tool = litestreamFor(env, run);
   const targets = backupTargets(V2_STORE_PATH, env);
   if (command === 'backup') await replicateOnce(tool, targets, logger);
-  else await restoreMissing(tool, targets);
+  else await restoreMissing(tool, targets, logger);
   return 0;
 }
 

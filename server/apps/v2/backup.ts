@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { type ExecFileException, execFile } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -14,6 +14,10 @@ const BACKUP_ENV = [
   'R2_BUCKET',
   'LITESTREAM_SSE_C_KEY',
 ] as const;
+
+const PASSED_ENV = ['PATH', 'HOME', ...BACKUP_ENV];
+
+const REPLICA_ROOT = /^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/;
 
 export interface BackupTarget {
   readonly dbPath: string;
@@ -31,24 +35,45 @@ export type CommandRunner = (
   env: NodeJS.ProcessEnv,
 ) => Promise<CommandResult>;
 
-export type Backup = () => Promise<void>;
+export interface Backup {
+  readonly restore: () => Promise<void>;
+  readonly replicate: () => Promise<void>;
+}
 
-export const NO_BACKUP: Backup = () => Promise.resolve();
+export const NO_BACKUP: Backup = {
+  restore: () => Promise.resolve(),
+  replicate: () => Promise.resolve(),
+};
+
+export function failureReason(error: ExecFileException | null): string {
+  if (error === null) return '';
+  const code = typeof error.code === 'string' ? error.code : '';
+  return [code, error.signal ?? ''].filter((part) => part !== '').join(' ');
+}
 
 export const execRunner: CommandRunner = (bin, args, env) =>
   new Promise((done) => {
     execFile(bin, [...args], { env, timeout: 300_000 }, (error, stdout, stderr) => {
       const code = error === null ? 0 : typeof error.code === 'number' ? error.code : 1;
-      done({ code, output: `${stdout}${stderr}` });
+      const reason = failureReason(error);
+      done({ code, output: `${stdout}${stderr}${reason === '' ? '' : `\n${reason}`}` });
     });
   });
 
 export function backupTargets(storePath: string, env: NodeJS.ProcessEnv): BackupTarget[] {
-  const root = env.LITESTREAM_REPLICA_ROOT?.trim() || 'v2';
-  return [
+  const root = (env.LITESTREAM_REPLICA_ROOT?.trim() || 'v2').replace(/\/+$/, '');
+  if (!REPLICA_ROOT.test(root)) {
+    throw new Error('LITESTREAM_REPLICA_ROOT may hold only letters, digits, _, - and /');
+  }
+  const targets = [
     { dbPath: resolve(storePath), replicaPath: `${root}/paper` },
     { dbPath: resolve(researchStorePath(env)), replicaPath: `${root}/research` },
   ];
+  const expanded = targets.find((target) => target.dbPath.includes('$'));
+  if (expanded !== undefined) {
+    throw new Error(`Litestream would expand the $ in ${expanded.dbPath}`);
+  }
+  return targets;
 }
 
 export function missingBackupEnv(env: NodeJS.ProcessEnv): string[] {
@@ -64,7 +89,7 @@ export function litestreamConfig(targets: readonly BackupTarget[]): string {
       '    replica:',
       '      type: s3',
       `      bucket: ${ref('R2_BUCKET')}`,
-      `      path: ${target.replicaPath}`,
+      `      path: ${JSON.stringify(target.replicaPath)}`,
       `      endpoint: ${ref('R2_ENDPOINT')}`,
       '      region: auto',
       `      access-key-id: ${ref('R2_ACCESS_KEY_ID')}`,
@@ -75,12 +100,29 @@ export function litestreamConfig(targets: readonly BackupTarget[]): string {
   return `dbs:\n${entries.join('\n')}\n`;
 }
 
+function endpointParts(endpoint: string): string[] {
+  try {
+    const { host } = new URL(endpoint);
+    return [host, host.split('.')[0] ?? host];
+  } catch {
+    return [];
+  }
+}
+
+function secretsIn(env: NodeJS.ProcessEnv): [string, string][] {
+  const pairs: [string, string][] = [];
+  for (const name of BACKUP_ENV) {
+    const value = env[name]?.trim().replace(/\/+$/, '');
+    if (value) pairs.push([name, value]);
+  }
+  for (const part of endpointParts(env.R2_ENDPOINT?.trim() ?? ''))
+    pairs.push(['R2_ENDPOINT', part]);
+  return pairs.sort(([, a], [, b]) => b.length - a.length);
+}
+
 export function scrubbed(text: string, env: NodeJS.ProcessEnv): string {
   let clean = text;
-  for (const name of BACKUP_ENV) {
-    const value = env[name]?.trim();
-    if (value) clean = clean.split(value).join(`[${name}]`);
-  }
+  for (const [name, value] of secretsIn(env)) clean = clean.split(value).join(`[${name}]`);
   return maskCredentials(clean);
 }
 
@@ -107,7 +149,9 @@ async function withConfig<T>(
 ): Promise<T> {
   const version = (await litestream(tool, ['version'], 'version')).trim();
   if (version !== LITESTREAM_VERSION) {
-    throw new Error(`litestream ${version} found, ${LITESTREAM_VERSION} is pinned`);
+    throw new Error(
+      `litestream ${scrubbed(version, tool.env).slice(0, 80)} found, ${LITESTREAM_VERSION} is pinned`,
+    );
   }
   const dir = mkdtempSync(join(tmpdir(), 'samurai-litestream-'));
   const configPath = join(dir, 'litestream.yml');
@@ -124,7 +168,14 @@ export function litestreamFor(env: NodeJS.ProcessEnv, run: CommandRunner): Lites
   if (missing.length > 0) {
     throw new Error(`paper run refuses without its Litestream backup: set ${missing.join(', ')}`);
   }
-  return { bin: env.LITESTREAM_BIN ?? 'litestream', env, run };
+  const passed = Object.fromEntries(
+    PASSED_ENV.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
+  );
+  return { bin: env.LITESTREAM_BIN ?? 'litestream', env: passed, run };
+}
+
+function logBackup(logger: Logger, event: string, message: string): void {
+  logger.log({ trace_id: 'v2-backup', stage: 'v2', level: 'info', event, message });
 }
 
 export async function replicateOnce(
@@ -137,21 +188,22 @@ export async function replicateOnce(
   await withConfig(tool, present, (configPath) =>
     litestream(tool, ['replicate', '-once', '-config', configPath], 'replicate'),
   );
-  logger.log({
-    trace_id: 'v2-backup',
-    stage: 'v2',
-    level: 'info',
-    event: 'v2_backup_replicated',
-    message: `replicated ${present.map((target) => target.replicaPath).join(', ')}`,
-  });
+  logBackup(
+    logger,
+    'v2_backup_replicated',
+    `replicated ${present.map((target) => target.replicaPath).join(', ')}`,
+  );
 }
 
 export async function restoreMissing(
   tool: Litestream,
   targets: readonly BackupTarget[],
+  logger: Logger,
 ): Promise<void> {
-  await withConfig(tool, targets, async (configPath) => {
-    for (const target of targets) {
+  const missing = targets.filter((target) => !existsSync(target.dbPath));
+  if (missing.length === 0) return;
+  await withConfig(tool, missing, async (configPath) => {
+    for (const target of missing) {
       await litestream(
         tool,
         [
@@ -163,6 +215,12 @@ export async function restoreMissing(
           target.dbPath,
         ],
         `restore of ${target.replicaPath}`,
+      );
+      const restored = existsSync(target.dbPath);
+      logBackup(
+        logger,
+        restored ? 'v2_backup_restored' : 'v2_backup_no_replica',
+        `${target.replicaPath}: ${restored ? 'restored' : 'no replica to restore'}`,
       );
     }
   });
@@ -177,11 +235,31 @@ export function backupFor(
 ): Backup {
   if (argv.includes('--dry-run')) return NO_BACKUP;
   const tool = litestreamFor(env, run);
-  return () => replicateOnce(tool, backupTargets(storePath, env), logger);
+  const targets = backupTargets(storePath, env);
+  return {
+    restore: () => restoreMissing(tool, targets, logger),
+    replicate: () => replicateOnce(tool, targets, logger),
+  };
 }
 
-export async function thenBackup(run: () => Promise<number>, backup: Backup): Promise<number> {
-  const code = await run();
-  await backup();
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+export async function withBackup(run: () => Promise<number>, backup: Backup): Promise<number> {
+  await backup.restore();
+  let code: number;
+  try {
+    code = await run();
+  } catch (error) {
+    await backup.replicate().catch((backupError: unknown) => {
+      throw new Error(
+        `${messageOf(error)}; the backup after it also failed: ${messageOf(backupError)}`,
+        {
+          cause: error,
+        },
+      );
+    });
+    throw error;
+  }
+  await backup.replicate();
   return code;
 }
