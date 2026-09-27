@@ -40,7 +40,7 @@ export function healthchecksHeartbeat(
       if (response.ok) log('info', 'v2_heartbeat_sent', `healthchecks ${outcome} ping sent`);
       else log('warn', 'v2_heartbeat_failed', `healthchecks answered ${response.status}`);
     } catch {
-      // The fetch error text can carry the ping URL, which is a secret.
+      // The fetch error text can carry the ping URL, which is a secret
       log('warn', 'v2_heartbeat_failed', `healthchecks ${outcome} ping did not complete`);
     }
   };
