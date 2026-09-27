@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { openReadOnlyStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { main, readJournalledEntries, reportEntryOffsets } from './report-entry-offsets.js';
 
 const dirs: string[] = [];
@@ -110,6 +110,25 @@ describe('reportEntryOffsets', () => {
       '200 bps     100.0%   900.00',
       'at the open 100.0%   900.00',
     ]);
+  });
+
+  it('closes the store even when the bar store fails to load', async () => {
+    const storePath = join(scratch(), 'v2.sqlite');
+    journal(storePath, []).close();
+    let closed = false;
+    const open = (path: string) => {
+      const db = openReadOnlyStore(path);
+      return Object.assign(Object.create(db) as StoreHandle, {
+        close: () => {
+          closed = true;
+          db.close();
+        },
+      });
+    };
+    await expect(
+      reportEntryOffsets(storePath, join(scratch(), 'not-a-bar-root', '\0'), open),
+    ).rejects.toThrow();
+    expect(closed).toBe(true);
   });
 
   it('refuses a store that does not exist', async () => {
