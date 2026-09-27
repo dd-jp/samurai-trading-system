@@ -13,6 +13,7 @@ import { SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
 import { composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
@@ -286,14 +287,32 @@ export async function main(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
   litestream: CommandRunner = execRunner,
+  fetchImpl: AlertFetch = fetch,
 ): Promise<number> {
-  const heartbeat = heartbeatFor(argv, env, fetch, STDERR_LOGGER);
-  return withHeartbeat(() => {
-    const clock = new SystemClock();
-    const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
-    const backup = backupFor(argv, V2_STORE_PATH, env, litestream, STDERR_LOGGER);
-    return withBackup(() => runOnce(dryRun, tradingDate, env, clock), backup);
-  }, heartbeat);
+  const alerts = alertsFor(argv, env, fetchImpl, STDERR_LOGGER);
+  const logger = alerts.logger;
+  const heartbeat = heartbeatFor(argv, env, fetchImpl, logger);
+  return withAlerts(
+    () =>
+      withHeartbeat(() => {
+        const clock = new SystemClock();
+        const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
+        const backup = backupFor(argv, V2_STORE_PATH, env, litestream, logger);
+        return withBackup(() => runOnce(dryRun, tradingDate, env, clock, logger), backup);
+      }, heartbeat),
+    alerts,
+  );
+}
+
+export function logRefusals(report: CycleReport, logger: Logger): void {
+  if (report.refusals.length === 0) return;
+  logger.log({
+    trace_id: `v2-${report.trading_date}`,
+    stage: 'v2',
+    level: 'warn',
+    event: 'v2_cycle_refusals',
+    message: report.refusals.join('\n'),
+  });
 }
 
 async function runOnce(
@@ -301,6 +320,7 @@ async function runOnce(
   tradingDate: string,
   env: NodeJS.ProcessEnv,
   clock: Clock,
+  logger: Logger,
 ): Promise<number> {
   const nous = nousOptionsFrom(env);
   const root = composeV2Root({
@@ -309,6 +329,7 @@ async function runOnce(
     ...nous,
     samuraiMode: env.SAMURAI_MODE,
     clock,
+    logger,
   });
   try {
     const report = await runAfterPinCheck(root, () =>
@@ -317,9 +338,10 @@ async function runOnce(
         baseUrl: nous.nousBaseUrl,
         apiKey: nous.nousApiKey,
         pins: ALL_PINS,
-        logger: STDERR_LOGGER,
+        logger,
       }),
     );
+    logRefusals(report, logger);
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);
   } finally {

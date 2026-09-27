@@ -226,6 +226,17 @@ Litestream streams the SQLite store to S3-compatible object storage, encrypted (
 
 **Status 2026-09-27 (Step 3e PR 2, Litestream):** each paper cycle restores any missing store from R2 first, and afterwards replicates the paper and research stores to R2 with SSE-C (`server/apps/v2/backup.ts`, `litestream replicate -once`, no daemon); a paper run refuses without the R2 variables and a failed backup sends the `/fail` ping. `npm run v2:backup` and `npm run v2:restore` run it by hand. Doc 73 records the live proofs: without the key, R2 refuses; incremental restores are identical; a deleted store restores identically and the next cycle's report matches. Still open: the real-broker reconcile half of the drill (Step 4b), the skipped-cycle alert (the healthchecks.io check is paused) and the off-Mac copy of the SSE-C key (David's).
 
+**Status 2026-09-27 (Step 3e PR 3, Telegram severities):** a paper run collects every `warn` and `error` log line from the heartbeat, the backup and the cycle, and after the run sends at most one Telegram message per severity to `TELEGRAM_CHAT_ID` (`server/apps/v2/alerts.ts`). There are two severities:
+- **Critical** (an `error` line, or the run throwing) notifies with sound.
+- **Warning** (a `warn` line) arrives silently.
+
+`info` lines are never sent. Repeats are counted, the bot token and credentials are masked, and text is cut at Telegram's 4,096-character limit. Any level not listed alerts by default; only the dry-run and simulated-cost fallback notices are kept quiet. The loss budget now logs its changes:
+- a halt, once, as critical;
+- a size step-down, as a warning;
+- a daily-cap block, as a warning.
+
+The cycle's refusals go out as one warning. Dry runs and `SAMURAI_ALERTS=log-only` send nothing. A missing token or chat logs a warning instead, and a failed send is logged and never changes the exit code. v2 never reads v1's `TELEGRAM_HEARTBEAT_CHAT_ID`: the healthchecks.io ping replaced that channel. The levels and routing are this plan's proposal, not a ruling; David can change them. The daily summary is Step 4b's row.
+
 Order: 3a → 3b → 3d; 3e and 3c run alongside. Step 1b below needs 3b and 3d.
 
 #### Step 3c — UI (G13)

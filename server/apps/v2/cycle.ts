@@ -653,6 +653,7 @@ class Cycle {
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
     );
     await this.cancelRestingEntriesOnBlock(book, day.state, this.tradingDate);
+    this.logBudgetChange(book.id, previous?.state, day.state);
     return {
       book_id: book.id,
       equity_gbp: day.equityGbp,
@@ -662,7 +663,23 @@ class Cycle {
     };
   }
 
-  log(level: 'warn' | 'info', event: string, message: string): void {
+  logBudgetChange(bookId: string, before: LossBudgetState | undefined, after: LossBudgetState) {
+    const loss = `year-to-date loss £${after.ytdLossGbp.toFixed(2)}`;
+    if (after.halted && before?.halted !== true) {
+      this.log('error', 'v2_loss_budget_halt', `${bookId}: loss budget halts entries, ${loss}`);
+    } else if (after.sizeMultiplier < (before?.sizeMultiplier ?? 1)) {
+      this.log(
+        'warn',
+        'v2_loss_budget_step',
+        `${bookId}: entries sized at ${after.sizeMultiplier}x, ${loss}`,
+      );
+    }
+    if (after.entriesBlockedAtNextFill && !after.halted) {
+      this.log('warn', 'v2_daily_loss_cap', `${bookId}: daily loss cap blocks new entries`);
+    }
+  }
+
+  log(level: 'error' | 'warn' | 'info', event: string, message: string): void {
     this.deps.logger?.log({
       trace_id: `v2-${this.tradingDate}`,
       stage: 'v2',
