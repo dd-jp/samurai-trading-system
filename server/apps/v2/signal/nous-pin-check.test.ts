@@ -9,7 +9,7 @@ const LISTED = [
   { id: 'anthropic/claude-sonnet-5', canonical_slug: 'anthropic/claude-sonnet-5' },
   { id: 'openai/gpt-5.5', canonical_slug: 'openai/gpt-5.5-20260423' },
   { id: 'deepseek/deepseek-v4-pro-0813', canonical_slug: 'deepseek/deepseek-v4-pro-20260813' },
-  { id: 'anthropic/claude-opus-5', canonical_slug: 'anthropic/claude-opus-5-20260723' },
+  { id: 'anthropic/claude-opus-5.5', canonical_slug: 'anthropic/claude-opus-5.5-20260921' },
   { id: 'other/model', canonical_slug: 'other/model-20260101' },
 ];
 
@@ -54,7 +54,7 @@ describe('verifyNousPins', () => {
       event: 'v2_llm_pins_verified',
       level: 'info',
       message:
-        'anthropic/claude-sonnet-5 = anthropic/claude-sonnet-5 (slug unverified), openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5 = anthropic/claude-opus-5-20260723',
+        'anthropic/claude-sonnet-5 = anthropic/claude-sonnet-5 (slug unverified), openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5.5 = anthropic/claude-opus-5.5-20260921',
       payload: [
         {
           seat: 'sonnet',
@@ -76,8 +76,8 @@ describe('verifyNousPins', () => {
         },
         {
           seat: 'judge',
-          wire: 'anthropic/claude-opus-5',
-          canonical_slug: 'anthropic/claude-opus-5-20260723',
+          wire: 'anthropic/claude-opus-5.5',
+          canonical_slug: 'anthropic/claude-opus-5.5-20260921',
           slug_verified: true,
         },
       ],
@@ -117,7 +117,7 @@ describe('verifyNousPins', () => {
   it.each([
     ['gpt', 'openai/gpt-5.5', 'openai/gpt-5.5-20260423'],
     ['deepseek', 'deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
-    ['judge', 'anthropic/claude-opus-5', 'anthropic/claude-opus-5-20260723'],
+    ['judge', 'anthropic/claude-opus-5.5', 'anthropic/claude-opus-5.5-20260921'],
   ])('stays strict on the %s seat: an undated slug refuses', async (seat, wire, pinned) => {
     const rows = LISTED.map((row) => (row.id === wire ? { id: wire, canonical_slug: wire } : row));
     const { entries, error } = await check(json({ data: rows }));
@@ -137,13 +137,13 @@ describe('verifyNousPins', () => {
 
   it('refuses when a pin resolves to a different snapshot', async () => {
     const swapped = LISTED.map((row) =>
-      row.id === 'anthropic/claude-opus-5'
-        ? { ...row, canonical_slug: 'anthropic/claude-opus-5-20261101' }
+      row.id === 'anthropic/claude-opus-5.5'
+        ? { ...row, canonical_slug: 'anthropic/claude-opus-5.5-20261101' }
         : row,
     );
     const { entries, error } = await check(json({ data: swapped }));
     expect(error?.message).toBe(
-      'v2 refuses the paper run: Nous GET /models: judge anthropic/claude-opus-5 resolves to anthropic/claude-opus-5-20261101, pinned anthropic/claude-opus-5-20260723 — a changed snapshot is a new trial',
+      'v2 refuses the paper run: Nous GET /models: judge anthropic/claude-opus-5.5 resolves to anthropic/claude-opus-5.5-20261101, pinned anthropic/claude-opus-5.5-20260921 — a changed snapshot is a new trial',
     );
     expect(entries).toEqual([]);
   });

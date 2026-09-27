@@ -116,22 +116,22 @@ describe('NousPinnedTransport', () => {
 
   it('refuses a reply served by a model other than the pin and logs the swap', async () => {
     const logs: LogEntry[] = [];
-    stubFetch(200, completion('anthropic/claude-opus-5-20260723', '{}'));
+    stubFetch(200, completion('anthropic/claude-opus-5.5-20260921', '{}'));
     const error = await transportFor(JUDGE_PIN, { log: (entry) => logs.push(entry) })
-      .createMessage(request('anthropic/claude-opus-5'))
+      .createMessage(request('anthropic/claude-opus-5.5'))
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(LlmProviderError);
     expect((error as Error).message).toMatch(
-      /Nous answered for anthropic\/claude-opus-5 with model anthropic\/claude-opus-5-20260723/,
+      /Nous answered for anthropic\/claude-opus-5.5 with model anthropic\/claude-opus-5.5-20260921/,
     );
     expect(logs[0]?.payload).toEqual({
-      pinned: 'anthropic/claude-opus-5',
-      upstream: 'anthropic/claude-opus-5-20260723',
+      pinned: 'anthropic/claude-opus-5.5',
+      upstream: 'anthropic/claude-opus-5.5-20260921',
     });
   });
 
   it('bills a swapped-model reply to llm_spend under the priced id and the monthly cap counts it', async () => {
-    const swapped = completion('anthropic/claude-opus-5-20260723', '{"stance":"bullish"}');
+    const swapped = completion('anthropic/claude-opus-5.5-20260921', '{"stance":"bullish"}');
     swapped.usage = { prompt_tokens: 1_800_000, completion_tokens: 400_000 };
     stubFetch(200, swapped);
     const db = openSharedStore(':memory:');
@@ -139,7 +139,7 @@ describe('NousPinnedTransport', () => {
     const client = new AnthropicLlmClient(
       transportFor(JUDGE_PIN),
       {
-        model: 'anthropic/claude-opus-5',
+        model: 'anthropic/claude-opus-5.5',
         max_tokens: 64,
         timeoutMs: 1_000,
         retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
@@ -164,14 +164,14 @@ describe('NousPinnedTransport', () => {
       }[];
       expect(rows).toEqual([
         {
-          model: 'anthropic/claude-opus-5',
+          model: 'anthropic/claude-opus-5.5',
           input_tokens: 1_800_000,
           output_tokens: 400_000,
-          cost_usd: 1.8 * 5 + 0.4 * 25,
+          cost_usd: 1.8 * 4 + 0.4 * 20,
         },
       ]);
-      const verdict = new SqliteMonthlySpendCap(db, clock, 19).check();
-      expect(verdict).toMatchObject({ admitted: false, kind: 'budget', spent_usd: 19 });
+      const verdict = new SqliteMonthlySpendCap(db, clock, 15.2).check();
+      expect(verdict).toMatchObject({ admitted: false, kind: 'budget', spent_usd: 15.2 });
     } finally {
       db.close();
     }
@@ -182,11 +182,11 @@ describe('NousPinnedTransport', () => {
     const { model: _dropped, ...unreported } = completion('x', 'ok');
     stubFetch(200, unreported);
     const reply = await transportFor(JUDGE_PIN, { log: (entry) => logs.push(entry) }).createMessage(
-      request('anthropic/claude-opus-5'),
+      request('anthropic/claude-opus-5.5'),
     );
-    expect(reply.model).toBe('anthropic/claude-opus-5');
+    expect(reply.model).toBe('anthropic/claude-opus-5.5');
     expect(reply.upstream_model).toBeUndefined();
-    expect(logs[0]?.message).toBe('anthropic/claude-opus-5 answered as unreported');
+    expect(logs[0]?.message).toBe('anthropic/claude-opus-5.5 answered as unreported');
     expect(logs[0]?.stage).toBe('v2');
   });
 
@@ -209,7 +209,7 @@ describe('NousPinnedTransport', () => {
   it('surfaces a 429 as rate-limited and other statuses as transport failures without leaking the key', async () => {
     stubFetch(429, { error: { type: 'rate_limit', message: 'slow down' } });
     const limited = await transportFor(JUDGE_PIN)
-      .createMessage(request('anthropic/claude-opus-5'))
+      .createMessage(request('anthropic/claude-opus-5.5'))
       .catch((e: unknown) => e);
     expect(limited).toBeInstanceOf(NousApiError);
     expect((limited as NousApiError).status).toBe(429);
@@ -217,7 +217,7 @@ describe('NousPinnedTransport', () => {
 
     stubFetch(502, 'not json');
     const broken = await transportFor(JUDGE_PIN)
-      .createMessage(request('anthropic/claude-opus-5'))
+      .createMessage(request('anthropic/claude-opus-5.5'))
       .catch((e: unknown) => e);
     expect(broken).toBeInstanceOf(NousApiError);
     expect(classifyFailureCause(broken)).toBe('transport');
@@ -227,7 +227,7 @@ describe('NousPinnedTransport', () => {
   it('is classified LlmRateLimitError by AnthropicLlmClient (maxAttempts: 1, so no retry runs here)', async () => {
     stubFetch(429, { error: { type: 'rate_limit', message: 'slow down' } });
     const client = new AnthropicLlmClient(transportFor(JUDGE_PIN), {
-      model: 'anthropic/claude-opus-5',
+      model: 'anthropic/claude-opus-5.5',
       max_tokens: 64,
       timeoutMs: 1_000,
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
@@ -243,9 +243,9 @@ describe('NousPinnedTransport', () => {
 
   it('passes the caller signal through to fetch', async () => {
     const captured: Captured[] = [];
-    stubFetch(200, completion('anthropic/claude-opus-5', 'ok'), captured);
+    stubFetch(200, completion('anthropic/claude-opus-5.5', 'ok'), captured);
     const controller = new AbortController();
-    await transportFor(JUDGE_PIN).createMessage(request('anthropic/claude-opus-5'), {
+    await transportFor(JUDGE_PIN).createMessage(request('anthropic/claude-opus-5.5'), {
       signal: controller.signal,
     });
     expect(captured[0]?.signal).toBeInstanceOf(AbortSignal);
@@ -258,7 +258,9 @@ describe('NousPinnedTransport', () => {
     const shared = gate();
     stubFetch(500, {});
     await expect(
-      transportFor(JUDGE_PIN, undefined, shared).createMessage(request('anthropic/claude-opus-5')),
+      transportFor(JUDGE_PIN, undefined, shared).createMessage(
+        request('anthropic/claude-opus-5.5'),
+      ),
     ).rejects.toThrow();
     const slot = await shared.acquire({ budgetMs: 1 });
     slot.release();
@@ -274,7 +276,7 @@ describe('ScriptedTransport', () => {
     );
     const mediator = await transport.createMessage(
       {
-        ...request('anthropic/claude-opus-5'),
+        ...request('anthropic/claude-opus-5.5'),
         messages: [{ role: 'user', content: 'Mediator persona' }],
       },
       { stage: 'debate' },
@@ -284,13 +286,13 @@ describe('ScriptedTransport', () => {
       rationale: 'scripted',
       converged: true,
     });
-    const debater = await transport.createMessage(request('anthropic/claude-opus-5'));
+    const debater = await transport.createMessage(request('anthropic/claude-opus-5.5'));
     expect(JSON.parse(debater.content[0]?.text ?? '')).toEqual({
       stance: 'neutral',
       rationale: 'scripted',
     });
     expect(transport.calls).toHaveLength(2);
     expect(transport.calls[0]?.stage).toBe('debate');
-    expect(mediator.model).toBe('anthropic/claude-opus-5');
+    expect(mediator.model).toBe('anthropic/claude-opus-5.5');
   });
 });
