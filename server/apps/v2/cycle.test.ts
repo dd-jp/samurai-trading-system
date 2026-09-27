@@ -1670,7 +1670,10 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('submitted');
     expect(
       log.mock.calls.filter(
-        ([entry]) => entry.event === 'v2_cancel_failed' && entry.level === 'warn',
+        ([entry]) =>
+          entry.event === 'v2_cancel_failed' &&
+          entry.level === 'warn' &&
+          entry.message.startsWith('v2-debate-primary-2026-09-28-MSFT: '),
       ),
     ).toHaveLength(1);
     expect(budgetRows(deps)).toEqual([
