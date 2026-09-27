@@ -40,7 +40,9 @@ describe('readJournalledEntries', () => {
       ['d', 'debate/primary', '2026-09-29', 'AAA', 'alpaca', 'flatten'],
       ['e', 'debate/primary', '2026-09-29', 'CCC', 'alpaca', 'entry'],
     ]);
-    db.prepare(`UPDATE v2_orders SET payload = '{}' WHERE client_order_id = 'e'`).run();
+    db.prepare(
+      `UPDATE v2_orders SET payload = '{"price":"100"}' WHERE client_order_id = 'e'`,
+    ).run();
     db.prepare(`UPDATE v2_orders SET payload = 'not json' WHERE client_order_id = 'c'`).run();
     db.prepare(`UPDATE v2_orders SET venue = 'alpaca' WHERE client_order_id = 'c'`).run();
     db.prepare(

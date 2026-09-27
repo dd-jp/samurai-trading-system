@@ -111,17 +111,21 @@ describe('entryOffsetReport', () => {
     ]);
   });
 
-  it('leaves an entry pending when the benchmark window does not cover the same dates', () => {
+  it.each([
+    ['entry day', ['2026-09-29', '2026-09-30']],
+    ['exit day', ['2026-09-28', '2026-09-30']],
+  ])('leaves an entry pending when the benchmark misses the %s', (_, spyDates) => {
     const barsFrom = source({
       AAA: [bar('2026-09-28', 101.5, 103, 100.8, 102), bar('2026-09-29', 103, 105, 102, 104)],
-      SPY: [bar('2026-09-29', 50, 50, 50, 50), bar('2026-09-30', 50, 50, 50, 50)],
-      BBB: [bar('2026-09-28', 100, 100, 100, 100), bar('2026-09-30', 100, 100, 100, 100)],
+      SPY: spyDates.map((date) => bar(date, 50, 50, 50, 50)),
     });
-    const entries: JournalledEntry[] = [
-      { tradingDate: '2026-09-28', instrument: 'AAA', side: 'buy', limit: 100 },
-      { tradingDate: '2026-09-29', instrument: 'BBB', side: 'buy', limit: 100 },
-    ];
-    expect(entryOffsetReport(entries, barsFrom, 'SPY', 2).pending).toBe(2);
+    const entry: JournalledEntry = {
+      tradingDate: '2026-09-28',
+      instrument: 'AAA',
+      side: 'buy',
+      limit: 100,
+    };
+    expect(entryOffsetReport([entry], barsFrom, 'SPY', 2).pending).toBe(1);
   });
 
   it('leaves an entry pending when the benchmark lacks the bars', () => {
