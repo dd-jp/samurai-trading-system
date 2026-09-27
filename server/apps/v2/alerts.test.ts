@@ -124,7 +124,8 @@ describe('alertText', () => {
 describe('telegramSender', () => {
   it('posts to the bot API, silently unless critical', async () => {
     const fetchImpl = okFetch();
-    const send = telegramSender(TOKEN, '-100777', fetchImpl, recorder().logger);
+    const { entries, logger } = recorder();
+    const send = telegramSender(TOKEN, '-100777', fetchImpl, logger);
     await send('critical', 'boom');
     await send('warning', 'meh');
     const [url, init] = fetchImpl.mock.calls[0] ?? [];
@@ -136,6 +137,7 @@ describe('telegramSender', () => {
       { chat_id: '-100777', text: 'boom', disable_notification: false },
       { chat_id: '-100777', text: 'meh', disable_notification: true },
     ]);
+    expect(entries).toEqual([]);
   });
 
   it('logs a refused or failed send without the token, and never throws', async () => {
@@ -233,6 +235,7 @@ describe('alertsFor', () => {
     for (const env of [
       { TELEGRAM_CHAT_ID: 'c' },
       { TELEGRAM_BOT_TOKEN: 't', TELEGRAM_CHAT_ID: ' ' },
+      { TELEGRAM_BOT_TOKEN: 't' },
     ]) {
       const { entries, logger } = recorder();
       const alerts = alertsFor([], env, fetchImpl, logger);
