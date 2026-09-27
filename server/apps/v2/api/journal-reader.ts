@@ -162,10 +162,21 @@ function includesUnlinkedOrders(query: JournalQuery): boolean {
   return query.action === undefined && query.veto === undefined;
 }
 
-function refusalsSelectDays(query: JournalQuery): boolean {
-  return (
-    includesUnlinkedOrders(query) && query.book === undefined && query.instrument === undefined
-  );
+// NULL book_id/instrument means cycle-wide: once a day is selected, a cycle-wide
+// refusal must still display under any book/instrument filter, so unlike scopeFilters
+// this widens with IS NULL rather than excluding unscoped rows
+function refusalDisplayFilters(query: JournalQuery): Filter[] {
+  const filters: Filter[] = [];
+  if (query.book !== undefined) {
+    filters.push({ sql: 'r.book_id IS NULL OR r.book_id = ?', params: [query.book] });
+  }
+  if (query.instrument !== undefined) {
+    filters.push({
+      sql: 'r.instrument IS NULL OR r.instrument = ? COLLATE NOCASE',
+      params: [query.instrument],
+    });
+  }
+  return filters;
 }
 
 function where(filters: readonly Filter[]): Filter {
@@ -200,8 +211,10 @@ function daySources(query: JournalQuery): Filter[] {
       params: orders.params,
     });
   }
-  if (refusalsSelectDays(query)) {
-    const refusals = where(dateFilters(query, 'r'));
+  if (includesUnlinkedOrders(query)) {
+    // Exact-match here, not refusalDisplayFilters: a cycle-wide refusal must not
+    // make every day match a book/instrument filter
+    const refusals = where([...dateFilters(query, 'r'), ...scopeFilters(query, 'r')]);
     sources.push({
       sql: `SELECT r.trading_date FROM v2_refusals r ${refusals.sql}`,
       params: refusals.params,
@@ -329,7 +342,7 @@ export class JournalReader {
     );
     const fills = this.#fills([...linked, ...unlinked]);
     const ordersByDecision = groupBy(linked, (row) => row.decision_id);
-    const refusals = this.#refusals(days);
+    const refusals = this.#refusals(query, days);
     const toOrder = (order: OrderRow) => orderWire(order, fills);
     const decisionsByDay = groupBy(
       decisions.map((row) => ({
@@ -405,10 +418,11 @@ export class JournalReader {
     return groupBy(rows, (row) => row.client_order_id);
   }
 
-  #refusals(days: readonly string[]): RefusalRow[] {
-    const filter = where([inDays('r', days)]);
+  #refusals(query: JournalQuery, days: readonly string[]): RefusalRow[] {
+    const filter = where([inDays('r', days), ...refusalDisplayFilters(query)]);
     return this.#all<RefusalRow>(
-      `SELECT r.refusal_id, r.trading_date, r.scope, r.parameter, r.ticket, r.message, r.recorded_at
+      `SELECT r.refusal_id, r.trading_date, r.scope, r.parameter, r.ticket, r.message, r.book_id,
+              r.instrument, r.recorded_at
          FROM v2_refusals r ${filter.sql} ORDER BY r.refusal_id`,
       filter.params,
     );

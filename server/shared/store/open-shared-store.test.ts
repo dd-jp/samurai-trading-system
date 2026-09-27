@@ -64,7 +64,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 46;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 70;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 71;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -168,6 +168,69 @@ describe('openSharedStore', () => {
       db.prepare('PRAGMA table_info(closed_trades)').all() as { name: string }[]
     ).find((candidate) => candidate.name === 'abandon_reason');
     expect(closedTradesColumn).toBeUndefined();
+  });
+
+  it('migration 0071 adds nullable book_id and instrument to v2_refusals (#1806)', () => {
+    const db = openSharedStore(':memory:');
+
+    const columns = db.prepare('PRAGMA table_info(v2_refusals)').all() as {
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: unknown;
+    }[];
+    for (const name of ['book_id', 'instrument']) {
+      const column = columns.find((candidate) => candidate.name === name);
+      expect(column, `v2_refusals is missing column ${name}`).toBeDefined();
+      expect(column?.type).toBe('TEXT');
+      expect(column?.notnull).toBe(0);
+      expect(column?.dflt_value).toBeNull();
+    }
+  });
+
+  it('migration 0071 applies cleanly to a store with pre-existing refusal rows, which read back with a NULL scope (#1806)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 70;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw
+        .prepare(
+          `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+           VALUES ('2026-09-25', 'entry', 'ADV_WINDOW_COVERAGE', '#1', 'debate/primary THIN: no_adv',
+             '2026-09-25T21:40:00.000Z')`,
+        )
+        .run();
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw
+          .prepare('SELECT book_id, instrument FROM v2_refusals WHERE parameter = ?')
+          .get('ADV_WINDOW_COVERAGE'),
+      ).toEqual({ book_id: null, instrument: null });
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0071 adds the journal read indexes (#1806)', () => {
+    const db = openSharedStore(':memory:');
+    const indexed = ({ table, column }: { table: string; column: string }): boolean => {
+      const indexes = db.prepare(`PRAGMA index_list(${table})`).all() as { name: string }[];
+      return indexes.some((index) => {
+        const columns = db.prepare(`PRAGMA index_info(${index.name})`).all() as { name: string }[];
+        return columns.some((info) => info.name === column);
+      });
+    };
+    expect(indexed({ table: 'v2_decisions', column: 'trading_date' })).toBe(true);
+    expect(indexed({ table: 'v2_orders', column: 'trading_date' })).toBe(true);
+    expect(indexed({ table: 'v2_orders', column: 'decision_id' })).toBe(true);
+    expect(indexed({ table: 'v2_fills', column: 'client_order_id' })).toBe(true);
+    expect(indexed({ table: 'v2_refusals', column: 'trading_date' })).toBe(true);
   });
 
   it('migration 0049 adds modelled_cost_charged to closed_trades, NOT NULL DEFAULT 1, backfilling live rows to 0 (#1121)', () => {

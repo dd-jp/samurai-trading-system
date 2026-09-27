@@ -88,13 +88,19 @@ function fill(id: string, orderId: string, date: string): void {
   });
 }
 
-function refuse(date: string, parameter: string): void {
+function refuse(
+  date: string,
+  parameter: string,
+  scoped?: { readonly book: string; readonly instrument?: string },
+): void {
   journal.recordRefusal({
     trading_date: date,
-    scope: 'control',
+    scope: scoped === undefined ? 'control' : 'entry',
     parameter,
     ticket: '#1745',
     message: `${parameter} refused`,
+    book_id: scoped?.book,
+    instrument: scoped?.instrument,
   });
 }
 
@@ -290,6 +296,8 @@ describe('JournalReader (P9)', () => {
             parameter: 'MANUAL_PAUSE',
             ticket: '#1745',
             message: 'MANUAL_PAUSE refused',
+            book_id: null,
+            instrument: null,
             recorded_at: '2026-10-06T21:40:00.000Z',
           },
           expect.objectContaining({ refusal_id: 2, parameter: 'SECOND' }),
@@ -361,7 +369,7 @@ describe('JournalReader (P9)', () => {
     order('exit-msft', '2026-10-04', null, 'MSFT');
     order('exit-shadow', '2026-10-04', null, 'AAPL', 'debate/no-veto');
     refuse('2026-10-03', 'P');
-    refuse('2026-10-05', 'debate/primary AAPL: below the volume cap');
+    refuse('2026-10-05', 'VOLUME_CAP', { book: 'debate/primary', instrument: 'AAPL' });
     const byInstrument = read({ instrument: 'aapl' });
     expect(datesOf(byInstrument)).toEqual(['2026-10-05', '2026-10-04']);
     expect(byInstrument.days[0]?.decisions.map((row) => row.book_id)).toEqual([
@@ -372,9 +380,7 @@ describe('JournalReader (P9)', () => {
       'exit-aapl',
       'exit-shadow',
     ]);
-    expect(byInstrument.days[0]?.refusals.map((row) => row.parameter)).toEqual([
-      'debate/primary AAPL: below the volume cap',
-    ]);
+    expect(byInstrument.days[0]?.refusals.map((row) => row.parameter)).toEqual(['VOLUME_CAP']);
     expect(read({ book: "' OR 1=1 --" }).days).toEqual([]);
     const byBook = read({ book: 'debate/no-veto' });
     expect(datesOf(byBook)).toEqual(['2026-10-05', '2026-10-04']);
@@ -382,6 +388,47 @@ describe('JournalReader (P9)', () => {
     expect(byBook.days[1]?.unlinked_orders.map((row) => row.client_order_id)).toEqual([
       'exit-shadow',
     ]);
+    expect(byBook.days[0]?.refusals).toEqual([]);
+  });
+
+  it('surfaces a refusal-only day when the refusal is scoped to the filtered book or instrument', () => {
+    open();
+    refuse('2026-10-05', 'VOLUME_CAP', { book: 'debate/primary', instrument: 'AAPL' });
+    refuse('2026-10-05', 'OTHER_VOLUME_CAP', { book: 'debate/no-veto', instrument: 'MSFT' });
+    refuse('2026-10-04', 'MANUAL_PAUSE');
+    const byInstrument = read({ instrument: 'aapl' });
+    expect(datesOf(byInstrument)).toEqual(['2026-10-05']);
+    expect(byInstrument.days[0]?.refusals.map((row) => row.parameter)).toEqual(['VOLUME_CAP']);
+    const byBook = read({ book: 'debate/primary' });
+    expect(datesOf(byBook)).toEqual(['2026-10-05']);
+    expect(byBook.days[0]?.refusals.map((row) => row.parameter)).toEqual(['VOLUME_CAP']);
+    expect(datesOf(read({ instrument: 'MSFT' }))).toEqual(['2026-10-05']);
+    expect(datesOf(read({ instrument: 'NVDA' }))).toEqual([]);
+    // a cycle-wide (unscoped) refusal never picks a day on its own under a book or instrument
+    // filter: NULL only ever widens which rows show on a day something else already selected
+    expect(datesOf(read({ book: 'debate/primary', from: '2026-10-04', to: '2026-10-04' }))).toEqual(
+      [],
+    );
+  });
+
+  it('shows a cycle-wide refusal under a book or instrument filter, on a day something else already selected', () => {
+    open();
+    decide('2026-10-05', 'AAPL');
+    refuse('2026-10-05', 'MANUAL_PAUSE');
+    refuse('2026-10-05', 'OTHER_VOLUME_CAP', { book: 'debate/no-veto', instrument: 'MSFT' });
+    const byInstrument = read({ instrument: 'AAPL' });
+    expect(byInstrument.days[0]?.refusals.map((row) => row.parameter)).toEqual(['MANUAL_PAUSE']);
+    const byBook = read({ book: 'debate/primary' });
+    expect(byBook.days[0]?.refusals.map((row) => row.parameter)).toEqual(['MANUAL_PAUSE']);
+  });
+
+  it('shows a book-only refusal (no single instrument) under a combined book and instrument filter', () => {
+    open();
+    decide('2026-10-05', 'AAPL');
+    refuse('2026-10-05', 'LOSS_BUDGET', { book: 'debate/primary' });
+    refuse('2026-10-05', 'OTHER_LOSS_BUDGET', { book: 'debate/no-veto' });
+    const page = read({ book: 'debate/primary', instrument: 'AAPL' });
+    expect(page.days[0]?.refusals.map((row) => row.parameter)).toEqual(['LOSS_BUDGET']);
   });
 
   it('finds vetoes by category, and only vetoes', () => {

@@ -845,10 +845,24 @@ describe('runCycle', () => {
       deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
     ).db;
     expect(
-      db.prepare("SELECT parameter, message FROM v2_refusals WHERE scope = 'entry'").all(),
+      db
+        .prepare(
+          "SELECT parameter, message, book_id, instrument FROM v2_refusals WHERE scope = 'entry'",
+        )
+        .all(),
     ).toEqual([
-      { parameter: 'ADV_WINDOW_COVERAGE', message: 'debate/primary THIN: no_adv' },
-      { parameter: 'ADV_WINDOW_COVERAGE', message: 'debate/no-macro-gate THIN: no_adv' },
+      {
+        parameter: 'ADV_WINDOW_COVERAGE',
+        message: 'debate/primary THIN: no_adv',
+        book_id: 'debate/primary',
+        instrument: 'THIN',
+      },
+      {
+        parameter: 'ADV_WINDOW_COVERAGE',
+        message: 'debate/no-macro-gate THIN: no_adv',
+        book_id: 'debate/no-macro-gate',
+        instrument: 'THIN',
+      },
     ]);
   });
 
@@ -1075,6 +1089,16 @@ describe('runCycle', () => {
     ).toEqual([
       { trading_date: '2026-09-30', scope: 'data', ticket: '#1804', n: 2 },
       { trading_date: '2026-10-01', scope: 'data', ticket: '#1804', n: 2 },
+    ]);
+    expect(
+      db
+        .prepare(
+          "SELECT book_id, instrument FROM v2_refusals WHERE parameter = 'MARK_FRESHNESS' AND trading_date = '2026-09-30' ORDER BY book_id",
+        )
+        .all(),
+    ).toEqual([
+      { book_id: 'debate/no-macro-gate', instrument: 'AAPL' },
+      { book_id: 'debate/primary', instrument: 'AAPL' },
     ]);
   });
 
@@ -1543,6 +1567,14 @@ describe('runCycle under a manual control', () => {
     const message = 'halt could not exit AAPL in debate/primary: no route to alpaca';
     expect(report.refusals).toContain(message);
     expect(refusalRows(deps, '2026-09-29')).toContainEqual({ parameter: 'MANUAL_HALT', message });
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { get: () => unknown } } }
+    ).db;
+    expect(
+      db
+        .prepare("SELECT book_id, instrument FROM v2_refusals WHERE parameter = 'MANUAL_HALT'")
+        .get(),
+    ).toEqual({ book_id: 'debate/primary', instrument: 'AAPL' });
     expect(alpaca.flattens).toEqual([]);
   });
 
@@ -1732,6 +1764,19 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
         message:
           'debate/primary: loss budget halt at the 2026-09-28 mark cancelled resting entries: 1',
       },
+    ]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT book_id, instrument FROM v2_refusals WHERE parameter = 'LOSS_BUDGET' ORDER BY book_id",
+        )
+        .all(),
+    ).toEqual([
+      { book_id: 'debate/no-macro-gate', instrument: null },
+      { book_id: 'debate/primary', instrument: null },
     ]);
     const next = await runCycle(deps, '2026-09-29');
     expect(next.fills).toBe(0);
