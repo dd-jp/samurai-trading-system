@@ -3890,10 +3890,12 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
       getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
       cancelOrder: vi.fn().mockResolvedValue(undefined),
       getOrder: confirmingGetOrder(),
-      getPositions: vi.fn().mockResolvedValue([
-        { symbol: 'TSLA', qty: '40', side: 'long' as const, avg_entry_price: '250' },
-        ...livePosition('6'),
-      ]),
+      getPositions: vi
+        .fn()
+        .mockResolvedValue([
+          { symbol: 'TSLA', qty: '40', side: 'long' as const, avg_entry_price: '250' },
+          ...livePosition('6'),
+        ]),
       submitMarketOrder,
     });
     const adapter = adapterWith(client);
