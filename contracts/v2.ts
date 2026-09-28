@@ -157,12 +157,14 @@ export interface Position {
   readonly exitClientOrderId: string | undefined;
   readonly openedDate: string;
   readonly marksHeld: number;
+  readonly stray: boolean;
 }
 
 export interface BookFill {
   readonly instrument: string;
   readonly venue: Venue;
   readonly side: OrderSide;
+  readonly leg: FillLeg;
   readonly qty: number;
   readonly priceGbp: number;
   readonly feeGbp: number;

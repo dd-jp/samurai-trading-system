@@ -342,6 +342,7 @@ describe('V2RiskGate', () => {
       exitClientOrderId: undefined,
       openedDate: '2026-09-01',
       marksHeld: 10,
+      stray: false,
     };
     const exit = noCapital.approveExit({ book: shadow, held, clientOrderId: 'x1' });
     expect(exit).toEqual({
@@ -380,6 +381,7 @@ describe('V2RiskGate', () => {
       exitClientOrderId: undefined,
       openedDate: '2026-09-01',
       marksHeld: 10,
+      stray: false,
     };
     const exit = gate().approveExit({
       book: primary,

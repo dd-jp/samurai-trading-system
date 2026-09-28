@@ -48,6 +48,7 @@ const held: Position = {
   exitClientOrderId: undefined,
   openedDate: '2026-09-01',
   marksHeld: 10,
+  stray: false,
 };
 
 const gate = new V2RiskGate({

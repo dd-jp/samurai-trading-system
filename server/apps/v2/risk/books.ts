@@ -4,6 +4,7 @@ import type {
   BookLedger,
   BookSpec,
   CapitalYear,
+  FillLeg,
   LossBudgetState,
   MarkPriceGbp,
   Position,
@@ -20,6 +21,14 @@ import type { CapitalConfigStore } from './capital-config.js';
 import { LossBudget } from './loss-budget.js';
 
 const FLAT_EPSILON = 1e-9;
+
+// A sign change, or a flat->nonzero open by a non-entry leg, is a crossing fill (#1778)
+function crossedUnexpectedly(leg: FillLeg, beforeQty: number, afterQty: number): boolean {
+  const beforeSign = Math.sign(beforeQty);
+  const afterSign = Math.sign(afterQty);
+  if (beforeSign !== 0 && afterSign !== 0) return beforeSign !== afterSign;
+  return beforeSign === 0 && afterSign !== 0 && leg !== 'entry';
+}
 
 interface BookDayRow {
   trading_date: string;
@@ -44,6 +53,7 @@ interface PositionRow {
   exit_client_order_id: string | null;
   opened_date: string;
   marks_held: number;
+  stray: number;
 }
 
 function positionFromRow(row: PositionRow): Position {
@@ -58,6 +68,7 @@ function positionFromRow(row: PositionRow): Position {
     exitClientOrderId: row.exit_client_order_id ?? undefined,
     openedDate: row.opened_date,
     marksHeld: row.marks_held,
+    stray: row.stray === 1,
   };
 }
 
@@ -183,7 +194,7 @@ export class PaperBooks implements BookLedger {
     const rows = this.db
       .prepare(
         `SELECT instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp, client_order_id,
-           exit_client_order_id, opened_date, marks_held
+           exit_client_order_id, opened_date, marks_held, stray
          FROM v2_positions WHERE book_id = ? ORDER BY instrument`,
       )
       .all(bookId) as PositionRow[];
@@ -202,17 +213,22 @@ export class PaperBooks implements BookLedger {
       const qty = (held?.qty ?? 0) + signedQty;
       if (Math.abs(qty) < FLAT_EPSILON) {
         this.#closePosition(bookId, fill.instrument);
-        return undefined;
-      }
-      if (held !== undefined && Math.sign(held.qty) === Math.sign(qty)) {
-        this.#resizePosition(bookId, held, fill, qty);
       } else {
-        this.#closePosition(bookId, fill.instrument);
-        this.#openPosition(bookId, fill, qty);
+        this.#setPositionQty(bookId, held, fill, qty);
       }
       return this.position(bookId, fill.instrument);
     });
     return apply();
+  }
+
+  #setPositionQty(bookId: string, held: Position | undefined, fill: BookFill, qty: number): void {
+    if (held !== undefined && Math.sign(held.qty) === Math.sign(qty)) {
+      this.#resizePosition(bookId, held, fill, qty);
+      return;
+    }
+    const stray = crossedUnexpectedly(fill.leg, held?.qty ?? 0, qty);
+    this.#closePosition(bookId, fill.instrument);
+    this.#openPosition(bookId, fill, qty, stray);
   }
 
   #closePosition(bookId: string, instrument: string): void {
@@ -221,12 +237,12 @@ export class PaperBooks implements BookLedger {
       .run(bookId, instrument);
   }
 
-  #openPosition(bookId: string, fill: BookFill, qty: number): void {
+  #openPosition(bookId: string, fill: BookFill, qty: number, stray: boolean): void {
     this.db
       .prepare(
         `INSERT INTO v2_positions (book_id, instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp,
-           client_order_id, exit_client_order_id, opened_date, marks_held, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?)`,
+           client_order_id, exit_client_order_id, opened_date, marks_held, stray, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)`,
       )
       .run(
         bookId,
@@ -238,6 +254,7 @@ export class PaperBooks implements BookLedger {
         fill.targetGbp ?? null,
         fill.clientOrderId,
         fill.tradingDate,
+        stray ? 1 : 0,
         this.#now(),
       );
   }

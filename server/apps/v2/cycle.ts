@@ -111,14 +111,6 @@ function opposite(side: OrderSide): OrderSide {
   return side === 'buy' ? 'sell' : 'buy';
 }
 
-// A sign change, or a flat->nonzero open by a non-entry leg, is a crossing fill (#1778)
-function crossedUnexpectedly(leg: V2Fill['leg'], beforeQty: number, afterQty: number): boolean {
-  const beforeSign = Math.sign(beforeQty);
-  const afterSign = Math.sign(afterQty);
-  if (beforeSign !== 0 && afterSign !== 0) return beforeSign !== afterSign;
-  return beforeSign === 0 && afterSign !== 0 && leg !== 'entry';
-}
-
 // A stop/target/exit fill closes a bracket entry's other leg; its levels describe the
 // position being closed, not whatever this fill leaves behind, so they never carry (#1778)
 function bracketLevelsGbp(
@@ -154,7 +146,7 @@ interface Tally {
   fills: number;
 }
 
-type ExitReason = 'time_stop' | 'manual_halt';
+type ExitReason = 'time_stop' | 'manual_halt' | 'crossing_fill';
 
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
 
@@ -255,6 +247,7 @@ class Cycle {
       instrument: order.instrument,
       venue: order.venue as Venue,
       side,
+      leg: fill.leg,
       qty: fill.qty,
       priceGbp,
       feeGbp: fill.fee / fx,
@@ -272,7 +265,7 @@ class Cycle {
     before: Position | undefined,
     after: Position | undefined,
   ): void {
-    if (after === undefined || !crossedUnexpectedly(leg, before?.qty ?? 0, after.qty)) return;
+    if (after === undefined || !after.stray || (before?.stray ?? false)) return;
     const heldBefore = before === undefined ? 'no position was held' : `qty ${before.qty} held`;
     const message =
       `${order.book_id} ${order.instrument}: a ${leg} fill on ${order.client_order_id} ` +
@@ -546,7 +539,9 @@ class Cycle {
     const clientOrderId = this.exitOrderId(book.id, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     this.tally.exits += 1;
-    const rearm = nativeRearmPrices(this.deps.journal, held);
+    // Policy, not staleness: an unexpected crossing fill is never trusted as an intentional
+    // new entry, even when its own bracket levels would otherwise resolve cleanly (#1778)
+    const rearm = held.stray ? undefined : nativeRearmPrices(this.deps.journal, held);
     const order = this.deps.risk.approveExit({ book, held, clientOrderId, rearm });
     const submission = await this.deps.executor.submit(order);
     this.count(submission.outcome);
@@ -597,9 +592,19 @@ class Cycle {
     }
     if (resumed === undefined) return;
     if (resumed.orderState === 'submitted' || resumed.orderState === 'partially_filled') return;
-    const stillHeld = this.deps.books.position(book.id, held.instrument);
+    await this.clearAndRearmIfBracketed(book, held.instrument, exitClientOrderId);
+  }
+
+  async clearAndRearmIfBracketed(
+    book: BookSpec,
+    instrument: string,
+    exitClientOrderId: string,
+  ): Promise<void> {
+    const stillHeld = this.deps.books.position(book.id, instrument);
     if (stillHeld === undefined) return;
-    this.deps.books.clearExitPending(book.id, held.instrument);
+    this.deps.books.clearExitPending(book.id, instrument);
+    // A stray has no legitimate bracket to rearm to; crossingFillExit re-submits the flatten instead
+    if (stillHeld.stray) return;
     await this.rearmBackstop(book, stillHeld, exitClientOrderId);
   }
 
@@ -667,14 +672,27 @@ class Cycle {
 
   async exits(book: BookSpec): Promise<void> {
     for (const held of this.deps.books.positions(book.id)) {
-      await this.resumePendingExit(book, held);
-      if (this.deps.executor.simulates(routeOf(book, held.venue))) {
-        this.simulatedBracketExit(book, held);
-      }
-      const stillHeld = this.deps.books.position(book.id, held.instrument);
-      if (stillHeld !== undefined) await this.timeStop(book, stillHeld);
+      await this.exitHeldPosition(book, held);
     }
     if (this.control.state === 'halted') await this.haltExits(book);
+  }
+
+  async exitHeldPosition(book: BookSpec, held: Position): Promise<void> {
+    await this.resumePendingExit(book, held);
+    if (this.deps.executor.simulates(routeOf(book, held.venue))) {
+      this.simulatedBracketExit(book, held);
+    }
+    const afterSimulated = this.deps.books.position(book.id, held.instrument);
+    if (afterSimulated === undefined) return;
+    await this.crossingFillExit(book, afterSimulated);
+    const afterCrossing = this.deps.books.position(book.id, held.instrument);
+    if (afterCrossing !== undefined) await this.timeStop(book, afterCrossing);
+  }
+
+  async crossingFillExit(book: BookSpec, held: Position): Promise<void> {
+    if (held.exitClientOrderId !== undefined || !held.stray) return;
+    if (!this.deps.executor.canRoute(routeOf(book, held.venue))) return;
+    await this.submitExit(book, held, 'crossing_fill');
   }
 
   entryOrderId(book: BookSpec, instrument: string): string {
