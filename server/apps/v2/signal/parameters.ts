@@ -59,8 +59,9 @@ export const LSE_LIQUIDITY_SCREEN = unset<number>('LSE_LIQUIDITY_SCREEN', '#1774
 
 export const SHORTS_ENABLED = false;
 
-// doc 66 ruling (l): keep SGLN, SSLN, PHGP, PHSP, but no order in a complex line
-// until David records the Saxo appropriateness test as taken (his admin)
+// doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
+// separately committed lines), but no order in a complex line until David records
+// the Saxo appropriateness test as taken (his admin)
 export const SAXO_APPROPRIATENESS_TEST_TAKEN = false;
 
 export const DEBATE_RISK_FRACTION = 0.005;

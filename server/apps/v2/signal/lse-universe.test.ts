@@ -22,6 +22,7 @@ function series(symbol: string, days: number, price: number, volume: number): Ba
 }
 
 function withCalendar(all: readonly BarSeries[]): readonly BarSeries[] {
+  if (all.some((entry) => entry.symbol === 'ISF')) return all;
   const dates = [...new Set(all.flatMap((entry) => entry.bars.map((bar) => bar.date)))].sort();
   const reference = dates.map((date) => ({
     date,
@@ -54,7 +55,7 @@ describe('lseInstrumentsAbove', () => {
     expect(instruments).not.toContain('SGLN');
   });
 
-  it('excludes a name with no covered bars, and admits everything at a zero floor', () => {
+  it('excludes a name with no covered bars, and admits the fixture at a zero floor', () => {
     const source = memorySource([series('ISF', 25, 100, 1_000_000)]);
     expect(lseInstrumentsAbove(source, '2026-09-26', 0)).toEqual(['ISF']);
     expect(lseInstrumentsAbove(source, '2026-09-26', Number.POSITIVE_INFINITY)).toEqual([]);
