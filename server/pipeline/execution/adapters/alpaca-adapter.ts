@@ -23,6 +23,7 @@ import type {
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
+  ProtectedExitRequest,
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
@@ -47,6 +48,17 @@ const ALPACA_FILL_SWEEP_TRACE_ID = 'alpaca-fetch-new-fills';
 
 const MAX_REARM_ATTEMPTS = 4;
 
+const MAX_CANCEL_CONFIRM_ATTEMPTS = 5;
+const DEFAULT_CANCEL_CONFIRM_WAIT_MS = 250;
+const RESTING_LEG_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
+const TERMINAL_LEG_STATES = new Set(['cancelled', 'filled', 'rejected', 'expired']);
+
+function defaultWait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 const rearmWireId = (clientOrderId: string, attempt: number): string =>
   attempt === 0 ? `${clientOrderId}:rearm` : `${clientOrderId}:rearm-${attempt}`;
 
@@ -66,6 +78,8 @@ export interface AlpacaBrokerAdapterInput {
   unpricedFillAgeOutMs?: number;
   clock?: Clock;
   logger: Logger;
+  cancelConfirmWait?: (ms: number) => Promise<void>;
+  cancelConfirmWaitMs?: number;
 }
 
 type LookedUpOrderId = { id: string | null } | { error: unknown };
@@ -112,6 +126,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly unpricedFillAgeOutMs: number;
   private readonly emulation: AlpacaCryptoLegEmulation;
   private readonly logger: Logger;
+  private readonly cancelConfirmWait: (ms: number) => Promise<void>;
+  private readonly cancelConfirmWaitMs: number;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
     this.rateLimiter =
@@ -124,6 +140,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     this.clock = input.clock ?? new SystemClock();
     this.unpricedFillAgeOutMs = input.unpricedFillAgeOutMs ?? DEFAULT_UNPRICED_FILL_AGE_OUT_MS;
     this.logger = input.logger;
+    this.cancelConfirmWait = input.cancelConfirmWait ?? defaultWait;
+    this.cancelConfirmWaitMs = input.cancelConfirmWaitMs ?? DEFAULT_CANCEL_CONFIRM_WAIT_MS;
 
     this.emulation = new AlpacaCryptoLegEmulation({
       client: input.client,
@@ -154,6 +172,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     side: 'buy' | 'sell',
     size: number,
     clientOrderId: string,
+    timeInForce = 'ioc',
   ): Promise<BrokerAck> {
     const submittedAt = this.clock.now();
     const response = await this.call('submitFlatten', () =>
@@ -161,7 +180,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         symbol: toAlpacaSymbol(instrument),
         side,
         qty: String(size),
-        time_in_force: 'ioc',
+        time_in_force: timeInForce,
         client_order_id: clientOrderId,
       }),
     );
@@ -249,6 +268,111 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     } catch (error) {
       return { error };
     }
+  }
+
+  async submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
+    const { entryClientOrderId, clientOrderId, instrument, side, size, rearm } = request;
+
+    const existing = await this.resumeFlatten(clientOrderId, instrument);
+    if (existing !== null && existing.order_state !== 'rejected') {
+      return {
+        client_order_id: clientOrderId,
+        broker_order_ids: existing.broker_order_ids,
+        order_state: existing.order_state,
+      };
+    }
+
+    await this.cancelBracketLegsForExit(entryClientOrderId, instrument);
+
+    const positions = await this.call('submitProtectedExit', () =>
+      this.input.client.getPositions(),
+    );
+    const live = positions.find((position) => fromAlpacaSymbol(position.symbol) === instrument);
+    const brokerQty = live === undefined ? 0 : Math.abs(Number(live.qty));
+    const qty = Math.min(size, brokerQty);
+    if (qty <= 0)
+      return { client_order_id: clientOrderId, broker_order_ids: [], order_state: 'closed' };
+
+    let ack: BrokerAck;
+    try {
+      ack = await this.submitFlatten(instrument, side, qty, clientOrderId, 'day');
+    } catch (error) {
+      await this.rearmAfterFailedExit(entryClientOrderId, instrument, side, qty, rearm);
+      throw error;
+    }
+    if (ack.order_state === 'rejected') {
+      await this.rearmAfterFailedExit(entryClientOrderId, instrument, side, qty, rearm);
+      throw new Error(
+        `submitProtectedExit: day flatten '${clientOrderId}' for ${instrument} was rejected by ` +
+          'Alpaca; protective legs were re-armed inline',
+      );
+    }
+    return ack;
+  }
+
+  private async rearmAfterFailedExit(
+    entryClientOrderId: string,
+    instrument: string,
+    closingSide: 'buy' | 'sell',
+    qty: number,
+    rearm: { readonly stop: number; readonly target: number } | undefined,
+  ): Promise<void> {
+    if (rearm === undefined) {
+      throw new Error(
+        `submitProtectedExit: the flatten for ${instrument} (${entryClientOrderId}) failed with ` +
+          'no journalled rearm price available; the position is UNPROTECTED',
+      );
+    }
+    const entrySide = closingSide === 'buy' ? 'sell' : 'buy';
+    await this.rearmProtectiveLegs(
+      entryClientOrderId,
+      instrument,
+      entrySide,
+      qty,
+      rearm.stop,
+      rearm.target,
+    );
+  }
+
+  private async cancelBracketLegsForExit(
+    entryClientOrderId: string,
+    instrument: string,
+  ): Promise<void> {
+    if (this.emulation.owns(entryClientOrderId)) {
+      await this.emulation.cancelAll(entryClientOrderId);
+      return;
+    }
+
+    const rearmed = await this.lookupLatestRearmOrderId(entryClientOrderId);
+    if ('error' in rearmed) throw rearmed.error;
+    if (rearmed.id !== null) {
+      await this.cancelLegAndConfirm(rearmed.id, instrument);
+      return;
+    }
+
+    const entry = await this.call('submitProtectedExit', () =>
+      this.input.client.getOrderByClientOrderId(entryClientOrderId),
+    );
+    const legs = (entry?.legs ?? []).filter((leg) => RESTING_LEG_STATUSES.includes(leg.status));
+    const target = legs.find((leg) => leg.type === 'limit');
+    const stop = legs.find((leg) => leg.type === 'stop');
+    if (target !== undefined) await this.cancelLegAndConfirm(target.id, instrument);
+    if (stop !== undefined) await this.cancelLegAndConfirm(stop.id, instrument);
+  }
+
+  private async cancelLegAndConfirm(orderId: string, instrument: string): Promise<void> {
+    await this.call('submitProtectedExit', () => this.input.client.cancelOrder(orderId));
+    for (let attempt = 0; attempt < MAX_CANCEL_CONFIRM_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await this.cancelConfirmWait(this.cancelConfirmWaitMs);
+      const order = await this.call('submitProtectedExit', () =>
+        this.input.client.getOrder(orderId),
+      );
+      if (TERMINAL_LEG_STATES.has(mapOrderState(order.status))) return;
+    }
+    throw new Error(
+      `submitProtectedExit: leg ${orderId} on ${instrument} did not confirm cancelled after ` +
+        `${MAX_CANCEL_CONFIRM_ATTEMPTS} checks`,
+    );
   }
 
   async getOpenPositions(): Promise<NormalizedPosition[]> {

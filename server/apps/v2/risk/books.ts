@@ -260,6 +260,15 @@ export class PaperBooks implements BookLedger {
       .run(exitClientOrderId, this.#now(), bookId, instrument);
   }
 
+  clearExitPending(bookId: string, instrument: string): void {
+    this.db
+      .prepare(
+        `UPDATE v2_positions SET exit_client_order_id = NULL, updated_at = ?
+         WHERE book_id = ? AND instrument = ?`,
+      )
+      .run(this.#now(), bookId, instrument);
+  }
+
   valuation(bookId: string, markGbp: MarkPriceGbp): Valuation {
     let investedGbp = 0;
     let investedSaxoGbp = 0;

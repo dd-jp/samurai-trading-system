@@ -1,4 +1,4 @@
-import type { Direction } from './primitives.js';
+import type { Direction, OrderState } from './primitives.js';
 
 export type Venue = 'alpaca' | 'saxo';
 export type OrderSide = 'buy' | 'sell';
@@ -189,6 +189,7 @@ export interface BookLedger {
   position(bookId: string, instrument: string): Position | undefined;
   applyFill(bookId: string, fill: BookFill): Position | undefined;
   setExitPending(bookId: string, instrument: string, exitClientOrderId: string): void;
+  clearExitPending(bookId: string, instrument: string): void;
   valuation(bookId: string, markGbp: MarkPriceGbp): Valuation;
   lastDay(bookId: string): BookDay | undefined;
   markDay(
@@ -221,9 +222,19 @@ export interface ApprovedBracketEntry extends ApprovedOrderFields {
 
 export interface ApprovedFlatten extends ApprovedOrderFields {
   readonly kind: 'flatten';
+  readonly entryClientOrderId: string;
+  readonly rearmStop: number | undefined;
+  readonly rearmTarget: number | undefined;
 }
 
-export type RiskApprovedOrder = (ApprovedBracketEntry | ApprovedFlatten) & {
+export interface ApprovedRearm extends ApprovedOrderFields {
+  readonly kind: 'rearm';
+  readonly entryClientOrderId: string;
+  readonly stop: number;
+  readonly target: number;
+}
+
+export type RiskApprovedOrder = (ApprovedBracketEntry | ApprovedFlatten | ApprovedRearm) & {
   readonly [riskApproved]: true;
 };
 
@@ -240,10 +251,24 @@ export type EntryApproval =
   | { readonly size: number; readonly order: RiskApprovedOrder }
   | { readonly size: number; readonly order: undefined; readonly refusal: string };
 
+export interface RearmPrices {
+  readonly stop: number;
+  readonly target: number;
+}
+
 export interface ExitRequest {
   readonly book: BookSpec;
   readonly held: Position;
   readonly clientOrderId: string;
+  readonly rearm?: RearmPrices | undefined;
+}
+
+export interface RearmRequest {
+  readonly book: BookSpec;
+  readonly held: Position;
+  readonly clientOrderId: string;
+  readonly stop: number;
+  readonly target: number;
 }
 
 export type ControlAction = 'pause' | 'halt' | 'resume';
@@ -265,6 +290,7 @@ export interface ControlReader {
 export interface RiskGate {
   approveEntry(request: EntryRequest): EntryApproval;
   approveExit(request: ExitRequest): RiskApprovedOrder;
+  approveRearm(request: RearmRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined;
 }
@@ -307,13 +333,22 @@ export interface SimulatedFillQuote {
   readonly fee: number;
 }
 
+export interface ResumedExit {
+  readonly orderState: OrderState;
+  readonly filledQty: number;
+}
+
 export interface OrderExecutor {
   simulates(route: ExecutionRoute): boolean;
   quoteSimulatedFill(venue: Venue, request: SimulatedFillRequest): SimulatedFillQuote;
   canRoute(route: ExecutionRoute): boolean;
   submit(order: RiskApprovedOrder): Promise<Submission>;
   cancel(route: ExecutionRoute, clientOrderId: string, instrument: string): Promise<void>;
-  resumeFlatten(route: ExecutionRoute, clientOrderId: string, instrument: string): Promise<void>;
+  resumeFlatten(
+    route: ExecutionRoute,
+    clientOrderId: string,
+    instrument: string,
+  ): Promise<ResumedExit | undefined>;
   fetchNewFills(sinceIso: string): Promise<FillSweep>;
 }
 

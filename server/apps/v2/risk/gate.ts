@@ -5,6 +5,7 @@ import type {
   EntryRequest,
   ExitRequest,
   MarketData,
+  RearmRequest,
   RiskApprovedOrder,
   RiskGate,
   Sleeve,
@@ -107,6 +108,32 @@ export class V2RiskGate implements RiskGate {
       instrument: request.held.instrument,
       side: request.held.qty > 0 ? 'sell' : 'buy',
       size,
+      entryClientOrderId: request.held.clientOrderId,
+      rearmStop: request.rearm?.stop,
+      rearmTarget: request.rearm?.target,
+    });
+  }
+
+  approveRearm(request: RearmRequest): RiskApprovedOrder {
+    const size = Math.abs(request.held.qty);
+    if (!(size > 0)) {
+      throw new Error(
+        `risk gate: no rearm for ${request.held.instrument} at qty ${request.held.qty}`,
+      );
+    }
+    return mintApproval({
+      kind: 'rearm',
+      approvalId: `rearm:${request.clientOrderId}:${size}`,
+      clientOrderId: request.clientOrderId,
+      bookId: request.book.id,
+      bookVariant: request.book.variant,
+      venue: request.held.venue,
+      instrument: request.held.instrument,
+      side: request.held.qty > 0 ? 'sell' : 'buy',
+      size,
+      entryClientOrderId: request.held.clientOrderId,
+      stop: request.stop,
+      target: request.target,
     });
   }
 

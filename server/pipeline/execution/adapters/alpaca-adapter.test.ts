@@ -3561,3 +3561,308 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
     });
   });
 });
+
+describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
+  const ENTRY_ID = 'key-aapl-1355';
+  const EXIT_ID = 'key-aapl-1355-exit';
+  const TARGET_LEG_ID = 'alpaca-target-1';
+  const STOP_LEG_ID = 'alpaca-stop-1';
+
+  function restingEntryOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
+    return acceptedOrder({
+      id: 'alpaca-entry-1',
+      client_order_id: ENTRY_ID,
+      status: 'filled',
+      filled_qty: '6',
+      legs: [
+        {
+          id: TARGET_LEG_ID,
+          type: 'limit',
+          status: 'new',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+        },
+        {
+          id: STOP_LEG_ID,
+          type: 'stop',
+          status: 'new',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  function noPriorOrders(entry: AlpacaOrder) {
+    return vi.fn(async (clientOrderId: string) => {
+      if (clientOrderId === ENTRY_ID) return entry;
+      return null;
+    });
+  }
+
+  function adapterWith(
+    client: AlpacaBrokerClient,
+    cancelConfirmWait: (ms: number) => Promise<void> = () => Promise.resolve(),
+  ): AlpacaBrokerAdapter {
+    return new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+      cancelConfirmWait,
+    });
+  }
+
+  function request(
+    overrides: Partial<Parameters<AlpacaBrokerAdapter['submitProtectedExit']>[0]> = {},
+  ) {
+    return {
+      entryClientOrderId: ENTRY_ID,
+      clientOrderId: EXIT_ID,
+      instrument: 'AAPL',
+      side: 'sell' as const,
+      size: 6,
+      rearm: { stop: 95, target: 110 },
+      ...overrides,
+    };
+  }
+
+  function confirmingGetOrder() {
+    return vi.fn().mockResolvedValue({ ...acceptedOrder(), status: 'canceled' });
+  }
+
+  function livePosition(qty = '6') {
+    return [{ symbol: 'AAPL', qty, side: 'long' as const, avg_entry_price: '100' }];
+  }
+
+  it('cancels the target leg then the stop leg, confirms each cancelled, then flattens with time_in_force day', async () => {
+    const cancelOrder = vi.fn().mockResolvedValue(undefined);
+    const submitMarketOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'accepted' });
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder,
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue(livePosition()),
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client);
+
+    const ack = await adapter.submitProtectedExit(request());
+
+    expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([TARGET_LEG_ID, STOP_LEG_ID]);
+    expect(submitMarketOrder).toHaveBeenCalledWith({
+      symbol: 'AAPL',
+      side: 'sell',
+      qty: '6',
+      time_in_force: 'day',
+      client_order_id: EXIT_ID,
+    });
+    expect(ack).toEqual({
+      client_order_id: EXIT_ID,
+      broker_order_ids: ['flatten-1'],
+      order_state: 'submitted',
+    });
+  });
+
+  it('cancels a previously re-armed order instead of re-deriving the original bracket legs', async () => {
+    const REARM_LEG_ID = 'alpaca-rearm-1';
+    const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+      if (clientOrderId === `${ENTRY_ID}:rearm`) {
+        return acceptedOrder({
+          id: REARM_LEG_ID,
+          client_order_id: `${ENTRY_ID}:rearm`,
+          status: 'accepted',
+        });
+      }
+      return null;
+    });
+    const cancelOrder = vi.fn().mockResolvedValue(undefined);
+    const submitMarketOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'accepted' });
+    const client = makeClient({
+      getOrderByClientOrderId,
+      cancelOrder,
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue(livePosition()),
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client);
+
+    await adapter.submitProtectedExit(request());
+
+    expect(cancelOrder).toHaveBeenCalledExactlyOnceWith(REARM_LEG_ID);
+  });
+
+  it('adopts an existing non-rejected exit order instead of cancelling legs again (crash idempotency)', async () => {
+    const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+      if (clientOrderId === EXIT_ID) {
+        return acceptedOrder({
+          id: 'flatten-1',
+          client_order_id: EXIT_ID,
+          status: 'accepted',
+          legs: [],
+        });
+      }
+      return null;
+    });
+    const cancelOrder = vi.fn();
+    const getPositions = vi.fn();
+    const submitMarketOrder = vi.fn();
+    const client = makeClient({
+      getOrderByClientOrderId,
+      cancelOrder,
+      getPositions,
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client);
+
+    const ack = await adapter.submitProtectedExit(request());
+
+    expect(ack).toEqual({
+      client_order_id: EXIT_ID,
+      broker_order_ids: ['flatten-1'],
+      order_state: 'submitted',
+    });
+    expect(cancelOrder).not.toHaveBeenCalled();
+    expect(getPositions).not.toHaveBeenCalled();
+    expect(submitMarketOrder).not.toHaveBeenCalled();
+  });
+
+  it('skips the flatten and reports closed when getOpenPositions ground truth shows nothing left to sell', async () => {
+    const cancelOrder = vi.fn().mockResolvedValue(undefined);
+    const submitMarketOrder = vi.fn();
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder,
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue([]),
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client);
+
+    const ack = await adapter.submitProtectedExit(request());
+
+    expect(ack).toEqual({ client_order_id: EXIT_ID, broker_order_ids: [], order_state: 'closed' });
+    expect(submitMarketOrder).not.toHaveBeenCalled();
+    expect(cancelOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it('flattens the broker-reported quantity, not the ledger size, when they disagree', async () => {
+    const submitMarketOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'accepted' });
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue(livePosition('2')),
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client);
+
+    await adapter.submitProtectedExit(request({ size: 6 }));
+
+    expect(submitMarketOrder).toHaveBeenCalledWith(expect.objectContaining({ qty: '2' }));
+  });
+
+  it('never attempts the flatten when a leg cancel does not confirm after repeated polling', async () => {
+    const cancelOrder = vi.fn().mockResolvedValue(undefined);
+    const getOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), status: 'new' });
+    const getPositions = vi.fn();
+    const submitMarketOrder = vi.fn();
+    const wait = vi.fn().mockResolvedValue(undefined);
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder,
+      getOrder,
+      getPositions,
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client, wait);
+
+    await expect(adapter.submitProtectedExit(request())).rejects.toThrow(
+      /did not confirm cancelled/,
+    );
+
+    expect(cancelOrder).toHaveBeenCalledExactlyOnceWith(TARGET_LEG_ID);
+    expect(getOrder.mock.calls.length).toBeGreaterThan(1);
+    expect(wait).toHaveBeenCalled();
+    expect(getPositions).not.toHaveBeenCalled();
+    expect(submitMarketOrder).not.toHaveBeenCalled();
+  });
+
+  it('re-arms the entry-side protective legs inline when the day flatten comes back rejected, and throws', async () => {
+    const submitOcoOrder = vi
+      .fn()
+      .mockResolvedValue(acceptedOrder({ id: 'rearm-1', client_order_id: `${ENTRY_ID}:rearm` }));
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue(livePosition()),
+      submitMarketOrder: vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'rejected' }),
+      submitOcoOrder,
+    });
+    const adapter = adapterWith(client);
+
+    await expect(adapter.submitProtectedExit(request())).rejects.toThrow(/rejected by Alpaca/);
+
+    expect(submitOcoOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbol: 'AAPL',
+        side: 'sell',
+        qty: '6',
+        client_order_id: `${ENTRY_ID}:rearm`,
+        stop_loss: { stop_price: '95.00' },
+        take_profit: { limit_price: '110.00' },
+      }),
+    );
+  });
+
+  it('re-arms inline and re-throws the original submission failure when the day flatten submission itself throws', async () => {
+    const submitOcoOrder = vi
+      .fn()
+      .mockResolvedValue(acceptedOrder({ id: 'rearm-1', client_order_id: `${ENTRY_ID}:rearm` }));
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue(livePosition()),
+      submitMarketOrder: vi.fn().mockRejectedValue(new Error('network blip')),
+      submitOcoOrder,
+    });
+    const adapter = adapterWith(client);
+
+    await expect(adapter.submitProtectedExit(request())).rejects.toThrow(BrokerError);
+    expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws a distinct UNPROTECTED error, without attempting a rearm, when the flatten fails and no rearm price was journalled', async () => {
+    const submitOcoOrder = vi.fn();
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue(livePosition()),
+      submitMarketOrder: vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'rejected' }),
+      submitOcoOrder,
+    });
+    const adapter = adapterWith(client);
+
+    await expect(adapter.submitProtectedExit(request({ rearm: undefined }))).rejects.toThrow(
+      /UNPROTECTED/,
+    );
+    expect(submitOcoOrder).not.toHaveBeenCalled();
+  });
+});

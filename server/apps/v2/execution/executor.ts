@@ -2,6 +2,7 @@ import type {
   ExecutionRoute,
   FillSweep,
   OrderExecutor,
+  ResumedExit,
   RiskApprovedOrder,
   SimulatedFillQuote,
   SimulatedFillRequest,
@@ -30,13 +31,58 @@ export class UnapprovedOrderError extends Error {
   }
 }
 
+async function sendRearm(
+  broker: BrokerAdapter,
+  entryClientOrderId: string,
+  instrument: string,
+  closingSide: 'buy' | 'sell',
+  child: ChildOrder,
+  stop: number,
+  target: number,
+): Promise<BrokerAck> {
+  const entrySide = closingSide === 'buy' ? 'sell' : 'buy';
+  await broker.rearmProtectiveLegs(
+    entryClientOrderId,
+    instrument,
+    entrySide,
+    child.size,
+    stop,
+    target,
+  );
+  return { client_order_id: child.clientOrderId, broker_order_ids: [], order_state: 'submitted' };
+}
+
 function send(
   broker: BrokerAdapter,
   order: RiskApprovedOrder,
   child: ChildOrder,
 ): Promise<BrokerAck> {
   if (order.kind === 'flatten') {
+    if (broker.submitProtectedExit !== undefined) {
+      return broker.submitProtectedExit({
+        entryClientOrderId: order.entryClientOrderId,
+        clientOrderId: child.clientOrderId,
+        instrument: order.instrument,
+        side: order.side,
+        size: child.size,
+        rearm:
+          order.rearmStop === undefined || order.rearmTarget === undefined
+            ? undefined
+            : { stop: order.rearmStop, target: order.rearmTarget },
+      });
+    }
     return broker.submitFlatten(order.instrument, order.side, child.size, child.clientOrderId);
+  }
+  if (order.kind === 'rearm') {
+    return sendRearm(
+      broker,
+      order.entryClientOrderId,
+      order.instrument,
+      order.side,
+      child,
+      order.stop,
+      order.target,
+    );
   }
   return broker.submitBracket({
     client_order_id: child.clientOrderId,
@@ -101,9 +147,11 @@ export class V2OrderExecutor implements OrderExecutor {
     route: ExecutionRoute,
     clientOrderId: string,
     instrument: string,
-  ): Promise<void> {
-    if (this.simulates(route)) return;
-    await this.#brokerFor(route)?.resumeFlatten(clientOrderId, instrument);
+  ): Promise<ResumedExit | undefined> {
+    if (this.simulates(route)) return undefined;
+    const order = await this.#brokerFor(route)?.resumeFlatten(clientOrderId, instrument);
+    if (order === undefined || order === null) return undefined;
+    return { orderState: order.order_state, filledQty: order.filled_qty };
   }
 
   async fetchNewFills(sinceIso: string): Promise<FillSweep> {

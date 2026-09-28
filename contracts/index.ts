@@ -72,6 +72,7 @@ export {
 export type {
   ApprovedBracketEntry,
   ApprovedFlatten,
+  ApprovedRearm,
   BookDay,
   BookFill,
   BookLedger,
@@ -100,6 +101,9 @@ export type {
   OrderOutcome,
   OrderSide,
   Position,
+  RearmPrices,
+  RearmRequest,
+  ResumedExit,
   RiskApprovedOrder,
   RiskGate,
   SimulatedFillQuote,
