@@ -54,6 +54,15 @@ export interface NormalizedPosition {
   avg_entry_price: number | null;
 }
 
+export interface ProtectedExitRequest {
+  readonly entryClientOrderId: string;
+  readonly clientOrderId: string;
+  readonly instrument: string;
+  readonly side: 'buy' | 'sell';
+  readonly size: number;
+  readonly rearm: { readonly stop: number; readonly target: number } | undefined;
+}
+
 export interface BrokerAdapter {
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck>;
   getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
@@ -73,8 +82,10 @@ export interface BrokerAdapter {
     side: 'buy' | 'sell',
     size: number,
     clientOrderId: string,
+    timeInForce?: string,
   ): Promise<BrokerAck>;
   cancel(clientOrderId: string, instrument: string): Promise<void>;
   getOpenPositions(): Promise<NormalizedPosition[]>;
   readonly prices_own_fills?: boolean;
+  submitProtectedExit?(request: ProtectedExitRequest): Promise<BrokerAck>;
 }

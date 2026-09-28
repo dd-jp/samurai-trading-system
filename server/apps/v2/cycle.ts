@@ -12,6 +12,7 @@ import type {
   OrderOutcome,
   OrderSide,
   Position,
+  RearmPrices,
   RiskGate,
   Sleeve,
   SleeveDecision,
@@ -163,6 +164,13 @@ function positionKey(bookId: string, instrument: string): string {
 
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
+}
+
+function nativeRearmPrices(journal: DecisionJournal, held: Position): RearmPrices | undefined {
+  const entry = journal.orderFor(held.clientOrderId);
+  const stop = entry === undefined ? undefined : numberOrUndefined(entry.payload.stop);
+  const target = entry === undefined ? undefined : numberOrUndefined(entry.payload.target);
+  return stop === undefined || target === undefined ? undefined : { stop, target };
 }
 
 function withinLimit(side: OrderSide, limit: number, price: number): number {
@@ -538,7 +546,8 @@ class Cycle {
     const clientOrderId = this.exitOrderId(book.id, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     this.tally.exits += 1;
-    const order = this.deps.risk.approveExit({ book, held, clientOrderId });
+    const rearm = nativeRearmPrices(this.deps.journal, held);
+    const order = this.deps.risk.approveExit({ book, held, clientOrderId, rearm });
     const submission = await this.deps.executor.submit(order);
     this.count(submission.outcome);
     this.deps.journal.recordOrder({
@@ -574,14 +583,85 @@ class Cycle {
 
   async resumePendingExit(book: BookSpec, held: Position): Promise<void> {
     if (held.exitClientOrderId === undefined) return;
+    const exitClientOrderId = held.exitClientOrderId;
+    let resumed: Awaited<ReturnType<OrderExecutor['resumeFlatten']>>;
     try {
-      await this.deps.executor.resumeFlatten(
+      resumed = await this.deps.executor.resumeFlatten(
         routeOf(book, held.venue),
-        held.exitClientOrderId,
+        exitClientOrderId,
         held.instrument,
       );
     } catch (error) {
       this.log('warn', 'v2_resume_flatten_failed', describeThrownSafely(error));
+      return;
+    }
+    if (resumed === undefined) return;
+    if (resumed.orderState === 'submitted' || resumed.orderState === 'partially_filled') return;
+    const stillHeld = this.deps.books.position(book.id, held.instrument);
+    if (stillHeld === undefined) return;
+    this.deps.books.clearExitPending(book.id, held.instrument);
+    await this.rearmBackstop(book, stillHeld, exitClientOrderId);
+  }
+
+  rearmOrderId(bookId: string, instrument: string): string {
+    return `v2-${bookId.replaceAll('/', '-')}-${this.tradingDate}-${instrument}-rearm`;
+  }
+
+  async rearmBackstop(book: BookSpec, held: Position, exitClientOrderId: string): Promise<void> {
+    const rearm = nativeRearmPrices(this.deps.journal, held);
+    if (rearm === undefined) {
+      const message =
+        `${book.id} ${held.instrument}: exit ${exitClientOrderId} ended without flattening the ` +
+        'position and no journalled entry rearm price exists; the position is UNPROTECTED';
+      this.deps.journal.recordRefusal({
+        trading_date: this.tradingDate,
+        scope: 'execution',
+        parameter: 'REARM_BACKSTOP',
+        ticket: '#1801',
+        message,
+        book_id: book.id,
+        instrument: held.instrument,
+      });
+      this.refusals.push(message);
+      this.log('error', 'v2_rearm_backstop_missing_prices', message);
+      return;
+    }
+    const clientOrderId = this.rearmOrderId(book.id, held.instrument);
+    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
+    if (!this.deps.executor.canRoute(routeOf(book, held.venue))) return;
+    const order = this.deps.risk.approveRearm({
+      book,
+      held,
+      clientOrderId,
+      stop: rearm.stop,
+      target: rearm.target,
+    });
+    const submission = await this.deps.executor.submit(order);
+    this.count(submission.outcome);
+    this.deps.journal.recordOrder({
+      client_order_id: clientOrderId,
+      decision_id: null,
+      book_id: book.id,
+      trading_date: this.tradingDate,
+      instrument: held.instrument,
+      venue: held.venue,
+      leg: 'exit',
+      side: order.side,
+      dry_run: this.deps.dryRun,
+      outcome: submission.outcome,
+      payload: {
+        size: order.size,
+        detail: submission.detail,
+        stop: rearm.stop,
+        target: rearm.target,
+        exit_client_order_id: exitClientOrderId,
+        approval: submission.approvalId,
+      },
+    });
+    if (submission.outcome === 'rejected') {
+      const message = `${book.id} ${held.instrument}: backstop rearm after exit ${exitClientOrderId} failed: ${submission.detail}`;
+      this.refusals.push(message);
+      this.log('error', 'v2_rearm_backstop_failed', message);
     }
   }
 

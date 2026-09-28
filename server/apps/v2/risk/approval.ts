@@ -1,12 +1,15 @@
 import type {
   ApprovedBracketEntry,
   ApprovedFlatten,
+  ApprovedRearm,
   RiskApprovedOrder,
 } from '../../../../contracts/index.js';
 
 const minted = new WeakSet<object>();
 
-export function mintApproval(fields: ApprovedBracketEntry | ApprovedFlatten): RiskApprovedOrder {
+export function mintApproval(
+  fields: ApprovedBracketEntry | ApprovedFlatten | ApprovedRearm,
+): RiskApprovedOrder {
   const order = Object.freeze({ ...fields }) as RiskApprovedOrder;
   minted.add(order);
   return order;

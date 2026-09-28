@@ -197,6 +197,8 @@ describe('PaperBooks', () => {
     expect(books.valuation('debate/primary', () => 50)).toMatchObject({ investedSaxoGbp: 50 });
     books.setExitPending('debate/primary', 'AAPL', 'x1');
     expect(books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe('x1');
+    books.clearExitPending('debate/primary', 'AAPL');
+    expect(books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBeUndefined();
   });
 
   it('marks a day from positions, counts marks held, deducts Saxo custody and blocks entries on the daily cap', () => {

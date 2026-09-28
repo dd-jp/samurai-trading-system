@@ -354,6 +354,9 @@ describe('V2RiskGate', () => {
       instrument: 'AAPL',
       side: 'buy',
       size: 4,
+      entryClientOrderId: 'c0',
+      rearmStop: undefined,
+      rearmTarget: undefined,
     });
     expect(isRiskApproved(exit)).toBe(true);
     const halted = gate({ state: { halted: true, sizeMultiplier: 0 } });
@@ -363,6 +366,60 @@ describe('V2RiskGate', () => {
     expect(() =>
       gate().approveExit({ book: primary, held: { ...held, qty: 0 }, clientOrderId: 'x3' }),
     ).toThrow(/no exit for AAPL at qty 0/);
+  });
+
+  it('carries the entry order id and native rearm prices on a flatten, and mints a rearm order', () => {
+    const held: Position = {
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      qty: -4,
+      avgPriceGbp: 16,
+      stopGbp: undefined,
+      targetGbp: undefined,
+      clientOrderId: 'c0',
+      exitClientOrderId: undefined,
+      openedDate: '2026-09-01',
+      marksHeld: 10,
+    };
+    const exit = gate().approveExit({
+      book: primary,
+      held,
+      clientOrderId: 'x1',
+      rearm: { stop: 21, target: 18 },
+    });
+    expect(exit).toMatchObject({ entryClientOrderId: 'c0', rearmStop: 21, rearmTarget: 18 });
+
+    const rearm = gate().approveRearm({
+      book: primary,
+      held,
+      clientOrderId: 'r1',
+      stop: 21,
+      target: 18,
+    });
+    expect(rearm).toEqual({
+      kind: 'rearm',
+      approvalId: 'rearm:r1:4',
+      clientOrderId: 'r1',
+      bookId: 'debate/primary',
+      bookVariant: 'primary',
+      venue: 'alpaca',
+      instrument: 'AAPL',
+      side: 'buy',
+      size: 4,
+      entryClientOrderId: 'c0',
+      stop: 21,
+      target: 18,
+    });
+    expect(isRiskApproved(rearm)).toBe(true);
+    expect(() =>
+      gate().approveRearm({
+        book: primary,
+        held: { ...held, qty: 0 },
+        clientOrderId: 'r2',
+        stop: 1,
+        target: 1,
+      }),
+    ).toThrow(/no rearm for AAPL at qty 0/);
   });
 
   it('never approves a copy or a look-alike', () => {

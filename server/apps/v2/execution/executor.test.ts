@@ -118,6 +118,7 @@ function fakeBroker(name: string, fills: NormalizedFill[] = []) {
       broker_order_ids: [name],
       order_state: `${name}-flatten`,
     }),
+    rearmProtectiveLegs: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
     resumeFlatten: vi.fn().mockResolvedValue(null),
     fetchNewFills: vi.fn().mockResolvedValue(fills),
@@ -212,6 +213,54 @@ describe('V2OrderExecutor', () => {
     });
     expect(alpaca.submitFlatten).toHaveBeenCalledWith('AAPL', 'sell', 6, 'x1');
     expect(simulated.submitBracket).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a flatten through submitProtectedExit when the broker supports it, carrying the entry id and rearm prices', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const protectedExit = vi.fn().mockResolvedValue({
+      client_order_id: 'x1',
+      broker_order_ids: ['day-order'],
+      order_state: 'submitted',
+    });
+    (alpaca as unknown as { submitProtectedExit: typeof protectedExit }).submitProtectedExit =
+      protectedExit;
+    const flatten = gate.approveExit({
+      book: primary,
+      held,
+      clientOrderId: 'x1',
+      rearm: { stop: 21, target: 18 },
+    });
+    expect(await paper.submit(flatten)).toEqual({
+      outcome: 'submitted',
+      detail: 'submitted',
+      approvalId: 'exit:x1:6',
+    });
+    expect(protectedExit).toHaveBeenCalledWith({
+      entryClientOrderId: 'c0',
+      clientOrderId: 'x1',
+      instrument: 'AAPL',
+      side: 'sell',
+      size: 6,
+      rearm: { stop: 21, target: 18 },
+    });
+    expect(alpaca.submitFlatten).not.toHaveBeenCalled();
+  });
+
+  it('submits a rearm order by re-arming the entry side protective legs, not the flatten side', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const rearm = gate.approveRearm({
+      book: primary,
+      held,
+      clientOrderId: 'r1',
+      stop: 21,
+      target: 18,
+    });
+    expect(await paper.submit(rearm)).toEqual({
+      outcome: 'submitted',
+      detail: 'submitted',
+      approvalId: 'rearm:r1:6',
+    });
+    expect(alpaca.rearmProtectiveLegs).toHaveBeenCalledWith('c0', 'AAPL', 'buy', 6, 21, 18);
   });
 
   it('rejects a primary order with no broker for its venue and a broker error', async () => {

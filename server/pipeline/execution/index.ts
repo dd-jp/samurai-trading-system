@@ -85,6 +85,7 @@ export type {
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
+  ProtectedExitRequest,
   ReconcileDivergence,
   ReconcileReport,
   ResidualProtectionSweepResult,

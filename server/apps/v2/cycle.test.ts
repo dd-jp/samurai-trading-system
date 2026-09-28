@@ -12,6 +12,8 @@ import type {
   BrokerAdapter,
   NativeBracketRequest,
   NormalizedFill,
+  NormalizedOrder,
+  ProtectedExitRequest,
 } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { type LogEntry, SimulatedClock, toBrokerFillId } from '../../shared/index.js';
@@ -98,7 +100,7 @@ class FakeAlpaca implements BrokerAdapter {
     return Promise.resolve(null);
   }
 
-  resumeFlatten(): Promise<null> {
+  resumeFlatten(_clientOrderId?: string, _instrument?: string): Promise<NormalizedOrder | null> {
     return Promise.resolve(null);
   }
 
@@ -111,7 +113,14 @@ class FakeAlpaca implements BrokerAdapter {
     return Promise.resolve();
   }
 
-  rearmProtectiveLegs(): Promise<void> {
+  rearmProtectiveLegs(
+    _clientOrderId?: string,
+    _instrument?: string,
+    _side?: 'buy' | 'sell',
+    _qty?: number,
+    _stop?: number,
+    _target?: number,
+  ): Promise<void> {
     return Promise.resolve();
   }
 
@@ -1729,6 +1738,229 @@ describe('runCycle under a manual control', () => {
     const resumed = await runCycle(deps, '2026-09-30');
     expect(sizeShares(deps, 'debate/primary', '2026-09-30', 'MSFT')).toBe(0);
     expect(resumed.books[0]?.size_multiplier).toBe(0);
+  });
+});
+
+describe('runCycle: protected exits carry a native Alpaca bracket safely (#1801)', () => {
+  const TEN_MARKS = [
+    '2026-09-28',
+    '2026-09-29',
+    '2026-09-30',
+    '2026-10-01',
+    '2026-10-02',
+    '2026-10-05',
+    '2026-10-06',
+    '2026-10-07',
+    '2026-10-08',
+  ];
+
+  class FakeAlpacaProtected extends FakeAlpaca {
+    readonly protectedExits: ProtectedExitRequest[] = [];
+    readonly rearms: {
+      clientOrderId: string;
+      instrument: string;
+      side: 'buy' | 'sell';
+      qty: number;
+      stop: number;
+      target: number;
+    }[] = [];
+    protectedExitResult: (request: ProtectedExitRequest) => BrokerAck = (request) => ({
+      client_order_id: request.clientOrderId,
+      broker_order_ids: ['pf1'],
+      order_state: 'submitted',
+    });
+    protectedExitError: Error | undefined;
+    resumeResult: NormalizedOrder | null | undefined;
+
+    submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
+      this.protectedExits.push(request);
+      if (this.protectedExitError !== undefined) return Promise.reject(this.protectedExitError);
+      return Promise.resolve(this.protectedExitResult(request));
+    }
+
+    override resumeFlatten(
+      clientOrderId: string,
+      instrument: string,
+    ): Promise<NormalizedOrder | null> {
+      if (this.resumeResult !== undefined) return Promise.resolve(this.resumeResult);
+      return super.resumeFlatten(clientOrderId, instrument);
+    }
+
+    override rearmProtectiveLegs(
+      clientOrderId: string,
+      instrument: string,
+      side: 'buy' | 'sell',
+      qty: number,
+      stop: number,
+      target: number,
+    ): Promise<void> {
+      this.rearms.push({ clientOrderId, instrument, side, qty, stop, target });
+      return Promise.resolve();
+    }
+  }
+
+  function refusalRows(deps: CycleDeps, tradingDate: string, scope: string) {
+    const db = (
+      deps.journal as unknown as {
+        db: { prepare: (sql: string) => { all: (date: string, scope: string) => unknown[] } };
+      }
+    ).db;
+    return db
+      .prepare(
+        'SELECT parameter, message, ticket FROM v2_refusals WHERE trading_date = ? AND scope = ?',
+      )
+      .all(tradingDate, scope) as { parameter: string; message: string; ticket: string }[];
+  }
+
+  it('kill line: a time stop closes a bracket-protected position through submitProtectedExit, carrying the entry id and native rearm prices', async () => {
+    const alpaca = new FakeAlpacaProtected();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    for (const date of [...TEN_MARKS, '2026-10-09']) await runCycle(deps, date);
+    const timeStop = await runCycle(deps, '2026-10-12');
+
+    expect(timeStop.exits).toBe(2);
+    expect(alpaca.protectedExits).toHaveLength(1);
+    const entryOrder = deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL');
+    expect(alpaca.protectedExits[0]).toEqual({
+      entryClientOrderId: 'v2-debate-primary-2026-09-25-AAPL',
+      clientOrderId: 'v2-debate-primary-2026-10-12-AAPL-exit',
+      instrument: 'AAPL',
+      side: 'sell',
+      size: 6,
+      rearm: { stop: entryOrder?.payload.stop, target: entryOrder?.payload.target },
+    });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-10-12-AAPL-exit',
+    );
+  });
+
+  it('kill line: a manual halt closes a bracket-protected position through submitProtectedExit', async () => {
+    const alpaca = new FakeAlpacaProtected();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    const report = await runCycle(deps, '2026-09-28');
+
+    expect(report).toMatchObject({ exits: 2, submitted_orders: 1 });
+    expect(alpaca.protectedExits).toHaveLength(1);
+    expect(alpaca.protectedExits[0]).toMatchObject({
+      entryClientOrderId: 'v2-debate-primary-2026-09-25-AAPL',
+      clientOrderId: 'v2-debate-primary-2026-09-28-AAPL-exit',
+      side: 'sell',
+      size: 6,
+    });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-28-AAPL-exit',
+    );
+  });
+
+  it('a day flatten that expires with the position still held clears the exit marker, re-arms the protective legs, and retries the exit the same cycle while still halted', async () => {
+    const alpaca = new FakeAlpacaProtected();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-28-AAPL-exit',
+    );
+
+    alpaca.resumeResult = {
+      client_order_id: 'v2-debate-primary-2026-09-28-AAPL-exit',
+      broker_order_ids: ['pf1'],
+      order_state: 'expired',
+      filled_qty: 0,
+    };
+    const next = await runCycle(deps, '2026-09-29');
+
+    expect(alpaca.rearms).toHaveLength(1);
+    const entryOrder = deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL');
+    expect(alpaca.rearms[0]).toEqual({
+      clientOrderId: 'v2-debate-primary-2026-09-25-AAPL',
+      instrument: 'AAPL',
+      side: 'buy',
+      qty: 6,
+      stop: entryOrder?.payload.stop,
+      target: entryOrder?.payload.target,
+    });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-rearm')).toMatchObject({
+      outcome: 'submitted',
+      payload: {
+        exit_client_order_id: 'v2-debate-primary-2026-09-28-AAPL-exit',
+      },
+    });
+
+    // still halted: the position is retried for exit within the SAME cycle, never left
+    // unprotected or unattended across a cycle boundary
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-29-AAPL-exit',
+    );
+    expect(alpaca.protectedExits.map((request) => request.clientOrderId)).toEqual([
+      'v2-debate-primary-2026-09-28-AAPL-exit',
+      'v2-debate-primary-2026-09-29-AAPL-exit',
+    ]);
+    expect(next.submitted_orders).toBeGreaterThanOrEqual(2);
+
+    alpaca.resumeResult = undefined;
+    alpaca.fill('v2-debate-primary-2026-09-29-AAPL-exit', 'exit', 6, 20);
+    const resumed = await runCycle(deps, '2026-09-30');
+    expect(resumed.fills).toBeGreaterThanOrEqual(1);
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+  });
+
+  it('journals a REARM_BACKSTOP refusal and does not guess when a backstop rearm has no journalled native price', async () => {
+    const alpaca = new FakeAlpacaProtected();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    const realOrderFor = deps.journal.orderFor.bind(deps.journal);
+    vi.spyOn(deps.journal, 'orderFor').mockImplementation((clientOrderId: string) => {
+      const order = realOrderFor(clientOrderId);
+      if (order === undefined || clientOrderId !== 'v2-debate-primary-2026-09-25-AAPL')
+        return order;
+      return { ...order, payload: { ...order.payload, stop: undefined, target: undefined } };
+    });
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+
+    alpaca.resumeResult = {
+      client_order_id: 'v2-debate-primary-2026-09-28-AAPL-exit',
+      broker_order_ids: ['pf1'],
+      order_state: 'expired',
+      filled_qty: 0,
+    };
+    const next = await runCycle(deps, '2026-09-29');
+
+    expect(alpaca.rearms).toHaveLength(0);
+    expect(refusalRows(deps, '2026-09-29', 'execution')).toContainEqual(
+      expect.objectContaining({ parameter: 'REARM_BACKSTOP', ticket: '#1801' }),
+    );
+    expect(next.refusals.some((refusal) => refusal.includes('UNPROTECTED'))).toBe(true);
+    // the backstop declines to guess, but the marker was still cleared, so the ordinary
+    // halt-exit re-evaluation immediately retries the flatten within the same cycle
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-29-AAPL-exit',
+    );
+  });
+
+  it('re-arms inline and re-throws when the day flatten submission itself fails, leaving no exit pending', async () => {
+    const alpaca = new FakeAlpacaProtected();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    alpaca.protectedExitError = new Error('venue closed');
+    const rejected = await runCycle(deps, '2026-09-28');
+
+    expect(rejected).toMatchObject({ rejected_orders: 1 });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBeUndefined();
+    alpaca.protectedExitError = undefined;
+    await runCycle(deps, '2026-09-29');
+    expect(alpaca.protectedExits).toHaveLength(2);
   });
 });
 
