@@ -219,6 +219,20 @@ Asked in the same chat session to choose between v1 (frozen runtime), v2 (this p
 
 Build tickets from the same session: [#1848](https://github.com/dd-jp/samurai-trading-system/issues/1848) (AccountKey-scoped Saxo reads), [#1849](https://github.com/dd-jp/samurai-trading-system/issues/1849) (Saxo CFD venue path), [#1850](https://github.com/dd-jp/samurai-trading-system/issues/1850) (CFD cost model), [#1851](https://github.com/dd-jp/samurai-trading-system/issues/1851) (daily Saxo bar refresh).
 
+## Rulings of 2026-09-28 — v3 feature evidence
+
+A session on David's Mac tested each v3 candidate against the v2 baseline, outside the repo (report at ~/samurai-scratch/v3-evidence/report.md on the Mac). Entries used a pre-declared fallback rule because `ARM2_ENTRY_THRESHOLDS` is unset; in-sample 2016–2022, out-of-sample 2023–2026-09; path noise on the baseline about 0.25 OOS Sharpe (2 sd). Results: tiered exits FAIL (OOS Sharpe 0.83 and 1.05 vs 0.94); regime and VWAP filters FAIL (SMA200 0.76, ADX 0.95; VWAP −0.14 vs 1.20 on 50 names); opening-range and gap-and-go FAIL (−0.08, −0.89); v3 loss controls FAIL the gate (Sharpe 1.30 vs 0.94, drawdown 6.9% vs 17.5%, return 32% vs 88%, negative in-sample Sharpe); stale-price guard INCONCLUSIVE (at 1 ATR it blocked a +1.27R winner); mirrored shorts FAIL (OOS Sharpe −1.77 short-only, −0.91 combined, negative at 0% financing). The 13 MrMTrades signals were scored as anecdote only (12 filled, 6 won, total 0.19R). Asked one question at a time; each answer is the option David chose.
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| Loss controls | Adopt v3's 3%/6% halts and position/sector caps for lower drawdown? | **"Reject; test vol-target later (Recommended)"**. G6 stands; lower drawdown is pursued later as its own pre-declared trial (volatility-targeted sizing), not v3's halts. |
+| Post-hoc addenda | A1 (data-gap exit) and A3 (T6c/T6d, added after seeing T6a/T6b) | **"A1 if baseline too; A3 exploratory (Recommended)"**. A1 counts only as a simulator fix applied to baseline and candidates alike; A3 is counted as trials and is never grounds for adoption. |
+| Trial count | Which count the deflated Sharpe uses | **"Highest defensible: every run (Recommended)"**: every run made, prior trials included. |
+| Stand-in entries | Does the fallback entry rule stand in for the debate? | **"Valid for all"**: every verdict above applies to the debate sleeve. |
+| Shorts and CFDs | After the mirrored-shorts FAIL, what happens to shorts and the CFD build ([#1849](https://github.com/dd-jp/samurai-trading-system/issues/1849))? | David: *"build shorts and cfd"*. #1849 proceeds; shorts remain a counted trial against arm 2 (Q17). |
+| Failed candidates | Disposition of tiered exits, the stale-price guard and the intraday filters and setups | **"Close #1853, park #1854, G2 stands (Recommended)"**: [#1853](https://github.com/dd-jp/samurai-trading-system/issues/1853) closed; [#1854](https://github.com/dd-jp/samurai-trading-system/issues/1854) parked until an external-signal path exists; VWAP, regime, opening-range and gap-and-go dropped; G2 (no intraday sleeve) unchanged. |
+| Telegram commands | Build [#1852](https://github.com/dd-jp/samurai-trading-system/issues/1852), given the dashboard already has pause/halt/resume? | **"Build before paper"**: phone control through Telegram, kill line before Step 4b. |
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
