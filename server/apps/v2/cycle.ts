@@ -727,11 +727,11 @@ class Cycle {
     decision: SleeveDecision,
     decisionId: string,
     approval: EntryApproval,
-  ): Promise<void> {
+  ): Promise<OrderOutcome | undefined> {
     const clientOrderId = this.entryOrderId(book, decision.instrument);
-    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
-    if (this.deps.books.position(book.id, decision.instrument) !== undefined) return;
-    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return;
+    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return undefined;
+    if (this.deps.books.position(book.id, decision.instrument) !== undefined) return undefined;
+    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return undefined;
     this.tally.entries += 1;
     const submission: Submission =
       approval.order === undefined
@@ -758,6 +758,7 @@ class Cycle {
         approval: approval.order === undefined ? undefined : submission.approvalId,
       },
     });
+    return submission.outcome;
   }
 
   notionalGbp(decision: SleeveDecision, size: number): number {
@@ -833,8 +834,10 @@ class Cycle {
     );
     if (gated.order === undefined) this.journalSizingRefusal(book, decision, gated.refusal);
     if (gated.size <= 0) return;
-    if (gated.order !== undefined) charge();
-    await this.submitEntry(book, decision, decisionId, gated);
+    const outcome = await this.submitEntry(book, decision, decisionId, gated);
+    // A broker-level 'rejected' never rests (journal.restingEntries excludes it), so it must
+    // never reserve cash against later decisions in this same cycle (doc 66 2026-09-28, #1785)
+    if (gated.order !== undefined && outcome !== undefined && outcome !== 'rejected') charge();
   }
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {

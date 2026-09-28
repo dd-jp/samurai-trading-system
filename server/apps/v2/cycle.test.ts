@@ -2659,4 +2659,28 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     expect(last?.outcome).toBe('rejected');
     expect(last?.payload.detail).toBe('insufficient_cash');
   });
+
+  it('does not reserve cash for an entry the broker genuinely rejects, so later entries in the same cycle still fund (doc 66 2026-09-28, #1785)', async () => {
+    const deps = harness(decisions, true);
+    const realSubmit = deps.executor.submit.bind(deps.executor);
+    vi.spyOn(deps.executor, 'submit').mockImplementation((order) =>
+      order.instrument === 'SYM0'
+        ? Promise.resolve({
+            outcome: 'rejected',
+            detail: 'stub_broker_rejection',
+            approvalId: order.approvalId,
+          })
+        : realSubmit(order),
+    );
+    await runCycle(deps, '2026-09-25');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM0')?.outcome).toBe('rejected');
+    // SYM0 was approved (sized, cash-gated) but the broker rejected it, so its £96 must never be
+    // charged: the real £1,000 still funds all 10 remaining entries (£960). Charging it anyway
+    // (the pre-fix bug) leaves £904, which fits only 9 and wrongly refuses SYM10 as insufficient_cash
+    for (const instrument of instruments.slice(1)) {
+      expect(deps.journal.orderFor(`v2-debate-primary-2026-09-25-${instrument}`)?.outcome).toBe(
+        'refused_dry_run',
+      );
+    }
+  });
 });
