@@ -6,7 +6,9 @@ import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import {
   barsBefore,
+  calendarReferenceFor,
   currentConstituents,
+  MultiVenueBarsSource,
   ParquetBarsSource,
   sessionsBefore,
   windowCovered,
@@ -55,6 +57,29 @@ describe('ParquetBarsSource', () => {
     expect(source.load('ISF')).toBeUndefined();
     expect(source.load('ZZZZ')).toBeUndefined();
   });
+
+  it('primes an optional venue to an empty series set instead of throwing when it has none', async () => {
+    directory = mkdtempSync(join(tmpdir(), 'v2-bars-'));
+    const source = new ParquetBarsSource(join(directory, 'absent'), 'saxo', { optional: true });
+    await expect(source.prime()).resolves.toBeUndefined();
+    expect(source.load('ISF')).toBeUndefined();
+  });
+});
+
+describe('MultiVenueBarsSource', () => {
+  it('unions sources by symbol, the first source with a series winning', () => {
+    const alpaca = {
+      load: (symbol: string) => (symbol === 'AAPL' ? series('AAPL', 1, 1, 1) : undefined),
+    };
+    const saxo = {
+      load: (symbol: string) =>
+        symbol === 'ISF' || symbol === 'AAPL' ? series(symbol, 1, 2, 2) : undefined,
+    };
+    const bars = new MultiVenueBarsSource([alpaca, saxo]);
+    expect(bars.load('AAPL')).toEqual(series('AAPL', 1, 1, 1));
+    expect(bars.load('ISF')).toEqual(series('ISF', 1, 2, 2));
+    expect(bars.load('ZZZZ')).toBeUndefined();
+  });
 });
 
 describe('currentConstituents', () => {
@@ -90,6 +115,13 @@ describe('coverage invariant', () => {
   });
 });
 
+describe('calendarReferenceFor', () => {
+  it('reads saxo off ISF and every other venue off SPY', () => {
+    expect(calendarReferenceFor('saxo')).toBe('ISF');
+    expect(calendarReferenceFor('alpaca')).toBe('SPY');
+  });
+});
+
 describe('window coverage against the SPY calendar (#1791)', () => {
   const spy = series('SPY', 25, 1, 1);
   const calendar = { load: (symbol: string) => (symbol === 'SPY' ? spy : undefined) };
@@ -120,6 +152,13 @@ describe('window coverage against the SPY calendar (#1791)', () => {
     expect(windowCovered(history.slice(-19), sessions, 19)).toBe(true);
     expect(windowCovered(history.slice(-19), sessions, 20)).toBe(false);
     expect(windowCovered(history, sessions, 26)).toBe(false);
+  });
+
+  it('reads sessions off a chosen reference symbol, not just SPY', () => {
+    const isf = series('ISF', 25, 1, 1);
+    const source = { load: (symbol: string) => (symbol === 'ISF' ? isf : undefined) };
+    expect(sessionsBefore(source, '2026-09-26', 'ISF')).toHaveLength(25);
+    expect(sessionsBefore(source, '2026-09-26')).toEqual([]);
   });
 
   it('ignores a bar on a date the calendar lacks', () => {

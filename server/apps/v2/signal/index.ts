@@ -2,6 +2,7 @@ export { type CandleFeatures, candleFeatures, candleLine } from './candle.js';
 export { createDebateSleeve } from './debate-sleeve.js';
 export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 export { NousPinnedTransport } from './llm-transport.js';
+export { isLseInstrument } from './lse-lines.js';
 export { ALL_PINS, type ModelPin } from './models.js';
 export { SqliteMonthlySpendCap, utcMonthStart } from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';

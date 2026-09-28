@@ -1,3 +1,4 @@
+import type { Venue } from '../../../../contracts/index.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { coverageSatisfied, windowCoverage } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
@@ -7,12 +8,20 @@ export interface BarsSource {
   load(symbol: string): BarSeries | undefined;
 }
 
+export interface ParquetBarsSourceOptions {
+  // an optional venue primes to an empty series set rather than throwing when
+  // its store directory is missing or empty (e.g. saxo in a fixture that only
+  // seeds alpaca)
+  readonly optional?: boolean;
+}
+
 export class ParquetBarsSource implements BarsSource {
   #series: ReadonlyMap<string, BarSeries> | undefined;
 
   constructor(
     private readonly root: string,
     private readonly venue: string,
+    private readonly options: ParquetBarsSourceOptions = {},
   ) {}
 
   async prime(): Promise<void> {
@@ -20,7 +29,9 @@ export class ParquetBarsSource implements BarsSource {
     const store = await ParquetBarStore.open(this.root);
     try {
       const series = await store.readVenue(this.venue);
-      if (series.size === 0) throw new Error(`bars: no ${this.venue} series under ${this.root}`);
+      if (series.size === 0 && this.options.optional !== true) {
+        throw new Error(`bars: no ${this.venue} series under ${this.root}`);
+      }
       this.#series = series;
     } finally {
       store.close();
@@ -32,6 +43,20 @@ export class ParquetBarsSource implements BarsSource {
       throw new Error(`bars: ${this.venue} read before prime()`);
     }
     return this.#series.get(symbol);
+  }
+}
+
+// Unions per-venue sources by symbol: alpaca tickers and LSE tidms are disjoint
+// namespaces, so the first source with a series for a symbol wins
+export class MultiVenueBarsSource implements BarsSource {
+  constructor(private readonly sources: readonly BarsSource[]) {}
+
+  load(symbol: string): BarSeries | undefined {
+    for (const source of this.sources) {
+      const series = source.load(symbol);
+      if (series !== undefined) return series;
+    }
+    return undefined;
   }
 }
 
@@ -62,9 +87,22 @@ export function isFresh(last: DailyBar | undefined, tradingDate: string): last i
 }
 
 export const CALENDAR_REFERENCE = 'SPY';
+export const LSE_CALENDAR_REFERENCE = 'ISF';
 
-export function sessionsBefore(bars: BarsSource, tradingDate: string): readonly string[] {
-  const reference = bars.load(CALENDAR_REFERENCE);
+// LSE and US trading calendars diverge on each venue's own bank holidays (UK early
+// May/spring/summer bank holidays, Boxing Day; US Presidents' Day, Juneteenth, etc)
+// windowCovered's 95% ratio makes an SPY-keyed calendar fail almost every LSE name
+// over a 200-session window, so each venue reads sessions off its own reference line
+export function calendarReferenceFor(venue: Venue): string {
+  return venue === 'saxo' ? LSE_CALENDAR_REFERENCE : CALENDAR_REFERENCE;
+}
+
+export function sessionsBefore(
+  bars: BarsSource,
+  tradingDate: string,
+  referenceSymbol: string = CALENDAR_REFERENCE,
+): readonly string[] {
+  const reference = bars.load(referenceSymbol);
   const history = reference === undefined ? [] : barsBefore(reference, tradingDate);
   return isFresh(history.at(-1), tradingDate) ? history.map((bar) => bar.date) : [];
 }

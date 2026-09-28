@@ -31,7 +31,7 @@ export interface UniverseSelection {
   readonly refusals: readonly UnsetParameterError[];
 }
 
-function coveredHistory(
+export function coveredHistory(
   bars: BarsSource,
   symbol: string,
   tradingDate: string,

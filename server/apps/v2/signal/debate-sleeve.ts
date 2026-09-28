@@ -28,11 +28,12 @@ import { averageTrueRange, trailingReturn } from '../../../pipeline/momentum/ind
 import type { Clock, Logger } from '../../../shared/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { BarsSource, NewsSource } from '../data/index.js';
-import { barsBefore, sessionsBefore, windowCovered } from '../data/index.js';
+import { barsBefore, calendarReferenceFor, sessionsBefore, windowCovered } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
 import { candleFeatures, candleLine } from './candle.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
+import { selectLseUniverse } from './lse-universe.js';
 import {
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
@@ -351,7 +352,8 @@ async function decideOne(
   const traceId = `v2-${context.tradingDate}-${symbol}`;
   const read = technicalRead(history, traceId, deps.clock.now());
   if (read === undefined) return skipped(symbol, venue, undefined, '', 'no_bars');
-  if (!windowCovered(history, sessionsBefore(deps.bars, context.tradingDate), SMA_LONG_WINDOW)) {
+  const sessions = sessionsBefore(deps.bars, context.tradingDate, calendarReferenceFor(venue));
+  if (!windowCovered(history, sessions, SMA_LONG_WINDOW)) {
     return skipped(symbol, venue, read, '', 'window_coverage');
   }
   const news = await fetchHeadlines(deps, symbol, context.tradingDate);
@@ -386,9 +388,10 @@ export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
         deps.bars,
         context.tradingDate,
       );
+      const lse = selectLseUniverse(deps.bars, context.tradingDate);
       return {
-        instruments: [...selection.liquidity, ...selection.movers],
-        refusals: selection.refusals.map((refusal) => ({
+        instruments: [...selection.liquidity, ...selection.movers, ...lse.instruments],
+        refusals: [...selection.refusals, ...lse.refusals].map((refusal) => ({
           scope: 'universe',
           parameter: refusal.parameter,
           ticket: refusal.ticket,

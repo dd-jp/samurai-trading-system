@@ -11,9 +11,11 @@ import {
   G18_SMALL_CAP_FLOORS,
   G18_SOCIAL_SOURCE,
   isSet,
+  LSE_LIQUIDITY_SCREEN,
   MOVERS_MIN_DOLLAR_VOLUME_USD,
   type Parameter,
   requireSet,
+  SAXO_APPROPRIATENESS_TEST_TAKEN,
   SHORTS_ENABLED,
   UNSET,
   UnsetParameterError,
@@ -27,6 +29,7 @@ describe('parameters', () => {
       G18_SENTIMENT_DEDUP_RULE,
       ALPACA_SHORT_EQUITY_FLOOR_USD,
       ARM2_ENTRY_THRESHOLDS,
+      LSE_LIQUIDITY_SCREEN,
     ]);
     expect(CYCLE_LEVEL_PARAMETERS).toEqual([
       ARM2_ENTRY_THRESHOLDS,
@@ -71,5 +74,9 @@ describe('parameters', () => {
 
   it('shorts are off', () => {
     expect(SHORTS_ENABLED).toBe(false);
+  });
+
+  it('the Saxo appropriateness test is not yet recorded as taken (doc 66 ruling (l))', () => {
+    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(false);
   });
 });

@@ -31,3 +31,15 @@ export class AlpacaNewsSource implements NewsSource {
     return perNameHeadlines(await this.client.fetchNews([symbol], start, now));
   }
 }
+
+// doc 66 G18(2): "Polymarket and LSE news are skipped for now" — no underlying-key
+// mapping exists for the 22 diversified LSE index/commodity/bond ETFs (unlike the
+// leveraged single-stock-proxy ETPs #522/#960 built the underlying-key pattern for)
+export function newsForVenue(inner: NewsSource, isLse: (symbol: string) => boolean): NewsSource {
+  return {
+    headlines: (symbol, tradingDate, now) =>
+      isLse(symbol)
+        ? NO_NEWS.headlines(symbol, tradingDate, now)
+        : inner.headlines(symbol, tradingDate, now),
+  };
+}
