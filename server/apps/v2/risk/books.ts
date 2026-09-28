@@ -160,7 +160,6 @@ export class PaperBooks implements BookLedger {
   }
 
   #replayAccount(budget: LossBudget, primaryIds: readonly string[]): void {
-    if (primaryIds.length === 0) return;
     const lastKnown = new Map<string, number>(
       primaryIds.map((id) => [id, this.#startCapital(id) ?? 0]),
     );
@@ -208,9 +207,9 @@ export class PaperBooks implements BookLedger {
   settlePrimaryBudgets(tradingDate: string): void {
     const budget = this.#accountBudget;
     if (budget === undefined) return;
-    const primaryIds = this.#primaryIds();
-    if (primaryIds.length === 0) return;
-    const days = primaryIds.map((id) => this.#markedDay(id, tradingDate));
+    // #accountBudget is only ever set when #primaryIds() was non-empty at construction
+    // (#openAccountBudget), and #specs never changes after that, so it still is here
+    const days = this.#primaryIds().map((id) => this.#markedDay(id, tradingDate));
     const equityGbp = days.reduce((total, day) => total + day.equityGbp, 0);
     const state = this.#advanceAccountBudget(budget, equityGbp, tradingDate);
     for (const day of days) {

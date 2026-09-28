@@ -425,6 +425,27 @@ describe('PaperBooks', () => {
       });
       db.close();
     });
+
+    it('resets the pooled halt at the calendar year boundary, same as each book resets its own', () => {
+      const books = twoPrimaries(openSharedStore(':memory:'));
+      lose(books, 'debate/primary', '2026-12-31', 1_000, 'a');
+      lose(books, 'trend/primary', '2026-12-31', 600, 'b');
+      books.settlePrimaryBudgets('2026-12-31');
+      expect(books.lastDay('trend/primary')?.state).toMatchObject({ halted: true, sizeMultiplier: 0 });
+
+      books.markDay('debate/primary', '2027-01-04', flat, 4);
+      books.markDay('trend/primary', '2027-01-04', flat, 4);
+      books.settlePrimaryBudgets('2027-01-04');
+
+      expect(books.lastDay('debate/primary')?.state).toMatchObject({
+        halted: false,
+        sizeMultiplier: 1,
+      });
+      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+        halted: false,
+        sizeMultiplier: 1,
+      });
+    });
   });
 
   it('resets the reference equity at the calendar year boundary', () => {
