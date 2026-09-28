@@ -409,6 +409,15 @@ describe('PaperBooks', () => {
       );
     });
 
+    it('settlePrimaryBudgets refuses to settle a primary that has never been marked at all', () => {
+      const books = twoPrimaries(openSharedStore(':memory:'));
+      books.markDay('debate/primary', '2026-09-25', flat, 0);
+
+      expect(() => books.settlePrimaryBudgets('2026-09-25')).toThrow(
+        /settlePrimaryBudgets\(2026-09-25\) called before trend\/primary was marked/,
+      );
+    });
+
     it('settleLastPrimaryMark is a no-op when no primary book has any capital', () => {
       const noPrimaryCapital: readonly Pick<Sleeve, 'id' | 'spec'>[] = [
         { id: 'debate', spec: { ...DEBATE_SPEC, minimumCapitalGbp: Number.POSITIVE_INFINITY } },
