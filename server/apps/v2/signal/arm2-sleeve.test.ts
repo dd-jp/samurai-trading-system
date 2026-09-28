@@ -5,7 +5,7 @@ import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { addDays } from '../data/index.js';
 import { createArm2Sleeve } from './arm2-sleeve.js';
-import { resolveTechnical, technicalRead } from './debate-sleeve.js';
+import { technicalRead } from './debate-sleeve.js';
 import { ARM2_ENTRY_THRESHOLDS, ARM2_SLEEVE_SPEC, requireSet } from './parameters.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
@@ -56,7 +56,7 @@ async function decideAll(sleeve: Sleeve, context: SleeveContext): Promise<Sleeve
 }
 
 describe('createArm2Sleeve', () => {
-  it('enters long on a bullish technical read with a 2-ATR stop, and makes no LLM call', async () => {
+  it('enters long on a bullish technical read with a 2-ATR stop', async () => {
     const series = trending('UP', 260, 0.001);
     const sleeve = createArm2Sleeve({
       bars: source([series]),
@@ -111,9 +111,35 @@ describe('createArm2Sleeve', () => {
     const neutral = output.decisions.find((decision) => decision.instrument === 'FLAT');
     expect(neutral).toMatchObject({
       direction: 'neutral',
+      confidence: 0.5,
       action: 'none',
       reason: 'technical neutral',
     });
+  });
+
+  it('hashes only the last 200 bars of history, tagged apart from the debate sleeve (#1773)', async () => {
+    const base = trending('UP', 260, 0.001);
+    const decide = async (series: BarSeries) => {
+      const sleeve = createArm2Sleeve({
+        bars: source([series]),
+        constituents: () => ['UP'],
+        venueFor: () => 'alpaca',
+        clock,
+      });
+      const output = await decideAll(sleeve, {
+        tradingDate: nextDate(series),
+        macroDay: false,
+        dryRun: true,
+      });
+      return output.decisions[0]?.inputs_hash;
+    };
+    const retouch = (index: number): BarSeries => ({
+      symbol: base.symbol,
+      bars: base.bars.map((bar, i) => (i === index ? { ...bar, open: bar.open * 1.5 } : bar)),
+    });
+    const reference = await decide(base);
+    expect(await decide(retouch(59))).toBe(reference);
+    expect(await decide(retouch(60))).not.toBe(reference);
   });
 
   it('skips a name whose 200-session window is not covered, before any decision', async () => {
@@ -138,25 +164,28 @@ describe('createArm2Sleeve', () => {
     });
   });
 
-  it('resolveTechnical reports no_bars for a symbol with no series, tagged with the caller sleeve elsewhere', () => {
-    const outcome = resolveTechnical(
-      source([]),
-      () => 'alpaca',
-      'NOBARS',
-      '2026-01-01',
-      clock.now(),
-    );
-    expect(outcome).toMatchObject({ ok: false, reason: 'no_bars' });
-  });
-
-  it("reproduces the debate sleeve's own zero-threshold technical read exactly (#1773 parity)", () => {
-    const bullish = technicalRead(trending('UP', 260, 0.001).bars, 't', clock.now());
-    const bearish = technicalRead(trending('DOWN', 260, -0.001).bars, 't', clock.now());
-    const flat = technicalRead(trending('FLAT', 30, 0.001).bars, 't', clock.now());
+  it("reproduces the debate sleeve's own zero-threshold technical read exactly (#1773 parity)", async () => {
     expect(requireSet(ARM2_ENTRY_THRESHOLDS)).toEqual({ longAbove: 0, shortBelow: 0 });
-    expect(bullish?.view.direction).toBe('bullish');
-    expect(bearish?.view.direction).toBe('bearish');
-    expect(flat?.view.direction).toBe('neutral');
+    const cases: ReadonlyArray<readonly [string, BarSeries]> = [
+      ['UP', trending('UP', 260, 0.001)],
+      ['DOWN', trending('DOWN', 260, -0.001)],
+      ['FLAT', trending('FLAT', 260, 0)],
+    ];
+    for (const [symbol, series] of cases) {
+      const sleeve = createArm2Sleeve({
+        bars: source([series]),
+        constituents: () => [symbol],
+        venueFor: () => 'alpaca',
+        clock,
+      });
+      const output = await decideAll(sleeve, {
+        tradingDate: nextDate(series),
+        macroDay: false,
+        dryRun: true,
+      });
+      const expected = technicalRead(series.bars, 't', clock.now());
+      expect(output.decisions[0]?.direction).toBe(expected?.view.direction);
+    }
   });
 
   it('uses the same universe as the debate sleeve, and its own sleeve id', async () => {
