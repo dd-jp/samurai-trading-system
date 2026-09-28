@@ -200,6 +200,7 @@ export interface BookLedger {
     markGbp: MarkPriceGbp,
     calendarDaysSinceLastMark: number,
   ): BookDay;
+  settlePrimaryBudgets(tradingDate: string): void;
 }
 
 declare const riskApproved: unique symbol;

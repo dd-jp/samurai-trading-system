@@ -325,6 +325,108 @@ describe('PaperBooks', () => {
     });
   });
 
+  describe('#1799: account-wide pooling across primary books', () => {
+    const TWO_PRIMARIES: readonly Pick<Sleeve, 'id' | 'spec'>[] = [
+      { id: 'debate', spec: { ...DEBATE_SPEC, capitalShare: 0.5 } },
+      { id: 'trend', spec: { ...DEBATE_SPEC, capitalShare: 0.5 } },
+    ];
+    const seedTwoPrimaries = (db: StoreHandle) => {
+      new CapitalConfigStore(db, clock).setYear(2026, 1_500, 1_500);
+    };
+    const twoPrimaries = (db: StoreHandle, openingDate = '2026-09-25') => {
+      seedTwoPrimaries(db);
+      return openBooks(db, openingDate, TWO_PRIMARIES);
+    };
+    const lose = (
+      books: PaperBooks,
+      bookId: string,
+      date: string,
+      loss: number,
+      orderId: string,
+    ) => {
+      books.applyFill(bookId, fill({ qty: 1, priceGbp: 100 + loss, clientOrderId: orderId }));
+      books.applyFill(
+        bookId,
+        fill({ side: 'sell', qty: 1, priceGbp: 100, clientOrderId: orderId }),
+      );
+      return books.markDay(bookId, date, flat, 1).state;
+    };
+
+    it('halts both primaries once their summed loss crosses the full cap, though only one crossed its own share', () => {
+      const books = twoPrimaries(openSharedStore(':memory:'));
+      expect(books.cash('debate/primary')).toBe(750);
+      expect(lose(books, 'debate/primary', '2026-09-25', 1_000, 'a')).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+      expect(lose(books, 'trend/primary', '2026-09-25', 600, 'b')).toMatchObject({
+        halted: false,
+        sizeMultiplier: 0.25,
+      });
+
+      books.settlePrimaryBudgets('2026-09-25');
+
+      expect(books.lastDay('debate/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+    });
+
+    it('steps a primary down to the pooled half-size mark though it took no loss of its own', () => {
+      const books = twoPrimaries(openSharedStore(':memory:'));
+      expect(lose(books, 'debate/primary', '2026-09-25', 700, 'a')).toMatchObject({
+        sizeMultiplier: 0.25,
+      });
+      expect(books.markDay('trend/primary', '2026-09-25', flat, 1).state).toMatchObject({
+        sizeMultiplier: 1,
+      });
+
+      books.settlePrimaryBudgets('2026-09-25');
+
+      expect(books.lastDay('debate/primary')?.state.sizeMultiplier).toBe(0.25);
+      expect(books.lastDay('trend/primary')?.state.sizeMultiplier).toBe(0.5);
+    });
+
+    it('leaves a shadow book on its own independent budget, unpooled', () => {
+      const books = twoPrimaries(openSharedStore(':memory:'));
+      lose(books, 'debate/primary', '2026-09-25', 1_000, 'a');
+      lose(books, 'trend/primary', '2026-09-25', 600, 'b');
+      expect(lose(books, 'debate/no-macro-gate', '2026-09-25', 700, 'c')).toMatchObject({
+        sizeMultiplier: 0.25,
+      });
+
+      books.settlePrimaryBudgets('2026-09-25');
+
+      expect(books.lastDay('debate/no-macro-gate')?.state.sizeMultiplier).toBe(0.25);
+    });
+
+    it('keeps the pooled halt sticky across a restart even once every book recovers', () => {
+      const db = openSharedStore(':memory:');
+      const first = twoPrimaries(db);
+      lose(first, 'debate/primary', '2026-09-25', 1_000, 'a');
+      lose(first, 'trend/primary', '2026-09-25', 600, 'b');
+      first.settlePrimaryBudgets('2026-09-25');
+      expect(first.lastDay('trend/primary')?.state.sizeMultiplier).toBe(0);
+
+      const second = openBooks(db, '2026-09-26', TWO_PRIMARIES);
+      lose(second, 'debate/primary', '2026-09-26', -1_000, 'c');
+      const trendOwnState = lose(second, 'trend/primary', '2026-09-26', -600, 'd');
+      expect(trendOwnState).toMatchObject({ sizeMultiplier: 1, halted: false });
+
+      second.settlePrimaryBudgets('2026-09-26');
+
+      expect(second.lastDay('trend/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+      db.close();
+    });
+  });
+
   it('resets the reference equity at the calendar year boundary', () => {
     const db = seededStore();
     const books = openBooks(db);

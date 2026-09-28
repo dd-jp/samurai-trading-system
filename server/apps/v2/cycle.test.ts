@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  BookFill,
+  BookLedger,
   ControlAction,
   LossBudgetState,
   MarketData,
@@ -192,6 +194,7 @@ function harness(
   spec: SleeveSpec = TEST_SPEC,
   pricing: FillPricing = SPREAD_ONLY,
   lossCapGbp = 1_500,
+  secondSleeve?: Sleeve,
 ): Harness {
   const db = openSharedStore(':memory:');
   const capital = new CapitalConfigStore(db, clock);
@@ -209,6 +212,7 @@ function harness(
     decide: () => Promise.resolve({ decisions: current, refusals: [] }),
   };
   registry.register(sleeve);
+  if (secondSleeve !== undefined) registry.register(secondSleeve);
   const barsByDate = new Map<string, DailyBar>();
   const barFor = (_instrument: string, tradingDate: string) => {
     const dated = barsByDate.get(tradingDate);
@@ -228,7 +232,13 @@ function harness(
     },
     gbpUsdAtYearStart: () => FX,
   };
-  const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
+  const books = new PaperBooks(
+    db,
+    clock,
+    capital,
+    '2026-09-01',
+    secondSleeve === undefined ? [sleeve] : [sleeve, secondSleeve],
+  );
   const simulatedBroker = new DryRunBrokerAdapter();
   return {
     registry,
@@ -246,7 +256,12 @@ function harness(
     controls: new ControlStore(db),
     books,
     journal: new Journal(db, clock),
-    risk: new V2RiskGate({ books, capital, market, spec: () => spec }),
+    risk: new V2RiskGate({
+      books,
+      capital,
+      market,
+      spec: (sleeveId) => (sleeveId === sleeve.id ? spec : (secondSleeve?.spec ?? spec)),
+    }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },
       simulatedBrokers: { alpaca: simulatedBroker, saxo: simulatedBroker },
@@ -304,6 +319,27 @@ function exitFill(deps: CycleDeps, clientOrderId: string) {
   return db
     .prepare("SELECT side, qty, price_gbp FROM v2_fills WHERE client_order_id = ? AND leg = 'exit'")
     .get(clientOrderId);
+}
+
+function loseInBook(
+  books: BookLedger,
+  bookId: string,
+  date: string,
+  loss: number,
+  orderId: string,
+): void {
+  const entry: BookFill = {
+    instrument: 'ZZZ',
+    venue: 'alpaca',
+    side: 'buy',
+    qty: 1,
+    priceGbp: 100 + loss,
+    feeGbp: 0,
+    clientOrderId: orderId,
+    tradingDate: date,
+  };
+  books.applyFill(bookId, entry);
+  books.applyFill(bookId, { ...entry, side: 'sell', priceGbp: 100 });
 }
 
 async function openBooks(deps: Harness): Promise<void> {
@@ -2382,5 +2418,47 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
           'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled resting entries: 1',
       },
     ]);
+  });
+});
+
+describe('#1799: account-wide pooled loss budget across primary books', () => {
+  it('halts a second primary once the pooled loss crosses the full cap, and the gate sizes its next entry at zero', async () => {
+    const share = 0.5;
+    const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
+    const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
+    let trendDecisions: readonly SleeveDecision[] = [];
+    const trend: Sleeve = {
+      id: 'trend',
+      spec: specB,
+      universe: () => ({
+        instruments: trendDecisions.map((decision) => decision.instrument),
+        refusals: [],
+      }),
+      decide: () => Promise.resolve({ decisions: trendDecisions, refusals: [] }),
+    };
+    const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 1_500, trend);
+
+    // debate's own share of the £1,500 cap is £750: a £1,000 loss halts it on its own
+    loseInBook(deps.books, 'debate/primary', '2026-09-25', 1_000, 'a');
+    // trend's own share is also £750, and £600 is only its quarter-size step, not a halt
+    loseInBook(deps.books, 'trend/primary', '2026-09-25', 600, 'b');
+    await runCycle(deps, '2026-09-25');
+
+    expect(deps.books.lastDay('debate/primary')?.state).toMatchObject({
+      halted: true,
+      sizeMultiplier: 0,
+    });
+    // Without pooling this would still read sizeMultiplier: 0.25 (its own, unhalted share)
+    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
+      halted: true,
+      sizeMultiplier: 0,
+    });
+
+    trendDecisions = [{ ...longAapl, sleeve_id: 'trend' }];
+    await runCycle(deps, '2026-09-28');
+
+    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBe(0);
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    expect(deps.books.positions('trend/primary')).toEqual([]);
   });
 });
