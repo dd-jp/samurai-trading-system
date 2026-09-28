@@ -4,7 +4,7 @@
 
 **Supersedes the entire v1 ADR set** (ADR-0001 through ADR-0021, deleted per ruling G8 and preserved verbatim at git tag `v1-final`, commit `38ee499d`). The four v1 decisions that still hold are restated in §4; nothing else in the old set binds v2.
 
-**Authority.** This ADR records David's rulings of 2026-09-19 (Q1–Q19), 2026-09-21 (G1–G18), 2026-09-22 (Q15 re-ruled, Step 2 verdict) 2026-09-25 (Session B, D1–D8, S1–S7) and 2026-09-28 (CFDs at Saxo) from `docs/research/66-v2-grill-decisions.md`. Where this ADR and doc 66 differ, doc 66 wins. The plan that turns the rulings into work is `docs/research/67-v2-plan-and-handoff.md`; the goal in one paragraph is `CONTEXT.md`'s North Star. Every item that David has not ruled is listed in §5 as open; this ADR decides none of them.
+**Authority.** This ADR records David's rulings of 2026-09-19 (Q1–Q19), 2026-09-21 (G1–G18), 2026-09-22 (Q15 re-ruled, Step 2 verdict) 2026-09-25 (Session B, D1–D8, S1–S7) and 2026-09-28 (CFDs at Saxo; v2 chosen over v1 and the UK brainstorm) from `docs/research/66-v2-grill-decisions.md`. Where this ADR and doc 66 differ, doc 66 wins. The plan that turns the rulings into work is `docs/research/67-v2-plan-and-handoff.md`; the goal in one paragraph is `CONTEXT.md`'s North Star. Every item that David has not ruled is listed in §5 as open; this ADR decides none of them.
 
 ## 1. Context
 
@@ -127,6 +127,7 @@ Each item is open until David rules or the named ticket closes it. This ADR take
 16. **Debate paper entry order:** ruled 2026-09-27 (doc 66) — a marketable limit with a cap; the offset and its reference price were delegated to the data and set the same day (doc 72): the decision close, 0 bps, with a paper report of every offset over the debate's own entries — ticket [#1815](https://github.com/dd-jp/samurai-trading-system/issues/1815). A mark that halts a book or trips the daily cap cancels that book's resting entries: **closed 2026-09-27** (doc 66, [#1813](https://github.com/dd-jp/samurai-trading-system/issues/1813)).
 17. **Sleeve contradiction:** ruled 2026-09-27 (doc 66); which of the two journalled debate answers G1's test counts is open — ticket [#1779](https://github.com/dd-jp/samurai-trading-system/issues/1779).
 18. **CFD ruling follow-ups** (doc 66, 2026-09-28; open — awaiting David): which sleeves may use CFDs; ~~a gross-leverage cap~~ (**ruled 2026-09-28:** gross notional, cash and CFD, long plus short, ≤ 1× book equity); ~~whether Q8's gap bound carries to CFD shorts~~ (**ruled 2026-09-28:** a CFD short is sized so a +30% gap costs ≤ ~£45, 30% of Q8's ~£150); US and UK routing between Saxo CFDs, Alpaca and 1× ETFs; the CFD cost model; CFD tax treatment.
+19. **v2 chosen over v1 and the UK brainstorm** (doc 66, 2026-09-28): closed. v2 adopts CFD shorts, Telegram commands (#1852), a tiered-exit trial (#1853) and a stale-price guard (#1854); CFDs trade on the existing Saxo Individual account (GIA) with CFDs enabled. Build: #1848–#1851.
 
 ## 6. Consequences
 
