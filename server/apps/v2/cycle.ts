@@ -802,7 +802,7 @@ class Cycle {
     proposed: SleeveDecision,
     equityGbp: number,
     cashRemainingGbp: number,
-  ): { decision: SleeveDecision; gated: EntryApproval; willSubmit: boolean } {
+  ): { decision: SleeveDecision; gated: EntryApproval } {
     const decision = vetoApplied(book, proposed);
     const approval = this.deps.risk.approveEntry({
       book,
@@ -817,7 +817,7 @@ class Cycle {
       approval.size > 0 &&
       this.willSubmitEntry(book, decision.instrument);
     const gated = willSubmit ? this.applyCashGate(decision, approval, cashRemainingGbp) : approval;
-    return { decision, gated, willSubmit };
+    return { decision, gated };
   }
 
   async settleEntry(
@@ -835,23 +835,26 @@ class Cycle {
     if (gated.order === undefined) this.journalSizingRefusal(book, decision, gated.refusal);
     if (gated.size <= 0) return;
     const outcome = await this.submitEntry(book, decision, decisionId, gated);
-    // A broker-level 'rejected' never rests (journal.restingEntries excludes it), so it must
-    // never reserve cash against later decisions in this same cycle (doc 66 2026-09-28, #1785)
-    if (gated.order !== undefined && outcome !== undefined && outcome !== 'rejected') charge();
+    // outcome is undefined or 'rejected' whenever gated.order is undefined too (submitEntry's
+    // early-return guards mirror willSubmitEntry, and a sizing refusal always yields 'rejected'),
+    // so outcome alone decides: a broker-level 'rejected' never rests (journal.restingEntries
+    // excludes it) and must never reserve cash against later decisions this cycle (doc 66
+    // 2026-09-28, #1785)
+    if (outcome !== undefined && outcome !== 'rejected') charge();
   }
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
     const { equityGbp } = this.deps.books.valuation(book.id, (i, v) => this.markGbp(i, v));
     let cashRemainingGbp = this.deps.books.cash(book.id) - this.restingNotionalGbp(book.id);
     for (const proposed of decisions) {
-      const { decision, gated, willSubmit } = this.resolveEntryGate(
+      const { decision, gated } = this.resolveEntryGate(
         book,
         proposed,
         equityGbp,
         cashRemainingGbp,
       );
       await this.settleEntry(book, decision, gated, () => {
-        if (willSubmit) cashRemainingGbp -= this.notionalGbp(decision, gated.size);
+        cashRemainingGbp -= this.notionalGbp(decision, gated.size);
       });
     }
   }
