@@ -399,7 +399,11 @@ describe('createDebateSleeve', () => {
       make(() => Promise.reject(new Error('alpaca news 500'))),
       context,
     );
-    expect(failed.decisions[0]?.action).toBe('skip');
+    expect(failed.decisions[0]).toMatchObject({
+      direction: 'neutral',
+      action: 'skip',
+      inputs_hash: '',
+    });
     expect(failed.decisions[0]?.reason).toMatch(/^news_error:.*alpaca news 500/);
     expect(transports.flatMap((t) => t.calls).length).toBe(before);
   });
@@ -450,7 +454,13 @@ describe('createDebateSleeve', () => {
       macroDay: false,
       dryRun: true,
     });
-    expect(output.decisions[0]).toMatchObject({ action: 'skip', reason: 'window_coverage' });
+    expect(output.decisions[0]).toMatchObject({
+      direction: 'neutral',
+      action: 'skip',
+      reason: 'window_coverage',
+      price: full.bars.at(-1)?.close,
+      inputs_hash: '',
+    });
     expect(transports.flatMap((transport) => transport.calls)).toEqual([]);
   });
 
