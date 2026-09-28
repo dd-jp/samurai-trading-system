@@ -519,7 +519,7 @@ then, ends with an EVAL line like the others.
   whether G12 covers session STOPs. Ruled 2026-09-22: the debate sleeve's direction after doc 71
   and the LSE data source.
 - Account questions only David can ask (doc 69, last sections): Alpaca — margin as a UK resident,
-  US-ETF access, a Wise-originated USD wire; Saxo — 1× inverse ETF permission, keeping chart
+  US-ETF access, a Wise-originated USD wire; Saxo — 1× inverse ETF permission, CFD permission and rates (doc 66, 2026-09-28), keeping chart
   history locally, custody fee actually charged.
 - Open the live Alpaca account, apply for margin (debate-sleeve shorts), W-8BEN, one GBP→USD transfer — before live.
 - Accountant input if R1 says so.
