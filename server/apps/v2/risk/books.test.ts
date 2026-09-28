@@ -179,6 +179,23 @@ describe('PaperBooks', () => {
     ).toMatchObject({ qty: -5, avgPriceGbp: 110, stopGbp: undefined, targetGbp: undefined });
   });
 
+  it('#1831: markStray persists across a same-side resize and clears on the next clean reopen', () => {
+    const books = openBooks(seededStore());
+    books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 100 }));
+    books.markStray('debate/primary', 'AAPL');
+    expect(books.position('debate/primary', 'AAPL')).toMatchObject({ stray: true });
+
+    books.applyFill('debate/primary', fill({ qty: 1, priceGbp: 110, clientOrderId: 'o2' }));
+    expect(books.position('debate/primary', 'AAPL')).toMatchObject({ qty: 3, stray: true });
+
+    books.applyFill('debate/primary', fill({ side: 'sell', qty: 3, priceGbp: 110 }));
+    expect(books.positions('debate/primary')).toEqual([]);
+
+    expect(books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 100 }))).toMatchObject({
+      stray: false,
+    });
+  });
+
   it('values positions at the mark, falls back to the entry price, and holds shorts as negative qty', () => {
     const db = seededStore();
     const books = openBooks(db);

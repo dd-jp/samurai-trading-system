@@ -1962,6 +1962,137 @@ describe('runCycle: protected exits carry a native Alpaca bracket safely (#1801)
     await runCycle(deps, '2026-09-29');
     expect(alpaca.protectedExits).toHaveLength(2);
   });
+
+  describe('#1831: a crossing fill auto-flattens the stray position', () => {
+    it('a flip from long to short is flattened in the same cycle, carrying no fabricated rearm', async () => {
+      const alpaca = new FakeAlpacaProtected();
+      const deps = harness([longAapl], false, alpaca);
+      await runCycle(deps, '2026-09-25');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+      deps.setDecisions([]);
+      await runCycle(deps, '2026-09-28');
+      // Never passes through flat: one oversized stop fill both closes the long and opens a short
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+      const report = await runCycle(deps, '2026-09-29');
+
+      expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+        qty: -9,
+        stray: true,
+        exitClientOrderId: 'v2-debate-primary-2026-09-29-AAPL-exit',
+      });
+      expect(alpaca.protectedExits).toHaveLength(1);
+      expect(alpaca.protectedExits[0]).toEqual({
+        entryClientOrderId: 'v2-debate-primary-2026-09-25-AAPL',
+        clientOrderId: 'v2-debate-primary-2026-09-29-AAPL-exit',
+        instrument: 'AAPL',
+        side: 'buy',
+        size: 9,
+        rearm: undefined,
+      });
+      expect(report.refusals).toContainEqual(
+        'debate/primary AAPL: a stop fill on v2-debate-primary-2026-09-25-AAPL left qty -9 ' +
+          'where qty 6 held; a fill must never flip or open a position outside a fresh entry ' +
+          '(#1778)',
+      );
+      expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')?.payload.reason).toBe(
+        'crossing_fill',
+      );
+    });
+
+    it('a stray whose flatten is still working is not resubmitted the next cycle', async () => {
+      const alpaca = new FakeAlpacaProtected();
+      const deps = harness([longAapl], false, alpaca);
+      await runCycle(deps, '2026-09-25');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+      deps.setDecisions([]);
+      await runCycle(deps, '2026-09-28');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+      await runCycle(deps, '2026-09-29');
+      expect(alpaca.protectedExits).toHaveLength(1);
+
+      alpaca.resumeResult = {
+        client_order_id: 'v2-debate-primary-2026-09-29-AAPL-exit',
+        broker_order_ids: ['pf1'],
+        order_state: 'submitted',
+        filled_qty: 0,
+      };
+      await runCycle(deps, '2026-09-30');
+
+      expect(alpaca.protectedExits).toHaveLength(1);
+      expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+        'v2-debate-primary-2026-09-29-AAPL-exit',
+      );
+    });
+
+    it('a route that cannot be reached this cycle leaves the stray for the next cycle to flatten', async () => {
+      const alpaca = new FakeAlpacaProtected();
+      const deps = harness([longAapl], false, alpaca);
+      await runCycle(deps, '2026-09-25');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+      deps.setDecisions([]);
+      await runCycle(deps, '2026-09-28');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+
+      const real = deps.executor.canRoute.bind(deps.executor);
+      vi.spyOn(deps.executor, 'canRoute').mockReturnValue(false);
+      const blocked = await runCycle(deps, '2026-09-29');
+      expect(alpaca.protectedExits).toHaveLength(0);
+      expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+        qty: -9,
+        stray: true,
+        exitClientOrderId: undefined,
+      });
+      expect(blocked.refusals).toContainEqual(expect.stringContaining('(#1778)'));
+
+      vi.spyOn(deps.executor, 'canRoute').mockImplementation(real);
+      await runCycle(deps, '2026-09-30');
+      expect(alpaca.protectedExits).toHaveLength(1);
+      expect(alpaca.protectedExits[0]).toMatchObject({
+        clientOrderId: 'v2-debate-primary-2026-09-30-AAPL-exit',
+        side: 'buy',
+        size: 9,
+        rearm: undefined,
+      });
+      expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+        'v2-debate-primary-2026-09-30-AAPL-exit',
+      );
+    });
+
+    it('an expired stray flatten re-flattens the same cycle without fabricating a rearm', async () => {
+      const alpaca = new FakeAlpacaProtected();
+      const deps = harness([longAapl], false, alpaca);
+      await runCycle(deps, '2026-09-25');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+      deps.setDecisions([]);
+      await runCycle(deps, '2026-09-28');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+      await runCycle(deps, '2026-09-29');
+      expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+        'v2-debate-primary-2026-09-29-AAPL-exit',
+      );
+
+      alpaca.resumeResult = {
+        client_order_id: 'v2-debate-primary-2026-09-29-AAPL-exit',
+        broker_order_ids: ['pf1'],
+        order_state: 'expired',
+        filled_qty: 0,
+      };
+      await runCycle(deps, '2026-09-30');
+
+      expect(alpaca.rearms).toHaveLength(0);
+      expect(refusalRows(deps, '2026-09-30', 'execution')).not.toContainEqual(
+        expect.objectContaining({ parameter: 'REARM_BACKSTOP' }),
+      );
+      expect(alpaca.protectedExits.map((request) => request.clientOrderId)).toEqual([
+        'v2-debate-primary-2026-09-29-AAPL-exit',
+        'v2-debate-primary-2026-09-30-AAPL-exit',
+      ]);
+      expect(alpaca.protectedExits[1]).toMatchObject({ rearm: undefined, side: 'buy', size: 9 });
+      expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+        'v2-debate-primary-2026-09-30-AAPL-exit',
+      );
+    });
+  });
 });
 
 describe('budgetChanges', () => {

@@ -44,6 +44,7 @@ interface PositionRow {
   exit_client_order_id: string | null;
   opened_date: string;
   marks_held: number;
+  stray: number;
 }
 
 function positionFromRow(row: PositionRow): Position {
@@ -58,6 +59,7 @@ function positionFromRow(row: PositionRow): Position {
     exitClientOrderId: row.exit_client_order_id ?? undefined,
     openedDate: row.opened_date,
     marksHeld: row.marks_held,
+    stray: row.stray === 1,
   };
 }
 
@@ -183,7 +185,7 @@ export class PaperBooks implements BookLedger {
     const rows = this.db
       .prepare(
         `SELECT instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp, client_order_id,
-           exit_client_order_id, opened_date, marks_held
+           exit_client_order_id, opened_date, marks_held, stray
          FROM v2_positions WHERE book_id = ? ORDER BY instrument`,
       )
       .all(bookId) as PositionRow[];
@@ -264,6 +266,18 @@ export class PaperBooks implements BookLedger {
     this.db
       .prepare(
         `UPDATE v2_positions SET exit_client_order_id = NULL, updated_at = ?
+         WHERE book_id = ? AND instrument = ?`,
+      )
+      .run(this.#now(), bookId, instrument);
+  }
+
+  // Persisted rather than derived from stopGbp/targetGbp: a normal single-leg entry whose
+  // rearm price never got journalled looks identical to a crossing-fill stray by that measure
+  // (#1801's REARM_BACKSTOP case), so it isn't a safe substitute signal
+  markStray(bookId: string, instrument: string): void {
+    this.db
+      .prepare(
+        `UPDATE v2_positions SET stray = 1, updated_at = ?
          WHERE book_id = ? AND instrument = ?`,
       )
       .run(this.#now(), bookId, instrument);

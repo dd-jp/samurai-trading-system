@@ -157,6 +157,7 @@ export interface Position {
   readonly exitClientOrderId: string | undefined;
   readonly openedDate: string;
   readonly marksHeld: number;
+  readonly stray: boolean;
 }
 
 export interface BookFill {
@@ -190,6 +191,7 @@ export interface BookLedger {
   applyFill(bookId: string, fill: BookFill): Position | undefined;
   setExitPending(bookId: string, instrument: string, exitClientOrderId: string): void;
   clearExitPending(bookId: string, instrument: string): void;
+  markStray(bookId: string, instrument: string): void;
   valuation(bookId: string, markGbp: MarkPriceGbp): Valuation;
   lastDay(bookId: string): BookDay | undefined;
   markDay(

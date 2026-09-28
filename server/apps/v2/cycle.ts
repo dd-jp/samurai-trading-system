@@ -154,7 +154,7 @@ interface Tally {
   fills: number;
 }
 
-type ExitReason = 'time_stop' | 'manual_halt';
+type ExitReason = 'time_stop' | 'manual_halt' | 'crossing_fill';
 
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
 
@@ -273,6 +273,7 @@ class Cycle {
     after: Position | undefined,
   ): void {
     if (after === undefined || !crossedUnexpectedly(leg, before?.qty ?? 0, after.qty)) return;
+    this.deps.books.markStray(order.book_id, order.instrument);
     const heldBefore = before === undefined ? 'no position was held' : `qty ${before.qty} held`;
     const message =
       `${order.book_id} ${order.instrument}: a ${leg} fill on ${order.client_order_id} ` +
@@ -546,7 +547,10 @@ class Cycle {
     const clientOrderId = this.exitOrderId(book.id, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     this.tally.exits += 1;
-    const rearm = nativeRearmPrices(this.deps.journal, held);
+    // held.clientOrderId still points at the original entry after a crossing fill (#1778), so
+    // nativeRearmPrices on a stray would hand back that entry's stop/target — inverted and
+    // wrong-sided for whatever the fill actually opened
+    const rearm = held.stray ? undefined : nativeRearmPrices(this.deps.journal, held);
     const order = this.deps.risk.approveExit({ book, held, clientOrderId, rearm });
     const submission = await this.deps.executor.submit(order);
     this.count(submission.outcome);
@@ -597,9 +601,19 @@ class Cycle {
     }
     if (resumed === undefined) return;
     if (resumed.orderState === 'submitted' || resumed.orderState === 'partially_filled') return;
-    const stillHeld = this.deps.books.position(book.id, held.instrument);
+    await this.clearAndRearmIfBracketed(book, held.instrument, exitClientOrderId);
+  }
+
+  async clearAndRearmIfBracketed(
+    book: BookSpec,
+    instrument: string,
+    exitClientOrderId: string,
+  ): Promise<void> {
+    const stillHeld = this.deps.books.position(book.id, instrument);
     if (stillHeld === undefined) return;
-    this.deps.books.clearExitPending(book.id, held.instrument);
+    this.deps.books.clearExitPending(book.id, instrument);
+    // A stray has no legitimate bracket to rearm to; exits() below re-submits the flatten instead
+    if (stillHeld.stray) return;
     await this.rearmBackstop(book, stillHeld, exitClientOrderId);
   }
 
@@ -667,14 +681,27 @@ class Cycle {
 
   async exits(book: BookSpec): Promise<void> {
     for (const held of this.deps.books.positions(book.id)) {
-      await this.resumePendingExit(book, held);
-      if (this.deps.executor.simulates(routeOf(book, held.venue))) {
-        this.simulatedBracketExit(book, held);
-      }
-      const stillHeld = this.deps.books.position(book.id, held.instrument);
-      if (stillHeld !== undefined) await this.timeStop(book, stillHeld);
+      await this.exitHeldPosition(book, held);
     }
     if (this.control.state === 'halted') await this.haltExits(book);
+  }
+
+  async exitHeldPosition(book: BookSpec, held: Position): Promise<void> {
+    await this.resumePendingExit(book, held);
+    if (this.deps.executor.simulates(routeOf(book, held.venue))) {
+      this.simulatedBracketExit(book, held);
+    }
+    const afterSimulated = this.deps.books.position(book.id, held.instrument);
+    if (afterSimulated === undefined) return;
+    await this.crossingFillExit(book, afterSimulated);
+    const afterCrossing = this.deps.books.position(book.id, held.instrument);
+    if (afterCrossing !== undefined) await this.timeStop(book, afterCrossing);
+  }
+
+  async crossingFillExit(book: BookSpec, held: Position): Promise<void> {
+    if (held.exitClientOrderId !== undefined || !held.stray) return;
+    if (!this.deps.executor.canRoute(routeOf(book, held.venue))) return;
+    await this.submitExit(book, held, 'crossing_fill');
   }
 
   entryOrderId(book: BookSpec, instrument: string): string {
