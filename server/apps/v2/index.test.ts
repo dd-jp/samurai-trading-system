@@ -184,21 +184,25 @@ describe('composeV2Root', () => {
       composeV2Root({ ...fixtures, tradingDate, dryRun: true, storePath, clock, logger });
     const root = open(ENTRY_DATE);
     try {
-      expect(root.registry.ids()).toEqual(['debate']);
-      expect(root.books.ids()).toEqual(['debate/primary', 'debate/no-macro-gate']);
+      expect(root.registry.ids()).toEqual(['debate', 'arm2']);
+      expect(root.books.ids()).toEqual([
+        'debate/primary',
+        'debate/no-macro-gate',
+        'arm2/technical-only',
+      ]);
       const report = await root.run();
       expect(report).toMatchObject({
-        decisions: 1,
-        entries: 2,
+        decisions: 2,
+        entries: 3,
         submitted_orders: 0,
         dry_run_refusals: 1,
-        simulated_orders: 1,
+        simulated_orders: 2,
         rejected_orders: 0,
         fills: 0,
-        sleeves: ['debate'],
+        sleeves: ['debate', 'arm2'],
       });
       expect(exitCodeFor(report)).toBe(0);
-      expect(report.refusals.filter((refusal) => refusal.includes('needs David'))).toHaveLength(6);
+      expect(report.refusals.filter((refusal) => refusal.includes('needs David'))).toHaveLength(7);
       const decision = root.db
         .prepare('SELECT action, size_shares, stop_price FROM v2_decisions WHERE book_id = ?')
         .get('debate/primary') as { action: string; size_shares: number; stop_price: number };
@@ -217,9 +221,13 @@ describe('composeV2Root', () => {
         outcome: 'simulated',
         payload: { approval: expect.stringMatching(/^entry:v2-debate-no-macro-gate-/) },
       });
-      expect(count(root, 'v2_orders')).toBe(2);
+      expect(root.journal.orderFor(`v2-arm2-technical-only-${ENTRY_DATE}-UP`)).toMatchObject({
+        outcome: 'simulated',
+        payload: { approval: expect.stringMatching(/^entry:v2-arm2-technical-only-/) },
+      });
+      expect(count(root, 'v2_orders')).toBe(3);
       expect(count(root, 'v2_fills')).toBe(0);
-      expect(report.books.map((book) => book.positions)).toEqual([0, 0]);
+      expect(report.books.map((book) => book.positions)).toEqual([0, 0, 0]);
       const llmCalls = root.scriptedTransports.reduce((n, t) => n + t.calls.length, 0);
       expect(llmCalls).toBe(3);
       expect(count(root, 'llm_spend')).toBe(llmCalls);
@@ -237,7 +245,7 @@ describe('composeV2Root', () => {
     const next = open(NEXT_DATE);
     try {
       const report = await next.run();
-      expect(report).toMatchObject({ fills: 2, entries: 0 });
+      expect(report).toMatchObject({ fills: 3, entries: 0 });
       const size = next.journal.orderFor(`v2-debate-primary-${ENTRY_DATE}-UP`)?.payload.size;
       expect(next.books.position('debate/primary', 'UP')?.qty).toBe(size);
       const fx = new BarsMarketData(
@@ -254,7 +262,7 @@ describe('composeV2Root', () => {
       expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
       expect(fill.fee_gbp).toBeGreaterThan(0);
       expect(fill.trading_date).toBe(NEXT_DATE);
-      expect(report.books.map((book) => book.positions)).toEqual([1, 1]);
+      expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1]);
     } finally {
       next.close();
     }
@@ -294,9 +302,9 @@ describe('composeV2Root', () => {
       report = await first.run();
       expect(report).toMatchObject({
         dry_run: false,
-        entries: 2,
+        entries: 3,
         submitted_orders: 1,
-        simulated_orders: 1,
+        simulated_orders: 2,
         dry_run_refusals: 0,
         fills: 1,
       });
@@ -341,6 +349,9 @@ describe('composeV2Root', () => {
       expect(second.books.position('debate/primary', 'UP')?.marksHeld).toBe(2);
       expect(second.books.position('debate/no-macro-gate', 'UP')).toMatchObject({
         qty: Number(alpacaClient.orders[0]?.qty),
+        marksHeld: 1,
+      });
+      expect(second.books.position('arm2/technical-only', 'UP')).toMatchObject({
         marksHeld: 1,
       });
     } finally {

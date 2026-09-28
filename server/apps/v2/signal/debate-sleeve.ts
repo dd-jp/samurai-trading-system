@@ -6,6 +6,7 @@ import type {
   SleeveContext,
   SleeveDecision,
   SleeveOutput,
+  SleeveSpec,
   SleeveUniverse,
   Venue,
 } from '../../../../contracts/index.js';
@@ -35,6 +36,7 @@ import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
 import { selectLseUniverse } from './lse-universe.js';
 import {
+  type Arm2EntryThresholds,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DEBATE_STOP_ATR_MULTIPLE,
@@ -43,11 +45,12 @@ import {
 import { selectUniverse } from './universe.js';
 
 const DEBATE_MAX_ROUNDS = 1;
-const SMA_LONG_WINDOW = 200;
+export const SMA_LONG_WINDOW = 200;
 const TRAILING_SHORT_DAYS = 20;
 const TRAILING_LONG_DAYS = 63;
 const ATR_WINDOW = 20;
 const HASHED_HISTORY_DAYS = SMA_LONG_WINDOW;
+const ZERO_THRESHOLDS: Arm2EntryThresholds = { longAbove: 0, shortBelow: 0 };
 
 export interface DebateSleeveDeps {
   readonly panel: LlmPanel;
@@ -61,6 +64,9 @@ export interface DebateSleeveDeps {
 
 export interface TechnicalRead {
   readonly price: number;
+  readonly close: number;
+  readonly sma: number | undefined;
+  readonly r63: number | undefined;
   readonly atr: number | undefined;
   readonly view: AnalystView;
 }
@@ -76,10 +82,11 @@ export function directionFrom(
   close: number,
   sma: number | undefined,
   r63: number | undefined,
+  thresholds: Arm2EntryThresholds = ZERO_THRESHOLDS,
 ): Direction {
   if (sma === undefined || r63 === undefined) return 'neutral';
-  if (close > sma && r63 > 0) return 'bullish';
-  if (close < sma && r63 < 0) return 'bearish';
+  if (close > sma && r63 > thresholds.longAbove) return 'bullish';
+  if (close < sma && r63 < thresholds.shortBelow) return 'bearish';
   return 'neutral';
 }
 
@@ -107,6 +114,9 @@ export function technicalRead(
     value === undefined ? 'n/a' : `${(value * 100).toFixed(2)}%`;
   return {
     price: last.rawClose,
+    close: last.close,
+    sma,
+    r63,
     atr: atr === undefined ? undefined : (atr * last.rawClose) / last.close,
     view: {
       trace_id: traceId,
@@ -208,20 +218,25 @@ function buildPersonas(
   };
 }
 
-function actionFor(direction: Direction): Pick<SleeveDecision, 'action' | 'reason'> {
+// `source` names the direction's origin in the journalled reason ('judge' vs 'technical'),
+// so a skimmed v2_decisions row never reads as debate output for an arm 2 decision or vice versa
+export function actionFor(
+  direction: Direction,
+  source: string,
+): Pick<SleeveDecision, 'action' | 'reason'> {
   switch (direction) {
     case 'bullish':
-      return { action: 'enter_long', reason: 'judge bullish' };
+      return { action: 'enter_long', reason: `${source} bullish` };
     case 'bearish':
       return SHORTS_ENABLED
-        ? { action: 'enter_short', reason: 'judge bearish' }
+        ? { action: 'enter_short', reason: `${source} bearish` }
         : { action: 'skip', reason: 'shorts_disabled' };
     default:
-      return { action: 'none', reason: 'judge neutral' };
+      return { action: 'none', reason: `${source} neutral` };
   }
 }
 
-function stopFor(action: SleeveAction, read: TechnicalRead): number | undefined {
+export function stopFor(action: SleeveAction, read: TechnicalRead): number | undefined {
   if (read.atr === undefined) return undefined;
   if (action === 'enter_long') return read.price - DEBATE_STOP_ATR_MULTIPLE * read.atr;
   if (action === 'enter_short') return read.price + DEBATE_STOP_ATR_MULTIPLE * read.atr;
@@ -236,7 +251,7 @@ function decisionFrom(
   result: DebateResult,
   headlines: number,
 ): SleeveDecision {
-  const { action, reason } = actionFor(result.direction);
+  const { action, reason } = actionFor(result.direction, 'judge');
   const stop = stopFor(action, read);
   return {
     sleeve_id: DEBATE_SLEEVE_ID,
@@ -262,7 +277,8 @@ function decisionFrom(
   };
 }
 
-function skipped(
+export function skipped(
+  sleeveId: string,
   symbol: string,
   venue: Venue,
   read: TechnicalRead | undefined,
@@ -270,7 +286,7 @@ function skipped(
   reason: string,
 ): SleeveDecision {
   return {
-    sleeve_id: DEBATE_SLEEVE_ID,
+    sleeve_id: sleeveId,
     instrument: symbol,
     venue,
     direction: 'neutral',
@@ -283,6 +299,59 @@ function skipped(
     inputs_hash: hash,
     debate_id: undefined,
     payload: {},
+  };
+}
+
+export type TechnicalOutcome =
+  | {
+      readonly ok: true;
+      readonly venue: Venue;
+      readonly read: TechnicalRead;
+      readonly history: readonly DailyBar[];
+    }
+  | {
+      readonly ok: false;
+      readonly venue: Venue;
+      readonly read: TechnicalRead | undefined;
+      readonly reason: string;
+    };
+
+// The 200-session coverage check runs before any caller branches on the read (postmortem §2)
+export function resolveTechnical(
+  bars: BarsSource,
+  venueFor: (symbol: string) => Venue,
+  symbol: string,
+  tradingDate: string,
+  now: Date,
+): TechnicalOutcome {
+  const venue = venueFor(symbol);
+  const series = bars.load(symbol);
+  const history = series === undefined ? [] : barsBefore(series, tradingDate);
+  const traceId = `v2-${tradingDate}-${symbol}`;
+  const read = technicalRead(history, traceId, now);
+  if (read === undefined) return { ok: false, venue, read: undefined, reason: 'no_bars' };
+  const sessions = sessionsBefore(bars, tradingDate, calendarReferenceFor(venue));
+  if (!windowCovered(history, sessions, SMA_LONG_WINDOW)) {
+    return { ok: false, venue, read, reason: 'window_coverage' };
+  }
+  return { ok: true, venue, read, history };
+}
+
+export function buildUniverse(
+  bars: BarsSource,
+  constituents: (tradingDate: string) => readonly string[],
+  tradingDate: string,
+): SleeveUniverse {
+  const selection = selectUniverse(constituents(tradingDate), bars, tradingDate);
+  const lse = selectLseUniverse(bars, tradingDate);
+  return {
+    instruments: [...selection.liquidity, ...selection.movers, ...lse.instruments],
+    refusals: [...selection.refusals, ...lse.refusals].map((refusal) => ({
+      scope: 'universe',
+      parameter: refusal.parameter,
+      ticket: refusal.ticket,
+      message: refusal.message,
+    })),
   };
 }
 
@@ -337,7 +406,14 @@ async function debateDecision(
       message: `debate for ${symbol} failed: ${describeThrownSafely(error)}`,
       payload: { symbol, debate_id: debateId },
     });
-    return skipped(symbol, venue, read, hash, `llm_error:${describeThrownSafely(error)}`);
+    return skipped(
+      DEBATE_SLEEVE_ID,
+      symbol,
+      venue,
+      read,
+      hash,
+      `llm_error:${describeThrownSafely(error)}`,
+    );
   }
 }
 
@@ -346,18 +422,20 @@ async function decideOne(
   symbol: string,
   context: SleeveContext,
 ): Promise<SleeveDecision> {
-  const venue = deps.venueFor(symbol);
-  const series = deps.bars.load(symbol);
-  const history = series === undefined ? [] : barsBefore(series, context.tradingDate);
-  const traceId = `v2-${context.tradingDate}-${symbol}`;
-  const read = technicalRead(history, traceId, deps.clock.now());
-  if (read === undefined) return skipped(symbol, venue, undefined, '', 'no_bars');
-  const sessions = sessionsBefore(deps.bars, context.tradingDate, calendarReferenceFor(venue));
-  if (!windowCovered(history, sessions, SMA_LONG_WINDOW)) {
-    return skipped(symbol, venue, read, '', 'window_coverage');
+  const outcome = resolveTechnical(
+    deps.bars,
+    deps.venueFor,
+    symbol,
+    context.tradingDate,
+    deps.clock.now(),
+  );
+  if (!outcome.ok) {
+    return skipped(DEBATE_SLEEVE_ID, symbol, outcome.venue, outcome.read, '', outcome.reason);
   }
+  const { venue, read, history } = outcome;
+  const traceId = `v2-${context.tradingDate}-${symbol}`;
   const news = await fetchHeadlines(deps, symbol, context.tradingDate);
-  if ('failure' in news) return skipped(symbol, venue, read, '', news.failure);
+  if ('failure' in news) return skipped(DEBATE_SLEEVE_ID, symbol, venue, read, '', news.failure);
   const views = [read.view, newsView(news.headlines, traceId, deps.clock.now())];
   const hash = inputsHash(
     history.slice(-HASHED_HISTORY_DAYS),
@@ -365,7 +443,9 @@ async function decideOne(
     seatModels(context.tradingDate),
   );
   const cap = deps.panel.spendCap.check();
-  if (!cap.admitted) return skipped(symbol, venue, read, hash, `llm_spend_cap:${cap.kind}`);
+  if (!cap.admitted) {
+    return skipped(DEBATE_SLEEVE_ID, symbol, venue, read, hash, `llm_spend_cap:${cap.kind}`);
+  }
   return debateDecision(deps, {
     symbol,
     venue,
@@ -378,31 +458,31 @@ async function decideOne(
   });
 }
 
-export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
+interface TechnicalSleeveDeps {
+  readonly bars: BarsSource;
+  readonly constituents: (tradingDate: string) => readonly string[];
+}
+
+export function createTechnicalSleeve<Deps extends TechnicalSleeveDeps>(
+  id: string,
+  spec: SleeveSpec,
+  deps: Deps,
+  decideOneFor: (deps: Deps, symbol: string, context: SleeveContext) => Promise<SleeveDecision>,
+): Sleeve {
   return {
-    id: DEBATE_SLEEVE_ID,
-    spec: DEBATE_SLEEVE_SPEC,
+    id,
+    spec,
     universe(context): SleeveUniverse {
-      const selection = selectUniverse(
-        deps.constituents(context.tradingDate),
-        deps.bars,
-        context.tradingDate,
-      );
-      const lse = selectLseUniverse(deps.bars, context.tradingDate);
-      return {
-        instruments: [...selection.liquidity, ...selection.movers, ...lse.instruments],
-        refusals: [...selection.refusals, ...lse.refusals].map((refusal) => ({
-          scope: 'universe',
-          parameter: refusal.parameter,
-          ticket: refusal.ticket,
-          message: refusal.message,
-        })),
-      };
+      return buildUniverse(deps.bars, deps.constituents, context.tradingDate);
     },
     async decide(context, instruments): Promise<SleeveOutput> {
       const decisions: SleeveDecision[] = [];
-      for (const symbol of instruments) decisions.push(await decideOne(deps, symbol, context));
+      for (const symbol of instruments) decisions.push(await decideOneFor(deps, symbol, context));
       return { decisions, refusals: [] };
     },
   };
+}
+
+export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
+  return createTechnicalSleeve(DEBATE_SLEEVE_ID, DEBATE_SLEEVE_SPEC, deps, decideOne);
 }

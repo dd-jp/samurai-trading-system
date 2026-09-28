@@ -33,12 +33,20 @@ import {
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
 import type { Journal } from './journal/index.js';
-import { assertCapitalShares, type CapitalConfigStore, type PaperBooks } from './risk/index.js';
+import {
+  assertArm2RunsBesideDebate,
+  assertCapitalShares,
+  type CapitalConfigStore,
+  type PaperBooks,
+} from './risk/index.js';
 import {
   ALL_PINS,
+  ARM2_SLEEVE_ID,
   BULLISH_SCRIPT,
   buildLlmPanel,
+  createArm2Sleeve,
   createDebateSleeve,
+  DEBATE_SLEEVE_ID,
   isLseInstrument,
   type LlmPanel,
   type ModelPin,
@@ -247,17 +255,12 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     bars,
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
+  const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
   const sleeves = [
-    createDebateSleeve({
-      panel,
-      bars,
-      constituents,
-      venueFor: (symbol) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca'),
-      news,
-      clock,
-      logger,
-    }),
+    createDebateSleeve({ panel, bars, constituents, venueFor, news, clock, logger }),
+    createArm2Sleeve({ bars, constituents, venueFor, clock }),
   ];
+  assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
   const cycle = composeCycle({
     db,

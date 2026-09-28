@@ -4,15 +4,27 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { macroGate } from './data/index.js';
 import { composeV2Root } from './index.js';
-import { bookSpecsFor, CapitalConfigStore, positionSizeShares } from './risk/index.js';
+import {
+  assertArm2RunsBesideDebate,
+  bookSpecsFor,
+  CapitalConfigStore,
+  positionSizeShares,
+} from './risk/index.js';
 import {
   ALL_PINS,
+  ARM2_ENTRY_THRESHOLDS,
+  ARM2_SLEEVE_ID,
+  DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
   SHORTS_ENABLED,
   SqliteMonthlySpendCap,
 } from './signal/index.js';
+
+const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
+  (parameter) => parameter !== ARM2_ENTRY_THRESHOLDS,
+);
 
 export interface SmokeProbe {
   readonly name: string;
@@ -97,9 +109,14 @@ function staticProbes(): SmokeProbe[] {
     ),
     probe('shorts are off', !SHORTS_ENABLED, String(SHORTS_ENABLED)),
     probe(
-      'every David-owned parameter is still unset',
-      DECLARED_PARAMETERS.every((parameter) => !isSet(parameter)),
-      DECLARED_PARAMETERS.map((parameter) => parameter.name).join(', '),
+      'every still-open David-owned parameter is unset',
+      STILL_UNSET_PARAMETERS.every((parameter) => !isSet(parameter)),
+      STILL_UNSET_PARAMETERS.map((parameter) => parameter.name).join(', '),
+    ),
+    probe(
+      'arm 2 entry thresholds are approved and resolved (#1773)',
+      isSet(ARM2_ENTRY_THRESHOLDS),
+      JSON.stringify(ARM2_ENTRY_THRESHOLDS.value),
     ),
     probe(
       'G18 shadows are declared but not instantiated',
@@ -108,7 +125,28 @@ function staticProbes(): SmokeProbe[] {
       ),
       declaredBooks.map((spec) => `${spec.id}${spec.instantiated ? '' : ' (declared)'}`).join(', '),
     ),
+    probe(
+      'no debate-sleeve paper trade until arm 2 runs beside it (#1773 kill line)',
+      killLineEnforced(),
+      'assertArm2RunsBesideDebate([debate]) refused without arm2',
+    ),
   ];
+}
+
+function killLineEnforced(): boolean {
+  try {
+    assertArm2RunsBesideDebate(
+      [{ id: DEBATE_SLEEVE_ID, spec: DEBATE_SLEEVE_SPEC }],
+      DEBATE_SLEEVE_ID,
+      ARM2_SLEEVE_ID,
+    );
+    return false;
+  } catch (error) {
+    return (
+      error instanceof Error &&
+      /no debate-sleeve paper trade until arm 2 runs beside it/.test(error.message)
+    );
+  }
 }
 
 function keylessPaperRunRefused(): boolean {
@@ -152,8 +190,8 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
     const spendRows = root.db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get() as { n: number };
     probes.push(
       probe(
-        'registry holds the debate sleeve only',
-        root.registry.ids().join(',') === 'debate',
+        'registry holds the debate sleeve and arm 2, beside each other',
+        root.registry.ids().join(',') === 'debate,arm2',
         root.registry.ids().join(','),
       ),
       probe(
@@ -172,13 +210,13 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         `${llmCalls} calls, ${spendRows.n} llm_spend rows`,
       ),
       probe(
-        'primary and no-macro-gate each have their own paper book',
-        root.books.ids().join(',') === 'debate/primary,debate/no-macro-gate',
+        'debate and arm 2 each have their own paper books',
+        root.books.ids().join(',') === 'debate/primary,debate/no-macro-gate,arm2/technical-only',
         root.books.ids().join(', '),
       ),
       probe(
-        'every unset parameter is journalled as a refusal',
-        DECLARED_PARAMETERS.every((parameter) =>
+        'every still-open parameter is journalled as a refusal',
+        STILL_UNSET_PARAMETERS.every((parameter) =>
           report.refusals.some((refusal) => refusal.includes(parameter.name)),
         ),
         report.refusals.join(' | '),

@@ -1,4 +1,5 @@
 export {
+  assertArm2RunsBesideDebate,
   assertCapitalShareRanges,
   assertCapitalShares,
   bookSpecsFor,

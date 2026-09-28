@@ -8,10 +8,13 @@ import type { BarsSource } from '../data/index.js';
 import { addDays, NO_NEWS } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
 import {
+  actionFor,
+  buildUniverse,
   createDebateSleeve,
   directionFrom,
   JUDGE_CONFIDENCE_BY_AGREEING_DEBATERS,
   newsView,
+  resolveTechnical,
   technicalRead,
 } from './debate-sleeve.js';
 import { buildLlmPanel, seatModels } from './llm-panel.js';
@@ -99,6 +102,80 @@ describe('directionFrom', () => {
     expect(directionFrom(100, 100, -0.01)).toBe('neutral');
     expect(directionFrom(101, undefined, 0.01)).toBe('neutral');
     expect(directionFrom(101, 100, undefined)).toBe('neutral');
+  });
+
+  it("takes arm 2's own thresholds instead of the zero default when given one (#1773)", () => {
+    const thresholds = { longAbove: 0.02, shortBelow: -0.02 };
+    expect(directionFrom(101, 100, 0.01, thresholds)).toBe('neutral');
+    expect(directionFrom(101, 100, 0.03, thresholds)).toBe('bullish');
+    expect(directionFrom(99, 100, -0.01, thresholds)).toBe('neutral');
+    expect(directionFrom(99, 100, -0.03, thresholds)).toBe('bearish');
+  });
+});
+
+describe('actionFor', () => {
+  it('names the reason after the source that computed the direction', () => {
+    expect(actionFor('bullish', 'technical')).toEqual({
+      action: 'enter_long',
+      reason: 'technical bullish',
+    });
+    expect(actionFor('bearish', 'technical')).toEqual({
+      action: 'skip',
+      reason: 'shorts_disabled',
+    });
+    expect(actionFor('neutral', 'technical')).toEqual({
+      action: 'none',
+      reason: 'technical neutral',
+    });
+    expect(actionFor('bullish', 'judge')).toEqual({
+      action: 'enter_long',
+      reason: 'judge bullish',
+    });
+  });
+});
+
+describe('resolveTechnical', () => {
+  it('resolves ok with the full history once the 200-session window is covered', () => {
+    const series = trending('UP', 260, 0.001);
+    const outcome = resolveTechnical(
+      source([series]),
+      () => 'alpaca',
+      'UP',
+      nextDate(series),
+      clock.now(),
+    );
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.read.view.direction).toBe('bullish');
+      expect(outcome.venue).toBe('alpaca');
+    }
+  });
+
+  it('reports no_bars for a symbol with no series and window_coverage for a gapped one', () => {
+    const series = trending('UP', 260, 0.001);
+    const full = { symbol: 'FULL', bars: series.bars };
+    const gapped = source([
+      full,
+      { symbol: 'GAPPED', bars: series.bars.filter((_, i) => i % 15 !== 0) },
+    ]);
+    expect(
+      resolveTechnical(source([]), () => 'alpaca', 'MISSING', nextDate(series), clock.now()),
+    ).toMatchObject({ ok: false, reason: 'no_bars' });
+    expect(
+      resolveTechnical(gapped, () => 'alpaca', 'GAPPED', nextDate(series), clock.now()),
+    ).toMatchObject({ ok: false, reason: 'window_coverage' });
+  });
+});
+
+describe('buildUniverse', () => {
+  it('is the same universe both the debate sleeve and arm 2 select (#1773 extraction)', () => {
+    const series = trending('UP', 260, 0.001);
+    const universe = buildUniverse(source([series]), () => ['UP', 'MISSING'], nextDate(series));
+    expect(universe.instruments).toContain('UP');
+    expect(universe.refusals.map((refusal) => refusal.parameter)).toEqual([
+      'G18_SMALL_CAP_FLOORS',
+      'LSE_LIQUIDITY_SCREEN',
+    ]);
   });
 });
 
@@ -322,7 +399,12 @@ describe('createDebateSleeve', () => {
       make(() => Promise.reject(new Error('alpaca news 500'))),
       context,
     );
-    expect(failed.decisions[0]?.action).toBe('skip');
+    expect(failed.decisions[0]).toMatchObject({
+      direction: 'neutral',
+      action: 'skip',
+      price: series.bars.at(-1)?.close,
+      inputs_hash: '',
+    });
     expect(failed.decisions[0]?.reason).toMatch(/^news_error:.*alpaca news 500/);
     expect(transports.flatMap((t) => t.calls).length).toBe(before);
   });
@@ -373,7 +455,13 @@ describe('createDebateSleeve', () => {
       macroDay: false,
       dryRun: true,
     });
-    expect(output.decisions[0]).toMatchObject({ action: 'skip', reason: 'window_coverage' });
+    expect(output.decisions[0]).toMatchObject({
+      direction: 'neutral',
+      action: 'skip',
+      reason: 'window_coverage',
+      price: full.bars.at(-1)?.close,
+      inputs_hash: '',
+    });
     expect(transports.flatMap((transport) => transport.calls)).toEqual([]);
   });
 
