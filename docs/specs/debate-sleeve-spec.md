@@ -70,7 +70,7 @@ Every value below is a counted trial from #1 (ADR §5 item 9). Changing any valu
 | T6 | Macro gate | half size on G16's five release days | `MACRO_DAY_SIZE_FRACTION` | G16 |
 | T7 | `DEBATE_ADV_SHARE` | 1% of average daily notional | `server/apps/v2/signal/parameters.ts` | D8. This spec's own choice. On the four Step 3d dry-run dates the largest entry is 1.9 × 10⁻⁴ of its cap, so the cap does not bind below ~£10M of equity. Notional over today's price, not share volume: after a fall inside the window it allows slightly more shares, bounded by the 20-day drift. |
 | T8 | `DEBATE_ADV_WINDOW_BARS` | 20 bars; the risk module refuses a window whose first bar is over 35 calendar days (⌈20 × 7/5⌉ + 7) or whose last bar is over 5 days before the entry, or with a non-finite volume | `server/apps/v2/signal/parameters.ts` (window), `server/apps/v2/risk/volume-cap.ts` (coverage) | matches ATR(20) and the liquidity core's 20-day dollar volume |
-| T9 | `ARM2_ENTRY_THRESHOLDS` | `{ longAbove: 0, shortBelow: 0 }` — the technical analyst's own axis vote (`directionFrom`), reproduced exactly | `server/apps/v2/signal/parameters.ts` (value), `server/apps/v2/signal/arm2-sleeve.ts` (sleeve) | David approved 2026-09-28, #1773's proposal comment |
+| T9 | `ARM2_ENTRY_THRESHOLDS` | `{ longAbove: 0, shortBelow: 0 }` — the technical analyst's own axis vote (`directionFrom`), reproduced exactly | `server/apps/v2/signal/parameters.ts` (value), `server/apps/v2/signal/arm2-sleeve.ts` (sleeve) | David approved 2026-09-28 in chat, recorded on [#1773 comment 5876948519](https://github.com/dd-jp/samurai-trading-system/issues/1773#issuecomment-5876948519) against the proposal in [#1773 comment 5870296539](https://github.com/dd-jp/samurai-trading-system/issues/1773#issuecomment-5870296539); `validation: 'forward-paper'` (§8) |
 
 ### Simulated cost model
 
@@ -120,7 +120,7 @@ Each instantiated book is a paper book seeded at its sleeve's share of the year'
 - **Shorts:** flag off (§5).
 - **Saxo:** no adapter (§7).
 - **Live venues:** the root composes paper only; `SAMURAI_MODE=live` is refused.
-- **Backtest:** the sleeve declares `validation: 'forward-paper'` (Q15: an LLM verdict cannot be backtested without leaking the future), so the Step 3d backtest driver (`server/apps/v2/backtest.ts`) refuses it; it is judged in paper against arm 2 (Q17).
+- **Backtest:** both `DEBATE_SLEEVE_SPEC` and `ARM2_SLEEVE_SPEC` declare `validation: 'forward-paper'` (Q15: an LLM verdict cannot be backtested without leaking the future, and arm 2 exists only to be judged beside the debate sleeve in paper, so backtesting it separately would answer nothing), so the Step 3d backtest driver (`server/apps/v2/backtest.ts`) refuses both; the debate sleeve is judged in paper against arm 2 (Q17), and arm 2 itself is counted as trial T9 (§5) rather than judged on its own.
 
 What the root imports from v1: `runDebate` and the three personas plus `AnthropicLlmClient`/`NousMessagesClient`/`SqliteLlmSpendStore` from `server/pipeline/debate-engine/`; `AlpacaBrokerAdapter`, `AlpacaHttpBrokerClient`, `SqliteBrokerStateStore` from `server/pipeline/execution/`; `AlpacaNewsClient` from `server/providers/market-intelligence/sources/`; `NousAccountInFlightGate` and the pricing table from `server/shared/llm/`; `openSharedStore`/`guardedStore` from `server/shared/store/`. Nothing else.
 
