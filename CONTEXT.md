@@ -53,7 +53,7 @@ Target: commodities, indices, ETFs and equities, with indices and commodities on
 A debate-sleeve long in a name below the large-cap floor. Long-only, half a large-cap trade's risk, capped at a fixed share of the sleeve, excluded below liquidity, price and market-cap floors, and measured against a large-cap-only shadow. The floor and cap numbers are open (G18).
 
 **Short position**
-Debate sleeve only. At Alpaca: easy-to-borrow large caps, sized so a +30% gap costs no more than about £150. At Saxo: 1× inverse ETFs or CFDs (2026-09-28); CFD leverage is capped at 1× book equity, the other CFD bounds are open.
+Debate sleeve only. At Alpaca: easy-to-borrow large caps, sized so a +30% gap costs no more than about £150. At Saxo: 1× inverse ETFs or CFDs (2026-09-28); CFD leverage is capped at 1× book equity and a CFD short is sized so a +30% gap costs no more than about £45; the other CFD bounds are open.
 
 **Macro event day**
 A day with a high-impact release (FOMC, US CPI, NFP, BoE rate decision, UK CPI). The debate sleeve enters at half size; exits are unaffected; the gate is a counted trial against a no-gate shadow.
