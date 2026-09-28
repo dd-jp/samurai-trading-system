@@ -1,3 +1,4 @@
+export { type CandleFeatures, candleFeatures, candleLine } from './candle.js';
 export { createDebateSleeve } from './debate-sleeve.js';
 export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 export { NousPinnedTransport } from './llm-transport.js';
