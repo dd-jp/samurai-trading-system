@@ -113,6 +113,27 @@ function firstLookupError(order: LookedUpOrderId, rearmed: LookedUpOrderId): unk
   return 'error' in order ? order.error : (rearmed as { error: unknown }).error;
 }
 
+function resolveRateLimiter(input: AlpacaBrokerAdapterInput): TokenBucket {
+  return (
+    input.rateLimiter ??
+    new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
+      logger: input.logger,
+      name: 'alpaca',
+    })
+  );
+}
+
+function populateCrossRestartBrackets(
+  brackets: Map<string, string>,
+  state: BrokerStateStore,
+): void {
+  for (const record of state.loadBrackets('alpaca')) {
+    if (record.request?.asset_class === 'crypto') continue;
+    if (record.entry_order_id === null) continue;
+    brackets.set(record.client_order_id, record.entry_order_id);
+  }
+}
+
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, string>();
   private readonly bracketSubmittedAt = new Map<string, Date>();
@@ -130,12 +151,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly cancelConfirmWaitMs: number;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
-    this.rateLimiter =
-      input.rateLimiter ??
-      new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
-        logger: input.logger,
-        name: 'alpaca',
-      });
+    this.rateLimiter = resolveRateLimiter(input);
     this.state = input.state ?? new InMemoryBrokerStateStore();
     this.clock = input.clock ?? new SystemClock();
     this.unpricedFillAgeOutMs = input.unpricedFillAgeOutMs ?? DEFAULT_UNPRICED_FILL_AGE_OUT_MS;
@@ -151,11 +167,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       doubleFillAlerts: input.ocoDoubleFillAlerts,
     });
 
-    for (const record of this.state.loadBrackets('alpaca')) {
-      if (record.request?.asset_class === 'crypto') continue;
-      if (record.entry_order_id === null) continue;
-      this.brackets.set(record.client_order_id, record.entry_order_id);
-    }
+    populateCrossRestartBrackets(this.brackets, this.state);
   }
 
   private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {

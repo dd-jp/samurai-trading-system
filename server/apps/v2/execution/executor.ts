@@ -52,27 +52,33 @@ async function sendRearm(
   return { client_order_id: child.clientOrderId, broker_order_ids: [], order_state: 'submitted' };
 }
 
+function sendFlatten(
+  broker: BrokerAdapter,
+  order: Extract<RiskApprovedOrder, { kind: 'flatten' }>,
+  child: ChildOrder,
+): Promise<BrokerAck> {
+  if (broker.submitProtectedExit === undefined) {
+    return broker.submitFlatten(order.instrument, order.side, child.size, child.clientOrderId);
+  }
+  return broker.submitProtectedExit({
+    entryClientOrderId: order.entryClientOrderId,
+    clientOrderId: child.clientOrderId,
+    instrument: order.instrument,
+    side: order.side,
+    size: child.size,
+    rearm:
+      order.rearmStop === undefined || order.rearmTarget === undefined
+        ? undefined
+        : { stop: order.rearmStop, target: order.rearmTarget },
+  });
+}
+
 function send(
   broker: BrokerAdapter,
   order: RiskApprovedOrder,
   child: ChildOrder,
 ): Promise<BrokerAck> {
-  if (order.kind === 'flatten') {
-    if (broker.submitProtectedExit !== undefined) {
-      return broker.submitProtectedExit({
-        entryClientOrderId: order.entryClientOrderId,
-        clientOrderId: child.clientOrderId,
-        instrument: order.instrument,
-        side: order.side,
-        size: child.size,
-        rearm:
-          order.rearmStop === undefined || order.rearmTarget === undefined
-            ? undefined
-            : { stop: order.rearmStop, target: order.rearmTarget },
-      });
-    }
-    return broker.submitFlatten(order.instrument, order.side, child.size, child.clientOrderId);
-  }
+  if (order.kind === 'flatten') return sendFlatten(broker, order, child);
   if (order.kind === 'rearm') {
     return sendRearm(
       broker,
