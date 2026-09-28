@@ -179,7 +179,7 @@ Asked by the Step 3d session after #1812 merged. Each answer is the option David
 
 ## Rulings of 2026-09-28
 
-Three Step 4 tickets were blocking on a design fork or an undecided posture. Asked which option, David: *"Go with recommended or one that suits our spec and adr."* None of the options put to him carried a "(Recommended)" tag (unlike the S1–S7/U1–U6 tables above), so these are the build session's picks under that instruction, recorded here per Process 1 for David to overrule if wrong.
+Three Step 4 tickets were blocking on a design fork or an undecided posture. Asked which option, David: *"Go with recommended or one that suits our spec and adr."* None of the options put to him carried a "(Recommended)" tag (unlike the S1–S7/U1–U6 tables above), so the first three rows below are the build session's picks under that instruction, recorded here per Process 1 for David to overrule if wrong. The fourth row (#1799) is different: David answered it directly, in his own word ("isolated"), not a delegated pick — no overrule pending.
 
 | # | Question | Ruling |
 | --- | --- | --- |

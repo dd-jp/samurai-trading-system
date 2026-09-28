@@ -126,6 +126,15 @@ function trendSleeve(
   });
 }
 
+function inertSleeve(id: string): SleeveFactory {
+  return () => ({
+    id,
+    spec: spec('backtest'),
+    universe: () => ({ instruments: [], refusals: [] }),
+    decide: () => Promise.resolve({ decisions: [], refusals: [] }),
+  });
+}
+
 function reading(read: (market: MarketData, tradingDate: string) => void): SleeveFactory {
   return (market) => {
     const inner = trendSleeve('peek', 'UP', 5)(market);
@@ -137,6 +146,21 @@ function reading(read: (market: MarketData, tradingDate: string) => void): Sleev
       },
     };
   };
+}
+
+function yearLossesFor(
+  dates: readonly string[],
+  equity: readonly number[],
+  startCapitalGbp = 1_000,
+): Record<string, number> {
+  const losses: Record<string, number> = {};
+  let reference = startCapitalGbp;
+  dates.forEach((date, index) => {
+    if (dates[index + 1]?.slice(0, 4) === date.slice(0, 4)) return;
+    losses[date.slice(0, 4)] = reference - (equity[index] as number);
+    reference = equity[index] as number;
+  });
+  return losses;
 }
 
 function ledger(): TrialLedger {
@@ -417,17 +441,8 @@ describe('runBacktest', () => {
           ],
         }),
       );
-    const yearLosses = (result: Awaited<ReturnType<typeof run>>) => {
-      const equity = result.trials[0]?.equity as readonly number[];
-      const losses: Record<string, number> = {};
-      let reference = 1_000;
-      result.dates.forEach((date, index) => {
-        if (result.dates[index + 1]?.slice(0, 4) === date.slice(0, 4)) return;
-        losses[date.slice(0, 4)] = reference - (equity[index] as number);
-        reference = equity[index] as number;
-      });
-      return losses;
-    };
+    const yearLosses = (result: Awaited<ReturnType<typeof run>>) =>
+      yearLossesFor(result.dates, result.trials[0]?.equity as readonly number[]);
     const capped = await run(30);
     const uncapped = await run(100_000);
     expect(Object.keys(yearLosses(capped))).toEqual(['2024', '2025']);
@@ -453,15 +468,32 @@ describe('runBacktest', () => {
         lossCapGbp: tightCap,
         trials: [
           { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
-          { config: { lookback: 20, other: true }, sleeve: trendSleeve('trend-20b', 'FLAT', 20) },
+          { config: { inert: true }, sleeve: inertSleeve('inert') },
         ],
         benchmark: { config: { lookback: 0 }, sleeve: trendSleeve('hold', 'DOWN', 0) },
       }),
     );
-
-    const dumpEquity = dumpAlongside.trials[0]?.equity as readonly number[];
-    const dumpFinalLoss = 1_000 - (dumpEquity.at(-1) as number);
-    expect(dumpFinalLoss).toBeGreaterThan(tightCap);
+    // Sibling trial AND benchmark are both inert, so nothing but dump itself can ever reach the
+    // pool in this run — the trajectory is identical whether or not #1799's isolation is applied,
+    // which is what makes this precondition (the tight cap genuinely bites dump within 2024) hold
+    // regardless of which composition this test is exercising, unlike dump's trajectory inside
+    // dumpAlongside, where the DOWN benchmark is a second real loss the pool would otherwise share
+    const dumpAlone = await runBacktest(
+      input({
+        lossCapGbp: tightCap,
+        trials: [
+          { config: { lookback: 0 }, sleeve: trendSleeve('dump', 'DOWN', 0) },
+          { config: { inert: true }, sleeve: inertSleeve('inert') },
+        ],
+        benchmark: { config: { inert: true }, sleeve: inertSleeve('inert-benchmark') },
+      }),
+    );
+    const dumpAloneYearLosses = yearLossesFor(
+      dumpAlone.dates,
+      dumpAlone.trials[0]?.equity as readonly number[],
+    );
+    expect(dumpAloneYearLosses['2024']).toBeGreaterThan(tightCap * 0.8);
+    expect(dumpAloneYearLosses['2024']).toBeLessThan(tightCap);
 
     const trendAlongsideDump = dumpAlongside.trials[1]?.equity;
     expect(trendAlongsideDump).toEqual(trendAlone.trials[0]?.equity);
