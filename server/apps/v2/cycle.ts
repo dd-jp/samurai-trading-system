@@ -111,14 +111,6 @@ function opposite(side: OrderSide): OrderSide {
   return side === 'buy' ? 'sell' : 'buy';
 }
 
-// A sign change, or a flat->nonzero open by a non-entry leg, is a crossing fill (#1778)
-function crossedUnexpectedly(leg: V2Fill['leg'], beforeQty: number, afterQty: number): boolean {
-  const beforeSign = Math.sign(beforeQty);
-  const afterSign = Math.sign(afterQty);
-  if (beforeSign !== 0 && afterSign !== 0) return beforeSign !== afterSign;
-  return beforeSign === 0 && afterSign !== 0 && leg !== 'entry';
-}
-
 // A stop/target/exit fill closes a bracket entry's other leg; its levels describe the
 // position being closed, not whatever this fill leaves behind, so they never carry (#1778)
 function bracketLevelsGbp(
@@ -255,6 +247,7 @@ class Cycle {
       instrument: order.instrument,
       venue: order.venue as Venue,
       side,
+      leg: fill.leg,
       qty: fill.qty,
       priceGbp,
       feeGbp: fill.fee / fx,
@@ -272,8 +265,7 @@ class Cycle {
     before: Position | undefined,
     after: Position | undefined,
   ): void {
-    if (after === undefined || !crossedUnexpectedly(leg, before?.qty ?? 0, after.qty)) return;
-    this.deps.books.markStray(order.book_id, order.instrument);
+    if (after === undefined || !after.stray || (before?.stray ?? false)) return;
     const heldBefore = before === undefined ? 'no position was held' : `qty ${before.qty} held`;
     const message =
       `${order.book_id} ${order.instrument}: a ${leg} fill on ${order.client_order_id} ` +
@@ -547,9 +539,8 @@ class Cycle {
     const clientOrderId = this.exitOrderId(book.id, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
     this.tally.exits += 1;
-    // held.clientOrderId still points at the original entry after a crossing fill (#1778), so
-    // nativeRearmPrices on a stray would hand back that entry's stop/target — inverted and
-    // wrong-sided for whatever the fill actually opened
+    // Policy, not staleness: an unexpected crossing fill is never trusted as an intentional
+    // new entry, even when its own bracket levels would otherwise resolve cleanly (#1778)
     const rearm = held.stray ? undefined : nativeRearmPrices(this.deps.journal, held);
     const order = this.deps.risk.approveExit({ book, held, clientOrderId, rearm });
     const submission = await this.deps.executor.submit(order);
@@ -612,7 +603,7 @@ class Cycle {
     const stillHeld = this.deps.books.position(book.id, instrument);
     if (stillHeld === undefined) return;
     this.deps.books.clearExitPending(book.id, instrument);
-    // A stray has no legitimate bracket to rearm to; exits() below re-submits the flatten instead
+    // A stray has no legitimate bracket to rearm to; crossingFillExit re-submits the flatten instead
     if (stillHeld.stray) return;
     await this.rearmBackstop(book, stillHeld, exitClientOrderId);
   }

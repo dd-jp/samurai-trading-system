@@ -164,6 +164,7 @@ export interface BookFill {
   readonly instrument: string;
   readonly venue: Venue;
   readonly side: OrderSide;
+  readonly leg: FillLeg;
   readonly qty: number;
   readonly priceGbp: number;
   readonly feeGbp: number;
@@ -191,7 +192,6 @@ export interface BookLedger {
   applyFill(bookId: string, fill: BookFill): Position | undefined;
   setExitPending(bookId: string, instrument: string, exitClientOrderId: string): void;
   clearExitPending(bookId: string, instrument: string): void;
-  markStray(bookId: string, instrument: string): void;
   valuation(bookId: string, markGbp: MarkPriceGbp): Valuation;
   lastDay(bookId: string): BookDay | undefined;
   markDay(

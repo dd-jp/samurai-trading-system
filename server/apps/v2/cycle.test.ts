@@ -2092,6 +2092,42 @@ describe('runCycle: protected exits carry a native Alpaca bracket safely (#1801)
         'v2-debate-primary-2026-09-30-AAPL-exit',
       );
     });
+
+    it('a late duplicate bracket leg opening from flat is flattened the same as a flip', async () => {
+      const alpaca = new FakeAlpacaProtected();
+      const deps = harness([longAapl], false, alpaca);
+      await runCycle(deps, '2026-09-25');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+      deps.setDecisions([]);
+      await runCycle(deps, '2026-09-28');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'target', 6, 25);
+      await runCycle(deps, '2026-09-29');
+      expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+
+      // A duplicate leg from the same native bracket firing after the other already closed it
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 4, 18);
+      const report = await runCycle(deps, '2026-09-30');
+
+      expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+        qty: -4,
+        stray: true,
+        exitClientOrderId: 'v2-debate-primary-2026-09-30-AAPL-exit',
+      });
+      expect(alpaca.protectedExits).toHaveLength(1);
+      expect(alpaca.protectedExits[0]).toEqual({
+        entryClientOrderId: 'v2-debate-primary-2026-09-25-AAPL',
+        clientOrderId: 'v2-debate-primary-2026-09-30-AAPL-exit',
+        instrument: 'AAPL',
+        side: 'buy',
+        size: 4,
+        rearm: undefined,
+      });
+      expect(report.refusals).toContainEqual(
+        'debate/primary AAPL: a stop fill on v2-debate-primary-2026-09-25-AAPL left qty -4 ' +
+          'where no position was held; a fill must never flip or open a position outside a ' +
+          'fresh entry (#1778)',
+      );
+    });
   });
 });
 

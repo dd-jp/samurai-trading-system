@@ -4,6 +4,7 @@ import type {
   BookLedger,
   BookSpec,
   CapitalYear,
+  FillLeg,
   LossBudgetState,
   MarkPriceGbp,
   Position,
@@ -20,6 +21,14 @@ import type { CapitalConfigStore } from './capital-config.js';
 import { LossBudget } from './loss-budget.js';
 
 const FLAT_EPSILON = 1e-9;
+
+// A sign change, or a flat->nonzero open by a non-entry leg, is a crossing fill (#1778)
+function crossedUnexpectedly(leg: FillLeg, beforeQty: number, afterQty: number): boolean {
+  const beforeSign = Math.sign(beforeQty);
+  const afterSign = Math.sign(afterQty);
+  if (beforeSign !== 0 && afterSign !== 0) return beforeSign !== afterSign;
+  return beforeSign === 0 && afterSign !== 0 && leg !== 'entry';
+}
 
 interface BookDayRow {
   trading_date: string;
@@ -204,17 +213,22 @@ export class PaperBooks implements BookLedger {
       const qty = (held?.qty ?? 0) + signedQty;
       if (Math.abs(qty) < FLAT_EPSILON) {
         this.#closePosition(bookId, fill.instrument);
-        return undefined;
-      }
-      if (held !== undefined && Math.sign(held.qty) === Math.sign(qty)) {
-        this.#resizePosition(bookId, held, fill, qty);
       } else {
-        this.#closePosition(bookId, fill.instrument);
-        this.#openPosition(bookId, fill, qty);
+        this.#setPositionQty(bookId, held, fill, qty);
       }
       return this.position(bookId, fill.instrument);
     });
     return apply();
+  }
+
+  #setPositionQty(bookId: string, held: Position | undefined, fill: BookFill, qty: number): void {
+    if (held !== undefined && Math.sign(held.qty) === Math.sign(qty)) {
+      this.#resizePosition(bookId, held, fill, qty);
+      return;
+    }
+    const stray = crossedUnexpectedly(fill.leg, held?.qty ?? 0, qty);
+    this.#closePosition(bookId, fill.instrument);
+    this.#openPosition(bookId, fill, qty, stray);
   }
 
   #closePosition(bookId: string, instrument: string): void {
@@ -223,12 +237,12 @@ export class PaperBooks implements BookLedger {
       .run(bookId, instrument);
   }
 
-  #openPosition(bookId: string, fill: BookFill, qty: number): void {
+  #openPosition(bookId: string, fill: BookFill, qty: number, stray: boolean): void {
     this.db
       .prepare(
         `INSERT INTO v2_positions (book_id, instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp,
-           client_order_id, exit_client_order_id, opened_date, marks_held, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?)`,
+           client_order_id, exit_client_order_id, opened_date, marks_held, stray, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)`,
       )
       .run(
         bookId,
@@ -240,6 +254,7 @@ export class PaperBooks implements BookLedger {
         fill.targetGbp ?? null,
         fill.clientOrderId,
         fill.tradingDate,
+        stray ? 1 : 0,
         this.#now(),
       );
   }
@@ -266,18 +281,6 @@ export class PaperBooks implements BookLedger {
     this.db
       .prepare(
         `UPDATE v2_positions SET exit_client_order_id = NULL, updated_at = ?
-         WHERE book_id = ? AND instrument = ?`,
-      )
-      .run(this.#now(), bookId, instrument);
-  }
-
-  // Persisted rather than derived from stopGbp/targetGbp: a normal single-leg entry whose
-  // rearm price never got journalled looks identical to a crossing-fill stray by that measure
-  // (#1801's REARM_BACKSTOP case), so it isn't a safe substitute signal
-  markStray(bookId: string, instrument: string): void {
-    this.db
-      .prepare(
-        `UPDATE v2_positions SET stray = 1, updated_at = ?
          WHERE book_id = ? AND instrument = ?`,
       )
       .run(this.#now(), bookId, instrument);
