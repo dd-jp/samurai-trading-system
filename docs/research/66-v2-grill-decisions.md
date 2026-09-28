@@ -198,10 +198,10 @@ Asked in a chat session after David compared v2 with a UK-equities brainstorm an
 
 Not decided by this ruling, each for David, one question at a time:
 
-1. Which sleeves may use CFDs (the debate sleeve only, as Q8 scopes shorts, or the S2 rules candidates too).
+1. ~~Which sleeves may use CFDs (the debate sleeve only, as Q8 scopes shorts, or the S2 rules candidates too).~~ **Ruled 2026-09-28 (#1858): "Debate sleeve only (Recommended)".** The S2 candidates stay long-only in cash and ETFs; CFDs for them later would be a new counted trial.
 2. ~~Leverage: CFD margin lets notional exceed equity; whether gross notional is capped (for example at 1× book equity) so the G6 loss budget and the 1.0% daily cap still bound the book.~~ **Ruled 2026-09-28: "Cap at 1× book equity (Recommended)".** A book's gross notional, cash and CFD, long plus short, never exceeds its equity;
 3. ~~The short gap bound: whether Q8's "+30% gap costs ≤ ~£150" carries over to CFD shorts, UK and US alike.~~ **Ruled 2026-09-28: "Scale bound to 30% sleeve share".** Every CFD short, UK or US, is sized so a +30% gap costs ≤ ~£45 (30% of Q8's ~£150, matching the sleeve-share caps of 2026-09-27). Whether Q8's Alpaca bound scales the same way was not asked and stays as Q8 wrote it.
-4. Routing: whether US single stocks go to Saxo CFDs, Alpaca, or both (a CFD short avoids Alpaca's $2,000 floor, Q8 / doc 69 R3); whether UK longs go through CFDs (no stamp duty, overnight financing) and whether index exposure goes through CFDs or 1× ETFs.
+4. ~~Routing: whether US single stocks go to Saxo CFDs, Alpaca, or both~~ **Ruled 2026-09-28 (#1859):** US single stocks: **"Alpaca longs, Saxo CFD shorts (Recommended)"**; UK and index exposure: **"Longs cash/1× ETF, CFD for shorts only (Recommended)"**, UK single-stock longs through CFDs only, since cash UK shares pay 0.5% stamp duty (Q2). Original question: whether US single stocks go to Saxo CFDs, Alpaca, or both (a CFD short avoids Alpaca's $2,000 floor, Q8 / doc 69 R3); whether UK longs go through CFDs (no stamp duty, overnight financing) and whether index exposure goes through CFDs or 1× ETFs.
 5. Costs to model before paper: Saxo's CFD commission and minimum ticket, spread, overnight financing on longs and shorts, and borrow charges on single-stock shorts.
 6. Tax: how CFD disposals are taxed and logged beside the per-disposal share-matching log; doc 69 R1's accountant confirmation to cover CFDs as well as automation and shorting.
 
@@ -232,6 +232,14 @@ A session on David's Mac tested each v3 candidate against the v2 baseline, outsi
 | Shorts and CFDs | After the mirrored-shorts FAIL, what happens to shorts and the CFD build ([#1849](https://github.com/dd-jp/samurai-trading-system/issues/1849))? | David: *"build shorts and cfd"*. #1849 proceeds; shorts remain a counted trial against arm 2 (Q17). |
 | Failed candidates | Disposition of tiered exits, the stale-price guard and the intraday filters and setups | **"Close #1853, park #1854, G2 stands (Recommended)"**: [#1853](https://github.com/dd-jp/samurai-trading-system/issues/1853) closed; [#1854](https://github.com/dd-jp/samurai-trading-system/issues/1854) parked until an external-signal path exists; VWAP, regime, opening-range and gap-and-go dropped; G2 (no intraday sleeve) unchanged. |
 | Telegram commands | Build [#1852](https://github.com/dd-jp/samurai-trading-system/issues/1852), given the dashboard already has pause/halt/resume? | **"Build before paper"**: phone control through Telegram, kill line before Step 4b. |
+
+## Ruling of 2026-09-28 — fallback entry rule as an S2 candidate
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| [#1861](https://github.com/dd-jp/samurai-trading-system/issues/1861) | Should the v3 evidence run's fallback entry rule (out-of-sample Sharpe about 0.94) become its own rules-only candidate? | **"Yes, queue after the 4 declared (Recommended)"**: a fifth S2 candidate with its own counted trials, LLM entry veto and no-veto shadow (S1–S7), run after the four already declared. Its exact definition is copied from the Mac report into #1861 before any work. |
+
+Also filed the same day, not a ruling: [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860), the volatility-targeted sizing trial from the loss-controls ruling above.
 
 ## Still open
 
