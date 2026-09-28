@@ -3881,4 +3881,65 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
       /submitFlatten failed.*inline re-arm also failed.*rearmProtectiveLegs failed.*UNPROTECTED/s,
     );
   });
+
+  it('sizes the flatten off the position matching the requested instrument, not just the first one on the account', async () => {
+    const submitMarketOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'accepted' });
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue([
+        { symbol: 'TSLA', qty: '40', side: 'long' as const, avg_entry_price: '250' },
+        ...livePosition('6'),
+      ]),
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client);
+
+    await adapter.submitProtectedExit(request());
+
+    expect(submitMarketOrder).toHaveBeenCalledWith(expect.objectContaining({ qty: '6' }));
+  });
+
+  it('cancels only the stop leg when the target has already left the resting bracket, without a prior rearm', async () => {
+    const cancelOrder = vi.fn().mockResolvedValue(undefined);
+    const submitMarketOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'accepted' });
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(
+        restingEntryOrder({
+          legs: [
+            {
+              id: TARGET_LEG_ID,
+              type: 'limit',
+              status: 'filled',
+              filled_qty: '6',
+              filled_avg_price: '110',
+              filled_at: '2026-09-28T00:00:00Z',
+            },
+            {
+              id: STOP_LEG_ID,
+              type: 'stop',
+              status: 'new',
+              filled_qty: '0',
+              filled_avg_price: null,
+              filled_at: null,
+            },
+          ],
+        }),
+      ),
+      cancelOrder,
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue([]),
+      submitMarketOrder,
+    });
+    const adapter = adapterWith(client);
+
+    await adapter.submitProtectedExit(request());
+
+    expect(cancelOrder).toHaveBeenCalledExactlyOnceWith(STOP_LEG_ID);
+  });
 });
