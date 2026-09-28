@@ -1,4 +1,5 @@
 import {
+  type CapitalYear,
   type ControlRowWire,
   type ControlWire,
   type DecisionsWire,
@@ -15,8 +16,14 @@ import {
 } from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
 import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index.js';
-import { CapitalConfigStore, ControlStore, dailyCapGbp, sizeStepMarksGbp } from '../risk/index.js';
-import { SqliteMonthlySpendCap, utcMonthStart } from '../signal/index.js';
+import {
+  CapitalConfigStore,
+  ControlStore,
+  dailyCapGbp,
+  sizeStepMarksGbp,
+  sleeveCapitalYear,
+} from '../risk/index.js';
+import { SLEEVE_SPECS_BY_ID, SqliteMonthlySpendCap, utcMonthStart } from '../signal/index.js';
 import { vetoOf } from './journal-reader.js';
 import { type Holdings, type PositionsPanel, readHoldings } from './positions.js';
 
@@ -82,7 +89,26 @@ function latestDate(rows: readonly { trading_date: string }[]): string {
   return rows.reduce((latest, row) => (row.trading_date > latest ? row.trading_date : latest), '');
 }
 
-function bookWire(row: BookDayRow): LossBudgetBookWire {
+interface SleeveCaps {
+  readonly lossCapGbp: number;
+  readonly stepMarksGbp: readonly [number, number, number];
+  readonly dailyCapGbp: number;
+}
+
+// An unregistered sleeve_id shows no scaled figures rather than falling back to the account's
+function sleeveCapsFor(sleeveId: string, capital: CapitalYear): SleeveCaps | undefined {
+  const spec = SLEEVE_SPECS_BY_ID[sleeveId];
+  if (spec === undefined) return undefined;
+  const sleeveCapital = sleeveCapitalYear(spec, capital);
+  return {
+    lossCapGbp: sleeveCapital.lossCapGbp,
+    stepMarksGbp: sizeStepMarksGbp(sleeveCapital.lossCapGbp),
+    dailyCapGbp: dailyCapGbp(sleeveCapital),
+  };
+}
+
+function bookWire(row: BookDayRow, capital: CapitalYear): LossBudgetBookWire {
+  const caps = sleeveCapsFor(row.sleeve_id, capital);
   return {
     book_id: row.book_id,
     sleeve_id: row.sleeve_id,
@@ -92,6 +118,9 @@ function bookWire(row: BookDayRow): LossBudgetBookWire {
     day_loss_gbp: dayLoss(row),
     size_multiplier: row.size_multiplier,
     entries_blocked: row.entries_blocked === 1,
+    loss_cap_gbp: caps?.lossCapGbp ?? null,
+    step_marks_gbp: caps?.stepMarksGbp ?? null,
+    daily_cap_gbp: caps?.dailyCapGbp ?? null,
   };
 }
 
@@ -156,7 +185,7 @@ export class OverviewReader {
       daily_cap_gbp: dailyCapGbp(capital),
       ytd_loss_gbp: sum(primaries.map((row) => row.ytd_loss_gbp)),
       day_loss_gbp: sum(primaries.map(dayLoss)),
-      books: bookDays.map(bookWire),
+      books: bookDays.map((row) => bookWire(row, capital)),
     };
   }
 

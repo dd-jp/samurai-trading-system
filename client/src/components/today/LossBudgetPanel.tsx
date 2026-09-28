@@ -66,10 +66,23 @@ function sleevesOf(books: readonly LossBudgetBookWire[]): string[] {
   return [...new Set(books.map((book) => book.sleeve_id))];
 }
 
+function negOrNull(value: number | null): number | null {
+  return value === null ? null : -value;
+}
+
+function sleeveCap(book: LossBudgetBookWire): string {
+  const cap = gbp(negOrNull(book.loss_cap_gbp));
+  if (book.step_marks_gbp === null) return cap;
+  const [half, quarter, halt] = book.step_marks_gbp;
+  return `${cap} (½ ${gbp(-half)}, ¼ ${gbp(-quarter)}, halt ${gbp(-halt)})`;
+}
+
 function BookRows({ books }: { books: readonly LossBudgetBookWire[] }) {
   return (
     <table className="grid">
-      <TableHead columns={['Book', 'YTD loss', 'Today', 'Size', 'Entries']} />
+      <TableHead
+        columns={['Book', 'YTD loss', 'Sleeve cap', 'Today', 'Daily cap', 'Size', 'Entries']}
+      />
       <tbody>
         {sleevesOf(books).flatMap((sleeve) =>
           books
@@ -80,7 +93,9 @@ function BookRows({ books }: { books: readonly LossBudgetBookWire[] }) {
                   {book.variant === 'primary' ? book.book_id : `↳ ${book.variant} (shadow)`}
                 </th>
                 <td>{gbp(-book.ytd_loss_gbp)}</td>
+                <td>{sleeveCap(book)}</td>
                 <td>{gbp(-book.day_loss_gbp)}</td>
+                <td>{gbp(negOrNull(book.daily_cap_gbp))}</td>
                 <td>{sizeStep(book.size_multiplier)}</td>
                 <td>{book.entries_blocked ? 'blocked at next fill' : 'open'}</td>
               </tr>
