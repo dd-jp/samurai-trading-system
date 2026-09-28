@@ -15,7 +15,9 @@ import type { CycleReport } from './cycle.js';
 import { BarsMarketData, NO_NEWS, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
 import {
   composeV2Root,
+  DEFAULT_HALF_SPREAD_BPS,
   exitCodeFor,
+  halfSpreadLookup,
   llmKeysPresent,
   logNewRefusals,
   main,
@@ -196,7 +198,7 @@ describe('composeV2Root', () => {
         sleeves: ['debate'],
       });
       expect(exitCodeFor(report)).toBe(0);
-      expect(report.refusals.filter((refusal) => refusal.includes('needs David'))).toHaveLength(5);
+      expect(report.refusals.filter((refusal) => refusal.includes('needs David'))).toHaveLength(6);
       const decision = root.db
         .prepare('SELECT action, size_shares, stop_price FROM v2_decisions WHERE book_id = ?')
         .get('debate/primary') as { action: string; size_shares: number; stop_price: number };
@@ -558,6 +560,40 @@ describe('composeV2Root', () => {
     expect(exitCodeFor(base)).toBe(0);
     expect(exitCodeFor({ ...base, submitted_orders: 1 })).toBe(1);
     expect(exitCodeFor({ ...base, submitted_orders: 1, dry_run: false })).toBe(0);
+  });
+});
+
+describe('halfSpreadLookup', () => {
+  let directory: string;
+  afterEach(() => rmSync(directory, { recursive: true, force: true }));
+
+  it('merges alpaca (positional) and saxo (p25_half_spread_bps column) spreads, defaulting the rest', () => {
+    directory = mkdtempSync(join(tmpdir(), 'v2-spreads-'));
+    const alpacaPath = join(directory, 'alpaca-spreads.csv');
+    writeFileSync(alpacaPath, 'symbol,sessions,median_half_spread_bps\nAAPL,10,3\nBAD,1,abc\n');
+    const saxoPath = join(directory, 'saxo-spreads.csv');
+    writeFileSync(
+      saxoPath,
+      'symbol,uic,samples,p25_half_spread_bps,median_half_spread_bps,measured_at\nISF,4361,10,4,5,2026-09-23\nNEG,1,1,-1,-1,x\n',
+    );
+    const lookup = halfSpreadLookup(alpacaPath, saxoPath);
+    expect(lookup('AAPL')).toBe(3);
+    expect(lookup('ISF')).toBe(4);
+    expect(lookup('BAD')).toBe(DEFAULT_HALF_SPREAD_BPS);
+    expect(lookup('NEG')).toBe(DEFAULT_HALF_SPREAD_BPS);
+    expect(lookup('UNKNOWN')).toBe(DEFAULT_HALF_SPREAD_BPS);
+  });
+
+  it('defaults every saxo instrument when the file is missing or lacks the p25 column', () => {
+    directory = mkdtempSync(join(tmpdir(), 'v2-spreads-'));
+    const alpacaPath = join(directory, 'alpaca-spreads.csv');
+    writeFileSync(alpacaPath, 'symbol,sessions,median_half_spread_bps\nAAPL,10,3\n');
+    const missingPath = join(directory, 'absent.csv');
+    expect(existsSync(missingPath)).toBe(false);
+    expect(halfSpreadLookup(alpacaPath, missingPath)('ISF')).toBe(DEFAULT_HALF_SPREAD_BPS);
+    const noColumnPath = join(directory, 'no-column.csv');
+    writeFileSync(noColumnPath, 'symbol,uic\nISF,4361\n');
+    expect(halfSpreadLookup(alpacaPath, noColumnPath)('ISF')).toBe(DEFAULT_HALF_SPREAD_BPS);
   });
 });
 

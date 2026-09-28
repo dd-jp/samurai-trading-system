@@ -108,7 +108,10 @@ function failedSubmission(order: RiskApprovedOrder, error: unknown): Submission 
   if (!(error instanceof DryRunRefusedError)) {
     return { outcome: 'rejected', detail: describeThrownSafely(error), approvalId };
   }
-  const outcome = order.bookVariant === 'primary' ? 'refused_dry_run' : 'simulated';
+  // Saxo has no live adapter yet (#1400): a primary Saxo order always hits the
+  // DryRunBrokerAdapter by design, not because a dry run refused it
+  const outcome =
+    order.bookVariant === 'primary' && order.venue !== 'saxo' ? 'refused_dry_run' : 'simulated';
   return { outcome, detail: error.message, approvalId };
 }
 
@@ -116,7 +119,9 @@ export class V2OrderExecutor implements OrderExecutor {
   constructor(private readonly deps: ExecutorDeps) {}
 
   simulates(route: ExecutionRoute): boolean {
-    return this.deps.dryRun || route.bookVariant !== 'primary';
+    // #1400: v2 has no live Saxo adapter, so every Saxo route is simulated
+    // regardless of dry run or book variant
+    return this.deps.dryRun || route.bookVariant !== 'primary' || route.venue === 'saxo';
   }
 
   quoteSimulatedFill(venue: Venue, request: SimulatedFillRequest): SimulatedFillQuote {

@@ -33,6 +33,7 @@ import { inputsHash } from '../journal/index.js';
 import { candleFeatures, candleLine } from './candle.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
+import { selectLseUniverse } from './lse-universe.js';
 import {
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
@@ -386,9 +387,10 @@ export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
         deps.bars,
         context.tradingDate,
       );
+      const lse = selectLseUniverse(deps.bars, context.tradingDate);
       return {
-        instruments: [...selection.liquidity, ...selection.movers],
-        refusals: selection.refusals.map((refusal) => ({
+        instruments: [...selection.liquidity, ...selection.movers, ...lse.instruments],
+        refusals: [...selection.refusals, ...lse.refusals].map((refusal) => ({
           scope: 'universe',
           parameter: refusal.parameter,
           ticket: refusal.ticket,

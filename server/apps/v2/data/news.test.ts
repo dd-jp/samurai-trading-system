@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/sources/alpaca-news-client.js';
-import { AlpacaNewsSource, MAX_HEADLINES_PER_NAME, NO_NEWS, perNameHeadlines } from './news.js';
+import {
+  AlpacaNewsSource,
+  MAX_HEADLINES_PER_NAME,
+  NO_NEWS,
+  newsForVenue,
+  perNameHeadlines,
+} from './news.js';
 
 function article(id: number, headline: string, symbols: string[]): AlpacaNewsArticle {
   return {
@@ -42,5 +48,13 @@ describe('news', () => {
     expect(await source.headlines('NVDA', '2026-09-25', now)).toEqual(['x']);
     expect(calls).toEqual([[['NVDA'], '2026-09-24T00:00:00.000Z', '2026-09-25T07:00:00.000Z']]);
     expect(await NO_NEWS.headlines('NVDA', '2026-09-25', now)).toEqual([]);
+  });
+
+  it('routes LSE symbols to no news and everything else through (doc 66 G18(2))', async () => {
+    const inner = { headlines: () => Promise.resolve(['real headline']) };
+    const routed = newsForVenue(inner, (symbol) => symbol === 'ISF');
+    const now = new Date('2026-09-25T07:00:00.000Z');
+    expect(await routed.headlines('ISF', '2026-09-25', now)).toEqual([]);
+    expect(await routed.headlines('AAPL', '2026-09-25', now)).toEqual(['real headline']);
   });
 });

@@ -1033,7 +1033,7 @@ describe('runCycle', () => {
     expect(deps.books.position('debate/primary', 'AAPL')?.qty).toBe(6);
   });
 
-  it('rejects an entry for a venue without a broker, without a stop, and on a broker error', async () => {
+  it('rejects a missing stop and a broker error; a saxo primary entry simulates (#1400: no live Saxo adapter)', async () => {
     const saxo: SleeveDecision = {
       ...longAapl,
       instrument: 'CSP1',
@@ -1050,8 +1050,8 @@ describe('runCycle', () => {
     expect(report).toMatchObject({
       decisions: 4,
       entries: 6,
-      rejected_orders: 4,
-      simulated_orders: 2,
+      rejected_orders: 3,
+      simulated_orders: 3,
       submitted_orders: 0,
     });
     expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'NOATR')).toBe(0);
@@ -1064,7 +1064,11 @@ describe('runCycle', () => {
       ]),
     ).toEqual([
       ['v2-debate-primary-2026-09-25-AAPL', 'rejected', expect.stringContaining('422')],
-      ['v2-debate-primary-2026-09-25-CSP1', 'rejected', 'no_broker_for_venue:saxo'],
+      [
+        'v2-debate-primary-2026-09-25-CSP1',
+        'simulated',
+        expect.stringContaining('dry run refused'),
+      ],
       ['v2-debate-primary-2026-09-25-NOSTOP', 'rejected', 'no_stop_price'],
     ]);
     expect(

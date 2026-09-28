@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type {
   AnthropicMessagesClient,
@@ -23,8 +23,10 @@ import {
   BarsMarketData,
   type BarsSource,
   currentConstituents,
+  MultiVenueBarsSource,
   type NewsSource,
   NO_NEWS,
+  newsForVenue,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
@@ -37,6 +39,7 @@ import {
   BULLISH_SCRIPT,
   buildLlmPanel,
   createDebateSleeve,
+  isLseInstrument,
   type LlmPanel,
   type ModelPin,
   NousPinnedTransport,
@@ -50,6 +53,7 @@ export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
 export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
+export const SAXO_SPREADS_PATH = 'data/bars/saxo-spreads.csv';
 export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 export const DEFAULT_HALF_SPREAD_BPS = 5;
 const LLM_MAX_IN_FLIGHT_PER_ACCOUNT = 1;
@@ -63,6 +67,7 @@ export interface V2RootOptions {
   readonly barStoreRoot?: string | undefined;
   readonly constituentsPath?: string | undefined;
   readonly spreadsPath?: string | undefined;
+  readonly saxoSpreadsPath?: string | undefined;
   readonly fxPath?: string | undefined;
   readonly nousBaseUrl?: string | undefined;
   readonly nousApiKey?: string | undefined;
@@ -146,12 +151,33 @@ function transportsFor(
   };
 }
 
-function halfSpreadLookup(path: string): (instrument: string) => number {
-  const spreads = new Map<string, number>();
+function addAlpacaSpreads(spreads: Map<string, number>, path: string): void {
   for (const line of readFileSync(path, 'utf8').split('\n').slice(1)) {
     const [symbol, , bps] = line.split(',');
     if (symbol !== undefined && Number(bps) >= 0) spreads.set(symbol.trim(), Number(bps));
   }
+}
+
+function addSaxoSpreads(spreads: Map<string, number>, path: string): void {
+  if (!existsSync(path)) return;
+  const lines = readFileSync(path, 'utf8').split('\n');
+  const p25Index = lines[0]?.split(',').indexOf('p25_half_spread_bps') ?? -1;
+  if (p25Index < 0) return;
+  for (const line of lines.slice(1)) {
+    const cells = line.split(',');
+    const symbol = cells[0];
+    const bps = Number(cells[p25Index]);
+    if (symbol !== undefined && bps >= 0) spreads.set(symbol.trim(), bps);
+  }
+}
+
+export function halfSpreadLookup(
+  alpacaPath: string,
+  saxoPath: string,
+): (instrument: string) => number {
+  const spreads = new Map<string, number>();
+  addAlpacaSpreads(spreads, alpacaPath);
+  addSaxoSpreads(spreads, saxoPath);
   return (instrument) => spreads.get(instrument) ?? DEFAULT_HALF_SPREAD_BPS;
 }
 
@@ -162,7 +188,8 @@ function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => r
 
 function newsSourceFor(options: V2RootOptions): NewsSource {
   if (options.newsSource !== undefined) return options.newsSource;
-  return options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient());
+  const base = options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient());
+  return newsForVenue(base, isLseInstrument);
 }
 
 const STDERR_LOGGER: Logger = {
@@ -186,8 +213,16 @@ function barsSourceFor(options: V2RootOptions): {
   prime: () => Promise<void>;
 } {
   if (options.bars !== undefined) return { bars: options.bars, prime: () => Promise.resolve() };
-  const bars = new ParquetBarsSource(options.barStoreRoot ?? DEFAULT_BAR_STORE_ROOT, 'alpaca');
-  return { bars, prime: () => bars.prime() };
+  const root = options.barStoreRoot ?? DEFAULT_BAR_STORE_ROOT;
+  const alpaca = new ParquetBarsSource(root, 'alpaca');
+  const saxo = new ParquetBarsSource(root, 'saxo', { optional: true });
+  return {
+    bars: new MultiVenueBarsSource([alpaca, saxo]),
+    prime: async () => {
+      await alpaca.prime();
+      await saxo.prime();
+    },
+  };
 }
 
 export function composeV2Root(options: V2RootOptions): V2Root {
@@ -217,7 +252,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       panel,
       bars,
       constituents,
-      venueFor: () => 'alpaca',
+      venueFor: (symbol) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca'),
       news,
       clock,
       logger,
@@ -233,7 +268,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     openingDate: options.tradingDate,
     tradingDate: () => options.tradingDate,
     dryRun: options.dryRun,
-    halfSpreadBps: halfSpreadLookup(options.spreadsPath ?? SPREADS_PATH),
+    halfSpreadBps: halfSpreadLookup(
+      options.spreadsPath ?? SPREADS_PATH,
+      options.saxoSpreadsPath ?? SAXO_SPREADS_PATH,
+    ),
     alpacaClient: options.alpacaClient,
   });
   return {

@@ -1,0 +1,80 @@
+import { describe, expect, it } from 'vitest';
+import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
+import type { BarsSource } from '../data/index.js';
+import { lseInstrumentsAbove, selectLseUniverse } from './lse-universe.js';
+import { SAXO_APPROPRIATENESS_TEST_TAKEN } from './parameters.js';
+
+function series(symbol: string, days: number, price: number, volume: number): BarSeries {
+  const bars: DailyBar[] = [];
+  for (let i = 0; i < days; i += 1) {
+    const day = String(i + 1).padStart(2, '0');
+    bars.push({
+      date: `2026-09-${day}`,
+      open: price,
+      high: price + 1,
+      low: price - 1,
+      close: price,
+      volume,
+      rawClose: price,
+    });
+  }
+  return { symbol, bars };
+}
+
+function withCalendar(all: readonly BarSeries[]): readonly BarSeries[] {
+  const dates = [...new Set(all.flatMap((entry) => entry.bars.map((bar) => bar.date)))].sort();
+  const reference = dates.map((date) => ({
+    date,
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+    volume: 1,
+    rawClose: 1,
+  }));
+  return [...all, { symbol: 'ISF', bars: reference }];
+}
+
+function memorySource(all: readonly BarSeries[]): BarsSource {
+  const withReference = withCalendar(all);
+  return { load: (symbol) => withReference.find((entry) => entry.symbol === symbol) };
+}
+
+describe('lseInstrumentsAbove', () => {
+  it('screens by 20-day average GBP notional and gates SGLN/SSLN behind the appropriateness test', () => {
+    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(false);
+    const source = memorySource([
+      series('ISF', 25, 100, 1_000_000),
+      series('IGLT', 25, 1, 100),
+      series('SGLN', 25, 100, 1_000_000),
+    ]);
+    const instruments = lseInstrumentsAbove(source, '2026-09-26', 50_000_000);
+    expect(instruments).toContain('ISF');
+    expect(instruments).not.toContain('IGLT');
+    expect(instruments).not.toContain('SGLN');
+  });
+
+  it('excludes a name with no covered bars, and admits everything at a zero floor', () => {
+    const source = memorySource([series('ISF', 25, 100, 1_000_000)]);
+    expect(lseInstrumentsAbove(source, '2026-09-26', 0)).toEqual(['ISF']);
+    expect(lseInstrumentsAbove(source, '2026-09-26', Number.POSITIVE_INFINITY)).toEqual([]);
+  });
+
+  it('admits a name whose average notional exactly equals the floor', () => {
+    const source = memorySource([series('ISF', 25, 100, 1_000_000)]);
+    expect(lseInstrumentsAbove(source, '2026-09-26', 100_000_000)).toEqual(['ISF']);
+    expect(lseInstrumentsAbove(source, '2026-09-26', 100_000_000.01)).toEqual([]);
+  });
+});
+
+describe('selectLseUniverse', () => {
+  it('refuses cleanly with no instruments while the liquidity screen is unset (doc 66: universe route, #1774)', () => {
+    const source = memorySource([series('ISF', 25, 100, 1_000_000)]);
+    const selection = selectLseUniverse(source, '2026-09-26');
+    expect(selection.instruments).toEqual([]);
+    expect(selection.refusals).toHaveLength(1);
+    expect(selection.refusals[0]?.parameter).toBe('LSE_LIQUIDITY_SCREEN');
+    expect(selection.refusals[0]?.ticket).toBe('#1774');
+    expect(selection.refusals[0]?.message).toContain('needs David');
+  });
+});

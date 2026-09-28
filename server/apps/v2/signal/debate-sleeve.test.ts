@@ -241,7 +241,10 @@ describe('createDebateSleeve', () => {
         expect(call.prompt).toContain('prior-day candle:');
       }
     }
-    expect(output.refusals.map((refusal) => refusal.parameter)).toEqual(['G18_SMALL_CAP_FLOORS']);
+    expect(output.refusals.map((refusal) => refusal.parameter)).toEqual([
+      'G18_SMALL_CAP_FLOORS',
+      'LSE_LIQUIDITY_SCREEN',
+    ]);
     expect(decision?.payload).toMatchObject({ headlines: 0, disagreement: '', converged: true });
   });
 

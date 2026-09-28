@@ -182,9 +182,10 @@ describe('V2OrderExecutor', () => {
   it('routes the primary to its venue broker and every shadow to the simulated broker', async () => {
     const { executor: paper, alpaca, simulated } = executor(false);
     expect(paper.simulates({ bookVariant: 'primary', venue: 'alpaca' })).toBe(false);
+    expect(paper.simulates({ bookVariant: 'primary', venue: 'saxo' })).toBe(true);
     expect(paper.simulates({ bookVariant: 'no-macro-gate', venue: 'alpaca' })).toBe(true);
     expect(paper.canRoute({ bookVariant: 'primary', venue: 'alpaca' })).toBe(true);
-    expect(paper.canRoute({ bookVariant: 'primary', venue: 'saxo' })).toBe(false);
+    expect(paper.canRoute({ bookVariant: 'primary', venue: 'saxo' })).toBe(true);
     expect(paper.canRoute({ bookVariant: 'no-macro-gate', venue: 'saxo' })).toBe(true);
     expect(await paper.submit(entry())).toEqual({
       outcome: 'submitted',
@@ -264,17 +265,36 @@ describe('V2OrderExecutor', () => {
     expect(alpaca.rearmProtectiveLegs).toHaveBeenCalledWith('c0', 'AAPL', 'buy', 6, 21, 18);
   });
 
-  it('rejects a primary order with no broker for its venue and a broker error', async () => {
-    const { executor: paper, alpaca } = executor(false);
-    expect(await paper.submit(entry(primary, 'saxo'))).toEqual({
-      outcome: 'rejected',
-      detail: 'no_broker_for_venue:saxo',
+  it('a primary saxo order routes to the simulated broker (#1400: no live Saxo adapter), and a broker error rejects', async () => {
+    const { executor: paper, simulated, alpaca } = executor(false);
+    expect(await paper.submit(entry(primary, 'saxo'))).toMatchObject({
+      outcome: 'submitted',
+      detail: 'sim-bracket',
       approvalId: 'entry:e-primary-saxo:5',
     });
+    expect(simulated.submitBracket).toHaveBeenCalledTimes(1);
     alpaca.submitBracket.mockRejectedValueOnce(new Error('422 target required'));
     expect(await paper.submit(entry())).toMatchObject({
       outcome: 'rejected',
       detail: expect.stringContaining('422 target required'),
+    });
+  });
+
+  it('rejects a primary order when no broker at all covers its venue', async () => {
+    const { alpaca, simulated } = executor(false);
+    const noSaxo = new V2OrderExecutor({
+      brokers: { alpaca: asAdapter(alpaca) },
+      simulatedBrokers: {
+        alpaca: asAdapter(simulated),
+        saxo: undefined as unknown as BrokerAdapter,
+      },
+      pricing: PRICING,
+      dryRun: false,
+    });
+    expect(await noSaxo.submit(entry(primary, 'saxo'))).toEqual({
+      outcome: 'rejected',
+      detail: 'no_broker_for_venue:saxo',
+      approvalId: 'entry:e-primary-saxo:5',
     });
   });
 
@@ -292,6 +312,7 @@ describe('V2OrderExecutor', () => {
       detail: refusal.message,
     });
     expect(await dry.submit(entry(shadow))).toMatchObject({ outcome: 'simulated' });
+    expect(await dry.submit(entry(primary, 'saxo'))).toMatchObject({ outcome: 'simulated' });
     expect(alpaca.submitBracket).not.toHaveBeenCalled();
   });
 
