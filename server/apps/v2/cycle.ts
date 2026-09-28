@@ -280,6 +280,7 @@ class Cycle {
       instrument: order.instrument,
     });
     this.refusals.push(message);
+    this.log('error', 'v2_crossing_fill', message);
   }
 
   fillSimulatedEntries(): void {

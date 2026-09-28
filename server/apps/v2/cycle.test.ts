@@ -674,6 +674,25 @@ describe('runCycle', () => {
     ).toEqual([{ book_id: 'debate/primary', instrument: 'AAPL' }]);
   });
 
+  it('#1778: a crossing fill logs error (critical alert), not just a silent refusal', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    const log = vi.fn();
+    await runCycle({ ...deps, logger: { log } }, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle({ ...deps, logger: { log } }, '2026-09-28');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+    await runCycle({ ...deps, logger: { log } }, '2026-09-29');
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_crossing_fill',
+        message: expect.stringContaining('(#1778)'),
+      }),
+    );
+  });
+
   it('#1778: a partial stop fill resizes the position and keeps its stop/target', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
