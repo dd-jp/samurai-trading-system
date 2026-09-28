@@ -402,6 +402,7 @@ describe('createDebateSleeve', () => {
     expect(failed.decisions[0]).toMatchObject({
       direction: 'neutral',
       action: 'skip',
+      price: series.bars.at(-1)?.close,
       inputs_hash: '',
     });
     expect(failed.decisions[0]?.reason).toMatch(/^news_error:.*alpaca news 500/);
