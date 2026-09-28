@@ -81,6 +81,23 @@ describe('createCrossAssetTrendSleeve', () => {
     }
   });
 
+  it('rescales atr and stop_price by the raw/close ratio on a split-adjusted last bar', async () => {
+    // Base bars close=100 flat; the last bar's close=150 (above the ~100.5 SMA, enters long) with
+    // a wide 140-160 range against a flat 100 previous close, so its true range is 60 and the
+    // 20-day ATR is 60/20=3 in close terms; rawClose=375 makes the raw/close ratio 2.5, so the
+    // rescaled atr is 3*2.5=7.5 and stop_price is 375 - 3*7.5=352.5
+    const sleeve = createCrossAssetTrendSleeve(100)(
+      flatMarket(150, { high: 160, low: 140, rawClose: 375 }),
+    );
+    const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+    for (const decision of output.decisions) {
+      expect(decision.action).toBe('enter_long');
+      expect(decision.price).toBe(375);
+      expect(decision.atr).toBeCloseTo(7.5, 9);
+      expect(decision.stop_price).toBeCloseTo(352.5, 9);
+    }
+  });
+
   it('exits when the close is below the SMA', async () => {
     const sleeve = createCrossAssetTrendSleeve(100)(flatMarket(50));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
