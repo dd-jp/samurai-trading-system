@@ -297,15 +297,23 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     try {
       ack = await this.submitFlatten(instrument, side, qty, clientOrderId, 'day');
     } catch (error) {
-      await this.rearmAfterFailedExit(entryClientOrderId, instrument, side, qty, rearm);
+      await this.rearmAfterFailedExit(
+        entryClientOrderId,
+        instrument,
+        side,
+        qty,
+        rearm,
+        error as Error,
+      );
       throw error;
     }
     if (ack.order_state === 'rejected') {
-      await this.rearmAfterFailedExit(entryClientOrderId, instrument, side, qty, rearm);
-      throw new Error(
+      const rejected = new Error(
         `submitProtectedExit: day flatten '${clientOrderId}' for ${instrument} was rejected by ` +
           'Alpaca; protective legs were re-armed inline',
       );
+      await this.rearmAfterFailedExit(entryClientOrderId, instrument, side, qty, rearm, rejected);
+      throw rejected;
     }
     return ack;
   }
@@ -316,22 +324,32 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     closingSide: 'buy' | 'sell',
     qty: number,
     rearm: { readonly stop: number; readonly target: number } | undefined,
+    cause: Error,
   ): Promise<void> {
     if (rearm === undefined) {
       throw new Error(
         `submitProtectedExit: the flatten for ${instrument} (${entryClientOrderId}) failed with ` +
           'no journalled rearm price available; the position is UNPROTECTED',
+        { cause },
       );
     }
     const entrySide = closingSide === 'buy' ? 'sell' : 'buy';
-    await this.rearmProtectiveLegs(
-      entryClientOrderId,
-      instrument,
-      entrySide,
-      qty,
-      rearm.stop,
-      rearm.target,
-    );
+    try {
+      await this.rearmProtectiveLegs(
+        entryClientOrderId,
+        instrument,
+        entrySide,
+        qty,
+        rearm.stop,
+        rearm.target,
+      );
+    } catch (rearmError) {
+      throw new Error(
+        `${cause.message}; the inline re-arm also failed ` +
+          `(${(rearmError as Error).message}) — the position may be UNPROTECTED`,
+        { cause },
+      );
+    }
   }
 
   private async cancelBracketLegsForExit(

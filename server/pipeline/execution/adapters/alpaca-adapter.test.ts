@@ -3865,4 +3865,20 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
     );
     expect(submitOcoOrder).not.toHaveBeenCalled();
   });
+
+  it('surfaces both failures, with UNPROTECTED wording, when the inline rearm itself fails after the flatten submission throws', async () => {
+    const client = makeClient({
+      getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+      getOrder: confirmingGetOrder(),
+      getPositions: vi.fn().mockResolvedValue(livePosition()),
+      submitMarketOrder: vi.fn().mockRejectedValue(new Error('network blip')),
+      submitOcoOrder: vi.fn().mockRejectedValue(new Error('venue unavailable')),
+    });
+    const adapter = adapterWith(client);
+
+    await expect(adapter.submitProtectedExit(request())).rejects.toThrow(
+      /submitFlatten failed.*inline re-arm also failed.*rearmProtectiveLegs failed.*UNPROTECTED/s,
+    );
+  });
 });
