@@ -614,6 +614,115 @@ describe('runCycle', () => {
     ]);
   });
 
+  it('#1778: one oversized fill that flips long straight to short is journaled loudly, unbracketed', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')?.qty).toBe(6);
+    // Never passes through flat: one fill both closes the long and opens a short
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+    const report = await runCycle(deps, '2026-09-29');
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: -9,
+      avgPriceGbp: expect.closeTo(18 / FX, 9),
+      stopGbp: undefined,
+      targetGbp: undefined,
+    });
+    expect(report.refusals).toContainEqual(
+      'debate/primary AAPL: a stop fill on v2-debate-primary-2026-09-25-AAPL left qty -9 ' +
+        'where qty 6 held; a fill must never flip or open a position outside a fresh entry ' +
+        '(#1778)',
+    );
+  });
+
+  it('#1778: a stray closing fill on an already-flat position opens unbracketed and is journaled loudly', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 6, 19.2);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    // Broker-side OCO race: the sibling target leg reports a fill after the stop already closed it
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'target', 6, 21.2);
+    const report = await runCycle(deps, '2026-09-30');
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: -6,
+      avgPriceGbp: expect.closeTo(21.2 / FX, 9),
+      stopGbp: undefined,
+      targetGbp: undefined,
+    });
+    expect(report.refusals).toContainEqual(
+      'debate/primary AAPL: a target fill on v2-debate-primary-2026-09-25-AAPL left qty -6 ' +
+        'where no position was held; a fill must never flip or open a position outside a ' +
+        'fresh entry (#1778)',
+    );
+    const db = (
+      deps.journal as unknown as {
+        db: { prepare: (sql: string) => { all: () => unknown[] } };
+      }
+    ).db;
+    expect(
+      db
+        .prepare("SELECT book_id, instrument FROM v2_refusals WHERE parameter = 'CROSSING_FILL'")
+        .all(),
+    ).toEqual([{ book_id: 'debate/primary', instrument: 'AAPL' }]);
+  });
+
+  it('#1778: a crossing fill logs error (critical alert), not just a silent refusal', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    const log = vi.fn();
+    await runCycle({ ...deps, logger: { log } }, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle({ ...deps, logger: { log } }, '2026-09-28');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 15, 18);
+    await runCycle({ ...deps, logger: { log } }, '2026-09-29');
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_crossing_fill',
+        message: expect.stringContaining('(#1778)'),
+      }),
+    );
+  });
+
+  it('#1778: a partial stop fill resizes the position and keeps its stop/target', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'stop', 4, 19.2);
+    const report = await runCycle(deps, '2026-09-29');
+    expect(report.refusals.some((refusal) => refusal.includes('(#1778)'))).toBe(false);
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: 2,
+      stopGbp: expect.closeTo(19.2 / FX, 9),
+      targetGbp: expect.closeTo(21.2 / FX, 9),
+    });
+  });
+
+  it('#1778: a cancel that keeps failing blocks a same-day opposite entry on the same instrument', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.cancelError = new Error('venue closed');
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    deps.setDecisions([short]);
+    await runCycle(deps, '2026-09-28');
+    expect(orders(deps, 'debate/primary').map((order) => order.client_order_id)).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+    ]);
+  });
+
   it('dry run never sweeps the paper broker', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], true, alpaca);

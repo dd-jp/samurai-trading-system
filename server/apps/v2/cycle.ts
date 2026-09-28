@@ -110,6 +110,29 @@ function opposite(side: OrderSide): OrderSide {
   return side === 'buy' ? 'sell' : 'buy';
 }
 
+// A sign change, or a flat->nonzero open by a non-entry leg, is a crossing fill (#1778)
+function crossedUnexpectedly(leg: V2Fill['leg'], beforeQty: number, afterQty: number): boolean {
+  const beforeSign = Math.sign(beforeQty);
+  const afterSign = Math.sign(afterQty);
+  if (beforeSign !== 0 && afterSign !== 0) return beforeSign !== afterSign;
+  return beforeSign === 0 && afterSign !== 0 && leg !== 'entry';
+}
+
+// A stop/target/exit fill closes a bracket entry's other leg; its levels describe the
+// position being closed, not whatever this fill leaves behind, so they never carry (#1778)
+function bracketLevelsGbp(
+  fill: V2Fill,
+  order: JournalledOrder,
+  fx: number,
+): { stopGbp: number | undefined; targetGbp: number | undefined } {
+  if (fill.leg !== 'entry') return { stopGbp: undefined, targetGbp: undefined };
+  const { stop, target } = order.payload;
+  return {
+    stopGbp: typeof stop === 'number' ? stop / fx : undefined,
+    targetGbp: typeof target === 'number' ? target / fx : undefined,
+  };
+}
+
 function routeOf(book: BookSpec, venue: Venue) {
   return { bookVariant: book.variant, venue };
 }
@@ -218,9 +241,9 @@ class Cycle {
     });
     if (!recorded) return;
     this.tally.fills += 1;
-    const stop = order.payload.stop;
-    const target = order.payload.target;
-    this.deps.books.applyFill(order.book_id, {
+    const { stopGbp, targetGbp } = bracketLevelsGbp(fill, order, fx);
+    const before = this.deps.books.position(order.book_id, order.instrument);
+    const after = this.deps.books.applyFill(order.book_id, {
       instrument: order.instrument,
       venue: order.venue as Venue,
       side,
@@ -229,9 +252,35 @@ class Cycle {
       feeGbp: fill.fee / fx,
       clientOrderId: order.client_order_id,
       tradingDate: this.tradingDate,
-      stopGbp: typeof stop === 'number' ? stop / fx : undefined,
-      targetGbp: typeof target === 'number' ? target / fx : undefined,
+      stopGbp,
+      targetGbp,
     });
+    this.warnIfFillCrossedFlat(order, fill.leg, before, after);
+  }
+
+  warnIfFillCrossedFlat(
+    order: JournalledOrder,
+    leg: V2Fill['leg'],
+    before: Position | undefined,
+    after: Position | undefined,
+  ): void {
+    if (after === undefined || !crossedUnexpectedly(leg, before?.qty ?? 0, after.qty)) return;
+    const heldBefore = before === undefined ? 'no position was held' : `qty ${before.qty} held`;
+    const message =
+      `${order.book_id} ${order.instrument}: a ${leg} fill on ${order.client_order_id} ` +
+      `left qty ${after.qty} where ${heldBefore}; a fill must never flip or open a position ` +
+      'outside a fresh entry (#1778)';
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'execution',
+      parameter: 'CROSSING_FILL',
+      ticket: '#1778',
+      message,
+      book_id: order.book_id,
+      instrument: order.instrument,
+    });
+    this.refusals.push(message);
+    this.log('error', 'v2_crossing_fill', message);
   }
 
   fillSimulatedEntries(): void {
@@ -346,6 +395,9 @@ class Cycle {
         this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
         cancelled += 1;
       } catch (error) {
+        // Still resting at the broker: block a fresh opposite entry here too, or its fill
+        // could later cross the stale one's fill and flip the position unnoticed (#1778)
+        this.#pendingEntries.add(positionKey(book.id, order.instrument));
         this.log(
           'warn',
           'v2_cancel_failed',
