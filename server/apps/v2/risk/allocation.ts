@@ -28,11 +28,35 @@ export function assertCapitalShareRanges(sleeves: readonly Pick<Sleeve, 'id' | '
   }
 }
 
+// A sleeve with no 'primary' book can never hold a real fill (`V2OrderExecutor.simulates()`
+// routes every non-primary book, and every venue, to a simulated broker) — its capital
+// share is notional, seeding a comparably-sized shadow book (Q14), never drawing on the
+// real account. Doc 66, 2026-09-28 addition (#1773): the ceiling below sums only sleeves
+// that can, so a shadow-only arm cannot crowd out a real one's share of the account
+function capableOfRealFills(spec: SleeveSpec): boolean {
+  return spec.books.some((book) => book.variant === 'primary');
+}
+
 export function assertCapitalShares(sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[]): void {
   assertCapitalShareRanges(sleeves);
-  const total = sleeves.reduce((sum, { spec }) => sum + spec.capitalShare, 0);
+  const total = sleeves
+    .filter(({ spec }) => capableOfRealFills(spec))
+    .reduce((sum, { spec }) => sum + spec.capitalShare, 0);
   if (total > 1 + SHARE_TOLERANCE) {
     throw new Error(`capital share: sleeves declare ${total} of the account, more than 1`);
+  }
+}
+
+export function assertArm2RunsBesideDebate(
+  sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[],
+  debateSleeveId: string,
+  arm2SleeveId: string,
+): void {
+  const ids = new Set(sleeves.map((sleeve) => sleeve.id));
+  if (ids.has(debateSleeveId) !== ids.has(arm2SleeveId)) {
+    throw new Error(
+      `v2 root refuses '${debateSleeveId}' without '${arm2SleeveId}' beside it: no debate-sleeve paper trade until arm 2 runs beside it (#1773)`,
+    );
   }
 }
 

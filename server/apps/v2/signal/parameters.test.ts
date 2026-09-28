@@ -22,7 +22,7 @@ import {
 } from './parameters.js';
 
 describe('parameters', () => {
-  it('every David-owned parameter is unset and names its ticket', () => {
+  it('every David-owned parameter names its ticket; unresolved ones are unset', () => {
     expect(DECLARED_PARAMETERS).toEqual([
       G18_SOCIAL_SOURCE,
       G18_SMALL_CAP_FLOORS,
@@ -32,17 +32,24 @@ describe('parameters', () => {
       LSE_LIQUIDITY_SCREEN,
     ]);
     expect(CYCLE_LEVEL_PARAMETERS).toEqual([
-      ARM2_ENTRY_THRESHOLDS,
       G18_SOCIAL_SOURCE,
       G18_SENTIMENT_DEDUP_RULE,
       ALPACA_SHORT_EQUITY_FLOOR_USD,
     ]);
     for (const parameter of DECLARED_PARAMETERS) {
+      expect(parameter.ticket.length).toBeGreaterThan(0);
+      if (parameter === ARM2_ENTRY_THRESHOLDS) continue;
       expect(parameter.value).toBe(UNSET);
       expect(isSet(parameter)).toBe(false);
-      expect(parameter.ticket.length).toBeGreaterThan(0);
       expect(() => requireSet(parameter)).toThrow(UnsetParameterError);
     }
+  });
+
+  it('arm 2 entry thresholds are approved and resolved (#1773)', () => {
+    expect(isSet(ARM2_ENTRY_THRESHOLDS)).toBe(true);
+    expect(requireSet(ARM2_ENTRY_THRESHOLDS)).toEqual({ longAbove: 0, shortBelow: 0 });
+    expect(ARM2_ENTRY_THRESHOLDS.ticket).toBe('#1773');
+    expect(CYCLE_LEVEL_PARAMETERS).not.toContain(ARM2_ENTRY_THRESHOLDS);
   });
 
   it('carries the pre-declared Step 3 trial values from the spec', () => {

@@ -116,7 +116,8 @@ export type BookVariant =
   | 'no-sentiment'
   | 'no-social'
   | 'large-cap-only'
-  | 'no-veto';
+  | 'no-veto'
+  | 'technical-only';
 
 export interface BookSpec {
   readonly id: string;

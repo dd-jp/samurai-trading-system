@@ -35,13 +35,17 @@ interface SmallCapFloors {
   readonly maxPositionFractionOfEquity: number;
 }
 
-interface Arm2EntryThresholds {
+export interface Arm2EntryThresholds {
   readonly longAbove: number;
   readonly shortBelow: number;
 }
 
 function unset<T>(name: string, ticket: string): Parameter<T> {
   return { name, ticket, value: UNSET };
+}
+
+function set<T>(name: string, ticket: string, value: T): Parameter<T> {
+  return { name, ticket, value };
 }
 
 export const G18_SOCIAL_SOURCE = unset<string>('G18_SOCIAL_SOURCE', '#1753');
@@ -51,10 +55,13 @@ export const ALPACA_SHORT_EQUITY_FLOOR_USD = unset<number>(
   'ALPACA_SHORT_EQUITY_FLOOR_USD',
   'doc 66 Q8',
 );
-export const ARM2_ENTRY_THRESHOLDS = unset<Arm2EntryThresholds>(
-  'ARM2_ENTRY_THRESHOLDS',
-  'doc 71 §6',
-);
+// Zero reproduces the technical analyst's own read exactly (`directionFrom`,
+// `server/apps/v2/signal/debate-sleeve.ts`): SMA-200 cross as the structural gate, no
+// further filter on r63 (#1773 proposal comment)
+export const ARM2_ENTRY_THRESHOLDS = set<Arm2EntryThresholds>('ARM2_ENTRY_THRESHOLDS', '#1773', {
+  longAbove: 0,
+  shortBelow: 0,
+});
 export const LSE_LIQUIDITY_SCREEN = unset<number>('LSE_LIQUIDITY_SCREEN', '#1774');
 
 export const SHORTS_ENABLED = false;
@@ -99,9 +106,27 @@ export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
   ],
 };
 
+export const ARM2_SLEEVE_ID = 'arm2';
+
+// #1773: arm 2 never routes a real order (its only book variant is not 'primary', so
+// `V2OrderExecutor.simulates()` always simulates it), so its capital share is notional —
+// it sizes and seeds its shadow book (same start capital as debate, Q14) but is excluded
+// from `assertCapitalShares`' account-wide ceiling, which sums only sleeves that can hold
+// a real fill (doc 66, 2026-09-28 addition)
+export const ARM2_SLEEVE_SPEC: SleeveSpec = {
+  capitalShare: DEBATE_CAPITAL_SHARE,
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
+  macroGate: true,
+  sizing: DEBATE_SLEEVE_SPEC.sizing,
+  books: [{ variant: 'technical-only', instantiated: true }],
+};
+
 // A sleeve missing here is a build gap, not a trading-state check
 export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
   [DEBATE_SLEEVE_ID]: DEBATE_SLEEVE_SPEC,
+  [ARM2_SLEEVE_ID]: ARM2_SLEEVE_SPEC,
 };
 
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
@@ -115,8 +140,9 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   LSE_LIQUIDITY_SCREEN,
 ];
 
+// A set parameter never blocks a cycle, so this list only ever holds an unset one;
+// ARM2_ENTRY_THRESHOLDS (#1773, set) stays out of it but stays in DECLARED_PARAMETERS
 export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
-  ARM2_ENTRY_THRESHOLDS,
   G18_SOCIAL_SOURCE,
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,

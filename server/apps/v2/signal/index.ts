@@ -1,3 +1,4 @@
+export { createArm2Sleeve } from './arm2-sleeve.js';
 export { type CandleFeatures, candleFeatures, candleLine } from './candle.js';
 export { createDebateSleeve } from './debate-sleeve.js';
 export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
@@ -7,11 +8,16 @@ export { ALL_PINS, type ModelPin } from './models.js';
 export { SqliteMonthlySpendCap, utcMonthStart } from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';
 export {
+  ARM2_ENTRY_THRESHOLDS,
+  ARM2_SLEEVE_ID,
+  ARM2_SLEEVE_SPEC,
+  type Arm2EntryThresholds,
   CYCLE_LEVEL_PARAMETERS,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
+  requireSet,
   SHORTS_ENABLED,
   SLEEVE_SPECS_BY_ID,
   UnsetParameterError,

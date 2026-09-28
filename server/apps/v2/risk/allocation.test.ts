@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CapitalYear, SleeveSpec } from '../../../../contracts/index.js';
-import { DEBATE_SLEEVE_SPEC } from '../signal/index.js';
-import { assertCapitalShares, sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
+import { ARM2_SLEEVE_SPEC, DEBATE_SLEEVE_SPEC } from '../signal/index.js';
+import {
+  assertArm2RunsBesideDebate,
+  assertCapitalShares,
+  sleeveAllocationGbp,
+  sleeveCapitalYear,
+} from './allocation.js';
 import { dailyCapGbp, sizeStepMarksGbp } from './loss-budget.js';
 
 const year: CapitalYear = {
@@ -67,5 +72,35 @@ describe('sleeve capital share', () => {
       );
     }
     expect(() => assertCapitalShares([sleeve('whole', 1)])).not.toThrow();
+  });
+
+  it('excludes a shadow-only sleeve (no primary book) from the ceiling (#1773)', () => {
+    const arm2 = { id: 'arm2', spec: ARM2_SLEEVE_SPEC };
+    expect(ARM2_SLEEVE_SPEC.books.some((book) => book.variant === 'primary')).toBe(false);
+    expect(() =>
+      assertCapitalShares([sleeve('debate', 0.3), sleeve('trend', 0.7), arm2]),
+    ).not.toThrow();
+  });
+});
+
+describe('assertArm2RunsBesideDebate', () => {
+  const debate = { id: 'debate', spec: DEBATE_SLEEVE_SPEC };
+  const arm2 = { id: 'arm2', spec: ARM2_SLEEVE_SPEC };
+
+  it('passes when both are present, or neither is', () => {
+    expect(() => assertArm2RunsBesideDebate([debate, arm2], 'debate', 'arm2')).not.toThrow();
+    expect(() => assertArm2RunsBesideDebate([], 'debate', 'arm2')).not.toThrow();
+    expect(() =>
+      assertArm2RunsBesideDebate([sleeve('other', 0.5)], 'debate', 'arm2'),
+    ).not.toThrow();
+  });
+
+  it('refuses one without the other, naming the #1773 kill line', () => {
+    expect(() => assertArm2RunsBesideDebate([debate], 'debate', 'arm2')).toThrow(
+      /no debate-sleeve paper trade until arm 2 runs beside it/,
+    );
+    expect(() => assertArm2RunsBesideDebate([arm2], 'debate', 'arm2')).toThrow(
+      /no debate-sleeve paper trade until arm 2 runs beside it/,
+    );
   });
 });
