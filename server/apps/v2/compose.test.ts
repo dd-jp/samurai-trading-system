@@ -116,3 +116,49 @@ describe('composeCycle: loss-budget pooling opt-out (#1799, ruled 2026-09-28)', 
     });
   });
 });
+
+describe('composeCycle: costMultiple scales every modelled cost leg (doc 67 "2x modelled cost")', () => {
+  const REQUEST = { instrument: 'AAPL', side: 'buy' as const, qty: 10, price: 100 };
+
+  it('scales the spread+impact slippage linearly, so 2x doubles the price move off mid', () => {
+    const base = composeCycle(options({ costMultiple: 1 })).executor.quoteSimulatedFill('alpaca', {
+      ...REQUEST,
+      crossesSpread: true,
+    });
+    const doubled = composeCycle(options({ costMultiple: 2 })).executor.quoteSimulatedFill(
+      'alpaca',
+      { ...REQUEST, crossesSpread: true },
+    );
+
+    expect(base.price).toBeGreaterThan(REQUEST.price);
+    expect(doubled.price - REQUEST.price).toBeCloseTo(2 * (base.price - REQUEST.price), 10);
+  });
+
+  it('scales the modelled fee linearly, isolated from price by never crossing the spread', () => {
+    const base = composeCycle(options({ costMultiple: 1 })).executor.quoteSimulatedFill('alpaca', {
+      ...REQUEST,
+      crossesSpread: false,
+    });
+    const doubled = composeCycle(options({ costMultiple: 2 })).executor.quoteSimulatedFill(
+      'alpaca',
+      { ...REQUEST, crossesSpread: false },
+    );
+
+    expect(base.price).toBe(REQUEST.price);
+    expect(base.fee).toBeGreaterThan(0);
+    expect(doubled.fee).toBeCloseTo(2 * base.fee, 10);
+  });
+
+  it('defaults to costMultiple 1 when the option is left unset', () => {
+    const defaulted = composeCycle(options()).executor.quoteSimulatedFill('alpaca', {
+      ...REQUEST,
+      crossesSpread: true,
+    });
+    const explicit = composeCycle(options({ costMultiple: 1 })).executor.quoteSimulatedFill(
+      'alpaca',
+      { ...REQUEST, crossesSpread: true },
+    );
+
+    expect(defaulted).toEqual(explicit);
+  });
+});

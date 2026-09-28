@@ -2338,11 +2338,15 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     await runCycle(deps, '2026-09-25');
     deps.barsByDate.set('2026-09-28', drop());
     deps.setDecisions([msft]);
-    vi.spyOn(deps.journal, 'restingEntries').mockReturnValueOnce([]);
+    // Simulates the crash losing every read of resting entries during this one cycle,
+    // however many call sites now make one (#1785 added a cash-gate read in entries()) — a
+    // fixed call count here would be re-broken by the next such addition
+    const restingEntries = vi.spyOn(deps.journal, 'restingEntries').mockReturnValue([]);
     await runCycle(deps, '2026-09-28');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe(
       'refused_dry_run',
     );
+    restingEntries.mockRestore();
     await runCycle(deps, '2026-09-29');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')).toMatchObject({
       outcome: 'cancelled',
@@ -2509,5 +2513,174 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
     });
     expect(deps.books.position('trend/primary', 'AAPL')).toBeUndefined();
     expect(deps.books.position('trend/no-macro-gate', 'AAPL')).toBeDefined();
+  });
+});
+
+describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
+  // TEST_SPEC/£1,000 equity: each longAapl-shaped decision sizes to min(byRisk, byNotional)
+  // = min(floor(5/(0.32*2))=7, floor(100/16)=6) = 6 shares at £20/1.25 = £16/share = £96
+  // notional (matches the file's existing ENTRY_COST_GBP). 10 fit (£960 of £1,000); the 11th
+  // has only £40 left and needs £96
+  const instruments = Array.from({ length: 11 }, (_, index) => `SYM${index}`);
+  const decisions: SleeveDecision[] = instruments.map((instrument) => ({
+    ...longAapl,
+    instrument,
+  }));
+
+  it('funds entries in list order and refuses the one that runs out of cash', async () => {
+    const deps = harness(decisions, true);
+    await runCycle(deps, '2026-09-25');
+    for (const instrument of instruments.slice(0, 10)) {
+      expect(deps.journal.orderFor(`v2-debate-primary-2026-09-25-${instrument}`)?.outcome).toBe(
+        'refused_dry_run',
+      );
+    }
+    const last = deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM10');
+    expect(last?.outcome).toBe('rejected');
+    expect(last?.payload.detail).toBe('insufficient_cash');
+  });
+
+  it('never double-counts a held line: re-issuing enter_long for it costs no fresh cash', async () => {
+    // Hold 5 lines first (£480 of £1,000 spent, ~£520 real cash left): if a held line's
+    // re-issued enter_long were charged again, 5 * £96 = £480 would be deducted a second time
+    // and leave ~£40, wrongly refusing the 6th, genuinely new line (needs £96)
+    const deps = harness(decisions.slice(0, 5), true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    for (const instrument of instruments.slice(0, 5)) {
+      expect(deps.books.position('debate/primary', instrument)).toBeDefined();
+    }
+    deps.setDecisions([...decisions.slice(0, 5), decisions[5] as SleeveDecision]);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-SYM5')?.outcome).toBe(
+      'refused_dry_run',
+    );
+    const sym5 = deps.journal.orderFor('v2-debate-primary-2026-09-29-SYM5');
+    expect(sym5?.payload.detail).not.toBe('insufficient_cash');
+  });
+
+  it('a signal-driven exit rests, then flattens a held position once it resolves', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeDefined();
+    deps.setDecisions([{ ...longAapl, action: 'exit' }]);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
+      outcome: 'refused_dry_run',
+      payload: { reason: 'signal_exit' },
+    });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-29-AAPL-exit',
+    );
+    deps.barsByDate.set('2026-09-30', bar('2026-09-29', { open: 19, low: 18.9, high: 19.4 }));
+    const filled = await runCycle(deps, '2026-09-30');
+    expect(filled.fills).toBeGreaterThan(0);
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+  });
+
+  it('a signal-driven exit is a no-op with nothing held', async () => {
+    const deps = harness([{ ...longAapl, action: 'exit' }], true);
+    const report = await runCycle(deps, '2026-09-25');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL-exit')).toBeUndefined();
+    expect(report.exits).toBe(0);
+  });
+
+  it('a signal-driven exit is a no-op once one is already resting', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.books.setExitPending('debate/primary', 'AAPL', 'stub-exit-already-resting');
+    deps.setDecisions([{ ...longAapl, action: 'exit' }]);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'stub-exit-already-resting',
+    );
+  });
+
+  it('a signal-driven exit does not submit on a route the executor cannot reach', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    vi.spyOn(deps.executor, 'canRoute').mockReturnValue(false);
+    deps.setDecisions([{ ...longAapl, action: 'exit' }]);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
+    const held = deps.books.position('debate/primary', 'AAPL');
+    expect(held).toBeDefined();
+    expect(held?.exitClientOrderId).toBeUndefined();
+  });
+
+  it("counts a resting order's own notional against cash before sizing the next entry", async () => {
+    // THIN's barsBefore is [] in this harness (see market.barsBefore above), so
+    // fillSimulatedEntries sees simulateLimitEntry's bars.length === 0 case and leaves the order
+    // genuinely pending rather than filling or cancelling it — the only way, in this fixture, to
+    // carry a resting order's notional across a cycle boundary and into restingNotionalGbp
+    const deps = harness([], true);
+    const decisionId = deps.journal.recordDecision(
+      'debate/primary',
+      '2026-09-25',
+      { ...longAapl, instrument: 'THIN' },
+      6,
+    );
+    deps.journal.recordOrder({
+      client_order_id: 'v2-debate-primary-2026-09-25-THIN',
+      decision_id: decisionId,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'THIN',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: true,
+      outcome: 'refused_dry_run',
+      payload: { size: 6, price: 20 },
+    });
+    const news = Array.from({ length: 10 }, (_, index) => ({
+      ...longAapl,
+      instrument: `NEW${index}`,
+    }));
+    deps.setDecisions(news);
+    await runCycle(deps, '2026-09-28');
+    // The resting THIN order's £96 notional leaves £904 of £1,000; 9 of the 10 new £96 entries
+    // fit (£864), the 10th needs £960 — distinguishes the correct subtraction from ignoring,
+    // inverting or mis-scaling the resting notional (any of those admits a 10th or refuses a 9th)
+    for (const { instrument } of news.slice(0, 9)) {
+      expect(deps.journal.orderFor(`v2-debate-primary-2026-09-28-${instrument}`)?.outcome).toBe(
+        'refused_dry_run',
+      );
+    }
+    const last = deps.journal.orderFor('v2-debate-primary-2026-09-28-NEW9');
+    expect(last?.outcome).toBe('rejected');
+    expect(last?.payload.detail).toBe('insufficient_cash');
+  });
+
+  it('does not reserve cash for an entry the broker genuinely rejects, so later entries in the same cycle still fund (doc 66 2026-09-28, #1785)', async () => {
+    const deps = harness(decisions, true);
+    const realSubmit = deps.executor.submit.bind(deps.executor);
+    vi.spyOn(deps.executor, 'submit').mockImplementation((order) =>
+      order.instrument === 'SYM0'
+        ? Promise.resolve({
+            outcome: 'rejected',
+            detail: 'stub_broker_rejection',
+            approvalId: order.approvalId,
+          })
+        : realSubmit(order),
+    );
+    await runCycle(deps, '2026-09-25');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM0')?.outcome).toBe('rejected');
+    // SYM0 was approved (sized, cash-gated) but the broker rejected it, so its £96 must never be
+    // charged: the real £1,000 still funds all 10 remaining entries (£960). Charging it anyway
+    // (the pre-fix bug) leaves £904, which fits only 9 and wrongly refuses SYM10 as insufficient_cash
+    for (const instrument of instruments.slice(1)) {
+      expect(deps.journal.orderFor(`v2-debate-primary-2026-09-25-${instrument}`)?.outcome).toBe(
+        'refused_dry_run',
+      );
+    }
   });
 });

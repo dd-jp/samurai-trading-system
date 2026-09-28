@@ -241,6 +241,38 @@ A session on David's Mac tested each v3 candidate against the v2 baseline, outsi
 
 Also filed the same day, not a ruling: [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860), the volatility-targeted sizing trial from the loss-controls ruling above.
 
+## Ruling of 2026-09-28 — candidate 1 (cross-asset trend) run, S2
+
+David pre-approved the trial 8 lettered rulings (a–h) for [#1785](https://github.com/dd-jp/samurai-trading-system/issues/1785) before the run: (a) fresh run, doc 70's earlier LSE momentum run does not count; (b) exactly 15 declared instruments (ISF, VMID, IUSA, IEUX, IJPN, IEEM equity index; IGLT, INXG, SLXX, VUTY bonds; SGLN, SSLN gold/silver; CUKS, CUS1, CPJ1 declared, near-never holdable, sized to 0, not dropped); (c) exactly 2 trials, SMA 100 and SMA 200; (d) benchmark is a re-entering always-long version of the same sleeve; (e) #1838's bar-shape-defect finding (0.45%/1.4% of Alpaca/Saxo bars over each symbol's last 250 sessions, 0.79%/7.7% over full history) accepted as a known small risk, noted here, not blocking; (f) capital split among passing candidates deferred to a later step; (g) the £5,000 second capital pass dropped, accepting the resulting window; (h) the MinBTL guard counts trials over the whole ledger, confirmed before and after.
+
+**Trial count (h):** whole-ledger `v2_trials` count was 8 before this run (4 `momentum/lse` + 4 `momentum/us`) and 10 after (+2, both `candidate='cross-asset-trend'`, trial 9 = SMA 100, trial 10 = SMA 200). Rehearsed first against a copy of the real ledger (`SAMURAI_RESEARCH_STORE` pointed at `/tmp`) to confirm the row delta before touching the real one; the benchmark and the 2× cost-stress pass add no rows (`costMultiple` is deliberately excluded from the trial hash, `server/apps/v2/backtest.ts`'s `recordTrials`, so a re-run with a different cost multiple resolves to the same trial number instead of a new one).
+
+**Window (g):** `2017-08-18` to `2025-09-24`, precisely 8.101300479123887 years — the ~8.7-year figure floated earlier was wrong; 8.10y is the reconciled, documented number. Cause: every line but VUTY warms its 200-bar SMA by 2014-05; VUTY's first bar is 2016-03-03 but its early bars are sparse, so its SMA(200) is not defined until 2017-08-18 (its 200th bar). The proposal's own rule (start once every declared line's slowest SMA has warmed up) picks this date; it is a data fact, not a new choice.
+
+**MinBTL headroom:** at the 8.10y window and a 0.6 target annual Sharpe, the limit is 13 trials. 10 of 13 are now used, leaving 3 trials of headroom. Since #1861 (ruled above, same day), a fifth S2 candidate is now queued behind the four originally declared — so this 3-trial headroom is shared across candidates 2 through 5, not 2 through 4 as scoped when #1785 was written. Flagged for David, not resolved here.
+
+**Verdict: FAIL, both at 1× and 2× modelled cost.** Selected trial both times: 10 (SMA 200).
+
+| | 1× cost | 2× cost |
+| --- | --- | --- |
+| Deflated Sharpe (the gated value, `verdict.deflatedSharpe`) | 0.0069 | 0.0008 |
+| Deflated Sharpe (walk-forward, `deflatedSharpeWalkForward`, reported alongside) | 0.0102 | 0.0020 |
+| PBO | 0.111 | 0.158 |
+| Strategy Sharpe (haircut) | −0.159 | −0.280 |
+| Benchmark Sharpe (walk-forward) | 0.731 | 0.721 |
+| Max drawdown | 10.0% | 14.0% |
+| `beatsBenchmarkAfterHaircut` | false | false |
+| `deflatedSharpeAtLeast095` | false | false |
+| `pboAtMost010` | false | false |
+
+Gate needs DSR ≥ 0.95 (got 0.007, or 0.010 on the walk-forward figure — both far short), PBO ≤ 0.10 (got 0.11–0.16), and the 2× cost run must not flip `beatsBenchmarkAfterHaircut`'s sign — it does not (false at both), so that one check passes; the other two fail by a wide margin. `server/apps/v2/backtest-verdict.ts` gates on `deflatedSharpe`, not the walk-forward figure; both are reported, and both fail. Never forced to pass: this is the actual outcome. Candidate 1 does not clear the S2 gate; candidates 2–5 proceed per S4 ("all declared candidates run" regardless of an early pass or fail).
+
+Cost-sensitivity note: the 2× multiple (`costMultiple`, `server/apps/v2/compose.ts`) scales the spread, market-impact and fee legs; the 0.12%/yr Saxo custody fee (`server/apps/v2/risk/books.ts`) is a separate accrual and stays at 1× under the stress pass. This cannot change the verdict here — the haircut Sharpe (−0.28) is far below the benchmark (0.72) on cost alone — but the doc 67 "2× modelled cost" framing should be read as spread/impact/fee only, not every cost leg.
+
+**Independent review findings, fixed before this run (doc 66's merge-authority ruling, one round):** a `code-review-graph`-driven subagent review found (1) Major: `settleEntry` charged an entry's cash against later decisions as soon as risk approved it, before awaiting the executor's real outcome, so a genuine broker-level `'rejected'` (which never rests) still reserved cash it should not have — fixed, and proven by a regression test that fails against the reverted code with the exact predicted symptom; (2) Major: `costMultiple`'s effect on the modelled cost legs (spread, impact, fee) had no regression test — added, proven the same way against a deliberately broken multiplier. Both fixes then let a redundant conjunct in the charge guard collapse to one condition (`outcome !== undefined && outcome !== 'rejected'` alone, since it already implies `gated.order !== undefined`). Three Minor findings (thin coverage on `#pendingEntries`, the interior-bad-bar ATR-splice behaviour, and `runCrossAssetTrendCandidate`'s real I/O wiring) were recorded, not fixed, per David's one-round review cap (2026-09-09).
+
+**Doc-68 session eval (independent, fresh-context, before the PR):** re-ran the real backtest against a ledger copy and reproduced every number above exactly; confirmed the ledger idempotent (still 10 rows on a same-config re-run); confirmed the 15-instrument universe, the 2-trial grid, the benchmark construction, no look-ahead, non-overlapping walk-forward folds, both Majors' revert-proofs, both mutation-testing claims (cycle.ts's cash-gate path 99.07% with one equivalent-mutant survivor; `cross-asset-trend.ts` full-file 85.19% with all 20 survivors confirmed module-scope-const tooling artifacts), all local gates, and no `Closes #1785`/secrets/scope creep. One CONFIRMED blocker (this doc was uncommitted at eval time) — fixed by committing it. Additional minors recorded, not fixed: the boundaries test's 4-line `ALLOWED_CAPITAL_LITERALS` widening (traces to S1's 0.7 and the £2,000 paper figure, same pattern as the existing `smoke.ts` allowance) is a D8 allowlist change David may want to see; `backtest-cli.test.ts`'s CLI-wiring test uses a 90-day fixture too short to warm either SMA and only asserts `signFlipped`'s type, not its value — thin, not wrong.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

@@ -34,6 +34,7 @@ export function journalUrl(filters: JournalFilters, before: string | null): stri
 const OUTCOMES: Readonly<Record<SleeveAction, string>> = {
   enter_long: 'entered long',
   enter_short: 'entered short',
+  exit: 'exited',
   skip: 'skipped',
   none: 'none',
 };

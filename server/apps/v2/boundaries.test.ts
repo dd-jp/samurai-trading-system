@@ -126,6 +126,10 @@ const ALLOWED_CAPITAL_LITERALS = new Set([
   'server/apps/v2/smoke.ts:SMOKE_START_CAPITAL_GBP',
   'server/apps/v2/smoke.ts:SMOKE_LOSS_CAP_GBP',
   'server/apps/v2/backtest-verdict.ts:CAPITAL_CEILING_DRAWDOWN_MULTIPLE',
+  'server/apps/v2/backtest-cli.ts:BACKTEST_START_CAPITAL_GBP',
+  'server/apps/v2/backtest-cli.ts:BACKTEST_LOSS_CAP_GBP',
+  'server/apps/v2/signal/cross-asset-trend.ts:CAPITAL_SHARE',
+  'server/apps/v2/signal/cross-asset-trend.ts:minimumCapitalGbp',
 ]);
 
 describe('capital literals', () => {

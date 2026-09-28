@@ -23,6 +23,7 @@
     "v2:restore": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/backup-cli.ts restore",
     "v2:dashboard": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/api/main.ts",
     "v2:trials": "tsx server/apps/v2/trial-ledger.ts",
+    "v2:backtest": "tsx server/apps/v2/backtest-cli.ts",
     "smoke": "npm run build && node dist/server/apps/orchestrator/smoke-run.js && node dist/server/apps/v2/smoke.js",
     "serve": "npm run start",
     "dashboard": "npm run api",

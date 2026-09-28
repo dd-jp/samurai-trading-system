@@ -147,7 +147,7 @@ interface Tally {
   fills: number;
 }
 
-type ExitReason = 'time_stop' | 'manual_halt' | 'crossing_fill';
+type ExitReason = 'time_stop' | 'manual_halt' | 'crossing_fill' | 'signal_exit';
 
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
 
@@ -671,14 +671,23 @@ class Cycle {
     }
   }
 
-  async exits(book: BookSpec): Promise<void> {
+  async exits(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
+    const exitSignalled = new Set(
+      decisions
+        .filter((decision) => decision.action === 'exit')
+        .map((decision) => decision.instrument),
+    );
     for (const held of this.deps.books.positions(book.id)) {
-      await this.exitHeldPosition(book, held);
+      await this.exitHeldPosition(book, held, exitSignalled);
     }
     if (this.control.state === 'halted') await this.haltExits(book);
   }
 
-  async exitHeldPosition(book: BookSpec, held: Position): Promise<void> {
+  async exitHeldPosition(
+    book: BookSpec,
+    held: Position,
+    exitSignalled: ReadonlySet<string>,
+  ): Promise<void> {
     await this.resumePendingExit(book, held);
     if (this.deps.executor.simulates(routeOf(book, held.venue))) {
       this.simulatedBracketExit(book, held);
@@ -687,13 +696,26 @@ class Cycle {
     if (afterSimulated === undefined) return;
     await this.crossingFillExit(book, afterSimulated);
     const afterCrossing = this.deps.books.position(book.id, held.instrument);
-    if (afterCrossing !== undefined) await this.timeStop(book, afterCrossing);
+    if (afterCrossing === undefined) return;
+    await this.signalExit(book, afterCrossing, exitSignalled);
+    const afterSignal = this.deps.books.position(book.id, held.instrument);
+    if (afterSignal !== undefined) await this.timeStop(book, afterSignal);
   }
 
   async crossingFillExit(book: BookSpec, held: Position): Promise<void> {
     if (held.exitClientOrderId !== undefined || !held.stray) return;
     if (!this.deps.executor.canRoute(routeOf(book, held.venue))) return;
     await this.submitExit(book, held, 'crossing_fill');
+  }
+
+  async signalExit(
+    book: BookSpec,
+    held: Position,
+    exitSignalled: ReadonlySet<string>,
+  ): Promise<void> {
+    if (!exitSignalled.has(held.instrument) || held.exitClientOrderId !== undefined) return;
+    if (!this.deps.executor.canRoute(routeOf(book, held.venue))) return;
+    await this.submitExit(book, held, 'signal_exit');
   }
 
   entryOrderId(book: BookSpec, instrument: string): string {
@@ -705,11 +727,11 @@ class Cycle {
     decision: SleeveDecision,
     decisionId: string,
     approval: EntryApproval,
-  ): Promise<void> {
+  ): Promise<OrderOutcome | undefined> {
     const clientOrderId = this.entryOrderId(book, decision.instrument);
-    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
-    if (this.deps.books.position(book.id, decision.instrument) !== undefined) return;
-    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return;
+    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return undefined;
+    if (this.deps.books.position(book.id, decision.instrument) !== undefined) return undefined;
+    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return undefined;
     this.tally.entries += 1;
     const submission: Submission =
       approval.order === undefined
@@ -736,28 +758,104 @@ class Cycle {
         approval: approval.order === undefined ? undefined : submission.approvalId,
       },
     });
+    return submission.outcome;
+  }
+
+  notionalGbp(decision: SleeveDecision, size: number): number {
+    return (size * decision.price) / this.fxFor(decision.venue);
+  }
+
+  restingNotionalGbp(bookId: string): number {
+    let total = 0;
+    for (const order of this.deps.journal.restingEntries(bookId)) {
+      const size = numberOrUndefined(order.payload.size) ?? 0;
+      const price = numberOrUndefined(order.payload.price) ?? 0;
+      total += (size * price) / this.fxFor(order.venue as Venue);
+    }
+    return total;
+  }
+
+  // #submitEntry no-ops when a client order already exists, a position is already held, or an
+  // entry for this instrument is mid-cycle-fill (#pendingEntries) — the cash gate must only
+  // charge and refuse decisions that take that path, or held/resting lines eat phantom cash and
+  // starve later instruments in list order (doc 66 2026-09-28, #1785)
+  willSubmitEntry(book: BookSpec, instrument: string): boolean {
+    return (
+      this.deps.journal.orderFor(this.entryOrderId(book, instrument)) === undefined &&
+      this.deps.books.position(book.id, instrument) === undefined &&
+      !this.#pendingEntries.has(positionKey(book.id, instrument))
+    );
+  }
+
+  applyCashGate(
+    decision: SleeveDecision,
+    approval: EntryApproval,
+    cashRemainingGbp: number,
+  ): EntryApproval {
+    if (approval.order === undefined || approval.size <= 0) return approval;
+    if (this.notionalGbp(decision, approval.size) <= cashRemainingGbp) return approval;
+    return { size: approval.size, order: undefined, refusal: 'insufficient_cash' };
+  }
+
+  resolveEntryGate(
+    book: BookSpec,
+    proposed: SleeveDecision,
+    equityGbp: number,
+    cashRemainingGbp: number,
+  ): { decision: SleeveDecision; gated: EntryApproval } {
+    const decision = vetoApplied(book, proposed);
+    const approval = this.deps.risk.approveEntry({
+      book,
+      decision,
+      clientOrderId: this.entryOrderId(book, decision.instrument),
+      tradingDate: this.tradingDate,
+      equityGbp,
+      macroDay: this.macro.macroDay,
+    });
+    const willSubmit =
+      approval.order !== undefined &&
+      approval.size > 0 &&
+      this.willSubmitEntry(book, decision.instrument);
+    const gated = willSubmit ? this.applyCashGate(decision, approval, cashRemainingGbp) : approval;
+    return { decision, gated };
+  }
+
+  async settleEntry(
+    book: BookSpec,
+    decision: SleeveDecision,
+    gated: EntryApproval,
+    charge: () => void,
+  ): Promise<void> {
+    const decisionId = this.deps.journal.recordDecision(
+      book.id,
+      this.tradingDate,
+      decision,
+      gated.size,
+    );
+    if (gated.order === undefined) this.journalSizingRefusal(book, decision, gated.refusal);
+    if (gated.size <= 0) return;
+    const outcome = await this.submitEntry(book, decision, decisionId, gated);
+    // outcome is undefined or 'rejected' whenever gated.order is undefined too (submitEntry's
+    // early-return guards mirror willSubmitEntry, and a sizing refusal always yields 'rejected'),
+    // so outcome alone decides: a broker-level 'rejected' never rests (journal.restingEntries
+    // excludes it) and must never reserve cash against later decisions this cycle (doc 66
+    // 2026-09-28, #1785)
+    if (outcome !== undefined && outcome !== 'rejected') charge();
   }
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
     const { equityGbp } = this.deps.books.valuation(book.id, (i, v) => this.markGbp(i, v));
+    let cashRemainingGbp = this.deps.books.cash(book.id) - this.restingNotionalGbp(book.id);
     for (const proposed of decisions) {
-      const decision = vetoApplied(book, proposed);
-      const approval = this.deps.risk.approveEntry({
+      const { decision, gated } = this.resolveEntryGate(
         book,
-        decision,
-        clientOrderId: this.entryOrderId(book, decision.instrument),
-        tradingDate: this.tradingDate,
+        proposed,
         equityGbp,
-        macroDay: this.macro.macroDay,
-      });
-      const decisionId = this.deps.journal.recordDecision(
-        book.id,
-        this.tradingDate,
-        decision,
-        approval.size,
+        cashRemainingGbp,
       );
-      if (approval.order === undefined) this.journalSizingRefusal(book, decision, approval.refusal);
-      if (approval.size > 0) await this.submitEntry(book, decision, decisionId, approval);
+      await this.settleEntry(book, decision, gated, () => {
+        cashRemainingGbp -= this.notionalGbp(decision, gated.size);
+      });
     }
   }
 
@@ -886,6 +984,7 @@ export function budgetChanges(
 const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   no_adv: 'ADV_WINDOW_COVERAGE',
   no_allocation: 'SLEEVE_MINIMUM_CAPITAL',
+  insufficient_cash: 'GROSS_CASH_GATE',
 };
 
 function recordRefusal(
@@ -1063,7 +1162,7 @@ async function runUnmarked(
     for (const book of deps.books.forSleeve(sleeve.id)) {
       books.push(book);
       await cycle.cancelStaleEntries(book);
-      await cycle.exits(book);
+      await cycle.exits(book, output.decisions);
       await cycle.entries(book, output.decisions);
     }
   }
