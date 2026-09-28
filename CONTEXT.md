@@ -47,13 +47,13 @@ A paper book that runs the same sleeve with one input or rule removed, so the in
 The debate sleeve's matched control: the same names, the same exit rule, the same stop, with entry by indicator alone and no LLM anywhere in the path. The debate sleeve exists only if it beats arm 2 forward, on paper: at least 100 closed trades and a one-sided test at 95%.
 
 **Universe**
-Target: commodities, indices, ETFs and equities, with indices and commodities only through 1× ETFs/ETCs — US large caps at Alpaca plus an LSE ETF/ETC leg at Saxo (being built). Per day ~20 names — ~10 by liquidity rank (a stable core) plus ~10 movers/news names chosen with help from the sentiment score; the movers/news rule is a pre-declared parameter counted as a trial. Out of scope: 3× ETPs, UK single stocks, CFDs, crypto.
+Target: commodities, indices, ETFs and equities, with indices and commodities only through 1× ETFs/ETCs or, since 2026-09-28, Saxo CFDs — US large caps at Alpaca plus an LSE ETF/ETC leg at Saxo (being built). Per day ~20 names — ~10 by liquidity rank (a stable core) plus ~10 movers/news names chosen with help from the sentiment score; the movers/news rule is a pre-declared parameter counted as a trial. UK and US single stocks, indices and ETFs may also be traded long or short through Saxo CFDs (2026-09-28). Out of scope: 3× ETPs, crypto.
 
 **Small-cap position**
 A debate-sleeve long in a name below the large-cap floor. Long-only, half a large-cap trade's risk, capped at a fixed share of the sleeve, excluded below liquidity, price and market-cap floors, and measured against a large-cap-only shadow. The floor and cap numbers are open (G18).
 
 **Short position**
-Debate sleeve only. At Alpaca: easy-to-borrow large caps, sized so a +30% gap costs no more than about £150. At Saxo: 1× inverse ETFs, never CFDs.
+Debate sleeve only. At Alpaca: easy-to-borrow large caps, sized so a +30% gap costs no more than about £150. At Saxo: 1× inverse ETFs or CFDs (2026-09-28); the CFD bounds are open.
 
 **Macro event day**
 A day with a high-impact release (FOMC, US CPI, NFP, BoE rate decision, UK CPI). The debate sleeve enters at half size; exits are unaffected; the gate is a counted trial against a no-gate shadow.
