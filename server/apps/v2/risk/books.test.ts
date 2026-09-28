@@ -369,10 +369,12 @@ describe('PaperBooks', () => {
       expect(books.lastDay('debate/primary')?.state).toMatchObject({
         halted: true,
         sizeMultiplier: 0,
+        entriesBlockedAtNextFill: true,
       });
       expect(books.lastDay('trend/primary')?.state).toMatchObject({
         halted: true,
         sizeMultiplier: 0,
+        entriesBlockedAtNextFill: true,
       });
     });
 
@@ -431,7 +433,10 @@ describe('PaperBooks', () => {
       lose(books, 'debate/primary', '2026-12-31', 1_000, 'a');
       lose(books, 'trend/primary', '2026-12-31', 600, 'b');
       books.settlePrimaryBudgets('2026-12-31');
-      expect(books.lastDay('trend/primary')?.state).toMatchObject({ halted: true, sizeMultiplier: 0 });
+      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
 
       books.markDay('debate/primary', '2027-01-04', flat, 4);
       books.markDay('trend/primary', '2027-01-04', flat, 4);
@@ -445,6 +450,43 @@ describe('PaperBooks', () => {
         halted: false,
         sizeMultiplier: 1,
       });
+    });
+
+    it('settleLastPrimaryMark repairs a pool a crash left unsettled before the process restarted', () => {
+      const db = openSharedStore(':memory:');
+      const first = twoPrimaries(db);
+      lose(first, 'debate/primary', '2026-09-25', 1_000, 'a');
+      lose(first, 'trend/primary', '2026-09-25', 600, 'b');
+
+      const second = openBooks(db, '2026-09-25', TWO_PRIMARIES);
+      second.settleLastPrimaryMark();
+
+      expect(second.lastDay('debate/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+      expect(second.lastDay('trend/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+
+      second.settleLastPrimaryMark();
+      expect(second.lastDay('trend/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+      db.close();
+    });
+
+    it('settleLastPrimaryMark skips a repair while the primaries disagree on their last mark date', () => {
+      const books = twoPrimaries(openSharedStore(':memory:'));
+      lose(books, 'debate/primary', '2026-09-25', 1_000, 'a');
+      books.markDay('trend/primary', '2026-09-24', flat, 0);
+
+      expect(() => books.settleLastPrimaryMark()).not.toThrow();
+
+      expect(books.lastDay('debate/primary')?.state.sizeMultiplier).toBe(0);
+      expect(books.lastDay('trend/primary')?.state.sizeMultiplier).toBe(1);
     });
   });
 

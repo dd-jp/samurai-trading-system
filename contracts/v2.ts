@@ -200,7 +200,12 @@ export interface BookLedger {
     markGbp: MarkPriceGbp,
     calendarDaysSinceLastMark: number,
   ): BookDay;
+  // Pools every primary book's loss for tradingDate against the account-wide cap (#1799) and
+  // tightens each one's persisted size_multiplier to the pooled step, never loosening it
   settlePrimaryBudgets(tradingDate: string): void;
+  // Idempotent repair for a crash between markDay and settlePrimaryBudgets: re-settles the
+  // most recent date every primary shares, a no-op once that date is already settled
+  settleLastPrimaryMark(): void;
 }
 
 declare const riskApproved: unique symbol;

@@ -1044,6 +1044,7 @@ async function runUnmarked(
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
+  deps.books.settleLastPrimaryMark();
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();

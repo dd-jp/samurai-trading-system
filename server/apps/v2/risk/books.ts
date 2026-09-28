@@ -215,9 +215,20 @@ export class PaperBooks implements BookLedger {
     for (const day of days) {
       const effective = Math.min(day.state.sizeMultiplier, state.sizeMultiplier) as SizeMultiplier;
       if (effective !== day.state.sizeMultiplier) {
-        this.#setSizeMultiplier(day, tradingDate, effective);
+        this.#tightenSizeMultiplier(day, tradingDate, effective);
       }
     }
+  }
+
+  // A crash between markAll's own markDay loop and its settlePrimaryBudgets call leaves that
+  // date pooled only in the in-memory #accountBudget replay, never written back to the books'
+  // own rows (#1799); re-settling the same date is a no-op once it is already written
+  settleLastPrimaryMark(): void {
+    if (this.#accountBudget === undefined) return;
+    const dates = this.#primaryIds().map((id) => this.lastDay(id)?.tradingDate);
+    const tradingDate = dates[0];
+    if (tradingDate === undefined || dates.some((date) => date !== tradingDate)) return;
+    this.settlePrimaryBudgets(tradingDate);
   }
 
   #markedDay(bookId: string, tradingDate: string): BookDay {
@@ -230,10 +241,15 @@ export class PaperBooks implements BookLedger {
     return day;
   }
 
-  #setSizeMultiplier(day: BookDay, tradingDate: string, sizeMultiplier: SizeMultiplier): void {
+  // A pooled halt (effective 0) must also block entries, or the dashboard's own
+  // "blocked at next fill" column (entries_blocked) disagrees with its halted state
+  #tightenSizeMultiplier(day: BookDay, tradingDate: string, sizeMultiplier: SizeMultiplier): void {
     this.db
-      .prepare('UPDATE v2_book_days SET size_multiplier = ? WHERE book_id = ? AND trading_date = ?')
-      .run(sizeMultiplier, day.bookId, tradingDate);
+      .prepare(
+        `UPDATE v2_book_days SET size_multiplier = ?, entries_blocked = MAX(entries_blocked, ?)
+          WHERE book_id = ? AND trading_date = ?`,
+      )
+      .run(sizeMultiplier, sizeMultiplier === 0 ? 1 : 0, day.bookId, tradingDate);
   }
 
   #seed(specs: readonly BookSpec[], seedCapitalGbp: number): void {
