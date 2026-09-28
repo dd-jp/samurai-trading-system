@@ -71,7 +71,15 @@ function marketWithInteriorBadBar(): MarketData {
     volume: 1_000,
     rawClose: 100,
   }));
-  bars[105] = { date: 'D105', open: 200, high: 100, low: 100, close: 0, volume: 1_000, rawClose: 0 };
+  bars[105] = {
+    date: 'D105',
+    open: 200,
+    high: 100,
+    low: 100,
+    close: 0,
+    volume: 1_000,
+    rawClose: 0,
+  };
   return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
 }
 
