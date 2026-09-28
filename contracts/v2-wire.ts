@@ -17,6 +17,9 @@ export interface LossBudgetBookWire {
   readonly day_loss_gbp: number;
   readonly size_multiplier: number;
   readonly entries_blocked: boolean;
+  readonly loss_cap_gbp: number | null;
+  readonly step_marks_gbp: readonly [number, number, number] | null;
+  readonly daily_cap_gbp: number | null;
 }
 
 export interface LossBudgetWire {
@@ -415,6 +418,9 @@ export const V2_WIRE_FIELD_NAMES = {
     'day_loss_gbp',
     'size_multiplier',
     'entries_blocked',
+    'loss_cap_gbp',
+    'step_marks_gbp',
+    'daily_cap_gbp',
   ]),
   control: fieldsOf<ControlWire>()(['state', 'in_force', 'loss_budget_halted_books', 'history']),
   controlRow: fieldsOf<ControlRowWire>()(['control_id', 'action', 'reason', 'source', 'set_at']),

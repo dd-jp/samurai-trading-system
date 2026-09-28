@@ -19,11 +19,16 @@ function seedCapital(startCapitalGbp = 2_000, lossCapGbp = 1_500, year = 2026): 
   ).run(year, `${year}-01-01`, startCapitalGbp, lossCapGbp);
 }
 
-function seedBook(bookId: string, variant: string, startCapitalGbp = 1_000): void {
+function seedBook(
+  bookId: string,
+  variant: string,
+  startCapitalGbp = 1_000,
+  sleeveId = 'debate',
+): void {
   db.prepare(
     `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
-     VALUES (?, 'debate', ?, ?, ?, '2026-09-01T00:00:00.000Z')`,
-  ).run(bookId, variant, startCapitalGbp, startCapitalGbp);
+     VALUES (?, ?, ?, ?, ?, '2026-09-01T00:00:00.000Z')`,
+  ).run(bookId, sleeveId, variant, startCapitalGbp, startCapitalGbp);
 }
 
 interface Day {
@@ -193,6 +198,9 @@ describe('OverviewReader loss budget (P1)', () => {
           day_loss_gbp: 30,
           size_multiplier: 0.5,
           entries_blocked: true,
+          loss_cap_gbp: 450,
+          step_marks_gbp: [150, 300, 450],
+          daily_cap_gbp: 6,
         },
         {
           book_id: 'debate/no-macro-gate',
@@ -203,8 +211,43 @@ describe('OverviewReader loss budget (P1)', () => {
           day_loss_gbp: 400,
           size_multiplier: 0.5,
           entries_blocked: false,
+          loss_cap_gbp: 450,
+          step_marks_gbp: [150, 300, 450],
+          daily_cap_gbp: 6,
         },
       ],
+    });
+  });
+
+  it("scales a registered sleeve's cap, steps and daily cap by its capital share; an unregistered sleeve gets none", async () => {
+    db = openSharedStore(':memory:');
+    seedCapital(2_000, 1_500);
+    seedBook('debate/primary', 'primary', 1_000, 'debate');
+    seedBook('trend/primary', 'primary', 1_000, 'trend');
+    seedDay('debate/primary', '2026-10-05', { equity: 900, ytdLoss: 100 });
+    seedDay('trend/primary', '2026-10-05', { equity: 950, ytdLoss: 50 });
+    const budget = (await reader().read()).loss_budget;
+    expect(budget).toMatchObject({
+      books: [
+        {
+          book_id: 'debate/primary',
+          loss_cap_gbp: 450,
+          step_marks_gbp: [150, 300, 450],
+          daily_cap_gbp: 6,
+        },
+        { book_id: 'trend/primary', loss_cap_gbp: null, step_marks_gbp: null, daily_cap_gbp: null },
+      ],
+    });
+  });
+
+  it('rescales a registered sleeve against a non-default cap (D8)', async () => {
+    db = openSharedStore(':memory:');
+    seedCapital(3_000, 900);
+    seedBook('debate/primary', 'primary', 1_000);
+    seedDay('debate/primary', '2026-10-05', { equity: 990, ytdLoss: 10 });
+    const budget = (await reader().read()).loss_budget;
+    expect(budget).toMatchObject({
+      books: [{ loss_cap_gbp: 270, step_marks_gbp: [90, 180, 270], daily_cap_gbp: 9 }],
     });
   });
 

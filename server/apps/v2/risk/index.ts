@@ -3,6 +3,7 @@ export {
   assertCapitalShares,
   bookSpecsFor,
   sleeveAllocationGbp,
+  sleeveCapitalYear,
 } from './allocation.js';
 export { consumeApproval } from './approval.js';
 export { PaperBooks } from './books.js';

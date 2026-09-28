@@ -33,10 +33,14 @@ import { inputsHash } from '../journal/index.js';
 import { candleFeatures, candleLine } from './candle.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
-import { DEBATE_SLEEVE_SPEC, DEBATE_STOP_ATR_MULTIPLE, SHORTS_ENABLED } from './parameters.js';
+import {
+  DEBATE_SLEEVE_ID,
+  DEBATE_SLEEVE_SPEC,
+  DEBATE_STOP_ATR_MULTIPLE,
+  SHORTS_ENABLED,
+} from './parameters.js';
 import { selectUniverse } from './universe.js';
 
-const DEBATE_SLEEVE_ID = 'debate';
 const DEBATE_MAX_ROUNDS = 1;
 const SMA_LONG_WINDOW = 200;
 const TRAILING_SHORT_DAYS = 20;

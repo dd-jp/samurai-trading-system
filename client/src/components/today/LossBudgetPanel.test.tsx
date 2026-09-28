@@ -36,9 +36,37 @@ describe('LossBudgetPanel (P1)', () => {
     render(<LossBudgetPanel panel={{ status: 'fed', ...LOSS_BUDGET }} />);
     const rows = within(region()).getAllByRole('row').slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([
-      'debate/primary−£120.00−£5.001open',
-      '↳ no-veto (shadow)−£300.00£2.00½blocked at next fill',
+      'debate/primary−£120.00−£450.00 (½ −£150.00, ¼ −£300.00, halt −£450.00)−£5.00−£6.001open',
+      '↳ no-veto (shadow)−£300.00−£450.00 (½ −£150.00, ¼ −£300.00, halt −£450.00)£2.00−£6.00½blocked at next fill',
     ]);
+  });
+
+  it('shows an unregistered sleeve with no scaled cap rather than the account cap', () => {
+    render(
+      <LossBudgetPanel
+        panel={{
+          status: 'fed',
+          ...LOSS_BUDGET,
+          books: [
+            {
+              book_id: 'trend/primary',
+              sleeve_id: 'trend',
+              variant: 'primary',
+              trading_date: '2026-10-05',
+              ytd_loss_gbp: 50,
+              day_loss_gbp: 10,
+              size_multiplier: 1,
+              entries_blocked: false,
+              loss_cap_gbp: null,
+              step_marks_gbp: null,
+              daily_cap_gbp: null,
+            },
+          ],
+        }}
+      />,
+    );
+    const rows = within(region()).getAllByRole('row').slice(1);
+    expect(rows.map((row) => row.textContent)).toEqual(['trend/primary−£50.00—−£10.00—1open']);
   });
 
   it('flags a stale capital config and a reached cap', () => {

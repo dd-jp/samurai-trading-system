@@ -29,6 +29,9 @@ export const LOSS_BUDGET: LossBudgetWire = {
       day_loss_gbp: 5,
       size_multiplier: 1,
       entries_blocked: false,
+      loss_cap_gbp: 450,
+      step_marks_gbp: [150, 300, 450],
+      daily_cap_gbp: 6,
     },
     {
       book_id: 'debate/no-veto',
@@ -39,6 +42,9 @@ export const LOSS_BUDGET: LossBudgetWire = {
       day_loss_gbp: -2,
       size_multiplier: 0.5,
       entries_blocked: true,
+      loss_cap_gbp: 450,
+      step_marks_gbp: [150, 300, 450],
+      daily_cap_gbp: 6,
     },
   ],
 };

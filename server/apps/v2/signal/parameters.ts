@@ -68,6 +68,8 @@ const DEBATE_ADV_WINDOW_BARS = 20;
 // Q14: 30% to debate, the 70% to S2 passers; S1 holds it in cash until one passes
 const DEBATE_CAPITAL_SHARE = 0.3;
 
+export const DEBATE_SLEEVE_ID = 'debate';
+
 export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
   capitalShare: DEBATE_CAPITAL_SHARE,
   minimumCapitalGbp: 0,
@@ -90,6 +92,12 @@ export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
     { variant: 'large-cap-only', instantiated: false },
   ],
 };
+
+// A sleeve missing here is a build gap, not a trading-state check
+export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
+  [DEBATE_SLEEVE_ID]: DEBATE_SLEEVE_SPEC,
+};
+
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
 
 export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
