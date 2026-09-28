@@ -1,17 +1,10 @@
-import type {
-  Sleeve,
-  SleeveContext,
-  SleeveDecision,
-  SleeveOutput,
-  SleeveUniverse,
-  Venue,
-} from '../../../../contracts/index.js';
+import type { Sleeve, SleeveContext, SleeveDecision, Venue } from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
 import {
   actionFor,
-  buildUniverse,
+  createTechnicalSleeve,
   directionFrom,
   resolveTechnical,
   SMA_LONG_WINDOW,
@@ -79,16 +72,5 @@ async function decideOne(
 }
 
 export function createArm2Sleeve(deps: Arm2SleeveDeps): Sleeve {
-  return {
-    id: ARM2_SLEEVE_ID,
-    spec: ARM2_SLEEVE_SPEC,
-    universe(context): SleeveUniverse {
-      return buildUniverse(deps.bars, deps.constituents, context.tradingDate);
-    },
-    async decide(context, instruments): Promise<SleeveOutput> {
-      const decisions: SleeveDecision[] = [];
-      for (const symbol of instruments) decisions.push(await decideOne(deps, symbol, context));
-      return { decisions, refusals: [] };
-    },
-  };
+  return createTechnicalSleeve(ARM2_SLEEVE_ID, ARM2_SLEEVE_SPEC, deps, decideOne);
 }

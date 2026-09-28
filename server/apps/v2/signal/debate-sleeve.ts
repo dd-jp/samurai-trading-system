@@ -6,6 +6,7 @@ import type {
   SleeveContext,
   SleeveDecision,
   SleeveOutput,
+  SleeveSpec,
   SleeveUniverse,
   Venue,
 } from '../../../../contracts/index.js';
@@ -457,17 +458,31 @@ async function decideOne(
   });
 }
 
-export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
+interface TechnicalSleeveDeps {
+  readonly bars: BarsSource;
+  readonly constituents: (tradingDate: string) => readonly string[];
+}
+
+export function createTechnicalSleeve<Deps extends TechnicalSleeveDeps>(
+  id: string,
+  spec: SleeveSpec,
+  deps: Deps,
+  decideOneFor: (deps: Deps, symbol: string, context: SleeveContext) => Promise<SleeveDecision>,
+): Sleeve {
   return {
-    id: DEBATE_SLEEVE_ID,
-    spec: DEBATE_SLEEVE_SPEC,
+    id,
+    spec,
     universe(context): SleeveUniverse {
       return buildUniverse(deps.bars, deps.constituents, context.tradingDate);
     },
     async decide(context, instruments): Promise<SleeveOutput> {
       const decisions: SleeveDecision[] = [];
-      for (const symbol of instruments) decisions.push(await decideOne(deps, symbol, context));
+      for (const symbol of instruments) decisions.push(await decideOneFor(deps, symbol, context));
       return { decisions, refusals: [] };
     },
   };
+}
+
+export function createDebateSleeve(deps: DebateSleeveDeps): Sleeve {
+  return createTechnicalSleeve(DEBATE_SLEEVE_ID, DEBATE_SLEEVE_SPEC, deps, decideOne);
 }
