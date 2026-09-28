@@ -389,8 +389,35 @@ describe('PaperBooks', () => {
 
       books.settlePrimaryBudgets('2026-09-25');
 
-      expect(books.lastDay('debate/primary')?.state.sizeMultiplier).toBe(0.25);
-      expect(books.lastDay('trend/primary')?.state.sizeMultiplier).toBe(0.5);
+      expect(books.lastDay('debate/primary')?.state).toMatchObject({
+        sizeMultiplier: 0.25,
+        entriesBlockedAtNextFill: false,
+      });
+      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+        sizeMultiplier: 0.5,
+        entriesBlockedAtNextFill: false,
+      });
+    });
+
+    it('settlePrimaryBudgets refuses to settle a date a primary was not marked for', () => {
+      const books = twoPrimaries(openSharedStore(':memory:'));
+      books.markDay('debate/primary', '2026-09-25', flat, 0);
+      books.markDay('trend/primary', '2026-09-25', flat, 0);
+
+      expect(() => books.settlePrimaryBudgets('2026-09-24')).toThrow(
+        /settlePrimaryBudgets\(2026-09-24\) called before debate\/primary was marked/,
+      );
+    });
+
+    it('settleLastPrimaryMark is a no-op when no primary book has any capital', () => {
+      const noPrimaryCapital: readonly Pick<Sleeve, 'id' | 'spec'>[] = [
+        { id: 'debate', spec: { ...DEBATE_SPEC, minimumCapitalGbp: Number.POSITIVE_INFINITY } },
+      ];
+      const db = openSharedStore(':memory:');
+      new CapitalConfigStore(db, clock).setYear(2026, 1_500, 1_500);
+      const books = openBooks(db, '2026-09-25', noPrimaryCapital);
+
+      expect(() => books.settleLastPrimaryMark()).not.toThrow();
     });
 
     it('leaves a shadow book on its own independent budget, unpooled', () => {
