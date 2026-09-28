@@ -128,6 +128,12 @@ export class PaperBooks implements BookLedger {
     private readonly capital: Pick<CapitalConfigStore, 'inForce' | 'lastKnown'>,
     openingDate: string,
     sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[],
+    // Paper/live pools real concurrent primary books against one account-wide cap (default,
+    // Q6/G6). A backtest composes independent trials plus the benchmark into one PaperBooks to
+    // run them side by side; pooling there would let one trial's losses throttle its siblings
+    // and the benchmark, corrupting backtestVerdict (ruled 2026-09-28, doc 66) — composeCycle's
+    // backtest caller passes false so each trial/benchmark keeps its own isolated budget
+    pooled = true,
   ) {
     const capitalYear = capital.inForce(openingDate);
     const opened: BookSpec[] = [];
@@ -140,7 +146,7 @@ export class PaperBooks implements BookLedger {
       opened.push(...specs.filter((spec) => this.#open(spec.id, sleeve.spec)));
     }
     this.#specs = opened;
-    this.#accountBudget = this.#openAccountBudget();
+    this.#accountBudget = pooled ? this.#openAccountBudget() : undefined;
   }
 
   #primaryIds(): readonly string[] {

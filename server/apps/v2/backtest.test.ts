@@ -436,6 +436,38 @@ describe('runBacktest', () => {
     expect(capped.verdict.capitalCeilingGbp).toBeLessThan(uncapped.verdict.capitalCeilingGbp);
   });
 
+  it("keeps a trial's equity independent of a sibling's losses and the benchmark's (isolation ruled 2026-09-28, #1799)", async () => {
+    const tightCap = 30;
+    const dumpAlongside = await runBacktest(
+      input({
+        lossCapGbp: tightCap,
+        trials: [
+          { config: { lookback: 0 }, sleeve: trendSleeve('dump', 'DOWN', 0) },
+          { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
+        ],
+        benchmark: { config: { lookback: 0 }, sleeve: trendSleeve('hold', 'DOWN', 0) },
+      }),
+    );
+    const trendAlone = await runBacktest(
+      input({
+        lossCapGbp: tightCap,
+        trials: [
+          { config: { lookback: 20 }, sleeve: trendSleeve('trend-20', 'FLAT', 20) },
+          { config: { lookback: 20, other: true }, sleeve: trendSleeve('trend-20b', 'FLAT', 20) },
+        ],
+        benchmark: { config: { lookback: 0 }, sleeve: trendSleeve('hold', 'DOWN', 0) },
+      }),
+    );
+
+    const dumpEquity = dumpAlongside.trials[0]?.equity as readonly number[];
+    const dumpFinalLoss = 1_000 - (dumpEquity.at(-1) as number);
+    expect(dumpFinalLoss).toBeGreaterThan(tightCap);
+
+    const trendAlongsideDump = dumpAlongside.trials[1]?.equity;
+    expect(trendAlongsideDump).toEqual(trendAlone.trials[0]?.equity);
+    expect(dumpAlongside.benchmark.equity).toEqual(trendAlone.benchmark.equity);
+  });
+
   it('checks the price of long and short entries only, and refuses a name with no bar', async () => {
     const remapped =
       (map: (decision: SleeveDecision) => SleeveDecision): SleeveFactory =>

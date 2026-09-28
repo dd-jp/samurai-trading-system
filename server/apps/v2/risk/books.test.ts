@@ -524,6 +524,61 @@ describe('PaperBooks', () => {
       expect(books.lastDay('debate/primary')?.state.sizeMultiplier).toBe(0);
       expect(books.lastDay('trend/primary')?.state.sizeMultiplier).toBe(1);
     });
+
+    it('does not pool losses across primaries when constructed unpooled (backtest isolation, ruled 2026-09-28)', () => {
+      const db = openSharedStore(':memory:');
+      seedTwoPrimaries(db);
+      const books = new PaperBooks(
+        db,
+        clock,
+        new CapitalConfigStore(db, clock),
+        '2026-09-25',
+        TWO_PRIMARIES,
+        false,
+      );
+      expect(lose(books, 'debate/primary', '2026-09-25', 1_000, 'a')).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+      expect(lose(books, 'trend/primary', '2026-09-25', 600, 'b')).toMatchObject({
+        halted: false,
+        sizeMultiplier: 0.25,
+      });
+
+      books.settlePrimaryBudgets('2026-09-25');
+
+      expect(books.lastDay('debate/primary')?.state).toMatchObject({
+        halted: true,
+        sizeMultiplier: 0,
+      });
+      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+        halted: false,
+        sizeMultiplier: 0.25,
+        entriesBlockedAtNextFill: false,
+      });
+    });
+
+    it('settleLastPrimaryMark is a no-op unpooled, same as when no primary has capital', () => {
+      const db = openSharedStore(':memory:');
+      seedTwoPrimaries(db);
+      const books = new PaperBooks(
+        db,
+        clock,
+        new CapitalConfigStore(db, clock),
+        '2026-09-25',
+        TWO_PRIMARIES,
+        false,
+      );
+      lose(books, 'debate/primary', '2026-09-25', 1_000, 'a');
+      lose(books, 'trend/primary', '2026-09-25', 600, 'b');
+
+      expect(() => books.settleLastPrimaryMark()).not.toThrow();
+
+      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+        halted: false,
+        sizeMultiplier: 0.25,
+      });
+    });
   });
 
   it('resets the reference equity at the calendar year boundary', () => {

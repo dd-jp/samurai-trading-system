@@ -253,6 +253,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       tradingDate: () => today.current,
       dryRun: true,
       halfSpreadBps: input.halfSpreadBps,
+      pooledLossBudget: false,
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
     const series = (index: number) => {

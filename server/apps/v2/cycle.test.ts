@@ -332,6 +332,7 @@ function loseInBook(
     instrument: 'ZZZ',
     venue: 'alpaca',
     side: 'buy',
+    leg: 'entry',
     qty: 1,
     priceGbp: 100 + loss,
     feeGbp: 0,
