@@ -6,6 +6,7 @@ import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import {
   barsBefore,
+  calendarReferenceFor,
   currentConstituents,
   MultiVenueBarsSource,
   ParquetBarsSource,
@@ -111,6 +112,13 @@ describe('coverage invariant', () => {
     ).toBe('2026-09-24');
     expect(barsBefore(before, '2026-09-25')).toHaveLength(24);
     expect(barsBefore(before, '2026-09-01')).toEqual([]);
+  });
+});
+
+describe('calendarReferenceFor', () => {
+  it('reads saxo off ISF and every other venue off SPY', () => {
+    expect(calendarReferenceFor('saxo')).toBe('ISF');
+    expect(calendarReferenceFor('alpaca')).toBe('SPY');
   });
 });
 

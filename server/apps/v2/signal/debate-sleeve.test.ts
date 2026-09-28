@@ -377,6 +377,41 @@ describe('createDebateSleeve', () => {
     expect(transports.flatMap((transport) => transport.calls)).toEqual([]);
   });
 
+  it("reads an LSE name's 200-session window off ISF, not SPY, since the two calendars diverge", async () => {
+    // own skips ~17 of 261 days (UK-only bank holidays CSP1, an LSE line, doesn't
+    // trade); ISF shares those gaps (also LSE) so it self-covers, but SPY (US, no
+    // gaps) would demand bars on days CSP1 never had, failing coverage if wrongly read
+    const full = trending('CSP1', 261, 0.001).bars;
+    const gapDates = new Set(full.filter((_, index) => index % 15 === 0).map((bar) => bar.date));
+    const own = full.filter((bar) => !gapDates.has(bar.date));
+    const isf = { symbol: 'ISF', bars: own };
+    const spy = { symbol: 'SPY', bars: full };
+    const bars: BarsSource = {
+      load: (symbol) => {
+        if (symbol === 'CSP1') return { symbol: 'CSP1', bars: own };
+        if (symbol === 'ISF') return isf;
+        if (symbol === 'SPY') return spy;
+        return undefined;
+      },
+    };
+    const transports: ScriptedTransport[] = [];
+    const sleeve = createDebateSleeve({
+      panel: panelWith(BULLISH_SCRIPT, transports),
+      bars,
+      constituents: () => ['CSP1'],
+      venueFor: () => 'saxo',
+      news: NO_NEWS,
+      clock,
+    });
+    const output = await decideAll(sleeve, {
+      tradingDate: nextDate({ symbol: 'CSP1', bars: own }),
+      macroDay: false,
+      dryRun: true,
+    });
+    expect(output.decisions[0]).not.toMatchObject({ reason: 'window_coverage' });
+    expect(transports.flatMap((transport) => transport.calls)).not.toEqual([]);
+  });
+
   it('skips a bearish judge because shorts are off and does nothing on neutral', async () => {
     const series = trending('DOWN', 260, -0.001);
     const bearish: Script = (request) =>

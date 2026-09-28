@@ -1,4 +1,4 @@
-import { type BarsSource, sessionsBefore } from '../data/index.js';
+import { type BarsSource, LSE_CALENDAR_REFERENCE, sessionsBefore } from '../data/index.js';
 import { LSE_LINES } from './lse-lines.js';
 import {
   isSet,
@@ -21,8 +21,7 @@ export function lseInstrumentsAbove(
   floorGbp: number,
 ): readonly string[] {
   const eligible = LSE_LINES.filter((line) => SAXO_APPROPRIATENESS_TEST_TAKEN || !line.isComplex);
-  // ISF (FTSE 100) as the LSE trading calendar reference, mirroring SPY's role for the US venue
-  const sessions = sessionsBefore(bars, tradingDate, 'ISF');
+  const sessions = sessionsBefore(bars, tradingDate, LSE_CALENDAR_REFERENCE);
   const instruments: string[] = [];
   for (const line of eligible) {
     const history = coveredHistory(

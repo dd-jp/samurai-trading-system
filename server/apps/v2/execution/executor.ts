@@ -103,15 +103,18 @@ function send(
   });
 }
 
-function failedSubmission(order: RiskApprovedOrder, error: unknown): Submission {
+function failedSubmission(order: RiskApprovedOrder, error: unknown, dryRun: boolean): Submission {
   const { approvalId } = order;
   if (!(error instanceof DryRunRefusedError)) {
     return { outcome: 'rejected', detail: describeThrownSafely(error), approvalId };
   }
-  // Saxo has no live adapter yet (#1400): a primary Saxo order always hits the
-  // DryRunBrokerAdapter by design, not because a dry run refused it
+  // A primary order is 'refused_dry_run' only when dryRun made it hit the stub broker;
+  // #1400: a Saxo primary hits it regardless (no live adapter), so outside a real dry
+  // run that is 'simulated', not a refusal
   const outcome =
-    order.bookVariant === 'primary' && order.venue !== 'saxo' ? 'refused_dry_run' : 'simulated';
+    order.bookVariant === 'primary' && (dryRun || order.venue !== 'saxo')
+      ? 'refused_dry_run'
+      : 'simulated';
   return { outcome, detail: error.message, approvalId };
 }
 
@@ -146,7 +149,7 @@ export class V2OrderExecutor implements OrderExecutor {
       }
       return { outcome: 'submitted', detail: states.join(','), approvalId };
     } catch (error) {
-      return failedSubmission(order, error);
+      return failedSubmission(order, error, this.deps.dryRun);
     }
   }
 

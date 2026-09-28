@@ -1,3 +1,4 @@
+import type { Venue } from '../../../../contracts/index.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { coverageSatisfied, windowCoverage } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
@@ -86,6 +87,15 @@ export function isFresh(last: DailyBar | undefined, tradingDate: string): last i
 }
 
 export const CALENDAR_REFERENCE = 'SPY';
+export const LSE_CALENDAR_REFERENCE = 'ISF';
+
+// LSE and US trading calendars diverge on each venue's own bank holidays (UK early
+// May/spring/summer bank holidays, Boxing Day; US Presidents' Day, Juneteenth, etc)
+// windowCovered's 95% ratio makes an SPY-keyed calendar fail almost every LSE name
+// over a 200-session window, so each venue reads sessions off its own reference line
+export function calendarReferenceFor(venue: Venue): string {
+  return venue === 'saxo' ? LSE_CALENDAR_REFERENCE : CALENDAR_REFERENCE;
+}
 
 export function sessionsBefore(
   bars: BarsSource,

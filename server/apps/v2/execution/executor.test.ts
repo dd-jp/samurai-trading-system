@@ -312,8 +312,19 @@ describe('V2OrderExecutor', () => {
       detail: refusal.message,
     });
     expect(await dry.submit(entry(shadow))).toMatchObject({ outcome: 'simulated' });
-    expect(await dry.submit(entry(primary, 'saxo'))).toMatchObject({ outcome: 'simulated' });
+    expect(await dry.submit(entry(primary, 'saxo'))).toMatchObject({ outcome: 'refused_dry_run' });
     expect(alpaca.submitBracket).not.toHaveBeenCalled();
+  });
+
+  it('a paper (non-dry-run) primary saxo refusal is simulated, not refused_dry_run (#1400: no live adapter)', async () => {
+    const { executor: paper, simulated } = executor(false);
+    const refusal = new DryRunRefusedError({
+      client_order_id: 'e',
+      instrument: 'CSP1',
+      kind: 'bracket',
+    });
+    simulated.submitBracket.mockRejectedValueOnce(refusal);
+    expect(await paper.submit(entry(primary, 'saxo'))).toMatchObject({ outcome: 'simulated' });
   });
 
   it('cancels and resumes flattens on the routed broker only', async () => {
