@@ -1,4 +1,5 @@
 import type {
+  BookDay,
   BookLedger,
   BookSpec,
   ControlReader,
@@ -775,8 +776,13 @@ class Cycle {
   }
 
   async markAll(books: readonly BookSpec[]): Promise<BookReport[]> {
+    const previous = new Map(books.map((book) => [book.id, this.deps.books.lastDay(book.id)]));
+    for (const book of books) this.markOne(book, previous.get(book.id));
+    // Pooled primary state depends on every primary's mark for tradingDate; settle only once
+    // all of today's marks are committed, so no book's own halt is checked against a partial sum
+    this.deps.books.settlePrimaryBudgets(this.tradingDate);
     const reports: BookReport[] = [];
-    for (const book of books) reports.push(await this.mark(book));
+    for (const book of books) reports.push(await this.reportMark(book, previous.get(book.id)));
     return reports;
   }
 
@@ -800,15 +806,19 @@ class Cycle {
     }
   }
 
-  async mark(book: BookSpec): Promise<BookReport> {
+  markOne(book: BookSpec, previous: BookDay | undefined): void {
     this.journalStaleMarks(book);
-    const previous = this.deps.books.lastDay(book.id);
-    const day = this.deps.books.markDay(
+    this.deps.books.markDay(
       book.id,
       this.tradingDate,
       (i, v) => this.markGbp(i, v),
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
     );
+  }
+
+  async reportMark(book: BookSpec, previous: BookDay | undefined): Promise<BookReport> {
+    const day = this.deps.books.lastDay(book.id);
+    if (day === undefined) throw new Error(`Cycle: ${book.id} unmarked after markAll`);
     await this.cancelRestingEntriesOnBlock(book, day.state, this.tradingDate);
     this.logBudgetChange(book.id, previous?.state, day.state);
     return {
@@ -1034,6 +1044,7 @@ async function runUnmarked(
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
+  deps.books.settleLastPrimaryMark();
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();

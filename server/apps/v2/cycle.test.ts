@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  BookFill,
+  BookLedger,
   ControlAction,
   LossBudgetState,
   MarketData,
@@ -192,6 +194,7 @@ function harness(
   spec: SleeveSpec = TEST_SPEC,
   pricing: FillPricing = SPREAD_ONLY,
   lossCapGbp = 1_500,
+  secondSleeve?: Sleeve,
 ): Harness {
   const db = openSharedStore(':memory:');
   const capital = new CapitalConfigStore(db, clock);
@@ -209,6 +212,7 @@ function harness(
     decide: () => Promise.resolve({ decisions: current, refusals: [] }),
   };
   registry.register(sleeve);
+  if (secondSleeve !== undefined) registry.register(secondSleeve);
   const barsByDate = new Map<string, DailyBar>();
   const barFor = (_instrument: string, tradingDate: string) => {
     const dated = barsByDate.get(tradingDate);
@@ -228,7 +232,13 @@ function harness(
     },
     gbpUsdAtYearStart: () => FX,
   };
-  const books = new PaperBooks(db, clock, capital, '2026-09-01', [sleeve]);
+  const books = new PaperBooks(
+    db,
+    clock,
+    capital,
+    '2026-09-01',
+    secondSleeve === undefined ? [sleeve] : [sleeve, secondSleeve],
+  );
   const simulatedBroker = new DryRunBrokerAdapter();
   return {
     registry,
@@ -246,7 +256,12 @@ function harness(
     controls: new ControlStore(db),
     books,
     journal: new Journal(db, clock),
-    risk: new V2RiskGate({ books, capital, market, spec: () => spec }),
+    risk: new V2RiskGate({
+      books,
+      capital,
+      market,
+      spec: (sleeveId) => (sleeveId === sleeve.id ? spec : (secondSleeve?.spec ?? spec)),
+    }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },
       simulatedBrokers: { alpaca: simulatedBroker, saxo: simulatedBroker },
@@ -304,6 +319,28 @@ function exitFill(deps: CycleDeps, clientOrderId: string) {
   return db
     .prepare("SELECT side, qty, price_gbp FROM v2_fills WHERE client_order_id = ? AND leg = 'exit'")
     .get(clientOrderId);
+}
+
+function loseInBook(
+  books: BookLedger,
+  bookId: string,
+  date: string,
+  loss: number,
+  orderId: string,
+): void {
+  const entry: BookFill = {
+    instrument: 'ZZZ',
+    venue: 'alpaca',
+    side: 'buy',
+    leg: 'entry',
+    qty: 1,
+    priceGbp: 100 + loss,
+    feeGbp: 0,
+    clientOrderId: orderId,
+    tradingDate: date,
+  };
+  books.applyFill(bookId, entry);
+  books.applyFill(bookId, { ...entry, side: 'sell', priceGbp: 100 });
 }
 
 async function openBooks(deps: Harness): Promise<void> {
@@ -2382,5 +2419,95 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
           'debate/no-macro-gate: loss budget halt at the 2026-09-28 mark cancelled resting entries: 1',
       },
     ]);
+  });
+});
+
+describe('#1799: account-wide pooled loss budget across primary books', () => {
+  it('halts a second primary once the pooled loss crosses the full cap, and the gate sizes its next entry at zero', async () => {
+    const share = 0.5;
+    const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
+    const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
+    let trendDecisions: readonly SleeveDecision[] = [];
+    const trend: Sleeve = {
+      id: 'trend',
+      spec: specB,
+      universe: () => ({
+        instruments: trendDecisions.map((decision) => decision.instrument),
+        refusals: [],
+      }),
+      decide: () => Promise.resolve({ decisions: trendDecisions, refusals: [] }),
+    };
+    const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
+
+    // debate's own share of the £600 cap is £300: a £550 loss halts it on its own
+    loseInBook(deps.books, 'debate/primary', '2026-09-25', 550, 'a');
+    // trend's own share is also £300, and £50 loss is under even the half-size step
+    loseInBook(deps.books, 'trend/primary', '2026-09-25', 50, 'b');
+    await runCycle(deps, '2026-09-25');
+
+    expect(deps.books.lastDay('debate/primary')?.state).toMatchObject({
+      halted: true,
+      sizeMultiplier: 0,
+    });
+    // Without pooling this would still read sizeMultiplier: 1 (its own £50 loss is under
+    // even the half-size mark of its £300 share)
+    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
+      halted: true,
+      sizeMultiplier: 0,
+    });
+
+    trendDecisions = [{ ...longAapl, sleeve_id: 'trend' }];
+    await runCycle(deps, '2026-09-28');
+
+    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBe(0);
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    expect(deps.books.positions('trend/primary')).toEqual([]);
+  });
+
+  it('a crash between marking both primaries and settling the pool is repaired next cycle, before any fill', async () => {
+    const share = 0.5;
+    const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
+    const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
+    const trendDecisions: readonly SleeveDecision[] = [{ ...longAapl, sleeve_id: 'trend' }];
+    const trend: Sleeve = {
+      id: 'trend',
+      spec: specB,
+      universe: () => ({
+        instruments: trendDecisions.map((decision) => decision.instrument),
+        refusals: [],
+      }),
+      decide: () => Promise.resolve({ decisions: trendDecisions, refusals: [] }),
+    };
+    // Each primary's own share of the hardcoded £1,000 start capital is £500 (share 0.5), so its
+    // own loss must stay well under that to leave AAPL's entry sizeable off live post-loss equity
+    const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
+
+    loseInBook(deps.books, 'debate/primary', '2026-09-25', 400, 'a');
+    loseInBook(deps.books, 'trend/primary', '2026-09-25', 250, 'b');
+    vi.spyOn(deps.books, 'settlePrimaryBudgets').mockImplementationOnce(() => {
+      throw new Error('crash before settling the pool');
+    });
+    await expect(runCycle(deps, '2026-09-25')).rejects.toThrow('crash before settling the pool');
+
+    expect(sizeShares(deps, 'trend/primary', '2026-09-25', 'AAPL')).toBeGreaterThan(0);
+    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toBeDefined();
+    // Both primaries were marked (the crash was after markOne, before settlePrimaryBudgets),
+    // but trend/primary's own unpooled step (0.25) is what got persisted, not the pooled halt
+    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
+      halted: false,
+      sizeMultiplier: 0.25,
+    });
+
+    await runCycle(deps, '2026-09-28');
+
+    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
+      halted: true,
+      sizeMultiplier: 0,
+    });
+    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toMatchObject({
+      outcome: 'cancelled',
+    });
+    expect(deps.books.position('trend/primary', 'AAPL')).toBeUndefined();
+    expect(deps.books.position('trend/no-macro-gate', 'AAPL')).toBeDefined();
   });
 });
