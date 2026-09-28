@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Sleeve, SleeveContext, SleeveOutput } from '../../../../contracts/index.js';
+import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import { UNCAPPED_SPEND } from '../../../pipeline/debate-engine/index.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { addDays, NO_NEWS } from '../data/index.js';
+import { inputsHash } from '../journal/index.js';
 import {
   createDebateSleeve,
   directionFrom,
@@ -12,7 +14,7 @@ import {
   newsView,
   technicalRead,
 } from './debate-sleeve.js';
-import { buildLlmPanel } from './llm-panel.js';
+import { buildLlmPanel, seatModels } from './llm-panel.js';
 import { DEBATE_SLEEVE_SPEC } from './parameters.js';
 import { BULLISH_SCRIPT, type Script, ScriptedTransport } from './scripted-transport.js';
 
@@ -147,6 +149,7 @@ describe('technicalRead', () => {
       `20-day return ${pct(close(199), close(179))}`,
       `63-day return ${pct(close(199), close(136))}`,
       expect.stringMatching(/^20-day ATR \d+\.\d{4}$/),
+      'prior-day candle: body 0.00%, upper wick 50.00%, lower wick 50.00% of range',
     ]);
     const short = technicalRead(full.slice(1), 't', clock.now());
     expect(short?.view.direction).toBe('neutral');
@@ -158,7 +161,39 @@ describe('technicalRead', () => {
       '20-day return n/a',
       '63-day return n/a',
       '20-day ATR n/a',
+      'prior-day candle: body 0.00%, upper wick 50.00%, lower wick 50.00% of range',
     ]);
+  });
+
+  it('reports the prior-day candle body/wick split, undefined on a zero-range bar (#1772)', () => {
+    const series = trending('UP', 260, 0.001);
+    const lastClose = series.bars.at(-1)?.close ?? 0;
+    const flatBar: DailyBar = {
+      date: '2099-01-01',
+      open: lastClose,
+      high: lastClose,
+      low: lastClose,
+      close: lastClose,
+      volume: 1_000_000,
+      rawClose: lastClose,
+    };
+    const flat = technicalRead([...series.bars, flatBar], 't', clock.now());
+    expect(flat?.view.key_points.at(-1)).toBe(
+      'prior-day candle: n/a (zero range, or open/close outside high-low)',
+    );
+    const marubozu: DailyBar = {
+      date: '2099-01-01',
+      open: lastClose * 0.99,
+      high: lastClose,
+      low: lastClose * 0.99,
+      close: lastClose,
+      volume: 1_000_000,
+      rawClose: lastClose,
+    };
+    const bull = technicalRead([...series.bars, marubozu], 't', clock.now());
+    expect(bull?.view.key_points.at(-1)).toBe(
+      'prior-day candle: body 100.00%, upper wick 0.00%, lower wick 0.00% of range',
+    );
   });
 });
 
@@ -203,10 +238,24 @@ describe('createDebateSleeve', () => {
     for (const transport of transports) {
       for (const call of transport.calls) {
         expect(call.prompt).not.toMatch(/api[_-]?key|ALPACA|SAXO|account/i);
+        expect(call.prompt).toContain('prior-day candle:');
       }
     }
     expect(output.refusals.map((refusal) => refusal.parameter)).toEqual(['G18_SMALL_CAP_FLOORS']);
     expect(decision?.payload).toMatchObject({ headlines: 0, disagreement: '', converged: true });
+  });
+
+  it('changes inputs_hash when the candle line changes and nothing else does (#1772)', () => {
+    const bars = trending('UP', 260, 0.001).bars;
+    const models = seatModels('2026-09-26');
+    const withCandle = technicalRead(bars, 't', clock.now())?.view as AnalystView;
+    const withoutCandle: AnalystView = {
+      ...withCandle,
+      key_points: withCandle.key_points.slice(0, -1),
+    };
+    expect(inputsHash(bars, [withCandle], models)).not.toBe(
+      inputsHash(bars, [withoutCandle], models),
+    );
   });
 
   it('hashes only the last 200 bars of history', async () => {

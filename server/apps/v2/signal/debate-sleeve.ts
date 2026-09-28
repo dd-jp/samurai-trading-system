@@ -30,6 +30,7 @@ import { describeThrownSafely } from '../../../shared/index.js';
 import type { BarsSource, NewsSource } from '../data/index.js';
 import { barsBefore, sessionsBefore, windowCovered } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
+import { candleFeatures, candleLine } from './candle.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
 import { DEBATE_SLEEVE_SPEC, DEBATE_STOP_ATR_MULTIPLE, SHORTS_ENABLED } from './parameters.js';
@@ -113,6 +114,7 @@ export function technicalRead(
         `20-day return ${format(r20)}`,
         `63-day return ${format(r63)}`,
         `20-day ATR ${atr === undefined ? 'n/a' : atr.toFixed(4)}`,
+        candleLine(candleFeatures(last)),
       ],
       timestamp: now,
     },
