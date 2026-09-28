@@ -198,7 +198,7 @@ Asked in a chat session after David compared v2 with a UK-equities brainstorm an
 Not decided by this ruling, each for David, one question at a time:
 
 1. Which sleeves may use CFDs (the debate sleeve only, as Q8 scopes shorts, or the S2 rules candidates too).
-2. Leverage: CFD margin lets notional exceed equity; whether gross notional is capped (for example at 1× book equity) so the G6 loss budget and the 1.0% daily cap still bound the book.
+2. ~~Leverage: CFD margin lets notional exceed equity; whether gross notional is capped (for example at 1× book equity) so the G6 loss budget and the 1.0% daily cap still bound the book.~~ **Ruled 2026-09-28: "Cap at 1× book equity (Recommended)".** A book's gross notional, cash and CFD, long plus short, never exceeds its equity;
 3. The short gap bound: whether Q8's "+30% gap costs ≤ ~£150" carries over to CFD shorts, UK and US alike.
 4. Routing: whether US single stocks go to Saxo CFDs, Alpaca, or both (a CFD short avoids Alpaca's $2,000 floor, Q8 / doc 69 R3); whether UK longs go through CFDs (no stamp duty, overnight financing) and whether index exposure goes through CFDs or 1× ETFs.
 5. Costs to model before paper: Saxo's CFD commission and minimum ticket, spread, overnight financing on longs and shorts, and borrow charges on single-stock shorts.
