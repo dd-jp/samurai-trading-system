@@ -32,6 +32,49 @@ function flatMarket(finalClose: number, finalOverrides: Partial<V2Bar> = {}): Ma
   };
 }
 
+function fixedCountMarket(count: number, finalClose = 100): MarketData {
+  return {
+    lastBarBefore: () => undefined,
+    barsBefore: () =>
+      Array.from({ length: count }, (_, index) => {
+        const close = index === count - 1 ? finalClose : 100;
+        return {
+          date: `D${index}`,
+          open: close,
+          high: close,
+          low: close,
+          close,
+          volume: 1_000,
+          rawClose: close,
+        };
+      }),
+    gbpUsdAtYearStart: () => 1,
+  };
+}
+
+function emptyMarket(): MarketData {
+  return { lastBarBefore: () => undefined, barsBefore: () => [], gbpUsdAtYearStart: () => 1 };
+}
+
+// A shape-invalid bar sitting inside the trailing window, not at the end: open(200) > high(100)
+// fails shapeValid, so a correct filter drops it and the SMA sees 109 flat closes at 100 plus the
+// last bar (also 100) — averaging to exactly 100, so close(100) is NOT above it and the sleeve
+// exits. Left unfiltered, its close=0 drags the average to 99, so close(100) IS above it and the
+// sleeve wrongly enters — the two outcomes distinguish filtering from including it
+function marketWithInteriorBadBar(): MarketData {
+  const bars: V2Bar[] = Array.from({ length: 110 }, (_, index) => ({
+    date: `D${index}`,
+    open: 100,
+    high: 100,
+    low: 100,
+    close: 100,
+    volume: 1_000,
+    rawClose: 100,
+  }));
+  bars[105] = { date: 'D105', open: 200, high: 100, low: 100, close: 0, volume: 1_000, rawClose: 0 };
+  return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
+}
+
 describe('CROSS_ASSET_TREND_TIDMS', () => {
   it('is exactly the 15 declared lines from #1785 ruling (b)', () => {
     expect(CROSS_ASSET_TREND_TIDMS).toHaveLength(15);
@@ -78,6 +121,10 @@ describe('createCrossAssetTrendSleeve', () => {
       expect(decision.price).toBe(150);
       expect(decision.stop_price).toBeLessThan(150);
       expect(decision.atr).toBeGreaterThan(0);
+      expect(decision.venue).toBe('saxo');
+      expect(decision.direction).toBe('bullish');
+      expect(decision.reason).toBe('close above SMA');
+      expect(decision.inputs_hash).toBe(`${decision.instrument}-2025-01-01`);
     }
   });
 
@@ -105,6 +152,18 @@ describe('createCrossAssetTrendSleeve', () => {
       expect(decision.action).toBe('exit');
       expect(decision.price).toBe(50);
       expect(decision.stop_price).toBeUndefined();
+      expect(decision.venue).toBe('saxo');
+      expect(decision.direction).toBe('neutral');
+      expect(decision.reason).toBe('close below SMA');
+      expect(decision.inputs_hash).toBe(`${decision.instrument}-2025-01-01`);
+    }
+  });
+
+  it('filters a shape-invalid interior bar out of the SMA window rather than averaging it in', async () => {
+    const sleeve = createCrossAssetTrendSleeve(100)(marketWithInteriorBadBar());
+    const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+    for (const decision of output.decisions) {
+      expect(decision.action).toBe('exit');
     }
   });
 
@@ -129,11 +188,35 @@ describe('createCrossAssetTrendSleeve', () => {
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
       expect(decision.reason).toBe('insufficient_history');
+      expect(decision.atr).toBeUndefined();
+      expect(decision.price).toBe(100);
+      expect(decision.venue).toBe('saxo');
+      expect(decision.direction).toBe('neutral');
+      expect(decision.inputs_hash).toBe('');
+    }
+  });
+
+  it('skips as insufficient_history when the ATR warms up before the SMA does', async () => {
+    // 50 bars: enough for the 20-day ATR (needs >= 21) but short of the 100-day SMA window
+    const sleeve = createCrossAssetTrendSleeve(100)(fixedCountMarket(50));
+    const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+    for (const decision of output.decisions) {
+      expect(decision.action).toBe('skip');
+      expect(decision.reason).toBe('insufficient_history');
     }
   });
 
   it('skips as bad_last_bar when the last bar fails the #1838 shape check, fail-closed', async () => {
     const sleeve = createCrossAssetTrendSleeve(100)(flatMarket(150, { close: 200, high: 150 }));
+    const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+    for (const decision of output.decisions) {
+      expect(decision.action).toBe('skip');
+      expect(decision.reason).toBe('bad_last_bar');
+    }
+  });
+
+  it('skips as bad_last_bar when there is no last bar at all', async () => {
+    const sleeve = createCrossAssetTrendSleeve(100)(emptyMarket());
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
@@ -149,6 +232,18 @@ describe('createCrossAssetTrendBenchmarkSleeve', () => {
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('enter_long');
+    }
+  });
+
+  it('skips as insufficient_history when its SMA(20) warms up before its own ATR(20) does', async () => {
+    // The benchmark's own smaWindow equals ATR_WINDOW (20), so 20 bars satisfy the SMA's
+    // length >= 20 but not the ATR's length >= 21 — the one case where this candidate's two
+    // window thresholds can disagree instead of the SMA(100/200) sleeves' always-wider SMA window
+    const sleeve = createCrossAssetTrendBenchmarkSleeve()(fixedCountMarket(20));
+    const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+    for (const decision of output.decisions) {
+      expect(decision.action).toBe('skip');
+      expect(decision.reason).toBe('insufficient_history');
     }
   });
 });
