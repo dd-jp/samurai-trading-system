@@ -2338,11 +2338,15 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     await runCycle(deps, '2026-09-25');
     deps.barsByDate.set('2026-09-28', drop());
     deps.setDecisions([msft]);
-    vi.spyOn(deps.journal, 'restingEntries').mockReturnValueOnce([]);
+    // Simulates the crash losing every read of resting entries during this one cycle,
+    // however many call sites now make one (#1785 added a cash-gate read in entries()) — a
+    // fixed call count here would be re-broken by the next such addition
+    const restingEntries = vi.spyOn(deps.journal, 'restingEntries').mockReturnValue([]);
     await runCycle(deps, '2026-09-28');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe(
       'refused_dry_run',
     );
+    restingEntries.mockRestore();
     await runCycle(deps, '2026-09-29');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')).toMatchObject({
       outcome: 'cancelled',

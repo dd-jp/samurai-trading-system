@@ -29,6 +29,9 @@ export interface CycleCompositionOptions {
   readonly tradingDate: () => string;
   readonly dryRun: boolean;
   readonly halfSpreadBps: (instrument: string) => number;
+  // Scales all three modelled-cost legs (spread, impact, fee) together, so a cost-sensitivity
+  // run (doc 67 "2x modelled cost") stresses the whole cost model, not just the quoted spread
+  readonly costMultiple?: number | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   // Default true: paper/live pools real concurrent primary books against one account-wide loss
   // cap (#1799). The backtest passes false so each trial and the benchmark it composes into the
@@ -65,6 +68,8 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
   });
+  const multiple = options.costMultiple ?? 1;
+  const impactBps = impactLookup(market, tradingDate, logger);
   const executor = createOrderExecutor({
     dryRun: options.dryRun,
     client: options.alpacaClient,
@@ -72,9 +77,9 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     clock,
     logger,
     pricing: {
-      halfSpreadBps: options.halfSpreadBps,
-      impactBps: impactLookup(market, tradingDate, logger),
-      fee: venueFee,
+      halfSpreadBps: (instrument) => options.halfSpreadBps(instrument) * multiple,
+      impactBps: (instrument, qty, price) => impactBps(instrument, qty, price) * multiple,
+      fee: (venue, side, qty, price) => venueFee(venue, side, qty, price) * multiple,
     },
   });
   return {

@@ -19,6 +19,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ACTIONS: ReadonlySet<string> = new Set<JournalActionFilterWire>([
   'enter_long',
   'enter_short',
+  'exit',
   'skip',
   'none',
   'vetoed',

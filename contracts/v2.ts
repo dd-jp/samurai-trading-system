@@ -22,7 +22,7 @@ export interface MarketData {
   gbpUsdAtYearStart(year: number): number;
 }
 
-export type SleeveAction = 'enter_long' | 'enter_short' | 'skip' | 'none';
+export type SleeveAction = 'enter_long' | 'enter_short' | 'exit' | 'skip' | 'none';
 
 export interface SleeveDecision {
   readonly sleeve_id: string;

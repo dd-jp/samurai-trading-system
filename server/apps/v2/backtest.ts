@@ -35,6 +35,10 @@ export interface BacktestInput {
   readonly ledger: TrialLedger;
   readonly logger: Logger;
   readonly folds?: number | undefined;
+  readonly calendarReference?: string | undefined;
+  // Never part of recordTrials' run info: a cost-sensitivity rerun (doc 67 "2x modelled cost")
+  // must resolve to the SAME trial hash as its 1x baseline, not a new permanent ledger entry
+  readonly costMultiple?: number | undefined;
 }
 
 export interface BacktestResult {
@@ -125,7 +129,12 @@ function rulesOnly(sleeve: Sleeve, market: MarketData): Sleeve {
   };
 }
 
-function assertSessionsCover(dates: readonly string[], from: string, to: string): void {
+function assertSessionsCover(
+  dates: readonly string[],
+  from: string,
+  to: string,
+  calendarReference: string,
+): void {
   const gaps: [string, string][] = [
     [from, dates[0] ?? to],
     ...dates.slice(1).map((date, index): [string, string] => [dates[index] as string, date]),
@@ -134,19 +143,24 @@ function assertSessionsCover(dates: readonly string[], from: string, to: string)
   for (const [before, after] of gaps) {
     if (addDays(before, MAX_SESSION_GAP_CALENDAR_DAYS) < after) {
       throw new Error(
-        `backtest: ${CALENDAR_REFERENCE} has no session from ${before} to ${after}; the calendar does not cover ${from} to ${to} (postmortem §2)`,
+        `backtest: ${calendarReference} has no session from ${before} to ${after}; the calendar does not cover ${from} to ${to} (postmortem §2)`,
       );
     }
   }
 }
 
-export function backtestSessions(market: MarketData, from: string, to: string): string[] {
+export function backtestSessions(
+  market: MarketData,
+  from: string,
+  to: string,
+  calendarReference: string = CALENDAR_REFERENCE,
+): string[] {
   const dates = market
-    .barsBefore(CALENDAR_REFERENCE, addDays(to, 1), Number.MAX_SAFE_INTEGER)
+    .barsBefore(calendarReference, addDays(to, 1), Number.MAX_SAFE_INTEGER)
     .map((bar) => bar.date)
     .filter((date) => date >= from);
   if (dates.length === 0) throw new Error(`backtest: no sessions from ${from} to ${to}`);
-  assertSessionsCover(dates, from, to);
+  assertSessionsCover(dates, from, to, calendarReference);
   return dates;
 }
 
@@ -232,7 +246,12 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
   const sleeves = [...trialSleeves, benchmarkSleeve];
   refuseForwardPaper(sleeves);
   const share = trialsShare(trialSleeves);
-  const dates = backtestSessions(input.market, input.from, input.to);
+  const dates = backtestSessions(
+    input.market,
+    input.from,
+    input.to,
+    input.calendarReference ?? CALENDAR_REFERENCE,
+  );
   const first = dates[0] as string;
   const trialNumbers = recordTrials(input, trialSleeves, benchmarkSleeve);
   const db = openSharedStore(':memory:');
@@ -253,6 +272,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       tradingDate: () => today.current,
       dryRun: true,
       halfSpreadBps: input.halfSpreadBps,
+      costMultiple: input.costMultiple,
       pooledLossBudget: false,
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
