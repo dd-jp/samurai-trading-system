@@ -2448,7 +2448,8 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
       halted: true,
       sizeMultiplier: 0,
     });
-    // Without pooling this would still read sizeMultiplier: 1 (its own share took no loss)
+    // Without pooling this would still read sizeMultiplier: 1 (its own £50 loss is under
+    // even the half-size mark of its £300 share)
     expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
       halted: true,
       sizeMultiplier: 0,
@@ -2487,7 +2488,6 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
     });
     await expect(runCycle(deps, '2026-09-25')).rejects.toThrow('crash before settling the pool');
 
-    // The AAPL entry was sized and submitted before markAll's mocked settle threw
     expect(sizeShares(deps, 'trend/primary', '2026-09-25', 'AAPL')).toBeGreaterThan(0);
     expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toBeDefined();
     // Both primaries were marked (the crash was after markOne, before settlePrimaryBudgets),
