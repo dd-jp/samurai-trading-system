@@ -2515,3 +2515,76 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
     expect(deps.books.position('trend/no-macro-gate', 'AAPL')).toBeDefined();
   });
 });
+
+describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
+  // TEST_SPEC/£1,000 equity: each longAapl-shaped decision sizes to min(byRisk, byNotional)
+  // = min(floor(5/(0.32*2))=7, floor(100/16)=6) = 6 shares at £20/1.25 = £16/share = £96
+  // notional (matches the file's existing ENTRY_COST_GBP). 10 fit (£960 of £1,000); the 11th
+  // has only £40 left and needs £96
+  const instruments = Array.from({ length: 11 }, (_, index) => `SYM${index}`);
+  const decisions: SleeveDecision[] = instruments.map((instrument) => ({
+    ...longAapl,
+    instrument,
+  }));
+
+  it('funds entries in list order and refuses the one that runs out of cash', async () => {
+    const deps = harness(decisions, true);
+    await runCycle(deps, '2026-09-25');
+    for (const instrument of instruments.slice(0, 10)) {
+      expect(deps.journal.orderFor(`v2-debate-primary-2026-09-25-${instrument}`)?.outcome).toBe(
+        'refused_dry_run',
+      );
+    }
+    const last = deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM10');
+    expect(last?.outcome).toBe('rejected');
+    expect(last?.payload.detail).toBe('insufficient_cash');
+  });
+
+  it('never double-counts a held line: re-issuing enter_long for it costs no fresh cash', async () => {
+    // Hold 5 lines first (£480 of £1,000 spent, ~£520 real cash left): if a held line's
+    // re-issued enter_long were charged again, 5 * £96 = £480 would be deducted a second time
+    // and leave ~£40, wrongly refusing the 6th, genuinely new line (needs £96)
+    const deps = harness(decisions.slice(0, 5), true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    for (const instrument of instruments.slice(0, 5)) {
+      expect(deps.books.position('debate/primary', instrument)).toBeDefined();
+    }
+    deps.setDecisions([...decisions.slice(0, 5), decisions[5] as SleeveDecision]);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-SYM5')?.outcome).toBe(
+      'refused_dry_run',
+    );
+    const sym5 = deps.journal.orderFor('v2-debate-primary-2026-09-29-SYM5');
+    expect(sym5?.payload.detail).not.toBe('insufficient_cash');
+  });
+
+  it('a signal-driven exit rests, then flattens a held position once it resolves', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeDefined();
+    deps.setDecisions([{ ...longAapl, action: 'exit' }]);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
+      outcome: 'refused_dry_run',
+      payload: { reason: 'signal_exit' },
+    });
+    expect(deps.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-primary-2026-09-29-AAPL-exit',
+    );
+    deps.barsByDate.set('2026-09-30', bar('2026-09-29', { open: 19, low: 18.9, high: 19.4 }));
+    const filled = await runCycle(deps, '2026-09-30');
+    expect(filled.fills).toBeGreaterThan(0);
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+  });
+
+  it('a signal-driven exit is a no-op with nothing held', async () => {
+    const deps = harness([{ ...longAapl, action: 'exit' }], true);
+    const report = await runCycle(deps, '2026-09-25');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL-exit')).toBeUndefined();
+    expect(report.exits).toBe(0);
+  });
+});

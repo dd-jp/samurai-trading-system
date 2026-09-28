@@ -164,6 +164,10 @@ describe('parseJournalQuery', () => {
       ok: true,
       query: { limit: 1, action: 'none' },
     });
+    expect(parseJournalQuery(new URLSearchParams({ limit: '1', action: 'exit' }))).toEqual({
+      ok: true,
+      query: { limit: 1, action: 'exit' },
+    });
   });
 
   it.each([
@@ -178,7 +182,7 @@ describe('parseJournalQuery', () => {
     ['limit=100', 'limit is invalid'],
     ['book=', 'book is invalid'],
     [`instrument=${'x'.repeat(65)}`, 'instrument is invalid'],
-    ['action=exit', 'action is invalid'],
+    ['action=bogus', 'action is invalid'],
     ['book=a&book=b', 'book is given more than once'],
     [
       'toString=1',

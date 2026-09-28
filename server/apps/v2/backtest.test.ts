@@ -562,4 +562,36 @@ describe('runBacktest', () => {
       'backtest: no sessions from 2030-01-01 to 2030-02-01',
     );
   });
+
+  it('#1785: a signal-driven exit rests, fills through the cycle, and stays flat', async () => {
+    const exitFrom = DATES[80] as string;
+    const flipExit: SleeveFactory = (m) => {
+      const inner = trendSleeve('flip-exit', 'UP', 0)(m);
+      return {
+        ...inner,
+        decide: async (context, instruments) => {
+          const output = await inner.decide(context, instruments);
+          if (context.tradingDate < exitFrom) return output;
+          return {
+            ...output,
+            decisions: output.decisions.map((decision) => ({
+              ...decision,
+              action: 'exit' as const,
+              reason: 'fixture exit',
+            })),
+          };
+        },
+      };
+    };
+    const result = await runBacktest(
+      input({ trials: [{ config: { flip: true }, sleeve: flipExit }, FLAT_TRIAL] }),
+    );
+    const equity = result.trials[0]?.equity as readonly number[];
+    const exitIndex = result.dates.indexOf(exitFrom);
+    // Held and moving with UP's drift up to the exit signal; give the dry-run resting exit a
+    // week of cycles to resolve into a fill, then flat (equity constant) for the rest of the run
+    expect(new Set(equity.slice(1, exitIndex + 1)).size).toBeGreaterThan(1);
+    const tail = equity.slice(exitIndex + 5);
+    expect(new Set(tail).size).toBe(1);
+  });
 });

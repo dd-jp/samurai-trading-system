@@ -1,5 +1,16 @@
 export { createArm2Sleeve } from './arm2-sleeve.js';
 export { type CandleFeatures, candleFeatures, candleLine } from './candle.js';
+export {
+  CROSS_ASSET_TREND_BENCHMARK_ID,
+  CROSS_ASSET_TREND_CANDIDATE_ID,
+  CROSS_ASSET_TREND_FROM,
+  CROSS_ASSET_TREND_TIDMS,
+  CROSS_ASSET_TREND_TO,
+  type CrossAssetTrendSmaWindow,
+  createCrossAssetTrendBenchmarkSleeve,
+  createCrossAssetTrendSleeve,
+  crossAssetTrendSleeveId,
+} from './cross-asset-trend.js';
 export { createDebateSleeve } from './debate-sleeve.js';
 export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 export { NousPinnedTransport } from './llm-transport.js';

@@ -673,7 +673,9 @@ class Cycle {
 
   async exits(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
     const exitSignalled = new Set(
-      decisions.filter((decision) => decision.action === 'exit').map((decision) => decision.instrument),
+      decisions
+        .filter((decision) => decision.action === 'exit')
+        .map((decision) => decision.instrument),
     );
     for (const held of this.deps.books.positions(book.id)) {
       await this.exitHeldPosition(book, held, exitSignalled);
@@ -794,37 +796,60 @@ class Cycle {
     return { size: approval.size, order: undefined, refusal: 'insufficient_cash' };
   }
 
+  resolveEntryGate(
+    book: BookSpec,
+    proposed: SleeveDecision,
+    equityGbp: number,
+    cashRemainingGbp: number,
+  ): { decision: SleeveDecision; gated: EntryApproval; willSubmit: boolean } {
+    const decision = vetoApplied(book, proposed);
+    const approval = this.deps.risk.approveEntry({
+      book,
+      decision,
+      clientOrderId: this.entryOrderId(book, decision.instrument),
+      tradingDate: this.tradingDate,
+      equityGbp,
+      macroDay: this.macro.macroDay,
+    });
+    const willSubmit =
+      approval.order !== undefined &&
+      approval.size > 0 &&
+      this.willSubmitEntry(book, decision.instrument);
+    const gated = willSubmit ? this.applyCashGate(decision, approval, cashRemainingGbp) : approval;
+    return { decision, gated, willSubmit };
+  }
+
+  async settleEntry(
+    book: BookSpec,
+    decision: SleeveDecision,
+    gated: EntryApproval,
+    charge: () => void,
+  ): Promise<void> {
+    const decisionId = this.deps.journal.recordDecision(
+      book.id,
+      this.tradingDate,
+      decision,
+      gated.size,
+    );
+    if (gated.order === undefined) this.journalSizingRefusal(book, decision, gated.refusal);
+    if (gated.size <= 0) return;
+    if (gated.order !== undefined) charge();
+    await this.submitEntry(book, decision, decisionId, gated);
+  }
+
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
     const { equityGbp } = this.deps.books.valuation(book.id, (i, v) => this.markGbp(i, v));
     let cashRemainingGbp = this.deps.books.cash(book.id) - this.restingNotionalGbp(book.id);
     for (const proposed of decisions) {
-      const decision = vetoApplied(book, proposed);
-      const approval = this.deps.risk.approveEntry({
+      const { decision, gated, willSubmit } = this.resolveEntryGate(
         book,
-        decision,
-        clientOrderId: this.entryOrderId(book, decision.instrument),
-        tradingDate: this.tradingDate,
+        proposed,
         equityGbp,
-        macroDay: this.macro.macroDay,
-      });
-      const willSubmit =
-        approval.order !== undefined &&
-        approval.size > 0 &&
-        this.willSubmitEntry(book, decision.instrument);
-      const gated = willSubmit ? this.applyCashGate(decision, approval, cashRemainingGbp) : approval;
-      const decisionId = this.deps.journal.recordDecision(
-        book.id,
-        this.tradingDate,
-        decision,
-        gated.size,
+        cashRemainingGbp,
       );
-      if (gated.order === undefined) this.journalSizingRefusal(book, decision, gated.refusal);
-      if (gated.size > 0) {
-        if (willSubmit && gated.order !== undefined) {
-          cashRemainingGbp -= this.notionalGbp(decision, gated.size);
-        }
-        await this.submitEntry(book, decision, decisionId, gated);
-      }
+      await this.settleEntry(book, decision, gated, () => {
+        if (willSubmit) cashRemainingGbp -= this.notionalGbp(decision, gated.size);
+      });
     }
   }
 
