@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   Direction,
+  MarketData,
   Sleeve,
   SleeveAction,
   SleeveContext,
@@ -40,6 +41,8 @@ import {
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DEBATE_STOP_ATR_MULTIPLE,
+  LSE_LIQUIDITY_SCREEN,
+  type Parameter,
   SHORTS_ENABLED,
 } from './parameters.js';
 import { selectUniverse } from './universe.js';
@@ -57,6 +60,7 @@ export interface DebateSleeveDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly venueFor: (symbol: string) => Venue;
+  readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly news: NewsSource;
   readonly clock: Clock;
   readonly logger?: Logger | undefined;
@@ -338,14 +342,15 @@ export function resolveTechnical(
 }
 
 export function buildUniverse(
-  bars: BarsSource,
-  constituents: (tradingDate: string) => readonly string[],
+  deps: TechnicalSleeveDeps,
   tradingDate: string,
+  lseScreen: Parameter<number> = LSE_LIQUIDITY_SCREEN,
 ): SleeveUniverse {
-  const selection = selectUniverse(constituents(tradingDate), bars, tradingDate);
-  const lse = selectLseUniverse(bars, tradingDate);
+  const lse = selectLseUniverse(deps.bars, tradingDate, lseScreen);
+  const pooled = [...deps.constituents(tradingDate), ...lse.instruments];
+  const selection = selectUniverse(pooled, { ...deps, tradingDate });
   return {
-    instruments: [...selection.liquidity, ...selection.movers, ...lse.instruments],
+    instruments: [...selection.liquidity, ...selection.movers],
     refusals: [...selection.refusals, ...lse.refusals].map((refusal) => ({
       scope: 'universe',
       parameter: refusal.parameter,
@@ -458,9 +463,11 @@ async function decideOne(
   });
 }
 
-interface TechnicalSleeveDeps {
+export interface TechnicalSleeveDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
+  readonly venueFor: (symbol: string) => Venue;
+  readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
 }
 
 export function createTechnicalSleeve<Deps extends TechnicalSleeveDeps>(
@@ -473,7 +480,7 @@ export function createTechnicalSleeve<Deps extends TechnicalSleeveDeps>(
     id,
     spec,
     universe(context): SleeveUniverse {
-      return buildUniverse(deps.bars, deps.constituents, context.tradingDate);
+      return buildUniverse(deps, context.tradingDate);
     },
     async decide(context, instruments): Promise<SleeveOutput> {
       const decisions: SleeveDecision[] = [];

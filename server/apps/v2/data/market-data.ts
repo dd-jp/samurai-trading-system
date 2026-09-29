@@ -29,6 +29,10 @@ export class BarsMarketData implements MarketData {
   }
 }
 
-export function quotePerGbp(market: MarketData, venue: Venue, tradingDate: string): number {
+export function quotePerGbp(
+  market: Pick<MarketData, 'gbpUsdAtYearStart'>,
+  venue: Venue,
+  tradingDate: string,
+): number {
   return venue === 'alpaca' ? market.gbpUsdAtYearStart(Number(tradingDate.slice(0, 4))) : 1;
 }

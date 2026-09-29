@@ -1,8 +1,11 @@
+import type { MarketData, Venue } from '../../../../contracts/index.js';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import {
   type BarsSource,
   barsBefore,
+  calendarReferenceFor,
   isFresh,
+  quotePerGbp,
   sessionsBefore,
   windowCovered,
 } from '../data/index.js';
@@ -16,6 +19,14 @@ import {
 const LIQUIDITY_CORE_COUNT = 10;
 const MOVERS_COUNT = 10;
 const DOLLAR_VOLUME_WINDOW_DAYS = 20;
+export const UNIVERSE_CAP = LIQUIDITY_CORE_COUNT + MOVERS_COUNT;
+
+export interface PoolContext {
+  readonly bars: BarsSource;
+  readonly tradingDate: string;
+  readonly venueFor: (symbol: string) => Venue;
+  readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
+}
 
 export function averageDollarVolume(bars: readonly DailyBar[], window: number): number | undefined {
   if (bars.length < window) return undefined;
@@ -45,18 +56,52 @@ export function coveredHistory(
   return covered ? history : [];
 }
 
+interface PoolReader {
+  covered(symbol: string, windowBars: number): readonly DailyBar[];
+  usdPerNative(symbol: string): number;
+}
+
+// Ranking and the movers floor compare in USD through the cycle's own quotePerGbp, so a
+// US name converts by exactly 1 and its selection is independent of the GBPUSD rate
+function readerFor(pool: PoolContext): PoolReader {
+  const sessionsByVenue = new Map<Venue, readonly string[]>();
+  const usdPerNativeByVenue = new Map<Venue, number>();
+  const gbpUsd = () => pool.market.gbpUsdAtYearStart(Number(pool.tradingDate.slice(0, 4)));
+  return {
+    covered(symbol, windowBars) {
+      const venue = pool.venueFor(symbol);
+      let sessions = sessionsByVenue.get(venue);
+      if (sessions === undefined) {
+        sessions = sessionsBefore(pool.bars, pool.tradingDate, calendarReferenceFor(venue));
+        sessionsByVenue.set(venue, sessions);
+      }
+      return coveredHistory(pool.bars, symbol, pool.tradingDate, sessions, windowBars);
+    },
+    usdPerNative(symbol) {
+      const venue = pool.venueFor(symbol);
+      let rate = usdPerNativeByVenue.get(venue);
+      if (rate === undefined) {
+        rate = gbpUsd() / quotePerGbp(pool.market, venue, pool.tradingDate);
+        usdPerNativeByVenue.set(venue, rate);
+      }
+      return rate;
+    },
+  };
+}
+
 export function liquidityCore(
   symbols: readonly string[],
-  bars: BarsSource,
-  tradingDate: string,
+  pool: PoolContext,
   count: number = LIQUIDITY_CORE_COUNT,
 ): readonly string[] {
+  const reader = readerFor(pool);
   const scored: Array<[string, number]> = [];
-  const sessions = sessionsBefore(bars, tradingDate);
   for (const symbol of symbols) {
-    const history = coveredHistory(bars, symbol, tradingDate, sessions, DOLLAR_VOLUME_WINDOW_DAYS);
-    const adv = averageDollarVolume(history, DOLLAR_VOLUME_WINDOW_DAYS);
-    if (adv !== undefined) scored.push([symbol, adv]);
+    const adv = averageDollarVolume(
+      reader.covered(symbol, DOLLAR_VOLUME_WINDOW_DAYS),
+      DOLLAR_VOLUME_WINDOW_DAYS,
+    );
+    if (adv !== undefined) scored.push([symbol, adv * reader.usdPerNative(symbol)]);
   }
   return scored
     .sort(([a, advA], [b, advB]) => advB - advA || a.localeCompare(b))
@@ -67,7 +112,7 @@ export function liquidityCore(
 export interface MoverCandidate {
   readonly symbol: string;
   readonly dayReturn: number;
-  readonly dollarVolume: number;
+  readonly dollarVolumeUsd: number;
 }
 
 export function selectMovers(
@@ -75,7 +120,7 @@ export function selectMovers(
   count: number = MOVERS_COUNT,
 ): readonly string[] {
   return candidates
-    .filter((candidate) => candidate.dollarVolume >= MOVERS_MIN_DOLLAR_VOLUME_USD)
+    .filter((candidate) => candidate.dollarVolumeUsd >= MOVERS_MIN_DOLLAR_VOLUME_USD)
     .sort(
       (a, b) => Math.abs(b.dayReturn) - Math.abs(a.dayReturn) || a.symbol.localeCompare(b.symbol),
     )
@@ -83,36 +128,28 @@ export function selectMovers(
     .map((candidate) => candidate.symbol);
 }
 
-function moverCandidates(
-  symbols: readonly string[],
-  bars: BarsSource,
-  tradingDate: string,
-): MoverCandidate[] {
+function moverCandidates(symbols: readonly string[], pool: PoolContext): MoverCandidate[] {
+  const reader = readerFor(pool);
   const candidates: MoverCandidate[] = [];
-  const sessions = sessionsBefore(bars, tradingDate);
   for (const symbol of symbols) {
-    const [previous, last] = coveredHistory(bars, symbol, tradingDate, sessions, 2).slice(-2);
+    const [previous, last] = reader.covered(symbol, 2).slice(-2);
     if (previous === undefined || last === undefined) continue;
     candidates.push({
       symbol,
       dayReturn: last.close / previous.close - 1,
-      dollarVolume: last.rawClose * last.volume,
+      dollarVolumeUsd: last.rawClose * last.volume * reader.usdPerNative(symbol),
     });
   }
   return candidates;
 }
 
-export function selectUniverse(
-  constituents: readonly string[],
-  bars: BarsSource,
-  tradingDate: string,
-): UniverseSelection {
+export function selectUniverse(pooled: readonly string[], pool: PoolContext): UniverseSelection {
   const refusals: UnsetParameterError[] = [];
   if (!isSet(G18_SMALL_CAP_FLOORS)) {
     refusals.push(new UnsetParameterError(G18_SMALL_CAP_FLOORS.name, G18_SMALL_CAP_FLOORS.ticket));
   }
-  const liquidity = liquidityCore(constituents, bars, tradingDate);
-  const remaining = constituents.filter((symbol) => !liquidity.includes(symbol));
-  const movers = selectMovers(moverCandidates(remaining, bars, tradingDate));
+  const liquidity = liquidityCore(pooled, pool);
+  const remaining = pooled.filter((symbol) => !liquidity.includes(symbol));
+  const movers = selectMovers(moverCandidates(remaining, pool));
   return { liquidity, movers, refusals };
 }

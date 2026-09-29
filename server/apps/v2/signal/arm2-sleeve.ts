@@ -1,4 +1,10 @@
-import type { Sleeve, SleeveContext, SleeveDecision, Venue } from '../../../../contracts/index.js';
+import type {
+  MarketData,
+  Sleeve,
+  SleeveContext,
+  SleeveDecision,
+  Venue,
+} from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
@@ -26,6 +32,7 @@ export interface Arm2SleeveDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly venueFor: (symbol: string) => Venue;
+  readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly clock: Clock;
 }
 
