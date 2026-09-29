@@ -11,15 +11,12 @@ import type { BarsSource } from '../data/index.js';
 import { baseRead } from './bar-quality.js';
 import { liquidityCore, type PoolContext } from './universe.js';
 
-// #1785 ruling (g): point-in-time top-300 by 20-day $ volume, reusing liquidityCore as-is
 export const MEAN_REVERSION_UNIVERSE_COUNT = 300;
 
 export const MEAN_REVERSION_CANDIDATE_ID = 'mean-reversion';
 export const MEAN_REVERSION_BENCHMARK_ID = 'mean-reversion-benchmark';
 
-// Ruling (d)/(a): Alpaca SIP from 2016-01-04 + SMA(200) warmup, ~200 trading sessions later —
-// pinned as a literal since from/to feed the trial hash and must not drift if the store is
-// re-primed (same rule as candidate 1's VUTY pin, cross-asset-trend.ts)
+// Pinned: from/to feed the trial hash, so they must not drift if the store is re-primed. Alpaca SIP starts 2016-01-04; the SMA(200) warm-up puts the first tradable day here
 export const MEAN_REVERSION_FROM = '2016-10-11';
 export const MEAN_REVERSION_TO = '2025-09-24';
 
@@ -29,22 +26,14 @@ const RECOVERY_RSI = 65;
 export const MEAN_REVERSION_ENTRY_THRESHOLDS: readonly number[] = [10, 15];
 const ATR_WINDOW = 20;
 const STOP_ATR_MULTIPLE = 5;
-// Ruling (e): 10 trading sessions, flatten at next open. #1515's embargo (folds.ts) is sized to
-// the same number — shared here rather than each pinning its own copy of "10"
 export const MEAN_REVERSION_TIME_STOP_TRADING_DAYS = 10;
-// No fixed profit target (the RSI recovery signal is the exit) and, for the benchmark only, no
-// time stop (ruling f): a large sentinel keeps SleeveSizing's fields plain numbers without
-// Infinity (same rationale as cross-asset-trend.ts's NO_TARGET_OR_TIME_STOP), reused for both
-// fields since both mean "no limit" at the same magnitude
+// Large finite stand-in for "no limit" so SleeveSizing's fields stay plain numbers
 const SENTINEL_LIMIT = 1_000_000;
 const RISK_FRACTION = 0.005;
 const ADV_SHARE_NON_BINDING = 1;
 const ADV_WINDOW_BARS = 20;
-// Ruling (f)/S1: this candidate's own backtest runs at the full 0.7, same convention as candidate 1
 const CAPITAL_SHARE = 0.7;
-// SMA(200) + ATR(20)'s own trailing window + slack for the RSI(2) seed to converge, all fed
-// from the same daily fetch (mirrors cross-asset-trend.ts's smaWindow + 10, wider here because
-// this candidate also needs the ATR window past the SMA's own tail)
+// Slack beyond the SMA and ATR windows lets the RSI(2) seed converge
 const LOOKBACK_BARS = SMA_WINDOW + ATR_WINDOW + 20;
 
 function meanReversionSpec(): SleeveSpec {
@@ -66,18 +55,12 @@ function meanReversionSpec(): SleeveSpec {
   };
 }
 
-// Ignores the time stop (ruling f): a sentinel far past any real hold keeps the benchmark's
-// position open until its own stop, not a schedule unrelated to a pure-hold thesis
 function meanReversionBenchmarkSpec(): SleeveSpec {
   const spec = meanReversionSpec();
   return { ...spec, sizing: { ...spec.sizing, timeStopTradingDays: SENTINEL_LIMIT } };
 }
 
-// Wilder smoothing over the whole supplied window, not just the trailing `period` — the seed
-// seen by the recursive average is the window's OWN start, not the series' inception, but at
-// period 2 the smoothing converges within a handful of bars, and LOOKBACK_BARS supplies far more
-// warmup than that before the value this function returns is ever read (#1785: distinct from the
-// debate panel's RSI(14) indicator engine — no import from it, this is its own small function)
+// Seeded at the window's own start; at period 2 it converges well inside LOOKBACK_BARS
 export function relativeStrengthIndex(bars: readonly V2Bar[], period: number): number | undefined {
   if (bars.length < period + 1) return undefined;
   let avgGain = 0;
@@ -235,11 +218,7 @@ export function meanReversionSleeveId(entryThreshold: number): string {
   return `mean-reversion-rsi${entryThreshold}`;
 }
 
-// Ruling (g): decide() only sees the point-in-time top-300 (from universe()) — an instrument
-// held from an earlier day that has since dropped out of that ranking simply gets no decision
-// here, so it is never signal-exited on membership change; only its resting stop or the (already
-// spec-declared) time stop can close it (exitHeldPosition/timeStop in cycle.ts act on the
-// position, not on whether the sleeve returned a decision for it today)
+// A held instrument that leaves the top-300 gets no decision, so only its stop or the time stop closes it
 export function createMeanReversionSleeve(
   bars: BarsSource,
   constituentsFor: (tradingDate: string) => readonly string[],
@@ -263,9 +242,7 @@ export function createMeanReversionSleeve(
           entryThreshold,
         );
       });
-      // Ruling (g): sorted RSI(2) ascending (most oversold first) before the cash gate funds
-      // them in cycle.ts:entries() — a stable sort, so ties (every bad_last_bar/insufficient_
-      // history skip shares sortKey Infinity) keep the liquidityCore ADV order they arrived in
+      // Stable: bad_last_bar and insufficient_history share sortKey Infinity and keep liquidityCore's ADV order
       ranked.sort((a, b) => a.sortKey - b.sortKey);
       return Promise.resolve({ decisions: ranked.map((entry) => entry.decision), refusals: [] });
     },
@@ -284,11 +261,6 @@ function benchmarkDecisionFor(
   return enterDecision(sleeveId, instrument, read, date);
 }
 
-// Ruling (f): risk-matched buy-and-hold over the same universe/sizing/stop/costs, funded in the
-// same ADV-rank order as the strategy (liquidityCore's own order, kept as-is — no RSI sort, the
-// benchmark ignores the mean-reversion signal entirely), ignoring the time stop (the sentinel in
-// meanReversionBenchmarkSpec) and holding a top-300 dropout to its own stop (same mechanism as
-// the strategy sleeve above: no decision for it, cycle.ts exits only on a real stop or signal)
 export function createMeanReversionBenchmarkSleeve(
   bars: BarsSource,
   constituentsFor: (tradingDate: string) => readonly string[],

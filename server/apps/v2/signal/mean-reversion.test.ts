@@ -41,12 +41,7 @@ function closesMarket(closes: readonly number[], finalOverrides: Partial<V2Bar> 
   return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
 }
 
-// #1785 ruling (d): a deep-oversold read inside a real uptrend. A long lower plateau (100) forms
-// most of the trailing SMA(200) window, an elevated plateau (200) near the end pulls the SMA well
-// below the current price, and the single tiny final-day dip (200 -> 199) is the only nonzero
-// change in the last ~20 bars: relativeStrengthIndex's recursive average decays the prior gain/
-// loss to ~0 by then, so that one small loss drives RSI(2) near 0 (measured ~0.019, asserted only
-// as < 15) while close (199) stays far above the barely-moved SMA (~109.995, computed in-test)
+// Close stays far above SMA(200) (~109.995) while the lone final-day dip drives RSI(2) near 0
 function oversoldCloses(): number[] {
   const closes = Array.from({ length: LOOKBACK_BARS }, () => 100);
   for (let index = LOOKBACK_BARS - 20; index < LOOKBACK_BARS - 1; index++) {
@@ -56,8 +51,6 @@ function oversoldCloses(): number[] {
   return closes;
 }
 
-// Mirrors oversoldCloses but recovers upward on the final bar: a long flat run decays gain/loss
-// to ~0, then a single small final-day rise (100 -> 101) drives RSI(2) to exactly 100
 function recoveredCloses(): number[] {
   const closes = Array.from({ length: LOOKBACK_BARS }, () => 100);
   closes[LOOKBACK_BARS - 1] = 101;
@@ -225,11 +218,9 @@ describe('createMeanReversionSleeve', () => {
   });
 
   it('rescales atr and stop_price by the raw/close ratio on a split-adjusted last bar (#1785)', async () => {
-    // oversoldCloses' plateau (100 -> 200 at index 220) sits inside the trailing 20-day ATR
-    // window, contributing a true range of 100 on its own; the 18 flat-200 days after it
-    // contribute 0; overriding only the last bar's high/low to 259/199 (close stays 199) adds a
-    // final true range of 60. ATR in close terms is (100 + 0*18 + 60)/20 = 8. rawClose=497.5
-    // makes the raw/close ratio 2.5, so the rescaled atr is 8*2.5=20, stop_price 497.5-5*20=397.5
+    // ATR(20) in close terms is (100 + 60)/20 = 8: the 100 -> 200 step plus a final true range of
+    // 60 from the overridden high/low. rawClose 497.5 makes the raw/close ratio 2.5, so atr 20
+    // and stop 497.5 - 5 * 20 = 397.5
     const sleeve = createMeanReversionSleeve(
       noSource,
       noConstituents,
