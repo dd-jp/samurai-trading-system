@@ -4,9 +4,8 @@ import type {
   SleeveSpec,
   V2Bar,
 } from '../../../../contracts/index.js';
-import { averageTrueRange } from '../../../pipeline/momentum/index.js';
 import type { SleeveFactory } from '../backtest.js';
-import { atrInRawTerms, shapeValid, simpleMovingAverage } from './bar-quality.js';
+import { baseRead } from './bar-quality.js';
 
 // #1785 ruling (b): the 15 declared lines from the proposal (doc 70 §10.4's 22-line Saxo pool)
 // Read directly here, bypassing selectLseUniverse/lseInstrumentsAbove: the LSE liquidity screen
@@ -87,16 +86,7 @@ interface TrendRead {
 }
 
 function trendRead(rawHistory: readonly V2Bar[], smaWindow: number): TrendRead | undefined {
-  const last = rawHistory.at(-1);
-  if (last === undefined || !shapeValid(last)) return undefined;
-  const valid = rawHistory.filter(shapeValid);
-  const atr = averageTrueRange(valid, valid.length - 1, ATR_WINDOW);
-  return {
-    price: last.rawClose,
-    close: last.close,
-    sma: simpleMovingAverage(valid, smaWindow),
-    atr: atrInRawTerms(atr, last),
-  };
+  return baseRead(rawHistory, smaWindow, ATR_WINDOW);
 }
 
 function baseDecision(

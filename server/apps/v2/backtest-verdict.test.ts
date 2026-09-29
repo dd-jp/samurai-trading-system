@@ -150,7 +150,7 @@ describe('backtestVerdict', () => {
     expect(verdict.walkForward.benchmarkSharpe).not.toBeCloseTo(naive, 6);
   });
 
-  it('omits embargo from nothing observable when unset: folds 4 with no embargo matches an explicit 0', () => {
+  it('defaults an unset embargo to 0, matching an explicit embargo: 0', () => {
     const noArgument = backtestVerdict(input());
     const explicitZero = backtestVerdict(input({ embargo: 0 }));
     expect(noArgument).toEqual(explicitZero);

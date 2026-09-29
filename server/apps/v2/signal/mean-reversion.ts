@@ -5,10 +5,9 @@ import type {
   SleeveUniverse,
   V2Bar,
 } from '../../../../contracts/index.js';
-import { averageTrueRange } from '../../../pipeline/momentum/index.js';
 import type { SleeveFactory } from '../backtest.js';
 import type { BarsSource } from '../data/index.js';
-import { atrInRawTerms, shapeValid, simpleMovingAverage } from './bar-quality.js';
+import { baseRead } from './bar-quality.js';
 import { liquidityCore } from './universe.js';
 
 // #1785 ruling (g): point-in-time top-300 by 20-day $ volume, reusing liquidityCore as-is
@@ -29,10 +28,8 @@ const RECOVERY_RSI = 65;
 export const MEAN_REVERSION_ENTRY_THRESHOLDS: readonly number[] = [10, 15];
 const ATR_WINDOW = 20;
 const STOP_ATR_MULTIPLE = 5;
-// Ruling (e): 10 trading sessions, flatten at next open — cycle.ts's generic timeStop() enforces
-// this from spec.sizing alone, nothing in decide() needs to know about it. #1515's embargo is
-// sized to the same number (folds.ts), so the two share this constant rather than each pinning
-// their own copy of "10"
+// Ruling (e): 10 trading sessions, flatten at next open. #1515's embargo (folds.ts) is sized to
+// the same number — shared here rather than each pinning its own copy of "10"
 export const MEAN_REVERSION_TIME_STOP_TRADING_DAYS = 10;
 // No fixed profit target (the RSI recovery signal is the exit) and, for the benchmark only, no
 // time stop (ruling f): a large sentinel keeps SleeveSizing's fields plain numbers without
@@ -109,17 +106,10 @@ interface MeanReversionRead {
 }
 
 function meanReversionRead(rawHistory: readonly V2Bar[]): MeanReversionRead | undefined {
-  const last = rawHistory.at(-1);
-  if (last === undefined || !shapeValid(last)) return undefined;
-  const valid = rawHistory.filter(shapeValid);
-  const atr = averageTrueRange(valid, valid.length - 1, ATR_WINDOW);
-  return {
-    price: last.rawClose,
-    close: last.close,
-    sma: simpleMovingAverage(valid, SMA_WINDOW),
-    rsi: relativeStrengthIndex(valid, RSI_PERIOD),
-    atr: atrInRawTerms(atr, last),
-  };
+  const read = baseRead(rawHistory, SMA_WINDOW, ATR_WINDOW);
+  if (read === undefined) return undefined;
+  const { valid, ...rest } = read;
+  return { ...rest, rsi: relativeStrengthIndex(valid, RSI_PERIOD) };
 }
 
 function baseDecision(
@@ -267,8 +257,8 @@ export function createMeanReversionSleeve(
         );
       });
       // Ruling (g): sorted RSI(2) ascending (most oversold first) before the cash gate funds
-      // them in cycle.ts:entries() — a stable sort, so ties (including every skip/exit at
-      // Infinity) keep the liquidityCore ADV order they arrived in, not an arbitrary shuffle
+      // them in cycle.ts:entries() — a stable sort, so ties (every bad_last_bar/insufficient_
+      // history skip shares sortKey Infinity) keep the liquidityCore ADV order they arrived in
       ranked.sort((a, b) => a.sortKey - b.sortKey);
       return Promise.resolve({ decisions: ranked.map((entry) => entry.decision), refusals: [] });
     },

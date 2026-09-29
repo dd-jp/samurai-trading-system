@@ -44,9 +44,9 @@ function closesMarket(closes: readonly number[], finalOverrides: Partial<V2Bar> 
 // #1785 ruling (d): a deep-oversold read inside a real uptrend. A long lower plateau (100) forms
 // most of the trailing SMA(200) window, an elevated plateau (200) near the end pulls the SMA well
 // below the current price, and the single tiny final-day dip (200 -> 199) is the only nonzero
-// change in the last ~20 bars: relativeStrengthIndex's recursive average has decayed the prior
-// gain/loss to ~0 by then, so that one small loss alone drives RSI(2) to exactly 0 while the SMA
-// barely moves and close stays far above it (close 199 vs sma ~109.995, computed in-test below)
+// change in the last ~20 bars: relativeStrengthIndex's recursive average decays the prior gain/
+// loss to ~0 by then, so that one small loss drives RSI(2) near 0 (measured ~0.019, asserted only
+// as < 15) while close (199) stays far above the barely-moved SMA (~109.995, computed in-test)
 function oversoldCloses(): number[] {
   const closes = Array.from({ length: LOOKBACK_BARS }, () => 100);
   for (let index = LOOKBACK_BARS - 20; index < LOOKBACK_BARS - 1; index++) {
@@ -197,6 +197,25 @@ describe('createMeanReversionSleeve', () => {
     expect(decision.inputs_hash).toBe('AAA-2025-01-01');
   });
 
+  it('rescales atr and stop_price by the raw/close ratio on a split-adjusted last bar (#1785)', async () => {
+    // oversoldCloses' plateau (100 -> 200 at index 220) sits inside the trailing 20-day ATR
+    // window, contributing a true range of 100 on its own; the 18 flat-200 days after it
+    // contribute 0; overriding only the last bar's high/low to 259/199 (close stays 199) adds a
+    // final true range of 60. ATR in close terms is (100 + 0*18 + 60)/20 = 8. rawClose=497.5
+    // makes the raw/close ratio 2.5, so the rescaled atr is 8*2.5=20, stop_price 497.5-5*20=397.5
+    const sleeve = createMeanReversionSleeve(
+      noSource,
+      noConstituents,
+      15,
+    )(closesMarket(oversoldCloses(), { high: 259, low: 199, rawClose: 497.5 }));
+    const output = await sleeve.decide(CONTEXT, ['AAA']);
+    const decision = output.decisions[0];
+    expect(decision?.action).toBe('enter_long');
+    expect(decision?.price).toBe(497.5);
+    expect(decision?.atr).toBeCloseTo(20, 9);
+    expect(decision?.stop_price).toBeCloseTo(397.5, 9);
+  });
+
   it('exits on RSI(2) recovery above 65, independent of the SMA gate', async () => {
     const sleeve = createMeanReversionSleeve(
       noSource,
@@ -262,7 +281,7 @@ describe('createMeanReversionSleeve', () => {
     expect(output.decisions[0]?.reason).toBe('bad_last_bar');
   });
 
-  it('sorts decisions by RSI(2) ascending (most oversold first), ties keeping arrival order (ruling g)', async () => {
+  it('sorts decisions by RSI(2) ascending, most oversold first (ruling g)', async () => {
     const market: MarketData = {
       lastBarBefore: () => undefined,
       barsBefore: (instrument) => {
@@ -281,7 +300,7 @@ describe('createMeanReversionSleeve', () => {
     ]);
   });
 
-  it('declares a point-in-time top-N universe over the point-in-time constituents (ruling g)', () => {
+  it('declares a universe filtered by the point-in-time constituents (ruling g)', () => {
     const bars = memorySource([
       series('BIG', 25, 100, 1_000),
       series('MID', 25, 10, 5_000),
@@ -316,7 +335,7 @@ describe('createMeanReversionBenchmarkSleeve', () => {
     expect(output.decisions[0]?.action).toBe('enter_long');
   });
 
-  it('funds in the same ADV-rank order liquidityCore returns, unsorted by any signal (ruling g)', async () => {
+  it('keeps the universe order in decide(), unsorted by any signal (ruling g)', async () => {
     const noSource: BarsSource = { load: () => undefined };
     const sleeve = createMeanReversionBenchmarkSleeve(
       noSource,

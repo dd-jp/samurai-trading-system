@@ -98,7 +98,6 @@ export interface CandidateWindow {
   readonly to: string;
 }
 export type CrossAssetTrendWindow = CandidateWindow;
-export type MeanReversionWindow = CandidateWindow;
 
 const CROSS_ASSET_TREND_WINDOW: CandidateWindow = {
   from: CROSS_ASSET_TREND_FROM,
@@ -237,7 +236,6 @@ export async function runMeanReversionAgainst(
       benchmark,
       window,
       calendarReference: calendarReferenceFor('alpaca'),
-      // #1515: sized to ruling (e)'s 10-session time stop (folds.ts's foldRanges embargo param)
       embargo: MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
     },
     market,

@@ -35,9 +35,9 @@ export interface BacktestInput {
   readonly ledger: TrialLedger;
   readonly logger: Logger;
   readonly folds?: number | undefined;
-  // #1515: bars purged from each side of a fold boundary (server/tools/backtest/momentum/folds.ts)
-  // Omitted from recordTrials' run info when unset (§4's idempotency risk), not defaulted to 0/null
-  // there, so a sleeve that never declares one hashes identically to before this field existed
+  // #1515: folds.ts's fold-boundary purge width. Omitted from recordTrials' run info when unset,
+  // not defaulted to 0/null there, so a sleeve that never declares one hashes identically to
+  // before this field existed
   readonly embargo?: number | undefined;
   readonly calendarReference?: string | undefined;
   // Never part of recordTrials' run info: a cost-sensitivity rerun (doc 67 "2x modelled cost")

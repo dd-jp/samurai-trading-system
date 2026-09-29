@@ -3,7 +3,11 @@ import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { resolveCliOptions, runCrossAssetTrendAgainst } from './backtest-cli.js';
+import {
+  resolveCliOptions,
+  runCrossAssetTrendAgainst,
+  runMeanReversionAgainst,
+} from './backtest-cli.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import { CROSS_ASSET_TREND_TIDMS } from './signal/index.js';
@@ -118,4 +122,101 @@ describe('runCrossAssetTrendAgainst', () => {
       db.close();
     }
   });
+});
+
+// A window long enough for foldRanges(16, embargo=10) to hold: length/16 - 2*embargo >= 2
+// needs length >= ~352 sessions; 500 weekdays gives comfortable margin
+const MEAN_REVERSION_DATES = weekdays('2022-01-01', 500);
+const MEAN_REVERSION_SYMBOLS = ['AAA', 'BBB', 'CCC'];
+
+function meanReversionSeries(symbol: string, drift: number): BarSeries {
+  const bars: DailyBar[] = MEAN_REVERSION_DATES.map((date, index) => {
+    const close = 50 * (1 + drift) ** index;
+    return {
+      date,
+      open: close,
+      high: close * 1.01,
+      low: close * 0.99,
+      close,
+      volume: 2_000_000,
+      rawClose: close,
+    };
+  });
+  return { symbol, bars };
+}
+
+function meanReversionBarsSource() {
+  const bySymbol = new Map<string, BarSeries>(
+    MEAN_REVERSION_SYMBOLS.map((symbol, index) => [
+      symbol,
+      meanReversionSeries(symbol, 0.0003 * (index + 1)),
+    ]),
+  );
+  // 'SPY' (calendarReferenceFor('alpaca')) is the session calendar, not a traded instrument
+  bySymbol.set('SPY', {
+    symbol: 'SPY',
+    bars: MEAN_REVERSION_DATES.map((date) => ({
+      date,
+      open: 1,
+      high: 1,
+      low: 1,
+      close: 1,
+      volume: 1,
+      rawClose: 1,
+    })),
+  });
+  return { load: (symbol: string) => bySymbol.get(symbol) };
+}
+
+describe('runMeanReversionAgainst', () => {
+  // ~500 sessions x 2 (baseline/stressed) x 2 (run/rerun) of real cycle simulation; comfortably
+  // under 5s standalone but the default 5000ms is tight under coverage instrumentation
+  it('#1785: orchestrates trials, benchmark and the cost-stress rerun with the #1515 embargo baked in', async () => {
+    const barsSource = meanReversionBarsSource();
+    const market = new BarsMarketData(
+      barsSource,
+      parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2021,1.35\n29 Dec 2023,1.27\n'),
+    );
+    const constituentsFor = (): readonly string[] => MEAN_REVERSION_SYMBOLS;
+    const db = openSharedStore(':memory:');
+    try {
+      const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-09-28T00:00:00.000Z')), {
+        entries: [],
+      });
+      const window = {
+        from: MEAN_REVERSION_DATES[20] as string,
+        to: MEAN_REVERSION_DATES.at(-1) as string,
+      };
+      const report = await runMeanReversionAgainst(
+        market,
+        barsSource,
+        constituentsFor,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        window,
+      );
+      expect(report.trialsCounted).toBe(2);
+      expect(ledger.count()).toBe(2);
+      expect(report.baseline.trials).toHaveLength(2);
+      expect(report.stressed.trials).toHaveLength(2);
+      expect(report.baseline.dates).toEqual(report.stressed.dates);
+      expect(report.minbtlLimit).toBeGreaterThan(0);
+      expect(report.windowYears).toBeGreaterThan(0);
+      expect(typeof report.signFlipped).toBe('boolean');
+      // Same trials rerun at 2x cost must resolve to the same trial numbers (doc 66 ruling h)
+      const rerun = await runMeanReversionAgainst(
+        market,
+        barsSource,
+        constituentsFor,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        window,
+      );
+      expect(rerun.trialsCounted).toBe(2);
+    } finally {
+      db.close();
+    }
+  }, 30_000);
 });
