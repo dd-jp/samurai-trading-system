@@ -100,9 +100,8 @@ function targetTouched(held: Position, lowGbp: number, highGbp: number): boolean
 // filling a stop outside the range the day actually traded
 function stopFillGbp(held: Position, openGbp: number, lowGbp: number, highGbp: number): number {
   const stop = held.stopGbp as number;
-  return held.qty > 0
-    ? Math.max(lowGbp, Math.min(stop, openGbp))
-    : Math.min(highGbp, Math.max(stop, openGbp));
+  const gapped = held.qty > 0 ? Math.min(stop, openGbp) : Math.max(stop, openGbp);
+  return Math.min(highGbp, Math.max(lowGbp, gapped));
 }
 
 interface BracketExit {

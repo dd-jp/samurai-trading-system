@@ -613,7 +613,9 @@ describe('runCycle', () => {
     const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
     for (const [decision, override, price] of [
       [longAapl, { open: 15, low: 19, high: 19.5 }, 19],
+      [longAapl, { open: 25, low: 18, high: 18.5 }, 18.5],
       [short, { open: 25, low: 20.5, high: 21 }, 21],
+      [short, { open: 15, low: 22, high: 23 }, 22],
     ] as const) {
       const deps = harness([decision], true);
       await openBooks(deps);
