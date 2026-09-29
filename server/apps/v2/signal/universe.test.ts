@@ -238,6 +238,26 @@ describe('selectUniverse', () => {
     expect(selection.movers).toEqual(['MOVE', 'FLAT']);
   });
 
+  it('ranks a fall of 30% above a rise of 20%, by size of move not sign', () => {
+    const source = memorySource([
+      ...core(),
+      moved(series('DOWN', 25, 100, 1_000_000), 70),
+      moved(series('UP', 25, 100, 1_000_000), 120),
+    ]);
+    const symbols = [...core().map((entry) => entry.symbol), 'UP', 'DOWN'];
+    expect(selectUniverse(symbols, poolOf(source)).movers).toEqual(['DOWN', 'UP']);
+  });
+
+  it('reads the GBPUSD rate of the trading date year', () => {
+    const source = memorySource([series('ISF', 25, 100, 1_000), series('AAPL', 25, 100, 1_100)]);
+    const yearRate = (year: number) => {
+      if (year !== 2026) throw new Error(`asked for ${year}`);
+      return 1.25;
+    };
+    const pool = { ...poolOf(source), market: { gbpUsdAtYearStart: yearRate } };
+    expect(liquidityCore(['AAPL', 'ISF'], pool, 2)).toEqual(['ISF', 'AAPL']);
+  });
+
   it('applies the USD movers floor to an LSE name after converting its GBP volume', () => {
     const gbpVolume = MOVERS_MIN_DOLLAR_VOLUME_USD / 1.1;
     const source = memorySource([

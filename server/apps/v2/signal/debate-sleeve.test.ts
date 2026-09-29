@@ -236,9 +236,14 @@ describe('buildUniverse', () => {
       expect(universe.instruments.filter(isLseInstrument).length).toBeGreaterThan(0);
       expect(universe.instruments.length).toBeLessThanOrEqual(UNIVERSE_CAP);
       expect(new Set(universe.instruments).size).toBe(universe.instruments.length);
-      expect(universe.refusals.map((refusal) => refusal.parameter)).not.toContain(
-        'LSE_LIQUIDITY_SCREEN',
-      );
+      expect(universe.refusals).toEqual([
+        {
+          scope: 'universe',
+          parameter: 'G18_SMALL_CAP_FLOORS',
+          ticket: '#1753',
+          message: 'G18_SMALL_CAP_FLOORS is not set: needs David (#1753)',
+        },
+      ]);
     });
 
     it('never selects more names than the US-only universe would (no extra debates)', () => {

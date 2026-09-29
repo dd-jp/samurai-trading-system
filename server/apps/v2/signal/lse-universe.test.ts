@@ -78,4 +78,13 @@ describe('selectLseUniverse', () => {
     expect(selection.refusals[0]?.ticket).toBe('#1774');
     expect(selection.refusals[0]?.message).toContain('needs David');
   });
+
+  it('selects the lines above a set screen with no refusal, injected so it does not wait on #1871', () => {
+    const source = memorySource([series('ISF', 25, 100, 1_000_000), series('IGLT', 25, 1, 100)]);
+    const screen = { name: 'LSE_LIQUIDITY_SCREEN', ticket: '#1774', value: 1_000_000 };
+    expect(selectLseUniverse(source, '2026-09-26', screen)).toEqual({
+      instruments: ['ISF'],
+      refusals: [],
+    });
+  });
 });
