@@ -23,7 +23,7 @@ export interface SuspectFlips {
 }
 
 export const SHAPE_REPAIR_MANIFEST_NOTE =
-  'then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low inside (90, 110) times or its inverse of the median of the other three prices is rescaled by 100 or 0.01, a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (open, close and raw_close are never changed); per-line counts in symbols.<TIDM>.hygiene.shape_repair';
+  'then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low whose ratio to the median of the other three prices is inside (90, 110) or its inverse is rescaled by 100 or 0.01, a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (open, close and raw_close are never changed); per-line counts in symbols.<TIDM>.hygiene.shape_repair';
 
 export function violatesBarShape(bar: DailyBar): boolean {
   return bar.low > Math.min(bar.open, bar.close) || bar.high < Math.max(bar.open, bar.close);
