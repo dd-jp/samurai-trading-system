@@ -34,20 +34,26 @@ async function handleOne(deps: PollerDeps, update: TelegramUpdate): Promise<void
   }
 }
 
+async function fetchUpdates(
+  deps: PollerDeps,
+  offset: number | undefined,
+  shutdown: AbortSignal,
+): Promise<TelegramUpdate[]> {
+  try {
+    return await deps.bot.getUpdates(offset, shutdown);
+  } catch (error) {
+    if (shutdown.aborted) return [];
+    warn(deps.logger, 'v2_telegram_poll_failed', error);
+    await deps.sleep(RETRY_AFTER_FAILURE_MS, shutdown);
+    return [];
+  }
+}
+
 export async function runPoller(deps: PollerDeps, shutdown: AbortSignal): Promise<void> {
   const last = deps.lastUpdateId();
   let offset = last === undefined ? undefined : last + 1;
   while (!shutdown.aborted) {
-    let updates: TelegramUpdate[];
-    try {
-      updates = await deps.bot.getUpdates(offset, shutdown);
-    } catch (error) {
-      if (shutdown.aborted) return;
-      warn(deps.logger, 'v2_telegram_poll_failed', error);
-      await deps.sleep(RETRY_AFTER_FAILURE_MS, shutdown);
-      continue;
-    }
-    for (const update of updates) {
+    for (const update of await fetchUpdates(deps, offset, shutdown)) {
       offset = update.update_id + 1;
       await handleOne(deps, update);
     }
