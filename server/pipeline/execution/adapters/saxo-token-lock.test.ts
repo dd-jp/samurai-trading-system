@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -56,6 +56,24 @@ describe('tryLockTokenFile', () => {
     utimesSync(lockPath(), recent, recent);
 
     expect(tryLockTokenFile(tokenPath, Date.now())).toBeUndefined();
+  });
+
+  it('treats a lock exactly at the stale limit as live, and one millisecond past it as stale', () => {
+    writeFileSync(lockPath(), 'held');
+    const mtimeSeconds = 1_800_000_000;
+    utimesSync(lockPath(), mtimeSeconds, mtimeSeconds);
+    const mtimeMs = mtimeSeconds * 1000;
+
+    expect(tryLockTokenFile(tokenPath, mtimeMs + SAXO_TOKEN_LOCK_STALE_MS)).toBeUndefined();
+    expect(tryLockTokenFile(tokenPath, mtimeMs + SAXO_TOKEN_LOCK_STALE_MS + 1)).toBeTypeOf(
+      'function',
+    );
+  });
+
+  it('records its owner in the lock file', () => {
+    tryLockTokenFile(tokenPath, 1_800_000_000_000);
+
+    expect(readFileSync(lockPath(), 'utf8')).toBe(`${process.pid}:1800000000000`);
   });
 
   it('refuses rather than throwing when the directory is missing', () => {

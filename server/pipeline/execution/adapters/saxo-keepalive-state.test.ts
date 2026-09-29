@@ -41,7 +41,11 @@ describe('Saxo keep-alive state file', () => {
 
   it('round-trips a partial state without inventing fields', () => {
     writeKeepAliveState(tokenPath, { warnedAt: 'w' });
-    expect(readKeepAliveState(tokenPath)).toEqual({ warnedAt: 'w' });
+    expect(readKeepAliveState(tokenPath)).toStrictEqual({ warnedAt: 'w' });
+    writeKeepAliveState(tokenPath, { lostAt: 'l' });
+    expect(readKeepAliveState(tokenPath)).toStrictEqual({ lostAt: 'l' });
+    writeKeepAliveState(tokenPath, { lostReason: 'r' });
+    expect(readKeepAliveState(tokenPath)).toStrictEqual({ lostReason: 'r' });
   });
 
   it.each([['not json'], ['null'], ['[1]'], ['{"lostAt":5}']])(

@@ -27,8 +27,8 @@ export interface SaxoKeepAliveDeps {
   readonly clock: Clock;
   readonly alerts: Pick<Alerts, 'logger' | 'flush'>;
   readonly journal: Logger;
-  readonly fetchImpl?: FetchLike;
-  readonly sleep?: (ms: number) => Promise<void>;
+  readonly fetchImpl?: FetchLike | undefined;
+  readonly sleep?: ((ms: number) => Promise<void>) | undefined;
 }
 
 type Outcome =
@@ -49,8 +49,8 @@ async function renew(deps: SaxoKeepAliveDeps): Promise<Outcome> {
       tokenPath: deps.tokenPath,
       logger: deps.journal,
       clock: deps.clock,
-      ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
-      ...(deps.sleep === undefined ? {} : { sleep: deps.sleep }),
+      fetchImpl: deps.fetchImpl,
+      sleep: deps.sleep,
     });
   } catch (cause) {
     return { kind: 'lost', reason: messageOf(cause) };
@@ -165,9 +165,12 @@ const STDERR_LOGGER: Logger = {
   },
 };
 
-export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
+export async function main(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv,
+  tokenPath: string = tokenFilePath('live'),
+): Promise<number> {
   const clock = new SystemClock();
-  const tokenPath = tokenFilePath('live');
   const journal = jsonlFileLogger(
     resolve(dirname(tokenPath), '..', 'logs', 'saxo-keepalive.jsonl'),
     () => clock.now(),

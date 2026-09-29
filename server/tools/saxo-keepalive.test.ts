@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { alertsFor } from '../apps/v2/alerts.js';
 import {
   keepAliveStatePath,
@@ -15,6 +15,7 @@ import type { LogEntry, Logger } from '../shared/index.js';
 import { recordingLogger } from '../shared/recording-logger.js';
 import {
   jsonlFileLogger,
+  main,
   runSaxoKeepAlive,
   WARN_WHEN_REFRESH_REMAINING_MS,
 } from './saxo-keepalive.js';
@@ -109,6 +110,79 @@ describe('runSaxoKeepAlive', () => {
       access_token_expires_at: new Date(NOW + 1_200_000).toISOString(),
       refresh_token_expires_at: new Date(NOW + 3_600_000).toISOString(),
     });
+    expect(summary).toMatchObject({
+      trace_id: 'saxo-keepalive',
+      stage: 'orchestrator',
+      level: 'info',
+      message: 'Saxo live keep-alive refreshed',
+    });
+    expect(journal.entries.map((entry) => entry.event)).not.toContain('saxo_keepalive_recovered');
+    expect(existsSync(keepAliveStatePath(tokenPath))).toBe(false);
+  });
+
+  it('labels the lost-session alert and journal entry so they can be filtered', async () => {
+    const { promise, journal, alertLog } = run(okGateway);
+    await promise;
+
+    expect(alertLog.entries).toContainEqual(
+      expect.objectContaining({
+        trace_id: 'saxo-keepalive',
+        stage: 'orchestrator',
+        level: 'error',
+        event: 'saxo_keepalive_session_lost',
+      }),
+    );
+    const summary = journal.entries.find((entry) => entry.event === 'saxo_keepalive_run');
+    expect(summary).toMatchObject({
+      trace_id: 'saxo-keepalive',
+      stage: 'orchestrator',
+      level: 'warn',
+      message: 'Saxo live keep-alive lost',
+      payload: { outcome: 'lost', reason: expect.stringContaining('npm run saxo:login') },
+    });
+  });
+
+  it('labels the refresh-failing warning and journals a failing run at warn', async () => {
+    writeTokenFile(
+      tokenPath,
+      liveRecord({
+        refreshTokenExpiresAt: new Date(NOW + WARN_WHEN_REFRESH_REMAINING_MS).toISOString(),
+      }),
+    );
+    const { promise, journal, alertLog } = run(statusGateway(503));
+    await promise;
+
+    expect(alertLog.entries).toContainEqual(
+      expect.objectContaining({
+        trace_id: 'saxo-keepalive',
+        stage: 'orchestrator',
+        level: 'warn',
+        event: 'saxo_keepalive_refresh_failing',
+      }),
+    );
+    expect(journal.entries.find((entry) => entry.event === 'saxo_keepalive_run')).toMatchObject({
+      level: 'warn',
+      message: 'Saxo live keep-alive failing',
+    });
+  });
+
+  it('a good refresh clears a warning-only outage and journals the recovery', async () => {
+    writeTokenFile(tokenPath, liveRecord());
+    writeKeepAliveState(tokenPath, { warnedAt: new Date(NOW - 60_000).toISOString() });
+    const { promise, journal } = run(okGateway);
+
+    expect(await promise).toBe(0);
+
+    expect(existsSync(keepAliveStatePath(tokenPath))).toBe(false);
+    expect(journal.entries).toContainEqual(
+      expect.objectContaining({
+        trace_id: 'saxo-keepalive',
+        stage: 'orchestrator',
+        level: 'info',
+        event: 'saxo_keepalive_recovered',
+        message: 'Saxo live session is refreshing again',
+      }),
+    );
   });
 
   it('with no saved session, alerts critical once, tells David to log in, and stays quiet after', async () => {
@@ -281,6 +355,38 @@ describe('runSaxoKeepAlive', () => {
     const { promise } = run(okGateway);
 
     expect(await promise).toBe(0);
+  });
+});
+
+describe('main', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'saxo-keepalive-main-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('runs one keep-alive against the given token path and journals beside it under logs/', async () => {
+    const tokenPath = join(dir, 'saxo-tokens', 'live.json');
+    const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let code: number;
+    let stderr: string;
+    try {
+      code = await main([], { SAMURAI_ALERTS: 'log-only', ...ENV }, tokenPath);
+    } finally {
+      stderr = written.mock.calls.map(([chunk]) => String(chunk)).join('');
+      written.mockRestore();
+    }
+
+    expect(code).toBe(1);
+    const journal = readFileSync(join(dir, 'logs', 'saxo-keepalive.jsonl'), 'utf8');
+    expect(journal).toContain('"outcome":"lost"');
+    expect(readKeepAliveState(tokenPath).lostAt).toBeDefined();
+    expect(stderr).toContain('saxo_keepalive_session_lost');
+    expect(stderr.endsWith('\n')).toBe(true);
   });
 });
 

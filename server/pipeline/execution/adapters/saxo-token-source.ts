@@ -76,12 +76,12 @@ export interface SaxoTokenRefresherDeps {
   tokenPath: string;
   logger: Logger;
   clock?: Clock;
-  fetchImpl?: FetchLike;
+  fetchImpl?: FetchLike | undefined;
   timers?: SaxoRefreshTimers;
   writeRecord?: (path: string, record: SaxoTokenFileRecord) => void;
   backoff?: { baseMs: number; maxMs: number };
   sessionLostAlerts?: SaxoSessionLostAlertChannel;
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: ((ms: number) => Promise<void>) | undefined;
 }
 
 function oauthFailureStatus(cause: unknown): number | undefined {

@@ -83,6 +83,13 @@ describe('saxoSessionRefusal', () => {
     expect(saxoSessionRefusal(NOW, tokenPath)).toBeDefined();
   });
 
+  it('still refuses when the loss record carries no reason', () => {
+    writeTokenFile(tokenPath, record({ obtainedAt: iso(-600_000) }));
+    writeKeepAliveState(tokenPath, { lostAt: iso(-300_000) });
+
+    expect(saxoSessionRefusal(NOW, tokenPath)).toContain('reason not recorded');
+  });
+
   it('ignores a warning-only state', () => {
     writeTokenFile(tokenPath, record());
     writeKeepAliveState(tokenPath, { warnedAt: iso(-1_000) });
