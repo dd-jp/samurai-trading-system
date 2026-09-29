@@ -44,6 +44,16 @@ describe('SqliteNewsLedger', () => {
     ledger.record(row({ status: 'no_news', reason: 'empty', found: 0, headlines: [] }));
     ledger.record(row({ reason: 'found=2' }));
     expect(ledger.cached('2026-09-29', 'AZN')?.reason).toBe('found=2');
+    ledger.record(
+      row({
+        symbol: 'SHEL',
+        status: 'no_news',
+        reason: 'window_not_open',
+        requested: false,
+        headlines: [],
+      }),
+    );
+    expect(ledger.cached('2026-09-29', 'SHEL')).toBeUndefined();
     expect(ledger.cached('2026-09-28', 'AZN')).toBeUndefined();
     expect(ledger.cached('2026-09-29', 'BP')).toBeUndefined();
   });

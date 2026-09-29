@@ -153,6 +153,12 @@ function failureReason(error: unknown): string {
   return error instanceof MarketauxRequestError ? error.reason : 'internal';
 }
 
+type RecordBase = Pick<NewsRecord, 'tradingDate' | 'symbol' | 'provider' | 'fetchedAt'>;
+
+type Preflight =
+  | { readonly refused: NewsRecord }
+  | { readonly client: MarketauxFetch; readonly window: NewsWindow };
+
 export class MarketauxNewsSource implements NewsSource {
   #rateLimitedUntil = 0;
 
@@ -206,28 +212,41 @@ export class MarketauxNewsSource implements NewsSource {
       provider: MARKETAUX_PROVIDER,
       fetchedAt: now.toISOString(),
     };
-    const empty = { ...base, requested: false, found: undefined, headlines: [] };
+    const preflight = this.#preflight(base, now);
+    if ('refused' in preflight) return preflight.refused;
+    try {
+      const result = await preflight.client.fetchArticles(
+        tidm,
+        preflight.window.start,
+        preflight.window.end,
+      );
+      return { ...base, requested: true, ...classify(result, preflight.window) };
+    } catch (error) {
+      const reason = failureReason(error);
+      if (reason === 'http_429') this.#pauseFrom(now);
+      return { ...base, requested: true, found: undefined, headlines: [], status: 'error', reason };
+    }
+  }
+
+  #pauseFrom(now: Date): void {
+    this.#rateLimitedUntil = now.getTime() + MARKETAUX_RATE_LIMIT_PAUSE_MS;
+  }
+
+  #preflight(base: RecordBase, now: Date): Preflight {
+    const refuse = (status: NewsStatus, reason: string): Preflight => ({
+      refused: { ...base, status, reason, requested: false, found: undefined, headlines: [] },
+    });
     const { client } = this.deps;
-    if (client === undefined) return { ...empty, status: 'no_key', reason: 'no_api_key' };
-    const window = newsWindow(tradingDate, now);
-    if (window === undefined) return { ...empty, status: 'no_news', reason: 'window_not_open' };
+    if (client === undefined) return refuse('no_key', 'no_api_key');
+    const window = newsWindow(base.tradingDate, now);
+    if (window === undefined) return refuse('no_news', 'window_not_open');
     const verdict = admission(
       this.deps.ledger.usageSince(MARKETAUX_PROVIDER, utcDayStart(now)),
       this.deps.ceiling,
     );
-    if (verdict !== 'admit') return { ...empty, status: 'budget_stop', reason: verdict };
-    if (now.getTime() < this.#rateLimitedUntil) {
-      return { ...empty, status: 'budget_stop', reason: 'rate_limited' };
-    }
-    try {
-      const result = await client.fetchArticles(tidm, window.start, window.end);
-      return { ...base, requested: true, ...classify(result, window) };
-    } catch (error) {
-      const reason = failureReason(error);
-      if (reason === 'http_429')
-        this.#rateLimitedUntil = now.getTime() + MARKETAUX_RATE_LIMIT_PAUSE_MS;
-      return { ...base, requested: true, found: undefined, headlines: [], status: 'error', reason };
-    }
+    if (verdict !== 'admit') return refuse('budget_stop', verdict);
+    if (now.getTime() < this.#rateLimitedUntil) return refuse('budget_stop', 'rate_limited');
+    return { client, window };
   }
 
   #logFailure(tidm: string, tradingDate: string, error: unknown): void {

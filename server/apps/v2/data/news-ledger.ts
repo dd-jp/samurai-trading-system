@@ -67,7 +67,7 @@ export class SqliteNewsLedger implements NewsLedger {
     const row = this.db
       .prepare(
         `SELECT * FROM v2_news
-         WHERE trading_date = ? AND symbol = ? AND status IN ('ok', 'no_news')
+         WHERE trading_date = ? AND symbol = ? AND status IN ('ok', 'no_news') AND requested = 1
          ORDER BY news_id DESC LIMIT 1`,
       )
       .get(tradingDate, symbol) as NewsRow | undefined;
