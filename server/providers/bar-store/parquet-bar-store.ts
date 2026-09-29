@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { type DuckDBConnection, DuckDBInstance, JSDuckDBValueConverter } from '@duckdb/node-api';
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { assertSortedUniqueDates } from '../../pipeline/momentum/index.js';
+import { violatesBarShape } from './bar-hygiene.js';
 
 export const DEFAULT_BAR_STORE_ROOT = 'data/bars/parquet';
 
@@ -184,7 +185,7 @@ function validateBar(symbol: string, bar: DailyBar): void {
   if (!(Number.isFinite(bar.volume) && bar.volume >= 0)) {
     throw new Error(`${symbol}: invalid volume at ${bar.date}`);
   }
-  if (bar.low > Math.min(bar.open, bar.close) || bar.high < Math.max(bar.open, bar.close)) {
+  if (violatesBarShape(bar)) {
     throw new Error(
       `${symbol}: bar shape violated at ${bar.date} (open ${bar.open}, high ${bar.high}, low ${bar.low}, close ${bar.close})`,
     );

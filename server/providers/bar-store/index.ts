@@ -27,5 +27,7 @@ export {
   findUnitBreaks,
   normaliseUnitBreaks,
   repairBarShape,
+  SHAPE_REPAIR_MANIFEST_NOTE,
+  violatesBarShape,
 } from './bar-hygiene.js';
 export { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from './parquet-bar-store.js';
