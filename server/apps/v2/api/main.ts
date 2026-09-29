@@ -84,7 +84,7 @@ export function parseDashboardArgs(
   };
 }
 
-function readFxOrNone(fxPath: string): ReturnType<typeof parseBoeGbpUsdCsv> {
+export function readFxOrNone(fxPath: string): ReturnType<typeof parseBoeGbpUsdCsv> {
   try {
     return parseBoeGbpUsdCsv(readFileSync(fxPath, 'utf8'));
   } catch (error) {
