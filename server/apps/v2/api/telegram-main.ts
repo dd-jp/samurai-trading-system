@@ -23,7 +23,7 @@ import { type BotFetch, TelegramBot } from './telegram-bot.js';
 import { CommandHandler } from './telegram-commands.js';
 import { runPoller } from './telegram-poller.js';
 
-export const COMMANDS_SCHEMA_VERSION = 73;
+export const COMMANDS_SCHEMA_VERSION = 74;
 const CONFIRMATION_CODE_DIGITS = 4;
 
 export interface TelegramArgs {
