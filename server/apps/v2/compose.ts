@@ -1,8 +1,9 @@
-import type { MarketData, Sleeve } from '../../../contracts/index.js';
+import type { CfdCostModel, MarketData, Sleeve } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore } from '../../shared/store/index.js';
 import type { CycleDeps } from './cycle.js';
+import { isCfdVenue } from './data/index.js';
 import {
   type AlpacaBrokerClient,
   createOrderExecutor,
@@ -17,7 +18,7 @@ import {
   PaperBooks,
   V2RiskGate,
 } from './risk/index.js';
-import { SleeveRegistry } from './signal/index.js';
+import { cfdEntryRefusal, SleeveRegistry } from './signal/index.js';
 
 export interface CycleCompositionOptions {
   readonly db: StoreHandle;
@@ -33,6 +34,8 @@ export interface CycleCompositionOptions {
   // run (doc 67 "2x modelled cost") stresses the whole cost model, not just the quoted spread
   readonly costMultiple?: number | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
+  readonly cfdCostModel?: CfdCostModel | undefined;
+  readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   // Default true: paper/live pools real concurrent primary books against one account-wide loss
   // cap (#1799). The backtest passes false so each trial and the benchmark it composes into the
   // same PaperBooks keeps an independent budget (ruled 2026-09-28, doc 66)
@@ -46,9 +49,21 @@ export interface CycleComposition extends CycleDeps {
   readonly journal: Journal;
 }
 
+function assertCfdFillsPriced(
+  cfdGate: () => string | undefined,
+  cfdCostModel: CfdCostModel | undefined,
+): void {
+  if (cfdGate() !== undefined || cfdCostModel !== undefined) return;
+  throw new Error(
+    'CFD entries can open but no CFD cost model prices their fills: a CFD stop or exit would be stranded (#1850)',
+  );
+}
+
 export function composeCycle(options: CycleCompositionOptions): CycleComposition {
   const { db, clock, logger, market, tradingDate } = options;
   assertCapitalShareRanges(options.sleeves);
+  const cfdGate = options.cfdEntryRefusal ?? cfdEntryRefusal;
+  assertCfdFillsPriced(cfdGate, options.cfdCostModel);
   const v2Store = guardedStore(db, 'v2');
   const capital = new CapitalConfigStore(v2Store, clock);
   const journal = new Journal(v2Store, clock);
@@ -67,6 +82,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     capital,
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
+    venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
   });
   const multiple = options.costMultiple ?? 1;
   const impactBps = impactLookup(market, tradingDate, logger);
@@ -79,7 +95,8 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     pricing: {
       halfSpreadBps: (instrument) => options.halfSpreadBps(instrument) * multiple,
       impactBps: (instrument, qty, price) => impactBps(instrument, qty, price) * multiple,
-      fee: (venue, side, qty, price) => venueFee(venue, side, qty, price) * multiple,
+      fee: (venue, side, qty, price) =>
+        venueFee(venue, side, qty, price, options.cfdCostModel) * multiple,
     },
   });
   return {

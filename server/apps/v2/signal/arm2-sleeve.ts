@@ -6,7 +6,7 @@ import type {
   Venue,
 } from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
-import type { BarsSource } from '../data/index.js';
+import type { BarsSource, VenueRouter } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
 import {
   actionFor,
@@ -14,6 +14,7 @@ import {
   directionFrom,
   resolveTechnical,
   SMA_LONG_WINDOW,
+  sideRoute,
   skipped,
   stopFor,
 } from './debate-sleeve.js';
@@ -32,6 +33,7 @@ export interface Arm2SleeveDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly venueFor: (symbol: string) => Venue;
+  readonly router?: VenueRouter | undefined;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly clock: Clock;
 }
@@ -59,12 +61,18 @@ async function decideOne(
   );
   const thresholds = requireSet(ARM2_ENTRY_THRESHOLDS);
   const direction = directionFrom(read.close, read.sma, read.r63, thresholds);
-  const { action, reason } = actionFor(direction, 'technical');
+  const routed = actionFor(
+    direction,
+    'technical',
+    venue,
+    sideRoute(deps.router, symbol, venue, context.tradingDate),
+  );
+  const { action, reason } = routed;
   const stop = stopFor(action, read);
   return {
     sleeve_id: ARM2_SLEEVE_ID,
     instrument: symbol,
-    venue,
+    venue: routed.venue,
     direction,
     confidence: direction === 'neutral' ? 0.5 : 0.6,
     action,

@@ -3,21 +3,25 @@ import type {
   CapitalYear,
   EntryApproval,
   EntryRequest,
+  EntryRoom,
   ExitRequest,
   MarketData,
+  Position,
   RearmRequest,
   RiskApprovedOrder,
   RiskGate,
   Sleeve,
   SleeveDecision,
   SleeveSpec,
+  Venue,
 } from '../../../../contracts/index.js';
-import { quotePerGbp } from '../data/index.js';
+import { isCfdVenue, quotePerGbp } from '../data/index.js';
 import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
+import { entryRoomRefusal, grossRoomGbp } from './gross-cap.js';
 import { sizeMultiplierFor } from './loss-budget.js';
-import { positionSizeShares } from './position-size.js';
+import { CFD_SHORT_GAP_BUDGET_FRACTION, positionSizeShares } from './position-size.js';
 import { averageDailyNotional, volumeCapShares } from './volume-cap.js';
 
 interface Sizing {
@@ -36,11 +40,42 @@ function bracketRefusal(
   return target > 0 ? undefined : 'target_not_positive';
 }
 
+function closingLeg(
+  held: Position,
+  purpose: 'exit' | 'rearm',
+): { readonly size: number; readonly side: 'buy' | 'sell' } {
+  const size = Math.abs(held.qty);
+  if (!(size > 0)) {
+    throw new Error(`risk gate: no ${purpose} for ${held.instrument} at qty ${held.qty}`);
+  }
+  return { size, side: held.qty > 0 ? 'sell' : 'buy' };
+}
+
+function venueRefusalFor(
+  decision: SleeveDecision,
+  extra: RiskGateDeps['venueRefusal'],
+): string | undefined {
+  const cfd = isCfdVenue(decision.venue);
+  if (decision.action === 'enter_short' && !cfd) return 'short_requires_cfd';
+  if (decision.action === 'enter_long' && cfd) return 'long_on_cfd';
+  return (extra ?? closedCfdVenue)(decision.venue);
+}
+
+function closedCfdVenue(venue: Venue): string | undefined {
+  return isCfdVenue(venue) ? 'cfd_cost_model_unset' : undefined;
+}
+
+function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {
+  if (decision.action !== 'enter_short') return undefined;
+  return capital.lossCapGbp * CFD_SHORT_GAP_BUDGET_FRACTION;
+}
+
 export interface RiskGateDeps {
   readonly books: Pick<BookLedger, 'lastDay'>;
   readonly capital: Pick<CapitalConfigStore, 'inForce'>;
   readonly market: MarketData;
   readonly spec: (sleeveId: string) => SleeveSpec;
+  readonly venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
 }
 
 export class V2RiskGate implements RiskGate {
@@ -49,6 +84,17 @@ export class V2RiskGate implements RiskGate {
   capitalRefusal(tradingDate: string): string | undefined {
     if (this.deps.capital.inForce(tradingDate) !== undefined) return undefined;
     return `no capital config in force on ${tradingDate}: entries refused until David sets the year (doc 66 D8)`;
+  }
+
+  entryRoom(equityGbp: number, cashGbp: number, grossNotionalGbp: number): EntryRoom {
+    return { cashGbp, grossGbp: grossRoomGbp(equityGbp, grossNotionalGbp) };
+  }
+
+  entryRoomRefusal(
+    notionalGbp: number,
+    room: EntryRoom,
+  ): 'insufficient_cash' | 'gross_cap' | undefined {
+    return entryRoomRefusal(notionalGbp, room);
   }
 
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined {
@@ -60,10 +106,17 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveEntry(request: EntryRequest): EntryApproval {
-    const { size, refusal: sizingRefusal } = this.#size(request);
     const { decision } = request;
+    const venueRefusal = venueRefusalFor(decision, this.deps.venueRefusal);
+    if (venueRefusal !== undefined) return { size: 0, order: undefined, refusal: venueRefusal };
+    const { size, refusal: sizingRefusal } = this.#size(request);
     if (sizingRefusal !== undefined) return { size, order: undefined, refusal: sizingRefusal };
     if (size <= 0) return { size, order: undefined, refusal: 'zero_size' };
+    return this.#bracket(request, size);
+  }
+
+  #bracket(request: EntryRequest, size: number): EntryApproval {
+    const { decision } = request;
     if (decision.stop_price === undefined || decision.atr === undefined) {
       return { size, order: undefined, refusal: 'no_stop_price' };
     }
@@ -92,12 +145,7 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveExit(request: ExitRequest): RiskApprovedOrder {
-    const size = Math.abs(request.held.qty);
-    if (!(size > 0)) {
-      throw new Error(
-        `risk gate: no exit for ${request.held.instrument} at qty ${request.held.qty}`,
-      );
-    }
+    const { size, side } = closingLeg(request.held, 'exit');
     return mintApproval({
       kind: 'flatten',
       approvalId: `exit:${request.clientOrderId}:${size}`,
@@ -106,7 +154,7 @@ export class V2RiskGate implements RiskGate {
       bookVariant: request.book.variant,
       venue: request.held.venue,
       instrument: request.held.instrument,
-      side: request.held.qty > 0 ? 'sell' : 'buy',
+      side,
       size,
       entryClientOrderId: request.held.clientOrderId,
       rearmStop: request.rearm?.stop,
@@ -115,12 +163,7 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveRearm(request: RearmRequest): RiskApprovedOrder {
-    const size = Math.abs(request.held.qty);
-    if (!(size > 0)) {
-      throw new Error(
-        `risk gate: no rearm for ${request.held.instrument} at qty ${request.held.qty}`,
-      );
-    }
+    const { size, side } = closingLeg(request.held, 'rearm');
     return mintApproval({
       kind: 'rearm',
       approvalId: `rearm:${request.clientOrderId}:${size}`,
@@ -129,7 +172,7 @@ export class V2RiskGate implements RiskGate {
       bookVariant: request.book.variant,
       venue: request.held.venue,
       instrument: request.held.instrument,
-      side: request.held.qty > 0 ? 'sell' : 'buy',
+      side,
       size,
       entryClientOrderId: request.held.clientOrderId,
       stop: request.stop,
@@ -156,6 +199,7 @@ export class V2RiskGate implements RiskGate {
       sizeMultiplier: this.#multiplier(book.id, sleeveCapitalYear(spec, capital)),
       macroDay: spec.macroGate && book.variant !== 'no-macro-gate' && request.macroDay,
       volumeCapShares: volumeCap,
+      gapBudgetGbp: gapBudgetGbp(decision, sleeveCapitalYear(spec, capital)),
     });
     return { size };
   }

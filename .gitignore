@@ -250,6 +250,7 @@ coverage/
 
 # Saxo OAuth login tokens (#1522) — access/refresh tokens, owner-only, never committed.
 data/saxo-tokens/
+data/saxo-cfd-catalogue.json
 
 # Durable structured-log sink (#325). The whole directory, not just *.log:
 # rotated generations are named `orchestrator.log.1`, which `*.log` does not

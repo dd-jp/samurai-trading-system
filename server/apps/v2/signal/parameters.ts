@@ -1,4 +1,10 @@
-import type { SleeveSpec } from '../../../../contracts/index.js';
+import type {
+  CfdBorrowModel,
+  CfdCostModel,
+  CfdFinancingModel,
+  CfdSpreadModel,
+  SleeveSpec,
+} from '../../../../contracts/index.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -69,7 +75,35 @@ export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774',
 // the count is the builder's default until David sets it
 export const LSE_RESERVED_SLOTS = 4;
 
-export const SHORTS_ENABLED = false;
+export const CFD_COST_MODEL = unset<CfdCostModel>('CFD_COST_MODEL', '#1850');
+export const CFD_SPREAD_MODEL = unset<CfdSpreadModel>('CFD_SPREAD_MODEL', '#1850');
+export const CFD_FINANCING_MODEL = unset<CfdFinancingModel>('CFD_FINANCING_MODEL', '#1850');
+export const CFD_BORROW_MODEL = unset<CfdBorrowModel>('CFD_BORROW_MODEL', '#1850');
+export const CFD_RESTING_STOP_VERIFIED = unset<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916');
+
+export interface CfdEntryGate {
+  readonly parameter: Parameter<unknown>;
+  readonly refusal: string;
+}
+
+export const CFD_ENTRY_GATES: readonly CfdEntryGate[] = [
+  { parameter: CFD_COST_MODEL, refusal: 'cfd_cost_model_unset' },
+  { parameter: CFD_SPREAD_MODEL, refusal: 'cfd_spread_model_unset' },
+  { parameter: CFD_FINANCING_MODEL, refusal: 'cfd_financing_model_unset' },
+  { parameter: CFD_BORROW_MODEL, refusal: 'cfd_borrow_model_unset' },
+  { parameter: CFD_RESTING_STOP_VERIFIED, refusal: 'cfd_resting_stop_unverified' },
+];
+
+export function cfdEntryRefusal(
+  gates: readonly CfdEntryGate[] = CFD_ENTRY_GATES,
+): string | undefined {
+  return gates.find(({ parameter }) => parameter.value === UNSET || parameter.value === false)
+    ?.refusal;
+}
+
+// David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
+// 2% a year; extended to US CFD shorts by David 2026-09-29 (#1849)
+export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
 
 // doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
 // separately committed lines), but no order in a complex line until David records
@@ -143,6 +177,7 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
+  ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
 ];
 
 // A set parameter never blocks a cycle, so this list only ever holds an unset one;
@@ -151,4 +186,5 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SOCIAL_SOURCE,
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,
+  ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
 ];

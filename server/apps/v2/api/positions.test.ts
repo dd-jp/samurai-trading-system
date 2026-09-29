@@ -172,6 +172,22 @@ describe('PositionsPanel (P3)', () => {
     });
   });
 
+  it('adds a venue row for a CFD venue only once a primary book holds one there', async () => {
+    db = openSharedStore(':memory:');
+    seedBook('debate/primary', 'primary', 100);
+    seedPosition('debate/primary', 'AAPL', 'saxo_cfd_usd', -2, 80);
+    const served = await present(marksOf({ 'saxo_cfd_usd:AAPL': bar('2026-10-05', 125) }));
+    expect(served).toMatchObject({
+      positions: [{ venue: 'saxo_cfd_usd', currency: 'USD', qty: -2 }],
+      venues: [
+        { venue: 'alpaca' },
+        { venue: 'saxo' },
+        { venue: 'saxo_cfd_usd', currency: 'USD', positions_value_quote: -250 },
+      ],
+    });
+    expect(served.status === 'fed' && served.venues).toHaveLength(3);
+  });
+
   it('asks for the bars before the latest cycle date, for every holding', async () => {
     db = openSharedStore(':memory:');
     seedBook('debate/primary', 'primary', 0);

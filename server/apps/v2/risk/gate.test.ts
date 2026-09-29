@@ -10,6 +10,7 @@ import type {
   SleeveDecision,
   SleeveSpec,
   V2Bar,
+  Venue,
 } from '../../../../contracts/index.js';
 import { isRiskApproved } from './approval.js';
 import { V2RiskGate } from './gate.js';
@@ -87,6 +88,7 @@ function gate(
     capital?: CapitalYear | undefined;
     bars?: readonly V2Bar[];
     spec?: SleeveSpec;
+    venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
   } = {},
 ) {
   const lastDay = (): BookDay | undefined =>
@@ -115,8 +117,17 @@ function gate(
     capital: { inForce: () => capital },
     market: marketWith(options.bars ?? liquidBars()),
     spec: () => options.spec ?? SPEC,
+    venueRefusal: 'venueRefusal' in options ? options.venueRefusal : () => undefined,
   });
 }
+
+const cfdShort: SleeveDecision = {
+  ...decision,
+  venue: 'saxo_cfd_usd',
+  direction: 'bearish',
+  action: 'enter_short',
+  stop_price: 20.8,
+};
 
 function request(overrides: Partial<EntryRequest> = {}): EntryRequest {
   return {
@@ -153,10 +164,100 @@ describe('V2RiskGate', () => {
   });
 
   it('mints shorts as sells with the target below the entry', () => {
-    const approval = gate().approveEntry(
-      request({ decision: { ...decision, action: 'enter_short', stop_price: 20.8 } }),
-    );
+    const approval = gate().approveEntry(request({ decision: cfdShort }));
     expect(approval.order).toMatchObject({ side: 'sell', target: expect.closeTo(18.8, 9) });
+  });
+
+  it('refuses a short on any venue that is not a CFD, whatever else is true', () => {
+    for (const venue of ['alpaca', 'saxo'] as const) {
+      expect(gate().approveEntry(request({ decision: { ...cfdShort, venue } }))).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'short_requires_cfd',
+      });
+    }
+  });
+
+  it('refuses a long on either CFD venue whatever else is true', () => {
+    for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
+      expect(gate().approveEntry(request({ decision: { ...decision, venue } }))).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'long_on_cfd',
+      });
+    }
+  });
+
+  it('lets a long through on a non-CFD venue and a short through on either CFD venue', () => {
+    expect(gate().approveEntry(request()).order).toBeDefined();
+    for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
+      expect(
+        gate().approveEntry(request({ decision: { ...cfdShort, venue } })).order,
+      ).toBeDefined();
+    }
+  });
+
+  it('refuses every CFD entry when no venue refusal is injected, and leaves cash venues alone', () => {
+    const closed = gate({ venueRefusal: undefined });
+    for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
+      expect(closed.approveEntry(request({ decision: { ...cfdShort, venue } }))).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'cfd_cost_model_unset',
+      });
+    }
+    expect(closed.approveEntry(request()).order).toBeDefined();
+  });
+
+  it('applies the injected venue refusal to the routed venue and names it', () => {
+    const refusing = gate({
+      venueRefusal: (venue) => (venue === 'saxo_cfd_usd' ? 'cfd_cost_model_unset' : undefined),
+    });
+    expect(refusing.approveEntry(request({ decision: cfdShort }))).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'cfd_cost_model_unset',
+    });
+    expect(refusing.approveEntry(request()).order).toBeDefined();
+  });
+
+  it('caps a CFD short so a +30% gap costs at most 10% of the sleeve loss cap', () => {
+    const sized = (lossCapGbp: number, capitalShare = 1) =>
+      gate({ capital: { ...year, lossCapGbp }, spec: { ...SPEC, capitalShare } }).approveEntry(
+        request({ decision: cfdShort }),
+      ).size;
+    expect(sized(1_500)).toBe(6);
+    expect(sized(160)).toBe(3);
+    expect(sized(100)).toBe(2);
+    expect(sized(20)).toBe(0);
+    expect(sized(100, 0.3)).toBe(0);
+  });
+
+  it('does not gap-cap a long', () => {
+    const tiny = gate({ capital: { ...year, lossCapGbp: 20 } });
+    expect(tiny.approveEntry(request()).size).toBe(6);
+  });
+
+  it('builds the entry room from cash and the gap between equity and gross notional', () => {
+    expect(gate().entryRoom(1_000, 700, 300)).toEqual({ cashGbp: 700, grossGbp: 700 });
+    expect(gate().entryRoom(1_000, 1_900, 900)).toEqual({ cashGbp: 1_900, grossGbp: 100 });
+  });
+
+  it('refuses on a NaN room or notional rather than letting the entry through', () => {
+    const room = { cashGbp: 500, grossGbp: 100 };
+    expect(gate().entryRoomRefusal(Number.NaN, room)).toBe('insufficient_cash');
+    expect(gate().entryRoomRefusal(10, { cashGbp: Number.NaN, grossGbp: 100 })).toBe(
+      'insufficient_cash',
+    );
+    expect(gate().entryRoomRefusal(10, { cashGbp: 500, grossGbp: Number.NaN })).toBe('gross_cap');
+    expect(gate().entryRoom(Number.NaN, 500, 0).grossGbp).toBeNaN();
+  });
+
+  it('refuses on room: cash first, then the 1x gross cap', () => {
+    const room = { cashGbp: 500, grossGbp: 100 };
+    expect(gate().entryRoomRefusal(100, room)).toBeUndefined();
+    expect(gate().entryRoomRefusal(100.01, room)).toBe('gross_cap');
+    expect(gate().entryRoomRefusal(500.01, room)).toBe('insufficient_cash');
   });
 
   it('converts only US prices by the year-start rate', () => {
@@ -208,18 +309,19 @@ describe('V2RiskGate', () => {
       );
     }
     for (const stop_price of [20, 19.6]) {
-      expect(
-        gate().approveEntry(
-          request({ decision: { ...decision, action: 'enter_short', stop_price } }),
-        ),
-      ).toMatchObject({ order: undefined, refusal: 'stop_wrong_side' });
+      expect(gate().approveEntry(request({ decision: { ...cfdShort, stop_price } }))).toMatchObject(
+        { order: undefined, refusal: 'stop_wrong_side' },
+      );
     }
     expect(
       gate().approveEntry(
         request({
-          decision: { ...decision, action: 'enter_short', price: 1.2, atr: 0.4, stop_price: 1.5 },
+          decision: { ...cfdShort, price: 1.2, atr: 0.4, stop_price: 1.5 },
         }),
       ),
+    ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
+    expect(
+      gate().approveEntry(request({ decision: { ...cfdShort, price: 3, atr: 1, stop_price: 4 } })),
     ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
   });
 
@@ -402,6 +504,14 @@ describe('V2RiskGate', () => {
       stop: 21,
       target: 18,
     });
+    const longRearm = gate().approveRearm({
+      book: primary,
+      held: { ...held, qty: 4 },
+      clientOrderId: 'r3',
+      stop: 19,
+      target: 22,
+    });
+    expect(longRearm).toMatchObject({ kind: 'rearm', side: 'sell', size: 4 });
     expect(rearm).toEqual({
       kind: 'rearm',
       approvalId: 'rearm:r1:4',

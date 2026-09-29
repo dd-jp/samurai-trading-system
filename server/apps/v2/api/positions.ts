@@ -7,16 +7,22 @@ import type {
   PanelWire,
   PositionsWire,
   PositionWire,
-  QuoteCurrencyWire,
   Venue,
   VenueTotalWire,
 } from '../../../../contracts/index.js';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
-import { heldKey, isFresh, type LastBar, type MarkSource, quotePerGbp } from '../data/index.js';
+import {
+  heldKey,
+  isFresh,
+  type LastBar,
+  type MarkSource,
+  quoteCurrencyOf,
+  quotePerGbp,
+} from '../data/index.js';
 
-const VENUE_CURRENCY: Readonly<Record<Venue, QuoteCurrencyWire>> = { alpaca: 'USD', saxo: 'GBP' };
-const VENUES: readonly Venue[] = ['alpaca', 'saxo'];
+const CASH_VENUES: readonly Venue[] = ['alpaca', 'saxo'];
+const CFD_VENUES: readonly Venue[] = ['saxo_cfd_gbp', 'saxo_cfd_usd'];
 const MARK_READ_TIMEOUT_MS = 5_000;
 const FX_SOURCE = 'Bank of England XUDLUSS, last observation on or before 1 January';
 
@@ -105,7 +111,7 @@ function venueTotal(venue: Venue, positions: readonly PositionWire[]): VenueTota
   const held = positions.filter((row) => row.venue === venue && isPrimary(row));
   return {
     venue,
-    currency: VENUE_CURRENCY[venue],
+    currency: quoteCurrencyOf(venue),
     positions_value_quote: sumOrNull(held.map(quoteValue)),
     positions_value_gbp: sumOrNull(held.map((row) => freshMark(row)?.market_value_gbp ?? null)),
   };
@@ -126,7 +132,10 @@ export class PositionsPanel {
     const positions = holdings.positions.map((row) =>
       this.#position(row, bars.get(heldKey(row)), asOf, fx),
     );
-    const venues = VENUES.map((venue) => venueTotal(venue, positions));
+    const heldCfdVenues = CFD_VENUES.filter((venue) =>
+      positions.some((row) => row.venue === venue),
+    );
+    const venues = [...CASH_VENUES, ...heldCfdVenues].map((venue) => venueTotal(venue, positions));
     const primaryCash = holdings.cash.filter(isPrimary).map((row) => row.cash_gbp);
     return {
       status: 'fed',
@@ -170,13 +179,16 @@ export class PositionsPanel {
   }
 
   #position(row: HoldingRow, bar: LastBar, asOf: string, fx: FxRateWire | null): PositionWire {
-    const perGbp = row.venue === 'alpaca' ? fx?.gbp_usd : quotePerGbp(this.market, row.venue, asOf);
+    const perGbp =
+      quoteCurrencyOf(row.venue) === 'USD'
+        ? fx?.gbp_usd
+        : quotePerGbp(this.market, row.venue, asOf);
     return {
       book_id: row.book_id,
       variant: row.variant,
       instrument: row.instrument,
       venue: row.venue,
-      currency: VENUE_CURRENCY[row.venue],
+      currency: quoteCurrencyOf(row.venue),
       qty: row.qty,
       entry_gbp: row.avg_price_gbp,
       stop_gbp: row.stop_gbp,

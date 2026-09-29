@@ -4,6 +4,7 @@ import type {
   Position,
   RiskApprovedOrder,
   SleeveDecision,
+  Venue,
 } from '../../../../contracts/index.js';
 import type { BrokerAdapter, NormalizedFill } from '../../../pipeline/execution/index.js';
 import { toBrokerFillId } from '../../../shared/index.js';
@@ -93,12 +94,17 @@ const gate = new V2RiskGate({
     },
     books: [],
   }),
+  venueRefusal: () => undefined,
 });
 
 function entry(book: BookSpec = primary, venue: SleeveDecision['venue'] = 'alpaca') {
+  const short = venue.startsWith('saxo_cfd');
+  const routed: SleeveDecision = short
+    ? { ...decision, venue, action: 'enter_short', stop_price: 20.8 }
+    : { ...decision, venue };
   const { order } = gate.approveEntry({
     book,
-    decision: { ...decision, venue },
+    decision: routed,
     clientOrderId: `e-${book.variant}-${venue}`,
     tradingDate: '2026-09-25',
     equityGbp: 1_000,
@@ -132,6 +138,10 @@ function asAdapter(broker: ReturnType<typeof fakeBroker>): BrokerAdapter {
   return broker as unknown as BrokerAdapter;
 }
 
+function allVenues(broker: BrokerAdapter): Record<Venue, BrokerAdapter> {
+  return { alpaca: broker, saxo: broker, saxo_cfd_gbp: broker, saxo_cfd_usd: broker };
+}
+
 function executor(dryRun: boolean) {
   const alpaca = fakeBroker('alpaca');
   const simulated = fakeBroker('sim');
@@ -140,7 +150,7 @@ function executor(dryRun: boolean) {
     simulated,
     executor: new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca) },
-      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      simulatedBrokers: allVenues(asAdapter(simulated)),
       pricing: PRICING,
       dryRun,
     }),
@@ -287,7 +297,7 @@ describe('V2OrderExecutor', () => {
     const noSaxo = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca) },
       simulatedBrokers: {
-        alpaca: asAdapter(simulated),
+        ...allVenues(asAdapter(simulated)),
         saxo: undefined as unknown as BrokerAdapter,
       },
       pricing: PRICING,
@@ -329,6 +339,78 @@ describe('V2OrderExecutor', () => {
     expect(await paper.submit(entry(primary, 'saxo'))).toMatchObject({ outcome: 'simulated' });
   });
 
+  it.each(['saxo', 'saxo_cfd_gbp', 'saxo_cfd_usd'] as const)(
+    'a primary order at %s is simulated outside a dry run and never reaches Alpaca',
+    async (venue) => {
+      const { executor: paper, alpaca, simulated } = executor(false);
+      expect(paper.simulates({ bookVariant: 'primary', venue })).toBe(true);
+      expect(await paper.submit(entry(primary, venue))).toMatchObject({
+        outcome: 'submitted',
+        detail: 'sim-bracket',
+      });
+      expect(simulated.submitBracket).toHaveBeenCalledTimes(1);
+      expect(alpaca.submitBracket).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['saxo_cfd_gbp', 'saxo_cfd_usd'] as const)(
+    'a dry-run refusal at %s is simulated in paper and refused_dry_run in a dry run',
+    async (venue) => {
+      const refusal = new DryRunRefusedError({
+        client_order_id: 'e',
+        instrument: 'VOD',
+        kind: 'bracket',
+      });
+      const paper = executor(false);
+      paper.simulated.submitBracket.mockRejectedValueOnce(refusal);
+      expect(await paper.executor.submit(entry(primary, venue))).toMatchObject({
+        outcome: 'simulated',
+      });
+      const dry = executor(true);
+      dry.simulated.submitBracket.mockRejectedValueOnce(refusal);
+      expect(await dry.executor.submit(entry(primary, venue))).toMatchObject({
+        outcome: 'refused_dry_run',
+      });
+    },
+  );
+
+  it('sends a CFD short bracket to the simulated broker as a sell with the stop above the entry', async () => {
+    const { executor: paper, simulated } = executor(false);
+    const { order } = gate.approveEntry({
+      book: primary,
+      decision: {
+        ...decision,
+        venue: 'saxo_cfd_usd',
+        direction: 'bearish',
+        action: 'enter_short',
+        stop_price: 20.8,
+      },
+      clientOrderId: 'e-short',
+      tradingDate: '2026-09-25',
+      equityGbp: 1_000,
+      macroDay: false,
+    });
+    if (order === undefined) throw new Error('fixture must approve');
+    await paper.submit(order);
+    expect(simulated.submitBracket.mock.calls[0]?.[0].target).toBeLessThan(20);
+    expect(simulated.submitBracket).toHaveBeenCalledWith(
+      expect.objectContaining({ side: 'sell', entry: 20, stop: 20.8, target: expect.any(Number) }),
+    );
+  });
+
+  it('a CFD fill with no CFD cost model throws instead of pricing a zero fee', () => {
+    const { executor: paper } = executor(false);
+    expect(() =>
+      paper.quoteSimulatedFill('saxo_cfd_usd', {
+        instrument: 'AAPL',
+        side: 'sell',
+        qty: 5,
+        price: 20,
+        crossesSpread: false,
+      }),
+    ).toThrow('needs #1850');
+  });
+
   it('cancels and resumes flattens on the routed broker only', async () => {
     const { executor: paper, alpaca, simulated } = executor(false);
     await paper.cancel({ bookVariant: 'primary', venue: 'alpaca' }, 'c1', 'AAPL');
@@ -358,7 +440,7 @@ describe('V2OrderExecutor', () => {
     const simulated = fakeBroker('sim');
     const paper = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca), saxo: asAdapter(failing) },
-      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      simulatedBrokers: allVenues(asAdapter(simulated)),
       pricing: PRICING,
       dryRun: false,
     });
@@ -372,7 +454,7 @@ describe('V2OrderExecutor', () => {
     expect(simulated.fetchNewFills).toHaveBeenCalledTimes(1);
     const dry = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca) },
-      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      simulatedBrokers: allVenues(asAdapter(simulated)),
       pricing: PRICING,
       dryRun: true,
     });
@@ -383,7 +465,7 @@ describe('V2OrderExecutor', () => {
     expect(alpaca.fetchNewFills).toHaveBeenCalledTimes(1);
     const shared = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(simulated) },
-      simulatedBrokers: { alpaca: asAdapter(simulated), saxo: asAdapter(simulated) },
+      simulatedBrokers: allVenues(asAdapter(simulated)),
       pricing: PRICING,
       dryRun: false,
     });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_POSITION_FRACTION_OF_EQUITY, positionSizeShares } from './position-size.js';
+import {
+  CFD_SHORT_GAP_BUDGET_FRACTION,
+  CFD_SHORT_GAP_FRACTION,
+  MAX_POSITION_FRACTION_OF_EQUITY,
+  positionSizeShares,
+} from './position-size.js';
 
 const base = {
   equityGbp: 1_000,
@@ -57,5 +62,41 @@ describe('positionSizeShares', () => {
     expect(positionSizeShares({ ...base, riskFraction: 0.0025 })).toBe(5);
     expect(positionSizeShares({ ...base, riskFraction: 0.01 })).toBe(10);
     expect(positionSizeShares({ ...base, riskFraction: 0 })).toBe(0);
+  });
+});
+
+describe('positionSizeShares CFD short gap bound', () => {
+  const roomy = { ...base, equityGbp: 10_000, priceGbp: 10 };
+
+  it('carries the ruled +30% gap and a 10% of sleeve loss cap budget', () => {
+    expect(CFD_SHORT_GAP_FRACTION).toBe(0.3);
+    expect(CFD_SHORT_GAP_BUDGET_FRACTION).toBe(0.1);
+  });
+
+  it('leaves the size alone when no gap budget applies', () => {
+    expect(positionSizeShares(roomy)).toBe(100);
+    expect(positionSizeShares({ ...roomy, gapBudgetGbp: undefined })).toBe(100);
+  });
+
+  it('caps shares so a +30% gap costs at most the budget', () => {
+    expect(positionSizeShares({ ...roomy, gapBudgetGbp: 45 })).toBe(15);
+    expect(15 * 10 * CFD_SHORT_GAP_FRACTION).toBeCloseTo(45, 9);
+  });
+
+  it('drops a share the moment the price would push the gap loss over the budget', () => {
+    expect(positionSizeShares({ ...roomy, priceGbp: 10, gapBudgetGbp: 45 })).toBe(15);
+    expect(positionSizeShares({ ...roomy, priceGbp: 10.01, gapBudgetGbp: 45 })).toBe(14);
+    expect(positionSizeShares({ ...roomy, priceGbp: 150, gapBudgetGbp: 45 })).toBe(1);
+    expect(positionSizeShares({ ...roomy, priceGbp: 150.01, gapBudgetGbp: 45 })).toBe(0);
+  });
+
+  it('never raises a size the fixed-risk or notional rules already made smaller', () => {
+    expect(positionSizeShares({ ...roomy, gapBudgetGbp: 4_500 })).toBe(100);
+    expect(positionSizeShares({ ...base, gapBudgetGbp: 4_500 })).toBe(10);
+  });
+
+  it('is zero on a zero or negative budget', () => {
+    expect(positionSizeShares({ ...roomy, gapBudgetGbp: 0 })).toBe(0);
+    expect(positionSizeShares({ ...roomy, gapBudgetGbp: -45 })).toBe(0);
   });
 });

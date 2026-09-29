@@ -333,6 +333,52 @@ describe('composeV2Root', () => {
     if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
   });
 
+  it('logs an unreadable CFD catalogue and still composes with every CFD route closed', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const logs: LogEntry[] = [];
+    const cfdCataloguePath = join(fixtures.directory, 'catalogue.json');
+    writeFileSync(cfdCataloguePath, '{not json');
+    const storePath = join(fixtures.directory, 'cfd.sqlite');
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      logger: { log: (entry) => logs.push(entry) },
+      cfdCataloguePath,
+    });
+    try {
+      expect(logs.filter((entry) => entry.event === 'v2_cfd_catalogue_unreadable')).toHaveLength(1);
+    } finally {
+      root.close();
+    }
+  });
+
+  it('composes without a catalogue file and without logging when none exists', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const logs: LogEntry[] = [];
+    const storePath = join(fixtures.directory, 'nocfd.sqlite');
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      logger: { log: (entry) => logs.push(entry) },
+      cfdCataloguePath: join(fixtures.directory, 'absent.json'),
+    });
+    try {
+      expect(logs.filter((entry) => entry.event === 'v2_cfd_catalogue_unreadable')).toEqual([]);
+    } finally {
+      root.close();
+    }
+  });
+
   it('dry run: sizes, reaches the dry-run broker, submits nothing, journals every LLM call and fill', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;
@@ -363,7 +409,17 @@ describe('composeV2Root', () => {
         sleeves: ['debate', 'arm2'],
       });
       expect(exitCodeFor(report)).toBe(0);
-      expect(report.refusals.filter((refusal) => refusal.includes('needs David'))).toHaveLength(5);
+      const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
+      expect(needsDavid).toHaveLength(10);
+      for (const parameter of [
+        'CFD_COST_MODEL',
+        'CFD_SPREAD_MODEL',
+        'CFD_FINANCING_MODEL',
+        'CFD_BORROW_MODEL',
+        'CFD_RESTING_STOP_VERIFIED',
+      ]) {
+        expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(true);
+      }
       const decision = root.db
         .prepare('SELECT action, size_shares, stop_price FROM v2_decisions WHERE book_id = ?')
         .get('debate/primary') as { action: string; size_shares: number; stop_price: number };

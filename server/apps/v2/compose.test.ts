@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { MarketData, Sleeve, SleeveSpec } from '../../../contracts/index.js';
+import type {
+  BookSpec,
+  MarketData,
+  Sleeve,
+  SleeveDecision,
+  SleeveSpec,
+} from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { type CycleCompositionOptions, composeCycle } from './compose.js';
@@ -160,5 +166,114 @@ describe('composeCycle: costMultiple scales every modelled cost leg (doc 67 "2x 
     );
 
     expect(defaulted).toEqual(explicit);
+  });
+});
+
+describe('composeCycle: CFD cost model (#1849, #1850)', () => {
+  const book: BookSpec = {
+    id: 'debate/primary',
+    sleeve: 'debate',
+    variant: 'primary',
+    instantiated: true,
+  };
+  const cfdShort: SleeveDecision = {
+    sleeve_id: 'debate',
+    instrument: 'AAPL',
+    venue: 'saxo_cfd_usd',
+    direction: 'bearish',
+    confidence: 1,
+    action: 'enter_short',
+    reason: 'r',
+    price: 20,
+    atr: 0.4,
+    stop_price: 20.8,
+    inputs_hash: 'h',
+    debate_id: 'd',
+    payload: {},
+  };
+  const richMarket: MarketData = {
+    ...market,
+    barsBefore: (_instrument, _date, count) =>
+      Array.from({ length: count }, (_, back) => {
+        const date = new Date(Date.parse('2026-09-24') - back * 86_400_000)
+          .toISOString()
+          .slice(0, 10);
+        return { date, open: 20, high: 20, low: 20, close: 20, volume: 1_000_000, rawClose: 20 };
+      }).reverse(),
+  };
+  const request = (composed: ReturnType<typeof composeCycle>) =>
+    composed.risk.approveEntry({
+      book,
+      decision: cfdShort,
+      clientOrderId: 'c1',
+      tradingDate: '2026-09-25',
+      equityGbp: 1_000,
+      macroDay: false,
+    });
+  const fill = (side: 'buy' | 'sell', qty: number, price: number) => ({
+    instrument: 'AAPL',
+    side,
+    qty,
+    price,
+    crossesSpread: false,
+  });
+
+  it('refuses a CFD entry as cfd_cost_model_unset while the CFD parameters are unset', () => {
+    const composed = composeCycle(options({ market: richMarket }));
+    expect(request(composed)).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'cfd_cost_model_unset',
+    });
+  });
+
+  it('refuses a CFD entry with whatever the injected CFD gate names, even with a model', () => {
+    const composed = composeCycle(
+      options({
+        market: richMarket,
+        cfdCostModel: { fee: () => 0 },
+        cfdEntryRefusal: () => 'cfd_resting_stop_unverified',
+      }),
+    );
+    expect(request(composed)).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'cfd_resting_stop_unverified',
+    });
+  });
+
+  it('approves the same entry once the gate passes, and prices CFD fills through the model', () => {
+    const cfdCostModel = {
+      fee: (_side: 'buy' | 'sell', qty: number, price: number) => qty * price * 0.001,
+    };
+    const composed = composeCycle(
+      options({ market: richMarket, cfdCostModel, cfdEntryRefusal: () => undefined }),
+    );
+    expect(request(composed).order).toBeDefined();
+    expect(composed.executor.quoteSimulatedFill('saxo_cfd_usd', fill('sell', 10, 100))).toEqual({
+      price: 100,
+      fee: 1,
+    });
+  });
+
+  it('scales the injected CFD fee by costMultiple like every other modelled cost', () => {
+    const composed = composeCycle(options({ cfdCostModel: { fee: () => 1 }, costMultiple: 2 }));
+    expect(composed.executor.quoteSimulatedFill('saxo_cfd_gbp', fill('buy', 1, 1)).fee).toBe(2);
+  });
+
+  it('refuses to compose when CFD entries can open but no cost model would price their exits', () => {
+    expect(() => composeCycle(options({ cfdEntryRefusal: () => undefined }))).toThrow(
+      /stranded \(#1850\)/,
+    );
+    expect(() =>
+      composeCycle(options({ cfdEntryRefusal: () => 'cfd_resting_stop_unverified' })),
+    ).not.toThrow();
+  });
+
+  it('throws when a CFD fill is priced with no model rather than fee-free', () => {
+    const composed = composeCycle(options());
+    expect(() => composed.executor.quoteSimulatedFill('saxo_cfd_gbp', fill('buy', 1, 1))).toThrow(
+      'needs #1850',
+    );
   });
 });

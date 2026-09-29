@@ -79,12 +79,17 @@ export type {
   BookSpec,
   BookVariant,
   CapitalYear,
+  CfdBorrowModel,
+  CfdCostModel,
+  CfdFinancingModel,
+  CfdSpreadModel,
   ControlAction,
   ControlReader,
   ControlState,
   DecisionJournal,
   EntryApproval,
   EntryRequest,
+  EntryRoom,
   ExecutionRoute,
   ExitRequest,
   FillLeg,
@@ -127,6 +132,7 @@ export type {
   Valuation,
   Venue,
 } from './v2.js';
+export { CfdCostModelUnsetError } from './v2.js';
 export type {
   BookCashWire,
   BookPerformanceWire,

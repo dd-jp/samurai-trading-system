@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import type { Sleeve } from '../../../contracts/index.js';
+import type { CfdCostModel, Sleeve } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -10,7 +10,7 @@ import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
-import { SystemClock } from '../../shared/index.js';
+import { describeThrownSafely, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
@@ -23,7 +23,10 @@ import {
   AlpacaNewsSource,
   BarsMarketData,
   type BarsSource,
+  type CfdCatalogue,
+  createVenueRouter,
   currentConstituents,
+  loadCfdCatalogue,
   MultiVenueBarsSource,
   type NewsSource,
   NO_NEWS,
@@ -46,10 +49,14 @@ import {
   ARM2_SLEEVE_ID,
   BULLISH_SCRIPT,
   buildLlmPanel,
+  CFD_COST_MODEL,
+  CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  cfdEntryRefusal,
   createArm2Sleeve,
   createDebateSleeve,
   DEBATE_SLEEVE_ID,
   isLseInstrument,
+  isSet,
   type LlmPanel,
   type ModelPin,
   NousPinnedTransport,
@@ -65,6 +72,7 @@ export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
 export const SAXO_SPREADS_PATH = 'data/bars/saxo-spreads.csv';
 export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
+export const CFD_CATALOGUE_PATH = 'data/saxo-cfd-catalogue.json';
 export const DEFAULT_HALF_SPREAD_BPS = 5;
 const LLM_MAX_IN_FLIGHT_PER_ACCOUNT = 1;
 const LLM_EXPECTED_CALL_MS = 20_000;
@@ -79,6 +87,10 @@ export interface V2RootOptions {
   readonly spreadsPath?: string | undefined;
   readonly saxoSpreadsPath?: string | undefined;
   readonly fxPath?: string | undefined;
+  readonly cfdCataloguePath?: string | undefined;
+  readonly cfdCatalogue?: CfdCatalogue | undefined;
+  readonly cfdCostModel?: CfdCostModel | undefined;
+  readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly nousBaseUrl?: string | undefined;
   readonly nousApiKey?: string | undefined;
   readonly samuraiMode?: string | undefined;
@@ -265,6 +277,31 @@ function journalLseLegRefusal(
   });
 }
 
+function cfdCatalogueFor(options: V2RootOptions, logger: Logger): CfdCatalogue | undefined {
+  if (options.cfdCatalogue !== undefined) return options.cfdCatalogue;
+  try {
+    return loadCfdCatalogue(options.cfdCataloguePath ?? CFD_CATALOGUE_PATH);
+  } catch (error) {
+    logger.log({
+      trace_id: 'v2-root',
+      stage: 'v2',
+      level: 'warn',
+      event: 'v2_cfd_catalogue_unreadable',
+      message: `CFD catalogue unreadable, every CFD route refused: ${describeThrownSafely(error)}`,
+    });
+    return undefined;
+  }
+}
+
+function cfdCostModelFor(options: V2RootOptions): CfdCostModel | undefined {
+  if (options.cfdCostModel !== undefined) return options.cfdCostModel;
+  return isSet(CFD_COST_MODEL) ? CFD_COST_MODEL.value : undefined;
+}
+
+function cfdGateFor(options: V2RootOptions): () => string | undefined {
+  return options.cfdEntryRefusal ?? cfdEntryRefusal;
+}
+
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -288,9 +325,26 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
   const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
+  const cfdCostModel = cfdCostModelFor(options);
+  const cfdGate = cfdGateFor(options);
+  const router = createVenueRouter({
+    catalogue: cfdCatalogueFor(options, logger),
+    entryRefusal: cfdGate,
+    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  });
   const sleeves = [
-    createDebateSleeve({ panel, bars, constituents, venueFor, market, news, clock, logger }),
-    createArm2Sleeve({ bars, constituents, venueFor, market, clock }),
+    createDebateSleeve({
+      panel,
+      bars,
+      constituents,
+      venueFor,
+      router,
+      market,
+      news,
+      clock,
+      logger,
+    }),
+    createArm2Sleeve({ bars, constituents, venueFor, router, market, clock }),
   ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
@@ -308,6 +362,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       options.saxoSpreadsPath ?? SAXO_SPREADS_PATH,
     ),
     alpacaClient: options.alpacaClient,
+    cfdCostModel,
+    cfdEntryRefusal: cfdGate,
   });
   return {
     registry: cycle.registry,

@@ -5,6 +5,7 @@ import type {
   ControlReader,
   DecisionJournal,
   EntryApproval,
+  EntryRoom,
   JournalledOrder,
   LossBudgetState,
   ManualControl,
@@ -15,6 +16,8 @@ import type {
   Position,
   RearmPrices,
   RiskGate,
+  SimulatedFillQuote,
+  SimulatedFillRequest,
   Sleeve,
   SleeveDecision,
   SleeveOutput,
@@ -24,6 +27,7 @@ import type {
   V2Fill,
   Venue,
 } from '../../../contracts/index.js';
+import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import {
@@ -35,7 +39,11 @@ import {
   quotePerGbp,
 } from './data/index.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
-import { simulateLimitEntry, simulateMarketExit } from './simulated-entry.js';
+import {
+  type LimitEntryOutcome,
+  simulateLimitEntry,
+  simulateMarketExit,
+} from './simulated-entry.js';
 import { splitRatioAcross } from './split.js';
 
 export interface CycleDeps {
@@ -368,15 +376,24 @@ class Cycle {
       this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       return;
     }
+    this.settleEntryFill(order, limit, outcome);
+  }
+
+  settleEntryFill(order: JournalledOrder, limit: number, outcome: FilledLimitEntry): void {
+    const side = order.side as OrderSide;
     const opening = this.deps.books.position(order.book_id, order.instrument) === undefined;
     const qty = order.payload.size as number;
-    const quote = this.deps.executor.quoteSimulatedFill(order.venue as Venue, {
+    const quote = this.quoteOrRefuse(order.book_id, order.venue as Venue, {
       instrument: order.instrument,
       side,
       qty,
       price: outcome.price,
       crossesSpread: outcome.crossesSpread,
     });
+    if (quote === undefined) {
+      this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
+      return;
+    }
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
@@ -391,6 +408,30 @@ class Cycle {
     }
     if (outcome.stoppedAt !== undefined && held !== undefined) {
       this.simulatedExit(order.book_id, held, outcome.stoppedAt, true, 'stop_on_entry_bar');
+    }
+  }
+
+  quoteOrRefuse(
+    bookId: string,
+    venue: Venue,
+    request: SimulatedFillRequest,
+  ): SimulatedFillQuote | undefined {
+    try {
+      return this.deps.executor.quoteSimulatedFill(venue, request);
+    } catch (error) {
+      if (!(error instanceof CfdCostModelUnsetError)) throw error;
+      const message = `${bookId} ${request.instrument}: simulated ${venue} fill left open, ${error.message}`;
+      this.deps.journal.recordRefusal({
+        trading_date: this.tradingDate,
+        scope: 'fill',
+        parameter: 'CFD_COST_MODEL',
+        ticket: '#1850',
+        message,
+        book_id: bookId,
+        instrument: request.instrument,
+      });
+      this.refusals.push(message);
+      return undefined;
     }
   }
 
@@ -417,13 +458,14 @@ class Cycle {
       return;
     }
     const qty = Math.abs(held.qty);
-    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
+    const quote = this.quoteOrRefuse(order.book_id, held.venue, {
       instrument: held.instrument,
       side: order.side,
       qty,
       price,
       crossesSpread: true,
     });
+    if (quote === undefined) return;
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
@@ -533,13 +575,14 @@ class Cycle {
     const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
     const clientOrderId = this.exitOrderId(bookId, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
-    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
+    const quote = this.quoteOrRefuse(bookId, held.venue, {
       instrument: held.instrument,
       side,
       qty: Math.abs(held.qty),
       price: trigger,
       crossesSpread,
     });
+    if (quote === undefined) return;
     this.tally.exits += 1;
     this.tally.simulated += 1;
     this.deps.journal.recordOrder({
@@ -852,21 +895,20 @@ class Cycle {
     );
   }
 
-  applyCashGate(
-    decision: SleeveDecision,
-    approval: EntryApproval,
-    cashRemainingGbp: number,
-  ): EntryApproval {
+  applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
     if (approval.order === undefined || approval.size <= 0) return approval;
-    if (this.notionalGbp(decision, approval.size) <= cashRemainingGbp) return approval;
-    return { size: approval.size, order: undefined, refusal: 'insufficient_cash' };
+    const refusal = this.deps.risk.entryRoomRefusal(
+      this.notionalGbp(decision, approval.size),
+      room,
+    );
+    return refusal === undefined ? approval : { size: approval.size, order: undefined, refusal };
   }
 
   resolveEntryGate(
     book: BookSpec,
     proposed: SleeveDecision,
     equityGbp: number,
-    cashRemainingGbp: number,
+    room: EntryRoom,
   ): { decision: SleeveDecision; gated: EntryApproval } {
     const decision = vetoApplied(book, proposed);
     const approval = this.deps.risk.approveEntry({
@@ -881,7 +923,7 @@ class Cycle {
       approval.order !== undefined &&
       approval.size > 0 &&
       this.willSubmitEntry(book, decision.instrument);
-    const gated = willSubmit ? this.applyCashGate(decision, approval, cashRemainingGbp) : approval;
+    const gated = willSubmit ? this.applyRoomGate(decision, approval, room) : approval;
     return { decision, gated };
   }
 
@@ -909,17 +951,21 @@ class Cycle {
   }
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
-    const { equityGbp } = this.deps.books.valuation(book.id, (i, v) => this.markGbp(i, v));
-    let cashRemainingGbp = this.deps.books.cash(book.id) - this.restingNotionalGbp(book.id);
+    const { equityGbp, investedGbp } = this.deps.books.valuation(book.id, (i, v) =>
+      this.markGbp(i, v),
+    );
+    const restingGbp = this.restingNotionalGbp(book.id);
+    const room = this.deps.risk.entryRoom(
+      equityGbp,
+      this.deps.books.cash(book.id) - restingGbp,
+      investedGbp + restingGbp,
+    );
     for (const proposed of decisions) {
-      const { decision, gated } = this.resolveEntryGate(
-        book,
-        proposed,
-        equityGbp,
-        cashRemainingGbp,
-      );
+      const { decision, gated } = this.resolveEntryGate(book, proposed, equityGbp, room);
       await this.settleEntry(book, decision, gated, () => {
-        cashRemainingGbp -= this.notionalGbp(decision, gated.size);
+        const notionalGbp = this.notionalGbp(decision, gated.size);
+        room.cashGbp -= notionalGbp;
+        room.grossGbp -= notionalGbp;
       });
     }
   }
@@ -1046,10 +1092,20 @@ export function budgetChanges(
   return changes;
 }
 
+type FilledLimitEntry = Extract<LimitEntryOutcome, { kind: 'filled' }>;
+
 const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   no_adv: 'ADV_WINDOW_COVERAGE',
   no_allocation: 'SLEEVE_MINIMUM_CAPITAL',
   insufficient_cash: 'GROSS_CASH_GATE',
+  gross_cap: 'BOOK_GROSS_NOTIONAL_CAP',
+  cfd_cost_model_unset: 'CFD_COST_MODEL',
+  cfd_spread_model_unset: 'CFD_SPREAD_MODEL',
+  cfd_financing_model_unset: 'CFD_FINANCING_MODEL',
+  cfd_borrow_model_unset: 'CFD_BORROW_MODEL',
+  cfd_resting_stop_unverified: 'CFD_RESTING_STOP_VERIFIED',
+  short_requires_cfd: 'CFD_VENUE_ROUTE',
+  long_on_cfd: 'CFD_VENUE_ROUTE',
 };
 
 function recordRefusal(

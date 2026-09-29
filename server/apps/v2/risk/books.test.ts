@@ -345,6 +345,23 @@ describe('PaperBooks', () => {
     expect(books.isMarked('2026-09-26')).toBe(false);
   });
 
+  it('accrues no Saxo custody on a CFD position, long or short, but still counts its notional invested', () => {
+    for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
+      const db = seededStore();
+      const books = openBooks(db);
+      books.applyFill(
+        'debate/primary',
+        fill({ instrument: 'VOD', venue, side: 'sell', qty: 10, priceGbp: 36.5 }),
+      );
+      expect(books.valuation('debate/primary', () => 36.5)).toMatchObject({
+        investedGbp: 365,
+        investedSaxoGbp: 0,
+      });
+      const day = books.markDay('debate/primary', '2026-09-25', () => 36.5, 1);
+      expect(day.custodyAccrualGbp).toBe(0);
+    }
+  });
+
   it('steps size down as a losing fill sequence crosses the loss-budget thresholds and halts at the third', () => {
     const db = seededStore();
     const books = openBooks(db);

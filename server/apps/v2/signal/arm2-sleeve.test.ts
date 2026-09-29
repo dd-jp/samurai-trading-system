@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Sleeve, SleeveContext, SleeveOutput } from '../../../../contracts/index.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import type { BarsSource } from '../data/index.js';
-import { addDays } from '../data/index.js';
+import type { BarsSource, CfdInstrument } from '../data/index.js';
+import { addDays, CfdCatalogue, createVenueRouter } from '../data/index.js';
 import { createArm2Sleeve } from './arm2-sleeve.js';
 import { technicalRead } from './debate-sleeve.js';
 import { ARM2_ENTRY_THRESHOLDS, ARM2_SLEEVE_SPEC, requireSet } from './parameters.js';
@@ -90,7 +90,7 @@ describe('createArm2Sleeve', () => {
     expect(decision?.inputs_hash).toHaveLength(64);
   });
 
-  it('skips a bearish read because shorts are off, and does nothing on a genuinely flat read', async () => {
+  it('skips a bearish read while the CFD short route is closed, and does nothing on a genuinely flat read', async () => {
     const down = trending('DOWN', 260, -0.001);
     const flat = trending('FLAT', 260, 0);
     const sleeve = createArm2Sleeve({
@@ -109,7 +109,8 @@ describe('createArm2Sleeve', () => {
     expect(short).toMatchObject({
       direction: 'bearish',
       action: 'skip',
-      reason: 'shorts_disabled',
+      reason: 'short_unavailable:cfd_cost_model_unset',
+      venue: 'alpaca',
     });
     const neutral = output.decisions.find((decision) => decision.instrument === 'FLAT');
     expect(neutral).toMatchObject({
@@ -117,6 +118,48 @@ describe('createArm2Sleeve', () => {
       confidence: 0.5,
       action: 'none',
       reason: 'technical neutral',
+    });
+  });
+
+  it('routes a bearish read to the CFD venue once the router is open, and a bullish one stays home', async () => {
+    const down = trending('DOWN', 260, -0.001);
+    const up = trending('UP', 260, 0.001);
+    const tradingDate = nextDate(down);
+    const instrument = (symbol: string): CfdInstrument => ({
+      symbol,
+      saxoSymbol: symbol,
+      uic: 1,
+      assetType: 'CfdOnStock',
+      currency: 'USD',
+      priceToContractFactor: 1,
+      tradable: true,
+      shortTradeDisabled: false,
+      borrowCostPerDay: 0.0000137,
+    });
+    const router = createVenueRouter({
+      catalogue: new CfdCatalogue({
+        asOf: tradingDate,
+        instruments: [instrument('DOWN'), instrument('UP')],
+      }),
+      entryRefusal: () => undefined,
+      maxBorrowRatePerYear: 0.02,
+    });
+    const sleeve = createArm2Sleeve({
+      bars: source([down, up]),
+      constituents: () => ['DOWN', 'UP'],
+      venueFor: () => 'alpaca',
+      router,
+      market,
+      clock,
+    });
+    const output = await decideAll(sleeve, { tradingDate, macroDay: false, dryRun: true });
+    expect(output.decisions.find((d) => d.instrument === 'DOWN')).toMatchObject({
+      action: 'enter_short',
+      venue: 'saxo_cfd_usd',
+    });
+    expect(output.decisions.find((d) => d.instrument === 'UP')).toMatchObject({
+      action: 'enter_long',
+      venue: 'alpaca',
     });
   });
 

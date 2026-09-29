@@ -9,6 +9,7 @@ import type {
   SleeveDecision,
   SleeveSpec,
 } from '../../../contracts/index.js';
+import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -38,6 +39,22 @@ import { CYCLE_LEVEL_PARAMETERS, SleeveRegistry } from './signal/index.js';
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 const FX = 1.25;
 const HALF_SPREAD_BPS = 5;
+
+const shortAapl: SleeveDecision = {
+  sleeve_id: 'debate',
+  instrument: 'AAPL',
+  venue: 'saxo_cfd_usd',
+  direction: 'bearish',
+  confidence: 1,
+  action: 'enter_short',
+  reason: 'judge bearish',
+  price: 20,
+  atr: 0.4,
+  stop_price: 20.8,
+  inputs_hash: 'h',
+  debate_id: 'd',
+  payload: {},
+};
 
 const longAapl: SleeveDecision = {
   sleeve_id: 'debate',
@@ -261,10 +278,16 @@ function harness(
       capital,
       market,
       spec: (sleeveId) => (sleeveId === sleeve.id ? spec : (secondSleeve?.spec ?? spec)),
+      venueRefusal: () => undefined,
     }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },
-      simulatedBrokers: { alpaca: simulatedBroker, saxo: simulatedBroker },
+      simulatedBrokers: {
+        alpaca: simulatedBroker,
+        saxo: simulatedBroker,
+        saxo_cfd_gbp: simulatedBroker,
+        saxo_cfd_usd: simulatedBroker,
+      },
       pricing,
       dryRun,
     }),
@@ -557,7 +580,7 @@ describe('runCycle', () => {
   });
 
   it('checks short legs against the rescaled bar too', async () => {
-    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const short: SleeveDecision = shortAapl;
     for (const [override, price] of [
       [{ open: 10, close: 10, low: 9.5, high: 10.3 }, undefined],
       [{ open: 10, close: 10, low: 9.5, high: 10.45 }, 20.8],
@@ -574,11 +597,7 @@ describe('runCycle', () => {
   });
 
   it('a bar touching both legs exits at the stop, for longs and shorts', async () => {
-    const short: SleeveDecision = {
-      ...longAapl,
-      action: 'enter_short',
-      stop_price: 20.8,
-    };
+    const short: SleeveDecision = shortAapl;
     for (const [decision, override, price] of [
       [longAapl, { low: 19.0, high: 21.5 }, 19.2],
       [short, { low: 18.5, high: 21.0 }, 20.8],
@@ -594,7 +613,7 @@ describe('runCycle', () => {
   });
 
   it('fills a simulated stop-exit at the open when the bar gaps through the stop, for longs and shorts', async () => {
-    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const short: SleeveDecision = shortAapl;
     for (const [decision, override, price] of [
       [longAapl, { open: 18.5, low: 18.2, high: 18.9 }, 18.5],
       [short, { open: 21.5, low: 21.2, high: 21.9 }, 21.5],
@@ -610,7 +629,7 @@ describe('runCycle', () => {
   });
 
   it('never fills a simulated stop-exit outside the bar range when the open is defective, for longs and shorts', async () => {
-    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const short: SleeveDecision = shortAapl;
     for (const [decision, override, price] of [
       [longAapl, { open: 15, low: 19, high: 19.5 }, 19],
       [longAapl, { open: 25, low: 18, high: 18.5 }, 18.5],
@@ -628,11 +647,7 @@ describe('runCycle', () => {
   });
 
   it('short brackets: the stop fires on the high, the target on the low, and neither inside', async () => {
-    const short: SleeveDecision = {
-      ...longAapl,
-      action: 'enter_short',
-      stop_price: 20.8,
-    };
+    const short: SleeveDecision = shortAapl;
     for (const [override, price] of [
       [{ low: 19.5, high: 20.8 }, 20.8],
       [{ low: 18.8, high: 20.5 }, 18.8],
@@ -795,7 +810,7 @@ describe('runCycle', () => {
     const deps = harness([longAapl], false, alpaca);
     await runCycle(deps, '2026-09-25');
     alpaca.cancelError = new Error('venue closed');
-    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const short: SleeveDecision = shortAapl;
     deps.setDecisions([short]);
     await runCycle(deps, '2026-09-28');
     expect(orders(deps, 'debate/primary').map((order) => order.client_order_id)).toEqual([
@@ -1005,7 +1020,12 @@ describe('runCycle', () => {
       reason: 'vetoed: x',
     });
     expect(vetoApplied(primary, longAapl)).toBe(longAapl);
-    const skipped = { ...longAapl, action: 'skip', reason: 'shorts_disabled', veto: 'x' } as const;
+    const skipped = {
+      ...longAapl,
+      action: 'skip',
+      reason: 'short_unavailable:no_catalogue',
+      veto: 'x',
+    } as const;
     expect(vetoApplied(primary, skipped)).toBe(skipped);
   });
 
@@ -1155,12 +1175,7 @@ describe('runCycle', () => {
   });
 
   it('sends shorts as sells with the target below, and skips zero-size names', async () => {
-    const short: SleeveDecision = {
-      ...longAapl,
-      instrument: 'SHRT',
-      action: 'enter_short',
-      stop_price: 20.8,
-    };
+    const short: SleeveDecision = { ...shortAapl, instrument: 'SHRT' };
     const pricy: SleeveDecision = {
       ...longAapl,
       instrument: 'PRICY',
@@ -1400,7 +1415,7 @@ describe('runCycle', () => {
     deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 19.99, low: 19.9 }));
     await runCycle(deps, '2026-09-25');
     expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20 / FX, 9);
-    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const short: SleeveDecision = shortAapl;
     const shorts = harness([short], true, undefined, [2026], TEST_SPEC, pricing);
     await runCycle(shorts, '2026-09-24');
     shorts.setDecisions([]);
@@ -1454,7 +1469,7 @@ describe('runCycle', () => {
   });
 
   it('a stop the fill bar also reaches exits the simulated entry the same bar, for longs and shorts', async () => {
-    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const short: SleeveDecision = shortAapl;
     for (const [decision, override, price, side] of [
       [longAapl, { low: 19.0, high: 21.5 }, 19.2, 'sell'],
       [longAapl, { open: 19.1, low: 18.9, high: 19.5 }, 19.1, 'sell'],
@@ -1605,7 +1620,7 @@ describe('runCycle under a manual control', () => {
   });
 
   it('halt shorts: the exit buys back at the next open, across the spread', async () => {
-    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    const short: SleeveDecision = shortAapl;
     const deps = harness([short], true);
     await openBooks(deps);
     deps.setControl('halt');
@@ -2741,6 +2756,203 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
         'refused_dry_run',
       );
     }
+  });
+});
+
+describe('#1849: book gross notional cap', () => {
+  const names = Array.from({ length: 10 }, (_, index) => `SHRT${index}`);
+  const held = names.map((instrument) => ({ ...shortAapl, instrument }));
+
+  it('refuses any entry that would push gross past 1x equity even though short proceeds left cash to spare', async () => {
+    const deps = harness(held, true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    for (const instrument of names) {
+      expect(deps.books.position('debate/primary', instrument)?.qty).toBe(-6);
+    }
+    expect(deps.books.cash('debate/primary')).toBeGreaterThan(1_500);
+
+    deps.setDecisions([
+      { ...shortAapl, instrument: 'ONEMORE' },
+      { ...longAapl, instrument: 'LONGMORE' },
+    ]);
+    await runCycle(deps, '2026-09-29');
+    for (const instrument of ['ONEMORE', 'LONGMORE']) {
+      const order = deps.journal.orderFor(`v2-debate-primary-2026-09-29-${instrument}`);
+      expect(order?.outcome).toBe('rejected');
+      expect(order?.payload.detail).toBe('gross_cap');
+    }
+  });
+
+  it('journals a gross_cap refusal against the BOOK_GROSS_NOTIONAL_CAP parameter', async () => {
+    const deps = harness(held, true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([{ ...shortAapl, instrument: 'ONEMORE' }]);
+    await runCycle(deps, '2026-09-29');
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT book_id, instrument FROM v2_refusals WHERE parameter = 'BOOK_GROSS_NOTIONAL_CAP' ORDER BY book_id",
+        )
+        .all(),
+    ).toContainEqual({ book_id: 'debate/primary', instrument: 'ONEMORE' });
+  });
+});
+
+describe('#1849: CFD short venue path', () => {
+  it('fills a CFD short on the simulated broker in paper mode and never touches Alpaca', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([shortAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    expect(alpaca.brackets).toHaveLength(0);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL')).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      side: 'sell',
+    });
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      qty: -6,
+    });
+    expect(alpaca.brackets).toHaveLength(0);
+  });
+
+  it('holds an Alpaca long and a CFD short together, each in its own venue', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl, { ...shortAapl, instrument: 'SHRT' }], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    expect(alpaca.brackets.map((request) => request.instrument)).toEqual(['AAPL']);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      qty: -6,
+    });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL')).toMatchObject({
+      venue: 'alpaca',
+      side: 'buy',
+    });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SHRT')).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      side: 'sell',
+    });
+  });
+
+  it('exits a CFD short on the venue it was opened on', async () => {
+    const deps = harness([shortAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([{ ...shortAapl, action: 'exit' }]);
+    await runCycle(deps, '2026-09-29');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      side: 'buy',
+    });
+  });
+});
+
+describe('#1849: a CFD fill with no cost model', () => {
+  const cfdShort: SleeveDecision = { ...shortAapl, instrument: 'SHRT' };
+  const unsetOnCfd = (state: { unset: boolean }): FillPricing => ({
+    halfSpreadBps: () => HALF_SPREAD_BPS,
+    impactBps: () => 0,
+    fee: (venue) => {
+      if (state.unset && venue.startsWith('saxo_cfd')) throw new CfdCostModelUnsetError();
+      return 0;
+    },
+  });
+  const refusalRows = (deps: Harness) =>
+    (deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }).db
+      .prepare(
+        "SELECT book_id, instrument, scope FROM v2_refusals WHERE parameter = 'CFD_COST_MODEL' AND scope = 'fill'",
+      )
+      .all();
+
+  it('leaves the CFD entry unfilled and journals it while the Alpaca-venue book fills and marks', async () => {
+    const deps = harness(
+      [longAapl, cfdShort],
+      true,
+      undefined,
+      [2026],
+      TEST_SPEC,
+      unsetOnCfd({ unset: true }),
+    );
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const report = await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({ qty: 6 });
+    expect(deps.books.position('debate/primary', 'SHRT')).toBeUndefined();
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+    expect(refusalRows(deps)).toContainEqual({
+      book_id: 'debate/primary',
+      instrument: 'SHRT',
+      scope: 'fill',
+    });
+    expect(report.refusals.some((message) => message.includes('SHRT'))).toBe(true);
+  });
+
+  it('fills the CFD entry on a later cycle once the model exists', async () => {
+    const state = { unset: true };
+    const deps = harness([cfdShort], true, undefined, [2026], TEST_SPEC, unsetOnCfd(state));
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'SHRT')).toBeUndefined();
+    state.unset = false;
+    await runCycle(deps, '2026-09-29');
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({ qty: -6 });
+  });
+
+  it('leaves an open CFD short open and flagged when its stop fires, while the long still exits', async () => {
+    const state = { unset: false };
+    const deps = harness(
+      [longAapl, cfdShort],
+      true,
+      undefined,
+      [2026],
+      TEST_SPEC,
+      unsetOnCfd(state),
+    );
+    await openBooks(deps);
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({ qty: -6 });
+    state.unset = true;
+    deps.barsByDate.set('2026-09-28', bar('2026-09-25', { low: 19.0, high: 21 }));
+    const report = await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({ qty: -6 });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-SHRT-exit')).toBeUndefined();
+    expect(refusalRows(deps)).toContainEqual({
+      book_id: 'debate/primary',
+      instrument: 'SHRT',
+      scope: 'fill',
+    });
+    expect(report.refusals.some((message) => message.includes('SHRT'))).toBe(true);
+    state.unset = false;
+    deps.barsByDate.set('2026-09-29', bar('2026-09-28', { low: 19.0, high: 21 }));
+    await runCycle(deps, '2026-09-29');
+    expect(deps.books.position('debate/primary', 'SHRT')).toBeUndefined();
+  });
+
+  it('rethrows any other error from a fill quote', async () => {
+    const boom: FillPricing = {
+      halfSpreadBps: () => 0,
+      impactBps: () => 0,
+      fee: () => {
+        throw new Error('boom');
+      },
+    };
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, boom);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await expect(runCycle(deps, '2026-09-28')).rejects.toThrow('boom');
   });
 });
 

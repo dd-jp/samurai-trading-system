@@ -109,10 +109,10 @@ function failedSubmission(order: RiskApprovedOrder, error: unknown, dryRun: bool
     return { outcome: 'rejected', detail: describeThrownSafely(error), approvalId };
   }
   // A primary order is 'refused_dry_run' only when dryRun made it hit the stub broker;
-  // #1400: a Saxo primary hits it regardless (no live adapter), so outside a real dry
+  // #1400: a non-Alpaca primary hits it regardless (no live adapter), so outside a real dry
   // run that is 'simulated', not a refusal
   const outcome =
-    order.bookVariant === 'primary' && (dryRun || order.venue !== 'saxo')
+    order.bookVariant === 'primary' && (dryRun || order.venue === 'alpaca')
       ? 'refused_dry_run'
       : 'simulated';
   return { outcome, detail: error.message, approvalId };
@@ -122,9 +122,9 @@ export class V2OrderExecutor implements OrderExecutor {
   constructor(private readonly deps: ExecutorDeps) {}
 
   simulates(route: ExecutionRoute): boolean {
-    // #1400: v2 has no live Saxo adapter, so every Saxo route is simulated
-    // regardless of dry run or book variant
-    return this.deps.dryRun || route.bookVariant !== 'primary' || route.venue === 'saxo';
+    // #1400: v2 has no live Saxo adapter, so every non-Alpaca route is simulated
+    // regardless of dry run or book variant; a venue added later fails closed to simulated
+    return this.deps.dryRun || route.bookVariant !== 'primary' || route.venue !== 'alpaca';
   }
 
   quoteSimulatedFill(venue: Venue, request: SimulatedFillRequest): SimulatedFillQuote {

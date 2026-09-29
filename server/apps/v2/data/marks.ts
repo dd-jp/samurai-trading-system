@@ -2,6 +2,7 @@ import type { Venue } from '../../../../contracts/index.js';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { barsBefore } from './bars.js';
+import { homeBarVenue } from './venues.js';
 
 export interface HeldInstrument {
   readonly venue: Venue;
@@ -56,7 +57,7 @@ async function lastBar(
   tradingDate: string,
 ): Promise<LastBar> {
   try {
-    const series = await store.readSeries(held.venue, held.instrument);
+    const series = await store.readSeries(homeBarVenue(held.venue), held.instrument);
     return series === undefined ? undefined : barsBefore(series, tradingDate).at(-1);
   } catch (error) {
     return asError(error);

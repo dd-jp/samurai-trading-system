@@ -54,6 +54,16 @@ describe('ParquetMarkSource', () => {
     expect(found.get(heldKey(AAPL))).toEqual(bar('2026-10-02', 101));
   });
 
+  it('marks a CFD position from its home venue series: USD CFD from alpaca bars, GBP CFD from saxo bars', async () => {
+    const root = await storeWith('alpaca', 'AAPL', [bar('2026-10-01', 100)]);
+    await storeWith('saxo', 'ISF', [bar('2026-10-01', 7)]);
+    const usd = { venue: 'saxo_cfd_usd', instrument: 'AAPL' } as const;
+    const gbp = { venue: 'saxo_cfd_gbp', instrument: 'ISF' } as const;
+    const found = await new ParquetMarkSource(root).lastBarsBefore([usd, gbp], '2026-10-05');
+    expect(found.get(heldKey(usd))).toEqual(bar('2026-10-01', 100));
+    expect(found.get(heldKey(gbp))).toEqual(bar('2026-10-01', 7));
+  });
+
   it('reads the store afresh on every call, so a new bar moves the mark', async () => {
     const root = await storeWith('alpaca', 'AAPL', [bar('2026-10-01', 100)]);
     const source = new ParquetMarkSource(root);

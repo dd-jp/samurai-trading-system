@@ -1,10 +1,12 @@
-import type {
-  MarketData,
-  OrderSide,
-  SimulatedFillQuote,
-  SimulatedFillRequest,
-  V2Bar,
-  Venue,
+import {
+  type CfdCostModel,
+  CfdCostModelUnsetError,
+  type MarketData,
+  type OrderSide,
+  type SimulatedFillQuote,
+  type SimulatedFillRequest,
+  type V2Bar,
+  type Venue,
 } from '../../../../contracts/index.js';
 import {
   alpacaRegulatoryFees,
@@ -29,10 +31,20 @@ export function adversePrice(price: number, side: OrderSide, bps: number): numbe
   return side === 'buy' ? price + adjustment : price - adjustment;
 }
 
-export function venueFee(venue: Venue, side: OrderSide, qty: number, price: number): number {
+export function venueFee(
+  venue: Venue,
+  side: OrderSide,
+  qty: number,
+  price: number,
+  cfdCostModel?: CfdCostModel,
+): number {
   const notional = qty * price;
   if (venue === 'saxo') return notional * SAXO_COMMISSION_PER_SIDE;
-  return alpacaRegulatoryFees({ side, notional, shares: qty, halfSpreadBps: 0 });
+  if (venue === 'alpaca') {
+    return alpacaRegulatoryFees({ side, notional, shares: qty, halfSpreadBps: 0 });
+  }
+  if (cfdCostModel === undefined) throw new CfdCostModelUnsetError();
+  return cfdCostModel.fee(side, qty, price);
 }
 
 export function quoteSimulatedFill(
