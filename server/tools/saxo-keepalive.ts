@@ -95,7 +95,7 @@ function reportLost(deps: SaxoKeepAliveDeps, prior: SaxoKeepAliveState, reason: 
     stage: 'orchestrator',
     level: 'error',
     event: 'saxo_keepalive_session_lost',
-    message: `Saxo live session lost: ${reason}. Run \`npm run saxo:login\`. The LSE leg is refused until then.`,
+    message: `Saxo live session lost: ${reason}\nIf the chain is dead, run \`npm run saxo:login\`. The LSE leg is refused until the session is back.`,
   });
 }
 

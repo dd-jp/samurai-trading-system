@@ -24,6 +24,7 @@ import {
   nousOptionsFrom,
   parseCliArgs,
   runAfterPinCheck,
+  withoutRefusedLse,
 } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
@@ -166,6 +167,27 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
   };
 }
 
+describe('withoutRefusedLse', () => {
+  const base = () => ['UP', 'ISF', 'IUSA', 'SPY'];
+
+  it('passes the list through untouched when the Saxo session is healthy', () => {
+    expect(withoutRefusedLse(base, undefined)('2026-09-29')).toEqual(base());
+  });
+
+  it('drops every LSE line, and only those, when the session is refused', () => {
+    expect(withoutRefusedLse(base, 'session lost')('2026-09-29')).toEqual(['UP', 'SPY']);
+  });
+
+  it('asks the underlying list for the same trading date', () => {
+    const seen: string[] = [];
+    withoutRefusedLse((date) => {
+      seen.push(date);
+      return [];
+    }, 'x')('2026-09-29');
+    expect(seen).toEqual(['2026-09-29']);
+  });
+});
+
 describe('composeV2Root', () => {
   let directory: string | undefined;
   afterEach(() => {
@@ -265,6 +287,50 @@ describe('composeV2Root', () => {
       expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1]);
     } finally {
       next.close();
+    }
+  });
+
+  it('journals one SAXO_SESSION refusal against #1876 when the LSE leg is refused, and none otherwise', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const open = (lseLegRefusal: string | undefined, storePath: string) => {
+      seededStore(storePath).close();
+      return composeV2Root({
+        ...fixtures,
+        tradingDate: ENTRY_DATE,
+        dryRun: true,
+        storePath,
+        clock,
+        logger: { log: () => {} },
+        lseLegRefusal,
+      });
+    };
+    const refused = open(
+      'the Saxo live session was lost: run `npm run saxo:login`',
+      join(fixtures.directory, 'a.sqlite'),
+    );
+    try {
+      await refused.run();
+      expect(refused.journal.newRefusals(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({
+          scope: 'data',
+          parameter: 'SAXO_SESSION',
+          ticket: '#1876',
+          message: expect.stringContaining('npm run saxo:login'),
+        }),
+      );
+    } finally {
+      refused.close();
+    }
+    const healthy = open(undefined, join(fixtures.directory, 'b.sqlite'));
+    try {
+      await healthy.run();
+      expect(
+        healthy.journal.newRefusals(ENTRY_DATE).filter((r) => r.parameter === 'SAXO_SESSION'),
+      ).toEqual([]);
+    } finally {
+      healthy.close();
     }
   });
 

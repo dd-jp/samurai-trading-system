@@ -11,7 +11,7 @@ import {
 import type { FetchLike } from '../pipeline/execution/adapters/saxo-oauth.js';
 import type { SaxoTokenFileRecord } from '../pipeline/execution/adapters/saxo-token-file.js';
 import { readTokenFile, writeTokenFile } from '../pipeline/execution/adapters/saxo-token-file.js';
-import type { Logger, LogEntry } from '../shared/index.js';
+import type { LogEntry, Logger } from '../shared/index.js';
 import { recordingLogger } from '../shared/recording-logger.js';
 import {
   jsonlFileLogger,
@@ -166,9 +166,9 @@ describe('runSaxoKeepAlive', () => {
     expect(sent).toEqual([]);
     expect(readFileSync(tokenPath, 'utf8')).toBe(before);
     expect(existsSync(keepAliveStatePath(tokenPath))).toBe(false);
-    expect(journal.entries.find((entry) => entry.event === 'saxo_keepalive_run')?.payload).toMatchObject(
-      { outcome: 'failing', failed_attempts: 1 },
-    );
+    expect(
+      journal.entries.find((entry) => entry.event === 'saxo_keepalive_run')?.payload,
+    ).toMatchObject({ outcome: 'failing', failed_attempts: 1 });
   });
 
   it('warns once when a transient failure leaves the refresh window nearly closed', async () => {
@@ -185,7 +185,9 @@ describe('runSaxoKeepAlive', () => {
 
     expect(first.sent).toHaveLength(1);
     expect(first.sent[0]?.text).toContain('warning');
-    expect(first.sent[0]?.text).toContain(new Date(NOW + WARN_WHEN_REFRESH_REMAINING_MS).toISOString());
+    expect(first.sent[0]?.text).toContain(
+      new Date(NOW + WARN_WHEN_REFRESH_REMAINING_MS).toISOString(),
+    );
     expect(second.sent).toEqual([]);
   });
 
@@ -262,7 +264,13 @@ describe('runSaxoKeepAlive', () => {
       second.journal.entries,
       existsSync(keepAliveStatePath(tokenPath)) ? readKeepAliveState(tokenPath) : {},
     ]);
-    for (const secret of [SAVED_REFRESH, SAVED_ACCESS, ROTATED_REFRESH, ROTATED_ACCESS, 'secret-fixture']) {
+    for (const secret of [
+      SAVED_REFRESH,
+      SAVED_ACCESS,
+      ROTATED_REFRESH,
+      ROTATED_ACCESS,
+      'secret-fixture',
+    ]) {
       expect(everything).not.toContain(secret);
     }
   });

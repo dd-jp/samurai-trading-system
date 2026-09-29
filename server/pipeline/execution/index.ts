@@ -28,10 +28,12 @@ export {
   SAXO_CREDENTIAL_ENV_VARS,
   SaxoHttpBrokerClient,
 } from './adapters/saxo-http-client.js';
+export { readKeepAliveState } from './adapters/saxo-keepalive-state.js';
 export {
   resolveSaxoOAuthConfig,
   SAXO_APP_CREDENTIAL_ENV_VARS,
 } from './adapters/saxo-oauth.js';
+export type { SaxoTokenFileRecord } from './adapters/saxo-token-file.js';
 export {
   readTokenFile,
   savedSessionExists,

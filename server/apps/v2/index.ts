@@ -31,6 +31,7 @@ import {
   parseBoeGbpUsdCsv,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
+import { saxoSessionRefusal } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
 import type { Journal } from './journal/index.js';
 import {
@@ -87,6 +88,7 @@ export interface V2RootOptions {
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly newsSource?: NewsSource | undefined;
+  readonly lseLegRefusal?: string | undefined;
 }
 
 export interface V2Root {
@@ -233,6 +235,29 @@ function barsSourceFor(options: V2RootOptions): {
   };
 }
 
+export function withoutRefusedLse(
+  constituents: (tradingDate: string) => readonly string[],
+  refusal: string | undefined,
+): (tradingDate: string) => readonly string[] {
+  if (refusal === undefined) return constituents;
+  return (tradingDate) => constituents(tradingDate).filter((symbol) => !isLseInstrument(symbol));
+}
+
+function journalLseLegRefusal(
+  journal: Pick<Journal, 'recordRefusal'>,
+  tradingDate: string,
+  refusal: string | undefined,
+): void {
+  if (refusal === undefined) return;
+  journal.recordRefusal({
+    trading_date: tradingDate,
+    scope: 'data',
+    parameter: 'SAXO_SESSION',
+    ticket: '#1876',
+    message: `LSE leg refused: ${refusal}`,
+  });
+}
+
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -250,7 +275,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     logger,
   });
   const { bars, prime } = barsSourceFor(options);
-  const constituents = options.constituents ?? constituentsFromCsv(options);
+  const constituents = withoutRefusedLse(
+    options.constituents ?? constituentsFromCsv(options),
+    options.lseLegRefusal,
+  );
   const market = new BarsMarketData(
     bars,
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
@@ -287,6 +315,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     scriptedTransports: scripted,
     run: async () => {
       await prime();
+      journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
       return runCycle(cycle, options.tradingDate);
     },
     close: () => db.close(),
@@ -395,6 +424,7 @@ async function runOnce(
     samuraiMode: env.SAMURAI_MODE,
     clock,
     logger,
+    lseLegRefusal: saxoSessionRefusal(clock.now()),
   });
   try {
     const report = await runAfterPinCheck(root, () =>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.samurai.saxo-keepalive</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ddjp/.nvm/versions/node/v26.5.0/bin/node</string>
+        <string>--env-file-if-exists=/Users/ddjp/Documents/projects/samurai-trading-system/.env.local</string>
+        <string>--import</string>
+        <string>tsx</string>
+        <string>/Users/ddjp/Documents/projects/samurai-trading-system/server/tools/saxo-keepalive.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/samurai-saxo-keepalive.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/samurai-saxo-keepalive.log</string>
+</dict>
+</plist>
