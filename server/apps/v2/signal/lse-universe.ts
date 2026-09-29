@@ -20,8 +20,9 @@ export function lseInstrumentsAbove(
   bars: BarsSource,
   tradingDate: string,
   floorGbp: number,
+  appropriatenessTestTaken: boolean = SAXO_APPROPRIATENESS_TEST_TAKEN,
 ): readonly string[] {
-  const eligible = LSE_LINES.filter((line) => SAXO_APPROPRIATENESS_TEST_TAKEN || !line.isComplex);
+  const eligible = LSE_LINES.filter((line) => appropriatenessTestTaken || !line.isComplex);
   const sessions = sessionsBefore(bars, tradingDate, LSE_CALENDAR_REFERENCE);
   const instruments: string[] = [];
   for (const line of eligible) {

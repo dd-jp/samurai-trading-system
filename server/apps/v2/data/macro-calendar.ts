@@ -8,15 +8,16 @@ export interface MacroSourceCalendar {
 }
 
 // Verified 2026-09-25 against federalreserve.gov (FOMC, decision = second meeting day),
-// bankofengland.co.uk (MPC dates), bls.gov (2026 CPI and Employment Situation schedules) and the
-// ons.gov.uk release calendar (UK CPI, read from 2026-10-21 on; the Jul–Sep 2026 releases were
-// not retrievable on 2026-09-25, so replay of those months under-gates); coverageThrough is where
-// each published schedule ends
+// bankofengland.co.uk (MPC), bls.gov (2026 CPI, Employment Situation) and ons.gov.uk (UK CPI, read
+// from 2026-10-21 on; Jul–Sep 2026 releases were not retrievable, so replay there under-gates)
+// 2027 FOMC verified 2026-09-29 (tentative until confirmed at the preceding meeting). bls.gov
+// published no 2027 schedule on 2026-09-29, so BLS coverageThrough stays 2026-12-31; never
+// extrapolate BLS dates. coverageThrough is where each published schedule ends
 export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   {
     source: 'fomc',
     coverageFrom: '2026-01-01',
-    coverageThrough: '2026-12-31',
+    coverageThrough: '2027-12-31',
     dates: [
       '2026-01-28',
       '2026-03-18',
@@ -26,6 +27,14 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
       '2026-09-16',
       '2026-10-28',
       '2026-12-09',
+      '2027-01-27',
+      '2027-03-17',
+      '2027-04-28',
+      '2027-06-09',
+      '2027-07-28',
+      '2027-09-15',
+      '2027-10-27',
+      '2027-12-08',
     ],
   },
   {

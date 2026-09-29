@@ -1,3 +1,5 @@
+import type { InstrumentDetails } from './saxo-api.js';
+
 export type QuoteUnit = 'GBX' | 'GBP' | 'USD';
 
 export interface SaxoLine {
@@ -88,4 +90,13 @@ export function gbpPerQuotedUnit(unit: QuoteUnit): number {
   if (unit === 'GBX') return 0.01;
   if (unit === 'GBP') return 1;
   throw new Error(`gbpPerQuotedUnit: ${unit} needs an FX rate, not a unit factor`);
+}
+
+export function assertUnitMatchesSaxo(line: SaxoLine, details: InstrumentDetails): void {
+  const expected = line.unit === 'USD' ? 1 : gbpPerQuotedUnit(line.unit);
+  if (details.priceToContractFactor !== expected) {
+    throw new Error(
+      `${line.tidm}: LSE list says ${line.unit} (factor ${expected}) but Saxo PriceToContractFactor is ${details.priceToContractFactor}`,
+    );
+  }
 }

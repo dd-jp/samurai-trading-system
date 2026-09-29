@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -110,6 +118,7 @@ describe('SaxoTokenRefresher', () => {
       writeRecord?: (path: string, record: SaxoTokenFileRecord) => void;
       backoff?: { baseMs: number; maxMs: number };
       sessionLostAlerts?: SaxoSessionLostAlertChannel;
+      sleep?: (ms: number) => Promise<void>;
     } = {},
   ) {
     const clock = movableClock();
@@ -132,6 +141,7 @@ describe('SaxoTokenRefresher', () => {
         }),
       ...(overrides.writeRecord === undefined ? {} : { writeRecord: overrides.writeRecord }),
       ...(overrides.backoff === undefined ? {} : { backoff: overrides.backoff }),
+      ...(overrides.sleep === undefined ? {} : { sleep: overrides.sleep }),
       ...(overrides.sessionLostAlerts === undefined
         ? {}
         : { sessionLostAlerts: overrides.sessionLostAlerts }),
@@ -461,6 +471,307 @@ describe('SaxoTokenRefresher', () => {
     await stopped;
 
     expect(readTokenFile(path)?.refreshToken).toBe(ROTATED_REFRESH);
+  });
+
+  describe('renewNow (the keep-alive one-shot)', () => {
+    it('rotates even though the access token is still valid, and reports the new session', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, calls } = build();
+
+      const state = await refresher.renewNow();
+
+      expect(calls).toEqual([`grant_type=refresh_token&refresh_token=${SAVED_REFRESH}`]);
+      expect(state).toMatchObject({ status: 'active', failedAttempts: 0 });
+      expect(readTokenFile(path)?.refreshToken).toBe(ROTATED_REFRESH);
+      await refresher.stop();
+    });
+
+    it('logs the rotation with both new expiries and no token value', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, entries } = build();
+
+      await refresher.renewNow();
+
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          trace_id: 'saxo-token',
+          stage: 'orchestrator',
+          level: 'info',
+          event: 'saxo_token_refreshed',
+          message: 'Saxo sim session refreshed',
+          payload: {
+            environment: 'sim',
+            access_token_expires_at: new Date(START + 1_200_000).toISOString(),
+            refresh_token_expires_at: new Date(START + 3_600_000).toISOString(),
+          },
+        }),
+      );
+      await refresher.stop();
+    });
+
+    it('reports the session lost, with no network call, when nothing was ever logged in', async () => {
+      const { refresher, calls } = build();
+
+      expect(await refresher.renewNow()).toMatchObject({ status: 'lost' });
+      expect(calls).toEqual([]);
+    });
+
+    it('reports a transient failure as still active with the failed attempt counted', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, entries } = build({
+        fetchImpl: async () => new Response('x', { status: 503 }),
+      });
+
+      expect(await refresher.renewNow()).toMatchObject({ status: 'active', failedAttempts: 1 });
+      expect(readTokenFile(path)?.refreshToken).toBe(SAVED_REFRESH);
+      expect(entries.map((entry) => entry.event)).toContain('saxo_token_refresh_failed');
+      await refresher.stop();
+    });
+  });
+
+  describe('two processes sharing one token file', () => {
+    const peerRecord = (overrides: Partial<SaxoTokenFileRecord> = {}) =>
+      savedRecord({
+        accessToken: 'access-token-peer-fixture',
+        refreshToken: 'refresh-token-peer-fixture',
+        obtainedAt: new Date(START + 1_000).toISOString(),
+        accessTokenExpiresAt: new Date(START + 1_201_000).toISOString(),
+        refreshTokenExpiresAt: new Date(START + 3_601_000).toISOString(),
+        ...overrides,
+      });
+
+    it('adopts a peer rotation instead of spending the refresh token the peer already used', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, calls } = build();
+      refresher.start();
+      writeTokenFile(path, peerRecord());
+
+      const state = await refresher.renewNow();
+
+      expect(calls).toEqual([]);
+      expect(state).toMatchObject({ status: 'active' });
+      expect(await refresher.getAccessToken()).toBe('access-token-peer-fixture');
+      await refresher.stop();
+    });
+
+    it('keeps the peer rotation when the gateway rejects the stale refresh token it raced with', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, entries } = build({
+        fetchImpl: async () => {
+          writeTokenFile(path, peerRecord());
+          return new Response('{"error":"invalid_grant"}', { status: 400 });
+        },
+      });
+
+      const state = await refresher.renewNow();
+
+      expect(state).toMatchObject({ status: 'active' });
+      expect(entries.map((entry) => entry.event)).not.toContain('saxo_session_lost');
+      expect(await refresher.getAccessToken()).toBe('access-token-peer-fixture');
+      await refresher.stop();
+    });
+
+    it('still loses the session when the gateway rejects a token no peer replaced', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher } = build({
+        fetchImpl: async () => new Response('{"error":"invalid_grant"}', { status: 400 }),
+      });
+
+      expect(await refresher.renewNow()).toMatchObject({ status: 'lost' });
+    });
+
+    it('does not adopt a peer file for the other gateway environment', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, calls } = build();
+      refresher.start();
+      writeTokenFile(path, peerRecord({ environment: 'live' }));
+
+      await refresher.renewNow();
+
+      expect(calls).toHaveLength(1);
+      await refresher.stop();
+    });
+
+    it('waits out a peer holding the refresh lock, then rotates', async () => {
+      writeTokenFile(path, savedRecord());
+      let sleeps = 0;
+      const { refresher, calls } = build({
+        sleep: async () => {
+          sleeps += 1;
+          if (sleeps === 2) unlinkSync(`${path}.lock`);
+        },
+      });
+      writeFileSync(`${path}.lock`, 'peer');
+
+      const state = await refresher.renewNow();
+
+      expect(sleeps).toBe(2);
+      expect(calls).toHaveLength(1);
+      expect(state).toMatchObject({ status: 'active', failedAttempts: 0 });
+      await refresher.stop();
+    });
+
+    it('waits on the real timer, with no injected sleep, until the peer frees the lock', async () => {
+      vi.useFakeTimers();
+      try {
+        writeTokenFile(path, savedRecord());
+        const { refresher, calls } = build();
+        writeFileSync(`${path}.lock`, 'peer');
+
+        const renewal = refresher.renewNow();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(calls).toEqual([]);
+        unlinkSync(`${path}.lock`);
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(await renewal).toMatchObject({ status: 'active', failedAttempts: 0 });
+        expect(calls).toHaveLength(1);
+        await refresher.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats a lock that never frees as a transient failure and spends no refresh token', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, calls, entries } = build({ sleep: async () => {} });
+      writeFileSync(`${path}.lock`, 'peer');
+
+      const state = await refresher.renewNow();
+
+      expect(calls).toEqual([]);
+      expect(state).toMatchObject({ status: 'active', failedAttempts: 1 });
+      expect(entries.map((entry) => entry.event)).toContain('saxo_token_refresh_failed');
+      await refresher.stop();
+    });
+
+    it('adopts a peer token only while its access token is still live, at the exact instant included', async () => {
+      const atExpiry = build();
+      writeTokenFile(path, savedRecord());
+      atExpiry.refresher.start();
+      writeTokenFile(path, peerRecord({ accessTokenExpiresAt: new Date(START).toISOString() }));
+      await atExpiry.refresher.renewNow();
+      expect(atExpiry.calls).toHaveLength(1);
+      await atExpiry.refresher.stop();
+
+      const justAlive = build();
+      writeTokenFile(path, savedRecord());
+      justAlive.refresher.start();
+      writeTokenFile(path, peerRecord({ accessTokenExpiresAt: new Date(START + 1).toISOString() }));
+      await justAlive.refresher.renewNow();
+      expect(justAlive.calls).toEqual([]);
+      await justAlive.refresher.stop();
+    });
+
+    it('rearms the refresh timer from the adopted peer token', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, scheduled } = build();
+      refresher.start();
+      writeTokenFile(path, peerRecord());
+
+      await refresher.renewNow();
+
+      expect(scheduled[scheduled.length - 1]?.delayMs).toBe(1_201_000 - 60_000);
+      expect(scheduled[scheduled.length - 1]?.cleared).toBe(false);
+      await refresher.stop();
+    });
+
+    it('rearms the refresh timer after keeping a peer rotation the gateway raced with', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, scheduled } = build({
+        fetchImpl: async () => {
+          writeTokenFile(path, peerRecord());
+          return new Response('{"error":"invalid_grant"}', { status: 400 });
+        },
+      });
+
+      await refresher.renewNow();
+
+      expect(scheduled[scheduled.length - 1]?.delayMs).toBe(1_201_000 - 60_000);
+      await refresher.stop();
+    });
+
+    it('ignores a peer file it cannot read and rotates its own token', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher, calls } = build();
+      refresher.start();
+      writeFileSync(path, 'not json');
+
+      await refresher.renewNow();
+
+      expect(calls).toHaveLength(1);
+      await refresher.stop();
+    });
+
+    it('does not mistake an unreadable file for a peer rotation when the gateway rejects the token', async () => {
+      writeTokenFile(path, savedRecord());
+      const { refresher } = build({
+        fetchImpl: async () => {
+          writeFileSync(path, 'not json');
+          return new Response('{"error":"invalid_grant"}', { status: 400 });
+        },
+      });
+
+      expect(await refresher.renewNow()).toMatchObject({ status: 'lost' });
+    });
+
+    it('refuses a peer rotation whose refresh window has closed, at the exact instant included', async () => {
+      const closed = build({
+        fetchImpl: async () => {
+          writeTokenFile(
+            path,
+            peerRecord({ refreshTokenExpiresAt: new Date(START).toISOString() }),
+          );
+          return new Response('{"error":"invalid_grant"}', { status: 400 });
+        },
+      });
+      writeTokenFile(path, savedRecord());
+      expect(await closed.refresher.renewNow()).toMatchObject({ status: 'lost' });
+
+      const open = build({
+        fetchImpl: async () => {
+          writeTokenFile(
+            path,
+            peerRecord({ refreshTokenExpiresAt: new Date(START + 1).toISOString() }),
+          );
+          return new Response('{"error":"invalid_grant"}', { status: 400 });
+        },
+      });
+      writeTokenFile(path, savedRecord());
+      expect(await open.refresher.renewNow()).toMatchObject({ status: 'active' });
+      await open.refresher.stop();
+    });
+
+    it('gives up on the lock after ten polls and says why', async () => {
+      writeTokenFile(path, savedRecord());
+      let sleeps = 0;
+      const { refresher, entries } = build({
+        sleep: async () => {
+          sleeps += 1;
+        },
+      });
+      writeFileSync(`${path}.lock`, 'peer');
+
+      await refresher.renewNow();
+
+      expect(sleeps).toBe(10);
+      const failure = entries.find((entry) => entry.event === 'saxo_token_refresh_failed');
+      expect(JSON.stringify(failure?.payload)).toContain('the token refresh lock stayed held');
+      await refresher.stop();
+    });
+
+    it('releases the lock after a success and after a failure', async () => {
+      writeTokenFile(path, savedRecord());
+      const ok = build();
+      await ok.refresher.renewNow();
+      expect(existsSync(`${path}.lock`)).toBe(false);
+      await ok.refresher.stop();
+
+      const failing = build({ fetchImpl: async () => new Response('x', { status: 503 }) });
+      await failing.refresher.renewNow();
+      expect(existsSync(`${path}.lock`)).toBe(false);
+      await failing.refresher.stop();
+    });
   });
 
   it('refuses rather than handing out an expired bearer once it has been stopped', async () => {

@@ -62,14 +62,14 @@ export const ARM2_ENTRY_THRESHOLDS = set<Arm2EntryThresholds>('ARM2_ENTRY_THRESH
   longAbove: 0,
   shortBelow: 0,
 });
-export const LSE_LIQUIDITY_SCREEN = unset<number>('LSE_LIQUIDITY_SCREEN', '#1774');
+export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774', 1_000_000);
 
 export const SHORTS_ENABLED = false;
 
 // doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
 // separately committed lines), but no order in a complex line until David records
-// the Saxo appropriateness test as taken (his admin)
-export const SAXO_APPROPRIATENESS_TEST_TAKEN = false;
+// the Saxo appropriateness test as taken (his admin); recorded 2026-09-29 (#1774 (b))
+export const SAXO_APPROPRIATENESS_TEST_TAKEN = true;
 
 export const DEBATE_RISK_FRACTION = 0.005;
 export const DEBATE_STOP_ATR_MULTIPLE = 2;

@@ -1,11 +1,20 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { ParquetBarStore, SHAPE_REPAIR_MANIFEST_NOTE } from '../../../providers/bar-store/index.js';
+import type {
+  ChartSample,
+  InfoPriceQuote,
+  InstrumentDetails,
+  SaxoLine,
+} from '../../../providers/saxo-bars/index.js';
+import {
+  gbpPerQuotedUnit,
+  isSpliced,
+  LSE_MOMENTUM_LINES,
+} from '../../../providers/saxo-bars/index.js';
 import { roundBarPrices } from './bar-csv.js';
 import { tradingCalendar } from './fixture.js';
-import type { SaxoLine } from './lse-lines.js';
-import { gbpPerQuotedUnit, isSpliced, LSE_MOMENTUM_LINES } from './lse-lines.js';
 import type { SaxoSpreadRow } from './measure-saxo-spread.js';
 import {
   BURST_READS,
@@ -20,7 +29,6 @@ import {
   saxoBarsManifest,
   saxoPullSummary,
 } from './pull-saxo-bars.js';
-import type { ChartSample, InfoPriceQuote, InstrumentDetails } from './saxo-api.js';
 
 const USD_PER_GBP = 1.25;
 const SPLICED_START = 200;
@@ -54,7 +62,20 @@ function sample(date: string, close: number): ChartSample {
   };
 }
 
-function fakeApi(options: { readonly noisySibling?: boolean } = {}): SaxoBarsApi {
+const GLITCH_OPEN_ABOVE_HIGH = 10;
+const GLITCH_HIGH_100X = 20;
+const GLITCH_LOW_HALF = 30;
+
+function glitched(index: number, close: number, base: ChartSample): ChartSample {
+  if (index === GLITCH_OPEN_ABOVE_HIGH) return { ...base, Open: close * 1.01 };
+  if (index === GLITCH_HIGH_100X) return { ...base, High: close * 100 };
+  if (index === GLITCH_LOW_HALF) return { ...base, Low: close * 0.5 };
+  return base;
+}
+
+function fakeApi(
+  options: { readonly noisySibling?: boolean; readonly shapeGlitches?: boolean } = {},
+): SaxoBarsApi {
   const noise = (unit: SaxoLine['unit'], i: number): number => {
     if (options.noisySibling !== true || unit !== 'USD') return 1;
     return i % 2 === 0 ? 1.002 : 0.998;
@@ -77,11 +98,11 @@ function fakeApi(options: { readonly noisySibling?: boolean } = {}): SaxoBarsApi
       return {
         firstSampleTime: `${calendar[start]}T00:00:00Z`,
         delayedByMinutes: 15,
-        samples: calendar
-          .slice(start)
-          .map((date, i) =>
-            sample(date, quotedClose(unit, gbpClose(start + i)) * noise(unit, start + i)),
-          ),
+        samples: calendar.slice(start).map((date, i) => {
+          const close = quotedClose(unit, gbpClose(start + i)) * noise(unit, start + i);
+          const base = sample(date, close);
+          return options.shapeGlitches === true ? glitched(start + i, close, base) : base;
+        }),
       };
     },
   };
@@ -165,6 +186,39 @@ describe('pullMomentumLine', () => {
     expect(readdirSync(ctx.rawDir)).toEqual(['ISF.csv']);
   });
 
+  it('repairs Saxo bar shape after the unit step, records it in the entry and leaves the raw series as pulled', async () => {
+    const ctx = context(fakeApi({ shapeGlitches: true }));
+    const outcome = await pullMomentumLine(ctx, momentumLine('ISF'));
+    if (outcome.kind !== 'included') throw new Error('expected included');
+    const droppedDate = calendar[GLITCH_LOW_HALF] as string;
+    expect(outcome.entry.bars).toBe(calendar.length - 1);
+    expect(outcome.entry.hygiene.shape_repair).toEqual({
+      rescaled_fields: [{ date: calendar[GLITCH_HIGH_100X], field: 'high', factor: 0.01 }],
+      dropped_glitch_dates: [droppedDate],
+      ranges_widened: 1,
+    });
+    const stored = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(stored.map((bar) => bar.date)).not.toContain(droppedDate);
+    for (const bar of stored) {
+      expect(bar.low).toBeLessThanOrEqual(Math.min(bar.open, bar.close));
+      expect(bar.high).toBeGreaterThanOrEqual(Math.max(bar.open, bar.close));
+    }
+    const rescaled = stored.find((bar) => bar.date === calendar[GLITCH_HIGH_100X]);
+    expect(rescaled?.high).toBe(rescaled?.close);
+    const rawRows = readFileSync(join(ctx.rawDir, 'ISF.csv'), 'utf8').trim().split('\n');
+    expect(rawRows).toHaveLength(calendar.length + 1);
+    expect(rawRows.find((row) => row.startsWith(droppedDate))).toBeDefined();
+  });
+
+  it('records an empty shape repair for a clean line', async () => {
+    const outcome = await pullMomentumLine(context(fakeApi()), momentumLine('ISF'));
+    expect(outcome.entry.hygiene.shape_repair).toEqual({
+      rescaled_fields: [],
+      dropped_glitch_dates: [],
+      ranges_widened: 0,
+    });
+  });
+
   it('refuses a line with no measured half spread, naming the spread file, and writes no book bars', async () => {
     const ctx = context(fakeApi(), []);
     await expect(pullMomentumLine(ctx, momentumLine('ISF'))).rejects.toThrow(
@@ -219,6 +273,7 @@ describe('pullAllLines and the manifest', () => {
 
     const manifest = saxoBarsManifest(ctx, pulled, '2026-09-25T12:00:00Z');
     expect(manifest.fetched_at).toBe('2026-09-25T12:00:00Z');
+    expect(manifest.hygiene).toContain(SHAPE_REPAIR_MANIFEST_NOTE);
     expect(manifest.delayed_by_minutes).toBe(15);
     expect(manifest.window_start).toBe(calendar[0]);
     expect(manifest.window_binding_line).toBe('ISF');

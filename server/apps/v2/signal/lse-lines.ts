@@ -6,9 +6,7 @@ export interface LseLine {
 // The 22 lines doc 70 §10.4 committed at Saxo (24 proposed minus IHCU and CMFP,
 // both short of ten years of Saxo history). isComplex mirrors doc 70 §4l/§6.1's
 // Saxo IsComplex flag; within this 22-line pool only the ETCs (SGLN, SSLN) are
-// complex. Duplicated here rather than importing
-// server/tools/backtest/momentum/lse-lines.ts to keep v2 clear of the backtest
-// tool's Saxo OAuth client as a transitive dependency
+// complex
 export const LSE_LINES: readonly LseLine[] = [
   { tidm: 'ISF', isComplex: false },
   { tidm: 'VMID', isComplex: false },

@@ -9,8 +9,8 @@ import type { SleeveFactory } from '../backtest.js';
 
 // #1785 ruling (b): the 15 declared lines from the proposal (doc 70 §10.4's 22-line Saxo pool)
 // Read directly here, bypassing selectLseUniverse/lseInstrumentsAbove: the LSE liquidity screen
-// (#1774) is unset and the Saxo appropriateness gate would drop SGLN/SSLN, but ruling (e)/(l)
-// says the backtest itself is unaffected by either — CUKS/CUS1/CPJ1 are declared and kept even
+// (#1774) would drop 11 of the 22 lines and the Saxo appropriateness gate SGLN/SSLN, but
+// ruling (e)/(l) says the backtest itself is unaffected by either — CUKS/CUS1/CPJ1 are declared and kept even
 // though they size to 0 shares at this capital (near-never holdable either way)
 export const CROSS_ASSET_TREND_TIDMS: readonly string[] = [
   'ISF',

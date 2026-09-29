@@ -159,6 +159,8 @@ export interface Position {
   readonly openedDate: string;
   readonly marksHeld: number;
   readonly stray: boolean;
+  readonly splitFactor: number;
+  readonly splitAnchorDate: string | undefined;
 }
 
 export interface BookFill {
@@ -191,6 +193,7 @@ export interface BookLedger {
   positions(bookId: string): readonly Position[];
   position(bookId: string, instrument: string): Position | undefined;
   applyFill(bookId: string, fill: BookFill): Position | undefined;
+  applySplit(bookId: string, instrument: string, ratio: number, anchorDate: string): void;
   setExitPending(bookId: string, instrument: string, exitClientOrderId: string): void;
   clearExitPending(bookId: string, instrument: string): void;
   valuation(bookId: string, markGbp: MarkPriceGbp): Valuation;

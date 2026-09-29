@@ -167,6 +167,36 @@ describe('ParquetBarStore', () => {
       /volume/,
     ],
     ['negative volume', 'alpaca', [{ symbol: 'SPY', bars: [bar('2020-01-02', 1, -1)] }], /volume/],
+    [
+      'open above high',
+      'alpaca',
+      [{ symbol: 'SPY', bars: [{ ...bar('2020-01-02', 1), open: 1.02 }] }],
+      /shape.*2020-01-02/,
+    ],
+    [
+      'close above high',
+      'saxo',
+      [{ symbol: 'SPY', bars: [{ ...bar('2020-01-02', 1), close: 1.02 }] }],
+      /shape/,
+    ],
+    [
+      'open below low',
+      'saxo',
+      [{ symbol: 'SPY', bars: [{ ...bar('2020-01-02', 1), open: 0.97 }] }],
+      /shape/,
+    ],
+    [
+      'close below low',
+      'alpaca',
+      [{ symbol: 'SPY', bars: [{ ...bar('2020-01-02', 1), close: 0.97 }] }],
+      /shape/,
+    ],
+    [
+      'high below low',
+      'saxo',
+      [{ symbol: 'SPY', bars: [{ ...bar('2020-01-02', 1), high: 0.9, low: 1.1 }] }],
+      /shape/,
+    ],
   ] as const)('refuses %s and leaves the store untouched', async (_name, venue, series, error) => {
     const { store, root } = await openStore();
     await store.write('alpaca', [BRK]);
@@ -174,6 +204,23 @@ describe('ParquetBarStore', () => {
     await expect(store.write(venue, series as readonly BarSeries[])).rejects.toThrow(error);
     expect(filesUnder(root)).toEqual(before);
     expect((await store.readVenue('alpaca')).get('BRK.B')).toEqual(BRK);
+  });
+
+  it('accepts bars whose open, high, low and close touch', async () => {
+    const { store } = await openStore();
+    const flat: DailyBar = {
+      date: '2020-01-02',
+      open: 5,
+      high: 5,
+      low: 5,
+      close: 5,
+      volume: 0,
+      rawClose: 5,
+    };
+    const touching: DailyBar = { ...flat, date: '2020-01-03', open: 5, high: 5, low: 4, close: 4 };
+    const series = { symbol: 'FLAT', bars: [flat, touching] };
+    await store.write('saxo', [series]);
+    expect(await store.readSeries('saxo', 'FLAT')).toEqual(series);
   });
 
   it('refuses invalid names on read', async () => {

@@ -38,7 +38,7 @@ describe('parameters', () => {
     ]);
     for (const parameter of DECLARED_PARAMETERS) {
       expect(parameter.ticket.length).toBeGreaterThan(0);
-      if (parameter === ARM2_ENTRY_THRESHOLDS) continue;
+      if (parameter === ARM2_ENTRY_THRESHOLDS || parameter === LSE_LIQUIDITY_SCREEN) continue;
       expect(parameter.value).toBe(UNSET);
       expect(isSet(parameter)).toBe(false);
       expect(() => requireSet(parameter)).toThrow(UnsetParameterError);
@@ -50,6 +50,11 @@ describe('parameters', () => {
     expect(requireSet(ARM2_ENTRY_THRESHOLDS)).toEqual({ longAbove: 0, shortBelow: 0 });
     expect(ARM2_ENTRY_THRESHOLDS.ticket).toBe('#1773');
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(ARM2_ENTRY_THRESHOLDS);
+  });
+
+  it("the LSE liquidity floor is David's $1M answer, measured in GBP (#1774)", () => {
+    expect(requireSet(LSE_LIQUIDITY_SCREEN)).toBe(1_000_000);
+    expect(CYCLE_LEVEL_PARAMETERS).not.toContain(LSE_LIQUIDITY_SCREEN);
   });
 
   it('carries the pre-declared Step 3 trial values from the spec', () => {
@@ -83,7 +88,7 @@ describe('parameters', () => {
     expect(SHORTS_ENABLED).toBe(false);
   });
 
-  it('the Saxo appropriateness test is not yet recorded as taken (doc 66 ruling (l))', () => {
-    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(false);
+  it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {
+    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(true);
   });
 });

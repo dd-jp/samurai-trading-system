@@ -1,11 +1,11 @@
-import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
-import { tokenFilePath } from '../../../pipeline/execution/adapters/saxo-token-file.js';
-import type { SaxoTokenSource } from '../../../pipeline/execution/adapters/saxo-token-source.js';
-import { SaxoTokenRefresher } from '../../../pipeline/execution/adapters/saxo-token-source.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
-import type { FetchResult, Sleeper } from '../../../providers/bar-store/index.js';
-import type { Logger } from '../../../shared/index.js';
-import { isFiniteNumber, maskCredentials } from '../../../shared/index.js';
+import { resolveSaxoOAuthConfig } from '../../pipeline/execution/adapters/saxo-oauth.js';
+import { tokenFilePath } from '../../pipeline/execution/adapters/saxo-token-file.js';
+import type { SaxoTokenSource } from '../../pipeline/execution/adapters/saxo-token-source.js';
+import { SaxoTokenRefresher } from '../../pipeline/execution/adapters/saxo-token-source.js';
+import type { DailyBar } from '../../pipeline/momentum/index.js';
+import type { Logger } from '../../shared/index.js';
+import { isFiniteNumber, maskCredentials } from '../../shared/index.js';
+import type { FetchResult, Sleeper } from '../bar-store/index.js';
 
 export const SAXO_CHART_PAGE = 1200;
 const CHART_CALLS_PER_MINUTE = 100;
@@ -149,12 +149,16 @@ const consoleLogger: Logger = {
   log: (entry) => console.log(maskCredentials(`${entry.event ?? entry.level}: ${entry.message}`)),
 };
 
-export function liveTokenSource(env: NodeJS.ProcessEnv, tokenPath?: string): SaxoTokenRefresher {
+export function liveTokenSource(
+  env: NodeJS.ProcessEnv,
+  tokenPath?: string,
+  logger: Logger = consoleLogger,
+): SaxoTokenRefresher {
   const refresher = new SaxoTokenRefresher({
     environment: 'live',
     config: resolveSaxoOAuthConfig('live', env),
     tokenPath: tokenPath ?? tokenFilePath('live'),
-    logger: consoleLogger,
+    logger,
   });
   const state = refresher.start();
   if (state.status !== 'active') {
@@ -163,6 +167,32 @@ export function liveTokenSource(env: NodeJS.ProcessEnv, tokenPath?: string): Sax
     );
   }
   return refresher;
+}
+
+export interface SaxoLiveSession {
+  readonly api: SaxoReadOnlyApi;
+  readonly stop: () => Promise<void>;
+}
+
+export function openSaxoLiveSession(
+  env: NodeJS.ProcessEnv,
+  tokenPath?: string,
+  logger?: Logger,
+): SaxoLiveSession {
+  const { gatewayBaseUrl } = resolveSaxoOAuthConfig('live', env);
+  const tokens = liveTokenSource(env, tokenPath, logger);
+  return { api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl), stop: () => tokens.stop() };
+}
+
+function requestUrl(gatewayBaseUrl: string, path: string, params?: Record<string, string>): string {
+  const query = params === undefined ? '' : `?${new URLSearchParams(params).toString()}`;
+  return `${gatewayBaseUrl.replace(/\/+$/, '')}${path}${query}`;
+}
+
+function retryDelayMs(status: number, attempt: number): number | undefined {
+  if (status === 429) return RATE_LIMIT_BACKOFF_MS;
+  if (status === 401 && attempt < MAX_ATTEMPTS) return 2_000;
+  return undefined;
 }
 
 export class SaxoReadOnlyApi {
@@ -233,22 +263,17 @@ export class SaxoReadOnlyApi {
   }
 
   private async get(path: string, params?: Record<string, string>): Promise<unknown> {
-    const query = params === undefined ? '' : `?${new URLSearchParams(params).toString()}`;
-    const url = `${this.gatewayBaseUrl.replace(/\/+$/, '')}${path}${query}`;
+    const url = requestUrl(this.gatewayBaseUrl, path, params);
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const result = await this.fetcher(url, await this.tokens.getAccessToken());
       if (result.status === 200) return result.body;
-      if (result.status === 429) {
-        await this.sleep(RATE_LIMIT_BACKOFF_MS);
-        continue;
+      const delayMs = retryDelayMs(result.status, attempt);
+      if (delayMs === undefined) {
+        throw new Error(
+          `Saxo ${result.status} for ${path}: ${JSON.stringify(result.body).slice(0, 300)}`,
+        );
       }
-      if (result.status === 401 && attempt < MAX_ATTEMPTS) {
-        await this.sleep(2_000);
-        continue;
-      }
-      throw new Error(
-        `Saxo ${result.status} for ${path}: ${JSON.stringify(result.body).slice(0, 300)}`,
-      );
+      await this.sleep(delayMs);
     }
     throw new Error(`Saxo: ${MAX_ATTEMPTS} attempts exhausted for ${path}`);
   }

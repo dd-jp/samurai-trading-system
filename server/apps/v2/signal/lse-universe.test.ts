@@ -43,16 +43,17 @@ function memorySource(all: readonly BarSeries[]): BarsSource {
 
 describe('lseInstrumentsAbove', () => {
   it('screens by 20-day average GBP notional and gates SGLN/SSLN behind the appropriateness test', () => {
-    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(false);
     const source = memorySource([
       series('ISF', 25, 100, 1_000_000),
       series('IGLT', 25, 1, 100),
       series('SGLN', 25, 100, 1_000_000),
     ]);
-    const instruments = lseInstrumentsAbove(source, '2026-09-26', 50_000_000);
-    expect(instruments).toContain('ISF');
-    expect(instruments).not.toContain('IGLT');
-    expect(instruments).not.toContain('SGLN');
+    const untaken = lseInstrumentsAbove(source, '2026-09-26', 50_000_000, false);
+    expect(untaken).toContain('ISF');
+    expect(untaken).not.toContain('IGLT');
+    expect(untaken).not.toContain('SGLN');
+    const taken = lseInstrumentsAbove(source, '2026-09-26', 50_000_000, true);
+    expect(taken).toContain('SGLN');
   });
 
   it('excludes a name with no covered bars, and admits the fixture at a zero floor', () => {
@@ -69,14 +70,15 @@ describe('lseInstrumentsAbove', () => {
 });
 
 describe('selectLseUniverse', () => {
-  it('refuses cleanly with no instruments while the liquidity screen is unset (doc 66: universe route, #1774)', () => {
-    const source = memorySource([series('ISF', 25, 100, 1_000_000)]);
+  it('screens at the resolved 1M GBP floor and admits the complex lines now the test is taken (#1774)', () => {
+    const source = memorySource([
+      series('ISF', 25, 100, 1_000_000),
+      series('IUKP', 25, 100, 5_000),
+      series('SGLN', 25, 100, 1_000_000),
+    ]);
     const selection = selectLseUniverse(source, '2026-09-26');
-    expect(selection.instruments).toEqual([]);
-    expect(selection.refusals).toHaveLength(1);
-    expect(selection.refusals[0]?.parameter).toBe('LSE_LIQUIDITY_SCREEN');
-    expect(selection.refusals[0]?.ticket).toBe('#1774');
-    expect(selection.refusals[0]?.message).toContain('needs David');
+    expect([...selection.instruments].sort()).toEqual(['ISF', 'SGLN']);
+    expect(selection.refusals).toEqual([]);
   });
 
   it('selects the lines above a set screen with no refusal, injected so it does not wait on #1871', () => {

@@ -4,24 +4,35 @@ import { join } from 'node:path';
 import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { TRADING_DAYS_PER_YEAR } from '../../../pipeline/momentum/index.js';
-import type { HygieneReport } from '../../../providers/bar-store/index.js';
+import type { HygieneReport, ShapeRepairReport } from '../../../providers/bar-store/index.js';
 import {
   applyBarHygiene,
   DEFAULT_BAR_STORE_ROOT,
   ParquetBarStore,
+  repairBarShape,
+  SHAPE_REPAIR_MANIFEST_NOTE,
 } from '../../../providers/bar-store/index.js';
-import { isMainModule } from '../../cli-entrypoint.js';
-import { barsToCsv, roundBarPrices } from './bar-csv.js';
-import type { FxRate } from './fx.js';
-import { parseBoeXudlussCsv } from './fx.js';
-import type { SaxoLine, SplicedLine } from './lse-lines.js';
+import type {
+  ChartPage,
+  InstrumentDetails,
+  SaxoLine,
+  SplicedLine,
+} from '../../../providers/saxo-bars/index.js';
 import {
+  assertUnitMatchesSaxo,
   gbpPerQuotedUnit,
   isSpliced,
   LSE_AUX_LINES,
   LSE_CALENDAR_REFERENCE,
   LSE_MOMENTUM_LINES,
-} from './lse-lines.js';
+  liveTokenSource,
+  SaxoReadOnlyApi,
+  samplesToBars,
+} from '../../../providers/saxo-bars/index.js';
+import { isMainModule } from '../../cli-entrypoint.js';
+import { barsToCsv, roundBarPrices } from './bar-csv.js';
+import type { FxRate } from './fx.js';
+import { parseBoeXudlussCsv } from './fx.js';
 import type { SaxoSpreadRow } from './measure-saxo-spread.js';
 import {
   BURST_READS,
@@ -29,8 +40,6 @@ import {
   DEFAULT_SAXO_SPREAD_PATH,
   parseSaxoSpreadCsv,
 } from './measure-saxo-spread.js';
-import type { ChartPage, InstrumentDetails } from './saxo-api.js';
-import { liveTokenSource, SaxoReadOnlyApi, samplesToBars } from './saxo-api.js';
 import type { OverlapStats } from './splice.js';
 import {
   convertUsdBarsToGbp,
@@ -39,6 +48,8 @@ import {
 } from './splice.js';
 
 export const DEFAULT_SAXO_BARS_DIR = 'data/bars/saxo';
+
+type SaxoHygieneReport = HygieneReport & { readonly shape_repair: ShapeRepairReport };
 const DEFAULT_SAXO_AUX_DIR = 'data/bars/saxo-aux';
 const DEFAULT_FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 
@@ -50,7 +61,7 @@ interface SpliceRecord {
   readonly sibling_first: string;
   readonly sibling_last: string;
   readonly sibling_bars: number;
-  readonly sibling_hygiene: HygieneReport;
+  readonly sibling_hygiene: SaxoHygieneReport;
   readonly splice_date: string;
   readonly sibling_bars_used: number;
   readonly overlap: OverlapStats;
@@ -70,7 +81,7 @@ interface SaxoSymbolEntry {
   readonly density: number;
   readonly half_spread_bps: number;
   readonly half_spread_median_bps: number;
-  readonly hygiene: HygieneReport;
+  readonly hygiene: SaxoHygieneReport;
   readonly spliced_from?: SpliceRecord;
 }
 
@@ -80,7 +91,7 @@ interface SaxoExcludedEntry {
   readonly first: string;
   readonly bars: number;
   readonly reason: string;
-  readonly hygiene: HygieneReport;
+  readonly hygiene: SaxoHygieneReport;
   readonly spliced_from?: SpliceRecord;
 }
 
@@ -111,15 +122,6 @@ export function density(bars: readonly DailyBar[]): number {
     (Date.parse(`${last.date}T00:00:00Z`) - Date.parse(`${first.date}T00:00:00Z`)) /
     (365.25 * 86_400_000);
   return years <= 0 ? 0 : bars.length / (years * TRADING_DAYS_PER_YEAR);
-}
-
-export function assertUnitMatchesSaxo(line: SaxoLine, details: InstrumentDetails): void {
-  const expected = line.unit === 'USD' ? 1 : gbpPerQuotedUnit(line.unit);
-  if (details.priceToContractFactor !== expected) {
-    throw new Error(
-      `${line.tidm}: LSE list says ${line.unit} (factor ${expected}) but Saxo PriceToContractFactor is ${details.priceToContractFactor}`,
-    );
-  }
 }
 
 export function distributionAdjustmentCheck(
@@ -155,7 +157,7 @@ interface PulledLine {
   readonly details: InstrumentDetails;
   readonly page: ChartPage;
   readonly bars: DailyBar[];
-  readonly hygiene: HygieneReport;
+  readonly hygiene: SaxoHygieneReport;
 }
 
 export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHistory'>;
@@ -178,11 +180,14 @@ async function pullLine(ctx: PullContext, line: SaxoLine): Promise<PulledLine> {
   const factor = line.unit === 'USD' ? 1 : gbpPerQuotedUnit(line.unit);
   const raw = samplesToBars(page.samples, factor);
   writeFileSync(join(ctx.rawDir, `${line.tidm}.csv`), barsToCsv(raw));
-  const { bars, report } = applyBarHygiene(line.tidm, raw, { fetchDate: ctx.fetchDate });
+  const cleaned = applyBarHygiene(line.tidm, raw, { fetchDate: ctx.fetchDate });
+  const repaired = repairBarShape(cleaned.bars);
+  const bars = repaired.bars;
+  const report = { ...cleaned.report, shape_repair: repaired.report };
   const first = bars[0];
   const last = bars[bars.length - 1];
   console.log(
-    `${line.tidm} (${line.uic}, ${line.unit}): ${bars.length} bars ${first?.date ?? '-'}..${last?.date ?? '-'}, FirstSampleTime ${page.firstSampleTime ?? '?'}, density ${(density(bars) * 100).toFixed(0)}%, dropped ${report.dropped_dates.length}, unit breaks ${report.unit_breaks.map((b) => `${b.date}×${b.factor}`).join(' ') || 'none'}, suspect flips ${report.suspect_flips?.count ?? 0}`,
+    `${line.tidm} (${line.uic}, ${line.unit}): ${bars.length} bars ${first?.date ?? '-'}..${last?.date ?? '-'}, FirstSampleTime ${page.firstSampleTime ?? '?'}, density ${(density(bars) * 100).toFixed(0)}%, dropped ${report.dropped_dates.length}, unit breaks ${report.unit_breaks.map((b) => `${b.date}×${b.factor}`).join(' ') || 'none'}, suspect flips ${report.suspect_flips?.count ?? 0}, shape: rescaled ${report.shape_repair.rescaled_fields.length} widened ${report.shape_repair.ranges_widened} dropped ${report.shape_repair.dropped_glitch_dates.length}`,
   );
   return { line, details, page, bars, hygiene: report };
 }
@@ -392,8 +397,7 @@ export function saxoBarsManifest(
     fetched_at: fetchedAt,
     delayed_by_minutes: delayed,
     fetch_date_bars_dropped: ctx.fetchDate,
-    hygiene:
-      'weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw',
+    hygiene: `weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw; ${SHAPE_REPAIR_MANIFEST_NOTE}`,
     calendar_reference: LSE_CALENDAR_REFERENCE,
     window_start: windowStart,
     window_binding_line: binding,
