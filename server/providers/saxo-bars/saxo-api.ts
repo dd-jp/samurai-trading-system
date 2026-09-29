@@ -149,12 +149,16 @@ const consoleLogger: Logger = {
   log: (entry) => console.log(maskCredentials(`${entry.event ?? entry.level}: ${entry.message}`)),
 };
 
-export function liveTokenSource(env: NodeJS.ProcessEnv, tokenPath?: string): SaxoTokenRefresher {
+export function liveTokenSource(
+  env: NodeJS.ProcessEnv,
+  tokenPath?: string,
+  logger: Logger = consoleLogger,
+): SaxoTokenRefresher {
   const refresher = new SaxoTokenRefresher({
     environment: 'live',
     config: resolveSaxoOAuthConfig('live', env),
     tokenPath: tokenPath ?? tokenFilePath('live'),
-    logger: consoleLogger,
+    logger,
   });
   const state = refresher.start();
   if (state.status !== 'active') {
@@ -163,6 +167,21 @@ export function liveTokenSource(env: NodeJS.ProcessEnv, tokenPath?: string): Sax
     );
   }
   return refresher;
+}
+
+export interface SaxoLiveSession {
+  readonly api: SaxoReadOnlyApi;
+  readonly stop: () => Promise<void>;
+}
+
+export function openSaxoLiveSession(
+  env: NodeJS.ProcessEnv,
+  tokenPath?: string,
+  logger?: Logger,
+): SaxoLiveSession {
+  const { gatewayBaseUrl } = resolveSaxoOAuthConfig('live', env);
+  const tokens = liveTokenSource(env, tokenPath, logger);
+  return { api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl), stop: () => tokens.stop() };
 }
 
 export class SaxoReadOnlyApi {

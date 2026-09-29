@@ -14,10 +14,12 @@ export type {
   InstrumentDetails,
   SaxoAssetType,
   SaxoFetcher,
+  SaxoLiveSession,
 } from './saxo-api.js';
 export {
   liveTokenSource,
   mergeChartPages,
+  openSaxoLiveSession,
   parseChartPage,
   parseInfoPricesList,
   parseInstrumentDetails,
