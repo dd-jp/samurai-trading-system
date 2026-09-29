@@ -184,6 +184,17 @@ export function openSaxoLiveSession(
   return { api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl), stop: () => tokens.stop() };
 }
 
+function requestUrl(gatewayBaseUrl: string, path: string, params?: Record<string, string>): string {
+  const query = params === undefined ? '' : `?${new URLSearchParams(params).toString()}`;
+  return `${gatewayBaseUrl.replace(/\/+$/, '')}${path}${query}`;
+}
+
+function retryDelayMs(status: number, attempt: number): number | undefined {
+  if (status === 429) return RATE_LIMIT_BACKOFF_MS;
+  if (status === 401 && attempt < MAX_ATTEMPTS) return 2_000;
+  return undefined;
+}
+
 export class SaxoReadOnlyApi {
   private readonly chartCalls: number[] = [];
 
@@ -252,22 +263,17 @@ export class SaxoReadOnlyApi {
   }
 
   private async get(path: string, params?: Record<string, string>): Promise<unknown> {
-    const query = params === undefined ? '' : `?${new URLSearchParams(params).toString()}`;
-    const url = `${this.gatewayBaseUrl.replace(/\/+$/, '')}${path}${query}`;
+    const url = requestUrl(this.gatewayBaseUrl, path, params);
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const result = await this.fetcher(url, await this.tokens.getAccessToken());
       if (result.status === 200) return result.body;
-      if (result.status === 429) {
-        await this.sleep(RATE_LIMIT_BACKOFF_MS);
-        continue;
+      const delayMs = retryDelayMs(result.status, attempt);
+      if (delayMs === undefined) {
+        throw new Error(
+          `Saxo ${result.status} for ${path}: ${JSON.stringify(result.body).slice(0, 300)}`,
+        );
       }
-      if (result.status === 401 && attempt < MAX_ATTEMPTS) {
-        await this.sleep(2_000);
-        continue;
-      }
-      throw new Error(
-        `Saxo ${result.status} for ${path}: ${JSON.stringify(result.body).slice(0, 300)}`,
-      );
+      await this.sleep(delayMs);
     }
     throw new Error(`Saxo: ${MAX_ATTEMPTS} attempts exhausted for ${path}`);
   }
