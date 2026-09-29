@@ -1,7 +1,6 @@
 import type { StoreHandle } from '../../../shared/store/index.js';
 
-export const NEWS_STATUSES = ['ok', 'no_news', 'error', 'budget_stop', 'no_key'] as const;
-export type NewsStatus = (typeof NEWS_STATUSES)[number];
+export type NewsStatus = 'ok' | 'no_news' | 'error' | 'budget_stop' | 'no_key';
 
 export interface StoredHeadline {
   readonly title: string;
