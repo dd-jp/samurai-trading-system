@@ -227,6 +227,7 @@ describe('relativeStrengthIndex', () => {
   it('smooths by (period - 1) / period beyond the seed at a period other than 2', () => {
     const closesOf = (closes: readonly number[]) => closes.map((close, index) => bar(index, close));
     expect(relativeStrengthIndex(closesOf([10, 11, 12, 13, 12]), 3)).toBeCloseTo(200 / 3, 9);
+    expect(relativeStrengthIndex(closesOf([10, 9, 10, 11, 10]), 3)).toBeCloseTo(400 / 9, 9);
   });
 
   it('is 0 after a long flat run followed by a single down day', () => {
