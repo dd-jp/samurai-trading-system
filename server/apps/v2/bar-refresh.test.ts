@@ -346,9 +346,9 @@ describe('refreshAlpacaBars with an implausible high or low print', () => {
     '2016-01-14',
   ];
   const HISTORY_TRADING_DATE = '2016-01-15';
-  const withPrint = (close: number, date: string, low: number): SymbolFixture => ({
+  const withPrint = (close: number, dates: string | string[], low: number): SymbolFixture => ({
     adjusted: HISTORY.map((day) =>
-      day === date
+      [dates].flat().includes(day)
         ? { t: `${day}T05:00:00Z`, o: close, h: close, l: low, c: close, v: 1 }
         : rawBar(`${day}T05:00:00Z`, close),
     ),
@@ -430,8 +430,10 @@ describe('refreshAlpacaBars with an implausible high or low print', () => {
 
   it('aborts the run rather than quarantine a SPY bar inside the last five sessions', async () => {
     const store = await openStore();
-    await expect(run(store, { SPY: withPrint(689.99, '2016-01-08', 68.47) })).rejects.toThrow(
-      'v2 bar refresh: SPY bar 2016-01-08 is implausible and too recent to quarantine; the calendar reference cannot skip a session',
+    await expect(
+      run(store, { SPY: withPrint(689.99, ['2016-01-08', '2016-01-12'], 68.47) }),
+    ).rejects.toThrow(
+      'v2 bar refresh: SPY bar 2016-01-08, 2016-01-12 is implausible and too recent to quarantine; the calendar reference cannot skip a session',
     );
     expect(await store.readSeries('alpaca', 'SPY')).toBeUndefined();
   });
