@@ -3,7 +3,7 @@
   "fetched_at": "2026-09-25T11:43:47.181Z",
   "delayed_by_minutes": 15,
   "fetch_date_bars_dropped": "2026-09-25",
-  "hygiene": "weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw",
+  "hygiene": "weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw; then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low inside (90, 110) times or its inverse of the median of the other three prices is rescaled by 100 or 0.01, a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (open, close and raw_close are never changed); per-line counts in symbols.<TIDM>.hygiene.shape_repair",
   "calendar_reference": "ISF",
   "window_start": "2016-06-21",
   "window_binding_line": "IITU",
@@ -36,7 +36,12 @@
           "2026-09-25"
         ],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 172
+        }
       }
     },
     "VMID": {
@@ -79,7 +84,12 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 156
+        }
       }
     },
     "IUSA": {
@@ -91,14 +101,19 @@
       "is_complex": false,
       "first": "2002-03-19",
       "last": "2026-09-24",
-      "bars": 5879,
-      "density": 0.9515411049958789,
+      "bars": 5878,
+      "density": 0.9513792507511101,
       "half_spread_bps": 0.646,
       "half_spread_median_bps": 1.076,
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": ["2011-02-21"],
+          "ranges_widened": 145
+        }
       }
     },
     "CUS1": {
@@ -110,8 +125,8 @@
       "is_complex": false,
       "first": "2011-08-01",
       "last": "2026-09-24",
-      "bars": 3269,
-      "density": 0.8563354720163865,
+      "bars": 3265,
+      "density": 0.855287646415877,
       "half_spread_bps": 7.851,
       "half_spread_median_bps": 7.851,
       "hygiene": {
@@ -122,6 +137,11 @@
           "count": 65,
           "from": "2011-08-05",
           "to": "2013-05-03"
+        },
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": ["2012-02-06", "2012-02-14", "2012-07-23", "2017-03-02"],
+          "ranges_widened": 55
         }
       }
     },
@@ -141,7 +161,12 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 13
+        }
       }
     },
     "IJPN": {
@@ -173,7 +198,12 @@
           "2026-09-25"
         ],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 187
+        }
       }
     },
     "CPJ1": {
@@ -185,8 +215,8 @@
       "is_complex": false,
       "first": "2010-09-28",
       "last": "2026-09-24",
-      "bars": 3245,
-      "density": 0.8053627486953686,
+      "bars": 3244,
+      "density": 0.8051145629484671,
       "half_spread_bps": 3.539,
       "half_spread_median_bps": 4.084,
       "hygiene": {
@@ -197,6 +227,11 @@
           "count": 2,
           "from": "2014-11-27",
           "to": "2014-11-28"
+        },
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": ["2014-11-27"],
+          "ranges_widened": 14
         }
       }
     },
@@ -229,7 +264,12 @@
           "2026-09-25"
         ],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 221
+        }
       }
     },
     "IITU": {
@@ -260,14 +300,19 @@
       "is_complex": false,
       "first": "2015-12-03",
       "last": "2026-09-24",
-      "bars": 2470,
-      "density": 0.9067957856901626,
+      "bars": 2467,
+      "density": 0.9056944142905389,
       "half_spread_bps": 5.03,
       "half_spread_median_bps": 5.03,
       "hygiene": {
         "dropped_dates": ["2017-01-01", "2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": ["2020-05-22", "2022-10-28", "2022-11-04"],
+          "ranges_widened": 744
+        }
       }
     },
     "UIFS": {
@@ -305,7 +350,12 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 668
+        }
       }
     },
     "SPGP": {
@@ -317,8 +367,8 @@
       "is_complex": false,
       "first": "2011-09-22",
       "last": "2026-09-24",
-      "bars": 3756,
-      "density": 0.9932428910261422,
+      "bars": 3731,
+      "density": 0.9866318494192057,
       "half_spread_bps": 10.692,
       "half_spread_median_bps": 10.692,
       "hygiene": {
@@ -329,6 +379,37 @@
           "count": 65,
           "from": "2012-01-11",
           "to": "2012-11-06"
+        },
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [
+            "2012-01-31",
+            "2012-02-09",
+            "2012-02-10",
+            "2012-02-13",
+            "2012-02-16",
+            "2012-02-21",
+            "2012-02-23",
+            "2012-02-27",
+            "2012-03-05",
+            "2012-03-23",
+            "2012-03-28",
+            "2012-04-19",
+            "2012-04-20",
+            "2012-04-24",
+            "2012-05-03",
+            "2012-06-06",
+            "2012-06-08",
+            "2012-06-22",
+            "2012-07-30",
+            "2012-08-01",
+            "2012-08-20",
+            "2012-08-22",
+            "2012-08-23",
+            "2012-08-28",
+            "2020-03-17"
+          ],
+          "ranges_widened": 148
         }
       }
     },
@@ -341,14 +422,25 @@
       "is_complex": false,
       "first": "2011-10-10",
       "last": "2026-09-24",
-      "bars": 3550,
-      "density": 0.9418610479154136,
+      "bars": 3549,
+      "density": 0.9415957349441698,
       "half_spread_bps": 9.577,
       "half_spread_median_bps": 9.577,
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [
+            {
+              "date": "2017-11-20",
+              "field": "low",
+              "factor": 100
+            }
+          ],
+          "dropped_glitch_dates": ["2020-03-09"],
+          "ranges_widened": 132
+        }
       }
     },
     "IUKP": {
@@ -367,7 +459,12 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 242
+        }
       }
     },
     "IGLT": {
@@ -391,7 +488,33 @@
             "factor": 0.01
           }
         ],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [
+            {
+              "date": "2011-08-23",
+              "field": "low",
+              "factor": 100
+            },
+            {
+              "date": "2011-09-20",
+              "field": "high",
+              "factor": 100
+            },
+            {
+              "date": "2011-09-28",
+              "field": "low",
+              "factor": 100
+            },
+            {
+              "date": "2016-10-27",
+              "field": "high",
+              "factor": 0.01
+            }
+          ],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 295
+        }
       }
     },
     "INXG": {
@@ -410,7 +533,18 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [
+            {
+              "date": "2016-11-23",
+              "field": "high",
+              "factor": 0.01
+            }
+          ],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 293
+        }
       }
     },
     "SLXX": {
@@ -422,14 +556,19 @@
       "is_complex": false,
       "first": "2004-03-30",
       "last": "2026-09-24",
-      "bars": 5679,
-      "density": 1.0022123027952201,
+      "bars": 5678,
+      "density": 1.0020358258973867,
       "half_spread_bps": 2.133,
       "half_spread_median_bps": 2.56,
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": ["2014-04-03"],
+          "ranges_widened": 639
+        }
       }
     },
     "VUTY": {
@@ -441,8 +580,8 @@
       "is_complex": false,
       "first": "2016-03-03",
       "last": "2026-09-24",
-      "bars": 2494,
-      "density": 0.9372090941639813,
+      "bars": 2493,
+      "density": 0.9368333086410607,
       "half_spread_bps": 2.898,
       "half_spread_median_bps": 2.898,
       "hygiene": {
@@ -453,6 +592,11 @@
           "count": 2,
           "from": "2016-03-11",
           "to": "2016-03-16"
+        },
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": ["2016-03-11"],
+          "ranges_widened": 0
         }
       }
     },
@@ -477,7 +621,12 @@
             "factor": 100
           }
         ],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 191
+        }
       }
     },
     "SSLN": {
@@ -496,7 +645,12 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 228
+        }
       }
     }
   },
