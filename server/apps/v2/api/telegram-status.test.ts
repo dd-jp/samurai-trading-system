@@ -76,7 +76,11 @@ function overview(patch: Partial<V2OverviewWire> = {}): V2OverviewWire {
       by_day: [],
     },
     heartbeat: {
-      last_cycle: { status: 'fed', trading_date: '2026-09-28', recorded_at: '2026-09-28T21:40:00.000Z' },
+      last_cycle: {
+        status: 'fed',
+        trading_date: '2026-09-28',
+        recorded_at: '2026-09-28T21:40:00.000Z',
+      },
       next_due: NOT_FED,
       last_ping: NOT_FED,
     },
