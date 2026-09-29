@@ -1,7 +1,7 @@
 import type { V2Bar } from '../../../contracts/index.js';
 
 // Large-cap splits start at 5:4 (1.25) and 6:5 (1.2). A special dividend above ~17% of price
-// restates the factor by as much and would read as a split; a split of 6:5 or smaller is missed
+// restates the factor by as much and would read as a split; a split smaller than 6:5 is missed
 export const SPLIT_STEP_THRESHOLD = 1.2;
 
 const SNAP_MAX_DENOMINATOR = 5;
