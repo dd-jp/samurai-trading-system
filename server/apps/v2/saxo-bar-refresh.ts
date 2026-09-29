@@ -3,6 +3,8 @@ import {
   applyBarHygiene,
   DEFAULT_BAR_STORE_ROOT,
   ParquetBarStore,
+  repairBarShape,
+  type ShapeRepairReport,
 } from '../../providers/bar-store/index.js';
 import {
   assertUnitMatchesSaxo,
@@ -107,6 +109,20 @@ function warnIfRescaled(
   );
 }
 
+function warnIfShapeRepaired(tidm: string, report: ShapeRepairReport, logger: Logger): void {
+  const dropped = report.dropped_glitch_dates.map((date) => `dropped ${date}`);
+  const rescaled = report.rescaled_fields.map(({ date, field }) => `rescaled ${date} ${field}`);
+  const widened = report.ranges_widened > 0 ? [`widened ${report.ranges_widened} range(s)`] : [];
+  const repairs = [...dropped, ...rescaled, ...widened];
+  if (repairs.length === 0) return;
+  logRefresh(
+    logger,
+    'warn',
+    'v2_saxo_bar_shape_repaired',
+    `${tidm}: repaired Saxo chart bar shape (${repairs.join(', ')})`,
+  );
+}
+
 async function refreshLine(
   line: SaxoLine,
   existing: BarSeries | undefined,
@@ -121,9 +137,12 @@ async function refreshLine(
     fetchDate: options.tradingDate,
   });
   if (hygiene.bars.length === 0) throw new Error(`${line.tidm}: Saxo returned no bars`);
-  const rounded = roundPrices(hygiene.bars);
+  const repaired = repairBarShape(hygiene.bars);
+  if (repaired.bars.length === 0) throw new Error(`${line.tidm}: no bars left after shape repair`);
+  const rounded = roundPrices(repaired.bars);
   if (existing !== undefined) assertNoShrink(line.tidm, existing, rounded);
   await options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]);
+  warnIfShapeRepaired(line.tidm, repaired.report, options.logger);
   warnIfRescaled(existing, rounded, options.logger);
   assertFresh(line.tidm, rounded, options.tradingDate);
   return {
