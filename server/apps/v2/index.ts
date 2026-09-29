@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import type { Sleeve } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -235,12 +236,18 @@ function barsSourceFor(options: V2RootOptions): {
   };
 }
 
-export function withoutRefusedLse(
-  constituents: (tradingDate: string) => readonly string[],
-  refusal: string | undefined,
-): (tradingDate: string) => readonly string[] {
-  if (refusal === undefined) return constituents;
-  return (tradingDate) => constituents(tradingDate).filter((symbol) => !isLseInstrument(symbol));
+export function withoutRefusedLse(sleeve: Sleeve, refusal: string | undefined): Sleeve {
+  if (refusal === undefined) return sleeve;
+  return {
+    ...sleeve,
+    universe(context) {
+      const universe = sleeve.universe(context);
+      return {
+        ...universe,
+        instruments: universe.instruments.filter((symbol) => !isLseInstrument(symbol)),
+      };
+    },
+  };
 }
 
 function journalLseLegRefusal(
@@ -275,10 +282,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     logger,
   });
   const { bars, prime } = barsSourceFor(options);
-  const constituents = withoutRefusedLse(
-    options.constituents ?? constituentsFromCsv(options),
-    options.lseLegRefusal,
-  );
+  const constituents = options.constituents ?? constituentsFromCsv(options);
   const market = new BarsMarketData(
     bars,
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
@@ -287,7 +291,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const sleeves = [
     createDebateSleeve({ panel, bars, constituents, venueFor, news, clock, logger }),
     createArm2Sleeve({ bars, constituents, venueFor, clock }),
-  ];
+  ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
   const cycle = composeCycle({

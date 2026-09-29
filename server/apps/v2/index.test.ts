@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Sleeve, SleeveContext, SleeveSpec } from '../../../contracts/index.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
@@ -168,23 +169,33 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
 }
 
 describe('withoutRefusedLse', () => {
-  const base = () => ['UP', 'ISF', 'IUSA', 'SPY'];
-
-  it('passes the list through untouched when the Saxo session is healthy', () => {
-    expect(withoutRefusedLse(base, undefined)('2026-09-29')).toEqual(base());
+  const context = { tradingDate: '2026-09-29' } as SleeveContext;
+  const refusals = [{ scope: 'universe', parameter: 'X', ticket: '#1', message: 'kept' }] as const;
+  const fake = (): Sleeve => ({
+    id: 'fake',
+    spec: {} as SleeveSpec,
+    universe: () => ({ instruments: ['UP', 'ISF', 'IUSA', 'SPY'], refusals }),
+    decide: async () => ({ decisions: [], refusals: [] }),
   });
 
-  it('drops every LSE line, and only those, when the session is refused', () => {
-    expect(withoutRefusedLse(base, 'session lost')('2026-09-29')).toEqual(['UP', 'SPY']);
+  it('returns the very same sleeve when the Saxo session is healthy', () => {
+    const sleeve = fake();
+    expect(withoutRefusedLse(sleeve, undefined)).toBe(sleeve);
   });
 
-  it('asks the underlying list for the same trading date', () => {
-    const seen: string[] = [];
-    withoutRefusedLse((date) => {
-      seen.push(date);
-      return [];
-    }, 'x')('2026-09-29');
-    expect(seen).toEqual(['2026-09-29']);
+  it('drops every LSE line from the universe, and only those, when the session is refused', () => {
+    const wrapped = withoutRefusedLse(fake(), 'session lost');
+    expect(wrapped.universe(context).instruments).toEqual(['UP', 'SPY']);
+    expect(wrapped.universe(context).refusals).toEqual(refusals);
+  });
+
+  it('keeps the sleeve identity and its decide behaviour', async () => {
+    const wrapped = withoutRefusedLse(fake(), 'session lost');
+    expect(wrapped.id).toBe('fake');
+    await expect(wrapped.decide(context, ['UP'])).resolves.toEqual({
+      decisions: [],
+      refusals: [],
+    });
   });
 });
 
