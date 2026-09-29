@@ -69,13 +69,13 @@ describe('lseInstrumentsAbove', () => {
 });
 
 describe('selectLseUniverse', () => {
-  it('refuses cleanly with no instruments while the liquidity screen is unset (doc 66: universe route, #1774)', () => {
-    const source = memorySource([series('ISF', 25, 100, 1_000_000)]);
+  it('screens at the resolved 1M GBP floor with no refusal (#1774)', () => {
+    const source = memorySource([
+      series('ISF', 25, 100, 1_000_000),
+      series('IUKP', 25, 100, 5_000),
+    ]);
     const selection = selectLseUniverse(source, '2026-09-26');
-    expect(selection.instruments).toEqual([]);
-    expect(selection.refusals).toHaveLength(1);
-    expect(selection.refusals[0]?.parameter).toBe('LSE_LIQUIDITY_SCREEN');
-    expect(selection.refusals[0]?.ticket).toBe('#1774');
-    expect(selection.refusals[0]?.message).toContain('needs David');
+    expect(selection.instruments).toEqual(['ISF']);
+    expect(selection.refusals).toEqual([]);
   });
 });

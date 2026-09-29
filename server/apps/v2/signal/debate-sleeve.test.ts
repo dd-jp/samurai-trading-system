@@ -172,10 +172,7 @@ describe('buildUniverse', () => {
     const series = trending('UP', 260, 0.001);
     const universe = buildUniverse(source([series]), () => ['UP', 'MISSING'], nextDate(series));
     expect(universe.instruments).toContain('UP');
-    expect(universe.refusals.map((refusal) => refusal.parameter)).toEqual([
-      'G18_SMALL_CAP_FLOORS',
-      'LSE_LIQUIDITY_SCREEN',
-    ]);
+    expect(universe.refusals.map((refusal) => refusal.parameter)).toEqual(['G18_SMALL_CAP_FLOORS']);
   });
 });
 
@@ -318,10 +315,7 @@ describe('createDebateSleeve', () => {
         expect(call.prompt).toContain('prior-day candle:');
       }
     }
-    expect(output.refusals.map((refusal) => refusal.parameter)).toEqual([
-      'G18_SMALL_CAP_FLOORS',
-      'LSE_LIQUIDITY_SCREEN',
-    ]);
+    expect(output.refusals.map((refusal) => refusal.parameter)).toEqual(['G18_SMALL_CAP_FLOORS']);
     expect(decision?.payload).toMatchObject({ headlines: 0, disagreement: '', converged: true });
   });
 

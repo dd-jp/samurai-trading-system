@@ -18,12 +18,13 @@ import {
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
+  LSE_LIQUIDITY_SCREEN,
   SHORTS_ENABLED,
   SqliteMonthlySpendCap,
 } from './signal/index.js';
 
 const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
-  (parameter) => parameter !== ARM2_ENTRY_THRESHOLDS,
+  (parameter) => parameter !== ARM2_ENTRY_THRESHOLDS && parameter !== LSE_LIQUIDITY_SCREEN,
 );
 
 export interface SmokeProbe {
@@ -117,6 +118,11 @@ function staticProbes(): SmokeProbe[] {
       'arm 2 entry thresholds are approved and resolved (#1773)',
       isSet(ARM2_ENTRY_THRESHOLDS),
       JSON.stringify(ARM2_ENTRY_THRESHOLDS.value),
+    ),
+    probe(
+      'LSE liquidity screen is resolved at 1M GBP (#1774)',
+      isSet(LSE_LIQUIDITY_SCREEN) && LSE_LIQUIDITY_SCREEN.value === 1_000_000,
+      String(LSE_LIQUIDITY_SCREEN.value),
     ),
     probe(
       'G18 shadows are declared but not instantiated',

@@ -202,7 +202,7 @@ describe('composeV2Root', () => {
         sleeves: ['debate', 'arm2'],
       });
       expect(exitCodeFor(report)).toBe(0);
-      expect(report.refusals.filter((refusal) => refusal.includes('needs David'))).toHaveLength(7);
+      expect(report.refusals.filter((refusal) => refusal.includes('needs David'))).toHaveLength(5);
       const decision = root.db
         .prepare('SELECT action, size_shares, stop_price FROM v2_decisions WHERE book_id = ?')
         .get('debate/primary') as { action: string; size_shares: number; stop_price: number };
