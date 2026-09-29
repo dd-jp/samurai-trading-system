@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import {
@@ -76,6 +76,23 @@ function samplesFor(saxoLine: SaxoLine, closes: Record<string, number>): ChartSa
       Volume: 1,
     };
   });
+}
+
+type Ohlc = readonly [open: number, high: number, low: number, close: number];
+
+function ohlcSamplesFor(saxoLine: SaxoLine, bars: Record<string, Ohlc>): ChartSample[] {
+  return Object.entries(bars).map(([date, [open, high, low, close]]) => ({
+    Time: `${date}T00:00:00.000000Z`,
+    Open: quoted(saxoLine, open),
+    High: quoted(saxoLine, high),
+    Low: quoted(saxoLine, low),
+    Close: quoted(saxoLine, close),
+    Volume: 1,
+  }));
+}
+
+function flatOhlc(dates: readonly string[], price: number): Record<string, Ohlc> {
+  return Object.fromEntries(dates.map((date) => [date, [price, price, price, price] as Ohlc]));
 }
 
 function fakeApi(fixtures: Record<string, Fixture>) {
@@ -294,6 +311,18 @@ describe('refreshSaxoBars', () => {
     expect(report.updated.map((u) => u.symbol)).toEqual(['VMID']);
   });
 
+  it('names the last bar, not an earlier one, when the refreshed series is stale', async () => {
+    const store = await openStore();
+    const { report } = await refresh(store, {
+      ISF: { samples: samplesFor(ISF, closes(['2026-09-09', '2026-09-10', '2026-09-11'], 8.5)) },
+      VMID: { samples: samplesFor(VMID, closes(DATES, 30)) },
+    });
+    const reason = report.failed[0]?.reason ?? '';
+    expect(reason).toContain('last bar 2026-09-11 ');
+    expect(reason).not.toContain('2026-09-09');
+    expect(reason).not.toContain('2026-09-10');
+  });
+
   it('reports a line still stale after the refresh as failed, without stopping the rest', async () => {
     const store = await openStore();
     const { report } = await refresh(store, {
@@ -349,6 +378,118 @@ describe('refreshSaxoBars', () => {
     expect((await store.readSeries('saxo', 'CUKS'))?.bars.map((b) => b.volume)).toEqual([
       0, 0, 0, 0,
     ]);
+  });
+});
+
+describe('refreshSaxoBars with Saxo chart bars whose shape is broken', () => {
+  const vmid = { samples: samplesFor(VMID, closes(DATES, 30)) };
+  const isfWith = (bars: Record<string, Ohlc>) => ({ ISF: { samples: ohlcSamplesFor(ISF, bars) } });
+
+  it('widens a bar whose open sits above its high instead of failing the write', async () => {
+    const store = await openStore();
+    const { report } = await refresh(store, {
+      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-22': [8.6, 8.55, 8.4, 8.5] }),
+      VMID: vmid,
+    });
+    expect(report.failed).toEqual([]);
+    const bar = (await store.readSeries('saxo', 'ISF'))?.bars.find((b) => b.date === '2026-09-22');
+    expect(bar).toMatchObject({ open: 8.6, high: 8.6, low: 8.4, close: 8.5 });
+  });
+
+  it('rescales a x100 field back into the bar', async () => {
+    const store = await openStore();
+    const { report } = await refresh(store, {
+      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-22': [8.5, 850, 8.4, 8.5] }),
+      VMID: vmid,
+    });
+    expect(report.failed).toEqual([]);
+    const bar = (await store.readSeries('saxo', 'ISF'))?.bars.find((b) => b.date === '2026-09-22');
+    expect(bar).toMatchObject({ open: 8.5, high: 8.5, low: 8.4, close: 8.5 });
+  });
+
+  it('drops a glitch bar and passes the shrink guard against the already repaired stored series', async () => {
+    const store = await openStore();
+    const kept = ['2026-09-21', '2026-09-22', '2026-09-24'];
+    await store.write('saxo', [storedSeries('ISF', kept, 8.5)]);
+    const { report } = await refresh(store, {
+      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-23': [8.5, 13, 8.4, 8.5] }),
+      VMID: vmid,
+    });
+    expect(report.failed).toEqual([]);
+    expect(report.updated.find((u) => u.symbol === 'ISF')?.bars).toBe(3);
+    expect((await store.readSeries('saxo', 'ISF'))?.bars.map((b) => b.date)).toEqual(kept);
+  });
+
+  it('repairs every defect together and reproduces the same series on a second refresh', async () => {
+    const store = await openStore();
+    const fixtures = {
+      ...isfWith({
+        '2026-09-21': [8.6, 8.55, 8.4, 8.5],
+        '2026-09-22': [8.5, 850, 8.4, 8.5],
+        '2026-09-23': [8.5, 13, 8.4, 8.5],
+        '2026-09-24': [8.5, 8.5, 8.5, 8.5],
+      }),
+      VMID: vmid,
+    };
+    await refresh(store, fixtures);
+    const first = await store.readSeries('saxo', 'ISF');
+    const { report } = await refresh(store, fixtures);
+    expect(report.failed).toEqual([]);
+    expect(await store.readSeries('saxo', 'ISF')).toEqual(first);
+    expect(first?.bars.map((b) => b.date)).toEqual(['2026-09-21', '2026-09-22', '2026-09-24']);
+  });
+
+  it('refuses a repair that drops a bar the stored series still holds', async () => {
+    const store = await openStore();
+    await store.write('saxo', [storedSeries('ISF', DATES, 8.5)]);
+    const { report } = await refresh(store, {
+      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-23': [8.5, 13, 8.4, 8.5] }),
+      VMID: vmid,
+    });
+    expect(report.failed).toEqual([
+      {
+        symbol: 'ISF',
+        reason:
+          'ISF: refresh would shrink history (had 4 bars from 2026-09-21, got 3 from 2026-09-21) — refusing to overwrite',
+      },
+    ]);
+    expect((await store.readSeries('saxo', 'ISF'))?.bars).toHaveLength(4);
+  });
+
+  it('fails a line whose every bar is a glitch rather than writing nothing', async () => {
+    const store = await openStore();
+    const glitches = Object.fromEntries(DATES.map((date) => [date, [8.5, 13, 8.4, 8.5] as Ohlc]));
+    const { report } = await refresh(store, { ...isfWith(glitches), VMID: vmid });
+    expect(report.failed).toEqual([
+      { symbol: 'ISF', reason: 'ISF: no bars left after shape repair' },
+    ]);
+    expect(await store.readSeries('saxo', 'ISF')).toBeUndefined();
+  });
+
+  it('warns which bars were dropped or rescaled', async () => {
+    const store = await openStore();
+    const { entries } = await refresh(store, {
+      ...isfWith({
+        ...flatOhlc(DATES, 8.5),
+        '2026-09-22': [8.5, 850, 8.4, 8.5],
+        '2026-09-23': [8.5, 13, 8.4, 8.5],
+      }),
+      VMID: vmid,
+    });
+    const warning = entries.find((entry) => entry.event === 'v2_saxo_bar_shape_repaired');
+    expect(warning?.level).toBe('warn');
+    expect(warning?.message).toContain('ISF');
+    expect(warning?.message).toContain('2026-09-23');
+    expect(warning?.message).toContain('2026-09-22');
+  });
+
+  it('does not warn when nothing needed repair', async () => {
+    const store = await openStore();
+    const { entries } = await refresh(store, {
+      ISF: { samples: samplesFor(ISF, closes(DATES, 8.5)) },
+      VMID: vmid,
+    });
+    expect(entries.map((entry) => entry.event)).not.toContain('v2_saxo_bar_shape_repaired');
   });
 });
 
@@ -484,6 +625,39 @@ describe('saxoBarRefreshFor', () => {
     expect(report.failed.map((f) => f.symbol)).toEqual(['saxo']);
     expect(stopped).toEqual(['stop']);
     expect(entries.map((entry) => entry.event)).toEqual(['v2_saxo_bar_refresh_unavailable']);
+  });
+
+  it('closes the store after a refresh that reports failures', async () => {
+    const root = storeRoot();
+    const close = vi.spyOn(ParquetBarStore.prototype, 'close');
+    try {
+      const report = await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+        storeRoot: root,
+        connect: connectWith({}),
+      }).run();
+      expect(report.failed.length).toBeGreaterThan(0);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+    }
+  });
+
+  it('closes the store when reading the stored bars throws', async () => {
+    const root = storeRoot();
+    const corrupt = join(root, 'venue=saxo', 'symbol=ISF', 'year=2026');
+    mkdirSync(corrupt, { recursive: true });
+    writeFileSync(join(corrupt, 'data_0.parquet'), 'not parquet');
+    const close = vi.spyOn(ParquetBarStore.prototype, 'close');
+    try {
+      const report = await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+        storeRoot: root,
+        connect: connectWith({}),
+      }).run();
+      expect(report.failed.map((f) => f.symbol)).toEqual(['saxo']);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+    }
   });
 
   it('reports the venue unavailable without live app credentials when no connector is injected', async () => {
