@@ -4,7 +4,7 @@ import type { CommandOutcome, CommandRecord } from './command-log.js';
 import { type ControlWriteResult, parseControlRequest } from './control-writer.js';
 import { formatStatus } from './telegram-status.js';
 
-export const CONTROL_SOURCE = 'telegram';
+const CONTROL_SOURCE = 'telegram';
 export const STALE_AFTER_MS = 10 * 60_000;
 export const CONFIRM_WINDOW_MS = 5 * 60_000;
 

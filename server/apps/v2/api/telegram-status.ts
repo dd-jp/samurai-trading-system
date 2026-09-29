@@ -19,7 +19,7 @@ const STATE_LABELS: Readonly<Record<ControlWire['state'], string>> = {
 
 const UNAVAILABLE = 'n/a';
 
-export function gbp(amount: number): string {
+function gbp(amount: number): string {
   const digits = Math.abs(amount).toLocaleString('en-GB', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

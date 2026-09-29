@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LogEntry } from '../../../shared/index.js';
-import { type PollerDeps, RETRY_AFTER_FAILURE_MS, runPoller } from './telegram-poller.js';
 import type { TelegramUpdate } from './telegram-commands.js';
+import { type PollerDeps, RETRY_AFTER_FAILURE_MS, runPoller } from './telegram-poller.js';
 
 const OWNER = 55;
 

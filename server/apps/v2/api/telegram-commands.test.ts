@@ -141,10 +141,8 @@ describe('authentication', () => {
   it('ignores an update with no message text and journals nothing', async () => {
     const handler = build();
     expect(await handler.handle({ update_id: 5 })).toBeUndefined();
-    const bare = message('x');
-    expect(
-      await handler.handle({ update_id: 6, message: { ...bare.message!, text: undefined } }),
-    ).toBeUndefined();
+    const noText = { date: 0, chat: { id: OWNER, type: 'private' }, from: { id: OWNER } };
+    expect(await handler.handle({ update_id: 6, message: noText })).toBeUndefined();
     expect(journal()).toEqual([]);
   });
 });

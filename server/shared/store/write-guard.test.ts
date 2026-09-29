@@ -276,6 +276,25 @@ describe('guardedStore', () => {
     }
   });
 
+  it('lets the telegram stage write v2_commands and nothing else, v2_controls included', () => {
+    const { db, guarded } = openGuarded('telegram');
+    try {
+      expect(() =>
+        guarded
+          .prepare(
+            `INSERT INTO v2_commands (update_id, chat_id, command, outcome, detail, sent_at, handled_at)
+               VALUES (1, '1', 'status', 'answered', 'ok', ?, ?)`,
+          )
+          .run(SEEN_AT, SEEN_AT),
+      ).not.toThrow();
+      expect(() => guarded.prepare('INSERT INTO v2_controls (action) VALUES (?)')).toThrow(
+        /the 'telegram' handle wrote to 'v2_controls'/,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it('never blocks a read, whoever owns the table', () => {
     const { db, guarded } = openGuarded('service-api');
     try {
