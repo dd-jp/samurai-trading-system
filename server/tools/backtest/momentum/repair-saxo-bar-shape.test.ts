@@ -9,6 +9,7 @@ import { ParquetBarStore, SHAPE_REPAIR_MANIFEST_NOTE } from '../../../providers/
 import {
   countShapeViolations,
   planShapeRepairs,
+  repairFromArgs,
   repairSaxoStore,
   updateManifest,
 } from './repair-saxo-bar-shape.js';
@@ -67,6 +68,18 @@ const CLEAN: BarSeries = {
   symbol: 'BBB',
   bars: [ohlc('2016-11-21', 5, 5.2, 4.9, 5.1), ohlc('2016-11-22', 5.1, 5.1, 5.1, 5.1)],
 };
+const WIDEN_ONLY: BarSeries = {
+  symbol: 'CCC',
+  bars: [ohlc('2016-11-21', 8, 8.1, 8.2, 8.05)],
+};
+const RESCALE_ONLY: BarSeries = {
+  symbol: 'DDD',
+  bars: [ohlc('2016-11-21', 10, 1000, 9.9, 9.95)],
+};
+const DROP_ONLY: BarSeries = {
+  symbol: 'EEE',
+  bars: [ohlc('2016-11-21', 10, 10.5, 9.8, 10.2), ohlc('2016-11-22', 10, 20, 10, 10)],
+};
 const ALPACA: BarSeries = { symbol: 'AAA', bars: [ohlc('2016-11-21', 9, 9.5, 8.9, 9.2)] };
 
 function manifestFor(series: readonly BarSeries[]) {
@@ -95,10 +108,10 @@ function manifestFor(series: readonly BarSeries[]) {
 async function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'repair-saxo-'));
   const root = join(dir, 'parquet');
-  await seedWithoutValidation(root, 'saxo', [GLITCHED, CLEAN]);
+  await seedWithoutValidation(root, 'saxo', [GLITCHED, CLEAN, WIDEN_ONLY]);
   await seedWithoutValidation(root, 'alpaca', [ALPACA]);
   const manifestPath = join(dir, 'manifest.json');
-  writeFileSync(manifestPath, JSON.stringify(manifestFor([GLITCHED, CLEAN])));
+  writeFileSync(manifestPath, JSON.stringify(manifestFor([GLITCHED, CLEAN, WIDEN_ONLY])));
   const store = await ParquetBarStore.open(root);
   stores.push(store);
   return { root, store, manifestPath };
@@ -121,9 +134,8 @@ describe('planShapeRepairs', () => {
         ['BBB', CLEAN],
       ]),
     );
-    expect(plan.changed.map((one) => one.symbol)).toEqual(['AAA']);
-    expect(plan.repairs).toHaveLength(1);
-    expect(plan.repairs[0]).toMatchObject({
+    expect(plan).toHaveLength(1);
+    expect(plan[0]).toMatchObject({
       symbol: 'AAA',
       report: {
         rescaled_fields: [{ date: '2016-11-23', field: 'high', factor: 0.01 }],
@@ -133,10 +145,30 @@ describe('planShapeRepairs', () => {
     });
   });
 
+  it('counts a rescale alone and a drop alone as a change', () => {
+    const plan = planShapeRepairs(
+      new Map([
+        ['DDD', RESCALE_ONLY],
+        ['EEE', DROP_ONLY],
+      ]),
+    );
+    expect(plan.map((repair) => repair.report)).toEqual([
+      {
+        rescaled_fields: [{ date: '2016-11-21', field: 'high', factor: 0.01 }],
+        dropped_glitch_dates: [],
+        ranges_widened: 0,
+      },
+      { rescaled_fields: [], dropped_glitch_dates: ['2016-11-22'], ranges_widened: 0 },
+    ]);
+    expect(plan.map((repair) => repair.repaired.bars.length)).toEqual([1, 1]);
+  });
+
   it('plans nothing for a repaired series', () => {
     const first = planShapeRepairs(new Map([['AAA', GLITCHED]]));
-    const second = planShapeRepairs(new Map(first.changed.map((one) => [one.symbol, one])));
-    expect(second).toEqual({ changed: [], repairs: [] });
+    const second = planShapeRepairs(
+      new Map(first.map((repair) => [repair.symbol, repair.repaired])),
+    );
+    expect(second).toEqual([]);
   });
 });
 
@@ -151,7 +183,7 @@ describe('updateManifest', () => {
   it('refreshes the counts of a repaired line, records the repair and notes the hygiene step once', () => {
     const plan = planShapeRepairs(new Map([['AAA', GLITCHED]]));
     const manifest = manifestFor([GLITCHED, CLEAN]);
-    const updated = updateManifest(manifest, plan.repairs, plan.changed);
+    const updated = updateManifest(manifest, plan);
     expect(updated.symbols.AAA).toMatchObject({
       first: '2016-11-21',
       last: '2016-11-25',
@@ -167,7 +199,7 @@ describe('updateManifest', () => {
     });
     expect(updated.symbols.BBB).toEqual(manifest.symbols.BBB);
     expect(updated.hygiene).toBe(`${manifest.hygiene}; ${SHAPE_REPAIR_MANIFEST_NOTE}`);
-    expect(updateManifest(updated, plan.repairs, plan.changed).hygiene).toBe(updated.hygiene);
+    expect(updateManifest(updated, plan).hygiene).toBe(updated.hygiene);
   });
 
   it('moves the window start to the latest first bar when the binding line lost its first bar', () => {
@@ -176,15 +208,41 @@ describe('updateManifest', () => {
       bars: [ohlc('2016-11-22', 5, 50, 4.9, 5.1), ohlc('2016-11-23', 5, 5.2, 4.9, 5.1)],
     };
     const plan = planShapeRepairs(new Map([['BBB', series]]));
-    const updated = updateManifest(manifestFor([series]), plan.repairs, plan.changed);
+    const updated = updateManifest(manifestFor([series]), plan);
     expect(updated.symbols.BBB?.first).toBe('2016-11-23');
     expect(updated.window_start).toBe('2016-11-23');
     expect(updated.window_binding_line).toBe('BBB');
   });
 
+  it('returns the manifest itself when nothing was repaired', () => {
+    const manifest = manifestFor([CLEAN]);
+    expect(updateManifest(manifest, [])).toBe(manifest);
+  });
+
   it('refuses a repaired line the manifest does not list', () => {
     const plan = planShapeRepairs(new Map([['AAA', GLITCHED]]));
-    expect(() => updateManifest(manifestFor([CLEAN]), plan.repairs, plan.changed)).toThrow(/AAA/);
+    expect(() => updateManifest(manifestFor([CLEAN]), plan)).toThrow(/AAA/);
+  });
+});
+
+describe('repairFromArgs', () => {
+  it('repairs the store and manifest it is pointed at and formats the manifest once', async () => {
+    const { root, manifestPath } = await fixture();
+    const formatted: string[] = [];
+    const first = await repairFromArgs(['--store', root, '--manifest', manifestPath], (path) =>
+      formatted.push(path),
+    );
+    expect(first.repairedSymbols).toEqual(['AAA', 'CCC']);
+    expect(formatted).toEqual([manifestPath]);
+    const second = await repairFromArgs(['--store', root, '--manifest', manifestPath], (path) =>
+      formatted.push(path),
+    );
+    expect(second.repairedSymbols).toEqual([]);
+    expect(formatted).toHaveLength(1);
+  });
+
+  it('refuses a flag it does not know', async () => {
+    await expect(repairFromArgs(['--stroe', 'x'], () => {})).rejects.toThrow(/stroe/);
   });
 });
 
@@ -193,14 +251,15 @@ describe('repairSaxoStore', () => {
     const { store, manifestPath } = await fixture();
     const result = await repairSaxoStore(store, manifestPath);
     expect(result).toMatchObject({
-      series: 2,
-      repairedSymbols: ['AAA'],
-      barsBefore: 7,
-      barsAfter: 6,
+      series: 3,
+      repairedSymbols: ['AAA', 'CCC'],
+      barsBefore: 8,
+      barsAfter: 7,
       rescaledFields: 1,
-      rangesWidened: 2,
+      rangesWidened: 3,
       droppedBars: 1,
-      violationsBefore: 3,
+      droppedDates: { AAA: ['2016-11-24'] },
+      violationsBefore: 4,
       violationsAfter: 0,
     });
     const saxo = await store.readVenue('saxo');
@@ -240,6 +299,6 @@ describe('repairSaxoStore', () => {
   it('runs without a manifest', async () => {
     const { store } = await fixture();
     const result = await repairSaxoStore(store, undefined);
-    expect(result.repairedSymbols).toEqual(['AAA']);
+    expect(result.repairedSymbols).toEqual(['AAA', 'CCC']);
   });
 });

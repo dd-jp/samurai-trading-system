@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import type { BarSeries } from '../../../pipeline/momentum/index.js';
+import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import type { ShapeRepairReport } from '../../../providers/bar-store/index.js';
 import {
   DEFAULT_BAR_STORE_ROOT,
@@ -20,6 +20,7 @@ const DEFAULT_MANIFEST_PATH = 'data/bars/saxo/manifest.json';
 export interface SymbolRepair {
   readonly symbol: string;
   readonly report: ShapeRepairReport;
+  readonly repaired: BarSeries;
 }
 
 export interface StoreRepairResult {
@@ -66,50 +67,51 @@ function isChanged(report: ShapeRepairReport): boolean {
   );
 }
 
-export function planShapeRepairs(series: ReadonlyMap<string, BarSeries>): {
-  changed: BarSeries[];
-  repairs: SymbolRepair[];
-} {
-  const changed: BarSeries[] = [];
+export function planShapeRepairs(series: ReadonlyMap<string, BarSeries>): SymbolRepair[] {
   const repairs: SymbolRepair[] = [];
   for (const [symbol, one] of series) {
     const { bars, report } = repairBarShape(one.bars);
-    if (!isChanged(report)) continue;
-    const rounded = roundBarPrices(bars);
-    changed.push({ symbol, bars: rounded });
-    repairs.push({ symbol, report });
+    if (isChanged(report)) {
+      repairs.push({ symbol, report, repaired: { symbol, bars: roundBarPrices(bars) } });
+    }
   }
-  return { changed, repairs };
+  return repairs;
+}
+
+function withShapeNote(hygiene: string): string {
+  return hygiene.includes(SHAPE_REPAIR_MANIFEST_NOTE)
+    ? hygiene
+    : `${hygiene}; ${SHAPE_REPAIR_MANIFEST_NOTE}`;
+}
+
+function repairedLine(line: ManifestLine | undefined, repair: SymbolRepair): ManifestLine {
+  if (line === undefined) {
+    throw new Error(`${repair.symbol}: repaired series is not listed in the Saxo manifest`);
+  }
+  const { bars } = repair.repaired;
+  return {
+    ...line,
+    first: (bars[0] as DailyBar).date,
+    last: (bars[bars.length - 1] as DailyBar).date,
+    bars: bars.length,
+    density: density(bars),
+    hygiene: { ...line.hygiene, shape_repair: repair.report },
+  };
 }
 
 export function updateManifest<T extends ManifestShape>(
   manifest: T,
   repairs: readonly SymbolRepair[],
-  changed: readonly BarSeries[],
 ): T {
   if (repairs.length === 0) return manifest;
   const symbols = { ...manifest.symbols };
-  for (const one of changed) {
-    const line = symbols[one.symbol];
-    const repair = repairs.find((entry) => entry.symbol === one.symbol);
-    if (line === undefined || repair === undefined) {
-      throw new Error(`${one.symbol}: repaired series is not listed in the Saxo manifest`);
-    }
-    symbols[one.symbol] = {
-      ...line,
-      first: one.bars[0]?.date ?? '',
-      last: one.bars[one.bars.length - 1]?.date ?? '',
-      bars: one.bars.length,
-      density: density(one.bars),
-      hygiene: { ...line.hygiene, shape_repair: repair.report },
-    };
+  for (const repair of repairs) {
+    symbols[repair.symbol] = repairedLine(symbols[repair.symbol], repair);
   }
   const window = windowStartOf(symbols);
   return {
     ...manifest,
-    hygiene: manifest.hygiene.includes(SHAPE_REPAIR_MANIFEST_NOTE)
-      ? manifest.hygiene
-      : `${manifest.hygiene}; ${SHAPE_REPAIR_MANIFEST_NOTE}`,
+    hygiene: withShapeNote(manifest.hygiene),
     window_start: window.windowStart,
     window_binding_line: window.binding,
     symbols,
@@ -129,12 +131,15 @@ export async function repairSaxoStore(
   manifestPath: string | undefined,
 ): Promise<StoreRepairResult> {
   const stored = await store.readVenue(SAXO_VENUE);
-  const { changed, repairs } = planShapeRepairs(stored);
-  if (changed.length > 0) {
-    await store.write(SAXO_VENUE, changed);
+  const repairs = planShapeRepairs(stored);
+  if (repairs.length > 0) {
+    await store.write(
+      SAXO_VENUE,
+      repairs.map((repair) => repair.repaired),
+    );
     if (manifestPath !== undefined) {
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ManifestShape;
-      const updated = updateManifest(manifest, repairs, changed);
+      const updated = updateManifest(manifest, repairs);
       writeFileSync(manifestPath, `${JSON.stringify(updated, null, 2)}\n`);
     }
   }
@@ -157,7 +162,10 @@ export async function repairSaxoStore(
   };
 }
 
-async function main(argv: readonly string[]): Promise<void> {
+export async function repairFromArgs(
+  argv: readonly string[],
+  formatManifest: (manifestPath: string) => void,
+): Promise<StoreRepairResult> {
   const { values } = parseArgs({
     args: [...argv],
     options: { store: { type: 'string' }, manifest: { type: 'string' } },
@@ -166,18 +174,22 @@ async function main(argv: readonly string[]): Promise<void> {
   try {
     const manifestPath = values.manifest ?? DEFAULT_MANIFEST_PATH;
     const result = await repairSaxoStore(store, manifestPath);
-    if (result.repairedSymbols.length > 0) {
-      execFileSync('npx', ['biome', 'format', '--write', manifestPath], { stdio: 'ignore' });
-    }
-    console.log(JSON.stringify(result, null, 2));
+    if (result.repairedSymbols.length > 0) formatManifest(manifestPath);
+    return result;
   } finally {
     store.close();
   }
 }
 
+function formatWithBiome(manifestPath: string): void {
+  execFileSync('npx', ['biome', 'format', '--write', manifestPath], { stdio: 'ignore' });
+}
+
 if (isMainModule(import.meta.url)) {
-  main(process.argv.slice(2)).catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  repairFromArgs(process.argv.slice(2), formatWithBiome)
+    .then((result) => console.log(JSON.stringify(result, null, 2)))
+    .catch((error: unknown) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
 }
