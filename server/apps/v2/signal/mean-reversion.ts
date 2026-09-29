@@ -1,4 +1,5 @@
 import type {
+  MarketData,
   SleeveDecision,
   SleeveOutput,
   SleeveSpec,
@@ -8,7 +9,7 @@ import type {
 import type { SleeveFactory } from '../backtest.js';
 import type { BarsSource } from '../data/index.js';
 import { baseRead } from './bar-quality.js';
-import { liquidityCore } from './universe.js';
+import { liquidityCore, type PoolContext } from './universe.js';
 
 // #1785 ruling (g): point-in-time top-300 by 20-day $ volume, reusing liquidityCore as-is
 export const MEAN_REVERSION_UNIVERSE_COUNT = 300;
@@ -217,11 +218,16 @@ function meanReversionDecisionFor(
 
 function meanReversionUniverse(
   bars: BarsSource,
+  market: Pick<MarketData, 'gbpUsdAtYearStart'>,
   constituentsFor: (tradingDate: string) => readonly string[],
   tradingDate: string,
 ): SleeveUniverse {
-  const constituents = constituentsFor(tradingDate);
-  const instruments = liquidityCore(constituents, bars, tradingDate, MEAN_REVERSION_UNIVERSE_COUNT);
+  const pool: PoolContext = { bars, tradingDate, venueFor: () => 'alpaca', market };
+  const instruments = liquidityCore(
+    constituentsFor(tradingDate),
+    pool,
+    MEAN_REVERSION_UNIVERSE_COUNT,
+  );
   return { instruments, refusals: [] };
 }
 
@@ -243,7 +249,8 @@ export function createMeanReversionSleeve(
   return (market) => ({
     id: sleeveId,
     spec: meanReversionSpec(),
-    universe: (context) => meanReversionUniverse(bars, constituentsFor, context.tradingDate),
+    universe: (context) =>
+      meanReversionUniverse(bars, market, constituentsFor, context.tradingDate),
     decide(context, instruments): Promise<SleeveOutput> {
       const ranked = instruments.map((instrument) => {
         const raw = market.barsBefore(instrument, context.tradingDate, LOOKBACK_BARS);
@@ -289,7 +296,8 @@ export function createMeanReversionBenchmarkSleeve(
   return (market) => ({
     id: MEAN_REVERSION_BENCHMARK_ID,
     spec: meanReversionBenchmarkSpec(),
-    universe: (context) => meanReversionUniverse(bars, constituentsFor, context.tradingDate),
+    universe: (context) =>
+      meanReversionUniverse(bars, market, constituentsFor, context.tradingDate),
     decide(context, instruments): Promise<SleeveOutput> {
       const decisions = instruments.map((instrument) => {
         const raw = market.barsBefore(instrument, context.tradingDate, LOOKBACK_BARS);

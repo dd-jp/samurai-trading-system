@@ -328,6 +328,18 @@ describe('createMeanReversionSleeve', () => {
       refusals: [],
     });
   });
+
+  it('ranks US names by native dollar volume whatever GBPUSD is, since a US name converts by exactly 1', () => {
+    const bars = memorySource([series('BIG', 25, 100, 1_000), series('MID', 25, 10, 5_000)]);
+    for (const gbpUsd of [1, 1.27, 0.83]) {
+      const market: MarketData = { ...closesMarket(flatCloses()), gbpUsdAtYearStart: () => gbpUsd };
+      const sleeve = createMeanReversionSleeve(bars, () => ['MID', 'BIG'], 10)(market);
+      expect(sleeve.universe({ ...CONTEXT, tradingDate: '2026-09-26' }).instruments).toEqual([
+        'BIG',
+        'MID',
+      ]);
+    }
+  });
 });
 
 describe('createMeanReversionBenchmarkSleeve', () => {
