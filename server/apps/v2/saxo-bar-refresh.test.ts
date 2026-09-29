@@ -201,7 +201,7 @@ describe('refreshSaxoBars', () => {
     expect(Math.min(...steps)).toBeGreaterThan(0.95);
     const warning = entries.find((entry) => entry.event === 'v2_saxo_history_rescaled');
     expect(warning?.level).toBe('warn');
-    expect(warning?.message).toMatch(/^ISF: .*by 10x/);
+    expect(warning?.message).toMatch(/^ISF: .*by 10x .*not rescaled here$/);
   });
 
   it('does not warn when the re-pull reproduces the stored history', async () => {
@@ -361,6 +361,14 @@ describe('saxoRefreshLines', () => {
   });
 });
 
+describe('saxoRefreshLines with an undeclared line', () => {
+  it('refuses a v2 LSE line Saxo has no declaration for', () => {
+    expect(() => saxoRefreshLines(['ISF', 'NOPE'])).toThrow(
+      'NOPE: no Saxo line declared for a v2 LSE line',
+    );
+  });
+});
+
 describe('historyRescaleFactor', () => {
   const series = (closesByDate: Record<string, number>): BarSeries => ({
     symbol: 'X',
@@ -475,6 +483,17 @@ describe('saxoBarRefreshFor', () => {
     }).run();
     expect(report.failed.map((f) => f.symbol)).toEqual(['saxo']);
     expect(stopped).toEqual(['stop']);
+    expect(entries.map((entry) => entry.event)).toEqual(['v2_saxo_bar_refresh_unavailable']);
+  });
+
+  it('reports the venue unavailable without live app credentials when no connector is injected', async () => {
+    const { entries, logger } = recorder();
+    const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
+      storeRoot: storeRoot(),
+    }).run();
+    expect(report.failed).toEqual([
+      { symbol: 'saxo', reason: expect.stringMatching(/SAXO_LIVE_APP_KEY/) },
+    ]);
     expect(entries.map((entry) => entry.event)).toEqual(['v2_saxo_bar_refresh_unavailable']);
   });
 

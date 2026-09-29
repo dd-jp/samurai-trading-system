@@ -68,8 +68,10 @@ export function historyRescaleFactor(
   return factor;
 }
 
-export function saxoRefreshLines(): readonly SaxoLine[] {
-  return LSE_LINES.map(({ tidm }) => {
+export function saxoRefreshLines(
+  tidms: readonly string[] = LSE_LINES.map((line) => line.tidm),
+): readonly SaxoLine[] {
+  return tidms.map((tidm) => {
     const line = LSE_MOMENTUM_LINES.find((candidate) => candidate.tidm === tidm);
     if (line === undefined) throw new Error(`${tidm}: no Saxo line declared for a v2 LSE line`);
     return line;
