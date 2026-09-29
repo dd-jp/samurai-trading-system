@@ -12,6 +12,7 @@ import {
 import {
   G18_SMALL_CAP_FLOORS,
   isSet,
+  LSE_RESERVED_SLOTS,
   MOVERS_MIN_DOLLAR_VOLUME_USD,
   UnsetParameterError,
 } from './parameters.js';
@@ -143,12 +144,26 @@ function moverCandidates(symbols: readonly string[], pool: PoolContext): MoverCa
   return candidates;
 }
 
-export function selectUniverse(pooled: readonly string[], pool: PoolContext): UniverseSelection {
+export function selectUniverse(
+  pooled: readonly string[],
+  pool: PoolContext,
+  reservedLseSlots: number = LSE_RESERVED_SLOTS,
+): UniverseSelection {
   const refusals: UnsetParameterError[] = [];
   if (!isSet(G18_SMALL_CAP_FLOORS)) {
     refusals.push(new UnsetParameterError(G18_SMALL_CAP_FLOORS.name, G18_SMALL_CAP_FLOORS.ticket));
   }
-  const liquidity = liquidityCore(pooled, pool);
+  const reserved = liquidityCore(
+    pooled.filter((symbol) => pool.venueFor(symbol) === 'saxo'),
+    pool,
+    Math.min(reservedLseSlots, LIQUIDITY_CORE_COUNT),
+  );
+  const shared = liquidityCore(
+    pooled.filter((symbol) => !reserved.includes(symbol)),
+    pool,
+    LIQUIDITY_CORE_COUNT - reserved.length,
+  );
+  const liquidity = [...reserved, ...shared];
   const remaining = pooled.filter((symbol) => !liquidity.includes(symbol));
   const movers = selectMovers(moverCandidates(remaining, pool));
   return { liquidity, movers, refusals };

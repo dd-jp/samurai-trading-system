@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import type { BarsSource } from '../data/index.js';
 import { isLseInstrument } from './lse-lines.js';
-import { MOVERS_MIN_DOLLAR_VOLUME_USD } from './parameters.js';
+import { LSE_RESERVED_SLOTS, MOVERS_MIN_DOLLAR_VOLUME_USD } from './parameters.js';
 import {
   averageDollarVolume,
   liquidityCore,
@@ -266,8 +266,8 @@ describe('selectUniverse', () => {
       moved(series('AAPL', 25, 1, gbpVolume)),
     ]);
     const symbols = [...core().map((entry) => entry.symbol), 'IUSA', 'AAPL'];
-    expect(selectUniverse(symbols, poolOf(source, TRADING_DATE, 1.2)).movers).toEqual(['IUSA']);
-    expect(selectUniverse(symbols, poolOf(source, TRADING_DATE, 1.05)).movers).toEqual([]);
+    expect(selectUniverse(symbols, poolOf(source, TRADING_DATE, 1.2), 0).movers).toEqual(['IUSA']);
+    expect(selectUniverse(symbols, poolOf(source, TRADING_DATE, 1.05), 0).movers).toEqual([]);
   });
 
   it('ranks an LSE mover against a US mover on return alone, whatever the currency', () => {
@@ -277,7 +277,7 @@ describe('selectUniverse', () => {
       moved(series('AAPL', 25, 100, 1_000_000), 110),
     ]);
     const symbols = [...core().map((entry) => entry.symbol), 'AAPL', 'IUSA'];
-    expect(selectUniverse(symbols, poolOf(source)).movers).toEqual(['IUSA', 'AAPL']);
+    expect(selectUniverse(symbols, poolOf(source), 0).movers).toEqual(['IUSA', 'AAPL']);
   });
 
   it('holds the shared cap in total, US plus LSE never above the cap (#1774 c)', () => {
@@ -311,17 +311,49 @@ describe('selectUniverse', () => {
     expect(picked.filter((symbol) => !isLseInstrument(symbol)).length).toBeGreaterThan(0);
   });
 
-  it('keeps the cap and the US-only picks when LSE names join a full US pool', () => {
+  describe('reserved LSE slots', () => {
     const us = Array.from({ length: 30 }, (_, i) =>
       series(`U${String(i).padStart(2, '0')}`, 25, 100, 10_000_000 + i * 1000),
     );
-    const lse = ['ISF', 'IUSA', 'VMID'].map((tidm) => series(tidm, 25, 100, 1_000));
+    const lseTidms = ['ISF', 'IUSA', 'VMID', 'CUKS', 'IEUX', 'IJPN'];
+    const lse = lseTidms.map((tidm, i) => series(tidm, 25, 100, 1_000 + i * 10));
     const usSymbols = us.map((entry) => entry.symbol);
     const pool = poolOf(memorySource([...us, ...lse]));
-    const usOnly = selectUniverse(usSymbols, pool);
-    const shared = selectUniverse([...usSymbols, ...lse.map((entry) => entry.symbol)], pool);
-    expect(shared).toEqual(usOnly);
-    expect(shared.liquidity.length + shared.movers.length).toBe(UNIVERSE_CAP);
+    const pooled = [...usSymbols, ...lseTidms];
+
+    it('gives LSE the reserved count of the 20 though every US name outranks it', () => {
+      const selection = selectUniverse(pooled, pool);
+      const picked = [...selection.liquidity, ...selection.movers];
+      expect(picked).toHaveLength(UNIVERSE_CAP);
+      expect(LSE_RESERVED_SLOTS).toBe(4);
+      expect(picked.filter(isLseInstrument)).toEqual(['IJPN', 'IEUX', 'CUKS', 'VMID']);
+      expect(selection.liquidity).toHaveLength(10);
+    });
+
+    it('takes the reserved LSE names by their own liquidity, best first', () => {
+      const selection = selectUniverse(pooled, pool, 2);
+      expect(selection.liquidity.slice(0, 2)).toEqual(['IJPN', 'IEUX']);
+    });
+
+    it('hands unfilled reserved slots back to the shared ranking', () => {
+      const oneLse = selectUniverse([...usSymbols, 'ISF'], pool);
+      expect(oneLse.liquidity).toHaveLength(10);
+      expect(oneLse.liquidity.filter(isLseInstrument)).toEqual(['ISF']);
+      const none = selectUniverse(usSymbols, pool);
+      expect(none.liquidity.filter((symbol) => !isLseInstrument(symbol))).toHaveLength(10);
+      expect(none.liquidity.length + none.movers.length).toBe(UNIVERSE_CAP);
+    });
+
+    it('leaves the US ranking untouched when reserving zero', () => {
+      const withLse = selectUniverse(pooled, pool, 0);
+      expect(withLse).toEqual(selectUniverse(usSymbols, pool, 0));
+    });
+
+    it('never reserves more than the liquidity bucket holds', () => {
+      const selection = selectUniverse(pooled, pool, 50);
+      expect(selection.liquidity).toHaveLength(10);
+      expect(selection.liquidity.filter(isLseInstrument)).toHaveLength(6);
+    });
   });
 
   it('selects US names identically whatever the GBPUSD rate', () => {
@@ -344,8 +376,8 @@ describe('selectUniverse', () => {
       moved(series('BBB', 25, 100, 1_000_000), 120),
     ]);
     const symbols = [...core().map((entry) => entry.symbol), 'IUSA', 'AAPL', 'BBB'];
-    const forward = selectUniverse(symbols, poolOf(source));
-    expect(selectUniverse([...symbols].reverse(), poolOf(source))).toEqual(forward);
+    const forward = selectUniverse(symbols, poolOf(source), 0);
+    expect(selectUniverse([...symbols].reverse(), poolOf(source), 0)).toEqual(forward);
     expect(forward.movers).toEqual(['AAPL', 'BBB', 'IUSA']);
   });
 });

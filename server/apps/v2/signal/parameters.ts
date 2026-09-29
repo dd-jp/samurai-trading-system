@@ -64,6 +64,11 @@ export const ARM2_ENTRY_THRESHOLDS = set<Arm2EntryThresholds>('ARM2_ENTRY_THRESH
 });
 export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774', 750_000);
 
+// #1774, David 2026-09-29 (option 1): on one USD ranking no LSE name reaches the 20
+// (ISF ~53M GBP/day against billions), so LSE holds a reserved share of the liquidity half;
+// the count is the builder's default until David sets it
+export const LSE_RESERVED_SLOTS = 4;
+
 export const SHORTS_ENABLED = false;
 
 // doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
