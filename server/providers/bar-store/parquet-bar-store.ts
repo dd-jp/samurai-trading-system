@@ -173,14 +173,21 @@ function validateSeries(series: BarSeries): void {
   requireSymbol(series.symbol);
   if (series.bars.length === 0) throw new Error(`${series.symbol}: no bars to write`);
   assertSortedUniqueDates(series);
-  for (const bar of series.bars) {
-    const prices = [bar.open, bar.high, bar.low, bar.close, bar.rawClose];
-    if (!prices.every((price) => Number.isFinite(price) && price > 0)) {
-      throw new Error(`${series.symbol}: non-positive or non-finite price at ${bar.date}`);
-    }
-    if (!(Number.isFinite(bar.volume) && bar.volume >= 0)) {
-      throw new Error(`${series.symbol}: invalid volume at ${bar.date}`);
-    }
+  for (const bar of series.bars) validateBar(series.symbol, bar);
+}
+
+function validateBar(symbol: string, bar: DailyBar): void {
+  const prices = [bar.open, bar.high, bar.low, bar.close, bar.rawClose];
+  if (!prices.every((price) => Number.isFinite(price) && price > 0)) {
+    throw new Error(`${symbol}: non-positive or non-finite price at ${bar.date}`);
+  }
+  if (!(Number.isFinite(bar.volume) && bar.volume >= 0)) {
+    throw new Error(`${symbol}: invalid volume at ${bar.date}`);
+  }
+  if (bar.low > Math.min(bar.open, bar.close) || bar.high < Math.max(bar.open, bar.close)) {
+    throw new Error(
+      `${symbol}: bar shape violated at ${bar.date} (open ${bar.open}, high ${bar.high}, low ${bar.low}, close ${bar.close})`,
+    );
   }
 }
 
