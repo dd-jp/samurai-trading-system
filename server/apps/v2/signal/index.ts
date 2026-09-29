@@ -51,4 +51,5 @@ export {
   UnsetParameterError,
 } from './parameters.js';
 export { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
+export { type SecretSource, secretsFromEnv } from './secret-guard.js';
 export { SleeveRegistry } from './sleeve.js';

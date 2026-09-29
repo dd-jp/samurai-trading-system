@@ -1,5 +1,6 @@
 import type { Logger } from '../../../shared/index.js';
 import type { ModelPin } from './models.js';
+import { leakedSecret, type SecretSource } from './secret-guard.js';
 
 const PIN_CHECK_TIMEOUT_MS = 30_000;
 const REFUSAL = 'v2 refuses the paper run: Nous GET /models';
@@ -10,6 +11,7 @@ export interface NousPinCheckOptions {
   readonly apiKey: string | undefined;
   readonly pins: readonly ModelPin[];
   readonly logger: Logger;
+  readonly secrets: SecretSource;
   readonly fetch?: typeof fetch | undefined;
   readonly timeoutMs?: number | undefined;
 }
@@ -22,9 +24,17 @@ function redacted(text: string, apiKey: string | undefined): string {
 
 async function requestCatalogue(options: NousPinCheckOptions): Promise<Response> {
   const fetchImpl = options.fetch ?? fetch;
+  const url = `${options.baseUrl}/models`;
+  const headers = { authorization: `Bearer ${options.apiKey}` };
+  const leaked = leakedSecret(
+    options.secrets(),
+    { url, headers, body: '' },
+    { header: 'authorization', key: options.apiKey ?? '' },
+  );
+  if (leaked !== undefined) throw new Error(`${REFUSAL} refused before send: it carries ${leaked}`);
   try {
-    return await fetchImpl(`${options.baseUrl}/models`, {
-      headers: { authorization: `Bearer ${options.apiKey}` },
+    return await fetchImpl(url, {
+      headers,
       signal: AbortSignal.timeout(options.timeoutMs ?? PIN_CHECK_TIMEOUT_MS),
     });
   } catch (cause) {

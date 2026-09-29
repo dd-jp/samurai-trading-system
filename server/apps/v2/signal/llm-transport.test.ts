@@ -55,12 +55,17 @@ const request = (model: string) => ({
   max_tokens: 64,
   messages: [{ role: 'user' as const, content: 'hello' }],
 });
+const KNOWN_SECRETS = [
+  { name: 'NOUS_API_KEY', value: 'nous-secret' },
+  { name: 'ALPACA_API_SECRET', value: 'fake-alpaca-secret-7f' },
+];
 const transportFor = (pin: ModelPin, logger?: Logger, shared = gate()) =>
   new NousPinnedTransport({
     pin,
     apiKey: 'nous-secret',
     baseUrl: 'https://nous.test/v1',
     gate: shared,
+    secrets: () => KNOWN_SECRETS,
     logger,
   });
 
@@ -111,6 +116,48 @@ describe('NousPinnedTransport', () => {
     await expect(
       transportFor(SONNET_5_PIN).createMessage(request('anthropic/claude-fable-5')),
     ).rejects.toThrow(/transport for anthropic\/claude-sonnet-5 refused a request for model/);
+    expect(captured).toHaveLength(0);
+  });
+
+  it('refuses a request carrying a known secret before send, naming it and never its value', async () => {
+    const captured: Captured[] = [];
+    const logs: LogEntry[] = [];
+    stubFetch(200, completion('anthropic/claude-sonnet-5', '{}'), captured);
+    const leaky = {
+      ...request('anthropic/claude-sonnet-5'),
+      messages: [{ role: 'user' as const, content: 'cash fake-alpaca-secret-7f' }],
+    };
+    const error = await transportFor(SONNET_5_PIN, { log: (entry) => logs.push(entry) })
+      .createMessage(leaky, { stage: 'debate' })
+      .catch((e: unknown) => e);
+    expect(captured).toHaveLength(0);
+    expect(error).toBeInstanceOf(LlmProviderError);
+    expect((error as Error).message).toBe(
+      'anthropic/claude-sonnet-5 request refused before send: it carries the value of ALPACA_API_SECRET',
+    );
+    expect(logs).toMatchObject([
+      {
+        trace_id: 'v2-llm',
+        stage: 'debate',
+        level: 'error',
+        event: 'v2_llm_secret_refused',
+        payload: { pinned: 'anthropic/claude-sonnet-5', secret: 'ALPACA_API_SECRET' },
+      },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain('fake-alpaca-secret-7f');
+    expect(classifyFailureCause(error)).toBe(classifyFailureCause(new LlmProviderError('x')));
+  });
+
+  it('refuses its own key anywhere but the authorization header', async () => {
+    const captured: Captured[] = [];
+    stubFetch(200, completion('anthropic/claude-sonnet-5', '{}'), captured);
+    const leaky = {
+      ...request('anthropic/claude-sonnet-5'),
+      messages: [{ role: 'user' as const, content: 'key nous-secret' }],
+    };
+    await expect(transportFor(SONNET_5_PIN).createMessage(leaky)).rejects.toThrow(
+      /it carries the value of NOUS_API_KEY/,
+    );
     expect(captured).toHaveLength(0);
   });
 

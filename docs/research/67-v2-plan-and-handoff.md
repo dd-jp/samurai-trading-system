@@ -291,7 +291,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Resilience | Risk gate by type | No venue adapter compiles against an order the risk module did not approve (D6) |
 | Resilience | Capital config | No capital or cap literal in code; the year's config refuses a mid-year loosening (D8, Q13) |
 | Resilience | Separate sleeve books | Each sleeve's paper book is isolated; one sleeve's loss cannot size the other (Q14) |
-| Security | Keys and egress | Broker keys trade-only, withdrawals disabled, IP-restricted where offered; test that no account data or key leaves in any LLM request (Q16) |
+| Security | Keys and egress | Broker keys trade-only, withdrawals disabled, IP-restricted where the venue offers it; test that no account data or key leaves in any LLM request, plus a runtime guard refusing any LLM request that carries a known secret value (Q16, #1881) |
 | Cost | LLM spend cap | ~$30/month cap enforced across providers; breach stops LLM calls, never trading exits (Q16) |
 | Self-learning | Model swap = new trial | Changing any pinned model version resets that sleeve's paper evaluation (Q16) |
 | Self-learning | Trial counter | Append-only, tamper-evident; every backtest run increments it |
