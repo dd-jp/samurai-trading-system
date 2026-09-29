@@ -1,8 +1,9 @@
-import type { MarketData, Sleeve } from '../../../contracts/index.js';
+import type { CfdCostModel, MarketData, Sleeve } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore } from '../../shared/store/index.js';
 import type { CycleDeps } from './cycle.js';
+import { isCfdVenue } from './data/index.js';
 import {
   type AlpacaBrokerClient,
   createOrderExecutor,
@@ -33,6 +34,7 @@ export interface CycleCompositionOptions {
   // run (doc 67 "2x modelled cost") stresses the whole cost model, not just the quoted spread
   readonly costMultiple?: number | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
+  readonly cfdCostModel?: CfdCostModel | undefined;
   // Default true: paper/live pools real concurrent primary books against one account-wide loss
   // cap (#1799). The backtest passes false so each trial and the benchmark it composes into the
   // same PaperBooks keeps an independent budget (ruled 2026-09-28, doc 66)
@@ -67,6 +69,8 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     capital,
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
+    venueRefusal: (venue) =>
+      isCfdVenue(venue) && options.cfdCostModel === undefined ? 'cfd_cost_model_unset' : undefined,
   });
   const multiple = options.costMultiple ?? 1;
   const impactBps = impactLookup(market, tradingDate, logger);
@@ -79,7 +83,8 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     pricing: {
       halfSpreadBps: (instrument) => options.halfSpreadBps(instrument) * multiple,
       impactBps: (instrument, qty, price) => impactBps(instrument, qty, price) * multiple,
-      fee: (venue, side, qty, price) => venueFee(venue, side, qty, price) * multiple,
+      fee: (venue, side, qty, price) =>
+        venueFee(venue, side, qty, price, options.cfdCostModel) * multiple,
     },
   });
   return {

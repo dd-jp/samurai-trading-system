@@ -3,6 +3,7 @@ import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { coverageSatisfied, windowCoverage } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { addDays } from './macro-calendar.js';
+import { quoteCurrencyOf } from './venues.js';
 
 export interface BarsSource {
   load(symbol: string): BarSeries | undefined;
@@ -94,7 +95,7 @@ export const LSE_CALENDAR_REFERENCE = 'ISF';
 // windowCovered's 95% ratio makes an SPY-keyed calendar fail almost every LSE name
 // over a 200-session window, so each venue reads sessions off its own reference line
 export function calendarReferenceFor(venue: Venue): string {
-  return venue === 'saxo' ? LSE_CALENDAR_REFERENCE : CALENDAR_REFERENCE;
+  return quoteCurrencyOf(venue) === 'GBP' ? LSE_CALENDAR_REFERENCE : CALENDAR_REFERENCE;
 }
 
 export function sessionsBefore(

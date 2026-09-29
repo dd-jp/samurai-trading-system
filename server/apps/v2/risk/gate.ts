@@ -2,6 +2,7 @@ import type {
   BookLedger,
   CapitalYear,
   EntryApproval,
+  EntryRoom,
   EntryRequest,
   ExitRequest,
   MarketData,
@@ -11,13 +12,18 @@ import type {
   Sleeve,
   SleeveDecision,
   SleeveSpec,
+  Venue,
 } from '../../../../contracts/index.js';
-import { quotePerGbp } from '../data/index.js';
+import { isCfdVenue, quotePerGbp } from '../data/index.js';
 import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
+import { entryRoomRefusal, grossRoomGbp } from './gross-cap.js';
 import { sizeMultiplierFor } from './loss-budget.js';
-import { positionSizeShares } from './position-size.js';
+import {
+  CFD_SHORT_GAP_BUDGET_FRACTION_OF_SLEEVE_LOSS_CAP,
+  positionSizeShares,
+} from './position-size.js';
 import { averageDailyNotional, volumeCapShares } from './volume-cap.js';
 
 interface Sizing {
@@ -36,11 +42,25 @@ function bracketRefusal(
   return target > 0 ? undefined : 'target_not_positive';
 }
 
+function venueRefusalFor(
+  decision: SleeveDecision,
+  extra: RiskGateDeps['venueRefusal'],
+): string | undefined {
+  if (decision.action === 'enter_short' && !isCfdVenue(decision.venue)) return 'short_requires_cfd';
+  return extra?.(decision.venue);
+}
+
+function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {
+  if (decision.action !== 'enter_short' || !isCfdVenue(decision.venue)) return undefined;
+  return capital.lossCapGbp * CFD_SHORT_GAP_BUDGET_FRACTION_OF_SLEEVE_LOSS_CAP;
+}
+
 export interface RiskGateDeps {
   readonly books: Pick<BookLedger, 'lastDay'>;
   readonly capital: Pick<CapitalConfigStore, 'inForce'>;
   readonly market: MarketData;
   readonly spec: (sleeveId: string) => SleeveSpec;
+  readonly venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
 }
 
 export class V2RiskGate implements RiskGate {
@@ -49,6 +69,14 @@ export class V2RiskGate implements RiskGate {
   capitalRefusal(tradingDate: string): string | undefined {
     if (this.deps.capital.inForce(tradingDate) !== undefined) return undefined;
     return `no capital config in force on ${tradingDate}: entries refused until David sets the year (doc 66 D8)`;
+  }
+
+  entryRoom(equityGbp: number, cashGbp: number, grossNotionalGbp: number): EntryRoom {
+    return { cashGbp, grossGbp: grossRoomGbp(equityGbp, grossNotionalGbp) };
+  }
+
+  entryRoomRefusal(notionalGbp: number, room: EntryRoom): 'insufficient_cash' | 'gross_cap' | undefined {
+    return entryRoomRefusal(notionalGbp, room);
   }
 
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined {
@@ -60,8 +88,10 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveEntry(request: EntryRequest): EntryApproval {
-    const { size, refusal: sizingRefusal } = this.#size(request);
     const { decision } = request;
+    const venueRefusal = venueRefusalFor(decision, this.deps.venueRefusal);
+    if (venueRefusal !== undefined) return { size: 0, order: undefined, refusal: venueRefusal };
+    const { size, refusal: sizingRefusal } = this.#size(request);
     if (sizingRefusal !== undefined) return { size, order: undefined, refusal: sizingRefusal };
     if (size <= 0) return { size, order: undefined, refusal: 'zero_size' };
     if (decision.stop_price === undefined || decision.atr === undefined) {
@@ -156,6 +186,7 @@ export class V2RiskGate implements RiskGate {
       sizeMultiplier: this.#multiplier(book.id, sleeveCapitalYear(spec, capital)),
       macroDay: spec.macroGate && book.variant !== 'no-macro-gate' && request.macroDay,
       volumeCapShares: volumeCap,
+      gapBudgetGbp: gapBudgetGbp(decision, sleeveCapitalYear(spec, capital)),
     });
     return { size };
   }

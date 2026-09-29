@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
+  CFD_COST_MODEL,
+  CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   CYCLE_LEVEL_PARAMETERS,
   DEBATE_RISK_FRACTION,
   DEBATE_TARGET_ATR_MULTIPLE,
@@ -16,7 +18,6 @@ import {
   type Parameter,
   requireSet,
   SAXO_APPROPRIATENESS_TEST_TAKEN,
-  SHORTS_ENABLED,
   UNSET,
   UnsetParameterError,
 } from './parameters.js';
@@ -30,11 +31,13 @@ describe('parameters', () => {
       ALPACA_SHORT_EQUITY_FLOOR_USD,
       ARM2_ENTRY_THRESHOLDS,
       LSE_LIQUIDITY_SCREEN,
+      CFD_COST_MODEL,
     ]);
     expect(CYCLE_LEVEL_PARAMETERS).toEqual([
       G18_SOCIAL_SOURCE,
       G18_SENTIMENT_DEDUP_RULE,
       ALPACA_SHORT_EQUITY_FLOOR_USD,
+      CFD_COST_MODEL,
     ]);
     for (const parameter of DECLARED_PARAMETERS) {
       expect(parameter.ticket.length).toBeGreaterThan(0);
@@ -84,8 +87,10 @@ describe('parameters', () => {
     expect(requireSet(set)).toBe(3);
   });
 
-  it('shorts are off', () => {
-    expect(SHORTS_ENABLED).toBe(false);
+  it('the CFD cost model is unset until #1850 and the borrow ceiling is the ruled 2% a year', () => {
+    expect(isSet(CFD_COST_MODEL)).toBe(false);
+    expect(CFD_COST_MODEL.ticket).toBe('#1850');
+    expect(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR).toBe(0.02);
   });
 
   it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {

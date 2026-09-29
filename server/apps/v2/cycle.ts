@@ -5,6 +5,7 @@ import type {
   ControlReader,
   DecisionJournal,
   EntryApproval,
+  EntryRoom,
   JournalledOrder,
   LossBudgetState,
   ManualControl,
@@ -852,21 +853,17 @@ class Cycle {
     );
   }
 
-  applyCashGate(
-    decision: SleeveDecision,
-    approval: EntryApproval,
-    cashRemainingGbp: number,
-  ): EntryApproval {
+  applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
     if (approval.order === undefined || approval.size <= 0) return approval;
-    if (this.notionalGbp(decision, approval.size) <= cashRemainingGbp) return approval;
-    return { size: approval.size, order: undefined, refusal: 'insufficient_cash' };
+    const refusal = this.deps.risk.entryRoomRefusal(this.notionalGbp(decision, approval.size), room);
+    return refusal === undefined ? approval : { size: approval.size, order: undefined, refusal };
   }
 
   resolveEntryGate(
     book: BookSpec,
     proposed: SleeveDecision,
     equityGbp: number,
-    cashRemainingGbp: number,
+    room: EntryRoom,
   ): { decision: SleeveDecision; gated: EntryApproval } {
     const decision = vetoApplied(book, proposed);
     const approval = this.deps.risk.approveEntry({
@@ -881,7 +878,7 @@ class Cycle {
       approval.order !== undefined &&
       approval.size > 0 &&
       this.willSubmitEntry(book, decision.instrument);
-    const gated = willSubmit ? this.applyCashGate(decision, approval, cashRemainingGbp) : approval;
+    const gated = willSubmit ? this.applyRoomGate(decision, approval, room) : approval;
     return { decision, gated };
   }
 
@@ -909,17 +906,21 @@ class Cycle {
   }
 
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
-    const { equityGbp } = this.deps.books.valuation(book.id, (i, v) => this.markGbp(i, v));
-    let cashRemainingGbp = this.deps.books.cash(book.id) - this.restingNotionalGbp(book.id);
+    const { equityGbp, investedGbp } = this.deps.books.valuation(book.id, (i, v) =>
+      this.markGbp(i, v),
+    );
+    const restingGbp = this.restingNotionalGbp(book.id);
+    const room = this.deps.risk.entryRoom(
+      equityGbp,
+      this.deps.books.cash(book.id) - restingGbp,
+      investedGbp + restingGbp,
+    );
     for (const proposed of decisions) {
-      const { decision, gated } = this.resolveEntryGate(
-        book,
-        proposed,
-        equityGbp,
-        cashRemainingGbp,
-      );
+      const { decision, gated } = this.resolveEntryGate(book, proposed, equityGbp, room);
       await this.settleEntry(book, decision, gated, () => {
-        cashRemainingGbp -= this.notionalGbp(decision, gated.size);
+        const notionalGbp = this.notionalGbp(decision, gated.size);
+        room.cashGbp -= notionalGbp;
+        room.grossGbp -= notionalGbp;
       });
     }
   }
@@ -1050,6 +1051,8 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   no_adv: 'ADV_WINDOW_COVERAGE',
   no_allocation: 'SLEEVE_MINIMUM_CAPITAL',
   insufficient_cash: 'GROSS_CASH_GATE',
+  gross_cap: 'BOOK_GROSS_NOTIONAL_CAP',
+  cfd_cost_model_unset: 'CFD_COST_MODEL',
 };
 
 function recordRefusal(

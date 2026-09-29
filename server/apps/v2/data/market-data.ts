@@ -1,6 +1,7 @@
 import type { MarketData, V2Bar, Venue } from '../../../../contracts/index.js';
 import { type BarsSource, barsBefore } from './bars.js';
 import { type FxObservation, yearStartGbpUsd } from './fx.js';
+import { quoteCurrencyOf } from './venues.js';
 
 export class BarsMarketData implements MarketData {
   readonly #yearStart = new Map<number, number>();
@@ -34,5 +35,7 @@ export function quotePerGbp(
   venue: Venue,
   tradingDate: string,
 ): number {
-  return venue === 'alpaca' ? market.gbpUsdAtYearStart(Number(tradingDate.slice(0, 4))) : 1;
+  return quoteCurrencyOf(venue) === 'USD'
+    ? market.gbpUsdAtYearStart(Number(tradingDate.slice(0, 4)))
+    : 1;
 }

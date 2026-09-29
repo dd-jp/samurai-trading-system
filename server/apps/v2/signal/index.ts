@@ -36,6 +36,8 @@ export {
   ARM2_SLEEVE_ID,
   ARM2_SLEEVE_SPEC,
   type Arm2EntryThresholds,
+  CFD_COST_MODEL,
+  CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   CYCLE_LEVEL_PARAMETERS,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
@@ -43,7 +45,6 @@ export {
   isSet,
   LSE_LIQUIDITY_SCREEN,
   requireSet,
-  SHORTS_ENABLED,
   SLEEVE_SPECS_BY_ID,
   UnsetParameterError,
 } from './parameters.js';

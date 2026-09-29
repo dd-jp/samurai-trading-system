@@ -1,6 +1,6 @@
 import type { Direction, OrderState } from './primitives.js';
 
-export type Venue = 'alpaca' | 'saxo';
+export type Venue = 'alpaca' | 'saxo' | 'saxo_cfd_gbp' | 'saxo_cfd_usd';
 export type OrderSide = 'buy' | 'sell';
 export type OrderLeg = 'entry' | 'exit';
 export type FillLeg = 'entry' | 'stop' | 'target' | 'exit';
@@ -295,8 +295,15 @@ export interface ControlReader {
   current(): ManualControl;
 }
 
+export interface EntryRoom {
+  cashGbp: number;
+  grossGbp: number;
+}
+
 export interface RiskGate {
   approveEntry(request: EntryRequest): EntryApproval;
+  entryRoom(equityGbp: number, cashGbp: number, grossNotionalGbp: number): EntryRoom;
+  entryRoomRefusal(notionalGbp: number, room: EntryRoom): 'insufficient_cash' | 'gross_cap' | undefined;
   approveExit(request: ExitRequest): RiskApprovedOrder;
   approveRearm(request: RearmRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;
@@ -334,6 +341,10 @@ export interface SimulatedFillRequest {
   readonly qty: number;
   readonly price: number;
   readonly crossesSpread: boolean;
+}
+
+export interface CfdCostModel {
+  fee(side: OrderSide, qty: number, priceQuote: number): number;
 }
 
 export interface SimulatedFillQuote {

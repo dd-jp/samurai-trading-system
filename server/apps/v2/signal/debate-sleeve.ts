@@ -29,8 +29,14 @@ import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { averageTrueRange, trailingReturn } from '../../../pipeline/momentum/index.js';
 import type { Clock, Logger } from '../../../shared/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
-import type { BarsSource, NewsSource } from '../data/index.js';
-import { barsBefore, calendarReferenceFor, sessionsBefore, windowCovered } from '../data/index.js';
+import type { BarsSource, NewsSource, RouteChoice, VenueRouter } from '../data/index.js';
+import {
+  barsBefore,
+  CLOSED_VENUE_ROUTER,
+  calendarReferenceFor,
+  sessionsBefore,
+  windowCovered,
+} from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
 import { candleFeatures, candleLine } from './candle.js';
 import type { LlmPanel } from './llm-panel.js';
@@ -43,7 +49,6 @@ import {
   DEBATE_STOP_ATR_MULTIPLE,
   LSE_LIQUIDITY_SCREEN,
   type Parameter,
-  SHORTS_ENABLED,
 } from './parameters.js';
 import { selectUniverse } from './universe.js';
 
@@ -60,6 +65,7 @@ export interface DebateSleeveDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly venueFor: (symbol: string) => Venue;
+  readonly router?: VenueRouter | undefined;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly news: NewsSource;
   readonly clock: Clock;
@@ -222,21 +228,47 @@ function buildPersonas(
   };
 }
 
+export type SideRoute = (side: 'long' | 'short') => RouteChoice;
+
+export function sideRoute(
+  router: VenueRouter | undefined,
+  symbol: string,
+  home: Venue,
+  tradingDate: string,
+): SideRoute {
+  return (side) => (router ?? CLOSED_VENUE_ROUTER).route(symbol, home, side, tradingDate);
+}
+
+function routedEntry(
+  side: 'long' | 'short',
+  source: string,
+  home: Venue,
+  route: SideRoute,
+): Pick<SleeveDecision, 'action' | 'reason' | 'venue'> {
+  const choice = route(side);
+  if ('refusal' in choice) {
+    return { action: 'skip', reason: `${side}_unavailable:${choice.refusal}`, venue: home };
+  }
+  return side === 'long'
+    ? { action: 'enter_long', reason: `${source} bullish`, venue: choice.venue }
+    : { action: 'enter_short', reason: `${source} bearish`, venue: choice.venue };
+}
+
 // `source` names the direction's origin in the journalled reason ('judge' vs 'technical'),
 // so a skimmed v2_decisions row never reads as debate output for an arm 2 decision or vice versa
 export function actionFor(
   direction: Direction,
   source: string,
-): Pick<SleeveDecision, 'action' | 'reason'> {
+  home: Venue,
+  route: SideRoute,
+): Pick<SleeveDecision, 'action' | 'reason' | 'venue'> {
   switch (direction) {
     case 'bullish':
-      return { action: 'enter_long', reason: `${source} bullish` };
+      return routedEntry('long', source, home, route);
     case 'bearish':
-      return SHORTS_ENABLED
-        ? { action: 'enter_short', reason: `${source} bearish` }
-        : { action: 'skip', reason: 'shorts_disabled' };
+      return routedEntry('short', source, home, route);
     default:
-      return { action: 'none', reason: `${source} neutral` };
+      return { action: 'none', reason: `${source} neutral`, venue: home };
   }
 }
 
@@ -254,13 +286,15 @@ function decisionFrom(
   hash: string,
   result: DebateResult,
   headlines: number,
+  route: SideRoute,
 ): SleeveDecision {
-  const { action, reason } = actionFor(result.direction, 'judge');
+  const routed = actionFor(result.direction, 'judge', venue, route);
+  const { action, reason } = routed;
   const stop = stopFor(action, read);
   return {
     sleeve_id: DEBATE_SLEEVE_ID,
     instrument: symbol,
-    venue,
+    venue: routed.venue,
     direction: result.direction,
     confidence: result.confidence,
     action,
@@ -383,6 +417,7 @@ interface DebateRequest {
   readonly headlines: number;
   readonly traceId: string;
   readonly tradingDate: string;
+  readonly route: SideRoute;
 }
 
 async function debateDecision(
@@ -401,7 +436,7 @@ async function debateDecision(
       buildPersonas(deps.panel, tradingDate, traceId, debateId, deps.clock),
       { maxRounds: DEBATE_MAX_ROUNDS },
     );
-    return decisionFrom(symbol, venue, read, hash, result, input.headlines);
+    return decisionFrom(symbol, venue, read, hash, result, input.headlines, input.route);
   } catch (error) {
     deps.logger?.log({
       trace_id: traceId,
@@ -460,6 +495,7 @@ async function decideOne(
     headlines: news.headlines.length,
     traceId,
     tradingDate: context.tradingDate,
+    route: sideRoute(deps.router, symbol, venue, context.tradingDate),
   });
 }
 
@@ -467,6 +503,7 @@ export interface TechnicalSleeveDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly venueFor: (symbol: string) => Venue;
+  readonly router?: VenueRouter | undefined;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
 }
 

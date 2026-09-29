@@ -17,6 +17,8 @@ export function createOrderExecutor(options: OrderExecutorOptions): OrderExecuto
     simulatedBrokers: {
       alpaca: new DryRunBrokerAdapter(),
       saxo: new DryRunBrokerAdapter(),
+      saxo_cfd_gbp: new DryRunBrokerAdapter(),
+      saxo_cfd_usd: new DryRunBrokerAdapter(),
     },
     pricing,
     dryRun,

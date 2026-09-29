@@ -16,6 +16,8 @@ import {
   JUDGE_CONFIDENCE_BY_AGREEING_DEBATERS,
   newsView,
   resolveTechnical,
+  type SideRoute,
+  sideRoute,
   technicalRead,
 } from './debate-sleeve.js';
 import { buildLlmPanel, seatModels } from './llm-panel.js';
@@ -118,22 +120,51 @@ describe('directionFrom', () => {
 });
 
 describe('actionFor', () => {
-  it('names the reason after the source that computed the direction', () => {
-    expect(actionFor('bullish', 'technical')).toEqual({
+  const route: SideRoute = (side) => ({ venue: side === 'long' ? 'alpaca' : 'saxo_cfd_usd' });
+  const refuse: SideRoute = () => ({ refusal: 'borrow_cost' });
+
+  it('names the reason after the source that computed the direction and carries the routed venue', () => {
+    expect(actionFor('bullish', 'technical', 'alpaca', route)).toEqual({
       action: 'enter_long',
       reason: 'technical bullish',
+      venue: 'alpaca',
     });
-    expect(actionFor('bearish', 'technical')).toEqual({
-      action: 'skip',
-      reason: 'shorts_disabled',
+    expect(actionFor('bearish', 'technical', 'alpaca', route)).toEqual({
+      action: 'enter_short',
+      reason: 'technical bearish',
+      venue: 'saxo_cfd_usd',
     });
-    expect(actionFor('neutral', 'technical')).toEqual({
+    expect(actionFor('neutral', 'technical', 'saxo', route)).toEqual({
       action: 'none',
       reason: 'technical neutral',
+      venue: 'saxo',
     });
-    expect(actionFor('bullish', 'judge')).toEqual({
+    expect(actionFor('bullish', 'judge', 'alpaca', route)).toEqual({
       action: 'enter_long',
       reason: 'judge bullish',
+      venue: 'alpaca',
+    });
+  });
+
+  it('skips with the refusing rule in the reason and keeps the home venue', () => {
+    expect(actionFor('bearish', 'judge', 'alpaca', refuse)).toEqual({
+      action: 'skip',
+      reason: 'short_unavailable:borrow_cost',
+      venue: 'alpaca',
+    });
+    expect(actionFor('bullish', 'technical', 'saxo', refuse)).toEqual({
+      action: 'skip',
+      reason: 'long_unavailable:borrow_cost',
+      venue: 'saxo',
+    });
+  });
+
+  it('sideRoute fails closed with no router: a short is refused, a long stays at home', () => {
+    expect(sideRoute(undefined, 'AAPL', 'alpaca', '2026-09-25')('short')).toEqual({
+      refusal: 'cfd_cost_model_unset',
+    });
+    expect(sideRoute(undefined, 'AAPL', 'alpaca', '2026-09-25')('long')).toEqual({
+      venue: 'alpaca',
     });
   });
 });
@@ -607,7 +638,7 @@ describe('createDebateSleeve', () => {
     expect(transports.flatMap((transport) => transport.calls)).not.toEqual([]);
   });
 
-  it('skips a bearish judge because shorts are off and does nothing on neutral', async () => {
+  it('skips a bearish judge while the CFD short route is closed and does nothing on neutral', async () => {
     const series = trending('DOWN', 260, -0.001);
     const bearish: Script = (request) =>
       (request.messages[0]?.content ?? '').includes('Mediator persona')
@@ -627,7 +658,8 @@ describe('createDebateSleeve', () => {
     const short = (await decideAll(make(bearish), context)).decisions[0];
     expect(short).toMatchObject({
       action: 'skip',
-      reason: 'shorts_disabled',
+      reason: 'short_unavailable:cfd_cost_model_unset',
+      venue: 'alpaca',
       direction: 'bearish',
     });
     const neutral = (await decideAll(make(NEUTRAL_SCRIPT), context)).decisions[0];

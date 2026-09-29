@@ -1,4 +1,5 @@
 import type {
+  CfdCostModel,
   MarketData,
   OrderSide,
   SimulatedFillQuote,
@@ -11,6 +12,7 @@ import {
   SAXO_COMMISSION_PER_SIDE,
 } from '../../../pipeline/momentum/index.js';
 import type { Logger } from '../../../shared/index.js';
+import { isCfdVenue } from '../data/index.js';
 import { averageDailyNotional } from '../risk/index.js';
 
 const BPS = 10_000;
@@ -29,7 +31,24 @@ export function adversePrice(price: number, side: OrderSide, bps: number): numbe
   return side === 'buy' ? price + adjustment : price - adjustment;
 }
 
-export function venueFee(venue: Venue, side: OrderSide, qty: number, price: number): number {
+export class CfdCostModelUnsetError extends Error {
+  constructor() {
+    super('a CFD fill was priced with no CFD cost model: needs #1850');
+    this.name = 'CfdCostModelUnsetError';
+  }
+}
+
+export function venueFee(
+  venue: Venue,
+  side: OrderSide,
+  qty: number,
+  price: number,
+  cfdCostModel?: CfdCostModel,
+): number {
+  if (isCfdVenue(venue)) {
+    if (cfdCostModel === undefined) throw new CfdCostModelUnsetError();
+    return cfdCostModel.fee(side, qty, price);
+  }
   const notional = qty * price;
   if (venue === 'saxo') return notional * SAXO_COMMISSION_PER_SIDE;
   return alpacaRegulatoryFees({ side, notional, shares: qty, halfSpreadBps: 0 });

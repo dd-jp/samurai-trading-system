@@ -12,6 +12,8 @@ export {
   sessionsBefore,
   windowCovered,
 } from './bars.js';
+export type { CfdInstrument } from './cfd-catalogue.js';
+export { CfdCatalogue, loadCfdCatalogue } from './cfd-catalogue.js';
 export { parseBoeGbpUsdCsv } from './fx.js';
 export type { MacroGateVerdict } from './macro-calendar.js';
 export { addDays, MACRO_DAY_SIZE_FRACTION, macroGate } from './macro-calendar.js';
@@ -20,3 +22,7 @@ export type { HeldInstrument, LastBar, MarkSource } from './marks.js';
 export { heldKey, ParquetMarkSource } from './marks.js';
 export type { NewsSource } from './news.js';
 export { AlpacaNewsSource, NO_NEWS, newsForVenue } from './news.js';
+export type { RouteChoice, VenueRouter } from './venue-routes.js';
+export { CLOSED_VENUE_ROUTER, createVenueRouter } from './venue-routes.js';
+export type { QuoteCurrency } from './venues.js';
+export { isCfdVenue, quoteCurrencyOf } from './venues.js';

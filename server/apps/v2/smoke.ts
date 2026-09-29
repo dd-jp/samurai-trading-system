@@ -2,7 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { macroGate } from './data/index.js';
+import { createVenueRouter, macroGate } from './data/index.js';
 import { composeV2Root } from './index.js';
 import {
   assertArm2RunsBesideDebate,
@@ -14,12 +14,12 @@ import {
   ALL_PINS,
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
+  CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
   LSE_LIQUIDITY_SCREEN,
-  SHORTS_ENABLED,
   SqliteMonthlySpendCap,
 } from './signal/index.js';
 
@@ -108,7 +108,11 @@ function staticProbes(): SmokeProbe[] {
       midYearLooseningRefused(),
       `tighten £${SMOKE_LOSS_CAP_GBP} to £${SMOKE_LOSS_CAP_GBP + 1}`,
     ),
-    probe('shorts are off', !SHORTS_ENABLED, String(SHORTS_ENABLED)),
+    probe(
+      'CFD shorts fail closed: no cost model refuses, then no catalogue refuses',
+      shortRefusal(false) === 'cfd_cost_model_unset' && shortRefusal(true) === 'no_catalogue',
+      `${shortRefusal(false)}, ${shortRefusal(true)}`,
+    ),
     probe(
       'every still-open David-owned parameter is unset',
       STILL_UNSET_PARAMETERS.every((parameter) => !isSet(parameter)),
@@ -137,6 +141,15 @@ function staticProbes(): SmokeProbe[] {
       'assertArm2RunsBesideDebate([debate]) refused without arm2',
     ),
   ];
+}
+
+function shortRefusal(costModelSet: boolean): string | undefined {
+  const choice = createVenueRouter({
+    catalogue: undefined,
+    costModelSet,
+    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  }).route('AAPL', 'alpaca', 'short', SMOKE_TRADING_DATE);
+  return 'refusal' in choice ? choice.refusal : undefined;
 }
 
 function killLineEnforced(): boolean {

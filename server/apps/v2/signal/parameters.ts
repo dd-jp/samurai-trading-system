@@ -1,4 +1,4 @@
-import type { SleeveSpec } from '../../../../contracts/index.js';
+import type { CfdCostModel, SleeveSpec } from '../../../../contracts/index.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -69,7 +69,11 @@ export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774',
 // the count is the builder's default until David sets it
 export const LSE_RESERVED_SLOTS = 4;
 
-export const SHORTS_ENABLED = false;
+export const CFD_COST_MODEL = unset<CfdCostModel>('CFD_COST_MODEL', '#1850');
+
+// doc 66 2026-09-28 (UK CFD shorts): refuse above 2% a year; applied to US CFD shorts as an
+// extension awaiting David's confirmation
+export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
 
 // doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
 // separately committed lines), but no order in a complex line until David records
@@ -143,6 +147,7 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
+  CFD_COST_MODEL,
 ];
 
 // A set parameter never blocks a cycle, so this list only ever holds an unset one;
@@ -151,4 +156,5 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SOCIAL_SOURCE,
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,
+  CFD_COST_MODEL,
 ];
