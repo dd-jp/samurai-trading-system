@@ -218,6 +218,17 @@ describe('relativeStrengthIndex', () => {
     expect(relativeStrengthIndex(closesOf([10, 11, 10, 12, 11.5]), 2)).toBeCloseTo(62.5, 9);
   });
 
+  it('is defined at exactly period + 1 bars, seeded from losses as well as gains', () => {
+    const closesOf = (closes: readonly number[]) => closes.map((close, index) => bar(index, close));
+    expect(relativeStrengthIndex(closesOf([10, 11, 10]), 2)).toBe(50);
+    expect(relativeStrengthIndex(closesOf([10, 9, 8]), 2)).toBe(0);
+  });
+
+  it('smooths by (period - 1) / period beyond the seed at a period other than 2', () => {
+    const closesOf = (closes: readonly number[]) => closes.map((close, index) => bar(index, close));
+    expect(relativeStrengthIndex(closesOf([10, 11, 12, 13, 12]), 3)).toBeCloseTo(200 / 3, 9);
+  });
+
   it('is 0 after a long flat run followed by a single down day', () => {
     const bars = flatCloses().map((close, index) => bar(index, close));
     const lastDown = [...bars.slice(0, -1), bar(bars.length - 1, 99)];
@@ -434,8 +445,14 @@ describe('createMeanReversionSleeve', () => {
   it('skips as non_positive_stop when price - 5 * ATR(20) lands exactly on zero (#1912)', async () => {
     const sleeve = createMeanReversionSleeve(CALENDAR, noConstituents, 15)(wideRangeDip(700));
     const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
-    expect(decision?.action).toBe('skip');
-    expect(decision?.reason).toBe('non_positive_stop');
+    expect(decision).toMatchObject({
+      action: 'skip',
+      reason: 'non_positive_stop',
+      venue: 'alpaca',
+      direction: 'neutral',
+      confidence: 0,
+      inputs_hash: '',
+    });
     expect(decision?.price).toBe(160);
     expect(decision?.atr).toBe(32);
     expect(decision?.stop_price).toBeUndefined();
@@ -563,6 +580,18 @@ describe('createMeanReversionBenchmarkSleeve', () => {
     )(closesMarket(flatCloses()));
     const output = await sleeve.decide(CONTEXT, ['ZZZ', 'AAA', 'MMM']);
     expect(output.decisions.map((decision) => decision.instrument)).toEqual(['ZZZ', 'AAA', 'MMM']);
+    expect(output.refusals).toEqual([]);
+  });
+
+  it('declares the strategy universe (ruling f)', () => {
+    const bars = memorySource([series('BIG', 25, 100, 1_000), series('MID', 25, 10, 5_000)]);
+    const sleeve = createMeanReversionBenchmarkSleeve(bars, () => ['MID', 'BIG'])(
+      closesMarket(flatCloses()),
+    );
+    expect(sleeve.universe({ ...CONTEXT, tradingDate: '2026-09-26' })).toEqual({
+      instruments: ['BIG', 'MID'],
+      refusals: [],
+    });
   });
 
   it('needs the strategy SMA(200) warm-up, not ATR(20) alone (#1912)', async () => {
