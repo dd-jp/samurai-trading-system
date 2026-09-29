@@ -2829,7 +2829,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
   it('does not rescale a position opened after the split day', async () => {
     const deps = harness([], true);
     hold(deps, 6, '2026-09-30', 0.1);
-    const report = await runCycle(withMarket(deps, snapshot), '2026-10-01');
+    const report = await runCycle(withMarket(deps, snapshot), '2026-10-05');
     expect(report.exits).toBe(0);
     expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: undefined });
   });
