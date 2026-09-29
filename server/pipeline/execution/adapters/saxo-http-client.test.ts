@@ -27,6 +27,28 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
   } as Response;
 }
 
+function rawTextResponse(text: string, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? 'OK' : 'Error',
+    headers: new Headers(),
+    json: async () => JSON.parse(text),
+    text: async () => text,
+  } as Response;
+}
+
+function brokenBodyResponse(readError: Error): Response {
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: new Headers(),
+    json: (): Promise<unknown> => Promise.reject(readError),
+    text: (): Promise<string> => Promise.reject(readError),
+  } as Response;
+}
+
 const ORDER: SaxoOrderRequest = {
   Uic: 3347273,
   AssetType: 'Etn',
@@ -71,12 +93,102 @@ describe('SaxoHttpBrokerClient', () => {
     vi.unstubAllGlobals();
   });
 
-  it('refuses to construct without a token, naming the env var', () => {
+  it('refuses to construct without a token, naming the env var and the full guidance message', () => {
     vi.stubEnv(SAXO_CREDENTIAL_ENV_VARS.sim.token, '   ');
-    expect(() => new SaxoHttpBrokerClient({ logger: recordingLogger() })).toThrow(
+    let caught: unknown;
+    try {
+      new SaxoHttpBrokerClient({ logger: recordingLogger() });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toContain('SAXO_SIM_ACCESS_TOKEN');
+    expect(message).toContain('.env.local');
+    expect(message).toContain('saxo:login');
+    expect(message).toContain("sim gateway's bearer");
+    vi.unstubAllEnvs();
+  });
+
+  it('treats a genuinely unset token env var as absent, not throwing on read', () => {
+    const key = SAXO_CREDENTIAL_ENV_VARS.sim.token;
+    const original = process.env[key];
+    delete process.env[key];
+    try {
+      expect(() => new SaxoHttpBrokerClient({ logger: recordingLogger() })).toThrow(
+        /SAXO_SIM_ACCESS_TOKEN/,
+      );
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+  });
+
+  it('reads and trims the token from the environment when accessToken is not passed', async () => {
+    const key = SAXO_CREDENTIAL_ENV_VARS.sim.token;
+    vi.stubEnv(key, '  env-token  ');
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ Data: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new SaxoHttpBrokerClient({
+      baseUrl: 'https://gateway.example/sim/openapi/',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      rateLimiter: permissiveLimiter(),
+      logger: recordingLogger(),
+    });
+
+    await client.listOpenOrders().catch(() => undefined);
+
+    expect(calledInit(fetchMock, 0).headers).toMatchObject({ authorization: 'Bearer env-token' });
+    vi.unstubAllEnvs();
+  });
+
+  it('collapses multiple trailing slashes in a configured base URL to one', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ Data: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi//',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      rateLimiter: permissiveLimiter(),
+      logger: recordingLogger(),
+    });
+
+    await client.listOpenOrders().catch(() => undefined);
+
+    expect(calledPath(fetchMock, 0)).toBe(
+      'https://gateway.example/sim/openapi/port/v1/accounts/me',
+    );
+  });
+
+  it('refuses an explicitly empty accessToken, not just an absent one', () => {
+    expect(() => new SaxoHttpBrokerClient({ accessToken: '', logger: recordingLogger() })).toThrow(
       /SAXO_SIM_ACCESS_TOKEN/,
     );
-    vi.unstubAllEnvs();
+  });
+
+  it('rejects a response whose body cannot be read', async () => {
+    const readError = new Error('socket already closed');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(brokenBodyResponse(readError));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOpenOrders()).rejects.toThrow(
+      /response body could not be read \(listOpenOrders\): socket already closed/,
+    );
+  });
+
+  it('rejects a response body that is not valid JSON', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(rawTextResponse('{not json'));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOpenOrders()).rejects.toThrow(
+      /response body could not be parsed as JSON \(listOpenOrders\)/,
+    );
   });
 
   it('resolves the account once, then POSTs with AccountKey, bearer and x-request-id', async () => {
@@ -95,6 +207,7 @@ describe('SaxoHttpBrokerClient', () => {
     expect(calledPath(fetchMock, 0)).toBe(
       'https://gateway.example/sim/openapi/port/v1/accounts/me',
     );
+    expect(calledInit(fetchMock, 0).method).toBe('GET');
     expect(calledPath(fetchMock, 1)).toBe('https://gateway.example/sim/openapi/trade/v2/orders');
     const init = calledInit(fetchMock, 1);
     expect(init.method).toBe('POST');
@@ -103,7 +216,62 @@ describe('SaxoHttpBrokerClient', () => {
       authorization: `Bearer ${FAKE_TOKEN}`,
       'x-request-id': 'key-1',
       'content-type': 'application/json',
+      accept: 'application/json',
     });
+  });
+
+  it('rejects a placement response whose body is not an object (null, or a bare JSON value)', async () => {
+    const nullBody = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse(null));
+    await expect(
+      makeClient(nullBody, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 }).placeOrder(
+        ORDER,
+        'key-1',
+      ),
+    ).rejects.toThrow(/malformed response body \(placeOrder\): expected an object/);
+
+    const stringBody = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse('just a string'));
+    await expect(
+      makeClient(stringBody, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 }).placeOrder(
+        ORDER,
+        'key-1',
+      ),
+    ).rejects.toThrow(/malformed response body \(placeOrder\): expected an object/);
+  });
+
+  it('validates every related order inside Orders[], not just the top-level fields', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          OrderId: '1',
+          ExternalReference: 'key-1',
+          Orders: [{ OrderId: '2', ExternalReference: 'leg-ref' }],
+        }),
+      );
+    const client = makeClient(fetchMock);
+
+    const placement = await client.placeOrder(ORDER, 'key-1');
+
+    expect(placement.Orders).toEqual([{ OrderId: '2', ExternalReference: 'leg-ref' }]);
+  });
+
+  it('rejects a non-object entry inside Orders[]', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({ OrderId: '1', Orders: [42] }));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.placeOrder(ORDER, 'key-1')).rejects.toThrow(
+      /Orders\[\] entries must be objects/,
+    );
   });
 
   it('does not retry a placement on a 503 — the adapter adopts instead', async () => {
@@ -182,6 +350,7 @@ describe('SaxoHttpBrokerClient', () => {
     await expect(client.cancelOrder('77')).rejects.toMatchObject({
       status: 404,
       code: 'OrderNotFound',
+      message: expect.stringContaining('(cancelOrder)'),
     });
     expect(calledPath(fetchMock, 1)).toBe(
       'https://gateway.example/sim/openapi/trade/v2/orders/77?AccountKey=acct-key',
@@ -198,6 +367,7 @@ describe('SaxoHttpBrokerClient', () => {
       OrderRelation: 'IfDoneMaster',
       Price: 10,
       Amount: 1,
+      FilledAmount: 0.5,
       BuySell: 'Buy',
       Uic: 3347273,
       AssetType: 'Etn',
@@ -231,7 +401,18 @@ describe('SaxoHttpBrokerClient', () => {
     const orders = await client.listOpenOrders();
 
     expect(orders.map((order) => order.OrderId)).toEqual(['1', '3']);
-    expect(orders[0]?.RelatedOpenOrders?.[0]?.OpenOrderType).toBe('StopIfTraded');
+    expect(orders[0]).toEqual({
+      ...row,
+      RelatedOpenOrders: [
+        {
+          OrderId: '2',
+          OpenOrderType: 'StopIfTraded',
+          OrderPrice: 9,
+          Amount: 1,
+          Status: 'NotWorking',
+        },
+      ],
+    });
     expect(calledPath(fetchMock, 1)).toBe(
       'https://gateway.example/sim/openapi/port/v1/orders?AccountKey=acct-key&ClientKey=client-key&%24top=500',
     );
@@ -248,6 +429,116 @@ describe('SaxoHttpBrokerClient', () => {
     const client = makeClient(fetchMock);
 
     await expect(client.listOpenOrders()).rejects.toThrow(/malformed response body/);
+  });
+
+  it('rejects a paged response with no Data envelope, naming the failing endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({}));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOpenOrders()).rejects.toThrow(
+      /malformed response body \(listOpenOrders\): expected a \{Data: \[\.\.\.\]\} envelope/,
+    );
+  });
+
+  it('rejects a non-object row inside an open-orders page', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({ Data: [42] }));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOpenOrders()).rejects.toThrow(/order rows must be objects/);
+  });
+
+  it('rejects a non-object entry inside an open order’s RelatedOpenOrders[]', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          Data: [
+            {
+              OrderId: '1',
+              Status: 'Working',
+              OpenOrderType: 'Limit',
+              Amount: 1,
+              BuySell: 'Buy',
+              Uic: 1,
+              AssetType: 'Etn',
+              RelatedOpenOrders: [42],
+            },
+          ],
+        }),
+      );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOpenOrders()).rejects.toThrow(/RelatedOpenOrders\[\] must be objects/);
+  });
+
+  it('stops paging when __next is present but not a string', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(rawTextResponse('{"Data":[],"__next":12345}'));
+    const client = makeClient(fetchMock);
+
+    const orders = await client.listOpenOrders();
+
+    expect(orders).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an open order whose BuySell is neither Buy nor Sell', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          Data: [
+            {
+              OrderId: '1',
+              Status: 'Working',
+              OpenOrderType: 'Limit',
+              Amount: 1,
+              BuySell: 'Hold',
+              Uic: 1,
+              AssetType: 'Etn',
+            },
+          ],
+        }),
+      );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOpenOrders()).rejects.toThrow(/BuySell must be 'Buy'\|'Sell'/);
+  });
+
+  it('drops an explicit null on an optional string field rather than throwing, and rejects a non-string one', async () => {
+    const BASE_ROW = {
+      OrderId: '1',
+      Status: 'Working',
+      OpenOrderType: 'Limit',
+      Amount: 1,
+      BuySell: 'Buy' as const,
+      Uic: 1,
+      AssetType: 'Etn',
+    };
+    const nullRef = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({ Data: [{ ...BASE_ROW, ExternalReference: null }] }));
+    const orders = await makeClient(nullRef).listOpenOrders();
+    expect(orders[0]?.ExternalReference).toBeUndefined();
+
+    const numericRef = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({ Data: [{ ...BASE_ROW, ExternalReference: 42 }] }));
+    await expect(
+      makeClient(numericRef, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 }).listOpenOrders(),
+    ).rejects.toThrow(/ExternalReference must be a string/);
   });
 
   it("scopes listOpenOrders, listNetPositions, getBalances and listOrderActivities to the pinned account, and excludes the other account's rows from every response", async () => {
@@ -400,6 +691,60 @@ describe('SaxoHttpBrokerClient', () => {
   });
 
   it('queries order activities by AccountKey, ClientKey and FromDateTime', async () => {
+    const activityRow = {
+      ActivityTime: '2026-09-05T08:30:00Z',
+      LogId: 'log-1',
+      OrderId: '1',
+      ExternalReference: 'key-1',
+      Status: 'Placed',
+      SubStatus: 'Rejected',
+      Amount: 1,
+      Price: 10,
+      FillAmount: 0.5,
+      AveragePrice: 9.9,
+      BuySell: 'Buy',
+      Uic: 3347273,
+      AssetType: 'Etn',
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({ Data: [activityRow] }));
+    const client = makeClient(fetchMock);
+
+    const activities = await client.listOrderActivities(new Date('2026-09-05T00:00:00Z'));
+
+    expect(activities).toEqual([activityRow]);
+    expect(calledPath(fetchMock, 1)).toBe(
+      'https://gateway.example/sim/openapi/cs/v1/audit/orderactivities?AccountKey=acct-key&ClientKey=client-key&FromDateTime=2026-09-05T00%3A00%3A00.000Z&%24top=500',
+    );
+  });
+
+  it('rejects an order-activities response with no Data envelope, naming the endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({}));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOrderActivities(new Date('2026-09-05T00:00:00Z'))).rejects.toThrow(
+      /malformed response body \(listOrderActivities\)/,
+    );
+  });
+
+  it('rejects a non-object row inside an order-activities page', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({ Data: [42] }));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOrderActivities(new Date('2026-09-05T00:00:00Z'))).rejects.toThrow(
+      /activity rows must be objects/,
+    );
+  });
+
+  it('drops an explicit null on an optional numeric field rather than throwing', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
@@ -410,11 +755,9 @@ describe('SaxoHttpBrokerClient', () => {
               ActivityTime: '2026-09-05T08:30:00Z',
               LogId: 'log-1',
               OrderId: '1',
-              ExternalReference: 'key-1',
               Status: 'Placed',
-              SubStatus: 'Rejected',
               Amount: 1,
-              Price: 10,
+              Price: null,
               BuySell: 'Buy',
               Uic: 3347273,
               AssetType: 'Etn',
@@ -426,11 +769,40 @@ describe('SaxoHttpBrokerClient', () => {
 
     const activities = await client.listOrderActivities(new Date('2026-09-05T00:00:00Z'));
 
-    expect(activities).toEqual([
-      expect.objectContaining({ LogId: 'log-1', SubStatus: 'Rejected' }),
-    ]);
-    expect(calledPath(fetchMock, 1)).toBe(
-      'https://gateway.example/sim/openapi/cs/v1/audit/orderactivities?AccountKey=acct-key&ClientKey=client-key&FromDateTime=2026-09-05T00%3A00%3A00.000Z&%24top=500',
+    expect(activities[0]?.Price).toBeUndefined();
+  });
+
+  it('rejects a required Amount that overflows to a non-finite number', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(
+        rawTextResponse(
+          '{"Data":[{"ActivityTime":"2026-09-05T08:30:00Z","LogId":"log-1","OrderId":"1",' +
+            '"Status":"Placed","Amount":1e400,"BuySell":"Buy","Uic":1,"AssetType":"Etn"}]}',
+        ),
+      );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOrderActivities(new Date('2026-09-05T00:00:00Z'))).rejects.toThrow(
+      /Amount must be a finite number/,
+    );
+  });
+
+  it('rejects an optional Price that overflows to a non-finite number', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(
+        rawTextResponse(
+          '{"Data":[{"ActivityTime":"2026-09-05T08:30:00Z","LogId":"log-1","OrderId":"1",' +
+            '"Status":"Placed","Amount":1,"Price":1e400,"BuySell":"Buy","Uic":1,"AssetType":"Etn"}]}',
+        ),
+      );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listOrderActivities(new Date('2026-09-05T00:00:00Z'))).rejects.toThrow(
+      /Price must be a finite number when present/,
     );
   });
 
@@ -463,6 +835,30 @@ describe('SaxoHttpBrokerClient', () => {
     expect(calledPath(fetchMock, 1)).toBe(
       'https://gateway.example/sim/openapi/port/v1/netpositions?AccountKey=acct-key&ClientKey=client-key&FieldGroups=NetPositionBase%2CNetPositionView%2CDisplayAndFormat&%24top=500',
     );
+  });
+
+  it('rejects a non-object row inside a net-positions page, naming the endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse({ Data: [42] }));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listNetPositions()).rejects.toThrow(
+      /malformed response body \(listNetPositions\): position rows must be objects/,
+    );
+  });
+
+  it('rejects a net position whose NetPositionBase is not an object', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(
+        jsonResponse({ Data: [{ NetPositionId: '1', NetPositionBase: 'not-an-object' }] }),
+      );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.listNetPositions()).rejects.toThrow(/NetPositionBase must be an object/);
   });
 
   describe('getBalances (#1509)', () => {
@@ -505,6 +901,28 @@ describe('SaxoHttpBrokerClient', () => {
 
       await expect(client.getBalances()).rejects.toThrow(/Currency/);
     });
+
+    it('rejects a balances response that is not an object, naming getBalances', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+        .mockResolvedValue(jsonResponse(null));
+      const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+      await expect(client.getBalances()).rejects.toThrow(
+        /malformed response body \(getBalances\): expected an object/,
+      );
+    });
+
+    it('rejects an explicitly empty Currency rather than treating it as present', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+        .mockResolvedValue(jsonResponse({ Currency: '', CashBalance: 1_000, TotalValue: 1_000 }));
+      const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+      await expect(client.getBalances()).rejects.toThrow(/Currency must not be empty/);
+    });
   });
 
   it('reads a line quote unit off instrument details, account-free (#1302)', async () => {
@@ -529,6 +947,33 @@ describe('SaxoHttpBrokerClient', () => {
     });
     expect(calledPath(fetchMock, 0)).toBe(
       'https://gateway.example/sim/openapi/ref/v1/instruments/details/29391797/Etn',
+    );
+    expect(calledInit(fetchMock, 0).method).toBe('GET');
+    expect(calledInit(fetchMock, 0).headers).not.toHaveProperty('content-type');
+  });
+
+  it('rejects an instrument-details response that is not an object', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse('not-an-object'));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.getInstrumentDetails(29391797, 'Etn')).rejects.toThrow(
+      /malformed response body \(getInstrumentDetails\): expected an object/,
+    );
+  });
+
+  it('refuses instrument details whose AssetType alone mismatches the request (Uic matches)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        Uic: 29391797,
+        AssetType: 'Stock',
+        CurrencyCode: 'GBP',
+        PriceToContractFactor: 1,
+      }),
+    );
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.getInstrumentDetails(29391797, 'Etn')).rejects.toThrow(
+      /details for Uic 29391797\/Etn came back as 29391797\/Stock/,
     );
   });
 
@@ -612,12 +1057,88 @@ describe('SaxoHttpBrokerClient', () => {
     await expect(client.placeOrder(ORDER, 'key-1')).rejects.toThrow(/accountKey/);
   });
 
+  it('picks the pinned account even when it is not the first one the token can see', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          Data: [
+            { AccountKey: 'first-acct', ClientKey: 'client-key' },
+            { AccountKey: 'pinned-acct', ClientKey: 'client-key' },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ Data: [] }));
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi/',
+      accountKey: 'pinned-acct',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      rateLimiter: permissiveLimiter(),
+      logger: recordingLogger(),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await client.listOpenOrders();
+
+    expect(calledPath(fetchMock, 1)).toContain('AccountKey=pinned-acct');
+  });
+
+  it('refuses a pinned accountKey the token cannot see, rather than silently falling back', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        Data: [{ AccountKey: 'some-other-acct', ClientKey: 'client-key' }],
+      }),
+    );
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi/',
+      accountKey: 'pinned-acct',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      rateLimiter: permissiveLimiter(),
+      logger: recordingLogger(),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client.listOpenOrders()).rejects.toThrow(
+      /the configured accountKey is not among the accounts this token can see/,
+    );
+  });
+
+  it('refuses an accounts response with zero accounts, even unpinned', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ Data: [] }));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.placeOrder(ORDER, 'key-1')).rejects.toThrow(
+      /Saxo: \/port\/v1\/accounts\/me returned no account\./,
+    );
+  });
+
+  it('rejects a non-object row inside the accounts response', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ Data: [42] }));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.placeOrder(ORDER, 'key-1')).rejects.toThrow(/account rows must be objects/);
+  });
+
+  it('names resolveAccount when the accounts response has no Data envelope', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({}));
+    const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+    await expect(client.placeOrder(ORDER, 'key-1')).rejects.toThrow(
+      /malformed response body \(resolveAccount\)/,
+    );
+  });
+
   it('never embeds the token in an error message', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ Message: 'nope' }, 401));
     const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
 
     await expect(client.listOpenOrders()).rejects.toSatisfy(
-      (error: unknown) => error instanceof Error && !error.message.includes(FAKE_TOKEN),
+      (error: unknown) =>
+        error instanceof Error &&
+        !error.message.includes(FAKE_TOKEN) &&
+        error.message.includes('(resolveAccount)'),
     );
   });
 
