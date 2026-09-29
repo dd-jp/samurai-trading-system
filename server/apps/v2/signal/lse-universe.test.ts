@@ -73,6 +73,7 @@ describe('selectLseUniverse', () => {
     const source = memorySource([
       series('ISF', 25, 100, 1_000_000),
       series('IUKP', 25, 100, 5_000),
+      series('SGLN', 25, 100, 1_000_000),
     ]);
     const selection = selectLseUniverse(source, '2026-09-26');
     expect(selection.instruments).toEqual(['ISF']);
