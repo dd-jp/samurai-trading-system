@@ -272,6 +272,20 @@ describe('PaperBooks', () => {
     ).toMatchObject({ splitFactor: 1, splitAnchorDate: undefined });
   });
 
+  it('#1865: a position row written before the split columns existed reads as unsplit, unanchored', () => {
+    const db = seededStore();
+    const books = openBooks(db);
+    db.prepare(
+      `INSERT INTO v2_positions (book_id, instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp,
+         client_order_id, exit_client_order_id, opened_date, marks_held, stray, updated_at)
+       VALUES ('debate/primary', 'AAPL', 'alpaca', 2, 100, 96, 106, 'o1', NULL, '2026-09-25', 0, 0, 't')`,
+    ).run();
+    expect(books.position('debate/primary', 'AAPL')).toMatchObject({
+      splitFactor: 1,
+      splitAnchorDate: undefined,
+    });
+  });
+
   it('#1865: applySplit refuses an unknown position', () => {
     const books = openBooks(seededStore());
     expect(() => books.applySplit('debate/primary', 'AAPL', 2, '2026-09-26')).toThrow(

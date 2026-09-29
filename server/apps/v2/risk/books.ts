@@ -370,7 +370,8 @@ export class PaperBooks implements BookLedger {
          WHERE book_id = @bookId AND instrument = @instrument`,
       )
       .run({ ratio, anchorDate, now: this.#now(), bookId, instrument });
-    if (result.changes !== 1) throw new Error(`PaperBooks: ${bookId} has no ${instrument} position`);
+    if (result.changes !== 1)
+      throw new Error(`PaperBooks: ${bookId} has no ${instrument} position`);
   }
 
   #setPositionQty(bookId: string, held: Position | undefined, fill: BookFill, qty: number): void {

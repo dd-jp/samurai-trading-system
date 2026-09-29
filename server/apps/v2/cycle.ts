@@ -295,7 +295,8 @@ class Cycle {
 
   rescaleForSplit(bookId: string, held: Position): void {
     const anchorDate =
-      held.splitAnchorDate ?? this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
+      held.splitAnchorDate ??
+      this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
     if (anchorDate === undefined) return;
     const days = calendarDaysBetween(anchorDate, this.tradingDate);
     const bars = this.deps.market
