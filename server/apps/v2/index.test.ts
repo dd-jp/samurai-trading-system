@@ -56,7 +56,10 @@ interface Fixtures {
   spreadsPath: string;
 }
 
-async function writeFixtures(saxoSymbols: readonly string[] = []): Promise<Fixtures> {
+async function writeFixtures(
+  saxoSymbols: readonly string[] = [],
+  usSymbols: readonly string[] = [],
+): Promise<Fixtures> {
   const directory = mkdtempSync(join(tmpdir(), 'v2-root-'));
   const bars: DailyBar[] = [];
   const origin = Date.UTC(2026, 0, 1);
@@ -78,6 +81,7 @@ async function writeFixtures(saxoSymbols: readonly string[] = []): Promise<Fixtu
   await store.write('alpaca', [
     { symbol: 'UP', bars },
     { symbol: 'SPY', bars },
+    ...usSymbols.map((symbol) => ({ symbol, bars })),
   ]);
   if (saxoSymbols.length > 0) {
     await store.write(
@@ -87,7 +91,10 @@ async function writeFixtures(saxoSymbols: readonly string[] = []): Promise<Fixtu
   }
   store.close();
   const constituentsPath = join(directory, 'constituents.csv');
-  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,MISSING"\n');
+  writeFileSync(
+    constituentsPath,
+    `date,tickers\n2016-01-04,"${['UP', 'MISSING', ...usSymbols].join(',')}"\n`,
+  );
   const fxPath = join(directory, 'fx.csv');
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
   const spreadsPath = join(directory, 'spreads.csv');
@@ -249,7 +256,10 @@ describe('rootOptionsFor', () => {
   });
 
   async function composedFrom(clock: SimulatedClock) {
-    const fixtures = await writeFixtures(['ISF', 'IUSA']);
+    const fixtures = await writeFixtures(
+      ['ISF', 'IUSA'],
+      Array.from({ length: 10 }, (_, i) => `US${i}`),
+    );
     directory = fixtures.directory;
     liveTokenFile.path = tokenPath;
     const storePath = join(fixtures.directory, 'wired.sqlite');
@@ -261,16 +271,19 @@ describe('rootOptionsFor', () => {
     });
   }
 
-  const lseInstrumentsOf = (root: ReturnType<typeof composeV2Root>) =>
+  const universesOf = (root: ReturnType<typeof composeV2Root>) =>
     root.registry
       .list()
-      .flatMap(
+      .map(
         (sleeve) =>
           sleeve.universe({ tradingDate: ENTRY_DATE, macroDay: false, dryRun: true }).instruments,
-      )
+      );
+  const lseInstrumentsOf = (root: ReturnType<typeof composeV2Root>) =>
+    universesOf(root)
+      .flat()
       .filter((symbol) => isLseInstrument(symbol));
 
-  it('reads the real live token file: an expired session journals SAXO_SESSION and empties every LSE universe', async () => {
+  it('reads the real live token file: an expired session journals SAXO_SESSION and hands every LSE slot to a US name (#1913)', async () => {
     const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
     writeTokenFile(tokenPath, saxoSession(clock, -1));
     const root = await composedFrom(clock);
@@ -284,6 +297,7 @@ describe('rootOptionsFor', () => {
         }),
       );
       expect(lseInstrumentsOf(root)).toEqual([]);
+      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10]);
     } finally {
       root.close();
     }
@@ -321,6 +335,7 @@ describe('rootOptionsFor', () => {
         root.journal.newRefusals(ENTRY_DATE).filter((r) => r.parameter === 'SAXO_SESSION'),
       ).toEqual([]);
       expect(lseInstrumentsOf(root).length).toBeGreaterThan(0);
+      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10]);
     } finally {
       root.close();
     }

@@ -343,8 +343,17 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       news,
       clock,
       logger,
+      lseLegRefusal: options.lseLegRefusal,
     }),
-    createArm2Sleeve({ bars, constituents, venueFor, router, market, clock }),
+    createArm2Sleeve({
+      bars,
+      constituents,
+      venueFor,
+      router,
+      market,
+      clock,
+      lseLegRefusal: options.lseLegRefusal,
+    }),
   ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);

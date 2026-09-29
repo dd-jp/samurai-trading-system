@@ -70,6 +70,7 @@ export interface DebateSleeveDeps {
   readonly news: NewsSource;
   readonly clock: Clock;
   readonly logger?: Logger | undefined;
+  readonly lseLegRefusal?: string | undefined;
 }
 
 export interface TechnicalRead {
@@ -381,7 +382,8 @@ export function buildUniverse(
   lseScreen: Parameter<number> = LSE_LIQUIDITY_SCREEN,
 ): SleeveUniverse {
   const lse = selectLseUniverse(deps.bars, tradingDate, lseScreen);
-  const pooled = [...deps.constituents(tradingDate), ...lse.instruments];
+  const lseLines = deps.lseLegRefusal === undefined ? lse.instruments : [];
+  const pooled = [...deps.constituents(tradingDate), ...lseLines];
   const selection = selectUniverse(pooled, { ...deps, tradingDate });
   return {
     instruments: [...selection.liquidity, ...selection.movers],
@@ -505,6 +507,7 @@ export interface TechnicalSleeveDeps {
   readonly venueFor: (symbol: string) => Venue;
   readonly router?: VenueRouter | undefined;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
+  readonly lseLegRefusal?: string | undefined;
 }
 
 export function createTechnicalSleeve<Deps extends TechnicalSleeveDeps>(
