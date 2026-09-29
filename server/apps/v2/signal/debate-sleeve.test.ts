@@ -22,7 +22,7 @@ import {
 } from './debate-sleeve.js';
 import { buildLlmPanel, seatModels } from './llm-panel.js';
 import { isLseInstrument } from './lse-lines.js';
-import { DEBATE_SLEEVE_SPEC, type Parameter, UNSET } from './parameters.js';
+import { DEBATE_SLEEVE_SPEC, LSE_RESERVED_SLOTS, type Parameter, UNSET } from './parameters.js';
 import { BULLISH_SCRIPT, type Script, ScriptedTransport } from './scripted-transport.js';
 import { UNIVERSE_CAP } from './universe.js';
 
@@ -286,6 +286,47 @@ describe('buildUniverse', () => {
       const shared = buildUniverse(manyDeps, tradingDate, screen(1));
       expect(usOnly.instruments).toHaveLength(UNIVERSE_CAP);
       expect(shared.instruments).toHaveLength(UNIVERSE_CAP);
+    });
+
+    describe('a refused Saxo session (#1913)', () => {
+      const manyUs = Array.from({ length: 30 }, (_, i) =>
+        trending(`V${String(i).padStart(2, '0')}`, 260, 0.001),
+      );
+      const withLse = (lseSeries: readonly BarSeries[], lseLegRefusal?: string) => ({
+        ...deps(manyUs.map((entry) => entry.symbol)),
+        bars: source([...manyUs, ...lseSeries]),
+        lseLegRefusal,
+      });
+      const thinLse = lseTidms.map((tidm) => trending(tidm, 260, 0.001, 1));
+      const context = { tradingDate, macroDay: false, dryRun: true };
+
+      it('hands every reserved LSE slot back: 20 US names, the US-only universe', () => {
+        const refused = withLse(thinLse, 'session lost');
+        const usOnly = buildUniverse(withLse([]), tradingDate, screen(1)).instruments;
+        const debate = createDebateSleeve({
+          ...refused,
+          panel: panelWith(bullishScript),
+          news: NO_NEWS,
+          clock,
+        }).universe(context).instruments;
+        const arm2 = createArm2Sleeve({ ...refused, clock }).universe(context).instruments;
+        expect(usOnly).toHaveLength(UNIVERSE_CAP);
+        expect(buildUniverse(refused, tradingDate, screen(1)).instruments).toEqual(usOnly);
+        expect(debate).toEqual(usOnly);
+        expect(arm2).toEqual(usOnly);
+      });
+
+      it('fills the reserved LSE slots when the session is live', () => {
+        const universe = buildUniverse(withLse(thinLse), tradingDate, screen(1)).instruments;
+        expect(universe).toHaveLength(UNIVERSE_CAP);
+        expect(universe.filter(isLseInstrument)).toHaveLength(LSE_RESERVED_SLOTS);
+      });
+
+      it('hands the slots two LSE lines cannot fill back to the shared ranking', () => {
+        const universe = buildUniverse(withLse(thinLse.slice(0, 2)), tradingDate, screen(1));
+        expect(universe.instruments).toHaveLength(UNIVERSE_CAP);
+        expect(universe.instruments.filter(isLseInstrument)).toHaveLength(2);
+      });
     });
 
     it('excludes every LSE name under the floor', () => {

@@ -36,6 +36,7 @@ export interface Arm2SleeveDeps {
   readonly router?: VenueRouter | undefined;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly clock: Clock;
+  readonly lseLegRefusal?: string | undefined;
 }
 
 async function decideOne(
