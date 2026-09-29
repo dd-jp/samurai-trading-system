@@ -2833,6 +2833,52 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toBeUndefined();
   });
 
+  const GAP_THROUGH_STOP: RawBar = { open: 1.8, high: 1.85, low: 1.75, close: 1.8 };
+
+  it('a held position across a split whose next open gaps through the rescaled stop exits at the gap open on the rescaled qty, with no phantom loss', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    const bars = [...snapshot.slice(0, 4), seriesBar('2026-09-29', GAP_THROUGH_STOP, 1)];
+    await runCycle(withMarket(deps, bars), '2026-09-28');
+    const splitDay = await runCycle(withMarket(deps, bars), '2026-09-29');
+    expect(splitDay.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({
+      qty: 60,
+      stopGbp: expect.closeTo(1.92 / FX, 9),
+      splitFactor: 10,
+    });
+    const gapDay = await runCycle(withMarket(deps, bars), '2026-09-30');
+    expect(gapDay.exits).toBe(1);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-30-AAPL-exit')).toMatchObject({
+      payload: { size: 60, price: expect.closeTo(1.8, 9) },
+    });
+    expect(primary(deps)).toBeUndefined();
+    const proceedsGbp = (60 * 1.8 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX + proceedsGbp, 9);
+    expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(false);
+  });
+
+  it('a simulated entry filled before a split and gapped through after it exits on the rescaled qty at the gap open', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const bars = [
+      seriesBar('2026-09-25', PRE, 10),
+      seriesBar('2026-09-28', TEN_TO_ONE, 1),
+      seriesBar('2026-09-29', TEN_TO_ONE, 1),
+      seriesBar('2026-09-30', GAP_THROUGH_STOP, 1),
+    ];
+    await runCycle(withMarket(deps, bars), '2026-09-30');
+    const filledQty = primary(deps)?.qty ?? 0;
+    expect(filledQty).toBeGreaterThan(0);
+    const report = await runCycle(withMarket(deps, bars), '2026-10-01');
+    expect(report.exits).toBe(2);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-10-01-AAPL-exit')).toMatchObject({
+      payload: { size: expect.closeTo(filledQty * 10, 9), price: expect.closeTo(1.8, 9) },
+    });
+    expect(primary(deps)).toBeUndefined();
+  });
+
   it('detects a split when the latest bar is always factor 1 because history is re-adjusted on refresh', async () => {
     const deps = harness([], true);
     hold(deps, 6);
