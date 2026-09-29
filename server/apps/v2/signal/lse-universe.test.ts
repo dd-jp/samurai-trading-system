@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import type { BarsSource } from '../data/index.js';
 import { lseInstrumentsAbove, selectLseUniverse } from './lse-universe.js';
-import { SAXO_APPROPRIATENESS_TEST_TAKEN } from './parameters.js';
 
 function series(symbol: string, days: number, price: number, volume: number): BarSeries {
   const bars: DailyBar[] = [];

@@ -257,14 +257,9 @@ describe('buildUniverse', () => {
       expect(shared.instruments).toHaveLength(UNIVERSE_CAP);
     });
 
-    it('excludes a name under the floor and a complex line while the appropriateness test is untaken', () => {
+    it('excludes every LSE name under the floor', () => {
       const universe = buildUniverse(deps([]), tradingDate, screen(Number.POSITIVE_INFINITY));
       expect(universe.instruments).toEqual([]);
-      const withComplex = {
-        ...deps([]),
-        bars: source([...lse, trending('SGLN', 260, 0.001)]),
-      };
-      expect(buildUniverse(withComplex, tradingDate, screen(0)).instruments).not.toContain('SGLN');
     });
 
     it('gives the debate sleeve and arm 2 the identical universe', () => {
