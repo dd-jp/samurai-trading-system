@@ -100,6 +100,15 @@ function ohlc(
   return { date, open, high, low, close, volume: 7, rawClose };
 }
 
+describe('the venue-neutral hygiene step', () => {
+  it('leaves the bar shape alone, so the Alpaca path is unaffected by the Saxo repair', () => {
+    const swapped = { ...bar('2020-01-02', 10), open: 10.4, high: 10.1, low: 9.9 };
+    const { bars, report } = applyBarHygiene('X', [swapped], { fetchDate: '2099-01-01' });
+    expect(bars).toEqual([swapped]);
+    expect(report).not.toHaveProperty('shape_repair');
+  });
+});
+
 describe('repairBarShape', () => {
   it('widens the range to cover open and close and never touches open, close, rawClose or volume', () => {
     const { bars, report } = repairBarShape([
