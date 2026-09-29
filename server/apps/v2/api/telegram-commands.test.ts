@@ -88,6 +88,16 @@ function haltBudget(): void {
   ).run();
 }
 
+function resumeFromDashboard(): void {
+  const writer = new ControlWriter(guardedStore(db, 'dashboard', { enabled: true }), {
+    now: () => new Date(nowMs),
+  });
+  writer.write(
+    { action: 'resume', reason: 'dashboard resume', idempotency_key: 'dashboard-resume-1' },
+    'dashboard',
+  );
+}
+
 function advance(ms: number): void {
   nowMs += ms;
 }
@@ -141,6 +151,15 @@ describe('authentication', () => {
     const handler = build();
     expect(await handler.handle(message('halt', { type: 'group' }))).toBeUndefined();
     expect(controlRows()).toEqual([]);
+  });
+
+  it('refuses the owner user id sent from a private chat with a different id', async () => {
+    const handler = build();
+    expect(await handler.handle(message('halt', { chat: 999 }))).toBeUndefined();
+    expect(controlRows()).toEqual([]);
+    expect(journal()).toEqual([
+      { command: 'halt', outcome: 'refused_unauthorized', chat_id: '999', control_id: null },
+    ]);
   });
 
   it('refuses a message in the owner chat from another sender or with none', async () => {
@@ -339,6 +358,19 @@ describe('flatten', () => {
     advance(60_000);
     expect(await handler.handle(message(`flatten ${CODE}`))).toMatch(/not confirmed/);
     expect(controlState()).toBe('running');
+  });
+
+  it('clears the code on confirmation, so a dashboard resume cannot be followed by a replay', async () => {
+    const handler = build();
+    await handler.handle(message('flatten'));
+    await handler.handle(message(`flatten ${CODE}`));
+    advance(60_000);
+    resumeFromDashboard();
+    expect(controlState()).toBe('running');
+    advance(60_000);
+    expect(await handler.handle(message(`flatten ${CODE}`))).toMatch(/not confirmed/);
+    expect(controlState()).toBe('running');
+    expect(controlRows().map((row) => row.action)).toEqual(['halt', 'resume']);
   });
 
   it('refuses a wrong code and drops the pending request', async () => {
