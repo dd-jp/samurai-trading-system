@@ -27,18 +27,44 @@ function adjustmentFactor(bar: V2Bar): number {
   return bar.rawClose / bar.close;
 }
 
+// Genuine splits leave the adjusted close continuous: real large-cap events, reverse splits
+// included, show an adjusted gap of at most ~1.6. Adjusted-only discontinuities (spin-offs,
+// vendor restatements) show 2.3x-9.6x while the raw close moved 1.07x-2.3x, and rescaling on
+// them turns a barely moved raw mark into a phantom loss. A band above 1.6 keeps CHK/EXE-size
+// reverse splits; below 2.3 it rejects every restatement seen
+export const SPLIT_ADJUSTED_GAP_BAND = 2;
+
+interface RejectedSplitStep {
+  readonly date: string;
+  readonly step: number;
+  readonly adjustedGap: number;
+}
+
+interface SplitReading {
+  readonly ratio: number;
+  readonly rejected: readonly RejectedSplitStep[];
+}
+
 // rawClose/close is the cumulative adjustment for every corporate action after that bar, so it
 // steps at a split and stays put through a crash. The step sits on the split day both in a
 // snapshot series and in a refreshed one, where the latest bar's factor is always 1
-export function splitRatioAcross(bars: readonly V2Bar[]): number {
+export function splitRatioAcross(bars: readonly V2Bar[]): SplitReading {
   let ratio = 1;
+  const rejected: RejectedSplitStep[] = [];
   let previous: V2Bar | undefined;
   for (const bar of bars) {
     if (previous !== undefined) {
       const step = adjustmentFactor(previous) / adjustmentFactor(bar);
-      if (Math.max(step, 1 / step) >= SPLIT_STEP_THRESHOLD) ratio *= snapToSplitRatio(step);
+      if (Math.max(step, 1 / step) >= SPLIT_STEP_THRESHOLD) {
+        const adjustedGap = previous.close / bar.close;
+        if (Math.max(adjustedGap, 1 / adjustedGap) < SPLIT_ADJUSTED_GAP_BAND) {
+          ratio *= snapToSplitRatio(step);
+        } else {
+          rejected.push({ date: bar.date, step, adjustedGap });
+        }
+      }
     }
     previous = bar;
   }
-  return ratio;
+  return { ratio, rejected };
 }

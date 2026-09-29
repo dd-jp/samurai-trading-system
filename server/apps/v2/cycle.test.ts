@@ -2955,6 +2955,82 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX + proceeds, 9);
   });
 
+  function loggedDeps(deps: Harness): { deps: Harness; entries: LogEntry[] } {
+    const entries: LogEntry[] = [];
+    return {
+      deps: { ...deps, logger: { log: (entry: LogEntry) => entries.push(entry) } },
+      entries,
+    };
+  }
+
+  const eventsOf = (entries: readonly LogEntry[], event: string) =>
+    entries.filter((entry) => entry.event === event);
+
+  const RAW_FLAT: RawBar = { open: 20.4, high: 20.9, low: 20.1, close: 20.5 };
+
+  it('does not rescale on a CNX-shaped adjusted-only step: adjusted close jumps 7.8x, raw moves 1.03x', async () => {
+    const { deps, entries } = loggedDeps(harness([], true));
+    hold(deps, 6);
+    const restated = [
+      ...preSplit(0.125),
+      seriesBar('2026-09-28', RAW_FLAT, 1),
+      seriesBar('2026-09-29', RAW_FLAT, 1),
+    ];
+    const report = await runCycle(withMarket(deps, restated), '2026-09-30');
+    expect(report.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: undefined });
+    expect(report.books[0]?.equity_gbp).toBeGreaterThan(1_000);
+    expect(eventsOf(entries, 'v2_split_rescaled')).toEqual([]);
+    expect(eventsOf(entries, 'v2_split_implausible')).toMatchObject([
+      { level: 'warn', message: expect.stringContaining('debate/primary AAPL') },
+    ]);
+  });
+
+  it('does not rescale on a glitched adjusted close on the latest bar', async () => {
+    const { deps, entries } = loggedDeps(harness([], true));
+    hold(deps, 6);
+    const glitched = [...preSplit(1), seriesBar('2026-09-28', PRE, 5)];
+    await runCycle(withMarket(deps, glitched), '2026-09-29');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
+    expect(eventsOf(entries, 'v2_split_implausible')).toHaveLength(1);
+  });
+
+  it('still rescales a CHK-shaped 1:200 reverse split on a day the adjusted close also gapped 1.6x', async () => {
+    const { deps, entries } = loggedDeps(harness([], true));
+    hold(deps, 6);
+    const afterSplit: RawBar = { open: 6400, high: 6450, low: 6350, close: 6400 };
+    const reverse = [
+      ...preSplit(0.005),
+      seriesBar('2026-09-28', afterSplit, 1),
+      seriesBar('2026-09-29', afterSplit, 1),
+    ];
+    await runCycle(withMarket(deps, reverse), '2026-09-30');
+    expect(eventsOf(entries, 'v2_split_implausible')).toEqual([]);
+    expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
+      { message: expect.stringContaining('qty 6 -> 0.03') },
+    ]);
+  });
+
+  it('anchors a simulated entry at its fill bar, so a split between the fill bar and the ingest cycle is rescaled', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const bars = [
+      seriesBar('2026-09-25', PRE, 10),
+      seriesBar('2026-09-28', TEN_TO_ONE, 1),
+      seriesBar('2026-09-29', TEN_TO_ONE, 1),
+    ];
+    await runCycle(withMarket(deps, bars), '2026-09-30');
+    expect(primary(deps)).toMatchObject({ splitFactor: 1, splitAnchorDate: '2026-09-25' });
+    const filledQty = primary(deps)?.qty ?? 0;
+    await runCycle(withMarket(deps, bars), '2026-10-01');
+    expect(primary(deps)).toMatchObject({
+      qty: expect.closeTo(filledQty * 10, 9),
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-29',
+    });
+  });
+
   it('logs each rescale', async () => {
     const entries: LogEntry[] = [];
     const deps = {
@@ -2997,13 +3073,31 @@ describe('runCycle: positions held across a split (#1865)', () => {
     }
   }
 
-  it('a backstop rearm after the split uses the rescaled native prices, not the pre-split entry prices', async () => {
+  it('leaves a broker-held position unrescaled and warns that reconcile must take qty from the broker, while simulated shadow books still rescale', async () => {
+    const alpaca = new SplitAlpaca();
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    await runCycle(withMarket(deps, snapshot), '2026-09-29');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: undefined });
+    expect(eventsOf(entries, 'v2_split_broker_qty')).toMatchObject([
+      { level: 'warn', message: expect.stringContaining('#1872') },
+    ]);
+    expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
+      { message: expect.stringContaining('debate/no-macro-gate') },
+    ]);
+  });
+
+  it('a backstop rearm after a recorded split uses the rescaled native prices, not the pre-split entry prices', async () => {
     const alpaca = new SplitAlpaca();
     const deps = harness([longAapl], false, alpaca);
     await runCycle(deps, '2026-09-25');
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
     deps.setControl('halt');
     await runCycle(deps, '2026-09-28');
+    deps.books.applySplit('debate/primary', 'AAPL', 10, '2026-09-28');
     alpaca.resumeResult = {
       client_order_id: 'v2-debate-primary-2026-09-28-AAPL-exit',
       broker_order_ids: ['pf1'],

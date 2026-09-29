@@ -288,12 +288,14 @@ class Cycle {
   }
 
   rescaleSplitPositions(): void {
-    for (const bookId of this.deps.books.ids()) {
-      for (const held of this.deps.books.positions(bookId)) this.rescaleForSplit(bookId, held);
+    for (const sleeveId of this.deps.registry.ids()) {
+      for (const book of this.deps.books.forSleeve(sleeveId)) {
+        for (const held of this.deps.books.positions(book.id)) this.rescaleForSplit(book, held);
+      }
     }
   }
 
-  rescaleForSplit(bookId: string, held: Position): void {
+  rescaleForSplit(book: BookSpec, held: Position): void {
     const anchorDate =
       held.splitAnchorDate ??
       this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
@@ -302,13 +304,30 @@ class Cycle {
     const bars = this.deps.market
       .barsBefore(held.instrument, this.tradingDate, days)
       .filter((dated) => dated.date >= anchorDate);
-    const ratio = splitRatioAcross(bars);
+    const latest = bars.at(-1);
+    if (latest === undefined) return;
+    const { ratio, rejected } = splitRatioAcross(bars);
+    for (const step of rejected) {
+      this.log(
+        'warn',
+        'v2_split_implausible',
+        `${book.id} ${held.instrument}: adjustment step ${step.step} on ${step.date} with adjusted close gap ${step.adjustedGap} is a data discontinuity, not a split; no rescale`,
+      );
+    }
     if (ratio === 1) return;
-    this.deps.books.applySplit(bookId, held.instrument, ratio, (bars.at(-1) as V2Bar).date);
+    if (!this.deps.executor.simulates(routeOf(book, held.venue))) {
+      this.log(
+        'warn',
+        'v2_split_broker_qty',
+        `${book.id} ${held.instrument}: split x${ratio} on a broker-held position; ledger qty ${held.qty} not rescaled, reconcile (#1872) must take qty from the broker`,
+      );
+      return;
+    }
+    this.deps.books.applySplit(book.id, held.instrument, ratio, latest.date);
     this.log(
       'info',
       'v2_split_rescaled',
-      `${bookId} ${held.instrument}: qty ${held.qty} -> ${held.qty * ratio}, levels / ${ratio}`,
+      `${book.id} ${held.instrument}: qty ${held.qty} -> ${held.qty * ratio}, levels / ${ratio}`,
     );
   }
 
@@ -334,6 +353,7 @@ class Cycle {
       this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       return;
     }
+    const opening = this.deps.books.position(order.book_id, order.instrument) === undefined;
     const qty = order.payload.size as number;
     const quote = this.deps.executor.quoteSimulatedFill(order.venue as Venue, {
       instrument: order.instrument,
@@ -351,6 +371,9 @@ class Cycle {
       fee: quote.fee,
     });
     const held = this.deps.books.position(order.book_id, order.instrument);
+    if (opening && held !== undefined) {
+      this.deps.books.applySplit(order.book_id, order.instrument, 1, outcome.bar.date);
+    }
     if (outcome.stoppedAt !== undefined && held !== undefined) {
       this.simulatedExit(order.book_id, held, outcome.stoppedAt, true, 'stop_on_entry_bar');
     }
