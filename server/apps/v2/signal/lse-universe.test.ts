@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import type { BarsSource } from '../data/index.js';
 import { lseInstrumentsAbove, selectLseUniverse } from './lse-universe.js';
-import { SAXO_APPROPRIATENESS_TEST_TAKEN } from './parameters.js';
 
 function series(symbol: string, days: number, price: number, volume: number): BarSeries {
   const bars: DailyBar[] = [];
@@ -70,14 +69,15 @@ describe('lseInstrumentsAbove', () => {
 });
 
 describe('selectLseUniverse', () => {
-  it('screens at the resolved 1M GBP floor and admits the complex lines now the test is taken (#1774)', () => {
+  it('screens at the resolved 750k GBP floor and admits the complex lines now the test is taken (#1774)', () => {
     const source = memorySource([
       series('ISF', 25, 100, 1_000_000),
-      series('IUKP', 25, 100, 5_000),
+      series('IUKP', 25, 100, 8_000),
+      series('IEUX', 25, 100, 7_000),
       series('SGLN', 25, 100, 1_000_000),
     ]);
     const selection = selectLseUniverse(source, '2026-09-26');
-    expect([...selection.instruments].sort()).toEqual(['ISF', 'SGLN']);
+    expect([...selection.instruments].sort()).toEqual(['ISF', 'IUKP', 'SGLN']);
     expect(selection.refusals).toEqual([]);
   });
 });

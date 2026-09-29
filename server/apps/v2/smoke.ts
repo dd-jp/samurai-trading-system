@@ -120,8 +120,8 @@ function staticProbes(): SmokeProbe[] {
       JSON.stringify(ARM2_ENTRY_THRESHOLDS.value),
     ),
     probe(
-      'LSE liquidity screen is resolved at 1M GBP (#1774)',
-      isSet(LSE_LIQUIDITY_SCREEN) && LSE_LIQUIDITY_SCREEN.value === 1_000_000,
+      'LSE liquidity screen is resolved at 750k GBP (#1774)',
+      isSet(LSE_LIQUIDITY_SCREEN) && LSE_LIQUIDITY_SCREEN.value === 750_000,
       String(LSE_LIQUIDITY_SCREEN.value),
     ),
     probe(
@@ -164,6 +164,17 @@ function keylessPaperRunRefused(): boolean {
   }
 }
 
+function unaffordableEntries(store: StoreHandle): number {
+  const row = store
+    .prepare(
+      `SELECT COUNT(*) AS n FROM v2_orders
+       WHERE leg = 'entry' AND trading_date = ? AND outcome = 'rejected'
+         AND json_extract(payload, '$.detail') = 'insufficient_cash'`,
+    )
+    .get(SMOKE_TRADING_DATE) as { n: number };
+  return row.n;
+}
+
 function settledEntries(store: StoreHandle): { filled: number; cancelled: number } {
   return store
     .prepare(
@@ -189,6 +200,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
   const root = dryRunOn(SMOKE_TRADING_DATE);
   try {
     const report = await root.run();
+    const unaffordable = unaffordableEntries(store);
     const llmCalls = root.scriptedTransports.reduce(
       (n, transport) => n + transport.calls.length,
       0,
@@ -228,9 +240,11 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         report.refusals.join(' | '),
       ),
       probe(
-        'entries reach the dry-run broker and every one is refused',
-        report.entries > 0 && report.dry_run_refusals > 0 && report.rejected_orders === 0,
-        `entries=${report.entries} refused=${report.dry_run_refusals} simulated=${report.simulated_orders}`,
+        'entries reach the dry-run broker and every one is refused or turned away for cash',
+        report.entries > 0 &&
+          report.dry_run_refusals > 0 &&
+          report.rejected_orders === unaffordable,
+        `entries=${report.entries} refused=${report.dry_run_refusals} simulated=${report.simulated_orders} unaffordable=${unaffordable}`,
       ),
       probe(
         'dry run fills nothing on the day it enters',
@@ -247,9 +261,9 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
     const { filled, cancelled } = settledEntries(store);
     probes.push(
       probe(
-        'every simulated entry fills or is cancelled on the next bar, and fills reach the books',
+        'every affordable entry fills or is cancelled on the next bar, and fills reach the books',
         filled > 0 &&
-          filled + cancelled === report.entries &&
+          filled + cancelled + unaffordable === report.entries &&
           next.books.some((b) => b.positions > 0),
         `${filled} filled, ${cancelled} cancelled of ${report.entries}; ${next.books
           .map((book) => `${book.book_id}: ${book.positions} positions`)

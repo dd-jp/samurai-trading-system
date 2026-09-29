@@ -52,8 +52,8 @@ describe('parameters', () => {
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(ARM2_ENTRY_THRESHOLDS);
   });
 
-  it("the LSE liquidity floor is David's $1M answer, measured in GBP (#1774)", () => {
-    expect(requireSet(LSE_LIQUIDITY_SCREEN)).toBe(1_000_000);
+  it("the LSE liquidity floor is David's $750k answer, measured in GBP (#1774)", () => {
+    expect(requireSet(LSE_LIQUIDITY_SCREEN)).toBe(750_000);
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(LSE_LIQUIDITY_SCREEN);
   });
 
