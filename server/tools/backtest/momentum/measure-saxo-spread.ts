@@ -1,10 +1,13 @@
 import { writeFileSync } from 'node:fs';
 import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
+import type { InfoPriceQuote } from '../../../providers/saxo-bars/index.js';
+import {
+  LSE_MOMENTUM_LINES,
+  liveTokenSource,
+  SaxoReadOnlyApi,
+} from '../../../providers/saxo-bars/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
-import { LSE_MOMENTUM_LINES } from './lse-lines.js';
 import { halfSpreadBps, median } from './measure-alpaca-spread.js';
-import type { InfoPriceQuote } from './saxo-api.js';
-import { liveTokenSource, SaxoReadOnlyApi } from './saxo-api.js';
 
 export const DEFAULT_SAXO_SPREAD_PATH = 'data/bars/saxo-spreads.csv';
 export const SAXO_SPREAD_CSV_HEADER =

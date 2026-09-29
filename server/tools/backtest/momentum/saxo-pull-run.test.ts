@@ -2,10 +2,19 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import type {
+  ChartSample,
+  InfoPriceQuote,
+  InstrumentDetails,
+  SaxoLine,
+} from '../../../providers/saxo-bars/index.js';
+import {
+  gbpPerQuotedUnit,
+  isSpliced,
+  LSE_MOMENTUM_LINES,
+} from '../../../providers/saxo-bars/index.js';
 import { roundBarPrices } from './bar-csv.js';
 import { tradingCalendar } from './fixture.js';
-import type { SaxoLine } from './lse-lines.js';
-import { gbpPerQuotedUnit, isSpliced, LSE_MOMENTUM_LINES } from './lse-lines.js';
 import type { SaxoSpreadRow } from './measure-saxo-spread.js';
 import {
   BURST_READS,
@@ -20,7 +29,6 @@ import {
   saxoBarsManifest,
   saxoPullSummary,
 } from './pull-saxo-bars.js';
-import type { ChartSample, InfoPriceQuote, InstrumentDetails } from './saxo-api.js';
 
 const USD_PER_GBP = 1.25;
 const SPLICED_START = 200;
