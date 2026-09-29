@@ -474,7 +474,7 @@ function resolveSubclassCappedEquity(
         'absolute here, where it decides a total refusal against a few percent of tolerance. ' +
         'Refusing to arm rather than silently compare GBP to USD. Resolve with a live FX-rate ' +
         "feed, or by running a venue whose account read reports the book's own currency — " +
-        'Saxo GET /port/v1/balances/me, wired as saxoFunding (#1509), which arms ' +
+        'Saxo GET /port/v1/balances, wired as saxoFunding (#1509), which arms ' +
         'equity_ceiling.same_currency_verified via armSameCurrencyCeilings when it does.',
       instrument,
       `per_subclass_deployment_cap:currency_mismatch:${instrument}`,
@@ -542,7 +542,7 @@ const liveBookCeiling: EntryCapGate = (config, intent, portfolio) => {
         'account-level check (#888 review fix-up, arms regardless of whether any instrument is ' +
         'D5-classified yet) refuses to arm rather than silently compare GBP to USD. Resolve with ' +
         "a live FX-rate feed, or by running a venue whose account read reports the book's own " +
-        'currency — Saxo GET /port/v1/balances/me, wired as saxoFunding (#1509), which arms ' +
+        'currency — Saxo GET /port/v1/balances, wired as saxoFunding (#1509), which arms ' +
         'live_book_ceiling.same_currency_verified via armSameCurrencyCeilings when it does.',
       intent.instrument,
       `live_book_ceiling:currency_mismatch:${intent.instrument}`,

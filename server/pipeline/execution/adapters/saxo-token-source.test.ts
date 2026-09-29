@@ -409,9 +409,12 @@ describe('SaxoTokenRefresher', () => {
     const sent: (string | undefined)[] = [];
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_url: string, init: RequestInit) => {
+      vi.fn(async (url: string, init: RequestInit) => {
         sent.push((init.headers as Record<string, string>).authorization);
-        return new Response('{"Data":[]}', { status: 200 });
+        const body = url.includes('/port/v1/accounts/me')
+          ? '{"Data":[{"AccountKey":"acct-key","ClientKey":"client-key"}]}'
+          : '{"Data":[]}';
+        return new Response(body, { status: 200 });
       }),
     );
     const client = new SaxoHttpBrokerClient({
@@ -430,7 +433,11 @@ describe('SaxoTokenRefresher', () => {
       vi.unstubAllGlobals();
     }
 
-    expect(sent).toEqual([`Bearer ${SAVED_ACCESS}`, `Bearer ${ROTATED_ACCESS}`]);
+    expect(sent).toEqual([
+      `Bearer ${SAVED_ACCESS}`,
+      `Bearer ${SAVED_ACCESS}`,
+      `Bearer ${ROTATED_ACCESS}`,
+    ]);
     void refresher.stop();
   });
 

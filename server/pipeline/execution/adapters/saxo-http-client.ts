@@ -491,9 +491,21 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     );
   }
 
+  // /orders/me, /balances/me and /netpositions/me take no AccountKey/ClientKey
+  // (Saxo ref docs); the routes without /me do, same response shape
+  private async accountScopedQuery(extra: Record<string, string> = {}): Promise<string> {
+    const { accountKey, clientKey } = await this.resolveIdentity();
+    return new URLSearchParams({
+      AccountKey: accountKey,
+      ClientKey: clientKey,
+      ...extra,
+    }).toString();
+  }
+
   async listOpenOrders(): Promise<SaxoOpenOrder[]> {
+    const query = await this.accountScopedQuery({ $top: String(PAGE_SIZE) });
     return this.listAll(
-      `/port/v1/orders/me?$top=${PAGE_SIZE}`,
+      `/port/v1/orders?${query}`,
       'listOpenOrders',
       validateOpenOrder,
       'background',
@@ -501,14 +513,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async listOrderActivities(from: Date): Promise<SaxoOrderActivity[]> {
-    const { clientKey } = await this.resolveIdentity();
-    const query = new URLSearchParams({
-      ClientKey: clientKey,
+    const query = await this.accountScopedQuery({
       FromDateTime: from.toISOString(),
       $top: String(PAGE_SIZE),
     });
     return this.listAll(
-      `/cs/v1/audit/orderactivities?${query.toString()}`,
+      `/cs/v1/audit/orderactivities?${query}`,
       'listOrderActivities',
       validateActivity,
       'background',
@@ -516,8 +526,9 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async getBalances(): Promise<SaxoAccountBalance> {
+    const query = await this.accountScopedQuery();
     return this.request(
-      '/port/v1/balances/me',
+      `/port/v1/balances?${query}`,
       { method: 'GET' },
       'getBalances',
       validateBalance,
@@ -526,8 +537,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async listNetPositions(): Promise<SaxoNetPosition[]> {
+    const query = await this.accountScopedQuery({
+      FieldGroups: 'NetPositionBase,NetPositionView,DisplayAndFormat',
+      $top: String(PAGE_SIZE),
+    });
     return this.listAll(
-      `/port/v1/netpositions/me?FieldGroups=NetPositionBase,NetPositionView,DisplayAndFormat&$top=${PAGE_SIZE}`,
+      `/port/v1/netpositions?${query}`,
       'listNetPositions',
       validateNetPosition,
       'background',
