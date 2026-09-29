@@ -96,13 +96,28 @@ function targetTouched(held: Position, lowGbp: number, highGbp: number): boolean
   return held.qty > 0 ? highGbp >= held.targetGbp : lowGbp <= held.targetGbp;
 }
 
+// A gap-open past the stop fills at the open, same as a gapped entry (cycle.test.ts's
+// "fills a simulated entry at the open across the spread when the bar gaps through the limit"):
+// the stop level is only reachable if the open itself hadn't already passed it
+function stopFillGbp(held: Position, openGbp: number): number {
+  const stop = held.stopGbp as number;
+  return held.qty > 0 ? Math.min(stop, openGbp) : Math.max(stop, openGbp);
+}
+
 interface BracketExit {
   readonly priceGbp: number | undefined;
   readonly crossesSpread: boolean;
 }
 
-function bracketExit(held: Position, lowGbp: number, highGbp: number): BracketExit | undefined {
-  if (stopTouched(held, lowGbp, highGbp)) return { priceGbp: held.stopGbp, crossesSpread: true };
+function bracketExit(
+  held: Position,
+  openGbp: number,
+  lowGbp: number,
+  highGbp: number,
+): BracketExit | undefined {
+  if (stopTouched(held, lowGbp, highGbp)) {
+    return { priceGbp: stopFillGbp(held, openGbp), crossesSpread: true };
+  }
   if (targetTouched(held, lowGbp, highGbp)) {
     return { priceGbp: held.targetGbp, crossesSpread: false };
   }
@@ -497,7 +512,7 @@ class Cycle {
     if (bar === undefined || bar.date < held.openedDate) return;
     const fx = this.fxFor(held.venue);
     const toRawGbp = bar.rawClose / bar.close / fx;
-    const exit = bracketExit(held, bar.low * toRawGbp, bar.high * toRawGbp);
+    const exit = bracketExit(held, bar.open * toRawGbp, bar.low * toRawGbp, bar.high * toRawGbp);
     if (exit?.priceGbp === undefined) return;
     this.simulatedExit(
       book.id,

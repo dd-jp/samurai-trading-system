@@ -559,9 +559,9 @@ describe('runCycle', () => {
   it('checks short legs against the rescaled bar too', async () => {
     const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
     for (const [override, price] of [
-      [{ close: 10, low: 9.5, high: 10.3 }, undefined],
-      [{ close: 10, low: 9.5, high: 10.45 }, 20.8],
-      [{ close: 10, low: 9.35, high: 10.3 }, 18.8],
+      [{ open: 10, close: 10, low: 9.5, high: 10.3 }, undefined],
+      [{ open: 10, close: 10, low: 9.5, high: 10.45 }, 20.8],
+      [{ open: 10, close: 10, low: 9.35, high: 10.3 }, 18.8],
     ] as const) {
       const deps = harness([short], true);
       await openBooks(deps);
@@ -587,6 +587,22 @@ describe('runCycle', () => {
       await openBooks(deps);
       deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
       expect((await runCycle(deps, '2026-09-28')).exits).toBe(2);
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
+      ).toBeCloseTo(price, 9);
+    }
+  });
+
+  it('fills a simulated stop-exit at the open when the bar gaps through the stop, for longs and shorts', async () => {
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    for (const [decision, override, price] of [
+      [longAapl, { open: 18.5, low: 18.2, high: 18.9 }, 18.5],
+      [short, { open: 21.5, low: 21.2, high: 21.9 }, 21.5],
+    ] as const) {
+      const deps = harness([decision], true);
+      await openBooks(deps);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      await runCycle(deps, '2026-09-28');
       expect(
         deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
       ).toBeCloseTo(price, 9);
