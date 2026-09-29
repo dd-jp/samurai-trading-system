@@ -6,6 +6,7 @@ import type {
   EntryRoom,
   ExitRequest,
   MarketData,
+  Position,
   RearmRequest,
   RiskApprovedOrder,
   RiskGate,
@@ -39,16 +40,29 @@ function bracketRefusal(
   return target > 0 ? undefined : 'target_not_positive';
 }
 
+function closingLeg(
+  held: Position,
+  purpose: 'exit' | 'rearm',
+): { readonly size: number; readonly side: 'buy' | 'sell' } {
+  const size = Math.abs(held.qty);
+  if (!(size > 0)) {
+    throw new Error(`risk gate: no ${purpose} for ${held.instrument} at qty ${held.qty}`);
+  }
+  return { size, side: held.qty > 0 ? 'sell' : 'buy' };
+}
+
 function venueRefusalFor(
   decision: SleeveDecision,
   extra: RiskGateDeps['venueRefusal'],
 ): string | undefined {
-  if (decision.action === 'enter_short' && !isCfdVenue(decision.venue)) return 'short_requires_cfd';
+  const cfd = isCfdVenue(decision.venue);
+  if (decision.action === 'enter_short' && !cfd) return 'short_requires_cfd';
+  if (decision.action === 'enter_long' && cfd) return 'long_on_cfd';
   return extra?.(decision.venue);
 }
 
 function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {
-  if (decision.action !== 'enter_short' || !isCfdVenue(decision.venue)) return undefined;
+  if (decision.action !== 'enter_short') return undefined;
   return capital.lossCapGbp * CFD_SHORT_GAP_BUDGET_FRACTION;
 }
 
@@ -127,12 +141,7 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveExit(request: ExitRequest): RiskApprovedOrder {
-    const size = Math.abs(request.held.qty);
-    if (!(size > 0)) {
-      throw new Error(
-        `risk gate: no exit for ${request.held.instrument} at qty ${request.held.qty}`,
-      );
-    }
+    const { size, side } = closingLeg(request.held, 'exit');
     return mintApproval({
       kind: 'flatten',
       approvalId: `exit:${request.clientOrderId}:${size}`,
@@ -141,7 +150,7 @@ export class V2RiskGate implements RiskGate {
       bookVariant: request.book.variant,
       venue: request.held.venue,
       instrument: request.held.instrument,
-      side: request.held.qty > 0 ? 'sell' : 'buy',
+      side,
       size,
       entryClientOrderId: request.held.clientOrderId,
       rearmStop: request.rearm?.stop,
@@ -150,12 +159,7 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveRearm(request: RearmRequest): RiskApprovedOrder {
-    const size = Math.abs(request.held.qty);
-    if (!(size > 0)) {
-      throw new Error(
-        `risk gate: no rearm for ${request.held.instrument} at qty ${request.held.qty}`,
-      );
-    }
+    const { size, side } = closingLeg(request.held, 'rearm');
     return mintApproval({
       kind: 'rearm',
       approvalId: `rearm:${request.clientOrderId}:${size}`,
@@ -164,7 +168,7 @@ export class V2RiskGate implements RiskGate {
       bookVariant: request.book.variant,
       venue: request.held.venue,
       instrument: request.held.instrument,
-      side: request.held.qty > 0 ? 'sell' : 'buy',
+      side,
       size,
       entryClientOrderId: request.held.clientOrderId,
       stop: request.stop,

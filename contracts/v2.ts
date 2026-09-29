@@ -350,6 +350,13 @@ export interface CfdCostModel {
   fee(side: OrderSide, qty: number, priceQuote: number): number;
 }
 
+export class CfdCostModelUnsetError extends Error {
+  constructor() {
+    super('a CFD fill was priced with no CFD cost model: needs #1850');
+    this.name = 'CfdCostModelUnsetError';
+  }
+}
+
 export interface SimulatedFillQuote {
   readonly price: number;
   readonly fee: number;

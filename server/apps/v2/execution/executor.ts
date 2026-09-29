@@ -109,7 +109,7 @@ function failedSubmission(order: RiskApprovedOrder, error: unknown, dryRun: bool
     return { outcome: 'rejected', detail: describeThrownSafely(error), approvalId };
   }
   // A primary order is 'refused_dry_run' only when dryRun made it hit the stub broker;
-  // #1400: a Saxo primary hits it regardless (no live adapter), so outside a real dry
+  // #1400: a non-Alpaca primary hits it regardless (no live adapter), so outside a real dry
   // run that is 'simulated', not a refusal
   const outcome =
     order.bookVariant === 'primary' && (dryRun || order.venue === 'alpaca')

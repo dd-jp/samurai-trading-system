@@ -178,6 +178,16 @@ describe('V2RiskGate', () => {
     }
   });
 
+  it('refuses a long on either CFD venue whatever else is true', () => {
+    for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
+      expect(gate().approveEntry(request({ decision: { ...decision, venue } }))).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'long_on_cfd',
+      });
+    }
+  });
+
   it('lets a long through on a non-CFD venue and a short through on either CFD venue', () => {
     expect(gate().approveEntry(request()).order).toBeDefined();
     for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
@@ -219,6 +229,16 @@ describe('V2RiskGate', () => {
   it('builds the entry room from cash and the gap between equity and gross notional', () => {
     expect(gate().entryRoom(1_000, 700, 300)).toEqual({ cashGbp: 700, grossGbp: 700 });
     expect(gate().entryRoom(1_000, 1_900, 900)).toEqual({ cashGbp: 1_900, grossGbp: 100 });
+  });
+
+  it('refuses on a NaN room or notional rather than letting the entry through', () => {
+    const room = { cashGbp: 500, grossGbp: 100 };
+    expect(gate().entryRoomRefusal(Number.NaN, room)).toBe('insufficient_cash');
+    expect(gate().entryRoomRefusal(10, { cashGbp: Number.NaN, grossGbp: 100 })).toBe(
+      'insufficient_cash',
+    );
+    expect(gate().entryRoomRefusal(10, { cashGbp: 500, grossGbp: Number.NaN })).toBe('gross_cap');
+    expect(gate().entryRoom(Number.NaN, 500, 0).grossGbp).toBeNaN();
   });
 
   it('refuses on room: cash first, then the 1x gross cap', () => {
@@ -287,6 +307,9 @@ describe('V2RiskGate', () => {
           decision: { ...cfdShort, price: 1.2, atr: 0.4, stop_price: 1.5 },
         }),
       ),
+    ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
+    expect(
+      gate().approveEntry(request({ decision: { ...cfdShort, price: 3, atr: 1, stop_price: 4 } })),
     ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
   });
 
@@ -469,6 +492,14 @@ describe('V2RiskGate', () => {
       stop: 21,
       target: 18,
     });
+    const longRearm = gate().approveRearm({
+      book: primary,
+      held: { ...held, qty: 4 },
+      clientOrderId: 'r3',
+      stop: 19,
+      target: 22,
+    });
+    expect(longRearm).toMatchObject({ kind: 'rearm', side: 'sell', size: 4 });
     expect(rearm).toEqual({
       kind: 'rearm',
       approvalId: 'rearm:r1:4',

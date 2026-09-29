@@ -10,6 +10,6 @@ export function entryRoomRefusal(
   notionalGbp: number,
   room: EntryRoom,
 ): 'insufficient_cash' | 'gross_cap' | undefined {
-  if (notionalGbp > room.cashGbp) return 'insufficient_cash';
-  return notionalGbp > room.grossGbp ? 'gross_cap' : undefined;
+  if (!(notionalGbp <= room.cashGbp)) return 'insufficient_cash';
+  return notionalGbp <= room.grossGbp ? undefined : 'gross_cap';
 }

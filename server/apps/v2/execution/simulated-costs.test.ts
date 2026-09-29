@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MarketData, OrderSide, V2Bar, Venue } from '../../../../contracts/index.js';
+import { CfdCostModelUnsetError } from '../../../../contracts/index.js';
 import {
   adversePrice,
-  CfdCostModelUnsetError,
   dailyReturnVolatility,
   FALLBACK_IMPACT_BPS,
   IMPACT_K,

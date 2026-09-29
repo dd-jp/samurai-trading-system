@@ -46,6 +46,14 @@ describe('parseCfdCatalogue', () => {
     expect(catalogue.lookup('X')?.borrowCostPerDay).toBeUndefined();
   });
 
+  it('rejects a duplicate symbol', () => {
+    expect(() =>
+      parseCfdCatalogue(
+        file({ asOf: '2026-09-29', instruments: [VOD, { ...VOD, borrowCostPerDay: 0 }] }),
+      ),
+    ).toThrow(/duplicate symbol/);
+  });
+
   it('accepts a zero borrow cost', () => {
     const catalogue = parseCfdCatalogue(
       file({ asOf: '2026-09-29', instruments: [{ ...VOD, borrowCostPerDay: 0 }] }),

@@ -120,10 +120,10 @@ export function parseCfdCatalogue(text: string): CfdCatalogue {
   if (!isRecord(body) || !isIsoDate(body.asOf) || !Array.isArray(body.instruments)) {
     throw new Error('CFD catalogue: expected { asOf, instruments[] }');
   }
-  return new CfdCatalogue({
-    asOf: body.asOf,
-    instruments: body.instruments.map(parseInstrument),
-  });
+  const instruments = body.instruments.map(parseInstrument);
+  const symbols = new Set(instruments.map((instrument) => instrument.symbol));
+  if (symbols.size !== instruments.length) throw new Error('CFD catalogue: duplicate symbol');
+  return new CfdCatalogue({ asOf: body.asOf, instruments });
 }
 
 export function loadCfdCatalogue(path: string): CfdCatalogue | undefined {

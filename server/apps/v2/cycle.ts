@@ -16,6 +16,8 @@ import type {
   Position,
   RearmPrices,
   RiskGate,
+  SimulatedFillQuote,
+  SimulatedFillRequest,
   Sleeve,
   SleeveDecision,
   SleeveOutput,
@@ -25,6 +27,7 @@ import type {
   V2Fill,
   Venue,
 } from '../../../contracts/index.js';
+import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import {
@@ -371,13 +374,17 @@ class Cycle {
     }
     const opening = this.deps.books.position(order.book_id, order.instrument) === undefined;
     const qty = order.payload.size as number;
-    const quote = this.deps.executor.quoteSimulatedFill(order.venue as Venue, {
+    const quote = this.quoteOrRefuse(order.book_id, order.venue as Venue, {
       instrument: order.instrument,
       side,
       qty,
       price: outcome.price,
       crossesSpread: outcome.crossesSpread,
     });
+    if (quote === undefined) {
+      this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
+      return;
+    }
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
@@ -392,6 +399,30 @@ class Cycle {
     }
     if (outcome.stoppedAt !== undefined && held !== undefined) {
       this.simulatedExit(order.book_id, held, outcome.stoppedAt, true, 'stop_on_entry_bar');
+    }
+  }
+
+  quoteOrRefuse(
+    bookId: string,
+    venue: Venue,
+    request: SimulatedFillRequest,
+  ): SimulatedFillQuote | undefined {
+    try {
+      return this.deps.executor.quoteSimulatedFill(venue, request);
+    } catch (error) {
+      if (!(error instanceof CfdCostModelUnsetError)) throw error;
+      const message = `${bookId} ${request.instrument}: simulated ${venue} fill left open, ${error.message}`;
+      this.deps.journal.recordRefusal({
+        trading_date: this.tradingDate,
+        scope: 'fill',
+        parameter: 'CFD_COST_MODEL',
+        ticket: '#1850',
+        message,
+        book_id: bookId,
+        instrument: request.instrument,
+      });
+      this.refusals.push(message);
+      return undefined;
     }
   }
 
@@ -418,13 +449,14 @@ class Cycle {
       return;
     }
     const qty = Math.abs(held.qty);
-    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
+    const quote = this.quoteOrRefuse(order.book_id, held.venue, {
       instrument: held.instrument,
       side: order.side,
       qty,
       price,
       crossesSpread: true,
     });
+    if (quote === undefined) return;
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
@@ -534,13 +566,14 @@ class Cycle {
     const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
     const clientOrderId = this.exitOrderId(bookId, held.instrument);
     if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
-    const quote = this.deps.executor.quoteSimulatedFill(held.venue, {
+    const quote = this.quoteOrRefuse(bookId, held.venue, {
       instrument: held.instrument,
       side,
       qty: Math.abs(held.qty),
       price: trigger,
       crossesSpread,
     });
+    if (quote === undefined) return;
     this.tally.exits += 1;
     this.tally.simulated += 1;
     this.deps.journal.recordOrder({
@@ -1056,6 +1089,8 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   insufficient_cash: 'GROSS_CASH_GATE',
   gross_cap: 'BOOK_GROSS_NOTIONAL_CAP',
   cfd_cost_model_unset: 'CFD_COST_MODEL',
+  short_requires_cfd: 'CFD_VENUE_ROUTE',
+  long_on_cfd: 'CFD_VENUE_ROUTE',
 };
 
 function recordRefusal(

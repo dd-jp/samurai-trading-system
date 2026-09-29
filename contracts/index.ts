@@ -129,6 +129,7 @@ export type {
   Valuation,
   Venue,
 } from './v2.js';
+export { CfdCostModelUnsetError } from './v2.js';
 export type {
   BookCashWire,
   BookPerformanceWire,

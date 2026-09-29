@@ -9,6 +9,7 @@ import type {
   SleeveDecision,
   SleeveSpec,
 } from '../../../contracts/index.js';
+import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -2822,6 +2823,27 @@ describe('#1849: CFD short venue path', () => {
     expect(alpaca.brackets).toHaveLength(0);
   });
 
+  it('holds an Alpaca long and a CFD short together, each in its own venue', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl, { ...shortAapl, instrument: 'SHRT' }], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    expect(alpaca.brackets.map((request) => request.instrument)).toEqual(['AAPL']);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      qty: -6,
+    });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL')).toMatchObject({
+      venue: 'alpaca',
+      side: 'buy',
+    });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SHRT')).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      side: 'sell',
+    });
+  });
+
   it('exits a CFD short on the venue it was opened on', async () => {
     const deps = harness([shortAapl], true);
     await runCycle(deps, '2026-09-25');
@@ -2833,6 +2855,103 @@ describe('#1849: CFD short venue path', () => {
       venue: 'saxo_cfd_usd',
       side: 'buy',
     });
+  });
+});
+
+describe('#1849: a CFD fill with no cost model', () => {
+  const cfdShort: SleeveDecision = { ...shortAapl, instrument: 'SHRT' };
+  const unsetOnCfd = (state: { unset: boolean }): FillPricing => ({
+    halfSpreadBps: () => HALF_SPREAD_BPS,
+    impactBps: () => 0,
+    fee: (venue) => {
+      if (state.unset && venue.startsWith('saxo_cfd')) throw new CfdCostModelUnsetError();
+      return 0;
+    },
+  });
+  const refusalRows = (deps: Harness) =>
+    (deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }).db
+      .prepare(
+        "SELECT book_id, instrument, scope FROM v2_refusals WHERE parameter = 'CFD_COST_MODEL' AND scope = 'fill'",
+      )
+      .all();
+
+  it('leaves the CFD entry unfilled and journals it while the Alpaca-venue book fills and marks', async () => {
+    const deps = harness(
+      [longAapl, cfdShort],
+      true,
+      undefined,
+      [2026],
+      TEST_SPEC,
+      unsetOnCfd({ unset: true }),
+    );
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const report = await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({ qty: 6 });
+    expect(deps.books.position('debate/primary', 'SHRT')).toBeUndefined();
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+    expect(refusalRows(deps)).toContainEqual({
+      book_id: 'debate/primary',
+      instrument: 'SHRT',
+      scope: 'fill',
+    });
+    expect(report.refusals.some((message) => message.includes('SHRT'))).toBe(true);
+  });
+
+  it('fills the CFD entry on a later cycle once the model exists', async () => {
+    const state = { unset: true };
+    const deps = harness([cfdShort], true, undefined, [2026], TEST_SPEC, unsetOnCfd(state));
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'SHRT')).toBeUndefined();
+    state.unset = false;
+    await runCycle(deps, '2026-09-29');
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({ qty: -6 });
+  });
+
+  it('leaves an open CFD short open and flagged when its stop fires, while the long still exits', async () => {
+    const state = { unset: false };
+    const deps = harness(
+      [longAapl, cfdShort],
+      true,
+      undefined,
+      [2026],
+      TEST_SPEC,
+      unsetOnCfd(state),
+    );
+    await openBooks(deps);
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({ qty: -6 });
+    state.unset = true;
+    deps.barsByDate.set('2026-09-28', bar('2026-09-25', { low: 19.0, high: 21 }));
+    const report = await runCycle(deps, '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+    expect(deps.books.position('debate/primary', 'SHRT')).toMatchObject({ qty: -6 });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-SHRT-exit')).toBeUndefined();
+    expect(refusalRows(deps)).toContainEqual({
+      book_id: 'debate/primary',
+      instrument: 'SHRT',
+      scope: 'fill',
+    });
+    expect(report.refusals.some((message) => message.includes('SHRT'))).toBe(true);
+    state.unset = false;
+    deps.barsByDate.set('2026-09-29', bar('2026-09-28', { low: 19.0, high: 21 }));
+    await runCycle(deps, '2026-09-29');
+    expect(deps.books.position('debate/primary', 'SHRT')).toBeUndefined();
+  });
+
+  it('rethrows any other error from a fill quote', async () => {
+    const boom: FillPricing = {
+      halfSpreadBps: () => 0,
+      impactBps: () => 0,
+      fee: () => {
+        throw new Error('boom');
+      },
+    };
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, boom);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await expect(runCycle(deps, '2026-09-28')).rejects.toThrow('boom');
   });
 });
 

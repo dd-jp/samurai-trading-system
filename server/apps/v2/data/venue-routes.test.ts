@@ -115,6 +115,30 @@ describe('VenueRouter short refusals', () => {
     expect(short(router([over]))).toEqual({ refusal: 'borrow_cost' });
   });
 
+  it('admits a present zero borrow cost as free', () => {
+    expect(short(router([instrument({ symbol: 'AAPL', borrowCostPerDay: 0 })]))).toEqual({
+      venue: 'saxo_cfd_usd',
+    });
+  });
+
+  it('refuses an index CFD row for a US stock and for a UK ETF', () => {
+    const index = router([
+      instrument({ symbol: 'AAPL', assetType: 'CfdOnIndex' }),
+      instrument({ symbol: 'ISF', currency: 'GBP', assetType: 'CfdOnIndex' }),
+    ]);
+    expect(short(index)).toEqual({ refusal: 'asset_type_mismatch' });
+    expect(short(index, 'ISF', 'saxo')).toEqual({ refusal: 'asset_type_mismatch' });
+  });
+
+  it('refuses a stock CFD row for a UK ETF and an ETF CFD row for a US stock', () => {
+    const swapped = router([
+      instrument({ symbol: 'AAPL', assetType: 'CfdOnEtf' }),
+      instrument({ symbol: 'ISF', currency: 'GBP', assetType: 'CfdOnStock' }),
+    ]);
+    expect(short(swapped)).toEqual({ refusal: 'asset_type_mismatch' });
+    expect(short(swapped, 'ISF', 'saxo')).toEqual({ refusal: 'asset_type_mismatch' });
+  });
+
   it('names the earlier rule when several apply', () => {
     const r = router([
       instrument({
@@ -125,5 +149,9 @@ describe('VenueRouter short refusals', () => {
       }),
     ]);
     expect(short(r)).toEqual({ refusal: 'not_tradable' });
+    const typed = router([
+      instrument({ symbol: 'AAPL', assetType: 'CfdOnIndex', tradable: false }),
+    ]);
+    expect(short(typed)).toEqual({ refusal: 'asset_type_mismatch' });
   });
 });

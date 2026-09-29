@@ -97,9 +97,13 @@ const gate = new V2RiskGate({
 });
 
 function entry(book: BookSpec = primary, venue: SleeveDecision['venue'] = 'alpaca') {
+  const short = venue.startsWith('saxo_cfd');
+  const routed: SleeveDecision = short
+    ? { ...decision, venue, action: 'enter_short', stop_price: 20.8 }
+    : { ...decision, venue };
   const { order } = gate.approveEntry({
     book,
-    decision: { ...decision, venue },
+    decision: routed,
     clientOrderId: `e-${book.variant}-${venue}`,
     tradingDate: '2026-09-25',
     equityGbp: 1_000,

@@ -49,4 +49,15 @@ describe('entryRoomRefusal', () => {
     expect(entryRoomRefusal(1, { cashGbp: 1_000, grossGbp: 0 })).toBe('gross_cap');
     expect(entryRoomRefusal(1, { cashGbp: 1_000, grossGbp: -50 })).toBe('gross_cap');
   });
+
+  it('refuses a NaN notional, cash room or gross room, and a NaN equity', () => {
+    expect(entryRoomRefusal(Number.NaN, { cashGbp: 1_000, grossGbp: 1_000 })).toBe(
+      'insufficient_cash',
+    );
+    expect(entryRoomRefusal(1, { cashGbp: Number.NaN, grossGbp: 1_000 })).toBe('insufficient_cash');
+    expect(entryRoomRefusal(1, { cashGbp: 1_000, grossGbp: Number.NaN })).toBe('gross_cap');
+    expect(entryRoomRefusal(1, { cashGbp: 1_000, grossGbp: grossRoomGbp(Number.NaN, 0) })).toBe(
+      'gross_cap',
+    );
+  });
 });

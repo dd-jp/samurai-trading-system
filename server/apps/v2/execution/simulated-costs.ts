@@ -1,11 +1,12 @@
-import type {
-  CfdCostModel,
-  MarketData,
-  OrderSide,
-  SimulatedFillQuote,
-  SimulatedFillRequest,
-  V2Bar,
-  Venue,
+import {
+  type CfdCostModel,
+  CfdCostModelUnsetError,
+  type MarketData,
+  type OrderSide,
+  type SimulatedFillQuote,
+  type SimulatedFillRequest,
+  type V2Bar,
+  type Venue,
 } from '../../../../contracts/index.js';
 import {
   alpacaRegulatoryFees,
@@ -28,13 +29,6 @@ export interface FillPricing {
 export function adversePrice(price: number, side: OrderSide, bps: number): number {
   const adjustment = (price * bps) / BPS;
   return side === 'buy' ? price + adjustment : price - adjustment;
-}
-
-export class CfdCostModelUnsetError extends Error {
-  constructor() {
-    super('a CFD fill was priced with no CFD cost model: needs #1850');
-    this.name = 'CfdCostModelUnsetError';
-  }
 }
 
 export function venueFee(
