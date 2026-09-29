@@ -130,6 +130,8 @@ const ALLOWED_CAPITAL_LITERALS = new Set([
   'server/apps/v2/backtest-cli.ts:BACKTEST_LOSS_CAP_GBP',
   'server/apps/v2/signal/cross-asset-trend.ts:CAPITAL_SHARE',
   'server/apps/v2/signal/cross-asset-trend.ts:minimumCapitalGbp',
+  'server/apps/v2/signal/mean-reversion.ts:CAPITAL_SHARE',
+  'server/apps/v2/signal/mean-reversion.ts:minimumCapitalGbp',
 ]);
 
 describe('capital literals', () => {

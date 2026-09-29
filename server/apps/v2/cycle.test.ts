@@ -559,9 +559,9 @@ describe('runCycle', () => {
   it('checks short legs against the rescaled bar too', async () => {
     const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
     for (const [override, price] of [
-      [{ close: 10, low: 9.5, high: 10.3 }, undefined],
-      [{ close: 10, low: 9.5, high: 10.45 }, 20.8],
-      [{ close: 10, low: 9.35, high: 10.3 }, 18.8],
+      [{ open: 10, close: 10, low: 9.5, high: 10.3 }, undefined],
+      [{ open: 10, close: 10, low: 9.5, high: 10.45 }, 20.8],
+      [{ open: 10, close: 10, low: 9.35, high: 10.3 }, 18.8],
     ] as const) {
       const deps = harness([short], true);
       await openBooks(deps);
@@ -587,6 +587,40 @@ describe('runCycle', () => {
       await openBooks(deps);
       deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
       expect((await runCycle(deps, '2026-09-28')).exits).toBe(2);
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
+      ).toBeCloseTo(price, 9);
+    }
+  });
+
+  it('fills a simulated stop-exit at the open when the bar gaps through the stop, for longs and shorts', async () => {
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    for (const [decision, override, price] of [
+      [longAapl, { open: 18.5, low: 18.2, high: 18.9 }, 18.5],
+      [short, { open: 21.5, low: 21.2, high: 21.9 }, 21.5],
+    ] as const) {
+      const deps = harness([decision], true);
+      await openBooks(deps);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      await runCycle(deps, '2026-09-28');
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
+      ).toBeCloseTo(price, 9);
+    }
+  });
+
+  it('never fills a simulated stop-exit outside the bar range when the open is defective, for longs and shorts', async () => {
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    for (const [decision, override, price] of [
+      [longAapl, { open: 15, low: 19, high: 19.5 }, 19],
+      [longAapl, { open: 25, low: 18, high: 18.5 }, 18.5],
+      [short, { open: 25, low: 20.5, high: 21 }, 21],
+      [short, { open: 15, low: 22, high: 23 }, 22],
+    ] as const) {
+      const deps = harness([decision], true);
+      await openBooks(deps);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      await runCycle(deps, '2026-09-28');
       expect(
         deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
       ).toBeCloseTo(price, 9);
@@ -2817,6 +2851,52 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toBeUndefined();
   });
 
+  const GAP_THROUGH_STOP: RawBar = { open: 1.8, high: 1.85, low: 1.75, close: 1.8 };
+
+  it('a held position across a split whose next open gaps through the rescaled stop exits at the gap open on the rescaled qty, with no phantom loss', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    const bars = [...snapshot.slice(0, 4), seriesBar('2026-09-29', GAP_THROUGH_STOP, 1)];
+    await runCycle(withMarket(deps, bars), '2026-09-28');
+    const splitDay = await runCycle(withMarket(deps, bars), '2026-09-29');
+    expect(splitDay.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({
+      qty: 60,
+      stopGbp: expect.closeTo(1.92 / FX, 9),
+      splitFactor: 10,
+    });
+    const gapDay = await runCycle(withMarket(deps, bars), '2026-09-30');
+    expect(gapDay.exits).toBe(1);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-30-AAPL-exit')).toMatchObject({
+      payload: { size: 60, price: expect.closeTo(1.8, 9) },
+    });
+    expect(primary(deps)).toBeUndefined();
+    const proceedsGbp = (60 * 1.8 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX + proceedsGbp, 9);
+    expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(false);
+  });
+
+  it('a simulated entry filled before a split and gapped through after it exits on the rescaled qty at the gap open', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const bars = [
+      seriesBar('2026-09-25', PRE, 10),
+      seriesBar('2026-09-28', TEN_TO_ONE, 1),
+      seriesBar('2026-09-29', TEN_TO_ONE, 1),
+      seriesBar('2026-09-30', GAP_THROUGH_STOP, 1),
+    ];
+    await runCycle(withMarket(deps, bars), '2026-09-30');
+    const filledQty = primary(deps)?.qty ?? 0;
+    expect(filledQty).toBeGreaterThan(0);
+    const report = await runCycle(withMarket(deps, bars), '2026-10-01');
+    expect(report.exits).toBe(2);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-10-01-AAPL-exit')).toMatchObject({
+      payload: { size: expect.closeTo(filledQty * 10, 9), price: expect.closeTo(1.8, 9) },
+    });
+    expect(primary(deps)).toBeUndefined();
+  });
+
   it('detects a split when the latest bar is always factor 1 because history is re-adjusted on refresh', async () => {
     const deps = harness([], true);
     hold(deps, 6);
@@ -2839,14 +2919,14 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
   });
 
-  it('a price crash that leaves the adjustment factor unchanged is a real move: no rescale, the stop fires', async () => {
+  it('a price crash that leaves the adjustment factor unchanged is a real move: no rescale, the stop fires at the crash open', async () => {
     const deps = harness([], true);
     hold(deps, 6);
     const crash = [...preSplit(1), seriesBar('2026-09-28', TEN_TO_ONE, 1)];
     const report = await runCycle(withMarket(deps, crash), '2026-09-29');
     expect(report.exits).toBe(1);
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
-      payload: { size: 6, price: expect.closeTo(19.2, 9) },
+      payload: { size: 6, price: expect.closeTo(2, 9) },
     });
     expect(primary(deps)).toBeUndefined();
   });

@@ -15,6 +15,19 @@ export { createDebateSleeve } from './debate-sleeve.js';
 export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 export { NousPinnedTransport } from './llm-transport.js';
 export { isLseInstrument, LSE_LINES } from './lse-lines.js';
+export {
+  createMeanReversionBenchmarkSleeve,
+  createMeanReversionSleeve,
+  MEAN_REVERSION_BENCHMARK_ID,
+  MEAN_REVERSION_CANDIDATE_ID,
+  MEAN_REVERSION_ENTRY_THRESHOLDS,
+  MEAN_REVERSION_FROM,
+  MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
+  MEAN_REVERSION_TO,
+  MEAN_REVERSION_UNIVERSE_COUNT,
+  meanReversionSleeveId,
+  relativeStrengthIndex,
+} from './mean-reversion.js';
 export { ALL_PINS, type ModelPin } from './models.js';
 export { SqliteMonthlySpendCap, utcMonthStart } from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';

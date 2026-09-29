@@ -9,6 +9,7 @@ import {
   PBO_REJECT_THRESHOLD,
   pbo,
   perPeriodSharpe,
+  sliceByRanges,
   WALK_FORWARD_FOLDS,
   walkForwardPath,
 } from '../../tools/backtest/index.js';
@@ -34,6 +35,7 @@ export interface VerdictInput {
   readonly trialsCounted: number;
   readonly lossCapGbp: number;
   readonly folds?: number | undefined;
+  readonly embargo?: number | undefined;
 }
 
 export interface TrialResult {
@@ -102,7 +104,11 @@ export function capitalCeilingGbp(lossCapGbp: number, drawdown: number): number 
 export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   assertAligned(input);
   const returns = input.trials.map((series) => series.returns);
-  const ranges = foldRanges(input.dates.length, input.folds ?? WALK_FORWARD_FOLDS);
+  const ranges = foldRanges(
+    input.dates.length,
+    input.folds ?? WALK_FORWARD_FOLDS,
+    input.embargo ?? 0,
+  );
   const matrix = foldSharpeMatrix(returns, ranges);
   const trials = input.trials.map((series, index) => ({
     trial: series.trial,
@@ -115,7 +121,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   const strategySharpe = annualisedSharpe(path.returns);
   const haircut = strategySharpe * SHARPE_HAIRCUT_MULTIPLIER;
   const walkForwardBenchmark = annualisedSharpe(
-    input.benchmark.returns.slice(path.start, path.end),
+    sliceByRanges(input.benchmark.returns, path.testRanges),
   );
   const dsr = deflate(selected.returns, input.trialsCounted);
   const probability = pbo(matrix).pbo;

@@ -343,8 +343,19 @@ describe('runBacktest', () => {
         benchmark: { config: { lookback: 2 }, sleeve: trendSleeve('hold', 'UP', 2) },
       }),
     ).toEqual([15, 16]);
+    expect(await numbers({ embargo: 2 })).toEqual([17, 18]);
     expect(await numbers({})).toEqual([3, 4]);
   }, 20_000);
+
+  it('#1515: omits embargo from the run hash when unset, so an old candidate replays its own trial numbers unchanged', async () => {
+    const shared = ledger();
+    const baseline = await runBacktest(input({ ledger: shared }));
+    const replay = await runBacktest(input({ ledger: shared, embargo: undefined }));
+    expect(replay.trials.map((trial) => trial.trial)).toEqual(
+      baseline.trials.map((trial) => trial.trial),
+    );
+    expect(shared.count()).toBe(SESSION_B.entries.length + 2);
+  });
 
   it('fences each sleeve from bars after its session', async () => {
     const future = reading((m, date) => m.barsBefore('UP', addDays(date, 1), 1));
