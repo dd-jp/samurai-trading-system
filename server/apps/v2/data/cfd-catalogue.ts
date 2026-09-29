@@ -35,6 +35,14 @@ function isPositive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function isIsoDate(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    new Date(`${value}T00:00:00.000Z`).toISOString().startsWith(value)
+  );
+}
+
 function isNonNegative(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
@@ -102,13 +110,14 @@ export class CfdCatalogue {
   }
 
   freshOn(tradingDate: string): boolean {
-    return addDays(this.snapshot.asOf, CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS) >= tradingDate;
+    const { asOf } = this.snapshot;
+    return asOf <= tradingDate && addDays(asOf, CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS) >= tradingDate;
   }
 }
 
 export function parseCfdCatalogue(text: string): CfdCatalogue {
   const body: unknown = JSON.parse(text);
-  if (!isRecord(body) || typeof body.asOf !== 'string' || !Array.isArray(body.instruments)) {
+  if (!isRecord(body) || !isIsoDate(body.asOf) || !Array.isArray(body.instruments)) {
     throw new Error('CFD catalogue: expected { asOf, instruments[] }');
   }
   return new CfdCatalogue({

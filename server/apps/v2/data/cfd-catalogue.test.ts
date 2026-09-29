@@ -56,30 +56,41 @@ describe('parseCfdCatalogue', () => {
   it.each([
     ['a non-object body', '[]'],
     ['no asOf', file({ instruments: [] })],
+    ['a non-date asOf', file({ asOf: 'yesterday', instruments: [] })],
+    ['an impossible asOf', file({ asOf: '2026-02-30', instruments: [] })],
     ['no instruments', file({ asOf: '2026-09-29' })],
-    ['a non-string symbol', file({ asOf: 'd', instruments: [{ ...VOD, symbol: 3 }] })],
-    ['an empty symbol', file({ asOf: 'd', instruments: [{ ...VOD, symbol: '' }] })],
-    ['an unknown asset type', file({ asOf: 'd', instruments: [{ ...VOD, assetType: 'Etf' }] })],
-    ['an unknown currency', file({ asOf: 'd', instruments: [{ ...VOD, currency: 'GBX' }] })],
+    ['a non-string symbol', file({ asOf: '2026-09-29', instruments: [{ ...VOD, symbol: 3 }] })],
+    ['an empty symbol', file({ asOf: '2026-09-29', instruments: [{ ...VOD, symbol: '' }] })],
+    [
+      'an unknown asset type',
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, assetType: 'Etf' }] }),
+    ],
+    [
+      'an unknown currency',
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, currency: 'GBX' }] }),
+    ],
     [
       'a zero contract factor',
-      file({ asOf: 'd', instruments: [{ ...VOD, priceToContractFactor: 0 }] }),
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, priceToContractFactor: 0 }] }),
     ],
-    ['a non-boolean tradable', file({ asOf: 'd', instruments: [{ ...VOD, tradable: 'yes' }] })],
+    [
+      'a non-boolean tradable',
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, tradable: 'yes' }] }),
+    ],
     [
       'a non-boolean short flag',
-      file({ asOf: 'd', instruments: [{ ...VOD, shortTradeDisabled: 0 }] }),
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, shortTradeDisabled: 0 }] }),
     ],
     [
       'a negative borrow cost',
-      file({ asOf: 'd', instruments: [{ ...VOD, borrowCostPerDay: -1 }] }),
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, borrowCostPerDay: -1 }] }),
     ],
     [
       'a non-numeric borrow cost',
-      file({ asOf: 'd', instruments: [{ ...VOD, borrowCostPerDay: 'x' }] }),
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, borrowCostPerDay: 'x' }] }),
     ],
-    ['a null instrument', file({ asOf: 'd', instruments: [null] })],
-    ['a zero uic', file({ asOf: 'd', instruments: [{ ...VOD, uic: 0 }] })],
+    ['a null instrument', file({ asOf: '2026-09-29', instruments: [null] })],
+    ['a zero uic', file({ asOf: '2026-09-29', instruments: [{ ...VOD, uic: 0 }] })],
   ])('throws on %s', (_name, text) => {
     expect(() => parseCfdCatalogue(text)).toThrow(/CFD catalogue/);
   });
@@ -93,6 +104,10 @@ describe('CfdCatalogue.freshOn', () => {
     expect(catalogue.freshOn('2026-09-25')).toBe(true);
     expect(catalogue.freshOn('2026-09-28')).toBe(true);
     expect(catalogue.freshOn('2026-09-29')).toBe(false);
+  });
+
+  it('is not fresh for a trading date before the snapshot, so a replay never reads a later snapshot', () => {
+    expect(catalogue.freshOn('2026-09-24')).toBe(false);
   });
 });
 

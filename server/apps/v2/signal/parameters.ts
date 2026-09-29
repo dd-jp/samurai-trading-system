@@ -71,8 +71,8 @@ export const LSE_RESERVED_SLOTS = 4;
 
 export const CFD_COST_MODEL = unset<CfdCostModel>('CFD_COST_MODEL', '#1850');
 
-// doc 66 2026-09-28 (UK CFD shorts): refuse above 2% a year; applied to US CFD shorts as an
-// extension awaiting David's confirmation
+// David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
+// 2% a year; applied to US CFD shorts as an extension awaiting David's confirmation
 export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
 
 // doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
