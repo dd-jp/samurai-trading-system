@@ -1,26 +1,70 @@
 // @vitest-environment jsdom
-import type { LlmSpendWire, PanelWire, V2OverviewWire } from '@contracts';
+import type { LlmSpendWire, PanelWire, ReconcileRunsWire, V2OverviewWire } from '@contracts';
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { PollState } from '../../hooks/usePoll.ts';
 import { JOURNAL, jsonResponse, overview, research } from '../../test-wire.ts';
 import { RecordsView } from './RecordsView.tsx';
 
-const RECONCILE = {
-  contract_version: JOURNAL.contract_version,
-  reconcile: { status: 'not-yet-fed', owner: 'Step 4 / Step 3e', ticket: '#1784' },
+const RECONCILE_RUNS: PanelWire<ReconcileRunsWire> = {
+  status: 'fed',
+  runs: [
+    {
+      trading_date: '2026-10-06',
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'mismatch',
+      book_ids: ['debate/primary'],
+      diffs: [
+        { kind: 'position_qty', instrument: 'AAPL', order_id: null, store: 6, broker: 5 },
+        {
+          kind: 'order_unknown_to_store',
+          instrument: 'TSLA',
+          order_id: 'manual',
+          store: null,
+          broker: null,
+        },
+      ],
+      detail: 'position_qty AAPL store 6 broker 5',
+      recorded_at: '2026-10-06T07:00:00.000Z',
+    },
+    {
+      trading_date: '2026-10-05',
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'read_failed',
+      book_ids: ['debate/primary'],
+      diffs: [],
+      detail: 'alpaca 503',
+      recorded_at: '2026-10-05T07:00:00.000Z',
+    },
+    {
+      trading_date: '2026-10-05',
+      venue: 'saxo',
+      source: 'simulated',
+      status: 'clean',
+      book_ids: ['debate/primary', 'debate/no-veto'],
+      diffs: [],
+      detail: 'simulated venue: the ledger is its book',
+      recorded_at: '2026-10-05T07:00:00.000Z',
+    },
+  ],
 };
+
+function reconcileBody(reconcile: PanelWire<ReconcileRunsWire> = RECONCILE_RUNS) {
+  return { contract_version: JOURNAL.contract_version, reconcile };
+}
 const TAX = {
   contract_version: JOURNAL.contract_version,
   year: null,
   disposals: { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1746' },
 };
 
-function routes(researchBody: unknown = research()): typeof fetch {
+function routes(researchBody: unknown = research(), reconcile = reconcileBody()): typeof fetch {
   const bodies: Record<string, unknown> = {
     '/api/v2/journal': JOURNAL,
     '/api/v2/research': researchBody,
-    '/api/v2/reconcile': RECONCILE,
+    '/api/v2/reconcile': reconcile,
     '/api/v2/tax': TAX,
   };
   return vi.fn<typeof fetch>().mockImplementation(async (url) => jsonResponse(bodies[String(url)]));
@@ -138,13 +182,27 @@ describe('RecordsView (P9–P13)', () => {
     );
   });
 
-  it('shows reconcile and tax as owned by their steps (P12, P13)', async () => {
+  it('lists each reconcile run newest first, naming every diff and the runs that blocked entries (P12)', async () => {
     mount(routes());
-    await screen.findByText('Not yet fed: Step 4 / Step 3e (#1784).');
+    const table = await screen.findByRole('table', { name: 'Newest first' });
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows.map((row) => row.textContent)).toEqual([
+      '2026-10-06alpaca brokerdebate/primarymismatch, entries blocked' +
+        'position_qty AAPL: store 6, broker 5' +
+        'order_unknown_to_store TSLA manual: store -, broker -',
+      '2026-10-05alpaca brokerdebate/primaryread_failed, entries blockedalpaca 503',
+      '2026-10-05saxo simulateddebate/primary, debate/no-vetoclean',
+    ]);
+  });
+
+  it('says when no reconcile has run yet (P12)', async () => {
+    mount(routes(research(), reconcileBody({ status: 'empty' })));
+    expect(await screen.findByText('No reconcile has run yet.')).toBeTruthy();
+  });
+
+  it('shows tax as owned by its step (P13)', async () => {
+    mount(routes());
     await screen.findByText('Not yet fed: Step 4 (#1746).');
-    expect(screen.getByRole('region', { name: 'Reconcile diffs' }).dataset.status).toBe(
-      'not-yet-fed',
-    );
     const tax = screen.getByRole('region', { name: 'Tax export' });
     expect(tax.textContent).toContain('CSV download');
     expect(within(tax).queryByRole('link')).toBeNull();

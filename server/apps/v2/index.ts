@@ -373,6 +373,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     alpacaClient: options.alpacaClient,
     cfdCostModel,
     cfdEntryRefusal: cfdGate,
+    brokerMode: options.samuraiMode === 'live' ? 'live' : 'paper',
   });
   return {
     registry: cycle.registry,

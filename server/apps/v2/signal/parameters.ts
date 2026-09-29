@@ -69,6 +69,7 @@ export const ARM2_ENTRY_THRESHOLDS = set<Arm2EntryThresholds>('ARM2_ENTRY_THRESH
   shortBelow: 0,
 });
 export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774', 750_000);
+export const RECONCILE_CASH_TOLERANCE_GBP = unset<number>('RECONCILE_CASH_TOLERANCE_GBP', '#1872');
 
 // #1774, David 2026-09-29 (option 1): on one USD ranking no LSE name reaches the 20
 // (ISF ~53M GBP/day against billions), so LSE holds a reserved share of the liquidity half;
@@ -178,6 +179,7 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
+  RECONCILE_CASH_TOLERANCE_GBP,
 ];
 
 // A set parameter never blocks a cycle, so this list only ever holds an unset one;

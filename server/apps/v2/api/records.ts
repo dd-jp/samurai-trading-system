@@ -1,15 +1,13 @@
 import {
   type NotYetFedWire,
+  type ReconcileRunWire,
   type ReconcileWire,
   type TaxWire,
   V2_CONTRACT_VERSION,
 } from '../../../../contracts/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
 
-const RECONCILE_OWNER: NotYetFedWire = {
-  status: 'not-yet-fed',
-  owner: 'Step 4 / Step 3e',
-  ticket: '#1784',
-};
+export const RECONCILE_RUNS_SHOWN = 60;
 const TAX_OWNER: NotYetFedWire = { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1746' };
 const TAX_PARAMS: ReadonlySet<string> = new Set(['year', 'format']);
 const FORMATS: ReadonlySet<string> = new Set(['json', 'csv']);
@@ -46,8 +44,41 @@ export function parseTaxQuery(params: URLSearchParams): TaxQueryResult {
   return { ok: true, query: { year, format: format as TaxQuery['format'] } };
 }
 
-export function reconcileWire(): ReconcileWire {
-  return { contract_version: V2_CONTRACT_VERSION, reconcile: RECONCILE_OWNER };
+interface ReconcileRow extends Omit<ReconcileRunWire, 'book_ids' | 'diffs'> {
+  readonly book_ids: string;
+  readonly diffs: string;
+}
+
+export class ReconcileReader {
+  constructor(private readonly db: StoreHandle) {}
+
+  read(): ReconcileWire {
+    const runs = this.#runs();
+    return {
+      contract_version: V2_CONTRACT_VERSION,
+      reconcile: runs.length === 0 ? { status: 'empty' } : { status: 'fed', runs },
+    };
+  }
+
+  #runs(): ReconcileRunWire[] {
+    // The dashboard opens stores from before migration 0075 (it needs only 0070), where the
+    // table does not exist yet: that is an empty log, not a fault
+    const table = this.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'v2_reconciles'")
+      .get();
+    if (table === undefined) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT trading_date, venue, source, status, book_ids, diffs, detail, recorded_at
+           FROM v2_reconciles ORDER BY reconcile_id DESC LIMIT ?`,
+      )
+      .all(RECONCILE_RUNS_SHOWN) as ReconcileRow[];
+    return rows.map((row) => ({
+      ...row,
+      book_ids: JSON.parse(row.book_ids),
+      diffs: JSON.parse(row.diffs),
+    }));
+  }
 }
 
 export function taxWire(query: TaxQuery): TaxWire {

@@ -276,6 +276,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       openingDate: first,
       tradingDate: () => today.current,
       dryRun: true,
+      brokerMode: 'paper',
       halfSpreadBps: input.halfSpreadBps,
       costMultiple: input.costMultiple,
       pooledLossBudget: false,

@@ -90,6 +90,10 @@ export function seedFixtureStore(db: StoreHandle, scenario: FixtureScenario = 'd
      VALUES ('fixture-aapl', 'debate/primary', ?, 'AAPL', 'alpaca', 'h', 'long', 0.68, 'enter_long',
        'debate consensus', 2, 135, '{}', ?)`,
   ).run(FIXTURE_TRADING_DATE, `${FIXTURE_TRADING_DATE}T21:40:00.000Z`);
+  db.prepare(
+    `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail, recorded_at)
+     VALUES (?, 'alpaca', 'broker', 'clean', '["debate/primary"]', '[]', '', ?)`,
+  ).run(FIXTURE_TRADING_DATE, `${FIXTURE_TRADING_DATE}T21:40:00.000Z`);
 }
 
 export function createFixtureStore(scenario: FixtureScenario = 'default'): {

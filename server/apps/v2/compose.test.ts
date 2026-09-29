@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   BookSpec,
   MarketData,
@@ -9,6 +9,7 @@ import type {
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { type CycleCompositionOptions, composeCycle } from './compose.js';
+import type { AlpacaBrokerClient } from './execution/index.js';
 import { CapitalConfigStore } from './risk/index.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
@@ -58,6 +59,7 @@ function options(overrides: Partial<CycleCompositionOptions> = {}): CycleComposi
     openingDate: '2026-09-25',
     tradingDate: () => '2026-09-25',
     dryRun: true,
+    brokerMode: 'paper',
     halfSpreadBps: () => 5,
     ...overrides,
   };
@@ -274,6 +276,35 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     const composed = composeCycle(options());
     expect(() => composed.executor.quoteSimulatedFill('saxo_cfd_gbp', fill('buy', 1, 1))).toThrow(
       'needs #1850',
+    );
+  });
+});
+
+describe('composeCycle: broker reconcile wiring (#1872)', () => {
+  it('reads the broker book from the same Alpaca client the executor trades through', async () => {
+    const alpacaClient = {
+      getPositions: vi.fn(async () => [{ symbol: 'AAPL', qty: '6', side: 'long' }]),
+      listOpenOrders: vi.fn(async () => [{ client_order_id: 'stop-1', symbol: 'AAPL' }]),
+      getAccount: vi.fn(async () => ({ cash: '127', equity: '127' })),
+    } as unknown as AlpacaBrokerClient;
+    const composed = composeCycle(options({ dryRun: false, alpacaClient }));
+
+    expect(await composed.brokerBooks.read('alpaca')).toEqual({
+      positions: [{ instrument: 'AAPL', qty: 6 }],
+      openOrders: [{ clientOrderId: 'stop-1', instrument: 'AAPL' }],
+      cashQuote: 127,
+    });
+    expect(composed.executor.simulates({ bookVariant: 'primary', venue: 'alpaca' })).toBe(false);
+  });
+
+  it('a dry run has no broker to read, and the cash tolerance stays unset until David rules', async () => {
+    const composed = composeCycle(options());
+    await expect(composed.brokerBooks.read('alpaca')).rejects.toThrow('every route is simulated');
+    expect(composed.reconcileCashToleranceGbp).toBeUndefined();
+    expect(composed.brokerMode).toBe('paper');
+    expect(composeCycle(options({ brokerMode: 'live' })).brokerMode).toBe('live');
+    expect(composeCycle(options({ reconcileCashToleranceGbp: 5 })).reconcileCashToleranceGbp).toBe(
+      5,
     );
   });
 });

@@ -192,9 +192,29 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
     submitLimitOrder: vi.fn().mockRejectedValue(new Error('unused')),
     submitStopLimitOrder: vi.fn().mockRejectedValue(new Error('unused')),
     cancelOrder: vi.fn().mockResolvedValue(undefined),
-    listOpenOrders: vi.fn().mockResolvedValue([]),
-    getPositions: vi.fn().mockResolvedValue([]),
-    getAccount: vi.fn().mockRejectedValue(new Error('unused')),
+    listOpenOrders: vi.fn(() =>
+      Promise.resolve(
+        orders.map((order) => ({
+          ...order,
+          id: `${order.id}-sl`,
+          client_order_id: `${order.client_order_id}-stop`,
+          side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
+          order_class: 'simple',
+          status: 'new',
+        })),
+      ),
+    ),
+    getPositions: vi.fn(() =>
+      Promise.resolve(
+        orders.map((order) => ({
+          symbol: order.symbol,
+          qty: order.qty,
+          side: order.side === 'buy' ? ('long' as const) : ('short' as const),
+          avg_entry_price: order.limit_price ?? '0',
+        })),
+      ),
+    ),
+    getAccount: vi.fn().mockResolvedValue({ cash: '100000', equity: '100000' }),
   };
 }
 
@@ -630,8 +650,54 @@ describe('composeV2Root', () => {
       expect(second.books.position('arm2/technical-only', 'UP')).toMatchObject({
         marksHeld: 1,
       });
+      expect(
+        second.db
+          .prepare("SELECT status FROM v2_reconciles WHERE trading_date = ? AND source = 'broker'")
+          .all(NEXT_DATE),
+      ).toEqual([{ status: 'clean' }]);
     } finally {
       second.close();
+    }
+  });
+
+  it('paper mode never compares cash: the unset cash tolerance refuses no entry, and the run says cash was not compared', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'paper.sqlite');
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const alpacaClient = fakeAlpacaClient(clock);
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: false,
+      storePath,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      clock,
+      logger: { log: () => {} },
+      transportFor: scriptedFactory([]),
+      alpacaClient,
+      newsSource: { headlines: () => Promise.resolve(['UP beats on revenue']) },
+    });
+    try {
+      const report = await root.run();
+      expect(report).toMatchObject({ submitted_orders: 1, simulated_orders: 2 });
+      expect(alpacaClient.submitOrder).toHaveBeenCalledTimes(1);
+      expect(
+        root.db
+          .prepare(
+            "SELECT parameter FROM v2_refusals WHERE parameter = 'RECONCILE_CASH_TOLERANCE_GBP' OR scope = 'reconcile'",
+          )
+          .all(),
+      ).toEqual([]);
+      expect(
+        root.db.prepare("SELECT status, detail FROM v2_reconciles WHERE source = 'broker'").all(),
+      ).toEqual([
+        { status: 'clean', detail: 'cash not compared on paper (David 2026-09-29, #1872)' },
+      ]);
+    } finally {
+      root.close();
     }
   });
 

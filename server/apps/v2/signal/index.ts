@@ -45,6 +45,7 @@ export {
   DECLARED_PARAMETERS,
   isSet,
   LSE_LIQUIDITY_SCREEN,
+  RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,
   SLEEVE_SPECS_BY_ID,
   UnsetParameterError,

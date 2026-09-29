@@ -334,9 +334,32 @@ export interface EvidenceWire {
   readonly gate: NotYetFedWire;
 }
 
+export interface ReconcileDiffWire {
+  readonly kind: string;
+  readonly instrument: string | null;
+  readonly order_id: string | null;
+  readonly store: number | null;
+  readonly broker: number | null;
+}
+
+export interface ReconcileRunWire {
+  readonly trading_date: string;
+  readonly venue: string;
+  readonly source: string;
+  readonly status: string;
+  readonly book_ids: readonly string[];
+  readonly diffs: readonly ReconcileDiffWire[];
+  readonly detail: string;
+  readonly recorded_at: string;
+}
+
+export interface ReconcileRunsWire {
+  readonly runs: readonly ReconcileRunWire[];
+}
+
 export interface ReconcileWire {
   readonly contract_version: string;
-  readonly reconcile: NotYetFedWire;
+  readonly reconcile: PanelWire<ReconcileRunsWire>;
 }
 
 export interface TaxWire {
@@ -545,6 +568,24 @@ export const V2_WIRE_FIELD_NAMES = {
     'gate',
   ]),
   reconcile: fieldsOf<ReconcileWire>()(['contract_version', 'reconcile']),
+  reconcileRuns: fieldsOf<ReconcileRunsWire>()(['runs']),
+  reconcileRun: fieldsOf<ReconcileRunWire>()([
+    'trading_date',
+    'venue',
+    'source',
+    'status',
+    'book_ids',
+    'diffs',
+    'detail',
+    'recorded_at',
+  ]),
+  reconcileDiff: fieldsOf<ReconcileDiffWire>()([
+    'kind',
+    'instrument',
+    'order_id',
+    'store',
+    'broker',
+  ]),
   tax: fieldsOf<TaxWire>()(['contract_version', 'year', 'disposals']),
 };
 

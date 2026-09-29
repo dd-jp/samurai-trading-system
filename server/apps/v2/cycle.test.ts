@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   BookFill,
   BookLedger,
+  BrokerBook,
+  BrokerBookReader,
+  BrokerMode,
   ControlAction,
   LossBudgetState,
   MarketData,
@@ -33,6 +36,7 @@ import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
+import { storeView } from './reconcile.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { CYCLE_LEVEL_PARAMETERS, SleeveRegistry } from './signal/index.js';
 
@@ -203,6 +207,33 @@ const SPREAD_ONLY: FillPricing = {
   fee: () => 0,
 };
 
+const MIRROR_CASH_TOLERANCE_GBP = 0.01;
+
+function primaryBooksMirror(
+  registry: SleeveRegistry,
+  books: PaperBooks,
+  journal: Journal,
+): BrokerBookReader {
+  return {
+    read: (venue) => {
+      const primaries = registry
+        .ids()
+        .flatMap((sleeveId) => books.forSleeve(sleeveId))
+        .filter((book) => book.variant === 'primary');
+      const view = storeView({ books, journal }, venue, primaries);
+      const stops = [...view.positions.keys()].map((instrument) => ({
+        clientOrderId: `stop-${instrument}`,
+        instrument,
+      }));
+      return Promise.resolve({
+        positions: [...view.positions].map(([instrument, qty]) => ({ instrument, qty })),
+        openOrders: [...view.openOrders, ...stops],
+        cashQuote: view.cashGbp * (venue === 'alpaca' ? FX : 1),
+      });
+    },
+  };
+}
+
 function harness(
   decisions: readonly SleeveDecision[],
   dryRun: boolean,
@@ -257,6 +288,7 @@ function harness(
     secondSleeve === undefined ? [sleeve] : [sleeve, secondSleeve],
   );
   const simulatedBroker = new DryRunBrokerAdapter();
+  const journal = new Journal(db, clock);
   return {
     registry,
     sleeve,
@@ -272,7 +304,10 @@ function harness(
     },
     controls: new ControlStore(db),
     books,
-    journal: new Journal(db, clock),
+    journal,
+    brokerBooks: primaryBooksMirror(registry, books, journal),
+    brokerMode: 'paper',
+    reconcileCashToleranceGbp: MIRROR_CASH_TOLERANCE_GBP,
     risk: new V2RiskGate({
       books,
       capital,
@@ -3438,5 +3473,232 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(alpaca.rearms[0]?.qty).toBe(60);
     expect(alpaca.rearms[0]?.stop).toBeCloseTo(1.92, 9);
     expect(alpaca.rearms[0]?.target).toBeCloseTo(2.12, 9);
+  });
+});
+
+describe('runCycle: reconcile against the broker before entries (#1872)', () => {
+  const longMsft: SleeveDecision = { ...longAapl, instrument: 'MSFT', inputs_hash: 'm' };
+  const exitAapl: SleeveDecision = { ...longAapl, action: 'exit', reason: 'judge exit' };
+  const PRIMARY_MSFT = 'v2-debate-primary-2026-09-28-MSFT';
+
+  type Defect = (book: BrokerBook) => BrokerBook;
+
+  function brokerWith(deps: Harness, defect: Defect): BrokerBookReader {
+    return { read: async (venue) => defect(await deps.brokerBooks.read(venue)) };
+  }
+
+  function rows<T>(deps: CycleDeps, sql: string): T[] {
+    const db = (deps.journal as unknown as { db: { prepare: (s: string) => { all: () => T[] } } })
+      .db;
+    return db.prepare(sql).all();
+  }
+
+  async function heldAaplThen(
+    brokerBooks: (deps: Harness) => BrokerBookReader,
+    tolerance: number | undefined,
+    brokerMode: BrokerMode = 'paper',
+  ) {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([exitAapl, longMsft]);
+    const logs: LogEntry[] = [];
+    const report = await runCycle(
+      {
+        ...deps,
+        brokerBooks: brokerBooks(deps),
+        brokerMode,
+        reconcileCashToleranceGbp: tolerance,
+        logger: { log: (entry) => logs.push(entry) },
+      },
+      '2026-09-28',
+    );
+    return { alpaca, deps, report, logs };
+  }
+
+  it.each<[string, Defect, string, BrokerMode?]>([
+    [
+      'a broker position the store does not hold',
+      (book) => ({
+        ...book,
+        positions: [...book.positions, { instrument: 'TSLA', qty: 2 }],
+        openOrders: [...book.openOrders, { clientOrderId: 'stop-TSLA', instrument: 'TSLA' }],
+      }),
+      'position_missing_in_store',
+    ],
+    [
+      'a store position the broker does not hold',
+      (book) => ({ ...book, positions: [], openOrders: [] }),
+      'position_missing_at_broker',
+    ],
+    [
+      'a quantity that differs',
+      (book) => ({ ...book, positions: [{ instrument: 'AAPL', qty: 5 }] }),
+      'position_qty',
+    ],
+    [
+      'an open order the store does not know',
+      (book) => ({
+        ...book,
+        openOrders: [...book.openOrders, { clientOrderId: 'manual', instrument: 'TSLA' }],
+      }),
+      'order_unknown_to_store',
+    ],
+    [
+      'a held position the broker guards with no order',
+      (book) => ({ ...book, openOrders: [] }),
+      'position_unprotected',
+    ],
+    [
+      'cash outside the tolerance',
+      (book) => ({ ...book, cashQuote: book.cashQuote + 100 }),
+      'cash',
+      'live',
+    ],
+  ])(
+    '%s: blocks primary entries, still exits, alerts critical and journals the diff',
+    async (_name, defect, kind, brokerMode) => {
+      const { alpaca, deps, report, logs } = await heldAaplThen(
+        (harnessed) => brokerWith(harnessed, defect),
+        MIRROR_CASH_TOLERANCE_GBP,
+        brokerMode,
+      );
+
+      expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-28-AAPL-exit']);
+      expect(alpaca.brackets.map((order) => order.client_order_id)).not.toContain(PRIMARY_MSFT);
+      expect(deps.journal.orderFor(PRIMARY_MSFT)).toBeUndefined();
+      expect(sizeShares(deps, 'debate/primary', '2026-09-28', 'MSFT')).toBe(0);
+      expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-28-MSFT')).toMatchObject({
+        outcome: 'simulated',
+      });
+      expect(report.books.map((book) => book.book_id)).toEqual([
+        'debate/primary',
+        'debate/no-macro-gate',
+      ]);
+      expect(report.refusals).toContainEqual(
+        expect.stringMatching(
+          /^debate\/primary: entries blocked, alpaca broker reconcile mismatch: /,
+        ),
+      );
+      expect(logs).toContainEqual(
+        expect.objectContaining({ level: 'error', event: 'v2_reconcile_mismatch' }),
+      );
+
+      const [run] = rows<{ status: string; book_ids: string; diffs: string }>(
+        deps,
+        "SELECT status, book_ids, diffs FROM v2_reconciles WHERE trading_date = '2026-09-28' AND source = 'broker'",
+      );
+      expect(run?.status).toBe('mismatch');
+      expect(JSON.parse(run?.book_ids ?? '[]')).toEqual(['debate/primary']);
+      expect(JSON.parse(run?.diffs ?? '[]').map((diff: { kind: string }) => diff.kind)).toContain(
+        kind,
+      );
+      expect(
+        rows(
+          deps,
+          "SELECT book_id, parameter FROM v2_refusals WHERE scope = 'reconcile' AND trading_date = '2026-09-28'",
+        ),
+      ).toEqual([{ book_id: 'debate/primary', parameter: 'BROKER_RECONCILE' }]);
+    },
+  );
+
+  it('a broker read failure blocks primary entries with a warning and never throws out of the cycle', async () => {
+    const { alpaca, deps, report, logs } = await heldAaplThen(
+      () => ({ read: () => Promise.reject(new Error('alpaca 503')) }),
+      MIRROR_CASH_TOLERANCE_GBP,
+    );
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-28-AAPL-exit']);
+    expect(deps.journal.orderFor(PRIMARY_MSFT)).toBeUndefined();
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'warn', event: 'v2_reconcile_read_failed' }),
+    );
+    expect(
+      rows(
+        deps,
+        "SELECT status, detail FROM v2_reconciles WHERE source = 'broker' AND trading_date = '2026-09-28'",
+      ),
+    ).toEqual([{ status: 'read_failed', detail: 'alpaca 503' }]);
+  });
+
+  it('live: an unset cash tolerance fails closed, primary entries blocked through a refusal, no critical alert', async () => {
+    const { deps, logs } = await heldAaplThen(
+      (harnessed) => harnessed.brokerBooks,
+      undefined,
+      'live',
+    );
+
+    expect(deps.journal.orderFor(PRIMARY_MSFT)).toBeUndefined();
+    expect(logs.filter((entry) => entry.event?.startsWith('v2_reconcile'))).toEqual([]);
+    expect(
+      rows(
+        deps,
+        "SELECT book_id, parameter FROM v2_refusals WHERE scope = 'reconcile' AND trading_date = '2026-09-28'",
+      ),
+    ).toEqual([{ book_id: 'debate/primary', parameter: 'RECONCILE_CASH_TOLERANCE_GBP' }]);
+  });
+
+  it('paper never compares cash (David 2026-09-29): a cash gap with no tolerance set blocks nothing', async () => {
+    const { alpaca, deps, logs } = await heldAaplThen(
+      (harnessed) =>
+        brokerWith(harnessed, (book) => ({ ...book, cashQuote: book.cashQuote + 100 })),
+      undefined,
+      'paper',
+    );
+
+    expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(PRIMARY_MSFT);
+    expect(logs.filter((entry) => entry.event?.startsWith('v2_reconcile'))).toEqual([]);
+    expect(rows(deps, "SELECT parameter FROM v2_refusals WHERE scope = 'reconcile'")).toEqual([]);
+    expect(
+      rows(
+        deps,
+        "SELECT status, detail FROM v2_reconciles WHERE source = 'broker' AND trading_date = '2026-09-28'",
+      ),
+    ).toEqual([
+      { status: 'clean', detail: 'cash not compared on paper (David 2026-09-29, #1872)' },
+    ]);
+  });
+
+  it('live compares cash: a gap inside the set tolerance is clean', async () => {
+    const { alpaca } = await heldAaplThen(
+      (harnessed) => brokerWith(harnessed, (book) => ({ ...book, cashQuote: book.cashQuote + 1 })),
+      5,
+      'live',
+    );
+    expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(PRIMARY_MSFT);
+  });
+
+  it('a clean book lets entries through and records the clean run', async () => {
+    const { alpaca, deps, logs } = await heldAaplThen(
+      (harnessed) => harnessed.brokerBooks,
+      MIRROR_CASH_TOLERANCE_GBP,
+    );
+
+    expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(PRIMARY_MSFT);
+    expect(logs.filter((entry) => entry.event?.startsWith('v2_reconcile'))).toEqual([]);
+    expect(
+      rows(
+        deps,
+        "SELECT source, status FROM v2_reconciles WHERE trading_date = '2026-09-28' ORDER BY venue, source",
+      ),
+    ).toEqual([
+      { source: 'broker', status: 'clean' },
+      { source: 'simulated', status: 'clean' },
+      { source: 'simulated', status: 'clean' },
+    ]);
+  });
+
+  it('blocks only the run that finds the defect: the next clean run enters again', async () => {
+    const { alpaca, deps } = await heldAaplThen(
+      (harnessed) => brokerWith(harnessed, (book) => ({ ...book, positions: [] })),
+      MIRROR_CASH_TOLERANCE_GBP,
+    );
+    deps.setDecisions([{ ...longMsft, inputs_hash: 'm2' }]);
+    await runCycle(deps, '2026-09-29');
+    expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(
+      'v2-debate-primary-2026-09-29-MSFT',
+    );
   });
 });

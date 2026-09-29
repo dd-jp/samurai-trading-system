@@ -393,6 +393,60 @@ export interface OrderExecutor {
   fetchNewFills(sinceIso: string): Promise<FillSweep>;
 }
 
+export interface BrokerPosition {
+  readonly instrument: string;
+  readonly qty: number;
+}
+
+export interface BrokerOpenOrder {
+  readonly clientOrderId: string;
+  readonly instrument: string;
+}
+
+export interface BrokerBook {
+  readonly positions: readonly BrokerPosition[];
+  readonly openOrders: readonly BrokerOpenOrder[];
+  readonly cashQuote: number;
+}
+
+export interface BrokerBookReader {
+  read(venue: Venue): Promise<BrokerBook>;
+}
+
+export type BrokerMode = 'paper' | 'live';
+
+export type ReconcileSource = 'broker' | 'simulated';
+
+export type ReconcileStatus = 'clean' | 'mismatch' | 'unverified' | 'read_failed';
+
+export type ReconcileDiffKind =
+  | 'position_missing_in_store'
+  | 'position_missing_at_broker'
+  | 'position_qty'
+  | 'position_unprotected'
+  | 'order_missing_at_broker'
+  | 'order_unknown_to_store'
+  | 'cash'
+  | 'cash_unverified';
+
+export interface ReconcileDiff {
+  readonly kind: ReconcileDiffKind;
+  readonly instrument: string | null;
+  readonly order_id: string | null;
+  readonly store: number | null;
+  readonly broker: number | null;
+}
+
+export interface JournalledReconcile {
+  readonly trading_date: string;
+  readonly venue: Venue;
+  readonly source: ReconcileSource;
+  readonly status: ReconcileStatus;
+  readonly book_ids: readonly string[];
+  readonly diffs: readonly ReconcileDiff[];
+  readonly detail: string;
+}
+
 export interface JournalledOrder {
   readonly client_order_id: string;
   readonly decision_id: string | null;
@@ -446,4 +500,5 @@ export interface DecisionJournal {
   markCancelled(clientOrderId: string, detail: string): void;
   recordFill(fill: JournalledFill): boolean;
   recordRefusal(refusal: JournalledRefusal): void;
+  recordReconcile(run: JournalledReconcile): void;
 }

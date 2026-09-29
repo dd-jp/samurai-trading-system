@@ -3,6 +3,7 @@ import { type PollOptions, type PollState, usePoll } from '../../hooks/usePoll.t
 import { FeedPanel, OwnedPanel } from '../Panel.tsx';
 import { JournalPanel } from './JournalPanel.tsx';
 import { LlmSpendPanel } from './LlmSpendPanel.tsx';
+import { ReconcilePanel } from './ReconcilePanel.tsx';
 import { ResearchPanel } from './ResearchPanel.tsx';
 
 const RESEARCH_URL = '/api/v2/research';
@@ -27,11 +28,7 @@ function Reconcile({ token, options }: FeedProps) {
   const reconcile = usePoll<ReconcileWire>(RECONCILE_URL, token, options);
   return (
     <FeedPanel title="Reconcile diffs" state={reconcile}>
-      {(served, note) => (
-        <OwnedPanel title="Reconcile diffs" panel={served.reconcile}>
-          {note}
-        </OwnedPanel>
-      )}
+      {(served, note) => <ReconcilePanel panel={served.reconcile} note={note} />}
     </FeedPanel>
   );
 }

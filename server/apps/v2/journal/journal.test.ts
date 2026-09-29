@@ -304,3 +304,40 @@ describe('Journal', () => {
     expect(first).not.toBe(inputsHash([bar], [view], ['b', 'a', 'judge']));
   });
 });
+
+describe('Journal.recordReconcile (#1872)', () => {
+  it('appends each run with its diff, and the row can be neither changed nor removed', () => {
+    const db = openSharedStore(':memory:');
+    const journal = new Journal(db, new SimulatedClock(new Date('2026-09-28T07:00:00.000Z')));
+    journal.recordReconcile({
+      trading_date: '2026-09-28',
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'mismatch',
+      book_ids: ['debate/primary'],
+      diffs: [{ kind: 'position_qty', instrument: 'AAPL', order_id: null, store: 6, broker: 5 }],
+      detail: 'position_qty AAPL store 6 broker 5',
+    });
+
+    expect(
+      db
+        .prepare(
+          'SELECT trading_date, venue, source, status, book_ids, diffs, detail, recorded_at FROM v2_reconciles',
+        )
+        .all(),
+    ).toEqual([
+      {
+        trading_date: '2026-09-28',
+        venue: 'alpaca',
+        source: 'broker',
+        status: 'mismatch',
+        book_ids: '["debate/primary"]',
+        diffs: '[{"kind":"position_qty","instrument":"AAPL","order_id":null,"store":6,"broker":5}]',
+        detail: 'position_qty AAPL store 6 broker 5',
+        recorded_at: '2026-09-28T07:00:00.000Z',
+      },
+    ]);
+    expect(() => db.prepare("UPDATE v2_reconciles SET status = 'clean'").run()).toThrow();
+    expect(() => db.prepare('DELETE FROM v2_reconciles').run()).toThrow();
+  });
+});
