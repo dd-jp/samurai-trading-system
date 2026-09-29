@@ -411,6 +411,24 @@ export function logNewRefusals(
   });
 }
 
+export function rootOptionsFor(
+  dryRun: boolean,
+  tradingDate: string,
+  env: NodeJS.ProcessEnv,
+  clock: Clock,
+  logger: Logger,
+): V2RootOptions {
+  return {
+    tradingDate,
+    dryRun,
+    ...nousOptionsFrom(env),
+    samuraiMode: env.SAMURAI_MODE,
+    clock,
+    logger,
+    lseLegRefusal: saxoSessionRefusal(clock.now()),
+  };
+}
+
 async function runOnce(
   dryRun: boolean,
   tradingDate: string,
@@ -421,15 +439,7 @@ async function runOnce(
 ): Promise<number> {
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
-  const root = composeV2Root({
-    tradingDate,
-    dryRun,
-    ...nous,
-    samuraiMode: env.SAMURAI_MODE,
-    clock,
-    logger,
-    lseLegRefusal: saxoSessionRefusal(clock.now()),
-  });
+  const root = composeV2Root(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
   try {
     const report = await runAfterPinCheck(root, () =>
       verifyNousPins({

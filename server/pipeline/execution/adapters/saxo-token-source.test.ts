@@ -611,6 +611,27 @@ describe('SaxoTokenRefresher', () => {
       await refresher.stop();
     });
 
+    it('waits on the real timer, with no injected sleep, until the peer frees the lock', async () => {
+      vi.useFakeTimers();
+      try {
+        writeTokenFile(path, savedRecord());
+        const { refresher, calls } = build();
+        writeFileSync(`${path}.lock`, 'peer');
+
+        const renewal = refresher.renewNow();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(calls).toEqual([]);
+        unlinkSync(`${path}.lock`);
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(await renewal).toMatchObject({ status: 'active', failedAttempts: 0 });
+        expect(calls).toHaveLength(1);
+        await refresher.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('treats a lock that never frees as a transient failure and spends no refresh token', async () => {
       writeTokenFile(path, savedRecord());
       const { refresher, calls, entries } = build({ sleep: async () => {} });
