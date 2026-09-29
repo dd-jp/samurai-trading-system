@@ -62,7 +62,7 @@ export const ARM2_ENTRY_THRESHOLDS = set<Arm2EntryThresholds>('ARM2_ENTRY_THRESH
   longAbove: 0,
   shortBelow: 0,
 });
-export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774', 1_000_000);
+export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774', 750_000);
 
 export const SHORTS_ENABLED = false;
 
