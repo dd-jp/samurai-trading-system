@@ -120,6 +120,12 @@ describe('relativeStrengthIndex', () => {
     expect(relativeStrengthIndex(lastUp, 2)).toBe(100);
   });
 
+  it('matches a hand-computed Wilder RSI(2) on a mixed series', () => {
+    const closesOf = (closes: readonly number[]) => closes.map((close, index) => bar(index, close));
+    expect(relativeStrengthIndex(closesOf([10, 11, 10, 12]), 2)).toBeCloseTo(100 - 100 / 6, 9);
+    expect(relativeStrengthIndex(closesOf([10, 11, 10, 12, 11.5]), 2)).toBeCloseTo(62.5, 9);
+  });
+
   it('is 0 after a long flat run followed by a single down day', () => {
     const bars = flatCloses().map((close, index) => bar(index, close));
     const lastDown = [...bars.slice(0, -1), bar(bars.length - 1, 99)];
@@ -229,6 +235,8 @@ describe('createMeanReversionSleeve', () => {
     expect(decision?.stop_price).toBeUndefined();
     expect(decision?.reason).toBe('RSI(2) recovered above 65');
     expect(decision?.payload).toEqual({ rsi2: 100, sma200: 100.005 });
+    expect(decision?.venue).toBe('alpaca');
+    expect(decision?.inputs_hash).toBe('AAA-2025-01-01');
   });
 
   it('skips as no_signal when RSI(2) sits between the entry threshold and the recovery line', async () => {
@@ -240,6 +248,7 @@ describe('createMeanReversionSleeve', () => {
     const output = await sleeve.decide(CONTEXT, ['AAA']);
     expect(output.decisions[0]?.action).toBe('skip');
     expect(output.decisions[0]?.reason).toBe('no_signal');
+    expect(output.decisions[0]?.payload).toStrictEqual({ rsi2: 50, sma200: 100 });
   });
 
   it('skips as insufficient_history below the SMA(200) warmup', async () => {
@@ -279,6 +288,7 @@ describe('createMeanReversionSleeve', () => {
     const output = await sleeve.decide(CONTEXT, ['AAA']);
     expect(output.decisions[0]?.action).toBe('skip');
     expect(output.decisions[0]?.reason).toBe('bad_last_bar');
+    expect(output.decisions[0]?.payload).toStrictEqual({ rsi2: undefined, sma200: undefined });
   });
 
   it('sorts decisions by RSI(2) ascending, most oversold first (ruling g)', async () => {

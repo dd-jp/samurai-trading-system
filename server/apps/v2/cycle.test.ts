@@ -2901,14 +2901,14 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
   });
 
-  it('a price crash that leaves the adjustment factor unchanged is a real move: no rescale, the stop fires', async () => {
+  it('a price crash that leaves the adjustment factor unchanged is a real move: no rescale, the stop fires at the crash open', async () => {
     const deps = harness([], true);
     hold(deps, 6);
     const crash = [...preSplit(1), seriesBar('2026-09-28', TEN_TO_ONE, 1)];
     const report = await runCycle(withMarket(deps, crash), '2026-09-29');
     expect(report.exits).toBe(1);
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
-      payload: { size: 6, price: expect.closeTo(19.2, 9) },
+      payload: { size: 6, price: expect.closeTo(2, 9) },
     });
     expect(primary(deps)).toBeUndefined();
   });
