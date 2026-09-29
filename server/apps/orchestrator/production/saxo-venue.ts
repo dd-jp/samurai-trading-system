@@ -236,7 +236,7 @@ function assertSaxoVenueBootable(deps: SaxoVenueDeps): void {
         'SAMURAI_MODE=live. The Saxo venue is wired against the SIM gateway only: the ' +
         "live-money gates (npm run check:live-gates) are open, and #949's currency-mismatch " +
         'refusal is lifted only by a same-currency account read (#1509 wires ' +
-        'GET /port/v1/balances/me for that) whose currency has never been observed on the live ' +
+        'GET /port/v1/balances for that) whose currency has never been observed on the live ' +
         'UK GIA. Run it with SAMURAI_MODE=paper, or leave the venue unset to run ' +
         'the Alpaca path.',
     );
@@ -249,7 +249,7 @@ function assertSaxoVenueBootable(deps: SaxoVenueDeps): void {
         "default funding read is Alpaca's USD GET /v2/account, and sizing a GBP LSE book off " +
         'a USD account balance is exactly the currency mismatch #949 refuses every live entry ' +
         "on — so this venue will not inherit another venue's ledger. Since #1509 the read it " +
-        'wants exists: saxoFunding(client) over GET /port/v1/balances/me, which the entrypoint ' +
+        'wants exists: saxoFunding(client) over GET /port/v1/balances, which the entrypoint ' +
         'supplies. A programmatic config has to pass one of the two deliberately — and an ' +
         'accountFunding passed to startFromEnvironment is currency-verified there ' +
         '(assertSameCurrencyFunding), the same as the one it builds itself.',

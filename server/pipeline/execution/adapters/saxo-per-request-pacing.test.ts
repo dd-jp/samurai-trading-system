@@ -100,7 +100,7 @@ function routedFetch(openOrders: readonly unknown[]): ReturnType<typeof vi.fn> {
     },
     {
       method: 'GET',
-      matches: (pathname) => pathname.endsWith('/port/v1/orders/me'),
+      matches: (pathname) => pathname.endsWith('/port/v1/orders'),
       respond: () => jsonResponse({ Data: openOrders }),
     },
     {

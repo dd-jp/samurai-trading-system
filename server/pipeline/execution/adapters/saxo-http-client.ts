@@ -491,15 +491,21 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     );
   }
 
-  async listOpenOrders(): Promise<SaxoOpenOrder[]> {
+  // /orders/me, /balances/me and /netpositions/me take no AccountKey/ClientKey
+  // (Saxo ref docs); the routes without /me do, same response shape
+  private async accountScopedQuery(extra: Record<string, string> = {}): Promise<string> {
     const { accountKey, clientKey } = await this.resolveIdentity();
-    const query = new URLSearchParams({
+    return new URLSearchParams({
       AccountKey: accountKey,
       ClientKey: clientKey,
-      $top: String(PAGE_SIZE),
-    });
+      ...extra,
+    }).toString();
+  }
+
+  async listOpenOrders(): Promise<SaxoOpenOrder[]> {
+    const query = await this.accountScopedQuery({ $top: String(PAGE_SIZE) });
     return this.listAll(
-      `/port/v1/orders/me?${query.toString()}`,
+      `/port/v1/orders?${query}`,
       'listOpenOrders',
       validateOpenOrder,
       'background',
@@ -507,15 +513,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async listOrderActivities(from: Date): Promise<SaxoOrderActivity[]> {
-    const { accountKey, clientKey } = await this.resolveIdentity();
-    const query = new URLSearchParams({
-      AccountKey: accountKey,
-      ClientKey: clientKey,
+    const query = await this.accountScopedQuery({
       FromDateTime: from.toISOString(),
       $top: String(PAGE_SIZE),
     });
     return this.listAll(
-      `/cs/v1/audit/orderactivities?${query.toString()}`,
+      `/cs/v1/audit/orderactivities?${query}`,
       'listOrderActivities',
       validateActivity,
       'background',
@@ -523,10 +526,9 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async getBalances(): Promise<SaxoAccountBalance> {
-    const { accountKey, clientKey } = await this.resolveIdentity();
-    const query = new URLSearchParams({ AccountKey: accountKey, ClientKey: clientKey });
+    const query = await this.accountScopedQuery();
     return this.request(
-      `/port/v1/balances/me?${query.toString()}`,
+      `/port/v1/balances?${query}`,
       { method: 'GET' },
       'getBalances',
       validateBalance,
@@ -535,15 +537,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async listNetPositions(): Promise<SaxoNetPosition[]> {
-    const { accountKey, clientKey } = await this.resolveIdentity();
-    const query = new URLSearchParams({
+    const query = await this.accountScopedQuery({
       FieldGroups: 'NetPositionBase,NetPositionView,DisplayAndFormat',
-      AccountKey: accountKey,
-      ClientKey: clientKey,
       $top: String(PAGE_SIZE),
     });
     return this.listAll(
-      `/port/v1/netpositions/me?${query.toString()}`,
+      `/port/v1/netpositions?${query}`,
       'listNetPositions',
       validateNetPosition,
       'background',

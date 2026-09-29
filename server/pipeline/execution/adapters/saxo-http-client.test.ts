@@ -217,7 +217,11 @@ describe('SaxoHttpBrokerClient', () => {
       .mockResolvedValueOnce(
         jsonResponse({
           __count: 2,
-          __next: 'https://gateway.example/sim/openapi/port/v1/orders/me?$top=500&$skip=500',
+          // Whether Saxo's real gateway keeps AccountKey/ClientKey in __next across a
+          // page boundary is unverified; this fixture assumes it does and listAll
+          // follows __next verbatim either way
+          __next:
+            'https://gateway.example/sim/openapi/port/v1/orders?AccountKey=acct-key&ClientKey=client-key&$top=500&$skip=500',
           Data: [row],
         }),
       )
@@ -229,10 +233,10 @@ describe('SaxoHttpBrokerClient', () => {
     expect(orders.map((order) => order.OrderId)).toEqual(['1', '3']);
     expect(orders[0]?.RelatedOpenOrders?.[0]?.OpenOrderType).toBe('StopIfTraded');
     expect(calledPath(fetchMock, 1)).toBe(
-      'https://gateway.example/sim/openapi/port/v1/orders/me?AccountKey=acct-key&ClientKey=client-key&%24top=500',
+      'https://gateway.example/sim/openapi/port/v1/orders?AccountKey=acct-key&ClientKey=client-key&%24top=500',
     );
     expect(calledPath(fetchMock, 2)).toBe(
-      'https://gateway.example/sim/openapi/port/v1/orders/me?$top=500&$skip=500',
+      'https://gateway.example/sim/openapi/port/v1/orders?AccountKey=acct-key&ClientKey=client-key&$top=500&$skip=500',
     );
   });
 
@@ -246,56 +250,75 @@ describe('SaxoHttpBrokerClient', () => {
     await expect(client.listOpenOrders()).rejects.toThrow(/malformed response body/);
   });
 
-  it('scopes listOpenOrders, listNetPositions, getBalances and listOrderActivities to the pinned account, never the other one on the login', async () => {
+  it("scopes listOpenOrders, listNetPositions, getBalances and listOrderActivities to the pinned account, and excludes the other account's rows from every response", async () => {
+    // Models a server that leaks every account's rows unless AccountKey selects one —
+    // proves the client's own request scoping is what keeps the other account's rows
+    // out, not an assumption that the fixture would refuse an unscoped request
     const TWO_ACCOUNTS = {
       Data: [
         { AccountKey: 'acct-key', ClientKey: 'client-key' },
         { AccountKey: 'cfd-acct-key', ClientKey: 'client-key' },
       ],
     };
+    const PINNED_ORDER = {
+      OrderId: '1',
+      ExternalReference: 'pinned-account-order',
+      Status: 'Working',
+      OpenOrderType: 'Limit',
+      Amount: 1,
+      BuySell: 'Buy',
+      Uic: 3347273,
+      AssetType: 'Etn',
+    };
+    const CFD_ORDER = { ...PINNED_ORDER, OrderId: '2', ExternalReference: 'cfd-account-order' };
+    const PINNED_POSITION = {
+      NetPositionId: '3347273__Etn',
+      NetPositionBase: { Amount: 2, Uic: 3347273, AssetType: 'Etn' },
+      NetPositionView: {},
+    };
+    const CFD_POSITION = { ...PINNED_POSITION, NetPositionId: '9999999__Etn' };
+    const PINNED_ACTIVITY = {
+      OrderId: '1',
+      LogId: 'log-1',
+      ActivityTime: '2026-09-06T00:00:00Z',
+      Amount: 1,
+      AssetType: 'Etn',
+      BuySell: 'Buy',
+      Status: 'Filled',
+      Uic: 3347273,
+    };
+    const CFD_ACTIVITY = { ...PINNED_ACTIVITY, OrderId: '2', LogId: 'log-2' };
+
     interface AccountAwareRoute {
       matches: (pathname: string) => boolean;
-      respond: () => Response;
+      respond: (scopedToPinned: boolean) => Response;
     }
     const ACCOUNT_AWARE_ROUTES: readonly AccountAwareRoute[] = [
       {
-        matches: (pathname) => pathname.endsWith('/port/v1/orders/me'),
-        respond: () =>
+        matches: (pathname) => pathname.endsWith('/port/v1/orders'),
+        respond: (scopedToPinned) =>
+          jsonResponse({ Data: scopedToPinned ? [PINNED_ORDER] : [PINNED_ORDER, CFD_ORDER] }),
+      },
+      {
+        matches: (pathname) => pathname.endsWith('/port/v1/netpositions'),
+        respond: (scopedToPinned) =>
           jsonResponse({
-            Data: [
-              {
-                OrderId: '1',
-                ExternalReference: 'pinned-account-order',
-                Status: 'Working',
-                OpenOrderType: 'Limit',
-                Amount: 1,
-                BuySell: 'Buy',
-                Uic: 3347273,
-                AssetType: 'Etn',
-              },
-            ],
+            Data: scopedToPinned ? [PINNED_POSITION] : [PINNED_POSITION, CFD_POSITION],
           }),
       },
       {
-        matches: (pathname) => pathname.endsWith('/port/v1/netpositions/me'),
-        respond: () =>
-          jsonResponse({
-            Data: [
-              {
-                NetPositionId: '3347273__Etn',
-                NetPositionBase: { Amount: 2, Uic: 3347273, AssetType: 'Etn' },
-                NetPositionView: {},
-              },
-            ],
-          }),
-      },
-      {
-        matches: (pathname) => pathname.endsWith('/port/v1/balances/me'),
-        respond: () => jsonResponse({ Currency: 'GBP', CashBalance: 1_000, TotalValue: 1_000 }),
+        matches: (pathname) => pathname.endsWith('/port/v1/balances'),
+        respond: (scopedToPinned) =>
+          scopedToPinned
+            ? jsonResponse({ Currency: 'GBP', CashBalance: 1_000, TotalValue: 1_000 })
+            : jsonResponse({ Currency: 'GBP', CashBalance: 9_999, TotalValue: 9_999 }),
       },
       {
         matches: (pathname) => pathname.endsWith('/cs/v1/audit/orderactivities'),
-        respond: () => jsonResponse({ Data: [] }),
+        respond: (scopedToPinned) =>
+          jsonResponse({
+            Data: scopedToPinned ? [PINNED_ACTIVITY] : [PINNED_ACTIVITY, CFD_ACTIVITY],
+          }),
       },
     ];
     function accountAwareFetch(): ReturnType<typeof vi.fn> {
@@ -304,15 +327,14 @@ describe('SaxoHttpBrokerClient', () => {
         if (parsed.pathname.endsWith('/port/v1/accounts/me')) {
           return jsonResponse(TWO_ACCOUNTS);
         }
-        const accountKey = parsed.searchParams.get('AccountKey');
-        if (accountKey !== 'acct-key') {
-          throw new Error(`unscoped read: ${parsed.pathname} carried AccountKey=${accountKey}`);
-        }
         const route = ACCOUNT_AWARE_ROUTES.find((candidate) => candidate.matches(parsed.pathname));
         if (route === undefined) {
-          throw new Error(`accountAwareFetch: unmocked request ${parsed.pathname}`);
+          // A 400, not a throw: an unmocked path must fail fast with a diagnostic,
+          // not get classified as a retryable transport failure and hang under fake
+          // timers until vitest's own test timeout
+          return jsonResponse({ Message: `unmocked request ${parsed.pathname}` }, 400);
         }
-        return route.respond();
+        return route.respond(parsed.searchParams.get('AccountKey') === 'acct-key');
       });
     }
     const fetchMock = accountAwareFetch();
@@ -329,11 +351,12 @@ describe('SaxoHttpBrokerClient', () => {
     const orders = await client.listOpenOrders();
     const positions = await client.listNetPositions();
     const balances = await client.getBalances();
-    await client.listOrderActivities(new Date('2026-09-05T00:00:00Z'));
+    const activities = await client.listOrderActivities(new Date('2026-09-05T00:00:00Z'));
 
     expect(orders.map((order) => order.ExternalReference)).toEqual(['pinned-account-order']);
     expect(positions.map((position) => position.NetPositionId)).toEqual(['3347273__Etn']);
     expect(balances).toEqual({ Currency: 'GBP', CashBalance: 1_000, TotalValue: 1_000 });
+    expect(activities.map((activity) => activity.OrderId)).toEqual(['1']);
     for (const path of [
       calledPath(fetchMock, 1),
       calledPath(fetchMock, 2),
@@ -437,6 +460,9 @@ describe('SaxoHttpBrokerClient', () => {
         DisplayAndFormat: { Symbol: '3USL:xlon' },
       },
     ]);
+    expect(calledPath(fetchMock, 1)).toBe(
+      'https://gateway.example/sim/openapi/port/v1/netpositions?AccountKey=acct-key&ClientKey=client-key&FieldGroups=NetPositionBase%2CNetPositionView%2CDisplayAndFormat&%24top=500',
+    );
   });
 
   describe('getBalances (#1509)', () => {
@@ -455,7 +481,7 @@ describe('SaxoHttpBrokerClient', () => {
         TotalValue: 1_000,
       });
       expect(calledPath(fetchMock, 1)).toBe(
-        'https://gateway.example/sim/openapi/port/v1/balances/me?AccountKey=acct-key&ClientKey=client-key',
+        'https://gateway.example/sim/openapi/port/v1/balances?AccountKey=acct-key&ClientKey=client-key',
       );
       expect(calledInit(fetchMock, 1).method).toBe('GET');
     });
@@ -813,7 +839,7 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
       },
       {
         method: 'GET',
-        matches: (parsed) => parsed.pathname.endsWith('/port/v1/orders/me'),
+        matches: (parsed) => parsed.pathname.endsWith('/port/v1/orders'),
         respond: (parsed) =>
           parsed.searchParams.has('$skip')
             ? jsonResponse({ Data: [] })
