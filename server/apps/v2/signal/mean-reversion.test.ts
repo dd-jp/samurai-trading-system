@@ -68,6 +68,27 @@ function flatCloses(): number[] {
   return Array.from({ length: LOOKBACK_BARS }, () => 100);
 }
 
+// Rise 26 / fall 7 lands RSI(2) on exactly 65 in floating point; rise 199 / fall 198 lands the
+// last close exactly on SMA(200) (integer sums). Both found by search, so boundary tests can pin
+// strict versus inclusive comparisons
+function twoMoveCloses(rise: number, fall: number): number[] {
+  const closes = Array.from({ length: LOOKBACK_BARS }, () => 1_000);
+  closes[LOOKBACK_BARS - 2] = 1_000 + rise;
+  closes[LOOKBACK_BARS - 1] = 1_000 + rise - fall;
+  return closes;
+}
+
+async function decideOn(closes: readonly number[], entryThreshold: number) {
+  const noSource: BarsSource = { load: () => undefined };
+  const sleeve = createMeanReversionSleeve(
+    noSource,
+    () => [],
+    entryThreshold,
+  )(closesMarket(closes));
+  const output = await sleeve.decide(CONTEXT, ['AAA']);
+  return output.decisions[0];
+}
+
 function series(symbol: string, days: number, price: number, volume: number): BarSeries {
   const bars: DailyBar[] = [];
   for (let i = 0; i < days; i += 1) {
@@ -249,6 +270,37 @@ describe('createMeanReversionSleeve', () => {
     expect(output.decisions[0]?.action).toBe('skip');
     expect(output.decisions[0]?.reason).toBe('no_signal');
     expect(output.decisions[0]?.payload).toStrictEqual({ rsi2: 50, sma200: 100 });
+  });
+
+  it('skips a dip that closes below SMA(200) even with RSI(2) under the entry threshold', async () => {
+    const decision = await decideOn(twoMoveCloses(10, 100), 15);
+    const payload = decision?.payload as { rsi2: number; sma200: number };
+    expect(payload.rsi2).toBeLessThan(15);
+    expect(decision?.price).toBeLessThan(payload.sma200);
+    expect(decision?.action).toBe('skip');
+    expect(decision?.reason).toBe('no_signal');
+  });
+
+  it('needs the close strictly above SMA(200): a close exactly on it skips', async () => {
+    const decision = await decideOn(twoMoveCloses(199, 198), 50);
+    const payload = decision?.payload as { rsi2: number; sma200: number };
+    expect(payload.rsi2).toBeLessThan(50);
+    expect(decision?.price).toBe(payload.sma200);
+    expect(decision?.action).toBe('skip');
+  });
+
+  it('enters only when RSI(2) is strictly below the entry threshold', async () => {
+    const closes = twoMoveCloses(26, 7);
+    expect((await decideOn(closes, 65))?.action).toBe('skip');
+    expect((await decideOn(closes, 65 + 1e-9))?.action).toBe('enter_long');
+  });
+
+  it('exits only when RSI(2) is strictly above 65', async () => {
+    const atBoundary = await decideOn(twoMoveCloses(26, 7), 10);
+    expect(atBoundary?.payload).toMatchObject({ rsi2: 65 });
+    expect(atBoundary?.action).toBe('skip');
+    const above = await decideOn(twoMoveCloses(27, 7), 10);
+    expect(above?.action).toBe('exit');
   });
 
   it('skips as insufficient_history below the SMA(200) warmup', async () => {
