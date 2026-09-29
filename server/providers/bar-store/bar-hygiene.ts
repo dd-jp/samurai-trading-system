@@ -4,6 +4,7 @@ const UNIT_BREAK_MIN_RATIO = 90;
 const UNIT_BREAK_MAX_RATIO = 110;
 const HOLE_MIN_RATIO = 3;
 const SUSPECT_MIN_RATIO = 1.35;
+const GLITCH_RANGE_MAX_RATIO = 1.4;
 
 export interface UnitBreak {
   readonly date: string;
@@ -19,6 +20,27 @@ export interface SuspectFlips {
   readonly count: number;
   readonly from: string;
   readonly to: string;
+}
+
+export const SHAPE_REPAIR_MANIFEST_NOTE =
+  'then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low whose ratio to the median of the other three prices is inside (90, 110) or its inverse is rescaled by 100 or 0.01, a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (open, close and raw_close are never changed); per-line counts in symbols.<TIDM>.hygiene.shape_repair';
+
+export function violatesBarShape(bar: DailyBar): boolean {
+  return bar.low > Math.min(bar.open, bar.close) || bar.high < Math.max(bar.open, bar.close);
+}
+
+export type RescalableField = 'open' | 'high' | 'low';
+
+export interface FieldRescale {
+  readonly date: string;
+  readonly field: RescalableField;
+  readonly factor: 100 | 0.01;
+}
+
+export interface ShapeRepairReport {
+  readonly rescaled_fields: readonly FieldRescale[];
+  readonly dropped_glitch_dates: readonly string[];
+  readonly ranges_widened: number;
 }
 
 export interface HygieneReport {
@@ -153,5 +175,86 @@ export function applyBarHygiene(
   return {
     bars,
     report: { dropped_dates: sessions.dropped, unit_breaks: breaks, holes, suspect_flips: flips },
+  };
+}
+
+const PRICE_FIELDS = ['open', 'high', 'low', 'close'] as const;
+const RESCALABLE_FIELDS: readonly RescalableField[] = ['open', 'high', 'low'];
+
+function medianOfThree(a: number, b: number, c: number): number {
+  return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+}
+
+function medianOfOtherPrices(bar: DailyBar, field: RescalableField): number {
+  const [a, b, c] = PRICE_FIELDS.filter((other) => other !== field).map((other) => bar[other]) as [
+    number,
+    number,
+    number,
+  ];
+  return medianOfThree(a, b, c);
+}
+
+function fieldUnitFactor(bar: DailyBar, field: RescalableField): 100 | 0.01 | undefined {
+  const ratio = bar[field] / medianOfOtherPrices(bar, field);
+  if (!isUnitBreakRatio(ratio)) return undefined;
+  return ratio > 1 ? 0.01 : 100;
+}
+
+function rescaleFields(bar: DailyBar): { bar: DailyBar; rescales: FieldRescale[] } {
+  const rescales = RESCALABLE_FIELDS.flatMap((field) => {
+    const factor = fieldUnitFactor(bar, field);
+    return factor === undefined ? [] : [{ date: bar.date, field, factor }];
+  });
+  const scaled = Object.fromEntries(
+    rescales.map(({ field, factor }) => [field, bar[field] * factor]),
+  );
+  return { bar: rescales.length === 0 ? bar : { ...bar, ...scaled }, rescales };
+}
+
+function spansGlitchRange(bar: DailyBar): boolean {
+  const prices = PRICE_FIELDS.map((field) => bar[field]);
+  return Math.max(...prices) / Math.min(...prices) > GLITCH_RANGE_MAX_RATIO;
+}
+
+function widenRange(bar: DailyBar): DailyBar {
+  const high = Math.max(bar.open, bar.high, bar.low, bar.close);
+  const low = Math.min(bar.open, bar.high, bar.low, bar.close);
+  return high === bar.high && low === bar.low ? bar : { ...bar, high, low };
+}
+
+function isRepairable(bar: DailyBar): boolean {
+  return PRICE_FIELDS.every((field) => Number.isFinite(bar[field]) && bar[field] > 0);
+}
+
+export function repairBarShape(bars: readonly DailyBar[]): {
+  bars: DailyBar[];
+  report: ShapeRepairReport;
+} {
+  const repaired: DailyBar[] = [];
+  const rescaledFields: FieldRescale[] = [];
+  const droppedDates: string[] = [];
+  let widenedCount = 0;
+  for (const bar of bars) {
+    if (!isRepairable(bar)) {
+      repaired.push(bar);
+      continue;
+    }
+    const scaled = rescaleFields(bar);
+    rescaledFields.push(...scaled.rescales);
+    if (spansGlitchRange(scaled.bar)) {
+      droppedDates.push(bar.date);
+      continue;
+    }
+    const widened = widenRange(scaled.bar);
+    if (widened !== scaled.bar) widenedCount++;
+    repaired.push(widened);
+  }
+  return {
+    bars: repaired,
+    report: {
+      rescaled_fields: rescaledFields,
+      dropped_glitch_dates: droppedDates,
+      ranges_widened: widenedCount,
+    },
   };
 }
