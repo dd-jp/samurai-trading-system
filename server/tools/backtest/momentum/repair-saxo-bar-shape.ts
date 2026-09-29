@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { parseArgs } from 'node:util';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
 import type { ShapeRepairReport } from '../../../providers/bar-store/index.js';
 import {
@@ -157,13 +158,13 @@ export async function repairSaxoStore(
 }
 
 async function main(argv: readonly string[]): Promise<void> {
-  const value = (flag: string): string | undefined => {
-    const index = argv.indexOf(flag);
-    return index === -1 ? undefined : argv[index + 1];
-  };
-  const store = await ParquetBarStore.open(value('--store') ?? DEFAULT_BAR_STORE_ROOT);
+  const { values } = parseArgs({
+    args: [...argv],
+    options: { store: { type: 'string' }, manifest: { type: 'string' } },
+  });
+  const store = await ParquetBarStore.open(values.store ?? DEFAULT_BAR_STORE_ROOT);
   try {
-    const manifestPath = value('--manifest') ?? DEFAULT_MANIFEST_PATH;
+    const manifestPath = values.manifest ?? DEFAULT_MANIFEST_PATH;
     const result = await repairSaxoStore(store, manifestPath);
     if (result.repairedSymbols.length > 0) {
       execFileSync('npx', ['biome', 'format', '--write', manifestPath], { stdio: 'ignore' });

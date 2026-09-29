@@ -14,12 +14,7 @@ export {
   joinAdjustedAndRaw,
   pullSymbol,
 } from './alpaca-pull.js';
-export type {
-  FieldRescale,
-  HygieneReport,
-  RescalableField,
-  ShapeRepairReport,
-} from './bar-hygiene.js';
+export type { HygieneReport, ShapeRepairReport } from './bar-hygiene.js';
 export {
   applyBarHygiene,
   dropNonSessionBars,
