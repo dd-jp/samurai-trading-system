@@ -60,6 +60,7 @@ const TABLES = [
   'v2_controls',
   'v2_commands',
   'v2_reconciles',
+  'v2_news',
 ];
 
 const CONSOLIDATED_SCHEMA_TABLE_COUNT = 48;

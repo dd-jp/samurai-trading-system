@@ -24,6 +24,7 @@ import {
   llmKeysPresent,
   logNewRefusals,
   main,
+  newsWiringFor,
   nousOptionsFrom,
   parseCliArgs,
   rootOptionsFor,
@@ -702,6 +703,67 @@ describe('composeV2Root', () => {
     }
   });
 
+  it('routes a UK stock to Marketaux through the real news wiring, journals the coverage and keeps the key out of every log', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const storePath = join(fixtures.directory, 'uk-news.sqlite');
+    seededStore(storePath).close();
+    const urls: string[] = [];
+    const publishedAt = new Date(clock.now().getTime() - 20 * 3_600_000).toISOString();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        urls.push(String(url));
+        const article = { title: 'UP beats on revenue', published_at: publishedAt, entities: [{}] };
+        const body = { meta: { found: 1, returned: 1, limit: 3, page: 1 }, data: [article] };
+        return Promise.resolve(new Response(JSON.stringify(body)));
+      }),
+    );
+    vi.stubEnv('ALPACA_API_KEY', 'key');
+    vi.stubEnv('ALPACA_API_SECRET', 'secret');
+    const logs: LogEntry[] = [];
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: false,
+      storePath,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      clock,
+      logger: { log: (entry) => logs.push(entry) },
+      transportFor: scriptedFactory([]),
+      alpacaClient: fakeAlpacaClient(clock),
+      marketauxApiKey: 'mx-secret-key',
+      isUkStock: (symbol) => symbol === 'UP',
+    });
+    try {
+      await root.run();
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain('symbols=UP.L');
+      expect(root.db.prepare('SELECT symbol, status, requested FROM v2_news').all()).toEqual([
+        { symbol: 'UP', status: 'ok', requested: 1 },
+      ]);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          event: 'v2_uk_news_coverage',
+          message: 'UK news: 1 of 1 names had headlines, 0 NO_NEWS',
+        }),
+      );
+      expect(JSON.stringify(logs)).not.toContain('mx-secret-key');
+      const decision = root.db
+        .prepare(
+          "SELECT payload FROM v2_decisions WHERE instrument = 'UP' AND payload LIKE '%headlines%'",
+        )
+        .get() as { payload: string };
+      expect(JSON.parse(decision.payload)).toMatchObject({ headlines: 1 });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+      root.close();
+    }
+  });
+
   it('refuses entries but still runs without a capital config in force', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;
@@ -1157,5 +1219,83 @@ describe('main', () => {
     );
     expect(warning).toMatchObject({ chat_id: 'chat', disable_notification: true });
     expect(warning.text).toContain('v2_heartbeat_unset: HEALTHCHECKS_PING_URL is not set');
+  });
+});
+
+describe('newsWiringFor', () => {
+  const NOW = new Date('2026-09-29T07:00:00.000Z');
+  const options = {
+    tradingDate: '2026-09-29',
+    dryRun: false,
+    isUkStock: (symbol: string) => symbol === 'VOD',
+    marketauxApiKey: '',
+  };
+  const quiet: Logger = { log: () => {} };
+  beforeEach(() => {
+    vi.stubEnv('ALPACA_API_KEY', 'key');
+    vi.stubEnv('ALPACA_API_SECRET', 'secret');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+  const rows = (db: StoreHandle) => db.prepare('SELECT symbol, status, reason FROM v2_news').all();
+
+  it('journals no_key for a UK stock when MARKETAUX_API_KEY is empty, and leaves ETFs and dry runs alone', async () => {
+    const db = openSharedStore(':memory:');
+    const { news, ukNews } = newsWiringFor(options, db, quiet);
+    expect(ukNews).toBeDefined();
+    expect(await news.headlines('ISF', '2026-09-29', NOW)).toEqual([]);
+    expect(rows(db)).toEqual([]);
+    expect(await news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
+    expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_key', reason: 'no_api_key' }]);
+
+    const dryDb = openSharedStore(':memory:');
+    const dry = newsWiringFor({ ...options, dryRun: true, marketauxApiKey: 'k' }, dryDb, quiet);
+    expect(dry.ukNews).toBeUndefined();
+    expect(await dry.news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
+    expect(rows(dryDb)).toEqual([]);
+  });
+
+  it('treats an unset key like an empty one', async () => {
+    const db = openSharedStore(':memory:');
+    const { news } = newsWiringFor({ ...options, marketauxApiKey: undefined }, db, quiet);
+    await news.headlines('VOD', '2026-09-29', NOW);
+    expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_key', reason: 'no_api_key' }]);
+  });
+
+  it('sends every non-ETF name to the US source until a pool supplies UK stocks', async () => {
+    const db = openSharedStore(':memory:');
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string | URL) => {
+        urls.push(String(url));
+        return Promise.resolve(new Response(JSON.stringify({ news: [], next_page_token: null })));
+      }),
+    );
+    const { news } = newsWiringFor({ ...options, isUkStock: undefined }, db, quiet);
+    expect(await news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('alpaca.markets');
+    expect(rows(db)).toEqual([]);
+  });
+
+  it('uses an injected news source untouched', async () => {
+    const db = openSharedStore(':memory:');
+    const injected = { headlines: () => Promise.resolve(['injected']) };
+    const { news, ukNews } = newsWiringFor({ ...options, newsSource: injected }, db, quiet);
+    expect(news).toBe(injected);
+    expect(ukNews).toBeUndefined();
+  });
+
+  it('reads the key from MARKETAUX_API_KEY', () => {
+    const clock = new SimulatedClock(NOW);
+    expect(
+      rootOptionsFor(false, '2026-09-29', { MARKETAUX_API_KEY: 'from-env' }, clock, quiet),
+    ).toMatchObject({
+      marketauxApiKey: 'from-env',
+    });
+    expect(rootOptionsFor(false, '2026-09-29', {}, clock, quiet).marketauxApiKey).toBeUndefined();
   });
 });

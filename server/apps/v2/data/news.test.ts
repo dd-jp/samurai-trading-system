@@ -50,11 +50,27 @@ describe('news', () => {
     expect(await NO_NEWS.headlines('NVDA', '2026-09-25', now)).toEqual([]);
   });
 
-  it('routes LSE symbols to no news and everything else through (doc 66 G18(2))', async () => {
-    const inner = { headlines: () => Promise.resolve(['real headline']) };
-    const routed = newsForVenue(inner, (symbol) => symbol === 'ISF');
+  it('routes UK stocks to their own source, LSE ETFs to no news and everything else through (doc 66 G18(2))', async () => {
+    const source = (headline: string) => ({ headlines: () => Promise.resolve([headline]) });
+    const routed = newsForVenue({
+      us: source('us'),
+      ukStock: source('uk'),
+      isUkStock: (symbol) => symbol === 'VOD',
+      isLseEtf: (symbol) => symbol === 'ISF',
+    });
     const now = new Date('2026-09-25T07:00:00.000Z');
     expect(await routed.headlines('ISF', '2026-09-25', now)).toEqual([]);
-    expect(await routed.headlines('AAPL', '2026-09-25', now)).toEqual(['real headline']);
+    expect(await routed.headlines('VOD', '2026-09-25', now)).toEqual(['uk']);
+    expect(await routed.headlines('AAPL', '2026-09-25', now)).toEqual(['us']);
+  });
+
+  it('sends a symbol that is both UK stock and LSE line to the UK source', async () => {
+    const routed = newsForVenue({
+      us: NO_NEWS,
+      ukStock: { headlines: () => Promise.resolve(['uk']) },
+      isUkStock: () => true,
+      isLseEtf: () => true,
+    });
+    expect(await routed.headlines('X', '2026-09-25', new Date())).toEqual(['uk']);
   });
 });
