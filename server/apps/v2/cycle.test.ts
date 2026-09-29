@@ -3681,12 +3681,14 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     expect(
       rows(
         deps,
-        "SELECT source, status FROM v2_reconciles WHERE trading_date = '2026-09-28' ORDER BY venue, source",
+        "SELECT venue, source, status FROM v2_reconciles WHERE trading_date = '2026-09-28' ORDER BY venue, source",
       ),
     ).toEqual([
-      { source: 'broker', status: 'clean' },
-      { source: 'simulated', status: 'clean' },
-      { source: 'simulated', status: 'clean' },
+      { venue: 'alpaca', source: 'broker', status: 'clean' },
+      { venue: 'alpaca', source: 'simulated', status: 'clean' },
+      { venue: 'saxo', source: 'simulated', status: 'clean' },
+      { venue: 'saxo_cfd_gbp', source: 'simulated', status: 'clean' },
+      { venue: 'saxo_cfd_usd', source: 'simulated', status: 'clean' },
     ]);
   });
 
