@@ -378,12 +378,26 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
         },
       },
     });
+    let upReasons: string[] = [];
     try {
       await root.run();
+      upReasons = (
+        root.db
+          .prepare(
+            "SELECT reason FROM v2_decisions WHERE instrument = 'UP' AND book_id LIKE 'debate/%'",
+          )
+          .all() as { reason: string }[]
+      ).map((row) => row.reason);
     } finally {
       root.close();
     }
 
+    expect(upReasons.length).toBeGreaterThan(0);
+    for (const reason of upReasons) {
+      expect(reason).toContain('llm_error:');
+      expect(reason).toContain('ALPACA_API_SECRET');
+      expect(reason).not.toContain(SECRET_ENV.ALPACA_API_SECRET);
+    }
     const values = Object.values(planted).map((headline) => headline.split(' ').at(-1) ?? '');
     for (const request of captured) {
       for (const value of values) expect(request.body).not.toContain(value);
