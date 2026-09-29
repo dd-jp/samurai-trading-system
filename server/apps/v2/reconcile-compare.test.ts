@@ -10,17 +10,18 @@ function view(
   return { positions: new Map(Object.entries(positions)), openOrders, cashGbp };
 }
 
-const stop = (instrument: string, clientOrderId = `stop-${instrument}`): BrokerOpenOrder => ({
-  clientOrderId,
-  instrument,
-});
+const stop = (
+  instrument: string,
+  clientOrderId = `stop-${instrument}`,
+  protects: BrokerOpenOrder['protects'] = 'long',
+): BrokerOpenOrder => ({ clientOrderId, instrument, protects });
 
 describe('compareVenue', () => {
   it('finds nothing when positions, orders and cash agree', () => {
     const store = view({ AAPL: 6, MSFT: -3 }, [stop('NVDA', 'entry-nvda')]);
     const broker = view({ AAPL: 6, MSFT: -3 }, [
       stop('AAPL'),
-      stop('MSFT'),
+      stop('MSFT', 'stop-MSFT', 'short'),
       stop('NVDA', 'entry-nvda'),
     ]);
     expect(compareVenue(store, broker, { toleranceGbp: 0 })).toEqual([]);
@@ -103,6 +104,20 @@ describe('compareVenue', () => {
     expect(compareVenue(view({ AAPL: 6 }), view({ AAPL: 6 }), { toleranceGbp: 0 })).toEqual([
       { kind: 'position_unprotected', instrument: 'AAPL', order_id: null, store: 6, broker: 6 },
     ]);
+  });
+
+  it('takes only a stop on the closing side as a guard, never a resting add-on entry', () => {
+    const held = { AAPL: 6, MSFT: -3 };
+    const unguarded = [
+      { kind: 'position_unprotected', instrument: 'AAPL', order_id: null, store: 6, broker: 6 },
+      { kind: 'position_unprotected', instrument: 'MSFT', order_id: null, store: -3, broker: -3 },
+    ];
+    const addOns = [stop('AAPL', 'add-aapl', null), stop('MSFT', 'add-msft', null)];
+    expect(compareVenue(view(held), view(held, addOns), 'not_compared')).toEqual(unguarded);
+    const wrongSide = [stop('AAPL', 'buy-stop', 'short'), stop('MSFT', 'sell-stop', 'long')];
+    expect(compareVenue(view(held), view(held, wrongSide), 'not_compared')).toEqual(unguarded);
+    const closing = [stop('AAPL', 'sell-stop', 'long'), stop('MSFT', 'buy-stop', 'short')];
+    expect(compareVenue(view(held), view(held, closing), 'not_compared')).toEqual([]);
   });
 
   it('does not call a position unprotected when books net it flat and the broker holds none', () => {

@@ -4,7 +4,6 @@ import type {
   BrokerBook,
   BrokerBookReader,
   BrokerMode,
-  BrokerOpenOrder,
   DecisionJournal,
   MarketData,
   OrderExecutor,
@@ -51,21 +50,39 @@ const VENUE_SET: Readonly<Record<Venue, true>> = {
 const VENUES = Object.keys(VENUE_SET) as Venue[];
 const TICKET = '#1872';
 
+function sourceOf(deps: ReconcileDeps, book: BookSpec, venue: Venue): ReconcileSource {
+  return deps.executor.simulates({ bookVariant: book.variant, venue }) ? 'simulated' : 'broker';
+}
+
+function addToGroup(
+  groups: Map<string, { venue: Venue; source: ReconcileSource; books: BookSpec[] }>,
+  venue: Venue,
+  source: ReconcileSource,
+  book: BookSpec,
+): void {
+  const key = `${venue}|${source}`;
+  const group = groups.get(key) ?? { venue, source, books: [] };
+  group.books.push(book);
+  groups.set(key, group);
+}
+
 function venueGroups(deps: ReconcileDeps): VenueGroup[] {
   const groups = new Map<string, { venue: Venue; source: ReconcileSource; books: BookSpec[] }>();
-  for (const sleeveId of deps.registry.ids()) {
-    for (const book of deps.books.forSleeve(sleeveId)) {
-      for (const venue of VENUES) {
-        const route = { bookVariant: book.variant, venue };
-        const source: ReconcileSource = deps.executor.simulates(route) ? 'simulated' : 'broker';
-        const key = `${venue}|${source}`;
-        const group = groups.get(key) ?? { venue, source, books: [] };
-        group.books.push(book);
-        groups.set(key, group);
-      }
-    }
+  const books = deps.registry.ids().flatMap((sleeveId) => deps.books.forSleeve(sleeveId));
+  for (const book of books) {
+    for (const venue of VENUES) addToGroup(groups, venue, sourceOf(deps, book, venue), book);
   }
   return [...groups.values()];
+}
+
+function netByInstrument(
+  held: readonly { readonly instrument: string; readonly qty: number }[],
+): Map<string, number> {
+  const positions = new Map<string, number>();
+  for (const { instrument, qty } of held) {
+    positions.set(instrument, (positions.get(instrument) ?? 0) + qty);
+  }
+  return positions;
 }
 
 export function storeView(
@@ -73,31 +90,27 @@ export function storeView(
   venue: Venue,
   books: readonly BookSpec[],
 ): VenueView {
-  const positions = new Map<string, number>();
-  const openOrders: BrokerOpenOrder[] = [];
-  let cashGbp = 0;
-  for (const book of books) {
-    cashGbp += deps.books.cash(book.id);
-    for (const held of deps.books.positions(book.id)) {
-      if (held.venue !== venue) continue;
-      positions.set(held.instrument, (positions.get(held.instrument) ?? 0) + held.qty);
-    }
-    for (const order of deps.journal.restingEntries(book.id)) {
-      if (order.venue !== venue) continue;
-      openOrders.push({ clientOrderId: order.client_order_id, instrument: order.instrument });
-    }
-  }
-  return { positions, openOrders, cashGbp };
+  const held = books
+    .flatMap((book) => deps.books.positions(book.id))
+    .filter((position) => position.venue === venue);
+  const resting = books
+    .flatMap((book) => deps.journal.restingEntries(book.id))
+    .filter((order) => order.venue === venue);
+  return {
+    positions: netByInstrument(held),
+    openOrders: resting.map((order) => ({
+      clientOrderId: order.client_order_id,
+      instrument: order.instrument,
+      protects: null,
+    })),
+    cashGbp: books.reduce((sum, book) => sum + deps.books.cash(book.id), 0),
+  };
 }
 
 function brokerView(book: BrokerBook, quotePerGbpRate: number): VenueView {
-  const positions = new Map<string, number>();
-  for (const held of book.positions) {
-    positions.set(held.instrument, (positions.get(held.instrument) ?? 0) + held.qty);
-  }
   const cashGbp = book.cashQuote / quotePerGbpRate;
   if (!Number.isFinite(cashGbp)) throw new Error(`broker cash ${book.cashQuote} is not a number`);
-  return { positions, openOrders: book.openOrders, cashGbp };
+  return { positions: netByInstrument(book.positions), openOrders: book.openOrders, cashGbp };
 }
 
 type Read =
@@ -172,12 +185,16 @@ const REFUSAL_PARAMETER: Readonly<Record<Exclude<ReconcileStatus, 'clean'>, stri
   read_failed: 'BROKER_RECONCILE_READ',
 };
 
-const LOG_LEVEL: Readonly<Record<Exclude<ReconcileStatus, 'clean'>, 'error' | 'warn' | undefined>> =
-  {
-    mismatch: 'error',
-    unverified: undefined,
-    read_failed: 'warn',
-  };
+const ALERT: Readonly<
+  Record<
+    Exclude<ReconcileStatus, 'clean'>,
+    { readonly level: 'error' | 'warn'; readonly event: string } | undefined
+  >
+> = {
+  mismatch: { level: 'error', event: 'v2_reconcile_mismatch' },
+  unverified: undefined,
+  read_failed: { level: 'warn', event: 'v2_reconcile_read_failed' },
+};
 
 function blockGroup(
   deps: ReconcileDeps,
@@ -186,13 +203,12 @@ function blockGroup(
   result: GroupResult & { status: Exclude<ReconcileStatus, 'clean'> },
 ): string[] {
   const summary = `${group.venue} ${group.source} reconcile ${result.status}: ${result.detail}`;
-  const level = LOG_LEVEL[result.status];
-  if (level !== undefined) {
+  const alert = ALERT[result.status];
+  if (alert !== undefined) {
     deps.logger?.log({
       trace_id: `v2-${tradingDate}`,
       stage: 'v2',
-      level,
-      event: `v2_reconcile_${result.status}`,
+      ...alert,
       message: summary,
       payload: result.diffs,
     });

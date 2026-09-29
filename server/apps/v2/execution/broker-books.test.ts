@@ -15,7 +15,7 @@ function client(overrides: {
 }
 
 describe('AlpacaBrokerBooks', () => {
-  it('reads positions signed by side, open orders by client id and cash in USD', async () => {
+  it('reads positions signed by side, open orders by client id with the side a stop protects, and cash in USD', async () => {
     const books = new AlpacaBrokerBooks(
       client({
         positions: [
@@ -23,7 +23,13 @@ describe('AlpacaBrokerBooks', () => {
           { symbol: 'MSFT', qty: '3', side: 'short' },
           { symbol: 'NVDA', qty: '-2', side: 'short' },
         ],
-        orders: [{ client_order_id: 'entry-1', symbol: 'AAPL', status: 'new' }],
+        orders: [
+          { client_order_id: 'entry-1', symbol: 'AAPL', side: 'buy', type: 'limit' },
+          { client_order_id: 'aapl-stop', symbol: 'AAPL', side: 'sell', type: 'stop' },
+          { client_order_id: 'msft-stop', symbol: 'MSFT', side: 'buy', type: 'stop_limit' },
+          { client_order_id: 'nvda-tp', symbol: 'NVDA', side: 'buy', type: 'limit' },
+          { client_order_id: 'untyped', symbol: 'NVDA', side: 'buy' },
+        ],
       }),
     );
     expect(await books.read('alpaca')).toEqual({
@@ -32,7 +38,13 @@ describe('AlpacaBrokerBooks', () => {
         { instrument: 'MSFT', qty: -3 },
         { instrument: 'NVDA', qty: -2 },
       ],
-      openOrders: [{ clientOrderId: 'entry-1', instrument: 'AAPL' }],
+      openOrders: [
+        { clientOrderId: 'entry-1', instrument: 'AAPL', protects: null },
+        { clientOrderId: 'aapl-stop', instrument: 'AAPL', protects: 'long' },
+        { clientOrderId: 'msft-stop', instrument: 'MSFT', protects: 'short' },
+        { clientOrderId: 'nvda-tp', instrument: 'NVDA', protects: null },
+        { clientOrderId: 'untyped', instrument: 'NVDA', protects: null },
+      ],
       cashQuote: 1000.5,
     });
   });

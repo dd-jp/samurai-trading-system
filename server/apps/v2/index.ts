@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import type { CfdCostModel, Sleeve } from '../../../contracts/index.js';
+import type { BrokerMode, CfdCostModel, Sleeve } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -227,6 +227,10 @@ function refuseLiveMode(options: V2RootOptions): void {
   }
 }
 
+function brokerModeFor(options: V2RootOptions): BrokerMode {
+  return options.samuraiMode === 'live' ? 'live' : 'paper';
+}
+
 function storePathFor(options: V2RootOptions): string {
   return options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH);
 }
@@ -373,7 +377,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     alpacaClient: options.alpacaClient,
     cfdCostModel,
     cfdEntryRefusal: cfdGate,
-    brokerMode: options.samuraiMode === 'live' ? 'live' : 'paper',
+    brokerMode: brokerModeFor(options),
   });
   return {
     registry: cycle.registry,

@@ -284,14 +284,16 @@ describe('composeCycle: broker reconcile wiring (#1872)', () => {
   it('reads the broker book from the same Alpaca client the executor trades through', async () => {
     const alpacaClient = {
       getPositions: vi.fn(async () => [{ symbol: 'AAPL', qty: '6', side: 'long' }]),
-      listOpenOrders: vi.fn(async () => [{ client_order_id: 'stop-1', symbol: 'AAPL' }]),
+      listOpenOrders: vi.fn(async () => [
+        { client_order_id: 'stop-1', symbol: 'AAPL', side: 'sell', type: 'stop' },
+      ]),
       getAccount: vi.fn(async () => ({ cash: '127', equity: '127' })),
     } as unknown as AlpacaBrokerClient;
     const composed = composeCycle(options({ dryRun: false, alpacaClient }));
 
     expect(await composed.brokerBooks.read('alpaca')).toEqual({
       positions: [{ instrument: 'AAPL', qty: 6 }],
-      openOrders: [{ clientOrderId: 'stop-1', instrument: 'AAPL' }],
+      openOrders: [{ clientOrderId: 'stop-1', instrument: 'AAPL', protects: 'long' }],
       cashQuote: 127,
     });
     expect(composed.executor.simulates({ bookVariant: 'primary', venue: 'alpaca' })).toBe(false);

@@ -221,9 +221,10 @@ function primaryBooksMirror(
         .flatMap((sleeveId) => books.forSleeve(sleeveId))
         .filter((book) => book.variant === 'primary');
       const view = storeView({ books, journal }, venue, primaries);
-      const stops = [...view.positions.keys()].map((instrument) => ({
+      const stops = [...view.positions].map(([instrument, qty]) => ({
         clientOrderId: `stop-${instrument}`,
         instrument,
+        protects: qty > 0 ? ('long' as const) : ('short' as const),
       }));
       return Promise.resolve({
         positions: [...view.positions].map(([instrument, qty]) => ({ instrument, qty })),
@@ -3523,7 +3524,10 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
       (book) => ({
         ...book,
         positions: [...book.positions, { instrument: 'TSLA', qty: 2 }],
-        openOrders: [...book.openOrders, { clientOrderId: 'stop-TSLA', instrument: 'TSLA' }],
+        openOrders: [
+          ...book.openOrders,
+          { clientOrderId: 'stop-TSLA', instrument: 'TSLA', protects: 'long' },
+        ],
       }),
       'position_missing_in_store',
     ],
@@ -3541,7 +3545,10 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
       'an open order the store does not know',
       (book) => ({
         ...book,
-        openOrders: [...book.openOrders, { clientOrderId: 'manual', instrument: 'TSLA' }],
+        openOrders: [
+          ...book.openOrders,
+          { clientOrderId: 'manual', instrument: 'TSLA', protects: null },
+        ],
       }),
       'order_unknown_to_store',
     ],

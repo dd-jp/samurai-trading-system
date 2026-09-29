@@ -199,6 +199,7 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
           id: `${order.id}-sl`,
           client_order_id: `${order.client_order_id}-stop`,
           side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
+          type: 'stop',
           order_class: 'simple',
           status: 'new',
         })),

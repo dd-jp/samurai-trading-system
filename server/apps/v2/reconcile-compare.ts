@@ -45,12 +45,29 @@ function positionDiffs(store: VenueView, broker: VenueView): ReconcileDiff[] {
   return diffs;
 }
 
+const guardKey = (instrument: string, side: 'long' | 'short'): string => `${instrument}|${side}`;
+
+function heldSide(qty: number): 'long' | 'short' {
+  return qty > 0 ? 'long' : 'short';
+}
+
+// Only a resting stop on the closing side guards a position; an add-on entry resting on the same
+// name would otherwise pass for one
+function guardedPositions(broker: VenueView): ReadonlySet<string> {
+  return new Set(
+    broker.openOrders.flatMap((order) =>
+      order.protects === null ? [] : [guardKey(order.instrument, order.protects)],
+    ),
+  );
+}
+
 function unprotectedDiffs(store: VenueView, broker: VenueView): ReconcileDiff[] {
-  const guarded = new Set(broker.openOrders.map((order) => order.instrument));
+  const guarded = guardedPositions(broker);
   const diffs: ReconcileDiff[] = [];
   for (const [instrument, held] of store.positions) {
     const reported = broker.positions.get(instrument) ?? 0;
-    if (held === 0 || !sameQty(held, reported) || guarded.has(instrument)) continue;
+    if (held === 0 || !sameQty(held, reported)) continue;
+    if (guarded.has(guardKey(instrument, heldSide(held)))) continue;
     diffs.push(diff('position_unprotected', { instrument, store: held, broker: reported }));
   }
   return diffs;

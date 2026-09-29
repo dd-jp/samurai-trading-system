@@ -401,6 +401,7 @@ export interface BrokerPosition {
 export interface BrokerOpenOrder {
   readonly clientOrderId: string;
   readonly instrument: string;
+  readonly protects: 'long' | 'short' | null;
 }
 
 export interface BrokerBook {

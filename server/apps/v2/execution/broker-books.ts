@@ -1,10 +1,11 @@
 import type {
   BrokerBook,
   BrokerBookReader,
+  BrokerOpenOrder,
   BrokerPosition,
   Venue,
 } from '../../../../contracts/index.js';
-import type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from '../../../pipeline/execution/index.js';
 
 function finite(value: string, what: string): number {
   const parsed = Number(value);
@@ -23,6 +24,18 @@ function signedPosition(position: {
   return { instrument: position.symbol, qty: position.side === 'short' ? -qty : qty };
 }
 
+const PROTECTIVE_STOP_TYPES: ReadonlySet<string | undefined> = new Set(['stop', 'stop_limit']);
+
+function openOrder(order: AlpacaOrder): BrokerOpenOrder {
+  const stop = PROTECTIVE_STOP_TYPES.has(order.type);
+  const protects = order.side === 'sell' ? 'long' : 'short';
+  return {
+    clientOrderId: order.client_order_id,
+    instrument: order.symbol,
+    protects: stop ? protects : null,
+  };
+}
+
 export class AlpacaBrokerBooks implements BrokerBookReader {
   constructor(private readonly client: AlpacaBrokerClient) {}
 
@@ -35,10 +48,7 @@ export class AlpacaBrokerBooks implements BrokerBookReader {
     ]);
     return {
       positions: positions.map(signedPosition),
-      openOrders: orders.map((order) => ({
-        clientOrderId: order.client_order_id,
-        instrument: order.symbol,
-      })),
+      openOrders: orders.map(openOrder),
       cashQuote: finite(account.cash, 'cash'),
     };
   }

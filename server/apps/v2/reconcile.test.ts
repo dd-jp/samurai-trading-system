@@ -93,8 +93,8 @@ const LEDGER: Ledger = {
 const CLEAN_BROKER: BrokerBook = {
   positions: [{ instrument: 'AAPL', qty: 6 }],
   openOrders: [
-    { clientOrderId: 'aapl-stop', instrument: 'AAPL' },
-    { clientOrderId: 'entry-NVDA', instrument: 'NVDA' },
+    { clientOrderId: 'aapl-stop', instrument: 'AAPL', protects: 'long' },
+    { clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null },
   ],
   cashQuote: 800 * FX,
 };
@@ -163,7 +163,7 @@ describe('storeView', () => {
     });
     expect(storeView(deps, 'alpaca', [PRIMARY, TREND])).toEqual({
       positions: new Map([['AAPL', 4]]),
-      openOrders: [{ clientOrderId: 'entry-NVDA', instrument: 'NVDA' }],
+      openOrders: [{ clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null }],
       cashGbp: 800,
     });
   });
@@ -247,7 +247,10 @@ describe('reconcileBooks', () => {
     const { deps, reconciles, refusals, logs } = harness({
       ...CLEAN_BROKER,
       positions: [...CLEAN_BROKER.positions, { instrument: 'MSFT', qty: 5 }],
-      openOrders: [...CLEAN_BROKER.openOrders, { clientOrderId: 'msft-stop', instrument: 'MSFT' }],
+      openOrders: [
+        ...CLEAN_BROKER.openOrders,
+        { clientOrderId: 'msft-stop', instrument: 'MSFT', protects: 'long' },
+      ],
     });
     const outcome = await reconcileBooks(deps, DATE);
 
@@ -300,9 +303,11 @@ describe('reconcileBooks', () => {
   it('compares broker cash in GBP at the venue rate', async () => {
     const off = harness({ ...CLEAN_BROKER, cashQuote: 800 }, { tolerance: 10 });
     await reconcileBooks(off.deps, DATE);
-    expect(off.reconciles[0]?.diffs).toEqual([
-      { kind: 'cash', instrument: null, order_id: null, store: 800, broker: 640 },
-    ]);
+    expect(off.reconciles[0]).toMatchObject({
+      status: 'mismatch',
+      diffs: [{ kind: 'cash', instrument: null, order_id: null, store: 800, broker: 640 }],
+      detail: 'cash cash store 800 broker 640',
+    });
   });
 
   it('a broker read failure blocks entries fail-closed with a warning, never throws', async () => {
