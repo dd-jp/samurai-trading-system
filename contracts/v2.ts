@@ -303,7 +303,10 @@ export interface EntryRoom {
 export interface RiskGate {
   approveEntry(request: EntryRequest): EntryApproval;
   entryRoom(equityGbp: number, cashGbp: number, grossNotionalGbp: number): EntryRoom;
-  entryRoomRefusal(notionalGbp: number, room: EntryRoom): 'insufficient_cash' | 'gross_cap' | undefined;
+  entryRoomRefusal(
+    notionalGbp: number,
+    room: EntryRoom,
+  ): 'insufficient_cash' | 'gross_cap' | undefined;
   approveExit(request: ExitRequest): RiskApprovedOrder;
   approveRearm(request: RearmRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;

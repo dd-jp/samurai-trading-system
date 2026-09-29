@@ -326,7 +326,17 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   });
   const sleeves = [
-    createDebateSleeve({ panel, bars, constituents, venueFor, router, market, news, clock, logger }),
+    createDebateSleeve({
+      panel,
+      bars,
+      constituents,
+      venueFor,
+      router,
+      market,
+      news,
+      clock,
+      logger,
+    }),
     createArm2Sleeve({ bars, constituents, venueFor, router, market, clock }),
   ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);

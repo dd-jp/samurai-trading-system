@@ -3,17 +3,16 @@ import type { CfdCatalogue, CfdInstrument } from './cfd-catalogue.js';
 import { borrowCostPerYear } from './cfd-catalogue.js';
 import { isCfdVenue, quoteCurrencyOf } from './venues.js';
 
-export type RouteSide = 'long' | 'short';
-export type AssetKind = 'us_stock' | 'uk_stock' | 'uk_etf';
+type RouteSide = 'long' | 'short';
+type AssetKind = 'us_stock' | 'uk_etf';
 export type RouteChoice = { readonly venue: Venue } | { readonly refusal: string };
 
 const ROUTES: Readonly<Record<AssetKind, Readonly<Record<RouteSide, Venue>>>> = {
   us_stock: { long: 'alpaca', short: 'saxo_cfd_usd' },
-  uk_stock: { long: 'saxo_cfd_gbp', short: 'saxo_cfd_gbp' },
   uk_etf: { long: 'saxo', short: 'saxo_cfd_gbp' },
 };
 
-export function assetKindFor(home: Venue): AssetKind {
+function assetKindFor(home: Venue): AssetKind {
   return home === 'alpaca' ? 'us_stock' : 'uk_etf';
 }
 

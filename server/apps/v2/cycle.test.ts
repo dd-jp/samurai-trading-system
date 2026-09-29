@@ -1018,7 +1018,12 @@ describe('runCycle', () => {
       reason: 'vetoed: x',
     });
     expect(vetoApplied(primary, longAapl)).toBe(longAapl);
-    const skipped = { ...longAapl, action: 'skip', reason: 'short_unavailable:no_catalogue', veto: 'x' } as const;
+    const skipped = {
+      ...longAapl,
+      action: 'skip',
+      reason: 'short_unavailable:no_catalogue',
+      veto: 'x',
+    } as const;
     expect(vetoApplied(primary, skipped)).toBe(skipped);
   });
 

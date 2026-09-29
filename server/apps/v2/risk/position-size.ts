@@ -3,7 +3,7 @@ import { MACRO_DAY_SIZE_FRACTION } from '../data/index.js';
 
 export const MAX_POSITION_FRACTION_OF_EQUITY = 0.1;
 export const CFD_SHORT_GAP_FRACTION = 0.3;
-export const CFD_SHORT_GAP_BUDGET_FRACTION_OF_SLEEVE_LOSS_CAP = 0.1;
+export const CFD_SHORT_GAP_BUDGET_FRACTION = 0.1;
 
 export interface PositionSizeInput {
   readonly equityGbp: number;

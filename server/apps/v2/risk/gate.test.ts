@@ -164,24 +164,26 @@ describe('V2RiskGate', () => {
   });
 
   it('mints shorts as sells with the target below the entry', () => {
-    const approval = gate().approveEntry(
-      request({ decision: cfdShort }),
-    );
+    const approval = gate().approveEntry(request({ decision: cfdShort }));
     expect(approval.order).toMatchObject({ side: 'sell', target: expect.closeTo(18.8, 9) });
   });
 
   it('refuses a short on any venue that is not a CFD, whatever else is true', () => {
     for (const venue of ['alpaca', 'saxo'] as const) {
-      expect(
-        gate().approveEntry(request({ decision: { ...cfdShort, venue } })),
-      ).toEqual({ size: 0, order: undefined, refusal: 'short_requires_cfd' });
+      expect(gate().approveEntry(request({ decision: { ...cfdShort, venue } }))).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'short_requires_cfd',
+      });
     }
   });
 
   it('lets a long through on a non-CFD venue and a short through on either CFD venue', () => {
     expect(gate().approveEntry(request()).order).toBeDefined();
     for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
-      expect(gate().approveEntry(request({ decision: { ...cfdShort, venue } })).order).toBeDefined();
+      expect(
+        gate().approveEntry(request({ decision: { ...cfdShort, venue } })).order,
+      ).toBeDefined();
     }
   });
 
@@ -199,9 +201,9 @@ describe('V2RiskGate', () => {
 
   it('caps a CFD short so a +30% gap costs at most 10% of the sleeve loss cap', () => {
     const sized = (lossCapGbp: number, capitalShare = 1) =>
-      gate({ capital: { ...year, lossCapGbp }, spec: { ...SPEC, capitalShare } })
-        .approveEntry(request({ decision: cfdShort }))
-        .size;
+      gate({ capital: { ...year, lossCapGbp }, spec: { ...SPEC, capitalShare } }).approveEntry(
+        request({ decision: cfdShort }),
+      ).size;
     expect(sized(1_500)).toBe(6);
     expect(sized(160)).toBe(3);
     expect(sized(100)).toBe(2);
@@ -275,11 +277,9 @@ describe('V2RiskGate', () => {
       );
     }
     for (const stop_price of [20, 19.6]) {
-      expect(
-        gate().approveEntry(
-          request({ decision: { ...cfdShort, stop_price } }),
-        ),
-      ).toMatchObject({ order: undefined, refusal: 'stop_wrong_side' });
+      expect(gate().approveEntry(request({ decision: { ...cfdShort, stop_price } }))).toMatchObject(
+        { order: undefined, refusal: 'stop_wrong_side' },
+      );
     }
     expect(
       gate().approveEntry(

@@ -855,7 +855,10 @@ class Cycle {
 
   applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
     if (approval.order === undefined || approval.size <= 0) return approval;
-    const refusal = this.deps.risk.entryRoomRefusal(this.notionalGbp(decision, approval.size), room);
+    const refusal = this.deps.risk.entryRoomRefusal(
+      this.notionalGbp(decision, approval.size),
+      room,
+    );
     return refusal === undefined ? approval : { size: approval.size, order: undefined, refusal };
   }
 

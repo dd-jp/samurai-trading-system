@@ -185,7 +185,7 @@ describe('PositionsPanel (P3)', () => {
         { venue: 'saxo_cfd_usd', currency: 'USD', positions_value_quote: -250 },
       ],
     });
-    expect((served as { venues: unknown[] }).venues).toHaveLength(3);
+    expect(served.status === 'fed' && served.venues).toHaveLength(3);
   });
 
   it('asks for the bars before the latest cycle date, for every holding', async () => {

@@ -55,19 +55,19 @@ interface RawInstrument {
   readonly shortTradeDisabled: boolean;
 }
 
+const FIELD_CHECKS: readonly (readonly [keyof RawInstrument, (value: unknown) => boolean])[] = [
+  ['symbol', (value) => typeof value === 'string' && value !== ''],
+  ['saxoSymbol', (value) => typeof value === 'string'],
+  ['uic', isPositive],
+  ['assetType', (value) => ASSET_TYPES.includes(String(value))],
+  ['currency', (value) => CURRENCIES.includes(String(value))],
+  ['priceToContractFactor', isPositive],
+  ['tradable', (value) => typeof value === 'boolean'],
+  ['shortTradeDisabled', (value) => typeof value === 'boolean'],
+];
+
 function isRawInstrument(raw: unknown): raw is RawInstrument {
-  return (
-    isRecord(raw) &&
-    typeof raw.symbol === 'string' &&
-    raw.symbol !== '' &&
-    typeof raw.saxoSymbol === 'string' &&
-    isPositive(raw.uic) &&
-    ASSET_TYPES.includes(String(raw.assetType)) &&
-    CURRENCIES.includes(String(raw.currency)) &&
-    isPositive(raw.priceToContractFactor) &&
-    typeof raw.tradable === 'boolean' &&
-    typeof raw.shortTradeDisabled === 'boolean'
-  );
+  return isRecord(raw) && FIELD_CHECKS.every(([key, valid]) => valid(raw[key]));
 }
 
 function parseInstrument(raw: unknown): CfdInstrument {

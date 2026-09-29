@@ -47,16 +47,24 @@ describe('venueFee', () => {
 });
 
 describe('venueFee on a CFD venue', () => {
-  const model = { fee: (side: OrderSide, qty: number, price: number) => (side === 'sell' ? 2 : 1) * qty * price };
+  const model = {
+    fee: (side: OrderSide, qty: number, price: number) => (side === 'sell' ? 2 : 1) * qty * price,
+  };
 
-  it.each(['saxo_cfd_gbp', 'saxo_cfd_usd'] as const)('%s throws with no cost model rather than pricing a zero fee', (venue) => {
-    expect(() => venueFee(venue, 'sell', 10, 100)).toThrow(CfdCostModelUnsetError);
-  });
+  it.each(['saxo_cfd_gbp', 'saxo_cfd_usd'] as const)(
+    '%s throws with no cost model rather than pricing a zero fee',
+    (venue) => {
+      expect(() => venueFee(venue, 'sell', 10, 100)).toThrow(CfdCostModelUnsetError);
+    },
+  );
 
-  it.each(['saxo_cfd_gbp', 'saxo_cfd_usd'] as const)('%s takes the fee from the injected model, not the cash Saxo commission', (venue) => {
-    expect(venueFee(venue, 'sell', 10, 100, model)).toBe(2_000);
-    expect(venueFee(venue, 'buy', 10, 100, model)).toBe(1_000);
-  });
+  it.each(['saxo_cfd_gbp', 'saxo_cfd_usd'] as const)(
+    '%s takes the fee from the injected model, not the cash Saxo commission',
+    (venue) => {
+      expect(venueFee(venue, 'sell', 10, 100, model)).toBe(2_000);
+      expect(venueFee(venue, 'buy', 10, 100, model)).toBe(1_000);
+    },
+  );
 
   it('ignores a cost model on the cash venues', () => {
     expect(venueFee('saxo', 'buy', 10, 100, model)).toBeCloseTo(0.8, 12);

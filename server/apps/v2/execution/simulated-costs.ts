@@ -12,7 +12,6 @@ import {
   SAXO_COMMISSION_PER_SIDE,
 } from '../../../pipeline/momentum/index.js';
 import type { Logger } from '../../../shared/index.js';
-import { isCfdVenue } from '../data/index.js';
 import { averageDailyNotional } from '../risk/index.js';
 
 const BPS = 10_000;
@@ -45,13 +44,13 @@ export function venueFee(
   price: number,
   cfdCostModel?: CfdCostModel,
 ): number {
-  if (isCfdVenue(venue)) {
-    if (cfdCostModel === undefined) throw new CfdCostModelUnsetError();
-    return cfdCostModel.fee(side, qty, price);
-  }
   const notional = qty * price;
   if (venue === 'saxo') return notional * SAXO_COMMISSION_PER_SIDE;
-  return alpacaRegulatoryFees({ side, notional, shares: qty, halfSpreadBps: 0 });
+  if (venue === 'alpaca') {
+    return alpacaRegulatoryFees({ side, notional, shares: qty, halfSpreadBps: 0 });
+  }
+  if (cfdCostModel === undefined) throw new CfdCostModelUnsetError();
+  return cfdCostModel.fee(side, qty, price);
 }
 
 export function quoteSimulatedFill(

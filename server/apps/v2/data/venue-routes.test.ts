@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Venue } from '../../../../contracts/index.js';
 import { CfdCatalogue, type CfdInstrument } from './cfd-catalogue.js';
-import {
-  assetKindFor,
-  CLOSED_VENUE_ROUTER,
-  createVenueRouter,
-  type VenueRouterDeps,
-} from './venue-routes.js';
+import { CLOSED_VENUE_ROUTER, createVenueRouter, type VenueRouterDeps } from './venue-routes.js';
 
 const TODAY = '2026-09-29';
 const MAX_BORROW = 0.02;
@@ -37,14 +32,6 @@ function router(
     ...over,
   });
 }
-
-describe('assetKindFor', () => {
-  it('reads an Alpaca home as a US stock and any other home as a UK ETF', () => {
-    expect(assetKindFor('alpaca')).toBe('us_stock');
-    expect(assetKindFor('saxo')).toBe('uk_etf');
-    expect(assetKindFor('saxo_cfd_gbp')).toBe('uk_etf');
-  });
-});
 
 describe('VenueRouter route table', () => {
   const both = router([
@@ -130,7 +117,12 @@ describe('VenueRouter short refusals', () => {
 
   it('names the earlier rule when several apply', () => {
     const r = router([
-      instrument({ symbol: 'AAPL', tradable: false, shortTradeDisabled: true, borrowCostPerDay: 1 }),
+      instrument({
+        symbol: 'AAPL',
+        tradable: false,
+        shortTradeDisabled: true,
+        borrowCostPerDay: 1,
+      }),
     ]);
     expect(short(r)).toEqual({ refusal: 'not_tradable' });
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CFD_SHORT_GAP_BUDGET_FRACTION_OF_SLEEVE_LOSS_CAP,
+  CFD_SHORT_GAP_BUDGET_FRACTION,
   CFD_SHORT_GAP_FRACTION,
   MAX_POSITION_FRACTION_OF_EQUITY,
   positionSizeShares,
@@ -70,7 +70,7 @@ describe('positionSizeShares CFD short gap bound', () => {
 
   it('carries the ruled +30% gap and a 10% of sleeve loss cap budget', () => {
     expect(CFD_SHORT_GAP_FRACTION).toBe(0.3);
-    expect(CFD_SHORT_GAP_BUDGET_FRACTION_OF_SLEEVE_LOSS_CAP).toBe(0.1);
+    expect(CFD_SHORT_GAP_BUDGET_FRACTION).toBe(0.1);
   });
 
   it('leaves the size alone when no gap budget applies', () => {

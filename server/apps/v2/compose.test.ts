@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { BookSpec, MarketData, Sleeve, SleeveDecision, SleeveSpec } from '../../../contracts/index.js';
+import type {
+  BookSpec,
+  MarketData,
+  Sleeve,
+  SleeveDecision,
+  SleeveSpec,
+} from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { type CycleCompositionOptions, composeCycle } from './compose.js';

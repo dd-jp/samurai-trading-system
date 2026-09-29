@@ -37,7 +37,10 @@ describe('parseCfdCatalogue', () => {
   it('treats a missing or null borrow cost as unknown, not zero', () => {
     const { borrowCostPerDay: _omitted, ...rest } = VOD;
     const catalogue = parseCfdCatalogue(
-      file({ asOf: '2026-09-29', instruments: [rest, { ...VOD, symbol: 'X', borrowCostPerDay: null }] }),
+      file({
+        asOf: '2026-09-29',
+        instruments: [rest, { ...VOD, symbol: 'X', borrowCostPerDay: null }],
+      }),
     );
     expect(catalogue.lookup('VOD')?.borrowCostPerDay).toBeUndefined();
     expect(catalogue.lookup('X')?.borrowCostPerDay).toBeUndefined();
@@ -58,11 +61,23 @@ describe('parseCfdCatalogue', () => {
     ['an empty symbol', file({ asOf: 'd', instruments: [{ ...VOD, symbol: '' }] })],
     ['an unknown asset type', file({ asOf: 'd', instruments: [{ ...VOD, assetType: 'Etf' }] })],
     ['an unknown currency', file({ asOf: 'd', instruments: [{ ...VOD, currency: 'GBX' }] })],
-    ['a zero contract factor', file({ asOf: 'd', instruments: [{ ...VOD, priceToContractFactor: 0 }] })],
+    [
+      'a zero contract factor',
+      file({ asOf: 'd', instruments: [{ ...VOD, priceToContractFactor: 0 }] }),
+    ],
     ['a non-boolean tradable', file({ asOf: 'd', instruments: [{ ...VOD, tradable: 'yes' }] })],
-    ['a non-boolean short flag', file({ asOf: 'd', instruments: [{ ...VOD, shortTradeDisabled: 0 }] })],
-    ['a negative borrow cost', file({ asOf: 'd', instruments: [{ ...VOD, borrowCostPerDay: -1 }] })],
-    ['a non-numeric borrow cost', file({ asOf: 'd', instruments: [{ ...VOD, borrowCostPerDay: 'x' }] })],
+    [
+      'a non-boolean short flag',
+      file({ asOf: 'd', instruments: [{ ...VOD, shortTradeDisabled: 0 }] }),
+    ],
+    [
+      'a negative borrow cost',
+      file({ asOf: 'd', instruments: [{ ...VOD, borrowCostPerDay: -1 }] }),
+    ],
+    [
+      'a non-numeric borrow cost',
+      file({ asOf: 'd', instruments: [{ ...VOD, borrowCostPerDay: 'x' }] }),
+    ],
     ['a null instrument', file({ asOf: 'd', instruments: [null] })],
     ['a zero uic', file({ asOf: 'd', instruments: [{ ...VOD, uic: 0 }] })],
   ])('throws on %s', (_name, text) => {

@@ -334,41 +334,40 @@ describe('V2OrderExecutor', () => {
     expect(await paper.submit(entry(primary, 'saxo'))).toMatchObject({ outcome: 'simulated' });
   });
 
-  it.each([
-    'saxo',
-    'saxo_cfd_gbp',
-    'saxo_cfd_usd',
-  ] as const)('a primary order at %s is simulated outside a dry run and never reaches Alpaca', async (venue) => {
-    const { executor: paper, alpaca, simulated } = executor(false);
-    expect(paper.simulates({ bookVariant: 'primary', venue })).toBe(true);
-    expect(await paper.submit(entry(primary, venue))).toMatchObject({
-      outcome: 'submitted',
-      detail: 'sim-bracket',
-    });
-    expect(simulated.submitBracket).toHaveBeenCalledTimes(1);
-    expect(alpaca.submitBracket).not.toHaveBeenCalled();
-  });
+  it.each(['saxo', 'saxo_cfd_gbp', 'saxo_cfd_usd'] as const)(
+    'a primary order at %s is simulated outside a dry run and never reaches Alpaca',
+    async (venue) => {
+      const { executor: paper, alpaca, simulated } = executor(false);
+      expect(paper.simulates({ bookVariant: 'primary', venue })).toBe(true);
+      expect(await paper.submit(entry(primary, venue))).toMatchObject({
+        outcome: 'submitted',
+        detail: 'sim-bracket',
+      });
+      expect(simulated.submitBracket).toHaveBeenCalledTimes(1);
+      expect(alpaca.submitBracket).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each([
-    'saxo_cfd_gbp',
-    'saxo_cfd_usd',
-  ] as const)('a dry-run refusal at %s is simulated in paper and refused_dry_run in a dry run', async (venue) => {
-    const refusal = new DryRunRefusedError({
-      client_order_id: 'e',
-      instrument: 'VOD',
-      kind: 'bracket',
-    });
-    const paper = executor(false);
-    paper.simulated.submitBracket.mockRejectedValueOnce(refusal);
-    expect(await paper.executor.submit(entry(primary, venue))).toMatchObject({
-      outcome: 'simulated',
-    });
-    const dry = executor(true);
-    dry.simulated.submitBracket.mockRejectedValueOnce(refusal);
-    expect(await dry.executor.submit(entry(primary, venue))).toMatchObject({
-      outcome: 'refused_dry_run',
-    });
-  });
+  it.each(['saxo_cfd_gbp', 'saxo_cfd_usd'] as const)(
+    'a dry-run refusal at %s is simulated in paper and refused_dry_run in a dry run',
+    async (venue) => {
+      const refusal = new DryRunRefusedError({
+        client_order_id: 'e',
+        instrument: 'VOD',
+        kind: 'bracket',
+      });
+      const paper = executor(false);
+      paper.simulated.submitBracket.mockRejectedValueOnce(refusal);
+      expect(await paper.executor.submit(entry(primary, venue))).toMatchObject({
+        outcome: 'simulated',
+      });
+      const dry = executor(true);
+      dry.simulated.submitBracket.mockRejectedValueOnce(refusal);
+      expect(await dry.executor.submit(entry(primary, venue))).toMatchObject({
+        outcome: 'refused_dry_run',
+      });
+    },
+  );
 
   it('sends a CFD short bracket to the simulated broker as a sell with the stop above the entry', async () => {
     const { executor: paper, simulated } = executor(false);

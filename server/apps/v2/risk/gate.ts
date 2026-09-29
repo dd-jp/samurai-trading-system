@@ -2,8 +2,8 @@ import type {
   BookLedger,
   CapitalYear,
   EntryApproval,
-  EntryRoom,
   EntryRequest,
+  EntryRoom,
   ExitRequest,
   MarketData,
   RearmRequest,
@@ -20,10 +20,7 @@ import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
 import { entryRoomRefusal, grossRoomGbp } from './gross-cap.js';
 import { sizeMultiplierFor } from './loss-budget.js';
-import {
-  CFD_SHORT_GAP_BUDGET_FRACTION_OF_SLEEVE_LOSS_CAP,
-  positionSizeShares,
-} from './position-size.js';
+import { CFD_SHORT_GAP_BUDGET_FRACTION, positionSizeShares } from './position-size.js';
 import { averageDailyNotional, volumeCapShares } from './volume-cap.js';
 
 interface Sizing {
@@ -52,7 +49,7 @@ function venueRefusalFor(
 
 function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {
   if (decision.action !== 'enter_short' || !isCfdVenue(decision.venue)) return undefined;
-  return capital.lossCapGbp * CFD_SHORT_GAP_BUDGET_FRACTION_OF_SLEEVE_LOSS_CAP;
+  return capital.lossCapGbp * CFD_SHORT_GAP_BUDGET_FRACTION;
 }
 
 export interface RiskGateDeps {
@@ -75,7 +72,10 @@ export class V2RiskGate implements RiskGate {
     return { cashGbp, grossGbp: grossRoomGbp(equityGbp, grossNotionalGbp) };
   }
 
-  entryRoomRefusal(notionalGbp: number, room: EntryRoom): 'insufficient_cash' | 'gross_cap' | undefined {
+  entryRoomRefusal(
+    notionalGbp: number,
+    room: EntryRoom,
+  ): 'insufficient_cash' | 'gross_cap' | undefined {
     return entryRoomRefusal(notionalGbp, room);
   }
 
@@ -94,6 +94,11 @@ export class V2RiskGate implements RiskGate {
     const { size, refusal: sizingRefusal } = this.#size(request);
     if (sizingRefusal !== undefined) return { size, order: undefined, refusal: sizingRefusal };
     if (size <= 0) return { size, order: undefined, refusal: 'zero_size' };
+    return this.#bracket(request, size);
+  }
+
+  #bracket(request: EntryRequest, size: number): EntryApproval {
+    const { decision } = request;
     if (decision.stop_price === undefined || decision.atr === undefined) {
       return { size, order: undefined, refusal: 'no_stop_price' };
     }

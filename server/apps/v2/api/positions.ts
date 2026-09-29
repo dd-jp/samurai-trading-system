@@ -132,7 +132,9 @@ export class PositionsPanel {
     const positions = holdings.positions.map((row) =>
       this.#position(row, bars.get(heldKey(row)), asOf, fx),
     );
-    const heldCfdVenues = CFD_VENUES.filter((venue) => positions.some((row) => row.venue === venue));
+    const heldCfdVenues = CFD_VENUES.filter((venue) =>
+      positions.some((row) => row.venue === venue),
+    );
     const venues = [...CASH_VENUES, ...heldCfdVenues].map((venue) => venueTotal(venue, positions));
     const primaryCash = holdings.cash.filter(isPrimary).map((row) => row.cash_gbp);
     return {
@@ -178,7 +180,9 @@ export class PositionsPanel {
 
   #position(row: HoldingRow, bar: LastBar, asOf: string, fx: FxRateWire | null): PositionWire {
     const perGbp =
-      quoteCurrencyOf(row.venue) === 'USD' ? fx?.gbp_usd : quotePerGbp(this.market, row.venue, asOf);
+      quoteCurrencyOf(row.venue) === 'USD'
+        ? fx?.gbp_usd
+        : quotePerGbp(this.market, row.venue, asOf);
     return {
       book_id: row.book_id,
       variant: row.variant,
