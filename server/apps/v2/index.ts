@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import type { Sleeve } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -31,6 +32,7 @@ import {
   parseBoeGbpUsdCsv,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
+import { saxoSessionRefusal } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
 import type { Journal } from './journal/index.js';
 import {
@@ -87,6 +89,7 @@ export interface V2RootOptions {
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly newsSource?: NewsSource | undefined;
+  readonly lseLegRefusal?: string | undefined;
 }
 
 export interface V2Root {
@@ -233,6 +236,35 @@ function barsSourceFor(options: V2RootOptions): {
   };
 }
 
+export function withoutRefusedLse(sleeve: Sleeve, refusal: string | undefined): Sleeve {
+  if (refusal === undefined) return sleeve;
+  return {
+    ...sleeve,
+    universe(context) {
+      const universe = sleeve.universe(context);
+      return {
+        ...universe,
+        instruments: universe.instruments.filter((symbol) => !isLseInstrument(symbol)),
+      };
+    },
+  };
+}
+
+function journalLseLegRefusal(
+  journal: Pick<Journal, 'recordRefusal'>,
+  tradingDate: string,
+  refusal: string | undefined,
+): void {
+  if (refusal === undefined) return;
+  journal.recordRefusal({
+    trading_date: tradingDate,
+    scope: 'data',
+    parameter: 'SAXO_SESSION',
+    ticket: '#1876',
+    message: `LSE leg refused: ${refusal}`,
+  });
+}
+
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -259,7 +291,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const sleeves = [
     createDebateSleeve({ panel, bars, constituents, venueFor, news, clock, logger }),
     createArm2Sleeve({ bars, constituents, venueFor, clock }),
-  ];
+  ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
   const cycle = composeCycle({
@@ -287,6 +319,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     scriptedTransports: scripted,
     run: async () => {
       await prime();
+      journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
       return runCycle(cycle, options.tradingDate);
     },
     close: () => db.close(),
@@ -378,6 +411,24 @@ export function logNewRefusals(
   });
 }
 
+export function rootOptionsFor(
+  dryRun: boolean,
+  tradingDate: string,
+  env: NodeJS.ProcessEnv,
+  clock: Clock,
+  logger: Logger,
+): V2RootOptions {
+  return {
+    tradingDate,
+    dryRun,
+    ...nousOptionsFrom(env),
+    samuraiMode: env.SAMURAI_MODE,
+    clock,
+    logger,
+    lseLegRefusal: saxoSessionRefusal(clock.now()),
+  };
+}
+
 async function runOnce(
   dryRun: boolean,
   tradingDate: string,
@@ -388,14 +439,7 @@ async function runOnce(
 ): Promise<number> {
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
-  const root = composeV2Root({
-    tradingDate,
-    dryRun,
-    ...nous,
-    samuraiMode: env.SAMURAI_MODE,
-    clock,
-    logger,
-  });
+  const root = composeV2Root(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
   try {
     const report = await runAfterPinCheck(root, () =>
       verifyNousPins({

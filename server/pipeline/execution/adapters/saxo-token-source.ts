@@ -10,6 +10,7 @@ import type { FetchLike, SaxoOAuthConfig, SaxoTokenResponse } from './saxo-oauth
 import { requestSaxoToken, SaxoOAuthError } from './saxo-oauth.js';
 import type { SaxoTokenFileRecord } from './saxo-token-file.js';
 import { readTokenFile, writeTokenFile } from './saxo-token-file.js';
+import { tryLockTokenFile } from './saxo-token-lock.js';
 
 export type SaxoSessionState =
   | {
@@ -61,6 +62,13 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_LEAD_MS = 60_000;
 const LEAD_FRACTION = 0.25;
 const DEFAULT_BACKOFF = { baseMs: 5_000, maxMs: 120_000 } as const;
+const LOCK_POLL_MS = 1_000;
+const LOCK_ATTEMPTS = 10;
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 export interface SaxoTokenRefresherDeps {
   environment: SaxoTradingEnvironment;
@@ -68,11 +76,12 @@ export interface SaxoTokenRefresherDeps {
   tokenPath: string;
   logger: Logger;
   clock?: Clock;
-  fetchImpl?: FetchLike;
+  fetchImpl?: FetchLike | undefined;
   timers?: SaxoRefreshTimers;
   writeRecord?: (path: string, record: SaxoTokenFileRecord) => void;
   backoff?: { baseMs: number; maxMs: number };
   sessionLostAlerts?: SaxoSessionLostAlertChannel;
+  sleep?: ((ms: number) => Promise<void>) | undefined;
 }
 
 function oauthFailureStatus(cause: unknown): number | undefined {
@@ -97,6 +106,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
   private readonly timers: SaxoRefreshTimers;
   private readonly writeRecord: (path: string, record: SaxoTokenFileRecord) => void;
   private readonly backoff: { baseMs: number; maxMs: number };
+  private readonly sleep: (ms: number) => Promise<void>;
 
   private record: SaxoTokenFileRecord | undefined;
   private lostReason: string | undefined;
@@ -113,6 +123,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     this.timers = deps.timers ?? DEFAULT_TIMERS;
     this.writeRecord = deps.writeRecord ?? writeTokenFile;
     this.backoff = deps.backoff ?? DEFAULT_BACKOFF;
+    this.sleep = deps.sleep ?? defaultSleep;
   }
 
   start(): SaxoSessionState {
@@ -147,6 +158,12 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       return renewed.accessToken;
     }
     return record.accessToken;
+  }
+
+  async renewNow(): Promise<SaxoSessionState> {
+    this.load();
+    await this.refreshNow();
+    return this.sessionState();
   }
 
   sessionState(): SaxoSessionState {
@@ -226,8 +243,62 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
   }
 
   private async runRefresh(): Promise<void> {
+    if (this.record === undefined || this.stopped || this.lostReason !== undefined) return;
+    const release = await this.acquireLock();
+    if (release === undefined) {
+      this.onFailure('saxo_token_refresh_failed', new Error('the token refresh lock stayed held'));
+      return;
+    }
+    try {
+      if (this.adoptPeerRotation()) {
+        this.schedule();
+        return;
+      }
+      await this.rotate();
+    } finally {
+      release();
+    }
+  }
+
+  private async acquireLock(): Promise<(() => void) | undefined> {
+    for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+      const release = tryLockTokenFile(this.deps.tokenPath, this.clock.now().getTime());
+      if (release !== undefined) return release;
+      await this.sleep(LOCK_POLL_MS);
+    }
+    return undefined;
+  }
+
+  private readPeerRecord(): SaxoTokenFileRecord | undefined {
+    try {
+      const onDisk = readTokenFile(this.deps.tokenPath);
+      return onDisk?.environment === this.deps.environment ? onDisk : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private adoptPeerRotation(): boolean {
+    const own = this.record;
+    const peer = this.readPeerRecord();
+    if (own === undefined || peer === undefined) return false;
+    if (Date.parse(peer.obtainedAt) <= Date.parse(own.obtainedAt)) return false;
+    if (Date.parse(peer.accessTokenExpiresAt) <= this.clock.now().getTime()) return false;
+    this.record = peer;
+    return true;
+  }
+
+  private adoptPeerRotationOf(sentRefreshToken: string): boolean {
+    const peer = this.readPeerRecord();
+    if (peer === undefined || peer.refreshToken === sentRefreshToken) return false;
+    if (Date.parse(peer.refreshTokenExpiresAt) <= this.clock.now().getTime()) return false;
+    this.record = peer;
+    return true;
+  }
+
+  private async rotate(): Promise<void> {
     const record = this.record;
-    if (record === undefined || this.stopped || this.lostReason !== undefined) return;
+    if (record === undefined) return;
     const now = this.clock.now();
     let response: SaxoTokenResponse;
     try {
@@ -238,9 +309,21 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
         this.fetchImpl,
       );
     } catch (cause) {
-      this.onFailure('saxo_token_refresh_failed', cause);
+      this.onRefreshRejected(record.refreshToken, cause);
       return;
     }
+    this.adoptRotation(record, response, now);
+  }
+
+  private onRefreshRejected(sentRefreshToken: string, cause: unknown): void {
+    const raced =
+      isTerminalOAuthFailure(oauthFailureStatus(cause)) &&
+      this.adoptPeerRotationOf(sentRefreshToken);
+    if (raced) this.schedule();
+    else this.onFailure('saxo_token_refresh_failed', cause);
+  }
+
+  private adoptRotation(record: SaxoTokenFileRecord, response: SaxoTokenResponse, now: Date): void {
     const next: SaxoTokenFileRecord = {
       ...response,
       environment: this.deps.environment,
@@ -255,6 +338,11 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     }
     this.record = next;
     this.failedAttempts = 0;
+    this.logRefreshed(next);
+    this.schedule();
+  }
+
+  private logRefreshed(next: SaxoTokenFileRecord): void {
     this.deps.logger.log({
       trace_id: 'saxo-token',
       stage: 'orchestrator',
@@ -267,7 +355,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
         refresh_token_expires_at: next.refreshTokenExpiresAt,
       },
     });
-    this.schedule();
   }
 
   private onFailure(event: string, cause: unknown): void {

@@ -1,7 +1,10 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Sleeve, SleeveContext, SleeveSpec } from '../../../contracts/index.js';
+import { writeKeepAliveState } from '../../pipeline/execution/adapters/saxo-keepalive-state.js';
+import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
@@ -23,11 +26,27 @@ import {
   main,
   nousOptionsFrom,
   parseCliArgs,
+  rootOptionsFor,
   runAfterPinCheck,
+  withoutRefusedLse,
 } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
-import { BULLISH_SCRIPT, ScriptedTransport } from './signal/index.js';
+import { BULLISH_SCRIPT, isLseInstrument, ScriptedTransport } from './signal/index.js';
+import { LSE_LIQUIDITY_SCREEN } from './signal/parameters.js';
+
+const liveTokenFile = vi.hoisted(() => ({ path: undefined as string | undefined }));
+
+vi.mock('../../pipeline/execution/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../pipeline/execution/index.js')>();
+  return {
+    ...actual,
+    tokenFilePath: (environment: Parameters<typeof actual.tokenFilePath>[0]) =>
+      environment === 'live' && liveTokenFile.path !== undefined
+        ? liveTokenFile.path
+        : actual.tokenFilePath(environment),
+  };
+});
 
 interface Fixtures {
   directory: string;
@@ -37,7 +56,7 @@ interface Fixtures {
   spreadsPath: string;
 }
 
-async function writeFixtures(): Promise<Fixtures> {
+async function writeFixtures(saxoSymbols: readonly string[] = []): Promise<Fixtures> {
   const directory = mkdtempSync(join(tmpdir(), 'v2-root-'));
   const bars: DailyBar[] = [];
   const origin = Date.UTC(2026, 0, 1);
@@ -60,6 +79,12 @@ async function writeFixtures(): Promise<Fixtures> {
     { symbol: 'UP', bars },
     { symbol: 'SPY', bars },
   ]);
+  if (saxoSymbols.length > 0) {
+    await store.write(
+      'saxo',
+      saxoSymbols.map((symbol) => ({ symbol, bars })),
+    );
+  }
   store.close();
   const constituentsPath = join(directory, 'constituents.csv');
   writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,MISSING"\n');
@@ -166,6 +191,142 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
   };
 }
 
+describe('withoutRefusedLse', () => {
+  const context = { tradingDate: '2026-09-29' } as SleeveContext;
+  const refusals = [{ scope: 'universe', parameter: 'X', ticket: '#1', message: 'kept' }] as const;
+  const fake = (): Sleeve => ({
+    id: 'fake',
+    spec: {} as SleeveSpec,
+    universe: () => ({ instruments: ['UP', 'ISF', 'IUSA', 'SPY'], refusals }),
+    decide: async () => ({ decisions: [], refusals: [] }),
+  });
+
+  it('returns the very same sleeve when the Saxo session is healthy', () => {
+    const sleeve = fake();
+    expect(withoutRefusedLse(sleeve, undefined)).toBe(sleeve);
+  });
+
+  it('drops every LSE line from the universe, and only those, when the session is refused', () => {
+    const wrapped = withoutRefusedLse(fake(), 'session lost');
+    expect(wrapped.universe(context).instruments).toEqual(['UP', 'SPY']);
+    expect(wrapped.universe(context).refusals).toEqual(refusals);
+  });
+
+  it('keeps the sleeve identity and its decide behaviour', async () => {
+    const wrapped = withoutRefusedLse(fake(), 'session lost');
+    expect(wrapped.id).toBe('fake');
+    await expect(wrapped.decide(context, ['UP'])).resolves.toEqual({
+      decisions: [],
+      refusals: [],
+    });
+  });
+});
+
+describe('rootOptionsFor', () => {
+  let directory: string | undefined;
+  const tokenDirectory = mkdtempSync(join(tmpdir(), 'v2-live-token-'));
+  const tokenPath = join(tokenDirectory, 'live.json');
+  const configuredScreen = LSE_LIQUIDITY_SCREEN.value;
+  beforeEach(() => {
+    Object.assign(LSE_LIQUIDITY_SCREEN, { value: 1 });
+  });
+  afterEach(() => {
+    Object.assign(LSE_LIQUIDITY_SCREEN, { value: configuredScreen });
+    liveTokenFile.path = undefined;
+    rmSync(tokenPath, { force: true });
+    rmSync(`${tokenPath}.keepalive.json`, { force: true });
+    if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
+  });
+  afterAll(() => rmSync(tokenDirectory, { recursive: true, force: true }));
+
+  const saxoSession = (clock: SimulatedClock, refreshTokenLifeMs: number) => ({
+    environment: 'live' as const,
+    accessToken: 'access-fixture',
+    refreshToken: 'refresh-fixture',
+    accessTokenExpiresAt: new Date(clock.now().getTime() - 60_000).toISOString(),
+    refreshTokenExpiresAt: new Date(clock.now().getTime() + refreshTokenLifeMs).toISOString(),
+    obtainedAt: new Date(clock.now().getTime() - 3_600_000).toISOString(),
+  });
+
+  async function composedFrom(clock: SimulatedClock) {
+    const fixtures = await writeFixtures(['ISF', 'IUSA']);
+    directory = fixtures.directory;
+    liveTokenFile.path = tokenPath;
+    const storePath = join(fixtures.directory, 'wired.sqlite');
+    seededStore(storePath).close();
+    return composeV2Root({
+      ...fixtures,
+      ...rootOptionsFor(true, ENTRY_DATE, {}, clock, { log: () => {} }),
+      storePath,
+    });
+  }
+
+  const lseInstrumentsOf = (root: ReturnType<typeof composeV2Root>) =>
+    root.registry
+      .list()
+      .flatMap(
+        (sleeve) =>
+          sleeve.universe({ tradingDate: ENTRY_DATE, macroDay: false, dryRun: true }).instruments,
+      )
+      .filter((symbol) => isLseInstrument(symbol));
+
+  it('reads the real live token file: an expired session journals SAXO_SESSION and empties every LSE universe', async () => {
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    writeTokenFile(tokenPath, saxoSession(clock, -1));
+    const root = await composedFrom(clock);
+    try {
+      await root.run();
+      expect(root.journal.newRefusals(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({
+          parameter: 'SAXO_SESSION',
+          ticket: '#1876',
+          message: expect.stringContaining('the Saxo live refresh token expired'),
+        }),
+      );
+      expect(lseInstrumentsOf(root)).toEqual([]);
+    } finally {
+      root.close();
+    }
+  });
+
+  it('reads the keep-alive verdict beside the token file: a lost session refuses too', async () => {
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    writeTokenFile(tokenPath, saxoSession(clock, 1_800_000));
+    writeKeepAliveState(tokenPath, {
+      lostAt: clock.now().toISOString(),
+      lostReason: 'refresh rejected',
+    });
+    const root = await composedFrom(clock);
+    try {
+      await root.run();
+      expect(root.journal.newRefusals(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({
+          parameter: 'SAXO_SESSION',
+          message: expect.stringContaining('refresh rejected'),
+        }),
+      );
+      expect(lseInstrumentsOf(root)).toEqual([]);
+    } finally {
+      root.close();
+    }
+  });
+
+  it('journals no refusal and keeps the LSE universe for a healthy session', async () => {
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    writeTokenFile(tokenPath, saxoSession(clock, 1_800_000));
+    const root = await composedFrom(clock);
+    try {
+      await root.run();
+      expect(
+        root.journal.newRefusals(ENTRY_DATE).filter((r) => r.parameter === 'SAXO_SESSION'),
+      ).toEqual([]);
+      expect(lseInstrumentsOf(root).length).toBeGreaterThan(0);
+    } finally {
+      root.close();
+    }
+  });
+});
+
 describe('composeV2Root', () => {
   let directory: string | undefined;
   afterEach(() => {
@@ -265,6 +426,50 @@ describe('composeV2Root', () => {
       expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1]);
     } finally {
       next.close();
+    }
+  });
+
+  it('journals one SAXO_SESSION refusal against #1876 when the LSE leg is refused, and none otherwise', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const open = (lseLegRefusal: string | undefined, storePath: string) => {
+      seededStore(storePath).close();
+      return composeV2Root({
+        ...fixtures,
+        tradingDate: ENTRY_DATE,
+        dryRun: true,
+        storePath,
+        clock,
+        logger: { log: () => {} },
+        lseLegRefusal,
+      });
+    };
+    const refused = open(
+      'the Saxo live session was lost: run `npm run saxo:login`',
+      join(fixtures.directory, 'a.sqlite'),
+    );
+    try {
+      await refused.run();
+      expect(refused.journal.newRefusals(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({
+          scope: 'data',
+          parameter: 'SAXO_SESSION',
+          ticket: '#1876',
+          message: expect.stringContaining('npm run saxo:login'),
+        }),
+      );
+    } finally {
+      refused.close();
+    }
+    const healthy = open(undefined, join(fixtures.directory, 'b.sqlite'));
+    try {
+      await healthy.run();
+      expect(
+        healthy.journal.newRefusals(ENTRY_DATE).filter((r) => r.parameter === 'SAXO_SESSION'),
+      ).toEqual([]);
+    } finally {
+      healthy.close();
     }
   });
 
