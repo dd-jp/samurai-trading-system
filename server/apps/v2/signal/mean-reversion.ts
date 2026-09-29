@@ -21,7 +21,7 @@ export const MEAN_REVERSION_UNIVERSE_COUNT = 300;
 export const MEAN_REVERSION_CANDIDATE_ID = 'mean-reversion';
 export const MEAN_REVERSION_BENCHMARK_ID = 'mean-reversion-benchmark';
 
-// Pinned: from/to feed the trial hash, so they must not drift if the store is re-primed. Alpaca SIP starts 2016-01-04, so every name skips on window_coverage until SPY's 240th session, 2016-12-14 (#1912)
+// Pinned: from/to feed the trial hash, so they must not drift if the store is re-primed. Alpaca SIP starts 2016-01-04, so every name skips on window_coverage until 2016-12-14, the first day with 240 prior SPY sessions (#1912)
 export const MEAN_REVERSION_FROM = '2016-10-11';
 export const MEAN_REVERSION_TO = '2025-09-24';
 
