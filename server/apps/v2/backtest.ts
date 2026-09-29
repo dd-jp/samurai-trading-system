@@ -35,6 +35,10 @@ export interface BacktestInput {
   readonly ledger: TrialLedger;
   readonly logger: Logger;
   readonly folds?: number | undefined;
+  // #1515: bars purged from each side of a fold boundary (server/tools/backtest/momentum/folds.ts)
+  // Omitted from recordTrials' run info when unset (§4's idempotency risk), not defaulted to 0/null
+  // there, so a sleeve that never declares one hashes identically to before this field existed
+  readonly embargo?: number | undefined;
   readonly calendarReference?: string | undefined;
   // Never part of recordTrials' run info: a cost-sensitivity rerun (doc 67 "2x modelled cost")
   // must resolve to the SAME trial hash as its 1x baseline, not a new permanent ledger entry
@@ -225,6 +229,7 @@ function recordTrials(
     from: input.from,
     to: input.to,
     folds: input.folds ?? null,
+    ...(input.embargo === undefined ? {} : { embargo: input.embargo }),
     startCapitalGbp: input.startCapitalGbp,
     lossCapGbp: input.lossCapGbp,
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
@@ -297,6 +302,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
         trialsCounted: input.ledger.count(),
         lossCapGbp: input.lossCapGbp * share,
         folds: input.folds,
+        embargo: input.embargo,
       }),
     };
   } finally {

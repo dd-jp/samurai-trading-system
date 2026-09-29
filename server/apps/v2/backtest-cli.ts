@@ -9,18 +9,33 @@ import { minbtl } from '../../tools/backtest/index.js';
 import { type BacktestInput, type BacktestResult, runBacktest } from './backtest.js';
 import {
   BarsMarketData,
+  type BarsSource,
   calendarReferenceFor,
+  currentConstituents,
   MultiVenueBarsSource,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
-import { FX_PATH, halfSpreadLookup, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
+import {
+  CONSTITUENTS_PATH,
+  FX_PATH,
+  halfSpreadLookup,
+  SAXO_SPREADS_PATH,
+  SPREADS_PATH,
+} from './index.js';
 import {
   CROSS_ASSET_TREND_CANDIDATE_ID,
   CROSS_ASSET_TREND_FROM,
   CROSS_ASSET_TREND_TO,
   createCrossAssetTrendBenchmarkSleeve,
   createCrossAssetTrendSleeve,
+  createMeanReversionBenchmarkSleeve,
+  createMeanReversionSleeve,
+  MEAN_REVERSION_CANDIDATE_ID,
+  MEAN_REVERSION_ENTRY_THRESHOLDS,
+  MEAN_REVERSION_FROM,
+  MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
+  MEAN_REVERSION_TO,
 } from './signal/index.js';
 import { researchStorePath, sessionBLedger, TrialLedger } from './trial-ledger.js';
 
@@ -39,6 +54,7 @@ export interface BacktestCliOptions {
   readonly fxPath?: string;
   readonly spreadsPath?: string;
   readonly saxoSpreadsPath?: string;
+  readonly constituentsPath?: string;
   readonly logger?: Logger;
 }
 
@@ -58,6 +74,7 @@ interface ResolvedCliOptions {
   readonly fxPath: string;
   readonly spreadsPath: string;
   readonly saxoSpreadsPath: string;
+  readonly constituentsPath: string;
   readonly storePath: string;
   readonly logger: Logger;
 }
@@ -68,6 +85,7 @@ export function resolveCliOptions(options: BacktestCliOptions): ResolvedCliOptio
     fxPath: options.fxPath ?? FX_PATH,
     spreadsPath: options.spreadsPath ?? SPREADS_PATH,
     saxoSpreadsPath: options.saxoSpreadsPath ?? SAXO_SPREADS_PATH,
+    constituentsPath: options.constituentsPath ?? CONSTITUENTS_PATH,
     storePath: options.storePath ?? researchStorePath(),
     logger: options.logger ?? SILENT_LOGGER,
   };
@@ -148,18 +166,134 @@ export async function runCrossAssetTrendCandidate(
   }
 }
 
+export interface MeanReversionRunReport {
+  readonly baseline: BacktestResult;
+  readonly stressed: BacktestResult;
+  readonly trialsCounted: number;
+  readonly minbtlLimit: number;
+  readonly windowYears: number;
+  readonly signFlipped: boolean;
+}
+
+export interface MeanReversionWindow {
+  readonly from: string;
+  readonly to: string;
+}
+
+const MEAN_REVERSION_WINDOW: MeanReversionWindow = {
+  from: MEAN_REVERSION_FROM,
+  to: MEAN_REVERSION_TO,
+};
+
+export async function runMeanReversionAgainst(
+  market: MarketData,
+  bars: BarsSource,
+  constituentsFor: (tradingDate: string) => readonly string[],
+  halfSpreadBps: (instrument: string) => number,
+  ledger: TrialLedger,
+  logger: Logger,
+  window: MeanReversionWindow = MEAN_REVERSION_WINDOW,
+): Promise<MeanReversionRunReport> {
+  const trials = MEAN_REVERSION_ENTRY_THRESHOLDS.map((threshold) => ({
+    config: { rsi_entry_threshold: threshold },
+    sleeve: createMeanReversionSleeve(bars, constituentsFor, threshold),
+  }));
+  const benchmark = {
+    config: { benchmark: true },
+    sleeve: createMeanReversionBenchmarkSleeve(bars, constituentsFor),
+  };
+  const input = (costMultiple: number): BacktestInput => ({
+    candidate: MEAN_REVERSION_CANDIDATE_ID,
+    trials,
+    benchmark,
+    from: window.from,
+    to: window.to,
+    startCapitalGbp: BACKTEST_START_CAPITAL_GBP,
+    lossCapGbp: BACKTEST_LOSS_CAP_GBP,
+    market,
+    halfSpreadBps,
+    ledger,
+    logger,
+    folds: WALK_FORWARD_FOLDS,
+    // #1515: sized to ruling (e)'s 10-session time stop (folds.ts's foldRanges embargo param) so
+    // a position opened near a fold boundary cannot straddle it in the PBO combinatorics
+    embargo: MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
+    calendarReference: calendarReferenceFor('alpaca'),
+    costMultiple,
+  });
+  const baseline = await runBacktest(input(1));
+  const stressed = await runBacktest(input(COST_STRESS_MULTIPLE));
+  const start = new Date(`${window.from}T00:00:00.000Z`);
+  const end = new Date(`${window.to}T00:00:00.000Z`);
+  const minbtlLimit = minbtl({ start, end }, MINBTL_EXPECTED_ANNUAL_SHARPE).limit;
+  return {
+    baseline,
+    stressed,
+    trialsCounted: ledger.count(),
+    minbtlLimit,
+    windowYears: (end.getTime() - start.getTime()) / (365.25 * 86_400_000),
+    signFlipped:
+      baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
+      stressed.verdict.checks.beatsBenchmarkAfterHaircut,
+  };
+}
+
+export async function runMeanReversionCandidate(
+  cliOptions: BacktestCliOptions = {},
+): Promise<MeanReversionRunReport> {
+  const options = resolveCliOptions(cliOptions);
+  const alpaca = new ParquetBarsSource(options.root, 'alpaca', { optional: true });
+  const saxo = new ParquetBarsSource(options.root, 'saxo');
+  await alpaca.prime();
+  await saxo.prime();
+  const bars = new MultiVenueBarsSource([alpaca, saxo]);
+  const market = new BarsMarketData(bars, parseBoeGbpUsdCsv(readFileSync(options.fxPath, 'utf8')));
+  const halfSpreadBps = halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath);
+  const constituentsCsv = readFileSync(options.constituentsPath, 'utf8');
+  const constituentsFor = (tradingDate: string): readonly string[] =>
+    currentConstituents(constituentsCsv, tradingDate);
+  const db = openSharedStore(options.storePath);
+  try {
+    const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());
+    return await runMeanReversionAgainst(
+      market,
+      bars,
+      constituentsFor,
+      halfSpreadBps,
+      ledger,
+      options.logger,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+const CANDIDATE_RUNNERS: Record<string, (options: BacktestCliOptions) => Promise<unknown>> = {
+  [CROSS_ASSET_TREND_CANDIDATE_ID]: runCrossAssetTrendCandidate,
+  [MEAN_REVERSION_CANDIDATE_ID]: runMeanReversionCandidate,
+};
+
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runCrossAssetTrendCandidate({
-    logger: { log: (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`) },
-  })
-    .then((report) => {
-      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-      process.exit(0);
+  const candidateArg = process.argv[2] ?? CROSS_ASSET_TREND_CANDIDATE_ID;
+  const runCandidate = CANDIDATE_RUNNERS[candidateArg];
+  if (runCandidate === undefined) {
+    process.stderr.write(
+      `backtest-cli: unknown candidate "${candidateArg}" (expected one of ${Object.keys(CANDIDATE_RUNNERS).join(', ')})\n`,
+    );
+    process.exit(1);
+  } else {
+    runCandidate({
+      logger: { log: (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`) },
     })
-    .catch((error: unknown) => {
-      process.stderr.write(
-        `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-      );
-      process.exit(1);
-    });
+      .then((report) => {
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        process.exit(0);
+      })
+      .catch((error: unknown) => {
+        process.stderr.write(
+          `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+        );
+        process.exit(1);
+      });
+  }
 }

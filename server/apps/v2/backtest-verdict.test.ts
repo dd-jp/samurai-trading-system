@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { annualisedSharpe } from '../../tools/backtest/index.js';
+import {
+  annualisedSharpe,
+  foldRanges,
+  sliceByRanges,
+  walkForwardPath,
+} from '../../tools/backtest/index.js';
 import {
   type BookSeries,
   backtestVerdict,
@@ -127,6 +132,26 @@ describe('backtestVerdict', () => {
     expect(verdict.deflatedSharpe).toBe(0);
     expect(verdict.deflatedSharpeWalkForward).toBe(0);
     expect(verdict.capitalCeilingGbp).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('#1515: an embargo drops the same boundary days from the benchmark comparison as from the strategy path', () => {
+    const withEmbargo = input({ embargo: 5 });
+    const verdict = backtestVerdict(withEmbargo);
+    const returns = withEmbargo.trials.map((series) => series.returns);
+    const ranges = foldRanges(LENGTH, 4, 5);
+    const path = walkForwardPath(returns, ranges);
+    const expected = annualisedSharpe(sliceByRanges(withEmbargo.benchmark.returns, path.testRanges));
+    expect(verdict.walkForward.benchmarkSharpe).toBeCloseTo(expected, 12);
+    // A plain slice(start, end) still includes the embargoed gaps: proves the fix matters, not
+    // just that the two are consistent with each other
+    const naive = annualisedSharpe(withEmbargo.benchmark.returns.slice(path.start, path.end));
+    expect(verdict.walkForward.benchmarkSharpe).not.toBeCloseTo(naive, 6);
+  });
+
+  it('omits embargo from nothing observable when unset: folds 4 with no embargo matches an explicit 0', () => {
+    const noArgument = backtestVerdict(input());
+    const explicitZero = backtestVerdict(input({ embargo: 0 }));
+    expect(noArgument).toEqual(explicitZero);
   });
 
   it('refuses fewer than two trials, misaligned series and an undercounted ledger', () => {

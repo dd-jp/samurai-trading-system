@@ -14,6 +14,7 @@ export {
   argMaxIndex,
   foldRanges,
   foldSharpeMatrix,
+  sliceByRanges,
   WALK_FORWARD_FOLDS,
   walkForwardPath,
 } from './momentum/folds.js';
