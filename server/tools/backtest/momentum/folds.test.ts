@@ -69,11 +69,12 @@ describe('sliceByRanges', () => {
 // return alive into the next fold. That is normal walk-forward behaviour (training always
 // precedes the test fold it is scored against), but pbo()'s CSCV combinatorics also score
 // combinations where a later fold "trains" against an earlier fold "testing" it — there, the
-// straddling return is the same event counted on both sides, not two independent confirmations.
+// straddling return is the same event counted on both sides, not two independent confirmations
 describe('embargo purges a boundary-straddling return (#1515)', () => {
   const length = 80;
   const spikeStart = 15;
-  const spikeEnd = 25; // exclusive: 5 bars each side of the boundary at index 20
+  // exclusive: 5 bars each side of the boundary at index 20
+  const spikeEnd = 25;
   const spike = 0.06;
 
   function leakyTrial(): number[] {
@@ -109,9 +110,7 @@ describe('embargo purges a boundary-straddling return (#1515)', () => {
       return seed / 0x7f_ff_ff_ff;
     };
     const genuine = Array.from({ length }, () => 0.0005 + (rand() - 0.5) * 0.02);
-    const withoutGap = pbo(
-      foldSharpeMatrix([leakyTrial(), genuine], foldRanges(length, 4, 0)),
-    ).pbo;
+    const withoutGap = pbo(foldSharpeMatrix([leakyTrial(), genuine], foldRanges(length, 4, 0))).pbo;
     const withGap = pbo(foldSharpeMatrix([leakyTrial(), genuine], foldRanges(length, 4, 5))).pbo;
     expect(withoutGap).toBeLessThan(withGap);
   });

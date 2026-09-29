@@ -8,15 +8,7 @@ export interface FoldRange {
   readonly end: number;
 }
 
-// #1515: embargo trims this many bars off each side of every INTERNAL fold boundary (not the
-// series' own outer ends), purging the carried-over mark-to-market return of a position opened
-// near a boundary from both the fold it closes in and the fold it was opened in — the CSCV
-// combinatorics in pbo() otherwise pair those two folds as if they were independent (#1785 §4)
-export function foldRanges(
-  length: number,
-  folds: number = WALK_FORWARD_FOLDS,
-  embargo: number = 0,
-): FoldRange[] {
+function assertFoldable(length: number, folds: number, embargo: number): void {
   if (!Number.isInteger(folds) || folds < 4 || folds % 2 !== 0) {
     throw new Error(`foldRanges: folds must be an even integer >= 4 (got ${folds})`);
   }
@@ -25,20 +17,34 @@ export function foldRanges(
   }
   if (length < folds * 2)
     throw new Error(`foldRanges: ${length} returns cannot fill ${folds} folds`);
-  const boundary = (fold: number) => Math.floor((fold * length) / folds);
-  const ranges: FoldRange[] = [];
-  for (let fold = 0; fold < folds; fold++) {
-    const start = boundary(fold) + (fold > 0 ? embargo : 0);
-    const end = boundary(fold + 1) - (fold < folds - 1 ? embargo : 0);
-    // < 2, not <= 0: moments() throws below 2 returns, and a would-be-valid 1-bar fold is not
-    // a useful signal either — proven unreachable at embargo 0 since length >= folds * 2
-    if (end - start < 2) {
-      throw new Error(
-        `foldRanges: embargo ${embargo} leaves fold ${fold} of ${folds} over ${length} with fewer than 2 bars`,
-      );
-    }
-    ranges.push({ fold, start, end });
+}
+
+// #1515: embargo trims this many bars off each side of every INTERNAL fold boundary (not the
+// series' own outer ends), purging the carried-over mark-to-market return of a position opened
+// near a boundary from both the fold it closes in and the fold it was opened in — the CSCV
+// combinatorics in pbo() otherwise pair those two folds as if they were independent (#1785 §4)
+function foldRange(fold: number, folds: number, length: number, embargo: number): FoldRange {
+  const boundary = (atFold: number) => Math.floor((atFold * length) / folds);
+  const start = boundary(fold) + (fold > 0 ? embargo : 0);
+  const end = boundary(fold + 1) - (fold < folds - 1 ? embargo : 0);
+  // < 2, not <= 0: moments() throws below 2 returns, and a would-be-valid 1-bar fold is not
+  // a useful signal either — proven unreachable at embargo 0 since length >= folds * 2
+  if (end - start < 2) {
+    throw new Error(
+      `foldRanges: embargo ${embargo} leaves fold ${fold} of ${folds} over ${length} with fewer than 2 bars`,
+    );
   }
+  return { fold, start, end };
+}
+
+export function foldRanges(
+  length: number,
+  folds: number = WALK_FORWARD_FOLDS,
+  embargo: number = 0,
+): FoldRange[] {
+  assertFoldable(length, folds, embargo);
+  const ranges: FoldRange[] = [];
+  for (let fold = 0; fold < folds; fold++) ranges.push(foldRange(fold, folds, length, embargo));
   return ranges;
 }
 

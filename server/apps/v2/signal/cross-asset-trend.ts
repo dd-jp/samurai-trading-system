@@ -6,6 +6,7 @@ import type {
 } from '../../../../contracts/index.js';
 import { averageTrueRange } from '../../../pipeline/momentum/index.js';
 import type { SleeveFactory } from '../backtest.js';
+import { atrInRawTerms, shapeValid, simpleMovingAverage } from './bar-quality.js';
 
 // #1785 ruling (b): the 15 declared lines from the proposal (doc 70 §10.4's 22-line Saxo pool)
 // Read directly here, bypassing selectLseUniverse/lseInstrumentsAbove: the LSE liquidity screen
@@ -78,19 +79,6 @@ function crossAssetTrendSpec(): SleeveSpec {
   };
 }
 
-function shapeValid(bar: V2Bar): boolean {
-  return (
-    bar.open >= bar.low && bar.open <= bar.high && bar.close >= bar.low && bar.close <= bar.high
-  );
-}
-
-function simpleMovingAverage(bars: readonly V2Bar[], window: number): number | undefined {
-  if (bars.length < window) return undefined;
-  let total = 0;
-  for (const bar of bars.slice(-window)) total += bar.close;
-  return total / window;
-}
-
 interface TrendRead {
   readonly price: number;
   readonly close: number;
@@ -98,9 +86,6 @@ interface TrendRead {
   readonly atr: number | undefined;
 }
 
-// #1838: a shape-invalid last bar is never priced off (fail-closed, the candleFeatures idiom);
-// shape-invalid bars inside the trailing window are filtered out of the SMA/ATR inputs rather
-// than treated as zero-return days
 function trendRead(rawHistory: readonly V2Bar[], smaWindow: number): TrendRead | undefined {
   const last = rawHistory.at(-1);
   if (last === undefined || !shapeValid(last)) return undefined;
@@ -110,7 +95,7 @@ function trendRead(rawHistory: readonly V2Bar[], smaWindow: number): TrendRead |
     price: last.rawClose,
     close: last.close,
     sma: simpleMovingAverage(valid, smaWindow),
-    atr: atr === undefined ? undefined : (atr * last.rawClose) / last.close,
+    atr: atrInRawTerms(atr, last),
   };
 }
 

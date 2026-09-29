@@ -5,7 +5,7 @@ import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { resolveCliOptions, runCrossAssetTrendAgainst } from './backtest-cli.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
-import { FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
+import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import { CROSS_ASSET_TREND_TIDMS } from './signal/index.js';
 import { researchStorePath, TrialLedger } from './trial-ledger.js';
 
@@ -16,6 +16,7 @@ describe('resolveCliOptions', () => {
     expect(resolved.fxPath).toBe(FX_PATH);
     expect(resolved.spreadsPath).toBe(SPREADS_PATH);
     expect(resolved.saxoSpreadsPath).toBe(SAXO_SPREADS_PATH);
+    expect(resolved.constituentsPath).toBe(CONSTITUENTS_PATH);
     expect(resolved.storePath).toBe(researchStorePath());
     expect(() =>
       resolved.logger.log({ level: 'info', event: 'x', trace_id: 't', stage: 's', message: 'm' }),
@@ -29,6 +30,7 @@ describe('resolveCliOptions', () => {
       fxPath: 'fx',
       spreadsPath: 'spreads',
       saxoSpreadsPath: 'saxo-spreads',
+      constituentsPath: 'constituents',
       storePath: ':memory:',
       logger,
     });
@@ -37,6 +39,7 @@ describe('resolveCliOptions', () => {
       fxPath: 'fx',
       spreadsPath: 'spreads',
       saxoSpreadsPath: 'saxo-spreads',
+      constituentsPath: 'constituents',
       storePath: ':memory:',
       logger,
     });

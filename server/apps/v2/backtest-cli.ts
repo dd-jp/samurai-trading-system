@@ -58,7 +58,7 @@ export interface BacktestCliOptions {
   readonly logger?: Logger;
 }
 
-export interface CrossAssetTrendRunReport {
+export interface CandidateRunReport {
   readonly baseline: BacktestResult;
   readonly stressed: BacktestResult;
   readonly trialsCounted: number;
@@ -66,6 +66,8 @@ export interface CrossAssetTrendRunReport {
   readonly windowYears: number;
   readonly signFlipped: boolean;
 }
+export type CrossAssetTrendRunReport = CandidateRunReport;
+export type MeanReversionRunReport = CandidateRunReport;
 
 const SILENT_LOGGER: Logger = { log: (_entry: LogEntry) => undefined };
 
@@ -91,34 +93,44 @@ export function resolveCliOptions(options: BacktestCliOptions): ResolvedCliOptio
   };
 }
 
-export interface CrossAssetTrendWindow {
+export interface CandidateWindow {
   readonly from: string;
   readonly to: string;
 }
+export type CrossAssetTrendWindow = CandidateWindow;
+export type MeanReversionWindow = CandidateWindow;
 
-const CANDIDATE_WINDOW: CrossAssetTrendWindow = {
+const CROSS_ASSET_TREND_WINDOW: CandidateWindow = {
   from: CROSS_ASSET_TREND_FROM,
   to: CROSS_ASSET_TREND_TO,
 };
+const MEAN_REVERSION_WINDOW: CandidateWindow = {
+  from: MEAN_REVERSION_FROM,
+  to: MEAN_REVERSION_TO,
+};
 
-export async function runCrossAssetTrendAgainst(
+interface CandidateRunSpec {
+  readonly candidate: string;
+  readonly trials: BacktestInput['trials'];
+  readonly benchmark: BacktestInput['benchmark'];
+  readonly window: CandidateWindow;
+  readonly calendarReference: string;
+  readonly embargo?: number;
+}
+
+async function runCandidateAgainst(
+  spec: CandidateRunSpec,
   market: MarketData,
   halfSpreadBps: (instrument: string) => number,
   ledger: TrialLedger,
   logger: Logger,
-  window: CrossAssetTrendWindow = CANDIDATE_WINDOW,
-): Promise<CrossAssetTrendRunReport> {
-  const trials = [100, 200].map((sma) => ({
-    config: { sma_window: sma },
-    sleeve: createCrossAssetTrendSleeve(sma as 100 | 200),
-  }));
-  const benchmark = { config: { benchmark: true }, sleeve: createCrossAssetTrendBenchmarkSleeve() };
+): Promise<CandidateRunReport> {
   const input = (costMultiple: number): BacktestInput => ({
-    candidate: CROSS_ASSET_TREND_CANDIDATE_ID,
-    trials,
-    benchmark,
-    from: window.from,
-    to: window.to,
+    candidate: spec.candidate,
+    trials: spec.trials,
+    benchmark: spec.benchmark,
+    from: spec.window.from,
+    to: spec.window.to,
     startCapitalGbp: BACKTEST_START_CAPITAL_GBP,
     lossCapGbp: BACKTEST_LOSS_CAP_GBP,
     market,
@@ -126,13 +138,14 @@ export async function runCrossAssetTrendAgainst(
     ledger,
     logger,
     folds: WALK_FORWARD_FOLDS,
-    calendarReference: calendarReferenceFor('saxo'),
+    embargo: spec.embargo,
+    calendarReference: spec.calendarReference,
     costMultiple,
   });
   const baseline = await runBacktest(input(1));
   const stressed = await runBacktest(input(COST_STRESS_MULTIPLE));
-  const start = new Date(`${window.from}T00:00:00.000Z`);
-  const end = new Date(`${window.to}T00:00:00.000Z`);
+  const start = new Date(`${spec.window.from}T00:00:00.000Z`);
+  const end = new Date(`${spec.window.to}T00:00:00.000Z`);
   const minbtlLimit = minbtl({ start, end }, MINBTL_EXPECTED_ANNUAL_SHARPE).limit;
   return {
     baseline,
@@ -146,16 +159,50 @@ export async function runCrossAssetTrendAgainst(
   };
 }
 
-export async function runCrossAssetTrendCandidate(
-  cliOptions: BacktestCliOptions = {},
-): Promise<CrossAssetTrendRunReport> {
-  const options = resolveCliOptions(cliOptions);
+async function openMultiVenueMarket(
+  options: ResolvedCliOptions,
+): Promise<{ market: MarketData; bars: BarsSource }> {
   const alpaca = new ParquetBarsSource(options.root, 'alpaca', { optional: true });
   const saxo = new ParquetBarsSource(options.root, 'saxo');
   await alpaca.prime();
   await saxo.prime();
   const bars = new MultiVenueBarsSource([alpaca, saxo]);
   const market = new BarsMarketData(bars, parseBoeGbpUsdCsv(readFileSync(options.fxPath, 'utf8')));
+  return { market, bars };
+}
+
+export async function runCrossAssetTrendAgainst(
+  market: MarketData,
+  halfSpreadBps: (instrument: string) => number,
+  ledger: TrialLedger,
+  logger: Logger,
+  window: CandidateWindow = CROSS_ASSET_TREND_WINDOW,
+): Promise<CrossAssetTrendRunReport> {
+  const trials = [100, 200].map((sma) => ({
+    config: { sma_window: sma },
+    sleeve: createCrossAssetTrendSleeve(sma as 100 | 200),
+  }));
+  const benchmark = { config: { benchmark: true }, sleeve: createCrossAssetTrendBenchmarkSleeve() };
+  return runCandidateAgainst(
+    {
+      candidate: CROSS_ASSET_TREND_CANDIDATE_ID,
+      trials,
+      benchmark,
+      window,
+      calendarReference: calendarReferenceFor('saxo'),
+    },
+    market,
+    halfSpreadBps,
+    ledger,
+    logger,
+  );
+}
+
+export async function runCrossAssetTrendCandidate(
+  cliOptions: BacktestCliOptions = {},
+): Promise<CrossAssetTrendRunReport> {
+  const options = resolveCliOptions(cliOptions);
+  const { market } = await openMultiVenueMarket(options);
   const halfSpreadBps = halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath);
   const db = openSharedStore(options.storePath);
   try {
@@ -166,25 +213,6 @@ export async function runCrossAssetTrendCandidate(
   }
 }
 
-export interface MeanReversionRunReport {
-  readonly baseline: BacktestResult;
-  readonly stressed: BacktestResult;
-  readonly trialsCounted: number;
-  readonly minbtlLimit: number;
-  readonly windowYears: number;
-  readonly signFlipped: boolean;
-}
-
-export interface MeanReversionWindow {
-  readonly from: string;
-  readonly to: string;
-}
-
-const MEAN_REVERSION_WINDOW: MeanReversionWindow = {
-  from: MEAN_REVERSION_FROM,
-  to: MEAN_REVERSION_TO,
-};
-
 export async function runMeanReversionAgainst(
   market: MarketData,
   bars: BarsSource,
@@ -192,7 +220,7 @@ export async function runMeanReversionAgainst(
   halfSpreadBps: (instrument: string) => number,
   ledger: TrialLedger,
   logger: Logger,
-  window: MeanReversionWindow = MEAN_REVERSION_WINDOW,
+  window: CandidateWindow = MEAN_REVERSION_WINDOW,
 ): Promise<MeanReversionRunReport> {
   const trials = MEAN_REVERSION_ENTRY_THRESHOLDS.map((threshold) => ({
     config: { rsi_entry_threshold: threshold },
@@ -202,52 +230,28 @@ export async function runMeanReversionAgainst(
     config: { benchmark: true },
     sleeve: createMeanReversionBenchmarkSleeve(bars, constituentsFor),
   };
-  const input = (costMultiple: number): BacktestInput => ({
-    candidate: MEAN_REVERSION_CANDIDATE_ID,
-    trials,
-    benchmark,
-    from: window.from,
-    to: window.to,
-    startCapitalGbp: BACKTEST_START_CAPITAL_GBP,
-    lossCapGbp: BACKTEST_LOSS_CAP_GBP,
+  return runCandidateAgainst(
+    {
+      candidate: MEAN_REVERSION_CANDIDATE_ID,
+      trials,
+      benchmark,
+      window,
+      calendarReference: calendarReferenceFor('alpaca'),
+      // #1515: sized to ruling (e)'s 10-session time stop (folds.ts's foldRanges embargo param)
+      embargo: MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
+    },
     market,
     halfSpreadBps,
     ledger,
     logger,
-    folds: WALK_FORWARD_FOLDS,
-    // #1515: sized to ruling (e)'s 10-session time stop (folds.ts's foldRanges embargo param) so
-    // a position opened near a fold boundary cannot straddle it in the PBO combinatorics
-    embargo: MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
-    calendarReference: calendarReferenceFor('alpaca'),
-    costMultiple,
-  });
-  const baseline = await runBacktest(input(1));
-  const stressed = await runBacktest(input(COST_STRESS_MULTIPLE));
-  const start = new Date(`${window.from}T00:00:00.000Z`);
-  const end = new Date(`${window.to}T00:00:00.000Z`);
-  const minbtlLimit = minbtl({ start, end }, MINBTL_EXPECTED_ANNUAL_SHARPE).limit;
-  return {
-    baseline,
-    stressed,
-    trialsCounted: ledger.count(),
-    minbtlLimit,
-    windowYears: (end.getTime() - start.getTime()) / (365.25 * 86_400_000),
-    signFlipped:
-      baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
-      stressed.verdict.checks.beatsBenchmarkAfterHaircut,
-  };
+  );
 }
 
 export async function runMeanReversionCandidate(
   cliOptions: BacktestCliOptions = {},
 ): Promise<MeanReversionRunReport> {
   const options = resolveCliOptions(cliOptions);
-  const alpaca = new ParquetBarsSource(options.root, 'alpaca', { optional: true });
-  const saxo = new ParquetBarsSource(options.root, 'saxo');
-  await alpaca.prime();
-  await saxo.prime();
-  const bars = new MultiVenueBarsSource([alpaca, saxo]);
-  const market = new BarsMarketData(bars, parseBoeGbpUsdCsv(readFileSync(options.fxPath, 'utf8')));
+  const { market, bars } = await openMultiVenueMarket(options);
   const halfSpreadBps = halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath);
   const constituentsCsv = readFileSync(options.constituentsPath, 'utf8');
   const constituentsFor = (tradingDate: string): readonly string[] =>

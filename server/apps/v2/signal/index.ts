@@ -16,6 +16,8 @@ export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 export { NousPinnedTransport } from './llm-transport.js';
 export { isLseInstrument, LSE_LINES } from './lse-lines.js';
 export {
+  createMeanReversionBenchmarkSleeve,
+  createMeanReversionSleeve,
   MEAN_REVERSION_BENCHMARK_ID,
   MEAN_REVERSION_CANDIDATE_ID,
   MEAN_REVERSION_ENTRY_THRESHOLDS,
@@ -23,8 +25,6 @@ export {
   MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
   MEAN_REVERSION_TO,
   MEAN_REVERSION_UNIVERSE_COUNT,
-  createMeanReversionBenchmarkSleeve,
-  createMeanReversionSleeve,
   meanReversionSleeveId,
   relativeStrengthIndex,
 } from './mean-reversion.js';

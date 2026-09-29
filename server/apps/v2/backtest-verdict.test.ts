@@ -140,7 +140,9 @@ describe('backtestVerdict', () => {
     const returns = withEmbargo.trials.map((series) => series.returns);
     const ranges = foldRanges(LENGTH, 4, 5);
     const path = walkForwardPath(returns, ranges);
-    const expected = annualisedSharpe(sliceByRanges(withEmbargo.benchmark.returns, path.testRanges));
+    const expected = annualisedSharpe(
+      sliceByRanges(withEmbargo.benchmark.returns, path.testRanges),
+    );
     expect(verdict.walkForward.benchmarkSharpe).toBeCloseTo(expected, 12);
     // A plain slice(start, end) still includes the embargoed gaps: proves the fix matters, not
     // just that the two are consistent with each other

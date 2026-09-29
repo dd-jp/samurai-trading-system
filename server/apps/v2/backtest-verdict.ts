@@ -104,7 +104,11 @@ export function capitalCeilingGbp(lossCapGbp: number, drawdown: number): number 
 export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   assertAligned(input);
   const returns = input.trials.map((series) => series.returns);
-  const ranges = foldRanges(input.dates.length, input.folds ?? WALK_FORWARD_FOLDS, input.embargo ?? 0);
+  const ranges = foldRanges(
+    input.dates.length,
+    input.folds ?? WALK_FORWARD_FOLDS,
+    input.embargo ?? 0,
+  );
   const matrix = foldSharpeMatrix(returns, ranges);
   const trials = input.trials.map((series, index) => ({
     trial: series.trial,

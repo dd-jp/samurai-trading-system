@@ -8,6 +8,7 @@ import type {
 import { averageTrueRange } from '../../../pipeline/momentum/index.js';
 import type { SleeveFactory } from '../backtest.js';
 import type { BarsSource } from '../data/index.js';
+import { atrInRawTerms, shapeValid, simpleMovingAverage } from './bar-quality.js';
 import { liquidityCore } from './universe.js';
 
 // #1785 ruling (g): point-in-time top-300 by 20-day $ volume, reusing liquidityCore as-is
@@ -33,11 +34,11 @@ const STOP_ATR_MULTIPLE = 5;
 // sized to the same number (folds.ts), so the two share this constant rather than each pinning
 // their own copy of "10"
 export const MEAN_REVERSION_TIME_STOP_TRADING_DAYS = 10;
-// No fixed profit target (the RSI recovery signal is the exit): a large sentinel keeps
-// SleeveSizing's fields plain numbers without Infinity (same rationale as cross-asset-trend.ts's
-// NO_TARGET_OR_TIME_STOP, but this candidate DOES use a real time stop, so the two sentinels
-// cannot share a name)
-const NO_TARGET_ATR_MULTIPLE = 1_000_000;
+// No fixed profit target (the RSI recovery signal is the exit) and, for the benchmark only, no
+// time stop (ruling f): a large sentinel keeps SleeveSizing's fields plain numbers without
+// Infinity (same rationale as cross-asset-trend.ts's NO_TARGET_OR_TIME_STOP), reused for both
+// fields since both mean "no limit" at the same magnitude
+const SENTINEL_LIMIT = 1_000_000;
 const RISK_FRACTION = 0.005;
 const ADV_SHARE_NON_BINDING = 1;
 const ADV_WINDOW_BARS = 20;
@@ -58,7 +59,7 @@ function meanReversionSpec(): SleeveSpec {
     sizing: {
       riskFraction: RISK_FRACTION,
       stopAtrMultiple: STOP_ATR_MULTIPLE,
-      targetAtrMultiple: NO_TARGET_ATR_MULTIPLE,
+      targetAtrMultiple: SENTINEL_LIMIT,
       timeStopTradingDays: MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
       advShare: ADV_SHARE_NON_BINDING,
       advWindowBars: ADV_WINDOW_BARS,
@@ -71,20 +72,7 @@ function meanReversionSpec(): SleeveSpec {
 // position open until its own stop, not a schedule unrelated to a pure-hold thesis
 function meanReversionBenchmarkSpec(): SleeveSpec {
   const spec = meanReversionSpec();
-  return { ...spec, sizing: { ...spec.sizing, timeStopTradingDays: NO_TARGET_ATR_MULTIPLE } };
-}
-
-function shapeValid(bar: V2Bar): boolean {
-  return (
-    bar.open >= bar.low && bar.open <= bar.high && bar.close >= bar.low && bar.close <= bar.high
-  );
-}
-
-function simpleMovingAverage(bars: readonly V2Bar[], window: number): number | undefined {
-  if (bars.length < window) return undefined;
-  let total = 0;
-  for (const bar of bars.slice(-window)) total += bar.close;
-  return total / window;
+  return { ...spec, sizing: { ...spec.sizing, timeStopTradingDays: SENTINEL_LIMIT } };
 }
 
 // Wilder smoothing over the whole supplied window, not just the trailing `period` — the seed
@@ -120,8 +108,6 @@ interface MeanReversionRead {
   readonly atr: number | undefined;
 }
 
-// #1838's idiom, same as cross-asset-trend.ts: a shape-invalid last bar is never priced off;
-// shape-invalid bars inside the trailing window are filtered out of every indicator's input
 function meanReversionRead(rawHistory: readonly V2Bar[]): MeanReversionRead | undefined {
   const last = rawHistory.at(-1);
   if (last === undefined || !shapeValid(last)) return undefined;
@@ -132,7 +118,7 @@ function meanReversionRead(rawHistory: readonly V2Bar[]): MeanReversionRead | un
     close: last.close,
     sma: simpleMovingAverage(valid, SMA_WINDOW),
     rsi: relativeStrengthIndex(valid, RSI_PERIOD),
-    atr: atr === undefined ? undefined : (atr * last.rawClose) / last.close,
+    atr: atrInRawTerms(atr, last),
   };
 }
 
