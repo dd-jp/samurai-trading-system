@@ -45,6 +45,25 @@ interface SplitReading {
   readonly rejected: readonly RejectedSplitStep[];
 }
 
+function magnitude(factor: number): number {
+  return Math.max(factor, 1 / factor);
+}
+
+const NO_SPLIT: SplitReading = { ratio: 1, rejected: [] };
+
+function judgeSplitStep(previous: V2Bar, bar: V2Bar, step: number): SplitReading {
+  const adjustedGap = previous.close / bar.close;
+  if (magnitude(adjustedGap) < SPLIT_ADJUSTED_GAP_BAND) {
+    return { ratio: snapToSplitRatio(step), rejected: [] };
+  }
+  return { ratio: 1, rejected: [{ date: bar.date, step, adjustedGap }] };
+}
+
+function readSplitStep(previous: V2Bar, bar: V2Bar): SplitReading {
+  const step = adjustmentFactor(previous) / adjustmentFactor(bar);
+  return magnitude(step) >= SPLIT_STEP_THRESHOLD ? judgeSplitStep(previous, bar, step) : NO_SPLIT;
+}
+
 // rawClose/close is the cumulative adjustment for every corporate action after that bar, so it
 // steps at a split and stays put through a crash. The step sits on the split day both in a
 // snapshot series and in a refreshed one, where the latest bar's factor is always 1
@@ -54,15 +73,9 @@ export function splitRatioAcross(bars: readonly V2Bar[]): SplitReading {
   let previous: V2Bar | undefined;
   for (const bar of bars) {
     if (previous !== undefined) {
-      const step = adjustmentFactor(previous) / adjustmentFactor(bar);
-      if (Math.max(step, 1 / step) >= SPLIT_STEP_THRESHOLD) {
-        const adjustedGap = previous.close / bar.close;
-        if (Math.max(adjustedGap, 1 / adjustedGap) < SPLIT_ADJUSTED_GAP_BAND) {
-          ratio *= snapToSplitRatio(step);
-        } else {
-          rejected.push({ date: bar.date, step, adjustedGap });
-        }
-      }
+      const reading = readSplitStep(previous, bar);
+      ratio *= reading.ratio;
+      rejected.push(...reading.rejected);
     }
     previous = bar;
   }

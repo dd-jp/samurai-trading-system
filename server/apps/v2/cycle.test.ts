@@ -1878,6 +1878,31 @@ describe('runCycle: protected exits carry a native Alpaca bracket safely (#1801)
     );
   });
 
+  it.each([
+    ['a stop but no target', { target: undefined }],
+    ['a target but no stop', { stop: undefined }],
+  ])(
+    'carries no rearm prices when the journalled entry has %s',
+    async (_label, missing: { stop?: undefined; target?: undefined }) => {
+      const alpaca = new FakeAlpacaProtected();
+      const deps = harness([longAapl], false, alpaca);
+      await runCycle(deps, '2026-09-25');
+      alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+      const realOrderFor = deps.journal.orderFor.bind(deps.journal);
+      vi.spyOn(deps.journal, 'orderFor').mockImplementation((clientOrderId: string) => {
+        const order = realOrderFor(clientOrderId);
+        if (order === undefined || clientOrderId !== 'v2-debate-primary-2026-09-25-AAPL')
+          return order;
+        return { ...order, payload: { ...order.payload, ...missing } };
+      });
+      deps.setControl('halt');
+      await runCycle(deps, '2026-09-28');
+
+      expect(alpaca.protectedExits).toHaveLength(1);
+      expect(alpaca.protectedExits[0]?.rearm).toBeUndefined();
+    },
+  );
+
   it('kill line: a manual halt closes a bracket-protected position through submitProtectedExit', async () => {
     const alpaca = new FakeAlpacaProtected();
     const deps = harness([longAapl], false, alpaca);
@@ -3029,6 +3054,18 @@ describe('runCycle: positions held across a split (#1865)', () => {
       splitFactor: 10,
       splitAnchorDate: '2026-09-29',
     });
+  });
+
+  it('a simulated entry filling into an already-held position leaves its split anchor untouched', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    hold(deps, 6, '2026-09-24');
+    deps.books.applySplit('debate/primary', 'AAPL', 1, '2026-09-24');
+    const report = await runCycle(deps, '2026-09-28');
+    expect(report.fills).toBeGreaterThanOrEqual(1);
+    expect(primary(deps)?.qty).toBeGreaterThan(6);
+    expect(primary(deps)).toMatchObject({ splitFactor: 1, splitAnchorDate: '2026-09-24' });
   });
 
   it('logs each rescale', async () => {
