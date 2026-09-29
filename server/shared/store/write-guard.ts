@@ -11,6 +11,7 @@ export const STORE_OWNER_STAGES = [
   'orchestrator',
   'risk',
   'service-api',
+  'telegram',
   'trader',
   'v2',
   'verdict',
@@ -58,6 +59,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   ],
   risk: ['breaker_state', 'risk_critic_log', 'risk_log'],
   'service-api': [],
+  telegram: ['v2_commands'],
   trader: ['cosine_setups', 'trader_log'],
   v2: [
     'v2_books',
