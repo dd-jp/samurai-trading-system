@@ -204,6 +204,81 @@ describe('PaperBooks', () => {
     ).toMatchObject({ stray: false });
   });
 
+  it('#1865: applySplit rescales qty and every price level atomically and leaves equity untouched', () => {
+    const books = openBooks(seededStore());
+    books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 100, feeGbp: 1 }));
+    const cashBefore = books.cash('debate/primary');
+    const equityBefore = books.valuation('debate/primary', () => 110).equityGbp;
+    books.applySplit('debate/primary', 'AAPL', 10, '2026-09-26');
+    expect(books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: 20,
+      avgPriceGbp: 10,
+      stopGbp: 9.6,
+      targetGbp: 10.6,
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-26',
+      marksHeld: 0,
+      openedDate: '2026-09-25',
+    });
+    expect(books.cash('debate/primary')).toBe(cashBefore);
+    expect(books.valuation('debate/primary', () => 11).equityGbp).toBeCloseTo(equityBefore, 9);
+  });
+
+  it('#1865: applySplit keeps qty x avgPrice for a 3:2 split (fractional qty) and a reverse split', () => {
+    const books = openBooks(seededStore());
+    books.applyFill('debate/primary', fill({ qty: 3, priceGbp: 90 }));
+    books.applySplit('debate/primary', 'AAPL', 1.5, '2026-09-26');
+    const held = books.position('debate/primary', 'AAPL');
+    expect(held?.qty).toBeCloseTo(4.5, 12);
+    expect(held?.avgPriceGbp).toBeCloseTo(60, 12);
+    expect((held?.qty ?? 0) * (held?.avgPriceGbp ?? 0)).toBeCloseTo(270, 9);
+    books.applySplit('debate/primary', 'AAPL', 0.1, '2026-09-29');
+    const reversed = books.position('debate/primary', 'AAPL');
+    expect(reversed?.qty).toBeCloseTo(0.45, 12);
+    expect(reversed?.avgPriceGbp).toBeCloseTo(600, 9);
+    expect(reversed?.splitFactor).toBeCloseTo(0.15, 12);
+    expect(reversed?.splitAnchorDate).toBe('2026-09-29');
+  });
+
+  it('#1865: applySplit mirrors a short and leaves absent levels absent', () => {
+    const books = openBooks(seededStore());
+    books.applyFill(
+      'debate/primary',
+      fill({ side: 'sell', qty: 6, priceGbp: 50, stopGbp: undefined, targetGbp: undefined }),
+    );
+    books.applySplit('debate/primary', 'AAPL', 2, '2026-09-26');
+    expect(books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: -12,
+      avgPriceGbp: 25,
+      stopGbp: undefined,
+      targetGbp: undefined,
+    });
+  });
+
+  it('#1865: applySplit survives a restart and is undone by a fresh open, not by a resize', () => {
+    const db = seededStore();
+    const books = openBooks(db);
+    books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 100 }));
+    books.applySplit('debate/primary', 'AAPL', 2, '2026-09-26');
+    books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 60, clientOrderId: 'o2' }));
+    expect(openBooks(db).position('debate/primary', 'AAPL')).toMatchObject({
+      qty: 6,
+      splitFactor: 2,
+      splitAnchorDate: '2026-09-26',
+    });
+    books.applyFill('debate/primary', fill({ side: 'sell', qty: 6, priceGbp: 60 }));
+    expect(
+      books.applyFill('debate/primary', fill({ qty: 1, priceGbp: 60, clientOrderId: 'o3' })),
+    ).toMatchObject({ splitFactor: 1, splitAnchorDate: undefined });
+  });
+
+  it('#1865: applySplit refuses an unknown position', () => {
+    const books = openBooks(seededStore());
+    expect(() => books.applySplit('debate/primary', 'AAPL', 2, '2026-09-26')).toThrow(
+      /no AAPL position/,
+    );
+  });
+
   it('values positions at the mark, falls back to the entry price, and holds shorts as negative qty', () => {
     const db = seededStore();
     const books = openBooks(db);

@@ -79,6 +79,8 @@ interface PositionRow {
   opened_date: string;
   marks_held: number;
   stray: number;
+  split_factor: number;
+  split_anchor_date: string | null;
 }
 
 function positionFromRow(row: PositionRow): Position {
@@ -94,6 +96,8 @@ function positionFromRow(row: PositionRow): Position {
     openedDate: row.opened_date,
     marksHeld: row.marks_held,
     stray: row.stray === 1,
+    splitFactor: row.split_factor,
+    splitAnchorDate: row.split_anchor_date ?? undefined,
   };
 }
 
@@ -329,7 +333,7 @@ export class PaperBooks implements BookLedger {
     const rows = this.db
       .prepare(
         `SELECT instrument, venue, qty, avg_price_gbp, stop_gbp, target_gbp, client_order_id,
-           exit_client_order_id, opened_date, marks_held, stray
+           exit_client_order_id, opened_date, marks_held, stray, split_factor, split_anchor_date
          FROM v2_positions WHERE book_id = ? ORDER BY instrument`,
       )
       .all(bookId) as PositionRow[];
@@ -354,6 +358,19 @@ export class PaperBooks implements BookLedger {
       return this.position(bookId, fill.instrument);
     });
     return apply();
+  }
+
+  applySplit(bookId: string, instrument: string, ratio: number, anchorDate: string): void {
+    const result = this.db
+      .prepare(
+        `UPDATE v2_positions SET qty = qty * @ratio, avg_price_gbp = avg_price_gbp / @ratio,
+           stop_gbp = stop_gbp / @ratio, target_gbp = target_gbp / @ratio,
+           split_factor = split_factor * @ratio, split_anchor_date = @anchorDate,
+           updated_at = @now
+         WHERE book_id = @bookId AND instrument = @instrument`,
+      )
+      .run({ ratio, anchorDate, now: this.#now(), bookId, instrument });
+    if (result.changes !== 1) throw new Error(`PaperBooks: ${bookId} has no ${instrument} position`);
   }
 
   #setPositionQty(bookId: string, held: Position | undefined, fill: BookFill, qty: number): void {
