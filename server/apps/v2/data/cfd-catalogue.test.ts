@@ -99,6 +99,32 @@ describe('parseCfdCatalogue', () => {
     ],
     ['a null instrument', file({ asOf: '2026-09-29', instruments: [null] })],
     ['a zero uic', file({ asOf: '2026-09-29', instruments: [{ ...VOD, uic: 0 }] })],
+    ['a negative uic', file({ asOf: '2026-09-29', instruments: [{ ...VOD, uic: -1 }] })],
+    ['a string uic', file({ asOf: '2026-09-29', instruments: [{ ...VOD, uic: '5' }] })],
+    [
+      'an infinite uic',
+      file({ asOf: '2026-09-29', instruments: [VOD] }).replace('"uic":4711', '"uic":1e999'),
+    ],
+    [
+      'an infinite borrow cost',
+      file({ asOf: '2026-09-29', instruments: [VOD] }).replace(
+        '"borrowCostPerDay":0.0000137',
+        '"borrowCostPerDay":1e999',
+      ),
+    ],
+    [
+      'a string borrow cost',
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, borrowCostPerDay: '5' }] }),
+    ],
+    [
+      'a non-string saxo symbol',
+      file({ asOf: '2026-09-29', instruments: [{ ...VOD, saxoSymbol: 3 }] }),
+    ],
+    ['an array asOf', file({ asOf: ['2026-09-29'], instruments: [] })],
+    ['an asOf with trailing text', file({ asOf: '2026-09-29x', instruments: [] })],
+    ['an asOf with leading text', file({ asOf: 'x2026-09-29', instruments: [] })],
+    ['a scalar body', '5'],
+    ['a scalar instrument', file({ asOf: '2026-09-29', instruments: [5] })],
   ])('throws on %s', (_name, text) => {
     expect(() => parseCfdCatalogue(text)).toThrow(/CFD catalogue/);
   });

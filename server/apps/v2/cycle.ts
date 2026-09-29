@@ -39,7 +39,11 @@ import {
   quotePerGbp,
 } from './data/index.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
-import { simulateLimitEntry, simulateMarketExit } from './simulated-entry.js';
+import {
+  type LimitEntryOutcome,
+  simulateLimitEntry,
+  simulateMarketExit,
+} from './simulated-entry.js';
 import { splitRatioAcross } from './split.js';
 
 export interface CycleDeps {
@@ -372,6 +376,11 @@ class Cycle {
       this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       return;
     }
+    this.settleEntryFill(order, limit, outcome);
+  }
+
+  settleEntryFill(order: JournalledOrder, limit: number, outcome: FilledLimitEntry): void {
+    const side = order.side as OrderSide;
     const opening = this.deps.books.position(order.book_id, order.instrument) === undefined;
     const qty = order.payload.size as number;
     const quote = this.quoteOrRefuse(order.book_id, order.venue as Venue, {
@@ -1082,6 +1091,8 @@ export function budgetChanges(
   }
   return changes;
 }
+
+type FilledLimitEntry = Extract<LimitEntryOutcome, { kind: 'filled' }>;
 
 const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   no_adv: 'ADV_WINDOW_COVERAGE',

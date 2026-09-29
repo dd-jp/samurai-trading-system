@@ -28,11 +28,11 @@ const ASSET_TYPES: readonly string[] = ['CfdOnStock', 'CfdOnIndex', 'CfdOnEtf'];
 const CURRENCIES: readonly string[] = ['GBP', 'USD'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return Object(value) === value;
 }
 
 function isPositive(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+  return Number.isFinite(value) && (value as number) > 0;
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -44,12 +44,7 @@ function isIsoDate(value: unknown): value is string {
 }
 
 function isNonNegative(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
-}
-
-function optionalBorrow(value: unknown): number | undefined | 'invalid' {
-  if (value === null || value === undefined) return undefined;
-  return isNonNegative(value) ? value : 'invalid';
+  return Number.isFinite(value) && (value as number) >= 0;
 }
 
 interface RawInstrument {
@@ -61,6 +56,7 @@ interface RawInstrument {
   readonly priceToContractFactor: number;
   readonly tradable: boolean;
   readonly shortTradeDisabled: boolean;
+  readonly borrowCostPerDay?: number | null;
 }
 
 const FIELD_CHECKS: readonly (readonly [keyof RawInstrument, (value: unknown) => boolean])[] = [
@@ -72,6 +68,7 @@ const FIELD_CHECKS: readonly (readonly [keyof RawInstrument, (value: unknown) =>
   ['priceToContractFactor', isPositive],
   ['tradable', (value) => typeof value === 'boolean'],
   ['shortTradeDisabled', (value) => typeof value === 'boolean'],
+  ['borrowCostPerDay', (value) => value === undefined || value === null || isNonNegative(value)],
 ];
 
 function isRawInstrument(raw: unknown): raw is RawInstrument {
@@ -79,8 +76,7 @@ function isRawInstrument(raw: unknown): raw is RawInstrument {
 }
 
 function parseInstrument(raw: unknown): CfdInstrument {
-  const borrow = isRecord(raw) ? optionalBorrow(raw.borrowCostPerDay) : 'invalid';
-  if (!isRawInstrument(raw) || borrow === 'invalid') {
+  if (!isRawInstrument(raw)) {
     throw new Error(`CFD catalogue: malformed instrument ${JSON.stringify(raw)}`);
   }
   return {
@@ -92,7 +88,7 @@ function parseInstrument(raw: unknown): CfdInstrument {
     priceToContractFactor: raw.priceToContractFactor,
     tradable: raw.tradable,
     shortTradeDisabled: raw.shortTradeDisabled,
-    borrowCostPerDay: borrow,
+    borrowCostPerDay: raw.borrowCostPerDay ?? undefined,
   };
 }
 
@@ -128,7 +124,7 @@ export function parseCfdCatalogue(text: string): CfdCatalogue {
 
 export function loadCfdCatalogue(path: string): CfdCatalogue | undefined {
   if (!existsSync(path)) return undefined;
-  return parseCfdCatalogue(readFileSync(path, 'utf8'));
+  return parseCfdCatalogue(new TextDecoder().decode(readFileSync(path)));
 }
 
 export function borrowCostPerYear(instrument: CfdInstrument): number | undefined {
