@@ -131,7 +131,6 @@ export function composeTelegram(
             bot,
             handler,
             ownerChatId,
-            lastUpdateId: () => log.lastUpdateId(),
             logger,
             replyPrefix,
             sleep: (ms, signal) => delay(ms, undefined, { signal }).catch(() => undefined),

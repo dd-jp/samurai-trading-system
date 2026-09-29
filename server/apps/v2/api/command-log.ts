@@ -37,13 +37,6 @@ export class CommandLog {
     );
   }
 
-  lastUpdateId(): number | undefined {
-    const row = this.db.prepare('SELECT MAX(update_id) AS update_id FROM v2_commands').get() as {
-      update_id: number | null;
-    };
-    return row.update_id ?? undefined;
-  }
-
   record(entry: CommandRecord): void {
     this.db
       .prepare(

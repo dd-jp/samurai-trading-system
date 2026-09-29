@@ -47,15 +47,13 @@ describe('CommandLog', () => {
     expect(row?.command).toHaveLength(32);
   });
 
-  it('knows which updates it has seen and the highest one', () => {
+  it('knows which updates it has seen', () => {
     const commands = log();
     expect(commands.has(41)).toBe(false);
-    expect(commands.lastUpdateId()).toBeUndefined();
     commands.record(entry);
     commands.record({ ...entry, updateId: 40 });
     expect(commands.has(41)).toBe(true);
     expect(commands.has(42)).toBe(false);
-    expect(commands.lastUpdateId()).toBe(41);
   });
 
   it('refuses a second row for the same update', () => {

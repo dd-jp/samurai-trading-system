@@ -72,6 +72,22 @@ function message(
   };
 }
 
+function haltBudget(): void {
+  db.prepare(
+    `INSERT INTO v2_capital_config (year, effective_from, start_capital_gbp, loss_cap_gbp, recorded_at)
+       VALUES (2026, '2026-01-01', 2000, 1500, '2026-01-01T00:00:00.000Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+       VALUES ('debate/primary', 'debate', 'primary', 1000, 0, '2026-09-01T00:00:00.000Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
+         size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+       VALUES ('debate/primary', '2026-09-28', 0, 0, 0, 1500, 0, 1, 0, '2026-09-28T21:40:00.000Z')`,
+  ).run();
+}
+
 function advance(ms: number): void {
   nowMs += ms;
 }
@@ -236,19 +252,7 @@ describe('resume', () => {
 
   it('never lifts a loss-budget halt (G6) and says so', async () => {
     const handler = build();
-    db.prepare(
-      `INSERT INTO v2_capital_config (year, effective_from, start_capital_gbp, loss_cap_gbp, recorded_at)
-       VALUES (2026, '2026-01-01', 2000, 1500, '2026-01-01T00:00:00.000Z')`,
-    ).run();
-    db.prepare(
-      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
-       VALUES ('debate/primary', 'debate', 'primary', 1000, 0, '2026-09-01T00:00:00.000Z')`,
-    ).run();
-    db.prepare(
-      `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
-         size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
-       VALUES ('debate/primary', '2026-09-28', 0, 0, 0, 1500, 0, 1, 0, '2026-09-28T21:40:00.000Z')`,
-    ).run();
+    haltBudget();
     await handler.handle(message('halt'));
     advance(60_000);
     const reply = await handler.handle(message('resume'));
@@ -257,6 +261,31 @@ describe('resume', () => {
     );
     expect(controlState()).toBe('running');
     expect((await overview()).control.state).toBe('halted-loss-budget');
+  });
+
+  it('says the loss-budget halt stands even when no manual control is in force', async () => {
+    const handler = build();
+    haltBudget();
+    const reply = await handler.handle(message('resume'));
+    expect(reply).toMatch(
+      /Already running\..*loss-budget halt is still in force on debate\/primary/,
+    );
+    expect(controlRows()).toEqual([]);
+  });
+
+  it('says a pending flatten is cancelled', async () => {
+    const handler = build();
+    await handler.handle(message('flatten'));
+    await handler.handle(message(`flatten ${CODE}`));
+    advance(60_000);
+    expect(await handler.handle(message('resume'))).toMatch(/pending flatten is cancelled/);
+  });
+
+  it('does not mention a flatten after a plain pause', async () => {
+    const handler = build();
+    await handler.handle(message('halt'));
+    advance(60_000);
+    expect(await handler.handle(message('resume'))).not.toMatch(/flatten/);
   });
 
   it('still resumes when the loss-budget state cannot be read, and says to check', async () => {

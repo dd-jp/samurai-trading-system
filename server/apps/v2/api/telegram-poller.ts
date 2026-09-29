@@ -8,7 +8,6 @@ export interface PollerDeps {
   readonly bot: Pick<TelegramBot, 'getUpdates' | 'sendMessage'>;
   readonly handler: Pick<CommandHandler, 'handle'>;
   readonly ownerChatId: number;
-  readonly lastUpdateId: () => number | undefined;
   readonly logger: Logger;
   readonly replyPrefix: string;
   readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -50,10 +49,12 @@ async function fetchUpdates(
 }
 
 export async function runPoller(deps: PollerDeps, shutdown: AbortSignal): Promise<void> {
-  const last = deps.lastUpdateId();
-  let offset = last === undefined ? undefined : last + 1;
+  let offset: number | undefined;
   while (!shutdown.aborted) {
-    for (const update of await fetchUpdates(deps, offset, shutdown)) {
+    const updates = await fetchUpdates(deps, offset, shutdown);
+    // Telegram picks a random next update_id after a week of silence; a stale offset above it would silently drop halt/flatten
+    offset = undefined;
+    for (const update of updates) {
       offset = update.update_id + 1;
       await handleOne(deps, update);
     }

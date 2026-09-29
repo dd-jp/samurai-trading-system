@@ -21,7 +21,6 @@ interface Rig {
 
 function rig(options: {
   batches: (TelegramUpdate[] | Error)[];
-  lastUpdateId?: number;
   reply?: (update: TelegramUpdate) => Promise<string | undefined>;
   send?: () => Promise<void>;
 }): Rig {
@@ -55,7 +54,6 @@ function rig(options: {
       },
     },
     ownerChatId: OWNER,
-    lastUpdateId: () => options.lastUpdateId,
     logger: { log: (entry) => logs.push(entry) },
     replyPrefix: '',
     sleep: (ms) => {
@@ -83,10 +81,10 @@ describe('runPoller', () => {
     expect(r.offsets).toEqual([undefined, 12, 13]);
   });
 
-  it('resumes after the last update the journal has seen', async () => {
-    const r = rig({ batches: [[]], lastUpdateId: 99 });
+  it('drops the offset once a poll comes back empty, since Telegram may restart update ids after a quiet week', async () => {
+    const r = rig({ batches: [[update(10)], [], [update(11)]] });
     await runPoller(r.deps, r.shutdown.signal);
-    expect(r.offsets[0]).toBe(100);
+    expect(r.offsets).toEqual([undefined, 11, undefined, 12]);
   });
 
   it('sends nothing when the handler has no reply', async () => {

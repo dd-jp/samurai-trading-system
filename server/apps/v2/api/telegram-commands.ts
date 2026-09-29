@@ -160,12 +160,16 @@ export class CommandHandler {
   }
 
   private async resume(received: Received): Promise<Outcome> {
-    if (this.deps.current().state === 'running') return noop('Already running.');
+    const { state } = this.deps.current();
+    if (state === 'running') {
+      return noop(`Already running.${await this.lossBudgetNote()}`);
+    }
+    const cancelled = state === 'halted' ? ' The pending flatten is cancelled.' : '';
     const written = this.write(
       'resume',
       reasonFor('resume', received.args),
       received,
-      'Resumed: entries are allowed again from the next cycle.',
+      `Resumed: entries are allowed again from the next cycle.${cancelled}`,
     );
     if (written.outcome !== 'applied') return written;
     return { ...written, reply: `${written.reply}${await this.lossBudgetNote()}` };

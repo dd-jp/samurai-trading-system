@@ -72,7 +72,7 @@ function ensureParentDirectory(dbPath: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
-// Two processes share one v2 store (the cycle and the dashboard API); without a busy timeout
+// Several processes share one v2 store (the cycle, the dashboard API and the Telegram poller); without a busy timeout
 // the loser of a write race fails with SQLITE_BUSY at once instead of waiting. It is set before
 // journal_mode because switching to WAL takes a lock the other process may hold
 const BUSY_TIMEOUT_MS = 5_000;
