@@ -27,7 +27,7 @@ import {
   runCycle,
   vetoApplied,
 } from './cycle.js';
-import { addDays } from './data/index.js';
+import { addDays, BarsMarketData } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import type { FillPricing } from './execution/simulated-costs.js';
@@ -2917,6 +2917,25 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
   });
 
+  it('reads the split off the real bars-backed market, weekend gap included', async () => {
+    const deps = harness([], true);
+    hold(deps, 6, '2026-09-25');
+    const weekend = [
+      seriesBar('2026-09-24', PRE, 10),
+      seriesBar('2026-09-25', PRE, 10),
+      seriesBar('2026-09-28', TEN_TO_ONE, 1),
+    ];
+    const real = new BarsMarketData({ load: () => ({ symbol: 'AAPL', bars: weekend }) }, []);
+    const market: MarketData = {
+      lastBarBefore: (instrument, date) => real.lastBarBefore(instrument, date),
+      barsBefore: (instrument, date, count) => real.barsBefore(instrument, date, count),
+      gbpUsdAtYearStart: () => FX,
+    };
+    const report = await runCycle({ ...deps, market }, '2026-09-29');
+    expect(report.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
+  });
+
   it('logs each rescale', async () => {
     const entries: LogEntry[] = [];
     const deps = {
@@ -2926,7 +2945,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
     hold(deps, 6);
     await runCycle(withMarket(deps, snapshot), '2026-09-29');
     expect(entries.filter((entry) => entry.event === 'v2_split_rescaled')).toMatchObject([
-      { level: 'info', message: expect.stringContaining('AAPL') },
+      { level: 'info', message: 'debate/primary AAPL: qty 6 -> 60, levels / 10' },
     ]);
   });
 

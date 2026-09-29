@@ -16,6 +16,7 @@ describe('snapToSplitRatio', () => {
     expect(snapToSplitRatio(9.9962)).toBe(10);
     expect(snapToSplitRatio(1.4985)).toBe(1.5);
     expect(snapToSplitRatio(1.2502)).toBe(1.25);
+    expect(snapToSplitRatio(1.2004)).toBe(1.2);
     expect(snapToSplitRatio(0.1002)).toBe(0.1);
     expect(snapToSplitRatio(0.6668)).toBeCloseTo(2 / 3, 12);
   });
