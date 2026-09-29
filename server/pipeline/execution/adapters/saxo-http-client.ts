@@ -492,8 +492,14 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async listOpenOrders(): Promise<SaxoOpenOrder[]> {
+    const { accountKey, clientKey } = await this.resolveIdentity();
+    const query = new URLSearchParams({
+      AccountKey: accountKey,
+      ClientKey: clientKey,
+      $top: String(PAGE_SIZE),
+    });
     return this.listAll(
-      `/port/v1/orders/me?$top=${PAGE_SIZE}`,
+      `/port/v1/orders/me?${query.toString()}`,
       'listOpenOrders',
       validateOpenOrder,
       'background',
@@ -501,8 +507,9 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async listOrderActivities(from: Date): Promise<SaxoOrderActivity[]> {
-    const { clientKey } = await this.resolveIdentity();
+    const { accountKey, clientKey } = await this.resolveIdentity();
     const query = new URLSearchParams({
+      AccountKey: accountKey,
       ClientKey: clientKey,
       FromDateTime: from.toISOString(),
       $top: String(PAGE_SIZE),
@@ -516,8 +523,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async getBalances(): Promise<SaxoAccountBalance> {
+    const { accountKey, clientKey } = await this.resolveIdentity();
+    const query = new URLSearchParams({ AccountKey: accountKey, ClientKey: clientKey });
     return this.request(
-      '/port/v1/balances/me',
+      `/port/v1/balances/me?${query.toString()}`,
       { method: 'GET' },
       'getBalances',
       validateBalance,
@@ -526,8 +535,15 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   }
 
   async listNetPositions(): Promise<SaxoNetPosition[]> {
+    const { accountKey, clientKey } = await this.resolveIdentity();
+    const query = new URLSearchParams({
+      FieldGroups: 'NetPositionBase,NetPositionView,DisplayAndFormat',
+      AccountKey: accountKey,
+      ClientKey: clientKey,
+      $top: String(PAGE_SIZE),
+    });
     return this.listAll(
-      `/port/v1/netpositions/me?FieldGroups=NetPositionBase,NetPositionView,DisplayAndFormat&$top=${PAGE_SIZE}`,
+      `/port/v1/netpositions/me?${query.toString()}`,
       'listNetPositions',
       validateNetPosition,
       'background',
