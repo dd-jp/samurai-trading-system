@@ -94,6 +94,7 @@ const gate = new V2RiskGate({
     },
     books: [],
   }),
+  venueRefusal: () => undefined,
 });
 
 function entry(book: BookSpec = primary, venue: SleeveDecision['venue'] = 'alpaca') {

@@ -278,6 +278,7 @@ function harness(
       capital,
       market,
       spec: (sleeveId) => (sleeveId === sleeve.id ? spec : (secondSleeve?.spec ?? spec)),
+      venueRefusal: () => undefined,
     }),
     executor: new V2OrderExecutor({
       brokers: alpaca === undefined ? {} : { alpaca },

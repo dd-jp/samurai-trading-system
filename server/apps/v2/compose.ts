@@ -49,10 +49,21 @@ export interface CycleComposition extends CycleDeps {
   readonly journal: Journal;
 }
 
+function assertCfdFillsPriced(
+  cfdGate: () => string | undefined,
+  cfdCostModel: CfdCostModel | undefined,
+): void {
+  if (cfdGate() !== undefined || cfdCostModel !== undefined) return;
+  throw new Error(
+    'CFD entries can open but no CFD cost model prices their fills: a CFD stop or exit would be stranded (#1850)',
+  );
+}
+
 export function composeCycle(options: CycleCompositionOptions): CycleComposition {
   const { db, clock, logger, market, tradingDate } = options;
   assertCapitalShareRanges(options.sleeves);
   const cfdGate = options.cfdEntryRefusal ?? cfdEntryRefusal;
+  assertCfdFillsPriced(cfdGate, options.cfdCostModel);
   const v2Store = guardedStore(db, 'v2');
   const capital = new CapitalConfigStore(v2Store, clock);
   const journal = new Journal(v2Store, clock);

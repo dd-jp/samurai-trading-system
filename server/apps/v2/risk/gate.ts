@@ -58,7 +58,11 @@ function venueRefusalFor(
   const cfd = isCfdVenue(decision.venue);
   if (decision.action === 'enter_short' && !cfd) return 'short_requires_cfd';
   if (decision.action === 'enter_long' && cfd) return 'long_on_cfd';
-  return extra?.(decision.venue);
+  return (extra ?? closedCfdVenue)(decision.venue);
+}
+
+function closedCfdVenue(venue: Venue): string | undefined {
+  return isCfdVenue(venue) ? 'cfd_cost_model_unset' : undefined;
 }
 
 function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {

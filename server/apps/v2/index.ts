@@ -298,6 +298,10 @@ function cfdCostModelFor(options: V2RootOptions): CfdCostModel | undefined {
   return isSet(CFD_COST_MODEL) ? CFD_COST_MODEL.value : undefined;
 }
 
+function cfdGateFor(options: V2RootOptions): () => string | undefined {
+  return options.cfdEntryRefusal ?? cfdEntryRefusal;
+}
+
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -322,7 +326,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   );
   const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
   const cfdCostModel = cfdCostModelFor(options);
-  const cfdGate = options.cfdEntryRefusal ?? cfdEntryRefusal;
+  const cfdGate = cfdGateFor(options);
   const router = createVenueRouter({
     catalogue: cfdCatalogueFor(options, logger),
     entryRefusal: cfdGate,

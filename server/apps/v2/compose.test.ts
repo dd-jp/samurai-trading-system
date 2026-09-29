@@ -261,6 +261,15 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     expect(composed.executor.quoteSimulatedFill('saxo_cfd_gbp', fill('buy', 1, 1)).fee).toBe(2);
   });
 
+  it('refuses to compose when CFD entries can open but no cost model would price their exits', () => {
+    expect(() => composeCycle(options({ cfdEntryRefusal: () => undefined }))).toThrow(
+      /stranded \(#1850\)/,
+    );
+    expect(() =>
+      composeCycle(options({ cfdEntryRefusal: () => 'cfd_resting_stop_unverified' })),
+    ).not.toThrow();
+  });
+
   it('throws when a CFD fill is priced with no model rather than fee-free', () => {
     const composed = composeCycle(options());
     expect(() => composed.executor.quoteSimulatedFill('saxo_cfd_gbp', fill('buy', 1, 1))).toThrow(

@@ -46,6 +46,22 @@ describe('parseCfdCatalogue', () => {
     expect(catalogue.lookup('X')?.borrowCostPerDay).toBeUndefined();
   });
 
+  it('accepts index and ETF rows and USD quotes', () => {
+    const catalogue = parseCfdCatalogue(
+      file({
+        asOf: '2026-09-29',
+        instruments: [
+          { ...VOD, symbol: 'UKX', assetType: 'CfdOnIndex' },
+          { ...VOD, symbol: 'ISF', assetType: 'CfdOnEtf' },
+          { ...VOD, symbol: 'AAPL', currency: 'USD', priceToContractFactor: 1 },
+        ],
+      }),
+    );
+    expect(catalogue.lookup('UKX')?.assetType).toBe('CfdOnIndex');
+    expect(catalogue.lookup('ISF')?.assetType).toBe('CfdOnEtf');
+    expect(catalogue.lookup('AAPL')?.currency).toBe('USD');
+  });
+
   it('rejects a duplicate symbol', () => {
     expect(() =>
       parseCfdCatalogue(

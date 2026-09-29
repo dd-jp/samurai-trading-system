@@ -88,7 +88,7 @@ function gate(
     capital?: CapitalYear | undefined;
     bars?: readonly V2Bar[];
     spec?: SleeveSpec;
-    venueRefusal?: (venue: Venue) => string | undefined;
+    venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
   } = {},
 ) {
   const lastDay = (): BookDay | undefined =>
@@ -117,7 +117,7 @@ function gate(
     capital: { inForce: () => capital },
     market: marketWith(options.bars ?? liquidBars()),
     spec: () => options.spec ?? SPEC,
-    venueRefusal: options.venueRefusal,
+    venueRefusal: 'venueRefusal' in options ? options.venueRefusal : () => undefined,
   });
 }
 
@@ -195,6 +195,18 @@ describe('V2RiskGate', () => {
         gate().approveEntry(request({ decision: { ...cfdShort, venue } })).order,
       ).toBeDefined();
     }
+  });
+
+  it('refuses every CFD entry when no venue refusal is injected, and leaves cash venues alone', () => {
+    const closed = gate({ venueRefusal: undefined });
+    for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
+      expect(closed.approveEntry(request({ decision: { ...cfdShort, venue } }))).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'cfd_cost_model_unset',
+      });
+    }
+    expect(closed.approveEntry(request()).order).toBeDefined();
   });
 
   it('applies the injected venue refusal to the routed venue and names it', () => {
