@@ -12,18 +12,27 @@ import {
   repairBarShape,
   SHAPE_REPAIR_MANIFEST_NOTE,
 } from '../../../providers/bar-store/index.js';
-import { isMainModule } from '../../cli-entrypoint.js';
-import { barsToCsv, roundBarPrices } from './bar-csv.js';
-import type { FxRate } from './fx.js';
-import { parseBoeXudlussCsv } from './fx.js';
-import type { SaxoLine, SplicedLine } from './lse-lines.js';
+import type {
+  ChartPage,
+  InstrumentDetails,
+  SaxoLine,
+  SplicedLine,
+} from '../../../providers/saxo-bars/index.js';
 import {
+  assertUnitMatchesSaxo,
   gbpPerQuotedUnit,
   isSpliced,
   LSE_AUX_LINES,
   LSE_CALENDAR_REFERENCE,
   LSE_MOMENTUM_LINES,
-} from './lse-lines.js';
+  liveTokenSource,
+  SaxoReadOnlyApi,
+  samplesToBars,
+} from '../../../providers/saxo-bars/index.js';
+import { isMainModule } from '../../cli-entrypoint.js';
+import { barsToCsv, roundBarPrices } from './bar-csv.js';
+import type { FxRate } from './fx.js';
+import { parseBoeXudlussCsv } from './fx.js';
 import type { SaxoSpreadRow } from './measure-saxo-spread.js';
 import {
   BURST_READS,
@@ -31,8 +40,6 @@ import {
   DEFAULT_SAXO_SPREAD_PATH,
   parseSaxoSpreadCsv,
 } from './measure-saxo-spread.js';
-import type { ChartPage, InstrumentDetails } from './saxo-api.js';
-import { liveTokenSource, SaxoReadOnlyApi, samplesToBars } from './saxo-api.js';
 import type { OverlapStats } from './splice.js';
 import {
   convertUsdBarsToGbp,
@@ -115,15 +122,6 @@ export function density(bars: readonly DailyBar[]): number {
     (Date.parse(`${last.date}T00:00:00Z`) - Date.parse(`${first.date}T00:00:00Z`)) /
     (365.25 * 86_400_000);
   return years <= 0 ? 0 : bars.length / (years * TRADING_DAYS_PER_YEAR);
-}
-
-export function assertUnitMatchesSaxo(line: SaxoLine, details: InstrumentDetails): void {
-  const expected = line.unit === 'USD' ? 1 : gbpPerQuotedUnit(line.unit);
-  if (details.priceToContractFactor !== expected) {
-    throw new Error(
-      `${line.tidm}: LSE list says ${line.unit} (factor ${expected}) but Saxo PriceToContractFactor is ${details.priceToContractFactor}`,
-    );
-  }
 }
 
 export function distributionAdjustmentCheck(

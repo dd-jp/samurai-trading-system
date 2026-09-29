@@ -1,14 +1,23 @@
 import type { SaxoSessionState } from '../../../pipeline/execution/adapters/saxo-token-source.js';
 import type { FetchResult } from '../../../providers/bar-store/index.js';
-import { tradingCalendar } from './fixture.js';
-import type { FxRate } from './fx.js';
+import type { ChartSample, InfoPriceQuote } from '../../../providers/saxo-bars/index.js';
 import {
+  assertUnitMatchesSaxo,
   gbpPerQuotedUnit,
   isSpliced,
   LSE_AUX_LINES,
   LSE_CALENDAR_REFERENCE,
   LSE_MOMENTUM_LINES,
-} from './lse-lines.js';
+  mergeChartPages,
+  parseChartPage,
+  parseInfoPricesList,
+  parseInstrumentDetails,
+  SAXO_CHART_PAGE,
+  SaxoReadOnlyApi,
+  samplesToBars,
+} from '../../../providers/saxo-bars/index.js';
+import { tradingCalendar } from './fixture.js';
+import type { FxRate } from './fx.js';
 import {
   burstRows,
   nearestRankPercentile,
@@ -17,22 +26,11 @@ import {
   saxoSpreadRowsToCsv,
 } from './measure-saxo-spread.js';
 import {
-  assertUnitMatchesSaxo,
   density,
   distributionAdjustmentCheck,
   parseSaxoPullArgs,
   windowStartOf,
 } from './pull-saxo-bars.js';
-import type { ChartSample, InfoPriceQuote } from './saxo-api.js';
-import {
-  mergeChartPages,
-  parseChartPage,
-  parseInfoPricesList,
-  parseInstrumentDetails,
-  SAXO_CHART_PAGE,
-  SaxoReadOnlyApi,
-  samplesToBars,
-} from './saxo-api.js';
 import {
   convertUsdBarsToGbp,
   overlapStats,
