@@ -43,16 +43,17 @@ function memorySource(all: readonly BarSeries[]): BarsSource {
 
 describe('lseInstrumentsAbove', () => {
   it('screens by 20-day average GBP notional and gates SGLN/SSLN behind the appropriateness test', () => {
-    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(false);
     const source = memorySource([
       series('ISF', 25, 100, 1_000_000),
       series('IGLT', 25, 1, 100),
       series('SGLN', 25, 100, 1_000_000),
     ]);
-    const instruments = lseInstrumentsAbove(source, '2026-09-26', 50_000_000);
-    expect(instruments).toContain('ISF');
-    expect(instruments).not.toContain('IGLT');
-    expect(instruments).not.toContain('SGLN');
+    const untaken = lseInstrumentsAbove(source, '2026-09-26', 50_000_000, false);
+    expect(untaken).toContain('ISF');
+    expect(untaken).not.toContain('IGLT');
+    expect(untaken).not.toContain('SGLN');
+    const taken = lseInstrumentsAbove(source, '2026-09-26', 50_000_000, true);
+    expect(taken).toContain('SGLN');
   });
 
   it('excludes a name with no covered bars, and admits the fixture at a zero floor', () => {
@@ -69,14 +70,14 @@ describe('lseInstrumentsAbove', () => {
 });
 
 describe('selectLseUniverse', () => {
-  it('screens at the resolved 1M GBP floor with no refusal (#1774)', () => {
+  it('screens at the resolved 1M GBP floor and admits the complex lines now the test is taken (#1774)', () => {
     const source = memorySource([
       series('ISF', 25, 100, 1_000_000),
       series('IUKP', 25, 100, 5_000),
       series('SGLN', 25, 100, 1_000_000),
     ]);
     const selection = selectLseUniverse(source, '2026-09-26');
-    expect(selection.instruments).toEqual(['ISF']);
+    expect([...selection.instruments].sort()).toEqual(['ISF', 'SGLN']);
     expect(selection.refusals).toEqual([]);
   });
 });

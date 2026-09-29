@@ -88,7 +88,7 @@ describe('parameters', () => {
     expect(SHORTS_ENABLED).toBe(false);
   });
 
-  it('the Saxo appropriateness test is not yet recorded as taken (doc 66 ruling (l))', () => {
-    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(false);
+  it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {
+    expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(true);
   });
 });
