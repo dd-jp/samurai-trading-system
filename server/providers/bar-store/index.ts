@@ -14,12 +14,15 @@ export {
   joinAdjustedAndRaw,
   pullSymbol,
 } from './alpaca-pull.js';
-export type { HygieneReport } from './bar-hygiene.js';
+export type { HygieneReport, ShapeRepairReport } from './bar-hygiene.js';
 export {
   applyBarHygiene,
   dropNonSessionBars,
   findHolesAndFlips,
   findUnitBreaks,
   normaliseUnitBreaks,
+  repairBarShape,
+  SHAPE_REPAIR_MANIFEST_NOTE,
+  violatesBarShape,
 } from './bar-hygiene.js';
 export { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from './parquet-bar-store.js';

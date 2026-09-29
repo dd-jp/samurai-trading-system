@@ -49,6 +49,8 @@ const held: Position = {
   openedDate: '2026-09-01',
   marksHeld: 10,
   stray: false,
+  splitFactor: 1,
+  splitAnchorDate: undefined,
 };
 
 const gate = new V2RiskGate({

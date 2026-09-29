@@ -22,6 +22,49 @@ describe('macro calendar', () => {
     }
   });
 
+  it('holds the eight published 2027 FOMC decision days, all Wednesdays', () => {
+    const fomc = MACRO_CALENDARS.find((calendar) => calendar.source === 'fomc');
+    expect(fomc?.coverageThrough).toBe('2027-12-31');
+    const decisions2027 = fomc?.dates.filter((date) => date.startsWith('2027-'));
+    expect(decisions2027).toEqual([
+      '2027-01-27',
+      '2027-03-17',
+      '2027-04-28',
+      '2027-06-09',
+      '2027-07-28',
+      '2027-09-15',
+      '2027-10-27',
+      '2027-12-08',
+    ]);
+    for (const date of fomc?.dates ?? []) {
+      expect(new Date(`${date}T00:00:00.000Z`).getUTCDay()).toBe(3);
+    }
+  });
+
+  it('never claims coverage past the last date its source published', () => {
+    const throughBySource = Object.fromEntries(
+      MACRO_CALENDARS.map((calendar) => [calendar.source, calendar.coverageThrough]),
+    );
+    expect(throughBySource).toEqual({
+      fomc: '2027-12-31',
+      boe_mpc: '2027-12-31',
+      bls_cpi: '2026-12-31',
+      bls_employment: '2026-12-31',
+      ons_cpi: '2027-12-31',
+    });
+  });
+
+  it('flags a 2027 FOMC day as covered once every source in the table reaches it', () => {
+    const fomc = MACRO_CALENDARS.filter((calendar) => calendar.source === 'fomc');
+    expect(macroGate('2027-01-27', fomc)).toEqual({
+      macroDay: true,
+      covered: true,
+      sources: ['fomc'],
+      reason: 'macro day: fomc',
+    });
+    expect(macroGate('2027-01-28', fomc).macroDay).toBe(false);
+  });
+
   it('coverage is the earliest source horizon regardless of order', () => {
     expect(macroCoverageThrough()).toBe('2026-12-31');
     expect(
