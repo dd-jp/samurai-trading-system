@@ -73,12 +73,12 @@ function reasonFor(command: string, args: string): string {
 export class CommandHandler {
   #pending: PendingFlatten | undefined;
 
-  private readonly commands: Readonly<Record<string, Command>> = {
-    status: () => this.status(),
-    halt: (received) => this.pause(received),
-    resume: (received) => this.resume(received),
-    flatten: (received) => this.flatten(received),
-  };
+  private readonly commands = new Map<string, Command>([
+    ['status', () => this.status()],
+    ['halt', (received) => this.pause(received)],
+    ['resume', (received) => this.resume(received)],
+    ['flatten', (received) => this.flatten(received)],
+  ]);
 
   constructor(private readonly deps: CommandDeps) {}
 
@@ -126,9 +126,10 @@ export class CommandHandler {
 
   private async run(name: string, received: Received): Promise<Outcome> {
     if (name !== 'flatten') this.#pending = undefined;
-    const command = this.commands[name];
-    if (command === undefined)
+    const command = this.commands.get(name);
+    if (command === undefined) {
       return { outcome: 'refused_invalid', reply: `Unknown command. ${HELP}` };
+    }
     try {
       return await command(received);
     } catch (error) {

@@ -414,6 +414,17 @@ describe('unknown commands', () => {
   });
 });
 
+describe('command lookup', () => {
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+    'treats %s as an unknown command',
+    async (name) => {
+      const handler = build();
+      expect(await handler.handle(message(name))).toMatch(/Unknown command/);
+      expect(journal()[0]?.outcome).toBe('refused_invalid');
+    },
+  );
+});
+
 describe('stale and replayed messages', () => {
   it('refuses a command older than the cutoff', async () => {
     const handler = build();
