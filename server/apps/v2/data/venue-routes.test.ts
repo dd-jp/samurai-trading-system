@@ -27,7 +27,7 @@ function router(
 ) {
   return createVenueRouter({
     catalogue: new CfdCatalogue({ asOf, instruments }),
-    costModelSet: true,
+    entryRefusal: () => undefined,
     maxBorrowRatePerYear: MAX_BORROW,
     ...over,
   });
@@ -63,9 +63,11 @@ describe('VenueRouter short refusals', () => {
     expect(short(CLOSED_VENUE_ROUTER)).toEqual({ refusal: 'cfd_cost_model_unset' });
   });
 
-  it('refuses on an unset cost model before looking at anything else', () => {
-    const r = router([], { costModelSet: false, catalogue: undefined });
-    expect(short(r)).toEqual({ refusal: 'cfd_cost_model_unset' });
+  it('refuses with the injected entry refusal before looking at anything else', () => {
+    for (const refusal of ['cfd_spread_model_unset', 'cfd_resting_stop_unverified']) {
+      const r = router([], { entryRefusal: () => refusal, catalogue: undefined });
+      expect(short(r)).toEqual({ refusal });
+    }
   });
 
   it('refuses with no catalogue loaded', () => {

@@ -141,7 +141,7 @@ describe('createArm2Sleeve', () => {
         asOf: tradingDate,
         instruments: [instrument('DOWN'), instrument('UP')],
       }),
-      costModelSet: true,
+      entryRefusal: () => undefined,
       maxBorrowRatePerYear: 0.02,
     });
     const sleeve = createArm2Sleeve({

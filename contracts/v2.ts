@@ -350,6 +350,18 @@ export interface CfdCostModel {
   fee(side: OrderSide, qty: number, priceQuote: number): number;
 }
 
+export interface CfdSpreadModel {
+  halfSpreadBps(instrument: string): number;
+}
+
+export interface CfdFinancingModel {
+  dailyRate(venue: Venue, side: OrderSide): number;
+}
+
+export interface CfdBorrowModel {
+  dailyRate(instrument: string): number;
+}
+
 export class CfdCostModelUnsetError extends Error {
   constructor() {
     super('a CFD fill was priced with no CFD cost model: needs #1850');

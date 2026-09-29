@@ -2,9 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
+  CFD_BORROW_MODEL,
   CFD_COST_MODEL,
+  CFD_ENTRY_GATES,
+  CFD_FINANCING_MODEL,
+  CFD_RESTING_STOP_VERIFIED,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  CFD_SPREAD_MODEL,
+  type CfdEntryGate,
   CYCLE_LEVEL_PARAMETERS,
+  cfdEntryRefusal,
   DEBATE_RISK_FRACTION,
   DEBATE_TARGET_ATR_MULTIPLE,
   DEBATE_TIME_STOP_TRADING_DAYS,
@@ -22,6 +29,14 @@ import {
   UnsetParameterError,
 } from './parameters.js';
 
+const CFD_GATE_PARAMETERS = [
+  CFD_COST_MODEL,
+  CFD_SPREAD_MODEL,
+  CFD_FINANCING_MODEL,
+  CFD_BORROW_MODEL,
+  CFD_RESTING_STOP_VERIFIED,
+];
+
 describe('parameters', () => {
   it('every David-owned parameter names its ticket; unresolved ones are unset', () => {
     expect(DECLARED_PARAMETERS).toEqual([
@@ -31,13 +46,13 @@ describe('parameters', () => {
       ALPACA_SHORT_EQUITY_FLOOR_USD,
       ARM2_ENTRY_THRESHOLDS,
       LSE_LIQUIDITY_SCREEN,
-      CFD_COST_MODEL,
+      ...CFD_GATE_PARAMETERS,
     ]);
     expect(CYCLE_LEVEL_PARAMETERS).toEqual([
       G18_SOCIAL_SOURCE,
       G18_SENTIMENT_DEDUP_RULE,
       ALPACA_SHORT_EQUITY_FLOOR_USD,
-      CFD_COST_MODEL,
+      ...CFD_GATE_PARAMETERS,
     ]);
     for (const parameter of DECLARED_PARAMETERS) {
       expect(parameter.ticket.length).toBeGreaterThan(0);
@@ -91,6 +106,52 @@ describe('parameters', () => {
     expect(isSet(CFD_COST_MODEL)).toBe(false);
     expect(CFD_COST_MODEL.ticket).toBe('#1850');
     expect(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR).toBe(0.02);
+  });
+
+  it('the CFD spread, financing and borrow models are unset until #1850, the resting stop until #1916', () => {
+    expect([CFD_SPREAD_MODEL, CFD_FINANCING_MODEL, CFD_BORROW_MODEL].map((p) => p.ticket)).toEqual([
+      '#1850',
+      '#1850',
+      '#1850',
+    ]);
+    expect(CFD_RESTING_STOP_VERIFIED.ticket).toBe('#1916');
+    expect(cfdEntryRefusal()).toBe('cfd_cost_model_unset');
+  });
+
+  describe('cfdEntryRefusal', () => {
+    const setGate = (gate: CfdEntryGate, value: unknown = {}): CfdEntryGate => ({
+      ...gate,
+      parameter: { ...gate.parameter, value },
+    });
+    const allSet = CFD_ENTRY_GATES.map((gate) => setGate(gate, true));
+
+    it('admits a CFD entry only when all five gates are set', () => {
+      expect(cfdEntryRefusal(allSet)).toBeUndefined();
+    });
+
+    it.each([
+      ['CFD_COST_MODEL', 'cfd_cost_model_unset'],
+      ['CFD_SPREAD_MODEL', 'cfd_spread_model_unset'],
+      ['CFD_FINANCING_MODEL', 'cfd_financing_model_unset'],
+      ['CFD_BORROW_MODEL', 'cfd_borrow_model_unset'],
+      ['CFD_RESTING_STOP_VERIFIED', 'cfd_resting_stop_unverified'],
+    ])('refuses when only %s is unset, naming it', (name, refusal) => {
+      const gates = CFD_ENTRY_GATES.map((gate) =>
+        gate.parameter.name === name ? gate : setGate(gate, true),
+      );
+      expect(cfdEntryRefusal(gates)).toBe(refusal);
+    });
+
+    it('refuses a resting stop set to false as unverified', () => {
+      const gates = allSet.map((gate) =>
+        gate.parameter.name === 'CFD_RESTING_STOP_VERIFIED' ? setGate(gate, false) : gate,
+      );
+      expect(cfdEntryRefusal(gates)).toBe('cfd_resting_stop_unverified');
+    });
+
+    it('names the first unset gate in order when several are missing', () => {
+      expect(cfdEntryRefusal([...CFD_ENTRY_GATES].reverse())).toBe('cfd_resting_stop_unverified');
+    });
   });
 
   it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {

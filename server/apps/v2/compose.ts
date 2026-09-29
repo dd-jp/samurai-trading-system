@@ -18,7 +18,7 @@ import {
   PaperBooks,
   V2RiskGate,
 } from './risk/index.js';
-import { SleeveRegistry } from './signal/index.js';
+import { cfdEntryRefusal, SleeveRegistry } from './signal/index.js';
 
 export interface CycleCompositionOptions {
   readonly db: StoreHandle;
@@ -35,6 +35,7 @@ export interface CycleCompositionOptions {
   readonly costMultiple?: number | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly cfdCostModel?: CfdCostModel | undefined;
+  readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   // Default true: paper/live pools real concurrent primary books against one account-wide loss
   // cap (#1799). The backtest passes false so each trial and the benchmark it composes into the
   // same PaperBooks keeps an independent budget (ruled 2026-09-28, doc 66)
@@ -51,6 +52,7 @@ export interface CycleComposition extends CycleDeps {
 export function composeCycle(options: CycleCompositionOptions): CycleComposition {
   const { db, clock, logger, market, tradingDate } = options;
   assertCapitalShareRanges(options.sleeves);
+  const cfdGate = options.cfdEntryRefusal ?? cfdEntryRefusal;
   const v2Store = guardedStore(db, 'v2');
   const capital = new CapitalConfigStore(v2Store, clock);
   const journal = new Journal(v2Store, clock);
@@ -69,8 +71,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     capital,
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
-    venueRefusal: (venue) =>
-      isCfdVenue(venue) && options.cfdCostModel === undefined ? 'cfd_cost_model_unset' : undefined,
+    venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
   });
   const multiple = options.costMultiple ?? 1;
   const impactBps = impactLookup(market, tradingDate, logger);

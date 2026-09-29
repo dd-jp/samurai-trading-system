@@ -51,6 +51,7 @@ import {
   buildLlmPanel,
   CFD_COST_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  cfdEntryRefusal,
   createArm2Sleeve,
   createDebateSleeve,
   DEBATE_SLEEVE_ID,
@@ -89,6 +90,7 @@ export interface V2RootOptions {
   readonly cfdCataloguePath?: string | undefined;
   readonly cfdCatalogue?: CfdCatalogue | undefined;
   readonly cfdCostModel?: CfdCostModel | undefined;
+  readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly nousBaseUrl?: string | undefined;
   readonly nousApiKey?: string | undefined;
   readonly samuraiMode?: string | undefined;
@@ -320,9 +322,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   );
   const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
   const cfdCostModel = cfdCostModelFor(options);
+  const cfdGate = options.cfdEntryRefusal ?? cfdEntryRefusal;
   const router = createVenueRouter({
     catalogue: cfdCatalogueFor(options, logger),
-    costModelSet: cfdCostModel !== undefined,
+    entryRefusal: cfdGate,
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   });
   const sleeves = [
@@ -356,6 +359,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     ),
     alpacaClient: options.alpacaClient,
     cfdCostModel,
+    cfdEntryRefusal: cfdGate,
   });
   return {
     registry: cycle.registry,

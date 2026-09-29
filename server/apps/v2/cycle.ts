@@ -1100,6 +1100,10 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   insufficient_cash: 'GROSS_CASH_GATE',
   gross_cap: 'BOOK_GROSS_NOTIONAL_CAP',
   cfd_cost_model_unset: 'CFD_COST_MODEL',
+  cfd_spread_model_unset: 'CFD_SPREAD_MODEL',
+  cfd_financing_model_unset: 'CFD_FINANCING_MODEL',
+  cfd_borrow_model_unset: 'CFD_BORROW_MODEL',
+  cfd_resting_stop_unverified: 'CFD_RESTING_STOP_VERIFIED',
   short_requires_cfd: 'CFD_VENUE_ROUTE',
   long_on_cfd: 'CFD_VENUE_ROUTE',
 };

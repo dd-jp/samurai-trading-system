@@ -23,7 +23,7 @@ function assetKindFor(home: Venue): AssetKind {
 
 export interface VenueRouterDeps {
   readonly catalogue: CfdCatalogue | undefined;
-  readonly costModelSet: boolean;
+  readonly entryRefusal: () => string | undefined;
   readonly maxBorrowRatePerYear: number;
 }
 
@@ -57,7 +57,8 @@ function cfdRefusal(
   kind: AssetKind,
   tradingDate: string,
 ): string | undefined {
-  if (!deps.costModelSet) return 'cfd_cost_model_unset';
+  const gated = deps.entryRefusal();
+  if (gated !== undefined) return gated;
   const { catalogue } = deps;
   if (catalogue === undefined || !catalogue.freshOn(tradingDate)) return 'no_catalogue';
   const instrument = catalogue.lookup(symbol);
@@ -79,6 +80,6 @@ export function createVenueRouter(deps: VenueRouterDeps): VenueRouter {
 
 export const CLOSED_VENUE_ROUTER: VenueRouter = createVenueRouter({
   catalogue: undefined,
-  costModelSet: false,
+  entryRefusal: () => 'cfd_cost_model_unset',
   maxBorrowRatePerYear: 0,
 });

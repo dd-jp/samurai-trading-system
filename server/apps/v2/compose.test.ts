@@ -218,7 +218,7 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     crossesSpread: false,
   });
 
-  it('refuses a CFD entry as cfd_cost_model_unset while no model is injected', () => {
+  it('refuses a CFD entry as cfd_cost_model_unset while the CFD parameters are unset', () => {
     const composed = composeCycle(options({ market: richMarket }));
     expect(request(composed)).toEqual({
       size: 0,
@@ -227,11 +227,28 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     });
   });
 
-  it('approves the same entry once a model is injected, and prices CFD fills through it', () => {
+  it('refuses a CFD entry with whatever the injected CFD gate names, even with a model', () => {
+    const composed = composeCycle(
+      options({
+        market: richMarket,
+        cfdCostModel: { fee: () => 0 },
+        cfdEntryRefusal: () => 'cfd_resting_stop_unverified',
+      }),
+    );
+    expect(request(composed)).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'cfd_resting_stop_unverified',
+    });
+  });
+
+  it('approves the same entry once the gate passes, and prices CFD fills through the model', () => {
     const cfdCostModel = {
       fee: (_side: 'buy' | 'sell', qty: number, price: number) => qty * price * 0.001,
     };
-    const composed = composeCycle(options({ market: richMarket, cfdCostModel }));
+    const composed = composeCycle(
+      options({ market: richMarket, cfdCostModel, cfdEntryRefusal: () => undefined }),
+    );
     expect(request(composed).order).toBeDefined();
     expect(composed.executor.quoteSimulatedFill('saxo_cfd_usd', fill('sell', 10, 100))).toEqual({
       price: 100,

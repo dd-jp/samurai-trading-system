@@ -15,6 +15,7 @@ import {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  cfdEntryRefusal,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
@@ -109,9 +110,10 @@ function staticProbes(): SmokeProbe[] {
       `tighten £${SMOKE_LOSS_CAP_GBP} to £${SMOKE_LOSS_CAP_GBP + 1}`,
     ),
     probe(
-      'CFD shorts fail closed: no cost model refuses, then no catalogue refuses',
-      shortRefusal(false) === 'cfd_cost_model_unset' && shortRefusal(true) === 'no_catalogue',
-      `${shortRefusal(false)}, ${shortRefusal(true)}`,
+      'CFD shorts fail closed: unset CFD gates refuse, then no catalogue refuses',
+      shortRefusal(cfdEntryRefusal) === 'cfd_cost_model_unset' &&
+        shortRefusal(() => undefined) === 'no_catalogue',
+      `${shortRefusal(cfdEntryRefusal)}, ${shortRefusal(() => undefined)}`,
     ),
     probe(
       'every still-open David-owned parameter is unset',
@@ -143,10 +145,10 @@ function staticProbes(): SmokeProbe[] {
   ];
 }
 
-function shortRefusal(costModelSet: boolean): string | undefined {
+function shortRefusal(entryRefusal: () => string | undefined): string | undefined {
   const choice = createVenueRouter({
     catalogue: undefined,
-    costModelSet,
+    entryRefusal,
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   }).route('AAPL', 'alpaca', 'short', SMOKE_TRADING_DATE);
   return 'refusal' in choice ? choice.refusal : undefined;
