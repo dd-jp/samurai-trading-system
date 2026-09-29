@@ -63,16 +63,58 @@ describe('parseTelegramArgs', () => {
 });
 
 describe('ownerChatIdFrom', () => {
-  it('reads a private chat id', () => {
-    expect(ownerChatIdFrom({ TELEGRAM_CHAT_ID: ' 424242 ' })).toBe(424242);
+  it('reads the one owner user id, trimmed', () => {
+    expect(ownerChatIdFrom({ TELEGRAM_ALLOWED_USER_IDS: ' 424242 ' })).toBe(424242);
   });
 
-  it.each([undefined, '', 'abc', '-1001234567890', '0', '12.5', '1'.repeat(17)])(
-    'refuses %j: only a positive private chat id is safe to command from',
+  it('ignores TELEGRAM_CHAT_ID, which stays the alert destination and may be a group', () => {
+    expect(
+      ownerChatIdFrom({ TELEGRAM_ALLOWED_USER_IDS: '424242', TELEGRAM_CHAT_ID: '-1001234567890' }),
+    ).toBe(424242);
+    expect(() => ownerChatIdFrom({ TELEGRAM_CHAT_ID: '424242' })).toThrow(
+      /TELEGRAM_ALLOWED_USER_IDS is not set/,
+    );
+  });
+
+  it.each([undefined, '', ' \t '])('refuses %j as unset', (raw) => {
+    expect(() => ownerChatIdFrom({ TELEGRAM_ALLOWED_USER_IDS: raw })).toThrow(
+      "TELEGRAM_ALLOWED_USER_IDS is not set: it must hold the owner's Telegram user id",
+    );
+  });
+
+  it.each(['424242,555', '424242, 555', '424242 555', '424242;555', '424242,'])(
+    'refuses %j: there is exactly one owner',
     (raw) => {
-      expect(() => ownerChatIdFrom({ TELEGRAM_CHAT_ID: raw })).toThrow(/TELEGRAM_CHAT_ID/);
+      expect(() => ownerChatIdFrom({ TELEGRAM_ALLOWED_USER_IDS: raw })).toThrow(
+        'TELEGRAM_ALLOWED_USER_IDS must hold exactly one user id: the system has one owner, whose private chat id equals their user id',
+      );
     },
   );
+
+  it.each([
+    'abc',
+    '-1001234567890',
+    '0',
+    '012',
+    '12.5',
+    '1'.repeat(17),
+    'x424242',
+    '424242x',
+    '1e3',
+  ])('refuses %j: only a positive user id is safe to command from', (raw) => {
+    expect(() => ownerChatIdFrom({ TELEGRAM_ALLOWED_USER_IDS: raw })).toThrow(
+      "TELEGRAM_ALLOWED_USER_IDS must be the owner's positive Telegram user id: a group or channel id would let its members command the system",
+    );
+  });
+
+  it('accepts ids up to the largest safe integer and refuses the next, which would round', () => {
+    expect(ownerChatIdFrom({ TELEGRAM_ALLOWED_USER_IDS: '9007199254740991' })).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(() => ownerChatIdFrom({ TELEGRAM_ALLOWED_USER_IDS: '9007199254740993' })).toThrow(
+      /positive Telegram user id/,
+    );
+  });
 });
 
 describe('botTokenFrom', () => {
@@ -132,7 +174,7 @@ describe('composeTelegram, every command against a real store', () => {
     const logs: LogEntry[] = [];
     const composed = composeTelegram(
       parseTelegramArgs(['--store', storePath]),
-      { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_CHAT_ID: String(OWNER) },
+      { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USER_IDS: String(OWNER) },
       { now: () => new Date(clockMs) },
       fetchImpl,
       { log: (entry) => logs.push(entry) },
@@ -185,7 +227,7 @@ describe('composeTelegram, every command against a real store', () => {
     expect(() =>
       composeTelegram(
         parseTelegramArgs(['--store', join(dir, 'missing.sqlite')]),
-        { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_CHAT_ID: String(OWNER) },
+        { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USER_IDS: String(OWNER) },
         { now: () => NOW },
         () => Promise.reject(new Error('unused')),
         { log: () => undefined },
@@ -193,7 +235,7 @@ describe('composeTelegram, every command against a real store', () => {
     ).toThrow();
   });
 
-  it('refuses to start without the owner chat id, before touching the store', () => {
+  it('refuses to start without the owner user id, before touching the store', () => {
     expect(() =>
       composeTelegram(
         parseTelegramArgs(['--store', '/nonexistent/v2.sqlite']),
@@ -202,6 +244,6 @@ describe('composeTelegram, every command against a real store', () => {
         () => Promise.reject(new Error('unused')),
         { log: () => undefined },
       ),
-    ).toThrow(/TELEGRAM_CHAT_ID/);
+    ).toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
   });
 });

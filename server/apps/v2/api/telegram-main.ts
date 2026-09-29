@@ -56,11 +56,21 @@ export function parseTelegramArgs(argv: readonly string[]): TelegramArgs {
   };
 }
 
+const OWNER_ENV = 'TELEGRAM_ALLOWED_USER_IDS';
+
 export function ownerChatIdFrom(env: NodeJS.ProcessEnv): number {
-  const raw = env.TELEGRAM_CHAT_ID?.trim() ?? '';
-  if (!/^[1-9]\d{0,15}$/.test(raw)) {
+  const raw = env[OWNER_ENV]?.trim() ?? '';
+  if (raw === '') {
+    throw new Error(`${OWNER_ENV} is not set: it must hold the owner's Telegram user id`);
+  }
+  if (/[\s,;]/.test(raw)) {
     throw new Error(
-      'TELEGRAM_CHAT_ID must be the positive id of a private chat with the bot: a group or channel id would let its members command the system',
+      `${OWNER_ENV} must hold exactly one user id: the system has one owner, whose private chat id equals their user id`,
+    );
+  }
+  if (!/^[1-9]\d{0,15}$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new Error(
+      `${OWNER_ENV} must be the owner's positive Telegram user id: a group or channel id would let its members command the system`,
     );
   }
   return Number(raw);
