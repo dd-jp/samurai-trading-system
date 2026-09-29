@@ -1,4 +1,4 @@
-export type { QuoteUnit, SaxoLine, SplicedLine } from './lse-lines.js';
+export type { SaxoLine, SplicedLine } from './lse-lines.js';
 export {
   assertUnitMatchesSaxo,
   gbpPerQuotedUnit,
@@ -12,9 +12,6 @@ export type {
   ChartSample,
   InfoPriceQuote,
   InstrumentDetails,
-  SaxoAssetType,
-  SaxoFetcher,
-  SaxoLiveSession,
 } from './saxo-api.js';
 export {
   liveTokenSource,
