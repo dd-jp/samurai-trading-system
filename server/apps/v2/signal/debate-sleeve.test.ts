@@ -20,7 +20,7 @@ import {
 } from './debate-sleeve.js';
 import { buildLlmPanel, seatModels } from './llm-panel.js';
 import { isLseInstrument } from './lse-lines.js';
-import { DEBATE_SLEEVE_SPEC, UNSET } from './parameters.js';
+import { DEBATE_SLEEVE_SPEC, type Parameter, UNSET } from './parameters.js';
 import { BULLISH_SCRIPT, type Script, ScriptedTransport } from './scripted-transport.js';
 import { UNIVERSE_CAP } from './universe.js';
 
@@ -216,7 +216,7 @@ describe('buildUniverse', () => {
       market,
     });
     const usSymbols = us.map((entry) => entry.symbol);
-    const screen = (value: number | typeof UNSET) => ({
+    const screen = (value: number | typeof UNSET): Parameter<number> => ({
       name: 'LSE_LIQUIDITY_SCREEN',
       ticket: '#1774',
       value,
