@@ -107,6 +107,7 @@ The orchestrator refuses to start rather than guess, and names *every* missing v
 | `NOUS_API_KEY` | | Shared LLM key. Satisfied instead by a per-role key (`NOUS_DEBATE_API_KEY` or `NOUS_SENTIMENT_API_KEY`) — "a key per model" is a supported setup |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | Required only when `SAMURAI_ALERTS=telegram`. `TELEGRAM_CHAT_ID` is the **escalation** chat: orphaned `go` verdicts, stuck unpriced fills, kill-threshold breaches. Keep it unmuted |
 | `TELEGRAM_HEARTBEAT_CHAT_ID` | | Required when `SAMURAI_ALERTS=telegram`, and must be a **different** chat from `TELEGRAM_CHAT_ID`. The dead-man's-switch heartbeat posts here and nothing else does, so muting the beat cannot silence an escalation. Startup refuses the two being equal (#342) |
+| `TELEGRAM_ALLOWED_USER_IDS` | | Required by the v2 command poller (`npm run v2:telegram`, #1852), which refuses to start without it. Exactly one positive Telegram user id: the owner, who alone may command the system. Commands are answered in the owner's private chat, whose id equals the user id. Alerts still go to `TELEGRAM_CHAT_ID`, which may be a group |
 
 #### Optional — LLM roles and models
 
