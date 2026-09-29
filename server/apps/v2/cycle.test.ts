@@ -2684,3 +2684,298 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     }
   });
 });
+
+describe('runCycle: positions held across a split (#1865)', () => {
+  interface RawBar {
+    readonly open: number;
+    readonly high: number;
+    readonly low: number;
+    readonly close: number;
+  }
+  const PRE: RawBar = { open: 20, high: 20.5, low: 19.5, close: 20 };
+  const TEN_TO_ONE: RawBar = { open: 2, high: 2.05, low: 1.95, close: 2 };
+  const TWO_TO_ONE: RawBar = { open: 1, high: 1.02, low: 0.98, close: 1 };
+  const THREE_FOR_TWO: RawBar = { open: 13.4, high: 13.7, low: 13, close: 40 / 3 };
+
+  function seriesBar(date: string, raw: RawBar, factor: number): DailyBar {
+    return {
+      date,
+      open: raw.open / factor,
+      high: raw.high / factor,
+      low: raw.low / factor,
+      close: raw.close / factor,
+      volume: 1_000_000,
+      rawClose: raw.close,
+    };
+  }
+
+  function seriesMarket(bars: readonly DailyBar[]): MarketData {
+    return {
+      lastBarBefore: (_instrument, tradingDate) =>
+        bars.filter((dated) => dated.date < tradingDate).at(-1),
+      barsBefore: (_instrument, tradingDate, count) =>
+        bars.filter((dated) => dated.date < tradingDate).slice(-count),
+      gbpUsdAtYearStart: () => FX,
+    };
+  }
+
+  function withMarket(deps: Harness, bars: readonly DailyBar[]): CycleDeps {
+    return { ...deps, market: seriesMarket(bars) };
+  }
+
+  const preSplit = (factor: number) => [
+    seriesBar('2026-09-23', PRE, factor),
+    seriesBar('2026-09-24', PRE, factor),
+    seriesBar('2026-09-25', PRE, factor),
+  ];
+
+  const snapshot = [
+    ...preSplit(10),
+    seriesBar('2026-09-28', TEN_TO_ONE, 1),
+    seriesBar('2026-09-29', TEN_TO_ONE, 1),
+    seriesBar('2026-09-30', TEN_TO_ONE, 1),
+  ];
+
+  function hold(deps: Harness, qty: number, tradingDate = '2026-09-25', scale = 1): void {
+    const long = qty > 0;
+    deps.books.applyFill('debate/primary', {
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      side: long ? 'buy' : 'sell',
+      leg: 'entry',
+      qty: Math.abs(qty),
+      priceGbp: (20 * scale) / FX,
+      feeGbp: 0,
+      clientOrderId: 'seed',
+      tradingDate,
+      stopGbp: ((long ? 19.2 : 20.8) * scale) / FX,
+      targetGbp: ((long ? 21.2 : 18.8) * scale) / FX,
+    });
+  }
+
+  function primary(deps: CycleDeps) {
+    return deps.books.position('debate/primary', 'AAPL');
+  }
+
+  it('a 10:1 split does not stop the position out, rescales it, and keeps marked equity continuous', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    const before = await runCycle(withMarket(deps, snapshot), '2026-09-28');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
+    const across = await runCycle(withMarket(deps, snapshot), '2026-09-29');
+    expect(across.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({
+      qty: 60,
+      avgPriceGbp: expect.closeTo(2 / FX, 9),
+      stopGbp: expect.closeTo(1.92 / FX, 9),
+      targetGbp: expect.closeTo(2.12 / FX, 9),
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-28',
+    });
+    expect(across.books[0]?.equity_gbp).toBeCloseTo(before.books[0]?.equity_gbp ?? 0, 9);
+    expect(across.books[0]).toMatchObject({ size_multiplier: 1 });
+    expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(false);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX, 9);
+  });
+
+  it('still catches a real stop after the split on the rescaled level', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    await runCycle(withMarket(deps, snapshot), '2026-09-28');
+    const breach = seriesBar('2026-09-29', { ...TEN_TO_ONE, low: 1.9 }, 1);
+    const bars = [...snapshot.slice(0, 4), breach];
+    const report = await runCycle(withMarket(deps, bars), '2026-09-30');
+    expect(report.exits).toBe(1);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-30-AAPL-exit')).toMatchObject({
+      payload: { size: 60, detail: 'bracket_leg_on_daily_bar', price: expect.closeTo(1.92, 9) },
+    });
+    expect(primary(deps)).toBeUndefined();
+  });
+
+  it('detects a split when the latest bar is always factor 1 because history is re-adjusted on refresh', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    await runCycle(withMarket(deps, preSplit(1)), '2026-09-28');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
+    const across = await runCycle(withMarket(deps, snapshot), '2026-09-29');
+    expect(across.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
+  });
+
+  it('detects a split across skipped cycles and does not apply it twice', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    await runCycle(withMarket(deps, snapshot), '2026-09-28');
+    const late = await runCycle(withMarket(deps, snapshot), '2026-09-30');
+    expect(late.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
+    await runCycle(withMarket(deps, snapshot), '2026-10-01');
+    await runCycle(withMarket(deps, snapshot), '2026-10-02');
+    expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
+  });
+
+  it('a price crash that leaves the adjustment factor unchanged is a real move: no rescale, the stop fires', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    const crash = [...preSplit(1), seriesBar('2026-09-28', TEN_TO_ONE, 1)];
+    const report = await runCycle(withMarket(deps, crash), '2026-09-29');
+    expect(report.exits).toBe(1);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
+      payload: { size: 6, price: expect.closeTo(19.2, 9) },
+    });
+    expect(primary(deps)).toBeUndefined();
+  });
+
+  it('does not rescale a position opened after the split day', async () => {
+    const deps = harness([], true);
+    hold(deps, 6, '2026-09-30', 0.1);
+    const report = await runCycle(withMarket(deps, snapshot), '2026-10-01');
+    expect(report.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: undefined });
+  });
+
+  it('does not rescale for dividend-sized factor steps', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    const dividend = [
+      seriesBar('2026-09-24', PRE, 1.004),
+      seriesBar('2026-09-25', PRE, 1.004),
+      seriesBar('2026-09-28', PRE, 1.11),
+      seriesBar('2026-09-29', PRE, 1),
+    ];
+    await runCycle(withMarket(deps, dividend), '2026-09-30');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
+  });
+
+  it('a short is rescaled the same way and its bracket stays intact', async () => {
+    const deps = harness([], true);
+    hold(deps, -6);
+    await runCycle(withMarket(deps, snapshot), '2026-09-28');
+    const across = await runCycle(withMarket(deps, snapshot), '2026-09-29');
+    expect(across.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({
+      qty: -60,
+      stopGbp: expect.closeTo(2.08 / FX, 9),
+      targetGbp: expect.closeTo(1.88 / FX, 9),
+      splitFactor: 10,
+    });
+    expect(across.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
+  });
+
+  it('a 3:2 split leaves a fractional qty and keeps qty x price and equity', async () => {
+    const deps = harness([], true);
+    hold(deps, 3);
+    const bars = [
+      ...preSplit(1.5),
+      seriesBar('2026-09-28', THREE_FOR_TWO, 1),
+      seriesBar('2026-09-29', THREE_FOR_TWO, 1),
+    ];
+    await runCycle(withMarket(deps, bars), '2026-09-28');
+    const across = await runCycle(withMarket(deps, bars), '2026-09-29');
+    expect(across.exits).toBe(0);
+    const held = primary(deps);
+    expect(held?.qty).toBeCloseTo(4.5, 12);
+    expect(held?.avgPriceGbp).toBeCloseTo(20 / 1.5 / FX, 9);
+    expect(held?.stopGbp).toBeCloseTo(19.2 / 1.5 / FX, 9);
+    expect(across.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
+  });
+
+  it('measures a second split from the anchor the first one left', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    const bars = [
+      ...preSplit(20),
+      seriesBar('2026-09-28', TEN_TO_ONE, 2),
+      seriesBar('2026-09-29', TEN_TO_ONE, 2),
+      seriesBar('2026-09-30', TWO_TO_ONE, 1),
+    ];
+    await runCycle(withMarket(deps, bars), '2026-09-28');
+    await runCycle(withMarket(deps, bars), '2026-09-29');
+    expect(primary(deps)).toMatchObject({
+      qty: 60,
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-28',
+    });
+    await runCycle(withMarket(deps, bars), '2026-09-30');
+    expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
+    const second = await runCycle(withMarket(deps, bars), '2026-10-01');
+    expect(second.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({
+      qty: 120,
+      stopGbp: expect.closeTo(0.96 / FX, 9),
+      splitFactor: 20,
+      splitAnchorDate: '2026-09-30',
+    });
+  });
+
+  it('leaves a position alone when no bar exists to measure it against', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    await runCycle(withMarket(deps, []), '2026-09-29');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
+    await runCycle(withMarket(deps, [seriesBar('2026-09-25', PRE, 10)]), '2026-09-30');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
+  });
+
+  it('logs each rescale', async () => {
+    const entries: LogEntry[] = [];
+    const deps = {
+      ...harness([], true),
+      logger: { log: (entry: LogEntry) => entries.push(entry) },
+    };
+    hold(deps, 6);
+    await runCycle(withMarket(deps, snapshot), '2026-09-29');
+    expect(entries.filter((entry) => entry.event === 'v2_split_rescaled')).toMatchObject([
+      { level: 'info', message: expect.stringContaining('AAPL') },
+    ]);
+  });
+
+  class SplitAlpaca extends FakeAlpaca {
+    readonly rearms: { qty: number; stop: number; target: number }[] = [];
+    resumeResult: NormalizedOrder | null = null;
+
+    submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
+      return Promise.resolve({
+        client_order_id: request.clientOrderId,
+        broker_order_ids: ['pf1'],
+        order_state: 'submitted',
+      });
+    }
+
+    override resumeFlatten(): Promise<NormalizedOrder | null> {
+      return Promise.resolve(this.resumeResult);
+    }
+
+    override rearmProtectiveLegs(
+      _clientOrderId?: string,
+      _instrument?: string,
+      _side?: 'buy' | 'sell',
+      qty = 0,
+      stop = 0,
+      target = 0,
+    ): Promise<void> {
+      this.rearms.push({ qty, stop, target });
+      return Promise.resolve();
+    }
+  }
+
+  it('a backstop rearm after the split uses the rescaled native prices, not the pre-split entry prices', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.resumeResult = {
+      client_order_id: 'v2-debate-primary-2026-09-28-AAPL-exit',
+      broker_order_ids: ['pf1'],
+      order_state: 'expired',
+      filled_qty: 0,
+    };
+    await runCycle(withMarket(deps, snapshot), '2026-09-29');
+    expect(alpaca.rearms).toHaveLength(1);
+    expect(alpaca.rearms[0]?.qty).toBe(60);
+    expect(alpaca.rearms[0]?.stop).toBeCloseTo(1.92, 9);
+    expect(alpaca.rearms[0]?.target).toBeCloseTo(2.12, 9);
+  });
+});

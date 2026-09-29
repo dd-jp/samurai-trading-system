@@ -36,6 +36,7 @@ import {
 } from './data/index.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import { simulateLimitEntry, simulateMarketExit } from './simulated-entry.js';
+import { splitRatioAcross } from './split.js';
 
 export interface CycleDeps {
   readonly registry: SleeveSource;
@@ -163,7 +164,8 @@ function nativeRearmPrices(journal: DecisionJournal, held: Position): RearmPrice
   const entry = journal.orderFor(held.clientOrderId);
   const stop = entry === undefined ? undefined : numberOrUndefined(entry.payload.stop);
   const target = entry === undefined ? undefined : numberOrUndefined(entry.payload.target);
-  return stop === undefined || target === undefined ? undefined : { stop, target };
+  if (stop === undefined || target === undefined) return undefined;
+  return { stop: stop / held.splitFactor, target: target / held.splitFactor };
 }
 
 function withinLimit(side: OrderSide, limit: number, price: number): number {
@@ -283,6 +285,30 @@ class Cycle {
     });
     this.refusals.push(message);
     this.log('error', 'v2_crossing_fill', message);
+  }
+
+  rescaleSplitPositions(): void {
+    for (const bookId of this.deps.books.ids()) {
+      for (const held of this.deps.books.positions(bookId)) this.rescaleForSplit(bookId, held);
+    }
+  }
+
+  rescaleForSplit(bookId: string, held: Position): void {
+    const anchorDate =
+      held.splitAnchorDate ?? this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
+    if (anchorDate === undefined) return;
+    const days = calendarDaysBetween(anchorDate, this.tradingDate);
+    const bars = this.deps.market
+      .barsBefore(held.instrument, this.tradingDate, days)
+      .filter((dated) => dated.date >= anchorDate);
+    const ratio = splitRatioAcross(bars);
+    if (ratio === 1) return;
+    this.deps.books.applySplit(bookId, held.instrument, ratio, (bars.at(-1) as V2Bar).date);
+    this.log(
+      'info',
+      'v2_split_rescaled',
+      `${bookId} ${held.instrument}: qty ${held.qty} -> ${held.qty * ratio}, levels / ${ratio}`,
+    );
   }
 
   fillSimulatedEntries(): void {
@@ -1143,6 +1169,7 @@ async function runUnmarked(
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
+  cycle.rescaleSplitPositions();
   deps.books.settleLastPrimaryMark();
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
