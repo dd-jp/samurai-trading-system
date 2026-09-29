@@ -5,6 +5,14 @@ const UNIT_BREAK_MAX_RATIO = 110;
 const HOLE_MIN_RATIO = 3;
 const SUSPECT_MIN_RATIO = 1.35;
 const GLITCH_RANGE_MAX_RATIO = 1.4;
+// Measured over the raw Saxo lines (#1904): the largest genuine extreme is INXG 2022-09-28 (LDI
+// crisis) at 1.085 and the smallest glitch David named is IUSA 2020-03-09 at 1.120. Calibrated
+// on 1× ETFs only; CFD single-stock underlyings need their own measurement
+const SAXO_NEIGHBOUR_MAX_RATIO = 1.1;
+// Measured over the 1,761,296 stored Alpaca bars (#1889): 4 bars exceed it, all glitches (SPY
+// 2026-02-02, MRK 2021-06-11, VZ 2026-01-08, BBBY 2016-10-27); the largest genuine extreme is FRC
+// 2023-03-13 at 1.78, then GME 2021-01-28 at 1.73
+const ALPACA_QUARANTINE_MIN_RATIO = 2;
 
 export interface UnitBreak {
   readonly date: string;
@@ -23,7 +31,7 @@ export interface SuspectFlips {
 }
 
 export const SHAPE_REPAIR_MANIFEST_NOTE =
-  'then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low whose ratio to the median of the other three prices is inside (90, 110) or its inverse is rescaled by 100 or 0.01, a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (open, close and raw_close are never changed); per-line counts in symbols.<TIDM>.hygiene.shape_repair';
+  'then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low whose ratio to the median of the other three prices is inside (90, 110) or its inverse is rescaled by 100 or 0.01, an open, high or low more than 1.1× beyond the previous, next and own closes is replaced by the close (#1904), a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (close and raw_close are never changed); per-line counts in symbols.<TIDM>.hygiene.shape_repair';
 
 export function violatesBarShape(bar: DailyBar): boolean {
   return bar.low > Math.min(bar.open, bar.close) || bar.high < Math.max(bar.open, bar.close);
@@ -37,10 +45,23 @@ export interface FieldRescale {
   readonly factor: 100 | 0.01;
 }
 
+export interface NeighbourRepair {
+  readonly date: string;
+  readonly field: RescalableField;
+}
+
 export interface ShapeRepairReport {
   readonly rescaled_fields: readonly FieldRescale[];
+  readonly neighbour_repairs: readonly NeighbourRepair[];
   readonly dropped_glitch_dates: readonly string[];
   readonly ranges_widened: number;
+}
+
+export interface QuarantinedBar {
+  readonly date: string;
+  readonly field: RescalableField;
+  readonly price: number;
+  readonly ratio: number;
 }
 
 export interface HygieneReport {
@@ -226,35 +247,114 @@ function isRepairable(bar: DailyBar): boolean {
   return PRICE_FIELDS.every((field) => Number.isFinite(bar[field]) && bar[field] > 0);
 }
 
+function referenceCloses(bars: readonly DailyBar[], index: number): number[] {
+  return [bars[index - 1], bars[index], bars[index + 1]].flatMap((bar) =>
+    bar === undefined ? [] : [bar.close],
+  );
+}
+
+function neighbourRatio(price: number, references: readonly number[]): number {
+  return Math.max(price / Math.max(...references), Math.min(...references) / price);
+}
+
+function fieldsBeyondNeighbours(
+  bars: readonly DailyBar[],
+  index: number,
+  maxRatio: number,
+): { field: RescalableField; ratio: number }[] {
+  const bar = bars[index] as DailyBar;
+  const references = referenceCloses(bars, index);
+  return RESCALABLE_FIELDS.flatMap((field) => {
+    const ratio = neighbourRatio(bar[field], references);
+    return ratio > maxRatio ? [{ field, ratio }] : [];
+  });
+}
+
+function repairAgainstNeighbours(
+  bars: readonly DailyBar[],
+  index: number,
+): { bar: DailyBar; repairs: NeighbourRepair[] } {
+  const bar = bars[index] as DailyBar;
+  const beyond = fieldsBeyondNeighbours(bars, index, SAXO_NEIGHBOUR_MAX_RATIO);
+  if (beyond.length === 0) return { bar, repairs: [] };
+  const replaced = Object.fromEntries(beyond.map(({ field }) => [field, bar.close]));
+  return {
+    bar: { ...bar, ...replaced },
+    repairs: beyond.map(({ field }) => ({ date: bar.date, field })),
+  };
+}
+
+function rescaleRepairable(bars: readonly DailyBar[]): {
+  bars: DailyBar[];
+  rescales: FieldRescale[];
+} {
+  const scaled = bars.map((bar) =>
+    isRepairable(bar) ? rescaleFields(bar) : { bar, rescales: [] },
+  );
+  return {
+    bars: scaled.map(({ bar }) => bar),
+    rescales: scaled.flatMap(({ rescales }) => rescales),
+  };
+}
+
 export function repairBarShape(bars: readonly DailyBar[]): {
   bars: DailyBar[];
   report: ShapeRepairReport;
 } {
+  const rescaled = rescaleRepairable(bars);
   const repaired: DailyBar[] = [];
-  const rescaledFields: FieldRescale[] = [];
+  const neighbourRepairs: NeighbourRepair[] = [];
   const droppedDates: string[] = [];
   let widenedCount = 0;
-  for (const bar of bars) {
+  rescaled.bars.forEach((bar, index) => {
     if (!isRepairable(bar)) {
       repaired.push(bar);
-      continue;
+      return;
     }
-    const scaled = rescaleFields(bar);
-    rescaledFields.push(...scaled.rescales);
-    if (spansGlitchRange(scaled.bar)) {
+    const fixed = repairAgainstNeighbours(rescaled.bars, index);
+    neighbourRepairs.push(...fixed.repairs);
+    if (spansGlitchRange(fixed.bar)) {
       droppedDates.push(bar.date);
-      continue;
+      return;
     }
-    const widened = widenRange(scaled.bar);
-    if (widened !== scaled.bar) widenedCount++;
+    const widened = widenRange(fixed.bar);
+    if (widened !== fixed.bar) widenedCount++;
     repaired.push(widened);
-  }
+  });
   return {
     bars: repaired,
     report: {
-      rescaled_fields: rescaledFields,
+      rescaled_fields: rescaled.rescales,
+      neighbour_repairs: neighbourRepairs,
       dropped_glitch_dates: droppedDates,
       ranges_widened: widenedCount,
     },
   };
+}
+
+function worstFieldBeyond(
+  bars: readonly DailyBar[],
+  index: number,
+  minRatio: number,
+): QuarantinedBar | undefined {
+  const bar = bars[index] as DailyBar;
+  const worst = fieldsBeyondNeighbours(bars, index, minRatio).reduce<
+    { field: RescalableField; ratio: number } | undefined
+  >((max, next) => (max === undefined || next.ratio > max.ratio ? next : max), undefined);
+  return worst === undefined
+    ? undefined
+    : { date: bar.date, field: worst.field, price: bar[worst.field], ratio: worst.ratio };
+}
+
+export function quarantineImplausibleBars(
+  bars: readonly DailyBar[],
+  minRatio: number = ALPACA_QUARANTINE_MIN_RATIO,
+): { bars: DailyBar[]; quarantined: QuarantinedBar[] } {
+  const quarantined: QuarantinedBar[] = [];
+  const kept = bars.filter((_, index) => {
+    const flagged = worstFieldBeyond(bars, index, minRatio);
+    if (flagged !== undefined) quarantined.push(flagged);
+    return flagged === undefined;
+  });
+  return { bars: kept, quarantined };
 }

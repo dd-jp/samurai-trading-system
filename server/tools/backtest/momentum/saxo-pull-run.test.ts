@@ -190,15 +190,17 @@ describe('pullMomentumLine', () => {
     const ctx = context(fakeApi({ shapeGlitches: true }));
     const outcome = await pullMomentumLine(ctx, momentumLine('ISF'));
     if (outcome.kind !== 'included') throw new Error('expected included');
-    const droppedDate = calendar[GLITCH_LOW_HALF] as string;
-    expect(outcome.entry.bars).toBe(calendar.length - 1);
+    const replacedDate = calendar[GLITCH_LOW_HALF] as string;
+    expect(outcome.entry.bars).toBe(calendar.length);
     expect(outcome.entry.hygiene.shape_repair).toEqual({
       rescaled_fields: [{ date: calendar[GLITCH_HIGH_100X], field: 'high', factor: 0.01 }],
-      dropped_glitch_dates: [droppedDate],
+      neighbour_repairs: [{ date: replacedDate, field: 'low' }],
+      dropped_glitch_dates: [],
       ranges_widened: 1,
     });
     const stored = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
-    expect(stored.map((bar) => bar.date)).not.toContain(droppedDate);
+    const replaced = stored.find((bar) => bar.date === replacedDate);
+    expect(replaced?.low).toBe(replaced?.close);
     for (const bar of stored) {
       expect(bar.low).toBeLessThanOrEqual(Math.min(bar.open, bar.close));
       expect(bar.high).toBeGreaterThanOrEqual(Math.max(bar.open, bar.close));
@@ -207,13 +209,15 @@ describe('pullMomentumLine', () => {
     expect(rescaled?.high).toBe(rescaled?.close);
     const rawRows = readFileSync(join(ctx.rawDir, 'ISF.csv'), 'utf8').trim().split('\n');
     expect(rawRows).toHaveLength(calendar.length + 1);
-    expect(rawRows.find((row) => row.startsWith(droppedDate))).toBeDefined();
+    const rawLow = Number(rawRows.find((row) => row.startsWith(replacedDate))?.split(',')[3]);
+    expect(rawLow).toBeCloseTo((replaced?.close ?? 0) * 0.5, 3);
   });
 
   it('records an empty shape repair for a clean line', async () => {
     const outcome = await pullMomentumLine(context(fakeApi()), momentumLine('ISF'));
     expect(outcome.entry.hygiene.shape_repair).toEqual({
       rescaled_fields: [],
+      neighbour_repairs: [],
       dropped_glitch_dates: [],
       ranges_widened: 0,
     });
