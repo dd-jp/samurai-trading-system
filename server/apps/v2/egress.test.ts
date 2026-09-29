@@ -12,7 +12,7 @@ import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { composeV2Root, rootOptionsFor } from './index.js';
+import { composeV2Root, rootOptionsFor, type V2Root } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { isLseInstrument } from './signal/index.js';
 import { LSE_LIQUIDITY_SCREEN } from './signal/parameters.js';
@@ -53,6 +53,10 @@ const SECRET_ENV: Readonly<Record<string, string>> = {
   MARKETAUX_API_TOKEN: 'sentinel-marketaux-api-token-1c3d',
   NOUS_API_KEY: 'sentinel-nous-shared-key-4e6f',
   NOUS_SENTIMENT_API_KEY: 'sentinel-nous-sentiment-key-7a8b',
+  TIINGO_API_KEY: 'sentinel-tiingo-api-key-9c0e',
+  R2_ACCESS_KEY_ID: 'sentinel-r2-access-key-id-1f2a',
+  R2_SECRET_ACCESS_KEY: 'sentinel-r2-secret-access-key-3b4c',
+  SAMURAI_DASHBOARD_TOKEN: 'sentinel-dashboard-token-5d6e',
 };
 
 const ENV: Readonly<Record<string, string>> = {
@@ -230,8 +234,28 @@ function captureEgress(captured: CapturedRequest[]): void {
   );
 }
 
-function leaksIn(text: string): string[] {
-  return FORBIDDEN.filter((value) => text.includes(value));
+function writeSaxoTokenFiles(directory: string, now: Date): void {
+  for (const environment of ['sim', 'live'] as const) {
+    writeTokenFile(join(directory, `${environment}.json`), {
+      environment,
+      ...SAXO_TOKENS,
+      accessTokenExpiresAt: new Date(now.getTime() + 1_200_000).toISOString(),
+      refreshTokenExpiresAt: new Date(now.getTime() + 86_400_000).toISOString(),
+      obtainedAt: new Date(now.getTime() - 60_000).toISOString(),
+    });
+  }
+}
+
+function heldPositionOf(root: V2Root): string[] {
+  const held = root.books.position('debate/primary', 'UP');
+  if (held === undefined || held.stopGbp === undefined) {
+    throw new Error('egress test: day 2 must open with a stopped UP position in debate/primary');
+  }
+  return [`${held.qty} shares`, String(held.avgPriceGbp), String(held.stopGbp)];
+}
+
+function leaksIn(text: string, held: readonly string[] = []): string[] {
+  return [...FORBIDDEN, ...held].filter((value) => text.includes(value));
 }
 
 describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
@@ -256,15 +280,7 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
   it('carries no key, token or account data in any request over two paper days, US and LSE', async () => {
     const fixtures = await writeFixtures(directory);
     const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
-    for (const environment of ['sim', 'live'] as const) {
-      writeTokenFile(join(directory, `${environment}.json`), {
-        environment,
-        ...SAXO_TOKENS,
-        accessTokenExpiresAt: new Date(clock.now().getTime() + 1_200_000).toISOString(),
-        refreshTokenExpiresAt: new Date(clock.now().getTime() + 86_400_000).toISOString(),
-        obtainedAt: new Date(clock.now().getTime() - 60_000).toISOString(),
-      });
-    }
+    writeSaxoTokenFiles(directory, clock.now());
     const storePath = join(directory, 'paper.sqlite');
     const seed = openSharedStore(storePath);
     new CapitalConfigStore(seed, clock).setYear(2026, START_CAPITAL_GBP, LOSS_CAP_GBP);
@@ -274,6 +290,7 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
     captureEgress(captured);
 
     const debatedSymbols: string[][] = [];
+    const heldPosition: string[] = [];
     for (const tradingDate of [ENTRY_DATE, NEXT_DATE]) {
       clock.advanceTo(new Date(`${tradingDate}T07:00:00.000Z`));
       const newsCalls: string[] = [];
@@ -291,10 +308,8 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
       });
       const before = captured.length;
       try {
+        if (tradingDate === NEXT_DATE) heldPosition.push(...heldPositionOf(root));
         await root.run();
-        if (tradingDate === NEXT_DATE) {
-          expect(root.books.position('debate/primary', 'UP')?.qty).toBeGreaterThan(0);
-        }
       } finally {
         root.close();
       }
@@ -309,9 +324,10 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
       true,
     );
     expect(captured.some((request) => request.body.includes(HEADLINE))).toBe(true);
+    expect(heldPosition).toHaveLength(3);
     for (const request of captured) {
-      expect(leaksIn(request.url)).toEqual([]);
-      expect(leaksIn(request.body)).toEqual([]);
+      expect(leaksIn(request.url, heldPosition)).toEqual([]);
+      expect(leaksIn(request.body, heldPosition)).toEqual([]);
       expect(request.headers).toEqual({
         'content-type': 'application/json',
         authorization: `Bearer ${NOUS_KEY}`,
@@ -323,5 +339,6 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
     expect(leaksIn(`{"messages":[{"content":"cash ${ACCOUNT.cash}"}]}`)).toEqual([ACCOUNT.cash]);
     expect(leaksIn(`token ${SAXO_TOKENS.refreshToken}`)).toEqual([SAXO_TOKENS.refreshToken]);
     expect(leaksIn(`key ${SECRET_ENV.ALPACA_API_SECRET}`)).toEqual([SECRET_ENV.ALPACA_API_SECRET]);
+    expect(leaksIn('stop 19.34432', ['19.34432'])).toEqual(['19.34432']);
   });
 });

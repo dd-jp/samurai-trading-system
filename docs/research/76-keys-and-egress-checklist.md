@@ -8,13 +8,14 @@ The Step 4b security row (doc 67): broker keys trade-only, withdrawals disabled,
 
 Seeded with sentinels:
 
-- every secret-shaped environment variable the repo reads (Alpaca paper and live key and secret, Saxo SIM and live app keys, secrets and access tokens, Telegram bot token, healthchecks ping URL, Litestream SSE-C key, Polygon, Marketaux, the other Nous keys);
+- the secret-shaped environment variables found by a grep of the server code on 2026-09-29 (Alpaca paper and live key and secret, Saxo SIM and live app keys, secrets and access tokens, Telegram bot token, dashboard token, healthchecks ping URL, Litestream SSE-C key, R2 access key, Polygon, Tiingo, Marketaux, the other Nous keys). A variable added later is not seeded until it is added to the test;
 - Saxo SIM and live token files holding sentinel access and refresh tokens;
-- the Alpaca account (account number, id, cash, equity, buying power, portfolio value);
+- the Alpaca account (account number, id, cash, equity, buying power, portfolio value). No v2 code calls `getAccount` today and the fake's `getPositions` returns nothing, so these guard a future reader (for example the reconcile in #1872) rather than a path that runs now;
 - the year's start capital and loss cap;
-- the broker order identifiers (`alp-1`, the `v2-debate-primary-` client order id prefix).
+- the broker order identifiers (`alp-1`, the `v2-debate-primary-` client order id prefix);
+- the day-1 position as the book holds it on day 2 (quantity in shares, GBP average price, GBP stop).
 
-Pass condition: every request goes to the Nous base URL's chat completions endpoint and nowhere else; no URL or body contains any sentinel; the headers are exactly the content type and `Bearer <debate Nous key>`. Day 2 runs with an open position in the book and still debates that name. The test fails if fewer than three calls per debated name are captured, and asserts a fixture headline reached a prompt, so it cannot pass on an empty capture. Injecting one environment secret into the news view turned it red before commit.
+Pass condition: every request goes to the Nous base URL's chat completions endpoint and nowhere else; no URL or body contains any sentinel; the headers are exactly the content type and `Bearer <debate Nous key>`. Day 2 runs with an open position in the book and still debates that name. The test fails if fewer than three calls per debated name are captured, and asserts a fixture headline reached a prompt, so it cannot pass on an empty capture. Injecting an environment secret into the news view, and separately the held position's quantity, price and stop into a day-2 headline, each turned it red before commit.
 
 Structural backing: `server/apps/v2/boundaries.test.ts` already refuses a `signal/` import of `execution/`, and `DebateSleeveDeps` carries bars, constituents, news and the LLM panel only, so the sleeve that builds prompts has no handle on a broker client or the capital config.
 
