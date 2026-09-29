@@ -2936,6 +2936,25 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toMatchObject({ qty: 60, splitFactor: 10 });
   });
 
+  it('rescales before a pending simulated flatten fills, so the flatten sells the post-split qty', async () => {
+    const deps = harness([], true);
+    hold(deps, 6);
+    deps.setControl('halt');
+    await runCycle(withMarket(deps, snapshot), '2026-09-28');
+    expect(primary(deps)).toMatchObject({
+      qty: 6,
+      exitClientOrderId: 'v2-debate-primary-2026-09-28-AAPL-exit',
+    });
+    await runCycle(withMarket(deps, snapshot), '2026-09-29');
+    expect(exitFill(deps, 'v2-debate-primary-2026-09-28-AAPL-exit')).toMatchObject({
+      side: 'sell',
+      qty: 60,
+    });
+    expect(primary(deps)).toBeUndefined();
+    const proceeds = (60 * 2 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX + proceeds, 9);
+  });
+
   it('logs each rescale', async () => {
     const entries: LogEntry[] = [];
     const deps = {
