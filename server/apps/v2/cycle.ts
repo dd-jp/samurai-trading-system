@@ -96,12 +96,13 @@ function targetTouched(held: Position, lowGbp: number, highGbp: number): boolean
   return held.qty > 0 ? highGbp >= held.targetGbp : lowGbp <= held.targetGbp;
 }
 
-// A gap-open past the stop fills at the open, same as a gapped entry (cycle.test.ts's
-// "fills a simulated entry at the open across the spread when the bar gaps through the limit"):
-// the stop level is only reachable if the open itself hadn't already passed it
-function stopFillGbp(held: Position, openGbp: number): number {
+// The bar's open is unvalidated: clamping to the day's range keeps a defective open from
+// filling a stop outside the range the day actually traded
+function stopFillGbp(held: Position, openGbp: number, lowGbp: number, highGbp: number): number {
   const stop = held.stopGbp as number;
-  return held.qty > 0 ? Math.min(stop, openGbp) : Math.max(stop, openGbp);
+  return held.qty > 0
+    ? Math.max(lowGbp, Math.min(stop, openGbp))
+    : Math.min(highGbp, Math.max(stop, openGbp));
 }
 
 interface BracketExit {
@@ -116,7 +117,7 @@ function bracketExit(
   highGbp: number,
 ): BracketExit | undefined {
   if (stopTouched(held, lowGbp, highGbp)) {
-    return { priceGbp: stopFillGbp(held, openGbp), crossesSpread: true };
+    return { priceGbp: stopFillGbp(held, openGbp, lowGbp, highGbp), crossesSpread: true };
   }
   if (targetTouched(held, lowGbp, highGbp)) {
     return { priceGbp: held.targetGbp, crossesSpread: false };

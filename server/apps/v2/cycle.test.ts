@@ -609,6 +609,22 @@ describe('runCycle', () => {
     }
   });
 
+  it('never fills a simulated stop-exit outside the bar range when the open is defective, for longs and shorts', async () => {
+    const short: SleeveDecision = { ...longAapl, action: 'enter_short', stop_price: 20.8 };
+    for (const [decision, override, price] of [
+      [longAapl, { open: 15, low: 19, high: 19.5 }, 19],
+      [short, { open: 25, low: 20.5, high: 21 }, 21],
+    ] as const) {
+      const deps = harness([decision], true);
+      await openBooks(deps);
+      deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
+      await runCycle(deps, '2026-09-28');
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload.price,
+      ).toBeCloseTo(price, 9);
+    }
+  });
+
   it('short brackets: the stop fires on the high, the target on the low, and neither inside', async () => {
     const short: SleeveDecision = {
       ...longAapl,
