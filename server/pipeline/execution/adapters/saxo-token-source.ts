@@ -309,16 +309,21 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
         this.fetchImpl,
       );
     } catch (cause) {
-      if (
-        isTerminalOAuthFailure(oauthFailureStatus(cause)) &&
-        this.adoptPeerRotationOf(record.refreshToken)
-      ) {
-        this.schedule();
-        return;
-      }
-      this.onFailure('saxo_token_refresh_failed', cause);
+      this.onRefreshRejected(record.refreshToken, cause);
       return;
     }
+    this.adoptRotation(record, response, now);
+  }
+
+  private onRefreshRejected(sentRefreshToken: string, cause: unknown): void {
+    const raced =
+      isTerminalOAuthFailure(oauthFailureStatus(cause)) &&
+      this.adoptPeerRotationOf(sentRefreshToken);
+    if (raced) this.schedule();
+    else this.onFailure('saxo_token_refresh_failed', cause);
+  }
+
+  private adoptRotation(record: SaxoTokenFileRecord, response: SaxoTokenResponse, now: Date): void {
     const next: SaxoTokenFileRecord = {
       ...response,
       environment: this.deps.environment,
@@ -333,6 +338,11 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     }
     this.record = next;
     this.failedAttempts = 0;
+    this.logRefreshed(next);
+    this.schedule();
+  }
+
+  private logRefreshed(next: SaxoTokenFileRecord): void {
     this.deps.logger.log({
       trace_id: 'saxo-token',
       stage: 'orchestrator',
@@ -345,7 +355,6 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
         refresh_token_expires_at: next.refreshTokenExpiresAt,
       },
     });
-    this.schedule();
   }
 
   private onFailure(event: string, cause: unknown): void {
