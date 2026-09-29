@@ -1,5 +1,5 @@
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
-import type { Logger } from '../../shared/index.js';
+import type { LogEventCode, Logger } from '../../shared/index.js';
 
 export interface BarRefreshSymbolResult {
   readonly symbol: string;
@@ -37,7 +37,7 @@ export function messageOf(error: unknown): string {
 export function logRefresh(
   logger: Logger,
   level: 'info' | 'warn',
-  event: string,
+  event: LogEventCode,
   message: string,
 ): void {
   logger.log({ trace_id: 'v2-bar-refresh', stage: 'v2', level, event, message });

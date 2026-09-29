@@ -399,6 +399,29 @@ describe('historyRescaleFactor', () => {
     ).toBe(undefined);
   });
 
+  it('sorts the ratios before taking the median', () => {
+    expect(
+      historyRescaleFactor(series({ a: 10, b: 100, c: 10 }), series({ a: 10, b: 10, c: 10 }).bars),
+    ).toBe(undefined);
+  });
+
+  it('averages the two middle ratios of an even overlap', () => {
+    expect(historyRescaleFactor(series({ a: 10, b: 30 }), series({ a: 10, b: 10 }).bars)).toBe(2);
+  });
+
+  it('flags a factor just outside tolerance and not one just inside', () => {
+    expect(historyRescaleFactor(series({ a: 106 }), series({ a: 100 }).bars)).toBe(1.06);
+    expect(historyRescaleFactor(series({ a: 104 }), series({ a: 100 }).bars)).toBe(undefined);
+    expect(historyRescaleFactor(series({ a: 94 }), series({ a: 100 }).bars)).toBe(0.94);
+    expect(historyRescaleFactor(series({ a: 96 }), series({ a: 100 }).bars)).toBe(undefined);
+  });
+
+  it('skips a replaced bar whose close is zero', () => {
+    expect(historyRescaleFactor(series({ a: 10, b: 10 }), series({ a: 0, b: 10 }).bars)).toBe(
+      undefined,
+    );
+  });
+
   it('is undefined with no overlapping dates', () => {
     expect(historyRescaleFactor(series({ a: 10 }), series({ b: 1 }).bars)).toBe(undefined);
   });
