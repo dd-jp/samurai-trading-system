@@ -80,4 +80,13 @@ describe('selectLseUniverse', () => {
     expect([...selection.instruments].sort()).toEqual(['ISF', 'IUKP', 'SGLN']);
     expect(selection.refusals).toEqual([]);
   });
+
+  it('selects the lines above a set screen with no refusal, injected so it does not wait on #1871', () => {
+    const source = memorySource([series('ISF', 25, 100, 1_000_000), series('IGLT', 25, 1, 100)]);
+    const screen = { name: 'LSE_LIQUIDITY_SCREEN', ticket: '#1774', value: 1_000_000 };
+    expect(selectLseUniverse(source, '2026-09-26', screen)).toEqual({
+      instruments: ['ISF'],
+      refusals: [],
+    });
+  });
 });

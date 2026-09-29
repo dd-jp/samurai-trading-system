@@ -9,6 +9,7 @@ import { technicalRead } from './debate-sleeve.js';
 import { ARM2_ENTRY_THRESHOLDS, ARM2_SLEEVE_SPEC, requireSet } from './parameters.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
+const market = { gbpUsdAtYearStart: () => 1.25 };
 
 function trending(symbol: string, days: number, slope: number, start = 100): BarSeries {
   const bars: DailyBar[] = [];
@@ -62,6 +63,7 @@ describe('createArm2Sleeve', () => {
       bars: source([series]),
       constituents: () => ['UP', 'MISSING'],
       venueFor: () => 'alpaca',
+      market,
       clock,
     });
     const output = await decideAll(sleeve, {
@@ -95,6 +97,7 @@ describe('createArm2Sleeve', () => {
       bars: source([down, flat]),
       constituents: () => ['DOWN', 'FLAT'],
       venueFor: () => 'alpaca',
+      market,
       clock,
     });
     const output = await decideAll(sleeve, {
@@ -124,6 +127,7 @@ describe('createArm2Sleeve', () => {
         bars: source([series]),
         constituents: () => ['UP'],
         venueFor: () => 'alpaca',
+        market,
         clock,
       });
       const output = await decideAll(sleeve, {
@@ -150,6 +154,7 @@ describe('createArm2Sleeve', () => {
       bars: source([full, gapped]),
       constituents: () => ['GAPPED'],
       venueFor: () => 'alpaca',
+      market,
       clock,
     });
     const output = await decideAll(sleeve, {
@@ -176,6 +181,7 @@ describe('createArm2Sleeve', () => {
         bars: source([series]),
         constituents: () => [symbol],
         venueFor: () => 'alpaca',
+        market,
         clock,
       });
       const output = await decideAll(sleeve, {
@@ -194,6 +200,7 @@ describe('createArm2Sleeve', () => {
       bars: source([series]),
       constituents: () => ['UP'],
       venueFor: () => 'alpaca',
+      market,
       clock,
     });
     const universe = sleeve.universe({

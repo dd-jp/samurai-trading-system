@@ -289,8 +289,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   );
   const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
   const sleeves = [
-    createDebateSleeve({ panel, bars, constituents, venueFor, news, clock, logger }),
-    createArm2Sleeve({ bars, constituents, venueFor, clock }),
+    createDebateSleeve({ panel, bars, constituents, venueFor, market, news, clock, logger }),
+    createArm2Sleeve({ bars, constituents, venueFor, market, clock }),
   ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);

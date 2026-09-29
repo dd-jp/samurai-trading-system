@@ -7,6 +7,7 @@ import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { addDays, NO_NEWS } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
+import { createArm2Sleeve } from './arm2-sleeve.js';
 import {
   actionFor,
   buildUniverse,
@@ -18,8 +19,10 @@ import {
   technicalRead,
 } from './debate-sleeve.js';
 import { buildLlmPanel, seatModels } from './llm-panel.js';
-import { DEBATE_SLEEVE_SPEC } from './parameters.js';
+import { isLseInstrument } from './lse-lines.js';
+import { DEBATE_SLEEVE_SPEC, type Parameter, UNSET } from './parameters.js';
 import { BULLISH_SCRIPT, type Script, ScriptedTransport } from './scripted-transport.js';
+import { UNIVERSE_CAP } from './universe.js';
 
 async function decideAll(sleeve: Sleeve, context: SleeveContext): Promise<SleeveOutput> {
   const universe = sleeve.universe(context);
@@ -28,6 +31,7 @@ async function decideAll(sleeve: Sleeve, context: SleeveContext): Promise<Sleeve
 }
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
+const market = { gbpUsdAtYearStart: () => 1.25 };
 
 function trending(symbol: string, days: number, slope: number, start = 100): BarSeries {
   const bars: DailyBar[] = [];
@@ -170,9 +174,112 @@ describe('resolveTechnical', () => {
 describe('buildUniverse', () => {
   it('is the same universe both the debate sleeve and arm 2 select (#1773 extraction)', () => {
     const series = trending('UP', 260, 0.001);
-    const universe = buildUniverse(source([series]), () => ['UP', 'MISSING'], nextDate(series));
+    const universe = buildUniverse(
+      {
+        bars: source([series]),
+        constituents: () => ['UP', 'MISSING'],
+        venueFor: () => 'alpaca',
+        market,
+      },
+      nextDate(series),
+    );
     expect(universe.instruments).toContain('UP');
     expect(universe.refusals.map((refusal) => refusal.parameter)).toEqual(['G18_SMALL_CAP_FLOORS']);
+  });
+
+  describe('one shared US+LSE pool (#1774 c)', () => {
+    const lseTidms = [
+      'ISF',
+      'VMID',
+      'IUSA',
+      'IEUX',
+      'IJPN',
+      'IEEM',
+      'IITU',
+      'IESU',
+      'SPGP',
+      'SLXX',
+    ];
+    const us = Array.from({ length: 15 }, (_, i) =>
+      trending(`U${String(i).padStart(2, '0')}`, 260, 0.001),
+    );
+    const lse = lseTidms.map((tidm) => trending(tidm, 260, 0.001));
+    const tradingDate = nextDate(us[0] ?? trending('X', 260, 0.001));
+    const deps = (constituents: readonly string[]) => ({
+      bars: source([...us, ...lse]),
+      constituents: () => constituents,
+      venueFor: (symbol: string): 'alpaca' | 'saxo' =>
+        isLseInstrument(symbol) ? 'saxo' : 'alpaca',
+      market,
+    });
+    const usSymbols = us.map((entry) => entry.symbol);
+    const screen = (value: number | typeof UNSET): Parameter<number> => ({
+      name: 'LSE_LIQUIDITY_SCREEN',
+      ticket: '#1774',
+      value,
+    });
+
+    it('draws no LSE name and the same US names while the screen is unset', () => {
+      const universe = buildUniverse(deps(usSymbols), tradingDate, screen(UNSET));
+      expect(universe.instruments.filter(isLseInstrument)).toEqual([]);
+      expect(universe.instruments).toHaveLength(15);
+      expect(universe.refusals.map((refusal) => refusal.parameter)).toContain(
+        'LSE_LIQUIDITY_SCREEN',
+      );
+    });
+
+    it('lets LSE names compete for the same cap once the screen is set, US plus LSE within it', () => {
+      const universe = buildUniverse(deps(usSymbols), tradingDate, screen(1));
+      expect(universe.instruments.filter(isLseInstrument).length).toBeGreaterThan(0);
+      expect(universe.instruments.length).toBeLessThanOrEqual(UNIVERSE_CAP);
+      expect(new Set(universe.instruments).size).toBe(universe.instruments.length);
+      expect(universe.refusals).toEqual([
+        {
+          scope: 'universe',
+          parameter: 'G18_SMALL_CAP_FLOORS',
+          ticket: '#1753',
+          message: 'G18_SMALL_CAP_FLOORS is not set: needs David (#1753)',
+        },
+      ]);
+    });
+
+    it('never selects more names than the US-only universe would (no extra debates)', () => {
+      const manyUs = Array.from({ length: 30 }, (_, i) =>
+        trending(`V${String(i).padStart(2, '0')}`, 260, 0.001),
+      );
+      const manyDeps = {
+        ...deps(manyUs.map((entry) => entry.symbol)),
+        bars: source([...manyUs, ...lse]),
+      };
+      const usOnly = buildUniverse(manyDeps, tradingDate, screen(UNSET));
+      const shared = buildUniverse(manyDeps, tradingDate, screen(1));
+      expect(usOnly.instruments).toHaveLength(UNIVERSE_CAP);
+      expect(shared.instruments).toHaveLength(UNIVERSE_CAP);
+    });
+
+    it('excludes every LSE name under the floor', () => {
+      const universe = buildUniverse(deps([]), tradingDate, screen(Number.POSITIVE_INFINITY));
+      expect(universe.instruments).toEqual([]);
+    });
+
+    it('gives the debate sleeve and arm 2 the identical universe', () => {
+      const shared = deps(usSymbols);
+      const context = { tradingDate, macroDay: false, dryRun: true };
+      const debate = createDebateSleeve({
+        ...shared,
+        panel: panelWith(bullishScript),
+        news: NO_NEWS,
+        clock,
+      });
+      const arm2 = createArm2Sleeve({ ...shared, clock });
+      expect(arm2.universe(context).instruments).toEqual(debate.universe(context).instruments);
+    });
+
+    it('is deterministic whatever order the constituents arrive in', () => {
+      const first = buildUniverse(deps(usSymbols), tradingDate, screen(1));
+      const reversed = buildUniverse(deps([...usSymbols].reverse()), tradingDate, screen(1));
+      expect(reversed.instruments).toEqual(first.instruments);
+    });
   });
 });
 
@@ -280,6 +387,7 @@ describe('createDebateSleeve', () => {
       bars: source([series]),
       constituents: () => ['UP', 'MISSING'],
       venueFor: () => 'alpaca',
+      market,
       news: NO_NEWS,
       clock,
     });
@@ -340,6 +448,7 @@ describe('createDebateSleeve', () => {
         bars: source([series]),
         constituents: () => ['UP'],
         venueFor: () => 'alpaca',
+        market,
         news: NO_NEWS,
         clock,
       });
@@ -368,6 +477,7 @@ describe('createDebateSleeve', () => {
         bars: source([series]),
         constituents: () => ['UP'],
         venueFor: () => 'alpaca',
+        market,
         news: { headlines },
         clock,
       });
@@ -418,6 +528,7 @@ describe('createDebateSleeve', () => {
       bars: source([series]),
       constituents: () => ['UP'],
       venueFor: () => 'alpaca',
+      market,
       news: NO_NEWS,
       clock,
     });
@@ -441,6 +552,7 @@ describe('createDebateSleeve', () => {
       bars: source([full, gapped]),
       constituents: () => ['UP'],
       venueFor: () => 'alpaca',
+      market,
       news: NO_NEWS,
       clock,
     });
@@ -482,6 +594,7 @@ describe('createDebateSleeve', () => {
       bars,
       constituents: () => ['CSP1'],
       venueFor: () => 'saxo',
+      market,
       news: NO_NEWS,
       clock,
     });
@@ -506,6 +619,7 @@ describe('createDebateSleeve', () => {
         bars: source([series]),
         constituents: () => ['DOWN'],
         venueFor: () => 'alpaca',
+        market,
         news: NO_NEWS,
         clock,
       });
@@ -534,6 +648,7 @@ describe('createDebateSleeve', () => {
       bars: source([series]),
       constituents: () => ['UP'],
       venueFor: () => 'alpaca',
+      market,
       news: NO_NEWS,
       clock,
     });
@@ -553,6 +668,7 @@ describe('createDebateSleeve', () => {
       bars: source([series]),
       constituents: () => ['UP'],
       venueFor: () => 'alpaca',
+      market,
       news: NO_NEWS,
       clock,
     });

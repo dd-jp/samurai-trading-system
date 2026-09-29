@@ -3,6 +3,7 @@ import { LSE_LINES } from './lse-lines.js';
 import {
   isSet,
   LSE_LIQUIDITY_SCREEN,
+  type Parameter,
   SAXO_APPROPRIATENESS_TEST_TAKEN,
   UnsetParameterError,
 } from './parameters.js';
@@ -38,15 +39,13 @@ export function lseInstrumentsAbove(
   return instruments;
 }
 
-export function selectLseUniverse(bars: BarsSource, tradingDate: string): LseUniverseSelection {
-  if (!isSet(LSE_LIQUIDITY_SCREEN)) {
-    return {
-      instruments: [],
-      refusals: [new UnsetParameterError(LSE_LIQUIDITY_SCREEN.name, LSE_LIQUIDITY_SCREEN.ticket)],
-    };
+export function selectLseUniverse(
+  bars: BarsSource,
+  tradingDate: string,
+  screen: Parameter<number> = LSE_LIQUIDITY_SCREEN,
+): LseUniverseSelection {
+  if (!isSet(screen)) {
+    return { instruments: [], refusals: [new UnsetParameterError(screen.name, screen.ticket)] };
   }
-  return {
-    instruments: lseInstrumentsAbove(bars, tradingDate, LSE_LIQUIDITY_SCREEN.value),
-    refusals: [],
-  };
+  return { instruments: lseInstrumentsAbove(bars, tradingDate, screen.value), refusals: [] };
 }
