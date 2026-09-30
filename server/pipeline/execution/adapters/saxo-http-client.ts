@@ -80,21 +80,14 @@ function readNext(body: unknown): string | undefined {
   return isRecord(body) && typeof body.__next === 'string' ? body.__next : undefined;
 }
 
-const ACCOUNT_SCOPE_PARAMS = ['AccountKey', 'ClientKey'] as const;
-
-function queryOf(path: string): URLSearchParams {
-  const at = path.indexOf('?');
-  return new URLSearchParams(at === -1 ? '' : path.slice(at + 1));
-}
-
-function keepAccountScope(nextPath: string, firstPath: string, context: string): string {
-  const pinned = queryOf(firstPath);
-  const echoed = queryOf(nextPath);
+function keepAccountScope(nextPath: string, identity: AccountIdentity, context: string): string {
+  const echoed = new URL(nextPath, 'https://saxo-next.invalid').searchParams;
   const missing = new URLSearchParams();
-  for (const key of ACCOUNT_SCOPE_PARAMS) {
-    const pinnedValue = pinned.get(key);
+  for (const [key, pinnedValue] of [
+    ['AccountKey', identity.accountKey],
+    ['ClientKey', identity.clientKey],
+  ] as const) {
     const echoedValue = echoed.get(key);
-    if (pinnedValue === null) continue;
     if (echoedValue === null) {
       missing.set(key, pinnedValue);
     } else if (echoedValue !== pinnedValue) {
@@ -468,6 +461,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     validateRow: (raw: unknown, context: string) => T,
     priority: SaxoRequestPriority,
   ): Promise<T[]> {
+    const identity = await this.resolveIdentity();
     const rows: T[] = [];
     let path: string | undefined = firstPath;
     while (path !== undefined) {
@@ -485,7 +479,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       path =
         page.next === undefined
           ? undefined
-          : keepAccountScope(this.relativeToGateway(page.next), firstPath, context);
+          : keepAccountScope(this.relativeToGateway(page.next), identity, context);
     }
     return rows;
   }
