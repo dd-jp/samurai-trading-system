@@ -44,9 +44,11 @@ import {
 import { type ReconcileOutcome, reconcileOrBlockEntries } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
+  bracketExit,
   type LimitEntryOutcome,
   simulateLimitEntry,
   simulateMarketExit,
+  withinLimit,
 } from './simulated-entry.js';
 import { splitRatioAcross } from './split.js';
 
@@ -101,44 +103,6 @@ const EPOCH_ISO = new Date(0).toISOString();
 export function calendarDaysBetween(from: string | undefined, to: string): number {
   if (from === undefined) return 0;
   return Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / MS_PER_DAY));
-}
-
-function stopTouched(held: Position, lowGbp: number, highGbp: number): boolean {
-  if (held.stopGbp === undefined) return false;
-  return held.qty > 0 ? lowGbp <= held.stopGbp : highGbp >= held.stopGbp;
-}
-
-function targetTouched(held: Position, lowGbp: number, highGbp: number): boolean {
-  if (held.targetGbp === undefined) return false;
-  return held.qty > 0 ? highGbp >= held.targetGbp : lowGbp <= held.targetGbp;
-}
-
-// The bar's open is unvalidated: clamping to the day's range keeps a defective open from
-// filling a stop outside the range the day actually traded
-function stopFillGbp(held: Position, openGbp: number, lowGbp: number, highGbp: number): number {
-  const stop = held.stopGbp as number;
-  const gapped = held.qty > 0 ? Math.min(stop, openGbp) : Math.max(stop, openGbp);
-  return Math.min(highGbp, Math.max(lowGbp, gapped));
-}
-
-interface BracketExit {
-  readonly priceGbp: number | undefined;
-  readonly crossesSpread: boolean;
-}
-
-function bracketExit(
-  held: Position,
-  openGbp: number,
-  lowGbp: number,
-  highGbp: number,
-): BracketExit | undefined {
-  if (stopTouched(held, lowGbp, highGbp)) {
-    return { priceGbp: stopFillGbp(held, openGbp, lowGbp, highGbp), crossesSpread: true };
-  }
-  if (targetTouched(held, lowGbp, highGbp)) {
-    return { priceGbp: held.targetGbp, crossesSpread: false };
-  }
-  return undefined;
 }
 
 function opposite(side: OrderSide): OrderSide {
@@ -198,10 +162,6 @@ function nativeRearmPrices(journal: DecisionJournal, held: Position): RearmPrice
   const target = entry === undefined ? undefined : numberOrUndefined(entry.payload.target);
   if (stop === undefined || target === undefined) return undefined;
   return { stop: stop / held.splitFactor, target: target / held.splitFactor };
-}
-
-function withinLimit(side: OrderSide, limit: number, price: number): number {
-  return side === 'buy' ? Math.min(limit, price) : Math.max(limit, price);
 }
 
 const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'refused_dry_run']);
