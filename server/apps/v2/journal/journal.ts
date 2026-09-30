@@ -5,6 +5,7 @@ import type {
   JournalledOrder,
   JournalledReconcile,
   JournalledRefusal,
+  RecordedFillPart,
   SleeveDecision,
 } from '../../../../contracts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
@@ -179,6 +180,15 @@ export class Journal implements DecisionJournal {
         this.#now(),
       );
     return result.changes === 1;
+  }
+
+  fillPartsOf(baseFillId: string): readonly RecordedFillPart[] {
+    return this.db
+      .prepare(
+        `SELECT qty, price_gbp, fee_gbp, trading_date FROM v2_fills
+         WHERE fill_id = @base OR substr(fill_id, 1, length(@base) + 1) = @base || '#'`,
+      )
+      .all({ base: baseFillId }) as RecordedFillPart[];
   }
 
   recordRefusal(refusal: JournalledRefusal): void {

@@ -119,6 +119,24 @@ class FakeAlpaca implements BrokerAdapter {
     });
   }
 
+  cumulative(
+    clientOrderId: string,
+    leg: NormalizedFill['leg'],
+    filledQty: number,
+    averagePrice: number,
+  ): void {
+    this.pending.push({
+      client_order_id: clientOrderId,
+      broker_fill_id: toBrokerFillId(`alp-${clientOrderId}-${leg}`),
+      leg,
+      price: averagePrice,
+      qty: filledQty,
+      fee: 0,
+      timestamp: clock.now(),
+      qty_is_cumulative: true,
+    });
+  }
+
   getOrder(): Promise<null> {
     return Promise.resolve(null);
   }
@@ -1259,7 +1277,11 @@ describe('runCycle', () => {
       payload: report,
     });
     expect(log).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'v2_fill_unmatched', level: 'warn' }),
+      expect.objectContaining({
+        event: 'v2_fill_unmatched',
+        level: 'warn',
+        message: 'fill alp-unknown-order-entry matches no v2 order',
+      }),
     );
     const db = (
       deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
@@ -2279,6 +2301,150 @@ describe('runCycle: protected exits carry a native Alpaca bracket safely (#1801)
           'fresh entry (#1778)',
       );
     });
+  });
+});
+
+describe('#1873: Alpaca cumulative fills book as increments per broker order', () => {
+  const ENTRY = 'v2-debate-primary-2026-09-25-AAPL';
+
+  async function entered(log = vi.fn()) {
+    const alpaca = new FakeAlpaca();
+    const deps = { ...harness([longAapl], false, alpaca), logger: { log } };
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    return { alpaca, deps, log };
+  }
+
+  function heldQty(deps: CycleDeps): number {
+    return deps.books.position('debate/primary', 'AAPL')?.qty ?? 0;
+  }
+
+  function fillRows(deps: CycleDeps) {
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    return db
+      .prepare(
+        "SELECT fill_id, leg, qty, price_gbp FROM v2_fills WHERE book_id = 'debate/primary' ORDER BY recorded_at, fill_id",
+      )
+      .all();
+  }
+
+  it('kill line: a partial then the complete report books the broker quantity at the true average', async () => {
+    const { alpaca, deps, log } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(fillRows(deps)).toHaveLength(1);
+    expect(heldQty(deps)).toBe(4);
+    alpaca.cumulative(ENTRY, 'entry', 6, 20.2);
+    const complete = await runCycle(deps, '2026-09-29');
+    expect(complete.fills).toBe(1);
+    expect(heldQty(deps)).toBe(6);
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      avgPriceGbp: expect.closeTo(20.2 / FX, 9),
+      stopGbp: expect.closeTo(19.2 / FX, 9),
+      targetGbp: expect.closeTo(21.2 / FX, 9),
+    });
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20.2) / FX, 9);
+    expect(log.mock.calls.some(([entry]) => entry.level === 'warn')).toBe(false);
+    expect(fillRows(deps)).toEqual([
+      { fill_id: `alpaca:alp-${ENTRY}-entry`, leg: 'entry', qty: 4, price_gbp: 20 / FX },
+      {
+        fill_id: `alpaca:alp-${ENTRY}-entry#6`,
+        leg: 'entry',
+        qty: 2,
+        price_gbp: expect.closeTo(20.6 / FX, 9),
+      },
+    ]);
+  });
+
+  it('kill line: a partial then cancel keeps the partial quantity however often it is re-reported', async () => {
+    const { alpaca, deps } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    for (const date of ['2026-09-29', '2026-09-30']) {
+      alpaca.cumulative(ENTRY, 'entry', 4, 20);
+      const report = await runCycle(deps, date);
+      expect(report.fills).toBe(0);
+      expect(heldQty(deps)).toBe(4);
+    }
+    expect(fillRows(deps)).toHaveLength(1);
+  });
+
+  it('kill line: duplicates and a stale report inside one sweep leave the latest cumulative quantity', async () => {
+    const { alpaca, deps, log } = await entered();
+    for (const qty of [4, 4, 6, 4, 6]) alpaca.cumulative(ENTRY, 'entry', qty, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(fillRows(deps)).toHaveLength(2);
+    expect(heldQty(deps)).toBe(6);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        event: 'v2_fill_cumulative_behind',
+        message: `alpaca:alp-${ENTRY}-entry reports cumulative qty 4 below the 6 already booked; ignored`,
+      }),
+    );
+  });
+
+  it('kill line: a report arriving after a later one books the later total once and never goes negative', async () => {
+    const { alpaca, deps, log } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 6, 20.2);
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(heldQty(deps)).toBe(6);
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    const report = await runCycle(deps, '2026-09-29');
+    expect(report.fills).toBe(0);
+    expect(heldQty(deps)).toBe(6);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20.2) / FX, 9);
+    expect(
+      log.mock.calls.filter(([entry]) => entry.event === 'v2_fill_cumulative_behind'),
+    ).toHaveLength(2);
+  });
+
+  it('kill line: each leg order accumulates on its own, so a partial stop after a full entry resizes then closes', async () => {
+    const { alpaca, deps } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 6, 20);
+    await runCycle(deps, '2026-09-28');
+    alpaca.cumulative(ENTRY, 'entry', 6, 20);
+    alpaca.cumulative(ENTRY, 'stop', 2, 19.2);
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(4);
+    alpaca.cumulative(ENTRY, 'stop', 6, 19.1);
+    const report = await runCycle(deps, '2026-09-30');
+    expect(report.refusals.some((refusal) => refusal.includes('(#1778)'))).toBe(false);
+    expect(heldQty(deps)).toBe(0);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - (6 * 20) / FX + (6 * 19.1) / FX,
+      9,
+    );
+  });
+
+  it('a discrete report is booked whole and stays idempotent on its id, never read as a running total', async () => {
+    const { alpaca, deps } = await entered();
+    alpaca.fill(ENTRY, 'entry', 4, 20);
+    alpaca.fill(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(heldQty(deps)).toBe(4);
+    alpaca.fill(ENTRY, 'entry', 6, 20);
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(4);
+  });
+
+  it('warns and books at the running average when the carved increment price is unusable', async () => {
+    const { alpaca, deps, log } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 4, 30);
+    await runCycle(deps, '2026-09-28');
+    alpaca.cumulative(ENTRY, 'entry', 6, 20);
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(6);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        event: 'v2_fill_increment_price_unusable',
+        message: `alpaca:alp-${ENTRY}-entry: increment of 2 booked at the cumulative average 20`,
+      }),
+    );
   });
 });
 

@@ -325,6 +325,7 @@ export interface V2Fill {
   readonly price: number;
   readonly qty: number;
   readonly fee: number;
+  readonly qty_is_cumulative?: boolean | undefined;
 }
 
 export interface Submission {
@@ -476,6 +477,13 @@ export interface JournalledFill {
   readonly fee_gbp: number;
 }
 
+export interface RecordedFillPart {
+  readonly qty: number;
+  readonly price_gbp: number;
+  readonly fee_gbp: number;
+  readonly trading_date: string;
+}
+
 export interface JournalledRefusal {
   readonly trading_date: string;
   readonly scope: string;
@@ -500,6 +508,7 @@ export interface DecisionJournal {
   restingEntries(bookId: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
   recordFill(fill: JournalledFill): boolean;
+  fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordRefusal(refusal: JournalledRefusal): void;
   recordReconcile(run: JournalledReconcile): void;
 }

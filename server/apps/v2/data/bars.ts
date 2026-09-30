@@ -31,7 +31,9 @@ export class ParquetBarsSource implements BarsSource {
     try {
       const series = await store.readVenue(this.venue);
       if (series.size === 0 && this.options.optional !== true) {
-        throw new Error(`bars: no ${this.venue} series under ${this.root}`);
+        throw new Error(
+          `bars: no ${this.venue} series under ${this.root} (npm run bars:snapshot restores the last committed store)`,
+        );
       }
       this.#series = series;
     } finally {
