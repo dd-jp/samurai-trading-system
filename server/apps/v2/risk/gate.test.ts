@@ -101,6 +101,8 @@ function gate(
           cashGbp: 1_000,
           investedGbp: 0,
           custodyAccrualGbp: 0,
+          cfdFinancingAccrualGbp: 0,
+          cfdBorrowAccrualGbp: 0,
           recordedAt: '2026-09-24T21:00:00.000Z',
           state: {
             referenceEquityGbp: 1_000,

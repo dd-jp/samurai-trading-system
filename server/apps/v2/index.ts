@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import type { BrokerMode, CfdCostModel, Sleeve } from '../../../contracts/index.js';
+import type { BrokerMode, CfdCosts, Sleeve } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -53,14 +53,13 @@ import {
   ARM2_SLEEVE_ID,
   BULLISH_SCRIPT,
   buildLlmPanel,
-  CFD_COST_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   cfdEntryRefusal,
   createArm2Sleeve,
   createDebateSleeve,
   DEBATE_SLEEVE_ID,
+  declaredCfdCosts,
   isLseInstrument,
-  isSet,
   type LlmPanel,
   type ModelPin,
   NousPinnedTransport,
@@ -94,7 +93,7 @@ export interface V2RootOptions {
   readonly fxPath?: string | undefined;
   readonly cfdCataloguePath?: string | undefined;
   readonly cfdCatalogue?: CfdCatalogue | undefined;
-  readonly cfdCostModel?: CfdCostModel | undefined;
+  readonly cfdCosts?: CfdCosts | undefined;
   readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly nousBaseUrl?: string | undefined;
   readonly nousApiKey?: string | undefined;
@@ -331,9 +330,14 @@ function cfdCatalogueFor(options: V2RootOptions, logger: Logger): CfdCatalogue |
   }
 }
 
-function cfdCostModelFor(options: V2RootOptions): CfdCostModel | undefined {
-  if (options.cfdCostModel !== undefined) return options.cfdCostModel;
-  return isSet(CFD_COST_MODEL) ? CFD_COST_MODEL.value : undefined;
+function cfdCostsFor(options: V2RootOptions): CfdCosts | undefined {
+  return options.cfdCosts ?? declaredCfdCosts();
+}
+
+function quotedBorrowPerDayFrom(
+  catalogue: CfdCatalogue | undefined,
+): (instrument: string) => number | undefined {
+  return (instrument) => catalogue?.lookup(instrument)?.borrowCostPerDay;
 }
 
 function cfdGateFor(options: V2RootOptions): () => string | undefined {
@@ -363,10 +367,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
   const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
-  const cfdCostModel = cfdCostModelFor(options);
   const cfdGate = cfdGateFor(options);
+  const catalogue = cfdCatalogueFor(options, logger);
   const router = createVenueRouter({
-    catalogue: cfdCatalogueFor(options, logger),
+    catalogue,
     entryRefusal: cfdGate,
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   });
@@ -409,7 +413,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       options.saxoSpreadsPath ?? SAXO_SPREADS_PATH,
     ),
     alpacaClient: options.alpacaClient,
-    cfdCostModel,
+    cfdCosts: cfdCostsFor(options),
+    quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(catalogue),
     cfdEntryRefusal: cfdGate,
     brokerMode: brokerModeFor(options),
   });

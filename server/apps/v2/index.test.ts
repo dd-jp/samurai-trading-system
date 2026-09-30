@@ -447,15 +447,17 @@ describe('composeV2Root', () => {
       });
       expect(exitCodeFor(report)).toBe(0);
       const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
-      expect(needsDavid).toHaveLength(10);
+      expect(needsDavid).toHaveLength(6);
+      expect(needsDavid.some((refusal) => refusal.includes('CFD_RESTING_STOP_VERIFIED'))).toBe(
+        true,
+      );
       for (const parameter of [
         'CFD_COST_MODEL',
         'CFD_SPREAD_MODEL',
         'CFD_FINANCING_MODEL',
         'CFD_BORROW_MODEL',
-        'CFD_RESTING_STOP_VERIFIED',
       ]) {
-        expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(true);
+        expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(false);
       }
       const decision = root.db
         .prepare('SELECT action, size_shares, stop_price FROM v2_decisions WHERE book_id = ?')

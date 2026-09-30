@@ -362,6 +362,50 @@ describe('PaperBooks', () => {
     }
   });
 
+  it('accrues CFD financing and borrow beside custody, deducts them from cash and journals both', () => {
+    const db = seededStore();
+    const books = new PaperBooks(
+      db,
+      clock,
+      new CapitalConfigStore(db, clock),
+      '2026-09-25',
+      DEBATE,
+      true,
+      {
+        financing: { dailyRate: (_venue, side) => (side === 'long' ? 0.001 : 0.0001) },
+        borrow: { dailyRate: (_venue, quoted) => quoted ?? 0 },
+        quotedBorrowPerDay: (instrument) => (instrument === 'TSLA' ? 0.0002 : undefined),
+      },
+    );
+    books.applyFill(
+      'debate/primary',
+      fill({ instrument: 'TSLA', venue: 'saxo_cfd_usd', side: 'sell', qty: 1 }),
+    );
+    books.applyFill(
+      'debate/primary',
+      fill({ instrument: 'VOD', venue: 'saxo_cfd_gbp', qty: 2, clientOrderId: 'o2' }),
+    );
+    const cashBefore = books.cash('debate/primary');
+    const day = books.markDay('debate/primary', '2026-09-25', () => 100, 3);
+    expect(day.cfdFinancingAccrualGbp).toBeCloseTo(200 * 0.001 * 3 + 100 * 0.0001 * 3, 12);
+    expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0002 * 3, 12);
+    const carried = day.cfdFinancingAccrualGbp + day.cfdBorrowAccrualGbp;
+    expect(books.cash('debate/primary')).toBeCloseTo(cashBefore - carried, 9);
+    expect(day.equityGbp).toBeCloseTo(1_000 - carried, 9);
+    expect(books.lastDay('debate/primary')).toMatchObject({
+      cfdFinancingAccrualGbp: day.cfdFinancingAccrualGbp,
+      cfdBorrowAccrualGbp: day.cfdBorrowAccrualGbp,
+    });
+  });
+
+  it('journals zero CFD carry when no carry rates are wired', () => {
+    const db = seededStore();
+    const books = openBooks(db);
+    books.applyFill('debate/primary', fill({ venue: 'saxo_cfd_usd', side: 'sell', qty: 1 }));
+    const day = books.markDay('debate/primary', '2026-09-25', () => 100, 1);
+    expect(day).toMatchObject({ cfdFinancingAccrualGbp: 0, cfdBorrowAccrualGbp: 0 });
+  });
+
   it('steps size down as a losing fill sequence crosses the loss-budget thresholds and halts at the third', () => {
     const db = seededStore();
     const books = openBooks(db);

@@ -14,19 +14,35 @@ import {
   ALL_PINS,
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
+  CFD_BORROW_MODEL,
+  CFD_COST_MODEL,
+  CFD_FINANCING_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  CFD_SPREAD_MODEL,
   cfdEntryRefusal,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
   LSE_LIQUIDITY_SCREEN,
+  type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
   SqliteMonthlySpendCap,
 } from './signal/index.js';
 
+const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
+  CFD_COST_MODEL,
+  CFD_SPREAD_MODEL,
+  CFD_FINANCING_MODEL,
+  CFD_BORROW_MODEL,
+];
+const SET_PARAMETERS: readonly Parameter<unknown>[] = [
+  ARM2_ENTRY_THRESHOLDS,
+  LSE_LIQUIDITY_SCREEN,
+  ...CFD_COST_PARAMETERS,
+];
 const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
-  (parameter) => parameter !== ARM2_ENTRY_THRESHOLDS && parameter !== LSE_LIQUIDITY_SCREEN,
+  (parameter) => !SET_PARAMETERS.includes(parameter),
 );
 // The cash tolerance blocks live entries only (David 2026-09-29, #1872), so a paper or dry-run
 // cycle never journals it
@@ -116,10 +132,15 @@ function staticProbes(): SmokeProbe[] {
       `tighten £${SMOKE_LOSS_CAP_GBP} to £${SMOKE_LOSS_CAP_GBP + 1}`,
     ),
     probe(
-      'CFD shorts fail closed: unset CFD gates refuse, then no catalogue refuses',
-      shortRefusal(cfdEntryRefusal) === 'cfd_cost_model_unset' &&
+      'CFD shorts fail closed: the unverified resting stop refuses, then no catalogue refuses',
+      shortRefusal(cfdEntryRefusal) === 'cfd_resting_stop_unverified' &&
         shortRefusal(() => undefined) === 'no_catalogue',
       `${shortRefusal(cfdEntryRefusal)}, ${shortRefusal(() => undefined)}`,
+    ),
+    probe(
+      'the four CFD cost models are set from the sourced Saxo tariff (#1850)',
+      CFD_COST_PARAMETERS.every((parameter) => isSet(parameter)),
+      CFD_COST_PARAMETERS.map((parameter) => parameter.name).join(', '),
     ),
     probe(
       'every still-open David-owned parameter is unset',

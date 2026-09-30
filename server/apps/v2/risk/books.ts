@@ -19,6 +19,7 @@ import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
 import { bookSpecsFor, sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import type { CapitalConfigStore } from './capital-config.js';
+import { type CfdCarryRates, cfdCarryAccrual } from './cfd-carry.js';
 import { LossBudget } from './loss-budget.js';
 
 const FLAT_EPSILON = 1e-9;
@@ -64,6 +65,8 @@ interface BookDayRow {
   size_multiplier: number;
   entries_blocked: number;
   custody_accrual_gbp: number;
+  cfd_financing_accrual_gbp: number;
+  cfd_borrow_accrual_gbp: number;
   recorded_at: string;
 }
 
@@ -133,6 +136,7 @@ export class PaperBooks implements BookLedger {
     openingDate: string,
     sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[],
     pooled = true,
+    private readonly cfdCarryRates?: CfdCarryRates,
   ) {
     const capitalYear = capital.inForce(openingDate);
     const opened: BookSpec[] = [];
@@ -456,7 +460,8 @@ export class PaperBooks implements BookLedger {
     const row = this.db
       .prepare(
         `SELECT trading_date, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp, size_multiplier,
-           entries_blocked, custody_accrual_gbp, recorded_at
+           entries_blocked, custody_accrual_gbp, cfd_financing_accrual_gbp, cfd_borrow_accrual_gbp,
+           recorded_at
          FROM v2_book_days WHERE book_id = ? ORDER BY trading_date DESC LIMIT 1`,
       )
       .get(bookId) as BookDayRow | undefined;
@@ -468,6 +473,8 @@ export class PaperBooks implements BookLedger {
       cashGbp: row.cash_gbp,
       investedGbp: row.invested_gbp,
       custodyAccrualGbp: row.custody_accrual_gbp,
+      cfdFinancingAccrualGbp: row.cfd_financing_accrual_gbp,
+      cfdBorrowAccrualGbp: row.cfd_borrow_accrual_gbp,
       recordedAt: row.recorded_at,
       state: {
         referenceEquityGbp: this.#book(bookId).budget.referenceEquityGbp,
@@ -506,16 +513,24 @@ export class PaperBooks implements BookLedger {
         before.investedSaxoGbp,
         calendarDaysSinceLastMark,
       );
-      this.#adjustCash(bookId, -custodyAccrualGbp);
-      const equityGbp = before.equityGbp - custodyAccrualGbp;
+      const carry = cfdCarryAccrual(
+        this.positions(bookId),
+        markGbp,
+        calendarDaysSinceLastMark,
+        this.cfdCarryRates,
+      );
+      const accruedGbp = custodyAccrualGbp + carry.financingGbp + carry.borrowGbp;
+      this.#adjustCash(bookId, -accruedGbp);
+      const equityGbp = before.equityGbp - accruedGbp;
       const cashGbp = this.cash(bookId);
       const state = budget.markClose(equityGbp, previous?.equityGbp ?? equityGbp, capital);
       const recordedAt = this.#now();
       this.db
         .prepare(
           `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
-             ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp,
+             cfd_financing_accrual_gbp, cfd_borrow_accrual_gbp, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           bookId,
@@ -527,6 +542,8 @@ export class PaperBooks implements BookLedger {
           state.sizeMultiplier,
           state.entriesBlockedAtNextFill ? 1 : 0,
           custodyAccrualGbp,
+          carry.financingGbp,
+          carry.borrowGbp,
           recordedAt,
         );
       this.db
@@ -540,6 +557,8 @@ export class PaperBooks implements BookLedger {
         investedGbp: before.investedGbp,
         state,
         custodyAccrualGbp,
+        cfdFinancingAccrualGbp: carry.financingGbp,
+        cfdBorrowAccrualGbp: carry.borrowGbp,
         recordedAt,
       };
     });
