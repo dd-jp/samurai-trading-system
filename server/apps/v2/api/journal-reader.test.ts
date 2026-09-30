@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JournalWire, SleeveAction, SleeveDecision } from '../../../../contracts/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { Journal } from '../journal/journal.js';
-import { type JournalQuery, JournalReader, parseJournalQuery, vetoOf } from './journal-reader.js';
+import { CFD_ENTRY_GATES } from '../signal/index.js';
+import {
+  featureOffLabel,
+  type JournalQuery,
+  JournalReader,
+  parseJournalQuery,
+  vetoOf,
+} from './journal-reader.js';
 
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 
@@ -205,7 +212,55 @@ describe('vetoOf', () => {
   });
 });
 
+describe('featureOffLabel', () => {
+  it('labels an unset cycle-level parameter by its feature', () => {
+    expect(featureOffLabel('parameter', 'G18_SOCIAL_SOURCE')).toBe('social source');
+    expect(featureOffLabel('parameter', 'G18_SENTIMENT_DEDUP_RULE')).toBe('sentiment dedup');
+    expect(featureOffLabel('parameter', 'ALPACA_SHORT_EQUITY_FLOOR_USD')).toBe(
+      'Alpaca shorts floor',
+    );
+  });
+
+  it('keeps every unset CFD gate out, since paper needs CFDs', () => {
+    for (const { parameter } of CFD_ENTRY_GATES) {
+      expect(featureOffLabel('parameter', parameter.name)).toBeNull();
+    }
+  });
+
+  it('labels an unset universe parameter', () => {
+    expect(featureOffLabel('universe', 'G18_SMALL_CAP_FLOORS')).toBe('small-cap floors');
+    expect(featureOffLabel('universe', 'LSE_LIQUIDITY_SCREEN')).toBe('LSE liquidity screen');
+  });
+
+  it('falls back to the parameter name for an unlabelled unset parameter', () => {
+    expect(featureOffLabel('parameter', 'NEW_PARAMETER')).toBe('NEW_PARAMETER');
+  });
+
+  it('leaves every other refusal out, even one naming a declared parameter', () => {
+    for (const scope of ['capital', 'allocation', 'control', 'reconcile', 'data', 'entry']) {
+      expect(featureOffLabel(scope, 'G18_SOCIAL_SOURCE')).toBeNull();
+    }
+    expect(featureOffLabel('reconcile', 'RECONCILE_CASH_TOLERANCE_GBP')).toBeNull();
+  });
+});
+
 describe('JournalReader (P9)', () => {
+  it('serves each refusal with its feature-off label, null when it is not one', () => {
+    open();
+    journal.recordRefusal({
+      trading_date: '2026-10-05',
+      scope: 'parameter',
+      parameter: 'G18_SOCIAL_SOURCE',
+      ticket: '#1753',
+      message: 'G18_SOCIAL_SOURCE is not set: needs David (#1753)',
+    });
+    refuse('2026-10-05', 'MANUAL_PAUSE');
+    expect(read().days[0]?.refusals.map((row) => [row.parameter, row.feature_off])).toEqual([
+      ['G18_SOCIAL_SOURCE', 'social source'],
+      ['MANUAL_PAUSE', null],
+    ]);
+  });
+
   it('is an empty page before the first cycle', () => {
     open();
     expect(read()).toMatchObject({ days: [], next_before: null });
@@ -303,6 +358,7 @@ describe('JournalReader (P9)', () => {
             book_id: null,
             instrument: null,
             recorded_at: '2026-10-06T21:40:00.000Z',
+            feature_off: null,
           },
           expect.objectContaining({ refusal_id: 2, parameter: 'SECOND' }),
         ],

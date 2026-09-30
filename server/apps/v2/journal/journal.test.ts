@@ -132,6 +132,68 @@ describe('Journal', () => {
     expect(refusal).toEqual({ parameter: 'G18_SMALL_CAP_FLOORS', ticket: '#1753' });
   });
 
+  it("reads back a broker order's fill parts: the bare id and its '#' top-ups, never a longer id", () => {
+    const db = openSharedStore(':memory:');
+    const journal = new Journal(db, clock);
+    journal.recordOrder({
+      client_order_id: 'o1',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'submitted',
+      payload: {},
+    });
+    const base = {
+      client_order_id: 'o1',
+      book_id: 'debate/primary',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy' as const,
+      fee_gbp: 0,
+    };
+    journal.recordFill({
+      ...base,
+      fill_id: 'alpaca:f1',
+      trading_date: '2026-09-25',
+      qty: 4,
+      price_gbp: 16,
+    });
+    journal.recordFill({
+      ...base,
+      fill_id: 'alpaca:f1#10',
+      trading_date: '2026-09-28',
+      qty: 6,
+      price_gbp: 17,
+      fee_gbp: 0.2,
+    });
+    journal.recordFill({
+      ...base,
+      fill_id: 'alpaca:f10',
+      trading_date: '2026-09-25',
+      qty: 1,
+      price_gbp: 1,
+    });
+    journal.recordFill({
+      ...base,
+      fill_id: 'alpaca:f1x#2',
+      trading_date: '2026-09-25',
+      qty: 1,
+      price_gbp: 1,
+    });
+    expect([...journal.fillPartsOf('alpaca:f1')].sort((a, b) => a.qty - b.qty)).toEqual([
+      { qty: 4, price_gbp: 16, fee_gbp: 0, trading_date: '2026-09-25' },
+      { qty: 6, price_gbp: 17, fee_gbp: 0.2, trading_date: '2026-09-28' },
+    ]);
+    expect(journal.fillPartsOf('alpaca:f%')).toEqual([]);
+    expect(journal.fillPartsOf('alpaca:none')).toEqual([]);
+  });
+
   it('records a refusal scoped to a book and instrument, and leaves both NULL when unset', () => {
     const db = openSharedStore(':memory:');
     const journal = new Journal(db, clock);

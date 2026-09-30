@@ -11,6 +11,14 @@ import {
   V2_CONTRACT_VERSION,
 } from '../../../../contracts/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
+import {
+  ALPACA_SHORT_EQUITY_FLOOR_USD,
+  CFD_ENTRY_GATES,
+  G18_SENTIMENT_DEDUP_RULE,
+  G18_SMALL_CAP_FLOORS,
+  G18_SOCIAL_SOURCE,
+  LSE_LIQUIDITY_SCREEN,
+} from '../signal/index.js';
 
 const VETO_PREFIX = 'vetoed:';
 const DEFAULT_DAYS = 7;
@@ -258,7 +266,31 @@ interface OrderRow {
 }
 
 type FillRow = JournalFillWire & { client_order_id: string };
-type RefusalRow = JournalRefusalWire & { trading_date: string };
+type RefusalRow = Omit<JournalRefusalWire, 'feature_off'> & { trading_date: string };
+
+const FEATURE_LABELS: ReadonlyMap<string, string> = new Map([
+  [G18_SOCIAL_SOURCE.name, 'social source'],
+  [G18_SMALL_CAP_FLOORS.name, 'small-cap floors'],
+  [G18_SENTIMENT_DEDUP_RULE.name, 'sentiment dedup'],
+  [ALPACA_SHORT_EQUITY_FLOOR_USD.name, 'Alpaca shorts floor'],
+  [LSE_LIQUIDITY_SCREEN.name, 'LSE liquidity screen'],
+]);
+
+// David 2026-09-30: paper needs CFDs, so an unset CFD gate is a blocker to keep in view,
+// not a feature switched off
+const CFD_GATE_NAMES: ReadonlySet<string> = new Set(
+  CFD_ENTRY_GATES.map(({ parameter }) => parameter.name),
+);
+
+// 'universe' qualifies only because every universe refusal is built from an
+// UnsetParameterError (`buildUniverse` in server/apps/v2/signal/debate-sleeve.ts); a
+// universe refusal of any other kind would be hidden in the collapsed row
+const FEATURE_OFF_SCOPES: ReadonlySet<string> = new Set(['parameter', 'universe']);
+
+export function featureOffLabel(scope: string, parameter: string): string | null {
+  if (!FEATURE_OFF_SCOPES.has(scope) || CFD_GATE_NAMES.has(parameter)) return null;
+  return FEATURE_LABELS.get(parameter) ?? parameter;
+}
 
 const ORDER_COLUMNS = `o.client_order_id, o.decision_id, o.book_id, o.trading_date, o.instrument,
   o.venue, o.leg, o.side, o.dry_run, o.outcome, o.payload, o.recorded_at`;
@@ -320,7 +352,7 @@ function decisionWire(row: DecisionRow, orders: readonly JournalOrderWire[]): Jo
 }
 
 function refusalWire({ trading_date: _day, ...refusal }: RefusalRow): JournalRefusalWire {
-  return refusal;
+  return { ...refusal, feature_off: featureOffLabel(refusal.scope, refusal.parameter) };
 }
 
 export class JournalReader {

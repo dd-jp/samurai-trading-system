@@ -181,6 +181,7 @@ export class V2OrderExecutor implements OrderExecutor {
             price: fill.price,
             qty: fill.qty,
             fee: fill.fee,
+            qty_is_cumulative: fill.qty_is_cumulative,
           });
         }
       } catch (error) {
