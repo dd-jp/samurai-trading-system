@@ -77,7 +77,7 @@ Mean excess per signal, in bps, relative to market-on-open, with the 95% CI:
 
 At an offset of 0 the target is always beyond the limit.
 
-**Sizing.** Sizing reads the decision price (`server/apps/v2/risk/gate.ts`). A fill above the close widens the risk to the fixed stop, and Alpaca reserves buying power at the limit. Neither applies at 0.
+**Sizing.** A fill above the close widens the risk to the fixed stop, and Alpaca reserves buying power at the limit. Neither applies at 0. At the ruled 50 bps both do, so sizing and the cash gate price the entry at the limit (`server/apps/v2/risk/gate.ts`, #1815).
 
 ## 4. Limits of this evidence
 
