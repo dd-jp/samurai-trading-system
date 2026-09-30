@@ -3807,6 +3807,58 @@ describe('runCycle: a held name whose series ends (doc 70 §2.4, #1911)', () => 
     expect(endedLogs()).toEqual([]);
   });
 
+  it('leaves a bracket leg on the last bar to close the position, with no second exit', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const touchesTarget = bar('2026-09-28', { low: 20.3, high: 21.3, close: 20.4, rawClose: 20.4 });
+    const { endedLogs } = ended(deps, true);
+    const report = await runCycle(
+      {
+        ...deps,
+        closeEndedSeries: true,
+        market: {
+          ...deps.market,
+          lastBarBefore: (instrument, tradingDate) =>
+            instrument === 'AAPL'
+              ? touchesTarget
+              : deps.market.lastBarBefore(instrument, tradingDate),
+        },
+      },
+      '2026-10-04',
+    );
+    expect(report.exits).toBe(2);
+    for (const bookId of BOOKS) {
+      expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(exitOrderId(bookId, '2026-10-04'))?.payload).toMatchObject({
+        detail: 'bracket_leg_on_daily_bar',
+      });
+    }
+    expect(endedLogs()).toEqual([]);
+  });
+
+  it('keeps a CFD position whose close has no cost model open and unlogged until the model exists', async () => {
+    const state = { unset: false };
+    const pricing: FillPricing = {
+      ...SPREAD_ONLY,
+      fee: (venue) => {
+        if (state.unset && venue.startsWith('saxo_cfd')) throw new CfdCostModelUnsetError();
+        return 0;
+      },
+    };
+    const deps = harness([shortAapl], true, undefined, [2026], TEST_SPEC, pricing);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    state.unset = true;
+    const refused = await run('2026-10-04');
+    expect(refused.exits).toBe(0);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')?.qty).toBe(-6);
+    expect(endedLogs()).toEqual([]);
+    state.unset = false;
+    await run('2026-10-05');
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+    expect(endedLogs()).toHaveLength(2);
+  });
+
   it('fills a pending flatten at the last close and keeps its journalled reason', async () => {
     const deps = harness([longAapl], true);
     await openBooks(deps);

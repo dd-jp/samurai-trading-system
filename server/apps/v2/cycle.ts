@@ -492,7 +492,7 @@ class Cycle {
   endedSeriesBar(instrument: string): V2Bar | undefined {
     if (this.deps.closeEndedSeries !== true) return undefined;
     const bar = this.deps.market.lastBarBefore(instrument, this.tradingDate);
-    return bar === undefined || isFresh(bar, this.tradingDate) ? undefined : bar;
+    return isFresh(bar, this.tradingDate) ? undefined : bar;
   }
 
   logEndedSeries(bookId: string, instrument: string, bar: V2Bar): void {
