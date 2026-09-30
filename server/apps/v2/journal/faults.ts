@@ -151,18 +151,28 @@ export interface ControlEvent {
 // Doc 66 U6: a day that spent any time paused or halted does not count toward the fault-free
 // weeks. The count stops over it; it does not restart
 export function pausedDates(events: readonly ControlEvent[], asOf: string): ReadonlySet<string> {
-  const paused = new Set<string>();
-  let pausedFrom: string | undefined;
-  for (const event of events) {
-    const date = event.set_at.slice(0, 10);
-    if (event.action !== 'resume') pausedFrom ??= date;
-    else if (pausedFrom !== undefined) {
-      for (const day of datesFrom(pausedFrom, date)) paused.add(day);
-      pausedFrom = undefined;
-    }
-  }
-  if (pausedFrom !== undefined) for (const day of datesFrom(pausedFrom, asOf)) paused.add(day);
-  return paused;
+  const { intervals, from } = events.reduce(scanControl, NO_PAUSE);
+  const closed = from === undefined ? intervals : [...intervals, { from, through: asOf }];
+  return new Set(closed.flatMap((interval) => datesFrom(interval.from, interval.through)));
+}
+
+interface PauseInterval {
+  readonly from: string;
+  readonly through: string;
+}
+
+interface PauseScan {
+  readonly intervals: readonly PauseInterval[];
+  readonly from: string | undefined;
+}
+
+const NO_PAUSE: PauseScan = { intervals: [], from: undefined };
+
+function scanControl(scan: PauseScan, event: ControlEvent): PauseScan {
+  const date = event.set_at.slice(0, 10);
+  if (event.action !== 'resume') return { intervals: scan.intervals, from: scan.from ?? date };
+  if (scan.from === undefined) return scan;
+  return { intervals: [...scan.intervals, { from: scan.from, through: date }], from: undefined };
 }
 
 const DAYS_PER_WEEK = 7;
