@@ -58,7 +58,7 @@ Code: `server/apps/v2/signals/processor.ts` (the processor), `server/apps/v2/sig
 ### Known limits
 
 - The daily cap binds at the next mark, not mid-session. The processor does not sweep fills intraday, so several same-day signals can together lose more than the £70 daily cap before the cycle sees it. David ruled on 2026-09-30 (#1941) to record this and let paper decide. It is fixed only if same-day signal clusters show up.
-- A buy-stop that gaps through its limit does not fill: the `stop_limit` parent triggers and then rests at the limit. For a single-price entry, the limit is the entry itself. The daily cycle cancels it as a stale entry.
+- A buy-stop that gaps through its limit need not fill: the `stop_limit` parent triggers and then rests at the limit, filling only if price trades back down to it. For a single-price entry the trigger and the limit are both the entry, so a gap-up open misses unless price returns. The daily cycle cancels an unfilled entry as stale.
 - The probe sent `time_in_force: day`; the executor sends `gtc`, which was not probed. If Alpaca refuses a gtc stop-limit bracket, the entry is journalled `rejected`. The date-free order id then makes a later pass read it as `already_submitted`, so that signal is never retried.
 - A failed signal is never retried. A zone that straddles the close enters at its high. The universe is the current S&P 500 constituents only, and the ≤10% veto-rate cap is not enforced in code. These are recorded, not ruled.
 - The shadow's simulated entry fills against the whole day's bar, including the part of the session before the signal arrived.
