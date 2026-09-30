@@ -167,9 +167,20 @@ describe('borrowCostPerYear', () => {
     borrowCostPerDay,
   });
 
-  it('annualises the per-day fraction over 365 days', () => {
+  it('annualises a GBP per-day fraction over 365 days', () => {
     expect(borrowCostPerYear(instrument(0.0000137))).toBeCloseTo(0.005, 4);
     expect(borrowCostPerYear(instrument(0.02 / 365))).toBeCloseTo(0.02, 12);
+  });
+
+  it('annualises a USD per-day fraction over 360 days', () => {
+    const usd = (borrowCostPerDay: number): CfdInstrument => ({
+      ...instrument(borrowCostPerDay),
+      currency: 'USD',
+    });
+    expect(borrowCostPerYear(usd(0.0000138889))).toBeCloseTo(0.005, 7);
+    expect(borrowCostPerYear(usd(0.02 / 360))).toBeCloseTo(0.02, 12);
+    expect(borrowCostPerYear(usd(1))).toBe(360);
+    expect(borrowCostPerYear(instrument(1))).toBe(365);
   });
 
   it('is undefined when the borrow cost is unknown', () => {
