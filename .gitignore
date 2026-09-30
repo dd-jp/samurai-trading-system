@@ -247,6 +247,7 @@ coverage/
 # `git add .` away from committing real run state (#358).
 *.sqlite-shm
 *.sqlite-wal
+.*.sqlite-litestream/
 
 # Saxo OAuth login tokens (#1522) — access/refresh tokens, owner-only, never committed.
 data/saxo-tokens/
