@@ -321,6 +321,15 @@ Open after these rulings: whether #1854 (stale-price guard, parked "until an ext
 
 Still open and recorded, not ruled: the universe is only the current S&P 500 constituents; the shadow fills over the whole day's bar; the ≤10% veto-rate cap is not enforced in code; a failed signal is never retried; a zone that straddles the close enters at its high.
 
+## Rulings of 2026-09-30 — venue holidays and late wakes (#1933)
+
+David ruled in chat, recorded on [#1933](https://github.com/dd-jp/samurai-trading-system/issues/1933), and approved building it ahead of the ticket's "when logs show it" gating, with Thanksgiving (26 November 2026) as the first case.
+
+1. **Holidays are per venue.** On a day one venue is closed, its names sit out: no entries (`venue_closed`), and the day does not count toward their time stop. The other venue trades normally. The whole cycle skips only when both are closed; that skip is journalled (`venues_closed`), and the missed-run check (#1878) passes over it by the same day rule.
+2. **Late wake is per venue.** A run that starts late places no new LSE entries from 08:00 London (the LSE open) and no new US entries from 14:30 London (the US open), refused as `late_wake_entry_cutoff`. Exits and marks always run.
+
+Built (not ruled): the day rule reads the in-tree hand calendars, and a weekday past a calendar's coverage refuses that venue's entries (`venue_calendar_uncovered`) rather than counting the day closed, so exits and marks keep running. Saxo CFDs follow their underlying's exchange (`saxo_cfd_usd` US, `saxo_cfd_gbp` LSE). The intraday signals pass is not gated: it trades inside the US session by design. Open for David: 14:30 London is taken literally, so in the weeks the US and UK clock changes differ (26–30 October 2026, 15–26 March 2027) the US opens at 13:30 London and a run waking between 13:30 and 14:30 still places US entries.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
