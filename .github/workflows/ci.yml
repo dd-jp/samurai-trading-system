@@ -78,6 +78,10 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run build:web
 
+      - name: Restore the bar store snapshot
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run bars:snapshot
+
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm test
