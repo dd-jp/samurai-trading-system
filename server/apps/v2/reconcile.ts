@@ -66,10 +66,13 @@ function addToGroup(
   groups.set(key, group);
 }
 
+function allBooks(deps: ReconcileDeps): BookSpec[] {
+  return deps.registry.ids().flatMap((sleeveId) => deps.books.forSleeve(sleeveId));
+}
+
 function venueGroups(deps: ReconcileDeps): VenueGroup[] {
   const groups = new Map<string, { venue: Venue; source: ReconcileSource; books: BookSpec[] }>();
-  const books = deps.registry.ids().flatMap((sleeveId) => deps.books.forSleeve(sleeveId));
-  for (const book of books) {
+  for (const book of allBooks(deps)) {
     for (const venue of VENUES) addToGroup(groups, venue, sourceOf(deps, book, venue), book);
   }
   return [...groups.values()];
@@ -249,4 +252,30 @@ export async function reconcileBooks(
     for (const book of group.books) blockedBookIds.add(book.id);
   }
   return { blockedBookIds, refusals };
+}
+
+// Reconcile gates entries only, so a ledger or journal throw blocks entries and must never skip
+// the exits and resting stops after it (postmortem §3, #1927). Logged, not journalled: the
+// journal may be the store that threw
+export async function reconcileOrBlockEntries(
+  deps: ReconcileDeps,
+  tradingDate: string,
+): Promise<ReconcileOutcome> {
+  try {
+    return await reconcileBooks(deps, tradingDate);
+  } catch (error) {
+    const summary = `reconcile threw: ${describeThrownSafely(error)}`;
+    deps.logger?.log({
+      trace_id: `v2-${tradingDate}`,
+      stage: 'v2',
+      level: 'error',
+      event: 'v2_reconcile_threw',
+      message: summary,
+    });
+    const bookIds = allBooks(deps).map((book) => book.id);
+    return {
+      blockedBookIds: new Set(bookIds),
+      refusals: bookIds.map((bookId) => `${bookId}: entries blocked, ${summary}`),
+    };
+  }
 }
