@@ -47,8 +47,8 @@ describe('JournalPanel (P9)', () => {
         .map((item) => item.textContent),
     ).toEqual([
       'parameter, G18_SOCIAL_SOURCE (#1753): G18_SOCIAL_SOURCE is not set',
-      'parameter, CFD_COST_MODEL (#1753): CFD_COST_MODEL is not set',
-      'parameter, CFD_SPREAD_MODEL (#1753): CFD_SPREAD_MODEL is not set',
+      'parameter, CFD_COST_MODEL (#1850): CFD_COST_MODEL is not set',
+      'parameter, CFD_SPREAD_MODEL (#1850): CFD_SPREAD_MODEL is not set',
       'universe, G18_SMALL_CAP_FLOORS (#1753): G18_SMALL_CAP_FLOORS is not set',
     ]);
     expect(within(day).getByRole('list', { name: 'Refusals' }).textContent).not.toContain(

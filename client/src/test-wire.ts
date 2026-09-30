@@ -255,16 +255,16 @@ export const JOURNAL: JournalWire = {
         },
         ...(
           [
-            [8, 'parameter', 'G18_SOCIAL_SOURCE', 'social source'],
-            [9, 'parameter', 'CFD_COST_MODEL', 'CFD'],
-            [10, 'parameter', 'CFD_SPREAD_MODEL', 'CFD'],
-            [11, 'universe', 'G18_SMALL_CAP_FLOORS', 'small-cap floors'],
+            [8, 'parameter', 'G18_SOCIAL_SOURCE', '#1753', 'social source'],
+            [9, 'parameter', 'CFD_COST_MODEL', '#1850', 'CFD'],
+            [10, 'parameter', 'CFD_SPREAD_MODEL', '#1850', 'CFD'],
+            [11, 'universe', 'G18_SMALL_CAP_FLOORS', '#1753', 'small-cap floors'],
           ] as const
-        ).map(([refusal_id, scope, parameter, feature_off]) => ({
+        ).map(([refusal_id, scope, parameter, ticket, feature_off]) => ({
           refusal_id,
           scope,
           parameter,
-          ticket: '#1753',
+          ticket,
           message: `${parameter} is not set`,
           book_id: null,
           instrument: null,
