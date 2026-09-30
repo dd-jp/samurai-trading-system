@@ -7,6 +7,7 @@ export {
   credentialsFromEnv,
   endOfDayUtc,
   parseBarsPage,
+  sipEnd,
 } from './alpaca-bars-api.js';
 export {
   alpacaSymbolCandidates,

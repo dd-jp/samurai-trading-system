@@ -7,6 +7,7 @@ import {
   credentialsFromEnv,
   endOfDayUtc,
   parseBarsPage,
+  sipEnd,
 } from './index.js';
 
 describe('alpaca bars api', () => {
@@ -35,6 +36,44 @@ describe('alpaca bars api', () => {
     expect(url.searchParams.get('end')).toBe('2026-09-23T23:59:59Z');
     expect(url.searchParams.get('page_token')).toBe('tok');
     expect(url.searchParams.get('adjustment')).toBe('all');
+  });
+
+  it('pulls the SIP end back to 16 minutes before now when end of day has not passed', () => {
+    const now = Date.parse('2026-09-30T00:42:30.500Z');
+    expect(sipEnd('2026-09-30', now)).toBe('2026-09-30T00:26:30Z');
+    expect(sipEnd('2026-09-29', now)).toBe('2026-09-29T23:59:59Z');
+    expect(sipEnd('2026-09-29', Date.parse('2026-09-30T00:15:58Z'))).toBe('2026-09-29T23:59:58Z');
+    expect(sipEnd('2026-09-29', Date.parse('2026-09-30T00:15:59Z'))).toBe('2026-09-29T23:59:59Z');
+    const url = new URL(
+      barsUrl(
+        { symbol: 'SPY', start: '2016-01-04', end: '2026-09-30', adjustment: 'all' },
+        undefined,
+        now,
+      ),
+    );
+    expect(url.searchParams.get('end')).toBe('2026-09-30T00:26:30Z');
+    expect(url.searchParams.has('page_token')).toBe(false);
+  });
+
+  it('requests bars with the end its clock allows', async () => {
+    const calls: string[] = [];
+    const api = new AlpacaBarsApi(
+      { apiKey: 'k', apiSecret: 's' },
+      async (url) => {
+        calls.push(url);
+        return { status: 200, body: { bars: {} } };
+      },
+      async () => {},
+      0,
+      () => Date.parse('2026-09-30T20:00:00Z'),
+    );
+    await api.dailyBars({
+      symbol: 'SPY',
+      start: '2016-01-04',
+      end: '2026-09-30',
+      adjustment: 'all',
+    });
+    expect(new URL(calls[0] ?? '').searchParams.get('end')).toBe('2026-09-30T19:44:00Z');
   });
 
   it('parses a page and tolerates a symbol with no bars', () => {
