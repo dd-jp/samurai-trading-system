@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BrokerAdapter } from '../../../pipeline/execution/index.js';
+import type { BrokerAdapter } from '../../../shared/index.js';
 import { DryRunBrokerAdapter, DryRunRefusedError } from './dry-run-broker.js';
 
 describe('DryRunBrokerAdapter', () => {

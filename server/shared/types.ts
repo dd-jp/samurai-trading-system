@@ -1,4 +1,13 @@
 export type {
+  BrokerAck,
+  BrokerAdapter,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+  NormalizedPosition,
+  ProtectedExitRequest,
+} from './types/broker.js';
+export type {
   ClosedTradeStore,
   DebateLogStore,
   SetupStore,
