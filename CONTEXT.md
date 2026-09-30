@@ -96,7 +96,7 @@ The 40% reduction applied to a backtest Sharpe before it is compared to the benc
 The backtest's predictive interval for a live or paper window. Paper is **in band** when its return sits inside the 90% band and its realised costs are within ±25% of modelled. Live is demoted when it leaves the 95% band for 4 consecutive weeks.
 
 **Fault-free week**
-A week with zero plumbing faults: no missed stop, no reconcile mismatch, no stuck order. Counted from the plumbing-fault ledger, not from memory.
+A week with zero plumbing faults of any of the eight kinds: missed stop, reconcile mismatch, stuck order, refused cycle, stale bar, failed broker call, missed run, token failure (David, 2026-09-30, #1878). Counted from the plumbing-fault ledger, not from memory.
 
 **Benchmark**
 What a sleeve must beat, risk-matched: arm 2 for the debate sleeve. Return-only comparisons are never used.
@@ -133,7 +133,7 @@ The external dead-man's switch and the Saxo token-refresh/wake job: silence from
 Every run compares broker positions and cash with the store; any mismatch halts entries and alerts.
 
 **Plumbing-fault ledger**
-The log of every missed stop, reconcile mismatch or stuck order. The gate's fault-free weeks are counted from it.
+The append-only log of every plumbing fault, one row per fault of the eight kinds. The gate's fault-free weeks are counted from it.
 
 **Tax log**
 Per-disposal record in GBP at the day's rate with the FX rate used, share-matched (same-day and 30-day rules), for a Saxo GIA and an Alpaca account: disposals are CGT events. W-8BEN on the US side.
