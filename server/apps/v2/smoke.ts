@@ -8,6 +8,7 @@ import {
   assertArm2RunsBesideDebate,
   bookSpecsFor,
   CapitalConfigStore,
+  ENTRY_LIMIT_OFFSET,
   positionSizeShares,
 } from './risk/index.js';
 import {
@@ -217,6 +218,19 @@ function unaffordableEntries(store: StoreHandle): number {
   return row.n;
 }
 
+function offsetLimits(store: StoreHandle): { offset: number; total: number } {
+  const bps = ENTRY_LIMIT_OFFSET.capBps / 10_000;
+  return store
+    .prepare(
+      `SELECT
+         COALESCE(SUM(ABS(json_extract(payload, '$.limit') / json_extract(payload, '$.price')
+           - (CASE side WHEN 'buy' THEN 1 + ? ELSE 1 - ? END)) < 1e-9), 0) AS offset,
+         COUNT(*) AS total
+       FROM v2_orders WHERE leg = 'entry' AND trading_date = ? AND outcome != 'rejected'`,
+    )
+    .get(bps, bps, SMOKE_TRADING_DATE) as { offset: number; total: number };
+}
+
 function settledEntries(store: StoreHandle): { filled: number; cancelled: number } {
   return store
     .prepare(
@@ -243,6 +257,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
   try {
     const report = await root.run();
     const unaffordable = unaffordableEntries(store);
+    const limits = offsetLimits(store);
     const llmCalls = root.scriptedTransports.reduce(
       (n, transport) => n + transport.calls.length,
       0,
@@ -288,6 +303,11 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
           report.dry_run_refusals > 0 &&
           report.rejected_orders === unaffordable,
         `entries=${report.entries} refused=${report.dry_run_refusals} simulated=${report.simulated_orders} unaffordable=${unaffordable}`,
+      ),
+      probe(
+        `every entry rests ${ENTRY_LIMIT_OFFSET.capBps} bps through its decision close (#1815)`,
+        limits.total > 0 && limits.offset === limits.total,
+        `${limits.offset} of ${limits.total} entries`,
       ),
       probe(
         'dry run fills nothing on the day it enters',

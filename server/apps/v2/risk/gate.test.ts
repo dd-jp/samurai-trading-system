@@ -131,6 +131,9 @@ const cfdShort: SleeveDecision = {
   stop_price: 20.8,
 };
 
+const signalLong: SleeveDecision = { ...decision, entry_limit: 20 };
+const signalShort: SleeveDecision = { ...cfdShort, entry_limit: 20 };
+
 function request(overrides: Partial<EntryRequest> = {}): EntryRequest {
   return {
     book: primary,
@@ -157,12 +160,50 @@ describe('V2RiskGate', () => {
       instrument: 'AAPL',
       side: 'buy',
       size: 6,
-      entry: 20,
+      entry: expect.closeTo(20.1, 9),
       stop: 19.2,
       target: expect.closeTo(21.2, 9),
     });
     expect(approval.order !== undefined && isRiskApproved(approval.order)).toBe(true);
     expect(Object.isFrozen(approval.order)).toBe(true);
+  });
+
+  it('sends a decision-close entry as a limit 50 bps through the close, stop and target as decided (#1815)', () => {
+    expect(gate().approveEntry(request()).order).toMatchObject({
+      entry: expect.closeTo(20.1, 9),
+      stop: 19.2,
+      target: expect.closeTo(21.2, 9),
+    });
+    expect(gate().approveEntry(request({ decision: cfdShort })).order).toMatchObject({
+      entry: expect.closeTo(19.9, 9),
+      stop: 20.8,
+      target: expect.closeTo(18.8, 9),
+    });
+    expect(gate().approveEntry(request({ decision: signalLong })).order).toMatchObject({
+      entry: 20,
+    });
+  });
+
+  it('refuses an offset that carries the limit to or past the target', () => {
+    for (const target_price of [20.05, 20.1]) {
+      expect(
+        gate().approveEntry(request({ decision: { ...decision, target_price } })),
+      ).toMatchObject({ order: undefined, refusal: 'offset_past_target' });
+    }
+    expect(
+      gate().approveEntry(request({ decision: { ...cfdShort, target_price: 19.95 } })),
+    ).toMatchObject({ order: undefined, refusal: 'offset_past_target' });
+    expect(
+      gate().approveEntry(request({ decision: { ...signalLong, target_price: 20.05 } })).order,
+    ).toBeDefined();
+  });
+
+  it('sizes the risk from the limit to the stop, not from the close', () => {
+    const wide = { ...decision, atr: 0.6, stop_price: 18.8 };
+    const sized = (entry: SleeveDecision) =>
+      gate().approveEntry(request({ equityGbp: 10_000, decision: entry })).size;
+    expect(sized(wide)).toBe(48);
+    expect(sized({ ...wide, entry_limit: 20 })).toBe(52);
   });
 
   it('mints shorts as sells with the target below the entry', () => {
@@ -264,7 +305,7 @@ describe('V2RiskGate', () => {
 
   it('converts only US prices by the year-start rate', () => {
     const saxo = { ...decision, venue: 'saxo' as const };
-    expect(gate().approveEntry(request({ decision: saxo })).size).toBe(5);
+    expect(gate().approveEntry(request({ decision: saxo })).size).toBe(4);
     expect(gate().approveEntry(request()).size).toBe(6);
   });
 
@@ -329,9 +370,9 @@ describe('V2RiskGate', () => {
 
   it('brackets at the decision target when one is given, else the ATR multiple', () => {
     const atrTarget = gate().approveEntry(request()).order;
-    expect(atrTarget).toMatchObject({ entry: 20, stop: 19.2, target: 21.2 });
+    expect(atrTarget).toMatchObject({ stop: 19.2, target: 21.2 });
     const given = gate().approveEntry(request({ decision: { ...decision, target_price: 23.5 } }));
-    expect(given.order).toMatchObject({ entry: 20, stop: 19.2, target: 23.5 });
+    expect(given.order).toMatchObject({ stop: 19.2, target: 23.5 });
     const shortTarget = gate().approveEntry(
       request({ decision: { ...cfdShort, target_price: 17.5 } }),
     );
@@ -358,7 +399,7 @@ describe('V2RiskGate', () => {
     expect(gate().approveEntry(request()).order).toMatchObject({ entryTrigger: undefined });
     for (const entry_trigger of [19.5, 20]) {
       expect(
-        gate().approveEntry(request({ decision: { ...decision, entry_trigger } })).order,
+        gate().approveEntry(request({ decision: { ...signalLong, entry_trigger } })).order,
       ).toMatchObject({
         kind: 'bracket_entry',
         entry: 20,
@@ -367,15 +408,15 @@ describe('V2RiskGate', () => {
       });
     }
     expect(
-      gate().approveEntry(request({ decision: { ...cfdShort, entry_trigger: 20.5 } })).order,
+      gate().approveEntry(request({ decision: { ...signalShort, entry_trigger: 20.5 } })).order,
     ).toMatchObject({ side: 'sell', entry: 20, entryTrigger: 20.5 });
     expect(
-      gate().approveEntry(request({ decision: { ...cfdShort, entry_trigger: 20 } })).order,
+      gate().approveEntry(request({ decision: { ...signalShort, entry_trigger: 20 } })).order,
     ).toMatchObject({ side: 'sell', entryTrigger: 20 });
   });
 
   it('refuses an entry trigger beyond the limit or at or past the stop', () => {
-    const refusal = (overrides: Partial<SleeveDecision>, base = decision) =>
+    const refusal = (overrides: Partial<SleeveDecision>, base = signalLong) =>
       gate().approveEntry(request({ decision: { ...base, ...overrides } }));
     expect(refusal({ entry_trigger: 20.01 })).toMatchObject({
       order: undefined,
@@ -387,11 +428,11 @@ describe('V2RiskGate', () => {
         refusal: 'trigger_at_or_past_stop',
       });
     }
-    expect(refusal({ entry_trigger: 19.99 }, cfdShort)).toMatchObject({
+    expect(refusal({ entry_trigger: 19.99 }, signalShort)).toMatchObject({
       refusal: 'trigger_beyond_limit',
     });
     for (const entry_trigger of [20.8, 20.9]) {
-      expect(refusal({ entry_trigger }, cfdShort)).toMatchObject({
+      expect(refusal({ entry_trigger }, signalShort)).toMatchObject({
         refusal: 'trigger_at_or_past_stop',
       });
     }
@@ -477,7 +518,8 @@ describe('V2RiskGate', () => {
 
   it('caps size at the declared share of average daily notional and refuses without covered volume', () => {
     const thin = gate({ bars: liquidBars(20, 300) });
-    expect(thin.approveEntry(request()).size).toBe(3);
+    expect(thin.approveEntry(request()).size).toBe(2);
+    expect(thin.approveEntry(request({ decision: signalLong })).size).toBe(3);
     expect(gate({ bars: liquidBars(20, 0) }).approveEntry(request())).toMatchObject({
       size: 0,
       refusal: 'zero_size',

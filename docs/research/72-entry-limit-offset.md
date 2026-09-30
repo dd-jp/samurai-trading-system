@@ -2,6 +2,8 @@
 
 **Status 2026-09-27.** David ruled the paper entry a marketable limit with a capped offset (doc 66, #1815). He then set the offset and its reference price to "base it on actual data and evidence backed", with a paper test as well. This doc is that evidence.
 
+**Overruled 2026-09-29.** David set the offset at 50 bps through the decision close (buy at close × 1.005, short at × 0.995), as a judgement rather than a measurement (#1815). The code is `ENTRY_LIMIT_OFFSET` in `server/apps/v2/risk/entry-limit.ts`. Sizing and the cash gate now price the entry at the limit, not at the decision price (§3 Sizing below). The evidence and the paper test are unchanged. The 0 bps result below is the measured optimum, not the running setting.
+
 **Result:**
 - **Reference price:** the decision close.
 - **Offset:** 0 bps. The entry stays a limit at the prior close.

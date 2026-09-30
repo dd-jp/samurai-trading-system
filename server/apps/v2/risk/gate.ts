@@ -19,6 +19,7 @@ import { isCfdVenue, quotePerGbp } from '../data/index.js';
 import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
+import { entryLimitFor, offsetRefusal } from './entry-limit.js';
 import { entryRoomRefusal, grossRoomGbp } from './gross-cap.js';
 import { sizeMultiplierFor } from './loss-budget.js';
 import { CFD_SHORT_GAP_BUDGET_FRACTION, positionSizeShares } from './position-size.js';
@@ -53,6 +54,14 @@ function triggerRefusal(
   if (!withinLimit) return 'trigger_beyond_limit';
   const clearOfStop = side === 'buy' ? trigger > stop : trigger < stop;
   return clearOfStop ? undefined : 'trigger_at_or_past_stop';
+}
+
+function sideOf(decision: SleeveDecision): 'buy' | 'sell' {
+  return decision.action === 'enter_short' ? 'sell' : 'buy';
+}
+
+function entryToStop(limit: number, stop: number | undefined): number {
+  return stop === undefined ? 0 : Math.abs(limit - stop);
 }
 
 function closingLeg(
@@ -135,11 +144,13 @@ export class V2RiskGate implements RiskGate {
     if (decision.stop_price === undefined || decision.atr === undefined) {
       return { size, order: undefined, refusal: 'no_stop_price' };
     }
-    const side = decision.action === 'enter_short' ? 'sell' : 'buy';
+    const side = sideOf(decision);
+    const limit = entryLimitFor(side, decision);
     const target = decision.target_price ?? this.#atrTarget(request, side, decision.atr);
     const refusal =
       bracketRefusal(side, decision.price, decision.stop_price, target) ??
-      triggerRefusal(side, decision.price, decision.stop_price, decision.entry_trigger);
+      offsetRefusal(side, limit, decision.stop_price, target) ??
+      triggerRefusal(side, limit, decision.stop_price, decision.entry_trigger);
     if (refusal !== undefined) return { size, order: undefined, refusal };
     return {
       size,
@@ -153,7 +164,7 @@ export class V2RiskGate implements RiskGate {
         instrument: decision.instrument,
         side,
         size,
-        entry: decision.price,
+        entry: limit,
         entryTrigger: decision.entry_trigger,
         stop: decision.stop_price,
         target,
@@ -209,28 +220,35 @@ export class V2RiskGate implements RiskGate {
     if (capital === undefined) return { size: 0 };
     const spec = this.deps.spec(book.sleeve);
     if (sleeveAllocationGbp(spec, capital) <= 0) return { size: 0, refusal: 'no_allocation' };
-    const volumeCap = this.#volumeCap(decision, spec, tradingDate);
+    const limit = entryLimitFor(sideOf(decision), decision);
+    const volumeCap = this.#volumeCap(decision.instrument, limit, spec, tradingDate);
     if (volumeCap === undefined) return { size: 0, refusal: 'no_adv' };
     const fx = quotePerGbp(this.deps.market, decision.venue, tradingDate);
     const size = positionSizeShares({
       equityGbp: request.equityGbp,
       riskFraction: spec.sizing.riskFraction,
-      priceGbp: decision.price / fx,
+      priceGbp: limit / fx,
       atrGbp: (decision.atr ?? 0) / fx,
       stopAtrMultiple: spec.sizing.stopAtrMultiple,
       sizeMultiplier: this.#multiplier(book.id, sleeveCapitalYear(spec, capital)),
       macroDay: spec.macroGate && book.variant !== 'no-macro-gate' && request.macroDay,
       volumeCapShares: volumeCap,
       gapBudgetGbp: gapBudgetGbp(decision, sleeveCapitalYear(spec, capital)),
+      entryToStopGbp: entryToStop(limit, decision.stop_price) / fx,
     });
     return { size };
   }
 
-  #volumeCap(decision: SleeveDecision, spec: SleeveSpec, tradingDate: string): number | undefined {
+  #volumeCap(
+    instrument: string,
+    limit: number,
+    spec: SleeveSpec,
+    tradingDate: string,
+  ): number | undefined {
     const { advShare, advWindowBars } = spec.sizing;
-    const bars = this.deps.market.barsBefore(decision.instrument, tradingDate, advWindowBars);
+    const bars = this.deps.market.barsBefore(instrument, tradingDate, advWindowBars);
     const notional = averageDailyNotional(bars, advWindowBars, tradingDate);
-    return notional === undefined ? undefined : volumeCapShares(notional, advShare, decision.price);
+    return notional === undefined ? undefined : volumeCapShares(notional, advShare, limit);
   }
 
   #multiplier(bookId: string, capital: CapitalYear): number {
