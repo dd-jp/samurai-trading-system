@@ -212,6 +212,9 @@ describe('the Evidence and Records routes the client reads, served over the seed
     if (count.status !== 'fed') throw new Error(`trade count ${count.status}`);
     expect(keysOf(count)).toEqual(fieldsOf('tradeCount', true));
     expect(keysOf(first(count.books))).toEqual(fieldsOf('closedTradesBook'));
+    expect(keysOf(first(first(count.books).by_entry_offset))).toEqual(
+      fieldsOf('entryOffsetTrades'),
+    );
     for (const owned of [
       served.vs_arm2,
       served.vs_benchmark,

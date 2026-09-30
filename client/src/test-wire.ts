@@ -182,7 +182,17 @@ export function evidence(overrides: Partial<EvidenceWire> = {}): EvidenceWire {
     trade_count: {
       status: 'fed',
       target: 100,
-      books: [{ book_id: 'debate/primary', variant: 'primary', closed_trades: 12 }],
+      books: [
+        {
+          book_id: 'debate/primary',
+          variant: 'primary',
+          closed_trades: 12,
+          by_entry_offset: [
+            { entry_offset_bps: 0, closed_trades: 3 },
+            { entry_offset_bps: 50, closed_trades: 12 },
+          ],
+        },
+      ],
     },
     arm2_test: ARM2_OWNER,
     band: STEP_1B_OWNER,

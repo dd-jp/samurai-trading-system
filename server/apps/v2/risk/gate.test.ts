@@ -184,6 +184,29 @@ describe('V2RiskGate', () => {
     });
   });
 
+  it('offsets a Saxo LSE entry by the same 50 bps as an Alpaca one (#1815, 2026-09-30)', () => {
+    const saxo = { ...decision, venue: 'saxo' as const };
+    expect(gate().approveEntry(request({ decision: saxo })).order).toMatchObject({
+      venue: 'saxo',
+      entry: expect.closeTo(20.1, 9),
+    });
+    expect(gate().approveEntry(request({ decision: cfdShort })).order).toMatchObject({
+      venue: 'saxo_cfd_usd',
+      side: 'sell',
+      entry: expect.closeTo(19.9, 9),
+    });
+  });
+
+  it("tags an approved entry with the offset it used, and a sleeve's own limit with none", () => {
+    expect(gate().approveEntry(request())).toMatchObject({ entryOffsetBps: 50 });
+    expect(gate().approveEntry(request({ decision: cfdShort }))).toMatchObject({
+      entryOffsetBps: 50,
+    });
+    const own = gate().approveEntry(request({ decision: signalLong }));
+    expect(own.order).toBeDefined();
+    expect(own).toMatchObject({ entryOffsetBps: undefined });
+  });
+
   it('refuses an offset that carries the limit to or past the target', () => {
     for (const target_price of [20.05, 20.1]) {
       expect(

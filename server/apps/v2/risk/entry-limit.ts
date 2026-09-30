@@ -3,9 +3,18 @@ import type { OrderSide, SleeveDecision } from '../../../../contracts/index.js';
 // David ruled 2026-09-29 on #1815 (superseding doc 72's 0 bps): a buy rests at the decision
 // close x 1.005, a short at x 0.995. 50 bps is a judgement with no measurement behind it;
 // changing the reference or the cap is a new counted trial (Q16)
-export const ENTRY_LIMIT_OFFSET = { reference: 'decision_close', capBps: 50 } as const;
+export interface EntryLimitOffset {
+  readonly reference: 'decision_close';
+  readonly capBps: number;
+}
+
+export const ENTRY_LIMIT_OFFSET: EntryLimitOffset = { reference: 'decision_close', capBps: 50 };
 
 const BPS = 10_000;
+
+export function entryOffsetBps(decision: SleeveDecision): number | undefined {
+  return decision.entry_limit === undefined ? ENTRY_LIMIT_OFFSET.capBps : undefined;
+}
 
 export function marketableLimit(side: OrderSide, decisionClose: number): number {
   const offset = (decisionClose * ENTRY_LIMIT_OFFSET.capBps) / BPS;

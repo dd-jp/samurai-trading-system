@@ -3,6 +3,7 @@ import type { SleeveDecision } from '../../../../contracts/index.js';
 import {
   ENTRY_LIMIT_OFFSET,
   entryLimitFor,
+  entryOffsetBps,
   marketableLimit,
   offsetRefusal,
 } from './entry-limit.js';
@@ -23,6 +24,11 @@ describe('entry limit (#1815)', () => {
     expect(entryLimitFor('buy', decision)).toBeCloseTo(201, 9);
     expect(entryLimitFor('sell', decision)).toBeCloseTo(199, 9);
     expect(entryLimitFor('buy', { ...decision, entry_limit: 198.5 })).toBe(198.5);
+  });
+
+  it('tags a decision-close entry with the ruled offset and a sleeve-set limit with none', () => {
+    expect(entryOffsetBps(decision)).toBe(50);
+    expect(entryOffsetBps({ ...decision, entry_limit: 198.5 })).toBeUndefined();
   });
 
   it('refuses a limit at or past the stop, then one at or past the target', () => {

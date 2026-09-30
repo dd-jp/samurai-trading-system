@@ -19,7 +19,7 @@ import { isCfdVenue, quotePerGbp } from '../data/index.js';
 import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
-import { entryLimitFor, offsetRefusal } from './entry-limit.js';
+import { entryLimitFor, entryOffsetBps, offsetRefusal } from './entry-limit.js';
 import { entryRoomRefusal, grossRoomGbp } from './gross-cap.js';
 import { sizeMultiplierFor } from './loss-budget.js';
 import { CFD_SHORT_GAP_BUDGET_FRACTION, positionSizeShares } from './position-size.js';
@@ -154,6 +154,7 @@ export class V2RiskGate implements RiskGate {
     if (refusal !== undefined) return { size, order: undefined, refusal };
     return {
       size,
+      entryOffsetBps: entryOffsetBps(decision),
       order: mintApproval({
         kind: 'bracket_entry',
         approvalId: `entry:${request.clientOrderId}:${size}`,

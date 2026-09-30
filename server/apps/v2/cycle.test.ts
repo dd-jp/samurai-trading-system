@@ -465,6 +465,7 @@ describe('runCycle', () => {
       size: 6,
       price: 20,
       limit: expect.closeTo(20.1, 9),
+      entry_offset_bps: 50,
       stop: 19.2,
       target: expect.closeTo(21.2, 9),
     });
@@ -2871,6 +2872,10 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     const last = deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM10');
     expect(last?.outcome).toBe('rejected');
     expect(last?.payload.detail).toBe('insufficient_cash');
+    expect(last?.payload).not.toHaveProperty('entry_offset_bps');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM9')?.payload).toMatchObject({
+      entry_offset_bps: 50,
+    });
   });
 
   it('never double-counts a held line: re-issuing enter_long for it costs no fresh cash', async () => {

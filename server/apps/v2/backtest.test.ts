@@ -13,13 +13,15 @@ import {
   type BacktestInput,
   type BacktestTrial,
   backtestSessions,
+  entryOffsetIdentity,
   fencedMarket,
   runBacktest,
   type SleeveFactory,
 } from './backtest.js';
 import { capitalCeilingGbp } from './backtest-verdict.js';
 import { addDays, BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
-import { type SessionBLedger, TrialLedger } from './trial-ledger.js';
+import { ENTRY_LIMIT_OFFSET } from './risk/index.js';
+import { type SessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
 
 const SESSION_B: SessionBLedger = {
   entries: [
@@ -358,6 +360,28 @@ describe('runBacktest', () => {
     expect(shared.count()).toBe(SESSION_B.entries.length + 2);
   });
 
+  it('#1815: records the entry offset in every trial identity', async () => {
+    const db = openSharedStore(':memory:');
+    const run = input({
+      ledger: new TrialLedger(
+        db,
+        new SimulatedClock(new Date('2026-09-30T00:00:00.000Z')),
+        SESSION_B,
+      ),
+    });
+    await runBacktest(run);
+    const configs = db
+      .prepare("SELECT config FROM v2_trials WHERE source = 'v2' ORDER BY trial")
+      .all() as { config: string }[];
+    expect(configs).toHaveLength(2);
+    for (const { config } of configs) {
+      expect(JSON.parse(config).run.entryOffset).toEqual({
+        reference: 'decision_close',
+        capBps: 50,
+      });
+    }
+  });
+
   it('fences each sleeve from bars after its session', async () => {
     const future = reading((m, date) => m.barsBefore('UP', addDays(date, 1), 1));
     await expect(
@@ -648,5 +672,33 @@ describe('runBacktest', () => {
       expect(equity[exitIndex]).toBeLessThan(equity[exitIndex - 1] as number);
       expect(new Set(equity.slice(exitIndex)).size).toBe(1);
     }
+  });
+});
+
+describe('entryOffsetIdentity (#1815)', () => {
+  const run = { from: '2024-01-01', to: '2024-12-31' };
+
+  it('makes a changed offset a new trial', () => {
+    const shared = ledger();
+    const at = (capBps: number) =>
+      shared.record('candidate', {
+        lookback: 5,
+        run: { ...run, ...entryOffsetIdentity({ reference: 'decision_close', capBps }) },
+      });
+    expect([at(0), at(50), at(100), at(50), at(0)]).toEqual([3, 4, 5, 4, 3]);
+  });
+
+  it('leaves a 0 bps run hashing as every trial recorded before the offset joined the identity', () => {
+    const before = trialHash('candidate', { lookback: 5, run });
+    const zero = { reference: 'decision_close', capBps: 0 } as const;
+    expect(
+      trialHash('candidate', { lookback: 5, run: { ...run, ...entryOffsetIdentity(zero) } }),
+    ).toBe(before);
+    expect(
+      trialHash('candidate', {
+        lookback: 5,
+        run: { ...run, ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET) },
+      }),
+    ).not.toBe(before);
   });
 });

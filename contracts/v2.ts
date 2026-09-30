@@ -260,7 +260,11 @@ export interface EntryRequest {
 }
 
 export type EntryApproval =
-  | { readonly size: number; readonly order: RiskApprovedOrder }
+  | {
+      readonly size: number;
+      readonly order: RiskApprovedOrder;
+      readonly entryOffsetBps?: number | undefined;
+    }
   | { readonly size: number; readonly order: undefined; readonly refusal: string };
 
 export interface RearmPrices {
