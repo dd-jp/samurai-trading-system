@@ -142,6 +142,12 @@ function admit(
   return { plan: verdict.plan, lastBar };
 }
 
+function entryLabel(plan: SignalEntryPlan): string {
+  return plan.trigger === undefined
+    ? `limit ${plan.limit}`
+    : `buy-stop ${plan.trigger} limit ${plan.limit}`;
+}
+
 function decisionFor(
   signal: SignalWire,
   admitted: Admitted,
@@ -157,11 +163,12 @@ function decisionFor(
     direction: 'bullish',
     confidence: 1,
     action: 'enter_long',
-    reason: `signal ${signal.signal_id}: limit ${plan.limit} stop ${plan.stop} target ${plan.target}; veto ${veto.kind}: ${veto.reason}`,
+    reason: `signal ${signal.signal_id}: ${entryLabel(plan)} stop ${plan.stop} target ${plan.target}; veto ${veto.kind}: ${veto.reason}`,
     price: plan.limit,
     atr: plan.riskPerShare,
     stop_price: plan.stop,
     target_price: plan.target,
+    entry_trigger: plan.trigger,
     inputs_hash: digest({ signal: signal.signal_id, bars }),
     debate_id: undefined,
     veto: veto.kind === 'pass' ? undefined : `${veto.kind}: ${veto.reason}`,

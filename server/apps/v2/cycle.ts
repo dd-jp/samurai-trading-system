@@ -412,7 +412,12 @@ class Cycle {
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const outcome = simulateLimitEntry(
-      { side, limit, stop: numberOrUndefined(order.payload.stop) },
+      {
+        side,
+        limit,
+        stop: numberOrUndefined(order.payload.stop),
+        trigger: numberOrUndefined(order.payload.trigger),
+      },
       this.barsSince(order),
     );
     if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_CALENDAR_DAYS) {
@@ -951,6 +956,7 @@ class Cycle {
         size: approval.size,
         detail: submission.detail,
         price: decision.price,
+        trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
         approval: approval.order === undefined ? undefined : submission.approvalId,

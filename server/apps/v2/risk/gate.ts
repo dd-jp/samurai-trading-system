@@ -42,6 +42,19 @@ function bracketRefusal(
   return targetBeyondEntry ? undefined : 'target_wrong_side';
 }
 
+function triggerRefusal(
+  side: 'buy' | 'sell',
+  entry: number,
+  stop: number,
+  trigger: number | undefined,
+): string | undefined {
+  if (trigger === undefined) return undefined;
+  const withinLimit = side === 'buy' ? trigger <= entry : trigger >= entry;
+  if (!withinLimit) return 'trigger_beyond_limit';
+  const clearOfStop = side === 'buy' ? trigger > stop : trigger < stop;
+  return clearOfStop ? undefined : 'trigger_at_or_past_stop';
+}
+
 function closingLeg(
   held: Position,
   purpose: 'exit' | 'rearm',
@@ -124,7 +137,9 @@ export class V2RiskGate implements RiskGate {
     }
     const side = decision.action === 'enter_short' ? 'sell' : 'buy';
     const target = decision.target_price ?? this.#atrTarget(request, side, decision.atr);
-    const refusal = bracketRefusal(side, decision.price, decision.stop_price, target);
+    const refusal =
+      bracketRefusal(side, decision.price, decision.stop_price, target) ??
+      triggerRefusal(side, decision.price, decision.stop_price, decision.entry_trigger);
     if (refusal !== undefined) return { size, order: undefined, refusal };
     return {
       size,
@@ -139,6 +154,7 @@ export class V2RiskGate implements RiskGate {
         side,
         size,
         entry: decision.price,
+        entryTrigger: decision.entry_trigger,
         stop: decision.stop_price,
         target,
       }),

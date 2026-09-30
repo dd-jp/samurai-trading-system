@@ -40,6 +40,7 @@ import {
   formatTickPrice,
   roundBracketToTick,
   roundProtectiveLegsToTick,
+  roundTriggerToTick,
 } from './us-equity-price-tick.js';
 
 export const DEFAULT_UNPRICED_FILL_AGE_OUT_MS = 15 * 60_000;
@@ -442,7 +443,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         symbol: toAlpacaSymbol(submitted.instrument, submitted.asset_class),
         side: submitted.side,
         qty: String(submitted.size),
-        limit_price: formatTickPrice(submitted.entry),
+        ...bracketParentPrices(submitted),
         time_in_force: submitted.time_in_force,
         client_order_id: submitted.client_order_id,
         order_class: 'bracket',
@@ -913,6 +914,16 @@ function rearmOrderMatches(prior: AlpacaOrder, qty: number, stop: number, target
   const stopLeg = prior.legs?.find((leg) => leg.type === 'stop');
   if (stopLeg?.stop_price == null || Number(stopLeg.stop_price) !== stop) return false;
   return true;
+}
+
+function bracketParentPrices(order: NativeBracketRequest): {
+  limit_price: string;
+  stop_price?: string;
+} {
+  const limit_price = formatTickPrice(order.entry);
+  if (order.entry_trigger === undefined) return { limit_price };
+  const trigger = roundTriggerToTick(order.side, order.entry_trigger, order.entry);
+  return { limit_price, stop_price: formatTickPrice(trigger) };
 }
 
 function legOrderIds(legs: AlpacaOrderLeg[] | undefined): {

@@ -301,6 +301,33 @@ describe('processSignals, dry run', () => {
     expect(data).not.toMatch(/size|equity|cash|book|position|account|desk|7000|api[_-]?key/i);
   });
 
+  it('enters a buy-stop in both books with its trigger; the shadow fills at the trigger, not the open', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const { root, signals } = open(fixtures, clock);
+    const id = post(signals, { entry: 25.15, targets: [26, 27] });
+
+    await root.processSignals(signals, IN_SESSION);
+
+    for (const orderId of [primaryId(id), shadowId(id)]) {
+      expect(root.journal.orderFor(orderId)).toMatchObject({
+        payload: { price: 25.15, trigger: 25.15, stop: 24.5, target: 27 },
+      });
+    }
+    const reason = root.db
+      .prepare("SELECT reason FROM v2_decisions WHERE book_id = 'signals/primary'")
+      .get() as { reason: string };
+    expect(reason.reason).toContain('buy-stop 25.15 limit 25.15 stop 24.5 target 27');
+
+    clock.advanceTo(new Date('2026-10-01T06:30:00.000Z'));
+    const next = open(fixtures, clock);
+    await next.root.run();
+    const fill = next.root.db
+      .prepare("SELECT price_gbp FROM v2_fills WHERE book_id = 'signals/no-veto' AND leg = 'entry'")
+      .get() as { price_gbp: number };
+    expect(fill.price_gbp).toBeCloseTo(25.15 / 1.25, 9);
+  });
+
   it('shows the signal decisions and signal refusals in the dashboard journal', async () => {
     const fixtures = await writeFixtures();
     const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
@@ -385,8 +412,6 @@ describe('processSignals, dry run', () => {
     ['not_in_universe', { symbol: 'NOPE' }, 'NOPE is not a current S&P 500 constituent'],
     ['stale_last_close', { symbol: 'ZZZ' }, 'last bar none before 2026-09-30'],
     ['stale_last_close', { symbol: 'OLD' }, 'last bar 2026-09-01 before 2026-09-30'],
-    ['entry_is_buy_stop', { entry: 25.01, targets: [26, 27] }, 'entry 25.01 is above'],
-    ['entry_is_buy_stop', { entry: [25.5, 25.6], targets: [26, 27] }, 'entry 25.5 is above'],
     ['last_close_at_or_below_stop', { entry: 26, stop: 25, targets: [28] }, 'last close 25'],
   ])('refuses %s in both books and journals it', async (code, value, detail) => {
     const fixtures = await writeFixtures();
@@ -786,6 +811,37 @@ describe('processSignals, paper with a fake Alpaca', () => {
     await after.root.run();
     expect(after.root.books.position('signals/no-veto', 'UP')).toBeUndefined();
     expect(after.root.books.position('signals/primary', 'UP')?.qty).toBe(35);
+  });
+
+  it('submits a buy-stop primary as a stop-limit parent: stop at the zone low, limit at its high', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const alpaca = fakeAlpaca(clock, false);
+    const day = open(fixtures, clock, paper(alpaca));
+    day.root.journal.recordReconcile({
+      trading_date: D,
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'clean',
+      book_ids: ['signals/primary'],
+      diffs: [],
+      detail: '',
+    });
+    const id = post(day.signals, { entry: [25.5, 25.6], targets: [26, 27] });
+
+    await day.root.processSignals(day.signals, IN_SESSION);
+
+    expect(alpaca.submitOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client_order_id: primaryId(id),
+        limit_price: '25.60',
+        stop_price: '25.50',
+        order_class: 'bracket',
+        take_profit: { limit_price: '27.00' },
+        stop_loss: { stop_price: '24.50' },
+      }),
+    );
+    expect(day.root.journal.orderFor(primaryId(id))).toMatchObject({ outcome: 'submitted' });
   });
 
   it('cancels an unfilled signal entry at the next daily cycle', async () => {

@@ -7,6 +7,7 @@ export interface NativeBracketRequest {
   side: 'buy' | 'sell';
   size: number;
   entry: number;
+  entry_trigger?: number | undefined;
   stop: number;
   target: number;
   time_in_force: string;

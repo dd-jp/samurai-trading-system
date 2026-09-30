@@ -36,6 +36,7 @@ export interface SleeveDecision {
   readonly atr: number | undefined;
   readonly stop_price: number | undefined;
   readonly target_price?: number | undefined;
+  readonly entry_trigger?: number | undefined;
   readonly inputs_hash: string;
   readonly debate_id: string | undefined;
   readonly veto?: string | undefined;
@@ -223,6 +224,7 @@ interface ApprovedOrderFields {
 export interface ApprovedBracketEntry extends ApprovedOrderFields {
   readonly kind: 'bracket_entry';
   readonly entry: number;
+  readonly entryTrigger?: number | undefined;
   readonly stop: number;
   readonly target: number;
 }

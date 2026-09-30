@@ -20,32 +20,34 @@ describe('planSignalEntry', () => {
   it('plans a limit at a single entry at or below the last close', () => {
     expect(planSignalEntry({ entry: 50, targets: [52, 56, 60], stop: 48 }, 50)).toEqual({
       ok: true,
-      plan: { limit: 50, stop: 48, target: 56, riskPerShare: 2 },
+      plan: { limit: 50, trigger: undefined, stop: 48, target: 56, riskPerShare: 2 },
     });
     expect(planSignalEntry({ entry: 49, targets: [60], stop: 48 }, 50.5)).toMatchObject({
       ok: true,
-      plan: { limit: 49 },
+      plan: { limit: 49, trigger: undefined },
     });
   });
 
-  it('plans a zone as a limit at its high, even when the high is above the last close', () => {
-    expect(planSignalEntry({ entry: [49, 51], targets: [55, 60], stop: 47 }, 50)).toEqual({
+  it('plans a zone straddling the last close as a limit at its high, with no trigger', () => {
+    for (const lastClose of [49, 50]) {
+      expect(planSignalEntry({ entry: [49, 51], targets: [55, 60], stop: 47 }, lastClose)).toEqual({
+        ok: true,
+        plan: { limit: 51, trigger: undefined, stop: 47, target: 60, riskPerShare: 4 },
+      });
+    }
+  });
+
+  it('plans a single entry above the last close as a buy-stop: triggered and capped at the entry', () => {
+    expect(planSignalEntry({ entry: 50.01, targets: [60], stop: 48 }, 50)).toEqual({
       ok: true,
-      plan: { limit: 51, stop: 47, target: 60, riskPerShare: 4 },
+      plan: { limit: 50.01, trigger: 50.01, stop: 48, target: 60, riskPerShare: 50.01 - 48 },
     });
   });
 
-  it('refuses a single entry above the last close as a buy-stop', () => {
-    expect(planSignalEntry({ entry: 50.01, targets: [60], stop: 48 }, 50)).toMatchObject({
-      ok: false,
-      refusal: 'entry_is_buy_stop',
-    });
-  });
-
-  it('refuses a zone wholly above the last close as a buy-stop', () => {
-    expect(planSignalEntry({ entry: [51, 52], targets: [60], stop: 48 }, 50)).toMatchObject({
-      ok: false,
-      refusal: 'entry_is_buy_stop',
+  it('plans a zone wholly above the last close as a buy-stop: triggered at its low, capped at its high', () => {
+    expect(planSignalEntry({ entry: [51, 52], targets: [60], stop: 48 }, 50)).toEqual({
+      ok: true,
+      plan: { limit: 52, trigger: 51, stop: 48, target: 60, riskPerShare: 4 },
     });
   });
 

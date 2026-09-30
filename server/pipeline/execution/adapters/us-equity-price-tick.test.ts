@@ -2,6 +2,7 @@ import {
   formatTickPrice,
   roundBracketToTick,
   roundProtectiveLegsToTick,
+  roundTriggerToTick,
   snapToTick,
   tickFor,
 } from './us-equity-price-tick.js';
@@ -121,6 +122,15 @@ describe('roundBracketToTick', () => {
       stop: 766.4,
       target: 754.19,
     });
+  });
+});
+
+describe('roundTriggerToTick', () => {
+  it('rounds a buy trigger up and a sell trigger down, never past the rounded limit', () => {
+    expect(roundTriggerToTick('buy', 99.501, 100)).toBe(99.51);
+    expect(roundTriggerToTick('buy', 99.999, 99.99)).toBe(99.99);
+    expect(roundTriggerToTick('sell', 100.499, 100)).toBe(100.49);
+    expect(roundTriggerToTick('sell', 100.001, 100.01)).toBe(100.01);
   });
 });
 

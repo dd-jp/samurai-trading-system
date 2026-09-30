@@ -186,6 +186,43 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
     });
   });
 
+  it('submits a stop_limit parent when the bracket carries an entry trigger, the trigger on the tick grid and never above the limit (#1941)', async () => {
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+    });
+
+    await adapter.submitBracket(makeBracket({ entry: 100, entry_trigger: 99.501 }));
+    await adapter.submitBracket(
+      makeBracket({ client_order_id: 'point', entry: 100, entry_trigger: 100.004 }),
+    );
+
+    expect(client.submitOrder).toHaveBeenNthCalledWith(1, {
+      symbol: 'AAPL',
+      side: 'buy',
+      qty: '100',
+      limit_price: '100.00',
+      stop_price: '99.51',
+      time_in_force: 'day',
+      client_order_id: 'key-aapl-1355',
+      order_class: 'bracket',
+      take_profit: { limit_price: '110.00' },
+      stop_loss: { stop_price: '95.00' },
+    });
+    expect(client.submitOrder).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        client_order_id: 'point',
+        limit_price: '100.00',
+        stop_price: '100.00',
+      }),
+    );
+  });
+
   it('rounds a sub-penny short bracket onto the venue price grid (#983)', async () => {
     const client = makeClient();
     const adapter = new AlpacaBrokerAdapter({

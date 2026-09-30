@@ -83,6 +83,15 @@ export function roundBracketToTick(
   return rounded;
 }
 
+export function roundTriggerToTick(
+  side: 'buy' | 'sell',
+  trigger: number,
+  roundedEntry: number,
+): number {
+  const rounded = snapToTick(trigger, side === 'buy' ? 'up' : 'down');
+  return side === 'buy' ? Math.min(rounded, roundedEntry) : Math.max(rounded, roundedEntry);
+}
+
 export function roundProtectiveLegsToTick(
   heldSide: 'buy' | 'sell',
   stop: number,

@@ -352,6 +352,46 @@ describe('V2RiskGate', () => {
     ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
   });
 
+  it('carries an entry trigger between the stop and the limit onto the approved bracket', () => {
+    expect(gate().approveEntry(request()).order).toMatchObject({ entryTrigger: undefined });
+    for (const entry_trigger of [19.5, 20]) {
+      expect(
+        gate().approveEntry(request({ decision: { ...decision, entry_trigger } })).order,
+      ).toMatchObject({
+        kind: 'bracket_entry',
+        entry: 20,
+        entryTrigger: entry_trigger,
+        stop: 19.2,
+      });
+    }
+    expect(
+      gate().approveEntry(request({ decision: { ...cfdShort, entry_trigger: 20.5 } })).order,
+    ).toMatchObject({ side: 'sell', entry: 20, entryTrigger: 20.5 });
+  });
+
+  it('refuses an entry trigger beyond the limit or at or past the stop', () => {
+    const refusal = (overrides: Partial<SleeveDecision>, base = decision) =>
+      gate().approveEntry(request({ decision: { ...base, ...overrides } }));
+    expect(refusal({ entry_trigger: 20.01 })).toMatchObject({
+      order: undefined,
+      refusal: 'trigger_beyond_limit',
+    });
+    for (const entry_trigger of [19.2, 19.1]) {
+      expect(refusal({ entry_trigger })).toMatchObject({
+        order: undefined,
+        refusal: 'trigger_at_or_past_stop',
+      });
+    }
+    expect(refusal({ entry_trigger: 19.99 }, cfdShort)).toMatchObject({
+      refusal: 'trigger_beyond_limit',
+    });
+    for (const entry_trigger of [20.8, 20.9]) {
+      expect(refusal({ entry_trigger }, cfdShort)).toMatchObject({
+        refusal: 'trigger_at_or_past_stop',
+      });
+    }
+  });
+
   it('sizes by the previous mark multiplier and to zero when entries are blocked', () => {
     expect(gate({ state: { sizeMultiplier: 0.5 } }).approveEntry(request()).size).toBe(3);
     const blocked = gate({ state: { sizeMultiplier: 1, entriesBlockedAtNextFill: true } });
