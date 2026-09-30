@@ -461,11 +461,15 @@ class Cycle {
     if (held.exitClientOrderId === undefined) return;
     const order = this.deps.journal.orderFor(held.exitClientOrderId);
     if (order === undefined || !SIMULATED_OUTCOMES.has(order.outcome)) return;
-    const price = this.pendingExitPrice(order);
+    const price = simulateMarketExit(this.barsSince(order));
     if (price === undefined) {
-      this.warnIfStale(order);
+      this.fillPendingExitAtLastClose(order, held);
       return;
     }
+    this.settleExitFill(order, held, price);
+  }
+
+  settleExitFill(order: JournalledOrder, held: Position, price: number): boolean {
     const qty = Math.abs(held.qty);
     const quote = this.quoteOrRefuse(order.book_id, held.venue, {
       instrument: held.instrument,
@@ -474,7 +478,7 @@ class Cycle {
       price,
       crossesSpread: true,
     });
-    if (quote === undefined) return;
+    if (quote === undefined) return false;
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
@@ -483,10 +487,18 @@ class Cycle {
       qty,
       fee: quote.fee,
     });
+    return true;
   }
 
-  pendingExitPrice(order: JournalledOrder): number | undefined {
-    return simulateMarketExit(this.barsSince(order)) ?? this.pendingExitAtLastClose(order);
+  fillPendingExitAtLastClose(order: JournalledOrder, held: Position): void {
+    const bar = this.endedSeriesBar(order.instrument);
+    if (bar === undefined) {
+      this.warnIfStale(order);
+      return;
+    }
+    if (this.settleExitFill(order, held, bar.rawClose)) {
+      this.logEndedSeries(order.book_id, order.instrument, bar);
+    }
   }
 
   endedSeriesBar(instrument: string): V2Bar | undefined {
@@ -501,13 +513,6 @@ class Cycle {
       'v2_series_ended_exit',
       `${bookId} ${instrument}: series ended ${bar.date}, closed at its last close (doc 70 §2.4)`,
     );
-  }
-
-  pendingExitAtLastClose(order: JournalledOrder): number | undefined {
-    const bar = this.endedSeriesBar(order.instrument);
-    if (bar === undefined) return undefined;
-    this.logEndedSeries(order.book_id, order.instrument, bar);
-    return bar.rawClose;
   }
 
   simulatedEndedSeriesExit(bookId: string, instrument: string): void {

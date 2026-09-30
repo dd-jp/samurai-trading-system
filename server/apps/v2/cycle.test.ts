@@ -3859,6 +3859,41 @@ describe('runCycle: a held name whose series ends (doc 70 §2.4, #1911)', () => 
     expect(endedLogs()).toHaveLength(2);
   });
 
+  it('keeps a pending CFD flatten with no cost model open, refused once per book and unlogged', async () => {
+    const state = { unset: false };
+    const pricing: FillPricing = {
+      ...SPREAD_ONLY,
+      fee: (venue) => {
+        if (state.unset && venue.startsWith('saxo_cfd')) throw new CfdCostModelUnsetError();
+        return 0;
+      },
+    };
+    const deps = harness([shortAapl], true, undefined, [2026], TEST_SPEC, pricing);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    deps.setControl('halt');
+    await run('2026-09-29');
+    state.unset = true;
+    const refused = await run('2026-10-04');
+    expect(refused.fills).toBe(0);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')?.qty).toBe(-6);
+    expect(endedLogs()).toEqual([]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT book_id FROM v2_refusals WHERE parameter = 'CFD_COST_MODEL' AND scope = 'fill' ORDER BY book_id",
+        )
+        .all(),
+    ).toEqual([{ book_id: 'debate/no-macro-gate' }, { book_id: 'debate/primary' }]);
+    state.unset = false;
+    await run('2026-10-05');
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+    expect(endedLogs()).toHaveLength(2);
+  });
+
   it('fills a pending flatten at the last close and keeps its journalled reason', async () => {
     const deps = harness([longAapl], true);
     await openBooks(deps);
