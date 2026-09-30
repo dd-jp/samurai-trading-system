@@ -59,12 +59,26 @@ export function endOfDayUtc(date: string): string {
   return `${date}T23:59:59Z`;
 }
 
-export function barsUrl(request: BarsRequest, pageToken: string | undefined): string {
+// The free data plan answers 403 "subscription does not permit querying recent SIP data"
+// to any SIP request whose end falls inside the last 15 minutes (measured 2026-09-30)
+const SIP_RECENT_EMBARGO_MS = 16 * 60_000;
+
+export function sipEnd(date: string, nowMs: number): string {
+  const embargoed = new Date(nowMs - SIP_RECENT_EMBARGO_MS).toISOString().slice(0, 19);
+  const endOfDay = endOfDayUtc(date).slice(0, 19);
+  return `${embargoed < endOfDay ? embargoed : endOfDay}Z`;
+}
+
+export function barsUrl(
+  request: BarsRequest,
+  pageToken: string | undefined,
+  nowMs: number = Date.now(),
+): string {
   const params = new URLSearchParams({
     symbols: request.symbol,
     timeframe: '1Day',
     start: request.start,
-    end: endOfDayUtc(request.end),
+    end: sipEnd(request.end, nowMs),
     limit: String(PAGE_LIMIT),
     adjustment: request.adjustment,
     feed: 'sip',
@@ -123,6 +137,7 @@ export class AlpacaBarsApi {
     private readonly fetcher: Fetcher = jsonFetcher,
     private readonly sleep: Sleeper = defaultSleep,
     private readonly minIntervalMs = Math.ceil(60_000 / ALPACA_REQUESTS_PER_MINUTE),
+    private readonly now: () => number = Date.now,
   ) {
     this.headers = authHeaders(credentials);
   }
@@ -132,7 +147,7 @@ export class AlpacaBarsApi {
     let pageToken: string | undefined;
     do {
       const page = parseBarsPage(
-        await this.getWithRetry(barsUrl(request, pageToken)),
+        await this.getWithRetry(barsUrl(request, pageToken, this.now())),
         request.symbol,
       );
       bars.push(...page.bars);
