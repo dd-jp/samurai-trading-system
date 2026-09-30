@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Always on: a signal can arrive at any hour and is processed at once in the US session (#1941).
-     The daily cycle shares the run lease, so a restart mid-pass is safe. -->
+     ExitTimeOut covers the final pass on SIGTERM, whose veto calls can queue past launchd's 20 s default. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -33,6 +33,9 @@
 
     <key>ThrottleInterval</key>
     <integer>30</integer>
+
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
 
     <key>StandardOutPath</key>
     <string>/Users/ddjp/Documents/projects/samurai-trading-system/data/logs/v2-signals.log</string>
