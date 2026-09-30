@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JournalWire, SleeveAction, SleeveDecision } from '../../../../contracts/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { Journal } from '../journal/journal.js';
+import { CFD_ENTRY_GATES } from '../signal/index.js';
 import {
   featureOffLabel,
   type JournalQuery,
@@ -212,14 +213,18 @@ describe('vetoOf', () => {
 });
 
 describe('featureOffLabel', () => {
-  it('labels an unset cycle-level parameter by its feature, every CFD gate as one feature', () => {
+  it('labels an unset cycle-level parameter by its feature', () => {
     expect(featureOffLabel('parameter', 'G18_SOCIAL_SOURCE')).toBe('social source');
     expect(featureOffLabel('parameter', 'G18_SENTIMENT_DEDUP_RULE')).toBe('sentiment dedup');
     expect(featureOffLabel('parameter', 'ALPACA_SHORT_EQUITY_FLOOR_USD')).toBe(
       'Alpaca shorts floor',
     );
-    expect(featureOffLabel('parameter', 'CFD_COST_MODEL')).toBe('CFD');
-    expect(featureOffLabel('parameter', 'CFD_RESTING_STOP_VERIFIED')).toBe('CFD');
+  });
+
+  it('keeps every unset CFD gate out, since paper needs CFDs', () => {
+    for (const { parameter } of CFD_ENTRY_GATES) {
+      expect(featureOffLabel('parameter', parameter.name)).toBeNull();
+    }
   });
 
   it('labels an unset universe parameter', () => {
@@ -233,7 +238,7 @@ describe('featureOffLabel', () => {
 
   it('leaves every other refusal out, even one naming a declared parameter', () => {
     for (const scope of ['capital', 'allocation', 'control', 'reconcile', 'data', 'entry']) {
-      expect(featureOffLabel(scope, 'CFD_COST_MODEL')).toBeNull();
+      expect(featureOffLabel(scope, 'G18_SOCIAL_SOURCE')).toBeNull();
     }
     expect(featureOffLabel('reconcile', 'RECONCILE_CASH_TOLERANCE_GBP')).toBeNull();
   });

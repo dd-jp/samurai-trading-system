@@ -26,17 +26,20 @@ describe('JournalPanel (P9)', () => {
     expect(within(day).getByRole('list', { name: 'Orders no decision owns' }).textContent).toBe(
       'exit sell MSFT (alpaca), filled, 2026-10-05 21:41ZFill 2 at £310.00, fee £0.50, 2026-10-05 21:42Z',
     );
-    expect(within(day).getByRole('list', { name: 'Refusals' }).textContent).toBe(
+    expect(
+      within(within(day).getByRole('list', { name: 'Refusals' }))
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual([
       'capital, CAPITAL_CONFIG (D8): no capital config',
-    );
+      'parameter, CFD_COST_MODEL (#1850): CFD_COST_MODEL is not set',
+    ]);
   });
 
-  it('collapses the unset-parameter refusals into one features-off row that expands', async () => {
+  it('collapses the features-off refusals into one row that expands', async () => {
     const panel = mount(serving());
     const day = await within(panel).findByRole('article', { name: 'Cycle 2026-10-05' });
-    const summary = within(day).getByText(
-      'Features off (4): social source, CFD ×2, small-cap floors',
-    );
+    const summary = within(day).getByText('Features off (3): social source, small-cap floors ×2');
     const row = summary.closest('details') as HTMLDetailsElement;
     expect(row.open).toBe(false);
     fireEvent.click(summary);
@@ -47,13 +50,9 @@ describe('JournalPanel (P9)', () => {
         .map((item) => item.textContent),
     ).toEqual([
       'parameter, G18_SOCIAL_SOURCE (#1753): G18_SOCIAL_SOURCE is not set',
-      'parameter, CFD_COST_MODEL (#1850): CFD_COST_MODEL is not set',
-      'parameter, CFD_SPREAD_MODEL (#1850): CFD_SPREAD_MODEL is not set',
+      'universe, G18_SMALL_CAP_FLOORS (#1753): G18_SMALL_CAP_FLOORS is not set',
       'universe, G18_SMALL_CAP_FLOORS (#1753): G18_SMALL_CAP_FLOORS is not set',
     ]);
-    expect(within(day).getByRole('list', { name: 'Refusals' }).textContent).not.toContain(
-      'is not set',
-    );
   });
 
   it('shows no refusals list on a day whose only refusals are features off', async () => {
@@ -65,7 +64,7 @@ describe('JournalPanel (P9)', () => {
     const panel = mount(serving(body));
     const article = await within(panel).findByRole('article', { name: 'Cycle 2026-10-05' });
     expect(within(article).queryByRole('list', { name: 'Refusals' })).toBeNull();
-    expect(within(article).getByText(/^Features off \(4\)/)).toBeTruthy();
+    expect(within(article).getByText(/^Features off \(3\)/)).toBeTruthy();
   });
 
   it('expands a decision to its reason, veto, inputs hash, debate and payload', async () => {

@@ -275,6 +275,9 @@ const FEATURE_LABELS: ReadonlyMap<string, string> = new Map([
   [ALPACA_SHORT_EQUITY_FLOOR_USD.name, 'Alpaca shorts floor'],
   [LSE_LIQUIDITY_SCREEN.name, 'LSE liquidity screen'],
 ]);
+
+// David 2026-09-30: paper needs CFDs, so an unset CFD gate is a blocker to keep in view,
+// not a feature switched off
 const CFD_GATE_NAMES: ReadonlySet<string> = new Set(
   CFD_ENTRY_GATES.map(({ parameter }) => parameter.name),
 );
@@ -285,8 +288,7 @@ const CFD_GATE_NAMES: ReadonlySet<string> = new Set(
 const FEATURE_OFF_SCOPES: ReadonlySet<string> = new Set(['parameter', 'universe']);
 
 export function featureOffLabel(scope: string, parameter: string): string | null {
-  if (!FEATURE_OFF_SCOPES.has(scope)) return null;
-  if (CFD_GATE_NAMES.has(parameter)) return 'CFD';
+  if (!FEATURE_OFF_SCOPES.has(scope) || CFD_GATE_NAMES.has(parameter)) return null;
   return FEATURE_LABELS.get(parameter) ?? parameter;
 }
 

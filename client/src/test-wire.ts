@@ -256,8 +256,8 @@ export const JOURNAL: JournalWire = {
         ...(
           [
             [8, 'parameter', 'G18_SOCIAL_SOURCE', '#1753', 'social source'],
-            [9, 'parameter', 'CFD_COST_MODEL', '#1850', 'CFD'],
-            [10, 'parameter', 'CFD_SPREAD_MODEL', '#1850', 'CFD'],
+            [9, 'parameter', 'CFD_COST_MODEL', '#1850', null],
+            [10, 'universe', 'G18_SMALL_CAP_FLOORS', '#1753', 'small-cap floors'],
             [11, 'universe', 'G18_SMALL_CAP_FLOORS', '#1753', 'small-cap floors'],
           ] as const
         ).map(([refusal_id, scope, parameter, ticket, feature_off]) => ({
