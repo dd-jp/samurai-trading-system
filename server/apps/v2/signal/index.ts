@@ -32,17 +32,22 @@ export { ALL_PINS, type ModelPin } from './models.js';
 export { SqliteMonthlySpendCap, utcMonthStart } from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';
 export {
+  ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   ARM2_SLEEVE_SPEC,
   type Arm2EntryThresholds,
   CFD_COST_MODEL,
+  CFD_ENTRY_GATES,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   CYCLE_LEVEL_PARAMETERS,
   cfdEntryRefusal,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
+  G18_SENTIMENT_DEDUP_RULE,
+  G18_SMALL_CAP_FLOORS,
+  G18_SOCIAL_SOURCE,
   isSet,
   LSE_LIQUIDITY_SCREEN,
   RECONCILE_CASH_TOLERANCE_GBP,

@@ -244,14 +244,33 @@ export const JOURNAL: JournalWire = {
       refusals: [
         {
           refusal_id: 7,
-          scope: 'universe',
-          parameter: 'saxo_universe',
-          ticket: '#1740',
-          message: 'unset',
+          scope: 'capital',
+          parameter: 'CAPITAL_CONFIG',
+          ticket: 'D8',
+          message: 'no capital config',
           book_id: null,
           instrument: null,
           recorded_at: '2026-10-05T21:40:00.000Z',
+          feature_off: null,
         },
+        ...(
+          [
+            [8, 'parameter', 'G18_SOCIAL_SOURCE', '#1753', 'social source'],
+            [9, 'parameter', 'CFD_COST_MODEL', '#1850', null],
+            [10, 'universe', 'G18_SMALL_CAP_FLOORS', '#1753', 'small-cap floors'],
+            [11, 'universe', 'G18_SMALL_CAP_FLOORS', '#1753', 'small-cap floors'],
+          ] as const
+        ).map(([refusal_id, scope, parameter, ticket, feature_off]) => ({
+          refusal_id,
+          scope,
+          parameter,
+          ticket,
+          message: `${parameter} is not set`,
+          book_id: null,
+          instrument: null,
+          recorded_at: '2026-10-05T21:40:00.000Z',
+          feature_off,
+        })),
       ],
     },
   ],

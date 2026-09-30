@@ -4,6 +4,7 @@ import {
   type JournalDayWire,
   type JournalDecisionWire,
   type JournalOrderWire,
+  type JournalRefusalWire,
   type JournalWire,
 } from '@contracts';
 import { type FormEvent, type ReactNode, useState } from 'react';
@@ -91,7 +92,40 @@ function Decision({ decision }: { decision: JournalDecisionWire }) {
   );
 }
 
+function Refusal({ refusal }: { refusal: JournalRefusalWire }) {
+  return (
+    <li>
+      {refusal.scope}, {refusal.parameter} ({refusal.ticket}): {refusal.message}
+    </li>
+  );
+}
+
+function featureCounts(refusals: readonly JournalRefusalWire[]): string {
+  const counts = new Map<string, number>();
+  for (const { feature_off: label } of refusals) {
+    if (label !== null) counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts].map(([label, n]) => (n === 1 ? label : `${label} ×${n}`)).join(', ');
+}
+
+function FeaturesOff({ refusals }: { refusals: readonly JournalRefusalWire[] }) {
+  return (
+    <details className="entry">
+      <summary>
+        Features off ({refusals.length}): {featureCounts(refusals)}
+      </summary>
+      <ul aria-label="Features off">
+        {refusals.map((refusal) => (
+          <Refusal key={refusal.refusal_id} refusal={refusal} />
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function Day({ day }: { day: JournalDayWire }) {
+  const refusals = day.refusals.filter((refusal) => refusal.feature_off === null);
+  const featuresOff = day.refusals.filter((refusal) => refusal.feature_off !== null);
   return (
     <article className="day" aria-label={`Cycle ${day.trading_date}`}>
       <h3>{day.trading_date}</h3>
@@ -106,15 +140,14 @@ function Day({ day }: { day: JournalDayWire }) {
           ))}
         </ul>
       )}
-      {day.refusals.length > 0 && (
+      {refusals.length > 0 && (
         <ul aria-label="Refusals">
-          {day.refusals.map((refusal) => (
-            <li key={refusal.refusal_id}>
-              {refusal.scope}, {refusal.parameter} ({refusal.ticket}): {refusal.message}
-            </li>
+          {refusals.map((refusal) => (
+            <Refusal key={refusal.refusal_id} refusal={refusal} />
           ))}
         </ul>
       )}
+      {featuresOff.length > 0 && <FeaturesOff refusals={featuresOff} />}
     </article>
   );
 }
