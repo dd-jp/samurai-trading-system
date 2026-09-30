@@ -21,11 +21,11 @@ const CONTROL_REFUSAL = {
   halted: 'manual_control_halted',
 } as const;
 
-const OUTCOME_EVENT: Readonly<Record<SignalOutcomeStatus, string>> = {
-  processed: 'v2_signal_processed',
-  refused: 'v2_signal_refused',
-  failed: 'v2_signal_failed',
-};
+const OUTCOME_LOG = {
+  processed: { event: 'v2_signal_processed', level: 'info' },
+  refused: { event: 'v2_signal_refused', level: 'info' },
+  failed: { event: 'v2_signal_failed', level: 'error' },
+} as const satisfies Record<SignalOutcomeStatus, { event: string; level: 'info' | 'error' }>;
 
 export interface SignalProcessorDeps {
   readonly cycle: CycleDeps;
@@ -294,8 +294,7 @@ function settle(
   deps.cycle.logger?.log({
     trace_id: `v2-signal-${signal.signal_id}`,
     stage: 'v2',
-    level: status === 'failed' ? 'error' : 'info',
-    event: OUTCOME_EVENT[status],
+    ...OUTCOME_LOG[status],
     message: `${signal.symbol} ${signal.signal_id}: ${detail}`,
   });
   return { signal_id: signal.signal_id, symbol: signal.symbol, status, detail };
