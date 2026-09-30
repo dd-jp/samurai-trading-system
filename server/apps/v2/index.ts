@@ -600,7 +600,7 @@ export function rootOptionsFor(
   };
 }
 
-async function runOnce(
+export async function runOnce(
   dryRun: boolean,
   tradingDate: string,
   env: NodeJS.ProcessEnv,
@@ -608,10 +608,11 @@ async function runOnce(
   logger: Logger,
   barRefresh: BarRefresh,
   notify: (text: string) => Promise<void>,
+  compose: (options: V2RootOptions) => V2Root = composeV2Root,
 ): Promise<number> {
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
-  const root = composeV2Root(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
+  const root = compose(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
   try {
     const report = await runAfterPinCheck(root, () =>
       verifyNousPins({

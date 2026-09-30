@@ -42,6 +42,7 @@ import {
   parseCliArgs,
   rootOptionsFor,
   runAfterPinCheck,
+  runOnce,
   type V2RootOptions,
   withoutRefusedLse,
 } from './index.js';
@@ -684,6 +685,45 @@ describe('composeV2Root', () => {
       '  decisions 1; entries 0 placed, 1 filled, 0 rejected; exits 0; open 1',
     );
     expect(lines.at(-1)).toMatch(/^LLM spend this month: \$\d+\.\d{2} of \$30\.00$/);
+  });
+
+  it('runOnce pushes the summary after the cycle, and a failing push keeps the exit code', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'run-once.sqlite');
+    seededStore(storePath).close();
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const logs: LogEntry[] = [];
+    const sent: string[] = [];
+    const runOn = (tradingDate: string, notify: (text: string) => Promise<void>) =>
+      runOnce(
+        true,
+        tradingDate,
+        {},
+        clock,
+        { log: (entry) => logs.push(entry) },
+        NO_BAR_REFRESH,
+        notify,
+        (options) => composeV2Root({ ...options, ...fixtures, storePath }),
+      );
+    const written = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(
+        await runOn(ENTRY_DATE, (text) => {
+          sent.push(text);
+          return Promise.resolve();
+        }),
+      ).toBe(0);
+      clock.advanceTo(new Date(`${NEXT_DATE}T07:00:00.000Z`));
+      expect(await runOn(NEXT_DATE, () => Promise.reject(new Error('telegram down')))).toBe(0);
+    } finally {
+      written.mockRestore();
+    }
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(new RegExp(`^Samurai v2 daily summary ${ENTRY_DATE} \\(dry-run\\)\n`));
+    expect(logs.filter((entry) => entry.event === 'v2_daily_summary_failed')).toEqual([
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('telegram down') }),
+    ]);
   });
 
   it('journals one SAXO_SESSION refusal against #1876 when the LSE leg is refused, and none otherwise', async () => {
