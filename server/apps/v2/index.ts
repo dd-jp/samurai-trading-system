@@ -676,7 +676,14 @@ export async function runOnce(
     logNewRefusals(root.journal, tradingDate, logger);
     logFaultFreeWeeks(root.faults, tradingDate, logger);
     await pushDailySummary(
-      { db: root.db, clock, faults: root.faults, mode: dryRun ? 'dry-run' : 'paper', logger, notify },
+      {
+        db: root.db,
+        clock,
+        faults: root.faults,
+        mode: dryRun ? 'dry-run' : 'paper',
+        logger,
+        notify,
+      },
       report,
     );
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
