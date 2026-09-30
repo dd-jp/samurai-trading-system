@@ -2,8 +2,9 @@ import { pathToFileURL } from 'node:url';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { formatDailySummary, readDailySummary } from './daily-summary.js';
 import { createVenueRouter, macroGate } from './data/index.js';
-import { composeV2Root } from './index.js';
+import { composeV2Root, type V2Root } from './index.js';
 import {
   assertArm2RunsBesideDebate,
   bookSpecsFor,
@@ -228,6 +229,27 @@ function settledEntries(store: StoreHandle): { filled: number; cancelled: number
     .get(SMOKE_TRADING_DATE) as { filled: number; cancelled: number };
 }
 
+function dailySummaryProbe(
+  store: StoreHandle,
+  root: Pick<V2Root, 'books' | 'faults'>,
+  filled: number,
+): SmokeProbe {
+  const summary = readDailySummary(
+    store,
+    new SimulatedClock(new Date(`${SMOKE_NEXT_DATE}T07:00:00.000Z`)),
+    SMOKE_NEXT_DATE,
+    root.faults,
+  );
+  return probe(
+    "the daily summary covers every book, counts the next day's fills and carries the fault line",
+    summary.books.map((book) => book.book_id).join(',') === root.books.ids().join(',') &&
+      summary.books.reduce((n, book) => n + book.entries_filled, 0) === filled &&
+      summary.faults.recorded.length === 0 &&
+      summary.faults.counted_days === 2,
+    formatDailySummary(summary, 'dry-run').replaceAll('\n', ' | '),
+  );
+}
+
 export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: boolean }> {
   const probes = staticProbes();
   const store = seededSmokeStore();
@@ -303,6 +325,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
     const next = await dryRunOn(SMOKE_NEXT_DATE).run();
     const { filled, cancelled } = settledEntries(store);
     probes.push(
+      dailySummaryProbe(store, root, filled),
       probe(
         'every affordable entry fills or is cancelled on the next bar, and fills reach the books',
         filled > 0 &&
