@@ -10,7 +10,7 @@ import type { AlpacaBrokerClient, AlpacaOrder } from '../../../pipeline/executio
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
-import { SimulatedClock } from '../../../shared/index.js';
+import { type LogEntry, SimulatedClock } from '../../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { JournalReader } from '../api/journal-reader.js';
 import { composeV2Root, type V2Root, type V2RootOptions } from '../index.js';
@@ -81,10 +81,11 @@ async function writeFixtures(capital: boolean = true): Promise<Fixtures> {
     { symbol: 'UP', bars: UP_BARS },
     { symbol: 'DN', bars: flatBars() },
     { symbol: 'SPY', bars: flatBars() },
+    { symbol: 'OLD', bars: flatBars().filter((bar) => bar.date <= '2026-09-01') },
   ]);
   bars.close();
   const constituentsPath = join(directory, 'constituents.csv');
-  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,DN,ZZZ"\n');
+  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,DN,ZZZ,OLD"\n');
   const fxPath = join(directory, 'fx.csv');
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n');
   const spreadsPath = join(directory, 'spreads.csv');
@@ -167,6 +168,22 @@ function post(
   if (!parsed.ok) throw new Error(parsed.reason);
   return signals.record(parsed.payload, receivedAt, classifySignalWindow(receivedAt, CALENDAR))
     .signal.signal_id;
+}
+
+function hold(root: V2Root, bookId: string, instrument: string): void {
+  root.books.applyFill(bookId, {
+    instrument,
+    venue: 'alpaca',
+    side: 'buy',
+    leg: 'entry',
+    qty: 1,
+    priceGbp: 20,
+    feeGbp: 0,
+    clientOrderId: `held-${bookId}`,
+    tradingDate: '2026-09-29',
+    stopGbp: undefined,
+    targetGbp: undefined,
+  });
 }
 
 function refusalsOf(root: V2Root, parameter: string) {
@@ -363,12 +380,13 @@ describe('processSignals, dry run', () => {
   });
 
   it.each([
-    ['not_in_universe', { symbol: 'NOPE' }],
-    ['stale_last_close', { symbol: 'ZZZ' }],
-    ['entry_is_buy_stop', { entry: 25.01, targets: [26, 27] }],
-    ['entry_is_buy_stop', { entry: [25.5, 25.6], targets: [26, 27] }],
-    ['last_close_at_or_below_stop', { entry: 26, stop: 25, targets: [28] }],
-  ])('refuses %s in both books and journals it', async (code, value) => {
+    ['not_in_universe', { symbol: 'NOPE' }, 'NOPE is not a current S&P 500 constituent'],
+    ['stale_last_close', { symbol: 'ZZZ' }, 'last bar none before 2026-09-30'],
+    ['stale_last_close', { symbol: 'OLD' }, 'last bar 2026-09-01 before 2026-09-30'],
+    ['entry_is_buy_stop', { entry: 25.01, targets: [26, 27] }, 'entry 25.01 is above'],
+    ['entry_is_buy_stop', { entry: [25.5, 25.6], targets: [26, 27] }, 'entry 25.5 is above'],
+    ['last_close_at_or_below_stop', { entry: 26, stop: 25, targets: [28] }, 'last close 25'],
+  ])('refuses %s in both books and journals it', async (code, value, detail) => {
     const fixtures = await writeFixtures();
     const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
     const id = post(signals, value);
@@ -380,6 +398,7 @@ describe('processSignals, dry run', () => {
       status: 'refused',
       detail: expect.stringMatching(new RegExp(`^${code}: `)),
     });
+    expect(signals.get(id)?.events.at(-1)?.detail).toContain(detail);
     expect(refusalsOf(root, code)).toEqual([
       expect.objectContaining({ scope: 'signal', ticket: '#1941', book_id: null }),
     ]);
@@ -496,9 +515,38 @@ describe('processSignals, dry run', () => {
     expect(signals.get(id)?.status).toBe('queued');
   });
 
-  it('records a failed signal and carries on with the next', async () => {
+  it('refuses a symbol with an open position in a signals book', async () => {
     const fixtures = await writeFixtures();
     const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
+    hold(root, 'signals/primary', 'DN');
+    post(signals, { symbol: 'DN' });
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(refusalsOf(root, 'symbol_held')).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining('held or resting in signals/primary'),
+      }),
+    ]);
+  });
+
+  it('ignores a simulated book of another sleeve holding the symbol', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
+    hold(root, 'debate/primary', 'DN');
+    const id = post(signals, { symbol: 'DN' });
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(signals.get(id)?.status).toBe('processed');
+  });
+
+  it('records a failed signal and carries on with the next', async () => {
+    const fixtures = await writeFixtures();
+    const logs: LogEntry[] = [];
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION), {
+      logger: { log: (entry) => logs.push(entry) },
+    });
     const first = post(signals, {}, new Date(IN_SESSION.getTime() - 1_000));
     const second = post(signals, { symbol: 'DN' });
     const recordDecision = root.journal.recordDecision.bind(root.journal);
@@ -518,6 +566,17 @@ describe('processSignals, dry run', () => {
         { signal_id: second, status: 'processed' },
       ],
     });
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_signal_failed',
+        trace_id: `v2-signal-${first}`,
+        message: `UP ${first}: disk full`,
+      }),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'info', event: 'v2_signal_processed', stage: 'v2' }),
+    );
   });
 });
 
@@ -651,7 +710,28 @@ describe('processSignals, paper with a fake Alpaca', () => {
     expect(alpaca.submitOrder).not.toHaveBeenCalled();
     expect(root.journal.orderFor(shadowId(id))).toMatchObject({ outcome: 'simulated' });
     expect(refusalsOf(root, 'reconcile_not_clean')).toEqual([
-      expect.objectContaining({ book_id: 'signals/primary', instrument: 'UP' }),
+      expect.objectContaining({
+        book_id: 'signals/primary',
+        instrument: 'UP',
+        message: `signals/primary UP: signal ${id} not entered, no clean ${D} reconcile`,
+      }),
+    ]);
+    expect(signals.get(id)?.events.at(-1)?.detail).toMatch(/; reconcile blocked signals\/primary$/);
+  });
+
+  it('refuses a symbol a broker-routed book of another sleeve holds', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const { root, signals } = open(fixtures, clock, paper(fakeAlpaca(clock)));
+    hold(root, 'debate/primary', 'DN');
+    post(signals, { symbol: 'DN' });
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(refusalsOf(root, 'symbol_held')).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining('held or resting in debate/primary'),
+      }),
     ]);
   });
 

@@ -105,6 +105,16 @@ describe('pidAlive', () => {
     expect(pidAlive(process.pid)).toBe(true);
     expect(pidAlive(2_147_483_646)).toBe(false);
   });
+
+  it('sees a pid it may not signal (EPERM) as alive', () => {
+    expect(pidAlive(1)).toBe(true);
+  });
+});
+
+describe('RUN_LEASE_MAX_AGE_MS', () => {
+  it('is six hours', () => {
+    expect(RUN_LEASE_MAX_AGE_MS).toBe(21_600_000);
+  });
 });
 
 function fakeWait(timeoutMs: number): LeaseWait & { slept: number[] } {
