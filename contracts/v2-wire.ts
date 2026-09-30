@@ -249,6 +249,7 @@ export interface JournalRefusalWire {
   readonly book_id: string | null;
   readonly instrument: string | null;
   readonly recorded_at: string;
+  readonly feature_off: string | null;
 }
 
 export interface JournalDayWire {
@@ -531,6 +532,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'book_id',
     'instrument',
     'recorded_at',
+    'feature_off',
   ]),
   research: fieldsOf<ResearchWire>()([
     'contract_version',

@@ -56,7 +56,7 @@ function set<T>(name: string, ticket: string, value: T): Parameter<T> {
 
 export const G18_SOCIAL_SOURCE = unset<string>('G18_SOCIAL_SOURCE', '#1753');
 export const G18_SMALL_CAP_FLOORS = unset<SmallCapFloors>('G18_SMALL_CAP_FLOORS', '#1753');
-export const G18_SENTIMENT_DEDUP_RULE = unset<string>('G18_SENTIMENT_DEDUP_RULE', '#961');
+export const G18_SENTIMENT_DEDUP_RULE = unset<string>('G18_SENTIMENT_DEDUP_RULE', '#1753');
 export const ALPACA_SHORT_EQUITY_FLOOR_USD = unset<number>(
   'ALPACA_SHORT_EQUITY_FLOOR_USD',
   'doc 66 Q8',
