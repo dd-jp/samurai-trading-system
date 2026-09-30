@@ -283,6 +283,10 @@ describe('processSignals, dry run', () => {
       ['signals/no-veto', 'enter_long', 35],
       ['signals/primary', 'enter_long', 35],
     ]);
+    const { reason } = root.db
+      .prepare("SELECT reason FROM v2_decisions WHERE book_id = 'signals/primary'")
+      .get() as { reason: string };
+    expect(reason).toMatch(new RegExp(`^signal ${id}: limit 25 stop 24.5 target 26; veto pass`));
     expect(JSON.parse(decisions[1]?.payload ?? '{}')).toMatchObject({
       signal_id: id,
       size_hint: 0.25,

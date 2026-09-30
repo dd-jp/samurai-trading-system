@@ -367,6 +367,9 @@ describe('V2RiskGate', () => {
     expect(
       gate().approveEntry(request({ decision: { ...cfdShort, entry_trigger: 20.5 } })).order,
     ).toMatchObject({ side: 'sell', entry: 20, entryTrigger: 20.5 });
+    expect(
+      gate().approveEntry(request({ decision: { ...cfdShort, entry_trigger: 20 } })).order,
+    ).toMatchObject({ side: 'sell', entryTrigger: 20 });
   });
 
   it('refuses an entry trigger beyond the limit or at or past the stop', () => {
