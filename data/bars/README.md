@@ -5,6 +5,7 @@ Committed under doc 70 ruling (k) (David, 2026-09-23), except the Parquet store:
 ## `parquet/` — the bar store
 
 - Not in git: rebuilt by a re-pull (the daily refresh, or the two pullers below), not by a checkout.
+- Fresh checkout (a worktree, a clone, CI): `npm run bars:snapshot` restores the `ff29a732` snapshot, which is enough for smoke and the tests; it refuses to overwrite a non-empty store.
 - Layout: `parquet/venue=<venue>/symbol=<SYMBOL>/year=<YYYY>/data_0.parquet`, one file per venue, symbol and calendar year (doc 66 D2). Venues are `alpaca` (US) and `saxo` (LSE). Columns `date` (DATE), `open`, `high`, `low`, `close`, `volume`, `raw_close` (all DOUBLE); `venue`, `symbol` and `year` live in the path.
 - Reader and writer: `server/providers/bar-store/parquet-bar-store.ts` over DuckDB (`@duckdb/node-api`). A write replaces each written symbol whole and leaves the others alone. DuckDB runs single-threaded so the same bars always produce the same bytes.
 - Migrated from the per-symbol CSVs on 2026-09-25 (doc 67 Step 3b): 746 alpaca series (1,761,296 bars) and 22 saxo series (87,971 bars, 87,934 after the 2026-09-29 shape repair below), every series read back identical to the CSV, and the doc 70 verdicts re-ran byte-identical to a CSV re-run on the base commit. The CSVs are in git history before that commit.
