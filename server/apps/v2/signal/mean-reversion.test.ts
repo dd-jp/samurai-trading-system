@@ -406,6 +406,21 @@ describe('createMeanReversionSleeve', () => {
     expect(gappy?.reason).toBe('window_coverage');
   });
 
+  it('a window_coverage skip also blocks an RSI(2) recovery exit (David 2026-09-29, #1912)', async () => {
+    const exitOn = async (missing: number) => {
+      const sleeve = createMeanReversionSleeve(
+        CALENDAR,
+        noConstituents,
+        10,
+      )(barsMarket(datedBars(recoveredCloses(), gappyDates(missing))));
+      return (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    };
+    expect((await exitOn(12))?.action).toBe('exit');
+    const gappy = await exitOn(13);
+    expect(gappy?.action).toBe('skip');
+    expect(gappy?.reason).toBe('window_coverage');
+  });
+
   it('skips as window_coverage when the name has no bar on the last calendar session (stale) (#1912)', async () => {
     const stale = datedBars(oversoldCloses(), SESSIONS.slice(-(LOOKBACK_BARS + 1), -1));
     const sleeve = createMeanReversionSleeve(CALENDAR, noConstituents, 15)(barsMarket(stale));
