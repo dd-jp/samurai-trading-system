@@ -1,5 +1,6 @@
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import type { LogEventCode, Logger } from '../../shared/index.js';
+import { MAX_BAR_AGE_CALENDAR_DAYS } from './data/index.js';
 
 export interface BarRefreshSymbolResult {
   readonly symbol: string;
@@ -28,6 +29,15 @@ export function roundPrices(bars: readonly DailyBar[]): DailyBar[] {
     close: round(bar.close),
     rawClose: round(bar.rawClose),
   }));
+}
+
+// A bar this recent can still be the newest one a fresh read uses: freshness allows
+// MAX_BAR_AGE_CALENDAR_DAYS, and that many calendar days never hold more sessions
+const RECENT_SESSIONS = MAX_BAR_AGE_CALENDAR_DAYS;
+
+export function recentDates(bars: readonly DailyBar[], dates: readonly string[]): string[] {
+  const recent = new Set(bars.slice(-RECENT_SESSIONS).map((bar) => bar.date));
+  return dates.filter((date) => recent.has(date));
 }
 
 export function messageOf(error: unknown): string {

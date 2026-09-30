@@ -62,6 +62,7 @@ export function countShapeViolations(series: ReadonlyMap<string, BarSeries>): nu
 function isChanged(report: ShapeRepairReport): boolean {
   return (
     report.rescaled_fields.length > 0 ||
+    report.neighbour_repairs.length > 0 ||
     report.dropped_glitch_dates.length > 0 ||
     report.ranges_widened > 0
   );

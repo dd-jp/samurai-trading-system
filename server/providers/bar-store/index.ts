@@ -15,13 +15,14 @@ export {
   joinAdjustedAndRaw,
   pullSymbol,
 } from './alpaca-pull.js';
-export type { HygieneReport, ShapeRepairReport } from './bar-hygiene.js';
+export type { HygieneReport, QuarantinedBar, ShapeRepairReport } from './bar-hygiene.js';
 export {
   applyBarHygiene,
   dropNonSessionBars,
   findHolesAndFlips,
   findUnitBreaks,
   normaliseUnitBreaks,
+  quarantineImplausibleBars,
   repairBarShape,
   SHAPE_REPAIR_MANIFEST_NOTE,
   violatesBarShape,

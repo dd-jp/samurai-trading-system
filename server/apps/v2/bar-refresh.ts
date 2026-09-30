@@ -7,6 +7,8 @@ import {
   DEFAULT_BAR_STORE_ROOT,
   ParquetBarStore,
   pullSymbol,
+  type QuarantinedBar,
+  quarantineImplausibleBars,
 } from '../../providers/bar-store/index.js';
 import type { Logger } from '../../shared/index.js';
 import {
@@ -18,6 +20,7 @@ import {
   inSequence,
   logRefresh,
   messageOf,
+  recentDates,
   recordOutcome,
   roundPrices,
   type SymbolOutcome,
@@ -60,9 +63,43 @@ async function refreshOne(
   if (hygiene.bars.length === 0) return undefined;
   const rounded = roundPrices(hygiene.bars);
   if (existing !== undefined) assertNoShrink(symbol, existing, rounded);
-  await options.store.write('alpaca', [{ symbol, bars: rounded }]);
-  if (symbol === CALENDAR_REFERENCE) assertCalendarFresh(rounded, options.tradingDate);
-  return { symbol, bars: rounded.length, unitBreaks: hygiene.report.unit_breaks.length };
+  const { bars, quarantined } = quarantineImplausibleBars(rounded);
+  if (symbol === CALENDAR_REFERENCE) assertCalendarNotQuarantined(rounded, quarantined);
+  await options.store.write('alpaca', [{ symbol, bars }]);
+  warnIfQuarantined(symbol, quarantined, options.logger);
+  if (symbol === CALENDAR_REFERENCE) assertCalendarFresh(bars, options.tradingDate);
+  return { symbol, bars: bars.length, unitBreaks: hygiene.report.unit_breaks.length };
+}
+
+// SPY's bars are the session calendar for every US name, so quarantining a recent SPY bar
+// would silently shift the whole universe's decision day rather than skip one name
+function assertCalendarNotQuarantined(
+  rounded: readonly DailyBar[],
+  quarantined: readonly QuarantinedBar[],
+): void {
+  const recent = recentDates(
+    rounded,
+    quarantined.map(({ date }) => date),
+  );
+  if (recent.length === 0) return;
+  throw new Error(
+    `v2 bar refresh: ${CALENDAR_REFERENCE} bar ${recent.join(', ')} is implausible and too recent to quarantine; the calendar reference cannot skip a session`,
+  );
+}
+
+function warnIfQuarantined(
+  symbol: string,
+  quarantined: readonly QuarantinedBar[],
+  logger: Logger,
+): void {
+  for (const { date, field, price, ratio } of quarantined) {
+    logRefresh(
+      logger,
+      'warn',
+      'v2_bar_quarantined',
+      `${symbol}: quarantined ${date} (${field} ${price} is ${ratio.toFixed(2)}x beyond the neighbouring closes); the name skips that session`,
+    );
+  }
 }
 
 function orderedUniverse(

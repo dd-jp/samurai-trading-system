@@ -333,6 +333,118 @@ describe('refreshAlpacaBars', () => {
   });
 });
 
+describe('refreshAlpacaBars with an implausible high or low print', () => {
+  const HISTORY = [
+    '2016-01-04',
+    '2016-01-05',
+    '2016-01-06',
+    '2016-01-07',
+    '2016-01-08',
+    '2016-01-11',
+    '2016-01-12',
+    '2016-01-13',
+    '2016-01-14',
+  ];
+  const HISTORY_TRADING_DATE = '2016-01-15';
+  const withPrint = (close: number, dates: string | string[], low: number): SymbolFixture => ({
+    adjusted: HISTORY.map((day) =>
+      [dates].flat().includes(day)
+        ? { t: `${day}T05:00:00Z`, o: close, h: close, l: low, c: close, v: 1 }
+        : rawBar(`${day}T05:00:00Z`, close),
+    ),
+  });
+  const run = async (store: ParquetBarStore, fixtures: Record<string, SymbolFixture>) => {
+    const { logger, entries } = recorder();
+    const report = await refreshAlpacaBars({
+      api: fakeApi(fixtures),
+      store,
+      tradingDate: HISTORY_TRADING_DATE,
+      constituents: Object.keys(fixtures).filter((symbol) => symbol !== 'SPY'),
+      logger,
+    });
+    return { report, entries };
+  };
+
+  it('quarantines the bar, writes the rest and journals a warning naming it', async () => {
+    const store = await openStore();
+    const { report, entries } = await run(store, {
+      SPY: flat(HISTORY, 200),
+      MRK: withPrint(64.32, '2016-01-07', 12.92),
+    });
+    expect(report.failed).toEqual([]);
+    expect(report.updated.find((u) => u.symbol === 'MRK')?.bars).toBe(HISTORY.length - 1);
+    expect((await store.readSeries('alpaca', 'MRK'))?.bars.map((b) => b.date)).toEqual(
+      HISTORY.filter((date) => date !== '2016-01-07'),
+    );
+    expect(entries.filter((e) => e.event === 'v2_bar_quarantined')).toEqual([
+      {
+        trace_id: 'v2-bar-refresh',
+        stage: 'v2',
+        level: 'warn',
+        event: 'v2_bar_quarantined',
+        message:
+          'MRK: quarantined 2016-01-07 (low 12.92 is 4.98x beyond the neighbouring closes); the name skips that session',
+      },
+    ]);
+  });
+
+  it('quarantines a bar the stored series still holds without tripping the shrink guard', async () => {
+    const store = await openStore();
+    await store.write('alpaca', [existingSeries('MRK', HISTORY, 64.32)]);
+    const { report } = await run(store, {
+      SPY: flat(HISTORY, 200),
+      MRK: withPrint(64.32, '2016-01-07', 12.92),
+    });
+    expect(report.failed).toEqual([]);
+    expect((await store.readSeries('alpaca', 'MRK'))?.bars).toHaveLength(HISTORY.length - 1);
+  });
+
+  it('still refuses a truncated response even when a bar would be quarantined', async () => {
+    const store = await openStore();
+    await store.write('alpaca', [existingSeries('MRK', [...HISTORY, '2016-01-15'], 64.32)]);
+    const { report } = await run(store, {
+      SPY: flat(HISTORY, 200),
+      MRK: withPrint(64.32, '2016-01-07', 12.92),
+    });
+    expect(report.failed.map((f) => f.symbol)).toEqual(['MRK']);
+    expect(report.failed[0]?.reason).toMatch(/would shrink history/);
+  });
+
+  it('quarantines the newest bar of a name, which then skips that session', async () => {
+    const store = await openStore();
+    const { report } = await run(store, {
+      SPY: flat(HISTORY, 200),
+      VZ: withPrint(38.61, '2016-01-14', 10.09),
+    });
+    expect(report.failed).toEqual([]);
+    expect((await store.readSeries('alpaca', 'VZ'))?.bars.at(-1)?.date).toBe('2016-01-13');
+  });
+
+  it('quarantines an older SPY bar and keeps the calendar reference fresh', async () => {
+    const store = await openStore();
+    const { report, entries } = await run(store, { SPY: withPrint(689.99, '2016-01-07', 68.47) });
+    expect(report.failed).toEqual([]);
+    expect((await store.readSeries('alpaca', 'SPY'))?.bars).toHaveLength(HISTORY.length - 1);
+    expect(entries.map((e) => e.event)).toContain('v2_bar_quarantined');
+  });
+
+  it('aborts the run rather than quarantine a SPY bar inside the last five sessions', async () => {
+    const store = await openStore();
+    await expect(
+      run(store, { SPY: withPrint(689.99, ['2016-01-08', '2016-01-12'], 68.47) }),
+    ).rejects.toThrow(
+      'v2 bar refresh: SPY bar 2016-01-08, 2016-01-12 is implausible and too recent to quarantine; the calendar reference cannot skip a session',
+    );
+    expect(await store.readSeries('alpaca', 'SPY')).toBeUndefined();
+  });
+
+  it('does not journal a quarantine when every bar is plausible', async () => {
+    const store = await openStore();
+    const { entries } = await run(store, { SPY: flat(HISTORY, 200), MRK: flat(HISTORY, 64) });
+    expect(entries.map((e) => e.event)).not.toContain('v2_bar_quarantined');
+  });
+});
+
 describe('NO_BAR_REFRESH', () => {
   it('resolves an empty report', async () => {
     await expect(NO_BAR_REFRESH.run()).resolves.toEqual({
