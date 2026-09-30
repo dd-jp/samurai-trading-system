@@ -3630,6 +3630,40 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     ).toEqual([{ status: 'read_failed', detail: 'alpaca 503' }]);
   });
 
+  it('a store throw inside reconcile blocks every book entry, still exits and alerts critical (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([exitAapl, longMsft]);
+    vi.spyOn(deps.journal, 'recordReconcile').mockImplementation(() => {
+      throw new Error('SQLITE_BUSY');
+    });
+    const logs: LogEntry[] = [];
+    const report = await runCycle(
+      { ...deps, logger: { log: (entry) => logs.push(entry) } },
+      '2026-09-28',
+    );
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-28-AAPL-exit']);
+    expect(deps.journal.orderFor(PRIMARY_MSFT)).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-28-MSFT')).toBeUndefined();
+    expect(report.books.map((book) => book.book_id)).toEqual([
+      'debate/primary',
+      'debate/no-macro-gate',
+    ]);
+    expect(report.refusals).toEqual(
+      expect.arrayContaining([
+        'debate/primary: entries blocked, reconcile threw: SQLITE_BUSY',
+        'debate/no-macro-gate: entries blocked, reconcile threw: SQLITE_BUSY',
+      ]),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'v2_reconcile_threw' }),
+    );
+  });
+
   it('live: an unset cash tolerance fails closed, primary entries blocked through a refusal, no critical alert', async () => {
     const { deps, logs } = await heldAaplThen(
       (harnessed) => harnessed.brokerBooks,

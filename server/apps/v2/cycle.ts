@@ -40,7 +40,7 @@ import {
   macroGate,
   quotePerGbp,
 } from './data/index.js';
-import { type ReconcileOutcome, reconcileBooks } from './reconcile.js';
+import { type ReconcileOutcome, reconcileOrBlockEntries } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
   type LimitEntryOutcome,
@@ -1335,7 +1335,7 @@ async function runUnmarked(
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
-  cycle.blockEntries(await reconcileBooks(deps, tradingDate));
+  cycle.blockEntries(await reconcileOrBlockEntries(deps, tradingDate));
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {

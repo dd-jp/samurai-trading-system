@@ -11,7 +11,12 @@ import type {
   Venue,
 } from '../../../contracts/index.js';
 import type { LogEntry } from '../../shared/index.js';
-import { type ReconcileDeps, reconcileBooks, storeView } from './reconcile.js';
+import {
+  type ReconcileDeps,
+  reconcileBooks,
+  reconcileOrBlockEntries,
+  storeView,
+} from './reconcile.js';
 
 const FX = 1.25;
 const DATE = '2026-09-28';
@@ -411,5 +416,67 @@ describe('reconcileBooks', () => {
       detail:
         'position_missing_at_broker AAPL store 6 broker 0; cash not compared on paper (David 2026-09-29, #1872)',
     });
+  });
+});
+
+describe('reconcileOrBlockEntries', () => {
+  it('passes a completed reconcile through unchanged', async () => {
+    const { deps } = harness(CLEAN_BROKER);
+    expect(await reconcileOrBlockEntries(deps, DATE)).toEqual({
+      blockedBookIds: new Set(),
+      refusals: [],
+    });
+  });
+
+  it('a store throw blocks every book with an error alert and journals nothing (#1927)', async () => {
+    const { deps, refusals, logs } = harness(CLEAN_BROKER, {
+      ledger: { ...LEDGER, books: [PRIMARY, SHADOW, TREND] },
+    });
+    const outcome = await reconcileOrBlockEntries(
+      {
+        ...deps,
+        journal: {
+          ...deps.journal,
+          recordReconcile: () => {
+            throw new Error('SQLITE_BUSY');
+          },
+        },
+      },
+      DATE,
+    );
+
+    const summary = 'reconcile threw: SQLITE_BUSY';
+    expect(outcome).toEqual({
+      blockedBookIds: new Set([PRIMARY.id, SHADOW.id, TREND.id]),
+      refusals: [PRIMARY.id, SHADOW.id, TREND.id].map((id) => `${id}: entries blocked, ${summary}`),
+    });
+    expect(refusals).toEqual([]);
+    expect(logs).toEqual([
+      {
+        trace_id: `v2-${DATE}`,
+        stage: 'v2',
+        level: 'error',
+        event: 'v2_reconcile_threw',
+        message: summary,
+      },
+    ]);
+  });
+
+  it('still blocks every book when no logger is wired', async () => {
+    const { deps } = harness(CLEAN_BROKER);
+    const outcome = await reconcileOrBlockEntries(
+      {
+        ...deps,
+        logger: undefined,
+        books: {
+          ...deps.books,
+          positions: () => {
+            throw new Error('SQLITE_CORRUPT');
+          },
+        },
+      },
+      DATE,
+    );
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id, SHADOW.id]));
   });
 });
