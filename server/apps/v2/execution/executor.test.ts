@@ -433,6 +433,7 @@ describe('V2OrderExecutor', () => {
       qty: 6,
       fee: 0.5,
       timestamp: new Date('2026-09-25T15:00:00.000Z'),
+      qty_is_cumulative: true,
     };
     const alpaca = fakeBroker('alpaca', [fill]);
     const failing = fakeBroker('saxo');
@@ -446,7 +447,15 @@ describe('V2OrderExecutor', () => {
     });
     expect(await paper.fetchNewFills('2026-09-24T21:00:00.000Z')).toEqual({
       fills: [
-        { client_order_id: 'c1', broker_fill_id: 'f1', leg: 'entry', price: 20, qty: 6, fee: 0.5 },
+        {
+          client_order_id: 'c1',
+          broker_fill_id: 'f1',
+          leg: 'entry',
+          price: 20,
+          qty: 6,
+          fee: 0.5,
+          qty_is_cumulative: true,
+        },
       ],
       failures: [expect.stringContaining('saxo down')],
     });

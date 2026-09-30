@@ -118,6 +118,7 @@ export type {
   ReconcileDiffKind,
   ReconcileSource,
   ReconcileStatus,
+  RecordedFillPart,
   ResumedExit,
   RiskApprovedOrder,
   RiskGate,
