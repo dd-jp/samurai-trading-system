@@ -83,6 +83,12 @@ describe('cumulativeIncrement', () => {
     ).toBe('duplicate');
   });
 
+  it('treats a zero report against zero booked as a duplicate, not behind and not a fill', () => {
+    expect(cumulativeIncrement([part(0, 20, 0)], { qty: 0, price: 20, fee: 0 }, fxOn)).toEqual({
+      kind: 'duplicate',
+    });
+  });
+
   it('reports a cumulative quantity below the booked one as behind, never a negative fill', () => {
     expect(cumulativeIncrement([part(10, 20, 0)], { qty: 6, price: 20, fee: 0 }, fxOn)).toEqual({
       kind: 'behind',

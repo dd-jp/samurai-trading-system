@@ -1277,7 +1277,11 @@ describe('runCycle', () => {
       payload: report,
     });
     expect(log).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'v2_fill_unmatched', level: 'warn' }),
+      expect.objectContaining({
+        event: 'v2_fill_unmatched',
+        level: 'warn',
+        message: 'fill alp-unknown-order-entry matches no v2 order',
+      }),
     );
     const db = (
       deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
@@ -2327,7 +2331,7 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
   }
 
   it('kill line: a partial then the complete report books the broker quantity at the true average', async () => {
-    const { alpaca, deps } = await entered();
+    const { alpaca, deps, log } = await entered();
     alpaca.cumulative(ENTRY, 'entry', 4, 20);
     await runCycle(deps, '2026-09-28');
     expect(fillRows(deps)).toHaveLength(1);
@@ -2342,6 +2346,7 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
       targetGbp: expect.closeTo(21.2 / FX, 9),
     });
     expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20.2) / FX, 9);
+    expect(log.mock.calls.some(([entry]) => entry.level === 'warn')).toBe(false);
     expect(fillRows(deps)).toEqual([
       { fill_id: `alpaca:alp-${ENTRY}-entry`, leg: 'entry', qty: 4, price_gbp: 20 / FX },
       {
@@ -2413,6 +2418,17 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
       1_000 - (6 * 20) / FX + (6 * 19.1) / FX,
       9,
     );
+  });
+
+  it('a discrete report is booked whole and stays idempotent on its id, never read as a running total', async () => {
+    const { alpaca, deps } = await entered();
+    alpaca.fill(ENTRY, 'entry', 4, 20);
+    alpaca.fill(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(heldQty(deps)).toBe(4);
+    alpaca.fill(ENTRY, 'entry', 6, 20);
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(4);
   });
 
   it('warns and books at the running average when the carved increment price is unusable', async () => {
