@@ -32,6 +32,7 @@ import type {
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
+import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   CALENDAR_REFERENCE,
   isFresh,
@@ -258,11 +259,14 @@ class Cycle {
       this.log('warn', 'v2_fill_unmatched', `fill ${fill.broker_fill_id} matches no v2 order`);
       return;
     }
+    const baseFillId = `${order.venue}:${fill.broker_fill_id}`;
+    const increment = this.incrementOf(order, fill, baseFillId);
+    if (increment === undefined) return;
     const side = fill.leg === 'entry' || order.leg === 'exit' ? order.side : opposite(order.side);
     const fx = this.fxFor(order.venue as Venue);
-    const priceGbp = fill.price / fx;
+    const priceGbp = increment.price / fx;
     const recorded = this.deps.journal.recordFill({
-      fill_id: `${order.venue}:${fill.broker_fill_id}`,
+      fill_id: `${baseFillId}${increment.idSuffix}`,
       client_order_id: order.client_order_id,
       book_id: order.book_id,
       trading_date: this.tradingDate,
@@ -270,9 +274,9 @@ class Cycle {
       venue: order.venue,
       leg: fill.leg,
       side,
-      qty: fill.qty,
+      qty: increment.qty,
       price_gbp: priceGbp,
-      fee_gbp: fill.fee / fx,
+      fee_gbp: increment.fee / fx,
     });
     if (!recorded) return;
     this.tally.fills += 1;
@@ -283,15 +287,42 @@ class Cycle {
       venue: order.venue as Venue,
       side,
       leg: fill.leg,
-      qty: fill.qty,
+      qty: increment.qty,
       priceGbp,
-      feeGbp: fill.fee / fx,
+      feeGbp: increment.fee / fx,
       clientOrderId: order.client_order_id,
       tradingDate: this.tradingDate,
       stopGbp,
       targetGbp,
     });
     this.warnIfFillCrossedFlat(order, fill.leg, before, after);
+  }
+
+  // Alpaca re-reports each order's running filled_qty and average price under one order id
+  // (#1873); only the part beyond what the journal already holds for that id is a new fill
+  incrementOf(order: JournalledOrder, fill: V2Fill, baseFillId: string): FillIncrement | undefined {
+    if (fill.qty_is_cumulative !== true) return wholeFill(fill);
+    const venue = order.venue as Venue;
+    const verdict = cumulativeIncrement(this.deps.journal.fillPartsOf(baseFillId), fill, (date) =>
+      quotePerGbp(this.deps.market, venue, date),
+    );
+    if (verdict.kind === 'behind') {
+      this.log(
+        'warn',
+        'v2_fill_cumulative_behind',
+        `${baseFillId} reports cumulative qty ${fill.qty} below the ${verdict.bookedQty} already booked; ignored`,
+      );
+      return undefined;
+    }
+    if (verdict.kind === 'duplicate') return undefined;
+    if (verdict.increment.priceDegraded) {
+      this.log(
+        'warn',
+        'v2_fill_increment_price_unusable',
+        `${baseFillId}: increment of ${verdict.increment.qty} booked at the cumulative average ${fill.price}`,
+      );
+    }
+    return verdict.increment;
   }
 
   warnIfFillCrossedFlat(
