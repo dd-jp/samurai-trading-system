@@ -29,6 +29,10 @@ export function pidAlive(pid: number): boolean {
 
 export type ReleaseLease = () => void;
 
+export function describeHolder(holder: RunLeaseHolder | undefined): string {
+  return `${holder?.purpose ?? 'nobody'} (pid ${holder?.pid ?? '-'})`;
+}
+
 export class RunLease {
   constructor(
     private readonly db: StoreHandle,
@@ -91,7 +95,7 @@ export async function withRunLease<T>(
     if (wait.nowMs() >= deadline) {
       const holder = lease.current();
       throw new Error(
-        `v2 run lease not acquired for ${purpose} within ${wait.timeoutMs} ms: held by ${holder?.purpose ?? 'nobody'} (pid ${holder?.pid ?? '-'}) since ${holder?.acquired_at ?? '-'}`,
+        `v2 run lease not acquired for ${purpose} within ${wait.timeoutMs} ms: held by ${describeHolder(holder)} since ${holder?.acquired_at ?? '-'}`,
       );
     }
     await wait.sleep(wait.pollMs);

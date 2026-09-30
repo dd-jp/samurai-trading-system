@@ -49,7 +49,7 @@ import {
   type CapitalConfigStore,
   type PaperBooks,
 } from './risk/index.js';
-import { type LeaseWait, RunLease, withRunLease } from './run-lease.js';
+import { describeHolder, type LeaseWait, RunLease, withRunLease } from './run-lease.js';
 import {
   ALL_PINS,
   ARM2_SLEEVE_ID,
@@ -475,12 +475,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       }
       const release = lease.tryAcquire('signals');
       if (release === undefined) {
-        const holder = lease.current();
-        return {
-          ran: false,
-          reason: 'lease_held',
-          detail: `${holder?.purpose ?? 'nobody'} (pid ${holder?.pid ?? '-'})`,
-        };
+        return { ran: false, reason: 'lease_held', detail: describeHolder(lease.current()) };
       }
       try {
         await prime();

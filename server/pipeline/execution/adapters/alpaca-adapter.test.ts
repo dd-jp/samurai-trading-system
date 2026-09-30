@@ -223,6 +223,22 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
     );
   });
 
+  it('refuses a stop_limit parent whose trigger rounds onto the stop, submitting nothing (#1941)', async () => {
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+    });
+
+    await expect(
+      adapter.submitBracket(makeBracket({ entry: 100, stop: 99.505, entry_trigger: 99.506 })),
+    ).rejects.toThrow(/trigger 99.506 became 99.51, at or past the stop 99.51/);
+    expect(client.submitOrder).not.toHaveBeenCalled();
+  });
+
   it('rounds a sub-penny short bracket onto the venue price grid (#983)', async () => {
     const client = makeClient();
     const adapter = new AlpacaBrokerAdapter({

@@ -127,10 +127,21 @@ describe('roundBracketToTick', () => {
 
 describe('roundTriggerToTick', () => {
   it('rounds a buy trigger up and a sell trigger down, never past the rounded limit', () => {
-    expect(roundTriggerToTick('buy', 99.501, 100)).toBe(99.51);
-    expect(roundTriggerToTick('buy', 99.999, 99.99)).toBe(99.99);
-    expect(roundTriggerToTick('sell', 100.499, 100)).toBe(100.49);
-    expect(roundTriggerToTick('sell', 100.001, 100.01)).toBe(100.01);
+    expect(roundTriggerToTick('buy', 99.501, { entry: 100, stop: 95 })).toBe(99.51);
+    expect(roundTriggerToTick('buy', 99.999, { entry: 99.99, stop: 95 })).toBe(99.99);
+    expect(roundTriggerToTick('sell', 100.499, { entry: 100, stop: 105 })).toBe(100.49);
+    expect(roundTriggerToTick('sell', 100.001, { entry: 100.01, stop: 105 })).toBe(100.01);
+  });
+
+  it('refuses a trigger that rounds onto the rounded stop rather than resting the entry on its own stop', () => {
+    expect(roundTriggerToTick('buy', 95.001, { entry: 100, stop: 95 })).toBe(95.01);
+    expect(() => roundTriggerToTick('buy', 95.005, { entry: 100, stop: 95.01 })).toThrow(
+      /buy trigger 95.005 became 95.01, at or past the stop 95.01/,
+    );
+    expect(roundTriggerToTick('sell', 104.999, { entry: 100, stop: 105 })).toBe(104.99);
+    expect(() => roundTriggerToTick('sell', 104.995, { entry: 100, stop: 104.99 })).toThrow(
+      /sell trigger 104.995 became 104.99, at or past the stop 104.99/,
+    );
   });
 });
 

@@ -436,6 +436,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       order.target,
     );
     const submitted: NativeBracketRequest = { ...order, entry, stop, target };
+    const parentPrices = bracketParentPrices(submitted);
 
     const submittedAt = this.clock.now();
     const response = await this.call('submitBracket', () =>
@@ -443,7 +444,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         symbol: toAlpacaSymbol(submitted.instrument, submitted.asset_class),
         side: submitted.side,
         qty: String(submitted.size),
-        ...bracketParentPrices(submitted),
+        ...parentPrices,
         time_in_force: submitted.time_in_force,
         client_order_id: submitted.client_order_id,
         order_class: 'bracket',
@@ -922,7 +923,7 @@ function bracketParentPrices(order: NativeBracketRequest): {
 } {
   const limit_price = formatTickPrice(order.entry);
   if (order.entry_trigger === undefined) return { limit_price };
-  const trigger = roundTriggerToTick(order.side, order.entry_trigger, order.entry);
+  const trigger = roundTriggerToTick(order.side, order.entry_trigger, order);
   return { limit_price, stop_price: formatTickPrice(trigger) };
 }
 
