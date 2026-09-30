@@ -480,9 +480,10 @@ describe('composeV2Root', () => {
     try {
       root.books.applyFill('debate/primary', cfdEntry('TSLA', 'saxo_cfd_usd', 'sell'));
       root.books.applyFill('debate/primary', cfdEntry('NVDA', 'saxo_cfd_usd', 'sell'));
+      root.books.applyFill('debate/primary', cfdEntry('AMD', 'saxo_cfd_usd', 'sell'));
       root.books.applyFill('debate/primary', cfdEntry('AAPL', 'saxo_cfd_usd', 'buy'));
       const day = root.books.markDay('debate/primary', ENTRY_DATE, () => 100, 1);
-      expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0001 + (100 * 0.02) / 360, 12);
+      expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0001 + (2 * 100 * 0.02) / 360, 12);
       expect(day.cfdFinancingAccrualGbp).toBeCloseTo((100 * 0.072) / 360, 12);
     } finally {
       root.close();
