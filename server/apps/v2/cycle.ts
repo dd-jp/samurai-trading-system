@@ -1133,9 +1133,6 @@ class Cycle {
   async markAll(books: readonly BookSpec[]): Promise<BookReport[]> {
     const previous = new Map(books.map((book) => [book.id, this.deps.books.lastDay(book.id)]));
     for (const book of books) this.markOne(book, previous.get(book.id));
-    // Pooled primary state depends on every primary's mark for tradingDate; settle only once
-    // all of today's marks are committed, so no book's own halt is checked against a partial sum
-    this.deps.books.settlePrimaryBudgets(this.tradingDate);
     const reports: BookReport[] = [];
     for (const book of books) reports.push(await this.reportMark(book, previous.get(book.id)));
     return reports;
@@ -1411,7 +1408,6 @@ async function runUnmarked(
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
   cycle.rescaleSplitPositions();
-  deps.books.settleLastPrimaryMark();
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();

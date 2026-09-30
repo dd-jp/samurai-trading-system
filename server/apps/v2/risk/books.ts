@@ -8,7 +8,6 @@ import type {
   LossBudgetState,
   MarkPriceGbp,
   Position,
-  SizeMultiplier,
   Sleeve,
   SleeveSpec,
   Valuation,
@@ -29,30 +28,6 @@ function crossedUnexpectedly(leg: FillLeg, beforeQty: number, afterQty: number):
   const afterSign = Math.sign(afterQty);
   if (beforeSign !== 0 && afterSign !== 0) return beforeSign !== afterSign;
   return beforeSign === 0 && afterSign !== 0 && leg !== 'entry';
-}
-
-function sumValues(values: ReadonlyMap<string, number>): number {
-  let total = 0;
-  for (const value of values.values()) total += value;
-  return total;
-}
-
-interface AccountMarkRow {
-  readonly book_id: string;
-  readonly trading_date: string;
-  readonly equity_gbp: number;
-}
-
-function marksByTradingDate(
-  rows: readonly AccountMarkRow[],
-): ReadonlyMap<string, readonly AccountMarkRow[]> {
-  const byDate = new Map<string, AccountMarkRow[]>();
-  for (const row of rows) {
-    const marks = byDate.get(row.trading_date);
-    if (marks === undefined) byDate.set(row.trading_date, [row]);
-    else marks.push(row);
-  }
-  return byDate;
 }
 
 interface BookDayRow {
@@ -120,11 +95,6 @@ function rollYear(
 export class PaperBooks implements BookLedger {
   readonly #budgets = new Map<string, { budget: LossBudget; sleeve: SleeveSpec }>();
   readonly #specs: readonly BookSpec[];
-  // Q6/G6: one budget, account-wide, pooling every PRIMARY book's net loss against the full
-  // (unshared) yearly cap — the #1825 sleeve-share split still governs each book's own,
-  // tighter de-risking ratchet; this is the backstop once more than one primary book trades
-  readonly #accountBudget: LossBudget | undefined;
-  #accountPreviousDay: { trading_date: string; equity_gbp: number } | undefined;
 
   constructor(
     private readonly db: StoreHandle,
@@ -132,7 +102,6 @@ export class PaperBooks implements BookLedger {
     private readonly capital: Pick<CapitalConfigStore, 'inForce' | 'lastKnown'>,
     openingDate: string,
     sleeves: readonly Pick<Sleeve, 'id' | 'spec'>[],
-    pooled = true,
   ) {
     const capitalYear = capital.inForce(openingDate);
     const opened: BookSpec[] = [];
@@ -145,43 +114,6 @@ export class PaperBooks implements BookLedger {
       opened.push(...specs.filter((spec) => this.#open(spec.id, sleeve.spec)));
     }
     this.#specs = opened;
-    this.#accountBudget = pooled ? this.#openAccountBudget() : undefined;
-  }
-
-  #primaryIds(): readonly string[] {
-    return this.#specs.filter((spec) => spec.variant === 'primary').map((spec) => spec.id);
-  }
-
-  #openAccountBudget(): LossBudget | undefined {
-    const primaryIds = this.#primaryIds();
-    const startCapitalGbp = primaryIds.reduce(
-      (total, id) => total + (this.#startCapital(id) ?? 0),
-      0,
-    );
-    if (startCapitalGbp <= 0) return undefined;
-    const budget = new LossBudget(startCapitalGbp);
-    this.#replayAccount(budget, primaryIds);
-    return budget;
-  }
-
-  #replayAccount(budget: LossBudget, primaryIds: readonly string[]): void {
-    const lastKnown = new Map<string, number>(
-      primaryIds.map((id) => [id, this.#startCapital(id) ?? 0]),
-    );
-    for (const [tradingDate, marks] of marksByTradingDate(this.#accountMarkRows(primaryIds))) {
-      for (const mark of marks) lastKnown.set(mark.book_id, mark.equity_gbp);
-      this.#advanceAccountBudget(budget, sumValues(lastKnown), tradingDate);
-    }
-  }
-
-  #accountMarkRows(primaryIds: readonly string[]): readonly AccountMarkRow[] {
-    const placeholders = primaryIds.map(() => '?').join(', ');
-    return this.db
-      .prepare(
-        `SELECT book_id, trading_date, equity_gbp FROM v2_book_days
-          WHERE book_id IN (${placeholders}) ORDER BY trading_date`,
-      )
-      .all(...primaryIds) as AccountMarkRow[];
   }
 
   #accountCapitalOn(tradingDate: string): CapitalYear {
@@ -192,69 +124,6 @@ export class PaperBooks implements BookLedger {
       );
     }
     return capital;
-  }
-
-  #advanceAccountBudget(
-    budget: LossBudget,
-    equityGbp: number,
-    tradingDate: string,
-  ): LossBudgetState {
-    rollYear(budget, this.#accountPreviousDay, tradingDate);
-    const state = budget.markClose(
-      equityGbp,
-      this.#accountPreviousDay?.equity_gbp ?? equityGbp,
-      this.#accountCapitalOn(tradingDate),
-    );
-    this.#accountPreviousDay = { trading_date: tradingDate, equity_gbp: equityGbp };
-    return state;
-  }
-
-  settlePrimaryBudgets(tradingDate: string): void {
-    const budget = this.#accountBudget;
-    if (budget === undefined) return;
-    // #accountBudget is only ever set when #primaryIds() was non-empty at construction
-    // (#openAccountBudget), and #specs never changes after that, so it still is here
-    const days = this.#primaryIds().map((id) => this.#markedDay(id, tradingDate));
-    const equityGbp = days.reduce((total, day) => total + day.equityGbp, 0);
-    const state = this.#advanceAccountBudget(budget, equityGbp, tradingDate);
-    for (const day of days) {
-      const effective = Math.min(day.state.sizeMultiplier, state.sizeMultiplier) as SizeMultiplier;
-      if (effective !== day.state.sizeMultiplier) {
-        this.#tightenSizeMultiplier(day, tradingDate, effective);
-      }
-    }
-  }
-
-  // A crash between markAll's own markDay loop and its settlePrimaryBudgets call leaves that
-  // date pooled only in the in-memory #accountBudget replay, never written back to the books'
-  // own rows (#1799); re-settling the same date is a no-op once it is already written
-  settleLastPrimaryMark(): void {
-    if (this.#accountBudget === undefined) return;
-    const dates = this.#primaryIds().map((id) => this.lastDay(id)?.tradingDate);
-    const tradingDate = dates[0];
-    if (tradingDate === undefined || dates.some((date) => date !== tradingDate)) return;
-    this.settlePrimaryBudgets(tradingDate);
-  }
-
-  #markedDay(bookId: string, tradingDate: string): BookDay {
-    const day = this.lastDay(bookId);
-    if (day === undefined || day.tradingDate !== tradingDate) {
-      throw new Error(
-        `PaperBooks: settlePrimaryBudgets(${tradingDate}) called before ${bookId} was marked`,
-      );
-    }
-    return day;
-  }
-
-  // A pooled halt (effective 0) must also block entries, or the dashboard's own
-  // "blocked at next fill" column (entries_blocked) disagrees with its halted state
-  #tightenSizeMultiplier(day: BookDay, tradingDate: string, sizeMultiplier: SizeMultiplier): void {
-    this.db
-      .prepare(
-        `UPDATE v2_book_days SET size_multiplier = ?, entries_blocked = MAX(entries_blocked, ?)
-          WHERE book_id = ? AND trading_date = ?`,
-      )
-      .run(sizeMultiplier, sizeMultiplier === 0 ? 1 : 0, day.bookId, tradingDate);
   }
 
   #seed(specs: readonly BookSpec[], seedCapitalGbp: number): void {

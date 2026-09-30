@@ -2702,8 +2702,8 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
   });
 });
 
-describe('#1799: account-wide pooled loss budget across primary books', () => {
-  it('halts a second primary once the pooled loss crosses the full cap, and the gate sizes its next entry at zero', async () => {
+describe('per-sleeve loss budgets (David 2026-09-30, #1941)', () => {
+  it("a loss that halts one primary leaves another primary's sizing and next entry untouched", async () => {
     const share = 0.5;
     const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
     const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
@@ -2719,9 +2719,7 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
     };
     const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
 
-    // debate's own share of the £600 cap is £300: a £550 loss halts it on its own
     loseInBook(deps.books, 'debate/primary', '2026-09-25', 550, 'a');
-    // trend's own share is also £300, and £50 loss is under even the half-size step
     loseInBook(deps.books, 'trend/primary', '2026-09-25', 50, 'b');
     await runCycle(deps, '2026-09-25');
 
@@ -2729,66 +2727,15 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
       halted: true,
       sizeMultiplier: 0,
     });
-    // Without pooling this would still read sizeMultiplier: 1 (its own £50 loss is under
-    // even the half-size mark of its £300 share)
     expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: true,
-      sizeMultiplier: 0,
+      halted: false,
+      sizeMultiplier: 1,
     });
 
     trendDecisions = [{ ...longAapl, sleeve_id: 'trend' }];
     await runCycle(deps, '2026-09-28');
 
-    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBe(0);
-    expect(orders(deps, 'trend/primary')).toEqual([]);
-    expect(deps.books.positions('trend/primary')).toEqual([]);
-  });
-
-  it('a crash between marking both primaries and settling the pool is repaired next cycle, before any fill', async () => {
-    const share = 0.5;
-    const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
-    const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
-    const trendDecisions: readonly SleeveDecision[] = [{ ...longAapl, sleeve_id: 'trend' }];
-    const trend: Sleeve = {
-      id: 'trend',
-      spec: specB,
-      universe: () => ({
-        instruments: trendDecisions.map((decision) => decision.instrument),
-        refusals: [],
-      }),
-      decide: () => Promise.resolve({ decisions: trendDecisions, refusals: [] }),
-    };
-    // Each primary's own share of the hardcoded £1,000 start capital is £500 (share 0.5), so its
-    // own loss must stay well under that to leave AAPL's entry sizeable off live post-loss equity
-    const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
-
-    loseInBook(deps.books, 'debate/primary', '2026-09-25', 400, 'a');
-    loseInBook(deps.books, 'trend/primary', '2026-09-25', 250, 'b');
-    vi.spyOn(deps.books, 'settlePrimaryBudgets').mockImplementationOnce(() => {
-      throw new Error('crash before settling the pool');
-    });
-    await expect(runCycle(deps, '2026-09-25')).rejects.toThrow('crash before settling the pool');
-
-    expect(sizeShares(deps, 'trend/primary', '2026-09-25', 'AAPL')).toBeGreaterThan(0);
-    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toBeDefined();
-    // Both primaries were marked (the crash was after markOne, before settlePrimaryBudgets),
-    // but trend/primary's own unpooled step (0.25) is what got persisted, not the pooled halt
-    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: false,
-      sizeMultiplier: 0.25,
-    });
-
-    await runCycle(deps, '2026-09-28');
-
-    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: true,
-      sizeMultiplier: 0,
-    });
-    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toMatchObject({
-      outcome: 'cancelled',
-    });
-    expect(deps.books.position('trend/primary', 'AAPL')).toBeUndefined();
-    expect(deps.books.position('trend/no-macro-gate', 'AAPL')).toBeDefined();
+    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBeGreaterThan(0);
   });
 });
 

@@ -217,7 +217,7 @@ describe('signals sleeve capital (David 2026-09-30, doc 66 D8)', () => {
     expect(dailyCapGbp(share)).toBeCloseTo(70, 9);
   });
 
-  it('pools signals/primary with debate/primary: a signals loss steps the debate primary down', async () => {
+  it('keeps signals/primary and debate/primary on separate budgets: a signals loss leaves debate at full size', async () => {
     const fixtures = await writeFixtures();
     const { root } = open(fixtures, new SimulatedClock(IN_SESSION));
     const { books } = root;
@@ -243,8 +243,10 @@ describe('signals sleeve capital (David 2026-09-30, doc 66 D8)', () => {
     const flat = () => undefined;
     expect(books.markDay('signals/primary', D, flat, 1).state.sizeMultiplier).toBe(0.5);
     expect(books.markDay('debate/primary', D, flat, 1).state.sizeMultiplier).toBe(1);
-    books.settlePrimaryBudgets(D);
-    expect(books.lastDay('debate/primary')?.state.sizeMultiplier).toBe(0.5);
+    expect(books.lastDay('debate/primary')?.state).toMatchObject({
+      sizeMultiplier: 1,
+      entriesBlockedAtNextFill: false,
+    });
   });
 });
 
