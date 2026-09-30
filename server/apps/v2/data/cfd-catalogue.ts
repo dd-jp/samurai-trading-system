@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { addDays } from './macro-calendar.js';
 import type { QuoteCurrency } from './venues.js';
 
+export const CFD_CATALOGUE_PATH = 'data/saxo-cfd-catalogue.json';
 export const CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS = 3;
 const DAYS_PER_YEAR = 365;
 
