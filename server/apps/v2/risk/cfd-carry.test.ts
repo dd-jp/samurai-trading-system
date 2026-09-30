@@ -23,7 +23,7 @@ function held(instrument: string, venue: Venue, qty: number, avgPriceGbp = 100):
 const RATES: CfdCarryRates = {
   financing: {
     dailyRate: (venue, side) =>
-      (side === 'long' ? 0.001 : 0.0005) * (venue === 'saxo_cfd_usd' ? 2 : 1),
+      ({ long: 0.001, short: 0.0005 })[side] * (venue === 'saxo_cfd_usd' ? 2 : 1),
   },
   borrow: { dailyRate: (venue, quoted) => (quoted ?? 0.01) * (venue === 'saxo_cfd_usd' ? 2 : 1) },
   quotedBorrowPerDay: (instrument) => ({ AAPL: 0.0001, ISF: 0.0003 })[instrument],
