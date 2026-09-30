@@ -35,6 +35,7 @@ export interface SleeveDecision {
   readonly price: number;
   readonly atr: number | undefined;
   readonly stop_price: number | undefined;
+  readonly target_price?: number | undefined;
   readonly inputs_hash: string;
   readonly debate_id: string | undefined;
   readonly veto?: string | undefined;

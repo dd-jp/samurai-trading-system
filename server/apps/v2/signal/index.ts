@@ -52,9 +52,14 @@ export {
   LSE_LIQUIDITY_SCREEN,
   RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,
+  SIGNAL_BUY_STOP_BRACKET_VERIFIED,
+  SIGNAL_MIN_REWARD_R,
+  SIGNALS_SLEEVE_ID,
+  SIGNALS_SLEEVE_SPEC,
   SLEEVE_SPECS_BY_ID,
   UnsetParameterError,
 } from './parameters.js';
 export { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
 export { type SecretSource, secretsFromEnv } from './secret-guard.js';
+export { createSignalsSleeve } from './signals-sleeve.js';
 export { SleeveRegistry } from './sleeve.js';

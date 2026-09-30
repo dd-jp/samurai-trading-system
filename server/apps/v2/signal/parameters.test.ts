@@ -26,6 +26,7 @@ import {
   RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,
   SAXO_APPROPRIATENESS_TEST_TAKEN,
+  SIGNAL_BUY_STOP_BRACKET_VERIFIED,
   UNSET,
   UnsetParameterError,
 } from './parameters.js';
@@ -49,12 +50,14 @@ describe('parameters', () => {
       LSE_LIQUIDITY_SCREEN,
       ...CFD_GATE_PARAMETERS,
       RECONCILE_CASH_TOLERANCE_GBP,
+      SIGNAL_BUY_STOP_BRACKET_VERIFIED,
     ]);
     expect(CYCLE_LEVEL_PARAMETERS).toEqual([
       G18_SOCIAL_SOURCE,
       G18_SENTIMENT_DEDUP_RULE,
       ALPACA_SHORT_EQUITY_FLOOR_USD,
       ...CFD_GATE_PARAMETERS,
+      SIGNAL_BUY_STOP_BRACKET_VERIFIED,
     ]);
     for (const parameter of DECLARED_PARAMETERS) {
       expect(parameter.ticket.length).toBeGreaterThan(0);

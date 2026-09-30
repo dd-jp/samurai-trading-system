@@ -37,7 +37,9 @@ function bracketRefusal(
 ): string | undefined {
   const stopProtects = side === 'buy' ? stop < entry : stop > entry;
   if (!stopProtects) return 'stop_wrong_side';
-  return target > 0 ? undefined : 'target_not_positive';
+  if (!(target > 0)) return 'target_not_positive';
+  const targetBeyondEntry = side === 'buy' ? target > entry : target < entry;
+  return targetBeyondEntry ? undefined : 'target_wrong_side';
 }
 
 function closingLeg(
@@ -121,8 +123,7 @@ export class V2RiskGate implements RiskGate {
       return { size, order: undefined, refusal: 'no_stop_price' };
     }
     const side = decision.action === 'enter_short' ? 'sell' : 'buy';
-    const distance = this.deps.spec(request.book.sleeve).sizing.targetAtrMultiple * decision.atr;
-    const target = side === 'sell' ? decision.price - distance : decision.price + distance;
+    const target = decision.target_price ?? this.#atrTarget(request, side, decision.atr);
     const refusal = bracketRefusal(side, decision.price, decision.stop_price, target);
     if (refusal !== undefined) return { size, order: undefined, refusal };
     return {
@@ -142,6 +143,11 @@ export class V2RiskGate implements RiskGate {
         target,
       }),
     };
+  }
+
+  #atrTarget(request: EntryRequest, side: 'buy' | 'sell', atr: number): number {
+    const distance = this.deps.spec(request.book.sleeve).sizing.targetAtrMultiple * atr;
+    return side === 'sell' ? request.decision.price - distance : request.decision.price + distance;
   }
 
   approveExit(request: ExitRequest): RiskApprovedOrder {

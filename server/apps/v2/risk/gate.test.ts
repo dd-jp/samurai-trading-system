@@ -325,6 +325,33 @@ describe('V2RiskGate', () => {
     ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
   });
 
+  it('brackets at the decision target when one is given, else the ATR multiple', () => {
+    const atrTarget = gate().approveEntry(request()).order;
+    expect(atrTarget).toMatchObject({ entry: 20, stop: 19.2, target: 21.2 });
+    const given = gate().approveEntry(request({ decision: { ...decision, target_price: 23.5 } }));
+    expect(given.order).toMatchObject({ entry: 20, stop: 19.2, target: 23.5 });
+    const shortTarget = gate().approveEntry(
+      request({ decision: { ...cfdShort, target_price: 17.5 } }),
+    );
+    expect(shortTarget.order).toMatchObject({ side: 'sell', target: 17.5 });
+  });
+
+  it('refuses a given target at or behind the entry', () => {
+    for (const target_price of [20, 19.9]) {
+      expect(
+        gate().approveEntry(request({ decision: { ...decision, target_price } })),
+      ).toMatchObject({ order: undefined, refusal: 'target_wrong_side' });
+    }
+    for (const target_price of [20, 20.1]) {
+      expect(
+        gate().approveEntry(request({ decision: { ...cfdShort, target_price } })),
+      ).toMatchObject({ order: undefined, refusal: 'target_wrong_side' });
+    }
+    expect(
+      gate().approveEntry(request({ decision: { ...cfdShort, target_price: 0 } })),
+    ).toMatchObject({ order: undefined, refusal: 'target_not_positive' });
+  });
+
   it('sizes by the previous mark multiplier and to zero when entries are blocked', () => {
     expect(gate({ state: { sizeMultiplier: 0.5 } }).approveEntry(request()).size).toBe(3);
     const blocked = gate({ state: { sizeMultiplier: 1, entriesBlockedAtNextFill: true } });

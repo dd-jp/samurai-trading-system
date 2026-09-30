@@ -76,6 +76,13 @@ export const RECONCILE_CASH_TOLERANCE_GBP = unset<number>('RECONCILE_CASH_TOLERA
 // the count is the builder's default until David sets it
 export const LSE_RESERVED_SLOTS = 4;
 
+// Alpaca's order documentation shows market and limit bracket parents only; until a stop parent
+// is verified, a signal whose entry sits above the last close is refused in both signals books
+export const SIGNAL_BUY_STOP_BRACKET_VERIFIED = unset<boolean>(
+  'SIGNAL_BUY_STOP_BRACKET_VERIFIED',
+  '#1941',
+);
+
 export const CFD_COST_MODEL = unset<CfdCostModel>('CFD_COST_MODEL', '#1850');
 export const CFD_SPREAD_MODEL = unset<CfdSpreadModel>('CFD_SPREAD_MODEL', '#1850');
 export const CFD_FINANCING_MODEL = unset<CfdFinancingModel>('CFD_FINANCING_MODEL', '#1850');
@@ -163,10 +170,38 @@ export const ARM2_SLEEVE_SPEC: SleeveSpec = {
   books: [{ variant: 'technical-only', instantiated: true }],
 };
 
+export const SIGNALS_SLEEVE_ID = 'signals';
+export const SIGNAL_MIN_REWARD_R = 2;
+// David 2026-09-30 (#1941): the whole idle 70% paper share, the loss and daily caps following it
+const SIGNALS_CAPITAL_SHARE = 0.7;
+const SIGNALS_NO_TIME_STOP_TRADING_DAYS = 1_000_000;
+
+// Sized on R = entry - stop: the decision's atr is R and the stop sits one "ATR" below entry
+export const SIGNALS_SLEEVE_SPEC: SleeveSpec = {
+  capitalShare: SIGNALS_CAPITAL_SHARE,
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
+  macroGate: false,
+  sizing: {
+    riskFraction: DEBATE_RISK_FRACTION,
+    stopAtrMultiple: 1,
+    targetAtrMultiple: SIGNAL_MIN_REWARD_R,
+    timeStopTradingDays: SIGNALS_NO_TIME_STOP_TRADING_DAYS,
+    advShare: DEBATE_ADV_SHARE,
+    advWindowBars: DEBATE_ADV_WINDOW_BARS,
+  },
+  books: [
+    { variant: 'primary', instantiated: true },
+    { variant: 'no-veto', instantiated: true },
+  ],
+};
+
 // A sleeve missing here is a build gap, not a trading-state check
 export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
   [DEBATE_SLEEVE_ID]: DEBATE_SLEEVE_SPEC,
   [ARM2_SLEEVE_ID]: ARM2_SLEEVE_SPEC,
+  [SIGNALS_SLEEVE_ID]: SIGNALS_SLEEVE_SPEC,
 };
 
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
@@ -180,6 +215,7 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   LSE_LIQUIDITY_SCREEN,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
   RECONCILE_CASH_TOLERANCE_GBP,
+  SIGNAL_BUY_STOP_BRACKET_VERIFIED,
 ];
 
 // A set parameter never blocks a cycle, so this list only ever holds an unset one;
@@ -189,4 +225,5 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
+  SIGNAL_BUY_STOP_BRACKET_VERIFIED,
 ];
