@@ -61,16 +61,33 @@ describe('bothVenuesClosed', () => {
   });
 });
 
+const londonClock = (instant: Date) =>
+  new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(instant);
+
 describe('entryCutoff', () => {
-  it('is 08:00 and 14:30 London wall-clock, in summer time and in winter', () => {
+  it('is the LSE open at 08:00 London and the NY open at 09:30 New York, in summer and winter', () => {
     expect(entryCutoff('lse', ORDINARY).toISOString()).toBe('2026-09-30T07:00:00.000Z');
     expect(entryCutoff('us', ORDINARY).toISOString()).toBe('2026-09-30T13:30:00.000Z');
     expect(entryCutoff('lse', '2026-12-01').toISOString()).toBe('2026-12-01T08:00:00.000Z');
     expect(entryCutoff('us', '2026-12-01').toISOString()).toBe('2026-12-01T14:30:00.000Z');
   });
 
-  it('keeps 14:30 London in the week London has left summer time and New York has not', () => {
-    expect(entryCutoff('us', '2026-10-27').toISOString()).toBe('2026-10-27T14:30:00.000Z');
+  it.each([
+    ['2026-10-23', '14:30'],
+    ['2026-10-26', '13:30'],
+    ['2026-10-30', '13:30'],
+    ['2026-11-02', '14:30'],
+    ['2027-03-12', '14:30'],
+    ['2027-03-15', '13:30'],
+    ['2027-03-26', '13:30'],
+    ['2027-03-29', '14:30'],
+  ])('puts the US cutoff on %s at the NY open, %s London', (date, london) => {
+    expect(londonClock(entryCutoff('us', date))).toBe(london);
+    expect(londonClock(entryCutoff('lse', date))).toBe('08:00');
   });
 });
 
@@ -116,7 +133,11 @@ describe('TABLE_VENUE_SESSIONS.entrySitOut', () => {
     ['saxo', '2026-12-01T08:00:00.000Z', 'late_wake_entry_cutoff'],
     ['alpaca', '2026-12-01T14:29:59.999Z', undefined],
     ['alpaca', '2026-12-01T14:30:00.000Z', 'late_wake_entry_cutoff'],
-    ['alpaca', '2026-10-27T14:00:00.000Z', undefined],
+    ['alpaca', '2026-10-27T13:29:59.999Z', undefined],
+    ['alpaca', '2026-10-27T13:30:00.000Z', 'late_wake_entry_cutoff'],
+    ['saxo_cfd_usd', '2027-03-25T13:30:00.000Z', 'late_wake_entry_cutoff'],
+    ['alpaca', '2027-03-25T13:29:59.999Z', undefined],
+    ['saxo', '2027-03-25T07:59:59.999Z', undefined],
   ] as const)('%s at %s: %s', (venue, now, code) => {
     expect(TABLE_VENUE_SESSIONS.entrySitOut(venue, now.slice(0, 10), at(now))).toBe(code);
   });

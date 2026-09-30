@@ -122,6 +122,7 @@ export interface V2RootOptions {
   readonly leaseWait?: LeaseWait | undefined;
   readonly sessionCalendar?: { isOpen(instant: Date): boolean } | undefined;
   readonly venueSessions?: VenueSessionGate | undefined;
+  readonly runStartedAt?: Date | undefined;
 }
 
 export interface V2Root {
@@ -483,6 +484,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     cfdEntryRefusal: cfdGate,
     brokerMode: brokerModeFor(options),
     venueSessions: venueSessionsFor(options),
+    runStartedAt: options.runStartedAt,
   });
   const lease = new RunLease(db, clock);
   return {
@@ -723,13 +725,17 @@ export async function runOnce(
   notify: (text: string) => Promise<void>,
   compose: (options: V2RootOptions) => V2Root = composeV2Root,
 ): Promise<number> {
+  const runStartedAt = clock.now();
   if (bothVenuesClosed(tradingDate)) {
     const storePath = storePathFor({ tradingDate, dryRun });
     return skipClosedDay(closedDayReport(tradingDate, dryRun), storePath, clock, logger);
   }
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
-  const root = compose(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
+  const root = compose({
+    ...rootOptionsFor(dryRun, tradingDate, env, clock, logger),
+    runStartedAt,
+  });
   try {
     const report = await runAfterPinCheck(root, () =>
       verifyNousPins({

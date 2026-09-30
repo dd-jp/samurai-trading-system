@@ -176,7 +176,7 @@ function staticProbes(): SmokeProbe[] {
     probe(
       'holidays and late wakes sit out per venue (#1933)',
       venueRulesHold(),
-      'Thanksgiving US-only, Christmas both, LSE refused from 08:00 and US from 14:30 London',
+      'Thanksgiving US-only, Christmas both, LSE refused from 08:00 London, US from the NY open (13:30 London on 2026-10-27)',
     ),
     probe(
       'no debate-sleeve paper trade until arm 2 runs beside it (#1773 kill line)',
@@ -207,6 +207,8 @@ function venueRulesHold(): boolean {
     sitOut('saxo', SMOKE_TRADING_DATE, at('07:00')) === 'late_wake_entry_cutoff' &&
     sitOut('alpaca', SMOKE_TRADING_DATE, at('13:29')) === undefined &&
     sitOut('alpaca', SMOKE_TRADING_DATE, at('13:30')) === 'late_wake_entry_cutoff' &&
+    sitOut('alpaca', '2026-10-27', new Date('2026-10-27T13:30:00.000Z')) ===
+      'late_wake_entry_cutoff' &&
     sitOut('alpaca', '2026-11-26', at('06:30')) === 'venue_closed'
   );
 }

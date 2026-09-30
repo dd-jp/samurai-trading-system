@@ -4245,6 +4245,39 @@ describe('runCycle with per-venue sessions (#1933)', () => {
     ).toEqual(late.map((instrument) => ['late_wake_entry_cutoff', instrument]));
   });
 
+  function slowDebate(deps: Harness, debateEndsAt: string): Harness {
+    const registry = new SleeveRegistry();
+    registry.register({
+      ...deps.sleeve,
+      decide: (...args: Parameters<Sleeve['decide']>) => {
+        (deps.clock as SimulatedClock).advanceTo(new Date(debateEndsAt));
+        return deps.sleeve.decide(...args);
+      },
+    });
+    return { ...deps, registry };
+  }
+
+  it('an on-time run whose debate drags past both opens still enters in both books', async () => {
+    const deps = slowDebate(
+      sessioned([longAapl, longIsf], '2026-09-30T06:30:00.000Z'),
+      '2026-09-30T14:00:00.000Z',
+    );
+    const report = await runCycle(deps, '2026-09-30');
+    expect(deps.clock.now().toISOString()).toBe('2026-09-30T14:00:00.000Z');
+    expect(report.entries).toBe(4);
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(['AAPL', 'ISF']);
+    expect(sitOuts(deps)).toEqual([]);
+  });
+
+  it.each([
+    ['2026-09-30T06:30:00.000Z', '2026-09-30T14:00:00.000Z', ['AAPL', 'ISF']],
+    ['2026-09-30T13:30:00.000Z', '2026-09-30T06:30:00.000Z', []],
+  ])('judges the cutoff by a run start of %s, not the cycle clock of %s', async (started, now, entered) => {
+    const deps = { ...sessioned([longAapl, longIsf], now), runStartedAt: new Date(started) };
+    await runCycle(deps, '2026-09-30');
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(entered);
+  });
+
   it('a late wake still exits and marks', async () => {
     const deps = sessioned([longAapl], '2026-09-24T06:30:00.000Z');
     await openBooks(deps);

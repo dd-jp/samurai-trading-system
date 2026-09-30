@@ -27,7 +27,7 @@ export class AlwaysOpenCalendar implements TradingCalendar {
 
 export const ET_ZONE = 'America/New_York';
 export const LONDON_ZONE = 'Europe/London';
-const SESSION_OPEN_MINUTES = 9 * 60 + 30;
+export const SESSION_OPEN_MINUTES = 9 * 60 + 30;
 const SESSION_CLOSE_MINUTES = 16 * 60;
 
 const WALL_CLOCK_PARTS = new Map<string, Intl.DateTimeFormat>();
@@ -330,7 +330,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   }
 }
 
-const LSE_OPEN_MINUTES = 8 * 60;
+export const LSE_OPEN_MINUTES = 8 * 60;
 const LSE_CLOSE_MINUTES = 16 * 60 + 30;
 const LSE_HALF_DAY_CLOSE_MINUTES = 12 * 60 + 30;
 

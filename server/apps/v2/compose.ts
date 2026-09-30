@@ -48,6 +48,7 @@ export interface CycleCompositionOptions {
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp?: number | undefined;
   readonly venueSessions?: VenueSessionGate | undefined;
+  readonly runStartedAt?: Date | undefined;
 }
 
 export interface CycleComposition extends CycleDeps {
@@ -146,5 +147,6 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     dryRun: options.dryRun,
     logger,
     venueSessions: options.venueSessions,
+    runStartedAt: options.runStartedAt,
   };
 }

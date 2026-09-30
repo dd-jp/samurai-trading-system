@@ -741,6 +741,54 @@ describe('composeV2Root', () => {
     ]);
   });
 
+  it('runOnce judges the late-wake cutoff at run start, before a bar refresh that runs past both opens (#1933)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'run-start.sqlite');
+    seededStore(storePath).close();
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T06:30:00.000Z`));
+    const slowRefresh: BarRefresh = {
+      run: () => {
+        clock.advanceTo(new Date(`${ENTRY_DATE}T20:00:00.000Z`));
+        return NO_BAR_REFRESH.run();
+      },
+    };
+    const started: (Date | undefined)[] = [];
+    const written = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await runOnce(
+        true,
+        ENTRY_DATE,
+        {},
+        clock,
+        { log: () => {} },
+        slowRefresh,
+        () => Promise.resolve(),
+        (options) => {
+          started.push(options.runStartedAt);
+          return composeV2Root({ ...options, ...fixtures, storePath });
+        },
+      );
+    } finally {
+      written.mockRestore();
+    }
+    const db = openSharedStore(storePath);
+    try {
+      const refusals = db
+        .prepare('SELECT parameter FROM v2_refusals')
+        .all()
+        .map((row) => (row as { parameter: string }).parameter);
+      expect(refusals).not.toContain('late_wake_entry_cutoff');
+      const decisions = db.prepare('SELECT COUNT(*) AS n FROM v2_decisions').get() as { n: number };
+      expect(decisions.n).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+    expect(started.map((instant) => instant?.toISOString())).toEqual([
+      `${ENTRY_DATE}T06:30:00.000Z`,
+    ]);
+  });
+
   it('journals one SAXO_SESSION refusal against #1876 when the LSE leg is refused, and none otherwise', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;

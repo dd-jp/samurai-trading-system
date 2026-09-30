@@ -69,6 +69,7 @@ export interface CycleDeps {
   // Backtest only: forward paper must read a stale series as a data outage (#1804), never a delisting
   readonly closeEndedSeries?: boolean;
   readonly venueSessions?: VenueSessionGate | undefined;
+  readonly runStartedAt?: Date | undefined;
 }
 
 export interface BookReport {
@@ -239,6 +240,7 @@ class Cycle {
     private readonly macro: MacroGateVerdict,
     private readonly control: ManualControl,
     private readonly entryOrderIdFor: EntryOrderId = defaultEntryOrderId,
+    private readonly runStartedAt: Date = deps.runStartedAt ?? deps.clock.now(),
   ) {}
 
   fxFor(venue: Venue): number {
@@ -1132,10 +1134,9 @@ class Cycle {
   withoutSittingOut(book: BookSpec, decisions: readonly SleeveDecision[]): SleeveDecision[] {
     const gate = this.deps.venueSessions;
     if (gate === undefined) return [...decisions];
-    const now = this.deps.clock.now();
     return decisions.filter((proposed) => {
       const code = isEntryAction(proposed)
-        ? gate.entrySitOut(proposed.venue, this.tradingDate, now)
+        ? gate.entrySitOut(proposed.venue, this.tradingDate, this.runStartedAt)
         : undefined;
       if (code === undefined) return true;
       this.journalSitOut(book, proposed, code);

@@ -1,8 +1,11 @@
 import type { Venue } from '../../../../contracts/index.js';
 import {
+  ET_ZONE,
   LONDON_ZONE,
+  LSE_OPEN_MINUTES,
   LSE_TABLE_COVERAGE_END,
   LseRegularHoursCalendar,
+  SESSION_OPEN_MINUTES,
   US_TABLE_COVERAGE_END,
   UsEquityRegularHoursCalendar,
   wallClockToInstant,
@@ -14,7 +17,7 @@ export type SessionDay = 'open' | 'closed' | 'uncovered';
 export type SitOutCode = 'venue_closed' | 'venue_calendar_uncovered' | 'late_wake_entry_cutoff';
 
 export interface VenueSessionGate {
-  entrySitOut(venue: Venue, tradingDate: string, now: Date): SitOutCode | undefined;
+  entrySitOut(venue: Venue, tradingDate: string, runStartedAt: Date): SitOutCode | undefined;
   timeStopPausedVenues(tradingDate: string): readonly Venue[];
 }
 
@@ -32,10 +35,10 @@ const COVERAGE_END: Readonly<Record<Exchange, string>> = {
   lse: LSE_TABLE_COVERAGE_END,
 };
 
-// David 2026-09-30 (#1933): the LSE and US opens as London wall-clock times, DST included
-const ENTRY_CUTOFF_LONDON_MINUTES: Readonly<Record<Exchange, number>> = {
-  lse: 8 * 60,
-  us: 14 * 60 + 30,
+// David 2026-09-30 (#1933): no new entries from each exchange's open, read in its own zone
+const ENTRY_CUTOFF_OPEN: Readonly<Record<Exchange, { zone: string; minutes: number }>> = {
+  lse: { zone: LONDON_ZONE, minutes: LSE_OPEN_MINUTES },
+  us: { zone: ET_ZONE, minutes: SESSION_OPEN_MINUTES },
 };
 
 function civilDate(date: string): { year: number; month: number; day: number } {
@@ -63,7 +66,8 @@ export function bothVenuesClosed(date: string): boolean {
 }
 
 export function entryCutoff(exchange: Exchange, date: string): Date {
-  return wallClockToInstant(civilDate(date), ENTRY_CUTOFF_LONDON_MINUTES[exchange], LONDON_ZONE);
+  const { zone, minutes } = ENTRY_CUTOFF_OPEN[exchange];
+  return wallClockToInstant(civilDate(date), minutes, zone);
 }
 
 const SIT_OUT_BY_DAY: Readonly<Record<Exclude<SessionDay, 'open'>, SitOutCode>> = {
@@ -72,11 +76,11 @@ const SIT_OUT_BY_DAY: Readonly<Record<Exclude<SessionDay, 'open'>, SitOutCode>> 
 };
 
 export const TABLE_VENUE_SESSIONS: VenueSessionGate = {
-  entrySitOut(venue, tradingDate, now) {
+  entrySitOut(venue, tradingDate, runStartedAt) {
     const exchange = exchangeOf(venue);
     const day = sessionDay(exchange, tradingDate);
     if (day !== 'open') return SIT_OUT_BY_DAY[day];
-    return now.getTime() >= entryCutoff(exchange, tradingDate).getTime()
+    return runStartedAt.getTime() >= entryCutoff(exchange, tradingDate).getTime()
       ? 'late_wake_entry_cutoff'
       : undefined;
   },
