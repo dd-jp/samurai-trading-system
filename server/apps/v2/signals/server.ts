@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { SignalWire } from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
 import { SWAGGER_HTML, signalsOpenApi } from './openapi.js';
-import { parseSignalPayload } from './payload.js';
+import { parseSignalPayload, type SignalPayload } from './payload.js';
 import { SIGNAL_LIST_MAX, type SignalStore } from './store.js';
 import { classifySignalWindow, type SessionCalendar } from './window.js';
 
@@ -102,12 +102,20 @@ function postSignal(opts: SignalsServerOptions): Handler {
       sendJson(res, 400, { error: parsed.reason });
       return;
     }
-    const receivedAt = opts.clock.now();
-    const window = classifySignalWindow(receivedAt, opts.calendar);
-    const { signal, replayed } = opts.store.record(parsed.payload, receivedAt, window);
-    sendJson(res, replayed ? 200 : 201, { signal, replayed });
-    if (!replayed) opts.onRecorded?.(signal);
+    recordAndReply(opts, parsed.payload, res);
   };
+}
+
+function recordAndReply(
+  opts: SignalsServerOptions,
+  payload: SignalPayload,
+  res: ServerResponse,
+): void {
+  const receivedAt = opts.clock.now();
+  const window = classifySignalWindow(receivedAt, opts.calendar);
+  const { signal, replayed } = opts.store.record(payload, receivedAt, window);
+  sendJson(res, replayed ? 200 : 201, { signal, replayed });
+  if (!replayed) opts.onRecorded?.(signal);
 }
 
 export function parseListLimit(raw: string | null): number | undefined {
