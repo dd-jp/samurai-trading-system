@@ -35,6 +35,7 @@ import {
   exitCodeFor,
   halfSpreadLookup,
   llmKeysPresent,
+  logFaultFreeWeeks,
   logNewRefusals,
   main,
   newsWiringFor,
@@ -47,6 +48,7 @@ import {
   withoutRefusedLse,
 } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
+import { RunLease } from './run-lease.js';
 import type { ModelPin } from './signal/index.js';
 import { BULLISH_SCRIPT, isLseInstrument, ScriptedTransport } from './signal/index.js';
 import { LSE_LIQUIDITY_SCREEN } from './signal/parameters.js';
@@ -748,6 +750,9 @@ describe('composeV2Root', () => {
     );
     try {
       await refused.run();
+      expect(refused.faults.faultsOn(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({ kind: 'token_failure', code: 'SAXO_SESSION' }),
+      );
       expect(refused.journal.newRefusals(ENTRY_DATE)).toContainEqual(
         expect.objectContaining({
           scope: 'data',
@@ -904,6 +909,100 @@ describe('composeV2Root', () => {
       ]);
     } finally {
       root.close();
+    }
+  });
+
+  it('records a broker reconcile mismatch in the fault ledger through the composed root (#1878)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'mismatch.sqlite');
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const alpacaClient = fakeAlpacaClient(clock);
+    alpacaClient.getPositions = vi
+      .fn()
+      .mockResolvedValue([{ symbol: 'ZZZ', qty: '5', side: 'long', avg_entry_price: '10' }]);
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: false,
+      storePath,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      clock,
+      logger: { log: () => {} },
+      transportFor: scriptedFactory([]),
+      alpacaClient,
+      newsSource: { headlines: () => Promise.resolve([]) },
+    });
+    try {
+      const report = await root.run();
+      expect(report.submitted_orders).toBe(0);
+      expect(root.faults.faultsOn(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({
+          kind: 'reconcile_mismatch',
+          code: 'BROKER_RECONCILE',
+          detail: expect.stringContaining('position_missing_in_store ZZZ'),
+        }),
+      );
+      expect(root.faults.faultFreeWeeks(ENTRY_DATE)).toMatchObject({
+        weeks: 0,
+        last_fault: ENTRY_DATE,
+      });
+    } finally {
+      root.close();
+    }
+  });
+
+  it('records the weekdays no cycle marked as missed runs, and a cycle that cannot take the lease as refused (#1878)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'missed.sqlite');
+    seededStore(storePath).close();
+    const open = (tradingDate: string, leaseWait?: V2RootOptions['leaseWait']) =>
+      composeV2Root({
+        ...fixtures,
+        tradingDate,
+        dryRun: true,
+        storePath,
+        clock: new SimulatedClock(new Date(`${tradingDate}T07:00:00.000Z`)),
+        logger: { log: () => {} },
+        leaseWait,
+      });
+    const first = open(ENTRY_DATE);
+    try {
+      await first.run();
+      expect(first.faults.faultsOn(ENTRY_DATE).map((fault) => fault.kind)).not.toContain(
+        'missed_run',
+      );
+    } finally {
+      first.close();
+    }
+    const later = '2026-09-23';
+    const second = open(later);
+    try {
+      await second.run();
+      const missed = second.db
+        .prepare(
+          "SELECT trading_date FROM v2_faults WHERE kind = 'missed_run' ORDER BY trading_date",
+        )
+        .all();
+      expect(missed).toEqual([{ trading_date: '2026-09-21' }, { trading_date: '2026-09-22' }]);
+    } finally {
+      second.close();
+    }
+    const blocked = '2026-09-24';
+    const third = open(blocked, { timeoutMs: 0, pollMs: 0, sleep: async () => {}, nowMs: () => 0 });
+    try {
+      new RunLease(third.db, new SimulatedClock(new Date(`${blocked}T06:59:00.000Z`))).tryAcquire(
+        'signals',
+      );
+      await expect(third.run()).rejects.toThrow(/run lease not acquired/);
+      expect(third.faults.faultsOn(blocked)).toEqual([
+        expect.objectContaining({ kind: 'refused_cycle', code: 'v2_cycle_failed' }),
+      ]);
+    } finally {
+      third.close();
     }
   });
 
@@ -1316,6 +1415,33 @@ describe('logNewRefusals', () => {
         event: 'v2_new_refusals',
         message: 'A: a\nB: b',
       },
+    ]);
+  });
+});
+
+describe('logFaultFreeWeeks', () => {
+  it('logs the weeks since the last fault, or says none was recorded', () => {
+    const entries: LogEntry[] = [];
+    const logger = { log: (entry: LogEntry) => entries.push(entry) };
+    const tallies = {
+      '2026-09-28': { weeks: 2, counted_days: 14, since: '2026-09-15', last_fault: '2026-09-14' },
+      '2026-09-29': { weeks: 0, counted_days: 3, since: '2026-09-27', last_fault: undefined },
+    };
+    const faults = { faultFreeWeeks: (date: string) => tallies[date as keyof typeof tallies] };
+    logFaultFreeWeeks(faults, '2026-09-28', logger);
+    logFaultFreeWeeks(faults, '2026-09-29', logger);
+    expect(entries).toEqual([
+      {
+        trace_id: 'v2-2026-09-28',
+        stage: 'v2',
+        level: 'info',
+        event: 'v2_fault_free_weeks',
+        message: '2 fault-free weeks (14 counted days, last fault 2026-09-14)',
+        payload: tallies['2026-09-28'],
+      },
+      expect.objectContaining({
+        message: '0 fault-free weeks (3 counted days, no fault recorded)',
+      }),
     ]);
   });
 });

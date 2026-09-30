@@ -404,6 +404,95 @@ describe('Journal.recordReconcile (#1872)', () => {
   });
 });
 
+describe('decision and fill journal append-only (#1883)', () => {
+  const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
+
+  function journalWithOneFill() {
+    const db = openSharedStore(':memory:');
+    const capital = new CapitalConfigStore(db, clock);
+    capital.setYear(2026, 1_000, 1_500);
+    new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
+    const journal = new Journal(db, clock);
+    const decisionId = journal.recordDecision('debate/primary', '2026-09-25', decision, 3);
+    journal.recordOrder({
+      client_order_id: 'o1',
+      decision_id: decisionId,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'submitted',
+      payload: {},
+    });
+    const fill = {
+      fill_id: 'alpaca:f1',
+      client_order_id: 'o1',
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy' as const,
+      qty: 3,
+      price_gbp: 80,
+      fee_gbp: 0.1,
+    };
+    return { db, journal, fill, firstInsert: journal.recordFill(fill) };
+  }
+
+  it('inserts, and a replayed fill id is ignored rather than refused', () => {
+    const { db, journal, fill, firstInsert } = journalWithOneFill();
+    expect(firstInsert).toBe(true);
+    expect(journal.recordFill(fill)).toBe(false);
+    expect(journal.recordFill({ ...fill, fill_id: 'alpaca:f2' })).toBe(true);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM v2_decisions').get()).toEqual({ n: 1 });
+    expect(db.prepare('SELECT fill_id FROM v2_fills ORDER BY fill_id').all()).toEqual([
+      { fill_id: 'alpaca:f1' },
+      { fill_id: 'alpaca:f2' },
+    ]);
+  });
+
+  it('refuses every update and delete and leaves the rows as written', () => {
+    const { db } = journalWithOneFill();
+    const decisionsBefore = db.prepare('SELECT * FROM v2_decisions').all();
+    const fillsBefore = db.prepare('SELECT * FROM v2_fills').all();
+
+    expect(() => db.prepare("UPDATE v2_decisions SET action = 'exit'").run()).toThrow(
+      'v2_decisions is append-only',
+    );
+    expect(() => db.prepare('DELETE FROM v2_decisions').run()).toThrow(
+      'v2_decisions is append-only',
+    );
+    expect(() => db.prepare('UPDATE v2_fills SET qty = 1').run()).toThrow(
+      'v2_fills is append-only',
+    );
+    expect(() => db.prepare('DELETE FROM v2_fills').run()).toThrow('v2_fills is append-only');
+    expect(() =>
+      db
+        .prepare(
+          `INSERT OR REPLACE INTO v2_decisions SELECT decision_id, book_id, trading_date,
+             instrument, venue, inputs_hash, direction, confidence, 'exit', reason, size_shares,
+             stop_price, payload, recorded_at FROM v2_decisions`,
+        )
+        .run(),
+    ).toThrow('v2_decisions is append-only');
+    expect(
+      db
+        .prepare(
+          `INSERT OR REPLACE INTO v2_fills SELECT fill_id, client_order_id, book_id, trading_date,
+             instrument, venue, leg, side, 1, price_gbp, fee_gbp, recorded_at FROM v2_fills`,
+        )
+        .run().changes,
+    ).toBe(0);
+
+    expect(db.prepare('SELECT * FROM v2_decisions').all()).toEqual(decisionsBefore);
+    expect(db.prepare('SELECT * FROM v2_fills').all()).toEqual(fillsBefore);
+  });
+});
+
 describe('Journal.latestReconcile (#1941)', () => {
   function run(
     journal: Journal,

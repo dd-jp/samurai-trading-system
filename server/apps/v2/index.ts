@@ -43,7 +43,7 @@ import {
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
-import type { Journal } from './journal/index.js';
+import type { FaultLedger, Journal } from './journal/index.js';
 import {
   assertArm2RunsBesideDebate,
   assertCapitalShares,
@@ -124,6 +124,7 @@ export interface V2Root {
   readonly books: PaperBooks;
   readonly capital: CapitalConfigStore;
   readonly journal: Journal;
+  readonly faults: FaultLedger;
   readonly panel: LlmPanel;
   readonly db: StoreHandle;
   readonly scriptedTransports: readonly ScriptedTransport[];
@@ -371,6 +372,33 @@ function cfdGateFor(options: V2RootOptions): () => string | undefined {
   return options.cfdEntryRefusal ?? cfdEntryRefusal;
 }
 
+function lastMarkedDate(books: Pick<PaperBooks, 'ids' | 'lastDay'>): string | undefined {
+  let latest: string | undefined;
+  for (const bookId of books.ids()) {
+    const date = books.lastDay(bookId)?.tradingDate;
+    if (date !== undefined && (latest === undefined || date > latest)) latest = date;
+  }
+  return latest;
+}
+
+export async function recordingRefusedCycle<T>(
+  faults: Pick<FaultLedger, 'record'>,
+  tradingDate: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    faults.record({
+      kind: 'refused_cycle',
+      trading_date: tradingDate,
+      code: 'v2_cycle_failed',
+      detail: describeThrownSafely(error),
+    });
+    throw error;
+  }
+}
+
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -452,20 +480,23 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     books: cycle.books,
     capital: cycle.capital,
     journal: cycle.journal,
+    faults: cycle.faults,
     panel,
     db,
     scriptedTransports: scripted,
-    run: async () => {
-      await prime();
-      journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
-      return withRunLease(lease, 'cycle', options.leaseWait ?? SYSTEM_LEASE_WAIT, async () => {
-        try {
-          return await runCycle(cycle, options.tradingDate);
-        } finally {
-          ukNews?.journalCoverage(options.tradingDate);
-        }
-      });
-    },
+    run: () =>
+      recordingRefusedCycle(cycle.faults, options.tradingDate, async () => {
+        await prime();
+        journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
+        return withRunLease(lease, 'cycle', options.leaseWait ?? SYSTEM_LEASE_WAIT, async () => {
+          cycle.faults.recordMissedRuns(() => lastMarkedDate(cycle.books), options.tradingDate);
+          try {
+            return await runCycle(cycle, options.tradingDate);
+          } finally {
+            ukNews?.journalCoverage(options.tradingDate);
+          }
+        });
+      }),
     processSignals: async (signals, now) => {
       const deps = {
         cycle,
@@ -580,6 +611,24 @@ export function logNewRefusals(
   });
 }
 
+export function logFaultFreeWeeks(
+  faults: Pick<FaultLedger, 'faultFreeWeeks'>,
+  tradingDate: string,
+  logger: Logger,
+): void {
+  const tally = faults.faultFreeWeeks(tradingDate);
+  const last =
+    tally.last_fault === undefined ? 'no fault recorded' : `last fault ${tally.last_fault}`;
+  logger.log({
+    trace_id: `v2-${tradingDate}`,
+    stage: 'v2',
+    level: 'info',
+    event: 'v2_fault_free_weeks',
+    message: `${tally.weeks} fault-free weeks (${tally.counted_days} counted days, ${last})`,
+    payload: tally,
+  });
+}
+
 export function rootOptionsFor(
   dryRun: boolean,
   tradingDate: string,
@@ -625,6 +674,7 @@ export async function runOnce(
       }),
     );
     logNewRefusals(root.journal, tradingDate, logger);
+    logFaultFreeWeeks(root.faults, tradingDate, logger);
     await pushDailySummary(
       { db: root.db, clock, mode: dryRun ? 'dry-run' : 'paper', logger, notify },
       report,
