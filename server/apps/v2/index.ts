@@ -366,6 +366,10 @@ function cfdCostsFor(options: V2RootOptions): CfdCosts | undefined {
   return options.cfdCosts ?? declaredCfdCosts();
 }
 
+function venueSessionsFor(options: V2RootOptions): VenueSessionGate {
+  return options.venueSessions ?? TABLE_VENUE_SESSIONS;
+}
+
 function quotedBorrowPerDayFrom(
   catalogue: CfdCatalogue | undefined,
 ): (instrument: string) => number | undefined {
@@ -477,7 +481,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(catalogue),
     cfdEntryRefusal: cfdGate,
     brokerMode: brokerModeFor(options),
-    venueSessions: options.venueSessions ?? TABLE_VENUE_SESSIONS,
+    venueSessions: venueSessionsFor(options),
   });
   const lease = new RunLease(db, clock);
   return {
