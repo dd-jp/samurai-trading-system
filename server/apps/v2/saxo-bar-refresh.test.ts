@@ -563,14 +563,14 @@ describe('refreshSaxoBars with Saxo chart bars whose shape is broken', () => {
     const refused = (dates: string) =>
       `ISF: Saxo bar shape repaired or dropped in a recent session (${dates}); refusing to write, the line keeps its stored bars until the bar ages out or Saxo corrects it`;
 
-    it('fails the line on a replaced field and leaves the stored bars untouched', async () => {
+    it('fails the line on replaced fields, naming every date, and leaves the stored bars untouched', async () => {
       const store = await openStore();
       await store.write('saxo', [storedSeries('ISF', HISTORY.slice(0, 8), 8.4)]);
       const { report, entries } = await refresh(
         store,
-        isfWith({ '2026-09-23': [8.5, 13, 8.4, 8.5] }),
+        isfWith({ '2026-09-21': [8.5, 13, 8.4, 8.5], '2026-09-23': [8.5, 13, 8.4, 8.5] }),
       );
-      expect(report.failed).toEqual([{ symbol: 'ISF', reason: refused('2026-09-23') }]);
+      expect(report.failed).toEqual([{ symbol: 'ISF', reason: refused('2026-09-21, 2026-09-23') }]);
       expect(report.updated.map((u) => u.symbol)).toEqual(['VMID']);
       expect(entries.map((entry) => entry.event)).toContain('v2_bar_refresh_failed');
       expect((await store.readSeries('saxo', 'ISF'))?.bars.map((b) => b.close)).toEqual(
