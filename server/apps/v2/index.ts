@@ -488,7 +488,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
         await prime();
         journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
         return withRunLease(lease, 'cycle', options.leaseWait ?? SYSTEM_LEASE_WAIT, async () => {
-          cycle.faults.recordMissedRuns(lastMarkedDate(cycle.books), options.tradingDate);
+          cycle.faults.recordMissedRuns(() => lastMarkedDate(cycle.books), options.tradingDate);
           try {
             return await runCycle(cycle, options.tradingDate);
           } finally {

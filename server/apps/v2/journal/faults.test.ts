@@ -110,7 +110,7 @@ describe('FaultLedger', () => {
   it('records one missed run per scheduled weekday left unmarked', () => {
     const db = openSharedStore(':memory:');
     const faults = ledger(db);
-    faults.recordMissedRuns('2026-09-24', '2026-09-30');
+    faults.recordMissedRuns(() => '2026-09-24', '2026-09-30');
     expect(rows(db)).toEqual([
       {
         kind: 'missed_run',
@@ -120,6 +120,25 @@ describe('FaultLedger', () => {
       },
       expect.objectContaining({ trading_date: '2026-09-28' }),
       expect.objectContaining({ trading_date: '2026-09-29' }),
+    ]);
+  });
+
+  it('logs a missed-run check that cannot read the last mark and never throws into the cycle', () => {
+    const logs: LogEntry[] = [];
+    const db = openSharedStore(':memory:');
+    const faults = ledger(db, logs);
+    expect(() =>
+      faults.recordMissedRuns(() => {
+        throw new Error('book store unreadable');
+      }, '2026-09-30'),
+    ).not.toThrow();
+    expect(rows(db)).toEqual([]);
+    expect(logs).toEqual([
+      expect.objectContaining({
+        trace_id: 'v2-2026-09-30',
+        event: 'v2_fault_record_failed',
+        message: 'missed_run CYCLE_NOT_RUN not recorded: book store unreadable',
+      }),
     ]);
   });
 });

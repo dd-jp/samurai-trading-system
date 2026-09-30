@@ -210,25 +210,34 @@ export class FaultLedger implements FaultSink {
           toStoredTimestamp(this.clock.now()),
         );
     } catch (error) {
-      this.logger?.log({
-        trace_id: `v2-${fault.trading_date}`,
-        stage: 'v2',
-        level: 'error',
-        event: 'v2_fault_record_failed',
-        message: `${fault.kind} ${fault.code} not recorded: ${describeThrownSafely(error)}`,
-      });
+      this.#logUnrecorded(fault.trading_date, `${fault.kind} ${fault.code}`, error);
     }
   }
 
-  recordMissedRuns(lastMarked: string | undefined, today: string): void {
-    for (const date of missedRunDates(lastMarked, today)) {
-      this.record({
-        kind: 'missed_run',
-        trading_date: date,
-        code: 'CYCLE_NOT_RUN',
-        detail: `no cycle marked ${date}; the next ran ${today}`,
-      });
+  // Runs ahead of the cycle's exits, so it must never throw into them either
+  recordMissedRuns(lastMarked: () => string | undefined, today: string): void {
+    try {
+      for (const date of missedRunDates(lastMarked(), today)) {
+        this.record({
+          kind: 'missed_run',
+          trading_date: date,
+          code: 'CYCLE_NOT_RUN',
+          detail: `no cycle marked ${date}; the next ran ${today}`,
+        });
+      }
+    } catch (error) {
+      this.#logUnrecorded(today, 'missed_run CYCLE_NOT_RUN', error);
     }
+  }
+
+  #logUnrecorded(tradingDate: string, what: string, error: unknown): void {
+    this.logger?.log({
+      trace_id: `v2-${tradingDate}`,
+      stage: 'v2',
+      level: 'error',
+      event: 'v2_fault_record_failed',
+      message: `${what} not recorded: ${describeThrownSafely(error)}`,
+    });
   }
 
   faultsOn(tradingDate: string): readonly Fault[] {
