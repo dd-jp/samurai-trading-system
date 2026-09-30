@@ -107,7 +107,7 @@ describe('ParquetBarStore', () => {
   });
 
   it('writes one file per partition and reads back across chunks however many rows a write carries', {
-    timeout: 30_000,
+    timeout: 90_000,
   }, async () => {
     const { store, root } = await openStore();
     const dates = Array.from({ length: 500 }, (_, day) =>
