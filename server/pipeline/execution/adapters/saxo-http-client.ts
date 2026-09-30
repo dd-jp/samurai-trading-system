@@ -80,6 +80,37 @@ function readNext(body: unknown): string | undefined {
   return isRecord(body) && typeof body.__next === 'string' ? body.__next : undefined;
 }
 
+const ACCOUNT_SCOPE_PARAMS = ['AccountKey', 'ClientKey'] as const;
+
+function queryOf(path: string): URLSearchParams {
+  const at = path.indexOf('?');
+  return new URLSearchParams(at === -1 ? '' : path.slice(at + 1));
+}
+
+function keepAccountScope(nextPath: string, firstPath: string, context: string): string {
+  const pinned = queryOf(firstPath);
+  const echoed = queryOf(nextPath);
+  const missing = new URLSearchParams();
+  for (const key of ACCOUNT_SCOPE_PARAMS) {
+    const pinnedValue = pinned.get(key);
+    const echoedValue = echoed.get(key);
+    if (pinnedValue === null) continue;
+    if (echoedValue === null) {
+      missing.set(key, pinnedValue);
+    } else if (echoedValue !== pinnedValue) {
+      throw new SaxoBrokerProviderError(
+        `Saxo API error: __next changed ${key} between pages (${context}).`,
+      );
+    }
+  }
+  return appendQuery(nextPath, missing.toString());
+}
+
+function appendQuery(path: string, query: string): string {
+  if (query === '') return path;
+  return `${path}${path.includes('?') ? '&' : '?'}${query}`;
+}
+
 function requireString(row: Record<string, unknown>, field: string, context: string): string {
   const value = row[field];
   if (typeof value !== 'string') failValidation(context, `${field} must be a string`, row);
@@ -427,6 +458,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     return this.identity;
   }
 
+  private relativeToGateway(next: string): string {
+    return next.startsWith(this.baseUrl) ? next.slice(this.baseUrl.length) : next;
+  }
+
   private async listAll<T>(
     firstPath: string,
     context: string,
@@ -447,7 +482,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
         priority,
       );
       rows.push(...page.rows);
-      path = page.next?.startsWith(this.baseUrl) ? page.next.slice(this.baseUrl.length) : page.next;
+      path =
+        page.next === undefined
+          ? undefined
+          : keepAccountScope(this.relativeToGateway(page.next), firstPath, context);
     }
     return rows;
   }
