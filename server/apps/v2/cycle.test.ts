@@ -2708,8 +2708,8 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
   });
 });
 
-describe('#1799: account-wide pooled loss budget across primary books', () => {
-  it('halts a second primary once the pooled loss crosses the full cap, and the gate sizes its next entry at zero', async () => {
+describe('per-sleeve loss budgets (David 2026-09-30, #1941)', () => {
+  it("a loss that halts one primary leaves another primary's sizing and next entry untouched", async () => {
     const share = 0.5;
     const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
     const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
@@ -2725,9 +2725,7 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
     };
     const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
 
-    // debate's own share of the £600 cap is £300: a £550 loss halts it on its own
     loseInBook(deps.books, 'debate/primary', '2026-09-25', 550, 'a');
-    // trend's own share is also £300, and £50 loss is under even the half-size step
     loseInBook(deps.books, 'trend/primary', '2026-09-25', 50, 'b');
     await runCycle(deps, '2026-09-25');
 
@@ -2735,66 +2733,103 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
       halted: true,
       sizeMultiplier: 0,
     });
-    // Without pooling this would still read sizeMultiplier: 1 (its own £50 loss is under
-    // even the half-size mark of its £300 share)
     expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: true,
-      sizeMultiplier: 0,
+      halted: false,
+      sizeMultiplier: 1,
     });
 
     trendDecisions = [{ ...longAapl, sleeve_id: 'trend' }];
     await runCycle(deps, '2026-09-28');
 
-    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBe(0);
-    expect(orders(deps, 'trend/primary')).toEqual([]);
-    expect(deps.books.positions('trend/primary')).toEqual([]);
+    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBeGreaterThan(0);
   });
+});
 
-  it('a crash between marking both primaries and settling the pool is repaired next cycle, before any fill', async () => {
-    const share = 0.5;
-    const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
-    const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
-    const trendDecisions: readonly SleeveDecision[] = [{ ...longAapl, sleeve_id: 'trend' }];
+describe('#1941: one Alpaca account across broker-routed books', () => {
+  function twoPrimaries(dryRun: boolean, alpaca?: FakeAlpaca, trendInstrument = 'AAPL') {
+    const spec: SleeveSpec = { ...TEST_SPEC, capitalShare: 0.5 };
+    const decision = { ...longAapl, sleeve_id: 'trend', instrument: trendInstrument };
     const trend: Sleeve = {
       id: 'trend',
-      spec: specB,
-      universe: () => ({
-        instruments: trendDecisions.map((decision) => decision.instrument),
-        refusals: [],
-      }),
-      decide: () => Promise.resolve({ decisions: trendDecisions, refusals: [] }),
+      spec,
+      universe: () => ({ instruments: [trendInstrument], refusals: [] }),
+      decide: () => Promise.resolve({ decisions: [decision], refusals: [] }),
     };
-    // Each primary's own share of the hardcoded £1,000 start capital is £500 (share 0.5), so its
-    // own loss must stay well under that to leave AAPL's entry sizeable off live post-loss equity
-    const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
+    return harness([longAapl], dryRun, alpaca, [2026], spec, SPREAD_ONLY, 1_500, trend);
+  }
 
-    loseInBook(deps.books, 'debate/primary', '2026-09-25', 400, 'a');
-    loseInBook(deps.books, 'trend/primary', '2026-09-25', 250, 'b');
-    vi.spyOn(deps.books, 'settlePrimaryBudgets').mockImplementationOnce(() => {
-      throw new Error('crash before settling the pool');
-    });
-    await expect(runCycle(deps, '2026-09-25')).rejects.toThrow('crash before settling the pool');
+  it('refuses a second primary entry on a symbol another primary rests at the broker', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca);
 
-    expect(sizeShares(deps, 'trend/primary', '2026-09-25', 'AAPL')).toBeGreaterThan(0);
-    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toBeDefined();
-    // Both primaries were marked (the crash was after markOne, before settlePrimaryBudgets),
-    // but trend/primary's own unpooled step (0.25) is what got persisted, not the pooled halt
-    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: false,
-      sizeMultiplier: 0.25,
-    });
+    const report = await runCycle(deps, '2026-09-25');
+
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+    ]);
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    expect(orders(deps, 'trend/no-macro-gate')).toMatchObject([{ outcome: 'simulated' }]);
+    expect(report.refusals).toContain(
+      'trend/primary AAPL: held or resting in debate/primary at alpaca',
+    );
+  });
+
+  it('refuses it while the other primary holds the position', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
 
     await runCycle(deps, '2026-09-28');
 
-    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: true,
-      sizeMultiplier: 0,
-    });
-    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toMatchObject({
-      outcome: 'cancelled',
-    });
-    expect(deps.books.position('trend/primary', 'AAPL')).toBeUndefined();
-    expect(deps.books.position('trend/no-macro-gate', 'AAPL')).toBeDefined();
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeDefined();
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT trading_date, scope, ticket, book_id, instrument FROM v2_refusals WHERE parameter = 'symbol_held_by_broker_book'",
+        )
+        .all(),
+    ).toEqual([
+      {
+        trading_date: '2026-09-25',
+        scope: 'entry',
+        ticket: '#1941',
+        book_id: 'trend/primary',
+        instrument: 'AAPL',
+      },
+      {
+        trading_date: '2026-09-28',
+        scope: 'entry',
+        ticket: '#1941',
+        book_id: 'trend/primary',
+        instrument: 'AAPL',
+      },
+    ]);
+  });
+
+  it('lets another primary enter a different symbol', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca, 'MSFT');
+
+    await runCycle(deps, '2026-09-25');
+
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+      'v2-trend-primary-2026-09-25-MSFT',
+    ]);
+  });
+
+  it('lets both primaries enter in a dry run, where no book reaches the broker', async () => {
+    const deps = twoPrimaries(true);
+
+    await runCycle(deps, '2026-09-25');
+
+    expect(orders(deps, 'debate/primary')).toHaveLength(1);
+    expect(orders(deps, 'trend/primary')).toHaveLength(1);
   });
 });
 

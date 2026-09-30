@@ -30,6 +30,7 @@ export interface AlpacaBracketOrderRequest {
   side: 'buy' | 'sell';
   qty: string;
   limit_price: string;
+  stop_price?: string;
   time_in_force: string;
   client_order_id: string;
   order_class: 'bracket';

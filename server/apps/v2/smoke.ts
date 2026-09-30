@@ -250,8 +250,8 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
     const spendRows = root.db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get() as { n: number };
     probes.push(
       probe(
-        'registry holds the debate sleeve and arm 2, beside each other',
-        root.registry.ids().join(',') === 'debate,arm2',
+        'registry holds the debate sleeve and arm 2 beside each other, then the signals sleeve',
+        root.registry.ids().join(',') === 'debate,arm2,signals',
         root.registry.ids().join(','),
       ),
       probe(
@@ -270,8 +270,9 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         `${llmCalls} calls, ${spendRows.n} llm_spend rows`,
       ),
       probe(
-        'debate and arm 2 each have their own paper books',
-        root.books.ids().join(',') === 'debate/primary,debate/no-macro-gate,arm2/technical-only',
+        'debate, arm 2 and signals each have their own paper books',
+        root.books.ids().join(',') ===
+          'debate/primary,debate/no-macro-gate,arm2/technical-only,signals/primary,signals/no-veto',
         root.books.ids().join(', '),
       ),
       probe(

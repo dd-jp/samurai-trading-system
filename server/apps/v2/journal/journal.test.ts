@@ -403,3 +403,52 @@ describe('Journal.recordReconcile (#1872)', () => {
     expect(() => db.prepare('DELETE FROM v2_reconciles').run()).toThrow();
   });
 });
+
+describe('Journal.latestReconcile (#1941)', () => {
+  function run(
+    journal: Journal,
+    tradingDate: string,
+    venue: 'alpaca' | 'saxo',
+    source: 'broker' | 'simulated',
+    status: 'clean' | 'mismatch' | 'read_failed',
+    bookIds: string[],
+  ): void {
+    journal.recordReconcile({
+      trading_date: tradingDate,
+      venue,
+      source,
+      status,
+      book_ids: bookIds,
+      diffs: [],
+      detail: '',
+    });
+  }
+
+  it('reads nothing reconciled on a day with no run', () => {
+    const journal = new Journal(openSharedStore(':memory:'), new SimulatedClock(new Date()));
+    run(journal, '2026-09-29', 'alpaca', 'broker', 'clean', ['signals/primary']);
+    const verdict = journal.latestReconcile('2026-09-30', 'alpaca');
+    expect([...verdict.reconciled]).toEqual([]);
+    expect([...verdict.blocked]).toEqual([]);
+  });
+
+  it('reads the venue latest run per source, and blocks a book any of those left unclean', () => {
+    const journal = new Journal(openSharedStore(':memory:'), new SimulatedClock(new Date()));
+    run(journal, '2026-09-30', 'alpaca', 'broker', 'mismatch', [
+      'debate/primary',
+      'signals/primary',
+    ]);
+    run(journal, '2026-09-30', 'saxo', 'broker', 'read_failed', ['signals/primary']);
+    run(journal, '2026-09-30', 'alpaca', 'simulated', 'mismatch', ['signals/no-veto']);
+    run(journal, '2026-09-30', 'alpaca', 'broker', 'clean', ['debate/primary', 'signals/primary']);
+    const alpaca = journal.latestReconcile('2026-09-30', 'alpaca');
+    expect([...alpaca.reconciled].sort()).toEqual([
+      'debate/primary',
+      'signals/no-veto',
+      'signals/primary',
+    ]);
+    expect([...alpaca.blocked]).toEqual(['signals/no-veto']);
+    const saxo = journal.latestReconcile('2026-09-30', 'saxo');
+    expect([...saxo.blocked]).toEqual(['signals/primary']);
+  });
+});

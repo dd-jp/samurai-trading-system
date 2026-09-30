@@ -123,6 +123,7 @@ const ALLOWED_CAPITAL_LITERALS = new Set([
   'server/apps/v2/risk/loss-budget.ts:DAILY_CAP_FRACTION_OF_START_CAPITAL',
   'server/apps/v2/signal/parameters.ts:minimumCapitalGbp',
   'server/apps/v2/signal/parameters.ts:DEBATE_CAPITAL_SHARE',
+  'server/apps/v2/signal/parameters.ts:SIGNALS_CAPITAL_SHARE',
   'server/apps/v2/smoke.ts:SMOKE_START_CAPITAL_GBP',
   'server/apps/v2/smoke.ts:SMOKE_LOSS_CAP_GBP',
   'server/apps/v2/backtest-verdict.ts:CAPITAL_CEILING_DRAWDOWN_MULTIPLE',

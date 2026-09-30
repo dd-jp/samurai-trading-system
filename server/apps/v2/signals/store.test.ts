@@ -158,6 +158,28 @@ describe('SignalStore.list', () => {
   });
 });
 
+describe('SignalStore.due', () => {
+  it('returns queued signals whose process time has come, oldest first', () => {
+    const later = store.record(payload({ symbol: 'AMD' }), RECEIVED, {
+      session: 'out_of_session',
+      processAfter: new Date('2026-09-30T13:31:00.000Z'),
+    }).signal;
+    const first = store.record(payload({}), RECEIVED, QUEUED).signal;
+    const done = store.record(payload({ symbol: 'NVDA' }), RECEIVED, QUEUED).signal;
+    store.appendEvent(done.signal_id, 'processed', 'submitted');
+    const notYet = store.record(payload({ symbol: 'MU' }), RECEIVED, {
+      session: 'out_of_session',
+      processAfter: new Date('2026-10-01T13:30:00.000Z'),
+    }).signal;
+
+    expect(store.due(new Date('2026-09-30T13:29:59.999Z'))).toEqual([]);
+    expect(store.due(OPEN).map((signal) => signal.signal_id)).toEqual([first.signal_id]);
+    const due = store.due(new Date('2026-09-30T20:00:00.000Z')).map((s) => s.signal_id);
+    expect(due).toEqual([first.signal_id, later.signal_id]);
+    expect(due).not.toContain(notYet.signal_id);
+  });
+});
+
 describe('v2_signals append-only', () => {
   it('refuses updates and deletes on both tables', () => {
     store.record(payload({}), RECEIVED, QUEUED);

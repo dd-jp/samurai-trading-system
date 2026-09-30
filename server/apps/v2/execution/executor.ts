@@ -96,6 +96,7 @@ function send(
     side: order.side,
     size: child.size,
     entry: order.entry,
+    entry_trigger: order.entryTrigger,
     stop: order.stop,
     target: order.target,
     time_in_force: 'gtc',

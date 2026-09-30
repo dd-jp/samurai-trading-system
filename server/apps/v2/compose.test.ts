@@ -107,27 +107,11 @@ const lose = (
   return books.markDay(bookId, '2026-09-25', flat, 1).state;
 };
 
-describe('composeCycle: loss-budget pooling opt-out (#1799, ruled 2026-09-28)', () => {
-  it('pools primary books by default, matching paper/live (compose.ts leaves the flag unset)', () => {
+describe('composeCycle: per-sleeve loss budgets (David 2026-09-30, #1941)', () => {
+  it('keeps each primary on its own budget: one halting leaves the other at its own step', () => {
     const { books } = composeCycle(options());
-    lose(books, 'debate/primary', 1_000, 'a');
+    expect(lose(books, 'debate/primary', 1_000, 'a')).toMatchObject({ halted: true });
     lose(books, 'trend/primary', 600, 'b');
-
-    books.settlePrimaryBudgets('2026-09-25');
-
-    expect(books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: true,
-      sizeMultiplier: 0,
-    });
-  });
-
-  it('keeps each primary on its own isolated budget when pooledLossBudget is explicitly false (backtest)', () => {
-    const { books } = composeCycle(options({ pooledLossBudget: false }));
-    lose(books, 'debate/primary', 1_000, 'a');
-    const trendState = lose(books, 'trend/primary', 600, 'b');
-    expect(trendState).toMatchObject({ halted: false, sizeMultiplier: 0.25 });
-
-    books.settlePrimaryBudgets('2026-09-25');
 
     expect(books.lastDay('trend/primary')?.state).toMatchObject({
       halted: false,

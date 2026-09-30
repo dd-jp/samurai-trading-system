@@ -206,6 +206,12 @@ function withinLimit(side: OrderSide, limit: number, price: number): number {
 
 const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'refused_dry_run']);
 
+export type EntryOrderId = (book: BookSpec, instrument: string, tradingDate: string) => string;
+
+function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: string): string {
+  return `v2-${book.id.replaceAll('/', '-')}-${tradingDate}-${instrument}`;
+}
+
 class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
@@ -225,6 +231,7 @@ class Cycle {
     private readonly tradingDate: string,
     private readonly macro: MacroGateVerdict,
     private readonly control: ManualControl,
+    private readonly entryOrderIdFor: EntryOrderId = defaultEntryOrderId,
   ) {}
 
   fxFor(venue: Venue): number {
@@ -405,7 +412,12 @@ class Cycle {
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const outcome = simulateLimitEntry(
-      { side, limit, stop: numberOrUndefined(order.payload.stop) },
+      {
+        side,
+        limit,
+        stop: numberOrUndefined(order.payload.stop),
+        trigger: numberOrUndefined(order.payload.trigger),
+      },
       this.barsSince(order),
     );
     if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_CALENDAR_DAYS) {
@@ -909,7 +921,7 @@ class Cycle {
   }
 
   entryOrderId(book: BookSpec, instrument: string): string {
-    return `v2-${book.id.replaceAll('/', '-')}-${this.tradingDate}-${instrument}`;
+    return this.entryOrderIdFor(book, instrument, this.tradingDate);
   }
 
   async submitEntry(
@@ -919,9 +931,10 @@ class Cycle {
     approval: EntryApproval,
   ): Promise<OrderOutcome | undefined> {
     const clientOrderId = this.entryOrderId(book, decision.instrument);
-    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return undefined;
-    if (this.deps.books.position(book.id, decision.instrument) !== undefined) return undefined;
-    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return undefined;
+    if (!this.willSubmitEntry(book, decision)) {
+      this.journalHeldByBrokerBook(book, decision);
+      return undefined;
+    }
     this.tally.entries += 1;
     const submission: Submission =
       approval.order === undefined
@@ -943,6 +956,7 @@ class Cycle {
         size: approval.size,
         detail: submission.detail,
         price: decision.price,
+        trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
         approval: approval.order === undefined ? undefined : submission.approvalId,
@@ -965,16 +979,59 @@ class Cycle {
     return total;
   }
 
-  // #submitEntry no-ops when a client order already exists, a position is already held, or an
-  // entry for this instrument is mid-cycle-fill (#pendingEntries) — the cash gate must only
+  // #submitEntry no-ops when a client order already exists, a position is already held, an
+  // entry for this instrument is mid-cycle-fill (#pendingEntries), or another broker-routed book
+  // holds or rests it — the cash gate must only
   // charge and refuse decisions that take that path, or held/resting lines eat phantom cash and
   // starve later instruments in list order (doc 66 2026-09-28, #1785)
-  willSubmitEntry(book: BookSpec, instrument: string): boolean {
+  willSubmitEntry(book: BookSpec, decision: SleeveDecision): boolean {
+    const { instrument } = decision;
     return (
       this.deps.journal.orderFor(this.entryOrderId(book, instrument)) === undefined &&
       this.deps.books.position(book.id, instrument) === undefined &&
-      !this.#pendingEntries.has(positionKey(book.id, instrument))
+      !this.#pendingEntries.has(positionKey(book.id, instrument)) &&
+      this.brokerBookHolding(book, decision) === undefined
     );
+  }
+
+  // One Alpaca account serves every broker-routed book, so an entry on a symbol another such
+  // book holds or rests would net against it at the broker and its stop legs would compete (#1941)
+  brokerBookHolding(book: BookSpec, decision: SleeveDecision): string | undefined {
+    const routed = (candidate: BookSpec) =>
+      !this.deps.executor.simulates(routeOf(candidate, decision.venue));
+    if (!routed(book)) return undefined;
+    return this.deps.registry
+      .ids()
+      .flatMap((id) => this.deps.books.forSleeve(id))
+      .find(
+        (other) =>
+          other.id !== book.id &&
+          routed(other) &&
+          this.holdsOrRestsAt(other.id, decision.instrument, decision.venue),
+      )?.id;
+  }
+
+  holdsOrRestsAt(bookId: string, instrument: string, venue: Venue): boolean {
+    if (this.deps.books.position(bookId, instrument)?.venue === venue) return true;
+    return this.deps.journal
+      .restingEntries(bookId)
+      .some((order) => order.instrument === instrument && order.venue === venue);
+  }
+
+  journalHeldByBrokerBook(book: BookSpec, decision: SleeveDecision): void {
+    const holder = this.brokerBookHolding(book, decision);
+    if (holder === undefined) return;
+    const message = `${book.id} ${decision.instrument}: held or resting in ${holder} at ${decision.venue}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter: 'symbol_held_by_broker_book',
+      ticket: '#1941',
+      message,
+      book_id: book.id,
+      instrument: decision.instrument,
+    });
+    this.refusals.push(message);
   }
 
   applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
@@ -1002,9 +1059,7 @@ class Cycle {
       macroDay: this.macro.macroDay,
     });
     const willSubmit =
-      approval.order !== undefined &&
-      approval.size > 0 &&
-      this.willSubmitEntry(book, decision.instrument);
+      approval.order !== undefined && approval.size > 0 && this.willSubmitEntry(book, decision);
     const gated = willSubmit ? this.applyRoomGate(decision, approval, room) : approval;
     return { decision, gated };
   }
@@ -1084,9 +1139,6 @@ class Cycle {
   async markAll(books: readonly BookSpec[]): Promise<BookReport[]> {
     const previous = new Map(books.map((book) => [book.id, this.deps.books.lastDay(book.id)]));
     for (const book of books) this.markOne(book, previous.get(book.id));
-    // Pooled primary state depends on every primary's mark for tradingDate; settle only once
-    // all of today's marks are committed, so no book's own halt is checked against a partial sum
-    this.deps.books.settlePrimaryBudgets(this.tradingDate);
     const reports: BookReport[] = [];
     for (const book of books) reports.push(await this.reportMark(book, previous.get(book.id)));
     return reports;
@@ -1362,7 +1414,6 @@ async function runUnmarked(
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
   cycle.rescaleSplitPositions();
-  deps.books.settleLastPrimaryMark();
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
@@ -1406,5 +1457,47 @@ async function runUnmarked(
     rejected_orders: tally.rejected,
     refusals,
     books: bookReports,
+  };
+}
+
+export interface EntryPass {
+  readonly tradingDate: string;
+  readonly sleeveId: string;
+  readonly decisionsFor: (book: BookSpec) => readonly SleeveDecision[];
+  readonly entryOrderId: EntryOrderId;
+  readonly blockedBookIds: ReadonlySet<string>;
+}
+
+export interface EntryPassReport {
+  readonly entries: number;
+  readonly submitted_orders: number;
+  readonly simulated_orders: number;
+  readonly dry_run_refusals: number;
+  readonly rejected_orders: number;
+  readonly refusals: readonly string[];
+}
+
+// Entries only: fills, reconcile, exits and marks stay with the daily cycle, which holds the run
+// lease against this pass
+export async function runEntryPass(deps: CycleDeps, pass: EntryPass): Promise<EntryPassReport> {
+  const cycle = new Cycle(
+    deps,
+    pass.tradingDate,
+    macroGate(pass.tradingDate),
+    deps.controls.current(),
+    pass.entryOrderId,
+  );
+  cycle.blockEntries({ blockedBookIds: pass.blockedBookIds, refusals: [] });
+  for (const book of deps.books.forSleeve(pass.sleeveId)) {
+    await cycle.entries(book, pass.decisionsFor(book));
+  }
+  const { tally } = cycle;
+  return {
+    entries: tally.entries,
+    submitted_orders: tally.submitted,
+    simulated_orders: tally.simulated,
+    dry_run_refusals: tally.refused,
+    rejected_orders: tally.rejected,
+    refusals: cycle.refusals,
   };
 }

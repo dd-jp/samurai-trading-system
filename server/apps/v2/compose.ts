@@ -47,10 +47,6 @@ export interface CycleCompositionOptions {
   readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp?: number | undefined;
-  // Default true: paper/live pools real concurrent primary books against one account-wide loss
-  // cap (#1799). The backtest passes false so each trial and the benchmark it composes into the
-  // same PaperBooks keeps an independent budget (ruled 2026-09-28, doc 66)
-  readonly pooledLossBudget?: boolean | undefined;
 }
 
 export interface CycleComposition extends CycleDeps {
@@ -112,7 +108,6 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     capital,
     options.openingDate,
     registry.list(),
-    options.pooledLossBudget ?? true,
     cfdCarryRatesFor(options),
   );
   const risk = new V2RiskGate({
