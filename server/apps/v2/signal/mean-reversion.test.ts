@@ -21,9 +21,49 @@ const SMA_WINDOW = 200;
 const ATR_WINDOW = 20;
 const LOOKBACK_BARS = SMA_WINDOW + ATR_WINDOW + 20;
 
-function bar(index: number, close: number, overrides: Partial<V2Bar> = {}): V2Bar {
+function weekdaysEndingBefore(tradingDate: string, count: number): readonly string[] {
+  const dates: string[] = [];
+  const cursor = new Date(`${tradingDate}T00:00:00.000Z`);
+  while (dates.length < count) {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+    const weekday = cursor.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) dates.unshift(cursor.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+const SESSIONS = weekdaysEndingBefore(CONTEXT.tradingDate, LOOKBACK_BARS + 20);
+
+function sessionAt(index: number, length: number): string {
+  return SESSIONS[SESSIONS.length - length + index] as string;
+}
+
+function calendarSource(sessions: readonly string[] = SESSIONS): BarsSource {
+  const reference: BarSeries = {
+    symbol: 'SPY',
+    bars: sessions.map((date) => ({
+      date,
+      open: 1,
+      high: 1,
+      low: 1,
+      close: 1,
+      volume: 1,
+      rawClose: 1,
+    })),
+  };
+  return { load: (symbol) => (symbol === 'SPY' ? reference : undefined) };
+}
+
+const CALENDAR = calendarSource();
+
+function bar(
+  index: number,
+  close: number,
+  overrides: Partial<V2Bar> = {},
+  length = LOOKBACK_BARS,
+): V2Bar {
   return {
-    date: `D${index}`,
+    date: sessionAt(index, length),
     open: close,
     high: close,
     low: close,
@@ -36,7 +76,9 @@ function bar(index: number, close: number, overrides: Partial<V2Bar> = {}): V2Ba
 
 function closesMarket(closes: readonly number[], finalOverrides: Partial<V2Bar> = {}): MarketData {
   const bars = closes.map((close, index) =>
-    index === closes.length - 1 ? bar(index, close, finalOverrides) : bar(index, close),
+    index === closes.length - 1
+      ? bar(index, close, finalOverrides, closes.length)
+      : bar(index, close, {}, closes.length),
   );
   return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
 }
@@ -71,10 +113,46 @@ function twoMoveCloses(rise: number, fall: number): number[] {
   return closes;
 }
 
+function barsMarket(bars: readonly V2Bar[]): MarketData {
+  return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
+}
+
+function datedBars(closes: readonly number[], dates: readonly string[]): V2Bar[] {
+  return closes.map((close, index) => ({ ...bar(index, close), date: dates[index] as string }));
+}
+
+// Drops `missing` sessions from inside the calendar's last LOOKBACK_BARS, never the last one, and
+// reaches back just as far for the bars it lost, so the read still returns LOOKBACK_BARS bars
+function gappyDates(missing: number): readonly string[] {
+  const span = SESSIONS.slice(-(LOOKBACK_BARS + missing));
+  const dropped = new Set(
+    Array.from({ length: missing }, (_, gap) => LOOKBACK_BARS - 10 * (gap + 2)),
+  );
+  return span.filter((_, index) => !dropped.has(index + missing));
+}
+
+// Every third interior bar closes above its own high, so shapeValid drops it: the read keeps
+// 240 - 41 = 199 bars, one short of SMA(200), while ATR(20) and RSI(2) stay defined
+function shapeThinnedBars(): V2Bar[] {
+  const bars = flatCloses().map((close, index) => bar(index, close));
+  for (let dropped = 0; dropped < 41; dropped++) {
+    const index = 3 * dropped + 1;
+    bars[index] = { ...(bars[index] as V2Bar), close: 101, high: 100 };
+  }
+  return bars;
+}
+
+// Last bar's true range is high - 160 against the prior 200 close, the 100 -> 200 step is the
+// window's only other range: ATR(20) = (100 + high - 160) / 20, so high 700 puts 5 * ATR on 160
+function wideRangeDip(high: number): MarketData {
+  const closes = oversoldCloses();
+  closes[LOOKBACK_BARS - 1] = 160;
+  return closesMarket(closes, { high });
+}
+
 async function decideOn(closes: readonly number[], entryThreshold: number) {
-  const noSource: BarsSource = { load: () => undefined };
   const sleeve = createMeanReversionSleeve(
-    noSource,
+    CALENDAR,
     () => [],
     entryThreshold,
   )(closesMarket(closes));
@@ -140,6 +218,18 @@ describe('relativeStrengthIndex', () => {
     expect(relativeStrengthIndex(closesOf([10, 11, 10, 12, 11.5]), 2)).toBeCloseTo(62.5, 9);
   });
 
+  it('is defined at exactly period + 1 bars, seeded from losses as well as gains', () => {
+    const closesOf = (closes: readonly number[]) => closes.map((close, index) => bar(index, close));
+    expect(relativeStrengthIndex(closesOf([10, 11, 10]), 2)).toBe(50);
+    expect(relativeStrengthIndex(closesOf([10, 9, 8]), 2)).toBe(0);
+  });
+
+  it('smooths by (period - 1) / period beyond the seed at a period other than 2', () => {
+    const closesOf = (closes: readonly number[]) => closes.map((close, index) => bar(index, close));
+    expect(relativeStrengthIndex(closesOf([10, 11, 12, 13, 12]), 3)).toBeCloseTo(200 / 3, 9);
+    expect(relativeStrengthIndex(closesOf([10, 9, 10, 11, 10]), 3)).toBeCloseTo(400 / 9, 9);
+  });
+
   it('is 0 after a long flat run followed by a single down day', () => {
     const bars = flatCloses().map((close, index) => bar(index, close));
     const lastDown = [...bars.slice(0, -1), bar(bars.length - 1, 99)];
@@ -167,12 +257,11 @@ describe('MEAN_REVERSION constants', () => {
 });
 
 describe('createMeanReversionSleeve', () => {
-  const noSource: BarsSource = { load: () => undefined };
   const noConstituents = (): readonly string[] => [];
 
   it('ids by entry threshold and declares its spec', () => {
     const sleeve = createMeanReversionSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
       10,
     )(closesMarket(flatCloses()));
@@ -197,7 +286,7 @@ describe('createMeanReversionSleeve', () => {
 
   it('enters long on an oversold RSI(2) dip inside an uptrend (close above SMA200)', async () => {
     const sleeve = createMeanReversionSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
       15,
     )(closesMarket(oversoldCloses()));
@@ -222,7 +311,7 @@ describe('createMeanReversionSleeve', () => {
     // 60 from the overridden high/low. rawClose 497.5 makes the raw/close ratio 2.5, so atr 20
     // and stop 497.5 - 5 * 20 = 397.5
     const sleeve = createMeanReversionSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
       15,
     )(closesMarket(oversoldCloses(), { high: 259, low: 199, rawClose: 497.5 }));
@@ -236,7 +325,7 @@ describe('createMeanReversionSleeve', () => {
 
   it('exits on RSI(2) recovery above 65, independent of the SMA gate', async () => {
     const sleeve = createMeanReversionSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
       10,
     )(closesMarket(recoveredCloses()));
@@ -253,7 +342,7 @@ describe('createMeanReversionSleeve', () => {
 
   it('skips as no_signal when RSI(2) sits between the entry threshold and the recovery line', async () => {
     const sleeve = createMeanReversionSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
       10,
     )(closesMarket(flatCloses()));
@@ -294,25 +383,126 @@ describe('createMeanReversionSleeve', () => {
     expect(above?.action).toBe('exit');
   });
 
-  it('skips as insufficient_history below the SMA(200) warmup', async () => {
-    const closes = Array.from({ length: 50 }, () => 100);
-    const sleeve = createMeanReversionSleeve(noSource, noConstituents, 10)(closesMarket(closes));
-    const output = await sleeve.decide(CONTEXT, ['AAA']);
-    expect(output.decisions[0]?.action).toBe('skip');
-    expect(output.decisions[0]?.reason).toBe('insufficient_history');
+  it('skips as window_coverage on fewer than 240 bars, though SMA(200) and RSI(2) are defined (#1912)', async () => {
+    const decision = await decideOn(oversoldCloses().slice(-210), 15);
+    expect(decision?.action).toBe('skip');
+    expect(decision?.reason).toBe('window_coverage');
+    expect(decision?.stop_price).toBeUndefined();
+    expect(decision?.payload).toMatchObject({ sma200: expect.any(Number) });
   });
 
-  it('skips as insufficient_history below the ATR(20) warmup even with RSI(2) defined', async () => {
-    const closes = Array.from({ length: 3 }, () => 100);
-    const sleeve = createMeanReversionSleeve(noSource, noConstituents, 10)(closesMarket(closes));
-    const output = await sleeve.decide(CONTEXT, ['AAA']);
-    expect(output.decisions[0]?.action).toBe('skip');
-    expect(output.decisions[0]?.reason).toBe('insufficient_history');
+  it('holds the 95% coverage line over the 240-session window: 12 missing sessions enter, 13 skip (#1912)', async () => {
+    const withMissing = async (missing: number) => {
+      const sleeve = createMeanReversionSleeve(
+        CALENDAR,
+        noConstituents,
+        15,
+      )(barsMarket(datedBars(oversoldCloses(), gappyDates(missing))));
+      return (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    };
+    expect((await withMissing(12))?.action).toBe('enter_long');
+    const gappy = await withMissing(13);
+    expect(gappy?.action).toBe('skip');
+    expect(gappy?.reason).toBe('window_coverage');
+  });
+
+  it('a window_coverage skip also blocks an RSI(2) recovery exit (David 2026-09-29, #1912)', async () => {
+    const exitOn = async (missing: number) => {
+      const sleeve = createMeanReversionSleeve(
+        CALENDAR,
+        noConstituents,
+        10,
+      )(barsMarket(datedBars(recoveredCloses(), gappyDates(missing))));
+      return (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    };
+    expect((await exitOn(12))?.action).toBe('exit');
+    const gappy = await exitOn(13);
+    expect(gappy?.action).toBe('skip');
+    expect(gappy?.reason).toBe('window_coverage');
+  });
+
+  it('skips as window_coverage when the name has no bar on the last calendar session (stale) (#1912)', async () => {
+    const stale = datedBars(oversoldCloses(), SESSIONS.slice(-(LOOKBACK_BARS + 1), -1));
+    const sleeve = createMeanReversionSleeve(CALENDAR, noConstituents, 15)(barsMarket(stale));
+    const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    expect(decision?.action).toBe('skip');
+    expect(decision?.reason).toBe('window_coverage');
+  });
+
+  it('skips as window_coverage when the calendar itself is stale or missing (#1912)', async () => {
+    const oldSessions = weekdaysEndingBefore('2024-12-20', LOOKBACK_BARS);
+    const market = barsMarket(datedBars(oversoldCloses(), oldSessions));
+    for (const calendar of [calendarSource(oldSessions), { load: () => undefined }]) {
+      const sleeve = createMeanReversionSleeve(calendar, noConstituents, 15)(market);
+      const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+      expect(decision?.reason).toBe('window_coverage');
+    }
+    const fresh = createMeanReversionSleeve(
+      calendarSource(oldSessions),
+      noConstituents,
+      15,
+    )(market);
+    const onTime = await fresh.decide({ ...CONTEXT, tradingDate: '2024-12-20' }, ['AAA']);
+    expect(onTime.decisions[0]?.action).toBe('enter_long');
+  });
+
+  it('skips as insufficient_history when shape-invalid bars leave a covered window short of SMA(200)', async () => {
+    const sleeve = createMeanReversionSleeve(
+      CALENDAR,
+      noConstituents,
+      10,
+    )(barsMarket(shapeThinnedBars()));
+    const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    expect(decision?.action).toBe('skip');
+    expect(decision?.reason).toBe('insufficient_history');
+    expect(decision?.payload).toStrictEqual({ rsi2: 50, sma200: undefined });
+  });
+
+  it('skips as non_positive_stop when price - 5 * ATR(20) lands exactly on zero (#1912)', async () => {
+    const sleeve = createMeanReversionSleeve(CALENDAR, noConstituents, 15)(wideRangeDip(700));
+    const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    expect(decision).toMatchObject({
+      action: 'skip',
+      reason: 'non_positive_stop',
+      venue: 'alpaca',
+      direction: 'neutral',
+      confidence: 0,
+      inputs_hash: '',
+    });
+    expect(decision?.price).toBe(160);
+    expect(decision?.atr).toBe(32);
+    expect(decision?.stop_price).toBeUndefined();
+  });
+
+  it('skips a stop below zero and enters a stop just above it (#1912)', async () => {
+    const decide = async (high: number) =>
+      (
+        await createMeanReversionSleeve(
+          CALENDAR,
+          noConstituents,
+          15,
+        )(wideRangeDip(high)).decide(CONTEXT, ['AAA'])
+      ).decisions[0];
+    expect((await decide(900))?.reason).toBe('non_positive_stop');
+    const justAbove = await decide(699);
+    expect(justAbove?.action).toBe('enter_long');
+    expect(justAbove?.stop_price).toBeCloseTo(0.25, 9);
+  });
+
+  it('still exits on RSI(2) recovery when 5 * ATR(20) exceeds the price', async () => {
+    const sleeve = createMeanReversionSleeve(
+      CALENDAR,
+      noConstituents,
+      10,
+    )(closesMarket(recoveredCloses(), { high: 1_000 }));
+    const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    expect(decision?.atr).toBeGreaterThan(101 / 5);
+    expect(decision?.action).toBe('exit');
   });
 
   it('skips as bad_last_bar when the last bar fails the shape check, fail-closed', async () => {
     const sleeve = createMeanReversionSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
       10,
     )(closesMarket(oversoldCloses(), { close: 500, high: 199 }));
@@ -327,7 +517,7 @@ describe('createMeanReversionSleeve', () => {
       barsBefore: () => [],
       gbpUsdAtYearStart: () => 1,
     };
-    const sleeve = createMeanReversionSleeve(noSource, noConstituents, 10)(empty);
+    const sleeve = createMeanReversionSleeve(CALENDAR, noConstituents, 10)(empty);
     const output = await sleeve.decide(CONTEXT, ['AAA']);
     expect(output.decisions[0]?.action).toBe('skip');
     expect(output.decisions[0]?.reason).toBe('bad_last_bar');
@@ -344,7 +534,7 @@ describe('createMeanReversionSleeve', () => {
       },
       gbpUsdAtYearStart: () => 1,
     };
-    const sleeve = createMeanReversionSleeve(noSource, noConstituents, 15)(market);
+    const sleeve = createMeanReversionSleeve(CALENDAR, noConstituents, 15)(market);
     const output = await sleeve.decide(CONTEXT, ['HIGH', 'FLAT', 'LOW']);
     expect(output.decisions.map((decision) => decision.instrument)).toEqual([
       'LOW',
@@ -389,9 +579,8 @@ describe('createMeanReversionBenchmarkSleeve', () => {
   const noConstituents = (): readonly string[] => [];
 
   it('ignores the RSI signal entirely: enters whenever warmed up, no time stop in its spec (ruling f)', async () => {
-    const noSource: BarsSource = { load: () => undefined };
     const sleeve = createMeanReversionBenchmarkSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
     )(closesMarket(flatCloses()));
     expect(sleeve.id).toBe(MEAN_REVERSION_BENCHMARK_ID);
@@ -401,31 +590,61 @@ describe('createMeanReversionBenchmarkSleeve', () => {
   });
 
   it('keeps the universe order in decide(), unsorted by any signal (ruling g)', async () => {
-    const noSource: BarsSource = { load: () => undefined };
     const sleeve = createMeanReversionBenchmarkSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
     )(closesMarket(flatCloses()));
     const output = await sleeve.decide(CONTEXT, ['ZZZ', 'AAA', 'MMM']);
     expect(output.decisions.map((decision) => decision.instrument)).toEqual(['ZZZ', 'AAA', 'MMM']);
+    expect(output.refusals).toEqual([]);
   });
 
-  it('skips as insufficient_history before its own ATR(20) warmup', async () => {
-    const noSource: BarsSource = { load: () => undefined };
-    const closes = Array.from({ length: 5 }, () => 100);
+  it('declares the strategy universe (ruling f)', () => {
+    const bars = memorySource([series('BIG', 25, 100, 1_000), series('MID', 25, 10, 5_000)]);
+    const sleeve = createMeanReversionBenchmarkSleeve(bars, () => ['MID', 'BIG'])(
+      closesMarket(flatCloses()),
+    );
+    expect(sleeve.universe({ ...CONTEXT, tradingDate: '2026-09-26' })).toEqual({
+      instruments: ['BIG', 'MID'],
+      refusals: [],
+    });
+  });
+
+  it('needs the strategy SMA(200) warm-up, not ATR(20) alone (#1912)', async () => {
     const sleeve = createMeanReversionBenchmarkSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
-    )(closesMarket(closes));
-    const output = await sleeve.decide(CONTEXT, ['AAA']);
-    expect(output.decisions[0]?.action).toBe('skip');
-    expect(output.decisions[0]?.reason).toBe('insufficient_history');
+    )(barsMarket(shapeThinnedBars()));
+    const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    expect(decision?.atr).toBeDefined();
+    expect(decision?.action).toBe('skip');
+    expect(decision?.reason).toBe('insufficient_history');
+  });
+
+  it('skips a gappy 240-session window the strategy also skips (#1912)', async () => {
+    const sleeve = createMeanReversionBenchmarkSleeve(
+      CALENDAR,
+      noConstituents,
+    )(barsMarket(datedBars(flatCloses(), gappyDates(13))));
+    const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    expect(decision?.action).toBe('skip');
+    expect(decision?.reason).toBe('window_coverage');
+  });
+
+  it('skips as non_positive_stop when 5 * ATR(20) reaches the price (#1912)', async () => {
+    const sleeve = createMeanReversionBenchmarkSleeve(
+      CALENDAR,
+      noConstituents,
+    )(closesMarket(flatCloses(), { high: 500 }));
+    const decision = (await sleeve.decide(CONTEXT, ['AAA'])).decisions[0];
+    expect(decision?.atr).toBe(20);
+    expect(decision?.action).toBe('skip');
+    expect(decision?.reason).toBe('non_positive_stop');
   });
 
   it('skips as bad_last_bar when the last bar fails the shape check, fail-closed', async () => {
-    const noSource: BarsSource = { load: () => undefined };
     const sleeve = createMeanReversionBenchmarkSleeve(
-      noSource,
+      CALENDAR,
       noConstituents,
     )(closesMarket(flatCloses(), { close: 500, high: 199 }));
     const output = await sleeve.decide(CONTEXT, ['AAA']);

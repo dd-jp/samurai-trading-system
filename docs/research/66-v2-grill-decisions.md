@@ -284,6 +284,16 @@ Cost-sensitivity note: the 2× multiple (`costMultiple`, `server/apps/v2/compose
 
 **Doc-68 session eval (independent, fresh-context, before the PR):** re-ran the real backtest against a ledger copy and reproduced every number above exactly; confirmed the ledger idempotent (still 10 rows on a same-config re-run); confirmed the 15-instrument universe, the 2-trial grid, the benchmark construction, no look-ahead, non-overlapping walk-forward folds, both Majors' revert-proofs, both mutation-testing claims (cycle.ts's cash-gate path 99.07% with one equivalent-mutant survivor; `cross-asset-trend.ts` full-file 85.19% with all 20 survivors confirmed module-scope-const tooling artifacts), all local gates, and no `Closes #1785`/secrets/scope creep. One CONFIRMED blocker (this doc was uncommitted at eval time) — fixed by committing it. Additional minors recorded, not fixed: the boundaries test's 4-line `ALLOWED_CAPITAL_LITERALS` widening (traces to S1's 0.7 and the £2,000 paper figure, same pattern as the existing `smoke.ts` allowance) is a D8 allowlist change David may want to see; `backtest-cli.test.ts`'s CLI-wiring test uses a 90-day fixture too short to warm either SMA and only asserts `signFlipped`'s type, not its value — thin, not wrong.
 
+## Rulings of 2026-09-29 — candidate 2 (mean reversion) review findings
+
+David ruled the three findings of #1870's independent review in chat, recorded on [#1912](https://github.com/dd-jp/samurai-trading-system/issues/1912) before candidate 2's trial (#1785):
+
+1. **Benchmark warm-up matches the strategy's.** The risk-matched benchmark enters only once SMA(200), ATR(20) and RSI(2) are all available, so both arms trade the same names.
+2. **Coverage invariant on the 240-bar read window.** Both arms check the window `decide()` reads with the universe's `windowCovered` rule (95% of the last 240 SPY sessions, a bar on the last one, calendar fresh); a gappy or stale window is a `window_coverage` skip, never a signal (postmortem §2). This also suppresses the RSI(2) exit on such a day: a held name then closes only on its resting stop or the 10-session time stop. On the pinned window every name skips until 2016-12-14, the first day with 240 prior SPY sessions, 45 sessions after `MEAN_REVERSION_FROM`.
+3. **Non-positive stop skips.** An entry whose stop `price - 5 × ATR(20)` is at or below zero is a `non_positive_stop` skip, in both arms.
+
+These change what the candidate trades. The trial hash does not change: it covers the grid, the sleeve spec and the run window, not code, so the first recorded run is of the ruled behaviour. No trial was recorded before this change.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
