@@ -1,6 +1,6 @@
 # Signals sleeve — spec (v2, #1941)
 
-Authority: David's rulings of 2026-09-30 on [#1941](https://github.com/dd-jp/samurai-trading-system/issues/1941), recorded in `docs/research/66-v2-grill-decisions.md` ("Rulings of 2026-09-30 — external signals sleeve") and `docs/adr/0001-samurai-v2.md` §2.3 and §5 item 22. The sleeve is built in two PRs: the endpoint and store (built), then the sleeve, books, processor and cycle integration (planned, the second #1941 PR). Sections say which.
+Authority: David's rulings of 2026-09-30 on [#1941](https://github.com/dd-jp/samurai-trading-system/issues/1941), recorded in `docs/research/66-v2-grill-decisions.md` ("Rulings of 2026-09-30 — external signals sleeve") and `docs/adr/0001-samurai-v2.md` §2.3 and §5 item 22. The sleeve is built in two PRs: the endpoint and store (built), then the sleeve, books, processor and cycle integration (built, the second #1941 PR).
 
 ## 1. What the sleeve is
 
@@ -39,12 +39,25 @@ Migration 0077 adds two append-only tables (update and delete refused by trigger
 
 At receipt the signal is classified against the US regular session from the existing market calendar (`UsEquityRegularHoursCalendar`, no hard-coded hours; half days close early): inside the session it is `in_session` and processed at once; outside it is `out_of_session` and processed at the next session open (`nextSessionOpen`). Both are stored as `session` and `process_after`, with a `queued` event. The calendar is hand-entered through 2027-12-31 and throws past its coverage, which the endpoint answers with 500.
 
-## 5. Sleeve (planned, second #1941 PR)
+## 5. Sleeve (built)
 
-- **Capital:** a £7,000 paper book, the whole idle 70% share of the £10,000 paper start; the loss cap and daily cap follow the 70% share (doc 66, 2026-09-27). The figure is derived from the capital config and the sleeve share (D8), never written in code. The rules-based candidates (#1785) have no idle cash while this holds.
-- **Sizing:** full R: risk 0.5% of equity over the distance from entry to the signal's stop, whole shares, the 10% position cap and every existing cap (gross, loss-budget tiers, daily cap).
-- **Exit:** one bracket. The stop is the signal's stop; the target is the first target at least 2R above the entry, else the last target. No ladder (#1853 stands).
-- **Entry:** a limit at or below the last close; a zone is a limit at its high. An entry above the last close would be a buy-stop; whether Alpaca accepts a stop parent in a bracket order is not stated in its documentation, so the build treats that as unverified.
-- **Veto:** the pinned judge model over the existing transport, under the secret guard (#1881) and the spend cap; the prompt carries the signal and market data only, never account data.
-- **Concurrency:** the always-on processor and the daily cycle take one lock, and every order carries an idempotent id per signal, so they never race on orders or books. The daily cycle sweeps fills, reconciles and manages exits for both signals books.
-- **Journal:** every signal, verdict (with the veto's reason), refusal, order and fill; the dashboard journal shows signals.
+Code: `server/apps/v2/signals/processor.ts` (the processor), `server/apps/v2/signals/entry.ts` (entry plan and bracket target), `server/apps/v2/signals/veto.ts`, `server/apps/v2/signals/loop.ts` (the always-on trigger), `server/apps/v2/run-lease.ts` (the lock), and `SIGNALS_SLEEVE_SPEC` in `server/apps/v2/signal/parameters.ts`.
+
+- **Capital:** the sleeve's capital share is 70%: on a £10,000 paper year that is a £7,000 book, a £1,050 loss cap and a £70 daily cap (doc 66, 2026-09-27). The figures are derived from the capital config and the share (D8), never written in code. Both books, `signals/primary` and `signals/no-veto`, start at the share. The rules-based candidates (#1785) have no idle cash while this holds.
+- **Pooled budget:** `signals/primary` is a primary book, so it joins `debate/primary` in the account-wide pooled loss budget (the full yearly cap, marks at a third, two thirds and all of it). A signals loss of a third of the cap halves `debate/primary`'s sizing too, and the reverse.
+- **Sizing:** full R: risk 0.5% of equity over the distance from the limit to the signal's stop, whole shares, the 10% position cap and every existing cap (gross, ADV, loss-budget tiers, daily cap). The signal's `size` is journalled as `size_hint` and ignored.
+- **Exit:** one bracket. The stop is the signal's stop; the target is the first target at least 2R above the limit, else the last target (`target_price` on the decision, which the risk gate uses in place of its ATR target). No ladder (#1853 stands), no time stop.
+- **Entry:** classified against the last daily close before today. A limit at or below it enters as a GTC limit-parent bracket; a zone is a limit at its high. An entry whose low is above the last close is a buy-stop and is refused (`entry_is_buy_stop`): Alpaca's documentation shows a bracket only with a market or limit parent, and the Alpaca adapter submits limit parents only, so a buy-stop would go in as a marketable limit. A whole zone above the close is treated as a buy-stop; a zone straddling the close enters at its high. The build's choice; David rules on stop parents (#1941).
+- **Session:** an in-session signal is processed at once; an out-of-session one waits for the next open (§4). A signal whose own session has passed is refused (`session_missed`). An entry that does not fill that session is cancelled by the next daily cycle, as every stale entry is.
+- **Veto:** the pinned judge model over the existing transport, under the secret guard (#1881) and the spend cap. The prompt carries the signal (symbol, entry, limit, stop, bracket target, targets, last close) and the last 20 daily bars at quoted prices, never account data. A veto skips the primary; the shadow enters regardless. When the veto cannot run (spend cap, call failure) the primary is skipped as `unavailable` and the shadow still enters.
+- **Refusals:** each is journalled with scope `signal` and the code as its parameter, and closes the signal as `refused`: `session_missed`, `manual_control_paused`, `manual_control_halted`, `no_capital_config`, `not_in_universe` (not a current S&P 500 constituent), `stale_last_close`, `last_close_at_or_below_stop`, `entry_is_buy_stop`, `symbol_held` (held or resting in a signals book or any broker-routed Alpaca book). A primary with no clean Alpaca reconcile journalled for the day is blocked (`reconcile_not_clean`) while the shadow trades.
+- **Concurrency:** one lease row (`v2_run_lease`, migration 0078) serialises the processor and the daily cycle. The processor tries once and skips the pass if the cycle holds it; the cycle waits up to 15 minutes, then fails. A lease held by a dead process, or older than 6 hours, is taken over. Entry order ids are `v2-<book>-<symbol>-<signal id>`, with no date, so a replayed signal finds its order and is closed as `already_submitted`.
+- **Cycle:** the daily cycle runs the signals sleeve like any other (it decides nothing itself): it sweeps fills, reconciles, cancels stale entries and manages exits for both books.
+- **Journal:** every signal event, decision (with the veto's verdict and reason in its payload), refusal, order and fill; the dashboard journal shows the signals books' decisions and the `signal` refusals.
+
+### Known limits
+
+- The daily cap binds at the next mark: the processor does not sweep fills intraday, so several same-day signals can together lose more than the daily cap before the cycle sees it.
+- The shadow's simulated entry fills against the whole day's bar, including the part of the session before the signal arrived.
+- Classification uses the prior close. A stock that gaps below the stop in-session still gets its limit, which is then marketable at the open's price.
+- A stale Alpaca entry whose cancel fails keeps `symbol_held` refusing that symbol until it is cleared.
