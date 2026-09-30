@@ -9,19 +9,21 @@ import type {
 import type { AlpacaBrokerClient, AlpacaOrder } from '../../../pipeline/execution/index.js';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { JournalReader } from '../api/journal-reader.js';
 import { composeV2Root, type V2Root, type V2RootOptions } from '../index.js';
-import { CapitalConfigStore, dailyCapGbp } from '../risk/index.js';
 import { sleeveCapitalYear } from '../risk/allocation.js';
+import { CapitalConfigStore, dailyCapGbp } from '../risk/index.js';
 import { RunLease } from '../run-lease.js';
-import { type ModelPin, SIGNALS_SLEEVE_SPEC, ScriptedTransport, type Script } from '../signal/index.js';
+import { type ModelPin, ScriptedTransport, SIGNALS_SLEEVE_SPEC } from '../signal/index.js';
 import { parseSignalPayload } from './payload.js';
 import { SignalStore } from './store.js';
 import { SIGNAL_VETO_PROMPT } from './veto.js';
 import { classifySignalWindow } from './window.js';
-import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
+
+type Script = (request: AnthropicMessageRequest) => string;
 
 const D = '2026-09-30';
 const IN_SESSION = new Date(`${D}T14:00:00.000Z`);
@@ -155,15 +157,23 @@ function post(
   value: Record<string, unknown>,
   receivedAt: Date = IN_SESSION,
 ): string {
-  const parsed = parseSignalPayload({ symbol: 'UP', entry: 25, targets: [25.6, 26, 26.4], stop: 24.5, ...value });
+  const parsed = parseSignalPayload({
+    symbol: 'UP',
+    entry: 25,
+    targets: [25.6, 26, 26.4],
+    stop: 24.5,
+    ...value,
+  });
   if (!parsed.ok) throw new Error(parsed.reason);
-  return signals.record(parsed.payload, receivedAt, classifySignalWindow(receivedAt, CALENDAR)).signal
-    .signal_id;
+  return signals.record(parsed.payload, receivedAt, classifySignalWindow(receivedAt, CALENDAR))
+    .signal.signal_id;
 }
 
 function refusalsOf(root: V2Root, parameter: string) {
   return root.db
-    .prepare('SELECT scope, parameter, ticket, message, book_id, instrument FROM v2_refusals WHERE parameter = ?')
+    .prepare(
+      'SELECT scope, parameter, ticket, message, book_id, instrument FROM v2_refusals WHERE parameter = ?',
+    )
     .all(parameter);
 }
 
@@ -246,7 +256,9 @@ describe('processSignals, dry run', () => {
     });
     expect(signals.get(id)?.status).toBe('processed');
     const decisions = root.db
-      .prepare('SELECT book_id, action, size_shares, stop_price, payload FROM v2_decisions ORDER BY book_id')
+      .prepare(
+        'SELECT book_id, action, size_shares, stop_price, payload FROM v2_decisions ORDER BY book_id',
+      )
       .all() as { book_id: string; action: string; size_shares: number; payload: string }[];
     expect(decisions.map((row) => [row.book_id, row.action, row.size_shares])).toEqual([
       ['signals/no-veto', 'enter_long', 35],
@@ -290,8 +302,11 @@ describe('processSignals, dry run', () => {
 
   it('turns a veto into a skip on the primary while the shadow still enters', async () => {
     const fixtures = await writeFixtures();
-    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION), {}, () =>
-      '{"veto": true, "reason": "stop sits inside daily noise"}',
+    const { root, signals } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      {},
+      () => '{"veto": true, "reason": "stop sits inside daily noise"}',
     );
     const id = post(signals, {});
 
@@ -302,8 +317,13 @@ describe('processSignals, dry run', () => {
     const primary = root.db
       .prepare("SELECT action, reason FROM v2_decisions WHERE book_id = 'signals/primary'")
       .get() as { action: string; reason: string };
-    expect(primary).toEqual({ action: 'skip', reason: 'vetoed: veto: stop sits inside daily noise' });
-    expect(signals.get(id)?.events.at(-1)?.detail).toMatch(/^veto veto: stop sits inside daily noise;/);
+    expect(primary).toEqual({
+      action: 'skip',
+      reason: 'vetoed: veto: stop sits inside daily noise',
+    });
+    expect(signals.get(id)?.events.at(-1)?.detail).toMatch(
+      /^veto veto: stop sits inside daily noise;/,
+    );
   });
 
   it('treats a failed veto call as unavailable: the primary refuses, the shadow enters', async () => {
@@ -387,8 +407,43 @@ describe('processSignals, dry run', () => {
     await root.processSignals(signals, IN_SESSION);
 
     expect(refusalsOf(root, 'symbol_held')).toEqual([
-      expect.objectContaining({ message: expect.stringContaining('held or resting in signals/no-veto') }),
+      expect.objectContaining({
+        message: expect.stringContaining('held or resting in signals/no-veto'),
+      }),
     ]);
+  });
+
+  it('enters no book halted by its loss budget, while the shadow still takes the signal', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
+    const leg = {
+      instrument: 'DN',
+      venue: 'alpaca' as const,
+      qty: 1,
+      feeGbp: 0,
+      tradingDate: '2026-09-29',
+      clientOrderId: 'loss',
+      stopGbp: undefined,
+      targetGbp: undefined,
+    };
+    root.books.applyFill('signals/primary', { ...leg, side: 'buy', leg: 'entry', priceGbp: 1_200 });
+    root.books.applyFill('signals/primary', { ...leg, side: 'sell', leg: 'exit', priceGbp: 100 });
+    expect(
+      root.books.markDay('signals/primary', '2026-09-29', () => undefined, 1).state.halted,
+    ).toBe(true);
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toMatchObject({ outcome: 'simulated' });
+    expect(
+      root.db.prepare('SELECT book_id, size_shares FROM v2_decisions ORDER BY book_id').all(),
+    ).toEqual([
+      { book_id: 'signals/no-veto', size_shares: 35 },
+      { book_id: 'signals/primary', size_shares: 0 },
+    ]);
+    expect(signals.get(id)?.events.at(-1)?.detail).toMatch(/entries 1, submitted 0, simulated 1/);
   });
 
   it('refuses a signal whose own session has passed', async () => {
@@ -492,20 +547,36 @@ describe('the run lease between the processor and the cycle', () => {
     });
     new RunLease(root.db, clock).tryAcquire('signals');
 
-    await expect(root.run()).rejects.toThrow(/v2 run lease not acquired for cycle within 0 ms: held by signals/);
+    await expect(root.run()).rejects.toThrow(
+      /v2 run lease not acquired for cycle within 0 ms: held by signals/,
+    );
     expect(root.books.isMarked(D)).toBe(false);
   });
 });
 
-function fakeAlpaca(clock: SimulatedClock): AlpacaBrokerClient & { orders: AlpacaOrder[] } {
+function fakeAlpaca(
+  clock: SimulatedClock,
+  fills = true,
+): AlpacaBrokerClient & { orders: AlpacaOrder[] } {
   const orders: AlpacaOrder[] = [];
-  const filled = (order: AlpacaOrder): AlpacaOrder => ({
+  const filled = (order: AlpacaOrder): AlpacaOrder => (fills ? filledAt(order, clock) : order);
+  return client(orders, filled);
+}
+
+function filledAt(order: AlpacaOrder, clock: SimulatedClock): AlpacaOrder {
+  return {
     ...order,
     status: 'filled',
     filled_qty: order.qty,
     filled_avg_price: order.limit_price ?? '0',
     filled_at: clock.now().toISOString(),
-  });
+  };
+}
+
+function client(
+  orders: AlpacaOrder[],
+  filled: (order: AlpacaOrder) => AlpacaOrder,
+): AlpacaBrokerClient & { orders: AlpacaOrder[] } {
   return {
     orders,
     submitOrder: vi.fn((request) => {
@@ -544,12 +615,15 @@ function fakeAlpaca(clock: SimulatedClock): AlpacaBrokerClient & { orders: Alpac
     listOpenOrders: vi.fn().mockResolvedValue([]),
     getPositions: vi.fn(() =>
       Promise.resolve(
-        orders.map((order) => ({
-          symbol: order.symbol,
-          qty: order.qty,
-          side: 'long' as const,
-          avg_entry_price: order.limit_price ?? '0',
-        })),
+        orders
+          .map(filled)
+          .filter((order) => order.status === 'filled')
+          .map((order) => ({
+            symbol: order.symbol,
+            qty: order.qty,
+            side: 'long' as const,
+            avg_entry_price: order.limit_price ?? '0',
+          })),
       ),
     ),
     getAccount: vi.fn().mockResolvedValue({ cash: '100000', equity: '100000' }),
@@ -630,5 +704,31 @@ describe('processSignals, paper with a fake Alpaca', () => {
     await after.root.run();
     expect(after.root.books.position('signals/no-veto', 'UP')).toBeUndefined();
     expect(after.root.books.position('signals/primary', 'UP')?.qty).toBe(35);
+  });
+
+  it('cancels an unfilled signal entry at the next daily cycle', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const alpaca = fakeAlpaca(clock, false);
+    const day = open(fixtures, clock, paper(alpaca));
+    day.root.journal.recordReconcile({
+      trading_date: D,
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'clean',
+      book_ids: ['signals/primary'],
+      diffs: [],
+      detail: '',
+    });
+    const id = post(day.signals, {});
+    await day.root.processSignals(day.signals, IN_SESSION);
+
+    clock.advanceTo(new Date('2026-10-01T06:30:00.000Z'));
+    await open(fixtures, clock, paper(alpaca)).root.run();
+
+    expect(alpaca.cancelOrder).toHaveBeenCalledTimes(1);
+    const reopened = open(fixtures, clock, paper(alpaca)).root;
+    expect(reopened.journal.orderFor(primaryId(id))?.outcome).toBe('cancelled');
+    expect(reopened.books.position('signals/primary', 'UP')).toBeUndefined();
   });
 });

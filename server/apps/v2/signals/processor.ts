@@ -7,7 +7,7 @@ import {
 import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
 import { isFresh } from '../data/index.js';
-import type { ReconcileVerdict } from '../journal/journal.js';
+import type { ReconcileVerdict } from '../journal/index.js';
 import type { LlmPanel } from '../signal/index.js';
 import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
 import { planSignalEntry, type SignalEntryPlan } from './entry.js';
@@ -60,7 +60,7 @@ export function sessionDate(instant: Date): string {
 }
 
 // Date-free, so a pass that crashed after submitting is recognised on any later retry
-export function signalEntryOrderId(signalId: string) {
+function signalEntryOrderId(signalId: string) {
   return (book: BookSpec, instrument: string): string =>
     `v2-${book.id.replaceAll('/', '-')}-${instrument}-${signalId}`;
 }
