@@ -208,11 +208,12 @@ async function replay(
   dates: readonly string[],
   today: { current: string },
 ): Promise<number[][]> {
+  const deps: CycleComposition = { ...cycle, closeEndedSeries: true };
   const marks = sleeves.map((): number[] => []);
   for (const date of dates) {
     today.current = date;
     clock.advanceTo(new Date(`${date}T00:00:00.000Z`));
-    const report = await runCycle(cycle, date);
+    const report = await runCycle(deps, date);
     sleeves.forEach((sleeve, index) => {
       (marks[index] as number[]).push(primaryEquity(report, sleeve, date));
     });
