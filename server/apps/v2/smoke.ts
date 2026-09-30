@@ -313,6 +313,17 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
           .join(', ')}`,
       ),
     );
+    const faults = [SMOKE_TRADING_DATE, SMOKE_NEXT_DATE].flatMap((date) =>
+      root.faults.faultsOn(date),
+    );
+    const tally = root.faults.faultFreeWeeks(SMOKE_NEXT_DATE);
+    probes.push(
+      probe(
+        'two clean dry-run cycles record no plumbing fault and count fault-free days from paper start',
+        faults.length === 0 && tally.since === SMOKE_TRADING_DATE && tally.counted_days === 2,
+        `${faults.map((fault) => `${fault.kind} ${fault.code}`).join(', ') || 'no faults'}; ${tally.counted_days} counted days since ${tally.since}`,
+      ),
+    );
   } finally {
     root.close();
   }

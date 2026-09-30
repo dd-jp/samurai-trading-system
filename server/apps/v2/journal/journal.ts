@@ -15,6 +15,7 @@ import type { Clock } from '../../../shared/index.js';
 import { digest } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
+import { type Fault, type FaultSink, orderFault, reconcileFaults, refusalFault } from './faults.js';
 
 export function inputsHash(
   bars: readonly DailyBar[],
@@ -43,6 +44,7 @@ export class Journal implements DecisionJournal {
   constructor(
     private readonly db: StoreHandle,
     private readonly clock: Clock,
+    private readonly faults?: FaultSink | undefined,
   ) {}
 
   recordDecision(
@@ -98,6 +100,7 @@ export class Journal implements DecisionJournal {
         JSON.stringify(order.payload),
         this.#now(),
       );
+    this.#recordFault(orderFault(order));
   }
 
   orderFor(clientOrderId: string): JournalledOrder | undefined {
@@ -214,6 +217,7 @@ export class Journal implements DecisionJournal {
         refusal.instrument ?? null,
         this.#now(),
       );
+    this.#recordFault(refusalFault(refusal));
   }
 
   latestReconcile(tradingDate: string, venue: Venue): ReconcileVerdict {
@@ -254,6 +258,7 @@ export class Journal implements DecisionJournal {
         run.detail,
         this.#now(),
       );
+    for (const fault of reconcileFaults(run)) this.#recordFault(fault);
   }
 
   newRefusals(tradingDate: string): readonly JournalledRefusal[] {
@@ -269,6 +274,10 @@ export class Journal implements DecisionJournal {
          ORDER BY today.rowid`,
       )
       .all(tradingDate, tradingDate) as JournalledRefusal[];
+  }
+
+  #recordFault(fault: Fault | undefined): void {
+    if (fault !== undefined) this.faults?.record(fault);
   }
 
   #now(): string {

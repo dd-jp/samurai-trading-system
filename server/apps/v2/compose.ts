@@ -12,7 +12,7 @@ import {
   venueFee,
   venueHalfSpreadBps,
 } from './execution/index.js';
-import { Journal } from './journal/index.js';
+import { FaultLedger, FaultRecordingLogger, Journal } from './journal/index.js';
 import {
   assertCapitalShareRanges,
   CapitalConfigStore,
@@ -54,6 +54,7 @@ export interface CycleComposition extends CycleDeps {
   readonly books: PaperBooks;
   readonly capital: CapitalConfigStore;
   readonly journal: Journal;
+  readonly faults: FaultLedger;
 }
 
 function assertCfdFillsPriced(
@@ -93,13 +94,15 @@ function fillPricingFor(options: CycleCompositionOptions): FillPricing {
 }
 
 export function composeCycle(options: CycleCompositionOptions): CycleComposition {
-  const { db, clock, logger, market } = options;
+  const { db, clock, market } = options;
   assertCapitalShareRanges(options.sleeves);
   const cfdGate = options.cfdEntryRefusal ?? cfdEntryRefusal;
   assertCfdFillsPriced(cfdGate, options.cfdCosts);
   const v2Store = guardedStore(db, 'v2');
+  const faults = new FaultLedger(v2Store, clock, options.logger);
+  const logger = new FaultRecordingLogger(options.logger, faults, options.tradingDate);
   const capital = new CapitalConfigStore(v2Store, clock);
-  const journal = new Journal(v2Store, clock);
+  const journal = new Journal(v2Store, clock, faults);
   const registry = new SleeveRegistry();
   for (const sleeve of options.sleeves) registry.register(sleeve);
   const books = new PaperBooks(
@@ -130,6 +133,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     books,
     capital,
     journal,
+    faults,
     risk,
     executor,
     brokerBooks,
