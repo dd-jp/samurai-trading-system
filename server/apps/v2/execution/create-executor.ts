@@ -1,6 +1,8 @@
-import type { OrderExecutor } from '../../../../contracts/index.js';
+import type { BrokerBookReader, OrderExecutor } from '../../../../contracts/index.js';
+import { AlpacaHttpBrokerClient } from '../../../pipeline/execution/index.js';
 import type { AlpacaPaperBrokerOptions } from './alpaca.js';
 import { alpacaPaperBroker } from './alpaca.js';
+import { AlpacaBrokerBooks, NO_BROKER_BOOKS } from './broker-books.js';
 import { DryRunBrokerAdapter } from './dry-run-broker.js';
 import { V2OrderExecutor } from './executor.js';
 import type { FillPricing } from './simulated-costs.js';
@@ -10,10 +12,18 @@ export interface OrderExecutorOptions extends AlpacaPaperBrokerOptions {
   readonly pricing: FillPricing;
 }
 
-export function createOrderExecutor(options: OrderExecutorOptions): OrderExecutor {
+export interface BrokerAccess {
+  readonly executor: OrderExecutor;
+  readonly brokerBooks: BrokerBookReader;
+}
+
+export function createBrokerAccess(options: OrderExecutorOptions): BrokerAccess {
   const { dryRun, pricing } = options;
-  return new V2OrderExecutor({
-    brokers: dryRun ? {} : { alpaca: alpacaPaperBroker(options) },
+  const client = dryRun
+    ? undefined
+    : (options.client ?? new AlpacaHttpBrokerClient({ environment: 'paper' }));
+  const executor = new V2OrderExecutor({
+    brokers: client === undefined ? {} : { alpaca: alpacaPaperBroker({ ...options, client }) },
     simulatedBrokers: {
       alpaca: new DryRunBrokerAdapter(),
       saxo: new DryRunBrokerAdapter(),
@@ -23,4 +33,6 @@ export function createOrderExecutor(options: OrderExecutorOptions): OrderExecuto
     pricing,
     dryRun,
   });
+  const brokerBooks = client === undefined ? NO_BROKER_BOOKS : new AlpacaBrokerBooks(client);
+  return { executor, brokerBooks };
 }

@@ -41,7 +41,7 @@ test('Records searches the journal and shows the owned panels', async ({ page })
   );
   await expect(page.getByRole('region', { name: 'LLM spend' })).toContainText('of $30.00');
   await expect(page.getByRole('region', { name: 'Reconcile diffs' })).toContainText(
-    'Not yet fed: Step 4 / Step 3e (#1784).',
+    /2026-10-05\s*alpaca broker\s*debate\/primary\s*clean/,
   );
   await expect(page.getByRole('region', { name: 'Tax export' })).toContainText(
     'Not yet fed: Step 4 (#1746).',

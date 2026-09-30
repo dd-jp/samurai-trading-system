@@ -2,6 +2,8 @@ import type {
   BookDay,
   BookLedger,
   BookSpec,
+  BrokerBookReader,
+  BrokerMode,
   ControlReader,
   DecisionJournal,
   EntryApproval,
@@ -38,6 +40,7 @@ import {
   macroGate,
   quotePerGbp,
 } from './data/index.js';
+import { type ReconcileOutcome, reconcileBooks } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
   type LimitEntryOutcome,
@@ -52,6 +55,9 @@ export interface CycleDeps {
   readonly journal: DecisionJournal;
   readonly risk: RiskGate;
   readonly executor: OrderExecutor;
+  readonly brokerBooks: BrokerBookReader;
+  readonly brokerMode: BrokerMode;
+  readonly reconcileCashToleranceGbp: number | undefined;
   readonly controls: ControlReader;
   readonly market: MarketData;
   readonly clock: Clock;
@@ -200,6 +206,7 @@ const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'ref
 class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
+  readonly #entriesBlocked = new Set<string>();
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -342,7 +349,7 @@ class Cycle {
       this.log(
         'warn',
         'v2_split_broker_qty',
-        `${book.id} ${held.instrument}: split x${ratio} on a broker-held position; ledger qty ${held.qty} not rescaled, reconcile (#1872) must take qty from the broker`,
+        `${book.id} ${held.instrument}: split x${ratio} on a broker-held position; ledger qty ${held.qty} not rescaled, reconcile (#1872) flags the broker qty and blocks entries`,
       );
       return;
     }
@@ -950,7 +957,22 @@ class Cycle {
     if (outcome !== undefined && outcome !== 'rejected') charge();
   }
 
+  blockEntries(outcome: ReconcileOutcome): void {
+    for (const bookId of outcome.blockedBookIds) this.#entriesBlocked.add(bookId);
+    this.refusals.push(...outcome.refusals);
+  }
+
+  journalBlockedDecisions(book: BookSpec, decisions: readonly SleeveDecision[]): void {
+    for (const proposed of decisions) {
+      this.deps.journal.recordDecision(book.id, this.tradingDate, vetoApplied(book, proposed), 0);
+    }
+  }
+
   async entries(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
+    if (this.#entriesBlocked.has(book.id)) {
+      this.journalBlockedDecisions(book, decisions);
+      return;
+    }
     const { equityGbp, investedGbp } = this.deps.books.valuation(book.id, (i, v) =>
       this.markGbp(i, v),
     );
@@ -1269,6 +1291,7 @@ async function runUnmarked(
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
+  cycle.blockEntries(await reconcileBooks(deps, tradingDate));
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {

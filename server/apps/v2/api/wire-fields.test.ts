@@ -11,7 +11,7 @@ import { createFixtureStore, FIXTURE_TRADING_DATE } from './fixture-server.js';
 import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
-import { reconcileWire, taxWire } from './records.js';
+import { ReconcileReader, taxWire } from './records.js';
 import { ResearchReader } from './research.js';
 
 type WireType = keyof typeof V2_WIRE_FIELD_NAMES;
@@ -179,6 +179,15 @@ describe('the Evidence and Records routes the client reads, served over the seed
       ticket: '#1745',
       message: 'paused',
     });
+    journal.recordReconcile({
+      trading_date: FIXTURE_TRADING_DATE,
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'mismatch',
+      book_ids: ['debate/primary'],
+      diffs: [{ kind: 'position_qty', instrument: 'MSFT', order_id: null, store: 2, broker: 1 }],
+      detail: 'position_qty MSFT store 2 broker 1',
+    });
     researchPath = join(routeDir, 'research.sqlite');
     const research = openSharedStore(researchPath);
     new TrialLedger(research, clock, { entries: [] }).record('trend', { lookback: 50 });
@@ -237,7 +246,13 @@ describe('the Evidence and Records routes the client reads, served over the seed
   });
 
   it('writes every field of the reconcile and tax wire types', () => {
-    expect(keysOf(reconcileWire())).toEqual(fieldsOf('reconcile'));
+    const served = new ReconcileReader(routeDb).read();
+    expect(keysOf(served)).toEqual(fieldsOf('reconcile'));
+    if (served.reconcile.status !== 'fed') throw new Error(`reconcile ${served.reconcile.status}`);
+    expect(keysOf(served.reconcile)).toEqual(fieldsOf('reconcileRuns', true));
+    const run = first(served.reconcile.runs);
+    expect(keysOf(run)).toEqual(fieldsOf('reconcileRun'));
+    expect(keysOf(first(run.diffs))).toEqual(fieldsOf('reconcileDiff'));
     const tax = taxWire({ year: null, format: 'json' });
     expect(keysOf(tax)).toEqual(fieldsOf('tax'));
     expect(keysOf(tax.disposals)).toEqual(fieldsOf('panel'));

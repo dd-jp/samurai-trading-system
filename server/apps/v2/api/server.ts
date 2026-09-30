@@ -4,6 +4,7 @@ import {
   type ControlResponseWire,
   type EvidenceWire,
   type JournalWire,
+  type ReconcileWire,
   type ResearchWire,
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
@@ -16,7 +17,7 @@ import {
   parseControlRequest,
 } from './control-writer.js';
 import { type JournalQuery, parseJournalQuery } from './journal-reader.js';
-import { parseTaxQuery, reconcileWire, TAX_CSV_NOT_FED, taxWire } from './records.js';
+import { parseTaxQuery, TAX_CSV_NOT_FED, taxWire } from './records.js';
 
 export const CONTROL_BODY_MAX_BYTES = 1_024;
 const BUSY_RETRY_AFTER_SECONDS = 1;
@@ -37,6 +38,7 @@ export interface V2DashboardServerOptions {
   readonly journal: (query: JournalQuery) => JournalWire;
   readonly research: () => ResearchWire;
   readonly evidence: () => EvidenceWire;
+  readonly reconcile: () => ReconcileWire;
   readonly onFault: (error: unknown) => void;
 }
 
@@ -194,7 +196,7 @@ function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Hand
     ['/api/v2/journal', new Map([['GET', getJournal(opts.journal)]])],
     ['/api/v2/research', new Map([['GET', (_req, res) => sendJson(res, 200, opts.research())]])],
     ['/api/v2/evidence', new Map([['GET', (_req, res) => sendJson(res, 200, opts.evidence())]])],
-    ['/api/v2/reconcile', new Map([['GET', (_req, res) => sendJson(res, 200, reconcileWire())]])],
+    ['/api/v2/reconcile', new Map([['GET', (_req, res) => sendJson(res, 200, opts.reconcile())]])],
     ['/api/v2/tax', new Map([['GET', getTax]])],
   ]);
 }

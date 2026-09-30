@@ -20,6 +20,7 @@ import { EvidenceReader } from './evidence.js';
 import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
+import { ReconcileReader } from './records.js';
 import { ResearchReader } from './research.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
 
@@ -118,6 +119,7 @@ export function composeV2Dashboard(
     const journal = new JournalReader(store);
     const research = new ResearchReader(args.researchStorePath, clock);
     const evidence = new EvidenceReader(store, clock);
+    const reconcile = new ReconcileReader(store);
     const server = createV2DashboardServer({
       host: args.host,
       port: args.port,
@@ -128,6 +130,7 @@ export function composeV2Dashboard(
       journal: (query) => journal.read(query),
       research: () => research.read(),
       evidence: () => evidence.read(),
+      reconcile: () => reconcile.read(),
       onFault: (error) =>
         process.stderr.write(
           `v2 dashboard fault: ${sanitizeLogText(describeThrownSafely(error))}\n`,

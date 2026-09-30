@@ -23,6 +23,7 @@ import {
   LSE_LIQUIDITY_SCREEN,
   MOVERS_MIN_DOLLAR_VOLUME_USD,
   type Parameter,
+  RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,
   SAXO_APPROPRIATENESS_TEST_TAKEN,
   UNSET,
@@ -47,6 +48,7 @@ describe('parameters', () => {
       ARM2_ENTRY_THRESHOLDS,
       LSE_LIQUIDITY_SCREEN,
       ...CFD_GATE_PARAMETERS,
+      RECONCILE_CASH_TOLERANCE_GBP,
     ]);
     expect(CYCLE_LEVEL_PARAMETERS).toEqual([
       G18_SOCIAL_SOURCE,
@@ -68,6 +70,11 @@ describe('parameters', () => {
     expect(requireSet(ARM2_ENTRY_THRESHOLDS)).toEqual({ longAbove: 0, shortBelow: 0 });
     expect(ARM2_ENTRY_THRESHOLDS.ticket).toBe('#1773');
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(ARM2_ENTRY_THRESHOLDS);
+  });
+
+  it('the reconcile cash tolerance is unset and never refuses a paper cycle (#1872, David 2026-09-29)', () => {
+    expect(isSet(RECONCILE_CASH_TOLERANCE_GBP)).toBe(false);
+    expect(CYCLE_LEVEL_PARAMETERS).not.toContain(RECONCILE_CASH_TOLERANCE_GBP);
   });
 
   it("the LSE liquidity floor is David's $750k answer, measured in GBP (#1774)", () => {

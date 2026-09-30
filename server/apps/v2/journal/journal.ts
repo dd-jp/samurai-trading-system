@@ -3,6 +3,7 @@ import type {
   DecisionJournal,
   JournalledFill,
   JournalledOrder,
+  JournalledReconcile,
   JournalledRefusal,
   SleeveDecision,
 } from '../../../../contracts/index.js';
@@ -195,6 +196,25 @@ export class Journal implements DecisionJournal {
         refusal.message,
         refusal.book_id ?? null,
         refusal.instrument ?? null,
+        this.#now(),
+      );
+  }
+
+  recordReconcile(run: JournalledReconcile): void {
+    this.db
+      .prepare(
+        `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+           recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        run.trading_date,
+        run.venue,
+        run.source,
+        run.status,
+        JSON.stringify(run.book_ids),
+        JSON.stringify(run.diffs),
+        run.detail,
         this.#now(),
       );
   }

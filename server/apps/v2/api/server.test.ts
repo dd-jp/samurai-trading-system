@@ -16,6 +16,7 @@ import { EvidenceReader } from './evidence.js';
 import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
+import { ReconcileReader } from './records.js';
 import { ResearchReader } from './research.js';
 import {
   CONTROL_BODY_MAX_BYTES,
@@ -73,6 +74,7 @@ async function start(
     journal: (query) => new JournalReader(store).read(query),
     research: () => new ResearchReader(join(tmpdir(), 'no-such-research.sqlite'), clock).read(),
     evidence: () => new EvidenceReader(store, clock).read(),
+    reconcile: () => new ReconcileReader(store).read(),
     onFault: (error) => faults.push(error),
   });
   await server.start();
@@ -108,6 +110,7 @@ describe('createV2DashboardServer start-up', () => {
         journal: UNUSED,
         research: UNUSED,
         evidence: UNUSED,
+        reconcile: UNUSED,
         onFault: () => undefined,
       }),
     ).toThrow(/SAMURAI_DASHBOARD_TOKEN is not set.*loopback included/s);
@@ -127,6 +130,7 @@ describe('createV2DashboardServer start-up', () => {
       journal: UNUSED,
       research: UNUSED,
       evidence: UNUSED,
+      reconcile: UNUSED,
       onFault: () => undefined,
     });
     await expect(clash.start()).rejects.toThrow(/EADDRINUSE/);
@@ -312,7 +316,10 @@ describe('GET /api/v2/evidence, /api/v2/reconcile and /api/v2/tax', () => {
       gate: { status: 'not-yet-fed' },
     });
     const reconcile = await fetch(`${url}/api/v2/reconcile`, { headers: AUTH });
-    expect(await reconcile.json()).toMatchObject({ reconcile: { ticket: '#1784' } });
+    expect(await reconcile.json()).toEqual({
+      contract_version: V2_CONTRACT_VERSION,
+      reconcile: { status: 'empty' },
+    });
     const tax = await fetch(`${url}/api/v2/tax?year=2026`, { headers: AUTH });
     expect(tax.status).toBe(200);
     expect(await tax.json()).toMatchObject({ year: 2026, disposals: { ticket: '#1746' } });
