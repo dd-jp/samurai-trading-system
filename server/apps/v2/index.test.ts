@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,7 @@ import {
   NO_NEWS,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
+  type VenueSessionGate,
 } from './data/index.js';
 import {
   composeV2Root,
@@ -42,6 +43,7 @@ import {
   parseCliArgs,
   rootOptionsFor,
   runAfterPinCheck,
+  V2_STORE_PATH,
   type V2RootOptions,
   withoutRefusedLse,
 } from './index.js';
@@ -124,6 +126,12 @@ async function writeFixtures(
 const LAST_CLOSE = 20 * (1 + 0.001 * 259);
 const ENTRY_DATE = new Date(Date.UTC(2026, 0, 1) + 260 * 86_400_000).toISOString().slice(0, 10);
 const NEXT_DATE = new Date(Date.UTC(2026, 0, 1) + 261 * 86_400_000).toISOString().slice(0, 10);
+
+// The fixture bars run every calendar day, and NEXT_DATE is a Saturday
+const OPEN_EVERY_DAY: VenueSessionGate = {
+  entrySitOut: () => undefined,
+  timeStopPausedVenues: () => [],
+};
 
 function seededStore(path = ':memory:'): StoreHandle {
   const db = openSharedStore(path);
@@ -691,6 +699,7 @@ describe('composeV2Root', () => {
         logger: { log: () => {} },
         transportFor: scriptedFactory(transports),
         alpacaClient,
+        venueSessions: OPEN_EVERY_DAY,
         newsSource: {
           headlines: (symbol) => {
             newsCalls.push(symbol);
@@ -899,6 +908,69 @@ describe('composeV2Root', () => {
       ]);
     } finally {
       third.close();
+    }
+  });
+
+  it('never records a day both venues were closed as a missed run, and records a one-venue holiday (#1933)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'holiday.sqlite');
+    seededStore(storePath).close();
+    const open = (tradingDate: string) =>
+      composeV2Root({
+        ...fixtures,
+        tradingDate,
+        dryRun: true,
+        storePath,
+        clock: new SimulatedClock(new Date(`${tradingDate}T06:30:00.000Z`)),
+        logger: { log: () => {} },
+      });
+    const first = open(ENTRY_DATE);
+    try {
+      await first.run();
+    } finally {
+      first.close();
+    }
+    const later = open('2026-12-29');
+    try {
+      await later.run();
+      const missed = (
+        later.db.prepare("SELECT trading_date FROM v2_faults WHERE kind = 'missed_run'").all() as {
+          trading_date: string;
+        }[]
+      ).map((row) => row.trading_date);
+      expect(missed).toContain('2026-11-26');
+      expect(missed).toContain('2026-12-28');
+      expect(missed).not.toContain('2026-12-25');
+    } finally {
+      later.close();
+    }
+  });
+
+  it('refuses every entry of a run that wakes after both opens, and still marks (#1933)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'late.sqlite');
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T20:00:00.000Z`)),
+      logger: { log: () => {} },
+    });
+    try {
+      const report = await root.run();
+      expect(report).toMatchObject({ skipped: false, entries: 0 });
+      expect(report.decisions).toBeGreaterThan(0);
+      const late = root.db
+        .prepare("SELECT COUNT(*) AS n FROM v2_refusals WHERE parameter = 'late_wake_entry_cutoff'")
+        .get() as { n: number };
+      expect(late.n).toBeGreaterThan(0);
+      expect(root.books.lastDay('debate/primary')?.tradingDate).toBe(ENTRY_DATE);
+    } finally {
+      root.close();
     }
   });
 
@@ -1412,6 +1484,63 @@ describe('main', () => {
       mainQuietly(['--date', '2026-09-28'], { ...R2, SAMURAI_RESEARCH_STORE: research }, run),
     ).rejects.toThrow(/ALPACA_API_KEY and ALPACA_API_SECRET must be set/);
     expect(commands).toEqual(['version', 'restore', 'restore']);
+  });
+
+  it('skips a day both venues are closed ahead of the bar refresh, journals why and still pings the heartbeat (#1933)', async () => {
+    const home = process.cwd();
+    const root = mkdtempSync(join(tmpdir(), 'main-closed-'));
+    mkdirSync(join(root, 'data'));
+    process.chdir(root);
+    const run: CommandRunner = (_bin, args) =>
+      Promise.resolve({ code: 0, output: args[0] === 'version' ? '0.5.17' : '' });
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const refreshed = vi.fn();
+    const barRefresh: BarRefresh = {
+      run: () => {
+        refreshed();
+        return Promise.resolve({ attempted: 0, updated: [], noNewBars: [], failed: [] });
+      },
+    };
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await main(
+        ['--date', '2026-12-25'],
+        {
+          ...R2,
+          SAMURAI_RESEARCH_STORE: join(root, 'research.sqlite'),
+          HEALTHCHECKS_PING_URL: 'https://hc.example/ping',
+        },
+        run,
+        fetchImpl,
+        barRefresh,
+      );
+      expect(code).toBe(0);
+      expect(refreshed).not.toHaveBeenCalled();
+      expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(['https://hc.example/ping']);
+      const printed = JSON.parse(String(stdout.mock.calls[0]?.[0])) as CycleReport;
+      expect(printed).toMatchObject({ trading_date: '2026-12-25', skipped: true, entries: 0 });
+      const db = openSharedStore(join(root, V2_STORE_PATH));
+      try {
+        expect(
+          db.prepare('SELECT trading_date, scope, parameter, ticket FROM v2_refusals').all(),
+        ).toEqual([
+          {
+            trading_date: '2026-12-25',
+            scope: 'cycle',
+            parameter: 'venues_closed',
+            ticket: '#1933',
+          },
+        ]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+      process.chdir(home);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('sends a failed cycle to Telegram as critical and its warnings silently', async () => {

@@ -207,6 +207,7 @@ export interface BookLedger {
     tradingDate: string,
     markGbp: MarkPriceGbp,
     calendarDaysSinceLastMark: number,
+    timeStopPausedVenues?: readonly Venue[],
   ): BookDay;
 }
 

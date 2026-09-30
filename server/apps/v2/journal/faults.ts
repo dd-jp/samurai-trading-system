@@ -138,9 +138,15 @@ function isScheduledRunDay(date: string): boolean {
   return weekday !== 0 && weekday !== 6;
 }
 
-export function missedRunDates(lastMarked: string | undefined, today: string): string[] {
+export function missedRunDates(
+  lastMarked: string | undefined,
+  today: string,
+  isSkippedDay: (date: string) => boolean,
+): string[] {
   if (lastMarked === undefined) return [];
-  return datesFrom(addDays(lastMarked, 1), addDays(today, -1)).filter(isScheduledRunDay);
+  return datesFrom(addDays(lastMarked, 1), addDays(today, -1)).filter(
+    (date) => isScheduledRunDay(date) && !isSkippedDay(date),
+  );
 }
 
 export interface ControlEvent {
@@ -215,9 +221,13 @@ export class FaultLedger implements FaultSink {
   }
 
   // Runs ahead of the cycle's exits, so it must never throw into them either
-  recordMissedRuns(lastMarked: () => string | undefined, today: string): void {
+  recordMissedRuns(
+    lastMarked: () => string | undefined,
+    today: string,
+    isSkippedDay: (date: string) => boolean,
+  ): void {
     try {
-      for (const date of missedRunDates(lastMarked(), today)) {
+      for (const date of missedRunDates(lastMarked(), today, isSkippedDay)) {
         this.record({
           kind: 'missed_run',
           trading_date: date,

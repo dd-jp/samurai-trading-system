@@ -38,5 +38,13 @@ export { AlpacaNewsSource, NO_NEWS, newsForVenue } from './news.js';
 export { SqliteNewsLedger } from './news-ledger.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export { CLOSED_VENUE_ROUTER, createVenueRouter } from './venue-routes.js';
+export type { Exchange, SessionDay, SitOutCode, VenueSessionGate } from './venue-sessions.js';
+export {
+  bothVenuesClosed,
+  entryCutoff,
+  exchangeOf,
+  sessionDay,
+  TABLE_VENUE_SESSIONS,
+} from './venue-sessions.js';
 export type { QuoteCurrency } from './venues.js';
 export { isCfdVenue, quoteCurrencyOf } from './venues.js';

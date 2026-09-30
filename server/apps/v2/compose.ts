@@ -3,7 +3,7 @@ import type { Clock, Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore } from '../../shared/store/index.js';
 import type { CycleDeps } from './cycle.js';
-import { isCfdVenue } from './data/index.js';
+import { isCfdVenue, type VenueSessionGate } from './data/index.js';
 import {
   type AlpacaBrokerClient,
   createBrokerAccess,
@@ -47,6 +47,7 @@ export interface CycleCompositionOptions {
   readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp?: number | undefined;
+  readonly venueSessions?: VenueSessionGate | undefined;
 }
 
 export interface CycleComposition extends CycleDeps {
@@ -144,5 +145,6 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     clock,
     dryRun: options.dryRun,
     logger,
+    venueSessions: options.venueSessions,
   };
 }
