@@ -346,7 +346,7 @@ describe('runBacktest', { timeout: 60_000 }, () => {
     ).toEqual([15, 16]);
     expect(await numbers({ embargo: 2 })).toEqual([17, 18]);
     expect(await numbers({})).toEqual([3, 4]);
-  }, 20_000);
+  });
 
   it('#1515: omits embargo from the run hash when unset, so an old candidate replays its own trial numbers unchanged', async () => {
     const shared = ledger();

@@ -371,7 +371,7 @@ describe('preserved-by-rule directories', () => {
 });
 
 describe('the repository as it stands', () => {
-  it('has zero citation violations', { timeout: 30_000 }, () => {
+  it('has zero citation violations', () => {
     const report = runCitationCheck({ root: REPO_ROOT });
     expect(report.violations.map((v) => v.message)).toEqual([]);
     expect(report.citationsScanned).toBeGreaterThan(250);

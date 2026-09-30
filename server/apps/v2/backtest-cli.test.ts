@@ -82,9 +82,7 @@ const SYNTHETIC_BARS = new Map<string, BarSeries>(
 );
 
 describe('runCrossAssetTrendAgainst', () => {
-  it('#1785: orchestrates trials, benchmark and the cost-stress rerun over a fixed window', {
-    timeout: 30_000,
-  }, async () => {
+  it('#1785: orchestrates trials, benchmark and the cost-stress rerun over a fixed window', async () => {
     const market = new BarsMarketData(
       { load: (symbol) => SYNTHETIC_BARS.get(symbol) },
       parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'),

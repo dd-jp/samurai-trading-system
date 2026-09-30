@@ -182,7 +182,7 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
   });
 });
 
-describe('inbound routing: nothing bypasses a barrel (#1158)', { timeout: 30_000 }, () => {
+describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
   const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
   const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo']);
 
