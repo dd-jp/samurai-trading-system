@@ -1,6 +1,6 @@
 # Keys and egress checklist (#1881)
 
-The Step 4b security row (doc 67): broker keys trade-only, withdrawals disabled, IP-restricted where offered, and a test that no account data or key leaves in any LLM request (doc 66 Q16, `CONTEXT.md` invariant 8). Written 2026-09-29. The test half is automated; the venue half is a checklist only David can tick, because every item is a setting on his accounts.
+The Step 4b security row (doc 67): broker keys trade-only, withdrawals disabled, IP-restricted where the venue offers it, and a test that no account data or key leaves in any LLM request (doc 66 Q16, `CONTEXT.md` invariant 8). Written 2026-09-29. The test half is automated; the venue half is a checklist only David can tick, because every item is a setting on his accounts.
 
 ## The test
 
@@ -24,7 +24,11 @@ Limits:
 - The Alpaca broker client and the news source are injected fakes, so the test does not exercise their own HTTP calls. Neither sends to an LLM.
 - The only other v2 Nous caller is the start-up pin check (`server/apps/v2/signal/nous-pin-check.ts`), which sends a models listing request with the key and no body.
 - The test attaches at the transport. An LLM client added later that bypasses `NousPinnedTransport` and global `fetch` is not covered. No v2 veto LLM exists yet; when one lands it should reuse the panel.
-- No runtime guard refuses a leaking request in production. Whether to build one is listed below for David.
+- The runtime guard (below) matches exact secret values only; account data such as cash, positions and the loss cap is not a secret value and rests on this test.
+
+## The runtime guard
+
+Ruled by David 2026-09-29 and built under #1881: `server/apps/v2/signal/secret-guard.ts`. Before `NousPinnedTransport` sends a chat request, and before the start-up pin check sends its models request, the request's URL, body and headers are checked against every secret the server knows: the environment variables in `SECRET_ENV_NAMES` (the same list this test seeds, asserted equal by the test) and the access and refresh tokens in the Saxo SIM and live token files, re-read on each request because the access token rotates. Values under `MIN_SECRET_LENGTH` (8) are ignored. A value is matched raw, URL-encoded and JSON-escaped. The provider's own key is allowed only in its own `authorization` header. A match is not sent: the transport logs `v2_llm_secret_refused` at error level naming the variable or token file, never the value, and throws an `LlmProviderError` naming it, so the debated name is skipped as `llm_error` like any other LLM failure; the pin check instead refuses the paper run. The transport rebuilds the wire request that `nousChat` sends, so a change to that shape must be mirrored in the transport.
 
 ## Venue checklist — David to confirm
 
@@ -50,6 +54,6 @@ Doc 69 R16 found that neither venue documents per-key withdrawal control or IP a
 ## Decisions for David
 
 1. Tick the venue boxes, or record which cannot be done at a venue.
-2. R16 found the "trade-only, withdrawals disabled, IP-restricted" line is not documented at either venue. Does the briefing (`CLAUDE.md`, `CONTEXT.md` invariant 8) keep it as a requirement, or become "where the venue offers it"?
-3. Does moving the secrets into the Keychain bind the paper start, or is the gitignored env file and token directory acceptable for paper?
-4. A runtime egress guard in `NousPinnedTransport` that refuses any request carrying a known secret value. It would skip the affected name as an LLM error. Build it, or rest on the test?
+2. ~~R16 found the "trade-only, withdrawals disabled, IP-restricted" line is not documented at either venue. Does the briefing keep it as a requirement, or become "where the venue offers it"?~~ **Ruled 2026-09-29:** "trade-only, withdrawals disabled, IP-restricted where the venue offers it" (doc 66).
+3. ~~Does moving the secrets into the Keychain bind the paper start?~~ **Ruled 2026-09-29:** secrets stay in the gitignored env file and token directory for paper and live; no Keychain move.
+4. ~~A runtime egress guard in `NousPinnedTransport`: build it, or rest on the test?~~ **Ruled 2026-09-29:** build it; see The runtime guard above.

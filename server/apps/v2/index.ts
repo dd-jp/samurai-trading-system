@@ -35,7 +35,7 @@ import {
   parseBoeGbpUsdCsv,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
-import { saxoSessionRefusal } from './execution/index.js';
+import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
 import type { Journal } from './journal/index.js';
 import {
@@ -61,8 +61,10 @@ import {
   type ModelPin,
   NousPinnedTransport,
   ScriptedTransport,
+  type SecretSource,
   type SleeveRegistry,
   SqliteMonthlySpendCap,
+  secretsFromEnv,
   verifyNousPins,
 } from './signal/index.js';
 
@@ -102,6 +104,7 @@ export interface V2RootOptions {
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly newsSource?: NewsSource | undefined;
   readonly lseLegRefusal?: string | undefined;
+  readonly knownSecrets?: SecretSource | undefined;
 }
 
 export interface V2Root {
@@ -142,8 +145,13 @@ function nousTransportFactory(
       apiKey: options.nousApiKey ?? '',
       baseUrl: options.nousBaseUrl ?? '',
       gate: accountGate,
+      secrets: options.knownSecrets ?? knownSecretsFrom(process.env),
       logger,
     });
+}
+
+function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
+  return () => [...secretsFromEnv(env), ...saxoTokenSecrets()];
 }
 
 function refuseKeylessPaperRun(options: V2RootOptions): void {
@@ -496,6 +504,7 @@ export function rootOptionsFor(
     clock,
     logger,
     lseLegRefusal: saxoSessionRefusal(clock.now()),
+    knownSecrets: knownSecretsFrom(env),
   };
 }
 
@@ -518,6 +527,7 @@ async function runOnce(
         apiKey: nous.nousApiKey,
         pins: ALL_PINS,
         logger,
+        secrets: knownSecretsFrom(env),
       }),
     );
     logNewRefusals(root.journal, tradingDate, logger);

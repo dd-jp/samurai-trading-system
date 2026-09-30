@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LogEntry } from '../../../shared/index.js';
 import { ALL_PINS } from './models.js';
 import { verifyNousPins } from './nous-pin-check.js';
+import type { KnownSecret } from './secret-guard.js';
 
 const KEY = 'nous-secret-key';
 
@@ -21,14 +22,21 @@ function json(body: unknown, status = 200) {
   return answering(() => Promise.resolve(new Response(JSON.stringify(body), { status })));
 }
 
-async function check(fetchImpl: typeof fetch, dryRun = false, apiKey: string | undefined = KEY) {
+async function check(
+  fetchImpl: typeof fetch,
+  dryRun = false,
+  apiKey: string | undefined = KEY,
+  secrets: readonly KnownSecret[] = [{ name: 'NOUS_API_KEY', value: KEY }],
+  baseUrl = 'https://nous.test/v1',
+) {
   const entries: LogEntry[] = [];
   const outcome = await verifyNousPins({
     dryRun,
-    baseUrl: 'https://nous.test/v1',
+    baseUrl,
     apiKey,
     pins: ALL_PINS,
     logger: { log: (entry) => entries.push(entry) },
+    secrets: () => secrets,
     fetch: fetchImpl,
   }).then(
     () => undefined,
@@ -214,11 +222,28 @@ describe('verifyNousPins', () => {
         apiKey: '',
         pins: ALL_PINS,
         logger: { log: () => {} },
+        secrets: () => [],
         timeoutMs: 5,
       });
       expect(global).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('refuses before send when the URL carries a known secret, naming it and never its value', async () => {
+    const fetchImpl = json({ data: LISTED });
+    const leaked = { name: 'TELEGRAM_BOT_TOKEN', value: 'fake-telegram-token-9z' };
+    const { error } = await check(
+      fetchImpl,
+      false,
+      KEY,
+      [leaked],
+      `https://nous.test/v1/${leaked.value}`,
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(error?.message).toBe(
+      'v2 refuses the paper run: Nous GET /models refused before send: it carries TELEGRAM_BOT_TOKEN',
+    );
   });
 });

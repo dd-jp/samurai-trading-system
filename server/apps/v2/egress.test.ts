@@ -10,12 +10,14 @@ import type {
 } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
+import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { composeV2Root, rootOptionsFor, type V2Root } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { isLseInstrument } from './signal/index.js';
 import { LSE_LIQUIDITY_SCREEN } from './signal/parameters.js';
+import { SECRET_ENV_NAMES } from './signal/secret-guard.js';
 
 const tokenFiles = vi.hoisted(() => ({ directory: undefined as string | undefined }));
 
@@ -340,5 +342,74 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
     expect(leaksIn(`token ${SAXO_TOKENS.refreshToken}`)).toEqual([SAXO_TOKENS.refreshToken]);
     expect(leaksIn(`key ${SECRET_ENV.ALPACA_API_SECRET}`)).toEqual([SECRET_ENV.ALPACA_API_SECRET]);
     expect(leaksIn('stop 19.34432', ['19.34432'])).toEqual(['19.34432']);
+  });
+
+  it('guards the same secret names the test seeds', () => {
+    expect([...Object.keys(SECRET_ENV), 'NOUS_DEBATE_API_KEY'].sort()).toEqual(
+      [...SECRET_ENV_NAMES].sort(),
+    );
+  });
+
+  it('refuses a debate whose prompt would carry a secret and logs only its name', async () => {
+    const fixtures = await writeFixtures(directory);
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    writeSaxoTokenFiles(directory, clock.now());
+    const captured: CapturedRequest[] = [];
+    captureEgress(captured);
+    const logs: LogEntry[] = [];
+    const planted: Record<string, string> = {
+      UP: `${HEADLINE} ${SECRET_ENV.ALPACA_API_SECRET}`,
+      ISF: `ISF steady ${SAXO_TOKENS.accessToken}`,
+    };
+    const debated: string[] = [];
+    const storePath = join(directory, 'paper.sqlite');
+    const seed = openSharedStore(storePath);
+    new CapitalConfigStore(seed, clock).setYear(2026, START_CAPITAL_GBP, LOSS_CAP_GBP);
+    seed.close();
+    const root = composeV2Root({
+      ...rootOptionsFor(false, ENTRY_DATE, { ...ENV }, clock, { log: (entry) => logs.push(entry) }),
+      ...fixtures,
+      storePath,
+      alpacaClient: fakeAlpacaClient(clock),
+      newsSource: {
+        headlines: (symbol) => {
+          debated.push(symbol);
+          return Promise.resolve([planted[symbol] ?? `${symbol} steady`]);
+        },
+      },
+    });
+    let upReasons: string[] = [];
+    try {
+      await root.run();
+      upReasons = (
+        root.db
+          .prepare(
+            "SELECT reason FROM v2_decisions WHERE instrument = 'UP' AND book_id LIKE 'debate/%'",
+          )
+          .all() as { reason: string }[]
+      ).map((row) => row.reason);
+    } finally {
+      root.close();
+    }
+
+    expect(upReasons.length).toBeGreaterThan(0);
+    for (const reason of upReasons) {
+      expect(reason).toContain('llm_error:');
+      expect(reason).toContain('ALPACA_API_SECRET');
+      expect(reason).not.toContain(SECRET_ENV.ALPACA_API_SECRET);
+    }
+    const values = Object.values(planted).map((headline) => headline.split(' ').at(-1) ?? '');
+    for (const request of captured) {
+      for (const value of values) expect(request.body).not.toContain(value);
+    }
+    const refused = logs
+      .filter((entry) => entry.event === 'v2_llm_secret_refused')
+      .map((entry) => (entry.payload as { secret: string }).secret);
+    expect(new Set(refused)).toEqual(
+      new Set(['ALPACA_API_SECRET', 'saxo-tokens/sim.json accessToken']),
+    );
+    expect(debated.filter((symbol) => planted[symbol] === undefined).length).toBeGreaterThan(0);
+    expect(captured.length).toBeGreaterThan(0);
+    for (const value of values) expect(JSON.stringify(logs)).not.toContain(value);
   });
 });

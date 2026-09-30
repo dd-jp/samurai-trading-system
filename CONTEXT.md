@@ -47,13 +47,13 @@ A paper book that runs the same sleeve with one input or rule removed, so the in
 The debate sleeve's matched control: the same names, the same exit rule, the same stop, with entry by indicator alone and no LLM anywhere in the path. The debate sleeve exists only if it beats arm 2 forward, on paper: at least 100 closed trades and a one-sided test at 95%.
 
 **Universe**
-Target: commodities, indices, ETFs and equities, with indices and commodities only through 1× ETFs/ETCs (indices also through Saxo CFDs since 2026-09-28, shorts only) — US large caps at Alpaca plus an LSE ETF/ETC leg at Saxo (being built). Per day ~20 names — ~10 by liquidity rank (a stable core) plus ~10 movers/news names chosen with help from the sentiment score; the movers/news rule is a pre-declared parameter counted as a trial. In the debate sleeve only, Saxo CFDs carry shorts on UK and US single stocks, indices and ETFs, and UK single-stock longs; US longs stay at Alpaca and index longs in 1× ETFs (2026-09-28), with a book's gross notional never above its equity. Out of scope: 3× ETPs, UK single stocks other than through CFDs, crypto.
+Target: commodities, indices, ETFs and equities, with indices and commodities only through 1× ETFs/ETCs (indices also through Saxo CFDs since 2026-09-28, shorts only) — US large caps at Alpaca plus an LSE ETF/ETC leg at Saxo (being built). Per day ~20 names — ~10 by liquidity rank (a stable core) plus ~10 movers/news names chosen with help from the sentiment score; the movers/news rule is a pre-declared parameter counted as a trial. In the debate sleeve only (and its arm 2 control, which shares its CFD routes; the rules-based candidates stay CFD-free), Saxo CFDs carry shorts on UK and US single stocks, indices and ETFs, and UK single-stock longs; US longs stay at Alpaca and index longs in 1× ETFs (2026-09-28), with a book's gross notional never above its equity. Out of scope: 3× ETPs, UK single stocks other than through CFDs, crypto.
 
 **Small-cap position**
 A debate-sleeve long in a name below the large-cap floor. Long-only, half a large-cap trade's risk, capped at a fixed share of the sleeve, excluded below liquidity, price and market-cap floors, and measured against a large-cap-only shadow. The floor and cap numbers are open (G18).
 
 **Short position**
-Debate sleeve only. At Alpaca: easy-to-borrow large caps, sized so a +30% gap costs no more than about £150. At Saxo: 1× inverse ETFs or CFDs (2026-09-28); CFD leverage is capped at 1× book equity and a CFD short is sized so a +30% gap costs no more than about £45; the other CFD bounds are open.
+The debate sleeve and its arm 2 control only (arm 2 shorts through the same Saxo CFD routes, 2026-09-29); the rules-based candidate sleeves stay long-only and CFD-free. At Alpaca: easy-to-borrow large caps, sized so a +30% gap costs no more than about £150. At Saxo: 1× inverse ETFs or CFDs (2026-09-28); CFD leverage is capped at 1× book equity and a CFD short is sized so a +30% gap costs no more than about £45; the other CFD bounds are open.
 
 **Macro event day**
 A day with a high-impact release (FOMC, US CPI, NFP, BoE rate decision, UK CPI). The debate sleeve enters at half size; exits are unaffected; the gate is a counted trial against a no-gate shadow.
@@ -171,6 +171,6 @@ Research, backtests, promotion to paper and risk tightening need nobody. Only wh
 5. Every trial is counted; every decision, fill and LLM call is journalled; any past day replays to the same decisions.
 6. Paper profit is not evidence of edge; only fidelity to the backtest (in band) is.
 7. One implementation of every strategy, in TypeScript, runs in backtest, paper and live.
-8. Broker keys are trade-only, withdrawals disabled, IP-restricted where offered; no account data or key leaves in any LLM request.
+8. Broker keys are trade-only, withdrawals disabled, IP-restricted where the venue offers it; no account data or key leaves in any LLM request, and an LLM request carrying a known secret value is refused before it is sent.
 9. Crash-restart loses no position: the broker is the source of truth and every run reconciles against it.
 10. Rate-limit errors are a hard stop; no agent proceeds.
