@@ -53,6 +53,7 @@ const SECRET_ENV: Readonly<Record<string, string>> = {
   LITESTREAM_SSE_C_KEY: 'sentinel-litestream-sse-c-key-8e9f',
   POLYGON_API_KEY: 'sentinel-polygon-api-key-0a2b',
   MARKETAUX_API_TOKEN: 'sentinel-marketaux-api-token-1c3d',
+  MARKETAUX_API_KEY: 'sentinel-marketaux-api-key-5b2e',
   NOUS_API_KEY: 'sentinel-nous-shared-key-4e6f',
   NOUS_SENTIMENT_API_KEY: 'sentinel-nous-sentiment-key-7a8b',
   TIINGO_API_KEY: 'sentinel-tiingo-api-key-9c0e',

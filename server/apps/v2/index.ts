@@ -13,7 +13,7 @@ import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
@@ -27,12 +27,15 @@ import {
   createVenueRouter,
   currentConstituents,
   loadCfdCatalogue,
+  MarketauxClient,
+  MarketauxNewsSource,
   MultiVenueBarsSource,
   type NewsSource,
   NO_NEWS,
   newsForVenue,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
+  SqliteNewsLedger,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
@@ -103,6 +106,8 @@ export interface V2RootOptions {
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly newsSource?: NewsSource | undefined;
+  readonly marketauxApiKey?: string | undefined;
+  readonly isUkStock?: ((symbol: string) => boolean) | undefined;
   readonly lseLegRefusal?: string | undefined;
   readonly knownSecrets?: SecretSource | undefined;
 }
@@ -217,10 +222,31 @@ function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => r
   return (tradingDate) => currentConstituents(csv, tradingDate);
 }
 
-function newsSourceFor(options: V2RootOptions): NewsSource {
-  if (options.newsSource !== undefined) return options.newsSource;
-  const base = options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient());
-  return newsForVenue(base, isLseInstrument);
+function marketauxClientFor(apiKey: string | undefined): MarketauxClient | undefined {
+  return apiKey === undefined || apiKey === '' ? undefined : new MarketauxClient(apiKey);
+}
+
+export interface NewsWiring {
+  readonly news: NewsSource;
+  readonly ukNews: MarketauxNewsSource | undefined;
+}
+
+export function newsWiringFor(options: V2RootOptions, db: StoreHandle, logger: Logger): NewsWiring {
+  if (options.newsSource !== undefined) return { news: options.newsSource, ukNews: undefined };
+  const ukNews = options.dryRun
+    ? undefined
+    : new MarketauxNewsSource({
+        client: marketauxClientFor(options.marketauxApiKey),
+        ledger: new SqliteNewsLedger(guardedStore(db, 'v2')),
+        logger,
+      });
+  const news = newsForVenue({
+    us: options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient()),
+    ukStock: ukNews ?? NO_NEWS,
+    isUkStock: options.isUkStock ?? (() => false),
+    isLseEtf: isLseInstrument,
+  });
+  return { news, ukNews };
 }
 
 const STDERR_LOGGER: Logger = {
@@ -319,8 +345,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   refuseKeylessPaperRun(options);
   const clock = options.clock ?? new SystemClock();
   const logger = options.logger ?? STDERR_LOGGER;
-  const news = newsSourceFor(options);
   const db = options.store ?? openSharedStore(storePathFor(options));
+  const { news, ukNews } = newsWiringFor(options, db, logger);
   const scripted: ScriptedTransport[] = [];
   const spendSink: LlmSpendSink = new SqliteLlmSpendStore(db, logger, true);
   const spendCap: SpendCap = new SqliteMonthlySpendCap(db, clock, undefined, logger);
@@ -398,7 +424,11 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     run: async () => {
       await prime();
       journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
-      return runCycle(cycle, options.tradingDate);
+      try {
+        return await runCycle(cycle, options.tradingDate);
+      } finally {
+        ukNews?.journalCoverage(options.tradingDate);
+      }
     },
     close: () => db.close(),
   };
@@ -501,6 +531,7 @@ export function rootOptionsFor(
     dryRun,
     ...nousOptionsFrom(env),
     samuraiMode: env.SAMURAI_MODE,
+    marketauxApiKey: env.MARKETAUX_API_KEY,
     clock,
     logger,
     lseLegRefusal: saxoSessionRefusal(clock.now()),
