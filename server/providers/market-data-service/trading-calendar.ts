@@ -315,6 +315,19 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
       'US equity',
     );
   }
+
+  nextSessionOpen(instant: Date): Date {
+    let current = toCivilDate(instant, ET_ZONE);
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
+      this.#closeMinutesFor(current);
+      const open = wallClockToInstant(current, SESSION_OPEN_MINUTES, ET_ZONE);
+      if (open.getTime() > instant.getTime() && this.isTradingDay(open)) return open;
+      current = nextCivilDay(current);
+    }
+    throw new Error(
+      `No US equity session open found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
+    );
+  }
 }
 
 const LSE_OPEN_MINUTES = 8 * 60;

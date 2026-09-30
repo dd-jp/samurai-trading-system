@@ -145,6 +145,16 @@ export type {
 } from './v2.js';
 export { CfdCostModelUnsetError } from './v2.js';
 export type {
+  SignalEntryWire,
+  SignalEventWire,
+  SignalListWire,
+  SignalPayloadWire,
+  SignalPostResponseWire,
+  SignalSessionWire,
+  SignalStatusWire,
+  SignalWire,
+} from './v2-signals.js';
+export type {
   BookCashWire,
   BookPerformanceWire,
   CandidateTrialsWire,
