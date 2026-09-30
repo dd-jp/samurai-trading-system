@@ -168,7 +168,7 @@ What the root imports from v1: `runDebate` and the three personas plus `Anthropi
 
 ## 11. Known gaps (eval 2026-09-25, not fixed here)
 
-- The v2 root reads the local bar store; no forward puller runs before the cycle, so a paper day needs `data/bars/alpaca` refreshed by hand (or the doc 70 puller) first.
+- The v2 root reads the local bar store; since #1775 the daily refresh (`server/apps/v2/bar-refresh.ts`) re-pulls it before each real cycle.
 - Shadow comparability (§7 deferred item 1): the primary's real fills and the shadows' daily-bar fills are not like-for-like.
 - The debate core has two debater seats; the third provider sits out each day by rotation (§4) rather than arguing.
 - The CFD short-availability check reads a Saxo reference-data catalogue loaded from a file; nothing calls the Saxo reference endpoints from the daily cycle yet, so with no catalogue every short is refused `no_catalogue` (fail closed).
