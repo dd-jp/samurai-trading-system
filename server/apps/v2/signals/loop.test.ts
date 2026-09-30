@@ -49,6 +49,25 @@ describe('SignalLoop', () => {
     expect(idle.opened).toEqual([]);
   });
 
+  it('logs a calendar that throws past its coverage instead of rejecting the tick', async () => {
+    const { loop, logs, opened } = harness({
+      calendar: {
+        isOpen: () => {
+          throw new Error('calendar ends 2027-12-31');
+        },
+      },
+    });
+    await expect(loop.tick()).resolves.toBeUndefined();
+    expect(opened).toEqual([]);
+    expect(logs).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_signal_pass_failed',
+        message: 'calendar ends 2027-12-31',
+      }),
+    ]);
+  });
+
   it('logs a skipped pass', async () => {
     const { loop, logs } = harness({}, () =>
       Promise.resolve({ ran: false, reason: 'lease_held', detail: 'cycle (pid 7)' }),

@@ -926,9 +926,10 @@ class Cycle {
     approval: EntryApproval,
   ): Promise<OrderOutcome | undefined> {
     const clientOrderId = this.entryOrderId(book, decision.instrument);
-    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return undefined;
-    if (this.deps.books.position(book.id, decision.instrument) !== undefined) return undefined;
-    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return undefined;
+    if (!this.willSubmitEntry(book, decision)) {
+      this.journalHeldByBrokerBook(book, decision);
+      return undefined;
+    }
     this.tally.entries += 1;
     const submission: Submission =
       approval.order === undefined
@@ -972,16 +973,59 @@ class Cycle {
     return total;
   }
 
-  // #submitEntry no-ops when a client order already exists, a position is already held, or an
-  // entry for this instrument is mid-cycle-fill (#pendingEntries) — the cash gate must only
+  // #submitEntry no-ops when a client order already exists, a position is already held, an
+  // entry for this instrument is mid-cycle-fill (#pendingEntries), or another broker-routed book
+  // holds or rests it — the cash gate must only
   // charge and refuse decisions that take that path, or held/resting lines eat phantom cash and
   // starve later instruments in list order (doc 66 2026-09-28, #1785)
-  willSubmitEntry(book: BookSpec, instrument: string): boolean {
+  willSubmitEntry(book: BookSpec, decision: SleeveDecision): boolean {
+    const { instrument } = decision;
     return (
       this.deps.journal.orderFor(this.entryOrderId(book, instrument)) === undefined &&
       this.deps.books.position(book.id, instrument) === undefined &&
-      !this.#pendingEntries.has(positionKey(book.id, instrument))
+      !this.#pendingEntries.has(positionKey(book.id, instrument)) &&
+      this.brokerBookHolding(book, decision) === undefined
     );
+  }
+
+  // One Alpaca account serves every broker-routed book, so an entry on a symbol another such
+  // book holds or rests would net against it at the broker and its stop legs would compete (#1941)
+  brokerBookHolding(book: BookSpec, decision: SleeveDecision): string | undefined {
+    const routed = (candidate: BookSpec) =>
+      !this.deps.executor.simulates(routeOf(candidate, decision.venue));
+    if (!routed(book)) return undefined;
+    return this.deps.registry
+      .ids()
+      .flatMap((id) => this.deps.books.forSleeve(id))
+      .find(
+        (other) =>
+          other.id !== book.id &&
+          routed(other) &&
+          this.holdsOrRestsAt(other.id, decision.instrument, decision.venue),
+      )?.id;
+  }
+
+  holdsOrRestsAt(bookId: string, instrument: string, venue: Venue): boolean {
+    if (this.deps.books.position(bookId, instrument)?.venue === venue) return true;
+    return this.deps.journal
+      .restingEntries(bookId)
+      .some((order) => order.instrument === instrument && order.venue === venue);
+  }
+
+  journalHeldByBrokerBook(book: BookSpec, decision: SleeveDecision): void {
+    const holder = this.brokerBookHolding(book, decision);
+    if (holder === undefined) return;
+    const message = `${book.id} ${decision.instrument}: held or resting in ${holder} at ${decision.venue}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter: 'symbol_held_by_broker_book',
+      ticket: '#1941',
+      message,
+      book_id: book.id,
+      instrument: decision.instrument,
+    });
+    this.refusals.push(message);
   }
 
   applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
@@ -1009,9 +1053,7 @@ class Cycle {
       macroDay: this.macro.macroDay,
     });
     const willSubmit =
-      approval.order !== undefined &&
-      approval.size > 0 &&
-      this.willSubmitEntry(book, decision.instrument);
+      approval.order !== undefined && approval.size > 0 && this.willSubmitEntry(book, decision);
     const gated = willSubmit ? this.applyRoomGate(decision, approval, room) : approval;
     return { decision, gated };
   }

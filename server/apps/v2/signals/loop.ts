@@ -39,9 +39,9 @@ export class SignalLoop {
 
   async #once(): Promise<void> {
     const now = this.deps.clock.now();
-    if (!signalsDue(this.deps, now)) return;
     let root: Pick<V2Root, 'processSignals' | 'close'> | undefined;
     try {
+      if (!signalsDue(this.deps, now)) return;
       root = this.deps.openRoot(sessionDate(now));
       this.#report(await root.processSignals(this.deps.signals, now));
     } catch (error) {

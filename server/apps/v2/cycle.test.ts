@@ -2792,6 +2792,94 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
   });
 });
 
+describe('#1941: one Alpaca account across broker-routed books', () => {
+  function twoPrimaries(dryRun: boolean, alpaca?: FakeAlpaca, trendInstrument = 'AAPL') {
+    const spec: SleeveSpec = { ...TEST_SPEC, capitalShare: 0.5 };
+    const decision = { ...longAapl, sleeve_id: 'trend', instrument: trendInstrument };
+    const trend: Sleeve = {
+      id: 'trend',
+      spec,
+      universe: () => ({ instruments: [trendInstrument], refusals: [] }),
+      decide: () => Promise.resolve({ decisions: [decision], refusals: [] }),
+    };
+    return harness([longAapl], dryRun, alpaca, [2026], spec, SPREAD_ONLY, 1_500, trend);
+  }
+
+  it('refuses a second primary entry on a symbol another primary rests at the broker', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca);
+
+    const report = await runCycle(deps, '2026-09-25');
+
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+    ]);
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    expect(orders(deps, 'trend/no-macro-gate')).toMatchObject([{ outcome: 'simulated' }]);
+    expect(report.refusals).toContain(
+      'trend/primary AAPL: held or resting in debate/primary at alpaca',
+    );
+  });
+
+  it('refuses it while the other primary holds the position', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+
+    await runCycle(deps, '2026-09-28');
+
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeDefined();
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT trading_date, scope, ticket, book_id, instrument FROM v2_refusals WHERE parameter = 'symbol_held_by_broker_book'",
+        )
+        .all(),
+    ).toEqual([
+      {
+        trading_date: '2026-09-25',
+        scope: 'entry',
+        ticket: '#1941',
+        book_id: 'trend/primary',
+        instrument: 'AAPL',
+      },
+      {
+        trading_date: '2026-09-28',
+        scope: 'entry',
+        ticket: '#1941',
+        book_id: 'trend/primary',
+        instrument: 'AAPL',
+      },
+    ]);
+  });
+
+  it('lets another primary enter a different symbol', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca, 'MSFT');
+
+    await runCycle(deps, '2026-09-25');
+
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+      'v2-trend-primary-2026-09-25-MSFT',
+    ]);
+  });
+
+  it('lets both primaries enter in a dry run, where no book reaches the broker', async () => {
+    const deps = twoPrimaries(true);
+
+    await runCycle(deps, '2026-09-25');
+
+    expect(orders(deps, 'debate/primary')).toHaveLength(1);
+    expect(orders(deps, 'trend/primary')).toHaveLength(1);
+  });
+});
+
 describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
   // TEST_SPEC/£1,000 equity: each longAapl-shaped decision sizes to min(byRisk, byNotional)
   // = min(floor(5/(0.32*2))=7, floor(100/16)=6) = 6 shares at £20/1.25 = £16/share = £96
