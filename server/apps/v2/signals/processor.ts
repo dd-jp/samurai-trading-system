@@ -10,7 +10,7 @@ import { isFresh } from '../data/index.js';
 import type { ReconcileVerdict } from '../journal/index.js';
 import type { LlmPanel } from '../signal/index.js';
 import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
-import { planSignalEntry, type SignalEntryPlan } from './entry.js';
+import { entryRange, planSignalEntry, type SignalEntryPlan } from './entry.js';
 import type { SignalStore } from './store.js';
 import { SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
 
@@ -140,12 +140,6 @@ function admit(
     return { code: 'symbol_held', detail: `held or resting in ${conflicts.join(', ')}` };
   }
   return { plan: verdict.plan, lastBar };
-}
-
-function entryRange(entry: SignalWire['entry']): { low: number; high: number } {
-  return typeof entry === 'number'
-    ? { low: entry, high: entry }
-    : { low: entry[0], high: entry[1] };
 }
 
 function decisionFor(
