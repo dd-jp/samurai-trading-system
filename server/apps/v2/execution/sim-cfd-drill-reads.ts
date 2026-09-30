@@ -19,6 +19,7 @@ export interface InstrumentRules {
   readonly supportedOrderTypes: readonly string[];
   readonly tickSize: (price: number) => number;
   readonly orderDistances: unknown;
+  readonly defaultStopLossFraction: number | undefined;
 }
 
 export interface SimQuote {
@@ -87,11 +88,17 @@ export async function trialAccount(gateway: SaxoSimGateway): Promise<SimAccount>
       'sim_only_refusal: an account on this token is not a Saxo trial account',
     );
   }
-  return {
+  const account = {
     accountKey: str(first.AccountKey),
     clientKey: str(first.ClientKey),
     currency: str(first.Currency),
   };
+  if (account.accountKey === '' || account.clientKey === '') {
+    throw new SimOnlyRefusal(
+      'sim_only_refusal: the trial account carries no account or client key',
+    );
+  }
+  return account;
 }
 
 export async function findInstrument(
@@ -139,7 +146,17 @@ export async function instrumentRules(
     supportedOrderTypes: supported.map(String),
     tickSize: tickSizer(row),
     orderDistances: row.OrderDistances,
+    defaultStopLossFraction: stopLossFraction(sub(row, 'OrderDistances')),
   };
+}
+
+// OrderDistances carries UI defaults only, no minimum stop distance (doc 44's SIM instrument capture)
+function stopLossFraction(distances: Row): number | undefined {
+  const percent = num(distances.StopLossDefaultDistance);
+  if (distances.StopLossDefaultDistanceType !== 'Percentage' || percent === undefined) {
+    return undefined;
+  }
+  return percent > 0 ? percent / 100 : undefined;
 }
 
 export async function quoteOf(

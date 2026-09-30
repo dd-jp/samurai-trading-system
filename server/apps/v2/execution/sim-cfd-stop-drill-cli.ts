@@ -115,7 +115,7 @@ export function writeEvidence(
   outDir: string,
   secrets: readonly string[],
 ): { json: string; markdown: string } {
-  const base = `sim-cfd-stop-drill-${evidence.startedAt.slice(0, 10)}`;
+  const base = `sim-cfd-stop-drill-${evidence.startedAt.slice(0, 19).replaceAll(':', '')}Z`;
   const json = join(outDir, `${base}.json`);
   const markdown = join(outDir, `${base}.md`);
   mkdirSync(outDir, { recursive: true });
@@ -129,6 +129,7 @@ export interface DrillDeps {
   readonly clock: DrillClock;
   readonly logger: Logger;
   readonly tokens: (env: NodeJS.ProcessEnv, logger: Logger) => SimTokenChoice;
+  readonly onInterrupt: (handler: () => void) => () => void;
 }
 
 const STDERR_LOGGER: Logger = {
@@ -145,6 +146,10 @@ const DEFAULT_DEPS: DrillDeps = {
   },
   logger: STDERR_LOGGER,
   tokens: simTokenSource,
+  onInterrupt: (handler) => {
+    process.once('SIGINT', handler);
+    return () => process.off('SIGINT', handler);
+  },
 };
 
 function log(logger: Logger, event: string, message: string, payload?: unknown): void {
@@ -175,11 +180,21 @@ export async function main(
     sleep: deps.clock.sleep,
     now: () => deps.clock.now().getTime(),
   });
+  const interrupt = new AbortController();
+  const release = deps.onInterrupt(() => {
+    log(
+      deps.logger,
+      'sim_cfd_drill_interrupted',
+      'interrupted: cleaning up SIM orders and positions; a second Ctrl-C abandons the clean-up',
+    );
+    interrupt.abort();
+  });
   const { evidence, account } = await runSimCfdStopDrill(
     gateway,
     { ...DEFAULT_DRILL_OPTIONS, targets: args.targets, runId: String(deps.clock.now().getTime()) },
     deps.clock,
-  );
+    interrupt.signal,
+  ).finally(release);
   const secrets = await tokens.secrets().catch(() => []);
   await tokens.source.stop();
   const written = writeEvidence(evidence, args.outDir, [

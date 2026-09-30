@@ -63,6 +63,7 @@ interface Drill {
   readonly clock: DrillClock;
   readonly evidence: DrillEvidence;
   readonly account: SimAccount;
+  readonly interrupt: AbortSignal;
 }
 
 const FILLED_STATUSES = new Set(['FinalFill', 'Filled']);
@@ -81,6 +82,10 @@ function note(drill: Pick<Drill, 'clock' | 'evidence'>, code: string, detail?: u
   });
 }
 
+function stopIfInterrupted(drill: Pick<Drill, 'interrupt'>): void {
+  if (drill.interrupt.aborted) throw new DrillFailure('drill_interrupted');
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -92,6 +97,7 @@ async function poll<T>(
 ): Promise<T | undefined> {
   const deadline = drill.clock.now().getTime() + timeoutMs;
   for (;;) {
+    stopIfInterrupted(drill);
     const found = await probe();
     if (found !== undefined || drill.clock.now().getTime() >= deadline) return found;
     await drill.clock.sleep(drill.options.pollIntervalMs);
@@ -310,9 +316,11 @@ async function amendToTrigger(
   const stop = record.stop;
   if (fill === undefined || stop?.orderId === undefined) fail(record, 'drill_fill_price_unknown');
   const tick = rules.tickSize(fill);
+  const fallback = rules.defaultStopLossFraction;
   const candidates = [
     toTick(fill * (1 - drill.options.crossDistance), tick, 'down'),
     toTick(fill * (1 + drill.options.nearDistance), tick, 'up'),
+    ...(fallback === undefined ? [] : [toTick(fill * (1 + fallback), tick, 'up')]),
   ];
   stop.amendAttempts = [];
   for (const price of candidates) {
@@ -354,6 +362,7 @@ async function awaitTrigger(
 }
 
 async function drillInstrument(drill: Drill, target: DrillTarget): Promise<void> {
+  stopIfInterrupted(drill);
   const record: InstrumentEvidence = { ...target, outcome: 'running' };
   drill.evidence.instruments.push(record);
   note(drill, 'drill_instrument_started', target);
@@ -470,7 +479,9 @@ async function runDrill(drill: Drill): Promise<void> {
     drill.evidence.failure = messageOf(error);
     note(drill, 'drill_failed', drill.evidence.failure);
   } finally {
-    if (isFlat(drill.evidence.flatBefore)) await cleanUp(drill);
+    if (isFlat(drill.evidence.flatBefore)) {
+      await cleanUp({ ...drill, interrupt: new AbortController().signal });
+    }
   }
 }
 
@@ -478,6 +489,7 @@ export async function runSimCfdStopDrill(
   gateway: SaxoSimGateway,
   options: DrillOptions,
   clock: DrillClock,
+  interrupt: AbortSignal = new AbortController().signal,
 ): Promise<{ evidence: DrillEvidence; account: SimAccount | undefined }> {
   const evidence = newEvidence(clock);
   let account: SimAccount | undefined;
@@ -485,7 +497,7 @@ export async function runSimCfdStopDrill(
     account = await trialAccount(gateway);
     evidence.account = { isTrialAccount: true, currency: account.currency };
     note({ clock, evidence }, 'drill_trial_account_confirmed');
-    await runDrill({ gateway, options, clock, evidence, account });
+    await runDrill({ gateway, options, clock, evidence, account, interrupt });
   } catch (error) {
     evidence.failure = messageOf(error);
     note({ clock, evidence }, 'drill_refused', evidence.failure);

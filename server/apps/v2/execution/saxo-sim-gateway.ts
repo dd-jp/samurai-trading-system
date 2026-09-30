@@ -1,4 +1,6 @@
 export const SAXO_SIM_GATEWAY = 'https://gateway.saxobank.com/sim/openapi';
+const SIM_ORIGIN = 'https://gateway.saxobank.com';
+const SIM_PATH_PREFIX = '/sim/openapi/';
 
 // doc 43: order bursts drew 429s from Saxo's one-order-request-per-second session limit
 const TRADE_SPACING_MS = 1_100;
@@ -18,6 +20,20 @@ export function assertSimGateway(baseUrl: string): void {
   if (baseUrl.replace(/\/+$/, '') !== SAXO_SIM_GATEWAY) {
     throw new SimOnlyRefusal(`sim_only_refusal: ${baseUrl} is not the Saxo SIM gateway`);
   }
+}
+
+// The live gateway shares this origin, so a dot-segment in a path would resolve onto it
+function simUrl(path: string): string {
+  const url = new URL(`${SAXO_SIM_GATEWAY}${path}`);
+  if (
+    !path.startsWith('/') ||
+    path.startsWith('//') ||
+    url.origin !== SIM_ORIGIN ||
+    !url.pathname.startsWith(SIM_PATH_PREFIX)
+  ) {
+    throw new SimOnlyRefusal(`sim_only_refusal: ${path.split('?')[0]} is not a SIM gateway path`);
+  }
+  return url.href;
 }
 
 export interface SaxoSimGatewayDeps {
@@ -47,14 +63,13 @@ export class SaxoSimGateway {
   }
 
   async send(method: SaxoMethod, path: string, body?: unknown): Promise<SaxoReply> {
-    if (!path.startsWith('/') || path.startsWith('//')) {
-      throw new SimOnlyRefusal(`sim_only_refusal: ${path} is not a SIM gateway path`);
-    }
+    const url = simUrl(path);
     if (method !== 'GET') await this.paceTrade();
     this.requests += 1;
     const token = await this.deps.accessToken();
-    const response = await this.deps.fetch(`${SAXO_SIM_GATEWAY}${path}`, {
+    const response = await this.deps.fetch(url, {
       method,
+      redirect: 'error',
       headers: {
         accept: 'application/json',
         authorization: `Bearer ${token}`,

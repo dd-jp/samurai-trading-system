@@ -63,9 +63,14 @@ type Reply = readonly [number, unknown];
 class FakeSaxoSim {
   readonly calls: Call[] = [];
   trial = true;
+  accountKey = ACCOUNT_KEY;
   etfListed = false;
   marketOpen = true;
   supportedOrderTypes = ['Market', 'Limit', 'StopIfTraded'];
+  orderDistances: Record<string, unknown> = {
+    StopLossDefaultDistance: 0.5,
+    StopLossDefaultDistanceType: 'Percentage',
+  };
   fillPrice = 200;
   stopPriceDrift = 0;
   amendStatuses: number[] = [];
@@ -84,6 +89,7 @@ class FakeSaxoSim {
 
   readonly fetch = async (url: string, init: RequestInit): Promise<Response> => {
     if (!url.startsWith(`${SAXO_SIM_GATEWAY}/`)) throw new Error(`left the SIM gateway: ${url}`);
+    if (init.redirect !== 'error') throw new Error('a redirect could carry the bearer elsewhere');
     const path = url.slice(SAXO_SIM_GATEWAY.length);
     const body =
       typeof init.body === 'string'
@@ -120,7 +126,7 @@ class FakeSaxoSim {
         {
           Data: [
             {
-              AccountKey: ACCOUNT_KEY,
+              AccountKey: this.accountKey,
               ClientKey: CLIENT_KEY,
               Currency: 'EUR',
               IsTrialAccount: this.trial,
@@ -145,7 +151,7 @@ class FakeSaxoSim {
               { HighPrice: 1, TickSize: 0.0001 },
             ],
           },
-          OrderDistances: { StopIfTradedOrder: 0.5 },
+          OrderDistances: this.orderDistances,
         },
       ];
     }
@@ -322,6 +328,25 @@ describe('SIM-only refusal', () => {
     await expect(gateway.send('GET', '//evil.test/x')).rejects.toThrow(SimOnlyRefusal);
     await expect(gateway.send('GET', 'port/v1/accounts/me')).rejects.toThrow(SimOnlyRefusal);
     expect(fake.calls).toHaveLength(0);
+  });
+
+  it.each([
+    '/../../openapi/trade/v2/orders',
+    '/%2e%2e/%2e%2e/openapi/trade/v2/orders',
+    '/port/../../../openapi/port/v1/accounts/me',
+  ])('refuses %s, which resolves onto the live gateway', async (path) => {
+    const fake = new FakeSaxoSim();
+    const gateway = gatewayFor(fake, new FakeClock());
+    await expect(gateway.send('POST', path, {})).rejects.toThrow(SimOnlyRefusal);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it('refuses a trial account that carries no account key, before any order', async () => {
+    const fake = new FakeSaxoSim();
+    fake.accountKey = '';
+    const { evidence } = await drill(fake);
+    expect(evidence.failure).toMatch(/^sim_only_refusal/);
+    expect(fake.trades()).toHaveLength(0);
   });
 
   it('refuses a live account and places nothing', async () => {
@@ -570,9 +595,21 @@ describe('cleanup on failure', () => {
     expect(evidence.passed).toBe(false);
   });
 
-  it('fails when Saxo rejects both amends and still cleans up', async () => {
+  it('falls back to the instrument default stop-loss distance when both amends are rejected', async () => {
     const fake = new FakeSaxoSim();
     fake.amendStatuses = [400, 400];
+    const { evidence } = await drill(fake);
+    expect(evidence.instruments[0]?.stop?.amendAttempts?.map((a) => [a.price, a.status])).toEqual([
+      [199, 400],
+      [200.1, 400],
+      [201, 200],
+    ]);
+    expect(evidence.passed).toBe(true);
+  });
+
+  it('fails when Saxo rejects every amend and still cleans up', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendStatuses = [400, 400, 400];
     const { evidence } = await drill(fake);
     expect(evidence.failure).toBe('drill_stop_amend_rejected: AAPL:xnas');
     expect(evidence.cleanup.cancelled.sort()).toEqual(['s-211', 't-211']);
@@ -608,6 +645,59 @@ describe('cleanup on failure', () => {
       'POST',
     ]);
     expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+  });
+
+  it.each([
+    [{ StopLossDefaultDistance: 0.5, StopLossDefaultDistanceType: 'Pips' }],
+    [{ StopLossDefaultDistance: 0, StopLossDefaultDistanceType: 'Percentage' }],
+    [{ StopLossDefaultDistanceType: 'Percentage' }],
+  ])('tries no default-distance amend when OrderDistances is %j', async (distances) => {
+    const fake = new FakeSaxoSim();
+    fake.orderDistances = distances;
+    fake.amendStatuses = [400, 400];
+    const { evidence } = await drill(fake);
+    expect(evidence.instruments[0]?.stop?.amendAttempts).toHaveLength(2);
+    expect(evidence.failure).toBe('drill_stop_amend_rejected: AAPL:xnas');
+  });
+
+  it('stops at an interrupt during the trigger wait, then cancels both legs and flattens', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendTriggers = false;
+    const clock = new FakeClock();
+    const interrupt = new AbortController();
+    const gateway = new SaxoSimGateway({
+      baseUrl: SAXO_SIM_GATEWAY,
+      accessToken: async () => TOKEN,
+      fetch: async (url, init) => {
+        if (init.method === 'PATCH') interrupt.abort();
+        return fake.fetch(url, init);
+      },
+      sleep: clock.sleep,
+      now: () => clock.now().getTime(),
+    });
+    const { evidence } = await runSimCfdStopDrill(gateway, OPTIONS, clock, interrupt.signal);
+    expect(evidence.failure).toBe('drill_interrupted');
+    expect(evidence.cleanup.cancelled.sort()).toEqual(['s-211', 't-211']);
+    expect(evidence.cleanup.flattened).toEqual(['CfdOnStock:211']);
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+    expect(evidence.instruments).toHaveLength(1);
+    expect(evidence.passed).toBe(false);
+  });
+
+  it('places nothing when interrupted before the first instrument', async () => {
+    const fake = new FakeSaxoSim();
+    const interrupt = new AbortController();
+    interrupt.abort();
+    const clock = new FakeClock();
+    const { evidence } = await runSimCfdStopDrill(
+      gatewayFor(fake, clock),
+      OPTIONS,
+      clock,
+      interrupt.signal,
+    );
+    expect(evidence.failure).toBe('drill_interrupted');
+    expect(evidence.instruments).toHaveLength(0);
+    expect(fake.trades()).toHaveLength(0);
   });
 
   it('records an entry that never fills and cleans up the resting master legs', async () => {
@@ -697,7 +787,7 @@ describe('redaction', () => {
     try {
       const written = writeEvidence(evidence, dir, [TOKEN, ACCOUNT_KEY, CLIENT_KEY]);
       const text = readFileSync(written.json, 'utf8') + readFileSync(written.markdown, 'utf8');
-      expect(written.json).toBe(join(dir, 'sim-cfd-stop-drill-2026-10-01.json'));
+      expect(written.json).toBe(join(dir, 'sim-cfd-stop-drill-2026-10-01T143500Z.json'));
       for (const secret of [TOKEN, ACCOUNT_KEY, CLIENT_KEY]) expect(text).not.toContain(secret);
       expect(JSON.stringify(evidence)).toContain(ACCOUNT_KEY);
     } finally {
@@ -721,13 +811,13 @@ describe('the verdict and summary', () => {
 
   it('renders a table row per instrument and names the JSON record', async () => {
     const { evidence } = await drill(new FakeSaxoSim());
-    const summary = renderSummary(evidence, 'sim-cfd-stop-drill-2026-10-01.json');
+    const summary = renderSummary(evidence, 'sim-cfd-stop-drill-2026-10-01T143500Z.json');
     expect(summary).toContain('Verdict: **PASSED**');
     expect(summary).toContain(
       '| AAPL:xnas | CfdOnStock | passed | - | 200 | 220.11 | Working | 199 | FinalFill | 199.5 |',
     );
     expect(summary).toContain('| ISF:xlon | CfdOnEtf | skipped | instrument_not_found |');
-    expect(summary).toContain('Full record: sim-cfd-stop-drill-2026-10-01.json');
+    expect(summary).toContain('Full record: sim-cfd-stop-drill-2026-10-01T143500Z.json');
   });
 
   it('says what was not read on a refused run', () => {
@@ -844,7 +934,13 @@ function cliDeps(
   tokens: () => SimTokenChoice = staticTokens,
   entries: LogEntry[] = [],
 ): DrillDeps {
-  return { fetch: fake.fetch, clock, logger: { log: (entry) => entries.push(entry) }, tokens };
+  return {
+    fetch: fake.fetch,
+    clock,
+    logger: { log: (entry) => entries.push(entry) },
+    tokens,
+    onInterrupt: () => () => {},
+  };
 }
 
 describe('main', () => {
@@ -859,7 +955,7 @@ describe('main', () => {
       );
       expect(code).toBe(0);
       const record = JSON.parse(
-        readFileSync(join(dir, 'sim-cfd-stop-drill-2026-10-01.json'), 'utf8'),
+        readFileSync(join(dir, 'sim-cfd-stop-drill-2026-10-01T143500Z.json'), 'utf8'),
       );
       expect(record.passed).toBe(true);
       expect(JSON.stringify(record)).not.toContain(ACCOUNT_KEY);
@@ -867,6 +963,41 @@ describe('main', () => {
         'sim_cfd_drill_token',
         'sim_cfd_drill_passed',
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans up on Ctrl-C, writes the evidence, exits 1 and releases the handler', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sim-drill-main-'));
+    const fake = new FakeSaxoSim();
+    fake.amendTriggers = false;
+    const entries: LogEntry[] = [];
+    let ctrlC = (): void => {};
+    let released = false;
+    const deps: DrillDeps = {
+      ...cliDeps(fake, new FakeClock(), staticTokens, entries),
+      fetch: async (url, init) => {
+        if (init.method === 'PATCH') ctrlC();
+        return fake.fetch(url, init);
+      },
+      onInterrupt: (handler) => {
+        ctrlC = handler;
+        return () => {
+          released = true;
+        };
+      },
+    };
+    try {
+      expect(await main(['--etf', 'none', '--out-dir', dir], {}, deps)).toBe(1);
+      const record = JSON.parse(
+        readFileSync(join(dir, 'sim-cfd-stop-drill-2026-10-01T143500Z.json'), 'utf8'),
+      );
+      expect(record.failure).toBe('drill_interrupted');
+      expect(record.cleanup.cancelled.sort()).toEqual(['s-211', 't-211']);
+      expect(record.cleanup.flattened).toEqual(['CfdOnStock:211']);
+      expect(entries.map((entry) => entry.event)).toContain('sim_cfd_drill_interrupted');
+      expect(released).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
