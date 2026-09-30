@@ -463,7 +463,7 @@ describe('runBacktest', () => {
     expect(capped.verdict.capitalCeilingGbp).toBeLessThan(uncapped.verdict.capitalCeilingGbp);
   });
 
-  it("keeps a trial's equity independent of a sibling's losses and the benchmark's (isolation ruled 2026-09-28, #1799)", async () => {
+  it("keeps a trial's equity independent of a sibling's losses and the benchmark's (per-sleeve budgets, #1941)", async () => {
     const tightCap = 30;
     const dumpAlongside = await runBacktest(
       input({
@@ -485,11 +485,6 @@ describe('runBacktest', () => {
         benchmark: { config: { lookback: 0 }, sleeve: trendSleeve('hold', 'DOWN', 0) },
       }),
     );
-    // Sibling trial AND benchmark are both inert, so nothing but dump itself can ever reach the
-    // pool in this run — the trajectory is identical whether or not #1799's isolation is applied,
-    // which is what makes this precondition (the tight cap genuinely bites dump within 2024) hold
-    // regardless of which composition this test is exercising, unlike dump's trajectory inside
-    // dumpAlongside, where the DOWN benchmark is a second real loss the pool would otherwise share
     const dumpAlone = await runBacktest(
       input({
         lossCapGbp: tightCap,
