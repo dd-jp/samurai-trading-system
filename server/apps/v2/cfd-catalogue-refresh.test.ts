@@ -213,6 +213,13 @@ describe('buildCfdCatalogue', () => {
     },
   );
 
+  it('keeps a present zero borrow as a known free borrow', async () => {
+    const fixture: SaxoFixture = { ...FIXTURE, prices: { 211: price(211, 0) } };
+    const [row] = (await buildCfdCatalogue(fakeSaxo(fixture).api, cfdScopes(['AAPL'], []), AS_OF))
+      .instruments;
+    expect(row?.borrowCostPerDay).toBe(0);
+  });
+
   it('reads no borrow from a price row without InstrumentPriceDetails', async () => {
     const fixture: SaxoFixture = { ...FIXTURE, prices: { 211: { Uic: 211 } } };
     const [row] = (await buildCfdCatalogue(fakeSaxo(fixture).api, cfdScopes(['AAPL'], []), AS_OF))
