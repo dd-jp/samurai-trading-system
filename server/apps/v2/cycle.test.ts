@@ -4212,6 +4212,15 @@ describe('runCycle with per-venue sessions (#1933)', () => {
     expect(report.refusals).toContain('debate/primary AAPL: alpaca entry sits out (venue_closed)');
   });
 
+  it('Thanksgiving sits a US CFD short out too', async () => {
+    const deps = sessioned([shortAapl], '2026-11-26T06:30:00.000Z');
+    await runCycle(deps, '2026-11-26');
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual([]);
+    expect(sitOuts(deps)).toMatchObject(
+      BOOKS.map((bookId) => ({ parameter: 'venue_closed', book_id: bookId, instrument: 'AAPL' })),
+    );
+  });
+
   it('an LSE-only holiday sits the LSE names out and the US names enter', async () => {
     const deps = sessioned([longAapl, longIsf], '2026-12-28T06:30:00.000Z');
     await runCycle(deps, '2026-12-28');
