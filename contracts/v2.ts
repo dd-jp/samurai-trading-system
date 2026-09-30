@@ -265,7 +265,12 @@ export type EntryApproval =
       readonly order: RiskApprovedOrder;
       readonly entryOffsetBps?: number | undefined;
     }
-  | { readonly size: number; readonly order: undefined; readonly refusal: string };
+  | {
+      readonly size: number;
+      readonly order: undefined;
+      readonly refusal: string;
+      readonly entryOffsetBps?: undefined;
+    };
 
 export interface RearmPrices {
   readonly stop: number;

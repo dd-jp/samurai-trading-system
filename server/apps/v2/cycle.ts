@@ -192,10 +192,6 @@ function approvedLimit(approval: EntryApproval): number | undefined {
   return approval.order?.kind === 'bracket_entry' ? approval.order.entry : undefined;
 }
 
-function approvedOffsetBps(approval: EntryApproval): number | undefined {
-  return approval.order === undefined ? undefined : approval.entryOffsetBps;
-}
-
 // Entries journalled before #1815 carry no limit: they went out at the decision price
 function journalledLimit(order: JournalledOrder): number | undefined {
   return numberOrUndefined(order.payload.limit) ?? numberOrUndefined(order.payload.price);
@@ -970,7 +966,7 @@ class Cycle {
         detail: submission.detail,
         price: decision.price,
         limit: approvedLimit(approval),
-        entry_offset_bps: approvedOffsetBps(approval),
+        entry_offset_bps: approval.entryOffsetBps,
         trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
