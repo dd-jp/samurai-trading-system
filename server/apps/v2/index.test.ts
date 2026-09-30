@@ -656,6 +656,7 @@ describe('composeV2Root', () => {
         {
           db: next.db,
           clock,
+          faults: next.faults,
           mode: 'dry-run',
           logger: { log: () => {} },
           notify: (text) => {
@@ -685,6 +686,9 @@ describe('composeV2Root', () => {
     ]);
     expect(lines).toContain(
       '  decisions 1; entries 0 placed, 1 filled, 0 rejected; exits 0; open 1',
+    );
+    expect(lines.at(-2)).toMatch(
+      /^Faults since the last cycle: 0; fault-free weeks 0 \(2 counted days, no fault yet\)$/,
     );
     expect(lines.at(-1)).toMatch(/^LLM spend this month: \$\d+\.\d{2} of \$30\.00$/);
   });

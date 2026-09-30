@@ -2,6 +2,7 @@ import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import type { CycleReport } from './cycle.js';
+import type { FaultLedger } from './journal/index.js';
 import { CapitalConfigStore, sleeveCapitalYear } from './risk/index.js';
 import { SLEEVE_SPECS_BY_ID, SqliteMonthlySpendCap } from './signal/index.js';
 
@@ -36,12 +37,20 @@ export interface BookSummary {
   readonly refusals: RefusalTally;
 }
 
+export type SummaryFaults = Pick<FaultLedger, 'faultFreeWeeks' | 'kindsRecordedAfter'>;
+
 export interface DailySummary {
   readonly trading_date: string;
   readonly since: string | null;
   readonly books: readonly BookSummary[];
   readonly signal_refusals: RefusalTally;
   readonly other_refusals: RefusalTally;
+  readonly faults: {
+    readonly recorded: readonly CodeCount[];
+    readonly free_weeks: number;
+    readonly counted_days: number;
+    readonly last_fault: string | undefined;
+  };
   readonly llm: {
     readonly spent_usd: number | null;
     readonly budget_usd: number;
@@ -175,7 +184,22 @@ function bookSummary(
   };
 }
 
-export function readDailySummary(db: StoreHandle, clock: Clock, tradingDate: string): DailySummary {
+function faultsFor(faults: SummaryFaults, since: string, tradingDate: string) {
+  const free = faults.faultFreeWeeks(tradingDate);
+  return {
+    recorded: faults.kindsRecordedAfter(since).map(({ kind, count }) => ({ code: kind, count })),
+    free_weeks: free.weeks,
+    counted_days: free.counted_days,
+    last_fault: free.last_fault,
+  };
+}
+
+export function readDailySummary(
+  db: StoreHandle,
+  clock: Clock,
+  tradingDate: string,
+  faults: SummaryFaults,
+): DailySummary {
   const since = previousCycleAt(db, tradingDate);
   const counts = countsByBook(db, since ?? FIRST_CYCLE);
   const refusals = db.prepare(REFUSALS).all(since ?? FIRST_CYCLE) as RefusalRow[];
@@ -191,6 +215,7 @@ export function readDailySummary(db: StoreHandle, clock: Clock, tradingDate: str
     books,
     signal_refusals: tally(unbooked.filter((refusal) => refusal.scope === SIGNAL_SCOPE)),
     other_refusals: tally(unbooked.filter((refusal) => refusal.scope !== SIGNAL_SCOPE)),
+    faults: faultsFor(faults, since ?? FIRST_CYCLE, tradingDate),
     llm: {
       spent_usd: Number.isFinite(verdict.spent_usd) ? verdict.spent_usd : null,
       budget_usd: verdict.budget_usd,
@@ -239,6 +264,14 @@ function windowLine(since: string | null): string {
   return `Window: since the last cycle, ${since.slice(0, 16).replace('T', ' ')} UTC`;
 }
 
+function faultLine(faults: DailySummary['faults']): string {
+  const count = faults.recorded.reduce((sum, kind) => sum + kind.count, 0);
+  const kinds =
+    count === 0 ? '' : ` (${faults.recorded.map((k) => `${k.code} ${k.count}`).join(', ')})`;
+  const last = faults.last_fault === undefined ? 'no fault yet' : `last fault ${faults.last_fault}`;
+  return `Faults since the last cycle: ${count}${kinds}; fault-free weeks ${faults.free_weeks} (${faults.counted_days} counted days, ${last})`;
+}
+
 function llmLine(llm: DailySummary['llm']): string {
   const spent = llm.spent_usd === null ? 'n/a' : `$${llm.spent_usd.toFixed(2)}`;
   const stopped = llm.stopped ? ' (calls stopped)' : '';
@@ -252,6 +285,7 @@ export function formatDailySummary(summary: DailySummary, mode: 'paper' | 'dry-r
     ...summary.books.flatMap(bookLines),
     `Signals refused before a book: ${codes(summary.signal_refusals)}`,
     `Other refusals: ${codes(summary.other_refusals)}`,
+    faultLine(summary.faults),
     llmLine(summary.llm),
   ].join('\n');
 }
@@ -259,6 +293,7 @@ export function formatDailySummary(summary: DailySummary, mode: 'paper' | 'dry-r
 export interface SummaryPush {
   readonly db: StoreHandle;
   readonly clock: Clock;
+  readonly faults: SummaryFaults;
   readonly mode: 'paper' | 'dry-run';
   readonly logger: Logger;
   readonly notify: (text: string) => Promise<void>;
@@ -268,7 +303,7 @@ export async function pushDailySummary(push: SummaryPush, report: CycleReport): 
   if (report.skipped) return;
   try {
     const text = formatDailySummary(
-      readDailySummary(push.db, push.clock, report.trading_date),
+      readDailySummary(push.db, push.clock, report.trading_date, push.faults),
       push.mode,
     );
     push.logger.log({

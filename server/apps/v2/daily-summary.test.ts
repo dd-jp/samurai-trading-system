@@ -12,6 +12,7 @@ import {
   readDailySummary,
   tally,
 } from './daily-summary.js';
+import { FaultLedger } from './journal/index.js';
 import { CapitalConfigStore } from './risk/index.js';
 
 const DAY = '2026-09-30';
@@ -56,6 +57,7 @@ function summary(overrides: Partial<DailySummary> = {}): DailySummary {
     books: [book()],
     signal_refusals: { count: 1, top: [{ code: 'stale_last_close', count: 1 }] },
     other_refusals: NO_REFUSALS,
+    faults: { recorded: [], free_weeks: 3, counted_days: 23, last_fault: undefined },
     llm: { spent_usd: 4.2, budget_usd: 30, stopped: false },
     ...overrides,
   };
@@ -72,6 +74,7 @@ describe('formatDailySummary', () => {
         '  refusals 3 (LOSS_BUDGET 2, gross_cap 1)',
         'Signals refused before a book: 1 (stale_last_close 1)',
         'Other refusals: 0',
+        'Faults since the last cycle: 0; fault-free weeks 3 (23 counted days, no fault yet)',
         'LLM spend this month: $4.20 of $30.00',
       ].join('\n'),
     );
@@ -87,9 +90,21 @@ describe('formatDailySummary', () => {
           book({ size_multiplier: 0, ytd_loss_gbp: -3 }),
           book({ size_multiplier: 0.7 }),
         ],
+        faults: {
+          recorded: [
+            { code: 'failed_broker_call', count: 2 },
+            { code: 'missed_run', count: 1 },
+          ],
+          free_weeks: 0,
+          counted_days: 0,
+          last_fault: '2026-09-30',
+        },
         llm: { spent_usd: null, budget_usd: 30, stopped: true },
       }),
       'dry-run',
+    );
+    expect(text).toContain(
+      'Faults since the last cycle: 3 (failed_broker_call 2, missed_run 1); fault-free weeks 0 (0 counted days, last fault 2026-09-30)',
     );
     expect(text).toContain('(dry-run)');
     expect(text).toContain('Window: everything journalled so far (first cycle)');
@@ -234,9 +249,26 @@ describe('readDailySummary', () => {
        VALUES ('t', 'debate', 'm', 1, 1, 2.5, 1, '2026-09-10T00:00:00.000Z')`,
     ).run();
 
-    const read = readDailySummary(db, CLOCK, DAY);
+    const faultClock = new SimulatedClock(new Date(PREVIOUS_MARK));
+    const faults = new FaultLedger(db, faultClock);
+    faults.record({ kind: 'stale_bar', trading_date: PREVIOUS, code: 'OLD', detail: 'old' });
+    faultClock.advanceTo(new Date(IN_WINDOW));
+    faults.record({
+      kind: 'failed_broker_call',
+      trading_date: PREVIOUS,
+      code: 'entry_rejected',
+      detail: 'account 12345 broker text',
+    });
+
+    const read = readDailySummary(db, CLOCK, DAY, faults);
 
     expect(read.since).toBe(PREVIOUS_MARK);
+    expect(read.faults).toEqual({
+      recorded: [{ code: 'failed_broker_call', count: 1 }],
+      free_weeks: 0,
+      counted_days: 1,
+      last_fault: PREVIOUS,
+    });
     expect(read.books.map((entry) => entry.book_id)).toEqual([
       'debate/primary',
       'mystery/primary',
@@ -280,9 +312,10 @@ describe('readDailySummary', () => {
     seedBook('debate/primary', 'debate', 'primary');
     seedDay('debate/primary', DAY, 600);
     seedDecision('d-old', 'debate/primary', BEFORE_WINDOW);
-    const read = readDailySummary(db, CLOCK, DAY);
+    const read = readDailySummary(db, CLOCK, DAY, new FaultLedger(db, CLOCK));
     expect(read.since).toBeNull();
     expect(read.books[0]).toMatchObject({ decisions: 1, loss_cap_gbp: null });
+    expect(read.faults).toMatchObject({ recorded: [], counted_days: 1, last_fault: undefined });
   });
 });
 
@@ -305,6 +338,7 @@ describe('pushDailySummary', () => {
   const push = (notify: (text: string) => Promise<void>) => ({
     db,
     clock: CLOCK,
+    faults: new FaultLedger(db, CLOCK),
     mode: 'paper' as const,
     logger: { log: (entry: LogEntry) => logs.push(entry) },
     notify,

@@ -307,12 +307,15 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
       store,
       new SimulatedClock(new Date(`${SMOKE_NEXT_DATE}T07:00:00.000Z`)),
       SMOKE_NEXT_DATE,
+      root.faults,
     );
     probes.push(
       probe(
-        "the daily summary covers every book and counts the next day's fills",
+        "the daily summary covers every book, counts the next day's fills and carries the fault line",
         summary.books.map((book) => book.book_id).join(',') === root.books.ids().join(',') &&
-          summary.books.reduce((n, book) => n + book.entries_filled, 0) === filled,
+          summary.books.reduce((n, book) => n + book.entries_filled, 0) === filled &&
+          summary.faults.recorded.length === 0 &&
+          summary.faults.counted_days === 2,
         formatDailySummary(summary, 'dry-run').replaceAll('\n', ' | '),
       ),
       probe(

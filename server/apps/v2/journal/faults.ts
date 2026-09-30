@@ -43,6 +43,11 @@ export interface FaultFreeWeeks {
   readonly last_fault: string | undefined;
 }
 
+export interface FaultKindCount {
+  readonly kind: FaultKind;
+  readonly count: number;
+}
+
 const REFUSAL_FAULTS: Readonly<Record<string, FaultKind>> = {
   MARK_FRESHNESS: 'stale_bar',
   CALENDAR_REFERENCE: 'stale_bar',
@@ -247,6 +252,16 @@ export class FaultLedger implements FaultSink {
          ORDER BY fault_id`,
       )
       .all(tradingDate) as Fault[];
+  }
+
+  // By recorded_at, not trading_date: a missed run is recorded today against a past date
+  kindsRecordedAfter(recordedAfter: string): readonly FaultKindCount[] {
+    return this.db
+      .prepare(
+        `SELECT kind, COUNT(*) AS count FROM v2_faults WHERE recorded_at > ?
+         GROUP BY kind ORDER BY count DESC, kind`,
+      )
+      .all(recordedAfter) as FaultKindCount[];
   }
 
   faultFreeWeeks(asOf: string): FaultFreeWeeks {
