@@ -18,7 +18,7 @@ An external signal (a US long with an entry, a stop and up to 12 targets) arrive
 | `GET /openapi.json` | The OpenAPI 3.0.3 document. |
 | `GET /docs` | Swagger UI over that document. |
 
-**No authentication, loopback only.** David ruled no auth until the VPS move brings an auth service. Until then the server binds `127.0.0.1` only (a hard-coded constant, not a setting), and refuses any request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` (403), so a web page cannot reach it by DNS rebinding. `POST` accepts `application/json` only (415 otherwise), so a browser form cannot send a simple cross-site request; bodies over 4,096 bytes are refused (413). Swagger UI loads its assets from jsDelivr; the API itself makes no outbound call.
+**No authentication, loopback only.** David ruled no auth until the VPS move brings an auth service. Until then the server binds `127.0.0.1` only (a hard-coded constant, not a setting), and refuses any request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` (403), so a web page cannot reach it by DNS rebinding. `POST` accepts `application/json` only (415 otherwise), so a browser form cannot send a simple cross-site request; bodies over 4,096 bytes are refused (413). Swagger UI loads its version-pinned assets from jsDelivr under Subresource Integrity hashes; the API itself makes no outbound call.
 
 ## 3. Payload (built)
 

@@ -27,7 +27,7 @@ function importRulesOnly(): OxlintConfig {
 const FIXTURES: Record<string, string> = {
   'risk/imports-signal.ts': "export { SleeveRegistry } from '../signal/index.js';",
   'risk/imports-v1-broker.ts':
-    "export type { BrokerAdapter } from '../../../pipeline/execution/index.js';",
+    "export type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';",
   'risk/deep-execution.ts': "export { V2OrderExecutor } from '../execution/executor.js';",
   'data/imports-risk.ts': "export { PaperBooks } from '../risk/index.js';",
   'journal/imports-data.ts': "export { macroGate } from '../data/index.js';",
@@ -40,7 +40,7 @@ const FIXTURES: Record<string, string> = {
   'risk/clean.ts': "export { macroGate } from '../data/index.js';",
   'signal/clean.ts': "export { STOP_ATR_MULTIPLE } from '../risk/index.js';",
   'execution/clean.ts':
-    "export type { BrokerAdapter } from '../../../pipeline/execution/index.js';\nexport { consumeApproval } from '../risk/index.js';",
+    "export type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';\nexport { consumeApproval } from '../risk/index.js';",
   'index.ts': "export { createOrderExecutor } from './execution/index.js';",
 };
 

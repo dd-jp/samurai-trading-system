@@ -75,6 +75,8 @@ export {
 export { currentTraceId, runWithTraceId } from './trace-context.js';
 export type {
   AssetClass,
+  BrokerAck,
+  BrokerAdapter,
   BrokerFillId,
   ClosedTrade,
   ClosedTradeStore,
@@ -91,9 +93,14 @@ export type {
   LogEventCode,
   Logger,
   LogLevel,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+  NormalizedPosition,
   OpenPosition,
   OrderIntent,
   OrderState,
+  ProtectedExitRequest,
   SetupNeighbor,
   SetupStore,
   SetupVector,

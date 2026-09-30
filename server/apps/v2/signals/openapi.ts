@@ -1,6 +1,10 @@
 import { SIGNAL_SIZE_MAX, SIGNAL_SOURCE_MAX_CHARS, SIGNAL_TARGETS_MAX } from './payload.js';
 
 const SWAGGER_UI_DIST = 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14';
+const SWAGGER_UI_CSS_SRI =
+  'sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn';
+const SWAGGER_UI_BUNDLE_SRI =
+  'sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep';
 
 const price = { type: 'number', exclusiveMinimum: 0 } as const;
 
@@ -168,11 +172,11 @@ export const SWAGGER_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>Samurai v2 signals API</title>
-<link rel="stylesheet" href="${SWAGGER_UI_DIST}/swagger-ui.css">
+<link rel="stylesheet" href="${SWAGGER_UI_DIST}/swagger-ui.css" integrity="${SWAGGER_UI_CSS_SRI}" crossorigin="anonymous">
 </head>
 <body>
 <div id="swagger-ui"></div>
-<script src="${SWAGGER_UI_DIST}/swagger-ui-bundle.js"></script>
+<script src="${SWAGGER_UI_DIST}/swagger-ui-bundle.js" integrity="${SWAGGER_UI_BUNDLE_SRI}" crossorigin="anonymous"></script>
 <script>window.ui = SwaggerUIBundle({ url: '/openapi.json', dom_id: '#swagger-ui' });</script>
 </body>
 </html>

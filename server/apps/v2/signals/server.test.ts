@@ -271,6 +271,7 @@ describe('docs and routing', () => {
     expect(reply.status).toBe(200);
     expect(reply.headers['content-type']).toBe('text/html; charset=utf-8');
     expect(reply.text).toContain("url: '/openapi.json'");
+    expect(reply.text.match(/integrity="sha384-[A-Za-z0-9+/]{64}"/g)).toHaveLength(2);
   });
 
   it('answers 404 for an unknown path and 405 for a wrong method', async () => {

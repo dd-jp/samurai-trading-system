@@ -14,6 +14,7 @@ const MAX_ATTEMPTS = 4;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 export type SaxoAssetType = 'Etf' | 'Etc';
+export type SaxoCfdAssetType = 'CfdOnStock' | 'CfdOnEtf';
 
 export interface ChartSample {
   readonly Time: string;
@@ -260,6 +261,36 @@ export class SaxoReadOnlyApi {
         FieldGroups: 'Quote',
       }),
     );
+  }
+
+  cfdInstrumentPage(
+    assetType: SaxoCfdAssetType,
+    exchangeId: string,
+    skip: number,
+    top: number,
+  ): Promise<unknown> {
+    return this.get('/ref/v1/instruments', {
+      AssetTypes: assetType,
+      ExchangeId: exchangeId,
+      $top: String(top),
+      $skip: String(skip),
+    });
+  }
+
+  cfdInstrumentDetails(uics: readonly number[], assetType: SaxoCfdAssetType): Promise<unknown> {
+    return this.get('/ref/v1/instruments/details', {
+      Uics: uics.join(','),
+      AssetTypes: assetType,
+      $top: String(uics.length),
+    });
+  }
+
+  cfdInfoPrices(uics: readonly number[], assetType: SaxoCfdAssetType): Promise<unknown> {
+    return this.get('/trade/v1/infoprices/list', {
+      Uics: uics.join(','),
+      AssetType: assetType,
+      FieldGroups: 'InstrumentPriceDetails',
+    });
   }
 
   private async get(path: string, params?: Record<string, string>): Promise<unknown> {
