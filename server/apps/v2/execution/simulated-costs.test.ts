@@ -11,6 +11,7 @@ import {
   marketImpactBps,
   quoteSimulatedFill,
   venueFee,
+  venueHalfSpreadBps,
 } from './simulated-costs.js';
 
 const TRADING_DATE = '2026-09-25';
@@ -48,7 +49,8 @@ describe('venueFee', () => {
 
 describe('venueFee on a CFD venue', () => {
   const model = {
-    fee: (side: OrderSide, qty: number, price: number) => (side === 'sell' ? 2 : 1) * qty * price,
+    fee: (_venue: Venue, side: OrderSide, qty: number, price: number) =>
+      (side === 'sell' ? 2 : 1) * qty * price,
   };
 
   it.each(['saxo_cfd_gbp', 'saxo_cfd_usd'] as const)(
@@ -69,6 +71,29 @@ describe('venueFee on a CFD venue', () => {
   it('ignores a cost model on the cash venues', () => {
     expect(venueFee('saxo', 'buy', 10, 100, model)).toBeCloseTo(0.8, 12);
     expect(venueFee('alpaca', 'buy', 1_000, 100, model)).toBeCloseTo(0.003, 12);
+  });
+});
+
+describe('venueHalfSpreadBps', () => {
+  const cash = (instrument: string) => (instrument === 'AAPL' ? 1.5 : 7);
+  const cfd = { halfSpreadBps: (venue: Venue) => (venue === 'saxo_cfd_usd' ? 4 : 30) };
+
+  it('prices cash venues from the cash lookup, whatever the CFD model says', () => {
+    const halfSpread = venueHalfSpreadBps(cash, cfd);
+    expect(halfSpread('alpaca', 'AAPL')).toBe(1.5);
+    expect(halfSpread('saxo', 'ISF')).toBe(7);
+  });
+
+  it('prices CFD venues from the CFD model by venue, not the cash lookup', () => {
+    const halfSpread = venueHalfSpreadBps(cash, cfd);
+    expect(halfSpread('saxo_cfd_usd', 'AAPL')).toBe(4);
+    expect(halfSpread('saxo_cfd_gbp', 'ISF')).toBe(30);
+  });
+
+  it('throws on a CFD venue with no spread model rather than pricing it off the cash spread', () => {
+    const halfSpread = venueHalfSpreadBps(cash, undefined);
+    expect(halfSpread('alpaca', 'AAPL')).toBe(1.5);
+    expect(() => halfSpread('saxo_cfd_usd', 'AAPL')).toThrow(CfdCostModelUnsetError);
   });
 });
 
@@ -145,6 +170,20 @@ describe('quoteSimulatedFill', () => {
       price: 100,
       fee: 1.5,
     });
+  });
+
+  it('asks the spread by venue and instrument, so a CFD fill can price off the CFD spread', () => {
+    const halfSpreadBps = vi.fn(() => 0);
+    const pricing = { halfSpreadBps, impactBps: () => 0, fee: () => 0 };
+    const request = {
+      instrument: 'AAPL',
+      side: 'sell' as const,
+      qty: 1,
+      price: 1,
+      crossesSpread: true,
+    };
+    quoteSimulatedFill('saxo_cfd_usd', request, pricing);
+    expect(halfSpreadBps).toHaveBeenCalledWith('saxo_cfd_usd', 'AAPL');
   });
 });
 

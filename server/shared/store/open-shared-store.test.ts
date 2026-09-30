@@ -70,7 +70,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 52;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 78;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 79;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -440,6 +440,51 @@ describe('openSharedStore', () => {
         last_seen_at: '2026-09-01T00:05:00.000Z',
         alerted_at: '2026-09-01T00:10:00.000Z',
       });
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0079 keeps every legacy book day and reads its CFD carry as zero (#1850)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 77;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw
+        .prepare(
+          `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+           VALUES ('debate/primary', 'debate', 'primary', 600, 400, '2026-09-25T07:00:00.000Z')`,
+        )
+        .run();
+      raw
+        .prepare(
+          `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
+             ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+           VALUES ('debate/primary', '2026-09-29', 600, 400, 200, 0, 1, 0, 0.01,
+             '2026-09-29T21:00:00.000Z')`,
+        )
+        .run();
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw
+          .prepare(
+            'SELECT equity_gbp, custody_accrual_gbp, cfd_financing_accrual_gbp, cfd_borrow_accrual_gbp FROM v2_book_days',
+          )
+          .all(),
+      ).toEqual([
+        {
+          equity_gbp: 600,
+          custody_accrual_gbp: 0.01,
+          cfd_financing_accrual_gbp: 0,
+          cfd_borrow_accrual_gbp: 0,
+        },
+      ]);
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

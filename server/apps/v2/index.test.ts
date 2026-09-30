@@ -2,7 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Sleeve, SleeveContext, SleeveSpec } from '../../../contracts/index.js';
+import type {
+  OrderSide,
+  Sleeve,
+  SleeveContext,
+  SleeveSpec,
+  Venue,
+} from '../../../contracts/index.js';
 import { writeKeepAliveState } from '../../pipeline/execution/adapters/saxo-keepalive-state.js';
 import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/index.js';
@@ -15,7 +21,13 @@ import { openSharedStore } from '../../shared/store/index.js';
 import type { CommandRunner } from './backup.js';
 import { type BarRefresh, NO_BAR_REFRESH } from './bar-refresh.js';
 import type { CycleReport } from './cycle.js';
-import { BarsMarketData, NO_NEWS, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
+import {
+  BarsMarketData,
+  CfdCatalogue,
+  NO_NEWS,
+  ParquetBarsSource,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
 import {
   composeV2Root,
   DEFAULT_HALF_SPREAD_BPS,
@@ -29,6 +41,7 @@ import {
   parseCliArgs,
   rootOptionsFor,
   runAfterPinCheck,
+  type V2RootOptions,
   withoutRefusedLse,
 } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
@@ -416,6 +429,89 @@ describe('composeV2Root', () => {
     }
   });
 
+  function cfdEntry(instrument: string, venue: Venue, side: OrderSide) {
+    return {
+      instrument,
+      venue,
+      side,
+      leg: 'entry' as const,
+      qty: 1,
+      priceGbp: 100,
+      feeGbp: 0,
+      clientOrderId: `cfd-${instrument}`,
+      tradingDate: ENTRY_DATE,
+      stopGbp: undefined,
+      targetGbp: undefined,
+    };
+  }
+
+  async function cfdCarryRoot(options: Partial<V2RootOptions>) {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'carry.sqlite');
+    seededStore(storePath).close();
+    return composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      cfdCataloguePath: join(fixtures.directory, 'absent.json'),
+      ...options,
+    });
+  }
+
+  it("carries CFDs on the declared Saxo models, a short's borrow read from the catalogue quote or the 2% ceiling", async () => {
+    const quoted = { symbol: 'TSLA', saxoSymbol: 'TSLA:xnas', uic: 1, borrowCostPerDay: 0.0001 };
+    const cfdCatalogue = new CfdCatalogue({
+      asOf: ENTRY_DATE,
+      instruments: [quoted, { ...quoted, symbol: 'NVDA', uic: 2, borrowCostPerDay: undefined }].map(
+        (row) => ({
+          ...row,
+          assetType: 'CfdOnStock' as const,
+          currency: 'USD' as const,
+          priceToContractFactor: 1,
+          tradable: true,
+          shortTradeDisabled: false,
+        }),
+      ),
+    });
+    const root = await cfdCarryRoot({ cfdCatalogue });
+    try {
+      root.books.applyFill('debate/primary', cfdEntry('TSLA', 'saxo_cfd_usd', 'sell'));
+      root.books.applyFill('debate/primary', cfdEntry('NVDA', 'saxo_cfd_usd', 'sell'));
+      root.books.applyFill('debate/primary', cfdEntry('AMD', 'saxo_cfd_usd', 'sell'));
+      root.books.applyFill('debate/primary', cfdEntry('AAPL', 'saxo_cfd_usd', 'buy'));
+      const day = root.books.markDay('debate/primary', ENTRY_DATE, () => 100, 1);
+      expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0001 + (2 * 100 * 0.02) / 360, 12);
+      expect(day.cfdFinancingAccrualGbp).toBeCloseTo((100 * 0.072) / 360, 12);
+    } finally {
+      root.close();
+    }
+  });
+
+  it('carries CFDs on an injected cost model over the declared one, with no catalogue quote', async () => {
+    const declined = () => {
+      throw new Error('fill-leg model not used by the mark');
+    };
+    const root = await cfdCarryRoot({
+      cfdCosts: {
+        fee: { fee: declined },
+        spread: { halfSpreadBps: declined },
+        financing: { dailyRate: (_venue, side) => (side === 'long' ? 0.01 : 0.002) },
+        borrow: { dailyRate: (_venue, quoted) => quoted ?? 0.03 },
+      },
+    });
+    try {
+      root.books.applyFill('debate/primary', cfdEntry('TSLA', 'saxo_cfd_usd', 'sell'));
+      const day = root.books.markDay('debate/primary', ENTRY_DATE, () => 100, 2);
+      expect(day.cfdFinancingAccrualGbp).toBeCloseTo(100 * 0.002 * 2, 12);
+      expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.03 * 2, 12);
+    } finally {
+      root.close();
+    }
+  });
+
   it('dry run: sizes, reaches the dry-run broker, submits nothing, journals every LLM call and fill', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;
@@ -449,15 +545,17 @@ describe('composeV2Root', () => {
       });
       expect(exitCodeFor(report)).toBe(0);
       const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
-      expect(needsDavid).toHaveLength(10);
+      expect(needsDavid).toHaveLength(6);
+      expect(needsDavid.some((refusal) => refusal.includes('CFD_RESTING_STOP_VERIFIED'))).toBe(
+        true,
+      );
       for (const parameter of [
         'CFD_COST_MODEL',
         'CFD_SPREAD_MODEL',
         'CFD_FINANCING_MODEL',
         'CFD_BORROW_MODEL',
-        'CFD_RESTING_STOP_VERIFIED',
       ]) {
-        expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(true);
+        expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(false);
       }
       const decision = root.db
         .prepare('SELECT action, size_shares, stop_price FROM v2_decisions WHERE book_id = ?')

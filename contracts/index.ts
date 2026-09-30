@@ -86,6 +86,7 @@ export type {
   CapitalYear,
   CfdBorrowModel,
   CfdCostModel,
+  CfdCosts,
   CfdFinancingModel,
   CfdSpreadModel,
   ControlAction,

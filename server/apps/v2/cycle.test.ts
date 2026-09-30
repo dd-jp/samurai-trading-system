@@ -40,7 +40,9 @@ import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
 import { storeView } from './reconcile.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
-import { CYCLE_LEVEL_PARAMETERS, SleeveRegistry } from './signal/index.js';
+import { CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
+
+const UNSET_CYCLE_PARAMETERS = CYCLE_LEVEL_PARAMETERS.filter((parameter) => !isSet(parameter));
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 const FX = 1.25;
@@ -447,7 +449,7 @@ describe('runCycle', () => {
       macro: { macroDay: false, covered: true },
     });
     expect(report.refusals).toEqual([
-      ...CYCLE_LEVEL_PARAMETERS.map(
+      ...UNSET_CYCLE_PARAMETERS.map(
         (parameter) => `${parameter.name} is not set: needs David (${parameter.ticket})`,
       ),
       'P: unset',
@@ -1289,7 +1291,7 @@ describe('runCycle', () => {
       deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
     ).db;
     expect(db.prepare('SELECT scope, parameter FROM v2_refusals ORDER BY rowid').all()).toEqual([
-      ...CYCLE_LEVEL_PARAMETERS.map((parameter) => ({
+      ...UNSET_CYCLE_PARAMETERS.map((parameter) => ({
         scope: 'parameter',
         parameter: parameter.name,
       })),
@@ -1574,6 +1576,8 @@ describe('runCycle', () => {
   it('counts calendar days between marks and never negatively', () => {
     expect(calendarDaysBetween(undefined, '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-22', '2026-09-25')).toBe(3);
+    expect(calendarDaysBetween('2026-09-25', '2026-09-28')).toBe(3);
+    expect(calendarDaysBetween('2026-10-23', '2026-10-26')).toBe(3);
     expect(calendarDaysBetween('2026-09-25', '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-26', '2026-09-25')).toBe(0);
   });

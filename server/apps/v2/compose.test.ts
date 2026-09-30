@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   BookSpec,
+  CfdCostModel,
+  CfdCosts,
   MarketData,
   Sleeve,
   SleeveDecision,
@@ -62,6 +64,15 @@ function options(overrides: Partial<CycleCompositionOptions> = {}): CycleComposi
     brokerMode: 'paper',
     halfSpreadBps: () => 5,
     ...overrides,
+  };
+}
+
+function cfdCosts(fee: CfdCostModel['fee'], halfSpreadBps = 0): CfdCosts {
+  return {
+    fee: { fee },
+    spread: { halfSpreadBps: () => halfSpreadBps },
+    financing: { dailyRate: () => 0 },
+    borrow: { dailyRate: () => 0 },
   };
 }
 
@@ -204,12 +215,12 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     crossesSpread: false,
   });
 
-  it('refuses a CFD entry as cfd_cost_model_unset while the CFD parameters are unset', () => {
+  it('refuses a CFD entry as cfd_resting_stop_unverified while that gate alone is unset', () => {
     const composed = composeCycle(options({ market: richMarket }));
     expect(request(composed)).toEqual({
       size: 0,
       order: undefined,
-      refusal: 'cfd_cost_model_unset',
+      refusal: 'cfd_resting_stop_unverified',
     });
   });
 
@@ -217,7 +228,7 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     const composed = composeCycle(
       options({
         market: richMarket,
-        cfdCostModel: { fee: () => 0 },
+        cfdCosts: cfdCosts(() => 0),
         cfdEntryRefusal: () => 'cfd_resting_stop_unverified',
       }),
     );
@@ -229,11 +240,12 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
   });
 
   it('approves the same entry once the gate passes, and prices CFD fills through the model', () => {
-    const cfdCostModel = {
-      fee: (_side: 'buy' | 'sell', qty: number, price: number) => qty * price * 0.001,
-    };
     const composed = composeCycle(
-      options({ market: richMarket, cfdCostModel, cfdEntryRefusal: () => undefined }),
+      options({
+        market: richMarket,
+        cfdCosts: cfdCosts((_venue, _side, qty, price) => qty * price * 0.001),
+        cfdEntryRefusal: () => undefined,
+      }),
     );
     expect(request(composed).order).toBeDefined();
     expect(composed.executor.quoteSimulatedFill('saxo_cfd_usd', fill('sell', 10, 100))).toEqual({
@@ -243,7 +255,7 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
   });
 
   it('scales the injected CFD fee by costMultiple like every other modelled cost', () => {
-    const composed = composeCycle(options({ cfdCostModel: { fee: () => 1 }, costMultiple: 2 }));
+    const composed = composeCycle(options({ cfdCosts: cfdCosts(() => 1), costMultiple: 2 }));
     expect(composed.executor.quoteSimulatedFill('saxo_cfd_gbp', fill('buy', 1, 1)).fee).toBe(2);
   });
 
@@ -254,6 +266,73 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     expect(() =>
       composeCycle(options({ cfdEntryRefusal: () => 'cfd_resting_stop_unverified' })),
     ).not.toThrow();
+  });
+
+  it('prices a crossing CFD fill off the CFD spread model and a cash fill off the cash spread', () => {
+    const composed = composeCycle(
+      options({
+        market: richMarket,
+        cfdCosts: cfdCosts(() => 0, 30),
+        cfdEntryRefusal: () => undefined,
+      }),
+    );
+    const crossing = { ...fill('buy', 1, 100), crossesSpread: true };
+    const cash = composed.executor.quoteSimulatedFill('saxo', crossing).price;
+    const cfd = composed.executor.quoteSimulatedFill('saxo_cfd_gbp', crossing).price;
+    expect(cfd - cash).toBeCloseTo((100 * (30 - 5)) / 10_000, 9);
+  });
+
+  it('wires CFD financing and the catalogue borrow quote into the daily mark', () => {
+    const composed = composeCycle(
+      options({
+        cfdCosts: {
+          ...cfdCosts(() => 0),
+          financing: { dailyRate: () => 0.001 },
+          borrow: { dailyRate: (_venue, quoted) => quoted ?? 1 },
+        },
+        quotedCfdBorrowPerDay: (instrument) => (instrument === 'AAPL' ? 0.0002 : undefined),
+      }),
+    );
+    composed.books.applyFill('debate/primary', {
+      instrument: 'AAPL',
+      venue: 'saxo_cfd_usd',
+      side: 'sell',
+      leg: 'entry',
+      qty: 2,
+      priceGbp: 50,
+      feeGbp: 0,
+      clientOrderId: 'short-1',
+      tradingDate: '2026-09-25',
+    });
+    composed.books.markDay('debate/primary', '2026-09-25', () => 50, 2);
+    const row = composed.books.lastDay('debate/primary');
+    expect(row?.cfdFinancingAccrualGbp).toBeCloseTo(100 * 0.001 * 2, 12);
+    expect(row?.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0002 * 2, 12);
+  });
+
+  it('hands the borrow model no quote when no catalogue source is wired, so its fallback prices it', () => {
+    const composed = composeCycle(
+      options({
+        cfdCosts: {
+          ...cfdCosts(() => 0),
+          borrow: { dailyRate: (_venue, quoted) => (quoted === undefined ? 0.003 : 1) },
+        },
+      }),
+    );
+    composed.books.applyFill('debate/primary', {
+      instrument: 'AAPL',
+      venue: 'saxo_cfd_usd',
+      side: 'sell',
+      leg: 'entry',
+      qty: 1,
+      priceGbp: 50,
+      feeGbp: 0,
+      clientOrderId: 'short-2',
+      tradingDate: '2026-09-25',
+    });
+    const day = composed.books.markDay('debate/primary', '2026-09-25', () => 50, 1);
+    expect(day.cfdFinancingAccrualGbp).toBe(0);
+    expect(day.cfdBorrowAccrualGbp).toBeCloseTo(50 * 0.003, 12);
   });
 
   it('throws when a CFD fill is priced with no model rather than fee-free', () => {

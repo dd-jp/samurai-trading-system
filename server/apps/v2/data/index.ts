@@ -19,6 +19,12 @@ export {
   loadCfdCatalogue,
   parseCfdCatalogue,
 } from './cfd-catalogue.js';
+export {
+  SAXO_CFD_COMMISSION,
+  SAXO_CFD_FINANCING,
+  SAXO_CFD_SPREAD,
+  saxoCfdBorrow,
+} from './cfd-tariff.js';
 export { parseBoeGbpUsdCsv } from './fx.js';
 export type { MacroGateVerdict } from './macro-calendar.js';
 export { addDays, MACRO_DAY_SIZE_FRACTION, macroGate } from './macro-calendar.js';

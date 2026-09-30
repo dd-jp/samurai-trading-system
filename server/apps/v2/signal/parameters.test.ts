@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SAXO_CFD_COMMISSION, SAXO_CFD_FINANCING, SAXO_CFD_SPREAD } from '../data/index.js';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
@@ -16,6 +17,7 @@ import {
   DEBATE_TARGET_ATR_MULTIPLE,
   DEBATE_TIME_STOP_TRADING_DAYS,
   DECLARED_PARAMETERS,
+  declaredCfdCosts,
   G18_SENTIMENT_DEDUP_RULE,
   G18_SMALL_CAP_FLOORS,
   G18_SOCIAL_SOURCE,
@@ -38,6 +40,19 @@ const CFD_GATE_PARAMETERS = [
   CFD_RESTING_STOP_VERIFIED,
 ];
 
+const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
+  CFD_COST_MODEL,
+  CFD_SPREAD_MODEL,
+  CFD_FINANCING_MODEL,
+  CFD_BORROW_MODEL,
+];
+
+const SET_PARAMETERS: readonly Parameter<unknown>[] = [
+  ARM2_ENTRY_THRESHOLDS,
+  LSE_LIQUIDITY_SCREEN,
+  ...CFD_COST_PARAMETERS,
+];
+
 describe('parameters', () => {
   it('every David-owned parameter names its ticket; unresolved ones are unset', () => {
     expect(DECLARED_PARAMETERS).toEqual([
@@ -58,7 +73,7 @@ describe('parameters', () => {
     ]);
     for (const parameter of DECLARED_PARAMETERS) {
       expect(parameter.ticket.length).toBeGreaterThan(0);
-      if (parameter === ARM2_ENTRY_THRESHOLDS || parameter === LSE_LIQUIDITY_SCREEN) continue;
+      if (SET_PARAMETERS.includes(parameter)) continue;
       expect(parameter.value).toBe(UNSET);
       expect(isSet(parameter)).toBe(false);
       expect(() => requireSet(parameter)).toThrow(UnsetParameterError);
@@ -109,20 +124,52 @@ describe('parameters', () => {
     expect(requireSet(set)).toBe(3);
   });
 
-  it('the CFD cost model is unset until #1850 and the borrow ceiling is the ruled 2% a year', () => {
-    expect(isSet(CFD_COST_MODEL)).toBe(false);
-    expect(CFD_COST_MODEL.ticket).toBe('#1850');
+  it('#1850 sets the four CFD cost models to the Saxo tariff; the borrow ceiling is the ruled 2% a year', () => {
+    expect(CFD_COST_PARAMETERS.map((parameter) => [parameter.ticket, isSet(parameter)])).toEqual([
+      ['#1850', true],
+      ['#1850', true],
+      ['#1850', true],
+      ['#1850', true],
+    ]);
+    expect(requireSet(CFD_COST_MODEL)).toBe(SAXO_CFD_COMMISSION);
+    expect(requireSet(CFD_SPREAD_MODEL)).toBe(SAXO_CFD_SPREAD);
+    expect(requireSet(CFD_FINANCING_MODEL)).toBe(SAXO_CFD_FINANCING);
+    expect(requireSet(CFD_BORROW_MODEL).dailyRate('saxo_cfd_usd', undefined)).toBeCloseTo(
+      0.02 / 360,
+      15,
+    );
     expect(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR).toBe(0.02);
   });
 
-  it('the CFD spread, financing and borrow models are unset until #1850, the resting stop until #1916', () => {
-    expect([CFD_SPREAD_MODEL, CFD_FINANCING_MODEL, CFD_BORROW_MODEL].map((p) => p.ticket)).toEqual([
-      '#1850',
-      '#1850',
-      '#1850',
-    ]);
+  it('with the cost models set, only the resting stop (#1916) still refuses a CFD entry', () => {
     expect(CFD_RESTING_STOP_VERIFIED.ticket).toBe('#1916');
-    expect(cfdEntryRefusal()).toBe('cfd_cost_model_unset');
+    expect(isSet(CFD_RESTING_STOP_VERIFIED)).toBe(false);
+    expect(cfdEntryRefusal()).toBe('cfd_resting_stop_unverified');
+  });
+
+  describe('declaredCfdCosts', () => {
+    it('bundles the four set models', () => {
+      expect(declaredCfdCosts()).toEqual({
+        fee: SAXO_CFD_COMMISSION,
+        spread: SAXO_CFD_SPREAD,
+        financing: SAXO_CFD_FINANCING,
+        borrow: requireSet(CFD_BORROW_MODEL),
+      });
+    });
+
+    it.each(['fee', 'spread', 'financing', 'borrow'] as const)(
+      'is undefined when %s is unset, so no CFD fill is half-priced',
+      (key) => {
+        const parameters = {
+          fee: CFD_COST_MODEL,
+          spread: CFD_SPREAD_MODEL,
+          financing: CFD_FINANCING_MODEL,
+          borrow: CFD_BORROW_MODEL,
+          [key]: { name: key, ticket: '#1850', value: UNSET },
+        };
+        expect(declaredCfdCosts(parameters)).toBeUndefined();
+      },
+    );
   });
 
   describe('cfdEntryRefusal', () => {
@@ -144,7 +191,7 @@ describe('parameters', () => {
       ['CFD_RESTING_STOP_VERIFIED', 'cfd_resting_stop_unverified'],
     ])('refuses when only %s is unset, naming it', (name, refusal) => {
       const gates = CFD_ENTRY_GATES.map((gate) =>
-        gate.parameter.name === name ? gate : setGate(gate, true),
+        setGate(gate, gate.parameter.name === name ? UNSET : true),
       );
       expect(cfdEntryRefusal(gates)).toBe(refusal);
     });

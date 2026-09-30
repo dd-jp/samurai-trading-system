@@ -146,6 +146,8 @@ export interface BookDay {
   readonly investedGbp: number;
   readonly state: LossBudgetState;
   readonly custodyAccrualGbp: number;
+  readonly cfdFinancingAccrualGbp: number;
+  readonly cfdBorrowAccrualGbp: number;
   readonly recordedAt: string;
 }
 
@@ -349,19 +351,26 @@ export interface SimulatedFillRequest {
 }
 
 export interface CfdCostModel {
-  fee(side: OrderSide, qty: number, priceQuote: number): number;
+  fee(venue: Venue, side: OrderSide, qty: number, priceQuote: number): number;
 }
 
 export interface CfdSpreadModel {
-  halfSpreadBps(instrument: string): number;
+  halfSpreadBps(venue: Venue): number;
 }
 
 export interface CfdFinancingModel {
-  dailyRate(venue: Venue, side: OrderSide): number;
+  dailyRate(venue: Venue, side: 'long' | 'short'): number;
 }
 
 export interface CfdBorrowModel {
-  dailyRate(instrument: string): number;
+  dailyRate(venue: Venue, quotedPerDay: number | undefined): number;
+}
+
+export interface CfdCosts {
+  readonly fee: CfdCostModel;
+  readonly spread: CfdSpreadModel;
+  readonly financing: CfdFinancingModel;
+  readonly borrow: CfdBorrowModel;
 }
 
 export class CfdCostModelUnsetError extends Error {

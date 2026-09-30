@@ -1,10 +1,17 @@
 import type {
   CfdBorrowModel,
   CfdCostModel,
+  CfdCosts,
   CfdFinancingModel,
   CfdSpreadModel,
   SleeveSpec,
 } from '../../../../contracts/index.js';
+import {
+  SAXO_CFD_COMMISSION,
+  SAXO_CFD_FINANCING,
+  SAXO_CFD_SPREAD,
+  saxoCfdBorrow,
+} from '../data/index.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -76,10 +83,23 @@ export const RECONCILE_CASH_TOLERANCE_GBP = unset<number>('RECONCILE_CASH_TOLERA
 // the count is the builder's default until David sets it
 export const LSE_RESERVED_SLOTS = 4;
 
-export const CFD_COST_MODEL = unset<CfdCostModel>('CFD_COST_MODEL', '#1850');
-export const CFD_SPREAD_MODEL = unset<CfdSpreadModel>('CFD_SPREAD_MODEL', '#1850');
-export const CFD_FINANCING_MODEL = unset<CfdFinancingModel>('CFD_FINANCING_MODEL', '#1850');
-export const CFD_BORROW_MODEL = unset<CfdBorrowModel>('CFD_BORROW_MODEL', '#1850');
+// David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
+// 2% a year; extended to US CFD shorts by David 2026-09-29 (#1849)
+export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
+
+// ADR item 19: #1850's figures are sourced, not ruled; the sources sit on each in cfd-tariff.ts
+export const CFD_COST_MODEL = set<CfdCostModel>('CFD_COST_MODEL', '#1850', SAXO_CFD_COMMISSION);
+export const CFD_SPREAD_MODEL = set<CfdSpreadModel>('CFD_SPREAD_MODEL', '#1850', SAXO_CFD_SPREAD);
+export const CFD_FINANCING_MODEL = set<CfdFinancingModel>(
+  'CFD_FINANCING_MODEL',
+  '#1850',
+  SAXO_CFD_FINANCING,
+);
+export const CFD_BORROW_MODEL = set<CfdBorrowModel>(
+  'CFD_BORROW_MODEL',
+  '#1850',
+  saxoCfdBorrow(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR),
+);
 export const CFD_RESTING_STOP_VERIFIED = unset<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916');
 
 export interface CfdEntryGate {
@@ -102,9 +122,22 @@ export function cfdEntryRefusal(
     ?.refusal;
 }
 
-// David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
-// 2% a year; extended to US CFD shorts by David 2026-09-29 (#1849)
-export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
+type CfdCostParameters = { readonly [K in keyof CfdCosts]: Parameter<CfdCosts[K]> };
+
+const CFD_COST_PARAMETERS: CfdCostParameters = {
+  fee: CFD_COST_MODEL,
+  spread: CFD_SPREAD_MODEL,
+  financing: CFD_FINANCING_MODEL,
+  borrow: CFD_BORROW_MODEL,
+};
+
+export function declaredCfdCosts(
+  parameters: CfdCostParameters = CFD_COST_PARAMETERS,
+): CfdCosts | undefined {
+  const { fee, spread, financing, borrow } = parameters;
+  if (!isSet(fee) || !isSet(spread) || !isSet(financing) || !isSet(borrow)) return undefined;
+  return { fee: fee.value, spread: spread.value, financing: financing.value, borrow: borrow.value };
+}
 
 // doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
 // separately committed lines), but no order in a complex line until David records
@@ -210,8 +243,8 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   RECONCILE_CASH_TOLERANCE_GBP,
 ];
 
-// A set parameter never blocks a cycle, so this list only ever holds an unset one;
-// ARM2_ENTRY_THRESHOLDS (#1773, set) stays out of it but stays in DECLARED_PARAMETERS
+// The cycle journals only the unset ones; ARM2_ENTRY_THRESHOLDS (#1773, set) stays out of it
+// but stays in DECLARED_PARAMETERS
 export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SOCIAL_SOURCE,
   G18_SENTIMENT_DEDUP_RULE,
