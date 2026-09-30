@@ -25,6 +25,7 @@
     "v2:telegram": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/api/telegram-main.ts",
     "v2:trials": "tsx server/apps/v2/trial-ledger.ts",
     "v2:backtest": "tsx server/apps/v2/backtest-cli.ts",
+    "v2:sim-cfd-stop-drill": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/execution/sim-cfd-stop-drill-cli.ts",
     "v2:cfd-catalogue": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/cfd-catalogue-cli.ts",
     "bars:snapshot": "sh ops/bars-snapshot.sh",
     "smoke": "npm run build && node dist/server/apps/orchestrator/smoke-run.js && node dist/server/apps/v2/smoke.js",
