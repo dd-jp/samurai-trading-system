@@ -1,1 +1,1 @@
-export { inputsHash, Journal } from './journal.js';
+export { inputsHash, Journal, type ReconcileVerdict } from './journal.js';

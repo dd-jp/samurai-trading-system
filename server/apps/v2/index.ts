@@ -8,6 +8,7 @@ import type {
 } from '../../pipeline/debate-engine/index.js';
 import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
+import { UsEquityRegularHoursCalendar } from '../../providers/market-data-service/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely, SystemClock } from '../../shared/index.js';
@@ -48,6 +49,7 @@ import {
   type CapitalConfigStore,
   type PaperBooks,
 } from './risk/index.js';
+import { describeHolder, type LeaseWait, RunLease, withRunLease } from './run-lease.js';
 import {
   ALL_PINS,
   ARM2_SLEEVE_ID,
@@ -58,6 +60,7 @@ import {
   cfdEntryRefusal,
   createArm2Sleeve,
   createDebateSleeve,
+  createSignalsSleeve,
   DEBATE_SLEEVE_ID,
   isLseInstrument,
   isSet,
@@ -71,6 +74,8 @@ import {
   secretsFromEnv,
   verifyNousPins,
 } from './signal/index.js';
+import { processDueSignals, type SignalOutcome, signalsDue } from './signals/processor.js';
+import type { SignalStore } from './signals/store.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
@@ -110,6 +115,8 @@ export interface V2RootOptions {
   readonly isUkStock?: ((symbol: string) => boolean) | undefined;
   readonly lseLegRefusal?: string | undefined;
   readonly knownSecrets?: SecretSource | undefined;
+  readonly leaseWait?: LeaseWait | undefined;
+  readonly sessionCalendar?: { isOpen(instant: Date): boolean } | undefined;
 }
 
 export interface V2Root {
@@ -121,8 +128,27 @@ export interface V2Root {
   readonly db: StoreHandle;
   readonly scriptedTransports: readonly ScriptedTransport[];
   run(): Promise<CycleReport>;
+  processSignals(signals: SignalProcessorStore, now: Date): Promise<SignalPass>;
   close(): void;
 }
+
+export type SignalProcessorStore = Pick<SignalStore, 'due' | 'appendEvent'>;
+
+export type SignalPass =
+  | { readonly ran: true; readonly outcomes: readonly SignalOutcome[] }
+  | { readonly ran: false; readonly reason: 'nothing_due' | 'lease_held'; readonly detail: string };
+
+// The 07:30 cycle can wait behind a signals pass (a few LLM calls); well past that, the holder is
+// taken to be wedged and the cycle fails loudly instead of running beside it
+const CYCLE_LEASE_TIMEOUT_MS = 15 * 60 * 1000;
+const CYCLE_LEASE_POLL_MS = 5_000;
+
+const SYSTEM_LEASE_WAIT: LeaseWait = {
+  timeoutMs: CYCLE_LEASE_TIMEOUT_MS,
+  pollMs: CYCLE_LEASE_POLL_MS,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  nowMs: () => Date.now(),
+};
 
 export function llmKeysPresent(options: V2RootOptions): boolean {
   return (options.nousBaseUrl ?? '').trim() !== '' && (options.nousApiKey ?? '').trim() !== '';
@@ -155,7 +181,7 @@ function nousTransportFactory(
     });
 }
 
-function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
+export function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
   return () => [...secretsFromEnv(env), ...saxoTokenSecrets()];
 }
 
@@ -392,6 +418,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       clock,
       lseLegRefusal: options.lseLegRefusal,
     }),
+    createSignalsSleeve(),
   ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
@@ -413,6 +440,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     cfdEntryRefusal: cfdGate,
     brokerMode: brokerModeFor(options),
   });
+  const lease = new RunLease(db, clock);
   return {
     registry: cycle.registry,
     books: cycle.books,
@@ -424,10 +452,36 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     run: async () => {
       await prime();
       journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
+      return withRunLease(lease, 'cycle', options.leaseWait ?? SYSTEM_LEASE_WAIT, async () => {
+        try {
+          return await runCycle(cycle, options.tradingDate);
+        } finally {
+          ukNews?.journalCoverage(options.tradingDate);
+        }
+      });
+    },
+    processSignals: async (signals, now) => {
+      const deps = {
+        cycle,
+        latestReconcile: (date: string, venue: 'alpaca') =>
+          cycle.journal.latestReconcile(date, venue),
+        signals,
+        panel,
+        constituents,
+        calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),
+      };
+      if (!signalsDue(deps, now)) {
+        return { ran: false, reason: 'nothing_due', detail: 'market closed or no signal due' };
+      }
+      const release = lease.tryAcquire('signals');
+      if (release === undefined) {
+        return { ran: false, reason: 'lease_held', detail: describeHolder(lease.current()) };
+      }
       try {
-        return await runCycle(cycle, options.tradingDate);
+        await prime();
+        return { ran: true, outcomes: await processDueSignals(deps, now) };
       } finally {
-        ukNews?.journalCoverage(options.tradingDate);
+        release();
       }
     },
     close: () => db.close(),

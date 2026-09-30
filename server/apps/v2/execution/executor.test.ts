@@ -182,6 +182,23 @@ describe('V2OrderExecutor', () => {
     expect(alpaca.submitFlatten).not.toHaveBeenCalled();
   });
 
+  it('passes an approved entry trigger to the venue broker (#1941)', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const { order } = gate.approveEntry({
+      book: primary,
+      decision: { ...decision, entry_trigger: 19.6 },
+      clientOrderId: 'e-trigger',
+      tradingDate: '2026-09-25',
+      equityGbp: 1_000,
+      macroDay: false,
+    });
+    if (order === undefined) throw new Error('expected an approved entry');
+    await paper.submit(order);
+    expect(alpaca.submitBracket).toHaveBeenCalledWith(
+      expect.objectContaining({ client_order_id: 'e-trigger', entry: 20, entry_trigger: 19.6 }),
+    );
+  });
+
   it('spends an approval on its first submission', async () => {
     const { executor: paper, alpaca } = executor(false);
     const once = entry();

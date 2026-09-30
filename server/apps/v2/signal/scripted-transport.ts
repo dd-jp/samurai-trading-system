@@ -14,6 +14,7 @@ export type Script = (request: AnthropicMessageRequest) => string;
 
 export const BULLISH_SCRIPT: Script = (request) => {
   const prompt = request.messages[0]?.content ?? '';
+  if (prompt.includes('Signal veto persona')) return '{"veto":false,"reason":"scripted"}';
   return prompt.includes('Mediator persona')
     ? '{"stance":"bullish","rationale":"scripted","converged":true}'
     : '{"stance":"bullish","rationale":"scripted"}';

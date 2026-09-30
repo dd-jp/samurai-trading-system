@@ -280,7 +280,6 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       brokerMode: 'paper',
       halfSpreadBps: input.halfSpreadBps,
       costMultiple: input.costMultiple,
-      pooledLossBudget: false,
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
     const series = (index: number) => {

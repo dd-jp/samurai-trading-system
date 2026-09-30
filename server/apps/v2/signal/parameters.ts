@@ -163,10 +163,38 @@ export const ARM2_SLEEVE_SPEC: SleeveSpec = {
   books: [{ variant: 'technical-only', instantiated: true }],
 };
 
+export const SIGNALS_SLEEVE_ID = 'signals';
+export const SIGNAL_MIN_REWARD_R = 2;
+// David 2026-09-30 (#1941): the whole idle 70% paper share, the loss and daily caps following it
+const SIGNALS_CAPITAL_SHARE = 0.7;
+const SIGNALS_NO_TIME_STOP_TRADING_DAYS = 1_000_000;
+
+// Sized on R = entry - stop: the decision's atr is R and the stop sits one "ATR" below entry
+export const SIGNALS_SLEEVE_SPEC: SleeveSpec = {
+  capitalShare: SIGNALS_CAPITAL_SHARE,
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
+  macroGate: false,
+  sizing: {
+    riskFraction: DEBATE_RISK_FRACTION,
+    stopAtrMultiple: 1,
+    targetAtrMultiple: SIGNAL_MIN_REWARD_R,
+    timeStopTradingDays: SIGNALS_NO_TIME_STOP_TRADING_DAYS,
+    advShare: DEBATE_ADV_SHARE,
+    advWindowBars: DEBATE_ADV_WINDOW_BARS,
+  },
+  books: [
+    { variant: 'primary', instantiated: true },
+    { variant: 'no-veto', instantiated: true },
+  ],
+};
+
 // A sleeve missing here is a build gap, not a trading-state check
 export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
   [DEBATE_SLEEVE_ID]: DEBATE_SLEEVE_SPEC,
   [ARM2_SLEEVE_ID]: ARM2_SLEEVE_SPEC,
+  [SIGNALS_SLEEVE_ID]: SIGNALS_SLEEVE_SPEC,
 };
 
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;

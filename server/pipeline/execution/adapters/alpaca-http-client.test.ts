@@ -360,6 +360,21 @@ describe('AlpacaHttpBrokerClient', () => {
     expect(sentBody.type).toBe('limit');
   });
 
+  it('submitOrder sends a stop_limit parent when the bracket carries a stop_price (probed on paper 2026-09-30, #1941)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+    await client.submitOrder({ ...ORDER_REQUEST, stop_price: '99.50' });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      ...ORDER_REQUEST,
+      stop_price: '99.50',
+      type: 'stop_limit',
+    });
+  });
+
   it('getOrder GETs /v2/orders/{id}', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
     vi.stubGlobal('fetch', fetchMock);

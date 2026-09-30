@@ -80,6 +80,19 @@ export class SignalStore {
     return rows.map((row) => this.#toWire(row));
   }
 
+  due(now: Date): readonly SignalWire[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${SIGNAL_COLUMNS} FROM v2_signals s
+         WHERE process_after <= ?
+           AND (SELECT status FROM v2_signal_events e WHERE e.signal_id = s.signal_id
+                ORDER BY event_id DESC LIMIT 1) = 'queued'
+         ORDER BY process_after, received_at, signal_id`,
+      )
+      .all(toStoredTimestamp(now)) as SignalRow[];
+    return rows.map((row) => this.#toWire(row));
+  }
+
   #idForDigest(key: string): string | undefined {
     const row = this.db
       .prepare('SELECT signal_id FROM v2_signals WHERE payload_digest = ?')

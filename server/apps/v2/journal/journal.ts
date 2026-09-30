@@ -7,6 +7,7 @@ import type {
   JournalledRefusal,
   RecordedFillPart,
   SleeveDecision,
+  Venue,
 } from '../../../../contracts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
@@ -31,6 +32,11 @@ export function inputsHash(
       key_points: view.key_points,
     })),
   });
+}
+
+export interface ReconcileVerdict {
+  readonly reconciled: ReadonlySet<string>;
+  readonly blocked: ReadonlySet<string>;
 }
 
 export class Journal implements DecisionJournal {
@@ -208,6 +214,27 @@ export class Journal implements DecisionJournal {
         refusal.instrument ?? null,
         this.#now(),
       );
+  }
+
+  latestReconcile(tradingDate: string, venue: Venue): ReconcileVerdict {
+    const rows = this.db
+      .prepare(
+        `SELECT status, book_ids FROM v2_reconciles r
+         WHERE trading_date = ? AND venue = ? AND reconcile_id = (
+           SELECT MAX(reconcile_id) FROM v2_reconciles
+           WHERE trading_date = r.trading_date AND venue = r.venue AND source = r.source)`,
+      )
+      .all(tradingDate, venue) as { status: string; book_ids: string }[];
+    const reconciled = new Set<string>();
+    const blocked = new Set<string>();
+    for (const row of rows) {
+      const bookIds = JSON.parse(row.book_ids) as string[];
+      for (const bookId of bookIds) {
+        reconciled.add(bookId);
+        if (row.status !== 'clean') blocked.add(bookId);
+      }
+    }
+    return { reconciled, blocked };
   }
 
   recordReconcile(run: JournalledReconcile): void {

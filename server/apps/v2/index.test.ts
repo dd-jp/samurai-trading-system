@@ -319,7 +319,7 @@ describe('rootOptionsFor', () => {
         }),
       );
       expect(lseInstrumentsOf(root)).toEqual([]);
-      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10]);
+      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10, 0]);
     } finally {
       root.close();
     }
@@ -357,7 +357,7 @@ describe('rootOptionsFor', () => {
         root.journal.newRefusals(ENTRY_DATE).filter((r) => r.parameter === 'SAXO_SESSION'),
       ).toEqual([]);
       expect(lseInstrumentsOf(root).length).toBeGreaterThan(0);
-      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10]);
+      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10, 0]);
     } finally {
       root.close();
     }
@@ -428,11 +428,13 @@ describe('composeV2Root', () => {
       composeV2Root({ ...fixtures, tradingDate, dryRun: true, storePath, clock, logger });
     const root = open(ENTRY_DATE);
     try {
-      expect(root.registry.ids()).toEqual(['debate', 'arm2']);
+      expect(root.registry.ids()).toEqual(['debate', 'arm2', 'signals']);
       expect(root.books.ids()).toEqual([
         'debate/primary',
         'debate/no-macro-gate',
         'arm2/technical-only',
+        'signals/primary',
+        'signals/no-veto',
       ]);
       const report = await root.run();
       expect(report).toMatchObject({
@@ -443,7 +445,7 @@ describe('composeV2Root', () => {
         simulated_orders: 2,
         rejected_orders: 0,
         fills: 0,
-        sleeves: ['debate', 'arm2'],
+        sleeves: ['debate', 'arm2', 'signals'],
       });
       expect(exitCodeFor(report)).toBe(0);
       const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
@@ -481,7 +483,7 @@ describe('composeV2Root', () => {
       });
       expect(count(root, 'v2_orders')).toBe(3);
       expect(count(root, 'v2_fills')).toBe(0);
-      expect(report.books.map((book) => book.positions)).toEqual([0, 0, 0]);
+      expect(report.books.map((book) => book.positions)).toEqual([0, 0, 0, 0, 0]);
       const llmCalls = root.scriptedTransports.reduce((n, t) => n + t.calls.length, 0);
       expect(llmCalls).toBe(3);
       expect(count(root, 'llm_spend')).toBe(llmCalls);
@@ -516,7 +518,7 @@ describe('composeV2Root', () => {
       expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
       expect(fill.fee_gbp).toBeGreaterThan(0);
       expect(fill.trading_date).toBe(NEXT_DATE);
-      expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1]);
+      expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1, 0, 0]);
     } finally {
       next.close();
     }

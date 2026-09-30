@@ -172,6 +172,10 @@ const BASE_URL_BY_ENVIRONMENT: Readonly<Record<AlpacaTradingEnvironment, string>
   live: 'https://api.alpaca.markets',
 };
 
+function bracketParentType(request: AlpacaBracketOrderRequest): 'limit' | 'stop_limit' {
+  return request.stop_price === undefined ? 'limit' : 'stop_limit';
+}
+
 export function classifyAlpacaTradingHost(
   baseUrl: string,
 ): AlpacaTradingEnvironment | 'other' | 'invalid' {
@@ -332,7 +336,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   async submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder> {
     return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
-      { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
+      { method: 'POST', body: JSON.stringify({ ...request, type: bracketParentType(request) }) },
       'submitOrder',
       validateAlpacaOrder,
     );
