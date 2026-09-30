@@ -37,6 +37,7 @@ interface Call {
   readonly path: string;
   readonly body: Record<string, unknown> | undefined;
   readonly authorization: string | undefined;
+  readonly headers: Record<string, string>;
 }
 
 interface Position {
@@ -82,6 +83,9 @@ class FakeSaxoSim {
   cancelStatus = 200;
   flattenStatus = 200;
   fillsEntry = true;
+  fillSign = -1;
+  stopAmountDrift = 0;
+  triggerCloses = true;
   positions: Position[] = [];
   orders: Order[] = [];
   activities: Record<string, unknown>[] = [];
@@ -101,6 +105,7 @@ class FakeSaxoSim {
       path,
       body,
       authorization: headers.authorization,
+      headers,
     });
     const [status, payload] = this.route(String(init.method), path, body);
     return new Response(payload === undefined ? '' : JSON.stringify(payload), { status });
@@ -175,11 +180,12 @@ class FakeSaxoSim {
 
   private listing(assetType: string | null): unknown[] {
     const rows = [
-      { Symbol: 'AAPL:xnas', Identifier: 211, AssetType: 'CfdOnStock' },
+      { Symbol: 'AAPL:xnas', Identifier: 555, AssetType: 'Stock' },
       { Symbol: 'AAPL:xmil', Identifier: 999, AssetType: 'CfdOnStock' },
+      { Symbol: 'AAPL:xnas', Identifier: 211, AssetType: 'CfdOnStock' },
       ...(this.etfListed ? [{ Symbol: 'ISF:xlon', Identifier: 311, AssetType: 'CfdOnEtf' }] : []),
     ];
-    return rows.filter((row) => row.AssetType === assetType);
+    return rows.filter((row) => row.AssetType === assetType || row.AssetType === 'Stock');
   }
 
   private place(body: Record<string, unknown>): Reply {
@@ -188,14 +194,21 @@ class FakeSaxoSim {
     const amount = Number(body.Amount);
     if (!Array.isArray(body.Orders)) {
       if (this.flattenStatus !== 200) return [this.flattenStatus, undefined];
-      this.positions = this.positions.filter((row) => row.uic !== uic);
+      this.positions = this.positions.filter(
+        (row) => row.uic !== uic || row.assetType !== assetType,
+      );
       return [200, { OrderId: `f-${uic}` }];
     }
     if (this.entryStatus !== 200)
       return [this.entryStatus, { ErrorInfo: { ErrorCode: 'Rejected', AccountKey: ACCOUNT_KEY } }];
     const [stop, target] = body.Orders as Record<string, unknown>[];
     if (this.fillsEntry)
-      this.positions.push({ uic, assetType, amount: -amount, price: this.fillPrice });
+      this.positions.push({
+        uic,
+        assetType,
+        amount: this.fillSign * amount,
+        price: this.fillPrice,
+      });
     const leg = (id: string, type: string, price: unknown): Order => ({
       OrderId: id,
       Uic: uic,
@@ -203,7 +216,7 @@ class FakeSaxoSim {
       OpenOrderType: type,
       Status: this.fillsEntry ? 'Working' : 'NotWorking',
       BuySell: 'Buy',
-      Amount: amount,
+      Amount: amount + (type === 'StopIfTraded' ? this.stopAmountDrift : 0),
       Price: Number(price) + (type === 'StopIfTraded' ? this.stopPriceDrift : 0),
       OrderRelation: 'Oco',
     });
@@ -227,7 +240,8 @@ class FakeSaxoSim {
     const order = this.orders.find((row) => row.OrderId === body.OrderId);
     if (order === undefined) return [404, undefined];
     if (this.amendTriggers) {
-      this.positions = this.positions.filter((row) => row.uic !== order.Uic);
+      if (this.triggerCloses)
+        this.positions = this.positions.filter((row) => row.uic !== order.Uic);
       this.orders = this.orders.filter((row) => row.Uic !== order.Uic);
       this.activities.push({
         OrderId: order.OrderId,
@@ -1012,5 +1026,341 @@ describe('main', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('what the drill matches on', () => {
+  const stockOnly: DrillOptions = { ...OPTIONS, targets: OPTIONS.targets.slice(0, 1) };
+
+  it('searches by bare symbol for tradable rows and takes the CFD row whose symbol matches', async () => {
+    const fake = new FakeSaxoSim();
+    const { evidence } = await drill(fake, stockOnly);
+    expect(evidence.instruments[0]?.uic).toBe(211);
+    const search = fake.calls.find((call) => call.path.startsWith('/ref/v1/instruments?'));
+    expect(Object.fromEntries(new URLSearchParams(search?.path.split('?')[1]))).toEqual({
+      Keywords: 'AAPL',
+      AssetTypes: 'CfdOnStock',
+      IncludeNonTradable: 'false',
+      $top: '100',
+    });
+  });
+
+  it('waits for a short of the amount sent, and flattens a long the other way', async () => {
+    const fake = new FakeSaxoSim();
+    fake.fillSign = 1;
+    const { evidence } = await drill(fake, stockOnly);
+    expect(evidence.failure).toBe('drill_entry_not_filled: AAPL:xnas');
+    expect(fake.trades().at(-1)?.body).toMatchObject({ BuySell: 'Sell', Amount: 1 });
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+  });
+
+  it('fails a resting stop whose amount differs from the amount sent', async () => {
+    const fake = new FakeSaxoSim();
+    fake.stopAmountDrift = 1;
+    const { evidence } = await drill(fake, stockOnly);
+    expect(evidence.failure).toBe('drill_stop_mismatch: AAPL:xnas');
+  });
+
+  it('does not take a working limit leg or a not-working stop as the resting stop', async () => {
+    const fake = new FakeSaxoSim();
+    fake.fillsEntry = false;
+    const gateway = new SaxoSimGateway({
+      baseUrl: SAXO_SIM_GATEWAY,
+      accessToken: async () => TOKEN,
+      fetch: async (url, init) => {
+        const reply = await fake.fetch(url, init);
+        if (init.method === 'POST' && fake.positions.length === 0) {
+          fake.positions.push({ uic: 211, assetType: 'CfdOnStock', amount: -1, price: 200 });
+          const limit = fake.orders.find((order) => order.OpenOrderType === 'Limit');
+          if (limit !== undefined) limit.Status = 'Working';
+        }
+        return reply;
+      },
+      sleep: async () => {},
+      now: () => 0,
+    });
+    const { evidence } = await runSimCfdStopDrill(gateway, stockOnly, new FakeClock());
+    expect(evidence.failure).toBe('drill_stop_not_resting: AAPL:xnas');
+  });
+
+  it('counts only a fill on the stop order id, not the entry fill', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendTriggers = false;
+    fake.activities.push(
+      { OrderId: 'm-211-1', Status: 'FinalFill', ActivityTime: 't', AveragePrice: 200 },
+      { OrderId: 's-211', Status: 'Placed', ActivityTime: 't' },
+    );
+    const { evidence } = await drill(fake, stockOnly);
+    expect(evidence.failure).toBe('drill_stop_not_triggered: AAPL:xnas');
+  });
+
+  it('reads order activities for this account from a minute before the entry', async () => {
+    const fake = new FakeSaxoSim();
+    const { evidence } = await drill(fake, stockOnly);
+    const placedAt = Date.parse(evidence.instruments[0]?.entry?.placedAt ?? '');
+    const read = fake.calls.find((call) => call.path.startsWith('/cs/v1/audit/orderactivities'));
+    expect(Object.fromEntries(new URLSearchParams(read?.path.split('?')[1]))).toEqual({
+      AccountKey: ACCOUNT_KEY,
+      ClientKey: CLIENT_KEY,
+      FromDateTime: new Date(placedAt - 60_000).toISOString(),
+      $top: '500',
+    });
+  });
+
+  it('fails when the stop fills but the position stays open', async () => {
+    const fake = new FakeSaxoSim();
+    fake.triggerCloses = false;
+    const { evidence } = await drill(fake, stockOnly);
+    expect(evidence.failure).toBe('drill_position_not_closed: AAPL:xnas');
+    expect(evidence.instruments[0]?.positionClosedAfterTrigger).toBe(false);
+    expect(evidence.cleanup.flattened).toEqual(['CfdOnStock:211']);
+  });
+
+  it('cleans up only the instruments it drilled and leaves any other order or position alone', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendTriggers = false;
+    const stray: Order = {
+      OrderId: 'other-42',
+      Uic: 42,
+      AssetType: 'CfdOnStock',
+      OpenOrderType: 'Limit',
+      Status: 'Working',
+      BuySell: 'Buy',
+      Amount: 1,
+      Price: 10,
+      OrderRelation: 'StandAlone',
+    };
+    const gateway = new SaxoSimGateway({
+      baseUrl: SAXO_SIM_GATEWAY,
+      accessToken: async () => TOKEN,
+      fetch: async (url, init) => {
+        if (init.method === 'PATCH') {
+          fake.orders.push(stray, { ...stray, OrderId: 'other-211', Uic: 211, AssetType: 'Stock' });
+          fake.positions.push({ uic: 211, assetType: 'Stock', amount: 5, price: 10 });
+        }
+        return fake.fetch(url, init);
+      },
+      sleep: async () => {},
+      now: () => 0,
+    });
+    const { evidence } = await runSimCfdStopDrill(gateway, stockOnly, new FakeClock());
+    expect(evidence.cleanup.cancelled.sort()).toEqual(['s-211', 't-211']);
+    expect(evidence.cleanup.flattened).toEqual(['CfdOnStock:211']);
+    expect(fake.orders.map((order) => order.OrderId).sort()).toEqual(['other-211', 'other-42']);
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 1, openOrders: 2 });
+  });
+
+  it('treats a zero-amount net position row as flat', async () => {
+    const fake = new FakeSaxoSim();
+    fake.positions.push({ uic: 7, assetType: 'CfdOnStock', amount: 0, price: 1 });
+    const { evidence } = await drill(fake, stockOnly);
+    expect(evidence.flatBefore).toMatchObject({ netPositions: 0 });
+    expect(evidence.passed).toBe(true);
+  });
+
+  it('runs no clean-up on an account it found not flat', async () => {
+    const fake = new FakeSaxoSim();
+    fake.orders.push({
+      OrderId: 'x',
+      Uic: 211,
+      AssetType: 'CfdOnStock',
+      OpenOrderType: 'Limit',
+      Status: 'Working',
+      BuySell: 'Buy',
+      Amount: 1,
+      Price: 1,
+      OrderRelation: 'StandAlone',
+    });
+    const { evidence } = await drill(fake, stockOnly);
+    expect(evidence.failure).toBe('drill_account_not_flat');
+    expect(evidence.steps.map((step) => step.code)).not.toContain('drill_cleanup_started');
+    expect(evidence.flatAfter).toBeUndefined();
+  });
+
+  it('refuses a token that also reaches a non-trial account, or a trial account with no client key', async () => {
+    const accountsReply = (rows: unknown[]) => async (url: string, init: RequestInit) =>
+      url.endsWith('/port/v1/accounts/me')
+        ? new Response(JSON.stringify({ Data: rows }), { status: 200 })
+        : new FakeSaxoSim().fetch(url, init);
+    const gatewayWith = (rows: unknown[]) =>
+      new SaxoSimGateway({
+        baseUrl: SAXO_SIM_GATEWAY,
+        accessToken: async () => TOKEN,
+        fetch: accountsReply(rows),
+        sleep: async () => {},
+        now: () => 0,
+      });
+    const mixed = await runSimCfdStopDrill(
+      gatewayWith([
+        { AccountKey: 'a', ClientKey: 'c', IsTrialAccount: true },
+        { AccountKey: 'b', ClientKey: 'c', IsTrialAccount: false },
+      ]),
+      stockOnly,
+      new FakeClock(),
+    );
+    expect(mixed.evidence.failure).toMatch(/not a Saxo trial account/);
+    const keyless = await runSimCfdStopDrill(
+      gatewayWith([{ AccountKey: 'a', ClientKey: '', IsTrialAccount: true }]),
+      stockOnly,
+      new FakeClock(),
+    );
+    expect(keyless.evidence.failure).toMatch(/no account or client key/);
+  });
+
+  it('records the trial account and every step of a passing run', async () => {
+    const { evidence } = await drill(new FakeSaxoSim(), stockOnly);
+    expect(evidence.account).toEqual({ isTrialAccount: true, currency: 'EUR' });
+    expect(evidence.refs).toEqual(['#1400', '#1916']);
+    expect(evidence.steps.map((step) => step.code)).toEqual([
+      'drill_trial_account_confirmed',
+      'drill_instrument_started',
+      'drill_entry_placed',
+      'drill_entry_filled',
+      'drill_stop_resting',
+      'drill_stop_amended',
+      'drill_stop_triggered',
+      'drill_instrument_passed',
+      'drill_cleanup_started',
+    ]);
+  });
+});
+
+describe('the gateway wire', () => {
+  it('sends JSON headers and a numbered request id, with a body only when there is one', async () => {
+    const fake = new FakeSaxoSim();
+    const clock = new FakeClock();
+    const gateway = gatewayFor(fake, clock);
+    await gateway.get('/port/v1/orders/me');
+    await gateway.send('POST', '/trade/v2/orders', { a: 1 });
+    const [read, write] = fake.calls;
+    expect(read?.headers).toEqual({
+      accept: 'application/json',
+      authorization: `Bearer ${TOKEN}`,
+      'x-request-id': `sim-cfd-stop-drill-${Date.parse('2026-10-01T14:35:00.000Z')}-1`,
+    });
+    expect(read?.body).toBeUndefined();
+    expect(write?.headers['content-type']).toBe('application/json');
+    expect(write?.headers['x-request-id']).toMatch(/-2$/);
+    expect(write?.body).toEqual({ a: 1 });
+  });
+
+  it('reads an empty reply as no body', async () => {
+    const gateway = new SaxoSimGateway({
+      baseUrl: SAXO_SIM_GATEWAY,
+      accessToken: async () => TOKEN,
+      fetch: async () => new Response('', { status: 200 }),
+      sleep: async () => {},
+      now: () => 0,
+    });
+    await expect(gateway.send('DELETE', '/trade/v2/orders/x')).resolves.toEqual({
+      status: 200,
+      body: undefined,
+    });
+  });
+
+  it('does not sleep when the last trade is already 1.1 s old', async () => {
+    const fake = new FakeSaxoSim();
+    const clock = new FakeClock();
+    const gateway = gatewayFor(fake, clock);
+    await gateway.send('DELETE', '/trade/v2/orders/x');
+    await clock.sleep(1_100);
+    await gateway.send('DELETE', '/trade/v2/orders/y');
+    expect(clock.sleeps).toEqual([1_100]);
+  });
+
+  it('accepts the SIM gateway with several trailing slashes and names a refused base URL', () => {
+    expect(() => assertSimGateway(`${SAXO_SIM_GATEWAY}///`)).not.toThrow();
+    expect(() => assertSimGateway('https://gateway.saxobank.com/openapi')).toThrow(
+      'sim_only_refusal: https://gateway.saxobank.com/openapi is not the Saxo SIM gateway',
+    );
+  });
+
+  it('names a refused path without its query', async () => {
+    const gateway = gatewayFor(new FakeSaxoSim(), new FakeClock());
+    await expect(gateway.get('/../../openapi/port/v1/orders/me?AccountKey=k')).rejects.toThrow(
+      'sim_only_refusal: /../../openapi/port/v1/orders/me is not a SIM gateway path',
+    );
+  });
+});
+
+describe('instrument details', () => {
+  it('takes the tick of the band a price sits on the edge of, and falls back to TickSize', async () => {
+    const rules = await instrumentRules(gatewayFor(new FakeSaxoSim(), new FakeClock()), {
+      uic: 211,
+      assetType: 'CfdOnStock',
+    });
+    expect(rules.tickSize(10)).toBe(0.001);
+    expect(rules.tickSize(1)).toBe(0.0001);
+    expect(rules.defaultStopLossFraction).toBe(0.005);
+    const bare = await instrumentRules(
+      new SaxoSimGateway({
+        baseUrl: SAXO_SIM_GATEWAY,
+        accessToken: async () => TOKEN,
+        fetch: async () =>
+          new Response(JSON.stringify({ TickSize: 0.05, MinimumTradeSize: 10 }), { status: 200 }),
+        sleep: async () => {},
+        now: () => 0,
+      }),
+      { uic: 1, assetType: 'CfdOnStock' },
+    );
+    expect(bare.tickSize(100)).toBe(0.05);
+    expect(bare.minimumAmount).toBe(10);
+    expect(bare.supportedOrderTypes).toEqual([]);
+    expect(bare.isTradable).toBe(false);
+    expect(bare.defaultStopLossFraction).toBeUndefined();
+  });
+});
+
+describe('the rendered summary', () => {
+  it('lays out every line of a passing run', async () => {
+    const { evidence } = await drill(new FakeSaxoSim(), {
+      ...OPTIONS,
+      targets: OPTIONS.targets.slice(0, 1),
+    });
+    expect(renderSummary(evidence, 'r.json').split('\n')).toEqual([
+      '# Saxo SIM CFD resting-stop drill, 2026-10-01',
+      '',
+      'Refs #1400 #1916. Verdict: **PASSED**.',
+      '',
+      `Gateway ${SAXO_SIM_GATEWAY}, Saxo trial account (EUR). Run ${evidence.startedAt} to ${evidence.finishedAt}. Full record: r.json.`,
+      '',
+      'A passing record is the evidence doc 66 ruling (c) asks for before `CFD_RESTING_STOP_VERIFIED` is set for paper. SIM is a trial account: order handling carries to live, tariffs and entitlements do not.',
+      '',
+      '| Symbol | Asset type | Outcome | Reason | Entry fill | Stop placed | Stop at rest | Stop amended to | Stop trigger | Stop fill |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| AAPL:xnas | CfdOnStock | passed | - | 200 | 220.11 | Working | 199 | FinalFill | 199.5 |',
+      '',
+      `- Flat before (${evidence.flatBefore?.at}): 0 net positions, 0 open orders`,
+      `- Flat after (${evidence.flatAfter?.at}): 0 net positions, 0 open orders`,
+      '- Cleanup: 0 orders cancelled, 0 positions flattened, 0 errors',
+      '',
+    ]);
+  });
+
+  it('shows the accepted amend price, not a rejected one', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendStatuses = [400];
+    const { evidence } = await drill(fake);
+    expect(renderSummary(evidence, 'r.json')).toContain('| 220.11 | Working | 200.1 |');
+  });
+
+  it('fails a run where any drilled instrument failed, and treats a missing reading as not flat', async () => {
+    const fake = new FakeSaxoSim();
+    fake.etfListed = true;
+    const { evidence } = await drill(fake);
+    const [stock, etf] = evidence.instruments;
+    if (stock === undefined || etf === undefined) throw new Error('expected two instruments');
+    expect(drillPassed({ ...evidence, instruments: [stock, { ...etf, outcome: 'failed' }] })).toBe(
+      false,
+    );
+    const { flatAfter: _unread, ...unread } = evidence;
+    expect(drillPassed(unread)).toBe(false);
+    expect(
+      drillPassed({ ...evidence, flatAfter: { at: 'a', netPositions: 0, openOrders: 1 } }),
+    ).toBe(false);
+  });
+
+  it('keeps null and numbers through redaction', () => {
+    expect(redact({ a: null, b: 1, c: [null] }, ['x'])).toEqual({ a: null, b: 1, c: [null] });
   });
 });
