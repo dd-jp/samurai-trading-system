@@ -255,13 +255,13 @@ export class FaultLedger implements FaultSink {
   }
 
   // By recorded_at, not trading_date: a missed run is recorded today against a past date
-  kindsRecordedAfter(recordedAfter: string): readonly FaultKindCount[] {
+  kindsRecordedBetween(after: string, through: string): readonly FaultKindCount[] {
     return this.db
       .prepare(
-        `SELECT kind, COUNT(*) AS count FROM v2_faults WHERE recorded_at > ?
+        `SELECT kind, COUNT(*) AS count FROM v2_faults WHERE recorded_at > ? AND recorded_at <= ?
          GROUP BY kind ORDER BY count DESC, kind`,
       )
-      .all(recordedAfter) as FaultKindCount[];
+      .all(after, through) as FaultKindCount[];
   }
 
   faultFreeWeeks(asOf: string): FaultFreeWeeks {

@@ -308,6 +308,28 @@ describe('readDailySummary', () => {
     expect(formatDailySummary(read, 'paper')).not.toContain('12345');
   });
 
+  it("counts what was journalled after this cycle's mark in the next summary, not in both", () => {
+    const AFTER_MARK = '2026-09-30T07:36:00.000Z';
+    seedBook('debate/primary', 'debate', 'primary');
+    seedDay('debate/primary', PREVIOUS, 600);
+    seedDay('debate/primary', DAY, 600);
+    seedRefusal('entry', 'LOSS_BUDGET', 'debate/primary', AFTER_MARK);
+    const faultClock = new SimulatedClock(new Date(AFTER_MARK));
+    const faults = new FaultLedger(db, faultClock);
+    faults.record({ kind: 'stuck_order', trading_date: DAY, code: 'C', detail: 'd' });
+    const today = readDailySummary(db, CLOCK, DAY, faults);
+    expect(today.books[0]?.refusals.count).toBe(0);
+    expect(today.faults.recorded).toEqual([]);
+    db.prepare(
+      `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
+         size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+       VALUES ('debate/primary', '2026-10-01', 600, 600, 0, 0, 1, 0, 0, '2026-10-01T07:35:00.000Z')`,
+    ).run();
+    const next = readDailySummary(db, CLOCK, '2026-10-01', faults);
+    expect(next.books[0]?.refusals).toEqual({ count: 1, top: [{ code: 'LOSS_BUDGET', count: 1 }] });
+    expect(next.faults.recorded).toEqual([{ code: 'stuck_order', count: 1 }]);
+  });
+
   it('reads everything as the first cycle when no earlier cycle marked a book', () => {
     seedBook('debate/primary', 'debate', 'primary');
     seedDay('debate/primary', DAY, 600);

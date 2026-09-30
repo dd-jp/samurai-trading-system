@@ -317,8 +317,8 @@ describe('FaultRecordingLogger', () => {
   });
 });
 
-describe('kindsRecordedAfter', () => {
-  it('counts faults by kind recorded after the mark, whatever trading date they carry', () => {
+describe('kindsRecordedBetween', () => {
+  it('counts faults by kind recorded inside the window, whatever trading date they carry', () => {
     const db = openSharedStore(':memory:');
     const at = new SimulatedClock(new Date('2026-09-29T07:30:00.000Z'));
     const faults = new FaultLedger(db, at);
@@ -327,11 +327,16 @@ describe('kindsRecordedAfter', () => {
     faults.record(fault('missed_run', '2026-09-25'));
     faults.record({ ...fault('failed_broker_call'), code: 'A' });
     faults.record({ ...fault('failed_broker_call'), code: 'B' });
-    expect(faults.kindsRecordedAfter('2026-09-29T07:30:00.000Z')).toEqual([
+    expect(
+      faults.kindsRecordedBetween('2026-09-29T07:30:00.000Z', '2026-09-30T07:30:00.000Z'),
+    ).toEqual([
       { kind: 'failed_broker_call', count: 2 },
       { kind: 'missed_run', count: 1 },
     ]);
-    expect(faults.kindsRecordedAfter('')).toHaveLength(3);
+    expect(faults.kindsRecordedBetween('', '2026-09-30T07:30:00.000Z')).toHaveLength(3);
+    expect(faults.kindsRecordedBetween('', '2026-09-29T07:30:00.000Z')).toEqual([
+      { kind: 'stale_bar', count: 1 },
+    ]);
   });
 });
 

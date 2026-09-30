@@ -8,6 +8,7 @@ import { SLEEVE_SPECS_BY_ID, SqliteMonthlySpendCap } from './signal/index.js';
 
 const TOP_REFUSAL_CODES = 3;
 const FIRST_CYCLE = '';
+const OPEN_END = '9999-12-31T23:59:59.999Z';
 const SIGNAL_SCOPE = 'signal';
 
 export interface CodeCount {
@@ -37,7 +38,7 @@ export interface BookSummary {
   readonly refusals: RefusalTally;
 }
 
-export type SummaryFaults = Pick<FaultLedger, 'faultFreeWeeks' | 'kindsRecordedAfter'>;
+export type SummaryFaults = Pick<FaultLedger, 'faultFreeWeeks' | 'kindsRecordedBetween'>;
 
 export interface DailySummary {
   readonly trading_date: string;
@@ -90,21 +91,21 @@ const BOOK_DAYS = `
 
 const PER_BOOK_COUNTS = {
   decisions:
-    'SELECT book_id, COUNT(*) AS n FROM v2_decisions WHERE recorded_at > ? GROUP BY book_id',
+    'SELECT book_id, COUNT(*) AS n FROM v2_decisions WHERE recorded_at > ? AND recorded_at <= ? GROUP BY book_id',
   placed: `SELECT book_id, COUNT(*) AS n FROM v2_orders
-            WHERE leg = 'entry' AND outcome <> 'rejected' AND recorded_at > ? GROUP BY book_id`,
+            WHERE leg = 'entry' AND outcome <> 'rejected' AND recorded_at > ? AND recorded_at <= ? GROUP BY book_id`,
   rejected: `SELECT book_id, COUNT(*) AS n FROM v2_orders
-              WHERE leg = 'entry' AND outcome = 'rejected' AND recorded_at > ? GROUP BY book_id`,
+              WHERE leg = 'entry' AND outcome = 'rejected' AND recorded_at > ? AND recorded_at <= ? GROUP BY book_id`,
   filled: `SELECT book_id, COUNT(DISTINCT client_order_id) AS n FROM v2_fills
-            WHERE leg = 'entry' AND recorded_at > ? GROUP BY book_id`,
+            WHERE leg = 'entry' AND recorded_at > ? AND recorded_at <= ? GROUP BY book_id`,
   exits: `SELECT book_id, COUNT(DISTINCT client_order_id) AS n FROM v2_fills
-           WHERE leg <> 'entry' AND recorded_at > ? GROUP BY book_id`,
+           WHERE leg <> 'entry' AND recorded_at > ? AND recorded_at <= ? GROUP BY book_id`,
 } as const;
 
 type CountName = keyof typeof PER_BOOK_COUNTS;
 
 const REFUSALS = `
-  SELECT book_id, scope, parameter, COUNT(*) AS n FROM v2_refusals WHERE recorded_at > ?
+  SELECT book_id, scope, parameter, COUNT(*) AS n FROM v2_refusals WHERE recorded_at > ? AND recorded_at <= ?
    GROUP BY book_id, scope, parameter ORDER BY n DESC, parameter`;
 
 const STAGES: Readonly<Record<number, string>> = {
@@ -114,20 +115,43 @@ const STAGES: Readonly<Record<number, string>> = {
   0: 'halted',
 };
 
-function previousCycleAt(db: StoreHandle, tradingDate: string): string | null {
-  const row = db
-    .prepare('SELECT MAX(recorded_at) AS at FROM v2_book_days WHERE trading_date < ?')
-    .get(tradingDate) as { at: string | null };
-  return row.at;
+interface SummaryWindow {
+  readonly after: string;
+  readonly through: string;
 }
 
-function countsByBook(db: StoreHandle, since: string): Record<CountName, Map<string, number>> {
+function lastMarkAt(db: StoreHandle, sql: string, tradingDate: string): string | null {
+  return (db.prepare(sql).get(tradingDate) as { at: string | null }).at;
+}
+
+// Bounded by this cycle's own last mark: anything journalled after it (a block's cancels, their
+// refusals and faults) belongs to the next summary, whose window starts at that mark
+function windowFor(
+  db: StoreHandle,
+  tradingDate: string,
+): { since: string | null; window: SummaryWindow } {
+  const since = lastMarkAt(
+    db,
+    'SELECT MAX(recorded_at) AS at FROM v2_book_days WHERE trading_date < ?',
+    tradingDate,
+  );
+  const through = lastMarkAt(
+    db,
+    'SELECT MAX(recorded_at) AS at FROM v2_book_days WHERE trading_date = ?',
+    tradingDate,
+  );
+  return { since, window: { after: since ?? FIRST_CYCLE, through: through ?? OPEN_END } };
+}
+
+function countsByBook(
+  db: StoreHandle,
+  window: SummaryWindow,
+): Record<CountName, Map<string, number>> {
   const read = (sql: string) =>
     new Map(
-      (db.prepare(sql).all(since) as { book_id: string; n: number }[]).map((row) => [
-        row.book_id,
-        row.n,
-      ]),
+      (db.prepare(sql).all(window.after, window.through) as { book_id: string; n: number }[]).map(
+        (row) => [row.book_id, row.n],
+      ),
     );
   return {
     decisions: read(PER_BOOK_COUNTS.decisions),
@@ -184,10 +208,12 @@ function bookSummary(
   };
 }
 
-function faultsFor(faults: SummaryFaults, since: string, tradingDate: string) {
+function faultsFor(faults: SummaryFaults, window: SummaryWindow, tradingDate: string) {
   const free = faults.faultFreeWeeks(tradingDate);
   return {
-    recorded: faults.kindsRecordedAfter(since).map(({ kind, count }) => ({ code: kind, count })),
+    recorded: faults
+      .kindsRecordedBetween(window.after, window.through)
+      .map(({ kind, count }) => ({ code: kind, count })),
     free_weeks: free.weeks,
     counted_days: free.counted_days,
     last_fault: free.last_fault,
@@ -200,9 +226,9 @@ export function readDailySummary(
   tradingDate: string,
   faults: SummaryFaults,
 ): DailySummary {
-  const since = previousCycleAt(db, tradingDate);
-  const counts = countsByBook(db, since ?? FIRST_CYCLE);
-  const refusals = db.prepare(REFUSALS).all(since ?? FIRST_CYCLE) as RefusalRow[];
+  const { since, window } = windowFor(db, tradingDate);
+  const counts = countsByBook(db, window);
+  const refusals = db.prepare(REFUSALS).all(window.after, window.through) as RefusalRow[];
   const capital = new CapitalConfigStore(db, clock);
   const books = (db.prepare(BOOK_DAYS).all(tradingDate) as BookDayRow[]).map((row) =>
     bookSummary(row, counts, refusals, lossCapFor(row.sleeve_id, capital, tradingDate)),
@@ -215,7 +241,7 @@ export function readDailySummary(
     books,
     signal_refusals: tally(unbooked.filter((refusal) => refusal.scope === SIGNAL_SCOPE)),
     other_refusals: tally(unbooked.filter((refusal) => refusal.scope !== SIGNAL_SCOPE)),
-    faults: faultsFor(faults, since ?? FIRST_CYCLE, tradingDate),
+    faults: faultsFor(faults, window, tradingDate),
     llm: {
       spent_usd: Number.isFinite(verdict.spent_usd) ? verdict.spent_usd : null,
       budget_usd: verdict.budget_usd,
