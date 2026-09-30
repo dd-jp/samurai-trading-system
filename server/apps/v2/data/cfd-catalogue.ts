@@ -4,7 +4,10 @@ import type { QuoteCurrency } from './venues.js';
 
 export const CFD_CATALOGUE_PATH = 'data/saxo-cfd-catalogue.json';
 export const CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS = 3;
-const DAYS_PER_YEAR = 365;
+// Measured on the live infoprices/list, 2026-09-30 (PR #1939): Saxo's USD CfdBorrowingCost is
+// the annual rate / 360 (0.5% reads 0.0000138889 a day), its GBP one the annual rate / 365 (ISF's
+// 2% reads 2%/365), matching the ACT/360 and ACT/365 money-market conventions of each currency
+const BORROW_DAY_COUNT: Readonly<Record<QuoteCurrency, number>> = { USD: 360, GBP: 365 };
 
 export type CfdAssetType = 'CfdOnStock' | 'CfdOnIndex' | 'CfdOnEtf';
 
@@ -131,5 +134,5 @@ export function loadCfdCatalogue(path: string): CfdCatalogue | undefined {
 export function borrowCostPerYear(instrument: CfdInstrument): number | undefined {
   return instrument.borrowCostPerDay === undefined
     ? undefined
-    : instrument.borrowCostPerDay * DAYS_PER_YEAR;
+    : instrument.borrowCostPerDay * BORROW_DAY_COUNT[instrument.currency];
 }
