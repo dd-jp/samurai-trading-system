@@ -23,6 +23,7 @@ import {
   AlpacaNewsSource,
   BarsMarketData,
   type BarsSource,
+  CFD_CATALOGUE_PATH,
   type CfdCatalogue,
   createVenueRouter,
   currentConstituents,
@@ -77,7 +78,6 @@ export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
 export const SAXO_SPREADS_PATH = 'data/bars/saxo-spreads.csv';
 export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
-export const CFD_CATALOGUE_PATH = 'data/saxo-cfd-catalogue.json';
 export const DEFAULT_HALF_SPREAD_BPS = 5;
 const LLM_MAX_IN_FLIGHT_PER_ACCOUNT = 1;
 const LLM_EXPECTED_CALL_MS = 20_000;
