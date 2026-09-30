@@ -17,7 +17,9 @@ export type SignalEntryVerdict =
 type SignalLevels = Pick<SignalWire, 'entry' | 'targets' | 'stop'>;
 
 function entryRange(entry: SignalWire['entry']): { low: number; high: number } {
-  return typeof entry === 'number' ? { low: entry, high: entry } : { low: entry[0], high: entry[1] };
+  return typeof entry === 'number'
+    ? { low: entry, high: entry }
+    : { low: entry[0], high: entry[1] };
 }
 
 export function bracketTarget(limit: number, stop: number, targets: readonly number[]): number {

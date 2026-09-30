@@ -1,0 +1,111 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { LogEntry } from '../../../shared/index.js';
+import type { SignalPass, SignalProcessorStore } from '../index.js';
+import { SignalLoop, type SignalLoopDeps } from './loop.js';
+
+const NOW = new Date('2026-09-30T14:00:00.000Z');
+
+function harness(overrides: Partial<SignalLoopDeps> = {}, pass?: () => Promise<SignalPass>) {
+  const logs: LogEntry[] = [];
+  const opened: string[] = [];
+  const closed: string[] = [];
+  const signals: SignalProcessorStore = {
+    due: () => [{ signal_id: 's1' } as never],
+    appendEvent: () => {},
+  };
+  const processSignals = vi.fn(
+    pass ?? (() => Promise.resolve<SignalPass>({ ran: true, outcomes: [] })),
+  );
+  const deps: SignalLoopDeps = {
+    signals,
+    calendar: { isOpen: () => true },
+    clock: { now: () => NOW },
+    logger: { log: (entry) => logs.push(entry) },
+    openRoot: (tradingDate) => {
+      opened.push(tradingDate);
+      return { processSignals, close: () => closed.push(tradingDate) };
+    },
+    ...overrides,
+  };
+  return { loop: new SignalLoop(deps), logs, opened, closed, processSignals };
+}
+
+describe('SignalLoop', () => {
+  it('opens a root for the ET session date, processes, reports and closes it', async () => {
+    const { loop, logs, opened, closed, processSignals } = harness();
+    await loop.tick();
+    expect(opened).toEqual(['2026-09-30']);
+    expect(closed).toEqual(['2026-09-30']);
+    expect(processSignals).toHaveBeenCalledWith(expect.anything(), NOW);
+    expect(logs.map((entry) => entry.event)).toEqual(['v2_signal_pass']);
+  });
+
+  it('never opens a root while the market is closed or nothing is due', async () => {
+    const closedMarket = harness({ calendar: { isOpen: () => false } });
+    await closedMarket.loop.tick();
+    expect(closedMarket.opened).toEqual([]);
+    const idle = harness({ signals: { due: () => [], appendEvent: () => {} } });
+    await idle.loop.tick();
+    expect(idle.opened).toEqual([]);
+  });
+
+  it('logs a skipped pass', async () => {
+    const { loop, logs } = harness({}, () =>
+      Promise.resolve({ ran: false, reason: 'lease_held', detail: 'cycle (pid 7)' }),
+    );
+    await loop.tick();
+    expect(logs).toEqual([
+      expect.objectContaining({
+        event: 'v2_signal_pass_skipped',
+        message: 'lease_held: cycle (pid 7)',
+      }),
+    ]);
+  });
+
+  it('logs a failed pass and still closes the root', async () => {
+    const { loop, logs, closed } = harness({}, () => Promise.reject(new Error('boom')));
+    await loop.tick();
+    expect(logs).toEqual([
+      expect.objectContaining({ level: 'error', event: 'v2_signal_pass_failed', message: 'boom' }),
+    ]);
+    expect(closed).toEqual(['2026-09-30']);
+  });
+
+  it('logs a root that fails to open', async () => {
+    const { loop, logs } = harness({
+      openRoot: () => {
+        throw new Error('no keys');
+      },
+    });
+    await loop.tick();
+    expect(logs.map((entry) => entry.message)).toEqual(['no keys']);
+  });
+
+  it('serialises ticks: one arriving mid-pass runs one more pass after it, never beside it', async () => {
+    let release: () => void = () => {};
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const { loop, processSignals } = harness({}, async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      if (processSignals.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      inFlight -= 1;
+      return { ran: true, outcomes: [] };
+    });
+    const first = loop.tick();
+    const second = loop.tick();
+    const third = loop.tick();
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    release();
+    await first;
+    expect(processSignals).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(1);
+    await loop.tick();
+    expect(processSignals).toHaveBeenCalledTimes(3);
+  });
+});

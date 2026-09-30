@@ -1,10 +1,4 @@
-import type {
-  BookSpec,
-  SignalWire,
-  SleeveDecision,
-  V2Bar,
-} from '../../../../contracts/index.js';
-import type { LlmPanel } from '../signal/index.js';
+import type { BookSpec, SignalWire, SleeveDecision, V2Bar } from '../../../../contracts/index.js';
 import {
   civilDateKey,
   ET_ZONE,
@@ -14,6 +8,7 @@ import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
 import { isFresh } from '../data/index.js';
 import type { ReconcileVerdict } from '../journal/journal.js';
+import type { LlmPanel } from '../signal/index.js';
 import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
 import { planSignalEntry, type SignalEntryPlan } from './entry.js';
 import type { SignalStore } from './store.js';
@@ -21,9 +16,20 @@ import { SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
 
 const TICKET = '#1941';
 
+const CONTROL_REFUSAL = {
+  paused: 'manual_control_paused',
+  halted: 'manual_control_halted',
+} as const;
+
+const OUTCOME_EVENT: Readonly<Record<SignalOutcomeStatus, string>> = {
+  processed: 'v2_signal_processed',
+  refused: 'v2_signal_refused',
+  failed: 'v2_signal_failed',
+};
+
 export interface SignalProcessorDeps {
   readonly cycle: CycleDeps;
-  readonly latestReconcile: (tradingDate: string) => ReconcileVerdict;
+  readonly latestReconcile: (tradingDate: string, venue: 'alpaca') => ReconcileVerdict;
   readonly signals: Pick<SignalStore, 'due' | 'appendEvent'>;
   readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
   readonly constituents: (tradingDate: string) => readonly string[];
@@ -102,12 +108,15 @@ function gateRefusal(
   }
   const control = deps.cycle.controls.current();
   if (control.state !== 'running') {
-    return { code: `manual_control_${control.state}`, detail: control.reason };
+    return { code: CONTROL_REFUSAL[control.state], detail: control.reason };
   }
   const capital = deps.cycle.risk.capitalRefusal(tradingDate);
   if (capital !== undefined) return { code: 'no_capital_config', detail: capital };
   if (!deps.constituents(tradingDate).includes(signal.symbol)) {
-    return { code: 'not_in_universe', detail: `${signal.symbol} is not a current S&P 500 constituent` };
+    return {
+      code: 'not_in_universe',
+      detail: `${signal.symbol} is not a current S&P 500 constituent`,
+    };
   }
   return undefined;
 }
@@ -134,7 +143,9 @@ function admit(
 }
 
 function entryRange(entry: SignalWire['entry']): { low: number; high: number } {
-  return typeof entry === 'number' ? { low: entry, high: entry } : { low: entry[0], high: entry[1] };
+  return typeof entry === 'number'
+    ? { low: entry, high: entry }
+    : { low: entry[0], high: entry[1] };
 }
 
 function decisionFor(
@@ -178,7 +189,7 @@ function decisionFor(
 }
 
 function reconcileBlocked(deps: SignalProcessorDeps, tradingDate: string): Set<string> {
-  const verdict = deps.latestReconcile(tradingDate);
+  const verdict = deps.latestReconcile(tradingDate, 'alpaca');
   const blocked = new Set<string>();
   for (const book of signalsBooks(deps)) {
     const unreconciled = !simulated(deps, book) && !verdict.reconciled.has(book.id);
@@ -206,7 +217,11 @@ function journalBlocked(
   }
 }
 
-function passDetail(veto: SignalVeto, report: EntryPassReport, blocked: ReadonlySet<string>): string {
+function passDetail(
+  veto: SignalVeto,
+  report: EntryPassReport,
+  blocked: ReadonlySet<string>,
+): string {
   const blockedNote = blocked.size === 0 ? '' : `; reconcile blocked ${[...blocked].join(', ')}`;
   return (
     `veto ${veto.kind}: ${veto.reason}; entries ${report.entries}, submitted ${report.submitted_orders}, ` +
@@ -279,7 +294,7 @@ function settle(
     trace_id: `v2-signal-${signal.signal_id}`,
     stage: 'v2',
     level: status === 'failed' ? 'error' : 'info',
-    event: `v2_signal_${status}`,
+    event: OUTCOME_EVENT[status],
     message: `${signal.symbol} ${signal.signal_id}: ${detail}`,
   });
   return { signal_id: signal.signal_id, symbol: signal.symbol, status, detail };
@@ -291,11 +306,23 @@ async function processOne(
   tradingDate: string,
 ): Promise<SignalOutcome> {
   if (alreadySubmitted(deps, signal)) {
-    return settle(deps, signal, 'processed', 'already_submitted: an entry order for this signal exists');
+    return settle(
+      deps,
+      signal,
+      'processed',
+      'already_submitted: an entry order for this signal exists',
+    );
   }
   const admitted = admit(deps, signal, tradingDate);
   if ('code' in admitted) return refuse(deps, signal, tradingDate, admitted);
   return settle(deps, signal, 'processed', await enter(deps, signal, tradingDate, admitted));
+}
+
+export function signalsDue(
+  deps: Pick<SignalProcessorDeps, 'signals' | 'calendar'>,
+  now: Date,
+): boolean {
+  return deps.calendar.isOpen(now) && deps.signals.due(now).length > 0;
 }
 
 export async function processDueSignals(

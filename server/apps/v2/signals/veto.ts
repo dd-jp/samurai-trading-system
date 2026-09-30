@@ -70,7 +70,9 @@ export function vetoContext(input: SignalVetoInput): Record<string, unknown> {
   };
 }
 
-export function parseVetoReply(raw: string): { valid: true; data: VetoReply } | { valid: false; reason: string } {
+export function parseVetoReply(
+  raw: string,
+): { valid: true; data: VetoReply } | { valid: false; reason: string } {
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
   if (start < 0 || end < start) return { valid: false, reason: 'no JSON object' };

@@ -427,23 +427,28 @@ describe('Journal.latestReconcile (#1941)', () => {
   it('reads nothing reconciled on a day with no run', () => {
     const journal = new Journal(openSharedStore(':memory:'), new SimulatedClock(new Date()));
     run(journal, '2026-09-29', 'alpaca', 'broker', 'clean', ['signals/primary']);
-    const verdict = journal.latestReconcile('2026-09-30');
+    const verdict = journal.latestReconcile('2026-09-30', 'alpaca');
     expect([...verdict.reconciled]).toEqual([]);
     expect([...verdict.blocked]).toEqual([]);
   });
 
-  it('blocks a book any venue group of the latest run left unclean, per venue and source', () => {
+  it('reads the venue latest run per source, and blocks a book any of those left unclean', () => {
     const journal = new Journal(openSharedStore(':memory:'), new SimulatedClock(new Date()));
-    run(journal, '2026-09-30', 'alpaca', 'broker', 'mismatch', ['debate/primary', 'signals/primary']);
-    run(journal, '2026-09-30', 'saxo', 'broker', 'read_failed', ['debate/primary']);
-    run(journal, '2026-09-30', 'alpaca', 'simulated', 'clean', ['signals/no-veto']);
+    run(journal, '2026-09-30', 'alpaca', 'broker', 'mismatch', [
+      'debate/primary',
+      'signals/primary',
+    ]);
+    run(journal, '2026-09-30', 'saxo', 'broker', 'read_failed', ['signals/primary']);
+    run(journal, '2026-09-30', 'alpaca', 'simulated', 'mismatch', ['signals/no-veto']);
     run(journal, '2026-09-30', 'alpaca', 'broker', 'clean', ['debate/primary', 'signals/primary']);
-    const verdict = journal.latestReconcile('2026-09-30');
-    expect([...verdict.reconciled].sort()).toEqual([
+    const alpaca = journal.latestReconcile('2026-09-30', 'alpaca');
+    expect([...alpaca.reconciled].sort()).toEqual([
       'debate/primary',
       'signals/no-veto',
       'signals/primary',
     ]);
-    expect([...verdict.blocked]).toEqual(['debate/primary']);
+    expect([...alpaca.blocked]).toEqual(['signals/no-veto']);
+    const saxo = journal.latestReconcile('2026-09-30', 'saxo');
+    expect([...saxo.blocked]).toEqual(['signals/primary']);
   });
 });

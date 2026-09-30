@@ -48,6 +48,7 @@ import {
   type CapitalConfigStore,
   type PaperBooks,
 } from './risk/index.js';
+import { type LeaseWait, RunLease, withRunLease } from './run-lease.js';
 import {
   ALL_PINS,
   ARM2_SLEEVE_ID,
@@ -72,8 +73,7 @@ import {
   secretsFromEnv,
   verifyNousPins,
 } from './signal/index.js';
-import { type LeaseWait, RunLease, withRunLease } from './run-lease.js';
-import { processDueSignals, type SignalOutcome } from './signals/processor.js';
+import { processDueSignals, type SignalOutcome, signalsDue } from './signals/processor.js';
 import type { SignalStore } from './signals/store.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
@@ -136,7 +136,7 @@ export type SignalProcessorStore = Pick<SignalStore, 'due' | 'appendEvent'>;
 
 export type SignalPass =
   | { readonly ran: true; readonly outcomes: readonly SignalOutcome[] }
-  | { readonly ran: false; readonly heldBy: string };
+  | { readonly ran: false; readonly reason: 'nothing_due' | 'lease_held'; readonly detail: string };
 
 // The 07:30 cycle can wait behind a signals pass (a few LLM calls); well past that, the holder is
 // taken to be wedged and the cycle fails loudly instead of running beside it
@@ -181,7 +181,7 @@ function nousTransportFactory(
     });
 }
 
-function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
+export function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
   return () => [...secretsFromEnv(env), ...saxoTokenSecrets()];
 }
 
@@ -461,22 +461,30 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       });
     },
     processSignals: async (signals, now) => {
+      const deps = {
+        cycle,
+        latestReconcile: (date: string, venue: 'alpaca') =>
+          cycle.journal.latestReconcile(date, venue),
+        signals,
+        panel,
+        constituents,
+        calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),
+      };
+      if (!signalsDue(deps, now)) {
+        return { ran: false, reason: 'nothing_due', detail: 'market closed or no signal due' };
+      }
       const release = lease.tryAcquire('signals');
-      if (release === undefined) return { ran: false, heldBy: lease.current()?.purpose ?? 'nobody' };
+      if (release === undefined) {
+        const holder = lease.current();
+        return {
+          ran: false,
+          reason: 'lease_held',
+          detail: `${holder?.purpose ?? 'nobody'} (pid ${holder?.pid ?? '-'})`,
+        };
+      }
       try {
         await prime();
-        const outcomes = await processDueSignals(
-          {
-            cycle,
-            latestReconcile: (date) => cycle.journal.latestReconcile(date),
-            signals,
-            panel,
-            constituents,
-            calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),
-          },
-          now,
-        );
-        return { ran: true, outcomes };
+        return { ran: true, outcomes: await processDueSignals(deps, now) };
       } finally {
         release();
       }

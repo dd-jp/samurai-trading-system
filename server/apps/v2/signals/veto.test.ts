@@ -76,10 +76,12 @@ describe('vetoContext', () => {
 
 describe('parseVetoReply', () => {
   it('reads a veto and its reason, inside prose or fences', () => {
-    expect(parseVetoReply('```json\n{"veto": true, "reason": " stop inside noise "}\n```')).toEqual({
-      valid: true,
-      data: { veto: true, reason: 'stop inside noise' },
-    });
+    expect(parseVetoReply('```json\n{"veto": true, "reason": " stop inside noise "}\n```')).toEqual(
+      {
+        valid: true,
+        data: { veto: true, reason: 'stop inside noise' },
+      },
+    );
   });
 
   it('caps the reason at 500 characters', () => {
