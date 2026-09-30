@@ -60,6 +60,7 @@ const BARS = new Map<string, BarSeries>([
   ['UP', series('UP', 0.001, 0.02)],
   ['FLAT', series('FLAT', 0, 0.03)],
   ['DOWN', series('DOWN', -0.004, 0.005)],
+  ['GONE', { symbol: 'GONE', bars: series('GONE', 0, 0).bars.slice(0, 71) }],
 ]);
 
 const market = new BarsMarketData(
@@ -604,5 +605,53 @@ describe('runBacktest', () => {
     expect(new Set(equity.slice(1, exitIndex + 1)).size).toBeGreaterThan(1);
     const tail = equity.slice(exitIndex + 5);
     expect(new Set(tail).size).toBe(1);
+  });
+
+  it('#1911: closes a held name at its last close on the first session its bars are over 5 days stale, in the trial and the benchmark', async () => {
+    const lastBarDate = DATES[70] as string;
+    const holdGone =
+      (id: string): SleeveFactory =>
+      (m) => {
+        const inner = trendSleeve(id, 'GONE', 0)(m);
+        const base = spec('backtest');
+        return {
+          ...inner,
+          spec: { ...base, sizing: { ...base.sizing, timeStopTradingDays: 1_000 } },
+          decide: (context, instruments) =>
+            context.tradingDate > (DATES[60] as string)
+              ? Promise.resolve({ decisions: [], refusals: [] })
+              : inner.decide(context, instruments),
+        };
+      };
+    const logs: LogEntry[] = [];
+    const result = await runBacktest(
+      input({
+        trials: [{ config: { gone: true }, sleeve: holdGone('gone') }, FLAT_TRIAL],
+        benchmark: { config: { gone: true }, sleeve: holdGone('gone-benchmark') },
+        logger: { log: (entry) => logs.push(entry) },
+      }),
+    );
+    const exitDate = result.dates.find((date) => date > addDays(lastBarDate, 5)) as string;
+    expect(
+      logs
+        .filter((entry) => entry.event === 'v2_series_ended_exit')
+        .map((entry) => [entry.trace_id, entry.message]),
+    ).toEqual(
+      ['gone/primary', 'gone-benchmark/primary'].map((bookId) => [
+        `v2-${exitDate}`,
+        `${bookId} GONE: series ended ${lastBarDate}, closed at its last close (doc 70 §2.4)`,
+      ]),
+    );
+    const staleMarks = logs.flatMap((entry) =>
+      entry.event === 'v2_cycle_complete'
+        ? (entry.payload as { refusals: string[] }).refusals.filter((r) => r.includes('marked at'))
+        : [],
+    );
+    expect(staleMarks).toEqual([]);
+    const exitIndex = result.dates.indexOf(exitDate) + 1;
+    for (const equity of [result.trials[0]?.equity, result.benchmark.equity] as number[][]) {
+      expect(equity[exitIndex]).toBeLessThan(equity[exitIndex - 1] as number);
+      expect(new Set(equity.slice(exitIndex)).size).toBe(1);
+    }
   });
 });

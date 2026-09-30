@@ -63,6 +63,8 @@ export interface CycleDeps {
   readonly clock: Clock;
   readonly dryRun: boolean;
   readonly logger?: Logger | undefined;
+  // Backtest only: forward paper must read a stale series as a data outage (#1804), never a delisting
+  readonly closeEndedSeries?: boolean;
 }
 
 export interface BookReport {
@@ -459,7 +461,7 @@ class Cycle {
     if (held.exitClientOrderId === undefined) return;
     const order = this.deps.journal.orderFor(held.exitClientOrderId);
     if (order === undefined || !SIMULATED_OUTCOMES.has(order.outcome)) return;
-    const price = simulateMarketExit(this.barsSince(order));
+    const price = this.pendingExitPrice(order);
     if (price === undefined) {
       this.warnIfStale(order);
       return;
@@ -481,6 +483,42 @@ class Cycle {
       qty,
       fee: quote.fee,
     });
+  }
+
+  pendingExitPrice(order: JournalledOrder): number | undefined {
+    return simulateMarketExit(this.barsSince(order)) ?? this.pendingExitAtLastClose(order);
+  }
+
+  endedSeriesBar(instrument: string): V2Bar | undefined {
+    if (this.deps.closeEndedSeries !== true) return undefined;
+    const bar = this.deps.market.lastBarBefore(instrument, this.tradingDate);
+    return bar === undefined || isFresh(bar, this.tradingDate) ? undefined : bar;
+  }
+
+  logEndedSeries(bookId: string, instrument: string, bar: V2Bar): void {
+    this.log(
+      'info',
+      'v2_series_ended_exit',
+      `${bookId} ${instrument}: series ended ${bar.date}, closed at its last close (doc 70 §2.4)`,
+    );
+  }
+
+  pendingExitAtLastClose(order: JournalledOrder): number | undefined {
+    const bar = this.endedSeriesBar(order.instrument);
+    if (bar === undefined) return undefined;
+    this.logEndedSeries(order.book_id, order.instrument, bar);
+    return bar.rawClose;
+  }
+
+  simulatedEndedSeriesExit(bookId: string, instrument: string): void {
+    const held = this.deps.books.position(bookId, instrument);
+    if (held === undefined || held.exitClientOrderId !== undefined) return;
+    const bar = this.endedSeriesBar(instrument);
+    if (bar === undefined) return;
+    this.simulatedExit(bookId, held, bar.rawClose, true, 'series_ended_at_last_close');
+    if (this.deps.books.position(bookId, instrument) === undefined) {
+      this.logEndedSeries(bookId, instrument, bar);
+    }
   }
 
   warnIfStale(order: JournalledOrder): void {
@@ -806,6 +844,7 @@ class Cycle {
     await this.resumePendingExit(book, held);
     if (this.deps.executor.simulates(routeOf(book, held.venue))) {
       this.simulatedBracketExit(book, held);
+      this.simulatedEndedSeriesExit(book.id, held.instrument);
     }
     const afterSimulated = this.deps.books.position(book.id, held.instrument);
     if (afterSimulated === undefined) return;

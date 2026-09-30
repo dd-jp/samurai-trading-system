@@ -3711,3 +3711,125 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     );
   });
 });
+
+describe('runCycle: a held name whose series ends (doc 70 §2.4, #1911)', () => {
+  const LAST_BAR = bar('2026-09-28', {
+    open: 20.4,
+    low: 20.3,
+    high: 20.6,
+    close: 20.4,
+    rawClose: 20.4,
+  });
+  const LAST_CLOSE_GBP = (20.4 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
+  const BOOKS = ['debate/primary', 'debate/no-macro-gate'] as const;
+  const ENDED_LOGS = BOOKS.map((bookId) => [
+    'info',
+    `${bookId} AAPL: series ended 2026-09-28, closed at its last close (doc 70 §2.4)`,
+  ]);
+
+  function ended(deps: Harness, closeEndedSeries: boolean) {
+    const log = vi.fn();
+    const market: MarketData = {
+      ...deps.market,
+      lastBarBefore: (instrument, tradingDate) =>
+        instrument === 'AAPL' && tradingDate > LAST_BAR.date
+          ? LAST_BAR
+          : deps.market.lastBarBefore(instrument, tradingDate),
+      barsBefore: (instrument, tradingDate, count) =>
+        deps.market
+          .barsBefore(instrument, tradingDate, count)
+          .filter((dated) => instrument !== 'AAPL' || dated.date <= LAST_BAR.date),
+    };
+    const run = (tradingDate: string) =>
+      runCycle({ ...deps, market, logger: { log }, closeEndedSeries }, tradingDate);
+    const endedLogs = () =>
+      log.mock.calls
+        .filter(([entry]) => entry.event === 'v2_series_ended_exit')
+        .map(([entry]) => [entry.level, entry.message]);
+    return { run, endedLogs };
+  }
+
+  const freshnessRefusals = (report: { refusals: readonly string[] }) =>
+    report.refusals.filter((refusal) => refusal.includes('marked at'));
+
+  const exitOrderId = (bookId: string, date: string) =>
+    `v2-${bookId.replace('/', '-')}-${date}-AAPL-exit`;
+
+  it('closes both books at the last close less half a spread once the last bar is 5 days stale, then stays flat', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    await run('2026-09-29');
+    const lastFresh = await run('2026-10-03');
+    expect(lastFresh.exits).toBe(0);
+    expect(freshnessRefusals(lastFresh)).toEqual([]);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')).toBeDefined();
+
+    const closing = await run('2026-10-04');
+    expect(closing).toMatchObject({ exits: 2, simulated_orders: 2, fills: 2 });
+    expect(freshnessRefusals(closing)).toEqual([]);
+    for (const bookId of BOOKS) {
+      const clientOrderId = exitOrderId(bookId, '2026-10-04');
+      expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(clientOrderId)).toMatchObject({
+        leg: 'exit',
+        side: 'sell',
+        outcome: 'simulated',
+        payload: { size: 6, detail: 'series_ended_at_last_close', price: 20.4 },
+      });
+      expect(exitFill(deps, clientOrderId)).toEqual({
+        side: 'sell',
+        qty: 6,
+        price_gbp: expect.closeTo(LAST_CLOSE_GBP, 9),
+      });
+    }
+    expect(endedLogs()).toEqual(ENDED_LOGS);
+
+    const after = await run('2026-10-05');
+    expect(after.exits).toBe(0);
+    expect(freshnessRefusals(after)).toEqual([]);
+    expect(endedLogs()).toEqual(ENDED_LOGS);
+  });
+
+  it('with the flag off keeps the position and journals the stale mark, as forward paper does (#1804)', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, false);
+    const stale = await run('2026-10-04');
+    expect(stale.exits).toBe(0);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')?.qty).toBe(6);
+    expect(freshnessRefusals(stale)).toEqual(
+      BOOKS.map(
+        (bookId) =>
+          `${bookId} AAPL: marked at the 2026-09-28 close, no bar in the 5 days before 2026-10-04`,
+      ),
+    );
+    expect(endedLogs()).toEqual([]);
+  });
+
+  it('fills a pending flatten at the last close and keeps its journalled reason', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    deps.setControl('halt');
+    await run('2026-09-29');
+    const waiting = await run('2026-10-03');
+    expect(waiting.fills).toBe(0);
+    deps.setControl('resume');
+    const filled = await run('2026-10-04');
+    expect(filled).toMatchObject({ exits: 0, fills: 2 });
+    for (const bookId of BOOKS) {
+      const clientOrderId = exitOrderId(bookId, '2026-09-29');
+      expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(clientOrderId)?.payload).toMatchObject({
+        reason: 'manual_halt',
+      });
+      expect(exitFill(deps, clientOrderId)).toEqual({
+        side: 'sell',
+        qty: 6,
+        price_gbp: expect.closeTo(LAST_CLOSE_GBP, 9),
+      });
+    }
+    expect(endedLogs()).toEqual(ENDED_LOGS);
+  });
+});
