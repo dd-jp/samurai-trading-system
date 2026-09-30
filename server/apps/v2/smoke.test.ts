@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { printSmoke, runV2Smoke } from './smoke.js';
 
 describe('v2 smoke', () => {
-  it('passes every probe against the committed bars', { timeout: 60_000 }, async () => {
+  it('passes every probe against the local bar store', { timeout: 60_000 }, async () => {
     const result = await runV2Smoke();
     expect(result.probes.filter((probe) => !probe.passed)).toEqual([]);
     expect(result.passed).toBe(true);

@@ -25,7 +25,13 @@ import {
   roundPrices,
   type SymbolOutcome,
 } from './bar-refresh-core.js';
-import { CALENDAR_REFERENCE, currentConstituents, isFresh } from './data/index.js';
+import { cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
+import {
+  CALENDAR_REFERENCE,
+  CFD_CATALOGUE_PATH,
+  currentConstituents,
+  isFresh,
+} from './data/index.js';
 import { saxoBarRefreshFor } from './saxo-bar-refresh.js';
 
 export type { BarRefresh };
@@ -155,6 +161,7 @@ export function barRefreshFor(
   tradingDate: string,
   constituentsPath: string,
   logger: Logger,
+  cfdCataloguePath: string = CFD_CATALOGUE_PATH,
 ): BarRefresh {
   if (dryRun) return NO_BAR_REFRESH;
   const api = new AlpacaBarsApi(credentialsFromEnv(env));
@@ -169,5 +176,11 @@ export function barRefreshFor(
       }
     },
   };
-  return inSequence([alpaca, saxoBarRefreshFor(env, tradingDate, logger)]);
+  const cfdCatalogue = cfdCatalogueRefreshFor(env, {
+    tradingDate,
+    constituents,
+    path: cfdCataloguePath,
+    logger,
+  });
+  return inSequence([alpaca, saxoBarRefreshFor(env, tradingDate, logger), cfdCatalogue]);
 }

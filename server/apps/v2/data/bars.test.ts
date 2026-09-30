@@ -38,7 +38,9 @@ describe('ParquetBarsSource', () => {
   it('refuses to prime from a venue with no series rather than serve nothing', async () => {
     directory = mkdtempSync(join(tmpdir(), 'v2-bars-'));
     const source = new ParquetBarsSource(join(directory, 'absent'), 'alpaca');
-    await expect(source.prime()).rejects.toThrow(/no alpaca series under .*absent/);
+    await expect(source.prime()).rejects.toThrow(
+      /no alpaca series under .*absent \(npm run bars:snapshot restores/,
+    );
     expect(() => source.load('AAPL')).toThrow(/before prime/);
   });
 
