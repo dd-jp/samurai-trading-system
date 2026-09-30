@@ -206,6 +206,12 @@ function withinLimit(side: OrderSide, limit: number, price: number): number {
 
 const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'refused_dry_run']);
 
+export type EntryOrderId = (book: BookSpec, instrument: string, tradingDate: string) => string;
+
+function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: string): string {
+  return `v2-${book.id.replaceAll('/', '-')}-${tradingDate}-${instrument}`;
+}
+
 class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
@@ -225,6 +231,7 @@ class Cycle {
     private readonly tradingDate: string,
     private readonly macro: MacroGateVerdict,
     private readonly control: ManualControl,
+    private readonly entryOrderIdFor: EntryOrderId = defaultEntryOrderId,
   ) {}
 
   fxFor(venue: Venue): number {
@@ -909,7 +916,7 @@ class Cycle {
   }
 
   entryOrderId(book: BookSpec, instrument: string): string {
-    return `v2-${book.id.replaceAll('/', '-')}-${this.tradingDate}-${instrument}`;
+    return this.entryOrderIdFor(book, instrument, this.tradingDate);
   }
 
   async submitEntry(
@@ -1406,5 +1413,47 @@ async function runUnmarked(
     rejected_orders: tally.rejected,
     refusals,
     books: bookReports,
+  };
+}
+
+export interface EntryPass {
+  readonly tradingDate: string;
+  readonly sleeveId: string;
+  readonly decisionsFor: (book: BookSpec) => readonly SleeveDecision[];
+  readonly entryOrderId: EntryOrderId;
+  readonly blockedBookIds: ReadonlySet<string>;
+}
+
+export interface EntryPassReport {
+  readonly entries: number;
+  readonly submitted_orders: number;
+  readonly simulated_orders: number;
+  readonly dry_run_refusals: number;
+  readonly rejected_orders: number;
+  readonly refusals: readonly string[];
+}
+
+// Entries only: fills, reconcile, exits and marks stay with the daily cycle, which holds the run
+// lease against this pass
+export async function runEntryPass(deps: CycleDeps, pass: EntryPass): Promise<EntryPassReport> {
+  const cycle = new Cycle(
+    deps,
+    pass.tradingDate,
+    macroGate(pass.tradingDate),
+    deps.controls.current(),
+    pass.entryOrderId,
+  );
+  cycle.blockEntries({ blockedBookIds: pass.blockedBookIds, refusals: [] });
+  for (const book of deps.books.forSleeve(pass.sleeveId)) {
+    await cycle.entries(book, pass.decisionsFor(book));
+  }
+  const { tally } = cycle;
+  return {
+    entries: tally.entries,
+    submitted_orders: tally.submitted,
+    simulated_orders: tally.simulated,
+    dry_run_refusals: tally.refused,
+    rejected_orders: tally.rejected,
+    refusals: cycle.refusals,
   };
 }

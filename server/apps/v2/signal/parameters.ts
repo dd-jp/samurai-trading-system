@@ -76,13 +76,6 @@ export const RECONCILE_CASH_TOLERANCE_GBP = unset<number>('RECONCILE_CASH_TOLERA
 // the count is the builder's default until David sets it
 export const LSE_RESERVED_SLOTS = 4;
 
-// Alpaca's order documentation shows market and limit bracket parents only; until a stop parent
-// is verified, a signal whose entry sits above the last close is refused in both signals books
-export const SIGNAL_BUY_STOP_BRACKET_VERIFIED = unset<boolean>(
-  'SIGNAL_BUY_STOP_BRACKET_VERIFIED',
-  '#1941',
-);
-
 export const CFD_COST_MODEL = unset<CfdCostModel>('CFD_COST_MODEL', '#1850');
 export const CFD_SPREAD_MODEL = unset<CfdSpreadModel>('CFD_SPREAD_MODEL', '#1850');
 export const CFD_FINANCING_MODEL = unset<CfdFinancingModel>('CFD_FINANCING_MODEL', '#1850');
@@ -215,7 +208,6 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   LSE_LIQUIDITY_SCREEN,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
   RECONCILE_CASH_TOLERANCE_GBP,
-  SIGNAL_BUY_STOP_BRACKET_VERIFIED,
 ];
 
 // A set parameter never blocks a cycle, so this list only ever holds an unset one;
@@ -225,5 +217,4 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
-  SIGNAL_BUY_STOP_BRACKET_VERIFIED,
 ];

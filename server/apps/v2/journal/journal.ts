@@ -33,6 +33,11 @@ export function inputsHash(
   });
 }
 
+export interface ReconcileVerdict {
+  readonly reconciled: ReadonlySet<string>;
+  readonly blocked: ReadonlySet<string>;
+}
+
 export class Journal implements DecisionJournal {
   constructor(
     private readonly db: StoreHandle,
@@ -208,6 +213,27 @@ export class Journal implements DecisionJournal {
         refusal.instrument ?? null,
         this.#now(),
       );
+  }
+
+  latestReconcile(tradingDate: string): ReconcileVerdict {
+    const rows = this.db
+      .prepare(
+        `SELECT status, book_ids FROM v2_reconciles r
+         WHERE trading_date = ? AND reconcile_id = (
+           SELECT MAX(reconcile_id) FROM v2_reconciles
+           WHERE trading_date = r.trading_date AND venue = r.venue AND source = r.source)`,
+      )
+      .all(tradingDate) as { status: string; book_ids: string }[];
+    const reconciled = new Set<string>();
+    const blocked = new Set<string>();
+    for (const row of rows) {
+      const bookIds = JSON.parse(row.book_ids) as string[];
+      for (const bookId of bookIds) {
+        reconciled.add(bookId);
+        if (row.status !== 'clean') blocked.add(bookId);
+      }
+    }
+    return { reconciled, blocked };
   }
 
   recordReconcile(run: JournalledReconcile): void {
