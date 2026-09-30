@@ -14,7 +14,6 @@ import {
   SAXO_COMMISSION_PER_SIDE,
 } from '../../../pipeline/momentum/index.js';
 import type { Logger } from '../../../shared/index.js';
-import { isCfdVenue } from '../data/index.js';
 import { averageDailyNotional } from '../risk/index.js';
 
 const BPS = 10_000;
@@ -54,7 +53,7 @@ export function venueHalfSpreadBps(
   cfdSpreadModel: CfdSpreadModel | undefined,
 ): FillPricing['halfSpreadBps'] {
   return (venue, instrument) => {
-    if (!isCfdVenue(venue)) return cashHalfSpreadBps(instrument);
+    if (venue === 'saxo' || venue === 'alpaca') return cashHalfSpreadBps(instrument);
     if (cfdSpreadModel === undefined) throw new CfdCostModelUnsetError();
     return cfdSpreadModel.halfSpreadBps(venue);
   };

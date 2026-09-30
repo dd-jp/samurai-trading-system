@@ -5,8 +5,8 @@ import type { QuoteCurrency } from './venues.js';
 export const CFD_CATALOGUE_PATH = 'data/saxo-cfd-catalogue.json';
 export const CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS = 3;
 // Measured on the live infoprices/list, 2026-09-30: Saxo's USD CfdBorrowingCost is the annual
-// rate / 360 (0.5% reads 0.0000138889 a day), its GBP one the annual rate / 365 (ISF's 2%).
-// Saxo's margin schedule states the same for financing: USD ACT/360, GBP ACT/365
+// rate / 360 (0.5% reads 0.0000138889 a day), its GBP one the annual rate / 365 (ISF's 2%);
+// Saxo's margin schedule states the same for financing, USD ACT/360 and GBP ACT/365
 // (home.saxo/en-gb/rates-and-conditions/commissions-charges-and-margin-schedule, read 2026-09-30)
 export const CFD_DAY_COUNT: Readonly<Record<QuoteCurrency, number>> = { USD: 360, GBP: 365 };
 

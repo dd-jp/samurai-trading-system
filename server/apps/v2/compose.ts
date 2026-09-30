@@ -97,7 +97,7 @@ function fillPricingFor(options: CycleCompositionOptions): FillPricing {
 }
 
 export function composeCycle(options: CycleCompositionOptions): CycleComposition {
-  const { db, clock, logger, market, tradingDate } = options;
+  const { db, clock, logger, market } = options;
   assertCapitalShareRanges(options.sleeves);
   const cfdGate = options.cfdEntryRefusal ?? cfdEntryRefusal;
   assertCfdFillsPriced(cfdGate, options.cfdCosts);
