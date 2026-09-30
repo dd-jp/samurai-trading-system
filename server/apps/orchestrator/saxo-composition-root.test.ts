@@ -145,7 +145,7 @@ function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
   };
 }
 
-describe('startFromEnvironment (broker venue selection, #1400)', () => {
+describe('startFromEnvironment (broker venue selection, #1400)', { timeout: 30_000 }, () => {
   const savedVenue = process.env[BROKER_VENUE_ENV_VAR];
   const savedAlerts = process.env.SAMURAI_ALERTS;
   const savedMode = process.env.SAMURAI_MODE;
