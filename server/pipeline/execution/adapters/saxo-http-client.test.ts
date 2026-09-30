@@ -734,6 +734,17 @@ describe('SaxoHttpBrokerClient', () => {
       });
     }
 
+    function isScopedToPinned(params: URLSearchParams): boolean {
+      return params.get('AccountKey') === 'acct-key' && params.get('ClientKey') === 'client-key';
+    }
+
+    function leakyPage(reader: PagedReader, parsed: URL, nextFor: (parsed: URL) => string) {
+      if (!parsed.searchParams.has('$skip')) {
+        return jsonResponse({ Data: [reader.pinnedRow], __next: nextFor(parsed) });
+      }
+      return jsonResponse({ Data: isScopedToPinned(parsed.searchParams) ? [] : [reader.otherRow] });
+    }
+
     function leakyPagedFetch(
       reader: PagedReader,
       nextFor: (parsed: URL) => string,
@@ -744,13 +755,7 @@ describe('SaxoHttpBrokerClient', () => {
         if (parsed.pathname !== reader.pathname) {
           return jsonResponse({ Message: `unmocked request ${parsed.pathname}` }, 400);
         }
-        if (!parsed.searchParams.has('$skip')) {
-          return jsonResponse({ Data: [reader.pinnedRow], __next: nextFor(parsed) });
-        }
-        const scoped =
-          parsed.searchParams.get('AccountKey') === 'acct-key' &&
-          parsed.searchParams.get('ClientKey') === 'client-key';
-        return jsonResponse({ Data: scoped ? [] : [reader.otherRow] });
+        return leakyPage(reader, parsed, nextFor);
       });
     }
 
