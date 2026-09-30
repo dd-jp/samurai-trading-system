@@ -61,9 +61,11 @@ const TABLES = [
   'v2_commands',
   'v2_reconciles',
   'v2_news',
+  'v2_signals',
+  'v2_signal_events',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 49;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 51;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);

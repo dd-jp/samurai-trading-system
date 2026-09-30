@@ -1,6 +1,5 @@
 import type {
   AlpacaBrokerClient,
-  BrokerAdapter,
   OcoDoubleFillAlertChannel,
   UnpricedFillAlertChannel,
 } from '../../../pipeline/execution/index.js';
@@ -9,7 +8,7 @@ import {
   AlpacaHttpBrokerClient,
   SqliteBrokerStateStore,
 } from '../../../pipeline/execution/index.js';
-import type { Clock, Logger } from '../../../shared/index.js';
+import type { BrokerAdapter, Clock, Logger } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 
 export interface AlpacaPaperBrokerOptions {

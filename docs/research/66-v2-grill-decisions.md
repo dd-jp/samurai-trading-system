@@ -296,6 +296,21 @@ David ruled the three findings of #1870's independent review in chat, recorded o
 
 These change what the candidate trades. The trial hash does not change: it covers the grid, the sleeve spec and the run window, not code, so the first recorded run is of the ruled behaviour. No trial was recorded before this change.
 
+## Rulings of 2026-09-30 — external signals sleeve (#1941)
+
+David ruled in chat, recorded on [#1941](https://github.com/dd-jp/samurai-trading-system/issues/1941); the spec is `docs/specs/signals-sleeve-spec.md`.
+
+1. **Own sleeve with an LLM veto.** External signals trade in their own `signals` sleeve. Each entry passes the risk gate plus an LLM entry veto, judged against a `signals/no-veto` shadow book that takes every signal the gate admits (S6, S7 style). Only the primary book submits to Alpaca paper. It is a counted trial.
+2. **Capital:** a £7,000 paper book, the whole idle 70% share of the £10,000 paper start; its loss-cap and daily-cap shares follow the 70% share (2026-09-27 ruling). The rules-based candidates (#1785) have no idle cash while this holds.
+3. **Sizing:** full R, ignoring the signal's own size (recorded as a field): whole shares, 0.5% risk, the 10% position cap and every existing cap.
+4. **Exits:** one bracket. The stop is the signal's stop; the target is the first target at ≥ 2R from entry, else the last target. No ladder; #1853 stands.
+5. **Entry and scope:** US longs only, anything else refused with a named reason. Above the last close the entry is a buy-stop, below it a limit; a zone is a limit at its high.
+6. **Timing:** a signal received outside the US regular session is queued and processed at the next open; one received inside it is processed at once. The session comes from the existing market calendar. This needs an always-on process, `npm run v2:signals`.
+7. **Auth:** none until the VPS move brings an auth service. A Swagger UI and OpenAPI document are served for testing. Build note (not a ruling): the server binds to loopback only until then.
+8. **Payload:** `{ symbol, entry: number | [lo, hi], targets: number[] (1..12), stop, size?, trail_after?, source?, received_at? }`, validated strictly; `trail_after` is stored, not implemented.
+
+Open after these rulings: whether #1854 (stale-price guard, parked "until an external-signal path exists", 2026-09-28) reopens; whether Alpaca accepts a stop parent in a bracket order (its documentation does not say).
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

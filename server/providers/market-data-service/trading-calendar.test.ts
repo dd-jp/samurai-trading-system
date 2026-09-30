@@ -287,6 +287,41 @@ describe('the exhausted-search contract (#691)', () => {
   it('still returns null for a venue that genuinely has no close', () => {
     expect(new AlwaysOpenCalendar().sessionEnd(instant)).toBeNull();
   });
+
+  it('throws when no session open can be found', () => {
+    expect(() => calendar.nextSessionOpen(instant)).toThrow(
+      /No US equity session open found within 10 days after 2026-07-15T18:00:00.000Z/,
+    );
+  });
+});
+
+describe('UsEquityRegularHoursCalendar.nextSessionOpen', () => {
+  const calendar = new UsEquityRegularHoursCalendar();
+  const open = (iso: string) => calendar.nextSessionOpen(new Date(iso)).toISOString();
+
+  it('is the same morning before the bell', () => {
+    expect(open('2026-07-15T08:00:00Z')).toBe('2026-07-15T13:30:00.000Z');
+  });
+
+  it('is the next session once the bell has rung', () => {
+    expect(open('2026-07-15T13:30:00Z')).toBe('2026-07-16T13:30:00.000Z');
+    expect(open('2026-07-15T21:00:00Z')).toBe('2026-07-16T13:30:00.000Z');
+  });
+
+  it('skips a weekend and a holiday', () => {
+    expect(open('2026-11-25T22:00:00Z')).toBe('2026-11-27T14:30:00.000Z');
+    expect(open('2026-07-17T21:00:00Z')).toBe('2026-07-20T13:30:00.000Z');
+  });
+
+  it('follows the ET offset across the DST change', () => {
+    expect(open('2026-11-01T12:00:00Z')).toBe('2026-11-02T14:30:00.000Z');
+  });
+
+  it('refuses a date past the hand-entered table', () => {
+    expect(() => calendar.nextSessionOpen(new Date('2028-03-14T15:00:00Z'))).toThrow(
+      /past the hand-entered table/,
+    );
+  });
 });
 
 describe('the hand-entered table coverage cliff (#684)', () => {

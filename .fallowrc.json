@@ -7,6 +7,7 @@
     "server/apps/v2/smoke.ts",
     "server/apps/v2/set-capital.ts",
     "server/apps/v2/trial-ledger.ts",
+    "server/apps/v2/execution/sim-cfd-stop-drill-cli.ts",
     "e2e/**/*.spec.ts",
     "server/tools/data-cli.ts",
     "client/src/main.tsx"
