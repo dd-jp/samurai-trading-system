@@ -1576,6 +1576,8 @@ describe('runCycle', () => {
   it('counts calendar days between marks and never negatively', () => {
     expect(calendarDaysBetween(undefined, '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-22', '2026-09-25')).toBe(3);
+    expect(calendarDaysBetween('2026-09-25', '2026-09-28')).toBe(3);
+    expect(calendarDaysBetween('2026-10-23', '2026-10-26')).toBe(3);
     expect(calendarDaysBetween('2026-09-25', '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-26', '2026-09-25')).toBe(0);
   });
