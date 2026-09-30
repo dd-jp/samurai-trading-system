@@ -4272,11 +4272,14 @@ describe('runCycle with per-venue sessions (#1933)', () => {
   it.each([
     ['2026-09-30T06:30:00.000Z', '2026-09-30T14:00:00.000Z', ['AAPL', 'ISF']],
     ['2026-09-30T13:30:00.000Z', '2026-09-30T06:30:00.000Z', []],
-  ])('judges the cutoff by a run start of %s, not the cycle clock of %s', async (started, now, entered) => {
-    const deps = { ...sessioned([longAapl, longIsf], now), runStartedAt: new Date(started) };
-    await runCycle(deps, '2026-09-30');
-    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(entered);
-  });
+  ])(
+    'judges the cutoff by a run start of %s, not the cycle clock of %s',
+    async (started, now, entered) => {
+      const deps = { ...sessioned([longAapl, longIsf], now), runStartedAt: new Date(started) };
+      await runCycle(deps, '2026-09-30');
+      for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(entered);
+    },
+  );
 
   it('a late wake still exits and marks', async () => {
     const deps = sessioned([longAapl], '2026-09-24T06:30:00.000Z');
