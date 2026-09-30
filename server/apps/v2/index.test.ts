@@ -21,6 +21,7 @@ import { openSharedStore } from '../../shared/store/index.js';
 import type { CommandRunner } from './backup.js';
 import { type BarRefresh, NO_BAR_REFRESH } from './bar-refresh.js';
 import type { CycleReport } from './cycle.js';
+import { pushDailySummary } from './daily-summary.js';
 import {
   BarsMarketData,
   CfdCatalogue,
@@ -620,6 +621,69 @@ describe('composeV2Root', () => {
     } finally {
       next.close();
     }
+  });
+
+  it('pushes a daily summary of the fixture cycle that ran since the previous one', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'summary.sqlite');
+    seededStore(storePath).close();
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const open = (tradingDate: string) =>
+      composeV2Root({
+        ...fixtures,
+        tradingDate,
+        dryRun: true,
+        storePath,
+        clock,
+        logger: { log: () => {} },
+      });
+    const first = open(ENTRY_DATE);
+    try {
+      await first.run();
+    } finally {
+      first.close();
+    }
+    clock.advanceTo(new Date(`${NEXT_DATE}T07:00:00.000Z`));
+    const next = open(NEXT_DATE);
+    const sent: string[] = [];
+    try {
+      const report = await next.run();
+      await pushDailySummary(
+        {
+          db: next.db,
+          clock,
+          mode: 'dry-run',
+          logger: { log: () => {} },
+          notify: (text) => {
+            sent.push(text);
+            return Promise.resolve();
+          },
+        },
+        report,
+      );
+    } finally {
+      next.close();
+    }
+    expect(sent).toHaveLength(1);
+    const lines = sent[0]?.split('\n') ?? [];
+    expect(lines.slice(0, 2)).toEqual([
+      `Samurai v2 daily summary ${NEXT_DATE} (dry-run)`,
+      `Window: since the last cycle, ${ENTRY_DATE} 07:00 UTC`,
+    ]);
+    expect(
+      lines.filter((line) => /^\S+\/\S+: equity /.test(line)).map((line) => line.split(':')[0]),
+    ).toEqual([
+      'debate/primary',
+      'debate/no-macro-gate',
+      'arm2/technical-only',
+      'signals/primary',
+      'signals/no-veto',
+    ]);
+    expect(lines).toContain(
+      '  decisions 1; entries 0 placed, 1 filled, 0 rejected; exits 0; open 1',
+    );
+    expect(lines.at(-1)).toMatch(/^LLM spend this month: \$\d+\.\d{2} of \$30\.00$/);
   });
 
   it('journals one SAXO_SESSION refusal against #1876 when the LSE leg is refused, and none otherwise', async () => {

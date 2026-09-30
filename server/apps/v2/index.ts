@@ -20,6 +20,7 @@ import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
 import { composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
+import { pushDailySummary } from './daily-summary.js';
 import {
   AlpacaNewsSource,
   BarsMarketData,
@@ -554,6 +555,7 @@ export async function main(
               clock,
               logger,
               barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+              alerts.notify,
             ),
           backup,
         );
@@ -605,6 +607,7 @@ async function runOnce(
   clock: Clock,
   logger: Logger,
   barRefresh: BarRefresh,
+  notify: (text: string) => Promise<void>,
 ): Promise<number> {
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
@@ -621,6 +624,10 @@ async function runOnce(
       }),
     );
     logNewRefusals(root.journal, tradingDate, logger);
+    await pushDailySummary(
+      { db: root.db, clock, mode: dryRun ? 'dry-run' : 'paper', logger, notify },
+      report,
+    );
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);
   } finally {

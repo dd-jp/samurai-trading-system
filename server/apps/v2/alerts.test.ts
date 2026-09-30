@@ -259,6 +259,15 @@ describe('alertsFor', () => {
     }
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('notifies as is, silently, with the bot token scrubbed, and sends nothing on a dry run', async () => {
+    const fetchImpl = okFetch();
+    await alertsFor([], ENV, fetchImpl, recorder().logger).notify(`summary ${TOKEN}`);
+    await alertsFor(['--dry-run'], ENV, fetchImpl, recorder().logger).notify('dry');
+    expect(sentBodies(fetchImpl)).toEqual([
+      { chat_id: '-100777', text: 'summary [TELEGRAM_BOT_TOKEN]', disable_notification: true },
+    ]);
+  });
 });
 
 describe('withAlerts', () => {

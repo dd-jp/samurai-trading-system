@@ -23,6 +23,7 @@ export type AlertSender = (severity: Severity, text: string) => Promise<void>;
 export interface Alerts {
   readonly logger: Logger;
   flush(): Promise<void>;
+  notify(text: string): Promise<void>;
 }
 
 const SEND_TIMEOUT_MS = 10_000;
@@ -90,7 +91,10 @@ export function alertText(severity: Severity, alerts: readonly Alert[], secret: 
     byEvent.set(alert.event, [...(byEvent.get(alert.event) ?? []), alert.message]);
   }
   const lines = [...byEvent].map(([event, messages]) => eventLine(event, messages));
-  const text = [HEADERS[severity], ...lines].join('\n');
+  return sendable([HEADERS[severity], ...lines].join('\n'), secret);
+}
+
+function sendable(text: string, secret: string): string {
   const unsecret = secret === '' ? text : text.split(secret).join('[TELEGRAM_BOT_TOKEN]');
   return truncated(maskCredentials(unsecret));
 }
@@ -173,12 +177,16 @@ export function alertsFor(
         if (matching.length > 0) await send(severity, alertText(severity, matching, secret));
       }
     },
+    notify: (text) => send('warning', sendable(text, secret)),
   };
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export async function withAlerts(run: () => Promise<number>, alerts: Alerts): Promise<number> {
+export async function withAlerts(
+  run: () => Promise<number>,
+  alerts: Pick<Alerts, 'logger' | 'flush'>,
+): Promise<number> {
   try {
     return await run();
   } catch (error) {

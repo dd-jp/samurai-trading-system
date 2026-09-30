@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { formatDailySummary, readDailySummary } from './daily-summary.js';
 import { createVenueRouter, macroGate } from './data/index.js';
 import { composeV2Root } from './index.js';
 import {
@@ -302,7 +303,18 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
     );
     const next = await dryRunOn(SMOKE_NEXT_DATE).run();
     const { filled, cancelled } = settledEntries(store);
+    const summary = readDailySummary(
+      store,
+      new SimulatedClock(new Date(`${SMOKE_NEXT_DATE}T07:00:00.000Z`)),
+      SMOKE_NEXT_DATE,
+    );
     probes.push(
+      probe(
+        "the daily summary covers every book and counts the next day's fills",
+        summary.books.map((book) => book.book_id).join(',') === root.books.ids().join(',') &&
+          summary.books.reduce((n, book) => n + book.entries_filled, 0) === filled,
+        formatDailySummary(summary, 'dry-run').replaceAll('\n', ' | '),
+      ),
       probe(
         'every affordable entry fills or is cancelled on the next bar, and fills reach the books',
         filled > 0 &&
