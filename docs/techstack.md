@@ -35,7 +35,7 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 | Component | Choice | Why |
 |-----------|--------|-----|
 | Open positions / trade log | SQLite (initial) → Postgres (scale) | Crash safety, query flexibility. SQLite gets us to V1. Postgres when concurrent agents need ACID at scale. |
-| Daily bars / analytics | Parquet partitioned by venue, symbol and year, read through DuckDB (`@duckdb/node-api`, exact pin) | Doc 66 D2, doc 67 Step 3b. SQLite keeps live state; the bar store is `data/bars/parquet/` behind `server/providers/bar-store/`. DuckDB runs single-threaded so a rewrite of the same bars is byte-identical. |
+| Daily bars / analytics | Parquet partitioned by venue, symbol and year, read through DuckDB (`@duckdb/node-api`, exact pin) | Doc 66 D2, doc 67 Step 3b. SQLite keeps live state; the bar store is `data/bars/parquet/` behind `server/providers/bar-store/`, gitignored and rebuilt by a re-pull, not by git (#1929). DuckDB runs single-threaded so a rewrite of the same bars is byte-identical. <!-- cite-exempt: untracked — local bar store, gitignored since #1929 --> |
 | Config / params | YAML or JSON | Human-editable, git-trackable. |
 
 ## Messaging / Alerting
