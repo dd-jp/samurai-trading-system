@@ -50,6 +50,12 @@ function openBooks(
   return new PaperBooks(db, clock, new CapitalConfigStore(db, clock), openingDate, sleeves);
 }
 
+function heldAapl(books: PaperBooks): NonNullable<ReturnType<PaperBooks['position']>> {
+  const held = books.position('debate/primary', 'AAPL');
+  if (held === undefined) throw new Error('expected an AAPL position in debate/primary');
+  return held;
+}
+
 function fill(overrides: Partial<BookFill> = {}): BookFill {
   return {
     instrument: 'AAPL',
@@ -259,16 +265,16 @@ describe('PaperBooks', () => {
     const books = openBooks(seededStore());
     books.applyFill('debate/primary', fill({ qty: 3, priceGbp: 90 }));
     books.applySplit('debate/primary', 'AAPL', 1.5, '2026-09-26');
-    const held = books.position('debate/primary', 'AAPL');
-    expect(held?.qty).toBeCloseTo(4.5, 12);
-    expect(held?.avgPriceGbp).toBeCloseTo(60, 12);
-    expect((held?.qty ?? 0) * (held?.avgPriceGbp ?? 0)).toBeCloseTo(270, 9);
+    const held = heldAapl(books);
+    expect(held.qty).toBeCloseTo(4.5, 12);
+    expect(held.avgPriceGbp).toBeCloseTo(60, 12);
+    expect(held.qty * held.avgPriceGbp).toBeCloseTo(270, 9);
     books.applySplit('debate/primary', 'AAPL', 0.1, '2026-09-29');
-    const reversed = books.position('debate/primary', 'AAPL');
-    expect(reversed?.qty).toBeCloseTo(0.45, 12);
-    expect(reversed?.avgPriceGbp).toBeCloseTo(600, 9);
-    expect(reversed?.splitFactor).toBeCloseTo(0.15, 12);
-    expect(reversed?.splitAnchorDate).toBe('2026-09-29');
+    const reversed = heldAapl(books);
+    expect(reversed.qty).toBeCloseTo(0.45, 12);
+    expect(reversed.avgPriceGbp).toBeCloseTo(600, 9);
+    expect(reversed.splitFactor).toBeCloseTo(0.15, 12);
+    expect(reversed.splitAnchorDate).toBe('2026-09-29');
   });
 
   it('#1865: applySplit mirrors a short and leaves absent levels absent', () => {

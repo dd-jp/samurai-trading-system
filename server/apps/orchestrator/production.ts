@@ -1727,6 +1727,42 @@ export function buildHeldAssetsReader(
   };
 }
 
+function thrownMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function resolveFeedbackIntervalMs(intervalMs: number | undefined): number {
+  const resolved = intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new Error(`FeedbackCycleConfig.intervalMs must be positive, got ${resolved}`);
+  }
+  return resolved;
+}
+
+export function feedbackScheduleStartupMessage(
+  readFailed: boolean,
+  dueNow: boolean,
+  nextDue: Date,
+): string {
+  if (readFailed) {
+    return (
+      'daily feedback cycle schedule is UNKNOWN — the store could not be read at ' +
+      "startup, so no catch-up decision was made here; runIfDue's own guarded read " +
+      `decides on its first pass, next boundary at ${nextDue.toISOString()} (#1110)`
+    );
+  }
+  if (dueNow) {
+    return (
+      'daily feedback cycle is due now — catching up on the current boundary, then ' +
+      `resuming the normal schedule, next due at ${nextDue.toISOString()} (#1110)`
+    );
+  }
+  return (
+    'daily feedback cycle already ran for the current boundary — next due at ' +
+    `${nextDue.toISOString()}`
+  );
+}
+
 export function buildProductionOrchestrator(config: ProductionConfig): ProductionOrchestrator {
   const logger = config.logger ?? new JsonLogger();
   const clock = config.clock;
@@ -1934,7 +1970,56 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const { llmCallLogMaxRows, miArchiveRetentionDays, alertDeliveryFailureRetentionDays } =
     components.environment;
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: every statement's position is individually documented as load-bearing — the three prunes must stay OUTSIDE the try (#1045/#1060/#1131), the metrics check must run AFTER the cycle's own success log, and the arm comparison must stay OUTSIDE the metrics guard (#971) and BEFORE the outside-benchmarks call (#981) — extraction risks silently reordering one of these
+  const postThresholdClampAlert = (error: unknown): void => {
+    try {
+      config.thresholdClampAlerts?.postThresholdClampAlert({
+        trace_id: 'feedback-cycle',
+        where: 'daily-kill-line-check',
+        message: thrownMessage(error),
+        reported_at: clock.now(),
+      });
+    } catch (alertError) {
+      logger.log({
+        trace_id: 'feedback-cycle',
+        stage: 'feedback-loop',
+        event: 'threshold_clamp_alert_failed',
+        level: 'error',
+        message: 'threshold clamp alert channel failed',
+        payload: {
+          error: thrownMessage(alertError),
+        },
+      });
+    }
+  };
+
+  // The metrics check runs AFTER the cycle's own success log, and the arm comparison stays OUTSIDE
+  // the metrics guard (#971) and BEFORE the outside-benchmarks call (#981)
+  const runDailyFeedbackSteps = (feedback: FeedbackCycleConfig): void => {
+    const result = runDailyCycle({
+      clock,
+      ...feedbackStores,
+      config: feedback.config,
+      loosen_notices: loosenNotices,
+      proposals: feedback.proposals ?? [],
+    });
+    logger.log({
+      trace_id: 'feedback-cycle',
+      stage: 'feedback-loop',
+      level: 'info',
+      message: 'daily feedback cycle complete',
+      payload: result,
+    });
+
+    if (feedback.metrics !== undefined && metricsSource !== undefined) {
+      runMetricsCheck(metricsSource, feedback.metrics, feedback.config);
+    }
+
+    const comparison = runArmComparison();
+
+    runOutsideBenchmarks(comparison);
+  };
+
+  // The three prunes stay OUTSIDE the try (#1045/#1060/#1131)
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
     pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'daily');
@@ -1947,28 +2032,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     );
 
     try {
-      const result = runDailyCycle({
-        clock,
-        ...feedbackStores,
-        config: feedback.config,
-        loosen_notices: loosenNotices,
-        proposals: feedback.proposals ?? [],
-      });
-      logger.log({
-        trace_id: 'feedback-cycle',
-        stage: 'feedback-loop',
-        level: 'info',
-        message: 'daily feedback cycle complete',
-        payload: result,
-      });
-
-      if (feedback.metrics !== undefined && metricsSource !== undefined) {
-        runMetricsCheck(metricsSource, feedback.metrics, feedback.config);
-      }
-
-      const comparison = runArmComparison();
-
-      runOutsideBenchmarks(comparison);
+      runDailyFeedbackSteps(feedback);
     } catch (error) {
       logger.log({
         trace_id: 'feedback-cycle',
@@ -1979,27 +2043,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         payload: { error: describeThrownSafely(error) },
       });
 
-      if (isThresholdBoundViolation(error)) {
-        try {
-          config.thresholdClampAlerts?.postThresholdClampAlert({
-            trace_id: 'feedback-cycle',
-            where: 'daily-kill-line-check',
-            message: error instanceof Error ? error.message : String(error),
-            reported_at: clock.now(),
-          });
-        } catch (alertError) {
-          logger.log({
-            trace_id: 'feedback-cycle',
-            stage: 'feedback-loop',
-            event: 'threshold_clamp_alert_failed',
-            level: 'error',
-            message: 'threshold clamp alert channel failed',
-            payload: {
-              error: alertError instanceof Error ? alertError.message : String(alertError),
-            },
-          });
-        }
-      }
+      if (isThresholdBoundViolation(error)) postThresholdClampAlert(error);
     }
   };
 
@@ -2076,6 +2120,303 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     runIfDue();
   };
 
+  type CarriedLotReads = Pick<
+    Parameters<typeof buildCarriedLotReporter>[0],
+    'getOpenPositions' | 'getExitFillSizes' | 'arm'
+  >;
+
+  const startArmFillSync = (
+    arm: CarriedLotReads &
+      Pick<
+        Parameters<typeof startFillSync>[0],
+        'execution' | 'reconcileTraceId' | 'fillSyncTraceId'
+      >,
+  ): ReturnType<typeof startFillSync> =>
+    startFillSync({
+      execution: arm.execution,
+      clock,
+      logger,
+      fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+      reconcileTraceId: arm.reconcileTraceId,
+      fillSyncTraceId: arm.fillSyncTraceId,
+      reportCarriedLots: buildCarriedLotReporter({
+        clock,
+        calendar: equityCalendar,
+        flattenAfterCloseMs: config.traderConfig.flatten_after_close_ms,
+        getOpenPositions: arm.getOpenPositions,
+        getExitFillSizes: arm.getExitFillSizes,
+        logger,
+        traceId: arm.fillSyncTraceId,
+        arm: arm.arm,
+        ...(config.traderDiagnosticAlerts === undefined
+          ? {}
+          : { alerts: config.traderDiagnosticAlerts }),
+      }),
+    });
+
+  const startProductionTickLoop = (): ReturnType<typeof startTickLoop> =>
+    startTickLoop({
+      scheduler,
+      runner: tickRunner,
+      clock,
+      logger,
+      persistence,
+      tickIntervalMs: config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
+      maxConcurrentInstruments: config.maxConcurrentInstruments ?? 1,
+      decisionGate: new DebateBarDecisionGate(),
+      tickSkipAlerts: config.tickSkipAlerts ?? loggingAlertChannel('tickSkipAlerts', logger),
+      heldAssets: buildHeldAssetsReader(components),
+    });
+
+  const seedAnalystWeightsAtStartup = (): void => {
+    if (config.feedback === undefined) return;
+    const seedResult = seedAnalystWeights({
+      tuning: feedbackStores.tuning,
+      analyst_ids: components.analysts.analystIds(),
+      dial: config.feedback.config.weights,
+    });
+    logger.log({
+      trace_id: 'startup',
+      stage: 'feedback-loop',
+      level: 'info',
+      message: 'analyst weight rows ready for the daily cycle',
+      payload: { seeded: seedResult.seeded, already_tuned: seedResult.existing },
+    });
+  };
+
+  const armGdeltPolling = (): void => {
+    const gdeltIngestAgent = components.gdeltIngestAgent;
+    const gdeltScoringPass = components.gdeltScoringPass;
+    if (gdeltIngestAgent === undefined) return;
+    const pollGdelt = (trace_id: string): void => {
+      void gdeltIngestAgent
+        .refresh(trace_id)
+        .then(() => {
+          gdeltScoringPass?.run(trace_id);
+        })
+        .catch((error: unknown) => {
+          logCaughtFailure(
+            logger,
+            {
+              trace_id,
+              stage: 'market_intelligence',
+              event: 'gdelt_chain_threw',
+              level: 'warn',
+              message:
+                'market intelligence: the GDELT poll/score chain broke its never-throws ' +
+                'contract; no macro aggregate this poll. The archive is unchanged and the ' +
+                'next poll retries.',
+            },
+            error,
+            {},
+          );
+        });
+    };
+
+    pollGdelt('startup');
+    gdeltHandle = setInterval(() => {
+      pollGdelt('gdelt-poll');
+    }, config.gdeltPollIntervalMs ?? DEFAULT_GDELT_POLL_INTERVAL_MS);
+  };
+
+  const prefetchBarsAtStartup = async (): Promise<void> => {
+    const prefetch = await prefetchBars({
+      marketData: components.marketData,
+      universe: components.universe,
+      asOf: clock.now(),
+      logger,
+      traceId: 'startup',
+    });
+    if (prefetch.warmed === 0 && prefetch.failed > 0) {
+      logger.log({
+        trace_id: 'startup',
+        stage: 'market_data',
+        event: 'bar_prefetch_total_failure',
+        level: 'error',
+        message:
+          `bar prefetch warmed ZERO of ${prefetch.failed} (instrument, window) pair(s) — ` +
+          'the tick loop is about to arm on a completely cold store; the first tick will pay ' +
+          'the full cold sweep this ticket exists to avoid',
+        payload: { failed: prefetch.failed },
+      });
+    }
+  };
+
+  const warnFeedbackUnconfigured = (): void => {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'feedback-loop',
+      event: 'feedback_cycle_unconfigured',
+      level: 'warn',
+      message:
+        'ProductionConfig.feedback is not set — the daily feedback cycle will NEVER run. ' +
+        'No analyst weight is attributed, no dial is tuned, and no kill-line ' +
+        '(pbo_over_max, oos_sharpe_under_min, dsr_insignificant, ' +
+        'live_backtest_divergence_over_max) is ever evaluated. The run will look healthy ' +
+        'and learn nothing.',
+      payload: { feedback_cycle: 'not_started' },
+    });
+  };
+
+  const logRevalidationArming = (): void => {
+    const revalidationSelections = selectionStore.getLatestPerAssetClass();
+    const usableSelections = usableRevalidationSelections(revalidationSelections, clock.now());
+    const revalidationGatedKillLines = [
+      'pbo_over_max',
+      'oos_sharpe_under_min',
+      'dsr_insignificant',
+    ];
+    if (usableSelections.length === 0) {
+      logger.log({
+        trace_id: 'startup',
+        stage: 'feedback-loop',
+        event: 'revalidation_selection_absent',
+        level: 'warn',
+        message:
+          'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY ' +
+          'from a revalidation snapshot (DailyMetricsSample.revalidation), and no usable ' +
+          'frozen Stage 2 selection exists — none persisted, all older than ' +
+          `${DEFAULT_STAGE2_MAX_AGE_DAYS} days, or PBO/DSR refused. Expect these three in ` +
+          '`not_evaluated` on every cycle (un-run, NOT passed) until a direct Stage 2 run ' +
+          '(`node dist/server/tools/run-stage2.js`) freezes a fresh selection (#384, #579).',
+        payload: {
+          kill_lines_gated_on_revalidation: revalidationGatedKillLines,
+          persisted_selections: revalidationSelections.length,
+        },
+      });
+      return;
+    }
+    logger.log({
+      trace_id: 'startup',
+      stage: 'feedback-loop',
+      level: 'info',
+      message:
+        'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are ARMED by the ' +
+        'frozen Stage 2 selection (#384): the metrics source reports the worse-PBO ' +
+        'snapshot once the daily suite clears its observation gate (ADR-0006 §5, ' +
+        '~60 sessions). Until then they read `not_evaluated`; after a selection ages ' +
+        `past ${DEFAULT_STAGE2_MAX_AGE_DAYS} days they go inert again until Stage 2 ` +
+        'is re-run (#579).',
+      payload: {
+        kill_lines_gated_on_revalidation: revalidationGatedKillLines,
+        selections: usableSelections.map((selection) => ({
+          asset_class: selection.asset_class,
+          selected_at: selection.selected_at.toISOString(),
+          pbo: selection.pbo,
+          dsr: selection.dsr,
+        })),
+      },
+    });
+  };
+
+  const logFeedbackMetricsWiring = (metrics: FeedbackCycleConfig['metrics']): void => {
+    if (metrics === undefined) {
+      logger.log({
+        trace_id: 'startup',
+        stage: 'feedback-loop',
+        event: 'feedback_metrics_unconfigured',
+        level: 'warn',
+        message:
+          'FeedbackCycleConfig.metrics is not set — the daily cycle will tune dials but ' +
+          'computeMetrics will NEVER run, so all four kill-lines stay unevaluated. A ' +
+          'MetricsSuite CAN be produced in-repo since #345: supply ' +
+          'SqliteDailyEquityMetricsSource over the daily_equity series this process is ' +
+          'already recording every tick (ADR-0006). It self-gates below 60 observations, ' +
+          'so arming it during a short soak evaluates nothing rather than acting on noise.',
+        payload: { kill_lines: 'not_evaluated' },
+      });
+      return;
+    }
+    logger.log({
+      trace_id: 'startup',
+      stage: 'feedback-loop',
+      level: 'info',
+      message:
+        'FeedbackCycleConfig.metrics is wired — computeMetrics runs on every daily cycle. ' +
+        'The source gates itself below its minimum observation count (ADR-0006 §5), so ' +
+        'early cycles report "no daily MetricsSuite" with the count rather than acting on ' +
+        'a Sharpe made of noise. Which kill-lines that suite can actually answer is ' +
+        'reported per cycle in `not_evaluated`, and at startup by the warns that follow.',
+      payload: { metrics_source: 'wired' },
+    });
+
+    logRevalidationArming();
+
+    if (metrics.backtest_reference_sharpe <= 0) {
+      logger.log({
+        trace_id: 'startup',
+        stage: 'feedback-loop',
+        event: 'backtest_reference_sharpe_inert',
+        level: 'warn',
+        message:
+          'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and ' +
+          'can never breach. A non-positive reference has no meaningful relative drop, so ' +
+          'the check returns 0 by design; set ' +
+          'FeedbackCycleConfig.metrics.backtest_reference_sharpe to the frozen selected ' +
+          "config's backtest Sharpe to arm it (#375). Warned once per process.",
+        payload: {
+          backtest_reference_sharpe: metrics.backtest_reference_sharpe,
+          kill_line: 'live_backtest_divergence_over_max',
+        },
+      });
+    }
+  };
+
+  const readStoredFeedbackBoundary = (): { stored: Date | null; readFailed: boolean } => {
+    try {
+      return { stored: feedbackScheduleStore.lastBoundary(), readFailed: false };
+    } catch (error) {
+      logger.log({
+        trace_id: 'startup',
+        stage: 'feedback-loop',
+        event: 'feedback_schedule_read_failed',
+        level: 'error',
+        message:
+          'could not read the feedback cycle schedule store at startup — proceeding with ' +
+          "boot; runIfDue's own guarded read (below) will retry it on the first pass (#1110)",
+        payload: { error: thrownMessage(error) },
+      });
+      return { stored: null, readFailed: true };
+    }
+  };
+
+  // The intervalMs check is a deliberate boot crash at this point in the sequence, and the boundary
+  // is read BEFORE scheduleFeedbackCycle's first check so the log reports what was true when the
+  // process came up, not the post-catch-up state
+  const runFeedbackCycleStartup = (): void => {
+    const feedback = config.feedback;
+    if (feedback === undefined) {
+      warnFeedbackUnconfigured();
+      return;
+    }
+    logFeedbackMetricsWiring(feedback.metrics);
+    const feedbackIntervalMs = resolveFeedbackIntervalMs(feedback.intervalMs);
+    const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
+    const { stored: feedbackStoredBoundary, readFailed: feedbackScheduleReadFailed } =
+      readStoredFeedbackBoundary();
+    const feedbackDueNow = isBoundaryDue(feedbackBoundaryNow, feedbackStoredBoundary);
+    const feedbackNextDue = nextBoundary(new Date(), feedbackIntervalMs);
+    logger.log({
+      trace_id: 'startup',
+      stage: 'feedback-loop',
+      level: 'info',
+      message: feedbackScheduleStartupMessage(
+        feedbackScheduleReadFailed,
+        feedbackDueNow,
+        feedbackNextDue,
+      ),
+      payload: {
+        boundary: feedbackBoundaryNow.toISOString(),
+        interval_ms: feedbackIntervalMs,
+        stored_boundary: feedbackStoredBoundary?.toISOString() ?? null,
+        stored_boundary_read_failed: feedbackScheduleReadFailed,
+        next_due: feedbackNextDue.toISOString(),
+      },
+    });
+
+    scheduleFeedbackCycle(feedback, feedbackIntervalMs);
+  };
+
   return {
     tickRunner,
     scheduler,
@@ -2092,7 +2433,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     marketIntelligenceRefresh: components.marketIntelligenceRefresh,
     universe: components.universe,
 
-    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: startup sequencing where order is the point — both reconciles must run before the tick loop, weight seeding before the loops start, and the bar prefetch is "the last line before the tick loop is armed" (#1543)
+    // Order is the point: both reconciles run before the tick loop, weight seeding before the
+    // loops start, and the bar prefetch is the last line before the tick loop is armed (#1543)
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(
         config.db,
@@ -2112,20 +2454,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         traceId: CONTROL_RECONCILE_TRACE_ID,
       });
 
-      if (config.feedback !== undefined) {
-        const seedResult = seedAnalystWeights({
-          tuning: feedbackStores.tuning,
-          analyst_ids: components.analysts.analystIds(),
-          dial: config.feedback.config.weights,
-        });
-        logger.log({
-          trace_id: 'startup',
-          stage: 'feedback-loop',
-          level: 'info',
-          message: 'analyst weight rows ready for the daily cycle',
-          payload: { seeded: seedResult.seeded, already_tuned: seedResult.existing },
-        });
-      }
+      seedAnalystWeightsAtStartup();
 
       const thresholdSeeds = riskThresholdsFrom(config.riskConfig);
       const seededThresholds = Object.entries(thresholdSeeds).filter(([name, value]) =>
@@ -2148,39 +2477,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         void heartbeat.emit(clock);
       }, config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
 
-      const gdeltIngestAgent = components.gdeltIngestAgent;
-      const gdeltScoringPass = components.gdeltScoringPass;
-      if (gdeltIngestAgent !== undefined) {
-        const pollGdelt = (trace_id: string): void => {
-          void gdeltIngestAgent
-            .refresh(trace_id)
-            .then(() => {
-              gdeltScoringPass?.run(trace_id);
-            })
-            .catch((error: unknown) => {
-              logCaughtFailure(
-                logger,
-                {
-                  trace_id,
-                  stage: 'market_intelligence',
-                  event: 'gdelt_chain_threw',
-                  level: 'warn',
-                  message:
-                    'market intelligence: the GDELT poll/score chain broke its never-throws ' +
-                    'contract; no macro aggregate this poll. The archive is unchanged and the ' +
-                    'next poll retries.',
-                },
-                error,
-                {},
-              );
-            });
-        };
-
-        pollGdelt('startup');
-        gdeltHandle = setInterval(() => {
-          pollGdelt('gdelt-poll');
-        }, config.gdeltPollIntervalMs ?? DEFAULT_GDELT_POLL_INTERVAL_MS);
-      }
+      armGdeltPolling();
 
       const polymarketAgent = components.polymarketAgent;
       void polymarketAgent.refresh('startup');
@@ -2188,255 +2485,28 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         void polymarketAgent.refresh('polymarket-poll');
       }, config.polymarketPollIntervalMs ?? DEFAULT_POLYMARKET_POLL_INTERVAL_MS);
 
-      controlFillSync = startFillSync({
+      controlFillSync = startArmFillSync({
         execution: components.controlArmWiring.fillSyncExecution,
-        clock,
-        logger,
-        fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+        getOpenPositions: () => components.controlArmWiring.store.getOpenPositions(),
+        getExitFillSizes: (keys) => components.controlArmWiring.store.getExitFillSizes(keys),
         reconcileTraceId: CONTROL_RECONCILE_TRACE_ID,
         fillSyncTraceId: CONTROL_FILL_SYNC_TRACE_ID,
-        reportCarriedLots: buildCarriedLotReporter({
-          clock,
-          calendar: equityCalendar,
-          flattenAfterCloseMs: config.traderConfig.flatten_after_close_ms,
-          getOpenPositions: () => components.controlArmWiring.store.getOpenPositions(),
-          getExitFillSizes: (keys) => components.controlArmWiring.store.getExitFillSizes(keys),
-          logger,
-          traceId: CONTROL_FILL_SYNC_TRACE_ID,
-          arm: 'control',
-          ...(config.traderDiagnosticAlerts === undefined
-            ? {}
-            : { alerts: config.traderDiagnosticAlerts }),
-        }),
+        arm: 'control',
       });
 
-      fillSync = startFillSync({
+      fillSync = startArmFillSync({
         execution: fillSyncExecution,
-        clock,
-        logger,
-        fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+        getOpenPositions: () => components.executionStore.getOpenPositions(),
+        getExitFillSizes: (keys) => components.executionStore.getExitFillSizes(keys),
         reconcileTraceId: RECONCILE_TRACE_ID,
         fillSyncTraceId: FILL_SYNC_TRACE_ID,
-        reportCarriedLots: buildCarriedLotReporter({
-          clock,
-          calendar: equityCalendar,
-          flattenAfterCloseMs: config.traderConfig.flatten_after_close_ms,
-          getOpenPositions: () => components.executionStore.getOpenPositions(),
-          getExitFillSizes: (keys) => components.executionStore.getExitFillSizes(keys),
-          logger,
-          traceId: FILL_SYNC_TRACE_ID,
-          arm: 'live',
-          ...(config.traderDiagnosticAlerts === undefined
-            ? {}
-            : { alerts: config.traderDiagnosticAlerts }),
-        }),
+        arm: 'live',
       });
 
-      if (config.mode !== 'backtest') {
-        const prefetch = await prefetchBars({
-          marketData: components.marketData,
-          universe: components.universe,
-          asOf: clock.now(),
-          logger,
-          traceId: 'startup',
-        });
-        if (prefetch.warmed === 0 && prefetch.failed > 0) {
-          logger.log({
-            trace_id: 'startup',
-            stage: 'market_data',
-            event: 'bar_prefetch_total_failure',
-            level: 'error',
-            message:
-              `bar prefetch warmed ZERO of ${prefetch.failed} (instrument, window) pair(s) — ` +
-              'the tick loop is about to arm on a completely cold store; the first tick will pay ' +
-              'the full cold sweep this ticket exists to avoid',
-            payload: { failed: prefetch.failed },
-          });
-        }
-      }
+      if (config.mode !== 'backtest') await prefetchBarsAtStartup();
 
-      loop = startTickLoop({
-        scheduler,
-        runner: tickRunner,
-        clock,
-        logger,
-        persistence,
-        tickIntervalMs: config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
-        maxConcurrentInstruments: config.maxConcurrentInstruments ?? 1,
-        decisionGate: new DebateBarDecisionGate(),
-        tickSkipAlerts: config.tickSkipAlerts ?? loggingAlertChannel('tickSkipAlerts', logger),
-        heldAssets: buildHeldAssetsReader(components),
-      });
+      loop = startProductionTickLoop();
 
-      // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the boundary read at the bottom is explicitly documented as happening BEFORE scheduleFeedbackCycle's first check ("so this reports what was true when the process came up, not the post-catch-up state"), and the intervalMs validation is a deliberate boot crash at a specific point in the sequence — extraction risks separating a diagnostic from the arming call it describes
-      function runFeedbackCycleStartup(): void {
-        const feedback = config.feedback;
-        if (feedback === undefined) {
-          logger.log({
-            trace_id: 'startup',
-            stage: 'feedback-loop',
-            event: 'feedback_cycle_unconfigured',
-            level: 'warn',
-            message:
-              'ProductionConfig.feedback is not set — the daily feedback cycle will NEVER run. ' +
-              'No analyst weight is attributed, no dial is tuned, and no kill-line ' +
-              '(pbo_over_max, oos_sharpe_under_min, dsr_insignificant, ' +
-              'live_backtest_divergence_over_max) is ever evaluated. The run will look healthy ' +
-              'and learn nothing.',
-            payload: { feedback_cycle: 'not_started' },
-          });
-        } else {
-          if (feedback.metrics === undefined) {
-            logger.log({
-              trace_id: 'startup',
-              stage: 'feedback-loop',
-              event: 'feedback_metrics_unconfigured',
-              level: 'warn',
-              message:
-                'FeedbackCycleConfig.metrics is not set — the daily cycle will tune dials but ' +
-                'computeMetrics will NEVER run, so all four kill-lines stay unevaluated. A ' +
-                'MetricsSuite CAN be produced in-repo since #345: supply ' +
-                'SqliteDailyEquityMetricsSource over the daily_equity series this process is ' +
-                'already recording every tick (ADR-0006). It self-gates below 60 observations, ' +
-                'so arming it during a short soak evaluates nothing rather than acting on noise.',
-              payload: { kill_lines: 'not_evaluated' },
-            });
-          } else {
-            logger.log({
-              trace_id: 'startup',
-              stage: 'feedback-loop',
-              level: 'info',
-              message:
-                'FeedbackCycleConfig.metrics is wired — computeMetrics runs on every daily cycle. ' +
-                'The source gates itself below its minimum observation count (ADR-0006 §5), so ' +
-                'early cycles report "no daily MetricsSuite" with the count rather than acting on ' +
-                'a Sharpe made of noise. Which kill-lines that suite can actually answer is ' +
-                'reported per cycle in `not_evaluated`, and at startup by the warns that follow.',
-              payload: { metrics_source: 'wired' },
-            });
-
-            const revalidationSelections = selectionStore.getLatestPerAssetClass();
-            const usableSelections = usableRevalidationSelections(
-              revalidationSelections,
-              clock.now(),
-            );
-            const revalidationGatedKillLines = [
-              'pbo_over_max',
-              'oos_sharpe_under_min',
-              'dsr_insignificant',
-            ];
-            if (usableSelections.length === 0) {
-              logger.log({
-                trace_id: 'startup',
-                stage: 'feedback-loop',
-                event: 'revalidation_selection_absent',
-                level: 'warn',
-                message:
-                  'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY ' +
-                  'from a revalidation snapshot (DailyMetricsSample.revalidation), and no usable ' +
-                  'frozen Stage 2 selection exists — none persisted, all older than ' +
-                  `${DEFAULT_STAGE2_MAX_AGE_DAYS} days, or PBO/DSR refused. Expect these three in ` +
-                  '`not_evaluated` on every cycle (un-run, NOT passed) until a direct Stage 2 run ' +
-                  '(`node dist/server/tools/run-stage2.js`) freezes a fresh selection (#384, #579).',
-                payload: {
-                  kill_lines_gated_on_revalidation: revalidationGatedKillLines,
-                  persisted_selections: revalidationSelections.length,
-                },
-              });
-            } else {
-              logger.log({
-                trace_id: 'startup',
-                stage: 'feedback-loop',
-                level: 'info',
-                message:
-                  'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are ARMED by the ' +
-                  'frozen Stage 2 selection (#384): the metrics source reports the worse-PBO ' +
-                  'snapshot once the daily suite clears its observation gate (ADR-0006 §5, ' +
-                  '~60 sessions). Until then they read `not_evaluated`; after a selection ages ' +
-                  `past ${DEFAULT_STAGE2_MAX_AGE_DAYS} days they go inert again until Stage 2 ` +
-                  'is re-run (#579).',
-                payload: {
-                  kill_lines_gated_on_revalidation: revalidationGatedKillLines,
-                  selections: usableSelections.map((selection) => ({
-                    asset_class: selection.asset_class,
-                    selected_at: selection.selected_at.toISOString(),
-                    pbo: selection.pbo,
-                    dsr: selection.dsr,
-                  })),
-                },
-              });
-            }
-
-            if (feedback.metrics.backtest_reference_sharpe <= 0) {
-              logger.log({
-                trace_id: 'startup',
-                stage: 'feedback-loop',
-                event: 'backtest_reference_sharpe_inert',
-                level: 'warn',
-                message:
-                  'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and ' +
-                  'can never breach. A non-positive reference has no meaningful relative drop, so ' +
-                  'the check returns 0 by design; set ' +
-                  'FeedbackCycleConfig.metrics.backtest_reference_sharpe to the frozen selected ' +
-                  "config's backtest Sharpe to arm it (#375). Warned once per process.",
-                payload: {
-                  backtest_reference_sharpe: feedback.metrics.backtest_reference_sharpe,
-                  kill_line: 'live_backtest_divergence_over_max',
-                },
-              });
-            }
-          }
-          const feedbackIntervalMs = feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
-          if (!Number.isFinite(feedbackIntervalMs) || feedbackIntervalMs <= 0) {
-            throw new Error(
-              `FeedbackCycleConfig.intervalMs must be positive, got ${feedbackIntervalMs}`,
-            );
-          }
-          const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
-          let feedbackStoredBoundary: Date | null = null;
-          let feedbackScheduleReadFailed = false;
-          try {
-            feedbackStoredBoundary = feedbackScheduleStore.lastBoundary();
-          } catch (error) {
-            feedbackScheduleReadFailed = true;
-            logger.log({
-              trace_id: 'startup',
-              stage: 'feedback-loop',
-              event: 'feedback_schedule_read_failed',
-              level: 'error',
-              message:
-                'could not read the feedback cycle schedule store at startup — proceeding with ' +
-                "boot; runIfDue's own guarded read (below) will retry it on the first pass (#1110)",
-              payload: { error: error instanceof Error ? error.message : String(error) },
-            });
-          }
-          const feedbackDueNow = isBoundaryDue(feedbackBoundaryNow, feedbackStoredBoundary);
-          const feedbackNextDue = nextBoundary(new Date(), feedbackIntervalMs);
-          logger.log({
-            trace_id: 'startup',
-            stage: 'feedback-loop',
-            level: 'info',
-            message: feedbackScheduleReadFailed
-              ? 'daily feedback cycle schedule is UNKNOWN — the store could not be read at ' +
-                "startup, so no catch-up decision was made here; runIfDue's own guarded read " +
-                `decides on its first pass, next boundary at ${feedbackNextDue.toISOString()} (#1110)`
-              : feedbackDueNow
-                ? 'daily feedback cycle is due now — catching up on the current boundary, then ' +
-                  `resuming the normal schedule, next due at ${feedbackNextDue.toISOString()} (#1110)`
-                : 'daily feedback cycle already ran for the current boundary — next due at ' +
-                  `${feedbackNextDue.toISOString()}`,
-            payload: {
-              boundary: feedbackBoundaryNow.toISOString(),
-              interval_ms: feedbackIntervalMs,
-              stored_boundary: feedbackStoredBoundary?.toISOString() ?? null,
-              stored_boundary_read_failed: feedbackScheduleReadFailed,
-              next_due: feedbackNextDue.toISOString(),
-            },
-          });
-
-          scheduleFeedbackCycle(feedback, feedbackIntervalMs);
-        }
-      }
       runFeedbackCycleStartup();
 
       return orphans;

@@ -1,6 +1,5 @@
 import { randomInt } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import {
@@ -11,6 +10,7 @@ import {
   sanitizeLogText,
 } from '../../../shared/index.js';
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import { BarsMarketData, ParquetMarkSource } from '../data/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';
@@ -179,9 +179,4 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2), process.env).catch((error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  });
-}
+void runWhenInvoked(import.meta.url, () => main(process.argv.slice(2), process.env));

@@ -144,6 +144,21 @@ function applyEntryCapGates(
   return { notional, bindingConstraint };
 }
 
+export function longOnlyRefusalReason(intent: RiskInput['intent']): string {
+  const positionClaim = intent.intent_type === 'entry' ? 'with no held lot' : 'on a scale_in';
+  return (
+    `long_only_book: refusing a sell ${intent.intent_type} on ${intent.instrument} ${positionClaim} ` +
+    '— #1511 decided a long-only book for the Saxo GIA equity leg. A sell that is not an ' +
+    'exit is a short on the long ETP: not sized or costed (no borrow/margin model, ' +
+    'ADR-0016/0018 sized this universe long-only); a "down" thesis routes to the paired ' +
+    'inverse line if it is in the universe.'
+  );
+}
+
+export function armedBreakersText(breakers: Pick<BreakerState, 'armed_breakers'>): string {
+  return breakers.armed_breakers.length > 0 ? breakers.armed_breakers.join(', ') : 'none';
+}
+
 export class RiskManagerImpl implements RiskManager {
   constructor(
     private readonly config: RiskConfig,
@@ -154,10 +169,7 @@ export class RiskManagerImpl implements RiskManager {
   evaluate(input: RiskInput): RiskDecision {
     const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
 
-    const { config } =
-      intent.intent_type === 'exit' || !this.thresholds
-        ? { config: this.config }
-        : resolveRiskConfig(this.config, this.thresholds.getRiskThresholds());
+    const { config } = this.configFor(intent);
 
     const warnings = [
       ...ciiWarnings(intent.instrument, cii, config.cii_threshold),
@@ -193,15 +205,7 @@ export class RiskManagerImpl implements RiskManager {
     }
 
     if (intent.side === 'sell' && config.long_only_instruments?.has(intent.instrument)) {
-      const binding = 'long_only_book';
-      const positionClaim = intent.intent_type === 'entry' ? 'with no held lot' : 'on a scale_in';
-      return rejected(binding, [
-        `${binding}: refusing a sell ${intent.intent_type} on ${intent.instrument} ${positionClaim} ` +
-          '— #1511 decided a long-only book for the Saxo GIA equity leg. A sell that is not an ' +
-          'exit is a short on the long ETP: not sized or costed (no borrow/margin model, ' +
-          'ADR-0016/0018 sized this universe long-only); a "down" thesis routes to the paired ' +
-          'inverse line if it is in the universe.',
-      ]);
+      return rejected('long_only_book', [longOnlyRefusalReason(intent)]);
     }
 
     if (portfolio.unvalued_instruments.length > 0) {
@@ -218,9 +222,7 @@ export class RiskManagerImpl implements RiskManager {
     if (trippedTier !== null) {
       const binding = `circuit_breaker:${trippedTier}`;
       return rejected(binding, [
-        `${binding}: new entries halted (armed: ${
-          breakers.armed_breakers.length > 0 ? breakers.armed_breakers.join(', ') : 'none'
-        })`,
+        `${binding}: new entries halted (armed: ${armedBreakersText(breakers)})`,
       ]);
     }
 
@@ -303,6 +305,12 @@ export class RiskManagerImpl implements RiskManager {
       reasons,
       ...decisionBase,
     };
+  }
+
+  private configFor(intent: RiskInput['intent']): { config: RiskConfig } {
+    return intent.intent_type === 'exit' || !this.thresholds
+      ? { config: this.config }
+      : resolveRiskConfig(this.config, this.thresholds.getRiskThresholds());
   }
 
   private applyCriticReview(

@@ -1111,6 +1111,368 @@ describe('residual-protection sweep (#549)', () => {
     });
   });
 
+  describe('the exact divergence and log record of each sweep outcome', () => {
+    const divergence = (reason: string, escalation?: string) => ({
+      idempotency_key: LOT,
+      instrument: 'AAPL',
+      store_state: 'partially_filled',
+      broker_state: null,
+      action: 'undetermined',
+      kind: 'sweep',
+      reason,
+      ...(escalation === undefined ? {} : { escalation }),
+    });
+    const logLine = (
+      event: string,
+      level: string,
+      message: string,
+      payload: Record<string, unknown>,
+    ) => ({
+      trace_id: 'trace-sweep',
+      stage: 'execution',
+      event,
+      level,
+      message,
+      payload: { idempotency_key: LOT, ...payload },
+    });
+    const DEDUP_HELD_MESSAGE =
+      "residual-exposure page dedup was already held by another surface — this pass's page " +
+      'was a duplicate; the durable record stays single-writer';
+
+    async function markedLot(fills: 'partial' | 'none' | 'flat' = 'partial') {
+      const opened = openTestExecutionStore();
+      await seedPosition(opened.store);
+      if (fills === 'partial') await seedPartiallyFlattenedFills(opened.store);
+      if (fills === 'flat') {
+        await seedPartiallyFlattenedFills(opened.store);
+        await opened.store.applyLotAdvance({
+          idempotency_key: LOT,
+          fills: [
+            {
+              idempotency_key: LOT,
+              broker_fill_id: toBrokerFillId('x2'),
+              leg: 'exit',
+              price: 104,
+              qty: 6,
+              fee: 0.6,
+              timestamp: new Date('2026-08-07T15:45:00Z'),
+            },
+          ],
+          position_update: {
+            filled_size: 10,
+            avg_entry_price: 100,
+            order_state: 'partially_filled',
+          },
+        });
+      }
+      await opened.store.markResidualUnprotected(LOT, NOW);
+      return opened;
+    }
+
+    async function sweepWith(store: TestExecutionStore, broker: SweepBroker) {
+      const logger = recordingLogger();
+      const result = await new ExecutionImpl(
+        makeInput(broker, store, makeResidualExposureAlerts(), logger),
+      ).sweepResidualProtection();
+      return { result, logger };
+    }
+
+    it('reports nothing and keeps the marker for a marked lot with no entry fill yet', async () => {
+      const { store } = await markedLot('none');
+      const broker = new SweepBroker();
+
+      const { result } = await sweepWith(store, broker);
+
+      expect(result).toEqual({ checked: 1, divergences: [] });
+      expect(broker.rearmCalls).toEqual([]);
+      expect((await store.getResidualProtectionMarker(LOT))?.unprotected_since).not.toBeNull();
+    });
+
+    it('adopts a lot that reads flat', async () => {
+      const { store } = await markedLot('flat');
+
+      const { result } = await sweepWith(store, new SweepBroker());
+
+      expect(result.divergences).toEqual([
+        {
+          ...divergence(
+            'marked lot reads flat on the persisted fill record — nothing left unprotected; ' +
+              'residual-protection marker cleared',
+          ),
+          action: 'adopted',
+        },
+      ]);
+    });
+
+    it('adopts a successfully re-armed residual', async () => {
+      const { store } = await markedLot();
+
+      const { result, logger } = await sweepWith(store, new SweepBroker());
+
+      expect(result.divergences).toEqual([
+        {
+          ...divergence(
+            'protective legs re-armed for residual 6 by the #549 sweep — ' +
+              'residual-protection marker cleared',
+          ),
+          action: 'adopted',
+        },
+      ]);
+      expect(logger.entries).toEqual([]);
+    });
+
+    it('records a failed fill read', async () => {
+      const { db } = await markedLot();
+      const store = new (class extends TestExecutionStore {
+        override async getFills(): Promise<never> {
+          throw new Error('fills table unreadable');
+        }
+      })(db);
+
+      const { result, logger } = await sweepWith(store, new SweepBroker());
+
+      expect(result.divergences).toEqual([
+        divergence(
+          'marked residual could not be recomputed (fill read failed): fills table unreadable',
+          'residual_sweep_size_read_failed',
+        ),
+      ]);
+      expect(logger.entries).toContainEqual(
+        logLine(
+          'residual_size_read_failed',
+          'error',
+          'sweepResidualProtection: store read failed while recomputing a marked residual — ' +
+            'alerting with the upper-bound requested_size instead',
+          { error: 'fills table unreadable' },
+        ),
+      );
+    });
+
+    it('refuses an infinite residual against a finite exit', async () => {
+      const { db } = await markedLot('none');
+      const store = new (class extends TestExecutionStore {
+        override async getFills(): Promise<Fill[]> {
+          const base = { idempotency_key: LOT, price: 100, fee: 0, timestamp: NOW };
+          return [
+            {
+              ...base,
+              broker_fill_id: toBrokerFillId('e1'),
+              leg: 'entry',
+              qty: Number.POSITIVE_INFINITY,
+            },
+            { ...base, broker_fill_id: toBrokerFillId('x1'), leg: 'exit', qty: 4 },
+          ];
+        }
+      })(db);
+      const broker = new SweepBroker();
+
+      const { result } = await sweepWith(store, broker);
+
+      expect(broker.rearmCalls).toEqual([]);
+      expect(result.divergences).toEqual([
+        divergence(
+          'marked residual recomputes to Infinity (non-finite or non-positive) while the fill ' +
+            'record reads not-flat — refusing to re-arm a garbage quantity; check the store by hand',
+          'residual_sweep_garbage_residual',
+        ),
+      ]);
+    });
+
+    it('records a retryable re-arm failure', async () => {
+      const { store } = await markedLot();
+      const broker = new SweepBroker();
+      broker.rearmFailure = new Error('venue still down');
+
+      const { result, logger } = await sweepWith(store, broker);
+
+      expect(result.divergences).toEqual([
+        divergence(
+          're-arm retry failed for residual 6: venue still down',
+          'residual_sweep_rearm_retry_failed',
+        ),
+      ]);
+      expect(logger.entries).toContainEqual(
+        logLine(
+          'residual_rearm_failed',
+          'error',
+          'sweepResidualProtection: broker.rearmProtectiveLegs retry failed — the marker ' +
+            'stays and the next pass retries',
+          { residual_qty: 6, error: 'venue still down' },
+        ),
+      );
+      expect(logger.entries.filter((entry) => entry.message === DEDUP_HELD_MESSAGE)).toEqual([]);
+    });
+
+    it('records a permanent re-arm refusal the shut venue could not close', async () => {
+      const { db } = await markedLot();
+      const store = new (class extends TestExecutionStore {
+        override async markResidualRearmUnsupportedAlerted(): Promise<never> {
+          throw new Error('unsupported dedup write refused');
+        }
+      })(db);
+      const broker = new SweepBroker();
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false',
+      );
+      const shutCalendar: TradingCalendar = {
+        isOpen: () => false,
+        isTradingDay: () => true,
+        sessionStart: () => NOW,
+        sessionEnd: () => NOW,
+      };
+      const logger = recordingLogger();
+
+      const result = await new ExecutionImpl(
+        makeInput(broker, store, makeResidualExposureAlerts(), logger, {
+          crypto: new AlwaysOpenCalendar(),
+          stocks: shutCalendar,
+        }),
+      ).sweepResidualProtection();
+
+      expect(result.divergences).toEqual([
+        divergence(
+          'this lot can never be re-armed and the residual 6 could not be closed either — see ' +
+            'the residual_reflatten_* log line for which gate stood the re-flatten down: ' +
+            'IsOcoOrderSupported false',
+          'residual_sweep_rearm_unsupported',
+        ),
+      ]);
+      expect(logger.entries).toContainEqual(
+        logLine(
+          'residual_rearm_unsupported',
+          'error',
+          'sweepResidualProtection: arming protective legs for this lot is permanently ' +
+            'refused, so no pass of this sweep can protect it — the marker stays and only ' +
+            'manual action at the venue clears it',
+          { residual_qty: 6, error: 'IsOcoOrderSupported false' },
+        ),
+      );
+      expect(logger.entries).toContainEqual(
+        logLine(
+          'residual_alert_mark_failed',
+          'warn',
+          'markResidualRearmUnsupportedAlerted failed — the next sweep pass may page a second ' +
+            'time for a permanent gap that was already alerted (noisy, not unsafe; #1447)',
+          { error: 'unsupported dedup write refused' },
+        ),
+      );
+    });
+
+    it('records the re-flatten it submitted in place of a re-arm', async () => {
+      const { store } = await markedLot();
+      const broker = new SweepBroker();
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false',
+      );
+
+      const { result } = await sweepWith(store, broker);
+
+      expect(result.divergences).toEqual([
+        divergence(
+          'this lot can never be re-armed, so residual 6 was CLOSED instead (#1214): market ' +
+            "order 'key-1:residual-reflatten-1' is live at the venue and the marker clears when " +
+            'its fill lands',
+          'residual_sweep_reflatten_submitted',
+        ),
+      ]);
+    });
+
+    it('keeps an in-flight own re-flatten undetermined', async () => {
+      const { store } = await markedLot();
+      const ownKey = `${LOT}:residual-reflatten-1`;
+      await store.writeAheadFlatten(flattenWriteAhead(ownKey));
+      await store.resolveFlattenSubmitted(
+        ownKey,
+        { order_state: 'submitted', broker_order_ids: [ownKey] },
+        NOW,
+      );
+      const broker = new SweepBroker();
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false',
+      );
+
+      const { result } = await sweepWith(store, broker);
+
+      expect(result.divergences).toEqual([
+        divergence(expect.any(String), 'residual_sweep_reflatten_in_flight'),
+      ]);
+    });
+
+    it('records a lot whose settlement threw', async () => {
+      const { db } = await markedLot();
+      const store = new (class extends TestExecutionStore {
+        override async confirmResidualProtected(): Promise<never> {
+          throw new Error('marker write refused');
+        }
+      })(db);
+
+      const { result, logger } = await sweepWith(store, new SweepBroker());
+
+      expect(result.divergences).toEqual([
+        divergence(
+          'residual-protection sweep failed: marker write refused',
+          'residual_sweep_lot_unsettled',
+        ),
+      ]);
+      expect(logger.entries).toEqual([
+        logLine(
+          'residual_sweep_lot_unsettled',
+          'error',
+          'sweepResidualProtection: one marked lot could not be settled this pass — the ' +
+            'marker stays and the next pass retries',
+          { error: 'marker write refused' },
+        ),
+      ]);
+    });
+
+    it('logs a failed alert-dedup write', async () => {
+      const { db } = await markedLot();
+      const store = new (class extends TestExecutionStore {
+        override async markResidualAlerted(): Promise<never> {
+          throw new Error('dedup write refused');
+        }
+      })(db);
+      const broker = new SweepBroker();
+      broker.rearmFailure = new Error('venue still down');
+
+      const { logger } = await sweepWith(store, broker);
+
+      expect(logger.entries).toContainEqual(
+        logLine(
+          'residual_alert_mark_failed',
+          'warn',
+          'markResidualAlerted failed — the next sweep pass may page a second time for an ' +
+            'episode that was already alerted (noisy, not unsafe)',
+          { error: 'dedup write refused' },
+        ),
+      );
+    });
+
+    it('notes a page whose dedup another surface already held', async () => {
+      const { db } = await markedLot();
+      const store = new (class extends TestExecutionStore {
+        override async markResidualAlerted(): Promise<boolean> {
+          return false;
+        }
+      })(db);
+      const broker = new SweepBroker();
+      broker.rearmFailure = new Error('venue still down');
+
+      const { logger } = await sweepWith(store, broker);
+
+      expect(logger.entries).toContainEqual({
+        trace_id: 'trace-sweep',
+        stage: 'execution',
+        level: 'info',
+        message: DEDUP_HELD_MESSAGE,
+        payload: { idempotency_key: LOT },
+      });
+    });
+  });
+
   describe('the marker store methods (migration 0024)', () => {
     it('markResidualUnprotected keeps the FIRST observation and never resets the alert dedup', async () => {
       const { store } = openTestExecutionStore();

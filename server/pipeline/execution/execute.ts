@@ -1,6 +1,7 @@
 import {
   describeThrownSafely,
   heldQuantitiesFor,
+  type LotHeldQuantity,
   logCaughtFailure,
   type OpenPosition,
   type OrderIntent,
@@ -22,6 +23,7 @@ import type {
   ExecutionInput,
   ExecutionResult,
   FlattenJournal,
+  FlattenSubmissionWriteAhead,
   LotJournal,
   NativeBracketRequest,
   ReconcileReport,
@@ -49,13 +51,13 @@ export class ExecutionImpl implements Execution {
   }
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the dedup gate, write-ahead-before-broker-call, and exit-retry walk are each ordered for a race/double-submit hazard named above; extracting a helper would relocate an early `return` uncaught by the compiler, silently changing what short-circuits the order path
+const ALREADY_EXISTS = 'an order or fill already exists for this idempotency_key';
+
 export async function executeVerdict(
   input: SubmitInput,
   verdict: VerdictDecision,
 ): Promise<ExecutionResult> {
-  const { clock, broker, store } = input;
-  const now = clock.now();
+  const now = input.clock.now();
 
   if (verdict.status !== 'go' || verdict.order === null) {
     return result('error', verdict.idempotency_key, now, {
@@ -64,90 +66,52 @@ export async function executeVerdict(
   }
 
   const order = verdict.order;
+  if (await input.store.findByKey(order.idempotency_key)) {
+    return executeOnExistingKey(input, order, now);
+  }
+  if (!isEntryOrder(order)) {
+    return executeExit(input, order, order.idempotency_key, now);
+  }
+  return submitEntry(input, order, now);
+}
+
+type EntryOrder = OrderIntent & { intent_type: OpenPosition['intent_type'] };
+
+function isEntryOrder(order: OrderIntent): order is EntryOrder {
+  return order.intent_type !== 'exit';
+}
+
+async function executeOnExistingKey(
+  input: SubmitInput,
+  order: OrderIntent,
+  now: Date,
+): Promise<ExecutionResult> {
+  const retryKey =
+    order.intent_type === 'exit'
+      ? await resolveExitRetryKey(input.store, order.idempotency_key)
+      : null;
+  if (retryKey === null) {
+    return result('deduped', order.idempotency_key, now, { reason: ALREADY_EXISTS });
+  }
+  return executeExit(input, order, retryKey, now);
+}
+
+async function submitEntry(
+  input: SubmitInput,
+  order: EntryOrder,
+  now: Date,
+): Promise<ExecutionResult> {
+  const { broker, store } = input;
   const idempotencyKey = order.idempotency_key;
-
-  if (await store.findByKey(idempotencyKey)) {
-    if (order.intent_type !== 'exit') {
-      return result('deduped', idempotencyKey, now, {
-        reason: 'an order or fill already exists for this idempotency_key',
-      });
-    }
-    const retryKey = await resolveExitRetryKey(store, idempotencyKey);
-    if (retryKey === null) {
-      return result('deduped', idempotencyKey, now, {
-        reason: 'an order or fill already exists for this idempotency_key',
-      });
-    }
-    return executeExit(input, order, retryKey, now);
-  }
-
-  if (order.intent_type === 'exit') {
-    return executeExit(input, order, idempotencyKey, now);
-  }
-
-  const bracket: NativeBracketRequest = {
-    client_order_id: idempotencyKey,
-    instrument: order.instrument,
-    asset_class: order.asset_class,
-    side: order.side,
-    size: order.size,
-    entry: order.entry,
-    stop: order.stop,
-    target: order.target,
-    time_in_force: order.time_in_force,
-  };
-
   const snapshot = await captureSubmitSnapshot(input, order, now);
 
-  const position: OpenPosition = {
-    idempotency_key: idempotencyKey,
-    debate_id: order.metadata.debate_id,
-    instrument: order.instrument,
-    asset_class: order.asset_class,
-    side: order.side,
-    intent_type: order.intent_type,
-    requested_size: order.size,
-    filled_size: 0,
-    avg_entry_price: 0,
-    stop: order.stop,
-    target: order.target,
-    order_state: 'pending',
-    broker_order_ids: [],
-    opened_at: now,
-    decision_timestamp: order.decision_timestamp,
-    conviction: order.metadata.conviction,
-    converged: order.metadata.converged,
-    ...(snapshot.decision_price === null ? {} : { decision_price: snapshot.decision_price }),
-    ...(snapshot.quote_bid === null ? {} : { quote_bid: snapshot.quote_bid }),
-    ...(snapshot.quote_ask === null ? {} : { quote_ask: snapshot.quote_ask }),
-    ...(snapshot.quote_mid === null ? {} : { quote_mid: snapshot.quote_mid }),
-    ...(snapshot.quote_observed_at === null
-      ? {}
-      : { quote_observed_at: snapshot.quote_observed_at }),
-    ...(snapshot.modelled_cost_breakdown === null
-      ? {}
-      : { modelled_cost_breakdown: snapshot.modelled_cost_breakdown }),
-    ...(snapshot.modelled_protective_exit_cost_breakdown === null
-      ? {}
-      : {
-          modelled_protective_exit_cost_breakdown: snapshot.modelled_protective_exit_cost_breakdown,
-        }),
-  };
-
-  try {
-    await store.writeAheadPosition(position);
-  } catch (error) {
-    if (error instanceof DuplicatePositionError) {
-      return result('deduped', idempotencyKey, now, {
-        reason: 'an order or fill already exists for this idempotency_key',
-      });
-    }
-    throw error;
+  if (!(await writeAheadEntry(store, openPositionFor(order, now, snapshot)))) {
+    return result('deduped', idempotencyKey, now, { reason: ALREADY_EXISTS });
   }
 
   let ack: Awaited<ReturnType<typeof broker.submitBracket>>;
   try {
-    ack = await broker.submitBracket(bracket);
+    ack = await broker.submitBracket(bracketFor(order));
   } catch (error) {
     return result('error', idempotencyKey, now, {
       order_state: 'pending',
@@ -164,6 +128,65 @@ export async function executeVerdict(
     order_state: ack.order_state,
     broker_order_ids: ack.broker_order_ids,
   });
+}
+
+async function writeAheadEntry(store: LotJournal, position: OpenPosition): Promise<boolean> {
+  try {
+    await store.writeAheadPosition(position);
+    return true;
+  } catch (error) {
+    if (error instanceof DuplicatePositionError) return false;
+    throw error;
+  }
+}
+
+export function bracketFor(order: OrderIntent): NativeBracketRequest {
+  return {
+    client_order_id: order.idempotency_key,
+    instrument: order.instrument,
+    asset_class: order.asset_class,
+    side: order.side,
+    size: order.size,
+    entry: order.entry,
+    stop: order.stop,
+    target: order.target,
+    time_in_force: order.time_in_force,
+  };
+}
+
+export function openPositionFor(
+  order: EntryOrder,
+  now: Date,
+  snapshot: SubmitSnapshot,
+): OpenPosition {
+  return {
+    idempotency_key: order.idempotency_key,
+    debate_id: order.metadata.debate_id,
+    instrument: order.instrument,
+    asset_class: order.asset_class,
+    side: order.side,
+    intent_type: order.intent_type,
+    requested_size: order.size,
+    filled_size: 0,
+    avg_entry_price: 0,
+    stop: order.stop,
+    target: order.target,
+    order_state: 'pending',
+    broker_order_ids: [],
+    opened_at: now,
+    decision_timestamp: order.decision_timestamp,
+    conviction: order.metadata.conviction,
+    converged: order.metadata.converged,
+    ...withoutNulls(snapshot),
+  };
+}
+
+type WithoutNulls<T> = { [K in keyof T]?: Exclude<T[K], null> };
+
+export function withoutNulls<T extends object>(record: T): WithoutNulls<T> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== null),
+  ) as WithoutNulls<T>;
 }
 
 const EXIT_SNAPSHOT_BUDGET_MS = 2_000;
@@ -229,149 +252,182 @@ function decisionPriceFor(order: OrderIntent): number | null {
   return order.entry;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the `prices_own_fills` early return sits inside the quote-read branch and must return the FULL snapshot, not just a cost-model result — splitting quote and cost-model reads into helpers would strand that early return with no clean way to still short-circuit the whole function from inside it
+interface SubmitQuote {
+  bid: number | null;
+  ask: number | null;
+  observed_at: Date | null;
+}
+
+interface ModelledCosts {
+  entry: CostBreakdown | null;
+  protective_exit: CostBreakdown | null;
+}
+
+const NO_QUOTE: SubmitQuote = { bid: null, ask: null, observed_at: null };
+const NO_MODELLED_COSTS: ModelledCosts = { entry: null, protective_exit: null };
+
+export function submitSnapshotOf(
+  decision_price: number | null,
+  quote: SubmitQuote,
+  costs: ModelledCosts,
+): SubmitSnapshot {
+  return {
+    decision_price,
+    quote_bid: quote.bid,
+    quote_ask: quote.ask,
+    quote_mid: quote.bid === null || quote.ask === null ? null : (quote.bid + quote.ask) / 2,
+    quote_observed_at: quote.observed_at,
+    modelled_cost_breakdown: costs.entry,
+    modelled_protective_exit_cost_breakdown: costs.protective_exit,
+  };
+}
+
 async function readSubmitSnapshot(
   input: SubmitInput,
   order: OrderIntent,
   now: Date,
   decision_price: number | null,
 ): Promise<SubmitSnapshot> {
-  let quoteBid: number | null = null;
-  let quoteAsk: number | null = null;
-  let quoteObservedAt: Date | null = null;
-  let modelledCostBreakdown: CostBreakdown | null = null;
-  let modelledProtectiveExitCostBreakdown: CostBreakdown | null = null;
-
-  if (order.metadata.unpriced_exit !== true) {
-    const { marketData, costModel, config, logger, trace_id } = input;
-
-    try {
-      const quote = await marketData.getQuote(order.instrument, now);
-      if (quote !== null) {
-        quoteBid = quote.bid;
-        quoteAsk = quote.ask;
-        quoteObservedAt = quote.observed_at;
-      }
-    } catch (error) {
-      logCaughtFailure(
-        logger,
-        {
-          trace_id,
-          stage: 'execution',
-          event: 'submit_snapshot_quote_unavailable',
-          level: 'warn',
-          message:
-            '#1001: captureSubmitSnapshot could not read a quote at submit time — ' +
-            'quote_bid/quote_ask/quote_mid/quote_observed_at are left null for this order. ' +
-            'Best-effort instrumentation only; the order is submitted regardless.',
-        },
-        error,
-        { idempotency_key: order.idempotency_key, instrument: order.instrument },
-      );
-    }
-
-    if (input.broker.prices_own_fills === true) {
-      safeLog(logger, {
-        trace_id,
-        stage: 'execution',
-        level: 'info',
-        message:
-          '#1001: captureSubmitSnapshot skipped its own CostModel.fill on the Simulated-adapter ' +
-          'path — the adapter prices this order itself and that breakdown is persisted directly ' +
-          'onto the fill, so a second pricing here could only disagree with it.',
-        payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
-      });
-      return {
-        decision_price,
-        quote_bid: quoteBid,
-        quote_ask: quoteAsk,
-        quote_mid: quoteBid === null || quoteAsk === null ? null : (quoteBid + quoteAsk) / 2,
-        quote_observed_at: quoteObservedAt,
-        modelled_cost_breakdown: null,
-        modelled_protective_exit_cost_breakdown: null,
-      };
-    }
-
-    try {
-      const [mark, volatility, spread, adv] = await Promise.all([
-        marketData.getMark(order.instrument, now),
-        marketData.getIndicator(order.instrument, config.simulated.volatility_indicator, now),
-        marketData.getSpreadEstimate(order.instrument, now),
-        marketData.getADV(order.instrument, config.simulated.adv_window, now),
-      ]);
-      const marketState: MarketState = {
-        mid: mark.price,
-        spread,
-        adv,
-        volatility: volatility.value,
-        asset_class: mark.asset_class,
-        ...(config.simulated.venue === undefined ? {} : { venue: config.simulated.venue }),
-        timestamp: mark.observed_at,
-      };
-      const fillRequest: FillRequest = {
-        instrument: order.instrument,
-        side: order.side,
-        size: order.size,
-        order_type: order.intent_type === 'exit' ? 'market' : 'limit',
-        ...(order.intent_type === 'exit' ? {} : { limit_price: order.entry }),
-        idempotency_key: order.idempotency_key,
-      };
-      const entryCost = costModel.fill(fillRequest, marketState).cost_breakdown;
-
-      const protectiveExitCost =
-        order.intent_type === 'exit'
-          ? null
-          : costModel.fill(
-              {
-                instrument: order.instrument,
-                side: order.side === 'buy' ? 'sell' : 'buy',
-                size: order.size,
-                order_type: 'market',
-                idempotency_key: order.idempotency_key,
-              },
-              marketState,
-            ).cost_breakdown;
-
-      modelledCostBreakdown = entryCost;
-      modelledProtectiveExitCostBreakdown = protectiveExitCost;
-    } catch (error) {
-      logCaughtFailure(
-        logger,
-        {
-          trace_id,
-          stage: 'execution',
-          event: 'submit_snapshot_cost_unavailable',
-          level: 'warn',
-          message:
-            '#1001: captureSubmitSnapshot could not assemble a MarketState / price the modelled ' +
-            'cost breakdown at submit time — modelled_cost_breakdown is left null for this order. ' +
-            'Best-effort instrumentation only; the order is submitted regardless.',
-        },
-        error,
-        { idempotency_key: order.idempotency_key, instrument: order.instrument },
-      );
-    }
-  } else {
-    safeLog(input.logger, {
-      trace_id: input.trace_id,
-      stage: 'execution',
-      level: 'info',
-      message:
-        '#1001: captureSubmitSnapshot skipped the quote/cost-model reads for an unpriced exit ' +
+  if (order.metadata.unpriced_exit === true) {
+    logSnapshotSkipped(
+      input,
+      order,
+      '#1001: captureSubmitSnapshot skipped the quote/cost-model reads for an unpriced exit ' +
         '(order.metadata.unpriced_exit) — the feed was already known dark this tick, so ' +
         're-probing it here would only risk widening the #826 flatten window.',
-      payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
-    });
+    );
+    return submitSnapshotOf(decision_price, NO_QUOTE, NO_MODELLED_COSTS);
   }
 
+  const quote = await readSubmitQuote(input, order, now);
+
+  if (input.broker.prices_own_fills === true) {
+    logSnapshotSkipped(
+      input,
+      order,
+      '#1001: captureSubmitSnapshot skipped its own CostModel.fill on the Simulated-adapter ' +
+        'path — the adapter prices this order itself and that breakdown is persisted directly ' +
+        'onto the fill, so a second pricing here could only disagree with it.',
+    );
+    return submitSnapshotOf(decision_price, quote, NO_MODELLED_COSTS);
+  }
+
+  return submitSnapshotOf(decision_price, quote, await readModelledCosts(input, order, now));
+}
+
+function logSnapshotSkipped(input: SubmitInput, order: OrderIntent, message: string): void {
+  safeLog(input.logger, {
+    trace_id: input.trace_id,
+    stage: 'execution',
+    level: 'info',
+    message,
+    payload: { idempotency_key: order.idempotency_key, instrument: order.instrument },
+  });
+}
+
+async function readSubmitQuote(
+  input: SubmitInput,
+  order: OrderIntent,
+  now: Date,
+): Promise<SubmitQuote> {
+  try {
+    const quote = await input.marketData.getQuote(order.instrument, now);
+    if (quote === null) return NO_QUOTE;
+    return { bid: quote.bid, ask: quote.ask, observed_at: quote.observed_at };
+  } catch (error) {
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'submit_snapshot_quote_unavailable',
+        level: 'warn',
+        message:
+          '#1001: captureSubmitSnapshot could not read a quote at submit time — ' +
+          'quote_bid/quote_ask/quote_mid/quote_observed_at are left null for this order. ' +
+          'Best-effort instrumentation only; the order is submitted regardless.',
+      },
+      error,
+      { idempotency_key: order.idempotency_key, instrument: order.instrument },
+    );
+    return NO_QUOTE;
+  }
+}
+
+async function readModelledCosts(
+  input: SubmitInput,
+  order: OrderIntent,
+  now: Date,
+): Promise<ModelledCosts> {
+  try {
+    const marketState = await submitMarketState(input, order, now);
+    const entry = input.costModel.fill(entryFillRequest(order), marketState).cost_breakdown;
+    const protective_exit =
+      order.intent_type === 'exit'
+        ? null
+        : input.costModel.fill(protectiveExitFillRequest(order), marketState).cost_breakdown;
+    return { entry, protective_exit };
+  } catch (error) {
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'submit_snapshot_cost_unavailable',
+        level: 'warn',
+        message:
+          '#1001: captureSubmitSnapshot could not assemble a MarketState / price the modelled ' +
+          'cost breakdown at submit time — modelled_cost_breakdown is left null for this order. ' +
+          'Best-effort instrumentation only; the order is submitted regardless.',
+      },
+      error,
+      { idempotency_key: order.idempotency_key, instrument: order.instrument },
+    );
+    return NO_MODELLED_COSTS;
+  }
+}
+
+async function submitMarketState(
+  input: SubmitInput,
+  order: OrderIntent,
+  now: Date,
+): Promise<MarketState> {
+  const { marketData, config } = input;
+  const [mark, volatility, spread, adv] = await Promise.all([
+    marketData.getMark(order.instrument, now),
+    marketData.getIndicator(order.instrument, config.simulated.volatility_indicator, now),
+    marketData.getSpreadEstimate(order.instrument, now),
+    marketData.getADV(order.instrument, config.simulated.adv_window, now),
+  ]);
   return {
-    decision_price,
-    quote_bid: quoteBid,
-    quote_ask: quoteAsk,
-    quote_mid: quoteBid === null || quoteAsk === null ? null : (quoteBid + quoteAsk) / 2,
-    quote_observed_at: quoteObservedAt,
-    modelled_cost_breakdown: modelledCostBreakdown,
-    modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
+    mid: mark.price,
+    spread,
+    adv,
+    volatility: volatility.value,
+    asset_class: mark.asset_class,
+    ...(config.simulated.venue === undefined ? {} : { venue: config.simulated.venue }),
+    timestamp: mark.observed_at,
+  };
+}
+
+export function entryFillRequest(order: OrderIntent): FillRequest {
+  return {
+    instrument: order.instrument,
+    side: order.side,
+    size: order.size,
+    order_type: order.intent_type === 'exit' ? 'market' : 'limit',
+    ...(order.intent_type === 'exit' ? {} : { limit_price: order.entry }),
+    idempotency_key: order.idempotency_key,
+  };
+}
+
+export function protectiveExitFillRequest(order: OrderIntent): FillRequest {
+  return {
+    instrument: order.instrument,
+    side: order.side === 'buy' ? 'sell' : 'buy',
+    size: order.size,
+    order_type: 'market',
+    idempotency_key: order.idempotency_key,
   };
 }
 
@@ -391,14 +447,13 @@ async function resolveExitRetryKey(
   return null;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the four numbered steps above are ordered specifically to avoid the reverse-position hazard named above (cancel-before-flatten); splitting into helpers risks a cancel-then-submit reorder the compiler cannot tell apart from the safe version
 async function executeExit(
   input: SubmitInput,
   order: OrderIntent,
   idempotencyKey: string,
   now: Date,
 ): Promise<ExecutionResult> {
-  const { broker, store } = input;
+  const { store } = input;
 
   const heldLots = (await store.getOpenPositions()).filter(
     (lot) => lot.instrument === order.instrument,
@@ -412,55 +467,11 @@ async function executeExit(
   }
 
   const perLotHeld = await heldQuantitiesFor(heldLots, (keys) => store.getExitFillSizes(keys));
+  const refusal = exitRefusal(order, heldSide, perLotHeld);
+  if (refusal !== undefined) return result('error', idempotencyKey, now, { reason: refusal });
 
-  const overExited = perLotHeld.find((lot) => lot.held < 0);
-  if (overExited !== undefined) {
-    return result('error', idempotencyKey, now, {
-      reason:
-        `exit intent for '${order.instrument}' refused: lot '${overExited.idempotency_key}' ` +
-        `records more closed quantity than it ever opened (held ${overExited.held})`,
-    });
-  }
-
-  const heldSize = totalHeldQuantity(perLotHeld);
-
-  const expectedClosingSide = heldSide === 'buy' ? 'sell' : 'buy';
-  if (order.side !== expectedClosingSide) {
-    return result('error', idempotencyKey, now, {
-      reason:
-        `exit intent side '${order.side}' does not match the closing side ` +
-        `'${expectedClosingSide}' implied by the held lot(s)' side ('${heldSide}') for ` +
-        `'${order.instrument}'`,
-    });
-  }
-
-  if (order.size !== heldSize) {
-    return result('error', idempotencyKey, now, {
-      reason:
-        `exit intent size ${order.size} does not match the held quantity ${heldSize} ` +
-        `for '${order.instrument}'`,
-    });
-  }
-
-  if (order.metadata.lot_held_quantities !== undefined) {
-    const recordedByKey = new Map(
-      order.metadata.lot_held_quantities.map((lot) => [lot.idempotency_key, lot.held]),
-    );
-    const diverged = perLotHeld.find(
-      (lot) => (recordedByKey.get(lot.idempotency_key) ?? 0) !== lot.held,
-    );
-    if (diverged !== undefined) {
-      const recorded = recordedByKey.get(diverged.idempotency_key) ?? 0;
-      return result('error', idempotencyKey, now, {
-        reason:
-          `exit intent for '${order.instrument}' refused: lot '${diverged.idempotency_key}' ` +
-          `now holds ${diverged.held} but the intent recorded ${recorded} — the covered lot set ` +
-          `has diverged since the Trader keyed this exit`,
-      });
-    }
-  }
-
-  if (order.metadata.exit_reason === undefined) {
+  const exitReason = order.metadata.exit_reason;
+  if (exitReason === undefined) {
     return result('error', idempotencyKey, now, {
       reason:
         `exit intent for '${order.instrument}' carries no metadata.exit_reason — every exit ` +
@@ -469,61 +480,40 @@ async function executeExit(
   }
 
   const snapshot = await captureSubmitSnapshot(input, order, now, EXIT_SNAPSHOT_BUDGET_MS);
+  const flatten: FlattenSubmissionWriteAhead = {
+    idempotency_key: idempotencyKey,
+    instrument: order.instrument,
+    asset_class: order.asset_class,
+    side: order.side,
+    exit_reason: exitReason,
+    size: order.size,
+    submitted_at: now,
+    lot_held_quantities: perLotHeld,
+    decision_price: snapshot.decision_price,
+    quote_bid: snapshot.quote_bid,
+    quote_ask: snapshot.quote_ask,
+    quote_mid: snapshot.quote_mid,
+    quote_observed_at: snapshot.quote_observed_at,
+    modelled_cost_breakdown: snapshot.modelled_cost_breakdown,
+  };
+  const inFlight = await writeAheadExit(input, flatten);
+  if (inFlight !== undefined) return result('deduped', idempotencyKey, now, { reason: inFlight });
 
-  try {
-    await store.writeAheadFlatten({
-      idempotency_key: idempotencyKey,
-      instrument: order.instrument,
-      asset_class: order.asset_class,
-      side: order.side,
-      exit_reason: order.metadata.exit_reason,
-      size: order.size,
-      submitted_at: now,
-      lot_held_quantities: perLotHeld,
-      decision_price: snapshot.decision_price,
-      quote_bid: snapshot.quote_bid,
-      quote_ask: snapshot.quote_ask,
-      quote_mid: snapshot.quote_mid,
-      quote_observed_at: snapshot.quote_observed_at,
-      modelled_cost_breakdown: snapshot.modelled_cost_breakdown,
-    });
-  } catch (error) {
-    if (!(error instanceof UnresolvedFlattenForInstrumentError)) throw error;
-    safeLog(input.logger, {
-      trace_id: input.trace_id,
-      stage: 'execution',
-      event: 'flatten_refused_in_flight',
-      level: 'warn',
-      message:
-        `executeExit: this exit (exit_reason '${order.metadata.exit_reason}') was refused ` +
-        'because another flatten on this instrument is still unresolved — reported as ' +
-        '`deduped`, which is NOT the same as "already flat": this lot is still held. The next ' +
-        'tick in the #826 window retries, and the blocking row is bounded (reconcile.ts ' +
-        'UNRESOLVABLE_FLATTEN_MAX_AGE_MS).',
-      payload: {
-        idempotency_key: idempotencyKey,
-        instrument: order.instrument,
-        blocking_key: error.blocking_key,
-        exit_reason: order.metadata.exit_reason,
-      },
-    });
-    return result('deduped', idempotencyKey, now, { reason: error.message });
+  const cancelFailure = await cancelHeldLots(input, heldLots, flatten, now);
+  if (cancelFailure !== undefined) {
+    return result('error', idempotencyKey, now, { reason: cancelFailure });
   }
 
-  const cancelledLots: OpenPosition[] = [];
-  for (const lot of heldLots) {
-    try {
-      await broker.cancel(lot.idempotency_key, order.instrument);
-      cancelledLots.push(lot);
-    } catch (error) {
-      const reason =
-        `cancelling held lot '${lot.idempotency_key}' before the flatten failed, so the ` +
-        `flatten was not sent: ${describeThrownSafely(error)}`;
-      await markLotsUnprotected(input, cancelledLots, lot.idempotency_key, error, now);
-      await store.resolveFlattenError(idempotencyKey, reason, now);
-      return result('error', idempotencyKey, now, { reason });
-    }
-  }
+  return await submitFlattenOrder(input, order, idempotencyKey, now);
+}
+
+async function submitFlattenOrder(
+  input: SubmitInput,
+  order: OrderIntent,
+  idempotencyKey: string,
+  now: Date,
+): Promise<ExecutionResult> {
+  const { broker, store } = input;
 
   let ack: Awaited<ReturnType<typeof broker.submitFlatten>>;
   try {
@@ -544,6 +534,112 @@ async function executeExit(
     order_state: ack.order_state,
     broker_order_ids: ack.broker_order_ids,
   });
+}
+
+export function exitRefusal(
+  order: OrderIntent,
+  heldSide: OpenPosition['side'],
+  perLotHeld: readonly LotHeldQuantity[],
+): string | undefined {
+  const overExited = perLotHeld.find((lot) => lot.held < 0);
+  if (overExited !== undefined) {
+    return (
+      `exit intent for '${order.instrument}' refused: lot '${overExited.idempotency_key}' ` +
+      `records more closed quantity than it ever opened (held ${overExited.held})`
+    );
+  }
+
+  const expectedClosingSide = heldSide === 'buy' ? 'sell' : 'buy';
+  if (order.side !== expectedClosingSide) {
+    return (
+      `exit intent side '${order.side}' does not match the closing side ` +
+      `'${expectedClosingSide}' implied by the held lot(s)' side ('${heldSide}') for ` +
+      `'${order.instrument}'`
+    );
+  }
+
+  const heldSize = totalHeldQuantity(perLotHeld);
+  if (order.size !== heldSize) {
+    return (
+      `exit intent size ${order.size} does not match the held quantity ${heldSize} ` +
+      `for '${order.instrument}'`
+    );
+  }
+
+  return divergedLotRefusal(order, perLotHeld);
+}
+
+export function divergedLotRefusal(
+  order: OrderIntent,
+  perLotHeld: readonly LotHeldQuantity[],
+): string | undefined {
+  const recordedLots = order.metadata.lot_held_quantities;
+  if (recordedLots === undefined) return undefined;
+  const recordedByKey = new Map(recordedLots.map((lot) => [lot.idempotency_key, lot.held]));
+  const diverged = perLotHeld.find(
+    (lot) => (recordedByKey.get(lot.idempotency_key) ?? 0) !== lot.held,
+  );
+  if (diverged === undefined) return undefined;
+  const recorded = recordedByKey.get(diverged.idempotency_key) ?? 0;
+  return (
+    `exit intent for '${order.instrument}' refused: lot '${diverged.idempotency_key}' ` +
+    `now holds ${diverged.held} but the intent recorded ${recorded} — the covered lot set ` +
+    `has diverged since the Trader keyed this exit`
+  );
+}
+
+async function writeAheadExit(
+  input: SubmitInput,
+  flatten: FlattenSubmissionWriteAhead,
+): Promise<string | undefined> {
+  try {
+    await input.store.writeAheadFlatten(flatten);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof UnresolvedFlattenForInstrumentError)) throw error;
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'flatten_refused_in_flight',
+      level: 'warn',
+      message:
+        `executeExit: this exit (exit_reason '${flatten.exit_reason}') was refused ` +
+        'because another flatten on this instrument is still unresolved — reported as ' +
+        '`deduped`, which is NOT the same as "already flat": this lot is still held. The next ' +
+        'tick in the #826 window retries, and the blocking row is bounded (reconcile.ts ' +
+        'UNRESOLVABLE_FLATTEN_MAX_AGE_MS).',
+      payload: {
+        idempotency_key: flatten.idempotency_key,
+        instrument: flatten.instrument,
+        blocking_key: error.blocking_key,
+        exit_reason: flatten.exit_reason,
+      },
+    });
+    return error.message;
+  }
+}
+
+async function cancelHeldLots(
+  input: SubmitInput,
+  heldLots: readonly OpenPosition[],
+  flatten: FlattenSubmissionWriteAhead,
+  now: Date,
+): Promise<string | undefined> {
+  const cancelledLots: OpenPosition[] = [];
+  for (const lot of heldLots) {
+    try {
+      await input.broker.cancel(lot.idempotency_key, flatten.instrument);
+      cancelledLots.push(lot);
+    } catch (error) {
+      const reason =
+        `cancelling held lot '${lot.idempotency_key}' before the flatten failed, so the ` +
+        `flatten was not sent: ${describeThrownSafely(error)}`;
+      await markLotsUnprotected(input, cancelledLots, lot.idempotency_key, error, now);
+      await input.store.resolveFlattenError(flatten.idempotency_key, reason, now);
+      return reason;
+    }
+  }
+  return undefined;
 }
 
 async function markLotsUnprotected(

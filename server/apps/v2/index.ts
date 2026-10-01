@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import type { BrokerMode, CfdCosts, Sleeve } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
@@ -15,6 +14,7 @@ import { describeThrownSafely, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
+import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
@@ -767,13 +767,4 @@ export async function runOnce(
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2), process.env)
-    .then((code) => process.exit(code))
-    .catch((error: unknown) => {
-      process.stderr.write(
-        `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-      );
-      process.exit(1);
-    });
-}
+void runWhenInvoked(import.meta.url, () => main(process.argv.slice(2), process.env), errorStack);
