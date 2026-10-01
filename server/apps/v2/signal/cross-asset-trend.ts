@@ -5,6 +5,12 @@ import type {
   V2Bar,
 } from '../../../../contracts/index.js';
 import type { SleeveFactory } from '../backtest.js';
+import {
+  type BarsSource,
+  calendarReferenceFor,
+  sessionsBefore,
+  windowCovered,
+} from '../data/index.js';
 import { baseRead } from './bar-quality.js';
 
 // #1785 ruling (b): the 15 declared lines from the proposal (doc 70 §10.4's 22-line Saxo pool)
@@ -163,10 +169,12 @@ function decisionFor(
   sleeveId: string,
   instrument: string,
   read: TrendRead | undefined,
+  covered: boolean,
   date: string,
   signalOn: (read: TrendRead) => boolean,
 ): SleeveDecision {
   if (read === undefined) return baseDecision(sleeveId, instrument, undefined, 'bad_last_bar');
+  if (!covered) return baseDecision(sleeveId, instrument, read, 'window_coverage');
   if (read.sma === undefined || read.atr === undefined) {
     return baseDecision(sleeveId, instrument, read, 'insufficient_history');
   }
@@ -176,6 +184,7 @@ function decisionFor(
 }
 
 function createSleeve(
+  bars: BarsSource,
   sleeveId: string,
   smaWindow: number,
   signalOn: (read: TrendRead) => boolean,
@@ -186,10 +195,12 @@ function createSleeve(
     spec: crossAssetTrendSpec(),
     universe: () => ({ instruments: CROSS_ASSET_TREND_TIDMS, refusals: [] }),
     decide(context): Promise<SleeveOutput> {
+      const sessions = sessionsBefore(bars, context.tradingDate, calendarReferenceFor('saxo'));
       const decisions = CROSS_ASSET_TREND_TIDMS.map((instrument) => {
         const raw = market.barsBefore(instrument, context.tradingDate, lookbackBars);
         const read = trendRead(raw, smaWindow);
-        return decisionFor(sleeveId, instrument, read, context.tradingDate, signalOn);
+        const covered = windowCovered(raw, sessions, smaWindow);
+        return decisionFor(sleeveId, instrument, read, covered, context.tradingDate, signalOn);
       });
       return Promise.resolve({ decisions, refusals: [] });
     },
@@ -202,8 +213,12 @@ export function crossAssetTrendSleeveId(window: CrossAssetTrendSmaWindow): strin
 
 export const CROSS_ASSET_TREND_BENCHMARK_ID = 'cross-asset-trend-benchmark';
 
-export function createCrossAssetTrendSleeve(window: CrossAssetTrendSmaWindow): SleeveFactory {
+export function createCrossAssetTrendSleeve(
+  bars: BarsSource,
+  window: CrossAssetTrendSmaWindow,
+): SleeveFactory {
   return createSleeve(
+    bars,
     crossAssetTrendSleeveId(window),
     SMA_WINDOWS[window],
     (read) => read.close > (read.sma as number),
@@ -215,6 +230,6 @@ export function createCrossAssetTrendSleeve(window: CrossAssetTrendSmaWindow): S
 // Re-enters because entries() re-issues enter_long for every held line daily; submitEntry no-ops
 // while held, so a stop-out is the only way back to flat before the next cycle re-enters. Its own
 // SMA(20) is unused by signalOn — only its definedness (ATR's own warmup) gates the first entry
-export function createCrossAssetTrendBenchmarkSleeve(): SleeveFactory {
-  return createSleeve(CROSS_ASSET_TREND_BENCHMARK_ID, ATR_WINDOW, () => true);
+export function createCrossAssetTrendBenchmarkSleeve(bars: BarsSource): SleeveFactory {
+  return createSleeve(bars, CROSS_ASSET_TREND_BENCHMARK_ID, ATR_WINDOW, () => true);
 }

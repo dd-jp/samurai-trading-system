@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MarketData, V2Bar } from '../../../../contracts/index.js';
+import type { BarSeries } from '../../../pipeline/momentum/index.js';
+import type { BarsSource } from '../data/index.js';
 import {
   CROSS_ASSET_TREND_BENCHMARK_ID,
   CROSS_ASSET_TREND_CANDIDATE_ID,
@@ -13,6 +15,41 @@ import {
 
 const CONTEXT = { tradingDate: '2025-01-01', macroDay: false, dryRun: true };
 
+function weekdaysEndingBefore(tradingDate: string, count: number): readonly string[] {
+  const dates: string[] = [];
+  const cursor = new Date(`${tradingDate}T00:00:00.000Z`);
+  while (dates.length < count) {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+    const weekday = cursor.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) dates.unshift(cursor.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+const SESSIONS = weekdaysEndingBefore(CONTEXT.tradingDate, 130);
+
+function sessionAt(index: number, length: number): string {
+  return SESSIONS[SESSIONS.length - length + index] as string;
+}
+
+function calendarSource(sessions: readonly string[] = SESSIONS): BarsSource {
+  const reference: BarSeries = {
+    symbol: 'ISF',
+    bars: sessions.map((date) => ({
+      date,
+      open: 1,
+      high: 1,
+      low: 1,
+      close: 1,
+      volume: 1,
+      rawClose: 1,
+    })),
+  };
+  return { load: (symbol) => (symbol === 'ISF' ? reference : undefined) };
+}
+
+const CALENDAR = calendarSource();
+
 function flatMarket(finalClose: number, finalOverrides: Partial<V2Bar> = {}): MarketData {
   return {
     lastBarBefore: () => undefined,
@@ -21,7 +58,7 @@ function flatMarket(finalClose: number, finalOverrides: Partial<V2Bar> = {}): Ma
         const isLast = index === count - 1;
         const close = isLast ? finalClose : 100;
         return {
-          date: `2024-01-${String(index + 1).padStart(2, '0')}`,
+          date: sessionAt(index, count),
           open: close,
           high: close,
           low: close,
@@ -42,7 +79,7 @@ function fixedCountMarket(count: number, finalClose = 100): MarketData {
       Array.from({ length: count }, (_, index) => {
         const close = index === count - 1 ? finalClose : 100;
         return {
-          date: `D${index}`,
+          date: sessionAt(index, count),
           open: close,
           high: close,
           low: close,
@@ -63,7 +100,7 @@ function marketWithOldOutlierBars(): MarketData {
   const bars: V2Bar[] = [];
   for (let index = 0; index < 10; index++) {
     bars.push({
-      date: `OLD${index}`,
+      date: sessionAt(index, 110),
       open: 200,
       high: 200,
       low: 200,
@@ -74,7 +111,7 @@ function marketWithOldOutlierBars(): MarketData {
   }
   for (let index = 10; index < 109; index++) {
     bars.push({
-      date: `D${index}`,
+      date: sessionAt(index, 110),
       open: 100,
       high: 100,
       low: 100,
@@ -84,7 +121,7 @@ function marketWithOldOutlierBars(): MarketData {
     });
   }
   bars.push({
-    date: 'D109',
+    date: sessionAt(109, 110),
     open: 110,
     high: 110,
     low: 110,
@@ -100,7 +137,7 @@ function marketWithOldOutlierBars(): MarketData {
 // below 100, so close(100) IS above it and the sleeve wrongly enters
 function marketWithInteriorBadBar(): MarketData {
   const bars: V2Bar[] = Array.from({ length: 110 }, (_, index) => ({
-    date: `D${index}`,
+    date: sessionAt(index, 110),
     open: 100,
     high: 100,
     low: 100,
@@ -109,7 +146,7 @@ function marketWithInteriorBadBar(): MarketData {
     rawClose: 100,
   }));
   bars[105] = {
-    date: 'D105',
+    date: sessionAt(105, 110),
     open: 200,
     high: 100,
     low: 100,
@@ -117,6 +154,44 @@ function marketWithInteriorBadBar(): MarketData {
     volume: 1_000,
     rawClose: 0,
   };
+  return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
+}
+
+function marketWithBadBars(badCount: number): MarketData {
+  const bars: V2Bar[] = Array.from({ length: 110 }, (_, index) => ({
+    date: sessionAt(index, 110),
+    open: index < badCount ? 200 : 100,
+    high: 100,
+    low: 100,
+    close: 100,
+    volume: 1_000,
+    rawClose: 100,
+  }));
+  return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
+}
+
+function fullBars(): V2Bar[] {
+  return Array.from({ length: 110 }, (_, index) => {
+    const close = index === 109 ? 150 : 100;
+    return {
+      date: sessionAt(index, 110),
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: 1_000,
+      rawClose: close,
+    };
+  });
+}
+
+function gappyMarket(missing: number): MarketData {
+  const bars = fullBars().filter((_, index) => index < 50 || index >= 50 + missing);
+  return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
+}
+
+function staleMarket(): MarketData {
+  const bars = fullBars().slice(0, -1);
   return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
 }
 
@@ -147,8 +222,8 @@ describe('CROSS_ASSET_TREND_TIDMS', () => {
 
 describe('createCrossAssetTrendSleeve', () => {
   it('ids by window and declares the universe with no refusals', () => {
-    const sleeve100 = createCrossAssetTrendSleeve(100)(flatMarket(100));
-    const sleeve200 = createCrossAssetTrendSleeve(200)(flatMarket(100));
+    const sleeve100 = createCrossAssetTrendSleeve(CALENDAR, 100)(flatMarket(100));
+    const sleeve200 = createCrossAssetTrendSleeve(CALENDAR, 200)(flatMarket(100));
     expect(sleeve100.id).toBe('cross-asset-trend-sma100');
     expect(sleeve200.id).toBe('cross-asset-trend-sma200');
     expect(crossAssetTrendSleeveId(100)).toBe('cross-asset-trend-sma100');
@@ -182,7 +257,7 @@ describe('createCrossAssetTrendSleeve', () => {
   });
 
   it('enters long when the close is above the SMA', async () => {
-    const sleeve = createCrossAssetTrendSleeve(100)(flatMarket(150));
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(flatMarket(150));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     expect(output.refusals).toEqual([]);
     for (const decision of output.decisions) {
@@ -202,9 +277,10 @@ describe('createCrossAssetTrendSleeve', () => {
     // a wide 140-160 range against a flat 100 previous close, so its true range is 60 and the
     // 20-day ATR is 60/20=3 in close terms; rawClose=375 makes the raw/close ratio 2.5, so the
     // rescaled atr is 3*2.5=7.5 and stop_price is 375 - 3*7.5=352.5
-    const sleeve = createCrossAssetTrendSleeve(100)(
-      flatMarket(150, { high: 160, low: 140, rawClose: 375 }),
-    );
+    const sleeve = createCrossAssetTrendSleeve(
+      CALENDAR,
+      100,
+    )(flatMarket(150, { high: 160, low: 140, rawClose: 375 }));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('enter_long');
@@ -215,7 +291,7 @@ describe('createCrossAssetTrendSleeve', () => {
   });
 
   it('exits when the close is below the SMA', async () => {
-    const sleeve = createCrossAssetTrendSleeve(100)(flatMarket(50));
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(flatMarket(50));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('exit');
@@ -229,19 +305,19 @@ describe('createCrossAssetTrendSleeve', () => {
   });
 
   it('filters a shape-invalid interior bar out of the SMA window rather than averaging it in', async () => {
-    const sleeve = createCrossAssetTrendSleeve(100)(marketWithInteriorBadBar());
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(marketWithInteriorBadBar());
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('exit');
     }
   });
 
-  it('skips as insufficient_history when the SMA/ATR window has not warmed up', async () => {
+  it('skips as window_coverage when the SMA/ATR window has not warmed up', async () => {
     const thin: MarketData = {
       lastBarBefore: () => undefined,
       barsBefore: () => [
         {
-          date: '2024-01-01',
+          date: sessionAt(0, 1),
           open: 100,
           high: 100,
           low: 100,
@@ -252,11 +328,11 @@ describe('createCrossAssetTrendSleeve', () => {
       ],
       gbpUsdAtYearStart: () => 1,
     };
-    const sleeve = createCrossAssetTrendSleeve(100)(thin);
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(thin);
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
-      expect(decision.reason).toBe('insufficient_history');
+      expect(decision.reason).toBe('window_coverage');
       expect(decision.atr).toBeUndefined();
       expect(decision.price).toBe(100);
       expect(decision.venue).toBe('saxo');
@@ -265,9 +341,17 @@ describe('createCrossAssetTrendSleeve', () => {
     }
   });
 
-  it('skips as insufficient_history when the ATR warms up before the SMA does', async () => {
-    // 50 bars: enough for the 20-day ATR (needs >= 21) but short of the 100-day SMA window
-    const sleeve = createCrossAssetTrendSleeve(100)(fixedCountMarket(50));
+  it('skips as window_coverage when only 50 bars exist, enough for the ATR but short of the SMA(100) window', async () => {
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(fixedCountMarket(50));
+    const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+    for (const decision of output.decisions) {
+      expect(decision.action).toBe('skip');
+      expect(decision.reason).toBe('window_coverage');
+    }
+  });
+
+  it('skips as insufficient_history when interior bad bars leave fewer valid bars than the SMA window, though the raw window is covered', async () => {
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(marketWithBadBars(11));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
@@ -275,8 +359,57 @@ describe('createCrossAssetTrendSleeve', () => {
     }
   });
 
+  it('holds the 95% coverage line over the SMA(100) window: 5 missing sessions trade, 6 skip (#1925)', async () => {
+    const decideWith = async (missing: number) => {
+      const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(gappyMarket(missing));
+      return (await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS)).decisions;
+    };
+    for (const decision of await decideWith(5)) expect(decision.action).toBe('enter_long');
+    for (const decision of await decideWith(6)) {
+      expect(decision.action).toBe('skip');
+      expect(decision.reason).toBe('window_coverage');
+    }
+  });
+
+  it('skips as window_coverage when the name has no bar on the last calendar session (stale) (#1925)', async () => {
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(staleMarket());
+    const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+    for (const decision of output.decisions) {
+      expect(decision.action).toBe('skip');
+      expect(decision.reason).toBe('window_coverage');
+    }
+  });
+
+  it('skips as window_coverage when the calendar itself is stale or missing (#1925)', async () => {
+    const staleSessions = weekdaysEndingBefore('2024-12-20', 130);
+    for (const calendar of [calendarSource(staleSessions), { load: () => undefined }]) {
+      const sleeve = createCrossAssetTrendSleeve(calendar, 100)(flatMarket(150));
+      const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+      for (const decision of output.decisions) {
+        expect(decision.reason).toBe('window_coverage');
+      }
+    }
+  });
+
+  it('applies the check per line: one gappy line skips while the rest trade (#1925)', async () => {
+    const gappy = gappyMarket(6);
+    const healthy = flatMarket(150);
+    const mixed: MarketData = {
+      ...healthy,
+      barsBefore: (instrument, date, count) =>
+        (instrument === 'VMID' ? gappy : healthy).barsBefore(instrument, date, count),
+    };
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(mixed);
+    const decisions = (await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS)).decisions;
+    expect(decisions.find((entry) => entry.instrument === 'VMID')?.reason).toBe('window_coverage');
+    expect(decisions.filter((entry) => entry.action === 'enter_long')).toHaveLength(14);
+  });
+
   it('skips as bad_last_bar when the last bar fails the #1838 shape check, fail-closed', async () => {
-    const sleeve = createCrossAssetTrendSleeve(100)(flatMarket(150, { close: 200, high: 150 }));
+    const sleeve = createCrossAssetTrendSleeve(
+      CALENDAR,
+      100,
+    )(flatMarket(150, { close: 200, high: 150 }));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
@@ -290,7 +423,7 @@ describe('createCrossAssetTrendSleeve', () => {
     ['close below low', { open: 120, high: 150, low: 100, close: 90 }],
     ['close above high', { open: 120, high: 150, low: 100, close: 160 }],
   ])('skips as bad_last_bar when the last bar has %s', async (_label, overrides) => {
-    const sleeve = createCrossAssetTrendSleeve(100)(flatMarket(120, overrides));
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(flatMarket(120, overrides));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
@@ -304,7 +437,7 @@ describe('createCrossAssetTrendSleeve', () => {
     ['close equal to low', { open: 120, high: 150, low: 100, close: 100 }],
     ['close equal to high', { open: 120, high: 150, low: 100, close: 150 }],
   ])('treats a last bar with %s as shape-valid, not bad_last_bar', async (_label, overrides) => {
-    const sleeve = createCrossAssetTrendSleeve(100)(flatMarket(120, overrides));
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(flatMarket(120, overrides));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.reason).not.toBe('bad_last_bar');
@@ -312,7 +445,7 @@ describe('createCrossAssetTrendSleeve', () => {
   });
 
   it('computes the SMA at exactly smaWindow bars, the warmup boundary', async () => {
-    const sleeve = createCrossAssetTrendSleeve(100)(fixedCountMarket(100));
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(fixedCountMarket(100));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.reason).not.toBe('insufficient_history');
@@ -324,7 +457,7 @@ describe('createCrossAssetTrendSleeve', () => {
     // last at 110) count. Correct SMA = (99*100+110)/100 = 100.1, so close(110) sits just above
     // it and the sleeve enters; summing all 110 bars instead would push the average to 120.1,
     // flipping the decision to exit
-    const sleeve = createCrossAssetTrendSleeve(100)(marketWithOldOutlierBars());
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(marketWithOldOutlierBars());
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('enter_long');
@@ -332,7 +465,7 @@ describe('createCrossAssetTrendSleeve', () => {
   });
 
   it('skips as bad_last_bar when there is no last bar at all', async () => {
-    const sleeve = createCrossAssetTrendSleeve(100)(emptyMarket());
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(emptyMarket());
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
@@ -343,7 +476,7 @@ describe('createCrossAssetTrendSleeve', () => {
 
 describe('createCrossAssetTrendBenchmarkSleeve', () => {
   it('always signals long once its own warmup window is covered, trend ignored (ruling d)', async () => {
-    const sleeve = createCrossAssetTrendBenchmarkSleeve()(flatMarket(50));
+    const sleeve = createCrossAssetTrendBenchmarkSleeve(CALENDAR)(flatMarket(50));
     expect(sleeve.id).toBe(CROSS_ASSET_TREND_BENCHMARK_ID);
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
@@ -355,7 +488,7 @@ describe('createCrossAssetTrendBenchmarkSleeve', () => {
     // The benchmark's own smaWindow equals ATR_WINDOW (20), so 20 bars satisfy the SMA's
     // length >= 20 but not the ATR's length >= 21 — the one case where this candidate's two
     // window thresholds can disagree instead of the SMA(100/200) sleeves' always-wider SMA window
-    const sleeve = createCrossAssetTrendBenchmarkSleeve()(fixedCountMarket(20));
+    const sleeve = createCrossAssetTrendBenchmarkSleeve(CALENDAR)(fixedCountMarket(20));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
