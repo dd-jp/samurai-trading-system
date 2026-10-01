@@ -29,11 +29,26 @@ import {
   recordOutcome,
   roundPrices,
   type SymbolOutcome,
+  type TimeLimit,
+  UNLIMITED,
+  withinTimeLimit,
 } from './bar-refresh-core.js';
 import { isFresh } from './data/index.js';
+import {
+  connectUnlessLost,
+  ledgerFor,
+  noteSessionLoss,
+  type SaxoSessionLedger,
+} from './saxo-session-loss.js';
 import { LSE_LINES } from './signal/index.js';
 
 const HISTORY_RESCALE_TOLERANCE = 0.05;
+// Between the 2026-09-25 pull (data/bars/saxo-aux/raw) and the 2026-09-30 store, 0 of 85,175
+// overlapping completed closes changed; the largest gap, 1.29%, was the partial fetch-day bar
+// hygiene drops, so any revision is unexplained; 0.5% only leaves room above 4-decimal rounding;
+// it holds only while Saxo closes stay price-only (doc 70's ISF/CUKX check): a distribution
+// back-adjustment would revise every close before an ex-date and refuse the line
+const MAX_CLOSE_REVISION = 0.005;
 const SAXO_VENUE = 'saxo';
 
 export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHistory'>;
@@ -44,6 +59,7 @@ export interface SaxoBarRefreshOptions {
   readonly tradingDate: string;
   readonly lines: readonly SaxoLine[];
   readonly logger: Logger;
+  readonly limit?: TimeLimit;
 }
 
 function median(values: readonly number[]): number | undefined {
@@ -54,6 +70,22 @@ function median(values: readonly number[]): number | undefined {
   return sorted.length % 2 === 1 ? upper : ((sorted[middle - 1] as number) + upper) / 2;
 }
 
+interface CloseRatio {
+  readonly date: string;
+  readonly stored: number;
+  readonly pulled: number;
+  readonly ratio: number;
+}
+
+function closeRatios(existing: BarSeries, next: readonly DailyBar[]): CloseRatio[] {
+  const replacement = new Map(next.map((bar) => [bar.date, bar.close]));
+  return existing.bars.flatMap((bar) => {
+    const pulled = replacement.get(bar.date);
+    if (pulled === undefined || pulled === 0) return [];
+    return [{ date: bar.date, stored: bar.close, pulled, ratio: bar.close / pulled }];
+  });
+}
+
 // Saxo rewrites past bars after a split, so the old-to-new close ratio over the overlap is
 // uniform (the split ratio) rather than noise; the median keeps a single revised bar from
 // tripping it
@@ -61,14 +93,57 @@ export function historyRescaleFactor(
   existing: BarSeries,
   next: readonly DailyBar[],
 ): number | undefined {
-  const replacement = new Map(next.map((bar) => [bar.date, bar.close]));
-  const ratios = existing.bars.flatMap((bar) => {
-    const close = replacement.get(bar.date);
-    return close === undefined || close === 0 ? [] : [bar.close / close];
-  });
-  const factor = median(ratios);
+  const factor = median(closeRatios(existing, next).map(({ ratio }) => ratio));
   if (factor === undefined || Math.abs(factor - 1) <= HISTORY_RESCALE_TOLERANCE) return undefined;
   return factor;
+}
+
+const LISTED_DATES = 5;
+
+function listed(dates: readonly string[]): string {
+  const more = dates.length > LISTED_DATES ? ` and ${dates.length - LISTED_DATES} more` : '';
+  return `${dates.slice(0, LISTED_DATES).join(', ')}${more}`;
+}
+
+function earlierStart(existing: BarSeries, next: readonly DailyBar[]): string | undefined {
+  const storedFirst = existing.bars[0]?.date;
+  const pulledFirst = next[0]?.date;
+  if (storedFirst === undefined || pulledFirst === undefined || pulledFirst >= storedFirst) {
+    return undefined;
+  }
+  return `starts at ${pulledFirst}, before the stored first bar ${storedFirst}`;
+}
+
+function interiorGap(existing: BarSeries, next: readonly DailyBar[]): string | undefined {
+  const pulled = new Set(next.map((bar) => bar.date));
+  const missing = existing.bars.map((bar) => bar.date).filter((date) => !pulled.has(date));
+  if (missing.length === 0) return undefined;
+  return `drops stored bar(s) ${listed(missing)}`;
+}
+
+// Measured against the median ratio, not 1, so a uniform split rescale (warned, then written)
+// never counts as a revision of every bar
+function revisedCloses(existing: BarSeries, next: readonly DailyBar[]): string | undefined {
+  const ratios = closeRatios(existing, next);
+  const base = median(ratios.map(({ ratio }) => ratio)) ?? 1;
+  const revised = ratios.filter(({ ratio }) => Math.abs(ratio / base - 1) > MAX_CLOSE_REVISION);
+  if (revised.length === 0) return undefined;
+  const shown = revised.map(({ date, stored, pulled }) => `${date} ${stored} to ${pulled}`);
+  return `revises stored close(s) by more than ${MAX_CLOSE_REVISION * 100}%: ${listed(shown)}`;
+}
+
+function assertHistoryConsistent(
+  symbol: string,
+  existing: BarSeries,
+  next: readonly DailyBar[],
+): void {
+  const conflict =
+    earlierStart(existing, next) ?? interiorGap(existing, next) ?? revisedCloses(existing, next);
+  if (conflict === undefined) return;
+  throw new Error(
+    `${symbol}: the Saxo re-pull ${conflict}; refusing to write, the stored bars stand until ` +
+      'the line is checked and re-seeded with the Saxo puller',
+  );
 }
 
 export function saxoRefreshLines(
@@ -168,8 +243,13 @@ async function refreshLine(
   if (repaired.bars.length === 0) throw new Error(`${line.tidm}: no bars left after shape repair`);
   assertNoRecentRepair(line.tidm, hygiene.bars, repaired.report);
   const rounded = roundPrices(repaired.bars);
-  if (existing !== undefined) assertNoShrink(line.tidm, existing, rounded);
-  await options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]);
+  if (existing !== undefined) {
+    assertNoShrink(line.tidm, existing, rounded);
+    assertHistoryConsistent(line.tidm, existing, rounded);
+  }
+  await (options.limit ?? UNLIMITED).atomic(() =>
+    options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
+  );
   warnIfShapeRepaired(line.tidm, repaired.report, options.logger);
   warnIfRescaled(existing, rounded, options.logger);
   assertFresh(line.tidm, rounded, options.tradingDate);
@@ -192,10 +272,29 @@ async function refreshLineSafely(
   }
 }
 
+// A crash between swapIn's two renames leaves the symbol directory missing, and with no
+// stored series the history guards above have nothing to compare against
+function warnIfUnguarded(
+  tidm: string,
+  existing: ReadonlyMap<string, BarSeries>,
+  logger: Logger,
+): void {
+  if (existing.size === 0 || existing.has(tidm)) return;
+  logRefresh(
+    logger,
+    'warn',
+    'v2_saxo_line_unguarded',
+    `${tidm}: no stored Saxo bars while other lines have them (new line, or a write interrupted ` +
+      'mid-swap); writing a fresh series without the history guards',
+  );
+}
+
 export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<BarRefreshReport> {
   const existing = await options.store.readVenue(SAXO_VENUE);
   const buckets: Buckets = { updated: [], noNewBars: [], failed: [] };
   for (const line of options.lines) {
+    if (options.limit?.signal.aborted) break;
+    warnIfUnguarded(line.tidm, existing, options.logger);
     const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
     recordOutcome(outcome, buckets, options.logger);
   }
@@ -211,32 +310,71 @@ export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<B
 export interface SaxoSession {
   readonly api: SaxoBarsApi;
   readonly stop: () => Promise<void>;
+  readonly lostReason?: () => string | undefined;
 }
+
+type SaxoConnect = (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
+
+// Each 429 costs a 65 s backoff and each request may wait 60 s, so an all-429 day runs past 1.5
+// hours; ten minutes covers a clean pull of the 22 lines with room for several backoffs
+const SAXO_REFRESH_TIME_LIMIT_MS = 10 * 60_000;
 
 export interface SaxoBarRefreshDeps {
   readonly storeRoot?: string;
   readonly connect?: (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
+  readonly tokenPath?: string;
+  readonly now?: () => Date;
+  readonly timeLimitMs?: number;
 }
 
-const connectLive = (env: NodeJS.ProcessEnv, logger: Logger): SaxoSession =>
-  openSaxoLiveSession(env, undefined, logger);
+interface SaxoLeg {
+  readonly env: NodeJS.ProcessEnv;
+  readonly tradingDate: string;
+  readonly storeRoot: string;
+  readonly connect: SaxoConnect;
+  readonly ledger: SaxoSessionLedger;
+}
+
+async function stopQuietly(session: SaxoSession, logger: Logger): Promise<void> {
+  try {
+    await session.stop();
+  } catch (error) {
+    logRefresh(
+      logger,
+      'warn',
+      'v2_saxo_session_stop_failed',
+      `Saxo session did not stop cleanly after the bar refresh (${messageOf(error)}); the refresh result stands`,
+    );
+  }
+}
 
 async function refreshInSession(
   session: SaxoSession,
-  storeRoot: string,
-  tradingDate: string,
-  logger: Logger,
+  leg: SaxoLeg,
+  limit: TimeLimit,
 ): Promise<BarRefreshReport> {
+  const logger = leg.ledger.logger;
   try {
-    const store = await ParquetBarStore.open(storeRoot);
+    const store = await ParquetBarStore.open(leg.storeRoot);
     try {
       const lines = saxoRefreshLines();
-      return await refreshSaxoBars({ api: session.api, store, tradingDate, lines, logger });
+      const { tradingDate } = leg;
+      return await refreshSaxoBars({ api: session.api, store, tradingDate, lines, logger, limit });
     } finally {
       store.close();
     }
   } finally {
-    await session.stop();
+    noteSessionLoss(session.lostReason?.(), leg.ledger);
+    await stopQuietly(session, logger);
+  }
+}
+
+async function connectAndRefresh(leg: SaxoLeg, limit: TimeLimit): Promise<BarRefreshReport> {
+  try {
+    const session = connectUnlessLost(() => leg.connect(leg.env, leg.ledger.logger), leg.ledger);
+    return await refreshInSession(session, leg, limit);
+  } catch (error) {
+    return unavailable(messageOf(error), leg.ledger.logger);
   }
 }
 
@@ -258,15 +396,20 @@ export function saxoBarRefreshFor(
   logger: Logger,
   deps: SaxoBarRefreshDeps = {},
 ): BarRefresh {
-  const connect = deps.connect ?? connectLive;
-  const storeRoot = deps.storeRoot ?? DEFAULT_BAR_STORE_ROOT;
+  const leg: SaxoLeg = {
+    env,
+    tradingDate,
+    storeRoot: deps.storeRoot ?? DEFAULT_BAR_STORE_ROOT,
+    connect: deps.connect ?? ((liveEnv, log) => openSaxoLiveSession(liveEnv, deps.tokenPath, log)),
+    ledger: ledgerFor(deps, logger),
+  };
+  const limitMs = deps.timeLimitMs ?? SAXO_REFRESH_TIME_LIMIT_MS;
+  const expired = () =>
+    unavailable(
+      `cut at the ${limitMs / 1000} s cap; lines not yet written keep their stored bars`,
+      logger,
+    );
   return {
-    run: async () => {
-      try {
-        return await refreshInSession(connect(env, logger), storeRoot, tradingDate, logger);
-      } catch (error) {
-        return unavailable(messageOf(error), logger);
-      }
-    },
+    run: () => withinTimeLimit(limitMs, (limit) => connectAndRefresh(leg, limit), expired),
   };
 }

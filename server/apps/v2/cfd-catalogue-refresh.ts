@@ -9,6 +9,12 @@ import type { Logger } from '../../shared/index.js';
 import { isFiniteNumber } from '../../shared/index.js';
 import { type BarRefresh, logRefresh, messageOf } from './bar-refresh-core.js';
 import { type CfdInstrument, parseCfdCatalogue, type QuoteCurrency } from './data/index.js';
+import {
+  connectUnlessLost,
+  ledgerFor,
+  noteSessionLoss,
+  type SaxoSessionLedger,
+} from './saxo-session-loss.js';
 import { LSE_LINES } from './signal/index.js';
 
 export type CfdReferenceApi = Pick<
@@ -328,11 +334,10 @@ export async function refreshCfdCatalogue(
 export interface CfdSession {
   readonly api: CfdReferenceApi;
   readonly stop: () => Promise<void>;
+  readonly lostReason?: () => string | undefined;
 }
 
 export type CfdSessionConnect = (env: NodeJS.ProcessEnv, logger: Logger) => CfdSession;
-
-const connectLive: CfdSessionConnect = (env, logger) => openSaxoLiveSession(env, undefined, logger);
 
 export interface CfdCatalogueLeg {
   readonly tradingDate: string;
@@ -340,13 +345,20 @@ export interface CfdCatalogueLeg {
   readonly path: string;
   readonly logger: Logger;
   readonly connect?: CfdSessionConnect;
+  readonly tokenPath?: string;
+  readonly now?: () => Date;
 }
 
-async function refreshInSession(session: CfdSession, leg: CfdCatalogueLeg): Promise<void> {
+async function refreshInSession(
+  session: CfdSession,
+  leg: CfdCatalogueLeg,
+  ledger: SaxoSessionLedger,
+): Promise<void> {
   try {
     const scopes = cfdScopes(leg.constituents);
     await refreshCfdCatalogue(session.api, scopes, leg.tradingDate, leg.path, leg.logger);
   } finally {
+    noteSessionLoss(session.lostReason?.(), ledger);
     await session.stop();
   }
 }
@@ -354,11 +366,14 @@ async function refreshInSession(session: CfdSession, leg: CfdCatalogueLeg): Prom
 // The catalogue is not bars, so the leg adds nothing to the bar report; a failure keeps the
 // previous file, which the router stops trusting after CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS
 export function cfdCatalogueRefreshFor(env: NodeJS.ProcessEnv, leg: CfdCatalogueLeg): BarRefresh {
-  const connect = leg.connect ?? connectLive;
+  const connect: CfdSessionConnect =
+    leg.connect ?? ((liveEnv, logger) => openSaxoLiveSession(liveEnv, leg.tokenPath, logger));
+  const ledger = ledgerFor(leg, leg.logger);
   return {
     run: async () => {
       try {
-        await refreshInSession(connect(env, leg.logger), leg);
+        const session = connectUnlessLost(() => connect(env, leg.logger), ledger);
+        await refreshInSession(session, leg, ledger);
       } catch (error) {
         logRefresh(
           leg.logger,

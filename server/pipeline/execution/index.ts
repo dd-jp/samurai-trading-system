@@ -28,7 +28,7 @@ export {
   SAXO_CREDENTIAL_ENV_VARS,
   SaxoHttpBrokerClient,
 } from './adapters/saxo-http-client.js';
-export { readKeepAliveState } from './adapters/saxo-keepalive-state.js';
+export { readKeepAliveState, writeKeepAliveState } from './adapters/saxo-keepalive-state.js';
 export {
   resolveSaxoOAuthConfig,
   SAXO_APP_CREDENTIAL_ENV_VARS,
@@ -44,6 +44,7 @@ export type {
   SaxoTokenSource,
 } from './adapters/saxo-token-source.js';
 export {
+  SaxoSessionLostError,
   SaxoTokenRefresher,
   StaticSaxoTokenSource,
 } from './adapters/saxo-token-source.js';
