@@ -157,42 +157,34 @@ function marketWithInteriorBadBar(): MarketData {
   return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
 }
 
-function marketWithBadBars(badCount: number): MarketData {
-  const bars: V2Bar[] = Array.from({ length: 110 }, (_, index) => ({
-    date: sessionAt(index, 110),
-    open: index < badCount ? 200 : 100,
-    high: 100,
-    low: 100,
-    close: 100,
-    volume: 1_000,
-    rawClose: 100,
-  }));
+function staticMarket(bars: readonly V2Bar[]): MarketData {
   return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
 }
 
-function fullBars(): V2Bar[] {
-  return Array.from({ length: 110 }, (_, index) => {
-    const close = index === 109 ? 150 : 100;
-    return {
-      date: sessionAt(index, 110),
-      open: close,
-      high: close,
-      low: close,
-      close,
-      volume: 1_000,
-      rawClose: close,
-    };
-  });
+function flatBar(date: string, close: number): V2Bar {
+  return { date, open: close, high: close, low: close, close, volume: 1_000, rawClose: close };
 }
 
-function gappyMarket(missing: number): MarketData {
-  const bars = fullBars().filter((_, index) => index < 50 || index >= 50 + missing);
-  return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
+function marketWithBadBars(badCount: number, length = 110): MarketData {
+  return staticMarket(
+    Array.from({ length }, (_, index) => ({
+      ...flatBar(sessionAt(index, length), 100),
+      open: index < badCount ? 200 : 100,
+    })),
+  );
 }
 
-function staleMarket(): MarketData {
-  const bars = fullBars().slice(0, -1);
-  return { lastBarBefore: () => undefined, barsBefore: () => bars, gbpUsdAtYearStart: () => 1 };
+function gappyMarket(missing: number, lookback = 110): MarketData {
+  const dates = SESSIONS.slice(-(lookback + missing));
+  const kept = dates.filter((_, index) => index < 20 || index >= 20 + missing);
+  return staticMarket(
+    kept.map((date, index) => flatBar(date, index === kept.length - 1 ? 150 : 100)),
+  );
+}
+
+function staleMarket(lookback = 110): MarketData {
+  const dates = SESSIONS.slice(-(lookback + 1), -1);
+  return staticMarket(dates.map((date) => flatBar(date, 100)));
 }
 
 describe('CROSS_ASSET_TREND_TIDMS', () => {
@@ -359,7 +351,7 @@ describe('createCrossAssetTrendSleeve', () => {
     }
   });
 
-  it('holds the 95% coverage line over the SMA(100) window: 5 missing sessions trade, 6 skip (#1925)', async () => {
+  it('holds the 95% coverage line over the 110-session lookback decide() reads: 5 missing sessions trade, 6 skip (#1925)', async () => {
     const decideWith = async (missing: number) => {
       const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(gappyMarket(missing));
       return (await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS)).decisions;
@@ -444,8 +436,8 @@ describe('createCrossAssetTrendSleeve', () => {
     }
   });
 
-  it('computes the SMA at exactly smaWindow bars, the warmup boundary', async () => {
-    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(fixedCountMarket(100));
+  it('trades at exactly the lookback bar count, the warmup boundary', async () => {
+    const sleeve = createCrossAssetTrendSleeve(CALENDAR, 100)(fixedCountMarket(110));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.reason).not.toBe('insufficient_history');
@@ -485,14 +477,37 @@ describe('createCrossAssetTrendBenchmarkSleeve', () => {
   });
 
   it('skips as insufficient_history when its SMA(20) warms up before its own ATR(20) does', async () => {
-    // The benchmark's own smaWindow equals ATR_WINDOW (20), so 20 bars satisfy the SMA's
-    // length >= 20 but not the ATR's length >= 21 — the one case where this candidate's two
-    // window thresholds can disagree instead of the SMA(100/200) sleeves' always-wider SMA window
-    const sleeve = createCrossAssetTrendBenchmarkSleeve(CALENDAR)(fixedCountMarket(20));
+    // 10 bad bars of 30 leave 20 valid: enough for the SMA(20) (length >= 20), short of the
+    // ATR(20) (length >= 21), with the raw 30-bar window covered
+    const sleeve = createCrossAssetTrendBenchmarkSleeve(CALENDAR)(marketWithBadBars(10, 30));
     const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
     for (const decision of output.decisions) {
       expect(decision.action).toBe('skip');
       expect(decision.reason).toBe('insufficient_history');
+    }
+  });
+
+  it('checks the whole 30-bar read, so the ATR never prices off an unchecked bar: 1 missing session trades, 2 skip (#1925)', async () => {
+    const decideWith = async (missing: number) => {
+      const sleeve = createCrossAssetTrendBenchmarkSleeve(CALENDAR)(gappyMarket(missing, 30));
+      return (await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS)).decisions;
+    };
+    for (const decision of await decideWith(1)) expect(decision.action).toBe('enter_long');
+    for (const decision of await decideWith(2)) expect(decision.reason).toBe('window_coverage');
+  });
+
+  it('skips as window_coverage on a stale last bar or a lone old bar followed by 20 recent ones (#1925)', async () => {
+    const lone = staticMarket([
+      flatBar('2023-06-01', 10),
+      ...SESSIONS.slice(-20).map((date) => flatBar(date, 100)),
+    ]);
+    for (const market of [staleMarket(30), lone]) {
+      const sleeve = createCrossAssetTrendBenchmarkSleeve(CALENDAR)(market);
+      const output = await sleeve.decide(CONTEXT, CROSS_ASSET_TREND_TIDMS);
+      for (const decision of output.decisions) {
+        expect(decision.action).toBe('skip');
+        expect(decision.reason).toBe('window_coverage');
+      }
     }
   });
 });

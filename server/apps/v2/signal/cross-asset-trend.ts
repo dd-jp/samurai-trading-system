@@ -199,7 +199,7 @@ function createSleeve(
       const decisions = CROSS_ASSET_TREND_TIDMS.map((instrument) => {
         const raw = market.barsBefore(instrument, context.tradingDate, lookbackBars);
         const read = trendRead(raw, smaWindow);
-        const covered = windowCovered(raw, sessions, smaWindow);
+        const covered = windowCovered(raw, sessions, lookbackBars);
         return decisionFor(sleeveId, instrument, read, covered, context.tradingDate, signalOn);
       });
       return Promise.resolve({ decisions, refusals: [] });
