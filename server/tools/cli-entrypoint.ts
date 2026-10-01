@@ -56,6 +56,20 @@ export function onTerminationSignal(
   signals.once('SIGTERM', handler);
 }
 
+export function failExitCodeOnRejection(
+  run: Promise<unknown>,
+  report: (error: unknown) => void = console.error,
+  proc: { exitCode?: number | string | null | undefined } = process,
+): Promise<void> {
+  return run.then(
+    () => undefined,
+    (error: unknown) => {
+      report(error);
+      proc.exitCode = 1;
+    },
+  );
+}
+
 export function exitCodeOrOne(
   run: Promise<number>,
   stderr: MainProcess['stderr'] = process.stderr,

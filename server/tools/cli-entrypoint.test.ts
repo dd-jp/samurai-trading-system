@@ -4,6 +4,7 @@ import {
   errorMessage,
   errorStack,
   exitCodeOrOne,
+  failExitCodeOnRejection,
   type MainProcess,
   onTerminationSignal,
   runWhenInvoked,
@@ -121,6 +122,25 @@ describe('onTerminationSignal', () => {
     expect([...handlers.keys()]).toEqual(['SIGINT', 'SIGTERM']);
     handlers.get('SIGTERM')?.();
     expect(stops).toBe(1);
+  });
+});
+
+describe('failExitCodeOnRejection', () => {
+  it('leaves the exit code alone when the run resolves', async () => {
+    const reported: unknown[] = [];
+    const proc: { exitCode?: number } = {};
+    await failExitCodeOnRejection(Promise.resolve('done'), (e) => reported.push(e), proc);
+    expect(reported).toEqual([]);
+    expect(proc.exitCode).toBeUndefined();
+  });
+
+  it('reports the error and sets exit code 1 on rejection', async () => {
+    const reported: unknown[] = [];
+    const proc: { exitCode?: number } = {};
+    const error = new Error('down');
+    await failExitCodeOnRejection(Promise.reject(error), (e) => reported.push(e), proc);
+    expect(reported).toEqual([error]);
+    expect(proc.exitCode).toBe(1);
   });
 });
 

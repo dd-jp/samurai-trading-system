@@ -144,7 +144,7 @@ export function toCivilDate(instant: Date, zone: string): ZonedCivilDate {
   return { year, month, day };
 }
 
-export function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
+function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const previous = new Date(Date.UTC(year, month - 1, day) - MS_PER_DAY);
 
   return {
