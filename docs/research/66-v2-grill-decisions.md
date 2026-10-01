@@ -366,14 +366,14 @@ David ruled in chat on the items raised while draining the ready-for-agent backl
 
 ## Rulings of 2026-10-01 — replay journal gaps (#1880, #1887)
 
-David ruled in chat on the replay limits in debate spec §11 that need a journal change, asked one at a time, and on #1887 item 6.
+David ruled in chat, one question at a time, on the four replay limits in debate spec §11 that need a journal change, on the split rescales that #1979 found unjournalled, and on #1887 item 6.
 
 1. **Log every LLM call ([#1980](https://github.com/dd-jp/samurai-trading-system/issues/1980)).** A failed call with no billed usage still writes an `llm_call_log` row, and `stop_reason` is recorded on every call.
 2. **Response capture raised to 16,384 characters (#1980).** The 4,096 cap sat below what the pinned max tokens can return.
-3. **Headlines are journalled ([#1981](https://github.com/dd-jp/samurai-trading-system/issues/1981)).** An append-only table holds each name's headlines and source ids per day, so a name whose prompt hit the cap can still be replayed.
-4. **A digest of the inputs, not a snapshot ([#1982](https://github.com/dd-jp/samurai-trading-system/issues/1982)).** Each cycle journals a sha256 of each bar window and of the CFD catalogue it read. A replay then reports an input changed since the day as its own outcome, not as a decision divergence. Bars and the catalogue are not copied per day.
+3. **US headlines are journalled ([#1981](https://github.com/dd-jp/samurai-trading-system/issues/1981)).** Each US name's headlines and source ids are kept per day, append-only, so a name whose prompt hit the cap can still be replayed. UK headlines already have their replay record in `v2_news` (#1915); the build extends that record or adds a US-only one, never a second UK copy.
+4. **A digest of the inputs, not a snapshot ([#1982](https://github.com/dd-jp/samurai-trading-system/issues/1982)).** Each day's cycle journals a sha256 of each bar window and of the CFD catalogue it read. A replay then reports an input changed since the day as its own outcome, not as a decision divergence. Bars and the catalogue are not copied per day.
 5. **Split rescales are journalled ([#1983](https://github.com/dd-jp/samurai-trading-system/issues/1983)).** Each rescale of a held position is recorded with its ratio and before/after values, and the replay's book rebuild applies them.
-6. **Fractional splits floor and reconcile ([#1984](https://github.com/dd-jp/samurai-trading-system/issues/1984), [#1887](https://github.com/dd-jp/samurai-trading-system/issues/1887#issuecomment-5942522869) item 6).** A held position rescales to `floor(qty × ratio)`, the remainder is a cash-in-lieu disposal in the tax log, and the reconcile flags any mismatch with the broker's qty.
+6. **Fractional splits floor and reconcile ([#1984](https://github.com/dd-jp/samurai-trading-system/issues/1984), [#1887](https://github.com/dd-jp/samurai-trading-system/issues/1887#issuecomment-5942522869) item 6).** A held position rescales to `floor(qty × ratio)`, the remainder is a cash-in-lieu disposal in the tax log, and the existing reconcile flag (no new flag) is raised on any mismatch with the broker's qty.
 
 ## Still open
 
