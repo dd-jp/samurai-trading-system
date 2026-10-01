@@ -36,6 +36,7 @@ import {
   saxoRefreshLines,
 } from './saxo-bar-refresh.js';
 import { LSE_LINES } from './signal/index.js';
+import { splitRatioAcross } from './split.js';
 
 const stores: ParquetBarStore[] = [];
 afterAll(() => {
@@ -239,7 +240,9 @@ describe('refreshSaxoBars', () => {
     expect(Math.min(...steps)).toBeGreaterThan(0.95);
     const warning = entries.find((entry) => entry.event === 'v2_saxo_history_rescaled');
     expect(warning?.level).toBe('warn');
-    expect(warning?.message).toMatch(/^ISF: .*by 10x .*not rescaled here$/);
+    expect(warning?.message).toMatch(/^ISF: .*by 10x .*rawClose carries the step/);
+    expect(series?.bars.map((b) => b.rawClose)).toEqual([100, 100, 100, 100, 10.1, 10.2, 10.15]);
+    expect(splitRatioAcross(series?.bars ?? []).ratio).toBe(10);
   });
 
   it('does not warn when the re-pull reproduces the stored history', async () => {
@@ -757,6 +760,136 @@ describe('saxoRefreshLines with an undeclared line', () => {
     expect(() => saxoRefreshLines(['ISF', 'NOPE'])).toThrow(
       'NOPE: no Saxo line declared for a v2 LSE line',
     );
+  });
+});
+
+describe('a Saxo split or consolidation steps rawClose for the split detector (#1899)', () => {
+  const preSplit = ['2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'];
+
+  async function seeded(close: number): Promise<ParquetBarStore> {
+    const store = await openStore();
+    await store.write('saxo', [storedSeries('ISF', preSplit, close)]);
+    return store;
+  }
+
+  function isfSamples(history: number, after: Record<string, number>) {
+    return {
+      ISF: { samples: samplesFor(ISF, { ...closes(preSplit, history), ...after }) },
+      VMID: { samples: samplesFor(VMID, closes(DATES, 30)) },
+    };
+  }
+
+  const refreshOn = (store: ParquetBarStore, fixtures: Record<string, Fixture>, date: string) =>
+    refresh(store, fixtures, [ISF, VMID], date);
+
+  it('reads a 1:10 consolidation as a 0.1 step on the first post-split bar', async () => {
+    const store = await seeded(10);
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(100, { '2026-09-21': 101, '2026-09-22': 102 }),
+      '2026-09-23',
+    );
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.map((b) => b.rawClose)).toEqual([10, 10, 10, 10, 101, 102]);
+    expect(splitRatioAcross(bars).ratio).toBeCloseTo(0.1, 12);
+    expect(entries.find((e) => e.event === 'v2_saxo_history_rescaled')?.level).toBe('warn');
+  });
+
+  it('keeps the step on later refreshes so a held position missed by one cycle is still rescaled', async () => {
+    const store = await seeded(100);
+    await refreshOn(store, isfSamples(10, { '2026-09-21': 10.1 }), '2026-09-22');
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(10, { '2026-09-21': 10.1, '2026-09-22': 10.2 }),
+      '2026-09-23',
+    );
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.map((b) => b.rawClose)).toEqual([100, 100, 100, 100, 10.1, 10.2]);
+    expect(splitRatioAcross(bars).ratio).toBe(10);
+    expect(entries.map((e) => e.event)).not.toContain('v2_saxo_history_rescaled');
+  });
+
+  it('measures a second split from the stored scale', async () => {
+    const store = await seeded(100);
+    await refreshOn(store, isfSamples(10, { '2026-09-21': 10.1 }), '2026-09-22');
+    await refreshOn(store, isfSamples(5, { '2026-09-21': 5.05, '2026-09-22': 5.1 }), '2026-09-23');
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.map((b) => b.rawClose)).toEqual([100, 100, 100, 100, 10.1, 5.1]);
+    expect(splitRatioAcross(bars).ratio).toBe(20);
+  });
+
+  it('writes no step when the history is unchanged', async () => {
+    const store = await seeded(10);
+    await refreshOn(store, isfSamples(10, { '2026-09-21': 10.1 }), '2026-09-22');
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.every((b) => b.rawClose === b.close)).toBe(true);
+  });
+
+  it('raises an error, with no step, when Saxo leaves the history unadjusted across a split', async () => {
+    const store = await seeded(100);
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(100, { '2026-09-21': 50, '2026-09-22': 50.5 }),
+      '2026-09-23',
+    );
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.every((b) => b.rawClose === b.close)).toBe(true);
+    expect(splitRatioAcross(bars).ratio).toBe(1);
+    const alert = entries.find((e) => e.event === 'v2_saxo_unadjusted_step');
+    expect(alert?.level).toBe('error');
+    expect(alert?.message).toMatch(/^ISF: 1 close step\(s\) beyond 1\.35x between 2026-09-21/);
+  });
+
+  it('does not alert on a stored suspect flip the new pull does not touch', async () => {
+    const store = await seeded(100);
+    await refreshOn(store, isfSamples(100, { '2026-09-21': 50 }), '2026-09-22');
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(100, { '2026-09-21': 50, '2026-09-22': 50.5 }),
+      '2026-09-23',
+    );
+    expect(entries.map((e) => e.event)).not.toContain('v2_saxo_unadjusted_step');
+  });
+
+  it('refuses the step and raises an error when the adjusted series is not continuous across it', async () => {
+    const store = await seeded(100);
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(10, { '2026-09-21': 4.5, '2026-09-22': 4.6 }),
+      '2026-09-23',
+    );
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.every((b) => b.rawClose === b.close)).toBe(true);
+    expect(entries.find((e) => e.event === 'v2_saxo_history_rescaled')?.level).toBe('error');
+  });
+
+  it('reads a unit break on the newest bar as a unit flip, not a 100:1 consolidation', async () => {
+    const store = await seeded(10);
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(10, { '2026-09-21': 1001 }),
+      '2026-09-22',
+    );
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.every((b) => b.rawClose === b.close)).toBe(true);
+    expect(splitRatioAcross(bars).ratio).toBe(1);
+    const alert = entries.find((e) => e.event === 'v2_saxo_history_rescaled');
+    expect(alert?.level).toBe('error');
+    expect(alert?.message).toMatch(/a unit break, not a split/);
+  });
+
+  it('raises an error and writes no step for a rewrite too small to be a split', async () => {
+    const store = await seeded(10);
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(9.2, { '2026-09-21': 9.3 }),
+      '2026-09-22',
+    );
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.every((b) => b.rawClose === b.close)).toBe(true);
+    const alert = entries.find((e) => e.event === 'v2_saxo_history_rescaled');
+    expect(alert?.level).toBe('error');
+    expect(alert?.message).toMatch(/too small for a split/);
   });
 });
 

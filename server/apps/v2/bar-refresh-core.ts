@@ -46,7 +46,7 @@ export function messageOf(error: unknown): string {
 
 export function logRefresh(
   logger: Logger,
-  level: 'info' | 'warn',
+  level: 'info' | 'warn' | 'error',
   event: LogEventCode,
   message: string,
 ): void {
