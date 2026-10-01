@@ -160,8 +160,8 @@ export function decisionBarField(decisionBar: DecisionBar | undefined): {
   return decisionBar === undefined ? {} : { decision_bar: decisionBar };
 }
 
-// The crash-handling guards (safeLog, the currentTickStore read, auditLog.record) exist so worker()
-// can never reject (#507's orphaned-worker leak)
+// The crash-handling guards (safeLog, the currentTickStore read, auditLog.record) exist so
+// runPlanWorker() can never reject (#507's orphaned-worker leak)
 function settleCrashedPass(
   config: TickLoopConfig,
   clock: Clock,

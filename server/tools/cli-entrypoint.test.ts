@@ -89,6 +89,18 @@ describe('runWhenInvoked', () => {
     await runWhenInvoked(SCRIPT_URL, () => Promise.reject(new Error('boom')), undefined, proc);
     expect(proc.written).toEqual(['boom\n']);
   });
+
+  it('masks credentials in what it writes, whichever describer is used', async () => {
+    const leak = () =>
+      Promise.reject(new Error('refresh failed: refresh_token=abc123 Bearer xyz789'));
+    const byDefault = fakeProcess(['node', SCRIPT]);
+    await runWhenInvoked(SCRIPT_URL, leak, undefined, byDefault);
+    const byStack = fakeProcess(['node', SCRIPT]);
+    await runWhenInvoked(SCRIPT_URL, leak, errorStack, byStack);
+    expect(byDefault.written).toEqual(['refresh failed: [REDACTED] [REDACTED]\n']);
+    expect(byStack.written.join('')).not.toMatch(/abc123|xyz789/);
+    expect(byStack.written.join('')).toContain('refresh failed: [REDACTED] [REDACTED]');
+  });
 });
 
 describe('errorMessage and errorStack', () => {

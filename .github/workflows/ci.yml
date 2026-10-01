@@ -79,7 +79,7 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run fallow:dead-code -- --format github-annotations --quiet
 
-      - name: Fallow duplication (advisory)
+      - name: Fallow duplication
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
         with:
@@ -210,7 +210,7 @@ jobs:
       - name: Merge shard reports and coverage
         run: npx vitest run --merge-reports --coverage --coverage.reporter=json
 
-      - name: Fallow design-system drift (advisory)
+      - name: Fallow health (complexity, CRAP with coverage, design-system drift)
         uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
         with:
           command: health

@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { maskCredentials } from '../shared/index.js';
 
 export function isMainModule(moduleUrl: string): boolean {
   const invokedPath = process.argv[1];
@@ -39,7 +40,7 @@ export function runWhenInvoked(
       if (typeof code === 'number') proc.exit(code);
     },
     (error: unknown) => {
-      proc.stderr.write(`${describe(error)}\n`);
+      proc.stderr.write(`${maskCredentials(describe(error))}\n`);
       proc.exit(1);
     },
   );
