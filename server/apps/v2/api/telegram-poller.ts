@@ -23,6 +23,7 @@ export interface PollerDeps {
 
 interface PollState {
   failures: number;
+  alerted: boolean;
   lastBeatMs: number | undefined;
 }
 
@@ -54,11 +55,18 @@ async function handleOne(deps: PollerDeps, update: TelegramUpdate): Promise<void
   }
 }
 
-async function raiseAlert(deps: PollerDeps, error: unknown): Promise<void> {
+async function raiseAlert(
+  deps: PollerDeps,
+  failures: number,
+  error: unknown,
+  waitMs: number,
+): Promise<void> {
+  const polls = failures === 1 ? '1 poll' : `${failures} polls`;
   const conflict = isConflict(error)
     ? " Another poller or a webhook is taking this bot's updates."
     : '';
-  const text = `Telegram command poller: ${ALERT_AFTER_FAILURES} polls failed in a row, last: ${causeOf(error)}.${conflict} Phone halt, resume and flatten may not reach Samurai.`;
+  const longWait = waitMs > BACKOFF_CAP_MS ? ` Telegram asked to wait ${waitMs / 1_000} s.` : '';
+  const text = `Telegram command poller: ${polls} failed in a row, last: ${causeOf(error)}.${conflict}${longWait} Phone halt, resume and flatten may not reach Samurai.`;
   await Promise.allSettled([deps.alert(text), deps.heartbeat('fail')]);
 }
 
@@ -79,11 +87,13 @@ async function onPollFailure(
   } else {
     log(deps.logger, 'warn', 'v2_telegram_poll_failed', causeOf(error));
   }
-  if (state.failures === ALERT_AFTER_FAILURES) {
-    await raiseAlert(deps, error);
+  const waitMs = backoffMs(state.failures, error);
+  if (!state.alerted && (state.failures >= ALERT_AFTER_FAILURES || waitMs > BACKOFF_CAP_MS)) {
+    state.alerted = true;
+    await raiseAlert(deps, state.failures, error, waitMs);
     state.lastBeatMs = undefined;
   }
-  await deps.sleep(backoffMs(state.failures, error), shutdown);
+  await deps.sleep(waitMs, shutdown);
 }
 
 async function fetchUpdates(
@@ -100,15 +110,15 @@ async function fetchUpdates(
   }
 }
 
-async function beat(deps: PollerDeps, state: PollState): Promise<void> {
+function beat(deps: PollerDeps, state: PollState): void {
   const now = deps.nowMs();
   if (state.lastBeatMs !== undefined && now - state.lastBeatMs < HEARTBEAT_EVERY_MS) return;
   state.lastBeatMs = now;
-  await deps.heartbeat('success').catch(() => undefined);
+  void deps.heartbeat('success').catch(() => undefined);
 }
 
 export async function runPoller(deps: PollerDeps, shutdown: AbortSignal): Promise<void> {
-  const state: PollState = { failures: 0, lastBeatMs: undefined };
+  const state: PollState = { failures: 0, alerted: false, lastBeatMs: undefined };
   let offset: number | undefined;
   while (!shutdown.aborted) {
     const updates = await fetchUpdates(deps, state, offset, shutdown);
@@ -116,10 +126,11 @@ export async function runPoller(deps: PollerDeps, shutdown: AbortSignal): Promis
     offset = undefined;
     if (updates === undefined) continue;
     state.failures = 0;
+    state.alerted = false;
     for (const update of updates) {
       offset = update.update_id + 1;
       await handleOne(deps, update);
     }
-    await beat(deps, state);
+    beat(deps, state);
   }
 }

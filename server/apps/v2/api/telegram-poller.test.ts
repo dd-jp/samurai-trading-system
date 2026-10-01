@@ -295,6 +295,28 @@ describe('runPoller failure streaks', () => {
     expect(r.sleeps.slice(ALERT_AFTER_FAILURES, ALERT_AFTER_FAILURES + 1)).toEqual([5_000]);
   });
 
+  it('alerts at once when Telegram asks for a wait longer than the backoff cap', async () => {
+    const r = rig({ batches: [flooded(3_600)] });
+    await runPoller(r.deps, r.shutdown.signal);
+    expect(r.sleeps).toEqual([3_600_000]);
+    expect(r.alerts).toEqual([
+      'Telegram command poller: 1 poll failed in a row, last: Telegram getUpdates answered 429. Telegram asked to wait 3600 s. Phone halt, resume and flatten may not reach Samurai.',
+    ]);
+    expect(r.beats).toEqual(['fail', 'success']);
+  });
+
+  it('alerts once per streak however long waits and the threshold combine', async () => {
+    const r = rig({
+      batches: [
+        flooded(3_600),
+        flooded(BACKOFF_CAP_MS / 1_000),
+        ...Array.from({ length: ALERT_AFTER_FAILURES }, unauthorized),
+      ],
+    });
+    await runPoller(r.deps, r.shutdown.signal);
+    expect(r.alerts).toHaveLength(1);
+  });
+
   it('keeps polling when the alert or the heartbeat rejects', async () => {
     const r = rig({
       batches: [...Array.from({ length: ALERT_AFTER_FAILURES }, unauthorized), [update(10)]],
@@ -326,7 +348,7 @@ describe('runPoller heartbeat', () => {
     expect(r.beats).toEqual(['success', 'success']);
   });
 
-  it('pings after the replies, so a slow ping never delays a command', async () => {
+  it('pings after the replies', async () => {
     const order: string[] = [];
     const r = rig({ batches: [[update(10)]] });
     await runPoller(
@@ -347,6 +369,15 @@ describe('runPoller heartbeat', () => {
       r.shutdown.signal,
     );
     expect(order).toEqual(['reply', 'beat']);
+  });
+
+  it('keeps polling while a ping hangs, so a slow healthchecks never delays a command', async () => {
+    const r = rig({ batches: [[update(10)], [update(11)]] });
+    await runPoller(
+      { ...r.deps, heartbeat: () => new Promise<void>(() => undefined) },
+      r.shutdown.signal,
+    );
+    expect(r.handled).toEqual([10, 11]);
   });
 
   it('pings at once when a poll recovers from an alerted streak', async () => {
