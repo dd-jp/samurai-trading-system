@@ -98,12 +98,24 @@ function withShapeNote(hygiene: string): string {
   return `${lead < 0 ? hygiene : hygiene.slice(0, lead)}; ${SHAPE_REPAIR_MANIFEST_NOTE}`;
 }
 
+function byDate<T extends { readonly date: string }>(entries: readonly T[]): T[] {
+  return [...entries].sort((left, right) => left.date.localeCompare(right.date));
+}
+
 function mergeUnique<T extends { readonly date: string; readonly field: string }>(
   prior: readonly T[],
   added: readonly T[],
 ): T[] {
   const known = new Set(prior.map((entry) => `${entry.date}:${entry.field}`));
-  return [...prior, ...added.filter((entry) => !known.has(`${entry.date}:${entry.field}`))];
+  return byDate([...prior, ...added.filter((entry) => !known.has(`${entry.date}:${entry.field}`))]);
+}
+
+function entryCount(report: Omit<ShapeRepairReport, 'ranges_widened'>): number {
+  return (
+    report.rescaled_fields.length +
+    report.neighbour_repairs.length +
+    report.dropped_glitch_dates.length
+  );
 }
 
 function mergeReports(
@@ -111,13 +123,17 @@ function mergeReports(
   added: ShapeRepairReport,
 ): ShapeRepairReport {
   const before = { ...NO_REPAIR, ...prior };
-  return {
+  const merged = {
     rescaled_fields: mergeUnique(before.rescaled_fields, added.rescaled_fields),
     neighbour_repairs: mergeUnique(before.neighbour_repairs, added.neighbour_repairs),
     dropped_glitch_dates: [
       ...new Set([...before.dropped_glitch_dates, ...added.dropped_glitch_dates]),
     ].sort(),
-    ranges_widened: before.ranges_widened + added.ranges_widened,
+  };
+  const fresh = prior === undefined || entryCount(merged) > entryCount(before);
+  return {
+    ...merged,
+    ranges_widened: before.ranges_widened + (fresh ? added.ranges_widened : 0),
   };
 }
 

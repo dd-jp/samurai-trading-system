@@ -304,6 +304,19 @@ describe('repairFromArgs', () => {
     expect(refreshed.hygiene.endsWith(SHAPE_REPAIR_MANIFEST_NOTE)).toBe(true);
   });
 
+  it('leaves a manifest byte-identical when a pre-repair store replays a plan it already records', async () => {
+    const { root, manifestPath } = await fixture();
+    const preRepair = parquetBytes(root);
+    await repairFromArgs(['--store', root, '--manifest', manifestPath], () => {});
+    const recorded = readFileSync(manifestPath, 'utf8');
+    expect(JSON.parse(recorded).symbols.AAA.hygiene.shape_repair.ranges_widened).toBe(2);
+    await seedWithoutValidation(root, 'saxo', [GLITCHED, CLEAN, WIDEN_ONLY]);
+    expect(parquetBytes(root)).toBe(preRepair);
+    const replay = await repairFromArgs(['--store', root, '--manifest', manifestPath], () => {});
+    expect(replay).toMatchObject({ repairedSymbols: ['AAA', 'CCC'], manifestUpdated: false });
+    expect(readFileSync(manifestPath, 'utf8')).toBe(recorded);
+  });
+
   it('refuses a flag it does not know', async () => {
     await expect(repairFromArgs(['--stroe', 'x'], () => {})).rejects.toThrow(/stroe/);
   });
