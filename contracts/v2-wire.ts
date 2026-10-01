@@ -98,6 +98,7 @@ export interface NextCycleWire {
 }
 
 export interface PingWire {
+  readonly outcome: 'success' | 'fail';
   readonly pinged_at: string;
 }
 
@@ -480,7 +481,7 @@ export const V2_WIRE_FIELD_NAMES = {
   heartbeat: fieldsOf<HeartbeatWire>()(['last_cycle', 'next_due', 'last_ping']),
   lastCycle: fieldsOf<LastCycleWire>()(['trading_date', 'recorded_at']),
   nextCycle: fieldsOf<NextCycleWire>()(['due_date']),
-  ping: fieldsOf<PingWire>()(['pinged_at']),
+  ping: fieldsOf<PingWire>()(['outcome', 'pinged_at']),
   controlRequest: fieldsOf<ControlRequestWire>()(['action', 'reason', 'idempotency_key']),
   controlResponse: fieldsOf<ControlResponseWire>()(['contract_version', 'control', 'replayed']),
   journal: fieldsOf<JournalWire>()(['contract_version', 'days', 'next_before']),

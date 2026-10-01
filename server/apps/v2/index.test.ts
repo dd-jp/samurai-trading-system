@@ -1691,6 +1691,9 @@ describe('main', () => {
             ticket: '#1933',
           },
         ]);
+        expect(db.prepare('SELECT outcome FROM v2_heartbeat_pings').all()).toEqual([
+          { outcome: 'success' },
+        ]);
       } finally {
         db.close();
       }

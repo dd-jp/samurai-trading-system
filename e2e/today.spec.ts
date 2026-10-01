@@ -8,7 +8,8 @@ test('boot: the token leaves the URL, the strip reads the fixture, Today shows i
   const strip = page.getByRole('banner');
   await expect(strip).toContainText('PAPER');
   await expect(strip).toContainText('Last cycle 2026-10-05');
-  await expect(strip).toContainText('Next due not yet fed (#1784)');
+  await expect(strip).toContainText('Next due 2026-10-06');
+  await expect(strip).toContainText('Ping success 2026-10-05 21:41Z');
   await expect(strip).toContainText('RUNNING');
   await expect(page).toHaveURL(/\/$/);
 

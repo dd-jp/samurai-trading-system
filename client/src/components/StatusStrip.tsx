@@ -21,7 +21,14 @@ function Heartbeat({ heartbeat }: { heartbeat: HeartbeatWire }) {
         )}
       </span>
       <span>Next due {field(heartbeat.next_due, (next) => next.due_date, 'none')}</span>
-      <span>Ping {field(heartbeat.last_ping, (ping) => utcMinute(ping.pinged_at), 'none')}</span>
+      <span>
+        Ping{' '}
+        {field(
+          heartbeat.last_ping,
+          (ping) => `${ping.outcome} ${utcMinute(ping.pinged_at)}`,
+          'none',
+        )}
+      </span>
     </>
   );
 }

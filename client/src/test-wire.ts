@@ -129,8 +129,8 @@ export function overview(overrides: Partial<V2OverviewWire> = {}): V2OverviewWir
         trading_date: '2026-10-05',
         recorded_at: '2026-10-05T21:40:00.000Z',
       },
-      next_due: { status: 'not-yet-fed', owner: 'Step 3e', ticket: '#1784' },
-      last_ping: { status: 'not-yet-fed', owner: 'Step 3e', ticket: '#1784' },
+      next_due: { status: 'fed', due_date: '2026-10-06' },
+      last_ping: { status: 'fed', outcome: 'success', pinged_at: '2026-10-05T21:41:00.000Z' },
     },
     ...overrides,
   };

@@ -8,7 +8,7 @@ import {
 import type { StoreHandle } from '../../../shared/store/index.js';
 
 export const RECONCILE_RUNS_SHOWN = 60;
-const TAX_OWNER: NotYetFedWire = { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1746' };
+const TAX_OWNER: NotYetFedWire = { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1947' };
 const TAX_PARAMS: ReadonlySet<string> = new Set(['year', 'format']);
 const FORMATS: ReadonlySet<string> = new Set(['json', 'csv']);
 

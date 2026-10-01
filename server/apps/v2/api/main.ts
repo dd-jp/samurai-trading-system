@@ -25,7 +25,7 @@ import { ReconcileReader } from './records.js';
 import { ResearchReader } from './research.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
 
-const CONTROLS_SCHEMA_VERSION = 70;
+const CONTROLS_SCHEMA_VERSION = 82;
 const DEFAULT_PORT = 8788;
 
 export interface V2DashboardArgs {

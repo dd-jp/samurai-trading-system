@@ -46,7 +46,7 @@ import {
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
-import { heartbeatFor, withHeartbeat } from './heartbeat.js';
+import { heartbeatFor, pingJournal, withHeartbeat } from './heartbeat.js';
 import { type FaultLedger, Journal } from './journal/index.js';
 import {
   assertArm2RunsBesideDebate,
@@ -584,11 +584,11 @@ export async function main(
 ): Promise<number> {
   const alerts = alertsFor(argv, env, fetchImpl, STDERR_LOGGER);
   const logger = alerts.logger;
-  const heartbeat = heartbeatFor(argv, env, fetchImpl, logger);
+  const clock = new SystemClock();
+  const heartbeat = heartbeatFor(argv, env, fetchImpl, logger, pingJournal(V2_STORE_PATH, clock));
   return withAlerts(
     () =>
       withHeartbeat(() => {
-        const clock = new SystemClock();
         const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
         const backup = backupFor(argv, V2_STORE_PATH, env, litestream, logger);
         // barRefresh is constructed lazily, inside the callback withBackup invokes after restore,

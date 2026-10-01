@@ -24,11 +24,11 @@ import {
   sleeveCapitalYear,
 } from '../risk/index.js';
 import { SLEEVE_SPECS_BY_ID, SqliteMonthlySpendCap, utcMonthStart } from '../signal/index.js';
+import { heartbeatWire } from './heartbeat-feed.js';
 import { vetoOf } from './journal-reader.js';
 import { type Holdings, type PositionsPanel, readHoldings } from './positions.js';
 
 const CONTROL_HISTORY_ROWS = 20;
-const SCHEDULE_OWNER = { status: 'not-yet-fed', owner: 'Step 3e', ticket: '#1784' } as const;
 
 interface BookDayRow {
   book_id: string;
@@ -246,15 +246,6 @@ export class OverviewReader {
   }
 
   heartbeat(): HeartbeatWire {
-    const last = this.db
-      .prepare(
-        'SELECT trading_date, recorded_at FROM v2_book_days ORDER BY recorded_at DESC LIMIT 1',
-      )
-      .get() as { trading_date: string; recorded_at: string } | undefined;
-    return {
-      last_cycle: last === undefined ? { status: 'empty' } : { status: 'fed', ...last },
-      next_due: SCHEDULE_OWNER,
-      last_ping: SCHEDULE_OWNER,
-    };
+    return heartbeatWire(this.db);
   }
 }
