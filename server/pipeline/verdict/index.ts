@@ -46,9 +46,7 @@ function shouldEngageHitl(
   config: VerdictConfig,
 ): boolean {
   const level = config.automation_level[orderIntent.asset_class];
-  if (level === 'manual') {
-    return true;
-  }
+  if (level === 'manual') return true;
   if (level === 'auto') return false;
   return isFlagged(orderIntent, riskDecision, config.flag_thresholds);
 }
