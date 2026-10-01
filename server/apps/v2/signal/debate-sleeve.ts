@@ -154,6 +154,8 @@ function judgeConfidence(bull: PersonaResponse, bear: PersonaResponse, judge: Di
   return JUDGE_CONFIDENCE_BY_AGREEING_DEBATERS[agreeing] ?? 0.5;
 }
 
+export const NO_HEADLINES_KEY_POINT = 'no per-name headlines in the window';
+
 export function newsView(headlines: readonly string[], traceId: string, now: Date): AnalystView {
   return {
     trace_id: traceId,
@@ -161,7 +163,7 @@ export function newsView(headlines: readonly string[], traceId: string, now: Dat
     analyst_type: 'news',
     direction: 'neutral',
     confidence: 0.5,
-    key_points: headlines.length === 0 ? ['no per-name headlines in the window'] : [...headlines],
+    key_points: headlines.length === 0 ? [NO_HEADLINES_KEY_POINT] : [...headlines],
     timestamp: now,
   };
 }

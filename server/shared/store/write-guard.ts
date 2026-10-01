@@ -77,6 +77,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'v2_signal_events',
     'v2_run_lease',
     'v2_faults',
+    'v2_heartbeat_pings',
   ],
   verdict: ['verdict_log'],
 };

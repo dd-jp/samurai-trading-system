@@ -125,8 +125,8 @@ describe('OverviewReader on an empty store', () => {
       },
       heartbeat: {
         last_cycle: { status: 'empty' },
-        next_due: { status: 'not-yet-fed', owner: 'Step 3e', ticket: '#1784' },
-        last_ping: { status: 'not-yet-fed', owner: 'Step 3e', ticket: '#1784' },
+        next_due: { status: 'empty' },
+        last_ping: { status: 'empty' },
       },
     });
   });
@@ -533,6 +533,52 @@ describe('OverviewReader heartbeat (P14)', () => {
       status: 'fed',
       trading_date: '2026-10-05',
       recorded_at: '2026-10-05T21:41:07.000Z',
+    });
+  });
+
+  it('serves the next due day after the newest recorded cycle, skipping a weekend', async () => {
+    db = openSharedStore(':memory:');
+    seedBook('debate/primary', 'primary');
+    seedDay('debate/primary', '2026-10-02', { equity: 1_000, ytdLoss: 0 });
+    expect((await reader().read()).heartbeat.next_due).toEqual({
+      status: 'fed',
+      due_date: '2026-10-05',
+    });
+  });
+
+  it('skips a day both venues are closed', async () => {
+    db = openSharedStore(':memory:');
+    seedBook('debate/primary', 'primary');
+    seedDay('debate/primary', '2026-12-24', { equity: 1_000, ytdLoss: 0 });
+    expect((await reader().read()).heartbeat.next_due).toEqual({
+      status: 'fed',
+      due_date: '2026-12-28',
+    });
+  });
+
+  it('counts a venues-closed skip as the newest cycle', async () => {
+    db = openSharedStore(':memory:');
+    seedBook('debate/primary', 'primary');
+    seedDay('debate/primary', '2026-10-02', { equity: 1_000, ytdLoss: 0 });
+    db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES ('2026-10-05', 'cycle', 'venues_closed', '#1933', 'closed', '2026-10-05T07:30:00.000Z')`,
+    ).run();
+    expect((await reader().read()).heartbeat.next_due).toEqual({
+      status: 'fed',
+      due_date: '2026-10-06',
+    });
+  });
+
+  it('reports the newest journalled ping with its outcome', async () => {
+    db = openSharedStore(':memory:');
+    const ping = db.prepare('INSERT INTO v2_heartbeat_pings (outcome, pinged_at) VALUES (?, ?)');
+    ping.run('success', '2026-10-05T21:41:00.000Z');
+    ping.run('fail', '2026-10-06T21:41:00.000Z');
+    expect((await reader().read()).heartbeat.last_ping).toEqual({
+      status: 'fed',
+      outcome: 'fail',
+      pinged_at: '2026-10-06T21:41:00.000Z',
     });
   });
 

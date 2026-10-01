@@ -27,9 +27,9 @@ export interface LlmSpendRecord {
   prompt_template_hash?: string | undefined;
 }
 
-const MAX_CAPTURED_PROMPT_CHARS = 16_384;
+export const MAX_CAPTURED_PROMPT_CHARS = 16_384;
 
-const MAX_CAPTURED_RESPONSE_CHARS = 4_096;
+export const MAX_CAPTURED_RESPONSE_CHARS = 4_096;
 
 export interface LlmSpendSink {
   record(entry: LlmSpendRecord): void;

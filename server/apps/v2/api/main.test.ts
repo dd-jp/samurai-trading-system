@@ -4,9 +4,10 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
+import { listMigrations, MIGRATIONS_DIR } from '../../../shared/store/migrate.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { researchStorePath } from '../trial-ledger.js';
-import { composeV2Dashboard, parseDashboardArgs } from './main.js';
+import { composeV2Dashboard, DASHBOARD_SCHEMA_VERSION, parseDashboardArgs } from './main.js';
 
 const PATHS = {
   barStoreRoot: DEFAULT_BAR_STORE_ROOT,
@@ -244,5 +245,15 @@ describe('composeV2Dashboard', () => {
         clock,
       ),
     ).toThrow();
+  });
+});
+
+describe('the dashboard schema floor', () => {
+  it('is at least the migration that adds the heartbeat ping table the overview reads', () => {
+    const ping = listMigrations(MIGRATIONS_DIR).find((m) =>
+      m.filename.includes('v2_heartbeat_pings'),
+    );
+    expect(ping).toBeDefined();
+    expect(DASHBOARD_SCHEMA_VERSION).toBeGreaterThanOrEqual(ping?.version ?? Infinity);
   });
 });

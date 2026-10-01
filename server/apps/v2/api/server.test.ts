@@ -322,7 +322,7 @@ describe('GET /api/v2/evidence, /api/v2/reconcile and /api/v2/tax', () => {
     });
     const tax = await fetch(`${url}/api/v2/tax?year=2026`, { headers: AUTH });
     expect(tax.status).toBe(200);
-    expect(await tax.json()).toMatchObject({ year: 2026, disposals: { ticket: '#1746' } });
+    expect(await tax.json()).toMatchObject({ year: 2026, disposals: { ticket: '#1947' } });
   });
 
   it('refuses a bad tax query with 400, and a CSV it cannot build yet with 501', async () => {
@@ -332,7 +332,7 @@ describe('GET /api/v2/evidence, /api/v2/reconcile and /api/v2/tax', () => {
     expect(await bad.json()).toEqual({ error: 'year is invalid' });
     const csv = await fetch(`${url}/api/v2/tax?format=csv`, { headers: AUTH });
     expect(csv.status).toBe(501);
-    expect(await csv.json()).toEqual({ error: 'tax log not yet fed: Step 4 (#1746)' });
+    expect(await csv.json()).toEqual({ error: 'tax log not yet fed: Step 4 (#1947)' });
   });
 
   it('allows only GET on each', async () => {

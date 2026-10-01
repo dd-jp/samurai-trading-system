@@ -95,8 +95,8 @@ describe('records panels not yet fed', () => {
     expect(taxWire({ year: 2026, format: 'json' })).toEqual({
       contract_version: V2_CONTRACT_VERSION,
       year: 2026,
-      disposals: { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1746' },
+      disposals: { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1947' },
     });
-    expect(TAX_CSV_NOT_FED).toBe('tax log not yet fed: Step 4 (#1746)');
+    expect(TAX_CSV_NOT_FED).toBe('tax log not yet fed: Step 4 (#1947)');
   });
 });
