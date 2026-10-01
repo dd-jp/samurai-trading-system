@@ -37,6 +37,7 @@ export interface SleeveDecision {
   readonly stop_price: number | undefined;
   readonly target_price?: number | undefined;
   readonly entry_trigger?: number | undefined;
+  readonly entry_limit?: number | undefined;
   readonly inputs_hash: string;
   readonly debate_id: string | undefined;
   readonly veto?: string | undefined;
@@ -260,8 +261,17 @@ export interface EntryRequest {
 }
 
 export type EntryApproval =
-  | { readonly size: number; readonly order: RiskApprovedOrder }
-  | { readonly size: number; readonly order: undefined; readonly refusal: string };
+  | {
+      readonly size: number;
+      readonly order: RiskApprovedOrder;
+      readonly entryOffsetBps?: number | undefined;
+    }
+  | {
+      readonly size: number;
+      readonly order: undefined;
+      readonly refusal: string;
+      readonly entryOffsetBps?: undefined;
+    };
 
 export interface RearmPrices {
   readonly stop: number;

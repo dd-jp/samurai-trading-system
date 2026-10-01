@@ -126,6 +126,7 @@ async function writeFixtures(
 }
 
 const LAST_CLOSE = 20 * (1 + 0.001 * 259);
+const ENTRY_BAR_OPEN = 20 * (1 + 0.001 * 260);
 const ENTRY_DATE = new Date(Date.UTC(2026, 0, 1) + 260 * 86_400_000).toISOString().slice(0, 10);
 const NEXT_DATE = new Date(Date.UTC(2026, 0, 1) + 261 * 86_400_000).toISOString().slice(0, 10);
 const NEXT_WEEKDAY = '2026-09-21';
@@ -626,7 +627,8 @@ describe('composeV2Root', () => {
         fee_gbp: number;
         trading_date: string;
       };
-      expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
+      expect(ENTRY_BAR_OPEN).toBeLessThan(LAST_CLOSE * 1.005);
+      expect(fill.price_gbp * fx).toBeCloseTo(ENTRY_BAR_OPEN, 6);
       expect(fill.fee_gbp).toBeGreaterThan(0);
       expect(fill.trading_date).toBe(NEXT_DATE);
       expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1, 0, 0]);

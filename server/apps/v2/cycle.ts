@@ -197,6 +197,15 @@ function positionKey(bookId: string, instrument: string): string {
   return `${bookId}|${instrument}`;
 }
 
+function approvedLimit(approval: EntryApproval): number | undefined {
+  return approval.order?.kind === 'bracket_entry' ? approval.order.entry : undefined;
+}
+
+// Entries journalled before #1815 carry no limit: they went out at the decision price
+function journalledLimit(order: JournalledOrder): number | undefined {
+  return numberOrUndefined(order.payload.limit) ?? numberOrUndefined(order.payload.price);
+}
+
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
@@ -418,7 +427,7 @@ class Cycle {
   }
 
   fillSimulatedEntry(order: JournalledOrder): void {
-    const limit = order.payload.price as number;
+    const limit = journalledLimit(order) as number;
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const outcome = simulateLimitEntry(
@@ -962,6 +971,8 @@ class Cycle {
         size: approval.size,
         detail: submission.detail,
         price: decision.price,
+        limit: approvedLimit(approval),
+        entry_offset_bps: approval.entryOffsetBps,
         trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
@@ -971,15 +982,16 @@ class Cycle {
     return submission.outcome;
   }
 
-  notionalGbp(decision: SleeveDecision, size: number): number {
-    return (size * decision.price) / this.fxFor(decision.venue);
+  notionalGbp(decision: SleeveDecision, approval: EntryApproval): number {
+    const limit = approvedLimit(approval) ?? decision.price;
+    return (approval.size * limit) / this.fxFor(decision.venue);
   }
 
   restingNotionalGbp(bookId: string): number {
     let total = 0;
     for (const order of this.deps.journal.restingEntries(bookId)) {
       const size = numberOrUndefined(order.payload.size) ?? 0;
-      const price = numberOrUndefined(order.payload.price) ?? 0;
+      const price = journalledLimit(order) ?? 0;
       total += (size * price) / this.fxFor(order.venue as Venue);
     }
     return total;
@@ -1042,10 +1054,7 @@ class Cycle {
 
   applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
     if (approval.order === undefined || approval.size <= 0) return approval;
-    const refusal = this.deps.risk.entryRoomRefusal(
-      this.notionalGbp(decision, approval.size),
-      room,
-    );
+    const refusal = this.deps.risk.entryRoomRefusal(this.notionalGbp(decision, approval), room);
     return refusal === undefined ? approval : { size: approval.size, order: undefined, refusal };
   }
 
@@ -1121,7 +1130,7 @@ class Cycle {
     for (const proposed of decisions) {
       const { decision, gated } = this.resolveEntryGate(book, proposed, equityGbp, room);
       await this.settleEntry(book, decision, gated, () => {
-        const notionalGbp = this.notionalGbp(decision, gated.size);
+        const notionalGbp = this.notionalGbp(decision, gated);
         room.cashGbp -= notionalGbp;
         room.grossGbp -= notionalGbp;
       });

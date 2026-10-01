@@ -186,7 +186,7 @@ describe('V2OrderExecutor', () => {
     const { executor: paper, alpaca } = executor(false);
     const { order } = gate.approveEntry({
       book: primary,
-      decision: { ...decision, entry_trigger: 19.6 },
+      decision: { ...decision, entry_limit: 20, entry_trigger: 19.6 },
       clientOrderId: 'e-trigger',
       tradingDate: '2026-09-25',
       equityGbp: 1_000,
@@ -218,15 +218,15 @@ describe('V2OrderExecutor', () => {
     expect(await paper.submit(entry())).toEqual({
       outcome: 'submitted',
       detail: 'alpaca-bracket',
-      approvalId: 'entry:e-primary-alpaca:5',
+      approvalId: 'entry:e-primary-alpaca:4',
     });
     expect(alpaca.submitBracket).toHaveBeenCalledWith({
       client_order_id: 'e-primary-alpaca',
       instrument: 'AAPL',
       asset_class: 'stocks',
       side: 'buy',
-      size: 5,
-      entry: 20,
+      size: 4,
+      entry: expect.closeTo(20.1, 9),
       stop: 19.2,
       target: expect.closeTo(21.2, 9),
       time_in_force: 'gtc',
@@ -298,7 +298,7 @@ describe('V2OrderExecutor', () => {
     expect(await paper.submit(entry(primary, 'saxo'))).toMatchObject({
       outcome: 'submitted',
       detail: 'sim-bracket',
-      approvalId: 'entry:e-primary-saxo:5',
+      approvalId: 'entry:e-primary-saxo:4',
     });
     expect(simulated.submitBracket).toHaveBeenCalledTimes(1);
     alpaca.submitBracket.mockRejectedValueOnce(new Error('422 target required'));
@@ -322,7 +322,7 @@ describe('V2OrderExecutor', () => {
     expect(await noSaxo.submit(entry(primary, 'saxo'))).toEqual({
       outcome: 'rejected',
       detail: 'no_broker_for_venue:saxo',
-      approvalId: 'entry:e-primary-saxo:5',
+      approvalId: 'entry:e-primary-saxo:4',
     });
   });
 
@@ -410,7 +410,12 @@ describe('V2OrderExecutor', () => {
     await paper.submit(order);
     expect(simulated.submitBracket.mock.calls[0]?.[0].target).toBeLessThan(20);
     expect(simulated.submitBracket).toHaveBeenCalledWith(
-      expect.objectContaining({ side: 'sell', entry: 20, stop: 20.8, target: expect.any(Number) }),
+      expect.objectContaining({
+        side: 'sell',
+        entry: expect.closeTo(19.9, 9),
+        stop: 20.8,
+        target: expect.any(Number),
+      }),
     );
   });
 

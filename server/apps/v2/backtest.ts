@@ -12,7 +12,12 @@ import { type BacktestVerdict, type BookSeries, backtestVerdict } from './backte
 import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { addDays, CALENDAR_REFERENCE } from './data/index.js';
-import { CapitalConfigStore, sleeveAllocationGbp } from './risk/index.js';
+import {
+  CapitalConfigStore,
+  ENTRY_LIMIT_OFFSET,
+  type EntryLimitOffset,
+  sleeveAllocationGbp,
+} from './risk/index.js';
 import type { TrialConfig, TrialLedger } from './trial-ledger.js';
 
 export type SleeveFactory = (market: MarketData) => Sleeve;
@@ -221,6 +226,12 @@ async function replay(
   return marks;
 }
 
+// David ruled 2026-09-30 on #1815: the entry offset is part of the trial identity. A 0 bps offset
+// is omitted so a run at 0 bps keeps the hash every trial recorded before the ruling carries
+export function entryOffsetIdentity(offset: EntryLimitOffset): { entryOffset?: EntryLimitOffset } {
+  return offset.capBps === 0 ? {} : { entryOffset: offset };
+}
+
 function recordTrials(
   input: BacktestInput,
   trials: readonly Sleeve[],
@@ -233,6 +244,7 @@ function recordTrials(
     ...(input.embargo === undefined ? {} : { embargo: input.embargo }),
     startCapitalGbp: input.startCapitalGbp,
     lossCapGbp: input.lossCapGbp,
+    ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET),
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
   };
   return input.trials.map((trial, index) =>

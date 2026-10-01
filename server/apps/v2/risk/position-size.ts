@@ -15,6 +15,7 @@ export interface PositionSizeInput {
   readonly macroDay: boolean;
   readonly volumeCapShares: number;
   readonly gapBudgetGbp?: number | undefined;
+  readonly entryToStopGbp?: number | undefined;
 }
 
 export function positionSizeShares(input: PositionSizeInput): number {
@@ -23,7 +24,8 @@ export function positionSizeShares(input: PositionSizeInput): number {
   if (!(atrGbp > 0)) return 0;
   const scale = sizeMultiplier * (macroDay ? MACRO_DAY_SIZE_FRACTION : 1);
   const riskCash = equityGbp * riskFraction * scale;
-  const byRisk = Math.floor(riskCash / (atrGbp * stopAtrMultiple));
+  const riskPerShare = Math.max(atrGbp * stopAtrMultiple, input.entryToStopGbp ?? 0);
+  const byRisk = Math.floor(riskCash / riskPerShare);
   const byNotional = wholeShares(equityGbp * MAX_POSITION_FRACTION_OF_EQUITY * scale, priceGbp);
   const byGap =
     input.gapBudgetGbp === undefined
