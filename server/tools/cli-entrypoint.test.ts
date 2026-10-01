@@ -8,6 +8,8 @@ import {
   type MainProcess,
   onTerminationSignal,
   runWhenInvoked,
+  setExitCodeWhenInvoked,
+  writeOrFail,
 } from './cli-entrypoint.js';
 
 const SCRIPT = '/opt/samurai/server/apps/v2/index.ts';
@@ -167,5 +169,51 @@ describe('exitCodeOrOne', () => {
     const proc = fakeProcess([]);
     expect(await exitCodeOrOne(Promise.reject(new Error('down')), proc.stderr)).toBe(1);
     expect(proc.written).toEqual(['down\n']);
+  });
+});
+
+describe('writeOrFail', () => {
+  it('writes the produced text and returns 0', async () => {
+    const lines: string[] = [];
+    expect(
+      await writeOrFail(
+        (line) => lines.push(line),
+        async () => 'report',
+      ),
+    ).toBe(0);
+    expect(lines).toEqual(['report']);
+  });
+
+  it('writes the error message and returns 1 when producing fails', async () => {
+    const lines: string[] = [];
+    const failing = async (): Promise<string> => {
+      throw new Error('no store');
+    };
+    expect(await writeOrFail((line) => lines.push(line), failing)).toBe(1);
+    expect(lines).toEqual(['no store']);
+  });
+});
+
+describe('setExitCodeWhenInvoked', () => {
+  it('sets the exit code from main when the module is the invoked script', async () => {
+    const proc: { exitCode?: number } = {};
+    const invoked = pathToFileURL(process.argv[1] ?? '').href;
+    await setExitCodeWhenInvoked(invoked, async () => 3, proc);
+    expect(proc.exitCode).toBe(3);
+  });
+
+  it('leaves the exit code alone and skips main for an imported module', async () => {
+    const proc: { exitCode?: number } = {};
+    let ran = false;
+    await setExitCodeWhenInvoked(
+      'file:///not/invoked.ts',
+      async () => {
+        ran = true;
+        return 3;
+      },
+      proc,
+    );
+    expect(ran).toBe(false);
+    expect(proc.exitCode).toBeUndefined();
   });
 });

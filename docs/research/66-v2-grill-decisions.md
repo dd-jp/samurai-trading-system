@@ -334,6 +334,13 @@ David ruled in chat, recorded on [#1933](https://github.com/dd-jp/samurai-tradin
 
 Built (not ruled): the day rule reads the in-tree hand calendars, and a weekday past a calendar's coverage refuses that venue's entries (`venue_calendar_uncovered`) rather than counting the day closed, so exits and marks keep running. Saxo CFDs follow their underlying's exchange (`saxo_cfd_usd` US, `saxo_cfd_gbp` LSE). The intraday signals pass is not gated: it trades inside the US session by design. Open for David: a manual `--date` rerun of a past date refuses every entry as a late wake, because that date's cutoffs fall before any rerun starts. Measuring at run start leaves this unchanged (a start is never later than an entry, so the change can only turn a refusal into an entry); the behaviour stands until ruled.
 
+## Rulings of 2026-10-01 — cost fidelity (#1884)
+
+David ruled in chat on PR #1959's open items, recorded on [#1884](https://github.com/dd-jp/samurai-trading-system/issues/1884#issuecomment-5926944618). They settle how Q19's "costs within ±25%" is measured.
+
+1. **The report's derived definitions are accepted.** Realised cost is measured against the simulator's own pre-cost price on the same bar (the open, the limit, or the stop clamped to the bar), not the decision close, so the overnight gap is not counted as cost. Pass is one total realised ÷ modelled ratio per entry-offset group (#1815, 2026-09-30) within ±25%, not ±25% on each order. The default window is the whole journal; from/to are optional.
+2. **On paper the check compares slippage only.** Alpaca paper charges no fee while the cost model charges SEC, TAF and CAT fees, so a fee comparison on paper reads low by construction. The fee legs are still printed. Fees join the comparison on live, where they are real.
+
 ## Rulings of 2026-10-01 — Saxo bar refresh guard and refusal dedup (#1901, #1907)
 
 David ruled in chat on PR #1960's open questions, recorded on [#1901](https://github.com/dd-jp/samurai-trading-system/issues/1901#issuecomment-5926944294) and [#1907](https://github.com/dd-jp/samurai-trading-system/issues/1907#issuecomment-5926943914). Both keep the PR as built.
