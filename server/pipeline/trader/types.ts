@@ -115,7 +115,6 @@ export type TraderSkipReason =
   | 'no_open_position'
   | 'signal_still_supports_position'
   | 'early_exit_signal_unavailable'
-  | 'no_position_side'
   | 'atr_insufficient_bars'
   | 'atr_not_finite'
   | 'mark_not_finite'

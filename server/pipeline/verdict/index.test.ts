@@ -6,7 +6,7 @@ import {
 } from '../../providers/market-data-service/index.js';
 import type { Clock, OrderIntent } from '../../shared/index.js';
 import type { BreakerState, RiskDecision } from '../risk-manager/index.js';
-import { VerdictImpl } from './index.js';
+import { assertAutomationLevelSupported, VerdictImpl } from './index.js';
 import type {
   ApprovalChannel,
   ApprovalOutcome,
@@ -1212,6 +1212,114 @@ describe('VerdictImpl.decide — precondition', () => {
       risk_decision: makeRiskDecision({ status: 'rejected', order_intent: null }),
     });
 
-    await expect(verdict.decide(input)).rejects.toThrow();
+    await expect(verdict.decide(input)).rejects.toThrow(
+      new Error('Verdict.decide requires an approved RiskDecision with a non-null order_intent'),
+    );
+  });
+});
+
+describe('VerdictImpl.decide — exact boundaries and records', () => {
+  it('does not flag a size exactly at the size_over threshold', async () => {
+    const approvals = makeApprovals('rejected');
+    const decision = await new VerdictImpl().decide(
+      makeInput({
+        config: makeConfig({
+          automation_level: { crypto: 'manual', stocks: 'semi_auto' },
+          flag_thresholds: { size_over: 100 },
+        }),
+        risk_decision: makeRiskDecision({ modifications: null }),
+        approvals,
+      }),
+    );
+
+    expect(approvals.requestApproval).not.toHaveBeenCalled();
+    expect(decision.status).toBe('go');
+  });
+
+  it('passes a drift exactly at the tolerance', async () => {
+    const decision = await new VerdictImpl().decide(
+      makeInput({ marketData: makeMarketData(makeMark({ price: 101 })) }),
+    );
+
+    expect(decision.status).toBe('go');
+  });
+
+  it('records an automated no-go as not requiring approval', async () => {
+    const decision = await new VerdictImpl().decide(
+      makeInput({ positionStore: makePositionStore(true) }),
+    );
+
+    expect(decision).toEqual({
+      status: 'no_go',
+      order: null,
+      no_go_reason: 'dedup',
+      no_go_detail: null,
+      approval_path: 'automated',
+      would_require_approval: false,
+      idempotency_key: 'AAPL-2026-07-15T13:55:00Z',
+      timestamp: NOW,
+    });
+  });
+
+  it.each([
+    ['timeout', 'human_timeout'],
+    ['rejected', 'human'],
+  ] as const)('records a %s no-go as having required approval', async (outcome, path) => {
+    const decision = await new VerdictImpl().decide(
+      makeInput({ approvals: makeApprovals(outcome) }),
+    );
+
+    expect(decision.approval_path).toBe(path);
+    expect(decision.would_require_approval).toBe(true);
+  });
+
+  it('asks the approval channel with the intent, the decision, the trace and the timeout', async () => {
+    const approvals = makeApprovals('approved');
+    const input = makeInput({ approvals });
+
+    await new VerdictImpl().decide(input);
+
+    expect(approvals.requestApproval).toHaveBeenCalledWith({
+      order_intent: makeIntent(),
+      risk_decision: input.risk_decision,
+      trace_id: 'trace-1',
+      timeout_ms: 5 * 60_000,
+    });
+  });
+});
+
+describe('assertAutomationLevelSupported', () => {
+  it('accepts a fully automated dial', () => {
+    expect(() =>
+      assertAutomationLevelSupported(
+        makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('names every asset class that would engage the unsound human gate', () => {
+    expect(() =>
+      assertAutomationLevelSupported(
+        makeConfig({ automation_level: { crypto: 'manual', stocks: 'semi_auto' } }),
+      ),
+    ).toThrow(
+      new Error(
+        "VerdictConfig.automation_level engages the human-in-the-loop gate for crypto='manual', " +
+          "stocks='semi_auto', but that gate is unsound: the staleness and drift gates run " +
+          'BEFORE the approval await and are never re-checked, so an approval returning after ' +
+          'human_timeout submits at a price older than max_signal_age allows. ADR-0007 set this ' +
+          "dial to 'auto' and recommends async approval (Verdict returns pending, a poller " +
+          'resumes it) rather than re-running the two gates — which also removes the human from ' +
+          'the instrument pass, the actual reason the gate was dropped. Land that first (#434).',
+      ),
+    );
+  });
+
+  it('names only the asset class that engages it', () => {
+    expect(() =>
+      assertAutomationLevelSupported(
+        makeConfig({ automation_level: { crypto: 'auto', stocks: 'manual' } }),
+      ),
+    ).toThrow(/gate for stocks='manual', but/);
   });
 });

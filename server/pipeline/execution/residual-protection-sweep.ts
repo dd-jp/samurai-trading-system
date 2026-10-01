@@ -56,7 +56,22 @@ export async function sweepResidualProtection(
   return { checked: marked.length, divergences };
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each branch is a distinct settlement outcome (flat/garbage-residual/rearm-failed/etc), several fail-closed on purpose per the doc comments above them — extracting one would separate a return from the specific evidence and escalation it is paired with
+export function sweepDivergence(
+  position: UnprotectedResidualLot['position'],
+  action: ReconcileDivergence['action'],
+  reason: string,
+): ReconcileDivergence {
+  return {
+    idempotency_key: position.idempotency_key,
+    instrument: position.instrument,
+    store_state: position.order_state,
+    broker_state: null,
+    action,
+    kind: 'sweep',
+    reason,
+  };
+}
+
 async function sweepOne(
   input: ResidualSweepInput,
   row: UnprotectedResidualLot,
@@ -66,57 +81,20 @@ async function sweepOne(
   const key = position.idempotency_key;
   const now = clock.now();
 
-  let filledSize: number;
-  let exitQty: number;
-  try {
-    ({ filledSize, exitQty } = heldQuantityFromFills(await store.getFills(key)));
-  } catch (error) {
-    logCaughtFailure(
-      input.logger,
-      {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        event: 'residual_size_read_failed',
-        level: 'error',
-        message:
-          'sweepResidualProtection: store read failed while recomputing a marked residual — ' +
-          'alerting with the upper-bound requested_size instead',
-      },
-      error,
-      { idempotency_key: key },
-    );
-    await alertResidualExposureOnce(input, row, position.requested_size, now, {
-      residualQtyIsUpperBound: true,
-    });
-    return {
-      idempotency_key: key,
-      instrument: position.instrument,
-      store_state: position.order_state,
-      broker_state: null,
-      action: 'undetermined',
-      kind: 'sweep',
-      reason: `marked residual could not be recomputed (fill read failed): ${describeThrownSafely(
-        error,
-      )}`,
-      escalation: 'residual_sweep_size_read_failed',
-    };
-  }
+  const totals = await readResidualFillTotals(input, row, now);
+  if ('failure' in totals) return totals.failure;
+  const { filledSize, exitQty } = totals;
 
   if (filledSize === 0) return null;
 
   if (isFlat({ filledSize, exitQty })) {
     await store.confirmResidualProtected(key);
-    return {
-      idempotency_key: key,
-      instrument: position.instrument,
-      store_state: position.order_state,
-      broker_state: null,
-      action: 'adopted',
-      kind: 'sweep',
-      reason:
-        'marked lot reads flat on the persisted fill record — nothing left unprotected; ' +
+    return sweepDivergence(
+      position,
+      'adopted',
+      'marked lot reads flat on the persisted fill record — nothing left unprotected; ' +
         'residual-protection marker cleared',
-    };
+    );
   }
 
   const residual = filledSize - exitQty;
@@ -126,15 +104,12 @@ async function sweepOne(
       residualQtyIsUpperBound: true,
     });
     return {
-      idempotency_key: key,
-      instrument: position.instrument,
-      store_state: position.order_state,
-      broker_state: null,
-      action: 'undetermined',
-      kind: 'sweep',
-      reason:
+      ...sweepDivergence(
+        position,
+        'undetermined',
         `marked residual recomputes to ${residual} (non-finite or non-positive) while the fill ` +
-        'record reads not-flat — refusing to re-arm a garbage quantity; check the store by hand',
+          'record reads not-flat — refusing to re-arm a garbage quantity; check the store by hand',
+      ),
       escalation: 'residual_sweep_garbage_residual',
     };
   }
@@ -149,95 +124,142 @@ async function sweepOne(
       position.target,
     );
   } catch (error) {
-    const unsupported = isProtectiveRearmUnsupported(error);
-    logCaughtFailure(
-      input.logger,
-      unsupported
-        ? {
-            trace_id: input.trace_id,
-            stage: 'execution',
-            event: 'residual_rearm_unsupported',
-            level: 'error',
-            message:
-              'sweepResidualProtection: arming protective legs for this lot is permanently ' +
-              'refused, so no pass of this sweep can protect it — the marker stays and only ' +
-              'manual action at the venue clears it',
-          }
-        : {
-            trace_id: input.trace_id,
-            stage: 'execution',
-            event: 'residual_rearm_failed',
-            level: 'error',
-            message:
-              'sweepResidualProtection: broker.rearmProtectiveLegs retry failed — the marker ' +
-              'stays and the next pass retries',
-          },
-      error,
-      { idempotency_key: key, residual_qty: residual },
-    );
-
-    if (unsupported) {
-      const reflatten = await reflattenResidual(input, position, residual, now);
-      if (reflatten.kind === 'skipped' && reflatten.reason === 'own_reflatten_in_flight') {
-        return {
-          idempotency_key: key,
-          instrument: position.instrument,
-          store_state: position.order_state,
-          broker_state: null,
-          action: 'undetermined',
-          kind: 'sweep',
-          reason: reflatten.detail,
-          escalation: 'residual_sweep_reflatten_in_flight',
-        };
-      }
-      if (reflatten.kind === 'submitted') {
-        return {
-          idempotency_key: key,
-          instrument: position.instrument,
-          store_state: position.order_state,
-          broker_state: null,
-          action: 'undetermined',
-          kind: 'sweep',
-          reason:
-            `this lot can never be re-armed, so residual ${residual} was CLOSED instead ` +
-            `(#1214): market order '${reflatten.idempotency_key}' is live at the venue and the ` +
-            'marker clears when its fill lands',
-          escalation: 'residual_sweep_reflatten_submitted',
-        };
-      }
-    }
-
-    await alertResidualExposureOnce(input, row, residual, now, { rearmUnsupported: unsupported });
-    return {
-      idempotency_key: key,
-      instrument: position.instrument,
-      store_state: position.order_state,
-      broker_state: null,
-      action: 'undetermined',
-      kind: 'sweep',
-      reason: unsupported
-        ? `this lot can never be re-armed and the residual ${residual} could not ` +
-          `be closed either — see the residual_reflatten_* log line for which gate stood the ` +
-          `re-flatten down: ${describeThrownSafely(error)}`
-        : `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
-      escalation: unsupported
-        ? 'residual_sweep_rearm_unsupported'
-        : 'residual_sweep_rearm_retry_failed',
-    };
+    return await settleFailedRearm(input, row, residual, now, error);
   }
 
   await store.confirmResidualProtected(key);
-  return {
-    idempotency_key: key,
-    instrument: position.instrument,
-    store_state: position.order_state,
-    broker_state: null,
-    action: 'adopted',
-    kind: 'sweep',
-    reason:
-      `protective legs re-armed for residual ${residual} by the #549 sweep — ` +
+  return sweepDivergence(
+    position,
+    'adopted',
+    `protective legs re-armed for residual ${residual} by the #549 sweep — ` +
       'residual-protection marker cleared',
+  );
+}
+
+async function readResidualFillTotals(
+  input: ResidualSweepInput,
+  row: UnprotectedResidualLot,
+  now: Date,
+): Promise<{ filledSize: number; exitQty: number } | { failure: ReconcileDivergence }> {
+  const { position } = row;
+  try {
+    return heldQuantityFromFills(await input.store.getFills(position.idempotency_key));
+  } catch (error) {
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'residual_size_read_failed',
+        level: 'error',
+        message:
+          'sweepResidualProtection: store read failed while recomputing a marked residual — ' +
+          'alerting with the upper-bound requested_size instead',
+      },
+      error,
+      { idempotency_key: position.idempotency_key },
+    );
+    await alertResidualExposureOnce(input, row, position.requested_size, now, {
+      residualQtyIsUpperBound: true,
+    });
+    return {
+      failure: {
+        ...sweepDivergence(
+          position,
+          'undetermined',
+          `marked residual could not be recomputed (fill read failed): ${describeThrownSafely(
+            error,
+          )}`,
+        ),
+        escalation: 'residual_sweep_size_read_failed',
+      },
+    };
+  }
+}
+
+async function settleFailedRearm(
+  input: ResidualSweepInput,
+  row: UnprotectedResidualLot,
+  residual: number,
+  now: Date,
+  error: unknown,
+): Promise<ReconcileDivergence> {
+  const { position } = row;
+  const unsupported = isProtectiveRearmUnsupported(error);
+  logCaughtFailure(
+    input.logger,
+    unsupported
+      ? {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          event: 'residual_rearm_unsupported',
+          level: 'error',
+          message:
+            'sweepResidualProtection: arming protective legs for this lot is permanently ' +
+            'refused, so no pass of this sweep can protect it — the marker stays and only ' +
+            'manual action at the venue clears it',
+        }
+      : {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          event: 'residual_rearm_failed',
+          level: 'error',
+          message:
+            'sweepResidualProtection: broker.rearmProtectiveLegs retry failed — the marker ' +
+            'stays and the next pass retries',
+        },
+    error,
+    { idempotency_key: position.idempotency_key, residual_qty: residual },
+  );
+
+  if (unsupported) {
+    const closing = await reflattenUnrearmable(input, position, residual, now);
+    if (closing !== undefined) return closing;
+  }
+
+  await alertResidualExposureOnce(input, row, residual, now, { rearmUnsupported: unsupported });
+  return {
+    ...sweepDivergence(
+      position,
+      'undetermined',
+      unsupported
+        ? `this lot can never be re-armed and the residual ${residual} could not ` +
+            `be closed either — see the residual_reflatten_* log line for which gate stood the ` +
+            `re-flatten down: ${describeThrownSafely(error)}`
+        : `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
+    ),
+    escalation: unsupported
+      ? 'residual_sweep_rearm_unsupported'
+      : 'residual_sweep_rearm_retry_failed',
   };
+}
+
+async function reflattenUnrearmable(
+  input: ResidualSweepInput,
+  position: UnprotectedResidualLot['position'],
+  residual: number,
+  now: Date,
+): Promise<ReconcileDivergence | undefined> {
+  const reflatten = await reflattenResidual(input, position, residual, now);
+  if (reflatten.kind === 'skipped' && reflatten.reason === 'own_reflatten_in_flight') {
+    return {
+      ...sweepDivergence(position, 'undetermined', reflatten.detail),
+      escalation: 'residual_sweep_reflatten_in_flight',
+    };
+  }
+  if (reflatten.kind === 'submitted') {
+    return {
+      ...sweepDivergence(
+        position,
+        'undetermined',
+        `this lot can never be re-armed, so residual ${residual} was CLOSED instead ` +
+          `(#1214): market order '${reflatten.idempotency_key}' is live at the venue and the ` +
+          'marker clears when its fill lands',
+      ),
+      escalation: 'residual_sweep_reflatten_submitted',
+    };
+  }
+  return undefined;
 }
 
 async function alertResidualExposureOnce(

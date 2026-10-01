@@ -129,3 +129,60 @@ describe('nousResponses', () => {
     });
   });
 });
+
+describe('nousResponses citations', () => {
+  async function citationsOf(body: Record<string, unknown>) {
+    stubFetch(responseBody(body));
+    return (await nousResponses(OPTIONS, REQUEST)).citations;
+  }
+
+  function annotated(annotations: readonly unknown[]) {
+    return {
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'x', annotations }] }],
+    };
+  }
+
+  it('reads flat and nested url_citation annotations, preferring the nested fields', async () => {
+    const citations = await citationsOf(
+      annotated([
+        { url: 'https://x.com/a/status/1', title: 'flat' },
+        {
+          url: 'https://ignored.example',
+          title: 'ignored',
+          url_citation: { url: 'https://x.com/b/status/2', title: 'nested' },
+        },
+        { url_citation: { url: 'https://x.com/c/status/3', title: 7 } },
+      ]),
+    );
+
+    expect(citations).toEqual([
+      { url: 'https://x.com/a/status/1', title: 'flat' },
+      { url: 'https://x.com/b/status/2', title: 'nested' },
+      { url: 'https://x.com/c/status/3' },
+    ]);
+  });
+
+  it('drops annotations that are not objects or carry no usable url', async () => {
+    const citations = await citationsOf(
+      annotated([null, 'https://x.com/s', { url: '' }, { url: 3 }, { url_citation: null }]),
+    );
+
+    expect(citations).toEqual([]);
+  });
+
+  it('merges top-level citations, strings and objects alike, without duplicates', async () => {
+    const citations = await citationsOf({
+      citations: [
+        'https://x.com/a/status/1',
+        { url: 'https://x.com/b/status/2', title: 'b' },
+        { url: 'https://x.com/a/status/1' },
+        { title: 'no url' },
+      ],
+    });
+
+    expect(citations).toEqual([
+      { url: 'https://x.com/a/status/1' },
+      { url: 'https://x.com/b/status/2', title: 'b' },
+    ]);
+  });
+});

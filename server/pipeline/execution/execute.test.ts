@@ -283,6 +283,22 @@ describe('ExecutionImpl.execute', () => {
     expect(result.timestamp).toEqual(NOW);
   });
 
+  it.each([
+    ['no_go', makeIntent()],
+    ['go', null],
+  ] as const)('refuses a %s verdict carrying order %#', async (status, order) => {
+    const broker = makeBroker();
+    const verdict: VerdictDecision = { ...makeGo(), status, order };
+
+    const result = await new ExecutionImpl(makeInput({ broker })).execute(verdict);
+
+    expect(result.status).toBe('error');
+    expect(result.reason).toBe(
+      `Execution.execute requires a 'go' VerdictDecision with a non-null order (got '${status}')`,
+    );
+    expect(broker.calls).toEqual([]);
+  });
+
   it('hands the adapter the abstract bracket with the idempotency key as client order id', async () => {
     const broker = makeBroker();
     const execution = new ExecutionImpl(makeInput({ broker }));
@@ -896,6 +912,126 @@ describe('ExecutionImpl.execute', () => {
       expect(broker.flattenCalls).toHaveLength(1);
     });
 
+    it('refuses an exit that names no exit_reason', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      await seedHeldLot(store);
+
+      const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+        makeExitGo({ metadata: makeIntent().metadata }),
+      );
+
+      expect(result.status).toBe('error');
+      expect(result.reason).toBe(
+        "exit intent for 'AAPL' carries no metadata.exit_reason — every exit intent must name " +
+          'one (ExitReason, shared/types/records.ts)',
+      );
+      expect(broker.cancelCalls).toEqual([]);
+    });
+
+    it('lets a write-ahead failure that is not an in-flight refusal escape', async () => {
+      const { db } = openTestExecutionStore();
+      const store = new (class extends TestExecutionStore {
+        override async writeAheadFlatten(): Promise<never> {
+          throw new Error('disk full');
+        }
+      })(db);
+      await seedHeldLot(store);
+
+      await expect(
+        new ExecutionImpl(makeInput({ store, broker: makeBroker() })).execute(makeExitGo()),
+      ).rejects.toThrow('disk full');
+    });
+
+    it('logs the failed cancel with the lots it had already cancelled', async () => {
+      const { store } = openTestExecutionStore();
+      const logger = recordingLogger();
+      const broker = makeBroker(undefined, undefined, ({ clientOrderId }) => {
+        if (clientOrderId === 'key-aapl-entry-2') throw new Error('venue timeout on cancel');
+      });
+      await seedHeldLot(store);
+      await seedHeldLot(store, { idempotency_key: 'key-aapl-entry-2' });
+
+      await new ExecutionImpl(makeInput({ store, broker, logger })).execute(
+        makeExitGo({ size: 80 }),
+      );
+
+      expect(logger.entries.filter((entry) => entry.level === 'error')).toEqual([
+        {
+          trace_id: 'trace-1',
+          stage: 'execution',
+          event: 'exit_cancel_failed',
+          level: 'error',
+          message:
+            'executeExit: cancelling a held lot failed, so the flatten was refused — any lot ' +
+            'listed in unprotected_lots had its cancel CONFIRMED before this failure, so it is ' +
+            'now open with no protective legs and is being marked for the #549 sweep to ' +
+            "re-arm. An empty list means nothing was confirmed cancelled. The failing lot's " +
+            'own legs are of unknown state and are deliberately left unmarked (re-arming over ' +
+            'a live bracket is double protection, #516 from the other direction).',
+          payload: {
+            failed_lot: 'key-aapl-entry-2',
+            unprotected_lots: ['key-aapl-entry-1'],
+            error: 'venue timeout on cancel',
+          },
+        },
+      ]);
+    });
+
+    it('logs a first-lot cancel failure with no unprotected lots', async () => {
+      const { store } = openTestExecutionStore();
+      const logger = recordingLogger();
+      const broker = makeBroker(undefined, undefined, () => {
+        throw new Error('venue timeout on cancel');
+      });
+      await seedHeldLot(store);
+
+      const result = await new ExecutionImpl(makeInput({ store, broker, logger })).execute(
+        makeExitGo(),
+      );
+
+      expect(result.reason).toBe(
+        "cancelling held lot 'key-aapl-entry-1' before the flatten failed, so the flatten was " +
+          'not sent: venue timeout on cancel',
+      );
+      expect(
+        logger.entries.filter((entry) => entry.level === 'error').map((entry) => entry.payload),
+      ).toEqual([
+        { failed_lot: 'key-aapl-entry-1', unprotected_lots: [], error: 'venue timeout on cancel' },
+      ]);
+    });
+
+    it('logs a lot it could not mark unprotected after its legs were cancelled', async () => {
+      const { db } = openTestExecutionStore();
+      const store = new (class extends TestExecutionStore {
+        override async markResidualUnprotected(): Promise<never> {
+          throw new Error('marker write refused');
+        }
+      })(db);
+      const logger = recordingLogger();
+      const broker = makeBroker(undefined, undefined, ({ clientOrderId }) => {
+        if (clientOrderId === 'key-aapl-entry-2') throw new Error('venue timeout on cancel');
+      });
+      await seedHeldLot(store);
+      await seedHeldLot(store, { idempotency_key: 'key-aapl-entry-2' });
+
+      await new ExecutionImpl(makeInput({ store, broker, logger })).execute(
+        makeExitGo({ size: 80 }),
+      );
+
+      expect(logger.entries).toContainEqual({
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'residual_mark_failed',
+        level: 'error',
+        message:
+          'executeExit: markResidualUnprotected failed for a lot whose protective legs were ' +
+          'already cancelled — the #549 sweep will not know to re-arm it, so this lot is ' +
+          'open and unprotected with no automatic recovery behind it',
+        payload: { idempotency_key: 'key-aapl-entry-1', error: 'marker write refused' },
+      });
+    });
+
     describe('one flatten per instrument (#1214 review)', () => {
       const REFLATTEN_KEY = 'key-aapl-entry-1:residual-reflatten-1';
 
@@ -939,16 +1075,28 @@ describe('ExecutionImpl.execute', () => {
 
         expect(broker.flattenCalls).toEqual([]);
         expect(result.status).toBe('deduped');
-        expect(logger.entries).toContainEqual(
-          expect.objectContaining({
-            level: 'warn',
-            event: 'flatten_refused_in_flight',
-            payload: expect.objectContaining({
-              instrument: 'AAPL',
-              blocking_key: REFLATTEN_KEY,
-            }),
-          }),
+        expect(result.reason).toBe(
+          "SqliteExecutionStore.writeAheadFlatten: refusing to journal flatten 'key-aapl-1355' — " +
+            `flatten '${REFLATTEN_KEY}' on 'AAPL' is still unresolved, and two live flattens on ` +
+            'one instrument can reverse the position (#516).',
         );
+        expect(logger.entries).toContainEqual({
+          trace_id: 'trace-1',
+          stage: 'execution',
+          event: 'flatten_refused_in_flight',
+          level: 'warn',
+          message:
+            "executeExit: this exit (exit_reason 'flatten') was refused because another flatten " +
+            'on this instrument is still unresolved — reported as `deduped`, which is NOT the ' +
+            'same as "already flat": this lot is still held. The next tick in the #826 window ' +
+            'retries, and the blocking row is bounded (reconcile.ts UNRESOLVABLE_FLATTEN_MAX_AGE_MS).',
+          payload: {
+            idempotency_key: 'key-aapl-1355',
+            instrument: 'AAPL',
+            blocking_key: REFLATTEN_KEY,
+            exit_reason: 'flatten',
+          },
+        });
         expect(broker.cancelCalls).toEqual([]);
         expect(await store.getFlattenSubmission('key-aapl-1355')).toBeNull();
       });
@@ -2559,13 +2707,24 @@ describe('#1001: submit-time quote and decision price', () => {
         marketData,
         config: SIM_CONFIG,
       });
+      const logger = recordingLogger();
 
       const result = await new ExecutionImpl(
-        makeInput({ store, broker, costModel, marketData }),
+        makeInput({ store, broker, costModel, marketData, logger }),
       ).execute(makeGo());
 
       expect(result.status).toBe('submitted');
       expect(costModel.fill).toHaveBeenCalledTimes(1);
+      expect(logger.entries).toContainEqual({
+        trace_id: 'trace-1',
+        stage: 'execution',
+        level: 'info',
+        message:
+          '#1001: captureSubmitSnapshot skipped its own CostModel.fill on the Simulated-adapter ' +
+          'path — the adapter prices this order itself and that breakdown is persisted ' +
+          'directly onto the fill, so a second pricing here could only disagree with it.',
+        payload: { idempotency_key: 'key-aapl-1355', instrument: 'AAPL' },
+      });
 
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.decision_price).toBe(100);
@@ -2630,6 +2789,20 @@ describe('#1001: submit-time quote and decision price', () => {
       const marketState = vi.mocked(costModel.fill).mock.calls[0]?.[1];
       expect(marketState?.venue).toBe('saxo');
     });
+
+    it('leaves MarketState.venue absent when executionConfig.simulated names no venue', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+      const base = makeInput({ store, broker: makeBroker(), costModel, marketData });
+      const { venue: _venue, ...unnamed } = base.config.simulated;
+
+      await new ExecutionImpl({ ...base, config: { simulated: unnamed } }).execute(makeGo());
+
+      const marketState = vi.mocked(costModel.fill).mock.calls[0]?.[1];
+      expect(marketState).toBeDefined();
+      expect(Object.hasOwn(marketState ?? {}, 'venue')).toBe(false);
+    });
   });
 
   describe('bracket (entry) path — open_positions', () => {
@@ -2659,12 +2832,14 @@ describe('#1001: submit-time quote and decision price', () => {
       const broker = makeBroker();
       const costModel = makeSnapshotCostModel();
       const marketData = makeSnapshotMarketData({ getQuote: vi.fn().mockResolvedValue(null) });
+      const logger = recordingLogger();
 
       const result = await new ExecutionImpl(
-        makeInput({ store, broker, costModel, marketData }),
+        makeInput({ store, broker, costModel, marketData, logger }),
       ).execute(makeGo());
 
       expect(result.status).toBe('submitted');
+      expect(logger.entries).toEqual([]);
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.decision_price).toBe(100);
       expect(position?.quote_bid).toBeUndefined();
@@ -2681,12 +2856,30 @@ describe('#1001: submit-time quote and decision price', () => {
       const marketData = makeSnapshotMarketData({
         getQuote: vi.fn().mockRejectedValue(new Error('quote feed down')),
       });
+      const logger = recordingLogger();
 
       const result = await new ExecutionImpl(
-        makeInput({ store, broker, costModel, marketData }),
+        makeInput({ store, broker, costModel, marketData, logger }),
       ).execute(makeGo());
 
       expect(result.status).toBe('submitted');
+      expect(logger.entries).toEqual([
+        {
+          trace_id: 'trace-1',
+          stage: 'execution',
+          event: 'submit_snapshot_quote_unavailable',
+          level: 'warn',
+          message:
+            '#1001: captureSubmitSnapshot could not read a quote at submit time — ' +
+            'quote_bid/quote_ask/quote_mid/quote_observed_at are left null for this order. ' +
+            'Best-effort instrumentation only; the order is submitted regardless.',
+          payload: {
+            idempotency_key: 'key-aapl-1355',
+            instrument: 'AAPL',
+            error: 'quote feed down',
+          },
+        },
+      ]);
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.decision_price).toBe(100);
       expect(position?.quote_bid).toBeUndefined();
@@ -2700,12 +2893,30 @@ describe('#1001: submit-time quote and decision price', () => {
       const marketData = makeSnapshotMarketData({
         getMark: vi.fn().mockRejectedValue(new Error('mark feed down')),
       });
+      const logger = recordingLogger();
 
       const result = await new ExecutionImpl(
-        makeInput({ store, broker, costModel, marketData }),
+        makeInput({ store, broker, costModel, marketData, logger }),
       ).execute(makeGo());
 
       expect(result.status).toBe('submitted');
+      expect(logger.entries).toEqual([
+        {
+          trace_id: 'trace-1',
+          stage: 'execution',
+          event: 'submit_snapshot_cost_unavailable',
+          level: 'warn',
+          message:
+            '#1001: captureSubmitSnapshot could not assemble a MarketState / price the modelled ' +
+            'cost breakdown at submit time — modelled_cost_breakdown is left null for this ' +
+            'order. Best-effort instrumentation only; the order is submitted regardless.',
+          payload: {
+            idempotency_key: 'key-aapl-1355',
+            instrument: 'AAPL',
+            error: 'mark feed down',
+          },
+        },
+      ]);
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.decision_price).toBe(100);
       expect(position?.quote_bid).toBe(100.1);
@@ -2741,19 +2952,81 @@ describe('#1001: submit-time quote and decision price', () => {
       ).execute(makeGo());
 
       expect(result.status).toBe('submitted');
-      const calls = vi.mocked(costModel.fill).mock.calls;
-      const entryRequest = calls[0]?.[0];
-      const protectiveRequest = calls[1]?.[0];
-      expect(entryRequest?.side).toBe('buy');
-      expect(protectiveRequest?.side).toBe('sell');
-      expect(protectiveRequest?.order_type).toBe('market');
-      expect(protectiveRequest?.limit_price).toBeUndefined();
-      expect(protectiveRequest?.size).toBe(entryRequest?.size);
-      expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
+      type FillCall = Parameters<CostModel['fill']>;
+      const [[entryRequest, entryState], [protectiveRequest, protectiveState]] = vi.mocked(
+        costModel.fill,
+      ).mock.calls as unknown as [FillCall, FillCall];
+      expect(entryRequest.side).toBe('buy');
+      expect(protectiveRequest.side).toBe('sell');
+      expect(protectiveRequest.order_type).toBe('market');
+      expect(protectiveRequest.limit_price).toBeUndefined();
+      expect(protectiveRequest.size).toBe(entryRequest.size);
+      expect(protectiveState).toBe(entryState);
 
-      const position = await store.getPosition('key-aapl-1355');
-      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
-      expect(position?.modelled_protective_exit_cost_breakdown).toEqual(protectiveBreakdown);
+      expect(await store.getPosition('key-aapl-1355')).toMatchObject({
+        modelled_cost_breakdown: modelledCostBreakdown,
+        modelled_protective_exit_cost_breakdown: protectiveBreakdown,
+      });
+    });
+
+    it('prices on a MarketState with no venue key when none is configured', async () => {
+      const costModel = makeSnapshotCostModel();
+
+      await new ExecutionImpl(
+        makeInput({ broker: makeBroker(), costModel, marketData: makeSnapshotMarketData() }),
+      ).execute(makeGo());
+
+      expect(vi.mocked(costModel.fill).mock.calls[0]?.[1]).toEqual({
+        mid: 100.2,
+        spread: 0.04,
+        adv: 1_000_000,
+        volatility: 2,
+        asset_class: 'stocks',
+        timestamp: NOW,
+      });
+    });
+
+    it('gives an entry no snapshot time budget — a slow quote is still captured', async () => {
+      const { store } = openTestExecutionStore();
+      const logger = recordingLogger();
+      const marketData = makeSnapshotMarketData({
+        getQuote: vi
+          .fn()
+          .mockImplementation(
+            () =>
+              new Promise((resolve) =>
+                setTimeout(() => resolve({ bid: 100.1, ask: 100.3, observed_at: NOW }), 5),
+              ),
+          ),
+      });
+
+      await new ExecutionImpl(
+        makeInput({
+          store,
+          broker: makeBroker(),
+          costModel: makeSnapshotCostModel(),
+          marketData,
+          logger,
+        }),
+      ).execute(makeGo());
+
+      expect((await store.getPosition('key-aapl-1355'))?.quote_bid).toBe(100.1);
+      expect(logger.entries).toEqual([]);
+    });
+
+    it('keeps the decision price of an entry even if it carries the unpriced-exit flag', async () => {
+      const { store } = openTestExecutionStore();
+
+      await new ExecutionImpl(
+        makeInput({
+          store,
+          broker: makeBroker(),
+          costModel: makeSnapshotCostModel(),
+          marketData: makeSnapshotMarketData(),
+        }),
+      ).execute(makeGo({ metadata: { ...makeIntent().metadata, unpriced_exit: true } }));
+
+      expect((await store.getPosition('key-aapl-1355'))?.decision_price).toBe(100);
     });
   });
 
@@ -2770,6 +3043,7 @@ describe('#1001: submit-time quote and decision price', () => {
       ).execute(makeExitGo());
 
       expect(result.status).toBe('submitted');
+      expect(costModel.fill).toHaveBeenCalledTimes(1);
       const row = await store.getFlattenSubmission('key-aapl-1355');
       expect(row?.decision_price).toBe(100);
       expect(row?.quote_bid).toBe(100.1);
@@ -2795,9 +3069,10 @@ describe('#1001: submit-time quote and decision price', () => {
       await seedHeldLot(store);
       const costModel = makeSnapshotCostModel();
       const marketData = makeSnapshotMarketData();
+      const logger = recordingLogger();
 
       const result = await new ExecutionImpl(
-        makeInput({ store, broker, costModel, marketData }),
+        makeInput({ store, broker, costModel, marketData, logger }),
       ).execute(
         makeExitGo({
           metadata: {
@@ -2809,6 +3084,18 @@ describe('#1001: submit-time quote and decision price', () => {
       );
 
       expect(result.status).toBe('submitted');
+      expect(logger.entries).toEqual([
+        {
+          trace_id: 'trace-1',
+          stage: 'execution',
+          level: 'info',
+          message:
+            '#1001: captureSubmitSnapshot skipped the quote/cost-model reads for an unpriced ' +
+            'exit (order.metadata.unpriced_exit) — the feed was already known dark this tick, ' +
+            'so re-probing it here would only risk widening the #826 flatten window.',
+          payload: { idempotency_key: 'key-aapl-1355', instrument: 'AAPL' },
+        },
+      ]);
       expect(marketData.getQuote).not.toHaveBeenCalled();
       expect(marketData.getMark).not.toHaveBeenCalled();
       expect(marketData.getIndicator).not.toHaveBeenCalled();
@@ -2867,12 +3154,26 @@ describe('#1001: submit-time quote and decision price', () => {
           ),
         });
 
+        const logger = recordingLogger();
         const pending = new ExecutionImpl(
-          makeInput({ store, broker, costModel, marketData }),
+          makeInput({ store, broker, costModel, marketData, logger }),
         ).execute(makeExitGo());
 
         await vi.advanceTimersByTimeAsync(2_000);
         expect(broker.flattenCalls).toHaveLength(1);
+        expect(logger.entries).toEqual([
+          {
+            trace_id: 'trace-1',
+            stage: 'execution',
+            event: 'submit_snapshot_budget_exceeded',
+            level: 'warn',
+            message:
+              '#1001: captureSubmitSnapshot exceeded its 2000ms exit budget — the quote and ' +
+              'modelled cost breakdown are left null for this order so the flatten is not ' +
+              'held behind a stalled feed (#826). decision_price is unaffected.',
+            payload: { idempotency_key: 'key-aapl-1355', instrument: 'AAPL' },
+          },
+        ]);
 
         const result = await pending;
         expect(result.status).toBe('submitted');
@@ -2885,6 +3186,30 @@ describe('#1001: submit-time quote and decision price', () => {
         expect(row?.modelled_cost_breakdown_json).toBeNull();
 
         await vi.advanceTimersByTimeAsync(30_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('disarms the snapshot budget once the feed answers in time', async () => {
+      vi.useFakeTimers();
+      try {
+        const { store } = openTestExecutionStore();
+        await seedHeldLot(store);
+        const logger = recordingLogger();
+
+        await new ExecutionImpl(
+          makeInput({
+            store,
+            broker: makeBroker(),
+            costModel: makeSnapshotCostModel(),
+            marketData: makeSnapshotMarketData(),
+            logger,
+          }),
+        ).execute(makeExitGo());
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(logger.entries).toEqual([]);
       } finally {
         vi.useRealTimers();
       }

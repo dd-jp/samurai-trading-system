@@ -1,9 +1,9 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { SystemClock } from '../../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import { DEFAULT_BUNDLE_ROOT } from './bundle.js';
 import { composeV2Dashboard } from './main.js';
 
@@ -131,9 +131,4 @@ async function main(env: NodeJS.ProcessEnv): Promise<void> {
   process.stdout.write(`v2 dashboard fixture on ${server.url}\n`);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.env).catch((error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  });
-}
+void runWhenInvoked(import.meta.url, () => main(process.env));

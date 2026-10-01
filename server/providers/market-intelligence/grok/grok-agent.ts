@@ -90,6 +90,33 @@ function toArchiveProjection(item: IntelligenceItem, retrievedAt: Date): XArchiv
   };
 }
 
+export function retrievalEvidenceAbsentMessage(instrument: string, discarded: number): string {
+  return discarded > 0
+    ? `grok: discarding ${discarded} item(s) for ${instrument} — the ` +
+        'response parsed cleanly but carried no evidence of retrieval (no citations, no ' +
+        'tool step), so it cannot be told apart from model recall. Reporting NO DATA ' +
+        'instead of risking confabulated sentiment as signal. See #485.'
+    : `grok: no retrieval evidence for ${instrument} this call (no citations, no tool ` +
+        'step) — reporting NO DATA. "Could not look" rather than "looked and saw ' +
+        'nothing". See #485.';
+}
+
+export function refreshFailureMessage(
+  instrument: string,
+  detail: string,
+  unroutedModel: boolean,
+): string {
+  return unroutedModel
+    ? `grok: RETRIEVAL IS DARK for ${instrument} — the provider refused the server-side ` +
+        `search tool for this model (${detail}). This is a configuration fault, not an ` +
+        'outage: retries cannot fix it, and every subsequent call will fail the same way ' +
+        'until the model is changed. The routed alias has probably re-resolved to a model ' +
+        'that does not carry the tool. Expect the coverage alert for every instrument; ' +
+        'this is its cause. See `X_SEARCH_MODEL` in x-search-client.ts.'
+    : `grok: sentiment refresh failed for ${instrument} — ${detail}. The analysts will ` +
+        'report NO DATA for this window; the bucket is NOT marked, so the next pass retries.';
+}
+
 export class GrokAgent {
   readonly #buckets = new Map<string, number>();
   readonly #deps: GrokAgentDeps;
@@ -100,7 +127,6 @@ export class GrokAgent {
     this.#refreshMs = deps.refreshMs ?? GROK_REFRESH_MS;
   }
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one linear bucket-check/spend-cap/fetch-meter-evidence-archive-ingest sequence per the doc comment above; splitting the try/catch's steps apart would scatter one refresh's ordering guarantees (meter before evidence-gate, archive before ingest, mark bucket only after success) across several functions.
   async refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean> {
     const asOf = this.#deps.clock.now();
     const bucket = floorToRefreshBucket(asOf, this.#refreshMs).getTime();
@@ -109,17 +135,7 @@ export class GrokAgent {
 
     const verdict = this.#deps.spendCap.check();
     if (!verdict.admitted) {
-      this.#deps.logger?.log({
-        trace_id,
-        stage: 'market_intelligence',
-        event: 'grok_refresh_refused_spend_cap',
-        level: 'warn',
-        message:
-          `grok: refusing to refresh ${instrument} — ${verdict.reason ?? 'spend cap reached'}. ` +
-          'The analysts will report NO DATA for this window rather than a fabricated neutral ' +
-          'item, so the debate can tell "could not afford to look" from "saw nothing".',
-        payload: { instrument, spent_usd: verdict.spent_usd, budget_usd: verdict.budget_usd },
-      });
+      this.#logSpendCapRefusal(trace_id, instrument, verdict);
       return false;
     }
 
@@ -140,22 +156,7 @@ export class GrokAgent {
 
       const items = result.retrievalEvidence ? result.items : [];
       if (!result.retrievalEvidence) {
-        this.#deps.logger?.log({
-          trace_id,
-          stage: 'market_intelligence',
-          event: 'grok_retrieval_evidence_absent',
-          level: result.items.length > 0 ? 'warn' : 'info',
-          message:
-            result.items.length > 0
-              ? `grok: discarding ${result.items.length} item(s) for ${instrument} — the ` +
-                'response parsed cleanly but carried no evidence of retrieval (no citations, no ' +
-                'tool step), so it cannot be told apart from model recall. Reporting NO DATA ' +
-                'instead of risking confabulated sentiment as signal. See #485.'
-              : `grok: no retrieval evidence for ${instrument} this call (no citations, no tool ` +
-                'step) — reporting NO DATA. "Could not look" rather than "looked and saw ' +
-                'nothing". See #485.',
-          payload: { instrument, discarded_items: result.items.length },
-        });
+        this.#logRetrievalEvidenceAbsent(trace_id, instrument, result.items.length);
       }
 
       this.#archive(trace_id, items, asOf, assetClass);
@@ -170,30 +171,55 @@ export class GrokAgent {
       this.#buckets.set(instrument, bucket);
       return true;
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      const unroutedModel = /search tools are not available|OpenRouter-routed/i.test(detail);
-      this.#deps.logger?.log({
-        trace_id,
-        stage: 'market_intelligence',
-        event: 'grok_refresh_failed',
-        level: 'error',
-        message: unroutedModel
-          ? `grok: RETRIEVAL IS DARK for ${instrument} — the provider refused the server-side ` +
-            `search tool for this model (${detail}). This is a configuration fault, not an ` +
-            'outage: retries cannot fix it, and every subsequent call will fail the same way ' +
-            'until the model is changed. The routed alias has probably re-resolved to a model ' +
-            'that does not carry the tool. Expect the coverage alert for every instrument; ' +
-            'this is its cause. See `X_SEARCH_MODEL` in x-search-client.ts.'
-          : `grok: sentiment refresh failed for ${instrument} — ${detail}. The analysts will ` +
-            'report NO DATA for this window; the bucket is NOT marked, so the next pass retries.',
-        payload: {
-          instrument,
-          failure_cause: classifyFailureCause(error),
-          ...(unroutedModel ? { unrouted_model: true } : {}),
-        },
-      });
+      this.#logRefreshFailure(trace_id, instrument, error);
       return false;
     }
+  }
+
+  #logSpendCapRefusal(
+    trace_id: string,
+    instrument: string,
+    verdict: Extract<ReturnType<SpendCap['check']>, { admitted: false }>,
+  ): void {
+    this.#deps.logger?.log({
+      trace_id,
+      stage: 'market_intelligence',
+      event: 'grok_refresh_refused_spend_cap',
+      level: 'warn',
+      message:
+        `grok: refusing to refresh ${instrument} — ${verdict.reason ?? 'spend cap reached'}. ` +
+        'The analysts will report NO DATA for this window rather than a fabricated neutral ' +
+        'item, so the debate can tell "could not afford to look" from "saw nothing".',
+      payload: { instrument, spent_usd: verdict.spent_usd, budget_usd: verdict.budget_usd },
+    });
+  }
+
+  #logRetrievalEvidenceAbsent(trace_id: string, instrument: string, discarded: number): void {
+    this.#deps.logger?.log({
+      trace_id,
+      stage: 'market_intelligence',
+      event: 'grok_retrieval_evidence_absent',
+      level: discarded > 0 ? 'warn' : 'info',
+      message: retrievalEvidenceAbsentMessage(instrument, discarded),
+      payload: { instrument, discarded_items: discarded },
+    });
+  }
+
+  #logRefreshFailure(trace_id: string, instrument: string, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error);
+    const unroutedModel = /search tools are not available|OpenRouter-routed/i.test(detail);
+    this.#deps.logger?.log({
+      trace_id,
+      stage: 'market_intelligence',
+      event: 'grok_refresh_failed',
+      level: 'error',
+      message: refreshFailureMessage(instrument, detail, unroutedModel),
+      payload: {
+        instrument,
+        failure_cause: classifyFailureCause(error),
+        ...(unroutedModel ? { unrouted_model: true } : {}),
+      },
+    });
   }
 
   #archive(

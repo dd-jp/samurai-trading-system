@@ -1362,4 +1362,281 @@ describe('SqliteExecutionStore', () => {
       expect(chargedFlagOf(db, 'uncharged')).toBe(0);
     });
   });
+
+  describe('exact errors and edge reads', () => {
+    async function rejectionOf(pending: Promise<unknown>): Promise<Error> {
+      try {
+        await pending;
+      } catch (error) {
+        return error as Error;
+      }
+      throw new Error('expected a rejection');
+    }
+
+    const AT = new Date('2026-07-21T10:00:00Z');
+    const ORDER_UPDATE = { order_state: 'submitted' as const, broker_order_ids: ['o-1'] };
+
+    it('names a duplicate position and the key that collided', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+
+      const error = await rejectionOf(store.writeAheadPosition(makePosition()));
+
+      expect(error.name).toBe('DuplicatePositionError');
+      expect(error.message).toBe(
+        "SqliteExecutionStore.writeAheadPosition: a position already exists for idempotency_key 'key-1' — execute()'s findByKey gate should have prevented this write.",
+      );
+    });
+
+    it('rethrows a non-unique failure from writeAheadPosition unchanged', async () => {
+      const { db, store } = makeStore();
+      db.close();
+
+      const error = await rejectionOf(store.writeAheadPosition(makePosition()));
+
+      expect(error.name).not.toBe('DuplicatePositionError');
+      expect(error.message).toMatch(/not open/);
+    });
+
+    it('names a duplicate flatten submission and the key that collided', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+      await store.resolveFlattenSubmitted('flatten-1', ORDER_UPDATE, AT);
+      await store.markFlattenFillsSwept('flatten-1', AT);
+
+      const error = await rejectionOf(store.writeAheadFlatten(makeFlattenWriteAhead()));
+
+      expect(error.name).toBe('DuplicateFlattenSubmissionError');
+      expect(error.message).toBe(
+        "SqliteExecutionStore.writeAheadFlatten: a flatten submission already exists for idempotency_key 'flatten-1' — execute()'s findByKey gate should have prevented this write.",
+      );
+    });
+
+    it('names the blocking flatten error class', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+
+      const error = await rejectionOf(
+        store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-2' })),
+      );
+
+      expect(error.name).toBe('UnresolvedFlattenForInstrumentError');
+    });
+
+    it('rethrows a non-unique failure from writeAheadFlatten unchanged', async () => {
+      const { db, store } = makeStore();
+      db.close();
+
+      const error = await rejectionOf(store.writeAheadFlatten(makeFlattenWriteAhead()));
+
+      expect(error.name).not.toBe('DuplicateFlattenSubmissionError');
+      expect(error.message).toMatch(/not open/);
+    });
+
+    it('refuses a re-ingested fill with the exact message and the driver cause', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+      await store.applyLotAdvance({ idempotency_key: 'key-1', fills: [makeFill()] });
+
+      const error = await rejectionOf(
+        store.applyLotAdvance({ idempotency_key: 'key-1', fills: [makeFill()] }),
+      );
+
+      expect(error.message).toBe(
+        "SqliteExecutionStore.applyLotAdvance: broker_fill_id 'fill-1' was already ingested for 'key-1' — ingestFills()'s hasFill gate should have prevented this write.",
+      );
+      expect((error.cause as NodeJS.ErrnoException).code).toBe('SQLITE_CONSTRAINT_PRIMARYKEY');
+    });
+
+    it('rethrows a non-unique fill insert failure unchanged', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+      db.exec('DROP TABLE fills');
+
+      const error = await rejectionOf(
+        store.applyLotAdvance({ idempotency_key: 'key-1', fills: [makeFill()] }),
+      );
+
+      expect(error.message).toMatch(/no such table: fills/);
+      expect(error.cause).toBeUndefined();
+    });
+
+    it('refuses a second closed trade with the exact message and the driver cause', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [],
+        closed_trade: makeClosedTrade(),
+      });
+
+      const error = await rejectionOf(
+        store.applyLotAdvance({
+          idempotency_key: 'key-1',
+          fills: [],
+          closed_trade: makeClosedTrade(),
+        }),
+      );
+
+      expect(error.message).toBe(
+        "SqliteExecutionStore.applyLotAdvance: a closed trade already exists for idempotency_key 'key-1' — a lot closes exactly once, on round-trip-to-flat.",
+      );
+      expect((error.cause as NodeJS.ErrnoException).code).toBe('SQLITE_CONSTRAINT_PRIMARYKEY');
+    });
+
+    it('rethrows a non-unique closed-trade insert failure unchanged', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+      db.exec('DROP TABLE closed_trades');
+
+      const error = await rejectionOf(
+        store.applyLotAdvance({
+          idempotency_key: 'key-1',
+          fills: [],
+          closed_trade: makeClosedTrade(),
+        }),
+      );
+
+      expect(error.message).toMatch(/no such table: closed_trades/);
+      expect(error.cause).toBeUndefined();
+    });
+
+    it('round-trips a fill exit_reason', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [makeFill({ leg: 'exit', exit_reason: 'signal_decay' })],
+      });
+
+      const [fill] = await store.getFills('key-1');
+
+      expect(fill?.exit_reason).toBe('signal_decay');
+    });
+
+    it.each([
+      [
+        'resolveFlattenSubmitted',
+        (store: SqliteExecutionStore) => store.resolveFlattenSubmitted('ghost', ORDER_UPDATE, AT),
+        "SqliteExecutionStore.resolveFlattenSubmitted: no write-ahead record for 'ghost'",
+      ],
+      [
+        'resolveFlattenError',
+        (store: SqliteExecutionStore) => store.resolveFlattenError('ghost', 'boom', AT),
+        "SqliteExecutionStore.resolveFlattenError: no write-ahead record for 'ghost'",
+      ],
+      [
+        'recordFlattenOrderStateObserved',
+        (store: SqliteExecutionStore) =>
+          store.recordFlattenOrderStateObserved('ghost', ORDER_UPDATE),
+        "SqliteExecutionStore.recordFlattenOrderStateObserved: no flatten_submissions row for 'ghost'",
+      ],
+      [
+        'markFlattenCancelAttempted',
+        (store: SqliteExecutionStore) => store.markFlattenCancelAttempted('ghost', AT),
+        "SqliteExecutionStore.markFlattenCancelAttempted: no flatten_submissions row for 'ghost'",
+      ],
+      [
+        'markFlattenTerminalUnsweptChecked',
+        (store: SqliteExecutionStore) => store.markFlattenTerminalUnsweptChecked('ghost', AT),
+        "SqliteExecutionStore.markFlattenTerminalUnsweptChecked: no flatten_submissions row for 'ghost'",
+      ],
+      [
+        'markFlattenFillsSwept',
+        (store: SqliteExecutionStore) => store.markFlattenFillsSwept('ghost', AT),
+        "SqliteExecutionStore.markFlattenFillsSwept: no flatten_submissions row for 'ghost'",
+      ],
+      [
+        'markResidualUnprotected',
+        (store: SqliteExecutionStore) => store.markResidualUnprotected('ghost', AT),
+        "SqliteExecutionStore.markResidualUnprotected: no open_positions row for 'ghost'",
+      ],
+    ])('%s on a missing row throws the exact message', async (_name, call, message) => {
+      const { store } = makeStore();
+
+      const error = await rejectionOf(call(store));
+
+      expect(error.message).toBe(message);
+    });
+
+    it.each([
+      [
+        'resolveFlattenSubmitted',
+        (store: SqliteExecutionStore) =>
+          store.resolveFlattenSubmitted('flatten-1', ORDER_UPDATE, AT),
+      ],
+      [
+        'resolveFlattenError',
+        (store: SqliteExecutionStore) => store.resolveFlattenError('flatten-1', 'boom', AT),
+      ],
+      [
+        'markFlattenTerminalUnsweptChecked',
+        (store: SqliteExecutionStore) => store.markFlattenTerminalUnsweptChecked('flatten-1', AT),
+      ],
+    ])('%s on an existing row resolves', async (_name, call) => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+
+      await expect(call(store)).resolves.toBeUndefined();
+    });
+
+    it('reads no unsupported-rearm alert for an unknown key', async () => {
+      const { store } = makeStore();
+
+      expect(await store.getResidualRearmUnsupportedAlertedAt('ghost')).toBeNull();
+    });
+
+    it('names the column and keeps the parse cause on invalid lot-key JSON', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+      overwriteJournalColumn(db, 'lot_idempotency_keys', 'flatten-1', '{not json');
+
+      const error = await rejectionOf(store.getFlattenAttribution('flatten-1'));
+
+      expect(error.message).toBe(
+        "SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_idempotency_keys for 'flatten-1' is not valid JSON",
+      );
+      expect(error.cause).toBeInstanceOf(SyntaxError);
+    });
+
+    it('throws the exact message on lot keys that are not strings', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+      overwriteJournalColumn(db, 'lot_idempotency_keys', 'flatten-1', '["key-lot-1", 2]');
+
+      const error = await rejectionOf(store.getFlattenAttribution('flatten-1'));
+
+      expect(error.message).toBe(
+        "SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_idempotency_keys for 'flatten-1' is not a JSON array of strings",
+      );
+    });
+
+    it('throws the exact message, with the lot count, on a held-quantity length mismatch', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+      overwriteJournalColumn(db, 'lot_held_quantities', 'flatten-1', '[10]');
+
+      const error = await rejectionOf(store.getFlattenAttribution('flatten-1'));
+
+      expect(error.message).toBe(
+        "SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities for 'flatten-1' is not a JSON array of one quantity per journalled lot (2)",
+      );
+    });
+
+    it.each([
+      ['a string', '[10, "15"]'],
+      ['a negative number', '[10, -15]'],
+      ['an overflowing number', '[10, 1e999]'],
+    ])('throws the exact message on a held quantity that is %s', async (_label, raw) => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+      overwriteJournalColumn(db, 'lot_held_quantities', 'flatten-1', raw);
+
+      const error = await rejectionOf(store.getFlattenAttribution('flatten-1'));
+
+      expect(error.message).toBe(
+        "SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities for 'flatten-1' holds an entry that is not a finite non-negative number",
+      );
+    });
+  });
 });

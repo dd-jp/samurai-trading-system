@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import type { MarketData } from '../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { minbtl } from '../../tools/backtest/index.js';
+import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { type BacktestInput, type BacktestResult, runBacktest } from './backtest.js';
 import {
   BarsMarketData,
@@ -275,27 +275,23 @@ const CANDIDATE_RUNNERS: Record<string, (options: BacktestCliOptions) => Promise
   [MEAN_REVERSION_CANDIDATE_ID]: runMeanReversionCandidate,
 };
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const candidateArg = process.argv[2] ?? CROSS_ASSET_TREND_CANDIDATE_ID;
+async function runNamedCandidate(candidateArg: string): Promise<number> {
   const runCandidate = CANDIDATE_RUNNERS[candidateArg];
   if (runCandidate === undefined) {
     process.stderr.write(
       `backtest-cli: unknown candidate "${candidateArg}" (expected one of ${Object.keys(CANDIDATE_RUNNERS).join(', ')})\n`,
     );
-    process.exit(1);
-  } else {
-    runCandidate({
-      logger: { log: (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`) },
-    })
-      .then((report) => {
-        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-        process.exit(0);
-      })
-      .catch((error: unknown) => {
-        process.stderr.write(
-          `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-        );
-        process.exit(1);
-      });
+    return 1;
   }
+  const report = await runCandidate({
+    logger: { log: (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`) },
+  });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
+
+void runWhenInvoked(
+  import.meta.url,
+  () => runNamedCandidate(process.argv[2] ?? CROSS_ASSET_TREND_CANDIDATE_ID),
+  errorStack,
+);

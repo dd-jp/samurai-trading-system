@@ -4406,3 +4406,835 @@ describe('a non-sterling fee pages an operator, not just a log line (#1465)', ()
     expect(JSON.stringify(failureEntries[0])).not.toContain('secret bot token');
   });
 });
+
+describe('ingestFills — exact log lines, leg flags and flatten gating', () => {
+  const FLATTEN_AT = new Date('2026-07-20T15:30:00Z');
+
+  class ScriptedStore extends TestExecutionStore {
+    readonly advances: LotAdvance[] = [];
+    readonly attributionReads: string[] = [];
+    readonly failAdvanceFor = new Map<string, Error>();
+    failAdvanceOfFillId: { id: string; error: Error } | null = null;
+    failMarkSwept: Error | null = null;
+    failMarkResidual: Error | null = null;
+    failAttributionFor: string | null = null;
+    failNextSplitHasFill = false;
+    positionOrder: string[] | null = null;
+
+    override async applyLotAdvance(advance: LotAdvance): Promise<void> {
+      this.advances.push(advance);
+      const failure = this.failAdvanceFor.get(advance.idempotency_key);
+      if (failure !== undefined) throw failure;
+      const failingFill = this.failAdvanceOfFillId;
+      if (failingFill !== null && advance.fills.some((f) => f.broker_fill_id === failingFill.id)) {
+        throw failingFill.error;
+      }
+      return super.applyLotAdvance(advance);
+    }
+
+    override async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
+      if (this.failMarkSwept !== null) throw this.failMarkSwept;
+      return super.markFlattenFillsSwept(idempotency_key, swept_at);
+    }
+
+    override async markResidualUnprotected(
+      idempotency_key: string,
+      observed_at: Date,
+    ): Promise<void> {
+      if (this.failMarkResidual !== null) throw this.failMarkResidual;
+      return super.markResidualUnprotected(idempotency_key, observed_at);
+    }
+
+    override async getFlattenAttribution(
+      idempotency_key: string,
+    ): ReturnType<TestExecutionStore['getFlattenAttribution']> {
+      this.attributionReads.push(idempotency_key);
+      if (idempotency_key === this.failAttributionFor) {
+        throw new Error('simulated attribution read failure');
+      }
+      return super.getFlattenAttribution(idempotency_key);
+    }
+
+    override async hasFill(key: Parameters<SharedStore['hasFill']>[0]): Promise<boolean> {
+      if (this.failNextSplitHasFill && key.broker_fill_id.includes(':')) {
+        this.failNextSplitHasFill = false;
+        throw new Error('simulated hasFill outage');
+      }
+      return super.hasFill(key);
+    }
+
+    override async getOpenPositions(): Promise<OpenPosition[]> {
+      const positions = await super.getOpenPositions();
+      const order = this.positionOrder;
+      if (order === null) return positions;
+      return [...positions].sort(
+        (a, b) => order.indexOf(a.idempotency_key) - order.indexOf(b.idempotency_key),
+      );
+    }
+  }
+
+  class SinceRecordingBroker extends ScriptedBroker {
+    readonly sinces: Date[] = [];
+    override async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+      this.sinces.push(since);
+      return super.fetchNewFills(since);
+    }
+  }
+
+  function scriptedStore(): ScriptedStore {
+    return new ScriptedStore(openTestExecutionStore().db);
+  }
+
+  async function journalFlatten(
+    store: TestExecutionStore,
+    key: string,
+    lots: { idempotency_key: string; held: number }[],
+  ): Promise<void> {
+    await store.writeAheadFlatten({
+      idempotency_key: key,
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: lots.reduce((sum, lot) => sum + lot.held, 0),
+      submitted_at: OPENED_AT,
+      lot_held_quantities: lots,
+      exit_reason: 'flatten',
+      decision_price: null,
+      quote_bid: null,
+      quote_ask: null,
+      quote_mid: null,
+      quote_observed_at: null,
+      modelled_cost_breakdown: null,
+    });
+    await store.resolveFlattenSubmitted(
+      key,
+      { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+      OPENED_AT,
+    );
+  }
+
+  function entryOf(lotKey: string, qty: number): NormalizedFill {
+    return fill({
+      client_order_id: lotKey,
+      broker_fill_id: toBrokerFillId(`e-${lotKey}`),
+      leg: 'entry',
+      qty,
+    });
+  }
+
+  function flattenFill(key: string, qty: number, id = `f-${key}`): NormalizedFill {
+    return fill({
+      client_order_id: key,
+      broker_fill_id: toBrokerFillId(id),
+      leg: 'exit',
+      qty,
+      timestamp: FLATTEN_AT,
+    });
+  }
+
+  interface PollOptions {
+    logger?: Logger;
+    overfill?: FlattenOverfillAlertChannel;
+    fees?: NonSterlingFeeAlertChannel;
+    unattributed?: UnattributedFlattenFillAlertChannel;
+  }
+
+  function inputFor(
+    broker: BrokerAdapter,
+    store: TestExecutionStore,
+    options: PollOptions = {},
+  ): ExecutionInput {
+    return makeInput(
+      broker,
+      store,
+      undefined,
+      options.overfill,
+      options.logger,
+      undefined,
+      undefined,
+      undefined,
+      options.fees,
+      undefined,
+      options.unattributed,
+    );
+  }
+
+  async function seedFilledLots(store: ScriptedStore, lots: [string, number][]): Promise<void> {
+    for (const [index, [key, qty]] of lots.entries()) {
+      await seedPosition(store, {
+        idempotency_key: key,
+        requested_size: qty,
+        opened_at: new Date(OPENED_AT.getTime() + index * 60_000),
+        broker_order_ids: [`${key}:entry`],
+      });
+    }
+    const entries = new ScriptedBroker(lots.map(([key, qty]) => entryOf(key, qty)));
+    await new ExecutionImpl(makeInput(entries, store)).ingestFills();
+    store.writeLog.length = 0;
+    store.advances.length = 0;
+  }
+
+  async function closedLotWithSecondFlatten(store: ScriptedStore): Promise<NormalizedFill[]> {
+    await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10 });
+    await seedPosition(store, {
+      idempotency_key: 'key-other',
+      instrument: 'TSLA',
+      requested_size: 5,
+    });
+    await journalFlatten(store, 'flatten-1', [{ idempotency_key: 'key-1', held: 10 }]);
+    const entry = entryOf('key-1', 10);
+    const first = flattenFill('flatten-1', 10, 'f1');
+    await new ExecutionImpl(makeInput(new ScriptedBroker([entry]), store)).ingestFills();
+    await new ExecutionImpl(makeInput(new ScriptedBroker([entry, first]), store)).ingestFills();
+    await journalFlatten(store, 'flatten-2', [{ idempotency_key: 'key-1', held: 4 }]);
+    return [entry, first, fill({ ...flattenFill('flatten-2', 4, 'f2'), fee: 0 })];
+  }
+
+  const UNATTRIBUTED_LINE = {
+    trace_id: 'trace-1',
+    stage: 'execution',
+    event: 'unattributed_flatten_fill',
+    level: 'error',
+    message: UNATTRIBUTED_FLATTEN_FILL,
+    payload: {
+      flatten_client_order_id: 'flatten-2',
+      idempotency_key: 'key-1',
+      broker_fill_id: 'f2:key-1',
+      qty: 4,
+    },
+  };
+
+  it('holds back the sweep of a flatten when ANY lot it named failed to advance, not only when all did', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [
+      ['key-a', 10],
+      ['key-b', 10],
+    ]);
+    await journalFlatten(store, 'flatten-1', [
+      { idempotency_key: 'key-a', held: 10 },
+      { idempotency_key: 'key-b', held: 10 },
+    ]);
+    store.failAdvanceFor.set('key-b', new Error('simulated outage on key-b'));
+
+    await expect(
+      new ExecutionImpl(
+        makeInput(new ScriptedBroker([flattenFill('flatten-1', 20)]), store),
+      ).ingestFills(),
+    ).rejects.toThrow('key-b');
+
+    expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-1');
+  });
+
+  it('does not hold back a sweep because an unrelated order failed attribution', async () => {
+    const store = scriptedStore();
+    const fills = await closedLotWithSecondFlatten(store);
+    store.failAttributionFor = 'key-1';
+    store.writeLog.length = 0;
+    const strayFillForClosedLot = fill({
+      client_order_id: 'key-1',
+      broker_fill_id: toBrokerFillId('stray'),
+      leg: 'exit',
+      qty: 1,
+      timestamp: FLATTEN_AT,
+    });
+
+    await expect(
+      new ExecutionImpl(
+        makeInput(new ScriptedBroker([...fills, strayFillForClosedLot]), store),
+      ).ingestFills(),
+    ).rejects.toThrow("flatten-attribution 'key-1'");
+
+    expect(store.writeLog).toContain('mark-flatten-fills-swept:flatten-2');
+  });
+
+  it('still throws a lot failure when a sweep mark ALSO failed in the same poll', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [
+      ['key-a', 10],
+      ['key-b', 10],
+    ]);
+    await journalFlatten(store, 'flatten-1', [{ idempotency_key: 'key-a', held: 10 }]);
+    store.failMarkSwept = new Error('simulated mark outage');
+    store.failAdvanceFor.set('key-b', new Error('simulated outage on key-b'));
+    const logger = recordingLogger();
+
+    await expect(
+      new ExecutionImpl(
+        inputFor(
+          new ScriptedBroker([
+            flattenFill('flatten-1', 10),
+            fill({
+              client_order_id: 'key-b',
+              broker_fill_id: toBrokerFillId('x-b'),
+              leg: 'exit',
+              qty: 2,
+            }),
+          ]),
+          store,
+          { logger },
+        ),
+      ).ingestFills(),
+    ).rejects.toThrow("lot-advance 'key-b'");
+
+    expect(logger.entries).toContainEqual({
+      trace_id: 'trace-1',
+      stage: 'execution',
+      event: 'flatten_sweep_mark_failed',
+      level: 'warn',
+      message:
+        'markFlattenFillsSwept failed — the row stays unswept and will be found again by the ' +
+        "next reconcile() pass (SharedStore.getUnresolvedFlattens()'s own designed recovery)",
+      payload: { flatten_key: 'flatten-1', error: 'simulated mark outage' },
+    });
+  });
+
+  it('throws one AggregateError naming every contained failure, carrying each error and the first as its cause', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { idempotency_key: 'key-a', requested_size: 10 });
+    await seedPosition(store, {
+      idempotency_key: 'key-b',
+      requested_size: 10,
+      opened_at: new Date(OPENED_AT.getTime() + 60_000),
+    });
+    const first = new Error('simulated outage on key-a');
+    const second = new TypeError('simulated outage on key-b');
+    store.failAdvanceFor.set('key-a', first);
+    store.failAdvanceFor.set('key-b', second);
+
+    const thrown = await new ExecutionImpl(
+      makeInput(new ScriptedBroker([entryOf('key-a', 10), entryOf('key-b', 10)]), store),
+    )
+      .ingestFills()
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    const aggregate = thrown as AggregateError;
+    expect(aggregate.message).toBe(
+      'ingestFills: 2 contained failure(s) — every other lot in this poll was advanced; ' +
+        "unresolved: lot-advance 'key-a' (AAPL) [Error], lot-advance 'key-b' (AAPL) [TypeError]",
+    );
+    expect(aggregate.errors).toEqual([first, second]);
+    expect(aggregate.errors[0]).toBe(first);
+    expect(aggregate.cause).toBe(first);
+  });
+
+  it("never reads flatten attribution for a lot's own fills", async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10 });
+
+    await new ExecutionImpl(
+      makeInput(new ScriptedBroker([entryOf('key-1', 10)]), store),
+    ).ingestFills();
+
+    expect(store.attributionReads).toEqual([]);
+  });
+
+  it('never marks swept a flatten the journal has no attribution for', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10 });
+
+    await new ExecutionImpl(
+      makeInput(new ScriptedBroker([flattenFill('flatten-ghost', 4)]), store),
+    ).ingestFills();
+
+    expect(store.attributionReads).toEqual(['flatten-ghost']);
+    expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-ghost');
+  });
+
+  it('ignores a flatten journalled with no lots rather than warning its whole fill as an over-fill', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10 });
+    await journalFlatten(store, 'flatten-empty', []);
+    const overfill = makeFlattenOverfillAlerts();
+
+    await new ExecutionImpl(
+      inputFor(new ScriptedBroker([flattenFill('flatten-empty', 4)]), store, { overfill }),
+    ).ingestFills();
+
+    expect(overfill.warnings).toEqual([]);
+    expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-empty');
+  });
+
+  it('marks unprotected only the named lots a flatten left a residual on', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [
+      ['key-a', 10],
+      ['key-b', 10],
+    ]);
+    await journalFlatten(store, 'flatten-1', [
+      { idempotency_key: 'key-a', held: 10 },
+      { idempotency_key: 'key-b', held: 10 },
+    ]);
+    const broker = new ScriptedBroker([flattenFill('flatten-1', 10)]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    expect(store.writeLog.filter((line) => line.startsWith('mark-residual-unprotected'))).toEqual([
+      'mark-residual-unprotected:key-b',
+      'mark-residual-unprotected:key-b',
+    ]);
+    expect(store.writeLog.indexOf('mark-residual-unprotected:key-b')).toBeLessThan(
+      store.writeLog.indexOf('confirm-residual-protected:key-b'),
+    );
+  });
+
+  it('logs the exact redistribution line when marking a residual unprotected fails', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [
+      ['key-a', 10],
+      ['key-b', 10],
+    ]);
+    await journalFlatten(store, 'flatten-1', [
+      { idempotency_key: 'key-a', held: 10 },
+      { idempotency_key: 'key-b', held: 10 },
+    ]);
+    store.failMarkResidual = new Error('simulated marker outage');
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(
+      inputFor(new ScriptedBroker([flattenFill('flatten-1', 10)]), store, { logger }),
+    ).ingestFills();
+
+    expect(
+      logger.entries.filter(
+        (entry) =>
+          (entry.payload as { flatten_client_order_id?: string } | undefined)
+            ?.flatten_client_order_id === 'flatten-1',
+      ),
+    ).toEqual([
+      {
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'residual_mark_failed',
+        level: 'warn',
+        message:
+          'markResidualUnprotected failed during flatten redistribution — a crash before the ' +
+          "re-arm confirms would leave this lot's residual invisible to the #549 sweep",
+        payload: {
+          idempotency_key: 'key-b',
+          flatten_client_order_id: 'flatten-1',
+          error: 'simulated marker outage',
+        },
+      },
+    ]);
+  });
+
+  it('logs the exact line when the over-fill alert cannot be delivered', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [['key-1', 10]]);
+    await journalFlatten(store, 'flatten-1', [{ idempotency_key: 'key-1', held: 4 }]);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(
+      inputFor(new ScriptedBroker([flattenFill('flatten-1', 6)]), store, {
+        logger,
+        overfill: {
+          postFlattenOverfillWarning: async () => {
+            throw new Error('transport down');
+          },
+        },
+      }),
+    ).ingestFills();
+
+    expect(logger.entries).toContainEqual({
+      trace_id: 'trace-1',
+      stage: 'execution',
+      event: 'flatten_overfill_alert_send_failed',
+      level: 'warn',
+      message:
+        'flatten-overfill alert delivery failed — the overfill itself was still dropped as ' +
+        'designed; this only lost the diagnostic line about it',
+      payload: { flatten_client_order_id: 'flatten-1', unattributed_qty: 2 },
+    });
+  });
+
+  it('still warns an over-fill when the already-recorded check cannot read the store', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [['key-1', 10]]);
+    await journalFlatten(store, 'flatten-1', [{ idempotency_key: 'key-1', held: 4 }]);
+    store.failNextSplitHasFill = true;
+    const overfill = makeFlattenOverfillAlerts();
+
+    await new ExecutionImpl(
+      inputFor(new ScriptedBroker([flattenFill('flatten-1', 6)]), store, { overfill }),
+    ).ingestFills();
+
+    expect(overfill.warnings).toMatchObject([
+      { idempotency_key: 'flatten-1', unattributed_qty: 2 },
+    ]);
+  });
+
+  it('logs the exact unattributed line, and no send failure, when no unattributed channel is wired', async () => {
+    const store = scriptedStore();
+    const fills = await closedLotWithSecondFlatten(store);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(inputFor(new ScriptedBroker(fills), store, { logger })).ingestFills();
+
+    expect(logger.entries).toEqual([UNATTRIBUTED_LINE]);
+  });
+
+  it('logs the exact line when the unattributed alert cannot be delivered', async () => {
+    const store = scriptedStore();
+    const fills = await closedLotWithSecondFlatten(store);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(
+      inputFor(new ScriptedBroker(fills), store, {
+        logger,
+        unattributed: {
+          postUnattributedFlattenFillAlert: async () => {
+            throw new Error('transport down');
+          },
+        },
+      }),
+    ).ingestFills();
+
+    expect(logger.entries).toEqual([
+      UNATTRIBUTED_LINE,
+      {
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'unattributed_flatten_fill_alert_send_failed',
+        level: 'warn',
+        message:
+          'postUnattributedFlattenFillAlert delivery failed — see the unattributed_flatten_fill ' +
+          'entry above for the fill this concerns',
+        payload: { idempotency_key: 'key-1', broker_fill_id: 'f2:key-1' },
+      },
+    ]);
+  });
+
+  it('logs the exact line when booking an unattributed split fails', async () => {
+    const store = scriptedStore();
+    const fills = await closedLotWithSecondFlatten(store);
+    store.failAdvanceOfFillId = { id: 'f2:key-1', error: new Error('simulated split outage') };
+    const logger = recordingLogger();
+
+    await expect(
+      new ExecutionImpl(inputFor(new ScriptedBroker(fills), store, { logger })).ingestFills(),
+    ).rejects.toThrow("lot-advance 'key-1'");
+
+    expect(logger.entries).toEqual([
+      {
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'unattributed_flatten_fill_persist_failed',
+        level: 'error',
+        message: UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
+        payload: {
+          flatten_client_order_id: 'flatten-2',
+          idempotency_key: 'key-1',
+          broker_fill_id: 'f2:key-1',
+          qty: 4,
+          error: 'simulated split outage',
+        },
+      },
+    ]);
+  });
+
+  it('re-arms but does not resize on an exit-only poll that leaves the lot open', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [['key-1', 10]]);
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('x1'), leg: 'exit', qty: 4 }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    expect(broker.resizeCalls).toEqual([]);
+    expect(broker.rearmCalls).toEqual([
+      { clientOrderId: 'key-1', instrument: 'AAPL', side: 'buy', qty: 6, stop: 95, target: 110 },
+    ]);
+  });
+
+  it('resizes but does not re-arm, and logs nothing, on a partial entry-only poll', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([entryOf('key-1', 5)]);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(inputFor(broker, store, { logger })).ingestFills();
+
+    expect(broker.resizeCalls).toEqual([{ clientOrderId: 'key-1', filledQty: 5 }]);
+    expect(broker.rearmCalls).toEqual([]);
+    expect(store.writeLog.filter((line) => line.includes('residual'))).toEqual([]);
+    expect(logger.entries).toEqual([]);
+  });
+
+  it('neither resizes nor re-arms a lot that one poll both enters and closes', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10 });
+    const broker = new ScriptedBroker([
+      entryOf('key-1', 10),
+      fill({ broker_fill_id: toBrokerFillId('x1'), leg: 'exit', qty: 10, timestamp: FLATTEN_AT }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+    expect(broker.resizeCalls).toEqual([]);
+    expect(broker.rearmCalls).toEqual([]);
+    expect(store.writeLog.filter((line) => line.includes('residual'))).toEqual([]);
+  });
+
+  function cumulative(
+    id: string,
+    leg: NormalizedFill['leg'],
+    qty: number,
+    price: number,
+    at: string,
+  ): NormalizedFill {
+    return fill({
+      broker_fill_id: toBrokerFillId(id),
+      leg,
+      qty,
+      price,
+      fee: 0,
+      timestamp: new Date(at),
+      qty_is_cumulative: true,
+    });
+  }
+
+  it('re-arms, and does not resize, on a cumulative EXIT top-up', async () => {
+    const store = scriptedStore();
+    await seedFilledLots(store, [['key-1', 10]]);
+    const broker = new ScriptedBroker([cumulative('x1', 'exit', 2, 104, '2026-07-20T15:10:00Z')]);
+    const execution = new ExecutionImpl(makeInput(broker, store));
+    await execution.ingestFills();
+
+    broker.replaceFills([cumulative('x1', 'exit', 5, 104, '2026-07-20T15:20:00Z')]);
+    await execution.ingestFills();
+
+    expect(broker.resizeCalls).toEqual([]);
+    expect(broker.rearmCalls.map((call) => call.qty)).toEqual([8, 5]);
+  });
+
+  it('resizes, and neither re-arms nor logs, on a cumulative ENTRY top-up at a usable price', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 100 });
+    const broker = new ScriptedBroker([cumulative('c1', 'entry', 50, 100, '2026-07-20T15:00:00Z')]);
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(inputFor(broker, store, { logger }));
+    await execution.ingestFills();
+
+    broker.replaceFills([cumulative('c1', 'entry', 80, 101, '2026-07-20T15:30:00Z')]);
+    await execution.ingestFills();
+
+    expect(broker.resizeCalls.map((call) => call.filledQty)).toEqual([50, 80]);
+    expect(broker.rearmCalls).toEqual([]);
+    expect(logger.entries).toEqual([]);
+  });
+
+  it('logs the exact line when a cumulative top-up derives an unusable increment price', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 100 });
+    const broker = new ScriptedBroker([cumulative('c1', 'entry', 50, 100, '2026-07-20T15:00:00Z')]);
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(inputFor(broker, store, { logger }));
+    await execution.ingestFills();
+
+    broker.replaceFills([cumulative('c1', 'entry', 100, 40, '2026-07-20T15:30:00Z')]);
+    await execution.ingestFills();
+
+    expect(logger.entries).toEqual([
+      {
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'fill_topup_price_unusable',
+        level: 'warn',
+        message:
+          '#842: cumulative fill top-up produced an unusable increment price — booking the ' +
+          "quantity at the venue's cumulative average instead, so avg_entry_price is approximate",
+        payload: {
+          idempotency_key: 'key-1',
+          broker_fill_id: 'c1',
+          booked_qty: 50,
+          venue_cumulative_qty: 100,
+          derived_price: -20,
+        },
+      },
+    ]);
+    expect((await store.getFills('key-1')).at(-1)?.price).toBe(40);
+  });
+
+  it('says nothing about an open lot with no fills, however many polls pass', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10 });
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(inputFor(new ScriptedBroker([]), store, { logger }));
+
+    for (let poll = 0; poll < 4; poll += 1) await execution.ingestFills();
+
+    expect(logger.entries).toEqual([]);
+  });
+
+  it('warns the exact line for a wedged zero-fill lot, then logs the exact cleared line once it fills', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10, order_state: 'filled', filled_size: 0 });
+    const broker = new ScriptedBroker([]);
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(inputFor(broker, store, { logger }));
+
+    for (let poll = 0; poll < 3; poll += 1) await execution.ingestFills();
+    broker.replaceFills([entryOf('key-1', 10)]);
+    await execution.ingestFills();
+
+    expect(logger.entries).toEqual([
+      {
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'fill_priced_at_zero_size',
+        level: 'warn',
+        message: FILLED_WITH_ZERO_SIZE,
+        payload: {
+          idempotency_key: 'key-1',
+          instrument: 'AAPL',
+          order_state: 'filled',
+          stuck_ms: NOW.getTime() - OPENED_AT.getTime(),
+          consecutive: 3,
+        },
+      },
+      {
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'fill_zero_size_cleared',
+        level: 'info',
+        message: FILLED_ZERO_SIZE_CLEARED,
+        payload: { idempotency_key: 'key-1', instrument: 'AAPL' },
+      },
+    ]);
+  });
+
+  const USD_FEE_LINE = {
+    trace_id: 'trace-1',
+    stage: 'execution',
+    event: 'fee_currency_not_book_currency',
+    level: 'error',
+    message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
+    payload: {
+      trace_id: 'trace-1',
+      idempotency_key: 'key-1',
+      instrument: 'AAPL',
+      broker_fill_id: 'usd-1',
+      fee: 0.8,
+      fee_currency: 'USD',
+      book_currency: 'GBP',
+    },
+  };
+
+  function usdFill(): NormalizedFill {
+    return fill({ broker_fill_id: toBrokerFillId('usd-1'), qty: 5, fee: 0.8, fee_currency: 'USD' });
+  }
+
+  it('logs only the exact fee line when no fee channel is wired', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 5 });
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(
+      inputFor(new ScriptedBroker([usdFill()]), store, { logger }),
+    ).ingestFills();
+
+    expect(logger.entries).toEqual([USD_FEE_LINE]);
+  });
+
+  it('logs the exact send-failure line after the fee line when the fee page fails', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 5 });
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(
+      inputFor(new ScriptedBroker([usdFill()]), store, {
+        logger,
+        fees: {
+          postNonSterlingFeeAlert: async () => {
+            throw new Error('transport down');
+          },
+        },
+      }),
+    ).ingestFills();
+
+    expect(logger.entries).toEqual([
+      USD_FEE_LINE,
+      {
+        trace_id: 'trace-1',
+        stage: 'execution',
+        event: 'non_sterling_fee_alert_send_failed',
+        level: 'error',
+        message:
+          'postNonSterlingFeeAlert delivery failed — see the fee_currency_not_book_currency ' +
+          'entry above for the fill this concerns',
+        payload: { idempotency_key: 'key-1', broker_fill_id: 'usd-1' },
+      },
+    ]);
+  });
+
+  it('books a plain fill with no optional or cost fields present at all', async () => {
+    const store = scriptedStore();
+    await seedPosition(store, { requested_size: 10 });
+
+    await new ExecutionImpl(
+      makeInput(new ScriptedBroker([entryOf('key-1', 5)]), store),
+    ).ingestFills();
+
+    expect(store.advances[0]?.fills).toStrictEqual([
+      {
+        idempotency_key: 'key-1',
+        broker_fill_id: 'e-key-1',
+        leg: 'entry',
+        price: 100,
+        qty: 5,
+        fee: 1,
+        timestamp: new Date('2026-07-20T15:00:00Z'),
+      },
+    ]);
+  });
+
+  it("charges no modelled commission over a fill that carries the venue's own cost breakdown", async () => {
+    const store = scriptedStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      modelled_cost_breakdown: {
+        spread_cost: 0.5,
+        commission: 1,
+        slippage: 0.25,
+        market_impact: 0,
+      },
+    });
+    const own = { spread_cost: 0, commission: 0, slippage: 0, market_impact: 0 };
+
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([{ ...entryOf('key-1', 10), fee: 0, cost_breakdown: own }]),
+        store,
+      ),
+    ).ingestFills();
+
+    expect(store.advances[0]?.fills[0]).toMatchObject({ fee: 0, cost_breakdown: own });
+  });
+
+  it('fetches fills from the earliest open lot, whatever order the store returns them in', async () => {
+    const store = scriptedStore();
+    const opened: [string, number][] = [
+      ['key-mid', 60_000],
+      ['key-earliest', 0],
+      ['key-latest', 120_000],
+    ];
+    for (const [key, offset] of opened) {
+      await seedPosition(store, {
+        idempotency_key: key,
+        opened_at: new Date(OPENED_AT.getTime() + offset),
+      });
+    }
+    store.positionOrder = opened.map(([key]) => key);
+    const broker = new SinceRecordingBroker([]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    expect(broker.sinces).toEqual([OPENED_AT]);
+  });
+});

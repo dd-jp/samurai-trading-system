@@ -1,6 +1,5 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import type { Alerts } from '../apps/v2/alerts.js';
 import { alertsFor } from '../apps/v2/alerts.js';
 import type { SaxoKeepAliveState } from '../pipeline/execution/adapters/saxo-keepalive-state.js';
@@ -16,6 +15,7 @@ import type { SaxoSessionState } from '../pipeline/execution/adapters/saxo-token
 import { SaxoTokenRefresher } from '../pipeline/execution/adapters/saxo-token-source.js';
 import type { Clock, LogEntry, Logger } from '../shared/index.js';
 import { maskCredentials, SystemClock } from '../shared/index.js';
+import { runWhenInvoked } from './cli-entrypoint.js';
 
 export const WARN_WHEN_REFRESH_REMAINING_MS = 20 * 60_000;
 
@@ -184,11 +184,4 @@ export async function main(
   });
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2), process.env)
-    .then((code) => process.exit(code))
-    .catch((error: unknown) => {
-      process.stderr.write(`${messageOf(error)}\n`);
-      process.exit(1);
-    });
-}
+void runWhenInvoked(import.meta.url, () => main(process.argv.slice(2), process.env));
