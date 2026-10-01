@@ -124,34 +124,47 @@ export interface MutationGateDeps {
   readonly log: (line: string) => void;
 }
 
-export function runMutationGate(args: readonly string[], deps: MutationGateDeps): number {
-  const arg = args[0];
-  if (arg === '--help' || arg === '-h') {
-    printHelp(deps.log);
-    return 0;
-  }
-  const listOnly = arg === '--list';
-  const baseRef = (listOnly ? args[1] : arg) ?? DEFAULT_BASE_REF;
-  const { tradingPath, advisory } = partitionChangedFiles(deps.changedFiles(baseRef));
+type GateMode = 'help' | 'list' | 'run';
 
-  if (listOnly) {
-    for (const file of tradingPath) deps.log(file);
-    return 0;
-  }
+export function parseGateArgs(args: readonly string[]): { mode: GateMode; baseRef: string } {
+  const [arg, listBaseRef] = args;
+  if (arg === '--help' || arg === '-h') return { mode: 'help', baseRef: DEFAULT_BASE_REF };
+  if (arg === '--list') return { mode: 'list', baseRef: listBaseRef ?? DEFAULT_BASE_REF };
+  return { mode: 'run', baseRef: arg ?? DEFAULT_BASE_REF };
+}
 
+function strykerExitCode(result: Pick<SpawnSyncReturns<Buffer>, 'error' | 'status'>): number {
+  if (result.error) throw result.error;
+  return result.status ?? 1;
+}
+
+function mutateChanged(
+  tradingPath: readonly string[],
+  advisory: readonly string[],
+  baseRef: string,
+  deps: MutationGateDeps,
+): number {
   logAdvisory(advisory, deps.log);
-
   if (tradingPath.length === 0) {
     deps.log(`No trading-path files changed vs ${baseRef} — mutation gate skipped.`);
     return 0;
   }
-
   logTradingPath(tradingPath, baseRef, deps.log);
+  return strykerExitCode(deps.stryker(tradingPath));
+}
 
-  const result = deps.stryker(tradingPath);
-
-  if (result.error) throw result.error;
-  return result.status ?? 1;
+export function runMutationGate(args: readonly string[], deps: MutationGateDeps): number {
+  const { mode, baseRef } = parseGateArgs(args);
+  if (mode === 'help') {
+    printHelp(deps.log);
+    return 0;
+  }
+  const { tradingPath, advisory } = partitionChangedFiles(deps.changedFiles(baseRef));
+  if (mode === 'list') {
+    for (const file of tradingPath) deps.log(file);
+    return 0;
+  }
+  return mutateChanged(tradingPath, advisory, baseRef, deps);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

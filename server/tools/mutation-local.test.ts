@@ -8,6 +8,7 @@ import {
   isTradingPathFile,
   type MutationGateDeps,
   parseChangedFiles,
+  parseGateArgs,
   partitionChangedFiles,
   resolveMergeBase,
   runMutationGate,
@@ -87,6 +88,19 @@ function gateDeps(changed: readonly string[], status: number | null = 0) {
   };
   return { deps, lines, baseRefs, mutated };
 }
+
+describe('parseGateArgs', () => {
+  it.each([
+    [['--help'], { mode: 'help', baseRef: 'origin/main' }],
+    [['-h'], { mode: 'help', baseRef: 'origin/main' }],
+    [['--list'], { mode: 'list', baseRef: 'origin/main' }],
+    [['--list', 'base'], { mode: 'list', baseRef: 'base' }],
+    [[], { mode: 'run', baseRef: 'origin/main' }],
+    [['base'], { mode: 'run', baseRef: 'base' }],
+  ])('%j parses to %j', (args, expected) => {
+    expect(parseGateArgs(args)).toEqual(expected);
+  });
+});
 
 describe('runMutationGate', () => {
   it('prints help without reading the diff', () => {
