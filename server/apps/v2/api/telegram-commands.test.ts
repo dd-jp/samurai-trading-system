@@ -136,15 +136,37 @@ describe('authentication', () => {
     ]);
   });
 
-  it('refuses flatten and its confirmation from another chat', async () => {
+  it('refuses flatten and its confirmation from another chat, journalling the chat once', async () => {
     const handler = build();
-    await handler.handle(message('flatten', { chat: 999, from: 999 }));
-    await handler.handle(message(`flatten ${CODE}`, { chat: 999, from: 999 }));
+    expect(await handler.handle(message('flatten', { chat: 999, from: 999 }))).toBeUndefined();
+    expect(
+      await handler.handle(message(`flatten ${CODE}`, { chat: 999, from: 999 })),
+    ).toBeUndefined();
     expect(controlRows()).toEqual([]);
-    expect(journal().map((row) => row.outcome)).toEqual([
-      'refused_unauthorized',
-      'refused_unauthorized',
+    expect(journal().map((row) => row.outcome)).toEqual(['refused_unauthorized']);
+  });
+
+  it('journals a flood of 1000 stranger updates from one chat as one row, with the reason', async () => {
+    const handler = build();
+    for (let i = 0; i < 1000; i += 1) {
+      expect(await handler.handle(message('halt', { chat: 999, from: 999 }))).toBeUndefined();
+    }
+    expect(db.prepare('SELECT chat_id, outcome, detail FROM v2_commands').all()).toEqual([
+      { chat_id: '999', outcome: 'refused_unauthorized', detail: 'not the owner chat' },
     ]);
+    expect(await handler.handle(message('halt'))).toMatch(/^Paused/);
+  });
+
+  it('journals each stranger chat once per UTC day', async () => {
+    const handler = build();
+    await handler.handle(message('halt', { chat: 999, from: 999 }));
+    await handler.handle(message('halt', { chat: 888, from: 888 }));
+    advance(14 * 3_600_000 - 1);
+    await handler.handle(message('halt', { chat: 999, from: 999 }));
+    advance(1);
+    await handler.handle(message('halt', { chat: 999, from: 999 }));
+    await handler.handle(message('halt', { chat: 999, from: 999 }));
+    expect(journal().map((row) => row.chat_id)).toEqual(['999', '888', '999']);
   });
 
   it('refuses the owner id when it arrives in a group chat', async () => {
@@ -167,10 +189,7 @@ describe('authentication', () => {
     expect(await handler.handle(message('halt', { from: 7 }))).toBeUndefined();
     expect(await handler.handle(message('halt', { from: null }))).toBeUndefined();
     expect(controlRows()).toEqual([]);
-    expect(journal().map((row) => row.outcome)).toEqual([
-      'refused_unauthorized',
-      'refused_unauthorized',
-    ]);
+    expect(journal().map((row) => row.outcome)).toEqual(['refused_unauthorized']);
   });
 
   it('ignores an update with no message text and journals nothing', async () => {
@@ -248,7 +267,12 @@ describe('resume', () => {
     await handler.handle(message('halt'));
     advance(60_000);
     const reply = await handler.handle(message('resume'));
-    expect(reply).toMatch(/Resumed/);
+    expect(reply).toBe('Resumed: entries are allowed again from the next cycle.');
+    expect(controlRows()[1]).toEqual({
+      action: 'resume',
+      reason: 'Telegram resume command',
+      source: 'telegram',
+    });
     expect(controlState()).toBe('running');
     expect(journal().map((row) => row.outcome)).toEqual(['applied', 'applied']);
   });
@@ -264,7 +288,7 @@ describe('resume', () => {
 
   it('is a no-op when nothing is in force', async () => {
     const handler = build();
-    expect(await handler.handle(message('resume'))).toMatch(/Already running/);
+    expect(await handler.handle(message('resume'))).toBe('Already running.');
     expect(controlRows()).toEqual([]);
     expect(journal()[0]?.outcome).toBe('noop');
   });
@@ -275,8 +299,8 @@ describe('resume', () => {
     await handler.handle(message('halt'));
     advance(60_000);
     const reply = await handler.handle(message('resume'));
-    expect(reply).toMatch(
-      /loss-budget halt is still in force on debate\/primary; resume never lifts it/,
+    expect(reply).toBe(
+      'Resumed: entries are allowed again from the next cycle. The loss-budget halt is still in force on debate/primary; resume never lifts it.',
     );
     expect(controlState()).toBe('running');
     expect((await overview()).control.state).toBe('halted-loss-budget');
@@ -297,7 +321,55 @@ describe('resume', () => {
     await handler.handle(message('flatten'));
     await handler.handle(message(`flatten ${CODE}`));
     advance(60_000);
-    expect(await handler.handle(message('resume'))).toMatch(/pending flatten is cancelled/);
+    expect(await handler.handle(message('resume'))).toBe(
+      'Resumed: entries are allowed again from the next cycle. The pending flatten is cancelled.',
+    );
+  });
+
+  it('names every loss-budget-halted book, comma-separated', async () => {
+    const handler = build();
+    const real = overview;
+    overview = async () => {
+      const wire = await real();
+      return {
+        ...wire,
+        control: { ...wire.control, loss_budget_halted_books: ['debate/primary', 'signals/primary'] },
+      };
+    };
+    expect(await handler.handle(message('resume'))).toBe(
+      'Already running. The loss-budget halt is still in force on debate/primary, signals/primary; resume never lifts it.',
+    );
+  });
+
+  it('adds no loss-budget note to a resume refused by the rate limit', async () => {
+    const handler = build();
+    haltBudget();
+    await handler.handle(message('halt'));
+    advance(1_000);
+    expect(await handler.handle(message('resume'))).toBe(
+      'Refused: another control was set less than 10 seconds ago. Resend in 9 s.',
+    );
+  });
+
+  it('reports a control conflict as a failure without writing', async () => {
+    db = openSharedStore(':memory:');
+    const clock = { now: () => START };
+    const handler = new CommandHandler({
+      ownerChatId: OWNER,
+      clock,
+      controls: {
+        write: () => ({ kind: 'conflict', reason: 'idempotency_key was already used' }),
+      },
+      current: () => ({ state: 'paused' }) as ReturnType<ControlStore['current']>,
+      overview: () => Promise.reject(new Error('unused')),
+      log: new CommandLog(guardedStore(db, 'telegram', { enabled: true }), clock),
+      newCode: () => CODE,
+    });
+    nowMs = START.getTime();
+    expect(await handler.handle(message('resume'))).toBe(
+      'Refused: idempotency_key was already used.',
+    );
+    expect(journal().map((row) => row.outcome)).toEqual(['failed']);
   });
 
   it('does not mention a flatten after a plain pause', async () => {
