@@ -156,7 +156,7 @@ async function buildBracket(
   direction: TradeDirection,
   intentType: 'entry' | 'scale_in',
   diagnostics: TraderDiagnostic[],
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const { clock, config, debate, instrument, marketData, setupStore } = input;
   const arm = input.arm ?? 'live';
 
@@ -287,7 +287,7 @@ async function buildExitIntent(
   input: TraderInput,
   positions: HeldLots,
   exitKind: ExitKind,
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const { debate } = input;
   return buildFlattenExit(
     input,
@@ -398,7 +398,7 @@ async function buildFlattenExit(
   decisionBar: Date,
   attribution: ExitAttribution,
   exitKind: ExitKind,
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const exitReason: ExitReason = exitKind.reason;
   const { clock, config, exitFillSizes, instrument } = input;
   const arm = input.arm ?? 'live';
@@ -492,28 +492,31 @@ export interface TraderOutcome {
   diagnostics: readonly TraderDiagnostic[];
 }
 
+type RoutedOutcome = Omit<TraderOutcome, 'decision_class' | 'diagnostics'>;
+
 function skip(
   reason: TraderSkipReason,
   reason_detail: TraderReasonDetail | null = null,
-): TraderOutcome {
-  return {
-    intent: null,
-    skip_reason: reason,
-    decision_class: null,
-    reason_detail,
-    atr: null,
-    diagnostics: [],
-  };
+): RoutedOutcome {
+  return { intent: null, skip_reason: reason, reason_detail, atr: null };
 }
 
-function emit(intent: OrderIntent, atr: number | null): TraderOutcome {
+function emit(intent: OrderIntent, atr: number | null): RoutedOutcome {
+  return { intent, skip_reason: null, reason_detail: null, atr };
+}
+
+function classifiedOutcome(
+  outcome: RoutedOutcome,
+  classify: (skip_reason: TraderSkipReason) => TraderDecisionClass,
+  diagnostics: readonly TraderDiagnostic[],
+): TraderOutcome {
   return {
-    intent,
-    skip_reason: null,
-    decision_class: null,
-    reason_detail: null,
-    atr,
-    diagnostics: [],
+    intent: outcome.intent,
+    skip_reason: outcome.skip_reason,
+    decision_class: outcome.skip_reason === null ? null : classify(outcome.skip_reason),
+    reason_detail: outcome.reason_detail,
+    atr: outcome.atr,
+    diagnostics,
   };
 }
 
@@ -524,21 +527,17 @@ export async function decide(input: TraderInput): Promise<OrderIntent | null> {
 export async function decideWithReason(input: TraderInput): Promise<TraderOutcome> {
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeDecision(input, diagnostics);
-
-  const decision_class =
-    outcome.skip_reason === null ? null : classifyDecision(outcome.skip_reason, input.debate);
-
-  return {
-    ...outcome,
-    decision_class,
+  return classifiedOutcome(
+    outcome,
+    (skip_reason) => classifyDecision(skip_reason, input.debate),
     diagnostics,
-  };
+  );
 }
 
 function entryFromFlat(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],
-): TraderOutcome | Promise<TraderOutcome> {
+): RoutedOutcome | Promise<RoutedOutcome> {
   const { direction } = input.debate;
   if (direction === 'neutral') return skip('neutral_direction_while_flat');
   return buildBracket(input, direction, 'entry', diagnostics);
@@ -547,7 +546,7 @@ function entryFromFlat(
 async function routeDecision(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const { config, debate, instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
@@ -606,17 +605,7 @@ export type ExitCheckInput = Pick<
 export async function checkExitsWithReason(input: ExitCheckInput): Promise<TraderOutcome> {
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeExitCheck(input, diagnostics);
-  const decision_class =
-    outcome.skip_reason === null ? null : classifyExitCheckSkip(outcome.skip_reason);
-  return {
-    ...outcome,
-    decision_class,
-    diagnostics,
-  };
-}
-
-function classifyExitCheckSkip(skip_reason: TraderSkipReason): TraderDecisionClass {
-  return SKIP_REASON_CLASS[skip_reason];
+  return classifiedOutcome(outcome, (skip_reason) => SKIP_REASON_CLASS[skip_reason], diagnostics);
 }
 
 type ExitPositionContext = {
@@ -627,7 +616,7 @@ type ExitPositionContext = {
 
 async function resolveExitPositionContext(
   input: ExitCheckInput,
-): Promise<{ ok: true; context: ExitPositionContext } | { ok: false; outcome: TraderOutcome }> {
+): Promise<{ ok: true; context: ExitPositionContext } | { ok: false; outcome: RoutedOutcome }> {
   const { instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
@@ -640,7 +629,7 @@ async function resolveExitPositionContext(
 async function routeExitCheck(
   input: ExitCheckInput,
   diagnostics: TraderDiagnostic[],
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const { instrument } = input;
 
   const resolved = await resolveExitPositionContext(input);
