@@ -533,3 +533,118 @@ describe('#949 — equity_ceiling refuses on currency mismatch, UNCONDITIONALLY,
     expect(decision.binding_constraint).toBeNull();
   });
 });
+
+describe('D5 refusal wording and the generic caps it replaces', () => {
+  const messageOf = (run: () => unknown): string => {
+    try {
+      run();
+    } catch (error) {
+      if (error instanceof PerSubclassCapUnresolvableError) return error.message;
+      throw error;
+    }
+    throw new Error('expected a PerSubclassCapUnresolvableError');
+  };
+
+  const tightGenericCaps = (cap: SubclassDeploymentCap): RiskConfig => ({
+    ...configWith(cap),
+    max_position_size_fraction_of_equity: 0.001,
+    per_asset_cap_fraction_of_equity: 0.002,
+  });
+
+  const evaluateWith = (config: RiskConfig, instrument: string) =>
+    new RiskManagerImpl(config).evaluate({
+      trace_id: 'trace-d5',
+      intent: intentFor(instrument, 10_000),
+      clock: CLOCK,
+      portfolio: portfolioWith({}),
+      breakers: NO_BREAKERS,
+      next_breaker_state: NO_PERSISTED_BREAKERS,
+      correlation: NO_CORRELATION,
+      cii: {},
+      mode: 'paper',
+    });
+
+  it('lets a D5 envelope replace the per-trade and per-asset caps for an instrument it sizes', () => {
+    const decision = evaluateWith(tightGenericCaps(DEPLOYMENT_CAP), '3USL');
+
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
+  });
+
+  it('keeps the per-trade cap for a subclass D5 measured no envelope for', () => {
+    const decision = evaluateWith(tightGenericCaps(DEPLOYMENT_CAP), 'BTC-USD');
+
+    expect(decision.binding_constraint).toBe('per_trade_size_cap');
+    expect(finalSizeOf(decision)).toBeCloseTo(100, 6);
+  });
+
+  it('keeps the generic caps when no envelope is declared', () => {
+    const { per_subclass_deployment_cap: _, ...withoutD5 } = tightGenericCaps(DEPLOYMENT_CAP);
+    const decision = evaluateWith(withoutD5, '3USL');
+
+    expect(decision.binding_constraint).toBe('per_trade_size_cap');
+  });
+
+  it('lists the known instruments in the unclassified refusal, or says none', () => {
+    expect(messageOf(() => decide(intentFor('SPY', 10_000)))).toBe(
+      'per_subclass_deployment_cap is declared but SPY has no subclass (known: 3USL, 3UKL, ' +
+        "3LAP, BTC-USD). ADR-0018 D5's deployment envelope cannot be resolved without one, and " +
+        'the alternative to this throw is sizing the position with no envelope at all. Add the ' +
+        'instrument to the pool file.',
+    );
+    const empty = { subclass_of: {}, cap_fraction_of_equity: {} } as SubclassDeploymentCap;
+    expect(messageOf(() => decide(intentFor('SPY', 10_000), {}, empty))).toContain(
+      '(known: none).',
+    );
+  });
+
+  it('lists the known subclasses in the missing-cap refusal, or says none', () => {
+    const holed = {
+      subclass_of: SUBCLASS_OF,
+      cap_fraction_of_equity: { crypto: null },
+    } as unknown as SubclassDeploymentCap;
+    expect(messageOf(() => decide(intentFor('3USL', 10_000), {}, holed))).toBe(
+      "per_subclass_deployment_cap declares 3USL as 'index_etp_3x' but carries no cap for that " +
+        "subclass (known: crypto). ADR-0018 D5's envelope cannot be resolved without one, and " +
+        'the alternative to this throw is sizing the position with no envelope at all. Add the ' +
+        'subclass to the cap record.',
+    );
+    const bare = { subclass_of: SUBCLASS_OF, cap_fraction_of_equity: {} } as SubclassDeploymentCap;
+    expect(messageOf(() => decide(intentFor('3USL', 10_000), {}, bare))).toContain(
+      '(known: none).',
+    );
+  });
+
+  it('words the equity_ceiling currency refusal exactly', () => {
+    const unverified: SubclassDeploymentCap = {
+      ...DEPLOYMENT_CAP,
+      equity_ceiling: { book: 1_000, refuse_above_tolerance: 0.05 },
+    };
+    expect(messageOf(() => decide(intentFor('3USL', 10_000), {}, unverified, 900))).toBe(
+      'per_subclass_deployment_cap: currency mismatch, cannot verify funding — ' +
+        "equity_ceiling's declared book (1000) is GBP but portfolio.equity (900) is read from " +
+        "Alpaca's USD-denominated GET /v2/account. #1180 added a configured GBP->USD rate for " +
+        'the SIZING inlet and deliberately did not arm this comparison with it: a rate error ' +
+        "is proportional at the Trader's ask and absolute here, where it decides a total " +
+        'refusal against a few percent of tolerance. Refusing to arm rather than silently ' +
+        'compare GBP to USD. Resolve with a live FX-rate feed, or by running a venue whose ' +
+        "account read reports the book's own currency — Saxo GET /port/v1/balances, wired as " +
+        'saxoFunding (#1509), which arms equity_ceiling.same_currency_verified via ' +
+        'armSameCurrencyCeilings when it does.',
+    );
+  });
+
+  it('words the equity_ceiling over-funding refusal exactly', () => {
+    const verified: SubclassDeploymentCap = {
+      ...DEPLOYMENT_CAP,
+      equity_ceiling: { book: 1_000, refuse_above_tolerance: 0.05, same_currency_verified: true },
+    };
+    expect(messageOf(() => decide(intentFor('3USL', 10_000), {}, verified, 2_000))).toBe(
+      "per_subclass_deployment_cap's declared book is 1000 but portfolio.equity is 2000, more " +
+        "than 5% above it. ADR-0018 D5's envelope was measured against the declared book " +
+        '(#888), and an account funded this far past it invalidates every sizing assumption ' +
+        'built on that book, not just this one fraction. Refusing to size this entry — re-fund ' +
+        'the account down to the declared book, or raise the book deliberately.',
+    );
+  });
+});
