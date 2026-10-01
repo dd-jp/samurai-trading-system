@@ -56,6 +56,16 @@ describe('CommandLog', () => {
     expect(commands.has(42)).toBe(false);
   });
 
+  it('knows whether a chat was refused at or after a time', () => {
+    const commands = log();
+    commands.record({ ...entry, chatId: '999', outcome: 'refused_unauthorized' });
+    commands.record({ ...entry, updateId: 42, chatId: '888', outcome: 'applied' });
+    expect(commands.refusedSince('999', HANDLED_AT)).toBe(true);
+    expect(commands.refusedSince('999', new Date(HANDLED_AT.getTime() + 1))).toBe(false);
+    expect(commands.refusedSince('777', SENT_AT)).toBe(false);
+    expect(commands.refusedSince('888', SENT_AT)).toBe(false);
+  });
+
   it('refuses a second row for the same update', () => {
     const commands = log();
     commands.record(entry);

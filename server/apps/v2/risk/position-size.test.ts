@@ -27,6 +27,12 @@ describe('positionSizeShares', () => {
     expect(positionSizeShares({ ...base, stopAtrMultiple: 2.5 })).toBe(8);
   });
 
+  it('risks the wider of the ATR stop and the entry-to-stop distance (#1815)', () => {
+    expect(positionSizeShares({ ...base, entryToStopGbp: 0.625 })).toBe(8);
+    expect(positionSizeShares({ ...base, entryToStopGbp: 0.4 })).toBe(10);
+    expect(positionSizeShares({ ...base, entryToStopGbp: undefined })).toBe(10);
+  });
+
   it('caps notional at 10% of equity', () => {
     expect(MAX_POSITION_FRACTION_OF_EQUITY).toBe(0.1);
     expect(positionSizeShares({ ...base, atrGbp: 0.01 })).toBe(10);

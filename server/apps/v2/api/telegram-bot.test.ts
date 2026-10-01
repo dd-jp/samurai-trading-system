@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type BotFetch,
   type BotResponse,
@@ -11,15 +11,21 @@ const TOKEN = '123456789:AAH-test-token-abcdefghijklmnop';
 
 interface Call {
   url: string;
+  method: string;
+  headers: Record<string, string>;
   body: Record<string, unknown>;
   signal: AbortSignal;
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 function scripted(...responses: (BotResponse | Error)[]): { fetchImpl: BotFetch; calls: Call[] } {
   const calls: Call[] = [];
   const fetchImpl: BotFetch = (url, init) => {
     calls.push({
       url,
+      method: init.method,
+      headers: init.headers,
       body: JSON.parse(init.body) as Record<string, unknown>,
       signal: init.signal,
     });
@@ -55,7 +61,10 @@ describe('TelegramBot.getUpdates', () => {
 
   it('drops entries that are not updates', async () => {
     const { fetchImpl } = scripted(
-      answer({ ok: true, result: [null, 'x', {}, { update_id: 'a' }, { update_id: 3 }] }),
+      answer({
+        ok: true,
+        result: [null, undefined, 'x', {}, { update_id: 'a' }, { update_id: 3 }],
+      }),
     );
     const updates = await new TelegramBot(TOKEN, fetchImpl).getUpdates(
       undefined,
@@ -90,6 +99,69 @@ describe('TelegramBot.getUpdates', () => {
     expect(String((failure as Error).stack)).not.toContain(TOKEN);
   });
 
+  it('carries the status and no retry_after on a plain refusal', async () => {
+    const { fetchImpl } = scripted(answer({ ok: false, error_code: 401 }, 401));
+    const failure = await new TelegramBot(TOKEN, fetchImpl)
+      .getUpdates(undefined, new AbortController().signal)
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ status: 401, retryAfterSeconds: undefined });
+  });
+
+  it("carries a 429's retry_after through the error", async () => {
+    const { fetchImpl } = scripted(
+      answer({ ok: false, error_code: 429, parameters: { retry_after: 37 } }, 429),
+    );
+    const failure = await new TelegramBot(TOKEN, fetchImpl)
+      .getUpdates(undefined, new AbortController().signal)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(TelegramApiError);
+    expect(failure).toMatchObject({
+      message: 'Telegram getUpdates answered 429',
+      status: 429,
+      retryAfterSeconds: 37,
+    });
+  });
+
+  it.each([
+    ['a zero', { parameters: { retry_after: 0 } }],
+    ['a negative', { parameters: { retry_after: -5 } }],
+    ['a fractional', { parameters: { retry_after: 1.5 } }],
+    ['a string', { parameters: { retry_after: '30' } }],
+    ['no parameters', {}],
+    ['a null body', null],
+  ])('ignores %s retry_after', async (_label, body) => {
+    const { fetchImpl } = scripted(answer(body, 429));
+    const failure = await new TelegramBot(TOKEN, fetchImpl)
+      .getUpdates(undefined, new AbortController().signal)
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ status: 429, retryAfterSeconds: undefined });
+  });
+
+  it('still names the status when the refusal body is not JSON', async () => {
+    const { fetchImpl } = scripted({
+      ok: false,
+      status: 502,
+      json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+    });
+    const failure = await new TelegramBot(TOKEN, fetchImpl)
+      .getUpdates(undefined, new AbortController().signal)
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      message: 'Telegram getUpdates answered 502',
+      status: 502,
+      retryAfterSeconds: undefined,
+    });
+  });
+
+  it('posts JSON and gives the long poll 15 s beyond its own timeout', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const { fetchImpl, calls } = scripted(answer({ ok: true, result: [] }));
+    await new TelegramBot(TOKEN, fetchImpl).getUpdates(undefined, new AbortController().signal);
+    expect(timeout).toHaveBeenCalledWith(45_000);
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.headers).toEqual({ 'content-type': 'application/json' });
+  });
+
   it('aborts the request when shutdown fires', async () => {
     const { fetchImpl, calls } = scripted(answer({ ok: true, result: [] }));
     const controller = new AbortController();
@@ -106,6 +178,8 @@ describe('TelegramBot.sendMessage', () => {
     await new TelegramBot(TOKEN, fetchImpl).sendMessage(55, 'hello');
     expect(calls[0]?.url).toBe(`https://api.telegram.org/bot${TOKEN}/sendMessage`);
     expect(calls[0]?.body).toEqual({ chat_id: 55, text: 'hello' });
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.headers).toEqual({ 'content-type': 'application/json' });
   });
 
   it('masks credentials and stays under the 4096 character limit', async () => {
