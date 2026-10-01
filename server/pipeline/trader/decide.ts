@@ -135,6 +135,15 @@ function decisionBarFor(debate: DebateResult): Date {
   return debate.bar_timestamp;
 }
 
+export function isBookValuationRefusal(error: unknown): boolean {
+  return (
+    error instanceof BookValuationError ||
+    (error instanceof AggregateError &&
+      error.errors.length > 0 &&
+      error.errors.every((member: unknown) => member instanceof BookValuationError))
+  );
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: sequential skip-guard chain (valuation, conviction, flatten window, ATR, mark, sizing) with each guard's position relative to the others explicitly documented and load-bearing; extracting risks silently reordering a guard
 async function buildBracket(
   input: TraderInput,
@@ -149,12 +158,7 @@ async function buildBracket(
   try {
     equity = await input.equity();
   } catch (error) {
-    const isValuationRefusal =
-      error instanceof BookValuationError ||
-      (error instanceof AggregateError &&
-        error.errors.length > 0 &&
-        error.errors.every((member: unknown) => member instanceof BookValuationError));
-    if (arm === 'control' && isValuationRefusal) {
+    if (arm === 'control' && isBookValuationRefusal(error)) {
       diagnostics.push({
         kind: 'control_arm_valuation_refused',
         asset_class: undefined,
@@ -530,6 +534,15 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   };
 }
 
+function entryFromFlat(
+  input: TraderInput,
+  diagnostics: TraderDiagnostic[],
+): TraderOutcome | Promise<TraderOutcome> {
+  const { direction } = input.debate;
+  if (direction === 'neutral') return skip('neutral_direction_while_flat');
+  return buildBracket(input, direction, 'entry', diagnostics);
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: position-state routing where branch ORDER is the safety property (flat-by-close must precede every other holding branch, see comment below) — extracting risks silently reordering a branch
 async function routeDecision(
   input: TraderInput,
@@ -539,10 +552,7 @@ async function routeDecision(
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
 
-  if (positions.length === 0) {
-    if (debate.direction === 'neutral') return skip('neutral_direction_while_flat');
-    return buildBracket(input, debate.direction, 'entry', diagnostics);
-  }
+  if (positions.length === 0) return entryFromFlat(input, diagnostics);
 
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) return skip('no_position_side');

@@ -72,169 +72,193 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   };
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each branch below resolves a distinct venue-evidence shape (never-landed, terminally-refused, wedged-working, resolved-then-fresher-answer) and several are explicitly ordered relative to their store writes (see "on purpose, not merely after" below) — extracting a branch risks reordering a write relative to a return that hazard depends on
+type ResumedFlatten = NonNullable<Awaited<ReturnType<ReconcileInput['broker']['resumeFlatten']>>>;
+
+export function flattenDivergence(
+  row: UnresolvedFlattenSubmission,
+  storeState: OrderState,
+  brokerState: OrderState | null,
+  action: ReconcileDivergence['action'],
+  reason: string,
+): ReconcileDivergence {
+  return {
+    idempotency_key: row.idempotency_key,
+    instrument: row.instrument,
+    store_state: storeState,
+    broker_state: brokerState,
+    action,
+    kind: 'flatten',
+    reason,
+  };
+}
+
+export function flattenStoreState(row: UnresolvedFlattenSubmission): OrderState {
+  return row.status === 'submitting' ? 'pending' : 'submitted';
+}
+
 async function reconcileFlatten(
   input: ReconcileInput,
   row: UnresolvedFlattenSubmission,
   now: Date,
   storePositions: readonly OpenPosition[],
 ): Promise<ReconcileDivergence> {
-  const { broker, store } = input;
-  const storeState: OrderState = row.status === 'submitting' ? 'pending' : 'submitted';
+  const storeState = flattenStoreState(row);
 
-  let order: Awaited<ReturnType<typeof broker.resumeFlatten>>;
+  let order: Awaited<ReturnType<typeof input.broker.resumeFlatten>>;
   try {
-    order = await broker.resumeFlatten(row.idempotency_key, row.instrument);
+    order = await input.broker.resumeFlatten(row.idempotency_key, row.instrument);
   } catch (error) {
-    if (
-      row.order_state === null &&
-      now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS
-    ) {
-      return await cancelNeverConfirmedFlatten(input, row, now, storePositions, {
-        storeState,
-        resumeError: describeThrownSafely(error),
-      });
-    }
-
-    const reason = describeThrownSafely(error);
-    await postFlattenReconcileAlert(input, row, reason, now);
-    return {
-      idempotency_key: row.idempotency_key,
-      instrument: row.instrument,
-      store_state: storeState,
-      broker_state: null,
-      action: 'undetermined',
-      kind: 'flatten',
-      reason,
-    };
+    return await reconcileUnreadableFlatten(input, row, now, storePositions, storeState, error);
   }
 
-  if (order === null) {
-    if (row.status === 'submitting') {
-      const reason =
-        'reconcile: broker has no order under this client_order_id — the write-ahead never landed';
-      await store.resolveFlattenError(row.idempotency_key, reason, now);
-      return {
-        idempotency_key: row.idempotency_key,
-        instrument: row.instrument,
-        store_state: storeState,
-        broker_state: null,
-        action: 'rejected',
-        kind: 'flatten',
-        reason,
-      };
-    }
-
-    const age = now.getTime() - row.submitted_at.getTime();
-    const provenance =
-      `flatten '${row.idempotency_key}' was previously acked by the broker (a durable ` +
-      "'submitted' journal row exists) but the venue now reports no such order";
-    if (age >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
-      const reason =
-        `${provenance}. The row has been unresolved for ${Math.round(age / 1_000)}s — past the ` +
-        `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound, so the journal row is resolved to ` +
-        'stop it blocking every later flatten on this instrument. This is a DECISION on one ' +
-        'unanswered check against a row that old, not proof the flatten is dead, and not a ' +
-        'record of repeated denial (nothing counts how often the venue was asked): check the ' +
-        'venue by hand, and note that a fill arriving later is still attributed to the lots ' +
-        'this flatten named (getFlattenAttribution does not filter on status)';
-      await postFlattenReconcileAlert(input, row, reason, now);
-      await store.resolveFlattenError(row.idempotency_key, reason, now);
-      return {
-        idempotency_key: row.idempotency_key,
-        instrument: row.instrument,
-        store_state: storeState,
-        broker_state: null,
-        action: 'rejected',
-        kind: 'flatten',
-        reason,
-      };
-    }
-    const reason = `${provenance} — leaving the journal untouched; check the venue by hand`;
-    await postFlattenReconcileAlert(input, row, reason, now);
-    return {
-      idempotency_key: row.idempotency_key,
-      instrument: row.instrument,
-      store_state: storeState,
-      broker_state: null,
-      action: 'undetermined',
-      kind: 'flatten',
-      reason,
-    };
-  }
+  if (order === null) return await reconcileMissingFlatten(input, row, now, storeState);
 
   if (TERMINAL_ORDER_STATES.includes(order.order_state) && order.filled_qty === 0) {
     const reason =
       `reconcile: the venue reports this flatten '${order.order_state}' having filled nothing — ` +
       'it closed no quantity and never will, so the journal row is resolved rather than left ' +
       'standing as an in-flight flatten on the instrument';
-    await store.resolveFlattenError(row.idempotency_key, reason, now);
-    return {
-      idempotency_key: row.idempotency_key,
-      instrument: row.instrument,
-      store_state: storeState,
-      broker_state: order.order_state,
-      action: 'rejected',
-      kind: 'flatten',
-      reason,
-    };
+    await input.store.resolveFlattenError(row.idempotency_key, reason, now);
+    return flattenDivergence(row, storeState, order.order_state, 'rejected', reason);
   }
 
-  if (row.status === 'submitting') {
-    await store.resolveFlattenSubmitted(
-      row.idempotency_key,
-      { order_state: order.order_state, broker_order_ids: order.broker_order_ids },
-      now,
-    );
-  } else {
-    await store.recordFlattenOrderStateObserved(row.idempotency_key, {
-      order_state: order.order_state,
-      broker_order_ids: order.broker_order_ids,
+  await recordObservedFlattenState(input, row, order, now);
+  return await reconcileObservedFlatten(input, row, order, now, storePositions, storeState);
+}
+
+async function reconcileUnreadableFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  now: Date,
+  storePositions: readonly OpenPosition[],
+  storeState: OrderState,
+  error: unknown,
+): Promise<ReconcileDivergence> {
+  if (
+    row.order_state === null &&
+    now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS
+  ) {
+    return await cancelNeverConfirmedFlatten(input, row, now, storePositions, {
+      storeState,
+      resumeError: describeThrownSafely(error),
     });
   }
 
+  const reason = describeThrownSafely(error);
+  await postFlattenReconcileAlert(input, row, reason, now);
+  return flattenDivergence(row, storeState, null, 'undetermined', reason);
+}
+
+async function reconcileMissingFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  now: Date,
+  storeState: OrderState,
+): Promise<ReconcileDivergence> {
+  if (row.status === 'submitting') {
+    const reason =
+      'reconcile: broker has no order under this client_order_id — the write-ahead never landed';
+    await input.store.resolveFlattenError(row.idempotency_key, reason, now);
+    return flattenDivergence(row, storeState, null, 'rejected', reason);
+  }
+
+  const age = now.getTime() - row.submitted_at.getTime();
+  const provenance =
+    `flatten '${row.idempotency_key}' was previously acked by the broker (a durable ` +
+    "'submitted' journal row exists) but the venue now reports no such order";
+  if (age >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
+    const reason =
+      `${provenance}. The row has been unresolved for ${Math.round(age / 1_000)}s — past the ` +
+      `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound, so the journal row is resolved to ` +
+      'stop it blocking every later flatten on this instrument. This is a DECISION on one ' +
+      'unanswered check against a row that old, not proof the flatten is dead, and not a ' +
+      'record of repeated denial (nothing counts how often the venue was asked): check the ' +
+      'venue by hand, and note that a fill arriving later is still attributed to the lots ' +
+      'this flatten named (getFlattenAttribution does not filter on status)';
+    await postFlattenReconcileAlert(input, row, reason, now);
+    await input.store.resolveFlattenError(row.idempotency_key, reason, now);
+    return flattenDivergence(row, storeState, null, 'rejected', reason);
+  }
+  const reason = `${provenance} — leaving the journal untouched; check the venue by hand`;
+  await postFlattenReconcileAlert(input, row, reason, now);
+  return flattenDivergence(row, storeState, null, 'undetermined', reason);
+}
+
+async function recordObservedFlattenState(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  order: ResumedFlatten,
+  now: Date,
+): Promise<void> {
+  const observed = { order_state: order.order_state, broker_order_ids: order.broker_order_ids };
+  if (row.status === 'submitting') {
+    await input.store.resolveFlattenSubmitted(row.idempotency_key, observed, now);
+  } else {
+    await input.store.recordFlattenOrderStateObserved(row.idempotency_key, observed);
+  }
+}
+
+async function reconcileObservedFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  order: ResumedFlatten,
+  now: Date,
+  storePositions: readonly OpenPosition[],
+  storeState: OrderState,
+): Promise<ReconcileDivergence> {
   const adopted = `flatten journal said '${row.status}'; broker reports '${order.order_state}'`;
 
-  if (TERMINAL_ORDER_STATES.includes(order.order_state)) {
-    const firstSeen = row.terminal_unswept_checked_at;
-    if (firstSeen === null) {
-      await store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
-    } else if (now.getTime() - firstSeen.getTime() >= UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS) {
-      return await judgeTerminalUnsweptFlatten(
-        input,
-        row,
-        order,
-        firstSeen,
-        storePositions,
-        storeState,
-        now,
-      );
-    }
-  }
+  const judged = await judgeTerminalUnsweptWhenDue(
+    input,
+    row,
+    order,
+    now,
+    storePositions,
+    storeState,
+  );
+  if (judged !== undefined) return judged;
 
   const working = !TERMINAL_ORDER_STATES.includes(order.order_state);
   if (working && now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
     return {
-      idempotency_key: row.idempotency_key,
-      instrument: row.instrument,
-      store_state: storeState,
-      broker_state: order.order_state,
-      action: 'adopted',
-      kind: 'flatten',
-      reason: `${adopted}; ${await cancelWedgedFlatten(input, row, order.order_state, now)}`,
+      ...flattenDivergence(
+        row,
+        storeState,
+        order.order_state,
+        'adopted',
+        `${adopted}; ${await cancelWedgedFlatten(input, row, order.order_state, now)}`,
+      ),
       escalation: 'wedge_cancelled',
     };
   }
 
-  return {
-    idempotency_key: row.idempotency_key,
-    instrument: row.instrument,
-    store_state: storeState,
-    broker_state: order.order_state,
-    action: 'adopted',
-    kind: 'flatten',
-    reason: adopted,
-  };
+  return flattenDivergence(row, storeState, order.order_state, 'adopted', adopted);
+}
+
+async function judgeTerminalUnsweptWhenDue(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  order: ResumedFlatten,
+  now: Date,
+  storePositions: readonly OpenPosition[],
+  storeState: OrderState,
+): Promise<ReconcileDivergence | undefined> {
+  if (!TERMINAL_ORDER_STATES.includes(order.order_state)) return undefined;
+  const firstSeen = row.terminal_unswept_checked_at;
+  if (firstSeen === null) {
+    await input.store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
+    return undefined;
+  }
+  if (now.getTime() - firstSeen.getTime() < UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS) return undefined;
+  return await judgeTerminalUnsweptFlatten(
+    input,
+    row,
+    order,
+    firstSeen,
+    storePositions,
+    storeState,
+    now,
+  );
 }
 
 async function cancelWedgedFlatten(
