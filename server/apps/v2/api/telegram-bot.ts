@@ -17,7 +17,25 @@ export type BotFetch = (
   init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
 ) => Promise<BotResponse>;
 
-export class TelegramApiError extends Error {}
+export class TelegramApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly retryAfterSeconds?: number,
+  ) {
+    super(message);
+  }
+}
+
+async function retryAfterOf(response: BotResponse): Promise<number | undefined> {
+  const body = (await response.json().catch(() => undefined)) as
+    | { parameters?: { retry_after?: unknown } }
+    | undefined;
+  const retryAfter = body?.parameters?.retry_after;
+  return Number.isInteger(retryAfter) && (retryAfter as number) > 0
+    ? (retryAfter as number)
+    : undefined;
+}
 
 function isUpdate(candidate: unknown): candidate is TelegramUpdate {
   return (
@@ -70,7 +88,13 @@ export class TelegramBot {
     } catch {
       throw new TelegramApiError(`Telegram ${method} did not complete`);
     }
-    if (!response.ok) throw new TelegramApiError(`Telegram ${method} answered ${response.status}`);
+    if (!response.ok) {
+      throw new TelegramApiError(
+        `Telegram ${method} answered ${response.status}`,
+        response.status,
+        await retryAfterOf(response),
+      );
+    }
     return response.json();
   }
 }
