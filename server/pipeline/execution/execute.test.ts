@@ -2741,19 +2741,21 @@ describe('#1001: submit-time quote and decision price', () => {
       ).execute(makeGo());
 
       expect(result.status).toBe('submitted');
-      const calls = vi.mocked(costModel.fill).mock.calls;
-      const entryRequest = calls[0]?.[0];
-      const protectiveRequest = calls[1]?.[0];
-      expect(entryRequest?.side).toBe('buy');
-      expect(protectiveRequest?.side).toBe('sell');
-      expect(protectiveRequest?.order_type).toBe('market');
-      expect(protectiveRequest?.limit_price).toBeUndefined();
-      expect(protectiveRequest?.size).toBe(entryRequest?.size);
-      expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
+      type FillCall = Parameters<CostModel['fill']>;
+      const [[entryRequest, entryState], [protectiveRequest, protectiveState]] = vi.mocked(
+        costModel.fill,
+      ).mock.calls as unknown as [FillCall, FillCall];
+      expect(entryRequest.side).toBe('buy');
+      expect(protectiveRequest.side).toBe('sell');
+      expect(protectiveRequest.order_type).toBe('market');
+      expect(protectiveRequest.limit_price).toBeUndefined();
+      expect(protectiveRequest.size).toBe(entryRequest.size);
+      expect(protectiveState).toBe(entryState);
 
-      const position = await store.getPosition('key-aapl-1355');
-      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
-      expect(position?.modelled_protective_exit_cost_breakdown).toEqual(protectiveBreakdown);
+      expect(await store.getPosition('key-aapl-1355')).toMatchObject({
+        modelled_cost_breakdown: modelledCostBreakdown,
+        modelled_protective_exit_cost_breakdown: protectiveBreakdown,
+      });
     });
   });
 

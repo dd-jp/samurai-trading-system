@@ -204,17 +204,18 @@ describe('decide — entry bracket', () => {
   it('generates a full bracket with entry, stop, and target for a qualifying debate', async () => {
     const intent = await decide(traderInput());
 
-    expect(intent).not.toBeNull();
-    expect(intent?.instrument).toBe(INSTRUMENT);
-    expect(intent?.asset_class).toBe('stocks');
-    expect(intent?.side).toBe('buy');
-    expect(intent?.intent_type).toBe('entry');
-    expect(intent?.entry).toBe(ENTRY_PRICE);
-    expect(intent?.stop).toBe(ENTRY_PRICE - EXPECTED_STOP_DISTANCE);
-    expect(intent?.target).toBe(ENTRY_PRICE + 2 * EXPECTED_STOP_DISTANCE);
-    expect(intent?.size).toBeCloseTo(EXPECTED_SIZE, 10);
-    expect(intent?.time_in_force).toBe(DEFAULT_TRADER_CONFIG.time_in_force.stocks);
-    expect(intent?.idempotency_key).toMatch(/^[0-9a-f]{64}$/);
+    expect(intent).toMatchObject({
+      instrument: INSTRUMENT,
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      entry: ENTRY_PRICE,
+      stop: ENTRY_PRICE - EXPECTED_STOP_DISTANCE,
+      target: ENTRY_PRICE + 2 * EXPECTED_STOP_DISTANCE,
+      size: expect.closeTo(EXPECTED_SIZE, 10),
+      time_in_force: DEFAULT_TRADER_CONFIG.time_in_force.stocks,
+      idempotency_key: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
   });
 
   it('mirrors the bracket for a bearish debate — stop above entry, target below', async () => {

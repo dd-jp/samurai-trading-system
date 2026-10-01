@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { Sleeve, SleeveContext, SleeveOutput } from '../../../../contracts/index.js';
+import type {
+  Sleeve,
+  SleeveContext,
+  SleeveDecision,
+  SleeveOutput,
+} from '../../../../contracts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import { UNCAPPED_SPEND } from '../../../pipeline/debate-engine/index.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
@@ -88,6 +93,18 @@ function panelWith(
     spendSink: { record: () => {} },
     spendCap,
   });
+}
+
+function atrMultipleStop(decision: SleeveDecision): number {
+  return decision.price - DEBATE_SLEEVE_SPEC.sizing.stopAtrMultiple * (decision.atr ?? 0);
+}
+
+function panelPrompts(transports: readonly ScriptedTransport[]): {
+  models: string[];
+  prompts: string[];
+} {
+  const calls = transports.flatMap((transport) => transport.calls);
+  return { models: calls.map((call) => call.model), prompts: calls.map((call) => call.prompt) };
 }
 
 const bullishScript = BULLISH_SCRIPT;
@@ -469,7 +486,7 @@ describe('createDebateSleeve', () => {
       dryRun: true,
     });
     expect(output.decisions).toHaveLength(1);
-    const decision = output.decisions[0];
+    const [decision] = output.decisions as [SleeveDecision];
     expect(decision).toMatchObject({
       sleeve_id: 'debate',
       instrument: 'UP',
@@ -477,26 +494,19 @@ describe('createDebateSleeve', () => {
       direction: 'bullish',
       action: 'enter_long',
       reason: 'judge bullish',
+      confidence: 1,
+      payload: { headlines: 0, disagreement: '', converged: true },
     });
-    expect(decision?.stop_price).toBeCloseTo(
-      (decision?.price ?? 0) - DEBATE_SLEEVE_SPEC.sizing.stopAtrMultiple * (decision?.atr ?? 0),
-      9,
-    );
-    expect(decision?.confidence).toBe(1);
-    expect(decision?.inputs_hash).toHaveLength(64);
-    expect(decision?.debate_id).toBeDefined();
-    const called = transports.flatMap((transport) => transport.calls.map((call) => call.model));
-    expect(called).toHaveLength(3);
-    expect(called).toContain('anthropic/claude-opus-5.5');
-    expect(called.join(' ')).not.toContain('fable');
-    for (const transport of transports) {
-      for (const call of transport.calls) {
-        expect(call.prompt).not.toMatch(/api[_-]?key|ALPACA|SAXO|account/i);
-        expect(call.prompt).toContain('prior-day candle:');
-      }
-    }
+    expect(decision.stop_price).toBeCloseTo(atrMultipleStop(decision), 9);
+    expect(decision.inputs_hash).toHaveLength(64);
+    expect(decision.debate_id).toBeDefined();
+    const { models, prompts } = panelPrompts(transports);
+    expect(models).toHaveLength(3);
+    expect(models).toContain('anthropic/claude-opus-5.5');
+    expect(models.join(' ')).not.toContain('fable');
+    expect(prompts.filter((prompt) => /api[_-]?key|ALPACA|SAXO|account/i.test(prompt))).toEqual([]);
+    expect(prompts.filter((prompt) => !prompt.includes('prior-day candle:'))).toEqual([]);
     expect(output.refusals.map((refusal) => refusal.parameter)).toEqual(['G18_SMALL_CAP_FLOORS']);
-    expect(decision?.payload).toMatchObject({ headlines: 0, disagreement: '', converged: true });
   });
 
   it('changes inputs_hash when the candle line changes and nothing else does (#1772)', () => {
