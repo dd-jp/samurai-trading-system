@@ -169,7 +169,9 @@ export function getAddedLineRanges(
   root: string,
 ): ReadonlyMap<string, readonly LineRange[]> {
   const mergeBase = resolveMergeBase(baseRef, root);
-  return parseAddedLineRanges(gitDiff(root, ['-U0', '--diff-filter=ACMR', mergeBase]));
+  return parseAddedLineRanges(
+    gitDiff(root, ['-U0', '--src-prefix=a/', '--dst-prefix=b/', '--diff-filter=ACMR', mergeBase]),
+  );
 }
 
 type MutantStatus =
@@ -184,6 +186,8 @@ type MutantStatus =
 
 interface ReportMutant {
   readonly status: MutantStatus;
+  readonly killedBy?: readonly string[];
+  readonly coveredBy?: readonly string[];
   readonly location: {
     readonly start: { readonly line: number };
     readonly end: { readonly line: number };
@@ -196,9 +200,21 @@ interface ReportFile {
   readonly [key: string]: unknown;
 }
 
+interface ReportTest {
+  readonly id: string;
+  readonly name: string;
+  readonly location?: { readonly start: { readonly line: number } };
+  readonly [key: string]: unknown;
+}
+
+interface ReportTestFile {
+  readonly tests: readonly ReportTest[];
+  readonly [key: string]: unknown;
+}
+
 export interface MutationReport {
   readonly files: Readonly<Record<string, ReportFile>>;
-  readonly testFiles?: Readonly<Record<string, unknown>>;
+  readonly testFiles?: Readonly<Record<string, ReportTestFile>>;
   readonly [key: string]: unknown;
 }
 
@@ -214,7 +230,8 @@ function mutantsInScope(
 ): ReadonlyMap<string, readonly ReportMutant[]> {
   const byFile = new Map<string, ReportMutant[]>();
   for (const target of targets) {
-    const mutants = report.files[target.file]?.mutants ?? [];
+    const mutants = report.files[target.file]?.mutants;
+    if (mutants === undefined) continue;
     const kept = byFile.get(target.file) ?? [];
     kept.push(...mutants.filter((mutant) => withinTarget(mutant, target)));
     byFile.set(target.file, kept);
@@ -222,17 +239,59 @@ function mutantsInScope(
   return byFile;
 }
 
+// Stryker numbers test ids per run, so each shard's killedBy/coveredBy are rewritten to a key
+// that means the same test in every shard before the reports are merged and reused
+function stableTestIds(report: MutationReport): ReadonlyMap<string, string> {
+  const ids = new Map<string, string>();
+  for (const [file, testFile] of Object.entries(report.testFiles ?? {})) {
+    for (const test of testFile.tests) {
+      ids.set(test.id, `${file}#${test.name}#${test.location?.start.line ?? ''}`);
+    }
+  }
+  return ids;
+}
+
+function restampIds(ids: readonly string[], stable: ReadonlyMap<string, string>): string[] {
+  return ids.map((id) => stable.get(id) ?? id);
+}
+
+function restampMutant(mutant: ReportMutant, stable: ReadonlyMap<string, string>): ReportMutant {
+  const { killedBy, coveredBy } = mutant;
+  return {
+    ...mutant,
+    ...(killedBy && { killedBy: restampIds(killedBy, stable) }),
+    ...(coveredBy && { coveredBy: restampIds(coveredBy, stable) }),
+  };
+}
+
+function restampTestFiles(
+  report: MutationReport,
+  stable: ReadonlyMap<string, string>,
+): Record<string, ReportTestFile> {
+  return Object.fromEntries(
+    Object.entries(report.testFiles ?? {}).map(([file, testFile]) => [
+      file,
+      {
+        ...testFile,
+        tests: testFile.tests.map((test) => ({ ...test, id: stable.get(test.id) ?? test.id })),
+      },
+    ]),
+  );
+}
+
 export function scopeShardReports(
   shards: readonly { readonly report: MutationReport; readonly targets: readonly MutateTarget[] }[],
 ): MutationReport {
   const files: Record<string, ReportFile> = {};
-  let testFiles: Record<string, unknown> = {};
+  let testFiles: Record<string, ReportTestFile> = {};
   for (const { report, targets } of shards) {
+    const stable = stableTestIds(report);
     for (const [file, mutants] of mutantsInScope(report, targets)) {
       const source = files[file] ?? { ...report.files[file], mutants: [] };
-      files[file] = { ...source, mutants: [...source.mutants, ...mutants] };
+      const restamped = mutants.map((mutant) => restampMutant(mutant, stable));
+      files[file] = { ...source, mutants: [...source.mutants, ...restamped] };
     }
-    testFiles = { ...testFiles, ...report.testFiles };
+    testFiles = { ...testFiles, ...restampTestFiles(report, stable) };
   }
   return { ...shards[0]?.report, files, testFiles };
 }
@@ -492,6 +551,14 @@ export function runMutationGate(argv: readonly string[], deps: MutationGateDeps)
   return mutateChanged(args, scope, deps);
 }
 
+export function breakThresholdOf(config: { default: { thresholds: { break: unknown } } }): number {
+  const breakAt = config.default.thresholds.break;
+  if (typeof breakAt !== 'number' || !Number.isFinite(breakAt)) {
+    throw new Error(`stryker.config.mjs thresholds.break must be a number, got ${String(breakAt)}`);
+  }
+  return breakAt;
+}
+
 function readReport(root: string, path: string): MutationReport | undefined {
   const full = join(root, path);
   return existsSync(full) ? (JSON.parse(readFileSync(full, 'utf8')) as MutationReport) : undefined;
@@ -506,7 +573,7 @@ function writeReport(root: string, path: string, report: MutationReport): void {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const config = (await import(pathToFileURL(join(root, 'stryker.config.mjs')).href)) as {
-    default: { thresholds: { break: number } };
+    default: { thresholds: { break: unknown } };
   };
   process.exitCode = runMutationGate(process.argv.slice(2), {
     changedFiles: (baseRef) => getChangedFiles(baseRef, root),
@@ -514,7 +581,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     stryker: (run) => runStryker(root, run),
     readReport: (path) => readReport(root, path),
     writeReport: (path, report) => writeReport(root, path, report),
-    breakThreshold: config.default.thresholds.break,
+    breakThreshold: breakThresholdOf(config),
     log: (line) => console.log(line),
   });
 }

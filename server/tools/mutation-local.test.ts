@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   assignShards,
+  breakThresholdOf,
   getAddedLineRanges,
   getChangedFiles,
   INCREMENTAL_FILE,
@@ -272,6 +273,56 @@ describe('scopeShardReports and scoreReport', () => {
     expect(merged.testFiles).toEqual({ [`${GATE}.test`]: { tests: [] } });
   });
 
+  it('adds no file entry for a target file the report has no mutants for', () => {
+    const merged = scopeShardReports([
+      {
+        targets: [
+          { file: GATE, range: { start: 1, end: 1 } },
+          { file: 'types.ts', range: { start: 1, end: 3 } },
+        ],
+        report: report(GATE, [mutant(1, 'Killed')]),
+      },
+    ]);
+    expect(Object.keys(merged.files)).toEqual([GATE]);
+    expect(merged.files[GATE]?.source).toBe('src');
+  });
+
+  it("rewrites each shard's run-local test ids to one stable key per test", () => {
+    const shardReport = (ids: readonly [string, string], killer: string): MutationReport =>
+      ({
+        files: {
+          [GATE]: {
+            source: 'src',
+            mutants: [{ ...mutant(1, 'Killed'), killedBy: [killer], coveredBy: [ids[0], ids[1]] }],
+          },
+        },
+        testFiles: {
+          't.test.ts': {
+            tests: [
+              { id: ids[0], name: 'first', location: { start: { line: 3 } } },
+              { id: ids[1], name: 'second', location: { start: { line: 9 } } },
+            ],
+          },
+        },
+      }) as unknown as MutationReport;
+    const merged = scopeShardReports([
+      {
+        targets: [{ file: GATE, range: { start: 1, end: 1 } }],
+        report: shardReport(['0', '1'], '0'),
+      },
+      { targets: [], report: shardReport(['1', '0'], '1') },
+    ]);
+    expect(merged.files[GATE]?.mutants[0]?.killedBy).toEqual(['t.test.ts#first#3']);
+    expect(merged.files[GATE]?.mutants[0]?.coveredBy).toEqual([
+      't.test.ts#first#3',
+      't.test.ts#second#9',
+    ]);
+    expect(merged.testFiles?.['t.test.ts']?.tests.map((test) => test.id)).toEqual([
+      't.test.ts#first#3',
+      't.test.ts#second#9',
+    ]);
+  });
+
   it('scores killed and timed-out over every valid mutant, ignoring errors and ignored ones', () => {
     const scored = scoreReport(
       report(GATE, [
@@ -290,6 +341,21 @@ describe('scopeShardReports and scoreReport', () => {
   it('has no score when nothing valid was mutated', () => {
     expect(scoreReport(report(GATE, [mutant(1, 'Ignored')])).score).toBeUndefined();
   });
+});
+
+describe('breakThresholdOf', () => {
+  it('reads a numeric break threshold', () => {
+    expect(breakThresholdOf({ default: { thresholds: { break: 80 } } })).toBe(80);
+  });
+
+  it.each([[null], [undefined], [Number.NaN], ['80']])(
+    'refuses a break threshold of %s',
+    (value) => {
+      expect(() => breakThresholdOf({ default: { thresholds: { break: value } } })).toThrow(
+        'thresholds.break must be a number',
+      );
+    },
+  );
 });
 
 describe('runMutationGate', () => {
@@ -679,6 +745,7 @@ describe('getAddedLineRanges against a real git repo', () => {
     gitIn(repo, 'init', '-q');
     gitIn(repo, 'config', 'user.email', 'test@example.com');
     gitIn(repo, 'config', 'user.name', 'Test');
+    gitIn(repo, 'config', 'diff.noprefix', 'true');
     writeIn(repo, 'server/pipeline/verdict/index.ts', 'a\nb\nc\nd\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'base');
@@ -693,7 +760,7 @@ describe('getAddedLineRanges against a real git repo', () => {
     rmSync(repo, { recursive: true, force: true });
   });
 
-  it('returns the committed and uncommitted added lines since the merge-base', () => {
+  it('returns the committed and uncommitted added lines since the merge-base, whatever the diff prefix config', () => {
     expect(getAddedLineRanges('base-ref', repo).get('server/pipeline/verdict/index.ts')).toEqual([
       { start: 1, end: 2 },
       { start: 5, end: 5 },
