@@ -3847,13 +3847,65 @@ describe('runCycle: positions held across a split (#1865)', () => {
     deps.setControl('halt');
     await runCycle(deps, '2026-09-28');
     await runCycle(withMarket(deps, snapshot), '2026-09-29');
-    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: undefined });
+    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: '2026-09-25' });
     expect(eventsOf(entries, 'v2_split_broker_qty')).toMatchObject([
       { level: 'warn', message: expect.stringContaining('#1872') },
     ]);
     expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
       { message: expect.stringContaining('debate/no-macro-gate') },
     ]);
+  });
+
+  it('a resting simulated entry that fills on the split day books the order units rescaled, with no false stop_on_entry_bar', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const resting: RawBar = { open: 25, high: 25.5, low: 24.5, close: 25 };
+    const bars = [
+      seriesBar('2026-09-24', PRE, 10),
+      seriesBar('2026-09-25', resting, 10),
+      seriesBar('2026-09-28', TEN_TO_ONE, 1),
+    ];
+    const report = await runCycle(withMarket(deps, bars), '2026-09-29');
+    expect(report.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-28',
+    });
+    const entry = deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL');
+    expect(primary(deps)?.qty).toBeCloseTo((entry?.payload.size as number) * 10, 9);
+    expect(primary(deps)?.stopGbp).toBeCloseTo(1.92 / FX, 9);
+  });
+
+  it('a split between a broker fill bar and the ingest cycle after skipped cycles is still detected', async () => {
+    const alpaca = new SplitAlpaca();
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(withMarket(deps, snapshot), '2026-09-30');
+    expect(primary(deps)).toMatchObject({ qty: 6, splitAnchorDate: '2026-09-25' });
+    expect(eventsOf(entries, 'v2_split_broker_qty')).toHaveLength(1);
+  });
+
+  it('a broker exit fill already in post-split units books against the ledger position in its own units', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-post-split'),
+      leg: 'stop',
+      price: 1.92,
+      qty: 60,
+      fee: 0,
+      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+    });
+    await runCycle(withMarket(deps, snapshot), '2026-09-30');
+    expect(primary(deps)).toBeUndefined();
   });
 
   it('a backstop rearm after a recorded split uses the rescaled native prices, not the pre-split entry prices', async () => {

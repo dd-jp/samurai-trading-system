@@ -53,7 +53,7 @@ import {
   simulateMarketExit,
   withinLimit,
 } from './simulated-entry.js';
-import { splitRatioAcross } from './split.js';
+import { cumulativeSplitRatios, splitRatioAcross } from './split.js';
 
 export interface CycleDeps {
   readonly registry: SleeveSource;
@@ -239,12 +239,13 @@ class Cycle {
     return earliest === undefined ? EPOCH_ISO : new Date(earliest).toISOString();
   }
 
-  ingest(fill: V2Fill): void {
-    const order = this.deps.journal.orderFor(fill.client_order_id);
+  ingest(reported: V2Fill): void {
+    const order = this.deps.journal.orderFor(reported.client_order_id);
     if (order === undefined) {
-      this.log('warn', 'v2_fill_unmatched', `fill ${fill.broker_fill_id} matches no v2 order`);
+      this.log('warn', 'v2_fill_unmatched', `fill ${reported.broker_fill_id} matches no v2 order`);
       return;
     }
+    const fill = this.inLedgerUnits(order, reported);
     const baseFillId = `${order.venue}:${fill.broker_fill_id}`;
     const increment = this.incrementOf(order, fill, baseFillId);
     if (increment === undefined) return;
@@ -282,6 +283,59 @@ class Cycle {
       targetGbp,
     });
     this.warnIfFillCrossedFlat(order, fill.leg, before, after);
+    this.anchorOpeningFill(order, fill, before, after);
+  }
+
+  fillDate(fill: V2Fill): string | undefined {
+    const date = fill.filled_at?.slice(0, 10);
+    return date !== undefined && date < this.tradingDate ? date : undefined;
+  }
+
+  anchorOpeningFill(
+    order: JournalledOrder,
+    fill: V2Fill,
+    before: Position | undefined,
+    after: Position | undefined,
+  ): void {
+    const date = this.fillDate(fill);
+    if (before !== undefined || after === undefined || fill.leg !== 'entry' || date === undefined) {
+      return;
+    }
+    this.deps.books.applySplit(order.book_id, order.instrument, 1, date);
+  }
+
+  // A broker-held ledger position keeps the units it opened in (#1872 reconciles quantity), so a
+  // fill reported in the units after a split that precedes it is converted back into them
+  inLedgerUnits(order: JournalledOrder, fill: V2Fill): V2Fill {
+    const date = this.fillDate(fill);
+    const held = this.deps.books.position(order.book_id, order.instrument);
+    const book = [...this.deps.registry.ids()]
+      .flatMap((sleeveId) => this.deps.books.forSleeve(sleeveId))
+      .find((spec) => spec.id === order.book_id);
+    if (date === undefined || held === undefined || book === undefined || fill.leg === 'entry') {
+      return fill;
+    }
+    if (this.deps.executor.simulates(routeOf(book, held.venue))) return fill;
+    const ratio = this.splitBefore(held, date);
+    if (ratio === 1) return fill;
+    this.log(
+      'warn',
+      'v2_fill_post_split_converted',
+      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} qty ${fill.qty} at ${fill.price} is in units after a x${ratio} split; booked as ${fill.qty / ratio} at ${fill.price * ratio}`,
+    );
+    return { ...fill, qty: fill.qty / ratio, price: fill.price * ratio };
+  }
+
+  splitBefore(held: Position, fillDate: string): number {
+    const anchorDate =
+      held.splitAnchorDate ??
+      this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
+    if (anchorDate === undefined) return 1;
+    const days = calendarDaysBetween(anchorDate, this.tradingDate);
+    const bars = this.deps.market
+      .barsBefore(held.instrument, this.tradingDate, days)
+      .filter((dated) => dated.date >= anchorDate && dated.date <= fillDate);
+    return splitRatioAcross(bars).ratio;
   }
 
   // Alpaca re-reports each order's running filled_qty and average price under one order id
@@ -390,6 +444,11 @@ class Cycle {
     const limit = journalledLimit(order) as number;
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
+    const bars = this.barsSince(order);
+    const ratios = cumulativeSplitRatios(
+      this.deps.market.lastBarBefore(order.instrument, order.trading_date),
+      bars,
+    );
     const outcome = simulateLimitEntry(
       {
         side,
@@ -397,7 +456,7 @@ class Cycle {
         stop: numberOrUndefined(order.payload.stop),
         trigger: numberOrUndefined(order.payload.trigger),
       },
-      this.barsSince(order),
+      bars.map((bar, index) => ({ ...bar, rawClose: bar.rawClose * (ratios[index] as number) })),
     );
     if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_CALENDAR_DAYS) {
       this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
@@ -407,10 +466,19 @@ class Cycle {
       this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       return;
     }
-    this.settleEntryFill(order, limit, outcome);
+    const atFill = ratios[bars.findIndex((bar) => bar.date === outcome.bar.date)] as number;
+    this.settleEntryFill(order, limit, outcome, { atFill, latest: ratios.at(-1) as number });
   }
 
-  settleEntryFill(order: JournalledOrder, limit: number, outcome: FilledLimitEntry): void {
+  // The order, the bars it fills against and its stop are in the units it was priced in. A new
+  // position books in those units and is then rescaled to the fill bar's; an add to a position
+  // already rescaled to the latest bar is converted to that bar's units before it books
+  settleEntryFill(
+    order: JournalledOrder,
+    limit: number,
+    outcome: FilledLimitEntry,
+    units: { readonly atFill: number; readonly latest: number },
+  ): void {
     const side = order.side as OrderSide;
     const opening = this.deps.books.position(order.book_id, order.instrument) === undefined;
     const qty = order.payload.size as number;
@@ -425,20 +493,36 @@ class Cycle {
       this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
       return;
     }
+    const bookedUnits = opening ? 1 : units.latest;
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
       leg: 'entry',
-      price: withinLimit(side, limit, quote.price),
-      qty,
+      price: withinLimit(side, limit, quote.price) / bookedUnits,
+      qty: qty * bookedUnits,
       fee: quote.fee,
     });
-    const held = this.deps.books.position(order.book_id, order.instrument);
-    if (opening && held !== undefined) {
-      this.deps.books.applySplit(order.book_id, order.instrument, 1, outcome.bar.date);
+    this.afterEntryFill(order, outcome, opening ? units.atFill : units.latest, opening);
+  }
+
+  afterEntryFill(
+    order: JournalledOrder,
+    outcome: FilledLimitEntry,
+    heldUnits: number,
+    opening: boolean,
+  ): void {
+    if (opening && this.deps.books.position(order.book_id, order.instrument) !== undefined) {
+      this.deps.books.applySplit(order.book_id, order.instrument, heldUnits, outcome.bar.date);
     }
+    const held = this.deps.books.position(order.book_id, order.instrument);
     if (outcome.stoppedAt !== undefined && held !== undefined) {
-      this.simulatedExit(order.book_id, held, outcome.stoppedAt, true, 'stop_on_entry_bar');
+      this.simulatedExit(
+        order.book_id,
+        held,
+        outcome.stoppedAt / heldUnits,
+        true,
+        'stop_on_entry_bar',
+      );
     }
   }
 

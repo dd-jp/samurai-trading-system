@@ -90,3 +90,20 @@ export function splitRatioAcross(bars: readonly V2Bar[]): SplitReading {
   }
   return { ratio, rejected };
 }
+
+// Ratio between the units a bar is quoted in and the units of `decisionBar`: entry orders keep
+// the units they were priced in, so each bar a resting entry could fill on is compared in them
+export function cumulativeSplitRatios(
+  decisionBar: V2Bar | undefined,
+  bars: readonly V2Bar[],
+): readonly number[] {
+  const ratios: number[] = [];
+  let previous = decisionBar;
+  let cumulative = 1;
+  for (const bar of bars) {
+    if (previous !== undefined) cumulative *= splitRatioAcross([previous, bar]).ratio;
+    ratios.push(cumulative);
+    previous = bar;
+  }
+  return ratios;
+}

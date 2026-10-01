@@ -340,6 +340,7 @@ export interface V2Fill {
   readonly qty: number;
   readonly fee: number;
   readonly qty_is_cumulative?: boolean | undefined;
+  readonly filled_at?: string | undefined;
 }
 
 export interface Submission {
