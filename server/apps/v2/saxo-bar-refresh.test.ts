@@ -268,6 +268,109 @@ describe('refreshSaxoBars', () => {
     expect((await store.readSeries('saxo', 'VMID'))?.bars[0]?.date).toBe('2026-09-21');
   });
 
+  describe('against the stored history (#1901)', () => {
+    async function refreshVmid(stored: BarSeries, pulled: Record<string, number>) {
+      const store = await openStore();
+      await store.write('saxo', [stored]);
+      const { report } = await refresh(
+        store,
+        { VMID: { samples: samplesFor(VMID, pulled) } },
+        [VMID],
+        '2026-09-28',
+      );
+      return { report, after: await store.readSeries('saxo', 'VMID') };
+    }
+
+    it('refuses a pull that loses an interior bar while adding a new one, leaving the store untouched', async () => {
+      const stored = storedSeries('VMID', DATES, 30);
+      const { report, after } = await refreshVmid(stored, {
+        '2026-09-21': 30,
+        '2026-09-23': 30,
+        '2026-09-24': 30,
+        '2026-09-25': 30,
+      });
+      expect(report.failed).toEqual([
+        {
+          symbol: 'VMID',
+          reason: expect.stringMatching(
+            /^VMID: the Saxo re-pull drops stored bar\(s\) 2026-09-22;/,
+          ),
+        },
+      ]);
+      expect(after).toEqual(stored);
+    });
+
+    it('refuses a pull that revises one older close beyond 0.5%, leaving the store untouched', async () => {
+      const stored = storedSeries('VMID', DATES, 30);
+      const { report, after } = await refreshVmid(stored, {
+        ...closes(DATES, 30),
+        '2026-09-22': 30.2,
+        '2026-09-25': 30,
+      });
+      expect(report.failed.map((f) => f.reason)).toEqual([
+        expect.stringContaining('revises stored close(s) by more than 0.5%: 2026-09-22 30 to 30.2'),
+      ]);
+      expect(after).toEqual(stored);
+    });
+
+    it('writes a revision inside 0.5%', async () => {
+      const { report, after } = await refreshVmid(storedSeries('VMID', DATES, 30), {
+        ...closes(DATES, 30),
+        '2026-09-22': 30.14,
+        '2026-09-25': 30,
+      });
+      expect(report.failed).toEqual([]);
+      expect(after?.bars.map((b) => b.close)).toEqual([30, 30.14, 30, 30, 30]);
+    });
+
+    it('refuses a pull that starts before the stored history, leaving the store untouched', async () => {
+      const stored = storedSeries('VMID', DATES, 30);
+      const { report, after } = await refreshVmid(stored, {
+        '2026-09-18': 30,
+        ...closes(DATES, 30),
+        '2026-09-25': 30,
+      });
+      expect(report.failed.map((f) => f.reason)).toEqual([
+        expect.stringContaining('starts at 2026-09-18, before the stored first bar 2026-09-21'),
+      ]);
+      expect(after).toEqual(stored);
+    });
+
+    it('writes a bar Saxo adds inside the stored range, as a repair that used to drop it now keeps it', async () => {
+      const stored = storedSeries('VMID', ['2026-09-21', '2026-09-23', '2026-09-24'], 30);
+      const { report, after } = await refreshVmid(stored, {
+        ...closes(DATES, 30),
+        '2026-09-25': 30,
+      });
+      expect(report.failed).toEqual([]);
+      expect(after?.bars.map((b) => b.date)).toEqual([...DATES, '2026-09-25']);
+    });
+
+    it('refuses a split rescale that leaves one bar off the uniform factor', async () => {
+      const stored = storedSeries('VMID', DATES, 100);
+      const { report } = await refreshVmid(stored, {
+        ...closes(DATES, 10),
+        '2026-09-22': 10.5,
+        '2026-09-25': 10,
+      });
+      expect(report.failed.map((f) => f.reason)).toEqual([
+        expect.stringContaining('2026-09-22 100 to 10.5'),
+      ]);
+    });
+
+    it('warns when a line has no stored bars while other lines do', async () => {
+      const store = await openStore();
+      await store.write('saxo', [storedSeries('ISF', DATES, 8.5)]);
+      const { entries } = await refresh(store, {
+        ISF: { samples: samplesFor(ISF, closes(DATES, 8.5)) },
+        VMID: { samples: samplesFor(VMID, closes(DATES, 30)) },
+      });
+      expect(
+        entries.filter((entry) => entry.event === 'v2_saxo_line_unguarded').map((e) => e.message),
+      ).toEqual([expect.stringMatching(/^VMID: no stored Saxo bars/)]);
+    });
+  });
+
   it('fails a line Saxo returns no bars for, instead of treating it as unchanged', async () => {
     const store = await openStore();
     const { report } = await refresh(store, {
@@ -480,7 +583,17 @@ describe('refreshSaxoBars with Saxo chart bars whose shape is broken', () => {
   it('drops a glitch bar whose close disagrees with its neighbours and passes the shrink guard against the already repaired stored series', async () => {
     const store = await openStore();
     const kept = HISTORY.filter((date) => date !== '2026-09-15');
-    await store.write('saxo', [storedSeries('ISF', kept, 8.5)]);
+    const repaired = storedSeries('ISF', kept, 8.5);
+    await store.write('saxo', [
+      {
+        ...repaired,
+        bars: repaired.bars.map((bar) =>
+          bar.date === '2026-09-16'
+            ? { ...bar, open: 5.5, high: 5.5, low: 5.5, close: 5.5, rawClose: 5.5 }
+            : bar,
+        ),
+      },
+    ]);
     const { report } = await refresh(store, isfWith(closeDisagreeingGlitch));
     expect(report.failed).toEqual([]);
     expect(report.updated.find((u) => u.symbol === 'ISF')?.bars).toBe(kept.length);
