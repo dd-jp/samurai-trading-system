@@ -44,6 +44,6 @@ test('Records searches the journal and shows the owned panels', async ({ page })
     /2026-10-05\s*alpaca broker\s*debate\/primary\s*clean/,
   );
   await expect(page.getByRole('region', { name: 'Tax export' })).toContainText(
-    'Not yet fed: Step 4 (#1746).',
+    'Not yet fed: Step 4 (#1947).',
   );
 });

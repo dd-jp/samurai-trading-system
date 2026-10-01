@@ -57,7 +57,7 @@ function reconcileBody(reconcile: PanelWire<ReconcileRunsWire> = RECONCILE_RUNS)
 const TAX = {
   contract_version: JOURNAL.contract_version,
   year: null,
-  disposals: { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1746' },
+  disposals: { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1947' },
 };
 
 function routes(researchBody: unknown = research(), reconcile = reconcileBody()): typeof fetch {
@@ -202,7 +202,7 @@ describe('RecordsView (P9–P13)', () => {
 
   it('shows tax as owned by its step (P13)', async () => {
     mount(routes());
-    await screen.findByText('Not yet fed: Step 4 (#1746).');
+    await screen.findByText('Not yet fed: Step 4 (#1947).');
     const tax = screen.getByRole('region', { name: 'Tax export' });
     expect(tax.textContent).toContain('CSV download');
     expect(within(tax).queryByRole('link')).toBeNull();

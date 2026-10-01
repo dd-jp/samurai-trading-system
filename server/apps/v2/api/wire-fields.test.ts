@@ -125,13 +125,13 @@ describe('the overview the client reads, served over the seeded fixture', () => 
     expect(keysOf(lastCycle)).toEqual(fieldsOf('lastCycle', true));
   });
 
-  it('serves the heartbeat fields the fixture has no cycle for as owned, never missing', () => {
-    expect(overview.heartbeat.next_due).toEqual({
-      status: 'not-yet-fed',
-      owner: 'Step 3e',
-      ticket: '#1784',
-    });
-    expect(keysOf(overview.heartbeat.last_ping)).toEqual(fieldsOf('panel'));
+  it('serves the heartbeat schedule and ping the fixture journals', () => {
+    const { next_due: nextDue, last_ping: lastPing } = overview.heartbeat;
+    if (nextDue.status !== 'fed') throw new Error(`next due ${nextDue.status}`);
+    expect(nextDue.due_date).toBe('2026-10-06');
+    expect(keysOf(nextDue)).toEqual(fieldsOf('nextCycle', true));
+    if (lastPing.status !== 'fed') throw new Error(`last ping ${lastPing.status}`);
+    expect(keysOf(lastPing)).toEqual(fieldsOf('ping', true));
   });
 });
 
