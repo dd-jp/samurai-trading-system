@@ -31,6 +31,12 @@ interface BrokerFillRow {
   readonly recorded_at: string;
 }
 
+interface FlattenFills {
+  readonly size: number | null;
+  readonly filled: number | null;
+  readonly today: number;
+}
+
 function adjacent(value: number, step: bigint): number {
   const view = new Float64Array([value]);
   const bits = new BigInt64Array(view.buffer);
@@ -39,6 +45,7 @@ function adjacent(value: number, step: bigint): number {
 }
 
 const ULP_STEPS = [0n, 1n, -1n, 2n, -2n, 3n, -3n, 4n, -4n] as const;
+const LATEST = '9999-12-31T23:59:59.999Z';
 
 // The cycle books a broker fill at price ÷ rate; the journal keeps only the quotient, so the
 // native price is the nearest double whose quotient reproduces the journalled bits
@@ -59,6 +66,8 @@ export interface JournalBrokerDay {
 }
 
 export class JournalReplayBroker implements BrokerAdapter {
+  #sweeps = 0;
+
   constructor(private readonly day: JournalBrokerDay) {}
 
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
@@ -89,13 +98,16 @@ export class JournalReplayBroker implements BrokerAdapter {
 
   fetchNewFills(): Promise<NormalizedFill[]> {
     const { db, tradingDate, venue, quotePerGbp } = this.day;
+    this.#sweeps += 1;
+    const cut = this.#sweeps === 1 ? this.#firstReconcileAt() : LATEST;
     const rows = db
       .prepare(
         `SELECT fill_id, client_order_id, leg, qty, price_gbp, fee_gbp, recorded_at FROM v2_fills
          WHERE trading_date = ? AND venue = ? AND substr(fill_id, 1, length(?)) <> ?
+           AND recorded_at <= ?
          ORDER BY rowid`,
       )
-      .all(tradingDate, venue, `${venue}:sim-`, `${venue}:sim-`) as BrokerFillRow[];
+      .all(tradingDate, venue, `${venue}:sim-`, `${venue}:sim-`, cut) as BrokerFillRow[];
     return Promise.resolve(
       rows.map((row) => ({
         client_order_id: row.client_order_id,
@@ -163,6 +175,15 @@ export class JournalReplayBroker implements BrokerAdapter {
     });
   }
 
+  // The cycle reconciles after its first sweep, so a fill journalled after the day's first
+  // reconcile was booked at the second sweep and must not be visible to the decisions
+  #firstReconcileAt(): string {
+    const row = this.day.db
+      .prepare('SELECT MIN(recorded_at) AS at FROM v2_reconciles WHERE trading_date = ?')
+      .get(this.day.tradingDate) as { at: string | null };
+    return row.at ?? LATEST;
+  }
+
   #flattenState(clientOrderId: string): OrderState {
     const { db, tradingDate } = this.day;
     const rearmed = db
@@ -172,10 +193,18 @@ export class JournalReplayBroker implements BrokerAdapter {
       )
       .get(tradingDate, clientOrderId);
     if (rearmed !== undefined) return 'cancelled';
-    const filled = db
-      .prepare('SELECT 1 FROM v2_fills WHERE trading_date = ? AND client_order_id = ?')
-      .get(tradingDate, clientOrderId);
-    return filled === undefined ? 'submitted' : 'filled';
+    const flatten = db
+      .prepare(
+        `SELECT json_extract(o.payload, '$.size') AS size,
+           (SELECT SUM(f.qty) FROM v2_fills f
+             WHERE f.client_order_id = o.client_order_id AND f.trading_date <= @date) AS filled,
+           EXISTS (SELECT 1 FROM v2_fills f
+             WHERE f.client_order_id = o.client_order_id AND f.trading_date = @date) AS today
+         FROM v2_orders o WHERE o.client_order_id = @id`,
+      )
+      .get({ date: tradingDate, id: clientOrderId }) as FlattenFills | undefined;
+    if (flatten?.today !== 1) return 'submitted';
+    return (flatten.filled ?? 0) < (flatten.size ?? 0) ? 'partially_filled' : 'filled';
   }
 }
 

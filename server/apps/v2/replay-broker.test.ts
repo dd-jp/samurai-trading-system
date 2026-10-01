@@ -15,12 +15,26 @@ function order(id: string, outcome: string, payload: Record<string, unknown>, da
   ).run(id, day, outcome, JSON.stringify(payload), `${day}T07:30:00.000Z`);
 }
 
-function fill(id: string, clientOrderId: string, priceGbp: number, feeGbp = 0): void {
+function fill(
+  id: string,
+  clientOrderId: string,
+  priceGbp: number,
+  feeGbp = 0,
+  { qty = 3, at = `${DAY}T07:31:00.000Z`, day = DAY } = {},
+): void {
   db.prepare(
     `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
        side, qty, price_gbp, fee_gbp, recorded_at)
-     VALUES (?, ?, 'debate/primary', ?, 'UP', 'alpaca', 'entry', 'buy', 3, ?, ?, ?)`,
-  ).run(id, clientOrderId, DAY, priceGbp, feeGbp, `${DAY}T07:31:00.000Z`);
+     VALUES (?, ?, 'debate/primary', ?, 'UP', 'alpaca', 'entry', 'buy', ?, ?, ?, ?)`,
+  ).run(id, clientOrderId, day, qty, priceGbp, feeGbp, at);
+}
+
+function reconciled(at: string): void {
+  db.prepare(
+    `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+       recorded_at)
+     VALUES (?, 'alpaca', 'broker', 'clean', '[]', '[]', 'detail', ?)`,
+  ).run(DAY, at);
 }
 
 beforeEach(() => {
@@ -87,6 +101,37 @@ describe('JournalReplayBroker', () => {
     expect(fills[0]).toMatchObject({ client_order_id: 'sent', broker_fill_id: 'abc#2', qty: 3 });
     expect((fills[0]?.price ?? 0) / FX).toBe(9.07 / FX);
     expect((fills[0]?.fee ?? 0) / FX).toBe(0.0157 / FX);
+  });
+
+  it('serves at the first sweep only the fills journalled by the first reconcile, the rest from the second', async () => {
+    order('sent', 'submitted', {});
+    fill('alpaca:early', 'sent', 7, 0, { at: `${DAY}T07:31:00.000Z` });
+    reconciled(`${DAY}T07:31:00.000Z`);
+    reconciled(`${DAY}T07:40:00.000Z`);
+    fill('alpaca:late', 'sent', 7, 0, { at: `${DAY}T07:35:00.000Z` });
+    const sweeping = broker();
+    const ids = async () => (await sweeping.fetchNewFills()).map((f) => f.broker_fill_id);
+    expect(await ids()).toEqual(['early']);
+    expect(await ids()).toEqual(['early', 'late']);
+    expect(await ids()).toEqual(['early', 'late']);
+  });
+
+  it('serves every fill at the first sweep when the day journalled no reconcile', async () => {
+    order('sent', 'submitted', {});
+    fill('alpaca:late', 'sent', 7, 0, { at: `${DAY}T23:59:00.000Z` });
+    expect(await broker().fetchNewFills()).toHaveLength(1);
+  });
+
+  it('reads a flatten short of its size as partially filled, across the days it filled on', async () => {
+    order('partial-exit', 'submitted', { size: 10 });
+    fill('alpaca:p1', 'partial-exit', 7, 0, { qty: 4, day: '2026-09-29' });
+    const state = async () => (await broker().resumeFlatten('partial-exit'))?.order_state;
+    expect(await state()).toBe('submitted');
+    fill('alpaca:p2', 'partial-exit', 7, 0, { qty: 5 });
+    fill('alpaca:p3', 'partial-exit', 7, 0, { qty: 1, day: '2026-10-01' });
+    expect(await state()).toBe('partially_filled');
+    fill('alpaca:p4', 'partial-exit', 7, 0, { qty: 1 });
+    expect(await state()).toBe('filled');
   });
 
   it('reads a flatten as cancelled when the day rearmed it, filled when it filled, else still working', async () => {

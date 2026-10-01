@@ -85,6 +85,17 @@ export interface JournalledDay {
   readonly dryRun: boolean;
 }
 
+function journalledDryRun(db: StoreHandle, tradingDate: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(
+         (SELECT MAX(dry_run) FROM v2_orders WHERE trading_date = ?),
+         (SELECT MAX(dry_run) FROM v2_orders)) AS dry_run`,
+    )
+    .get(tradingDate) as { dry_run: number | null };
+  return row.dry_run === 1;
+}
+
 export function journalledDay(db: StoreHandle, tradingDate: string): JournalledDay {
   const started = db
     .prepare(`SELECT MIN(recorded_at) AS at FROM (${UNION_RECORDED})`)
@@ -92,16 +103,19 @@ export function journalledDay(db: StoreHandle, tradingDate: string): JournalledD
   const marked = db
     .prepare('SELECT MAX(recorded_at) AS at FROM v2_book_days WHERE trading_date = ?')
     .get(tradingDate) as { at: string | null };
-  const dryRun = db.prepare('SELECT 1 FROM v2_orders WHERE dry_run = 1 LIMIT 1').get();
   return {
     startedAt: started.at ?? undefined,
     markedAt: marked.at ?? undefined,
-    dryRun: dryRun !== undefined,
+    dryRun: journalledDryRun(db, tradingDate),
   };
 }
 
+const UNREAD_BY_THE_CYCLE = ['llm_call_log', 'llm_spend'] as const;
+
 export function rewoundCopy(db: StoreHandle, tradingDate: string, startedAt: string): StoreHandle {
   const copy = inMemoryCopyOf(db);
+  for (const table of UNREAD_BY_THE_CYCLE) copy.exec(`DELETE FROM ${table}`);
+  copy.exec('VACUUM');
   for (const trigger of APPEND_ONLY_TRIGGERS) copy.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
   const reopened = reopenedSql('>=');
   copy.transaction(() => {

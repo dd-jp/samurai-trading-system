@@ -13,7 +13,7 @@ import type { VenueSessionGate } from './data/index.js';
 import { createBrokerAccess } from './execution/index.js';
 import { composeV2Root } from './index.js';
 import { formatReplay } from './replay.js';
-import { journalledSessions, rebuildBooks, rewoundCopy } from './replay-book.js';
+import { journalledDay, journalledSessions, rebuildBooks, rewoundCopy } from './replay-book.js';
 import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore, PaperBooks } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
@@ -260,6 +260,21 @@ describe('replay of sizing, orders, fills and marks', () => {
     });
   });
 
+  it('rewinds into a copy that holds none of the LLM call log or spend the replay reads from the journal', () => {
+    const db = new BetterSqlite3(options.storePath, { readonly: true });
+    const count = (handle: BetterSqlite3.Database, table: string) =>
+      (handle.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+    try {
+      expect(count(db, 'llm_call_log')).toBeGreaterThan(0);
+      const copy = rewoundCopy(db, EXIT_DAY, `${EXIT_DAY}T07:30:00.000Z`);
+      expect([count(copy, 'llm_call_log'), count(copy, 'llm_spend')]).toEqual([0, 0]);
+      expect(count(copy, 'v2_books')).toBe(count(db, 'v2_books'));
+      copy.close();
+    } finally {
+      db.close();
+    }
+  });
+
   it('names an exit the journal holds but the replay did not make', async () => {
     const result = await replayFromFiles(
       tamperedCopy(
@@ -366,6 +381,29 @@ describe('rebuildBooks', () => {
     ]);
     expect(copy.prepare('SELECT COUNT(*) AS n FROM v2_book_days').get()).toEqual({ n: 1 });
     copy.close();
+  });
+});
+
+describe('journalledDay', () => {
+  it('takes the mode from the day orders, and from the rest of the store on a day with none', () => {
+    const db = openSharedStore(':memory:');
+    db.prepare(
+      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+       VALUES ('debate/primary', 'debate', 'primary', 600, 600, 'now')`,
+    ).run();
+    const order = db.prepare(
+      `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+         leg, side, dry_run, outcome, payload, recorded_at)
+       VALUES (?, NULL, 'debate/primary', ?, 'UP', 'alpaca', 'entry', 'buy', ?, 'submitted', '{}',
+         'now')`,
+    );
+    expect(journalledDay(db, '2026-09-29').dryRun).toBe(false);
+    order.run('stray', '2026-09-28', 1);
+    order.run('paper', '2026-09-29', 0);
+    expect(journalledDay(db, '2026-09-29').dryRun).toBe(false);
+    expect(journalledDay(db, '2026-09-28').dryRun).toBe(true);
+    expect(journalledDay(db, '2026-09-30').dryRun).toBe(true);
+    db.close();
   });
 });
 
