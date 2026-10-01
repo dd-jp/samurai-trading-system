@@ -863,6 +863,21 @@ describe('a Saxo split or consolidation steps rawClose for the split detector (#
     expect(entries.find((e) => e.event === 'v2_saxo_history_rescaled')?.level).toBe('error');
   });
 
+  it('reads a unit break on the newest bar as a unit flip, not a 100:1 consolidation', async () => {
+    const store = await seeded(10);
+    const { entries } = await refreshOn(
+      store,
+      isfSamples(10, { '2026-09-21': 1001 }),
+      '2026-09-22',
+    );
+    const bars = (await store.readSeries('saxo', 'ISF'))?.bars ?? [];
+    expect(bars.every((b) => b.rawClose === b.close)).toBe(true);
+    expect(splitRatioAcross(bars).ratio).toBe(1);
+    const alert = entries.find((e) => e.event === 'v2_saxo_history_rescaled');
+    expect(alert?.level).toBe('error');
+    expect(alert?.message).toMatch(/a unit break, not a split/);
+  });
+
   it('raises an error and writes no step for a rewrite too small to be a split', async () => {
     const store = await seeded(10);
     const { entries } = await refreshOn(

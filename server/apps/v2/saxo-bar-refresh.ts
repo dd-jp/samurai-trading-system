@@ -238,19 +238,41 @@ function errorOnUnadjustedStep(existing: BarSeries, flips: SuspectFlips, logger:
   );
 }
 
+const UNIT_BREAK_BAND_MIN = 90;
+const UNIT_BREAK_BAND_MAX = 110;
+
+function inUnitBreakBand(factor: number): boolean {
+  const size = Math.max(factor, 1 / factor);
+  return size > UNIT_BREAK_BAND_MIN && size < UNIT_BREAK_BAND_MAX;
+}
+
+// normaliseUnitBreaks rescales every earlier bar to the newest bar's unit, so a GBX/GBP flip on
+// the newest bar rewrites the whole overlap by 100x or 0.01x, which is not a split
+function isUnitBreakRewrite(existing: BarSeries, factor: number, report: HygieneReport): boolean {
+  const storedLast = existing.bars.at(-1)?.date ?? '';
+  return inUnitBreakBand(factor) || report.unit_breaks.some((unit) => unit.date > storedLast);
+}
+
 function withSplitStep(
   existing: BarSeries | undefined,
   pulled: readonly DailyBar[],
-  flips: SuspectFlips,
+  report: HygieneReport,
   logger: Logger,
 ): DailyBar[] {
   if (existing === undefined) return [...pulled];
   const factor = historyRescaleFactor(existing, pulled);
-  if (factor !== undefined && isSplitScale(factor)) {
-    return stepFromRewrite(existing, pulled, factor, logger);
-  }
   if (factor === undefined) {
-    errorOnUnadjustedStep(existing, flips, logger);
+    errorOnUnadjustedStep(existing, report.suspect_flips, logger);
+  } else if (isUnitBreakRewrite(existing, factor, report)) {
+    const outcome = 'a unit break, not a split, so nothing is rescaled; check the line';
+    logRefresh(
+      logger,
+      'error',
+      'v2_saxo_history_rescaled',
+      rescaledMessage(existing.symbol, factor, outcome),
+    );
+  } else if (isSplitScale(factor)) {
+    return stepFromRewrite(existing, pulled, factor, logger);
   } else {
     const outcome = 'too small for a split, nothing rescaled, check the line';
     logRefresh(
@@ -325,7 +347,7 @@ async function refreshLine(
     assertNoShrink(line.tidm, existing, pulled);
     assertHistoryConsistent(line.tidm, existing, pulled);
   }
-  const rounded = withSplitStep(existing, pulled, hygiene.report.suspect_flips, options.logger);
+  const rounded = withSplitStep(existing, pulled, hygiene.report, options.logger);
   await (options.limit ?? UNLIMITED).atomic(() =>
     options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
   );

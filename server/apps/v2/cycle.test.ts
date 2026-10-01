@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   BookFill,
@@ -14,6 +17,8 @@ import type {
 } from '../../../contracts/index.js';
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
+import { ParquetBarStore } from '../../providers/bar-store/index.js';
+import { type InstrumentDetails, LSE_MOMENTUM_LINES } from '../../providers/saxo-bars/index.js';
 import {
   type BrokerAck,
   type BrokerAdapter,
@@ -41,6 +46,7 @@ import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
 import { storeView } from './reconcile.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import { refreshSaxoBars } from './saxo-bar-refresh.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
 
 const UNSET_CYCLE_PARAMETERS = CYCLE_LEVEL_PARAMETERS.filter((parameter) => !isSet(parameter));
@@ -3706,6 +3712,70 @@ describe('runCycle: positions held across a split (#1865)', () => {
 
     const isf = (deps: CycleDeps) => deps.books.position('debate/primary', 'ISF');
 
+    it('rescales a held position across a forward split read from actual refresh output', async () => {
+      const root = join(mkdtempSync(join(tmpdir(), 'cycle-saxo-split-')), 'parquet');
+      const store = await ParquetBarStore.open(root);
+      try {
+        const isfLine = LSE_MOMENTUM_LINES.find((line) => line.tidm === 'ISF');
+        if (isfLine === undefined) throw new Error('no ISF line');
+        const flat = (date: string, gbp: number): DailyBar => lseBar(date, gbp, gbp);
+        const stored = ['2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25'];
+        await store.write('saxo', [{ symbol: 'ISF', bars: stored.map((date) => flat(date, 100)) }]);
+        const pulled = Object.fromEntries([
+          ...stored.map((date) => [date, 10]),
+          ['2026-09-28', 10.1],
+          ['2026-09-29', 10.2],
+        ]) as Record<string, number>;
+        const samples = Object.entries(pulled).map(([date, gbp]) => ({
+          Time: `${date}T00:00:00.000000Z`,
+          Open: gbp * 100,
+          High: gbp * 100,
+          Low: gbp * 100,
+          Close: gbp * 100,
+          Volume: 1,
+        }));
+        const api = {
+          instrumentDetails: async (): Promise<InstrumentDetails> => ({
+            symbol: 'ISF',
+            currencyCode: isfLine.unit,
+            priceToContractFactor: 0.01,
+            isTradable: true,
+            isComplex: false,
+            exchangeId: 'LSE_ETF',
+          }),
+          dailyHistory: async () => ({ firstSampleTime: undefined, delayedByMinutes: 15, samples }),
+        };
+        const logger = { log: () => undefined };
+        const report = await refreshSaxoBars({
+          api,
+          store,
+          tradingDate: '2026-09-30',
+          lines: [isfLine],
+          logger,
+        });
+        expect(report.failed).toEqual([]);
+        const series = await store.readSeries('saxo', 'ISF');
+        const deps = harness([], true);
+        holdIsf(deps, 6, 100);
+        const real = new BarsMarketData({ load: () => series }, []);
+        const market: MarketData = {
+          lastBarBefore: (instrument, date) => real.lastBarBefore(instrument, date),
+          barsBefore: (instrument, date, count) => real.barsBefore(instrument, date, count),
+          gbpUsdAtYearStart: () => FX,
+        };
+        const across = await runCycle({ ...deps, market }, '2026-09-30');
+        expect(across.exits).toBe(0);
+        expect(isf(deps)).toMatchObject({
+          qty: 60,
+          stopGbp: expect.closeTo(9.6, 9),
+          targetGbp: expect.closeTo(10.6, 9),
+          splitFactor: 10,
+        });
+      } finally {
+        store.close();
+      }
+    });
+
     it.each([
       { name: 'forward 10:1 split', qty: 6, before: 100, after: 10, ratio: 10 },
       { name: '1:10 consolidation', qty: 60, before: 10, after: 100, ratio: 0.1 },
@@ -3730,7 +3800,12 @@ describe('runCycle: positions held across a split (#1865)', () => {
         targetGbp: expect.closeTo(c.after * 1.06, 9),
         splitFactor: c.ratio,
       });
-      expect(across.books[0]?.equity_gbp).toBeCloseTo(before.books[0]?.equity_gbp ?? 0, 1);
+      const custody = deps.books.lastDay('debate/primary')?.custodyAccrualGbp ?? 0;
+      expect(custody).toBeCloseTo((600 * 0.0012) / 365, 12);
+      expect((before.books[0]?.equity_gbp ?? 0) - (across.books[0]?.equity_gbp ?? 0)).toBeCloseTo(
+        custody,
+        12,
+      );
       expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(false);
     });
   });
