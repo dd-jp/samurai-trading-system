@@ -26,6 +26,7 @@ import {
   decide,
   decideWithReason,
   type ExitCheckInput,
+  mostRecentOpenLot,
 } from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
 import { computeFlattenIdempotencyKey, computeIdempotencyKey } from './idempotency-key.js';
@@ -2430,5 +2431,262 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
 
     expect(outcome.intent?.entry).toBe(ENTRY_PRICE);
     expect(outcome.intent?.metadata.unpriced_exit).toBeUndefined();
+  });
+});
+
+describe('decide — exact reasons, details and metadata', () => {
+  const MUTE_STOCKS = {
+    isOpen: () => true,
+    isTradingDay: () => true,
+    sessionStart: () => null,
+    sessionEnd: () => null,
+  } as unknown as TradingCalendar;
+
+  const SESSION_END_ABSENT = {
+    kind: 'session_end_absent_on_non_crypto',
+    asset_class: 'stocks',
+    detail:
+      `stocks calendar returned no session end at ${DECISION_BAR.toISOString()}; ` +
+      'flat-by-close cannot be enforced for this leg while that persists',
+  };
+
+  function muteStocks(): TraderInput['sessionCalendars'] {
+    return { crypto: new AlwaysOpenCalendar(), stocks: MUTE_STOCKS };
+  }
+
+  function exitCheckOn(input: TraderInput): ExitCheckInput {
+    return { ...input, positionState: async () => [openPosition()], bar: DECISION_BAR };
+  }
+
+  it('picks the latest-opened lot, and the first of two opened together', () => {
+    const older = openPosition({ idempotency_key: 'older' });
+    const newer = openPosition({
+      idempotency_key: 'newer',
+      opened_at: new Date('2026-07-15T09:00:00Z'),
+    });
+    const twin = openPosition({ idempotency_key: 'twin' });
+
+    expect(mostRecentOpenLot([newer, older])).toBe(newer);
+    expect(mostRecentOpenLot([older, twin])).toBe(older);
+  });
+
+  it('names the non-positive flatten window and grace exactly', async () => {
+    const held = async () => [openPosition()];
+
+    await expect(
+      decide(
+        traderInput({ positionState: held, config: configWith({ flatten_before_close_ms: 0 }) }),
+      ),
+    ).rejects.toThrow(
+      new Error(
+        'flatten_before_close_ms must be > 0 (got 0); a non-positive window disables ' +
+          'flat-by-close, which ADR-0014 requires',
+      ),
+    );
+    await expect(
+      decide(
+        traderInput({ positionState: held, config: configWith({ flatten_after_close_ms: 0 }) }),
+      ),
+    ).rejects.toThrow(
+      new Error(
+        'flatten_after_close_ms must be > 0 (got 0); a non-positive grace restores the ' +
+          'forward-only flatten window #1389 removed',
+      ),
+    );
+  });
+
+  it('reports the exact missing-session-end diagnostic while holding', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [openPosition()],
+        sessionCalendars: muteStocks(),
+      }),
+    );
+
+    expect(outcome.diagnostics).toEqual([SESSION_END_ABSENT]);
+  });
+
+  it('reports the missing session end on a flat entry too, and still enters', async () => {
+    const outcome = await decideWithReason(traderInput({ sessionCalendars: muteStocks() }));
+
+    expect(outcome.intent?.intent_type).toBe('entry');
+    expect(outcome.diagnostics).toEqual([SESSION_END_ABSENT]);
+  });
+
+  it('reports the missing session end on the tick-path exit check', async () => {
+    const marketData = new FixtureMarketData(bars(15, 2));
+    marketData.indicatorReads.set('rsi', 60);
+    marketData.indicatorReads.set('macd_histogram', 0.5);
+
+    const outcome = await checkExitsWithReason(
+      exitCheckOn(traderInput({ sessionCalendars: muteStocks(), marketData })),
+    );
+
+    expect(outcome.diagnostics).toEqual([SESSION_END_ABSENT]);
+  });
+
+  it('leaves a healthy tick-path exit with no diagnostics and no decision class', async () => {
+    const marketData = new FixtureMarketData(bars(15, 2));
+    marketData.indicatorReads.set('rsi', 30);
+    marketData.indicatorReads.set('macd_histogram', -0.5);
+
+    const outcome = await checkExitsWithReason(exitCheckOn(traderInput({ marketData })));
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.decision_class).toBeNull();
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
+  it('does not treat a prior close that lies in the future as inside the grace window', async () => {
+    const skewed = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: (now: Date) => new Date(now.getTime() + 60_000),
+      sessionEnd: (now: Date) => new Date(now.getTime() + 10 * 60 * 60 * 1000),
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({ sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: skewed } }),
+    );
+
+    expect(outcome.skip_reason).toBeNull();
+    expect(outcome.intent?.intent_type).toBe('entry');
+  });
+
+  it('records the exact control-arm valuation diagnostic', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        arm: 'control',
+        equity: async () => {
+          throw new MarkReadError('AMD', 'mark read failed');
+        },
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('control_arm_valuation_refused');
+    expect(outcome.decision_class).toBe('input_unusable');
+    expect(outcome.diagnostics).toEqual([
+      {
+        kind: 'control_arm_valuation_refused',
+        asset_class: undefined,
+        detail:
+          'AAPL: the control arm could not value the book (mark read failed) and skipped ' +
+          'this pass instead of crashing it.',
+      },
+    ]);
+  });
+
+  it('the live arm rethrows a book-valuation refusal', async () => {
+    const refusal = new MarkReadError('AMD', 'mark read failed');
+
+    await expect(
+      decideWithReason(
+        traderInput({
+          equity: async () => {
+            throw refusal;
+          },
+        }),
+      ),
+    ).rejects.toBe(refusal);
+  });
+
+  it('skips short bars without an ATR diagnostic, as input_unusable even after a degraded debate', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        marketData: new FixtureMarketData(bars(5, 2)),
+        debate: debateResult({ read: false }),
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('atr_insufficient_bars');
+    expect(outcome.decision_class).toBe('input_unusable');
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
+  it('names the corrupt-bar ATR exactly', async () => {
+    const corrupt = bars(15, 2).map((bar, index) =>
+      index === 7 ? { ...bar, high: Number.NaN } : bar,
+    );
+
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(corrupt) }),
+    );
+
+    expect(outcome.diagnostics).toEqual([
+      {
+        kind: 'atr_not_finite',
+        asset_class: 'stocks',
+        detail:
+          'ATR over 14 1h bars for AAPL was not finite on a full window — the bar data is ' +
+          'corrupt, not merely short',
+      },
+    ]);
+  });
+
+  it('skips a non-finite mark by name', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(bars(15, 2), 'stocks', Number.NaN) }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('mark_not_finite');
+  });
+
+  it('skips a zero stop distance by name', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        marketData: new FixtureMarketData(bars(15, 0)),
+        config: configWith({ vol_floor_fraction: 0 }),
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('stop_distance_not_positive');
+  });
+
+  it.each(['live', 'control'] as const)(
+    'stamps the exact %s-arm direction-flip exit metadata',
+    async (arm) => {
+      const outcome = await decideWithReason(
+        traderInput({
+          arm,
+          debate: debateResult({ direction: 'bearish', confidence: 0.8 }),
+          positionState: async () => [openPosition()],
+        }),
+      );
+
+      expect(outcome.intent?.metadata).toEqual({
+        debate_id: 'debate-abc123',
+        arm,
+        exit_reason: 'direction_flip',
+        lot_held_quantities: [{ idempotency_key: 'existing-key', held: 50 }],
+        conviction: 0.8,
+        converged: true,
+        sizing: {
+          base_risk_fraction: 0,
+          conviction_multiplier: 0,
+          vol_floor_factor: 1,
+          non_converged_haircut: 1,
+          cosine_multiplier: 0.75,
+        },
+        cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+      });
+      expect(outcome.intent?.idempotency_key).toBe(
+        computeIdempotencyKey(INSTRUMENT, DECISION_BAR, 'close', arm),
+      );
+    },
+  );
+
+  it('scales in when the conviction rise equals the delta exactly', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        config: configWith({ scale_in_conviction_delta: 0.25 }),
+        debate: debateResult({ confidence: 0.75 }),
+        positionState: async () => [openPosition({ conviction: 0.5 })],
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('scale_in');
   });
 });
