@@ -3675,6 +3675,66 @@ describe('runCycle: positions held across a split (#1865)', () => {
     ]);
   });
 
+  describe('a held Saxo LSE line, with bars shaped as the refresh writes them (#1899)', () => {
+    function lseBar(date: string, price: number, rawClose: number): DailyBar {
+      return {
+        date,
+        open: price,
+        high: price * 1.01,
+        low: price * 0.99,
+        close: price,
+        volume: 1,
+        rawClose,
+      };
+    }
+
+    function holdIsf(deps: Harness, qty: number, price: number): void {
+      deps.books.applyFill('debate/primary', {
+        instrument: 'ISF',
+        venue: 'saxo',
+        side: 'buy',
+        leg: 'entry',
+        qty,
+        priceGbp: price,
+        feeGbp: 0,
+        clientOrderId: 'seed-isf',
+        tradingDate: '2026-09-25',
+        stopGbp: price * 0.96,
+        targetGbp: price * 1.06,
+      });
+    }
+
+    const isf = (deps: CycleDeps) => deps.books.position('debate/primary', 'ISF');
+
+    it.each([
+      { name: 'forward 10:1 split', qty: 6, before: 100, after: 10, ratio: 10 },
+      { name: '1:10 consolidation', qty: 60, before: 10, after: 100, ratio: 0.1 },
+    ])('rescales qty, stop and target across a $name with no phantom exit or P&L', async (c) => {
+      const deps = harness([], true);
+      holdIsf(deps, c.qty, c.before);
+      const bars = [
+        lseBar('2026-09-23', c.after, c.before),
+        lseBar('2026-09-24', c.after, c.before),
+        lseBar('2026-09-25', c.after, c.before),
+        lseBar('2026-09-28', c.after, c.after),
+        lseBar('2026-09-29', c.after, c.after),
+      ];
+      const before = await runCycle(withMarket(deps, bars), '2026-09-28');
+      expect(isf(deps)).toMatchObject({ qty: c.qty, splitFactor: 1 });
+      const across = await runCycle(withMarket(deps, bars), '2026-09-29');
+      expect(across.exits).toBe(0);
+      expect(isf(deps)).toMatchObject({
+        qty: c.qty * c.ratio,
+        avgPriceGbp: expect.closeTo(c.after, 9),
+        stopGbp: expect.closeTo(c.after * 0.96, 9),
+        targetGbp: expect.closeTo(c.after * 1.06, 9),
+        splitFactor: c.ratio,
+      });
+      expect(across.books[0]?.equity_gbp).toBeCloseTo(before.books[0]?.equity_gbp ?? 0, 1);
+      expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(false);
+    });
+  });
+
   class SplitAlpaca extends FakeAlpaca {
     readonly rearms: { qty: number; stop: number; target: number }[] = [];
     resumeResult: NormalizedOrder | null = null;
