@@ -151,12 +151,18 @@ describe('TABLE_VENUE_SESSIONS.entrySitOut', () => {
 
 describe('TABLE_VENUE_SESSIONS.timeStopPausedVenues', () => {
   it.each([
-    [THANKSGIVING, ['alpaca', 'saxo_cfd_usd']],
-    [UK_BANK_HOLIDAY, ['saxo', 'saxo_cfd_gbp']],
-    [CHRISTMAS, ['alpaca', 'saxo', 'saxo_cfd_gbp', 'saxo_cfd_usd']],
-    [ORDINARY, []],
-    ['2028-01-04', []],
-  ])('%s pauses %j', (date, venues) => {
-    expect(TABLE_VENUE_SESSIONS.timeStopPausedVenues(date)).toEqual(venues);
+    ['2026-11-25', THANKSGIVING, []],
+    [THANKSGIVING, '2026-11-27', ['alpaca', 'saxo_cfd_usd']],
+    [UK_BANK_HOLIDAY, '2026-09-01', ['saxo', 'saxo_cfd_gbp']],
+    ['2026-12-24', '2026-12-28', []],
+    ['2027-03-25', '2027-03-29', []],
+    ['2027-03-29', '2027-03-30', ['saxo', 'saxo_cfd_gbp']],
+    ['2026-09-25', '2026-09-28', []],
+    [ORDINARY, '2026-10-01', []],
+    ['2028-01-03', '2028-01-04', ['saxo', 'saxo_cfd_gbp']],
+    ['2029-01-03', '2029-01-04', []],
+    [undefined, THANKSGIVING, []],
+  ] as const)('a mark on %s then %s pauses %j', (previous, date, venues) => {
+    expect(TABLE_VENUE_SESSIONS.timeStopPausedVenues(previous, date)).toEqual(venues);
   });
 });

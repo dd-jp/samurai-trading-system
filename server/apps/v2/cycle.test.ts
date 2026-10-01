@@ -4291,7 +4291,7 @@ describe('runCycle with per-venue sessions (#1933)', () => {
     expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
   });
 
-  it('a day a venue is closed does not count toward the time stop of its names', async () => {
+  it('the run after a closed venue day, whose mark repeats the bar, does not count toward its time stop', async () => {
     const deps = sessioned([longAapl, longIsf], '2026-11-24T06:30:00.000Z');
     await runCycle(deps, '2026-11-24');
     deps.setDecisions([]);
@@ -4307,13 +4307,18 @@ describe('runCycle with per-venue sessions (#1933)', () => {
     ]);
     await runCycle(deps, '2026-11-26');
     expect(marks()).toEqual([
-      ['AAPL', 1],
+      ['AAPL', 2],
       ['ISF', 2],
     ]);
     await runCycle(deps, '2026-11-27');
     expect(marks()).toEqual([
       ['AAPL', 2],
       ['ISF', 3],
+    ]);
+    await runCycle(deps, '2026-11-30');
+    expect(marks()).toEqual([
+      ['AAPL', 3],
+      ['ISF', 4],
     ]);
   });
 

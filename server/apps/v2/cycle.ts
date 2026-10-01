@@ -1208,7 +1208,7 @@ class Cycle {
       this.tradingDate,
       (i, v) => this.markGbp(i, v),
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
-      this.deps.venueSessions?.timeStopPausedVenues(this.tradingDate),
+      this.deps.venueSessions?.timeStopPausedVenues(previous?.tradingDate, this.tradingDate),
     );
   }
 

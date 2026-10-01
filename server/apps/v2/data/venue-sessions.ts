@@ -18,7 +18,7 @@ export type SitOutCode = 'venue_closed' | 'venue_calendar_uncovered' | 'late_wak
 
 export interface VenueSessionGate {
   entrySitOut(venue: Venue, tradingDate: string, runStartedAt: Date): SitOutCode | undefined;
-  timeStopPausedVenues(tradingDate: string): readonly Venue[];
+  timeStopPausedVenues(previousMarkDate: string | undefined, tradingDate: string): readonly Venue[];
 }
 
 const VENUES: readonly Venue[] = ['alpaca', 'saxo', 'saxo_cfd_gbp', 'saxo_cfd_usd'];
@@ -61,6 +61,19 @@ export function sessionDay(exchange: Exchange, date: string): SessionDay {
   return CALENDARS[exchange].isTradingDay(new Date(`${date}T12:00:00.000Z`)) ? 'open' : 'closed';
 }
 
+function nextDate(date: string): string {
+  const next = new Date(`${date}T12:00:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
+function sessionSince(exchange: Exchange, from: string, before: string): boolean {
+  for (let date = from; date < before; date = nextDate(date)) {
+    if (sessionDay(exchange, date) !== 'closed') return true;
+  }
+  return false;
+}
+
 export function bothVenuesClosed(date: string): boolean {
   return sessionDay('us', date) === 'closed' && sessionDay('lse', date) === 'closed';
 }
@@ -84,7 +97,12 @@ export const TABLE_VENUE_SESSIONS: VenueSessionGate = {
       ? 'late_wake_entry_cutoff'
       : undefined;
   },
-  timeStopPausedVenues(tradingDate) {
-    return VENUES.filter((venue) => sessionDay(exchangeOf(venue), tradingDate) === 'closed');
+  // A run marks the last bar before its trading date, so a closed day repeats the bar on the
+  // run after it: that run, not the holiday's own, is the one that must not count
+  timeStopPausedVenues(previousMarkDate, tradingDate) {
+    if (previousMarkDate === undefined) return [];
+    return VENUES.filter(
+      (venue) => !sessionSince(exchangeOf(venue), previousMarkDate, tradingDate),
+    );
   },
 };
