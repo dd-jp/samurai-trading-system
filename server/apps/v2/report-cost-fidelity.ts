@@ -10,7 +10,7 @@ import type {
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openReadOnlyStore } from '../../shared/store/index.js';
-import { isMainModule } from '../../tools/cli-entrypoint.js';
+import { setExitCodeWhenInvoked, writeOrFail } from '../../tools/cli-entrypoint.js';
 import {
   type BrokerFillPart,
   type BrokerOrder,
@@ -194,15 +194,9 @@ export async function main(
     to = OPEN_WINDOW.to,
     mode = 'paper',
   ] = argv;
-  try {
-    write(await report({ storePath, barRoot, from, to, mode: brokerModeOf(mode) }));
-    return 0;
-  } catch (error) {
-    write(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
+  return writeOrFail(write, () =>
+    report({ storePath, barRoot, from, to, mode: brokerModeOf(mode) }),
+  );
 }
 
-if (isMainModule(import.meta.url)) {
-  process.exitCode = await main(process.argv.slice(2), (line) => console.log(line));
-}
+await setExitCodeWhenInvoked(import.meta.url, () => main(process.argv.slice(2), console.log));
