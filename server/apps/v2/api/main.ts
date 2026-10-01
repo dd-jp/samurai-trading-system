@@ -9,9 +9,10 @@ import {
   sanitizeLogText,
 } from '../../../shared/index.js';
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
-import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
+import { onTerminationSignal, runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import { BarsMarketData, ParquetMarkSource, parseBoeGbpUsdCsv } from '../data/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
+import { parseListenPort } from '../json-http.js';
 import { researchStorePath } from '../trial-ledger.js';
 import { DASHBOARD_TOKEN_ENV_VAR } from './auth.js';
 import { DEFAULT_BUNDLE_ROOT } from './bundle.js';
@@ -36,14 +37,6 @@ export interface V2DashboardArgs {
   readonly mode: V2ModeWire;
   readonly host: string;
   readonly port: number;
-}
-
-function parsePort(raw: string | undefined): number {
-  const port = Number(raw ?? DEFAULT_PORT);
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new Error(`V2_DASHBOARD_PORT must be an integer port (got ${raw})`);
-  }
-  return port;
 }
 
 function storePathFor(dryRun: boolean, store: string | undefined): string {
@@ -81,7 +74,7 @@ export function parseDashboardArgs(
     bundleRoot: values.bundle,
     mode: dryRun ? 'dry-run' : 'paper',
     host: env.HOST ?? '127.0.0.1',
-    port: parsePort(env.V2_DASHBOARD_PORT),
+    port: parseListenPort(env.V2_DASHBOARD_PORT, DEFAULT_PORT, 'V2_DASHBOARD_PORT'),
   };
 }
 
@@ -147,11 +140,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
   const { server, db } = composeV2Dashboard(parseDashboardArgs(argv, env), env, new SystemClock());
   await server.start();
   process.stdout.write(`v2 dashboard API on ${server.url}\n`);
-  const shutdown = () => {
-    void server.stop().finally(() => db.close());
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  onTerminationSignal(() => server.stop().finally(() => db.close()));
 }
 
 void runWhenInvoked(import.meta.url, () => main(process.argv.slice(2), process.env));

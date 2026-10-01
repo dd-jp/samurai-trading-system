@@ -22,6 +22,18 @@ export function declaresLengthOver(req: IncomingMessage, maxBytes: number): bool
   return Number(req.headers['content-length'] ?? 0) > maxBytes;
 }
 
+export function parseListenPort(
+  raw: string | undefined,
+  defaultPort: number,
+  variable: string,
+): number {
+  const port = Number(raw ?? defaultPort);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new Error(`${variable} must be an integer port (got ${raw})`);
+  }
+  return port;
+}
+
 export interface ServerLifecycle {
   start(): Promise<void>;
   stop(): Promise<void>;

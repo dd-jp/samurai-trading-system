@@ -45,6 +45,17 @@ export function runWhenInvoked(
   );
 }
 
+export function onTerminationSignal(
+  shutdown: () => Promise<unknown>,
+  signals: Pick<NodeJS.Process, 'once'> = process,
+): void {
+  const handler = () => {
+    void shutdown();
+  };
+  signals.once('SIGINT', handler);
+  signals.once('SIGTERM', handler);
+}
+
 export function exitCodeOrOne(
   run: Promise<number>,
   stderr: MainProcess['stderr'] = process.stderr,

@@ -19,6 +19,7 @@ export {
 } from './held-quantity.js';
 export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
+export { jsonOrTextResult } from './http/json-or-text.js';
 export type { RawPolygonAggregate } from './http/polygon-aggregates.js';
 export { toPolygonDate, validateRawPolygonAggregate } from './http/polygon-aggregates.js';
 export {
@@ -51,7 +52,9 @@ export { DEFAULT_INJECTABLE_TIMERS } from './injectable-timers.js';
 export { isFiniteNumber } from './is-finite-number.js';
 export { median } from './median.js';
 export { NO_DATA_MARKER } from './no-data-marker.js';
+export { isString, readOhlcvBar } from './ohlcv-bar.js';
 export { parseJsonColumnAsObject } from './parse-json-column.js';
+export { credentialReader } from './require-credential.js';
 export {
   describeThrown,
   describeThrownSafely,

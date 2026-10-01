@@ -5,6 +5,7 @@ import {
   errorStack,
   exitCodeOrOne,
   type MainProcess,
+  onTerminationSignal,
   runWhenInvoked,
 } from './cli-entrypoint.js';
 
@@ -101,6 +102,25 @@ describe('errorMessage and errorStack', () => {
     const withoutStack = new Error('bare');
     Object.defineProperty(withoutStack, 'stack', { value: undefined });
     expect(errorStack(withoutStack)).toBe('bare');
+  });
+});
+
+describe('onTerminationSignal', () => {
+  it('runs the shutdown once on SIGINT or SIGTERM', async () => {
+    const handlers = new Map<string, () => void>();
+    const signals = {
+      once: (event: string, handler: () => void) => {
+        handlers.set(event, handler);
+        return signals;
+      },
+    } as unknown as Pick<NodeJS.Process, 'once'>;
+    let stops = 0;
+    onTerminationSignal(async () => {
+      stops += 1;
+    }, signals);
+    expect([...handlers.keys()]).toEqual(['SIGINT', 'SIGTERM']);
+    handlers.get('SIGTERM')?.();
+    expect(stops).toBe(1);
   });
 });
 

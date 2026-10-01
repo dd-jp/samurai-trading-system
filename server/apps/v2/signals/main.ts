@@ -8,7 +8,7 @@ import {
   sanitizeLogText,
 } from '../../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
-import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
+import { onTerminationSignal, runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import {
   composeV2Root,
   knownSecretsFrom,
@@ -18,6 +18,7 @@ import {
   V2_DRY_RUN_STORE_PATH,
   V2_STORE_PATH,
 } from '../index.js';
+import { parseListenPort } from '../json-http.js';
 import { ALL_PINS, verifyNousPins } from '../signal/index.js';
 import { SIGNAL_POLL_MS, SignalLoop } from './loop.js';
 import { createSignalsServer, type SignalsServer } from './server.js';
@@ -32,11 +33,7 @@ export interface SignalsArgs {
 }
 
 export function parsePort(raw: string | undefined): number {
-  const port = Number(raw ?? DEFAULT_PORT);
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new Error(`V2_SIGNALS_PORT must be an integer port (got ${raw})`);
-  }
-  return port;
+  return parseListenPort(raw, DEFAULT_PORT, 'V2_SIGNALS_PORT');
 }
 
 export function parseSignalsArgs(argv: readonly string[], env: NodeJS.ProcessEnv): SignalsArgs {
@@ -143,15 +140,13 @@ export async function main(
     void loop.tick();
   }, SIGNAL_POLL_MS);
   void loop.tick();
-  const shutdown = () => {
+  onTerminationSignal(() => {
     clearInterval(poll);
-    void loop
+    return loop
       .tick()
       .then(() => server.stop())
       .finally(() => db.close());
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  });
 }
 
 void runWhenInvoked(import.meta.url, () => main(process.argv.slice(2), process.env));
