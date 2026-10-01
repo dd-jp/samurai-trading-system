@@ -93,7 +93,7 @@ export type TelegramFetch = (
   init: { method: string; signal: AbortSignal; headers?: Record<string, string>; body?: string },
 ) => Promise<BotResponse>;
 
-export const TELEGRAM_PING_ENV = 'HEALTHCHECKS_TELEGRAM_PING_URL';
+const TELEGRAM_PING_ENV = 'HEALTHCHECKS_TELEGRAM_PING_URL';
 
 function pollerHeartbeat(
   args: TelegramArgs,
