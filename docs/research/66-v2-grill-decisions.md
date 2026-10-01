@@ -364,6 +364,17 @@ David ruled in chat on the items raised while draining the ready-for-agent backl
 7. **A corporate-action feed will be bought later ([#1887](https://github.com/dd-jp/samurai-trading-system/issues/1887#issuecomment-5939947566) item 5).** `SPLIT_STEP_THRESHOLD` stays as it is until then.
 8. **Concrete broker adapters stay in v1 until Step 5 ([#1946](https://github.com/dd-jp/samurai-trading-system/issues/1946#issuecomment-5939359281)).** Offered relocating the Alpaca and Saxo adapters, token handling and broker-state store now, or moving interfaces only, David chose to leave them in `pipeline/execution` for the Step 5 teardown (#1748); `BrokerAdapter` already lives in `server/shared` (#1945). #1946 is closed as not planned.
 
+## Rulings of 2026-10-01 — replay journal gaps (#1880, #1887)
+
+David ruled in chat on the replay limits in debate spec §11 that need a journal change, asked one at a time, and on #1887 item 6.
+
+1. **Log every LLM call ([#1980](https://github.com/dd-jp/samurai-trading-system/issues/1980)).** A failed call with no billed usage still writes an `llm_call_log` row, and `stop_reason` is recorded on every call.
+2. **Response capture raised to 16,384 characters (#1980).** The 4,096 cap sat below what the pinned max tokens can return.
+3. **Headlines are journalled ([#1981](https://github.com/dd-jp/samurai-trading-system/issues/1981)).** An append-only table holds each name's headlines and source ids per day, so a name whose prompt hit the cap can still be replayed.
+4. **A digest of the inputs, not a snapshot ([#1982](https://github.com/dd-jp/samurai-trading-system/issues/1982)).** Each cycle journals a sha256 of each bar window and of the CFD catalogue it read. A replay then reports an input changed since the day as its own outcome, not as a decision divergence. Bars and the catalogue are not copied per day.
+5. **Split rescales are journalled ([#1983](https://github.com/dd-jp/samurai-trading-system/issues/1983)).** Each rescale of a held position is recorded with its ratio and before/after values, and the replay's book rebuild applies them.
+6. **Fractional splits floor and reconcile ([#1984](https://github.com/dd-jp/samurai-trading-system/issues/1984), [#1887](https://github.com/dd-jp/samurai-trading-system/issues/1887#issuecomment-5942522869) item 6).** A held position rescales to `floor(qty × ratio)`, the remainder is a cash-in-lieu disposal in the tax log, and the reconcile flags any mismatch with the broker's qty.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
