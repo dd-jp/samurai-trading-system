@@ -34,6 +34,10 @@ export function perNameHeadlines(articles: readonly AlpacaNewsArticle[]): readon
   return perNameArticles(articles).map((headline) => headline.title);
 }
 
+export function newsFailureReason(error: unknown): string {
+  return maskCredentials(describeThrownSafely(error));
+}
+
 type FetchOutcome = Pick<NewsRecord, 'status' | 'reason' | 'found' | 'headlines'>;
 
 export class AlpacaNewsSource implements NewsSource {
@@ -48,13 +52,7 @@ export class AlpacaNewsSource implements NewsSource {
     try {
       articles = await this.client.fetchNews([symbol], start, now);
     } catch (error) {
-      const reason = maskCredentials(describeThrownSafely(error));
-      this.#record(symbol, tradingDate, now, {
-        status: 'error',
-        reason,
-        found: undefined,
-        headlines: [],
-      });
+      this.#recordFailure(symbol, tradingDate, now, error);
       throw error;
     }
     const headlines = perNameArticles(articles);
@@ -68,6 +66,19 @@ export class AlpacaNewsSource implements NewsSource {
     return headlines.map((headline) => headline.title);
   }
 
+  // A ledger write failing here must not replace the fetch error the cycle journals as the reason
+  #recordFailure(symbol: string, tradingDate: string, now: Date, error: unknown): void {
+    const reason = newsFailureReason(error);
+    try {
+      this.#record(symbol, tradingDate, now, {
+        status: 'error',
+        reason,
+        found: undefined,
+        headlines: [],
+      });
+    } catch {}
+  }
+
   #record(symbol: string, tradingDate: string, now: Date, outcome: FetchOutcome): void {
     this.ledger?.record({
       tradingDate,
@@ -78,20 +89,6 @@ export class AlpacaNewsSource implements NewsSource {
       ...outcome,
     });
   }
-}
-
-export function journalledUsNewsSource(
-  ledger: Pick<NewsLedger, 'first'>,
-  fallback: NewsSource,
-): NewsSource {
-  return {
-    headlines: (symbol, tradingDate, now) => {
-      const record = ledger.first(ALPACA_NEWS_PROVIDER, tradingDate, symbol);
-      if (record === undefined) return fallback.headlines(symbol, tradingDate, now);
-      if (record.status === 'error') return Promise.reject(new Error(record.reason));
-      return Promise.resolve(record.headlines.map((headline) => headline.title));
-    },
-  };
 }
 
 export interface NewsRoutes {

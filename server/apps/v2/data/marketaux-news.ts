@@ -15,7 +15,7 @@ import type {
   StoredHeadline,
 } from './news-ledger.js';
 
-const MARKETAUX_PROVIDER = 'marketaux';
+export const MARKETAUX_PROVIDER = 'marketaux';
 // free tier is 100 requests a day; the gap covers manual probes on the same key and an unknown reset timezone
 export const MARKETAUX_REQUEST_CEILING = 80;
 // documented 429 is "too many requests in the past 60 seconds"

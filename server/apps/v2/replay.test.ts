@@ -13,7 +13,7 @@ import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';
 import type { NewsSource, VenueSessionGate } from './data/index.js';
-import { AlpacaNewsSource, SqliteNewsLedger } from './data/index.js';
+import { AlpacaNewsSource, MarketauxNewsSource, SqliteNewsLedger } from './data/index.js';
 import { composeV2Root } from './index.js';
 import {
   compareDecision,
@@ -322,6 +322,49 @@ describe('replay from the US headline journal (#1981)', () => {
         field: 'inputs_hash',
         replayed: '',
       }),
+    );
+  });
+});
+
+describe('replay from the UK headline journal (#1981)', () => {
+  it('replays identical a UK name whose logged prompt hit the capture cap, from its marketaux rows', async () => {
+    const storePath = join(directory, 'capped-uk.sqlite');
+    const writer = openSharedStore(storePath);
+    const publishedAt = new Date(Date.parse(`${TRADING_DATE}T07:30:00.000Z`) - 3_600_000);
+    const articles = Array.from({ length: 10 }, (_, index) => ({
+      title: `UP plc headline ${index} ${'y'.repeat(2_000)}`,
+      publishedAt: new Date(publishedAt.getTime() - index * 60_000).toISOString(),
+      companyCount: 1,
+    }));
+    const news = new MarketauxNewsSource({
+      client: { fetchArticles: () => Promise.resolve({ found: articles.length, articles }) },
+      ledger: new SqliteNewsLedger(guardedStore(writer, 'v2')),
+    });
+    try {
+      await runFixtureDay(storePath, news);
+    } finally {
+      writer.close();
+    }
+    const db = new BetterSqlite3(storePath, { readonly: true });
+    const prompts = db
+      .prepare(`SELECT prompt FROM llm_call_log WHERE trace_id = 'v2-${TRADING_DATE}-UP'`)
+      .all() as { prompt: string }[];
+    const providers = db.prepare('SELECT DISTINCT provider, status FROM v2_news').all();
+    db.close();
+    expect(providers).toEqual([{ provider: 'marketaux', status: 'ok' }]);
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts.every((row) => row.prompt.length >= MAX_CAPTURED_PROMPT_CHARS)).toBe(true);
+    const result = await replayFromFiles({ ...options, storePath });
+    expect(result.decisions).toBe(3);
+    expect(result.divergences).toEqual([]);
+    const unjournalled = join(directory, 'capped-uk-unjournalled.sqlite');
+    copyFileSync(storePath, unjournalled);
+    const tamper = new BetterSqlite3(unjournalled);
+    tamper.exec('DROP TRIGGER v2_news_no_delete; DELETE FROM v2_news');
+    tamper.close();
+    const fallback = await replayFromFiles({ ...options, storePath: unjournalled });
+    expect(fallback.divergences).toContainEqual(
+      expect.objectContaining({ instrument: 'UP', field: 'inputs_hash', replayed: '' }),
     );
   });
 });

@@ -8,7 +8,7 @@ import {
   type BarsMarketData,
   type BarsSource,
   type CfdCatalogue,
-  journalledUsNewsSource,
+  journalledNewsSource,
   macroGate,
   SqliteNewsLedger,
 } from './data/index.js';
@@ -243,7 +243,7 @@ function replaySleeves(
     bars: inputs.bars,
     constituents: inputs.constituents,
     market: inputs.market,
-    news: journalledUsNewsSource(new SqliteNewsLedger(inputs.db), loggedNewsSource(calls)),
+    news: journalledNewsSource(new SqliteNewsLedger(inputs.db), loggedNewsSource(calls)),
     clock: { now: () => new Date(`${inputs.tradingDate}T00:00:00.000Z`) },
     logger,
     router: venueRouterFor(inputs.catalogue, inputs.cfdEntryRefusal ?? cfdEntryRefusal),

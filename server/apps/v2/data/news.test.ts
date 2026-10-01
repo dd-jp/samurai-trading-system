@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/sources/alpaca-news-client.js';
 import { guardedStore, openSharedStore } from '../../../shared/store/index.js';
+import { journalledNewsSource } from './journalled-news.js';
 import {
   ALPACA_NEWS_PROVIDER,
   AlpacaNewsSource,
-  journalledUsNewsSource,
   MAX_HEADLINES_PER_NAME,
   NO_NEWS,
+  newsFailureReason,
   newsForVenue,
   perNameHeadlines,
 } from './news.js';
@@ -138,7 +139,35 @@ describe('US headline journal (#1981)', () => {
     expect(row?.reason).not.toContain('abcdefghijklmnopqrstuvwxyz');
   });
 
-  it('replays the first journalled fetch per name, rejects a journalled failure and falls back otherwise', async () => {
+  it('rethrows the fetch error, not a ledger failure, and masks the reason the cycle journals', async () => {
+    const failing = {
+      record: () => {
+        throw new Error('SQLITE_BUSY');
+      },
+    };
+    const source = new AlpacaNewsSource(
+      { fetchNews: () => Promise.reject(new Error('HTTP 500')) },
+      failing,
+    );
+    await expect(source.headlines('NVDA', '2026-09-25', NOW)).rejects.toEqual(
+      new Error('HTTP 500'),
+    );
+    const masked = newsFailureReason(new Error('HTTP 500 Bearer abcdefghijklmnopqrstuvwxyz'));
+    expect(masked).not.toContain('abcdefghijklmnopqrstuvwxyz');
+    expect(newsFailureReason(new Error(masked))).toBe(masked);
+  });
+
+  it('skips the name when the ledger cannot record a successful fetch', async () => {
+    const failing = {
+      record: () => {
+        throw new Error('SQLITE_FULL');
+      },
+    };
+    const source = new AlpacaNewsSource(fetcher([article(1, 'x', ['NVDA'])]), failing);
+    await expect(source.headlines('NVDA', '2026-09-25', NOW)).rejects.toThrow('SQLITE_FULL');
+  });
+
+  it('replays the first journalled lookup per name, US failures rejected and UK failures as NO_NEWS, and falls back otherwise', async () => {
     const ledger = journal();
     const live = new AlpacaNewsSource(fetcher([article(1, 'first', ['NVDA'])]), ledger);
     await live.headlines('NVDA', '2026-09-25', NOW);
@@ -150,25 +179,42 @@ describe('US headline journal (#1981)', () => {
     await new AlpacaNewsSource({ fetchNews: () => Promise.reject(new Error('HTTP 503')) }, ledger)
       .headlines('AMD', '2026-09-25', NOW)
       .catch(() => undefined);
-    ledger.record({
+    const uk = {
       tradingDate: '2026-09-25',
-      symbol: 'VOD',
       provider: 'marketaux',
-      status: 'ok',
-      reason: 'found=1',
       requested: true,
-      found: 1,
-      headlines: [{ title: 'uk', publishedAt: '2026-09-24T09:00:00.000Z' }],
       fetchedAt: NOW.toISOString(),
+    };
+    ledger.record({
+      ...uk,
+      symbol: 'VOD',
+      status: 'ok',
+      reason: 'found=2',
+      found: 2,
+      headlines: [
+        { title: 'uk', publishedAt: '2026-09-24T09:00:00.000Z' },
+        { title: 'after fetch', publishedAt: '2026-09-25T08:00:00.000Z' },
+      ],
     });
-    const replayed = journalledUsNewsSource(ledger, {
+    ledger.record({ ...uk, symbol: 'VOD', status: 'ok', reason: 'rerun', found: 0, headlines: [] });
+    ledger.record({
+      ...uk,
+      symbol: 'BP',
+      status: 'error',
+      reason: 'http_500',
+      found: undefined,
+      headlines: [],
+    });
+    const replayed = journalledNewsSource(ledger, {
       headlines: (symbol) => Promise.resolve([`fallback ${symbol}`]),
     });
     expect(await replayed.headlines('NVDA', '2026-09-25', NOW)).toEqual(['first']);
     await expect(replayed.headlines('AMD', '2026-09-25', NOW)).rejects.toEqual(
       new Error('HTTP 503'),
     );
-    expect(await replayed.headlines('VOD', '2026-09-25', NOW)).toEqual(['fallback VOD']);
+    expect(await replayed.headlines('VOD', '2026-09-25', NOW)).toEqual(['uk']);
+    expect(await replayed.headlines('BP', '2026-09-25', NOW)).toEqual([]);
+    expect(await replayed.headlines('SHEL', '2026-09-25', NOW)).toEqual(['fallback SHEL']);
     expect(await replayed.headlines('NVDA', '2026-09-24', NOW)).toEqual(['fallback NVDA']);
   });
 });
