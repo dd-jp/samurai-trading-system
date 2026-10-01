@@ -1,5 +1,5 @@
+import type { Logger } from '../../shared/index.js';
 import { type Clock, currentTraceId, logCaughtFailure, safeLog } from '../../shared/index.js';
-import type { Logger } from '../../shared/types/primitives.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 import { computeIndicator } from './indicators.js';
 import { collectMarks } from './marks-batch.js';

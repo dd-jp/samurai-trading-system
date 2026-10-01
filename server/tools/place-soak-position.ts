@@ -4,8 +4,8 @@ import {
   buildDefaultAlpacaBrokerClient,
   JsonLogger,
   loggingAlertChannel,
+  resolveUsEquitySessionCalendar,
 } from '../apps/orchestrator/index.js';
-import { resolveUsEquitySessionCalendar } from '../apps/orchestrator/production/us-equity-session-source.js';
 import {
   ALPACA_CREDENTIAL_ENV_VARS,
   AlpacaBrokerAdapter,

@@ -1,4 +1,4 @@
-import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/sources/alpaca-news-client.js';
+import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/index.js';
 import { addDays } from './macro-calendar.js';
 
 export const MAX_HEADLINES_PER_NAME = 10;

@@ -1,28 +1,28 @@
-import type { Logger } from '../apps/orchestrator/index.js';
+import type {
+  DataFailoverAlert,
+  DataFailoverAlertChannel,
+  Logger,
+} from '../apps/orchestrator/index.js';
 import {
   buildAlertChannels,
   DEFAULT_UNIVERSE,
+  FIRST_TICK_BAR_WINDOWS,
   JsonLogger,
   loggingAlertChannel,
   resolveAlertsMode,
   type UniverseInstrument,
 } from '../apps/orchestrator/index.js';
-import { FIRST_TICK_BAR_WINDOWS } from '../apps/orchestrator/production/bar-prefetch.js';
-import type {
-  DataFailoverAlert,
-  DataFailoverAlertChannel,
-} from '../apps/orchestrator/production/data-failover.js';
+import type { FailoverAlerter } from '../providers/market-data-service/index.js';
 import {
   AlpacaHttpDataClient,
   type Bar,
   type BarWindow,
   closeTimeOf,
   type MarketDataStore,
+  PolygonBarsClient,
   SqliteMarketDataStore,
+  withOhlcvFailover,
 } from '../providers/market-data-service/index.js';
-import type { FailoverAlerter } from '../providers/market-data-service/sources/ohlcv-failover.js';
-import { withOhlcvFailover } from '../providers/market-data-service/sources/ohlcv-failover.js';
-import { PolygonBarsClient } from '../providers/market-data-service/sources/polygon-bars-client.js';
 import {
   describeThrownSafely,
   resolvePolygonPacing,
