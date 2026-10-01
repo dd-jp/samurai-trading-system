@@ -1,10 +1,19 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
+import {
+  readKeepAliveState,
+  SaxoSessionLostError,
+  writeKeepAliveState,
+} from '../../pipeline/execution/index.js';
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import {
+  type ChartPage,
   type ChartSample,
   type InstrumentDetails,
   isSpliced,
@@ -12,6 +21,9 @@ import {
   type SaxoLine,
 } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
+import { type BarRefresh, type BarRefreshReport, inSequence } from './bar-refresh-core.js';
+import { cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
+import { saxoSessionRefusal } from './execution/index.js';
 import {
   historyRescaleFactor,
   refreshSaxoBars,
@@ -27,6 +39,10 @@ afterAll(() => {
 
 function storeRoot(): string {
   return join(mkdtempSync(join(tmpdir(), 'saxo-bar-refresh-')), 'parquet');
+}
+
+function tokenPath(): string {
+  return join(mkdtempSync(join(tmpdir(), 'saxo-bar-refresh-token-')), 'live.json');
 }
 
 async function openStore(root: string = storeRoot()): Promise<ParquetBarStore> {
@@ -831,6 +847,7 @@ describe('saxoBarRefreshFor', () => {
     stopped.length = 0;
     const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
       storeRoot: root,
+      tokenPath: tokenPath(),
       connect: connectWith(fixtures),
     }).run();
     expect(report.failed).toEqual([]);
@@ -849,6 +866,7 @@ describe('saxoBarRefreshFor', () => {
     stopped.length = 0;
     const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
       storeRoot: root,
+      tokenPath: tokenPath(),
       connect: connectWith({}),
     }).run();
     expect(report.failed.map((f) => f.symbol)).toEqual(['saxo']);
@@ -862,6 +880,7 @@ describe('saxoBarRefreshFor', () => {
     try {
       const report = await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
         storeRoot: root,
+        tokenPath: tokenPath(),
         connect: connectWith({}),
       }).run();
       expect(report.failed.length).toBeGreaterThan(0);
@@ -880,6 +899,7 @@ describe('saxoBarRefreshFor', () => {
     try {
       const report = await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
         storeRoot: root,
+        tokenPath: tokenPath(),
         connect: connectWith({}),
       }).run();
       expect(report.failed.map((f) => f.symbol)).toEqual(['saxo']);
@@ -893,6 +913,7 @@ describe('saxoBarRefreshFor', () => {
     const { entries, logger } = recorder();
     const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
       storeRoot: storeRoot(),
+      tokenPath: tokenPath(),
     }).run();
     expect(report.failed).toEqual([
       { symbol: 'saxo', reason: expect.stringMatching(/SAXO_LIVE_APP_KEY/) },
@@ -904,6 +925,7 @@ describe('saxoBarRefreshFor', () => {
     const { entries, logger } = recorder();
     const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
       storeRoot: storeRoot(),
+      tokenPath: tokenPath(),
       connect: () => {
         throw new Error('Saxo token dead, needs `npm run saxo:login` (expired)');
       },
@@ -920,6 +942,242 @@ describe('saxoBarRefreshFor', () => {
         level: 'warn',
         message: expect.stringContaining('npm run saxo:login'),
       }),
+    ]);
+  });
+
+  it('records no session loss for a failure that is not one', async () => {
+    const path = tokenPath();
+    await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+      storeRoot: storeRoot(),
+      tokenPath: path,
+    }).run();
+    expect(readKeepAliveState(path)).toEqual({});
+  });
+});
+
+const NO_REPORT: BarRefreshReport = { attempted: 0, updated: [], noNewBars: [], failed: [] };
+
+function allLineFixtures(): Record<string, Fixture> {
+  return Object.fromEntries(
+    LSE_LINES.map(({ tidm }) => [tidm, { samples: samplesFor(line(tidm), closes(DATES, 10)) }]),
+  );
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('saxoBarRefreshFor time cap and session stop (#1900)', () => {
+  it('cuts a hung Saxo pull at the cap, reports it, and lets the next leg run', async () => {
+    const hung = {
+      instrumentDetails: () => new Promise<InstrumentDetails>(() => undefined),
+      dailyHistory: () => new Promise<ChartPage>(() => undefined),
+    };
+    const ran: string[] = [];
+    const next: BarRefresh = {
+      run: async () => {
+        ran.push('next');
+        return NO_REPORT;
+      },
+    };
+    const { entries, logger } = recorder();
+    const saxo = saxoBarRefreshFor({}, TRADING_DATE, logger, {
+      storeRoot: storeRoot(),
+      tokenPath: tokenPath(),
+      connect: () => ({ api: hung, stop: async () => undefined }),
+      timeLimitMs: 20,
+    });
+    const report = await inSequence([saxo, next]).run();
+    expect(report.failed).toEqual([
+      { symbol: 'saxo', reason: expect.stringContaining('cut at the 0.02 s cap') },
+    ]);
+    expect(ran).toEqual(['next']);
+    expect(entries.map((entry) => [entry.event, entry.level])).toEqual([
+      ['v2_saxo_bar_refresh_unavailable', 'warn'],
+    ]);
+  });
+
+  it('writes nothing once the cap has passed, then stops the session', async () => {
+    const root = storeRoot();
+    const api = fakeApi(allLineFixtures());
+    const slow = {
+      instrumentDetails: api.instrumentDetails,
+      dailyHistory: async (uic: number) => {
+        await sleep(60);
+        return api.dailyHistory(uic);
+      },
+    };
+    let stops = 0;
+    await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+      storeRoot: root,
+      tokenPath: tokenPath(),
+      connect: () => ({
+        api: slow,
+        stop: async () => {
+          stops += 1;
+        },
+      }),
+      timeLimitMs: 20,
+    }).run();
+    await vi.waitFor(() => expect(stops).toBe(1), { timeout: 2_000 });
+    expect((await (await openStore(root)).readVenue('saxo')).size).toBe(0);
+  });
+
+  it('keeps a successful report when stopping the session throws', async () => {
+    const { entries, logger } = recorder();
+    const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
+      storeRoot: storeRoot(),
+      tokenPath: tokenPath(),
+      connect: () => ({
+        api: fakeApi(allLineFixtures()),
+        stop: async () => {
+          throw new Error('stop failed');
+        },
+      }),
+    }).run();
+    expect(report.failed).toEqual([]);
+    expect(report.updated).toHaveLength(22);
+    expect(entries.filter((entry) => entry.event === 'v2_saxo_session_stop_failed')).toEqual([
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('stop failed') }),
+    ]);
+  });
+});
+
+describe('a Saxo session lost during the bar refresh (#1902)', () => {
+  const NOW = new Date('2026-09-29T12:00:00.000Z');
+
+  function liveToken(path: string, obtainedAt: Date): void {
+    writeTokenFile(path, {
+      environment: 'live',
+      accessToken: 'access-fixture',
+      refreshToken: 'refresh-fixture',
+      accessTokenExpiresAt: new Date(obtainedAt.getTime() - 60_000).toISOString(),
+      refreshTokenExpiresAt: new Date(obtainedAt.getTime() + 3_600_000).toISOString(),
+      obtainedAt: obtainedAt.toISOString(),
+    });
+  }
+
+  async function rejectingTokenEndpoint() {
+    let hits = 0;
+    const server = createServer((_request, response) => {
+      hits += 1;
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end('{"error":"invalid_grant"}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    return {
+      url: `http://127.0.0.1:${port}/token`,
+      hits: () => hits,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  it('writes the loss to the keep-alive state, so the LSE refusal is immediate and the outage raises one critical alert', async () => {
+    const endpoint = await rejectingTokenEndpoint();
+    try {
+      const path = tokenPath();
+      liveToken(path, new Date(Date.now() - 1_000_000));
+      const env = {
+        SAXO_LIVE_APP_KEY: 'app-key-fixture',
+        SAXO_LIVE_APP_SECRET: 'app-secret-fixture',
+        SAXO_LIVE_TOKEN_URL: endpoint.url,
+      };
+      const root = storeRoot();
+      const legs = (logger: Logger) =>
+        inSequence([
+          saxoBarRefreshFor(env, TRADING_DATE, logger, { storeRoot: root, tokenPath: path }),
+          cfdCatalogueRefreshFor(env, {
+            tradingDate: TRADING_DATE,
+            constituents: [],
+            path: join(mkdtempSync(join(tmpdir(), 'cfd-')), 'catalogue.json'),
+            logger,
+            tokenPath: path,
+          }),
+        ]);
+      const first = recorder();
+      await legs(first.logger).run();
+      const errors = (entries: Parameters<Logger['log']>[0][]) =>
+        entries.filter((entry) => entry.level === 'error').map((entry) => entry.event);
+      expect(errors(first.entries)).toEqual(['saxo_session_lost']);
+      expect(readKeepAliveState(path).lostReason).toContain('HTTP 401');
+      expect(saxoSessionRefusal(new Date(), path)).toContain('the Saxo live session was lost');
+
+      const second = recorder();
+      await legs(second.logger).run();
+      expect(errors(second.entries)).toEqual([]);
+      expect(endpoint.hits()).toBe(1);
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it('records a loss the session reports after the run and keeps the report', async () => {
+    const path = tokenPath();
+    liveToken(path, new Date(NOW.getTime() - 1_000_000));
+    const report = await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+      storeRoot: storeRoot(),
+      tokenPath: path,
+      now: () => NOW,
+      connect: () => ({
+        api: fakeApi(allLineFixtures()),
+        stop: async () => undefined,
+        lostReason: () => 'the refresh token was rejected (HTTP 401)',
+      }),
+    }).run();
+    expect(report.updated).toHaveLength(22);
+    expect(readKeepAliveState(path)).toEqual({
+      lostAt: NOW.toISOString(),
+      lostReason: 'the refresh token was rejected (HTTP 401)',
+    });
+  });
+
+  it('records a session that is already dead when it opens', async () => {
+    const path = tokenPath();
+    liveToken(path, new Date(NOW.getTime() - 1_000_000));
+    await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+      storeRoot: storeRoot(),
+      tokenPath: path,
+      now: () => NOW,
+      connect: () => {
+        throw new SaxoSessionLostError('Saxo token dead, needs `npm run saxo:login` (rejected)');
+      },
+    }).run();
+    expect(readKeepAliveState(path).lostAt).toBe(NOW.toISOString());
+  });
+
+  it('does not reconnect while a recorded loss stands', async () => {
+    const path = tokenPath();
+    liveToken(path, new Date(NOW.getTime() - 1_000_000));
+    writeKeepAliveState(path, { lostAt: NOW.toISOString(), lostReason: 'rejected' });
+    const connect = vi.fn();
+    const { entries, logger } = recorder();
+    const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
+      storeRoot: storeRoot(),
+      tokenPath: path,
+      connect,
+    }).run();
+    expect(connect).not.toHaveBeenCalled();
+    expect(report.failed).toEqual([
+      { symbol: 'saxo', reason: expect.stringContaining('was lost (rejected)') },
+    ]);
+    expect(entries.map((entry) => entry.level)).toEqual(['warn']);
+  });
+
+  it('warns and keeps the report when the keep-alive state cannot be written', async () => {
+    const blocker = join(mkdtempSync(join(tmpdir(), 'saxo-blocked-')), 'file');
+    writeFileSync(blocker, '');
+    const { entries, logger } = recorder();
+    const report = await saxoBarRefreshFor({}, TRADING_DATE, logger, {
+      storeRoot: storeRoot(),
+      tokenPath: join(blocker, 'live.json'),
+      connect: () => ({
+        api: fakeApi(allLineFixtures()),
+        stop: async () => undefined,
+        lostReason: () => 'rejected',
+      }),
+    }).run();
+    expect(report.updated).toHaveLength(22);
+    expect(entries.filter((entry) => entry.event === 'v2_saxo_session_loss_unrecorded')).toEqual([
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('(rejected)') }),
     ]);
   });
 });

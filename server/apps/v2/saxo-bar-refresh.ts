@@ -29,8 +29,15 @@ import {
   recordOutcome,
   roundPrices,
   type SymbolOutcome,
+  withinTimeLimit,
 } from './bar-refresh-core.js';
 import { isFresh } from './data/index.js';
+import {
+  connectUnlessLost,
+  ledgerFor,
+  noteSessionLoss,
+  type SaxoSessionLedger,
+} from './saxo-session-loss.js';
 import { LSE_LINES } from './signal/index.js';
 
 const HISTORY_RESCALE_TOLERANCE = 0.05;
@@ -48,6 +55,7 @@ export interface SaxoBarRefreshOptions {
   readonly tradingDate: string;
   readonly lines: readonly SaxoLine[];
   readonly logger: Logger;
+  readonly signal?: AbortSignal;
 }
 
 function median(values: readonly number[]): number | undefined {
@@ -235,6 +243,7 @@ async function refreshLine(
     assertNoShrink(line.tidm, existing, rounded);
     assertHistoryConsistent(line.tidm, existing, rounded);
   }
+  options.signal?.throwIfAborted();
   await options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]);
   warnIfShapeRepaired(line.tidm, repaired.report, options.logger);
   warnIfRescaled(existing, rounded, options.logger);
@@ -279,6 +288,7 @@ export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<B
   const existing = await options.store.readVenue(SAXO_VENUE);
   const buckets: Buckets = { updated: [], noNewBars: [], failed: [] };
   for (const line of options.lines) {
+    if (options.signal?.aborted) break;
     warnIfUnguarded(line.tidm, existing, options.logger);
     const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
     recordOutcome(outcome, buckets, options.logger);
@@ -295,32 +305,71 @@ export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<B
 export interface SaxoSession {
   readonly api: SaxoBarsApi;
   readonly stop: () => Promise<void>;
+  readonly lostReason?: () => string | undefined;
 }
+
+type SaxoConnect = (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
+
+// Each 429 costs a 65 s backoff and each request may wait 60 s, so an all-429 day runs past 1.5
+// hours; ten minutes covers a clean pull of the 22 lines with room for several backoffs
+export const SAXO_REFRESH_TIME_LIMIT_MS = 10 * 60_000;
 
 export interface SaxoBarRefreshDeps {
   readonly storeRoot?: string;
-  readonly connect?: (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
+  readonly connect?: SaxoConnect;
+  readonly tokenPath?: string;
+  readonly now?: () => Date;
+  readonly timeLimitMs?: number;
 }
 
-const connectLive = (env: NodeJS.ProcessEnv, logger: Logger): SaxoSession =>
-  openSaxoLiveSession(env, undefined, logger);
+interface SaxoLeg {
+  readonly env: NodeJS.ProcessEnv;
+  readonly tradingDate: string;
+  readonly storeRoot: string;
+  readonly connect: SaxoConnect;
+  readonly ledger: SaxoSessionLedger;
+}
+
+async function stopQuietly(session: SaxoSession, logger: Logger): Promise<void> {
+  try {
+    await session.stop();
+  } catch (error) {
+    logRefresh(
+      logger,
+      'warn',
+      'v2_saxo_session_stop_failed',
+      `Saxo session did not stop cleanly after the bar refresh (${messageOf(error)}); the refresh result stands`,
+    );
+  }
+}
 
 async function refreshInSession(
   session: SaxoSession,
-  storeRoot: string,
-  tradingDate: string,
-  logger: Logger,
+  leg: SaxoLeg,
+  signal: AbortSignal,
 ): Promise<BarRefreshReport> {
+  const logger = leg.ledger.logger;
   try {
-    const store = await ParquetBarStore.open(storeRoot);
+    const store = await ParquetBarStore.open(leg.storeRoot);
     try {
       const lines = saxoRefreshLines();
-      return await refreshSaxoBars({ api: session.api, store, tradingDate, lines, logger });
+      const { tradingDate } = leg;
+      return await refreshSaxoBars({ api: session.api, store, tradingDate, lines, logger, signal });
     } finally {
       store.close();
     }
   } finally {
-    await session.stop();
+    noteSessionLoss(session.lostReason?.(), leg.ledger);
+    await stopQuietly(session, logger);
+  }
+}
+
+async function connectAndRefresh(leg: SaxoLeg, signal: AbortSignal): Promise<BarRefreshReport> {
+  try {
+    const session = connectUnlessLost(() => leg.connect(leg.env, leg.ledger.logger), leg.ledger);
+    return await refreshInSession(session, leg, signal);
+  } catch (error) {
+    return unavailable(messageOf(error), leg.ledger.logger);
   }
 }
 
@@ -342,15 +391,20 @@ export function saxoBarRefreshFor(
   logger: Logger,
   deps: SaxoBarRefreshDeps = {},
 ): BarRefresh {
-  const connect = deps.connect ?? connectLive;
-  const storeRoot = deps.storeRoot ?? DEFAULT_BAR_STORE_ROOT;
+  const leg: SaxoLeg = {
+    env,
+    tradingDate,
+    storeRoot: deps.storeRoot ?? DEFAULT_BAR_STORE_ROOT,
+    connect: deps.connect ?? ((liveEnv, log) => openSaxoLiveSession(liveEnv, deps.tokenPath, log)),
+    ledger: ledgerFor(deps, logger),
+  };
+  const limitMs = deps.timeLimitMs ?? SAXO_REFRESH_TIME_LIMIT_MS;
+  const expired = () =>
+    unavailable(
+      `cut at the ${limitMs / 1000} s cap; lines not yet written keep their stored bars`,
+      logger,
+    );
   return {
-    run: async () => {
-      try {
-        return await refreshInSession(connect(env, logger), storeRoot, tradingDate, logger);
-      } catch (error) {
-        return unavailable(messageOf(error), logger);
-      }
-    },
+    run: () => withinTimeLimit(limitMs, (signal) => connectAndRefresh(leg, signal), expired),
   };
 }

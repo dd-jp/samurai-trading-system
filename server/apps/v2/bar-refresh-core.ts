@@ -108,6 +108,32 @@ export function recordOutcome(outcome: SymbolOutcome, buckets: Buckets, logger: 
   }
 }
 
+const EXPIRED = Symbol('expired');
+
+// The work is abandoned, not awaited, at the limit: it sees the aborted signal and must not
+// write after it
+export async function withinTimeLimit<T>(
+  limitMs: number,
+  work: (signal: AbortSignal) => Promise<T>,
+  onExpiry: () => T,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<typeof EXPIRED>((resolve) => {
+    timer = setTimeout(() => resolve(EXPIRED), limitMs);
+  });
+  const running = work(controller.signal);
+  try {
+    const outcome = await Promise.race([running, expiry]);
+    if (outcome !== EXPIRED) return outcome;
+    controller.abort();
+    running.catch(() => undefined);
+    return onExpiry();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function mergeReports(reports: readonly BarRefreshReport[]): BarRefreshReport {
   return {
     attempted: reports.reduce((sum, report) => sum + report.attempted, 0),

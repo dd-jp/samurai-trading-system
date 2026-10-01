@@ -2,7 +2,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { StaticSaxoTokenSource } from '../../pipeline/execution/index.js';
+import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
+import { readKeepAliveState, StaticSaxoTokenSource } from '../../pipeline/execution/index.js';
 import type { FetchResult } from '../../providers/bar-store/index.js';
 import { SaxoReadOnlyApi } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
@@ -492,7 +493,7 @@ describe('cfdCatalogueRefreshFor', () => {
     const { entries, logger } = recorder();
     const leg = cfdCatalogueRefreshFor(
       { K: 'v' },
-      { tradingDate: AS_OF, constituents: ['AAPL'], path, logger, connect },
+      { tradingDate: AS_OF, constituents: ['AAPL'], path, logger, connect, tokenPath: tempPath() },
     );
     expect(await leg.run()).toEqual({ attempted: 0, updated: [], noNewBars: [], failed: [] });
     expect(connect).toHaveBeenCalledWith({ K: 'v' }, logger);
@@ -512,6 +513,7 @@ describe('cfdCatalogueRefreshFor', () => {
         constituents: ['MSFT'],
         path,
         logger,
+        tokenPath: tempPath(),
         connect: () => ({ api: fakeSaxo({ ...FIXTURE, listings: {} }).api, stop }),
       },
     );
@@ -532,6 +534,7 @@ describe('cfdCatalogueRefreshFor', () => {
         constituents: [],
         path: tempPath(),
         logger,
+        tokenPath: tempPath(),
         connect: () => {
           throw new Error('Saxo token dead');
         },
@@ -545,8 +548,55 @@ describe('cfdCatalogueRefreshFor', () => {
     const { entries, logger } = recorder();
     const path = join(mkdtempSync(join(tmpdir(), 'cfd-live-')), 'c.json');
     writeFileSync(path, 'untouched');
-    await cfdCatalogueRefreshFor({}, { tradingDate: AS_OF, constituents: [], path, logger }).run();
+    await cfdCatalogueRefreshFor(
+      {},
+      { tradingDate: AS_OF, constituents: [], path, logger, tokenPath: tempPath() },
+    ).run();
     expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_failed']);
     expect(readFileSync(path, 'utf8')).toBe('untouched');
+  });
+
+  it('does not reconnect once a Saxo session loss is recorded, and records one it sees (#1902)', async () => {
+    const tokenPath = join(mkdtempSync(join(tmpdir(), 'cfd-token-')), 'live.json');
+    const now = new Date('2026-09-29T12:00:00.000Z');
+    writeTokenFile(tokenPath, {
+      environment: 'live',
+      accessToken: 'access-fixture',
+      refreshToken: 'refresh-fixture',
+      accessTokenExpiresAt: '2026-09-29T12:20:00.000Z',
+      refreshTokenExpiresAt: '2026-09-29T13:00:00.000Z',
+      obtainedAt: '2026-09-29T11:00:00.000Z',
+    });
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const connect = vi.fn(() => ({
+      api: fakeSaxo().api,
+      stop,
+      lostReason: () => 'the refresh token was rejected (HTTP 401)',
+    }));
+    const leg = (logger: Logger) =>
+      cfdCatalogueRefreshFor(
+        {},
+        {
+          tradingDate: AS_OF,
+          constituents: ['AAPL'],
+          path: tempPath(),
+          logger,
+          connect,
+          tokenPath,
+          now: () => now,
+        },
+      );
+    await leg(recorder().logger).run();
+    expect(readKeepAliveState(tokenPath)).toEqual({
+      lostAt: now.toISOString(),
+      lostReason: 'the refresh token was rejected (HTTP 401)',
+    });
+    const { entries, logger } = recorder();
+    await leg(logger).run();
+    expect(connect).toHaveBeenCalledOnce();
+    expect(entries.map((entry) => [entry.event, entry.level])).toEqual([
+      ['v2_cfd_catalogue_refresh_failed', 'warn'],
+    ]);
+    expect(entries[0]?.message).toContain('was lost (the refresh token was rejected (HTTP 401))');
   });
 });

@@ -1,5 +1,54 @@
 import { describe, expect, it } from 'vitest';
-import { type BarRefresh, type BarRefreshReport, inSequence } from './bar-refresh-core.js';
+import {
+  type BarRefresh,
+  type BarRefreshReport,
+  inSequence,
+  withinTimeLimit,
+} from './bar-refresh-core.js';
+
+describe('withinTimeLimit', () => {
+  it('returns the work result inside the limit and leaves its signal unaborted', async () => {
+    let seen: AbortSignal | undefined;
+    const result = await withinTimeLimit(
+      1_000,
+      async (signal) => {
+        seen = signal;
+        return 'done';
+      },
+      () => 'expired',
+    );
+    expect(result).toBe('done');
+    expect(seen?.aborted).toBe(false);
+  });
+
+  it('returns the expiry result at the limit, aborts the work and absorbs its later rejection', async () => {
+    let seen: AbortSignal | undefined;
+    let reject: (error: Error) => void = () => undefined;
+    const result = await withinTimeLimit(
+      10,
+      (signal) => {
+        seen = signal;
+        return new Promise<string>((_resolve, rejectWork) => {
+          reject = rejectWork;
+        });
+      },
+      () => 'expired',
+    );
+    expect(result).toBe('expired');
+    expect(seen?.aborted).toBe(true);
+    reject(new Error('late'));
+  });
+
+  it('passes a rejection inside the limit through', async () => {
+    await expect(
+      withinTimeLimit(
+        1_000,
+        () => Promise.reject(new Error('boom')),
+        () => 'expired',
+      ),
+    ).rejects.toThrow('boom');
+  });
+});
 
 const report = (symbol: string, failed: readonly string[] = []): BarRefreshReport => ({
   attempted: 2,
