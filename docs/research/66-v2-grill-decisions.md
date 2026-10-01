@@ -351,6 +351,19 @@ David ruled in chat on PR #1960's open questions, recorded on [#1901](https://gi
 1. **Refresh history guard (#1901): keep as built.** The daily Saxo re-pull refuses to write a line when it starts earlier than the stored series, drops a stored bar, or moves a stored close by more than 0.5% against the overlap's median ratio. A uniform split rescale still writes, with its existing warning. Interior insertions are allowed (the ~25 real bars #1904's neighbour step keeps). A refused line needs a manual re-seed. Build note (not a ruling): the 0.5% tolerance assumes Saxo closes are price-only. The ISF/CUKX check in `data/bars/saxo/manifest.json` (`checks.distribution_adjustment`, −3.76%/yr drift, the dividend yield) shows they are, so an ex-dividend date does not revise past closes.
 2. **Refusal dedup key (#1907): every field.** A refusal identical to one already recorded that trading day (same book, instrument, parameter, ticket and message) is one row; one that differs in any field gets its own row.
 
+## Rulings of 2026-10-01 — backlog drain (#1925, #1905, #1648, #1910, #1899, #1887, #1946)
+
+David ruled in chat on the items raised while draining the ready-for-agent backlog; each is recorded on its ticket.
+
+1. **Candidate 1 trials stay as recorded (#1925).** The coverage invariant added in #1965 changes which names candidate 1 trades (a gappy or stale window skips, VUTY starts about 10 sessions later). The trials recorded before it are not re-run.
+2. **Open stays rescalable (#1905).** `RESCALABLE_FIELDS` keeps open; the docs and the manifest note were corrected to match the code (#1966).
+3. **Refresh the Saxo manifest (#1905 item 5, #1969).** Every Saxo line carries `shape_repair` and the manifest note describes the current rules, produced by re-running the repair tooling, not by hand-editing generated data.
+4. **No dependency-cruiser (#1648).** `fallow dead-code`, gated in CI, already reports unused and unlisted (external) dependencies, unresolved imports, circular dependencies and the `.fallowrc.json` client/server/contracts boundary, so it covers items 1–2 of #1648.
+5. **Remaining Telegram survivors stay (#1910).** Stryker on the four Telegram files scored 93.99% raw against the 86% bar; the survivors left after #1968 are help text, constants and Stryker artefacts.
+6. **Saxo splits auto-rescale (#1899).** Re-confirmed: the 2026-09-29 ruling stands, so a held LSE position is rescaled across a split like a US one; a blocking-only warning was offered and not taken.
+7. **A corporate-action feed will be bought later (#1887 item 5).** `SPLIT_STEP_THRESHOLD` stays as it is until then.
+8. **Concrete broker adapters stay in v1 until Step 5 (#1946).** Offered relocating the Alpaca and Saxo adapters, token handling and broker-state store now, or moving interfaces only, David chose to leave them in `pipeline/execution` for the Step 5 teardown (#1748); `BrokerAdapter` already lives in `server/shared` (#1945). #1946 is closed as not planned.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
