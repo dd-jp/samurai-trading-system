@@ -6,6 +6,7 @@ import type { CycleDeps } from './cycle.js';
 import { isCfdVenue, type VenueSessionGate } from './data/index.js';
 import {
   type AlpacaBrokerClient,
+  type BrokerAccess,
   createBrokerAccess,
   type FillPricing,
   impactLookup,
@@ -49,6 +50,8 @@ export interface CycleCompositionOptions {
   readonly reconcileCashToleranceGbp?: number | undefined;
   readonly venueSessions?: VenueSessionGate | undefined;
   readonly runStartedAt?: Date | undefined;
+  // Replay only: answers every broker call from the journal, so no venue adapter is built
+  readonly brokerAccess?: ((pricing: FillPricing) => BrokerAccess) | undefined;
 }
 
 export interface CycleComposition extends CycleDeps {
@@ -122,14 +125,17 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     spec: (sleeveId) => registry.spec(sleeveId),
     venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
   });
-  const { executor, brokerBooks } = createBrokerAccess({
-    dryRun: options.dryRun,
-    client: options.alpacaClient,
-    db,
-    clock,
-    logger,
-    pricing: fillPricingFor(options),
-  });
+  const pricing = fillPricingFor(options);
+  const { executor, brokerBooks } =
+    options.brokerAccess?.(pricing) ??
+    createBrokerAccess({
+      dryRun: options.dryRun,
+      client: options.alpacaClient,
+      db,
+      clock,
+      logger,
+      pricing,
+    });
   return {
     registry,
     books,

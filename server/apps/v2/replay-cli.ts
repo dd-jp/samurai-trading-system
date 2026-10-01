@@ -4,14 +4,22 @@ import type { Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openReadOnlyStore } from '../../shared/store/index.js';
 import { errorMessage, setExitCodeWhenInvoked } from '../../tools/cli-entrypoint.js';
-import { BarsMarketData, CFD_CATALOGUE_PATH, parseBoeGbpUsdCsv } from './data/index.js';
+import {
+  BarsMarketData,
+  CFD_CATALOGUE_PATH,
+  parseBoeGbpUsdCsv,
+  type VenueSessionGate,
+} from './data/index.js';
 import {
   barsSourceFor,
   CONSTITUENTS_PATH,
   cfdCatalogueFor,
   constituentsFromCsv,
   FX_PATH,
+  halfSpreadLookup,
   knownSecretsFrom,
+  SAXO_SPREADS_PATH,
+  SPREADS_PATH,
   V2_STORE_PATH,
 } from './index.js';
 import { formatReplay, type ReplayResult, redactor, replayDay } from './replay.js';
@@ -23,15 +31,22 @@ export interface ReplayCliOptions {
   readonly constituentsPath: string;
   readonly fxPath: string;
   readonly cfdCataloguePath: string;
+  readonly spreadsPath: string;
+  readonly saxoSpreadsPath: string;
+  readonly venueSessions?: VenueSessionGate | undefined;
 }
 
-const FLAGS: Readonly<Record<string, keyof ReplayCliOptions>> = {
+type FlagOption = Exclude<keyof ReplayCliOptions, 'venueSessions'>;
+
+const FLAGS: Readonly<Record<string, FlagOption>> = {
   '--date': 'tradingDate',
   '--store': 'storePath',
   '--bars': 'barStoreRoot',
   '--constituents': 'constituentsPath',
   '--fx': 'fxPath',
   '--cfd-catalogue': 'cfdCataloguePath',
+  '--spreads': 'spreadsPath',
+  '--saxo-spreads': 'saxoSpreadsPath',
 };
 
 const DEFAULTS: Omit<ReplayCliOptions, 'tradingDate'> = {
@@ -40,12 +55,14 @@ const DEFAULTS: Omit<ReplayCliOptions, 'tradingDate'> = {
   constituentsPath: CONSTITUENTS_PATH,
   fxPath: FX_PATH,
   cfdCataloguePath: CFD_CATALOGUE_PATH,
+  spreadsPath: SPREADS_PATH,
+  saxoSpreadsPath: SAXO_SPREADS_PATH,
 };
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseReplayArgs(argv: readonly string[]): ReplayCliOptions {
-  const parsed: Partial<Record<keyof ReplayCliOptions, string>> = {};
+  const parsed: Partial<Record<FlagOption, string>> = {};
   for (let index = 0; index < argv.length; index += 2) {
     const key = FLAGS[argv[index] ?? ''];
     const value = argv[index + 1];
@@ -79,6 +96,8 @@ export async function replayFromFiles(
       constituents: constituentsFromCsv({ constituentsPath: options.constituentsPath }),
       market: new BarsMarketData(bars, parseBoeGbpUsdCsv(readFileSync(options.fxPath, 'utf8'))),
       catalogue: cfdCatalogueFor({ cfdCataloguePath: options.cfdCataloguePath }, SILENT),
+      halfSpreadBps: halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath),
+      venueSessions: options.venueSessions,
     });
   } finally {
     db.close();
