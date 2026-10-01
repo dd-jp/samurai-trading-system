@@ -110,24 +110,47 @@ export function recordOutcome(outcome: SymbolOutcome, buckets: Buckets, logger: 
 
 const EXPIRED = Symbol('expired');
 
-// The work is abandoned, not awaited, at the limit: it sees the aborted signal and must not
-// write after it
+export interface TimeLimit {
+  readonly signal: AbortSignal;
+  readonly atomic: <R>(step: () => Promise<R>) => Promise<R>;
+}
+
+export const UNLIMITED: TimeLimit = {
+  signal: new AbortController().signal,
+  atomic: (step) => step(),
+};
+
+// The work is abandoned at the limit, except an atomic step already in flight, which is
+// awaited so that a bar write never overlaps the reads that follow the refresh
 export async function withinTimeLimit<T>(
   limitMs: number,
-  work: (signal: AbortSignal) => Promise<T>,
+  work: (limit: TimeLimit) => Promise<T>,
   onExpiry: () => T,
 ): Promise<T> {
   const controller = new AbortController();
+  const inFlight = new Set<Promise<unknown>>();
+  const limit: TimeLimit = {
+    signal: controller.signal,
+    atomic: async (step) => {
+      controller.signal.throwIfAborted();
+      const running = step();
+      const settle = () => inFlight.delete(running);
+      inFlight.add(running);
+      running.then(settle, settle);
+      return await running;
+    },
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expiry = new Promise<typeof EXPIRED>((resolve) => {
     timer = setTimeout(() => resolve(EXPIRED), limitMs);
   });
-  const running = work(controller.signal);
+  const running = work(limit);
   try {
     const outcome = await Promise.race([running, expiry]);
     if (outcome !== EXPIRED) return outcome;
     controller.abort();
     running.catch(() => undefined);
+    await Promise.allSettled(inFlight);
     return onExpiry();
   } finally {
     clearTimeout(timer);

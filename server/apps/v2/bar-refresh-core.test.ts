@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   type BarRefresh,
   type BarRefreshReport,
@@ -11,8 +11,8 @@ describe('withinTimeLimit', () => {
     let seen: AbortSignal | undefined;
     const result = await withinTimeLimit(
       1_000,
-      async (signal) => {
-        seen = signal;
+      async (limit) => {
+        seen = limit.signal;
         return 'done';
       },
       () => 'expired',
@@ -26,8 +26,8 @@ describe('withinTimeLimit', () => {
     let reject: (error: Error) => void = () => undefined;
     const result = await withinTimeLimit(
       10,
-      (signal) => {
-        seen = signal;
+      (limit) => {
+        seen = limit.signal;
         return new Promise<string>((_resolve, rejectWork) => {
           reject = rejectWork;
         });
@@ -37,6 +37,49 @@ describe('withinTimeLimit', () => {
     expect(result).toBe('expired');
     expect(seen?.aborted).toBe(true);
     reject(new Error('late'));
+  });
+
+  it('awaits an atomic step in flight at the limit before returning, and refuses one after it', async () => {
+    const events: string[] = [];
+    let refused: unknown;
+    const result = await withinTimeLimit(
+      10,
+      async (limit) => {
+        await limit.atomic(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          events.push('write settled');
+        });
+        try {
+          await limit.atomic(async () => {
+            events.push('second write');
+          });
+        } catch (error) {
+          refused = error;
+        }
+        return 'done';
+      },
+      () => {
+        events.push('expired');
+        return 'expired';
+      },
+    );
+    expect(result).toBe('expired');
+    expect(events).toEqual(['write settled', 'expired']);
+    await vi.waitFor(() => expect(refused).toBeInstanceOf(Error));
+    expect(events).toEqual(['write settled', 'expired']);
+  });
+
+  it('returns at the limit even when the atomic step in flight fails', async () => {
+    const result = await withinTimeLimit(
+      10,
+      (limit) =>
+        limit.atomic(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          throw new Error('write failed');
+        }),
+      () => 'expired',
+    );
+    expect(result).toBe('expired');
   });
 
   it('passes a rejection inside the limit through', async () => {

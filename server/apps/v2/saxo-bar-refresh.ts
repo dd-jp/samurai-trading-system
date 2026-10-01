@@ -29,6 +29,8 @@ import {
   recordOutcome,
   roundPrices,
   type SymbolOutcome,
+  type TimeLimit,
+  UNLIMITED,
   withinTimeLimit,
 } from './bar-refresh-core.js';
 import { isFresh } from './data/index.js';
@@ -43,7 +45,9 @@ import { LSE_LINES } from './signal/index.js';
 const HISTORY_RESCALE_TOLERANCE = 0.05;
 // Between the 2026-09-25 pull (data/bars/saxo-aux/raw) and the 2026-09-30 store, 0 of 85,175
 // overlapping completed closes changed; the largest gap, 1.29%, was the partial fetch-day bar
-// hygiene drops, so any revision is unexplained; 0.5% only leaves room above 4-decimal rounding
+// hygiene drops, so any revision is unexplained; 0.5% only leaves room above 4-decimal rounding;
+// it holds only while Saxo closes stay price-only (doc 70's ISF/CUKX check): a distribution
+// back-adjustment would revise every close before an ex-date and refuse the line
 const MAX_CLOSE_REVISION = 0.005;
 const SAXO_VENUE = 'saxo';
 
@@ -55,7 +59,7 @@ export interface SaxoBarRefreshOptions {
   readonly tradingDate: string;
   readonly lines: readonly SaxoLine[];
   readonly logger: Logger;
-  readonly signal?: AbortSignal;
+  readonly limit?: TimeLimit;
 }
 
 function median(values: readonly number[]): number | undefined {
@@ -243,8 +247,9 @@ async function refreshLine(
     assertNoShrink(line.tidm, existing, rounded);
     assertHistoryConsistent(line.tidm, existing, rounded);
   }
-  options.signal?.throwIfAborted();
-  await options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]);
+  await (options.limit ?? UNLIMITED).atomic(() =>
+    options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
+  );
   warnIfShapeRepaired(line.tidm, repaired.report, options.logger);
   warnIfRescaled(existing, rounded, options.logger);
   assertFresh(line.tidm, rounded, options.tradingDate);
@@ -288,7 +293,7 @@ export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<B
   const existing = await options.store.readVenue(SAXO_VENUE);
   const buckets: Buckets = { updated: [], noNewBars: [], failed: [] };
   for (const line of options.lines) {
-    if (options.signal?.aborted) break;
+    if (options.limit?.signal.aborted) break;
     warnIfUnguarded(line.tidm, existing, options.logger);
     const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
     recordOutcome(outcome, buckets, options.logger);
@@ -346,7 +351,7 @@ async function stopQuietly(session: SaxoSession, logger: Logger): Promise<void> 
 async function refreshInSession(
   session: SaxoSession,
   leg: SaxoLeg,
-  signal: AbortSignal,
+  limit: TimeLimit,
 ): Promise<BarRefreshReport> {
   const logger = leg.ledger.logger;
   try {
@@ -354,7 +359,7 @@ async function refreshInSession(
     try {
       const lines = saxoRefreshLines();
       const { tradingDate } = leg;
-      return await refreshSaxoBars({ api: session.api, store, tradingDate, lines, logger, signal });
+      return await refreshSaxoBars({ api: session.api, store, tradingDate, lines, logger, limit });
     } finally {
       store.close();
     }
@@ -364,10 +369,10 @@ async function refreshInSession(
   }
 }
 
-async function connectAndRefresh(leg: SaxoLeg, signal: AbortSignal): Promise<BarRefreshReport> {
+async function connectAndRefresh(leg: SaxoLeg, limit: TimeLimit): Promise<BarRefreshReport> {
   try {
     const session = connectUnlessLost(() => leg.connect(leg.env, leg.ledger.logger), leg.ledger);
-    return await refreshInSession(session, leg, signal);
+    return await refreshInSession(session, leg, limit);
   } catch (error) {
     return unavailable(messageOf(error), leg.ledger.logger);
   }
@@ -405,6 +410,6 @@ export function saxoBarRefreshFor(
       logger,
     );
   return {
-    run: () => withinTimeLimit(limitMs, (signal) => connectAndRefresh(leg, signal), expired),
+    run: () => withinTimeLimit(limitMs, (limit) => connectAndRefresh(leg, limit), expired),
   };
 }

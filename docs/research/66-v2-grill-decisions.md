@@ -321,6 +321,13 @@ Open after these rulings: whether #1854 (stale-price guard, parked "until an ext
 
 Still open and recorded, not ruled: the universe is only the current S&P 500 constituents; the shadow fills over the whole day's bar; the ≤10% veto-rate cap is not enforced in code; a failed signal is never retried; a zone that straddles the close enters at its high.
 
+## Rulings of 2026-10-01 — Saxo bar refresh guard and refusal dedup (#1901, #1907)
+
+David ruled in chat on PR #1960's open questions, recorded on [#1901](https://github.com/dd-jp/samurai-trading-system/issues/1901#issuecomment-5926944294) and [#1907](https://github.com/dd-jp/samurai-trading-system/issues/1907#issuecomment-5926943914). Both keep the PR as built.
+
+1. **Refresh history guard (#1901): keep as built.** The daily Saxo re-pull refuses to write a line when it starts earlier than the stored series, drops a stored bar, or moves a stored close by more than 0.5% against the overlap's median ratio. A uniform split rescale still writes, with its existing warning. Interior insertions are allowed (the ~25 real bars #1904's neighbour step keeps). A refused line needs a manual re-seed. The 0.5% tolerance assumes Saxo closes are price-only; the ISF/CUKX check in doc 70 (−3.77%/yr drift, the dividend yield) shows they are, so an ex-dividend date does not revise past closes.
+2. **Refusal dedup key (#1907): every field.** A refusal identical to one already recorded that trading day (same book, instrument, parameter, ticket and message) is one row; one that differs in any field gets its own row.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

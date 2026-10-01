@@ -21,7 +21,12 @@ import {
   type SaxoLine,
 } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
-import { type BarRefresh, type BarRefreshReport, inSequence } from './bar-refresh-core.js';
+import {
+  type BarRefresh,
+  type BarRefreshReport,
+  inSequence,
+  withinTimeLimit,
+} from './bar-refresh-core.js';
 import { cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
 import { saxoSessionRefusal } from './execution/index.js';
 import {
@@ -1019,6 +1024,35 @@ describe('saxoBarRefreshFor time cap and session stop (#1900)', () => {
     }).run();
     await vi.waitFor(() => expect(stops).toBe(1), { timeout: 2_000 });
     expect((await (await openStore(root)).readVenue('saxo')).size).toBe(0);
+  });
+
+  it('finishes a bar write in flight at the cap before the leg returns, and starts no other', async () => {
+    const store = await openStore();
+    const writes: string[] = [];
+    const slowStore = Object.assign(Object.create(store) as ParquetBarStore, {
+      write: async (...args: Parameters<ParquetBarStore['write']>) => {
+        writes.push(`start ${args[1][0]?.symbol}`);
+        await sleep(60);
+        await store.write(...args);
+        writes.push(`done ${args[1][0]?.symbol}`);
+      },
+    });
+    const result = await withinTimeLimit<BarRefreshReport | 'expired'>(
+      20,
+      (limit) =>
+        refreshSaxoBars({
+          api: fakeApi(allLineFixtures()),
+          store: slowStore,
+          tradingDate: TRADING_DATE,
+          lines: [ISF, VMID],
+          logger: recorder().logger,
+          limit,
+        }),
+      () => 'expired',
+    );
+    expect(result).toBe('expired');
+    expect(writes).toEqual(['start ISF', 'done ISF']);
+    expect([...(await store.readVenue('saxo')).keys()]).toEqual(['ISF']);
   });
 
   it('keeps a successful report when stopping the session throws', async () => {
