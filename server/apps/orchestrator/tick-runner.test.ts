@@ -354,6 +354,42 @@ describe('SequentialTickRunner.runInstrument', () => {
     );
   });
 
+  it("warns, and still trades, when the debate claims a bar other than the gate's (#687/#743)", async () => {
+    const debateBar = new Date(NOW.getTime() - 3_600_000);
+    const steps = makeSteps({
+      debate: vi.fn(async () => makeDebate({ bar_timestamp: debateBar })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(ctx.logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trace_id: TRACE_ID,
+        stage: 'debate',
+        event: 'decision_bar_divergence',
+        level: 'warn',
+        payload: {
+          instrument: 'AAPL',
+          gate_bar: NOW.toISOString(),
+          debate_bar: debateBar.toISOString(),
+          debate_id: 'debate-1',
+        },
+      }),
+    );
+    expect(steps.trader).toHaveBeenCalled();
+  });
+
+  it('does not warn when the debate keys to the gate bar', async () => {
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(makeSteps()).runInstrument(SIGNAL, ctx);
+
+    expect(ctx.logger.log).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'decision_bar_divergence' }),
+    );
+  });
+
   it('passes the Analyst views to the Debate and the debate to the Trader', async () => {
     const views = [makeView(), makeView({ analyst_id: 'sentiment-1' })];
     const debate = makeDebate({ debate_id: 'debate-xyz' });
