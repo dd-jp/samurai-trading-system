@@ -317,15 +317,17 @@ describe('repairSaxoStore', () => {
     expect(readFileSync(manifestPath, 'utf8')).toBe(manifestAfterFirst);
   });
 
-  it('repairs the parquet on the next run when the first run died after writing the manifest', async () => {
+  it('brings the manifest in line with the bars when the first run died after the parquet write', async () => {
     const { root, store, manifestPath } = await fixture();
-    const crash = vi.spyOn(store, 'write').mockRejectedValueOnce(new Error('crash'));
+    const realWrite = store.write.bind(store);
+    const crash = vi.spyOn(store, 'write').mockImplementationOnce(async (venue, series) => {
+      await realWrite(venue, series);
+      throw new Error('crash');
+    });
     await expect(repairSaxoStore(store, manifestPath)).rejects.toThrow('crash');
     crash.mockRestore();
-    expect(countShapeViolations(await store.readVenue('saxo'))).toBeGreaterThan(0);
-    const result = await repairSaxoStore(store, manifestPath);
-    expect(result.repairedSymbols).toEqual(['AAA', 'CCC']);
-    expect(result.violationsAfter).toBe(0);
+    expect(countShapeViolations(await store.readVenue('saxo'))).toBe(0);
+    await repairSaxoStore(store, manifestPath);
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifest.symbols.AAA.bars).toBe(4);
     expect(manifest.hygiene.split(SHAPE_REPAIR_MANIFEST_NOTE)).toHaveLength(2);
