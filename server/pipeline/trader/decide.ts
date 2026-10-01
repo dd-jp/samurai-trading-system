@@ -531,7 +531,7 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   return {
     ...outcome,
     decision_class,
-    diagnostics: diagnostics.length === 0 ? outcome.diagnostics : diagnostics,
+    diagnostics,
   };
 }
 
@@ -611,7 +611,7 @@ export async function checkExitsWithReason(input: ExitCheckInput): Promise<Trade
   return {
     ...outcome,
     decision_class,
-    diagnostics: diagnostics.length === 0 ? outcome.diagnostics : diagnostics,
+    diagnostics,
   };
 }
 
