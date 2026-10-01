@@ -2,17 +2,19 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { Alerts } from '../apps/v2/alerts.js';
 import { alertsFor } from '../apps/v2/alerts.js';
-import type { SaxoKeepAliveState } from '../pipeline/execution/adapters/saxo-keepalive-state.js';
+import type {
+  FetchLike,
+  SaxoKeepAliveState,
+  SaxoSessionState,
+} from '../pipeline/execution/index.js';
 import {
   clearKeepAliveState,
   readKeepAliveState,
+  resolveSaxoOAuthConfig,
+  SaxoTokenRefresher,
+  tokenFilePath,
   writeKeepAliveState,
-} from '../pipeline/execution/adapters/saxo-keepalive-state.js';
-import type { FetchLike } from '../pipeline/execution/adapters/saxo-oauth.js';
-import { resolveSaxoOAuthConfig } from '../pipeline/execution/adapters/saxo-oauth.js';
-import { tokenFilePath } from '../pipeline/execution/adapters/saxo-token-file.js';
-import type { SaxoSessionState } from '../pipeline/execution/adapters/saxo-token-source.js';
-import { SaxoTokenRefresher } from '../pipeline/execution/adapters/saxo-token-source.js';
+} from '../pipeline/execution/index.js';
 import type { Clock, LogEntry, Logger } from '../shared/index.js';
 import { maskCredentials, SystemClock } from '../shared/index.js';
 import { runWhenInvoked } from './cli-entrypoint.js';

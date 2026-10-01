@@ -1,5 +1,5 @@
 import { writeFileSync } from 'node:fs';
-import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
+import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/index.js';
 import type { InfoPriceQuote } from '../../../providers/saxo-bars/index.js';
 import {
   LSE_MOMENTUM_LINES,

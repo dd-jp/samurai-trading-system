@@ -251,6 +251,7 @@ export {
   SOURCE_POLYMARKET,
 } from './polymarket/polymarket-agent.js';
 export { PolymarketClient } from './polymarket/polymarket-client.js';
+export type { AlpacaNewsArticle } from './sources/alpaca-news-client.js';
 export { AlpacaNewsClient } from './sources/alpaca-news-client.js';
 export {
   GdeltGkgClient,

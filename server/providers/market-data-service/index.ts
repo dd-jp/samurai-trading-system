@@ -40,7 +40,8 @@ export {
 } from './sources/failover-data-source.js';
 export type { LseMarkClient } from './sources/lse-mark-source.js';
 export { LseMarkDataSource } from './sources/lse-mark-source.js';
-export type { BarFetcher, FailoverEvent } from './sources/ohlcv-failover.js';
+export type { BarFetcher, FailoverAlerter, FailoverEvent } from './sources/ohlcv-failover.js';
+export { withOhlcvFailover } from './sources/ohlcv-failover.js';
 export { PolygonBarsClient } from './sources/polygon-bars-client.js';
 export { withSessionNormalization } from './sources/session-normalized-fetcher.js';
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';

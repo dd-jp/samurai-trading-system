@@ -1,4 +1,4 @@
-import type { AlpacaBrokerClient } from '../../pipeline/execution/adapters/alpaca-client.js';
+import type { AlpacaBrokerClient } from '../../pipeline/execution/index.js';
 import { fetchWithTimeout } from '../../shared/index.js';
 
 export type { ProviderStatusPanel } from '../../../contracts/index.js';
