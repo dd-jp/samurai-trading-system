@@ -259,6 +259,24 @@ describe('alertsFor', () => {
     }
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('notifies as is, silently, with the bot token scrubbed, and sends nothing on a dry run', async () => {
+    const fetchImpl = okFetch();
+    await alertsFor([], ENV, fetchImpl, recorder().logger).notify(`summary ${TOKEN}`);
+    await alertsFor(['--dry-run'], ENV, fetchImpl, recorder().logger).notify('dry');
+    expect(sentBodies(fetchImpl)).toEqual([
+      { chat_id: '-100777', text: 'summary [TELEGRAM_BOT_TOKEN]', disable_notification: true },
+    ]);
+  });
+
+  it('truncates an oversized summary to the Telegram limit after scrubbing the token', async () => {
+    const fetchImpl = okFetch();
+    await alertsFor([], ENV, fetchImpl, recorder().logger).notify(`${TOKEN} ${'x'.repeat(5_000)}`);
+    const [body] = sentBodies(fetchImpl);
+    expect(body?.text).toHaveLength(4096);
+    expect(body?.text.startsWith('[TELEGRAM_BOT_TOKEN] x')).toBe(true);
+    expect(body?.text.endsWith('\n…(truncated)')).toBe(true);
+  });
 });
 
 describe('withAlerts', () => {

@@ -20,6 +20,7 @@ import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
 import { composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
+import { pushDailySummary } from './daily-summary.js';
 import {
   AlpacaNewsSource,
   BarsMarketData,
@@ -585,6 +586,7 @@ export async function main(
               clock,
               logger,
               barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+              alerts.notify,
             ),
           backup,
         );
@@ -647,17 +649,19 @@ export function rootOptionsFor(
   };
 }
 
-async function runOnce(
+export async function runOnce(
   dryRun: boolean,
   tradingDate: string,
   env: NodeJS.ProcessEnv,
   clock: Clock,
   logger: Logger,
   barRefresh: BarRefresh,
+  notify: (text: string) => Promise<void>,
+  compose: (options: V2RootOptions) => V2Root = composeV2Root,
 ): Promise<number> {
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
-  const root = composeV2Root(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
+  const root = compose(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
   try {
     const report = await runAfterPinCheck(root, () =>
       verifyNousPins({
@@ -671,6 +675,17 @@ async function runOnce(
     );
     logNewRefusals(root.journal, tradingDate, logger);
     logFaultFreeWeeks(root.faults, tradingDate, logger);
+    await pushDailySummary(
+      {
+        db: root.db,
+        clock,
+        faults: root.faults,
+        mode: dryRun ? 'dry-run' : 'paper',
+        logger,
+        notify,
+      },
+      report,
+    );
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);
   } finally {
