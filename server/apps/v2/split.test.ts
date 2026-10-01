@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { V2Bar } from '../../../contracts/index.js';
 import {
+  cumulativeSplitRatios,
   isSplitStep,
   SPLIT_ADJUSTED_GAP_BAND,
   SPLIT_STEP_EPSILON,
@@ -189,5 +190,14 @@ describe('rounding tolerance at the split threshold', () => {
   it('accepts the threshold and a step inside the band', () => {
     expect(isSplitStep(SPLIT_STEP_THRESHOLD)).toBe(true);
     expect(isSplitStep(SPLIT_STEP_THRESHOLD * (1 - SPLIT_STEP_EPSILON / 2))).toBe(true);
+  });
+});
+
+describe('cumulativeSplitRatios', () => {
+  it('carries each split forward from the decision bar and starts at 1 without one', () => {
+    const [decision, ...rest] = series(10, 10, 1, 1);
+    expect(cumulativeSplitRatios(decision, rest)).toEqual([1, 10, 10]);
+    expect(cumulativeSplitRatios(undefined, rest)).toEqual([1, 10, 10]);
+    expect(cumulativeSplitRatios(undefined, [])).toEqual([]);
   });
 });
