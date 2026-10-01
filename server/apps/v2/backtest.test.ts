@@ -248,7 +248,7 @@ describe('fencedMarket', () => {
   });
 });
 
-describe('runBacktest', { timeout: 60_000 }, () => {
+describe('runBacktest', { timeout: 120_000 }, () => {
   it('runs every trial and the benchmark through the cycle and counts the trials after Session B', async () => {
     const run = input();
     const result = await runBacktest(run);

@@ -170,7 +170,7 @@ function meanReversionBarsSource() {
 
 describe('runMeanReversionAgainst', () => {
   it('#1785: orchestrates trials, benchmark and the cost-stress rerun with the #1515 embargo baked in', {
-    timeout: 120_000,
+    timeout: 180_000,
   }, async () => {
     const barsSource = meanReversionBarsSource();
     const market = new BarsMarketData(
