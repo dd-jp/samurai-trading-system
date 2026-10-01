@@ -27,6 +27,7 @@ import {
 const storeCalls = vi.hoisted(() => ({
   opened: [] as StoreHandle[],
   guarded: [] as unknown[][],
+  failGuard: false,
 }));
 
 vi.mock('../../../shared/store/index.js', async (importOriginal) => {
@@ -39,6 +40,7 @@ vi.mock('../../../shared/store/index.js', async (importOriginal) => {
       return db;
     },
     guardedStore: (...args: Parameters<typeof real.guardedStore>) => {
+      if (storeCalls.failGuard) throw new Error('guard failed');
       storeCalls.guarded.push(args.slice(1));
       return real.guardedStore(...args);
     },
@@ -57,6 +59,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   storeCalls.opened.length = 0;
   storeCalls.guarded.length = 0;
+  storeCalls.failGuard = false;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -466,6 +469,36 @@ describe('composeTelegram wiring', () => {
     ]);
   });
 
+  it('treats a whitespace-only heartbeat URL as unset', async () => {
+    const shutdown = new AbortController();
+    const b = bench(shutdown, [[], []]);
+    const logs: LogEntry[] = [];
+    await runComposed(
+      parseTelegramArgs(['--store', migratedStore()]),
+      { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: '   ' },
+      b.fetchImpl,
+      logs,
+      shutdown,
+    );
+    expect(b.pings).toEqual([]);
+    expect(logs.map((entry) => entry.event)).toEqual(['v2_telegram_heartbeat_unset']);
+  });
+
+  it('closes the store when composing fails after it opened', () => {
+    storeCalls.failGuard = true;
+    expect(() =>
+      composeTelegram(
+        parseTelegramArgs(['--store', migratedStore()]),
+        ENV,
+        { now: () => NOW },
+        () => Promise.resolve(reply({ ok: true, result: [] })),
+        { log: () => undefined },
+      ),
+    ).toThrow('guard failed');
+    expect(storeCalls.opened).toHaveLength(1);
+    expect(storeCalls.opened[0]?.open).toBe(false);
+  });
+
   it('logs a failed start notice and keeps polling', async () => {
     const shutdown = new AbortController();
     const b = bench(shutdown, [[messageFrom(1, 'resume')]], { failSend: 1 });
@@ -526,7 +559,7 @@ describe('composeTelegram wiring', () => {
 
 describe('main', () => {
   it('runs until SIGTERM, then closes the store', async () => {
-    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const sigintBefore = new Set(process.listeners('SIGINT'));
     const sigtermBefore = process.listenerCount('SIGTERM');
     let polls = 0;
@@ -542,6 +575,11 @@ describe('main', () => {
       if (!sigintBefore.has(listener)) process.off('SIGINT', listener);
     }
     expect(polls).toBe(1);
+    expect(stderr).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toMatchObject({
+      event: 'v2_telegram_heartbeat_unset',
+    });
+    expect(String(stderr.mock.calls[0]?.[0]).endsWith('\n')).toBe(true);
     expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
     expect(storeCalls.opened).toHaveLength(1);
     expect(storeCalls.opened[0]?.open).toBe(false);
