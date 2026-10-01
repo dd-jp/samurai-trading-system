@@ -1,24 +1,53 @@
-import type { BookSpec, BookVariant, Sleeve, SleeveDecision } from '../../../contracts/index.js';
+import type {
+  BookSpec,
+  BookVariant,
+  CfdCosts,
+  Sleeve,
+  SleeveDecision,
+  Venue,
+} from '../../../contracts/index.js';
 import { UNCAPPED_SPEND } from '../../pipeline/debate-engine/index.js';
 import type { Logger } from '../../shared/index.js';
-import { maskCredentials } from '../../shared/index.js';
+import { maskCredentials, SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { vetoApplied } from './cycle.js';
+import { type CycleComposition, composeCycle } from './compose.js';
+import { runCycle, vetoApplied } from './cycle.js';
 import {
   type BarsMarketData,
   type BarsSource,
   type CfdCatalogue,
   journalledNewsSource,
-  macroGate,
+  quotePerGbp,
   SqliteNewsLedger,
+  TABLE_VENUE_SESSIONS,
+  type VenueSessionGate,
 } from './data/index.js';
-import { decisionSleeves, venueRouterFor } from './index.js';
+import { brokerAccessFor } from './execution/index.js';
+import { decisionSleeves, quotedBorrowPerDayFrom, venueRouterFor } from './index.js';
+import { storeView } from './reconcile.js';
+import {
+  type BookDivergence,
+  bookStateDivergences,
+  type JournalledDay,
+  journalledDay,
+  journalledSessions,
+  lossBudgetDivergences,
+  rebuildBooks,
+  rewoundCopy,
+  tradingDivergences,
+} from './replay-book.js';
+import {
+  JournalReplayBroker,
+  JournalReplayBrokerBooks,
+  type MirroredBook,
+} from './replay-broker.js';
 import {
   ARM2_SLEEVE_ID,
   buildLlmPanel,
   cfdEntryRefusal,
   commonPrefixLength,
   DEBATE_SLEEVE_ID,
+  declaredCfdCosts,
   type LoggedCall,
   loggedNewsSource,
   MIN_SECRET_LENGTH,
@@ -61,12 +90,15 @@ export type Divergence =
   | { readonly kind: 'decision_missing'; readonly bookId: string; readonly instrument: string }
   | { readonly kind: 'decision_extra'; readonly bookId: string; readonly instrument: string }
   | { readonly kind: 'llm_request'; readonly miss: ReplayMiss }
-  | { readonly kind: 'call_not_replayed'; readonly call: LoggedCall };
+  | { readonly kind: 'call_not_replayed'; readonly call: LoggedCall }
+  | BookDivergence;
 
 export interface ReplayResult {
   readonly tradingDate: string;
   readonly decisions: number;
   readonly calls: number;
+  readonly orders: number;
+  readonly fills: number;
   readonly divergences: readonly Divergence[];
 }
 
@@ -78,6 +110,9 @@ export interface ReplayInputs {
   readonly market: BarsMarketData;
   readonly catalogue: CfdCatalogue | undefined;
   readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
+  readonly halfSpreadBps: (instrument: string) => number;
+  readonly cfdCosts?: CfdCosts | undefined;
+  readonly venueSessions?: VenueSessionGate | undefined;
   readonly logger?: Logger | undefined;
 }
 
@@ -198,6 +233,7 @@ export function divergencesOf(
   rows: readonly JournalledDecision[],
   replayed: ReplayedBySleeve,
   log: ReplayLog,
+  trading: readonly Divergence[] = [],
 ): Divergence[] {
   const decisions = [
     ...rows.map((row) => compareDecision(row, replayedFor(replayed, row))),
@@ -207,21 +243,20 @@ export function divergencesOf(
     ...decisions.filter(isInputsDivergence),
     ...log.misses.map((miss): Divergence => ({ kind: 'llm_request', miss })),
     ...decisions.filter((divergence) => !isInputsDivergence(divergence)),
+    ...trading,
     ...log.unserved().map((call): Divergence => ({ kind: 'call_not_replayed', call })),
   ];
 }
 
-async function decideAll(
-  sleeves: readonly Sleeve[],
-  tradingDate: string,
-): Promise<Map<string, readonly SleeveDecision[]>> {
-  const context = { tradingDate, macroDay: macroGate(tradingDate).macroDay, dryRun: false };
-  const replayed = new Map<string, readonly SleeveDecision[]>();
-  for (const sleeve of sleeves) {
-    const universe = sleeve.universe(context);
-    replayed.set(sleeve.id, (await sleeve.decide(context, universe.instruments)).decisions);
-  }
-  return replayed;
+function capturing(sleeve: Sleeve, into: Map<string, readonly SleeveDecision[]>): Sleeve {
+  return {
+    ...sleeve,
+    decide: async (context, instruments) => {
+      const output = await sleeve.decide(context, instruments);
+      into.set(sleeve.id, output.decisions);
+      return output;
+    },
+  };
 }
 
 const SILENT: Logger = { log: () => {} };
@@ -251,28 +286,137 @@ function replaySleeves(
   });
 }
 
+function mirrorOf(composition: CycleComposition, venue: Venue): MirroredBook {
+  const routed = composition.registry
+    .ids()
+    .flatMap((sleeveId) => composition.books.forSleeve(sleeveId))
+    .filter((book) => !composition.executor.simulates({ bookVariant: book.variant, venue }));
+  return storeView(composition, venue, routed);
+}
+
+interface ReplayCycle {
+  readonly inputs: ReplayInputs;
+  readonly copy: StoreHandle;
+  readonly sleeves: readonly Sleeve[];
+  readonly day: JournalledDay;
+  readonly startedAt: string;
+}
+
+function replayComposition(replay: ReplayCycle): CycleComposition {
+  const { inputs, copy, day } = replay;
+  const { db, tradingDate, market } = inputs;
+  const gate = inputs.cfdEntryRefusal ?? cfdEntryRefusal;
+  let composition: CycleComposition | undefined;
+  composition = composeCycle({
+    db: copy,
+    clock: new SimulatedClock(new Date(replay.startedAt)),
+    logger: inputs.logger ?? SILENT,
+    market,
+    sleeves: replay.sleeves,
+    openingDate: tradingDate,
+    tradingDate: () => tradingDate,
+    dryRun: day.dryRun,
+    halfSpreadBps: inputs.halfSpreadBps,
+    cfdCosts: inputs.cfdCosts ?? declaredCfdCosts(),
+    quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(inputs.catalogue),
+    cfdEntryRefusal: gate,
+    brokerMode: 'paper',
+    venueSessions: journalledSessions(
+      db,
+      tradingDate,
+      inputs.venueSessions ?? TABLE_VENUE_SESSIONS,
+    ),
+    brokerAccess: (pricing) =>
+      brokerAccessFor({
+        dryRun: day.dryRun,
+        pricing,
+        alpaca: day.dryRun
+          ? undefined
+          : new JournalReplayBroker({
+              db,
+              tradingDate,
+              venue: 'alpaca',
+              quotePerGbp: quotePerGbp(market, 'alpaca', tradingDate),
+            }),
+        brokerBooks: new JournalReplayBrokerBooks(db, tradingDate, (venue) =>
+          mirrorOf(composition as CycleComposition, venue),
+        ),
+      }),
+  });
+  return composition;
+}
+
+async function replayTrading(replay: ReplayCycle): Promise<{
+  state: Divergence[];
+  trading: Divergence[];
+  counts: { orders: number; fills: number };
+}> {
+  const { inputs, copy, day } = replay;
+  const composition = replayComposition(replay);
+  const rebuild = {
+    copy,
+    books: composition.books,
+    market: inputs.market,
+    venueSessions: composition.venueSessions ?? TABLE_VENUE_SESSIONS,
+  };
+  rebuildBooks(rebuild);
+  const state = [
+    ...bookStateDivergences(rebuild),
+    ...lossBudgetDivergences({
+      copy,
+      clock: composition.clock,
+      tradingDate: inputs.tradingDate,
+      sleeves: replay.sleeves,
+    }),
+  ];
+  await runCycle(composition, inputs.tradingDate);
+  const { divergences, counts } = tradingDivergences({
+    journal: inputs.db,
+    replayed: copy,
+    tradingDate: inputs.tradingDate,
+    markedAt: day.markedAt,
+  });
+  return { state, trading: divergences, counts };
+}
+
 export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
   const { db, tradingDate } = inputs;
   const rows = journalledDecisions(db, tradingDate);
   const calls = loggedCalls(db, tradingDate);
-  if (rows.length === 0) {
+  const day = journalledDay(db, tradingDate);
+  if (rows.length === 0 && day.markedAt === undefined) {
     return {
       tradingDate,
       decisions: 0,
       calls: calls.length,
+      orders: 0,
+      fills: 0,
       divergences: [{ kind: 'nothing_to_replay', tradingDate }],
     };
   }
   const log = new ReplayLog(calls);
-  const decided = new Set(rows.map((row) => row.sleeve_id));
-  const sleeves = replaySleeves(inputs, log, calls).filter((sleeve) => decided.has(sleeve.id));
-  const replayed = await decideAll(sleeves, tradingDate);
-  return {
-    tradingDate,
-    decisions: rows.length,
-    calls: calls.length,
-    divergences: divergencesOf(rows, replayed, log),
-  };
+  const replayed = new Map<string, readonly SleeveDecision[]>();
+  const sleeves = replaySleeves(inputs, log, calls).map((sleeve) => capturing(sleeve, replayed));
+  const startedAt = day.startedAt ?? `${tradingDate}T00:00:00.000Z`;
+  const copy = rewoundCopy(db, tradingDate, startedAt);
+  try {
+    const { state, trading, counts } = await replayTrading({
+      inputs,
+      copy,
+      sleeves,
+      day,
+      startedAt,
+    });
+    return {
+      tradingDate,
+      decisions: rows.length,
+      calls: calls.length,
+      ...counts,
+      divergences: [...state, ...divergencesOf(rows, replayed, log, trading)],
+    };
+  } finally {
+    copy.close();
+  }
 }
 
 export type Redact = (text: string) => string;
@@ -318,7 +462,7 @@ type DescriberOf = {
 
 const DESCRIBERS: DescriberOf = {
   nothing_to_replay: (divergence) =>
-    `no debate or arm 2 decision is journalled for ${divergence.tradingDate}`,
+    `no debate or arm 2 decision and no mark is journalled for ${divergence.tradingDate}`,
   decision_field: (divergence) =>
     [
       `${divergence.bookId} ${divergence.instrument}: ${divergence.field} differs`,
@@ -332,6 +476,22 @@ const DESCRIBERS: DescriberOf = {
   llm_request: (divergence, redact) => describeMiss(divergence.miss, redact),
   call_not_replayed: ({ call }) =>
     `logged call ${call.id} (${call.traceId}, ${call.model}) was never requested`,
+  book_state: (divergence) =>
+    [
+      divergence.stage === 'gate'
+        ? `gate: ${divergence.bookId} loss budget at the ${divergence.asOf} mark: ${divergence.field} differs from what its equity history gives`
+        : `book: ${divergence.bookId} at the ${divergence.asOf} mark: ${divergence.field} rebuilt from the journal differs`,
+      `  journalled: ${JSON.stringify(divergence.journalled)}`,
+      `  replayed:   ${JSON.stringify(divergence.replayed)}`,
+    ].join('\n'),
+  row_field: (divergence) =>
+    [
+      `${divergence.stage}: ${divergence.key}: ${divergence.field} differs`,
+      `  journalled: ${JSON.stringify(divergence.journalled)}`,
+      `  replayed:   ${JSON.stringify(divergence.replayed)}`,
+    ].join('\n'),
+  row_missing: (divergence) => `${divergence.stage}: ${divergence.key}: journalled, not replayed`,
+  row_extra: (divergence) => `${divergence.stage}: ${divergence.key}: replayed, not journalled`,
 };
 
 function describeDivergence(divergence: Divergence, redact: Redact): string {
@@ -340,7 +500,7 @@ function describeDivergence(divergence: Divergence, redact: Redact): string {
 }
 
 export function formatReplay(result: ReplayResult, redact: Redact): string {
-  const head = `replay ${result.tradingDate}: ${result.decisions} journalled decisions, ${result.calls} logged calls`;
+  const head = `replay ${result.tradingDate}: ${result.decisions} journalled decisions, ${result.calls} logged calls, ${result.orders} orders, ${result.fills} fills`;
   const [first] = result.divergences;
   if (first === undefined) return `${head}\nidentical`;
   return redact(
