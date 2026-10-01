@@ -6,10 +6,13 @@ import {
   getChangedFiles,
   isMutableProductionFile,
   isTradingPathFile,
+  type MutationGateDeps,
   parseChangedFiles,
   partitionChangedFiles,
   resolveMergeBase,
+  runMutationGate,
   TRADING_PATH_PREFIXES,
+  testFilesGlob,
 } from './mutation-local.js';
 
 describe('isMutableProductionFile', () => {
@@ -38,6 +41,103 @@ describe('isTradingPathFile', () => {
     'server/providers/market-data-service/index.ts',
   ])('%s is not trading-path', (path) => {
     expect(isTradingPathFile(path)).toBe(false);
+  });
+});
+
+describe('risk, sizing and loss-budget paths', () => {
+  it.each([
+    'server/apps/v2/risk/position-size.ts',
+    'server/pipeline/momentum/loss-budget.ts',
+    'server/pipeline/momentum/sizing.ts',
+  ])('%s is trading-path', (path) => {
+    expect(isTradingPathFile(path)).toBe(true);
+  });
+
+  it('leaves the rest of momentum out', () => {
+    expect(isTradingPathFile('server/pipeline/momentum/signal.ts')).toBe(false);
+  });
+});
+
+describe('testFilesGlob', () => {
+  it('globs every test under a directory prefix', () => {
+    expect(testFilesGlob('server/apps/v2/risk/')).toBe('server/apps/v2/risk/**/*.test.ts');
+  });
+
+  it('names the sibling test of a single-file prefix', () => {
+    expect(testFilesGlob('server/pipeline/momentum/sizing.ts')).toBe(
+      'server/pipeline/momentum/sizing.test.ts',
+    );
+  });
+});
+
+function gateDeps(changed: readonly string[], status: number | null = 0) {
+  const lines: string[] = [];
+  const baseRefs: string[] = [];
+  const mutated: (readonly string[])[] = [];
+  const deps: MutationGateDeps = {
+    changedFiles: (baseRef) => {
+      baseRefs.push(baseRef);
+      return changed;
+    },
+    stryker: (tradingPath) => {
+      mutated.push(tradingPath);
+      return { error: undefined, status };
+    },
+    log: (line) => lines.push(line),
+  };
+  return { deps, lines, baseRefs, mutated };
+}
+
+describe('runMutationGate', () => {
+  it('prints help without reading the diff', () => {
+    const { deps, lines, baseRefs } = gateDeps([]);
+    expect(runMutationGate(['--help'], deps)).toBe(0);
+    expect(lines[0]).toMatch(/^Usage: npm run mutation:local/);
+    expect(baseRefs).toEqual([]);
+  });
+
+  it('lists only the trading-path files and mutates nothing', () => {
+    const { deps, lines, baseRefs, mutated } = gateDeps([
+      'server/pipeline/execution/execute.ts',
+      'server/pipeline/analysts/index.ts',
+    ]);
+    expect(runMutationGate(['--list', 'base'], deps)).toBe(0);
+    expect(lines).toEqual(['server/pipeline/execution/execute.ts']);
+    expect(baseRefs).toEqual(['base']);
+    expect(mutated).toEqual([]);
+  });
+
+  it('defaults the base ref to origin/main', () => {
+    const { deps, baseRefs } = gateDeps([]);
+    runMutationGate([], deps);
+    expect(baseRefs).toEqual(['origin/main']);
+  });
+
+  it('skips Stryker when no trading-path file changed', () => {
+    const { deps, lines, mutated } = gateDeps(['server/pipeline/analysts/index.ts']);
+    expect(runMutationGate(['base'], deps)).toBe(0);
+    expect(mutated).toEqual([]);
+    expect(lines.at(-1)).toBe('No trading-path files changed vs base — mutation gate skipped.');
+  });
+
+  it('mutates the trading-path files and returns Stryker’s status', () => {
+    const { deps, mutated } = gateDeps(['server/apps/v2/risk/gate.ts'], 2);
+    expect(runMutationGate(['base'], deps)).toBe(2);
+    expect(mutated).toEqual([['server/apps/v2/risk/gate.ts']]);
+  });
+
+  it('fails when Stryker exits without a status', () => {
+    const { deps } = gateDeps(['server/apps/v2/risk/gate.ts'], null);
+    expect(runMutationGate(['base'], deps)).toBe(1);
+  });
+
+  it('rethrows a spawn error', () => {
+    const { deps } = gateDeps(['server/apps/v2/risk/gate.ts']);
+    const failing: MutationGateDeps = {
+      ...deps,
+      stryker: () => ({ error: new Error('no stryker'), status: null }),
+    };
+    expect(() => runMutationGate(['base'], failing)).toThrow('no stryker');
   });
 });
 

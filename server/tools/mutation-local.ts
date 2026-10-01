@@ -9,7 +9,14 @@ export const TRADING_PATH_PREFIXES = [
   'server/pipeline/risk-manager/',
   'server/pipeline/verdict/',
   'server/pipeline/execution/',
+  'server/apps/v2/risk/',
+  'server/pipeline/momentum/loss-budget.ts',
+  'server/pipeline/momentum/sizing.ts',
 ] as const;
+
+export function testFilesGlob(prefix: string): string {
+  return prefix.endsWith('/') ? `${prefix}**/*.test.ts` : prefix.replace(/\.ts$/, '.test.ts');
+}
 
 const MUTABLE_ROOTS = ['server/', 'contracts/'] as const;
 const PRODUCTION_FILE_RE = /\.tsx?$/;
@@ -64,8 +71,8 @@ export function getChangedFiles(baseRef: string, root: string): readonly string[
   return parseChangedFiles(diffOutput).filter((file) => existsSync(`${root}/${file}`));
 }
 
-function printHelp(): void {
-  console.log(`Usage: npm run mutation:local -- [baseRef]
+function printHelp(log: (line: string) => void): void {
+  log(`Usage: npm run mutation:local -- [--list] [baseRef]
 
 Runs Stryker Mutator against trading-path files changed since baseRef (default:
 ${DEFAULT_BASE_REF}) and HEAD diverged, mirroring test:local's diff-scoped pattern.
@@ -74,29 +81,33 @@ changes are included. Trading-path packages:
 ${TRADING_PATH_PREFIXES.map((prefix) => `  ${prefix}`).join('\n')}
 
 Non-trading-path changes (dashboard, tooling, other server packages) are listed
-but not mutated — no score bar applies to them.
+but not mutated — no score bar applies to them. --list prints the trading-path
+files that would be mutated and runs nothing; CI uses it to skip the mutation job.
 
 Coverage is scoped to these packages' own tests only, so a line whose only
 covering test lives elsewhere (e.g. an orchestrator wiring test) reads as
 uncovered. Check for that before treating a red gate as a real regression.
 
-Implementer gate only, not CI: GitHub Actions is billing-blocked on this repo.
-Run against the merge ref once billing is unblocked (deferred, not part of #1634).`);
+CI runs it on the PR's merge ref whenever --list is non-empty.`);
 }
 
-function logAdvisory(advisory: readonly string[]): void {
+function logAdvisory(advisory: readonly string[], log: (line: string) => void): void {
   if (advisory.length === 0) return;
-  console.log(`Advisory — changed but not mutated (no score bar), ${advisory.length} file(s):`);
-  for (const file of advisory) console.log(`  ${file}`);
+  log(`Advisory — changed but not mutated (no score bar), ${advisory.length} file(s):`);
+  for (const file of advisory) log(`  ${file}`);
 }
 
-function logTradingPath(tradingPath: readonly string[], baseRef: string): void {
-  console.log(`Mutating ${tradingPath.length} trading-path file(s) changed vs ${baseRef}:`);
-  for (const file of tradingPath) console.log(`  ${file}`);
+function logTradingPath(
+  tradingPath: readonly string[],
+  baseRef: string,
+  log: (line: string) => void,
+): void {
+  log(`Mutating ${tradingPath.length} trading-path file(s) changed vs ${baseRef}:`);
+  for (const file of tradingPath) log(`  ${file}`);
 }
 
 function runStryker(root: string, tradingPath: readonly string[]): SpawnSyncReturns<Buffer> {
-  const testFileGlobs = TRADING_PATH_PREFIXES.map((prefix) => `${prefix}**/*.test.ts`);
+  const testFileGlobs = TRADING_PATH_PREFIXES.map(testFilesGlob);
   const strykerBin = fileURLToPath(new URL('../../node_modules/.bin/stryker', import.meta.url));
   return spawnSync(
     strykerBin,
@@ -105,33 +116,49 @@ function runStryker(root: string, tradingPath: readonly string[]): SpawnSyncRetu
   );
 }
 
-function main(): void {
-  const arg = process.argv[2];
+export interface MutationGateDeps {
+  readonly changedFiles: (baseRef: string) => readonly string[];
+  readonly stryker: (
+    tradingPath: readonly string[],
+  ) => Pick<SpawnSyncReturns<Buffer>, 'error' | 'status'>;
+  readonly log: (line: string) => void;
+}
+
+export function runMutationGate(args: readonly string[], deps: MutationGateDeps): number {
+  const arg = args[0];
   if (arg === '--help' || arg === '-h') {
-    printHelp();
-    return;
+    printHelp(deps.log);
+    return 0;
+  }
+  const listOnly = arg === '--list';
+  const baseRef = (listOnly ? args[1] : arg) ?? DEFAULT_BASE_REF;
+  const { tradingPath, advisory } = partitionChangedFiles(deps.changedFiles(baseRef));
+
+  if (listOnly) {
+    for (const file of tradingPath) deps.log(file);
+    return 0;
   }
 
-  const baseRef = arg ?? DEFAULT_BASE_REF;
-  const root = fileURLToPath(new URL('../..', import.meta.url));
-  const changed = getChangedFiles(baseRef, root);
-  const { tradingPath, advisory } = partitionChangedFiles(changed);
-
-  logAdvisory(advisory);
+  logAdvisory(advisory, deps.log);
 
   if (tradingPath.length === 0) {
-    console.log(`No trading-path files changed vs ${baseRef} — mutation gate skipped.`);
-    return;
+    deps.log(`No trading-path files changed vs ${baseRef} — mutation gate skipped.`);
+    return 0;
   }
 
-  logTradingPath(tradingPath, baseRef);
+  logTradingPath(tradingPath, baseRef, deps.log);
 
-  const result = runStryker(root, tradingPath);
+  const result = deps.stryker(tradingPath);
 
   if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
+  return result.status ?? 1;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main();
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  process.exitCode = runMutationGate(process.argv.slice(2), {
+    changedFiles: (baseRef) => getChangedFiles(baseRef, root),
+    stryker: (tradingPath) => runStryker(root, tradingPath),
+    log: (line) => console.log(line),
+  });
 }
