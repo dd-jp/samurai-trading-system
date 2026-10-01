@@ -64,7 +64,7 @@ All of these are on `main`.
 
 Each step: `what => verify / kill line`. Steps 1 and 2 are £0, no LLM, and may start as soon as their own blockers in §5a are ruled (Q18: research, not build) — they do not wait for Step 0.
 
-**Definition of done for every step (David, 2026-09-19: tests, lint, e2e, crap, mutation are built as each stage requires):** a step's PR ships its own unit tests, e2e tests where it touches a runtime path, passes oxlint + biome + fallow + the CRAP gate, and runs mutation testing on any risk, sizing or loss-budget code it adds. There is no separate "testing phase"; Step 4b is the cross-cutting pre-paper checklist on top of this, not a substitute for it.
+**Definition of done for every step (David, 2026-09-19: tests, lint, e2e, crap, mutation are built as each stage requires):** a step's PR ships its own unit tests, e2e tests where it touches a runtime path, passes oxlint + biome + fallow + the CRAP gate, and runs mutation testing on any risk, sizing or loss-budget code it adds. There is no separate "testing phase"; Step 4b is the cross-cutting pre-paper checklist on top of this, not a substitute for it. Since 2026-10-01 (doc 66) the full gates run on CI: scoped tests locally, then the PR, then CI green.
 
 ### Step 0 — Doc rewrite (David asked for this explicitly; Q18/Q18a)
 
