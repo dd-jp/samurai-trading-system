@@ -547,7 +547,7 @@ async function routeDecision(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],
 ): Promise<RoutedOutcome> {
-  const { config, debate, instrument, positionState } = input;
+  const { instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
 
@@ -564,6 +564,17 @@ async function routeDecision(
       session_close: flattenWindow.enforcing_close,
     });
   }
+
+  return routeHeldOutsideFlattenWindow(input, positions, existingSide, diagnostics);
+}
+
+async function routeHeldOutsideFlattenWindow(
+  input: TraderInput,
+  positions: HeldLots,
+  existingSide: OpenPosition['side'],
+  diagnostics: TraderDiagnostic[],
+): Promise<RoutedOutcome> {
+  const { config, debate } = input;
 
   if (debate.direction === 'neutral' || !debate.converged) {
     return skip('holding_neutral_or_non_converged');
