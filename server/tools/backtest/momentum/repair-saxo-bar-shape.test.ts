@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DuckDBInstance } from '@duckdb/node-api';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore, SHAPE_REPAIR_MANIFEST_NOTE } from '../../../providers/bar-store/index.js';
 import {
@@ -315,6 +315,23 @@ describe('repairSaxoStore', () => {
     });
     expect(parquetBytes(root)).toBe(parquetAfterFirst);
     expect(readFileSync(manifestPath, 'utf8')).toBe(manifestAfterFirst);
+  });
+
+  it('repairs the parquet on the next run when the first run died after writing the manifest', async () => {
+    const { root, store, manifestPath } = await fixture();
+    const crash = vi.spyOn(store, 'write').mockRejectedValueOnce(new Error('crash'));
+    await expect(repairSaxoStore(store, manifestPath)).rejects.toThrow('crash');
+    crash.mockRestore();
+    expect(countShapeViolations(await store.readVenue('saxo'))).toBeGreaterThan(0);
+    const result = await repairSaxoStore(store, manifestPath);
+    expect(result.repairedSymbols).toEqual(['AAA', 'CCC']);
+    expect(result.violationsAfter).toBe(0);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    expect(manifest.symbols.AAA.bars).toBe(4);
+    expect(manifest.hygiene.split(SHAPE_REPAIR_MANIFEST_NOTE)).toHaveLength(2);
+    const settled = parquetBytes(root);
+    await repairSaxoStore(store, manifestPath);
+    expect(parquetBytes(root)).toBe(settled);
   });
 
   it('runs without a manifest', async () => {

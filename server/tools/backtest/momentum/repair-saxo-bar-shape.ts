@@ -134,15 +134,17 @@ export async function repairSaxoStore(
   const stored = await store.readVenue(SAXO_VENUE);
   const repairs = planShapeRepairs(stored);
   if (repairs.length > 0) {
+    if (manifestPath !== undefined) {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ManifestShape;
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(updateManifest(manifest, repairs), null, 2)}\n`,
+      );
+    }
     await store.write(
       SAXO_VENUE,
       repairs.map((repair) => repair.repaired),
     );
-    if (manifestPath !== undefined) {
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ManifestShape;
-      const updated = updateManifest(manifest, repairs);
-      writeFileSync(manifestPath, `${JSON.stringify(updated, null, 2)}\n`);
-    }
   }
   const after = await store.readVenue(SAXO_VENUE);
   return {
