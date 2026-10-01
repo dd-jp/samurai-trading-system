@@ -1,5 +1,5 @@
 import { timeframeToMs, toAlpacaTimeframe } from '../../providers/market-data-service/index.js';
-import { requireJsonObjectBody, TokenBucket } from '../../shared/index.js';
+import { credentialReader, requireJsonObjectBody, TokenBucket } from '../../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
 
@@ -100,15 +100,7 @@ export interface FreeStackAggregatesClientOptions {
   rateLimiter?: TokenBucket;
 }
 
-function requireCredential(value: string | undefined, envVar: string, field: string): string {
-  if (value === undefined || value.length === 0) {
-    throw new Error(
-      `FreeStackAggregatesClient: ${envVar} is not set. Provide it via the environment ` +
-        `(.env.local) or pass { ${field} } explicitly.`,
-    );
-  }
-  return value;
-}
+const requireCredential = credentialReader('FreeStackAggregatesClient');
 
 export class FreeStackAggregatesClient implements PolygonClient {
   private readonly alpacaKeyId: string;

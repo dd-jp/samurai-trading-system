@@ -169,17 +169,37 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
+  private writeOrderState(
+    table: 'open_positions' | 'flatten_submissions',
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+  ): number {
+    return Number(
+      this.db
+        .prepare(
+          `UPDATE ${table} SET order_state = ?, broker_order_ids = ? WHERE idempotency_key = ?`,
+        )
+        .run(update.order_state, JSON.stringify(update.broker_order_ids), idempotency_key).changes,
+    );
+  }
+
+  private liveArmPositionRows(extraCondition = ''): OpenPositionRow[] {
+    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT * FROM open_positions
+          WHERE arm = ?${extraCondition}
+            AND order_state NOT IN (${placeholders})
+          ORDER BY opened_at`,
+      )
+      .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
+  }
+
   async updatePositionState(
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
   ): Promise<void> {
-    const result = this.db
-      .prepare(
-        `UPDATE open_positions SET order_state = ?, broker_order_ids = ? WHERE idempotency_key = ?`,
-      )
-      .run(update.order_state, JSON.stringify(update.broker_order_ids), idempotency_key);
-
-    if (result.changes === 0) {
+    if (this.writeOrderState('open_positions', idempotency_key, update) === 0) {
       throw new Error(
         `SqliteExecutionStore.updatePositionState: no write-ahead record for '${idempotency_key}'`,
       );
@@ -187,15 +207,7 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   async getOpenPositions(): Promise<OpenPosition[]> {
-    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM open_positions
-          WHERE arm = ? AND order_state NOT IN (${placeholders})
-          ORDER BY opened_at`,
-      )
-      .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
-    return rows.map(fromOpenPositionRow);
+    return this.liveArmPositionRows().map(fromOpenPositionRow);
   }
 
   async sweepTerminalPositions(cutoff: Date): Promise<number> {
@@ -574,15 +586,7 @@ export class SqliteExecutionStore implements SharedStore {
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
   ): Promise<void> {
-    const result = this.db
-      .prepare(
-        `UPDATE flatten_submissions
-            SET order_state = ?, broker_order_ids = ?
-          WHERE idempotency_key = ?`,
-      )
-      .run(update.order_state, JSON.stringify(update.broker_order_ids), idempotency_key);
-
-    if (result.changes === 0) {
+    if (this.writeOrderState('flatten_submissions', idempotency_key, update) === 0) {
       throw new Error(
         `SqliteExecutionStore.recordFlattenOrderStateObserved: no flatten_submissions row for ` +
           `'${idempotency_key}'`,
@@ -704,16 +708,7 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
-    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM open_positions
-          WHERE arm = ?
-            AND residual_unprotected_since IS NOT NULL
-            AND order_state NOT IN (${placeholders})
-          ORDER BY opened_at`,
-      )
-      .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
+    const rows = this.liveArmPositionRows(' AND residual_unprotected_since IS NOT NULL');
 
     return rows.map((row) => {
       if (row.residual_unprotected_since === null) {

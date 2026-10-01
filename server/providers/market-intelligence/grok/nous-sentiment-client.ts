@@ -28,22 +28,14 @@ export interface NousSentimentClientOptions {
 }
 
 export class NousSentimentClient implements GrokSentimentClient {
-  readonly #apiKey: string;
-  readonly #baseUrl: string;
-  readonly #model: string;
-  readonly #timeoutMs: number;
-  readonly #maxTokens: number;
-  readonly #logger: Logger | undefined;
-  readonly #gate: LlmInFlightGate;
+  readonly #options: NousSentimentClientOptions & { timeoutMs: number; maxTokens: number };
 
   constructor(options: NousSentimentClientOptions) {
-    this.#apiKey = options.apiKey;
-    this.#baseUrl = options.baseUrl;
-    this.#model = options.model;
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.#maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
-    this.#logger = options.logger;
-    this.#gate = options.gate;
+    this.#options = {
+      ...options,
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxTokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+    };
   }
 
   async fetchSentiment(instrument: string, asOf: Date) {
@@ -70,29 +62,29 @@ export class NousSentimentClient implements GrokSentimentClient {
     try {
       result = await nousChat(
         {
-          apiKey: this.#apiKey,
-          baseUrl: this.#baseUrl,
-          timeoutMs: this.#timeoutMs,
-          gate: this.#gate,
-          gateBudgetMs: this.#timeoutMs,
+          apiKey: this.#options.apiKey,
+          baseUrl: this.#options.baseUrl,
+          timeoutMs: this.#options.timeoutMs,
+          gate: this.#options.gate,
+          gateBudgetMs: this.#options.timeoutMs,
           clampCallToBudget: true,
           llmStage: 'market_intelligence_sentiment',
         },
         {
-          model: this.#model,
-          max_tokens: this.#maxTokens,
+          model: this.#options.model,
+          max_tokens: this.#options.maxTokens,
           messages,
         },
       );
     } catch (error) {
       if (!(error instanceof NousRefusalError)) throw error;
-      this.#logger?.log({
+      this.#options.logger?.log({
         trace_id: 'grok',
         stage: 'market_intelligence',
         event: 'sentiment_refused',
         level: 'warn',
         message:
-          `sentiment: ${this.#model} refused the prompt for ${instrument} ` +
+          `sentiment: ${this.#options.model} refused the prompt for ${instrument} ` +
           `(${error.signal}); reporting zero items for this window. The call is metered — it ` +
           'cost money and produced nothing — and the bucket is marked, so the same prompt is ' +
           'not re-issued until it rolls. A refusal that persists across buckets is a prompt or ' +
@@ -104,7 +96,7 @@ export class NousSentimentClient implements GrokSentimentClient {
         items: [] as IntelligenceItem[],
         prompt: messages.map((message) => `[${message.role}] ${message.content}`).join('\n\n'),
         raw_text: '',
-        model: this.#model,
+        model: this.#options.model,
         usage: error.usage,
         retrievalEvidence: false,
         latency_ms: Date.now() - started,
@@ -172,7 +164,7 @@ export class NousSentimentClient implements GrokSentimentClient {
   }
 
   #unreadable(instrument: string): IntelligenceItem[] {
-    this.#logger?.log({
+    this.#options.logger?.log({
       trace_id: 'grok',
       stage: 'market_intelligence',
       event: 'sentiment_response_unparseable',

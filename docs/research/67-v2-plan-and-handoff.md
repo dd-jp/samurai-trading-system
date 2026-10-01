@@ -64,7 +64,7 @@ All of these are on `main`.
 
 Each step: `what => verify / kill line`. Steps 1 and 2 are £0, no LLM, and may start as soon as their own blockers in §5a are ruled (Q18: research, not build) — they do not wait for Step 0.
 
-**Definition of done for every step (David, 2026-09-19: tests, lint, e2e, crap, mutation are built as each stage requires):** a step's PR ships its own unit tests, e2e tests where it touches a runtime path, passes oxlint + biome + fallow + the CRAP gate, and runs mutation testing on any risk, sizing or loss-budget code it adds. There is no separate "testing phase"; Step 4b is the cross-cutting pre-paper checklist on top of this, not a substitute for it.
+**Definition of done for every step (David, 2026-09-19: tests, lint, e2e, crap, mutation are built as each stage requires):** a step's PR ships its own unit tests, e2e tests where it touches a runtime path, passes oxlint + biome + fallow + the CRAP gate, and runs mutation testing on any risk, sizing or loss-budget code it adds. There is no separate "testing phase"; Step 4b is the cross-cutting pre-paper checklist on top of this, not a substitute for it. Since 2026-10-01 (doc 66) the full gates run on CI, including the CRAP gate, smoke and, when risk, sizing or loss-budget files change, Stryker: scoped tests locally, then the PR, then CI green.
 
 ### Step 0 — Doc rewrite (David asked for this explicitly; Q18/Q18a)
 
@@ -304,7 +304,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Adaptability | Drift monitor | Live-vs-backtest distribution drift with pre-committed thresholds (#1516) |
 | Engineering | CI alive | GitHub Actions billing fixed; CI enforces oxlint, biome, crap, fallow, tests |
 | Engineering | Property tests | Money math, loss budget, sizing |
-| Engineering | Mutation testing | Risk and loss-budget code via `server/tools/mutation-local.ts` |
+| Engineering | Mutation testing | Risk and loss-budget code via `server/tools/mutation-local.ts`, on CI since 2026-10-01 |
 | Engineering | Broker contract tests | Order/position shapes: automated against Alpaca paper; a recorded drill against Saxo SIM (its token is manual and lasts 24h, so it cannot run in CI) |
 | Observability | v2 dashboard (G13: required before paper) | Loss budget left, live position within backtest band, sleeve vs benchmark, heartbeat, LLM spend |
 | Observability | Daily report + alerting | Daily summary pushed to David; any fault alerts within minutes |

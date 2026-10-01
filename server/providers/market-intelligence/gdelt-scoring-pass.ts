@@ -1,5 +1,5 @@
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
-import type { AssetClass, Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
+import type { AssetClass, Clock, Logger } from '../../shared/index.js';
 import { logFailureIfPresent, logIfPresent } from '../../shared/index.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
@@ -65,25 +65,14 @@ export class GdeltScoringPass {
 
   constructor(private readonly deps: GdeltScoringPassDeps) {}
 
-  private log(entry: LogEntry): void {
-    logIfPresent(this.deps.logger, entry);
-  }
-
-  private logFailure(
-    template: LogEntryTemplate,
-    error: unknown,
-    payload: Record<string, unknown>,
-  ): void {
-    logFailureIfPresent(this.deps.logger, template, error, payload);
-  }
-
   run(trace_id = 'gdelt-scoring'): void {
     const bar = this.sharedBarRead();
     for (const asset_class of this.deps.assetClasses) {
       try {
         this.derive(trace_id, asset_class, bar);
       } catch (error) {
-        this.logFailure(
+        logFailureIfPresent(
+          this.deps.logger,
           {
             trace_id,
             stage: 'market_intelligence',
@@ -137,7 +126,7 @@ export class GdeltScoringPass {
           : previous.consecutive + 1;
       this.#refusals.set(asset_class, { reason: derivation.reason, consecutive });
       if (shouldLogRefusalAt(consecutive)) {
-        this.log({
+        logIfPresent(this.deps.logger, {
           trace_id,
           stage: 'market_intelligence',
           event: 'gdelt_scoring_refused',
@@ -165,7 +154,7 @@ export class GdeltScoringPass {
     this.#emittedBar.set(asset_class, windowEnd.getTime());
     this.#refusals.delete(asset_class);
 
-    this.log({
+    logIfPresent(this.deps.logger, {
       trace_id,
       stage: 'market_intelligence',
       level: 'info',

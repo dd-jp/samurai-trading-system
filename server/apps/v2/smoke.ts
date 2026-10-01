@@ -1,7 +1,7 @@
-import { pathToFileURL } from 'node:url';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { formatDailySummary, readDailySummary } from './daily-summary.js';
 import { createVenueRouter, macroGate } from './data/index.js';
 import { composeV2Root, type V2Root } from './index.js';
@@ -364,13 +364,8 @@ export function printSmoke(
   return result.passed ? 0 : 1;
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runV2Smoke()
-    .then((result) => process.exit(printSmoke(result, (line) => process.stdout.write(line))))
-    .catch((error: unknown) => {
-      process.stderr.write(
-        `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-      );
-      process.exit(1);
-    });
-}
+void runWhenInvoked(
+  import.meta.url,
+  async () => printSmoke(await runV2Smoke(), (line) => process.stdout.write(line)),
+  errorStack,
+);

@@ -5913,6 +5913,14 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     }[];
   }
 
+  function controlAndLive<T>(lots: readonly T[]): [T, T] {
+    const [control, live] = lots;
+    if (control === undefined || live === undefined || lots.length !== 2) {
+      throw new Error(`expected exactly a control and a live lot, got ${lots.length}`);
+    }
+    return [control, live];
+  }
+
   it('makes zero LLM calls from the axis vote through to Execution', async () => {
     const calls: unknown[] = [];
     const backing = llmForOneDebate();
@@ -6059,19 +6067,18 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
 
     const lots = lotsByArm(db);
     expect(lots.map((lot) => lot.arm)).toEqual(['control', 'live']);
-    const [control, live] = lots;
+    const [control, live] = controlAndLive(lots);
 
-    expect(control?.instrument).toBe(live?.instrument);
-    expect(control?.decision_timestamp).toBe(live?.decision_timestamp);
-    expect(control?.side).toBe(live?.side);
-    expect(control?.stop).toBe(live?.stop);
-    expect(control?.target).toBe(live?.target);
+    expect(control.instrument).toBe(live.instrument);
+    expect(control.decision_timestamp).toBe(live.decision_timestamp);
+    expect(control.side).toBe(live.side);
+    expect(control.stop).toBe(live.stop);
+    expect(control.target).toBe(live.target);
     const queried = db
       .prepare('SELECT idempotency_key FROM open_positions WHERE arm = ?')
       .all('control') as { idempotency_key: string }[];
-    expect(queried).toHaveLength(1);
-    expect(queried[0]?.idempotency_key).toBe(control?.idempotency_key);
-    expect(queried[0]?.idempotency_key).not.toBe(live?.idempotency_key);
+    expect(queried.map((row) => row.idempotency_key)).toEqual([control.idempotency_key]);
+    expect(control.idempotency_key).not.toBe(live.idempotency_key);
   });
 
   it("moves both arms together across ADR-0018 D3's frozen bracket rows", async () => {
@@ -6117,10 +6124,12 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
         expect(lot.target / lot.stop).toBeCloseTo(shape(singleStockBracket), 6);
       }
 
-      expect(asSingleStock[0]?.stop).not.toBe(asIndex[0]?.stop);
-      expect(asSingleStock[1]?.stop).not.toBe(asIndex[1]?.stop);
-      expect(asSingleStock[0]?.stop).toBe(asSingleStock[1]?.stop);
-      expect(asSingleStock[0]?.target).toBe(asSingleStock[1]?.target);
+      const [indexControl, indexLive] = controlAndLive(asIndex);
+      const [singleControl, singleLive] = controlAndLive(asSingleStock);
+      expect(singleControl.stop).not.toBe(indexControl.stop);
+      expect(singleLive.stop).not.toBe(indexLive.stop);
+      expect(singleControl.stop).toBe(singleLive.stop);
+      expect(singleControl.target).toBe(singleLive.target);
     } finally {
       moved.close();
     }

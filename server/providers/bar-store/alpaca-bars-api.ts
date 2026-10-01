@@ -1,4 +1,4 @@
-import { isFiniteNumber } from '../../shared/index.js';
+import { delay, isString, jsonOrTextResult, readOhlcvBar } from '../../shared/index.js';
 
 export const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
 const ALPACA_REQUESTS_PER_MINUTE = 200;
@@ -112,19 +112,8 @@ function parseBarArray(raw: unknown, symbol: string): RawDailyBar[] {
 }
 
 function parseBar(item: unknown, symbol: string): RawDailyBar {
-  if (typeof item === 'object' && item !== null) {
-    const { t, o, h, l, c, v } = item as Record<string, unknown>;
-    if (
-      typeof t === 'string' &&
-      isFiniteNumber(o) &&
-      isFiniteNumber(h) &&
-      isFiniteNumber(l) &&
-      isFiniteNumber(c) &&
-      isFiniteNumber(v)
-    ) {
-      return { t, o, h, l, c, v };
-    }
-  }
+  const bar = readOhlcvBar(item, isString);
+  if (bar !== undefined) return bar;
   throw new Error(`Alpaca bars: malformed bar for ${symbol}: ${JSON.stringify(item)}`);
 }
 
@@ -135,7 +124,7 @@ export class AlpacaBarsApi {
   constructor(
     credentials: AlpacaCredentials,
     private readonly fetcher: Fetcher = jsonFetcher,
-    private readonly sleep: Sleeper = defaultSleep,
+    private readonly sleep: Sleeper = delay,
     private readonly minIntervalMs = Math.ceil(60_000 / ALPACA_REQUESTS_PER_MINUTE),
     private readonly now: () => number = Date.now,
   ) {
@@ -178,17 +167,5 @@ export class AlpacaBarsApi {
 }
 
 async function jsonFetcher(url: string, headers: Record<string, string>): Promise<FetchResult> {
-  const response = await fetch(url, { headers });
-  const text = await response.text();
-  let body: unknown = text;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-  return { status: response.status, body };
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return jsonOrTextResult(await fetch(url, { headers }));
 }

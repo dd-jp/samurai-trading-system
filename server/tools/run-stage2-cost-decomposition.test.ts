@@ -1,6 +1,121 @@
-import type { CostConfig, MarketState } from './backtest/index.js';
+import type { CostConfig, MarketState, PolygonAggregate, PolygonClient } from './backtest/index.js';
 import { CostModelImpl } from './backtest/index.js';
-import { scaleCostConfig } from './run-stage2-cost-decomposition.js';
+import {
+  printReport,
+  runCostDecomposition,
+  scaleCostConfig,
+} from './run-stage2-cost-decomposition.js';
+
+const DAY_MS = 86_400_000;
+
+function cyclingAggregates(startMs: number, bars: number): PolygonAggregate[] {
+  const closes = Array.from(
+    { length: bars },
+    (_, i) => 100 + 30 * Math.sin((2 * Math.PI * i) / 100) + 0.02 * i,
+  );
+  return closes.map((close, i) => {
+    const prevClose = i === 0 ? close : (closes[i - 1] as number);
+    return {
+      t: startMs + i * DAY_MS,
+      o: prevClose,
+      h: Math.max(close, prevClose) + 1,
+      l: Math.min(close, prevClose) - 1,
+      c: close,
+      v: 1_000,
+    };
+  });
+}
+
+describe('runCostDecomposition', () => {
+  it('scores the grid net and gross, sweeps the cost scales and prints the report', async () => {
+    const start = Date.UTC(2020, 0, 1);
+    const bars = 500;
+    const client: PolygonClient = {
+      async fetchAggregates() {
+        return cyclingAggregates(start, bars);
+      },
+    };
+    const lines: string[] = [];
+
+    const result = await runCostDecomposition({
+      polygonClient: client,
+      window: { start: new Date(start), end: new Date(start + (bars - 1) * DAY_MS) },
+      dbPath: ':memory:',
+      print: (line) => lines.push(line),
+    });
+
+    expect(result.rows).toHaveLength(8);
+    expect(result.sensitivity.map((point) => point.scale)).toEqual([1, 0.5, 0.25, 0.1, 0.05]);
+    expect(result.passes_net).toBeLessThanOrEqual(result.rows.length);
+    expect(result.passes_gross).toBeLessThanOrEqual(result.rows.length);
+    expect(lines[0]).toMatch(/^Stage 2 cost decomposition: ingesting over 2020-01-01/);
+    expect(lines).toContain('=== Discriminator ===');
+  });
+});
+
+describe('printReport', () => {
+  const row = {
+    config_hash: 'abc',
+    asset_class: 'stocks' as const,
+    label: 'sma 10/50',
+    net_oos_sharpe: 0.1,
+    gross_oos_sharpe: 0.6,
+    net_window_sharpe: 0.2,
+    gross_window_sharpe: 0.7,
+    net_profit_factor: 1.1,
+    gross_profit_factor: 1.4,
+    turnover: 12.34,
+    costs: {
+      total: 120,
+      spread: 50,
+      slippage: 30,
+      market_impact: 20,
+      commission: 20,
+      bps_of_notional: 4.25,
+      trades: 9,
+    },
+  };
+
+  function report(overrides: { passes_gross: number; passes_net: number; atr?: number }) {
+    const lines: string[] = [];
+    const costs =
+      overrides.atr === undefined
+        ? row.costs
+        : { ...row.costs, mean_adverse_move_in_atr: overrides.atr };
+    printReport(
+      {
+        window: { start: new Date(0), end: new Date(DAY_MS) },
+        rows: [{ ...row, costs } as Parameters<typeof printReport>[0]['rows'][number]],
+        passes_gross: overrides.passes_gross,
+        passes_net: overrides.passes_net,
+        sensitivity: [{ scale: 0.5, passes: 1, stocks_bps: 2.04, crypto_bps: 3 }],
+      },
+      (line) => lines.push(line),
+    );
+    return lines;
+  }
+
+  it('calls a gross-only rescue cost drag and prints the adverse move when known', () => {
+    const lines = report({ passes_gross: 1, passes_net: 0, atr: 0.1234 });
+    expect(lines).toContain('[stocks] sma 10/50 (abc)');
+    expect(lines).toContain(
+      '    cost rate: 4.3bps of notional over 9 trades, 0.123 ATR adverse move per fill',
+    );
+    expect(lines).toContain('  cost×0.5   passes=1/1 stocks=2.0bps crypto=3.0bps');
+    expect(lines).toContain('  cost×0     passes=1/1 (gross)');
+    expect(lines.at(-1)).toBe(
+      'Removing modeled costs rescues configs: the net kill is at least partly COST DRAG.',
+    );
+  });
+
+  it('calls an unrescued kill the signal and omits an unknown adverse move', () => {
+    const lines = report({ passes_gross: 0, passes_net: 0 });
+    expect(lines).toContain('    cost rate: 4.3bps of notional over 9 trades');
+    expect(lines.at(-1)).toBe(
+      'Removing modeled costs rescues nothing: the kill is the SIGNAL, not the cost model.',
+    );
+  });
+});
 
 const BASE: CostConfig = {
   crypto: {
