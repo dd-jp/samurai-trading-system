@@ -1,4 +1,6 @@
-import type { OrderSide, V2Bar } from '../../../contracts/index.js';
+import type { OrderSide, Position, V2Bar } from '../../../contracts/index.js';
+
+export type BracketLevels = Pick<Position, 'qty' | 'stopGbp' | 'targetGbp'>;
 
 export interface LimitEntry {
   readonly side: OrderSide;
@@ -24,7 +26,7 @@ interface QuotedBar {
   readonly high: number;
 }
 
-function quoted(bar: V2Bar): QuotedBar {
+export function quoted(bar: V2Bar): QuotedBar {
   const toQuoted = bar.rawClose / bar.close;
   return { open: bar.open * toQuoted, low: bar.low * toQuoted, high: bar.high * toQuoted };
 }
@@ -83,4 +85,51 @@ export function simulateLimitEntry(entry: LimitEntry, bars: readonly V2Bar[]): L
 export function simulateMarketExit(bars: readonly V2Bar[]): number | undefined {
   const [first] = bars;
   return first === undefined ? undefined : quoted(first).open;
+}
+
+function stopTouched(held: BracketLevels, lowGbp: number, highGbp: number): boolean {
+  if (held.stopGbp === undefined) return false;
+  return held.qty > 0 ? lowGbp <= held.stopGbp : highGbp >= held.stopGbp;
+}
+
+function targetTouched(held: BracketLevels, lowGbp: number, highGbp: number): boolean {
+  if (held.targetGbp === undefined) return false;
+  return held.qty > 0 ? highGbp >= held.targetGbp : lowGbp <= held.targetGbp;
+}
+
+// The bar's open is unvalidated: clamping to the day's range keeps a defective open from
+// filling a stop outside the range the day actually traded
+function stopFillGbp(
+  held: BracketLevels,
+  openGbp: number,
+  lowGbp: number,
+  highGbp: number,
+): number {
+  const stop = held.stopGbp as number;
+  const gapped = held.qty > 0 ? Math.min(stop, openGbp) : Math.max(stop, openGbp);
+  return Math.min(highGbp, Math.max(lowGbp, gapped));
+}
+
+export interface BracketExit {
+  readonly priceGbp: number | undefined;
+  readonly crossesSpread: boolean;
+}
+
+export function bracketExit(
+  held: BracketLevels,
+  openGbp: number,
+  lowGbp: number,
+  highGbp: number,
+): BracketExit | undefined {
+  if (stopTouched(held, lowGbp, highGbp)) {
+    return { priceGbp: stopFillGbp(held, openGbp, lowGbp, highGbp), crossesSpread: true };
+  }
+  if (targetTouched(held, lowGbp, highGbp)) {
+    return { priceGbp: held.targetGbp, crossesSpread: false };
+  }
+  return undefined;
+}
+
+export function withinLimit(side: OrderSide, limit: number, price: number): number {
+  return side === 'buy' ? Math.min(limit, price) : Math.max(limit, price);
 }

@@ -6,6 +6,7 @@ export { saxoTokenSecrets } from './saxo-token-secrets.js';
 export {
   type FillPricing,
   impactLookup,
+  quoteSimulatedFill,
   venueFee,
   venueHalfSpreadBps,
 } from './simulated-costs.js';

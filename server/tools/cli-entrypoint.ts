@@ -46,6 +46,27 @@ export function runWhenInvoked(
   );
 }
 
+export async function setExitCodeWhenInvoked(
+  moduleUrl: string,
+  main: () => Promise<number>,
+  proc: { exitCode?: number | string | null | undefined } = process,
+): Promise<void> {
+  if (isMainModule(moduleUrl)) proc.exitCode = await main();
+}
+
+export async function writeOrFail(
+  write: (line: string) => void,
+  produce: () => Promise<string>,
+): Promise<number> {
+  try {
+    write(await produce());
+    return 0;
+  } catch (error) {
+    write(errorMessage(error));
+    return 1;
+  }
+}
+
 export function onTerminationSignal(
   shutdown: () => Promise<unknown>,
   signals: Pick<NodeJS.Process, 'once'> = process,
