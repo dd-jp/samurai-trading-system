@@ -2,6 +2,8 @@
 
 **Status 2026-09-27.** David ruled the paper entry a marketable limit with a capped offset (doc 66, #1815). He then set the offset and its reference price to "base it on actual data and evidence backed", with a paper test as well. This doc is that evidence.
 
+**Overruled 2026-09-29.** David set the offset at 50 bps through the decision close (buy at close × 1.005, short at × 0.995), as a judgement rather than a measurement (#1815). The code is `ENTRY_LIMIT_OFFSET` in `server/apps/v2/risk/entry-limit.ts`. Sizing and the cash gate now price the entry at the limit, not at the decision price (§3 Sizing below). The evidence and the paper test are unchanged. The 0 bps result below is the measured optimum, not the running setting. On 2026-09-30 David added that the offset is part of the backtest trial identity, that Saxo entries take the same 50 bps, and that the paper sample splits at the change (doc 66, #1815).
+
 **Result:**
 - **Reference price:** the decision close.
 - **Offset:** 0 bps. The entry stays a limit at the prior close.
@@ -75,13 +77,13 @@ Mean excess per signal, in bps, relative to market-on-open, with the 95% CI:
 
 At an offset of 0 the target is always beyond the limit.
 
-**Sizing.** Sizing reads the decision price (`server/apps/v2/risk/gate.ts`). A fill above the close widens the risk to the fixed stop, and Alpaca reserves buying power at the limit. Neither applies at 0.
+**Sizing.** A fill above the close widens the risk to the fixed stop, and Alpaca reserves buying power at the limit. Neither applies at 0. At the ruled 50 bps both do, so sizing and the cash gate price the entry at the limit (`server/apps/v2/risk/gate.ts`, #1815).
 
 ## 4. Limits of this evidence
 
 - **Random entries, not the debate's picks.** A signal that predicts continuation from the close could make misses costly. The debate is forward-paper only (Q15), so its own entries can only be measured in paper, hence the report.
 - **Close-to-close hold.** The 2 ATR stop and 3 ATR target are not modelled.
-- **Venue.** US large caps only. The Saxo LSE leg is not measured and is not live (`venueFor` returns only `'alpaca'`). Its offset is decided when that leg is enabled.
+- **Venue.** US large caps only. The Saxo LSE leg is not measured. David ruled 2026-09-30 (#1815) that simulated Saxo entries take the same 50 bps now: one entry rule across venues, judged by the paper data.
 
 ## 5. The paper test
 

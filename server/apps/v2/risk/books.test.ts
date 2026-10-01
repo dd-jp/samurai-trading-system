@@ -146,6 +146,37 @@ describe('PaperBooks', () => {
     expect(() => books.applyFill('nope', fill())).toThrow(/unknown book/);
   });
 
+  it('#1933: a mark counts toward the time stop on every venue but the paused ones, in this book only', () => {
+    const books = openBooks(seededStore());
+    const held = (bookId: string) =>
+      books.positions(bookId).map((position) => [position.instrument, position.marksHeld]);
+    books.applyFill('debate/primary', fill({ instrument: 'AAPL', venue: 'alpaca' }));
+    books.applyFill('debate/primary', fill({ instrument: 'MSFT', venue: 'saxo_cfd_usd' }));
+    books.applyFill('debate/primary', fill({ instrument: 'ISF', venue: 'saxo' }));
+    books.applyFill('debate/primary', fill({ instrument: 'VOD', venue: 'saxo_cfd_gbp' }));
+    books.applyFill('debate/no-macro-gate', fill({ instrument: 'AAPL', venue: 'alpaca' }));
+
+    books.markDay('debate/primary', '2026-09-25', flat, 0);
+    books.markDay('debate/primary', '2026-09-26', flat, 1, ['alpaca', 'saxo_cfd_usd']);
+    books.markDay('debate/primary', '2026-09-27', flat, 1, []);
+    books.markDay('debate/primary', '2026-09-28', flat, 1, ['saxo', 'saxo_cfd_gbp']);
+
+    expect(held('debate/primary')).toEqual([
+      ['AAPL', 3],
+      ['ISF', 3],
+      ['MSFT', 3],
+      ['VOD', 3],
+    ]);
+    books.markDay('debate/primary', '2026-09-29', flat, 1, ['alpaca']);
+    expect(held('debate/primary')).toEqual([
+      ['AAPL', 3],
+      ['ISF', 4],
+      ['MSFT', 4],
+      ['VOD', 4],
+    ]);
+    expect(held('debate/no-macro-gate')).toEqual([['AAPL', 0]]);
+  });
+
   it('prices a position that flips through zero at the flipping fill', () => {
     const books = openBooks(seededStore());
     books.applyFill('debate/primary', fill({ qty: 2, priceGbp: 100 }));

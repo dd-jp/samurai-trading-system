@@ -31,9 +31,10 @@ import {
   type CycleDeps,
   calendarDaysBetween,
   runCycle,
+  runEntryPass,
   vetoApplied,
 } from './cycle.js';
-import { addDays, BarsMarketData } from './data/index.js';
+import { addDays, BarsMarketData, TABLE_VENUE_SESSIONS } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import type { FillPricing } from './execution/simulated-costs.js';
@@ -389,7 +390,7 @@ function sizeShares(deps: CycleDeps, bookId: string, tradingDate: string, instru
   return row?.size_shares;
 }
 
-const ENTRY_COST_GBP = (6 * 20) / FX;
+const ENTRY_COST_GBP = (6 * 20 * (1 + HALF_SPREAD_BPS / 10_000)) / FX;
 
 function exitFill(deps: CycleDeps, clientOrderId: string) {
   const db = (
@@ -464,6 +465,8 @@ describe('runCycle', () => {
     expect(JSON.parse(orders(deps, 'debate/primary')[0]?.payload ?? '{}')).toMatchObject({
       size: 6,
       price: 20,
+      limit: expect.closeTo(20.1, 9),
+      entry_offset_bps: 50,
       stop: 19.2,
       target: expect.closeTo(21.2, 9),
     });
@@ -486,7 +489,7 @@ describe('runCycle', () => {
       {
         book_id: 'debate/primary',
         positions: 1,
-        equity_gbp: expect.closeTo(1_000, 9),
+        equity_gbp: expect.closeTo(1_000 - ENTRY_COST_GBP + (6 * 20) / FX, 9),
         size_multiplier: 1,
       },
       { book_id: 'debate/no-macro-gate', positions: 1 },
@@ -512,7 +515,7 @@ describe('runCycle', () => {
         asset_class: 'stocks',
         side: 'buy',
         size: 3,
-        entry: 20,
+        entry: expect.closeTo(20.1, 9),
         stop: 19.2,
         target: expect.closeTo(21.2, 9),
         time_in_force: 'gtc',
@@ -600,8 +603,9 @@ describe('runCycle', () => {
       await openBooks(deps);
       deps.barsByDate.set('2026-09-28', bar('2026-09-25', override));
       await runCycle(deps, '2026-09-28');
+      const entryCostGbp = (6 * 20 * (1 + (HALF_SPREAD_BPS + 3) / 10_000)) / FX;
       expect(deps.books.cash('debate/primary')).toBeCloseTo(
-        1_000 - ENTRY_COST_GBP + (6 * fill) / FX - (2 * 0.5) / FX,
+        1_000 - entryCostGbp + (6 * fill) / FX - (2 * 0.5) / FX,
         9,
       );
     }
@@ -1443,7 +1447,7 @@ describe('runCycle', () => {
     await runCycle(deps, '2026-09-24');
     deps.setDecisions([]);
     deps.barsByDate.set('before the order', bar('2026-09-23', { open: 19, low: 18 }));
-    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.3, low: 20.01, high: 20.6 }));
+    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.3, low: 20.11, high: 20.6 }));
     const report = await runCycle(deps, '2026-09-25');
     expect(report.fills).toBe(0);
     expect(deps.books.positions('debate/primary')).toEqual([]);
@@ -1469,21 +1473,36 @@ describe('runCycle', () => {
     );
   });
 
+  it('fills a bar that dips between the decision close and the offset limit, at the limit (#1815)', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-24');
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.3, low: 20.05, high: 20.6 }));
+    expect((await runCycle(deps, '2026-09-25')).fills).toBe(2);
+    expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20.1 / FX, 9);
+    const shorts = harness([shortAapl], true);
+    await runCycle(shorts, '2026-09-24');
+    shorts.setDecisions([]);
+    shorts.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 19.7, low: 19.4, high: 19.95 }));
+    await runCycle(shorts, '2026-09-25');
+    expect(shorts.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(19.9 / FX, 9);
+  });
+
   it('never fills a simulated buy above its limit, even when the open inside it crosses the spread', async () => {
     const pricing: FillPricing = { halfSpreadBps: () => 50, impactBps: () => 0, fee: () => 0 };
     const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, pricing);
     await runCycle(deps, '2026-09-24');
     deps.setDecisions([]);
-    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 19.99, low: 19.9 }));
+    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.09, low: 19.9 }));
     await runCycle(deps, '2026-09-25');
-    expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20 / FX, 9);
+    expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20.1 / FX, 9);
     const short: SleeveDecision = shortAapl;
     const shorts = harness([short], true, undefined, [2026], TEST_SPEC, pricing);
     await runCycle(shorts, '2026-09-24');
     shorts.setDecisions([]);
-    shorts.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.01, high: 20.1 }));
+    shorts.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 19.91, high: 20.1 }));
     await runCycle(shorts, '2026-09-25');
-    expect(shorts.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20 / FX, 9);
+    expect(shorts.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(19.9 / FX, 9);
   });
 
   it('under a halt, a simulated entry filled this cycle gets its flatten in the same cycle', async () => {
@@ -2522,7 +2541,7 @@ describe('runCycle: loss-budget alerts', () => {
       BOOKS.map((book) => [
         'error',
         'v2_loss_budget_halt',
-        `${book}: loss budget halts entries, year-to-date loss £14.40`,
+        `${book}: loss budget halts entries, year-to-date loss £14.45`,
       ]),
     );
   });
@@ -2536,7 +2555,7 @@ describe('runCycle: loss-budget alerts', () => {
     await runCycle(deps, '2026-09-29');
     expect(events).toEqual(
       BOOKS.flatMap((book) => [
-        ['warn', 'v2_loss_budget_step', `${book}: entries sized at 0.5x, year-to-date loss £14.40`],
+        ['warn', 'v2_loss_budget_step', `${book}: entries sized at 0.5x, year-to-date loss £14.45`],
         ['warn', 'v2_daily_loss_cap', `${book}: daily loss cap blocks new entries`],
       ]),
     );
@@ -2835,9 +2854,8 @@ describe('#1941: one Alpaca account across broker-routed books', () => {
 
 describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
   // TEST_SPEC/£1,000 equity: each longAapl-shaped decision sizes to min(byRisk, byNotional)
-  // = min(floor(5/(0.32*2))=7, floor(100/16)=6) = 6 shares at £20/1.25 = £16/share = £96
-  // notional (matches the file's existing ENTRY_COST_GBP). 10 fit (£960 of £1,000); the 11th
-  // has only £40 left and needs £96
+  // = min(floor(5/(0.4*2/1.25))=7, floor(100/16.08)=6) = 6 shares at the $20.10 limit, £96.48
+  // notional. 10 fit (£964.80 of £1,000); the 11th has only £35.20 left
   const instruments = Array.from({ length: 11 }, (_, index) => `SYM${index}`);
   const decisions: SleeveDecision[] = instruments.map((instrument) => ({
     ...longAapl,
@@ -2855,6 +2873,10 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     const last = deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM10');
     expect(last?.outcome).toBe('rejected');
     expect(last?.payload.detail).toBe('insufficient_cash');
+    expect(last?.payload).not.toHaveProperty('entry_offset_bps');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM9')?.payload).toMatchObject({
+      entry_offset_bps: 50,
+    });
   });
 
   it('never double-counts a held line: re-issuing enter_long for it costs no fresh cash', async () => {
@@ -2975,6 +2997,43 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     const last = deps.journal.orderFor('v2-debate-primary-2026-09-28-NEW9');
     expect(last?.outcome).toBe('rejected');
     expect(last?.payload.detail).toBe('insufficient_cash');
+  });
+
+  it('charges an entry at its limit, not the decision close (#1815)', async () => {
+    const deps = harness([], true);
+    const decisionId = deps.journal.recordDecision(
+      'debate/primary',
+      '2026-09-25',
+      { ...longAapl, instrument: 'THIN' },
+      1,
+    );
+    deps.journal.recordOrder({
+      client_order_id: 'v2-debate-primary-2026-09-25-THIN',
+      decision_id: decisionId,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'THIN',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: true,
+      outcome: 'refused_dry_run',
+      payload: { size: 1, price: 40, limit: 47.5 },
+    });
+    const news = Array.from({ length: 10 }, (_, index) => ({
+      ...longAapl,
+      instrument: `NEW${index}`,
+    }));
+    deps.setDecisions(news);
+    await runCycle(deps, '2026-09-28');
+    // £962 left after the £38 resting limit: ten entries fit at the £96 close but only nine at
+    // the £96.48 limit
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-NEW8')?.outcome).toBe(
+      'refused_dry_run',
+    );
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-NEW9')?.payload.detail).toBe(
+      'insufficient_cash',
+    );
   });
 
   it('does not reserve cash for an entry the broker genuinely rejects, so later entries in the same cycle still fund (doc 66 2026-09-28, #1785)', async () => {
@@ -4159,5 +4218,192 @@ describe('runCycle: a held name whose series ends (doc 70 §2.4, #1911)', () => 
       });
     }
     expect(endedLogs()).toEqual(ENDED_LOGS);
+  });
+});
+
+describe('runCycle with per-venue sessions (#1933)', () => {
+  const longIsf: SleeveDecision = { ...longAapl, instrument: 'ISF', venue: 'saxo' };
+  const BOOKS = ['debate/primary', 'debate/no-macro-gate'];
+
+  function sessioned(decisions: readonly SleeveDecision[], now: string): Harness {
+    return {
+      ...harness(decisions, true),
+      clock: new SimulatedClock(new Date(now)),
+      venueSessions: TABLE_VENUE_SESSIONS,
+    };
+  }
+
+  function sitOuts(deps: CycleDeps) {
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    return db
+      .prepare(
+        "SELECT scope, parameter, book_id, instrument, message FROM v2_refusals WHERE ticket = '#1933' ORDER BY rowid",
+      )
+      .all();
+  }
+
+  function entryInstruments(deps: CycleDeps, bookId: string) {
+    return orders(deps, bookId)
+      .filter((order) => order.leg === 'entry')
+      .map((order) => order.client_order_id.split('-').at(-1));
+  }
+
+  it('Thanksgiving: US names sit out with venue_closed while LSE names enter', async () => {
+    const deps = sessioned([longAapl, longIsf], '2026-11-26T06:30:00.000Z');
+    const report = await runCycle(deps, '2026-11-26');
+    expect(report).toMatchObject({ decisions: 2, entries: 2 });
+    for (const bookId of BOOKS) {
+      expect(entryInstruments(deps, bookId)).toEqual(['ISF']);
+      expect(sizeShares(deps, bookId, '2026-11-26', 'AAPL')).toBe(0);
+    }
+    expect(sitOuts(deps)).toEqual(
+      BOOKS.map((bookId) => ({
+        scope: 'entry',
+        parameter: 'venue_closed',
+        book_id: bookId,
+        instrument: 'AAPL',
+        message: `${bookId} AAPL: alpaca entry sits out (venue_closed)`,
+      })),
+    );
+    expect(report.refusals).toContain('debate/primary AAPL: alpaca entry sits out (venue_closed)');
+  });
+
+  it('Thanksgiving sits a US CFD short out too', async () => {
+    const deps = sessioned([shortAapl], '2026-11-26T06:30:00.000Z');
+    await runCycle(deps, '2026-11-26');
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual([]);
+    expect(sitOuts(deps)).toMatchObject(
+      BOOKS.map((bookId) => ({ parameter: 'venue_closed', book_id: bookId, instrument: 'AAPL' })),
+    );
+  });
+
+  it('an LSE-only holiday sits the LSE names out and the US names enter', async () => {
+    const deps = sessioned([longAapl, longIsf], '2026-12-28T06:30:00.000Z');
+    await runCycle(deps, '2026-12-28');
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(['AAPL']);
+    expect(sitOuts(deps)).toMatchObject(
+      BOOKS.map((bookId) => ({ parameter: 'venue_closed', book_id: bookId, instrument: 'ISF' })),
+    );
+  });
+
+  it.each([
+    ['2026-09-30T06:30:00.000Z', ['AAPL', 'ISF'], []],
+    ['2026-09-30T07:00:00.000Z', ['AAPL'], ['ISF']],
+    ['2026-09-30T13:30:00.000Z', [], ['AAPL', 'ISF']],
+  ])('a run starting %s enters %j and refuses %j as a late wake', async (now, entered, late) => {
+    const deps = sessioned([longAapl, longIsf], now);
+    await runCycle(deps, '2026-09-30');
+    expect(entryInstruments(deps, 'debate/primary')).toEqual(entered);
+    expect(
+      (sitOuts(deps) as { parameter: string; book_id: string; instrument: string }[])
+        .filter((row) => row.book_id === 'debate/primary')
+        .map((row) => [row.parameter, row.instrument]),
+    ).toEqual(late.map((instrument) => ['late_wake_entry_cutoff', instrument]));
+  });
+
+  function slowDebate(deps: Harness, debateEndsAt: string): Harness {
+    const registry = new SleeveRegistry();
+    registry.register({
+      ...deps.sleeve,
+      decide: (...args: Parameters<Sleeve['decide']>) => {
+        (deps.clock as SimulatedClock).advanceTo(new Date(debateEndsAt));
+        return deps.sleeve.decide(...args);
+      },
+    });
+    return { ...deps, registry };
+  }
+
+  it('an on-time run whose debate drags past both opens still enters in both books', async () => {
+    const deps = slowDebate(
+      sessioned([longAapl, longIsf], '2026-09-30T06:30:00.000Z'),
+      '2026-09-30T14:00:00.000Z',
+    );
+    const report = await runCycle(deps, '2026-09-30');
+    expect(deps.clock.now().toISOString()).toBe('2026-09-30T14:00:00.000Z');
+    expect(report.entries).toBe(4);
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(['AAPL', 'ISF']);
+    expect(sitOuts(deps)).toEqual([]);
+  });
+
+  it.each([
+    ['2026-09-30T06:30:00.000Z', '2026-09-30T14:00:00.000Z', ['AAPL', 'ISF']],
+    ['2026-09-30T13:30:00.000Z', '2026-09-30T06:30:00.000Z', []],
+  ])(
+    'judges the cutoff by a run start of %s, not the cycle clock of %s',
+    async (started, now, entered) => {
+      const deps = { ...sessioned([longAapl, longIsf], now), runStartedAt: new Date(started) };
+      await runCycle(deps, '2026-09-30');
+      for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(entered);
+    },
+  );
+
+  it('a late wake still exits and marks', async () => {
+    const deps = sessioned([longAapl], '2026-09-24T06:30:00.000Z');
+    await openBooks(deps);
+    const late = { ...deps, clock: new SimulatedClock(new Date('2026-09-28T20:00:00.000Z')) };
+    late.setDecisions([{ ...longAapl, action: 'exit' }]);
+    const report = await runCycle(late, '2026-09-28');
+    expect(report).toMatchObject({ skipped: false, exits: 2 });
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+  });
+
+  it('the run after a closed venue day, whose mark repeats the bar, does not count toward its time stop', async () => {
+    const deps = sessioned([longAapl, longIsf], '2026-11-24T06:30:00.000Z');
+    await runCycle(deps, '2026-11-24');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-11-25');
+    const marks = () =>
+      ['AAPL', 'ISF'].map((instrument) => [
+        instrument,
+        deps.books.position('debate/no-macro-gate', instrument)?.marksHeld,
+      ]);
+    expect(marks()).toEqual([
+      ['AAPL', 1],
+      ['ISF', 1],
+    ]);
+    await runCycle(deps, '2026-11-26');
+    expect(marks()).toEqual([
+      ['AAPL', 2],
+      ['ISF', 2],
+    ]);
+    await runCycle(deps, '2026-11-27');
+    expect(marks()).toEqual([
+      ['AAPL', 2],
+      ['ISF', 3],
+    ]);
+    await runCycle(deps, '2026-11-30');
+    expect(marks()).toEqual([
+      ['AAPL', 3],
+      ['ISF', 4],
+    ]);
+  });
+
+  it('exits a US name on Thanksgiving when its exit is signalled', async () => {
+    const deps = sessioned([longAapl], '2026-11-24T06:30:00.000Z');
+    await runCycle(deps, '2026-11-24');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-11-25');
+    deps.setDecisions([{ ...longAapl, action: 'exit' }]);
+    const report = await runCycle(deps, '2026-11-26');
+    expect(report.exits).toBe(2);
+    expect(
+      deps.journal.orderFor('v2-debate-no-macro-gate-2026-11-26-AAPL-exit')?.payload,
+    ).toMatchObject({ reason: 'signal_exit' });
+    expect(sitOuts(deps)).toEqual([]);
+  });
+
+  it('never gates the intraday entry pass, which trades inside the session by design', async () => {
+    const deps = sessioned([], '2026-09-30T15:00:00.000Z');
+    const report = await runEntryPass(deps, {
+      tradingDate: '2026-09-30',
+      sleeveId: 'debate',
+      decisionsFor: () => [longAapl],
+      entryOrderId: (book, instrument, date) => `sig-${book.id}-${date}-${instrument}`,
+      blockedBookIds: new Set(),
+    });
+    expect(report.entries).toBe(2);
+    expect(sitOuts(deps)).toEqual([]);
   });
 });

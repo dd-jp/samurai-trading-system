@@ -169,6 +169,7 @@ function decisionFor(
     stop_price: plan.stop,
     target_price: plan.target,
     entry_trigger: plan.trigger,
+    entry_limit: plan.limit,
     inputs_hash: digest({ signal: signal.signal_id, bars }),
     debate_id: undefined,
     veto: veto.kind === 'pass' ? undefined : `${veto.kind}: ${veto.reason}`,

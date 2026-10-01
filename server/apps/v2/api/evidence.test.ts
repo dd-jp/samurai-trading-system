@@ -30,19 +30,27 @@ function day(bookId: string, date: string, equity: number): void {
   ).run(bookId, date, equity);
 }
 
-function exitOrder(id: string, bookId: string, leg: 'entry' | 'exit' = 'exit'): void {
+const AT_OFFSET = { price: 20, limit: 20.1, entry_offset_bps: 50 };
+
+function exitOrder(
+  id: string,
+  bookId: string,
+  leg: 'entry' | 'exit' = 'exit',
+  payload: Record<string, unknown> = leg === 'entry' ? AT_OFFSET : {},
+  instrument = 'AAPL',
+): void {
   new Journal(db, clock).recordOrder({
     client_order_id: id,
     decision_id: null,
     book_id: bookId,
     trading_date: '2026-10-05',
-    instrument: 'AAPL',
+    instrument,
     venue: 'alpaca',
     leg,
     side: 'sell',
     dry_run: false,
     outcome: 'simulated',
-    payload: {},
+    payload,
   });
 }
 
@@ -51,13 +59,14 @@ function fillOf(
   orderId: string,
   bookId: string,
   leg: 'entry' | 'stop' | 'target' | 'exit' = 'exit',
+  instrument = 'AAPL',
 ): void {
   new Journal(db, clock).recordFill({
     fill_id: fillId,
     client_order_id: orderId,
     book_id: bookId,
     trading_date: '2026-10-05',
-    instrument: 'AAPL',
+    instrument,
     venue: 'alpaca',
     leg,
     side: 'sell',
@@ -211,8 +220,63 @@ describe('EvidenceReader (P5–P8)', () => {
       status: 'fed',
       target: 100,
       books: [
-        { book_id: 'debate/primary', variant: 'primary', closed_trades: 4 },
-        { book_id: 'debate/no-veto', variant: 'no-veto', closed_trades: 1 },
+        {
+          book_id: 'debate/primary',
+          variant: 'primary',
+          closed_trades: 4,
+          by_entry_offset: [
+            { entry_offset_bps: null, closed_trades: 2 },
+            { entry_offset_bps: 50, closed_trades: 2 },
+          ],
+        },
+        {
+          book_id: 'debate/no-veto',
+          variant: 'no-veto',
+          closed_trades: 1,
+          by_entry_offset: [{ entry_offset_bps: null, closed_trades: 1 }],
+        },
+      ],
+    });
+  });
+
+  it('splits closed trades at the #1815 offset change and counts only the current sample toward G1', () => {
+    open();
+    book('debate/primary', 'primary');
+    const roundTrip = (id: string, entry: Record<string, unknown>, instrument = 'AAPL') => {
+      exitOrder(`${id}-entry`, 'debate/primary', 'entry', entry, instrument);
+      fillOf(`${id}-in`, `${id}-entry`, 'debate/primary', 'entry', instrument);
+      exitOrder(`${id}-exit`, 'debate/primary', 'exit', {}, instrument);
+      fillOf(`${id}-out`, `${id}-exit`, 'debate/primary', 'exit', instrument);
+    };
+    roundTrip('pre-change', { price: 20, stop: 19 });
+    roundTrip('at-offset', AT_OFFSET);
+    roundTrip('sleeve-limit', { price: 20, limit: 19.8 });
+    exitOrder('pre-msft', 'debate/primary', 'entry', { price: 30 }, 'MSFT');
+    fillOf('pre-msft-in', 'pre-msft', 'debate/primary', 'entry', 'MSFT');
+    roundTrip('msft', AT_OFFSET, 'MSFT');
+    fillOf('pre-msft-stop', 'pre-msft', 'debate/primary', 'stop', 'MSFT');
+    exitOrder('bracket', 'debate/primary', 'entry', {
+      price: 20,
+      limit: 20.2,
+      entry_offset_bps: 100,
+    });
+    fillOf('bracket-in', 'bracket', 'debate/primary', 'entry');
+    fillOf('bracket-target', 'bracket', 'debate/primary', 'target');
+    expect(read().trade_count).toEqual({
+      status: 'fed',
+      target: 100,
+      books: [
+        {
+          book_id: 'debate/primary',
+          variant: 'primary',
+          closed_trades: 3,
+          by_entry_offset: [
+            { entry_offset_bps: null, closed_trades: 1 },
+            { entry_offset_bps: 0, closed_trades: 2 },
+            { entry_offset_bps: 50, closed_trades: 2 },
+            { entry_offset_bps: 100, closed_trades: 1 },
+          ],
+        },
       ],
     });
   });

@@ -24,6 +24,7 @@ export interface Alerts {
   readonly logger: Logger;
   flush(): Promise<void>;
   notify(text: string): Promise<void>;
+  alarm(text: string): Promise<void>;
 }
 
 const SEND_TIMEOUT_MS = 10_000;
@@ -178,6 +179,7 @@ export function alertsFor(
       }
     },
     notify: (text) => send('warning', sendable(text, secret)),
+    alarm: (text) => send('critical', sendable(`${HEADERS.critical}\n${text}`, secret)),
   };
 }
 
