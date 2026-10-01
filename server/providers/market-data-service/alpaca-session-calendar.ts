@@ -11,9 +11,8 @@ import type { TradingCalendar } from './trading-calendar.js';
 import {
   civilDateKey,
   ET_ZONE,
+  findSessionClose,
   MAX_SESSION_SEARCH_DAYS,
-  nextCivilDay,
-  previousCivilDay,
   toCivilDate,
   toZonedTime,
   wallClockToInstant,
@@ -239,18 +238,14 @@ export class AlpacaEquitySessionCalendar implements TradingCalendar {
     return minutesSinceMidnight >= row.openMinutes && minutesSinceMidnight < row.closeMinutes;
   }
 
+  #tableClose(civilDate: ZonedCivilDate): Date | undefined {
+    const row = this.#table.get(civilDateKey(civilDate));
+    return row === undefined ? undefined : wallClockToInstant(civilDate, row.closeMinutes, ET_ZONE);
+  }
+
   sessionEnd(instant: Date): Date | null {
-    let civilDate: ZonedCivilDate = toCivilDate(instant, ET_ZONE);
-
-    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
-      const row = this.#table.get(civilDateKey(civilDate));
-      if (row !== undefined) {
-        const close = wallClockToInstant(civilDate, row.closeMinutes, ET_ZONE);
-        if (close.getTime() > instant.getTime()) return close;
-      }
-      civilDate = nextCivilDay(civilDate);
-    }
-
+    const close = findSessionClose(instant, ET_ZONE, 'after', (d) => this.#tableClose(d));
+    if (close !== undefined) return close;
     throw new Error(
       `AlpacaEquitySessionCalendar: no session close found within ${MAX_SESSION_SEARCH_DAYS} ` +
         `days after ${instant.toISOString()} — the fetched Alpaca calendar table may not cover ` +
@@ -259,17 +254,8 @@ export class AlpacaEquitySessionCalendar implements TradingCalendar {
   }
 
   sessionStart(instant: Date): Date {
-    let civilDate: ZonedCivilDate = toCivilDate(instant, ET_ZONE);
-
-    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
-      const row = this.#table.get(civilDateKey(civilDate));
-      if (row !== undefined) {
-        const close = wallClockToInstant(civilDate, row.closeMinutes, ET_ZONE);
-        if (close.getTime() <= instant.getTime()) return close;
-      }
-      civilDate = previousCivilDay(civilDate);
-    }
-
+    const close = findSessionClose(instant, ET_ZONE, 'before', (d) => this.#tableClose(d));
+    if (close !== undefined) return close;
     throw new Error(
       `AlpacaEquitySessionCalendar: no session close found within ${MAX_SESSION_SEARCH_DAYS} ` +
         `days before ${instant.toISOString()} — the fetched Alpaca calendar table may not cover ` +

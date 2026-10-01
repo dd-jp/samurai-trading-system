@@ -250,7 +250,8 @@ describe('fencedMarket', () => {
   });
 });
 
-describe('runBacktest', () => {
+// CPU-heavy: cases ran up to ~32 s under coverage at load 25
+describe('runBacktest', { timeout: 120_000 }, () => {
   it('runs every trial and the benchmark through the cycle and counts the trials after Session B', async () => {
     const run = input();
     const result = await runBacktest(run);
@@ -348,7 +349,7 @@ describe('runBacktest', () => {
     ).toEqual([15, 16]);
     expect(await numbers({ embargo: 2 })).toEqual([17, 18]);
     expect(await numbers({})).toEqual([3, 4]);
-  }, 20_000);
+  });
 
   it('#1515: omits embargo from the run hash when unset, so an old candidate replays its own trial numbers unchanged', async () => {
     const shared = ledger();

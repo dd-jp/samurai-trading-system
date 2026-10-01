@@ -1,4 +1,5 @@
 import { isFiniteNumber } from '../is-finite-number.js';
+import { readOhlcvBar } from '../ohlcv-bar.js';
 import { truncateForError } from './response-errors.js';
 
 export interface RawPolygonAggregate {
@@ -15,19 +16,8 @@ export function validateRawPolygonAggregate(
   symbol: string,
   errorPrefix: string,
 ): RawPolygonAggregate {
-  if (typeof raw === 'object' && raw !== null) {
-    const { t, o, h, l, c, v } = raw as Record<string, unknown>;
-    if (
-      isFiniteNumber(t) &&
-      isFiniteNumber(o) &&
-      isFiniteNumber(h) &&
-      isFiniteNumber(l) &&
-      isFiniteNumber(c) &&
-      isFiniteNumber(v)
-    ) {
-      return { t, o, h, l, c, v };
-    }
-  }
+  const aggregate = readOhlcvBar(raw, isFiniteNumber);
+  if (aggregate !== undefined) return aggregate;
   throw new Error(
     `${errorPrefix}: malformed aggregate for ${symbol}: ${truncateForError(JSON.stringify(raw))}`,
   );

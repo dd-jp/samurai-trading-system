@@ -17,7 +17,7 @@ export class SequentialTickRunner implements TickRunner {
   }
 
   async #runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome> {
-    const { trace_id, clock, logger, currentTickStore } = ctx;
+    const { trace_id, clock, currentTickStore } = ctx;
     const instrument = signal.asset;
 
     const decisionBar = ctx.decision_bar;
@@ -26,15 +26,7 @@ export class SequentialTickRunner implements TickRunner {
       return this.runExitCheckPass(signal, ctx, floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS));
     }
 
-    this.markStage(signal, ctx, 'analysts');
-    const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
-    const analystsTimer = this.startStageTimer();
-    const views = await this.steps.analysts(analystsInput);
-    const analystsDecision =
-      views.length === 0
-        ? analystsSkipDecisionWord(this.steps.analystSkipKind?.(trace_id))
-        : 'quorum_met';
-    this.record(signal, ctx, 'analysts', analystsDecision, analystsInput, views, analystsTimer);
+    const views = await this.#runAnalystsStage(signal, ctx, decisionBar.open_time);
 
     await this.steps.controlArm?.({ signal, ctx, views });
 
@@ -63,26 +55,7 @@ export class SequentialTickRunner implements TickRunner {
       debateTimer,
     );
 
-    if (debate.bar_timestamp.getTime() !== decisionBar.open_time.getTime()) {
-      logger.log({
-        trace_id,
-        stage: 'debate',
-        event: 'decision_bar_divergence',
-        level: 'warn',
-        message:
-          `debate: ${instrument} — decision bar divergence: the gate opened bar ` +
-          `${decisionBar.open_time.toISOString()} but the debate result claims ` +
-          `${debate.bar_timestamp.toISOString()}. Any intent this pass produces will key to ` +
-          "the debate's bar, not the gate's, and may be suppressed as a duplicate — a " +
-          'suppressed entry is otherwise indistinguishable from a no-trade tick (#687/#743).',
-        payload: {
-          instrument,
-          gate_bar: decisionBar.open_time.toISOString(),
-          debate_bar: debate.bar_timestamp.toISOString(),
-          debate_id: debate.debate_id,
-        },
-      });
-    }
+    this.#warnOnDecisionBarDivergence(ctx, instrument, decisionBar.open_time, debate);
 
     await ctx.beginPortfolioTail?.();
 
@@ -105,6 +78,51 @@ export class SequentialTickRunner implements TickRunner {
     }
 
     return this.runIntentTail(signal, ctx, intent, {});
+  }
+
+  async #runAnalystsStage(
+    signal: Signal,
+    ctx: TickContext,
+    bar: Date,
+  ): Promise<Awaited<ReturnType<TickSteps['analysts']>>> {
+    const { trace_id, clock } = ctx;
+    this.markStage(signal, ctx, 'analysts');
+    const analystsInput = { trace_id, signal, clock, bar };
+    const analystsTimer = this.startStageTimer();
+    const views = await this.steps.analysts(analystsInput);
+    const analystsDecision =
+      views.length === 0
+        ? analystsSkipDecisionWord(this.steps.analystSkipKind?.(trace_id))
+        : 'quorum_met';
+    this.record(signal, ctx, 'analysts', analystsDecision, analystsInput, views, analystsTimer);
+    return views;
+  }
+
+  #warnOnDecisionBarDivergence(
+    ctx: TickContext,
+    instrument: string,
+    gateBar: Date,
+    debate: Awaited<ReturnType<TickSteps['debate']>>,
+  ): void {
+    if (debate.bar_timestamp.getTime() === gateBar.getTime()) return;
+    ctx.logger.log({
+      trace_id: ctx.trace_id,
+      stage: 'debate',
+      event: 'decision_bar_divergence',
+      level: 'warn',
+      message:
+        `debate: ${instrument} — decision bar divergence: the gate opened bar ` +
+        `${gateBar.toISOString()} but the debate result claims ` +
+        `${debate.bar_timestamp.toISOString()}. Any intent this pass produces will key to ` +
+        "the debate's bar, not the gate's, and may be suppressed as a duplicate — a " +
+        'suppressed entry is otherwise indistinguishable from a no-trade tick (#687/#743).',
+      payload: {
+        instrument,
+        gate_bar: gateBar.toISOString(),
+        debate_bar: debate.bar_timestamp.toISOString(),
+        debate_id: debate.debate_id,
+      },
+    });
   }
 
   private startStageTimer(): StageTimer {

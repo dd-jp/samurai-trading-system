@@ -219,7 +219,9 @@ async function sweepCostSensitivity(
   return sensitivity;
 }
 
-async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDecompositionResult> {
+export async function runCostDecomposition(
+  deps: CostDecompositionDeps,
+): Promise<CostDecompositionResult> {
   const print = deps.print ?? console.log;
   const requested = deps.window ?? PINNED_VERDICT_WINDOW;
   const costConfig = deps.costConfig ?? PESSIMISTIC_COST_CONFIG;
@@ -317,7 +319,7 @@ async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDe
   return decomposition;
 }
 
-function printReport(result: CostDecompositionResult, print: (line: string) => void): void {
+export function printReport(result: CostDecompositionResult, print: (line: string) => void): void {
   print('');
   print('=== Gross vs net, per (config, asset class) ===');
   for (const row of result.rows) {

@@ -1,6 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { SignalWire } from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
+import {
+  declaresLengthOver,
+  isJsonRequest,
+  JSON_HEADERS,
+  parseJson,
+  serverLifecycle,
+} from '../json-http.js';
 import { SWAGGER_HTML, signalsOpenApi } from './openapi.js';
 import { parseSignalPayload, type SignalPayload } from './payload.js';
 import { SIGNAL_LIST_MAX, type SignalStore } from './store.js';
@@ -10,12 +17,6 @@ const SIGNALS_HOST = '127.0.0.1';
 export const SIGNAL_BODY_MAX_BYTES = 4_096;
 const DEFAULT_LIST_LIMIT = 50;
 const SIGNAL_PATH = /^\/api\/v2\/signals\/([0-9a-f-]{36})$/;
-
-const JSON_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Cache-Control': 'no-store',
-  'X-Content-Type-Options': 'nosniff',
-} as const;
 
 export interface SignalsServerOptions {
   readonly port: number;
@@ -58,22 +59,6 @@ function readCappedBody(req: IncomingMessage): Promise<string | null> {
   });
 }
 
-function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
-  try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch {
-    return { ok: false };
-  }
-}
-
-function isJsonRequest(req: IncomingMessage): boolean {
-  return (req.headers['content-type'] ?? '').split(';')[0]?.trim() === 'application/json';
-}
-
-function declaredTooLarge(req: IncomingMessage): boolean {
-  return Number(req.headers['content-length'] ?? 0) > SIGNAL_BODY_MAX_BYTES;
-}
-
 type BodyOutcome =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly status: 400 | 413 | 415; readonly error: string };
@@ -82,7 +67,7 @@ async function readJsonBody(req: IncomingMessage): Promise<BodyOutcome> {
   if (!isJsonRequest(req)) {
     return { ok: false, status: 415, error: 'content-type must be application/json' };
   }
-  const text = declaredTooLarge(req) ? null : await readCappedBody(req);
+  const text = declaresLengthOver(req, SIGNAL_BODY_MAX_BYTES) ? null : await readCappedBody(req);
   if (text === null) {
     return { ok: false, status: 413, error: `body is larger than ${SIGNAL_BODY_MAX_BYTES} bytes` };
   }
@@ -221,22 +206,13 @@ export function createSignalsServer(opts: SignalsServerOptions): SignalsServer {
         opts.onFault(error);
       });
   });
+  const lifecycle = serverLifecycle(server, SIGNALS_HOST, opts.port, (bound) => {
+    port = bound;
+  });
   return {
     get url() {
       return url();
     },
-    start: () =>
-      new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(opts.port, SIGNALS_HOST, () => {
-          const address = server.address();
-          port = typeof address === 'object' && address !== null ? address.port : opts.port;
-          resolve();
-        });
-      }),
-    stop: () =>
-      new Promise((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+    ...lifecycle,
   };
 }

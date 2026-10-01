@@ -66,7 +66,8 @@ describe('simulate: shape and determinism', () => {
     expect(result.equity[0]).toBe(1_000);
   });
 
-  it('is deterministic across runs', () => {
+  // CPU-heavy: ~4.3 s under coverage at load 25
+  it('is deterministic across runs', { timeout: 15_000 }, () => {
     const series = [
       syntheticSeries({ symbol: 'A', calendar, seed: 1 }),
       syntheticSeries({ symbol: 'B', calendar, seed: 2 }),

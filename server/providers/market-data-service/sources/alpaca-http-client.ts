@@ -1,7 +1,10 @@
 import type { RetryConfig, TokenBucket } from '../../../shared/index.js';
 import {
+  credentialReader,
   fetchWithTimeout,
   isFiniteNumber,
+  isString,
+  readOhlcvBar,
   truncateForError,
   withRetry,
 } from '../../../shared/index.js';
@@ -69,19 +72,8 @@ function toAlpacaBar(raw: RawAlpacaBar): AlpacaBar {
 }
 
 function validateRawAlpacaBar(raw: unknown, symbol: string, context: string): RawAlpacaBar {
-  if (typeof raw === 'object' && raw !== null) {
-    const { t, o, h, l, c, v } = raw as Record<string, unknown>;
-    if (
-      typeof t === 'string' &&
-      isFiniteNumber(o) &&
-      isFiniteNumber(h) &&
-      isFiniteNumber(l) &&
-      isFiniteNumber(c) &&
-      isFiniteNumber(v)
-    ) {
-      return { t, o, h, l, c, v };
-    }
-  }
+  const bar = readOhlcvBar(raw, isString);
+  if (bar !== undefined) return bar;
   throw new AlpacaDataProviderError(
     `AlpacaHttpDataClient: malformed bar for ${symbol} (${context}): ${truncateForError(
       JSON.stringify(raw),
@@ -175,15 +167,7 @@ export function resolveAlpacaDataFeed(raw: string | undefined): AlpacaDataFeed {
   );
 }
 
-function requireCredential(value: string | undefined, envVar: string, field: string): string {
-  if (value === undefined || value.length === 0) {
-    throw new Error(
-      `AlpacaHttpDataClient: ${envVar} is not set. Provide it via the environment ` +
-        `(.env.local) or pass { ${field} } explicitly.`,
-    );
-  }
-  return value;
-}
+const requireCredential = credentialReader('AlpacaHttpDataClient');
 
 function resolveFeedFor(
   assetClass: 'crypto' | 'stocks',

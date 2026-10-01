@@ -14,17 +14,15 @@ function hostnameOf(url: string): string {
   }
 }
 
-globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-  const url =
-    typeof input === 'string'
-      ? input
-      : input instanceof URL
-        ? input.href
-        : input instanceof Request
-          ? input.url
-          : String(input);
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  if (input instanceof Request) return input.url;
+  return String(input);
+}
 
-  const hostname = hostnameOf(url);
+globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  const hostname = hostnameOf(requestUrl(input));
   if (LOOPBACK_HOSTNAMES.has(hostname)) return realFetch(input, init);
 
   const escaped = hostname === '' ? '<unparseable URL>' : hostname;
