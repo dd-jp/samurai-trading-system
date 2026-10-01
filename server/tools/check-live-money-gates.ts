@@ -49,14 +49,18 @@ export async function checkLiveMoneyGates(
   };
 }
 
-export const ghIssueState: IssueStateLookup = async (issue) => {
-  const { stdout } = await execFileAsync('gh', ['issue', 'view', String(issue), '--json', 'state']);
+export function parseIssueState(stdout: string): GateState {
   const parsed: unknown = JSON.parse(stdout);
   const state =
     typeof parsed === 'object' && parsed !== null && 'state' in parsed
       ? (parsed as { state: unknown }).state
       : undefined;
   return state === 'OPEN' || state === 'CLOSED' ? state : 'UNKNOWN';
+}
+
+export const ghIssueState: IssueStateLookup = async (issue) => {
+  const { stdout } = await execFileAsync('gh', ['issue', 'view', String(issue), '--json', 'state']);
+  return parseIssueState(stdout);
 };
 
 export function formatGateReport(report: GateReport): string {

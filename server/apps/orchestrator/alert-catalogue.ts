@@ -92,6 +92,13 @@ const LOG_ONLY_CANNOT_PAGE =
   'SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram ' +
   'for an unattended run.';
 
+function rateOverWindow(alert: { rate: number; window_ms: number }): {
+  hours: number;
+  rate: string;
+} {
+  return { hours: Math.round(alert.window_ms / 3_600_000), rate: (alert.rate * 100).toFixed(1) };
+}
+
 function pct(value: number): string {
   return `${(value * 100).toFixed(2)}%`;
 }
@@ -902,7 +909,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       event: 'llm_failure_rate_elevated',
       level: 'warn',
       message:
-        `llm_failure rate ${(alert.rate * 100).toFixed(1)}% over the last ${Math.round(alert.window_ms / 3_600_000)}h ` +
+        `llm_failure rate ${rateOverWindow(alert).rate}% over the last ${rateOverWindow(alert).hours}h ` +
         `(${alert.llm_failure_count}/${alert.total_count} truncations) — ` +
         LOG_ONLY_CANNOT_PAGE,
       payload: {
@@ -914,8 +921,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       },
     }),
     text: (alert) => {
-      const hours = Math.round(alert.window_ms / 3_600_000);
-      const rate = (alert.rate * 100).toFixed(1);
+      const { hours, rate } = rateOverWindow(alert);
       return (
         `Samurai LLM FAILURE RATE ELEVATED: ${rate}% of truncations over the last ${hours}h ` +
         `(${alert.llm_failure_count}/${alert.total_count}) truncated on an outright LLM call ` +
@@ -935,7 +941,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       event: 'gate_refusal_rate_elevated',
       level: 'warn',
       message:
-        `in-flight gate refused ${(alert.rate * 100).toFixed(1)}% of debates over the last ${Math.round(alert.window_ms / 3_600_000)}h ` +
+        `in-flight gate refused ${rateOverWindow(alert).rate}% of debates over the last ${rateOverWindow(alert).hours}h ` +
         `(${alert.gate_refused_count}/${alert.decision_count} refused or run) — ` +
         LOG_ONLY_CANNOT_PAGE,
       payload: {
@@ -947,8 +953,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       },
     }),
     text: (alert) => {
-      const hours = Math.round(alert.window_ms / 3_600_000);
-      const rate = (alert.rate * 100).toFixed(1);
+      const { hours, rate } = rateOverWindow(alert);
       return (
         `Samurai GATE REFUSAL RATE ELEVATED: the in-flight LLM gate refused ${rate}% of debates ` +
         `over the last ${hours}h (${alert.gate_refused_count} refused of ` +

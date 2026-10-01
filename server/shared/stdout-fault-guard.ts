@@ -16,6 +16,20 @@ export function guardedWrite(stream: ErrorStream, line: string): void {
   } catch {}
 }
 
+export function retireStdoutOnFirstError(
+  stdout: StdoutStream,
+  stderr: StdoutStream & ErrorStream,
+  message: (error: Error) => string,
+): void {
+  watchStdoutErrors(stderr, () => {});
+  let reported = false;
+  watchStdoutErrors(stdout, (error) => {
+    if (reported) return;
+    reported = true;
+    guardedWrite(stderr, message(error));
+  });
+}
+
 export type ProcessFault = 'uncaughtException' | 'unhandledRejection';
 
 export interface ContinueOnFaultEffects {

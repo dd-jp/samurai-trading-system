@@ -18,6 +18,7 @@ import type { VerdictDecision } from '../pipeline/verdict/index.js';
 import type { OrderIntent } from '../shared/index.js';
 import { SystemClock } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import { failExitCodeOnRejection, isMainModule } from './cli-entrypoint.js';
 
 const PROBE_MODE = 'paper' as const;
 const PROBE_ENVIRONMENT = 'paper' as const;
@@ -28,14 +29,18 @@ const STOP_FRACTION = 0.95;
 const TARGET_FRACTION = 1.05;
 const ENTRY_SLIPPAGE = 1.001;
 
-async function latestTradePrice(instrument: string): Promise<number> {
+export async function latestTradePrice(
+  instrument: string,
+  env: NodeJS.ProcessEnv = process.env,
+  fetchFn: typeof fetch = fetch,
+): Promise<number> {
   const vars = ALPACA_CREDENTIAL_ENV_VARS[PROBE_ENVIRONMENT];
-  const key = process.env[vars.key];
-  const secret = process.env[vars.secret];
+  const key = env[vars.key];
+  const secret = env[vars.secret];
   if (key === undefined || secret === undefined) {
     throw new Error(`${vars.key} / ${vars.secret} must be set (use --env-file=.env.local)`);
   }
-  const response = await fetch(
+  const response = await fetchFn(
     `https://data.alpaca.markets/v2/stocks/${instrument}/trades/latest`,
     { headers: { 'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret } },
   );
@@ -65,25 +70,27 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-async function main(): Promise<void> {
-  const confirm = process.argv.includes('--confirm');
-  const logger = new JsonLogger();
-  const clock = new SystemClock();
-  const now = clock.now();
-
-  const calendar = await resolveUsEquitySessionCalendar({ logger, now: () => clock.now() });
-  if (!calendar.isOpen(now)) {
-    const closed =
-      `US equities are closed at ${now.toISOString()} — a limit order placed now would rest ` +
-      'unfilled rather than open the lot this probe exists to open. Run it inside the ' +
-      'equity entry window (13:30-14:45Z).';
-    if (confirm) {
-      throw new Error(closed);
-    }
-    console.log(`WARNING (dry run continues): ${closed}`);
+export function refuseOrWarnWhenClosed(
+  open: boolean,
+  now: Date,
+  confirm: boolean,
+  log: (line: string) => void,
+): void {
+  if (open) return;
+  const closed =
+    `US equities are closed at ${now.toISOString()} — a limit order placed now would rest ` +
+    'unfilled rather than open the lot this probe exists to open. Run it inside the ' +
+    'equity entry window (13:30-14:45Z).';
+  if (confirm) {
+    throw new Error(closed);
   }
+  log(`WARNING (dry run continues): ${closed}`);
+}
 
-  const last = await latestTradePrice(INSTRUMENT);
+export function probeOrder(
+  now: Date,
+  last: number,
+): { idempotencyKey: string; entry: number; stop: number; target: number; intent: OrderIntent } {
   const entry = round2(last * ENTRY_SLIPPAGE);
   const stop = round2(last * STOP_FRACTION);
   const target = round2(last * TARGET_FRACTION);
@@ -117,6 +124,34 @@ async function main(): Promise<void> {
       cosine_precedent: { neighbor_count: 0, weighted_mean_r: 0, no_precedent: true },
     },
   };
+  return { idempotencyKey, entry, stop, target, intent };
+}
+
+export function refuseWhenHeld(held: readonly { idempotency_key: string }[]): void {
+  if (held.length > 0) {
+    throw new Error(
+      `refusing to place: ${held.length} open lot(s) already held for ${INSTRUMENT} ` +
+        `(${held.map((lot) => lot.idempotency_key).join(', ')}). Let the running orchestrator ` +
+        'flatten them before probing again.',
+    );
+  }
+}
+
+export function opened(status: string): boolean {
+  return status === 'submitted' || status === 'deduped';
+}
+
+async function main(): Promise<void> {
+  const confirm = process.argv.includes('--confirm');
+  const logger = new JsonLogger();
+  const clock = new SystemClock();
+  const now = clock.now();
+
+  const calendar = await resolveUsEquitySessionCalendar({ logger, now: () => clock.now() });
+  refuseOrWarnWhenClosed(calendar.isOpen(now), now, confirm, (line) => console.log(line));
+
+  const last = await latestTradePrice(INSTRUMENT);
+  const { idempotencyKey, entry, stop, target, intent } = probeOrder(now, last);
 
   console.log(
     JSON.stringify(
@@ -150,14 +185,7 @@ async function main(): Promise<void> {
     config: snapshotSourceAbsent('config'),
   };
 
-  const held = (await store.getOpenPositions()).filter((lot) => lot.instrument === INSTRUMENT);
-  if (held.length > 0) {
-    throw new Error(
-      `refusing to place: ${held.length} open lot(s) already held for ${INSTRUMENT} ` +
-        `(${held.map((lot) => lot.idempotency_key).join(', ')}). Let the running orchestrator ` +
-        'flatten them before probing again.',
-    );
-  }
+  refuseWhenHeld((await store.getOpenPositions()).filter((lot) => lot.instrument === INSTRUMENT));
 
   if (!confirm) {
     console.log('DRY RUN — nothing submitted. Re-run with --confirm to place.');
@@ -179,12 +207,11 @@ async function main(): Promise<void> {
   const outcome = await executeVerdict(input, verdict);
   console.log(JSON.stringify(outcome, null, 2));
 
-  if (outcome.status !== 'submitted' && outcome.status !== 'deduped') {
+  if (!opened(outcome.status)) {
     process.exitCode = 1;
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (isMainModule(import.meta.url)) {
+  void failExitCodeOnRejection(main());
+}

@@ -10,7 +10,7 @@ import type {
 import { collectMarks } from '../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { CircuitBreakers } from './breakers.js';
-import { RiskManagerImpl } from './index.js';
+import { PerSubclassCapUnresolvableError, RiskManagerImpl } from './index.js';
 import { INVALIDATED_BINDING_CONSTRAINT, NO_CONDITIONS_REASON } from './invalidation.js';
 import { computePortfolioView } from './portfolio-view.js';
 import type {
@@ -1535,5 +1535,237 @@ describe('whole-share sizing (#941)', () => {
 
     expect(decision.status).toBe('approved');
     expect(decision.order_intent?.size).toBe(10.5);
+  });
+});
+
+describe('RiskManagerImpl.evaluate — exact gate boundaries and reasons', () => {
+  const evaluate = (config: Partial<RiskConfig>, input: Partial<RiskInput> = {}) =>
+    new RiskManagerImpl(makeConfig(config)).evaluate(makeInput(input));
+
+  const thrownBy = (run: () => unknown): PerSubclassCapUnresolvableError => {
+    try {
+      run();
+    } catch (error) {
+      if (error instanceof PerSubclassCapUnresolvableError) return error;
+      throw error;
+    }
+    throw new Error('expected a PerSubclassCapUnresolvableError');
+  };
+
+  it('records the verbatim exit pass-through reason', () => {
+    const decision = evaluate({}, { intent: makeIntent({ intent_type: 'exit' }) });
+
+    expect(decision.reasons).toEqual(['exit: bypasses all entry gates, passes through verbatim']);
+  });
+
+  it('names every unvalued instrument in the unvalued_book refusal', () => {
+    const decision = evaluate(
+      {},
+      { portfolio: makePortfolio({ unvalued_instruments: ['X', 'Y'] }) },
+    );
+
+    expect(decision.reasons).toEqual([
+      'unvalued_book: 2 held instrument(s) could not be valued (X, Y), so every exposure cap ' +
+        'below would read them as zero exposure and allow a larger entry than the book ' +
+        'supports. Exits are unaffected (they return above this line).',
+    ]);
+  });
+
+  it('spells out each in-flight reservation in the reasons', () => {
+    const decision = evaluate(
+      {},
+      {
+        portfolio: makePortfolio({
+          reserved_exposure_by_instrument: { MSFT: 300, NVDA: 200 },
+          reserved_gross_exposure: 500,
+        }),
+      },
+    );
+
+    expect(decision.reasons[0]).toBe(
+      'in_flight_reservation: 500 of submitted-but-unfilled notional counts as deployed ' +
+        'against every cap below (MSFT=300, NVDA=200)',
+    );
+  });
+
+  it('does not trim a notional that sits exactly on a cap', () => {
+    const decision = evaluate({ max_position_size_fraction_of_equity: 0.1 });
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.reasons).toEqual([
+      'risk_critic: skipped — no critic verdict was supplied for this evaluation',
+    ]);
+  });
+
+  it('counts a correlation exactly at the threshold as concentrated', () => {
+    const decision = evaluate(
+      { concentration: { cap_fraction_of_equity: 0.05, threshold: 0.7 } },
+      { correlation: makeCorrelation({ correlations: { MSFT: -0.7 } }) },
+    );
+
+    expect(decision.binding_constraint).toBe('concentration_correlation_cap');
+    expect(decision.modifications?.final_size).toBe(50);
+  });
+
+  it('raises no macro flag for an instrument with no mapped country', () => {
+    const decision = evaluate({}, { cii: { null: 99 } });
+
+    expect(decision.warnings).toEqual([]);
+  });
+
+  it('names the PerSubclassCapUnresolvableError class', () => {
+    expect(new PerSubclassCapUnresolvableError('m', 'AAPL', 'b').name).toBe(
+      'PerSubclassCapUnresolvableError',
+    );
+  });
+
+  describe('risk critic', () => {
+    it('records a prose reject verbatim', () => {
+      const decision = evaluate(
+        {},
+        { critic: { verdict: 'reject', max_notional: null, reasoning: 'earnings tonight' } },
+      );
+
+      expect(decision.binding_constraint).toBe('risk_critic:reject');
+      expect(decision.reasons).toContain('risk_critic: earnings tonight');
+    });
+
+    it.each(['pass', 'unavailable'] as const)(
+      'never trims on a %s verdict, even one carrying a max_notional',
+      (verdict) => {
+        const decision = evaluate({}, { critic: { verdict, max_notional: 500, reasoning: 'x' } });
+
+        expect(decision.status).toBe('approved');
+        expect(decision.binding_constraint).toBeNull();
+        expect(decision.modifications?.final_size).toBe(100);
+      },
+    );
+
+    it('binds risk_critic:trim when the critic cap is below the notional', () => {
+      const decision = evaluate(
+        {},
+        { critic: { verdict: 'trim', max_notional: 5_000, reasoning: 'thin book' } },
+      );
+
+      expect(decision.binding_constraint).toBe('risk_critic:trim');
+      expect(decision.modifications?.final_size).toBe(50);
+      expect(decision.reasons).toContain(
+        'risk_critic: trimmed notional from 10000 to 5000 (thin book)',
+      );
+    });
+
+    it.each([10_000, 20_000])(
+      'leaves the notional alone when the critic cap (%s) is at or above it',
+      (cap) => {
+        const decision = evaluate(
+          {},
+          { critic: { verdict: 'trim', max_notional: cap, reasoning: 'fine' } },
+        );
+
+        expect(decision.status).toBe('approved');
+        expect(decision.binding_constraint).toBeNull();
+        expect(decision.modifications?.final_size).toBe(100);
+        expect(decision.reasons.some((reason) => reason.startsWith('risk_critic: trimmed'))).toBe(
+          false,
+        );
+      },
+    );
+  });
+
+  describe('whole-share and quantised floors', () => {
+    it('words the rounds-to-zero refusal exactly', () => {
+      const decision = evaluate(
+        { whole_share_sizing: true },
+        {
+          intent: makeIntent({ size: 10, entry: 1_000 }),
+          critic: { verdict: 'trim', max_notional: 500, reasoning: 'r' },
+        },
+      );
+
+      expect(decision.binding_constraint).toBe('whole_share_sizing:rounds_to_zero');
+      expect(decision.reasons.at(-1)).toBe(
+        'whole_share_sizing: trimmed notional 500 at entry 1000 is less than one whole share',
+      );
+    });
+
+    it('words the quantised min-viable refusal exactly', () => {
+      const decision = evaluate(
+        { whole_share_sizing: true, min_viable_size: 600 },
+        {
+          intent: makeIntent({ size: 10, entry: 400 }),
+          critic: { verdict: 'trim', max_notional: 700, reasoning: 'r' },
+        },
+      );
+
+      expect(decision.binding_constraint).toBe('min_viable_size:quantised');
+      expect(decision.reasons.at(-1)).toBe(
+        'min_viable_size: quantised notional 400 below viable minimum 600',
+      );
+    });
+  });
+
+  describe('live_book_ceiling', () => {
+    const ceiling = (same_currency_verified?: boolean) => ({
+      live_book_ceiling: {
+        book: 100_000,
+        refuse_above_tolerance: 0.05,
+        ...(same_currency_verified === undefined ? {} : { same_currency_verified }),
+      },
+    });
+    const atEquity = (equity: number) => ({ portfolio: makePortfolio({ equity }) });
+
+    it('refuses to arm until the currencies are verified, naming the instrument', () => {
+      const error = thrownBy(() => evaluate(ceiling(), atEquity(50_000)));
+
+      expect(error.instrument).toBe('AAPL');
+      expect(error.bindingConstraint).toBe('live_book_ceiling:currency_mismatch:AAPL');
+      expect(error.message).toBe(
+        'live_book_ceiling: currency mismatch, cannot verify funding — ' +
+          "live_book_ceiling's declared book (100000) is GBP but portfolio.equity " +
+          "(50000) is read from Alpaca's USD-denominated GET /v2/account. #1180 added " +
+          'a configured GBP->USD rate for the SIZING inlet and deliberately did not arm this ' +
+          "comparison with it: a rate error is proportional at the Trader's ask and absolute here, " +
+          'where it decides a total refusal against a few percent of tolerance. So this ' +
+          'account-level check (#888 review fix-up, arms regardless of whether any instrument is ' +
+          'D5-classified yet) refuses to arm rather than silently compare GBP to USD. Resolve with ' +
+          "a live FX-rate feed, or by running a venue whose account read reports the book's own " +
+          'currency — Saxo GET /port/v1/balances, wired as saxoFunding (#1509), which arms ' +
+          'live_book_ceiling.same_currency_verified via armSameCurrencyCeilings when it does.',
+      );
+    });
+
+    it('refuses an account funded past the tolerance above the book', () => {
+      const error = thrownBy(() => evaluate(ceiling(true), atEquity(105_001)));
+
+      expect(error.bindingConstraint).toBe('live_book_ceiling:equity_exceeds_book:AAPL');
+      expect(error.message).toBe(
+        "live_book_ceiling's declared book is 100000 but portfolio.equity is 105001, more " +
+          'than 5% above it. This account-level check (#888 review fix-up) arms regardless of ' +
+          'whether any instrument is D5-classified yet — an account funded this far past the ' +
+          'declared book invalidates every sizing assumption built on that book, not just a ' +
+          "classified subclass's. Refusing to size this entry — re-fund the account down to " +
+          'the declared book, or raise the book deliberately.',
+      );
+    });
+
+    it.each([95_000, 105_000])(
+      'passes a verified account at equity %s without binding',
+      (equity) => {
+        const decision = evaluate(ceiling(true), atEquity(equity));
+
+        expect(decision.status).toBe('approved');
+        expect(decision.binding_constraint).toBeNull();
+      },
+    );
+
+    it('scales the refusal line with the book, not against it', () => {
+      const wideCeiling = {
+        live_book_ceiling: { book: 10, refuse_above_tolerance: 1, same_currency_verified: true },
+      };
+
+      expect(() => evaluate(wideCeiling, atEquity(20))).not.toThrow();
+      expect(() => evaluate(wideCeiling, atEquity(21))).toThrow(PerSubclassCapUnresolvableError);
+    });
   });
 });

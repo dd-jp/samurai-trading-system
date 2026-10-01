@@ -1,6 +1,7 @@
 import {
   DEFAULT_STAGE2_TIMEFRAME,
   HttpTiingoClient,
+  type PolygonClient,
   Stage2HistoricalStore,
 } from './backtest/index.js';
 import {
@@ -11,7 +12,7 @@ import {
 } from './run-stage2.js';
 
 export interface IngestHistoryDeps {
-  client: HttpTiingoClient;
+  client: PolygonClient;
   dbPath: string;
   print?: (line: string) => void;
 }

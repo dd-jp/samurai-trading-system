@@ -516,7 +516,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
   async resizeProtectiveLegs(): Promise<void> {}
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the walk's advance invariant ("advancing past an index means its order is not resting", enforced in both directions), the live-preferred-over-settled adoption order, and the three independent size bounds (qty, sizedAboveSettled, entryFilledQty) are each individually documented as load-bearing — two prior restructurings (#1570 review's early-return) were tried and reverted as live-money bugs, so a fresh extraction here repeats a mistake this function's own history already made
   async rearmProtectiveLegs(
     clientOrderId: string,
     instrument: string,
@@ -540,67 +539,15 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     const closingSide = side === 'buy' ? 'sell' : 'buy';
 
-    const RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
-    let live: AlpacaOrder | null = null;
-    let settled: AlpacaOrder | null = null;
-    let freeAttempt: number | null = null;
-    let sizedAboveSettled = 0;
-
-    for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
-      const prior = await this.call('rearmProtectiveLegs', () =>
-        this.input.client.getOrderByClientOrderId(rearmWireId(clientOrderId, attempt)),
-      );
-      if (prior === null) {
-        freeAttempt = attempt;
-        break;
-      }
-
-      const priorState = mapOrderState(prior.status);
-      if (priorState === 'filled') {
-        settled = prior;
-        sizedAboveSettled = 0;
-        continue;
-      }
-      sizedAboveSettled = Math.max(sizedAboveSettled, Number(prior.qty));
-      if (
-        priorState === 'partially_filled' ||
-        (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
-      ) {
-        const superseded = live;
-        if (superseded !== null) {
-          await this.call('rearmProtectiveLegs', () =>
-            this.input.client.cancelOrder(superseded.id),
-          );
-        }
-        live = prior;
-        continue;
-      }
-      if (!['cancelled', 'rejected', 'expired'].includes(priorState)) {
-        await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
-      }
-    }
-
-    let entryFilledQty = 0;
-    if (settled !== null) {
-      const entry = await this.call('rearmProtectiveLegs', () =>
-        this.input.client.getOrderByClientOrderId(clientOrderId),
-      );
-      const parsed = entry !== null ? Number(entry.filled_qty) : NaN;
-      if (Number.isFinite(parsed)) entryFilledQty = parsed;
-    }
-    const observedSize = Math.max(qty, sizedAboveSettled, entryFilledQty);
-    const adopted =
-      live ?? (settled !== null && Number(settled.filled_qty) >= observedSize ? settled : null);
+    const walk = await this.walkRearmWireIds(clientOrderId, qty, stop, target);
+    const entryFilledQty = await this.entryFilledQtyIfSettled(clientOrderId, walk.settled);
+    const adopted = adoptableRearm(walk, Math.max(qty, walk.sizedAboveSettled, entryFilledQty));
     if (adopted !== null) {
-      this.rearmedLegs.set(clientOrderId, adopted.id);
-      this.state.recordBracketOrderIds('alpaca', clientOrderId, {
-        entry_order_id: null,
-        stop_order_id: legOrderIds(adopted.legs).stop_order_id,
-        target_order_id: adopted.id,
-      });
+      this.recordRearmedLegs(clientOrderId, adopted);
       return;
     }
 
+    const freeAttempt = walk.freeAttempt;
     if (freeAttempt === null) {
       throw new ProtectiveRearmUnsupportedError(
         'alpaca',
@@ -627,11 +574,74 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       }),
     );
 
-    this.rearmedLegs.set(clientOrderId, response.id);
+    this.recordRearmedLegs(clientOrderId, response);
+  }
+
+  private async walkRearmWireIds(
+    clientOrderId: string,
+    qty: number,
+    stop: number,
+    target: number,
+  ): Promise<RearmWalk> {
+    const walk: RearmWalk = { live: null, settled: null, freeAttempt: null, sizedAboveSettled: 0 };
+    for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
+      const prior = await this.call('rearmProtectiveLegs', () =>
+        this.input.client.getOrderByClientOrderId(rearmWireId(clientOrderId, attempt)),
+      );
+      if (prior === null) {
+        walk.freeAttempt = attempt;
+        break;
+      }
+      await this.absorbPriorRearm(walk, prior, qty, stop, target);
+    }
+    return walk;
+  }
+
+  private async absorbPriorRearm(
+    walk: RearmWalk,
+    prior: AlpacaOrder,
+    qty: number,
+    stop: number,
+    target: number,
+  ): Promise<void> {
+    const kind = classifyPriorRearm(prior, qty, stop, target);
+    if (kind === 'settled') {
+      walk.settled = prior;
+      walk.sizedAboveSettled = 0;
+      return;
+    }
+    walk.sizedAboveSettled = Math.max(walk.sizedAboveSettled, Number(prior.qty));
+    if (kind === 'live') {
+      const superseded = walk.live;
+      if (superseded !== null) {
+        await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(superseded.id));
+      }
+      walk.live = prior;
+      return;
+    }
+    if (kind === 'stale') {
+      await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
+    }
+  }
+
+  private async entryFilledQtyIfSettled(
+    clientOrderId: string,
+    settled: AlpacaOrder | null,
+  ): Promise<number> {
+    if (settled === null) return 0;
+    const entry = await this.call('rearmProtectiveLegs', () =>
+      this.input.client.getOrderByClientOrderId(clientOrderId),
+    );
+    const parsed = entry !== null ? Number(entry.filled_qty) : NaN;
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private recordRearmedLegs(clientOrderId: string, order: AlpacaOrder): void {
+    this.rearmedLegs.set(clientOrderId, order.id);
     this.state.recordBracketOrderIds('alpaca', clientOrderId, {
       entry_order_id: null,
-      stop_order_id: legOrderIds(response.legs).stop_order_id,
-      target_order_id: response.id,
+      stop_order_id: legOrderIds(order.legs).stop_order_id,
+      target_order_id: order.id,
     });
   }
 
@@ -915,6 +925,45 @@ function rearmOrderMatches(prior: AlpacaOrder, qty: number, stop: number, target
   const stopLeg = prior.legs?.find((leg) => leg.type === 'stop');
   if (stopLeg?.stop_price == null || Number(stopLeg.stop_price) !== stop) return false;
   return true;
+}
+
+const REARM_RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
+const REARM_TERMINAL_STATES: readonly string[] = ['cancelled', 'rejected', 'expired'];
+
+interface RearmWalk {
+  live: AlpacaOrder | null;
+  settled: AlpacaOrder | null;
+  freeAttempt: number | null;
+  sizedAboveSettled: number;
+}
+
+type PriorRearmKind = 'settled' | 'live' | 'terminal' | 'stale';
+
+export function classifyPriorRearm(
+  prior: AlpacaOrder,
+  qty: number,
+  stop: number,
+  target: number,
+): PriorRearmKind {
+  const priorState = mapOrderState(prior.status);
+  if (priorState === 'filled') return 'settled';
+  if (
+    priorState === 'partially_filled' ||
+    (REARM_RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
+  ) {
+    return 'live';
+  }
+  return REARM_TERMINAL_STATES.includes(priorState) ? 'terminal' : 'stale';
+}
+
+export function adoptableRearm(
+  walk: Pick<RearmWalk, 'live' | 'settled'>,
+  observedSize: number,
+): AlpacaOrder | null {
+  if (walk.live !== null) return walk.live;
+  return walk.settled !== null && Number(walk.settled.filled_qty) >= observedSize
+    ? walk.settled
+    : null;
 }
 
 function bracketParentPrices(order: NativeBracketRequest): {
