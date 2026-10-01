@@ -61,7 +61,10 @@ describe('TelegramBot.getUpdates', () => {
 
   it('drops entries that are not updates', async () => {
     const { fetchImpl } = scripted(
-      answer({ ok: true, result: [null, undefined, 'x', {}, { update_id: 'a' }, { update_id: 3 }] }),
+      answer({
+        ok: true,
+        result: [null, undefined, 'x', {}, { update_id: 'a' }, { update_id: 3 }],
+      }),
     );
     const updates = await new TelegramBot(TOKEN, fetchImpl).getUpdates(
       undefined,

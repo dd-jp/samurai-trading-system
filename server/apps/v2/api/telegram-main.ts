@@ -11,8 +11,8 @@ import {
   sanitizeLogText,
 } from '../../../shared/index.js';
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
-import { BarsMarketData, ParquetMarkSource } from '../data/index.js';
 import { alertsFor } from '../alerts.js';
+import { BarsMarketData, ParquetMarkSource } from '../data/index.js';
 import { type Heartbeat, healthchecksHeartbeat, NO_HEARTBEAT } from '../heartbeat.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';

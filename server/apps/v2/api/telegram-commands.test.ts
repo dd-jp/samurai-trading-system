@@ -333,7 +333,10 @@ describe('resume', () => {
       const wire = await real();
       return {
         ...wire,
-        control: { ...wire.control, loss_budget_halted_books: ['debate/primary', 'signals/primary'] },
+        control: {
+          ...wire.control,
+          loss_budget_halted_books: ['debate/primary', 'signals/primary'],
+        },
       };
     };
     expect(await handler.handle(message('resume'))).toBe(

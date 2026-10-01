@@ -537,9 +537,9 @@ describe('main', () => {
   });
 
   it('refuses to start without the owner, before opening the store', async () => {
-    await expect(
-      main(['--store', migratedStore()], { TELEGRAM_BOT_TOKEN: TOKEN }),
-    ).rejects.toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
+    await expect(main(['--store', migratedStore()], { TELEGRAM_BOT_TOKEN: TOKEN })).rejects.toThrow(
+      /TELEGRAM_ALLOWED_USER_IDS/,
+    );
     expect(storeCalls.opened).toEqual([]);
   });
 });
