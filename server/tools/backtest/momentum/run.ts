@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BarSeries } from '../../../pipeline/momentum/index.js';
+import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import {
   DEFAULT_BAR_STORE_ROOT,
   findUnitBreaks,
   ParquetBarStore,
+  violatesBarShape,
 } from '../../../providers/bar-store/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
@@ -210,6 +211,7 @@ function manifestHalfSpreads(
     if (one === undefined)
       throw new Error(`LSE manifest lists ${symbol} but the bar store has no saxo ${symbol}`);
     assertNoUnitBreak(one);
+    assertBarShape(one);
     const halfSpread = manifest.symbols[symbol]?.half_spread_bps;
     if (halfSpread === undefined || !(halfSpread >= 0)) {
       throw new Error(`LSE manifest: ${symbol} needs a measured half_spread_bps`);
@@ -224,6 +226,15 @@ function assertNoUnitBreak(series: BarSeries): void {
   if (breaks.length > 0) {
     throw new Error(
       `LSE bars: ${series.symbol} has a unit break at ${breaks.map((b) => `${b.date} ×${b.factor}`).join(', ')} — re-pull through the hygiene step`,
+    );
+  }
+}
+
+function assertBarShape(series: BarSeries): void {
+  const bad = series.bars.filter(violatesBarShape);
+  if (bad.length > 0) {
+    throw new Error(
+      `LSE bars: ${series.symbol} has ${bad.length} bars with open or close outside high-low, first ${(bad[0] as DailyBar).date} — run repair-saxo-bar-shape.ts`,
     );
   }
 }

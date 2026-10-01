@@ -29,11 +29,13 @@ export interface StoreRepairResult {
   readonly barsBefore: number;
   readonly barsAfter: number;
   readonly rescaledFields: number;
+  readonly neighbourRepairs: number;
   readonly rangesWidened: number;
   readonly droppedBars: number;
   readonly droppedDates: Readonly<Record<string, readonly string[]>>;
   readonly violationsBefore: number;
   readonly violationsAfter: number;
+  readonly manifestUpdated: boolean;
 }
 
 interface ManifestLine {
@@ -41,7 +43,10 @@ interface ManifestLine {
   readonly last: string;
   readonly bars: number;
   readonly density: number;
-  readonly hygiene: object;
+  readonly hygiene: {
+    readonly shape_repair?: Partial<ShapeRepairReport>;
+    readonly [key: string]: unknown;
+  };
 }
 
 interface ManifestShape {
@@ -79,36 +84,89 @@ export function planShapeRepairs(series: ReadonlyMap<string, BarSeries>): Symbol
   return repairs;
 }
 
+const SHAPE_NOTE_LEAD = '; then the bar shape is repaired';
+
+const NO_REPAIR: ShapeRepairReport = {
+  rescaled_fields: [],
+  neighbour_repairs: [],
+  dropped_glitch_dates: [],
+  ranges_widened: 0,
+};
+
 function withShapeNote(hygiene: string): string {
-  return hygiene.includes(SHAPE_REPAIR_MANIFEST_NOTE)
-    ? hygiene
-    : `${hygiene}; ${SHAPE_REPAIR_MANIFEST_NOTE}`;
+  const lead = hygiene.indexOf(SHAPE_NOTE_LEAD);
+  return `${lead < 0 ? hygiene : hygiene.slice(0, lead)}; ${SHAPE_REPAIR_MANIFEST_NOTE}`;
 }
 
-function repairedLine(line: ManifestLine | undefined, repair: SymbolRepair): ManifestLine {
-  if (line === undefined) {
-    throw new Error(`${repair.symbol}: repaired series is not listed in the Saxo manifest`);
-  }
-  const { bars } = repair.repaired;
-  return {
-    ...line,
-    first: (bars[0] as DailyBar).date,
-    last: (bars[bars.length - 1] as DailyBar).date,
-    bars: bars.length,
-    density: density(bars),
-    hygiene: { ...line.hygiene, shape_repair: repair.report },
+function byDate<T extends { readonly date: string }>(entries: readonly T[]): T[] {
+  return [...entries].sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function mergeUnique<T extends { readonly date: string; readonly field: string }>(
+  prior: readonly T[],
+  added: readonly T[],
+): T[] {
+  const known = new Set(prior.map((entry) => `${entry.date}:${entry.field}`));
+  return byDate([...prior, ...added.filter((entry) => !known.has(`${entry.date}:${entry.field}`))]);
+}
+
+function entryCount(report: Omit<ShapeRepairReport, 'ranges_widened'>): number {
+  return (
+    report.rescaled_fields.length +
+    report.neighbour_repairs.length +
+    report.dropped_glitch_dates.length
+  );
+}
+
+function mergeReports(
+  prior: Partial<ShapeRepairReport> | undefined,
+  added: ShapeRepairReport,
+): ShapeRepairReport {
+  const before = { ...NO_REPAIR, ...prior };
+  const merged = {
+    rescaled_fields: mergeUnique(before.rescaled_fields, added.rescaled_fields),
+    neighbour_repairs: mergeUnique(before.neighbour_repairs, added.neighbour_repairs),
+    dropped_glitch_dates: [
+      ...new Set([...before.dropped_glitch_dates, ...added.dropped_glitch_dates]),
+    ].sort(),
   };
+  const fresh = prior === undefined || entryCount(merged) > entryCount(before);
+  return {
+    ...merged,
+    ranges_widened: before.ranges_widened + (fresh ? added.ranges_widened : 0),
+  };
+}
+
+function refreshedLine(line: ManifestLine, repair: SymbolRepair | undefined): ManifestLine {
+  const report = mergeReports(line.hygiene.shape_repair, repair?.report ?? NO_REPAIR);
+  const bars = repair?.repaired.bars;
+  const counted =
+    bars === undefined
+      ? {}
+      : {
+          first: (bars[0] as DailyBar).date,
+          last: (bars[bars.length - 1] as DailyBar).date,
+          bars: bars.length,
+          density: density(bars),
+        };
+  return { ...line, ...counted, hygiene: { ...line.hygiene, shape_repair: report } };
 }
 
 export function updateManifest<T extends ManifestShape>(
   manifest: T,
   repairs: readonly SymbolRepair[],
 ): T {
-  if (repairs.length === 0) return manifest;
-  const symbols = { ...manifest.symbols };
-  for (const repair of repairs) {
-    symbols[repair.symbol] = repairedLine(symbols[repair.symbol], repair);
+  const bySymbol = new Map(repairs.map((repair) => [repair.symbol, repair]));
+  const unlisted = repairs.find((repair) => manifest.symbols[repair.symbol] === undefined);
+  if (unlisted !== undefined) {
+    throw new Error(`${unlisted.symbol}: repaired series is not listed in the Saxo manifest`);
   }
+  const symbols = Object.fromEntries(
+    Object.entries(manifest.symbols).map(([symbol, line]) => [
+      symbol,
+      refreshedLine(line, bySymbol.get(symbol)),
+    ]),
+  );
   const window = windowStartOf(symbols);
   return {
     ...manifest,
@@ -117,6 +175,14 @@ export function updateManifest<T extends ManifestShape>(
     window_binding_line: window.binding,
     symbols,
   };
+}
+
+function refreshManifestFile(manifestPath: string, repairs: readonly SymbolRepair[]): boolean {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ManifestShape;
+  const updated = updateManifest(manifest, repairs);
+  if (JSON.stringify(updated) === JSON.stringify(manifest)) return false;
+  writeFileSync(manifestPath, `${JSON.stringify(updated, null, 2)}\n`);
+  return true;
 }
 
 function countBars(series: ReadonlyMap<string, BarSeries>): number {
@@ -133,14 +199,8 @@ export async function repairSaxoStore(
 ): Promise<StoreRepairResult> {
   const stored = await store.readVenue(SAXO_VENUE);
   const repairs = planShapeRepairs(stored);
+  const manifestUpdated = manifestPath !== undefined && refreshManifestFile(manifestPath, repairs);
   if (repairs.length > 0) {
-    if (manifestPath !== undefined) {
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ManifestShape;
-      writeFileSync(
-        manifestPath,
-        `${JSON.stringify(updateManifest(manifest, repairs), null, 2)}\n`,
-      );
-    }
     await store.write(
       SAXO_VENUE,
       repairs.map((repair) => repair.repaired),
@@ -153,6 +213,7 @@ export async function repairSaxoStore(
     barsBefore: countBars(stored),
     barsAfter: countBars(after),
     rescaledFields: sum(repairs, (repair) => repair.report.rescaled_fields.length),
+    neighbourRepairs: sum(repairs, (repair) => repair.report.neighbour_repairs.length),
     rangesWidened: sum(repairs, (repair) => repair.report.ranges_widened),
     droppedBars: sum(repairs, (repair) => repair.report.dropped_glitch_dates.length),
     droppedDates: Object.fromEntries(
@@ -162,6 +223,7 @@ export async function repairSaxoStore(
     ),
     violationsBefore: countShapeViolations(stored),
     violationsAfter: countShapeViolations(after),
+    manifestUpdated,
   };
 }
 
@@ -177,7 +239,7 @@ export async function repairFromArgs(
   try {
     const manifestPath = values.manifest ?? DEFAULT_MANIFEST_PATH;
     const result = await repairSaxoStore(store, manifestPath);
-    if (result.repairedSymbols.length > 0) formatManifest(manifestPath);
+    if (result.manifestUpdated) formatManifest(manifestPath);
     return result;
   } finally {
     store.close();
