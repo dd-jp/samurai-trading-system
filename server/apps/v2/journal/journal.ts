@@ -200,23 +200,32 @@ export class Journal implements DecisionJournal {
       .all({ base: baseFillId }) as RecordedFillPart[];
   }
 
+  // A re-run on the same trading date re-raises the same refusals; a row identical in every
+  // field but recorded_at adds nothing, so it is skipped, as v2_faults' UNIQUE key does
   recordRefusal(refusal: JournalledRefusal): void {
-    this.db
+    const { changes } = this.db
       .prepare(
         `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, book_id, instrument,
            recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         SELECT @trading_date, @scope, @parameter, @ticket, @message, @book_id, @instrument,
+           @recorded_at
+         WHERE NOT EXISTS (
+           SELECT 1 FROM v2_refusals
+           WHERE trading_date = @trading_date AND scope = @scope AND parameter = @parameter
+             AND ticket = @ticket AND message = @message
+             AND book_id IS @book_id AND instrument IS @instrument)`,
       )
-      .run(
-        refusal.trading_date,
-        refusal.scope,
-        refusal.parameter,
-        refusal.ticket,
-        refusal.message,
-        refusal.book_id ?? null,
-        refusal.instrument ?? null,
-        this.#now(),
-      );
+      .run({
+        trading_date: refusal.trading_date,
+        scope: refusal.scope,
+        parameter: refusal.parameter,
+        ticket: refusal.ticket,
+        message: refusal.message,
+        book_id: refusal.book_id ?? null,
+        instrument: refusal.instrument ?? null,
+        recorded_at: this.#now(),
+      });
+    if (Number(changes) === 0) return;
     this.#recordFault(refusalFault(refusal));
   }
 
