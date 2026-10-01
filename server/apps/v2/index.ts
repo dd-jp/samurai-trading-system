@@ -25,6 +25,7 @@ import {
   AlpacaNewsSource,
   BarsMarketData,
   type BarsSource,
+  bothVenuesClosed,
   CFD_CATALOGUE_PATH,
   type CfdCatalogue,
   createVenueRouter,
@@ -33,17 +34,20 @@ import {
   MarketauxClient,
   MarketauxNewsSource,
   MultiVenueBarsSource,
+  macroGate,
   type NewsSource,
   NO_NEWS,
   newsForVenue,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
   SqliteNewsLedger,
+  TABLE_VENUE_SESSIONS,
+  type VenueSessionGate,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
-import type { FaultLedger, Journal } from './journal/index.js';
+import { type FaultLedger, Journal } from './journal/index.js';
 import {
   assertArm2RunsBesideDebate,
   assertCapitalShares,
@@ -117,6 +121,8 @@ export interface V2RootOptions {
   readonly knownSecrets?: SecretSource | undefined;
   readonly leaseWait?: LeaseWait | undefined;
   readonly sessionCalendar?: { isOpen(instant: Date): boolean } | undefined;
+  readonly venueSessions?: VenueSessionGate | undefined;
+  readonly runStartedAt?: Date | undefined;
 }
 
 export interface V2Root {
@@ -362,6 +368,10 @@ function cfdCostsFor(options: V2RootOptions): CfdCosts | undefined {
   return options.cfdCosts ?? declaredCfdCosts();
 }
 
+function venueSessionsFor(options: V2RootOptions): VenueSessionGate {
+  return options.venueSessions ?? TABLE_VENUE_SESSIONS;
+}
+
 function quotedBorrowPerDayFrom(
   catalogue: CfdCatalogue | undefined,
 ): (instrument: string) => number | undefined {
@@ -473,6 +483,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(catalogue),
     cfdEntryRefusal: cfdGate,
     brokerMode: brokerModeFor(options),
+    venueSessions: venueSessionsFor(options),
+    runStartedAt: options.runStartedAt,
   });
   const lease = new RunLease(db, clock);
   return {
@@ -489,7 +501,11 @@ export function composeV2Root(options: V2RootOptions): V2Root {
         await prime();
         journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
         return withRunLease(lease, 'cycle', options.leaseWait ?? SYSTEM_LEASE_WAIT, async () => {
-          cycle.faults.recordMissedRuns(() => lastMarkedDate(cycle.books), options.tradingDate);
+          cycle.faults.recordMissedRuns(
+            () => lastMarkedDate(cycle.books),
+            options.tradingDate,
+            bothVenuesClosed,
+          );
           try {
             return await runCycle(cycle, options.tradingDate);
           } finally {
@@ -649,6 +665,56 @@ export function rootOptionsFor(
   };
 }
 
+function closedDayReport(tradingDate: string, dryRun: boolean): CycleReport {
+  return {
+    trading_date: tradingDate,
+    dry_run: dryRun,
+    skipped: true,
+    macro: macroGate(tradingDate),
+    sleeves: [],
+    decisions: 0,
+    entries: 0,
+    exits: 0,
+    fills: 0,
+    submitted_orders: 0,
+    simulated_orders: 0,
+    dry_run_refusals: 0,
+    rejected_orders: 0,
+    refusals: [`${tradingDate}: US and LSE both closed, cycle skipped`],
+    books: [],
+  };
+}
+
+function skipClosedDay(
+  report: CycleReport,
+  storePath: string,
+  clock: Clock,
+  logger: Logger,
+): number {
+  const db = openSharedStore(storePath);
+  try {
+    new Journal(guardedStore(db, 'v2'), clock).recordRefusal({
+      trading_date: report.trading_date,
+      scope: 'cycle',
+      parameter: 'venues_closed',
+      ticket: '#1933',
+      message: report.refusals.join('; '),
+    });
+  } finally {
+    db.close();
+  }
+  logger.log({
+    trace_id: `v2-${report.trading_date}`,
+    stage: 'v2',
+    level: 'info',
+    event: 'v2_cycle_venues_closed',
+    message: report.refusals.join('; '),
+    payload: report,
+  });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return exitCodeFor(report);
+}
+
 export async function runOnce(
   dryRun: boolean,
   tradingDate: string,
@@ -659,9 +725,17 @@ export async function runOnce(
   notify: (text: string) => Promise<void>,
   compose: (options: V2RootOptions) => V2Root = composeV2Root,
 ): Promise<number> {
+  const runStartedAt = clock.now();
+  if (bothVenuesClosed(tradingDate)) {
+    const storePath = storePathFor({ tradingDate, dryRun });
+    return skipClosedDay(closedDayReport(tradingDate, dryRun), storePath, clock, logger);
+  }
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
-  const root = compose(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
+  const root = compose({
+    ...rootOptionsFor(dryRun, tradingDate, env, clock, logger),
+    runStartedAt,
+  });
   try {
     const report = await runAfterPinCheck(root, () =>
       verifyNousPins({

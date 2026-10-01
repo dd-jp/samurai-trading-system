@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Always on: the phone halt, resume and flatten only work while the poller runs (#1893).
+     One bot token serves one poller: never run `npm run v2:telegram` by hand while this job is loaded, or both get 409. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.samurai.v2-telegram</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ddjp/.nvm/versions/node/v26.5.0/bin/node</string>
+        <string>--env-file=/Users/ddjp/Documents/projects/samurai-trading-system/.env.local</string>
+        <string>--import</string>
+        <string>tsx</string>
+        <string>/Users/ddjp/Documents/projects/samurai-trading-system/server/apps/v2/api/telegram-main.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/ddjp/.local/bin:/Users/ddjp/.nvm/versions/node/v26.5.0/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system/data/logs/v2-telegram.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system/data/logs/v2-telegram.log</string>
+</dict>
+</plist>

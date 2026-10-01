@@ -167,6 +167,7 @@ export type {
   ControlWire,
   DecisionsWire,
   DecisionWire,
+  EntryOffsetTradesWire,
   EquityPointWire,
   EvidenceWire,
   FreshMarkWire,

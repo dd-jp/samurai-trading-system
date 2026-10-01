@@ -23,6 +23,7 @@ import {
 import { Journal } from './journal.js';
 
 const clock = new SimulatedClock(new Date('2026-10-01T07:30:00.000Z'));
+const NO_SKIP = () => false;
 
 function ledger(db: StoreHandle = openSharedStore(':memory:'), logs: LogEntry[] = []) {
   return new FaultLedger(db, clock, { log: (entry) => logs.push(entry) });
@@ -110,7 +111,7 @@ describe('FaultLedger', () => {
   it('records one missed run per scheduled weekday left unmarked', () => {
     const db = openSharedStore(':memory:');
     const faults = ledger(db);
-    faults.recordMissedRuns(() => '2026-09-24', '2026-09-30');
+    faults.recordMissedRuns(() => '2026-09-24', '2026-09-30', NO_SKIP);
     expect(rows(db)).toEqual([
       {
         kind: 'missed_run',
@@ -128,9 +129,13 @@ describe('FaultLedger', () => {
     const db = openSharedStore(':memory:');
     const faults = ledger(db, logs);
     expect(() =>
-      faults.recordMissedRuns(() => {
-        throw new Error('book store unreadable');
-      }, '2026-09-30'),
+      faults.recordMissedRuns(
+        () => {
+          throw new Error('book store unreadable');
+        },
+        '2026-09-30',
+        NO_SKIP,
+      ),
     ).not.toThrow();
     expect(rows(db)).toEqual([]);
     expect(logs).toEqual([
@@ -145,19 +150,24 @@ describe('FaultLedger', () => {
 
 describe('missedRunDates', () => {
   it('names nothing before the first mark, after the previous weekday or across a weekend', () => {
-    expect(missedRunDates(undefined, '2026-09-30')).toEqual([]);
-    expect(missedRunDates('2026-09-29', '2026-09-30')).toEqual([]);
-    expect(missedRunDates('2026-09-25', '2026-09-28')).toEqual([]);
-    expect(missedRunDates('2026-09-30', '2026-09-30')).toEqual([]);
-    expect(missedRunDates('2026-10-01', '2026-09-30')).toEqual([]);
+    expect(missedRunDates(undefined, '2026-09-30', NO_SKIP)).toEqual([]);
+    expect(missedRunDates('2026-09-29', '2026-09-30', NO_SKIP)).toEqual([]);
+    expect(missedRunDates('2026-09-25', '2026-09-28', NO_SKIP)).toEqual([]);
+    expect(missedRunDates('2026-09-30', '2026-09-30', NO_SKIP)).toEqual([]);
+    expect(missedRunDates('2026-10-01', '2026-09-30', NO_SKIP)).toEqual([]);
   });
 
   it('names every weekday between the last mark and today', () => {
-    expect(missedRunDates('2026-09-25', '2026-10-01')).toEqual([
+    expect(missedRunDates('2026-09-25', '2026-10-01', NO_SKIP)).toEqual([
       '2026-09-28',
       '2026-09-29',
       '2026-09-30',
     ]);
+  });
+
+  it('never names a day the skip rule passes over', () => {
+    const skipped = (date: string) => date === '2026-12-25';
+    expect(missedRunDates('2026-12-24', '2026-12-29', skipped)).toEqual(['2026-12-28']);
   });
 });
 

@@ -11,7 +11,9 @@ import {
 } from '../../../shared/index.js';
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
+import { alertsFor } from '../alerts.js';
 import { BarsMarketData, ParquetMarkSource } from '../data/index.js';
+import { type Heartbeat, healthchecksHeartbeat, NO_HEARTBEAT } from '../heartbeat.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';
 import { CommandLog } from './command-log.js';
@@ -19,7 +21,7 @@ import { ControlWriter } from './control-writer.js';
 import { readFxOrNone } from './main.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
-import { type BotFetch, TelegramBot } from './telegram-bot.js';
+import { type BotResponse, TelegramBot } from './telegram-bot.js';
 import { CommandHandler } from './telegram-commands.js';
 import { runPoller } from './telegram-poller.js';
 
@@ -86,6 +88,33 @@ function confirmationCode(): string {
   return String(randomInt(10 ** (CONFIRMATION_CODE_DIGITS - 1), 10 ** CONFIRMATION_CODE_DIGITS));
 }
 
+export type TelegramFetch = (
+  url: string,
+  init: { method: string; signal: AbortSignal; headers?: Record<string, string>; body?: string },
+) => Promise<BotResponse>;
+
+const TELEGRAM_PING_ENV = 'HEALTHCHECKS_TELEGRAM_PING_URL';
+
+function pollerHeartbeat(
+  args: TelegramArgs,
+  env: NodeJS.ProcessEnv,
+  fetchImpl: TelegramFetch,
+  logger: Logger,
+): Heartbeat {
+  if (args.dryRun) return NO_HEARTBEAT;
+  if ((env[TELEGRAM_PING_ENV]?.trim() ?? '') === '') {
+    logger.log({
+      trace_id: 'v2-telegram',
+      stage: 'v2',
+      level: 'warn',
+      event: 'v2_telegram_heartbeat_unset',
+      message: `${TELEGRAM_PING_ENV} is not set: no healthchecks ping for the poller`,
+    });
+    return NO_HEARTBEAT;
+  }
+  return healthchecksHeartbeat(env[TELEGRAM_PING_ENV], fetchImpl, logger);
+}
+
 export interface ComposedTelegram {
   readonly db: StoreHandle;
   run(shutdown: AbortSignal): Promise<void>;
@@ -95,11 +124,13 @@ export function composeTelegram(
   args: TelegramArgs,
   env: NodeJS.ProcessEnv,
   clock: Clock,
-  fetchImpl: BotFetch,
+  fetchImpl: TelegramFetch,
   logger: Logger,
 ): ComposedTelegram {
   const ownerChatId = ownerChatIdFrom(env);
   const bot = new TelegramBot(botTokenFrom(env), fetchImpl);
+  const alerts = alertsFor(args.dryRun ? ['--dry-run'] : [], env, fetchImpl, logger);
+  const heartbeat = pollerHeartbeat(args, env, fetchImpl, logger);
   const db = openMigratedStore(args.storePath, COMMANDS_SCHEMA_VERSION);
   try {
     const store = guardedStore(db, 'dashboard', { enabled: true });
@@ -144,6 +175,9 @@ export function composeTelegram(
             logger,
             replyPrefix,
             sleep: (ms, signal) => delay(ms, undefined, { signal }).catch(() => undefined),
+            alert: (text) => alerts.alarm(text),
+            heartbeat,
+            nowMs: () => clock.now().getTime(),
           },
           shutdown,
         );

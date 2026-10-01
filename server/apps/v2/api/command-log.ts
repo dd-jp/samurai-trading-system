@@ -37,6 +37,18 @@ export class CommandLog {
     );
   }
 
+  refusedSince(chatId: string, since: Date): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM v2_commands
+            WHERE chat_id = ? AND outcome = 'refused_unauthorized' AND handled_at >= ?
+            LIMIT 1`,
+        )
+        .get(chatId, since.toISOString()) !== undefined
+    );
+  }
+
   record(entry: CommandRecord): void {
     this.db
       .prepare(

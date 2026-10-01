@@ -3,12 +3,19 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { formatDailySummary, readDailySummary } from './daily-summary.js';
-import { createVenueRouter, macroGate } from './data/index.js';
+import {
+  bothVenuesClosed,
+  createVenueRouter,
+  macroGate,
+  sessionDay,
+  TABLE_VENUE_SESSIONS,
+} from './data/index.js';
 import { composeV2Root, type V2Root } from './index.js';
 import {
   assertArm2RunsBesideDebate,
   bookSpecsFor,
   CapitalConfigStore,
+  ENTRY_LIMIT_OFFSET,
   positionSizeShares,
 } from './risk/index.js';
 import {
@@ -61,7 +68,9 @@ export const SMOKE_TRADING_DATE = '2026-09-23';
 const SMOKE_NEXT_DATE = '2026-09-24';
 const SMOKE_START_CAPITAL_GBP = 2_000;
 const SMOKE_LOSS_CAP_GBP = 1_500;
-const SMOKE_CLOCK = new SimulatedClock(new Date(`${SMOKE_TRADING_DATE}T07:00:00.000Z`));
+// 07:30 London (BST), the launchd start, ahead of both entry cutoffs
+const SMOKE_START_UTC = 'T06:30:00.000Z';
+const SMOKE_CLOCK = new SimulatedClock(new Date(`${SMOKE_TRADING_DATE}${SMOKE_START_UTC}`));
 
 function seededSmokeStore(): StoreHandle {
   const db = openSharedStore(':memory:');
@@ -166,6 +175,11 @@ function staticProbes(): SmokeProbe[] {
       declaredBooks.map((spec) => `${spec.id}${spec.instantiated ? '' : ' (declared)'}`).join(', '),
     ),
     probe(
+      'holidays and late wakes sit out per venue (#1933)',
+      venueRulesHold(),
+      'Thanksgiving US-only, Christmas both, LSE refused from 08:00 London, US from the NY open (13:30 London on 2026-10-27)',
+    ),
+    probe(
       'no debate-sleeve paper trade until arm 2 runs beside it (#1773 kill line)',
       killLineEnforced(),
       'assertArm2RunsBesideDebate([debate]) refused without arm2',
@@ -180,6 +194,24 @@ function shortRefusal(entryRefusal: () => string | undefined): string | undefine
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   }).route('AAPL', 'alpaca', 'short', SMOKE_TRADING_DATE);
   return 'refusal' in choice ? choice.refusal : undefined;
+}
+
+function venueRulesHold(): boolean {
+  const at = (utc: string) => new Date(`${SMOKE_TRADING_DATE}T${utc}:00.000Z`);
+  const sitOut = TABLE_VENUE_SESSIONS.entrySitOut;
+  return (
+    sessionDay('us', '2026-11-26') === 'closed' &&
+    sessionDay('lse', '2026-11-26') === 'open' &&
+    !bothVenuesClosed('2026-11-26') &&
+    bothVenuesClosed('2026-12-25') &&
+    sitOut('saxo', SMOKE_TRADING_DATE, at('06:59')) === undefined &&
+    sitOut('saxo', SMOKE_TRADING_DATE, at('07:00')) === 'late_wake_entry_cutoff' &&
+    sitOut('alpaca', SMOKE_TRADING_DATE, at('13:29')) === undefined &&
+    sitOut('alpaca', SMOKE_TRADING_DATE, at('13:30')) === 'late_wake_entry_cutoff' &&
+    sitOut('alpaca', '2026-10-27', new Date('2026-10-27T13:30:00.000Z')) ===
+      'late_wake_entry_cutoff' &&
+    sitOut('alpaca', '2026-11-26', at('06:30')) === 'venue_closed'
+  );
 }
 
 function killLineEnforced(): boolean {
@@ -216,6 +248,24 @@ function unaffordableEntries(store: StoreHandle): number {
     )
     .get(SMOKE_TRADING_DATE) as { n: number };
   return row.n;
+}
+
+function offsetLimitProbe(store: StoreHandle): SmokeProbe {
+  const bps = ENTRY_LIMIT_OFFSET.capBps / 10_000;
+  const limits = store
+    .prepare(
+      `SELECT
+         COALESCE(SUM(ABS(json_extract(payload, '$.limit') / json_extract(payload, '$.price')
+           - (CASE side WHEN 'buy' THEN 1 + ? ELSE 1 - ? END)) < 1e-9), 0) AS offset,
+         COUNT(*) AS total
+       FROM v2_orders WHERE leg = 'entry' AND trading_date = ? AND outcome != 'rejected'`,
+    )
+    .get(bps, bps, SMOKE_TRADING_DATE) as { offset: number; total: number };
+  return probe(
+    `every entry rests ${ENTRY_LIMIT_OFFSET.capBps} bps through its decision close (#1815)`,
+    limits.total > 0 && limits.offset === limits.total,
+    `${limits.offset} of ${limits.total} entries`,
+  );
 }
 
 function settledEntries(store: StoreHandle): { filled: number; cancelled: number } {
@@ -258,7 +308,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
       tradingDate,
       dryRun: true,
       store,
-      clock: new SimulatedClock(new Date(`${tradingDate}T07:00:00.000Z`)),
+      clock: new SimulatedClock(new Date(`${tradingDate}${SMOKE_START_UTC}`)),
       logger: { log: () => {} },
     });
   const root = dryRunOn(SMOKE_TRADING_DATE);
@@ -311,6 +361,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
           report.rejected_orders === unaffordable,
         `entries=${report.entries} refused=${report.dry_run_refusals} simulated=${report.simulated_orders} unaffordable=${unaffordable}`,
       ),
+      offsetLimitProbe(store),
       probe(
         'dry run fills nothing on the day it enters',
         report.fills === 0,

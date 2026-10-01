@@ -6,6 +6,7 @@ import type {
   SleeveSpec,
   V2Bar,
 } from '../../../../contracts/index.js';
+import { marketableLimit } from './entry-limit.js';
 import { V2RiskGate } from './gate.js';
 import { MAX_POSITION_FRACTION_OF_EQUITY } from './position-size.js';
 
@@ -151,12 +152,14 @@ describe('entry sizing properties (doc 67 Step 3d kill line)', () => {
     }
   });
 
-  it('never exceeds the equity fraction by notional or by risk at the stop', () => {
+  it('never exceeds the equity fraction by notional or by risk from the limit to the stop', () => {
     for (const testCase of cases) {
       const shares = size(testCase);
       const quotePerGbp = testCase.venue === 'alpaca' ? testCase.fx : 1;
-      const priceGbp = testCase.price / quotePerGbp;
-      const stopGbp = (testCase.spec.sizing.stopAtrMultiple * testCase.atr) / quotePerGbp;
+      const limit = marketableLimit('buy', testCase.price);
+      const stop = testCase.price - testCase.spec.sizing.stopAtrMultiple * testCase.atr;
+      const priceGbp = limit / quotePerGbp;
+      const stopGbp = (limit - stop) / quotePerGbp;
       const slack = 1 + 1e-9;
       expect(shares * priceGbp).toBeLessThanOrEqual(
         testCase.equityGbp * MAX_POSITION_FRACTION_OF_EQUITY * slack,
