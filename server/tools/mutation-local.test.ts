@@ -81,7 +81,7 @@ function gateDeps(changed: readonly string[], status: number | null = 0) {
     },
     stryker: (tradingPath) => {
       mutated.push(tradingPath);
-      return { error: undefined, status };
+      return { status };
     },
     log: (line) => lines.push(line),
   };
