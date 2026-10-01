@@ -267,19 +267,25 @@ export async function runFromEnvironment(): Promise<void> {
     fetchEquityBars,
   });
 
+  if (!reportBackfillOutcome(coverage)) process.exitCode = 1;
+}
+
+export function reportBackfillOutcome(
+  coverage: readonly CoverageRow[],
+  out: Pick<Console, 'log' | 'error'> = console,
+): boolean {
   const short = coverage.filter((row) => !row.satisfied);
   if (short.length > 0) {
-    console.error(
+    out.error(
       `Backfill incomplete: ${short.length} of ${coverage.length} (instrument, timeframe) ` +
         `pair(s) short of the derived minimum — see the SHORT rows above.`,
     );
-    process.exitCode = 1;
-    return;
+    return false;
   }
 
   const quarantined = coverage.filter((row) => row.quarantined);
   if (quarantined.length > 0) {
-    console.error(
+    out.error(
       `Backfill served ${quarantined.length} of ${coverage.length} (instrument, timeframe) ` +
         'pair(s) from the QUARANTINED Polygon fallback — see the QUARANTINED rows above. Those ' +
         'bars are durably stored and still usable for warm-starting a tick, but MUST NOT be ' +
@@ -288,11 +294,11 @@ export async function runFromEnvironment(): Promise<void> {
         'build an "investment strategy"). Re-run once Alpaca recovers before trusting this ' +
         "run's coverage for that purpose.",
     );
-    process.exitCode = 1;
-    return;
+    return false;
   }
 
-  console.log('Backfill complete — store is warm for every DEFAULT_UNIVERSE instrument.');
+  out.log('Backfill complete — store is warm for every DEFAULT_UNIVERSE instrument.');
+  return true;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

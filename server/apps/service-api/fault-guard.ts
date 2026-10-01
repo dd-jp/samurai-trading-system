@@ -2,28 +2,22 @@ import {
   type ContinueOnFaultEffects,
   describeThrown,
   type ErrorStream,
-  guardedWrite,
   installContinueOnFault,
+  retireStdoutOnFirstError,
   type StdoutStream,
-  watchStdoutErrors,
 } from '../../shared/index.js';
 
 export function watchDashboardStdout(
   stdout: StdoutStream = process.stdout,
   stderr: StdoutStream & ErrorStream = process.stderr,
 ): void {
-  watchStdoutErrors(stderr, () => {});
-
-  let reported = false;
-  watchStdoutErrors(stdout, (error) => {
-    if (reported) return;
-    reported = true;
-    guardedWrite(
-      stderr,
+  retireStdoutOnFirstError(
+    stdout,
+    stderr,
+    (error) =>
       'dashboard: stdout write failed and is retired for the rest of this process ' +
-        `(${describeThrown(error)}). Console output is lost; HTTP responses are unaffected (#764).\n`,
-    );
-  });
+      `(${describeThrown(error)}). Console output is lost; HTTP responses are unaffected (#764).\n`,
+  );
 }
 
 export function installDashboardContinueOnFault(effects?: ContinueOnFaultEffects): void {

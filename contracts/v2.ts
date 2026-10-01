@@ -35,6 +35,8 @@ export interface SleeveDecision {
   readonly price: number;
   readonly atr: number | undefined;
   readonly stop_price: number | undefined;
+  readonly target_price?: number | undefined;
+  readonly entry_trigger?: number | undefined;
   readonly inputs_hash: string;
   readonly debate_id: string | undefined;
   readonly veto?: string | undefined;
@@ -144,6 +146,8 @@ export interface BookDay {
   readonly investedGbp: number;
   readonly state: LossBudgetState;
   readonly custodyAccrualGbp: number;
+  readonly cfdFinancingAccrualGbp: number;
+  readonly cfdBorrowAccrualGbp: number;
   readonly recordedAt: string;
 }
 
@@ -204,8 +208,6 @@ export interface BookLedger {
     markGbp: MarkPriceGbp,
     calendarDaysSinceLastMark: number,
   ): BookDay;
-  settlePrimaryBudgets(tradingDate: string): void;
-  settleLastPrimaryMark(): void;
 }
 
 declare const riskApproved: unique symbol;
@@ -224,6 +226,7 @@ interface ApprovedOrderFields {
 export interface ApprovedBracketEntry extends ApprovedOrderFields {
   readonly kind: 'bracket_entry';
   readonly entry: number;
+  readonly entryTrigger?: number | undefined;
   readonly stop: number;
   readonly target: number;
 }
@@ -325,6 +328,7 @@ export interface V2Fill {
   readonly price: number;
   readonly qty: number;
   readonly fee: number;
+  readonly qty_is_cumulative?: boolean | undefined;
 }
 
 export interface Submission {
@@ -347,19 +351,26 @@ export interface SimulatedFillRequest {
 }
 
 export interface CfdCostModel {
-  fee(side: OrderSide, qty: number, priceQuote: number): number;
+  fee(venue: Venue, side: OrderSide, qty: number, priceQuote: number): number;
 }
 
 export interface CfdSpreadModel {
-  halfSpreadBps(instrument: string): number;
+  halfSpreadBps(venue: Venue): number;
 }
 
 export interface CfdFinancingModel {
-  dailyRate(venue: Venue, side: OrderSide): number;
+  dailyRate(venue: Venue, side: 'long' | 'short'): number;
 }
 
 export interface CfdBorrowModel {
-  dailyRate(instrument: string): number;
+  dailyRate(venue: Venue, quotedPerDay: number | undefined): number;
+}
+
+export interface CfdCosts {
+  readonly fee: CfdCostModel;
+  readonly spread: CfdSpreadModel;
+  readonly financing: CfdFinancingModel;
+  readonly borrow: CfdBorrowModel;
 }
 
 export class CfdCostModelUnsetError extends Error {
@@ -476,6 +487,13 @@ export interface JournalledFill {
   readonly fee_gbp: number;
 }
 
+export interface RecordedFillPart {
+  readonly qty: number;
+  readonly price_gbp: number;
+  readonly fee_gbp: number;
+  readonly trading_date: string;
+}
+
 export interface JournalledRefusal {
   readonly trading_date: string;
   readonly scope: string;
@@ -500,6 +518,7 @@ export interface DecisionJournal {
   restingEntries(bookId: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
   recordFill(fill: JournalledFill): boolean;
+  fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordRefusal(refusal: JournalledRefusal): void;
   recordReconcile(run: JournalledReconcile): void;
 }

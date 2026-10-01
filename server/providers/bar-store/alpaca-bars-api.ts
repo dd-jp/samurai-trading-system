@@ -1,4 +1,4 @@
-import { isFiniteNumber } from '../../shared/index.js';
+import { delay, isString, jsonOrTextResult, readOhlcvBar } from '../../shared/index.js';
 
 export const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
 const ALPACA_REQUESTS_PER_MINUTE = 200;
@@ -59,12 +59,26 @@ export function endOfDayUtc(date: string): string {
   return `${date}T23:59:59Z`;
 }
 
-export function barsUrl(request: BarsRequest, pageToken: string | undefined): string {
+// The free data plan answers 403 "subscription does not permit querying recent SIP data"
+// to any SIP request whose end falls inside the last 15 minutes (measured 2026-09-30)
+const SIP_RECENT_EMBARGO_MS = 16 * 60_000;
+
+export function sipEnd(date: string, nowMs: number): string {
+  const embargoed = new Date(nowMs - SIP_RECENT_EMBARGO_MS).toISOString().slice(0, 19);
+  const endOfDay = endOfDayUtc(date).slice(0, 19);
+  return `${embargoed < endOfDay ? embargoed : endOfDay}Z`;
+}
+
+export function barsUrl(
+  request: BarsRequest,
+  pageToken: string | undefined,
+  nowMs: number = Date.now(),
+): string {
   const params = new URLSearchParams({
     symbols: request.symbol,
     timeframe: '1Day',
     start: request.start,
-    end: endOfDayUtc(request.end),
+    end: sipEnd(request.end, nowMs),
     limit: String(PAGE_LIMIT),
     adjustment: request.adjustment,
     feed: 'sip',
@@ -98,19 +112,8 @@ function parseBarArray(raw: unknown, symbol: string): RawDailyBar[] {
 }
 
 function parseBar(item: unknown, symbol: string): RawDailyBar {
-  if (typeof item === 'object' && item !== null) {
-    const { t, o, h, l, c, v } = item as Record<string, unknown>;
-    if (
-      typeof t === 'string' &&
-      isFiniteNumber(o) &&
-      isFiniteNumber(h) &&
-      isFiniteNumber(l) &&
-      isFiniteNumber(c) &&
-      isFiniteNumber(v)
-    ) {
-      return { t, o, h, l, c, v };
-    }
-  }
+  const bar = readOhlcvBar(item, isString);
+  if (bar !== undefined) return bar;
   throw new Error(`Alpaca bars: malformed bar for ${symbol}: ${JSON.stringify(item)}`);
 }
 
@@ -121,8 +124,9 @@ export class AlpacaBarsApi {
   constructor(
     credentials: AlpacaCredentials,
     private readonly fetcher: Fetcher = jsonFetcher,
-    private readonly sleep: Sleeper = defaultSleep,
+    private readonly sleep: Sleeper = delay,
     private readonly minIntervalMs = Math.ceil(60_000 / ALPACA_REQUESTS_PER_MINUTE),
+    private readonly now: () => number = Date.now,
   ) {
     this.headers = authHeaders(credentials);
   }
@@ -132,7 +136,7 @@ export class AlpacaBarsApi {
     let pageToken: string | undefined;
     do {
       const page = parseBarsPage(
-        await this.getWithRetry(barsUrl(request, pageToken)),
+        await this.getWithRetry(barsUrl(request, pageToken, this.now())),
         request.symbol,
       );
       bars.push(...page.bars);
@@ -163,17 +167,5 @@ export class AlpacaBarsApi {
 }
 
 async function jsonFetcher(url: string, headers: Record<string, string>): Promise<FetchResult> {
-  const response = await fetch(url, { headers });
-  const text = await response.text();
-  let body: unknown = text;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-  return { status: response.status, body };
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return jsonOrTextResult(await fetch(url, { headers }));
 }

@@ -78,7 +78,15 @@ const RESCALE_ONLY: BarSeries = {
 };
 const DROP_ONLY: BarSeries = {
   symbol: 'EEE',
-  bars: [ohlc('2016-11-21', 10, 10.5, 9.8, 10.2), ohlc('2016-11-22', 10, 20, 10, 10)],
+  bars: [
+    ohlc('2016-11-21', 10, 10.5, 9.8, 10.2),
+    ohlc('2016-11-22', 10, 10, 6.5, 10),
+    ohlc('2016-11-23', 6.8, 6.8, 6.8, 6.8),
+  ],
+};
+const REPLACE_ONLY: BarSeries = {
+  symbol: 'FFF',
+  bars: [ohlc('2016-11-21', 10, 12, 10, 10)],
 };
 const ALPACA: BarSeries = { symbol: 'AAA', bars: [ohlc('2016-11-21', 9, 9.5, 8.9, 9.2)] };
 
@@ -145,22 +153,35 @@ describe('planShapeRepairs', () => {
     });
   });
 
-  it('counts a rescale alone and a drop alone as a change', () => {
+  it('counts a rescale alone, a drop alone and a neighbour replacement alone as a change', () => {
     const plan = planShapeRepairs(
       new Map([
         ['DDD', RESCALE_ONLY],
         ['EEE', DROP_ONLY],
+        ['FFF', REPLACE_ONLY],
       ]),
     );
     expect(plan.map((repair) => repair.report)).toEqual([
       {
         rescaled_fields: [{ date: '2016-11-21', field: 'high', factor: 0.01 }],
+        neighbour_repairs: [],
         dropped_glitch_dates: [],
         ranges_widened: 0,
       },
-      { rescaled_fields: [], dropped_glitch_dates: ['2016-11-22'], ranges_widened: 0 },
+      {
+        rescaled_fields: [],
+        neighbour_repairs: [],
+        dropped_glitch_dates: ['2016-11-22'],
+        ranges_widened: 0,
+      },
+      {
+        rescaled_fields: [],
+        neighbour_repairs: [{ date: '2016-11-21', field: 'high' }],
+        dropped_glitch_dates: [],
+        ranges_widened: 0,
+      },
     ]);
-    expect(plan.map((repair) => repair.repaired.bars.length)).toEqual([1, 1]);
+    expect(plan.map((repair) => repair.repaired.bars.length)).toEqual([1, 2, 1]);
   });
 
   it('plans nothing for a repaired series', () => {
@@ -205,7 +226,7 @@ describe('updateManifest', () => {
   it('moves the window start to the latest first bar when the binding line lost its first bar', () => {
     const series: BarSeries = {
       symbol: 'BBB',
-      bars: [ohlc('2016-11-22', 5, 50, 4.9, 5.1), ohlc('2016-11-23', 5, 5.2, 4.9, 5.1)],
+      bars: [ohlc('2016-11-22', 5, 5, 3.3, 5), ohlc('2016-11-23', 3.5, 3.5, 3.5, 3.5)],
     };
     const plan = planShapeRepairs(new Map([['BBB', series]]));
     const updated = updateManifest(manifestFor([series]), plan);

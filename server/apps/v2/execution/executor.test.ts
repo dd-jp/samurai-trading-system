@@ -6,8 +6,7 @@ import type {
   SleeveDecision,
   Venue,
 } from '../../../../contracts/index.js';
-import type { BrokerAdapter, NormalizedFill } from '../../../pipeline/execution/index.js';
-import { toBrokerFillId } from '../../../shared/index.js';
+import { type BrokerAdapter, type NormalizedFill, toBrokerFillId } from '../../../shared/index.js';
 import { V2RiskGate } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
 import { UnapprovedOrderError, V2OrderExecutor } from './executor.js';
@@ -181,6 +180,23 @@ describe('V2OrderExecutor', () => {
     await expect(paper.submit(copied)).rejects.toThrow(UnapprovedOrderError);
     expect(alpaca.submitBracket).not.toHaveBeenCalled();
     expect(alpaca.submitFlatten).not.toHaveBeenCalled();
+  });
+
+  it('passes an approved entry trigger to the venue broker (#1941)', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const { order } = gate.approveEntry({
+      book: primary,
+      decision: { ...decision, entry_trigger: 19.6 },
+      clientOrderId: 'e-trigger',
+      tradingDate: '2026-09-25',
+      equityGbp: 1_000,
+      macroDay: false,
+    });
+    if (order === undefined) throw new Error('expected an approved entry');
+    await paper.submit(order);
+    expect(alpaca.submitBracket).toHaveBeenCalledWith(
+      expect.objectContaining({ client_order_id: 'e-trigger', entry: 20, entry_trigger: 19.6 }),
+    );
   });
 
   it('spends an approval on its first submission', async () => {
@@ -433,6 +449,7 @@ describe('V2OrderExecutor', () => {
       qty: 6,
       fee: 0.5,
       timestamp: new Date('2026-09-25T15:00:00.000Z'),
+      qty_is_cumulative: true,
     };
     const alpaca = fakeBroker('alpaca', [fill]);
     const failing = fakeBroker('saxo');
@@ -446,7 +463,15 @@ describe('V2OrderExecutor', () => {
     });
     expect(await paper.fetchNewFills('2026-09-24T21:00:00.000Z')).toEqual({
       fills: [
-        { client_order_id: 'c1', broker_fill_id: 'f1', leg: 'entry', price: 20, qty: 6, fee: 0.5 },
+        {
+          client_order_id: 'c1',
+          broker_fill_id: 'f1',
+          leg: 'entry',
+          price: 20,
+          qty: 6,
+          fee: 0.5,
+          qty_is_cumulative: true,
+        },
       ],
       failures: [expect.stringContaining('saxo down')],
     });

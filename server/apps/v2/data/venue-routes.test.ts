@@ -110,11 +110,46 @@ describe('VenueRouter short refusals', () => {
     });
   });
 
-  it('admits a borrow cost at exactly the 2% ceiling and refuses one just above', () => {
-    const at = instrument({ symbol: 'AAPL', borrowCostPerDay: MAX_BORROW / 365 });
-    const over = instrument({ symbol: 'AAPL', borrowCostPerDay: (MAX_BORROW + 0.0001) / 365 });
-    expect(short(router([at]))).toEqual({ venue: 'saxo_cfd_usd' });
-    expect(short(router([over]))).toEqual({ refusal: 'borrow_cost' });
+  describe.each([
+    { currency: 'USD', days: 360, home: 'alpaca', venue: 'saxo_cfd_usd', assetType: 'CfdOnStock' },
+    { currency: 'GBP', days: 365, home: 'saxo', venue: 'saxo_cfd_gbp', assetType: 'CfdOnEtf' },
+  ] as const)('the 2% borrow ceiling on a $currency row ($days-day basis)', (row) => {
+    const shortAt = (ratePerYear: number) =>
+      router([
+        instrument({
+          symbol: 'X',
+          currency: row.currency,
+          assetType: row.assetType,
+          borrowCostPerDay: ratePerYear / row.days,
+        }),
+      ]).route('X', row.home, 'short', TODAY);
+
+    it('admits exactly 2.00% and 1.99%, and refuses 2.01%', () => {
+      expect(shortAt(0.02)).toEqual({ venue: row.venue });
+      expect(shortAt(0.0199)).toEqual({ venue: row.venue });
+      expect(shortAt(0.0201)).toEqual({ refusal: 'borrow_cost' });
+    });
+  });
+
+  it('admits the live 2% rows whose daily figure lands a float step off the ceiling', () => {
+    const mdt = instrument({ symbol: 'MDT', borrowCostPerDay: 5.55555555555556e-5 });
+    const isf = instrument({
+      symbol: 'ISF',
+      currency: 'GBP',
+      assetType: 'CfdOnEtf',
+      borrowCostPerDay: 5.47945205479452e-5,
+    });
+    expect(5.55555555555556e-5 * 360).toBeGreaterThan(MAX_BORROW);
+    expect(5.47945205479452e-5 * 365).toBeLessThan(MAX_BORROW);
+    expect(short(router([mdt]), 'MDT')).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(router([isf]).route('ISF', 'saxo', 'short', TODAY)).toEqual({ venue: 'saxo_cfd_gbp' });
+  });
+
+  it('admits a rate a float step above the ceiling but refuses one a billionth above it', () => {
+    const at = (ratePerYear: number) =>
+      short(router([instrument({ symbol: 'AAPL', borrowCostPerDay: ratePerYear / 360 })]));
+    expect(at(MAX_BORROW + Number.EPSILON)).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(at(MAX_BORROW + 2e-9)).toEqual({ refusal: 'borrow_cost' });
   });
 
   it('admits a present zero borrow cost as free', () => {

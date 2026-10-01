@@ -8,7 +8,21 @@ import {
   formatGateReport,
   type GateState,
   type IssueStateLookup,
+  parseIssueState,
 } from './check-live-money-gates.js';
+
+describe('parseIssueState', () => {
+  it.each([
+    ['{"state":"OPEN"}', 'OPEN'],
+    ['{"state":"CLOSED"}', 'CLOSED'],
+    ['{"state":"MERGED"}', 'UNKNOWN'],
+    ['{}', 'UNKNOWN'],
+    ['null', 'UNKNOWN'],
+    ['"OPEN"', 'UNKNOWN'],
+  ])('%s -> %s', (stdout, expected) => {
+    expect(parseIssueState(stdout)).toBe(expected);
+  });
+});
 
 const GATES = [
   { issue: 111, gap: 'the first thing that gates a live boot and is long enough to be a claim' },

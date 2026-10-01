@@ -10,8 +10,7 @@ import type {
   V2Fill,
   Venue,
 } from '../../../../contracts/index.js';
-import type { BrokerAck, BrokerAdapter } from '../../../pipeline/execution/index.js';
-import { describeThrownSafely } from '../../../shared/index.js';
+import { type BrokerAck, type BrokerAdapter, describeThrownSafely } from '../../../shared/index.js';
 import { consumeApproval } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
 import { type FillPricing, quoteSimulatedFill } from './simulated-costs.js';
@@ -97,6 +96,7 @@ function send(
     side: order.side,
     size: child.size,
     entry: order.entry,
+    entry_trigger: order.entryTrigger,
     stop: order.stop,
     target: order.target,
     time_in_force: 'gtc',
@@ -181,6 +181,7 @@ export class V2OrderExecutor implements OrderExecutor {
             price: fill.price,
             qty: fill.qty,
             fee: fill.fee,
+            qty_is_cumulative: fill.qty_is_cumulative,
           });
         }
       } catch (error) {

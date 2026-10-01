@@ -247,6 +247,7 @@ coverage/
 # `git add .` away from committing real run state (#358).
 *.sqlite-shm
 *.sqlite-wal
+.*.sqlite-litestream/
 
 # Saxo OAuth login tokens (#1522) — access/refresh tokens, owner-only, never committed.
 data/saxo-tokens/
@@ -273,7 +274,7 @@ playwright/.cache/
 graphify-out
 .claude/
 .code-review-graph/
-data/bars/parquet/.staging-*
-# Research bar cache (#787). Backtest bars are committed under data/bars/ (doc 70 ruling (k));
-# only this scratch cache stays out.
+# The daily bar refresh rewrites the store in place; a re-pull rebuilds it (#1929).
+data/bars/parquet/
+# Research bar cache (#787).
 docs/research/data/

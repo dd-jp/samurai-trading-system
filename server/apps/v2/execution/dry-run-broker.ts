@@ -5,7 +5,7 @@ import type {
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
-} from '../../../pipeline/execution/index.js';
+} from '../../../shared/index.js';
 
 export interface RefusedSubmission {
   readonly client_order_id: string;

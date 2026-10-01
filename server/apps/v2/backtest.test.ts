@@ -60,6 +60,7 @@ const BARS = new Map<string, BarSeries>([
   ['UP', series('UP', 0.001, 0.02)],
   ['FLAT', series('FLAT', 0, 0.03)],
   ['DOWN', series('DOWN', -0.004, 0.005)],
+  ['GONE', { symbol: 'GONE', bars: series('GONE', 0, 0).bars.slice(0, 71) }],
 ]);
 
 const market = new BarsMarketData(
@@ -247,7 +248,8 @@ describe('fencedMarket', () => {
   });
 });
 
-describe('runBacktest', () => {
+// CPU-heavy: cases ran up to ~32 s under coverage at load 25
+describe('runBacktest', { timeout: 120_000 }, () => {
   it('runs every trial and the benchmark through the cycle and counts the trials after Session B', async () => {
     const run = input();
     const result = await runBacktest(run);
@@ -345,7 +347,7 @@ describe('runBacktest', () => {
     ).toEqual([15, 16]);
     expect(await numbers({ embargo: 2 })).toEqual([17, 18]);
     expect(await numbers({})).toEqual([3, 4]);
-  }, 20_000);
+  });
 
   it('#1515: omits embargo from the run hash when unset, so an old candidate replays its own trial numbers unchanged', async () => {
     const shared = ledger();
@@ -462,7 +464,7 @@ describe('runBacktest', () => {
     expect(capped.verdict.capitalCeilingGbp).toBeLessThan(uncapped.verdict.capitalCeilingGbp);
   });
 
-  it("keeps a trial's equity independent of a sibling's losses and the benchmark's (isolation ruled 2026-09-28, #1799)", async () => {
+  it("keeps a trial's equity independent of a sibling's losses and the benchmark's (per-sleeve budgets, #1941)", async () => {
     const tightCap = 30;
     const dumpAlongside = await runBacktest(
       input({
@@ -484,11 +486,6 @@ describe('runBacktest', () => {
         benchmark: { config: { lookback: 0 }, sleeve: trendSleeve('hold', 'DOWN', 0) },
       }),
     );
-    // Sibling trial AND benchmark are both inert, so nothing but dump itself can ever reach the
-    // pool in this run — the trajectory is identical whether or not #1799's isolation is applied,
-    // which is what makes this precondition (the tight cap genuinely bites dump within 2024) hold
-    // regardless of which composition this test is exercising, unlike dump's trajectory inside
-    // dumpAlongside, where the DOWN benchmark is a second real loss the pool would otherwise share
     const dumpAlone = await runBacktest(
       input({
         lossCapGbp: tightCap,
@@ -604,5 +601,53 @@ describe('runBacktest', () => {
     expect(new Set(equity.slice(1, exitIndex + 1)).size).toBeGreaterThan(1);
     const tail = equity.slice(exitIndex + 5);
     expect(new Set(tail).size).toBe(1);
+  });
+
+  it('#1911: closes a held name at its last close on the first session its bars are over 5 days stale, in the trial and the benchmark', async () => {
+    const lastBarDate = DATES[70] as string;
+    const holdGone =
+      (id: string): SleeveFactory =>
+      (m) => {
+        const inner = trendSleeve(id, 'GONE', 0)(m);
+        const base = spec('backtest');
+        return {
+          ...inner,
+          spec: { ...base, sizing: { ...base.sizing, timeStopTradingDays: 1_000 } },
+          decide: (context, instruments) =>
+            context.tradingDate > (DATES[60] as string)
+              ? Promise.resolve({ decisions: [], refusals: [] })
+              : inner.decide(context, instruments),
+        };
+      };
+    const logs: LogEntry[] = [];
+    const result = await runBacktest(
+      input({
+        trials: [{ config: { gone: true }, sleeve: holdGone('gone') }, FLAT_TRIAL],
+        benchmark: { config: { gone: true }, sleeve: holdGone('gone-benchmark') },
+        logger: { log: (entry) => logs.push(entry) },
+      }),
+    );
+    const exitDate = result.dates.find((date) => date > addDays(lastBarDate, 5)) as string;
+    expect(
+      logs
+        .filter((entry) => entry.event === 'v2_series_ended_exit')
+        .map((entry) => [entry.trace_id, entry.message]),
+    ).toEqual(
+      ['gone/primary', 'gone-benchmark/primary'].map((bookId) => [
+        `v2-${exitDate}`,
+        `${bookId} GONE: series ended ${lastBarDate}, closed at its last close (doc 70 §2.4)`,
+      ]),
+    );
+    const staleMarks = logs.flatMap((entry) =>
+      entry.event === 'v2_cycle_complete'
+        ? (entry.payload as { refusals: string[] }).refusals.filter((r) => r.includes('marked at'))
+        : [],
+    );
+    expect(staleMarks).toEqual([]);
+    const exitIndex = result.dates.indexOf(exitDate) + 1;
+    for (const equity of [result.trials[0]?.equity, result.benchmark.equity] as number[][]) {
+      expect(equity[exitIndex]).toBeLessThan(equity[exitIndex - 1] as number);
+      expect(new Set(equity.slice(exitIndex)).size).toBe(1);
+    }
   });
 });

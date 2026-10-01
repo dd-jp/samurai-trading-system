@@ -12,7 +12,104 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        id: install
+        run: npm ci
+
+      - name: Oxlint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint:oxlint
+
+      - name: Biome
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint:biome
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  fallow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        id: install
+        run: npm ci
+
+      - name: Fallow architecture boundaries
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: dead-code
+          args: --boundary-violations
+          auto-changed-since: false
+
+      - name: Fallow dead code
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run fallow:dead-code -- --format github-annotations --quiet
+
+      - name: Fallow duplication
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: dupes
+          auto-changed-since: false
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        id: install
+        run: npm ci
+
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run build
+
+      - name: Build web dashboard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run build:web
+
+  citations:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -30,57 +127,6 @@ jobs:
       - name: Install dependencies
         id: install
         run: npm ci
-
-      - name: Oxlint
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run lint:oxlint
-
-      - name: Biome
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run lint:biome
-
-      - name: Fallow architecture boundaries
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
-        with:
-          command: dead-code
-          args: --boundary-violations
-          auto-changed-since: false
-
-      - name: Fallow dead code
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run fallow:dead-code -- --format github-annotations --quiet
-
-      - name: Fallow duplication (advisory)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
-        with:
-          command: dupes
-          auto-changed-since: false
-
-      - name: Fallow design-system drift (advisory)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
-        with:
-          command: health
-          args: --css
-          auto-changed-since: false
-
-      - name: Typecheck
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run typecheck
-
-      - name: Build
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run build
-
-      - name: Build web dashboard
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run build:web
-
-      - name: Test
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm test
 
       - name: Path citations resolve
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -104,6 +150,158 @@ jobs:
             git diff -- "$FIXTURE" | head -50
             exit 1
           fi
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore the bar store snapshot
+        run: npm run bars:snapshot
+
+      - name: Test (shard ${{ matrix.shard }}/4)
+        run: npx vitest run --shard=${{ matrix.shard }}/4 --reporter=default --reporter=blob --coverage --coverage.reporter=json
+
+      - name: Upload shard report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vitest-blob-${{ matrix.shard }}
+          path: .vitest-reports/blob-*.json
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+
+  health:
+    needs: test
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: vitest-blob-*
+          path: .vitest-reports
+          merge-multiple: true
+
+      - name: Merge shard reports and coverage
+        run: npx vitest run --merge-reports --coverage --coverage.reporter=json
+
+      - name: Fallow health (complexity, CRAP with coverage, design-system drift)
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: health
+          args: --css
+          coverage: coverage/coverage-final.json
+          coverage-root: ${{ github.workspace }}
+          auto-changed-since: false
+
+  crap:
+    needs: test
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: vitest-blob-*
+          path: .vitest-reports
+          merge-multiple: true
+
+      - name: Merge shard reports and coverage
+        run: npx vitest run --merge-reports --coverage --coverage.reporter=json
+
+      - name: CRAP floor (15, repo-wide)
+        run: npx tsx server/tools/crap-gate.ts --threshold 15
+
+      - name: CRAP ratchet (7, changed functions; v2 and contracts in full)
+        run: npx tsx server/tools/crap-gate.ts --threshold 7 --changed-since origin/main --strict server/apps/v2 --strict contracts
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore the bar store snapshot
+        run: npm run bars:snapshot
+
+      - name: Smoke
+        run: npm run smoke
+
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Find changed risk, sizing and loss-budget files
+        id: scope
+        run: |
+          CHANGED="$(node server/tools/mutation-local.ts --list origin/main)"
+          if [ -n "$CHANGED" ]; then
+            echo "$CHANGED"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No risk, sizing or loss-budget file changed; mutation testing skipped."
+          fi
+
+      - name: Install dependencies
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        run: npm ci
+
+      - name: Stryker (80% break on changed files)
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        run: npm run mutation:local -- origin/main
 
   e2e:
     runs-on: ubuntu-latest

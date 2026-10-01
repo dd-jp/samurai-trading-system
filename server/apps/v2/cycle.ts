@@ -17,6 +17,7 @@ import type {
   OrderSide,
   Position,
   RearmPrices,
+  RiskApprovedOrder,
   RiskGate,
   SimulatedFillQuote,
   SimulatedFillRequest,
@@ -32,6 +33,7 @@ import type {
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
+import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   CALENDAR_REFERENCE,
   isFresh,
@@ -40,7 +42,7 @@ import {
   macroGate,
   quotePerGbp,
 } from './data/index.js';
-import { type ReconcileOutcome, reconcileBooks } from './reconcile.js';
+import { type ReconcileOutcome, reconcileOrBlockEntries } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
   type LimitEntryOutcome,
@@ -63,6 +65,8 @@ export interface CycleDeps {
   readonly clock: Clock;
   readonly dryRun: boolean;
   readonly logger?: Logger | undefined;
+  // Backtest only: forward paper must read a stale series as a data outage (#1804), never a delisting
+  readonly closeEndedSeries?: boolean;
 }
 
 export interface BookReport {
@@ -203,6 +207,12 @@ function withinLimit(side: OrderSide, limit: number, price: number): number {
 
 const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'refused_dry_run']);
 
+export type EntryOrderId = (book: BookSpec, instrument: string, tradingDate: string) => string;
+
+function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: string): string {
+  return `v2-${book.id.replaceAll('/', '-')}-${tradingDate}-${instrument}`;
+}
+
 class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
@@ -222,6 +232,7 @@ class Cycle {
     private readonly tradingDate: string,
     private readonly macro: MacroGateVerdict,
     private readonly control: ManualControl,
+    private readonly entryOrderIdFor: EntryOrderId = defaultEntryOrderId,
   ) {}
 
   fxFor(venue: Venue): number {
@@ -256,11 +267,14 @@ class Cycle {
       this.log('warn', 'v2_fill_unmatched', `fill ${fill.broker_fill_id} matches no v2 order`);
       return;
     }
+    const baseFillId = `${order.venue}:${fill.broker_fill_id}`;
+    const increment = this.incrementOf(order, fill, baseFillId);
+    if (increment === undefined) return;
     const side = fill.leg === 'entry' || order.leg === 'exit' ? order.side : opposite(order.side);
     const fx = this.fxFor(order.venue as Venue);
-    const priceGbp = fill.price / fx;
+    const priceGbp = increment.price / fx;
     const recorded = this.deps.journal.recordFill({
-      fill_id: `${order.venue}:${fill.broker_fill_id}`,
+      fill_id: `${baseFillId}${increment.idSuffix}`,
       client_order_id: order.client_order_id,
       book_id: order.book_id,
       trading_date: this.tradingDate,
@@ -268,9 +282,9 @@ class Cycle {
       venue: order.venue,
       leg: fill.leg,
       side,
-      qty: fill.qty,
+      qty: increment.qty,
       price_gbp: priceGbp,
-      fee_gbp: fill.fee / fx,
+      fee_gbp: increment.fee / fx,
     });
     if (!recorded) return;
     this.tally.fills += 1;
@@ -281,15 +295,42 @@ class Cycle {
       venue: order.venue as Venue,
       side,
       leg: fill.leg,
-      qty: fill.qty,
+      qty: increment.qty,
       priceGbp,
-      feeGbp: fill.fee / fx,
+      feeGbp: increment.fee / fx,
       clientOrderId: order.client_order_id,
       tradingDate: this.tradingDate,
       stopGbp,
       targetGbp,
     });
     this.warnIfFillCrossedFlat(order, fill.leg, before, after);
+  }
+
+  // Alpaca re-reports each order's running filled_qty and average price under one order id
+  // (#1873); only the part beyond what the journal already holds for that id is a new fill
+  incrementOf(order: JournalledOrder, fill: V2Fill, baseFillId: string): FillIncrement | undefined {
+    if (fill.qty_is_cumulative !== true) return wholeFill(fill);
+    const venue = order.venue as Venue;
+    const verdict = cumulativeIncrement(this.deps.journal.fillPartsOf(baseFillId), fill, (date) =>
+      quotePerGbp(this.deps.market, venue, date),
+    );
+    if (verdict.kind === 'behind') {
+      this.log(
+        'warn',
+        'v2_fill_cumulative_behind',
+        `${baseFillId} reports cumulative qty ${fill.qty} below the ${verdict.bookedQty} already booked; ignored`,
+      );
+      return undefined;
+    }
+    if (verdict.kind === 'duplicate') return undefined;
+    if (verdict.increment.priceDegraded) {
+      this.log(
+        'warn',
+        'v2_fill_increment_price_unusable',
+        `${baseFillId}: increment of ${verdict.increment.qty} booked at the cumulative average ${fill.price}`,
+      );
+    }
+    return verdict.increment;
   }
 
   warnIfFillCrossedFlat(
@@ -372,7 +413,12 @@ class Cycle {
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const outcome = simulateLimitEntry(
-      { side, limit, stop: numberOrUndefined(order.payload.stop) },
+      {
+        side,
+        limit,
+        stop: numberOrUndefined(order.payload.stop),
+        trigger: numberOrUndefined(order.payload.trigger),
+      },
       this.barsSince(order),
     );
     if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_CALENDAR_DAYS) {
@@ -461,9 +507,13 @@ class Cycle {
     if (order === undefined || !SIMULATED_OUTCOMES.has(order.outcome)) return;
     const price = simulateMarketExit(this.barsSince(order));
     if (price === undefined) {
-      this.warnIfStale(order);
+      this.fillPendingExitAtLastClose(order, held);
       return;
     }
+    this.settleExitFill(order, held, price);
+  }
+
+  settleExitFill(order: JournalledOrder, held: Position, price: number): boolean {
     const qty = Math.abs(held.qty);
     const quote = this.quoteOrRefuse(order.book_id, held.venue, {
       instrument: held.instrument,
@@ -472,7 +522,7 @@ class Cycle {
       price,
       crossesSpread: true,
     });
-    if (quote === undefined) return;
+    if (quote === undefined) return false;
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
@@ -481,6 +531,43 @@ class Cycle {
       qty,
       fee: quote.fee,
     });
+    return true;
+  }
+
+  fillPendingExitAtLastClose(order: JournalledOrder, held: Position): void {
+    const bar = this.endedSeriesBar(order.instrument);
+    if (bar === undefined) {
+      this.warnIfStale(order);
+      return;
+    }
+    if (this.settleExitFill(order, held, bar.rawClose)) {
+      this.logEndedSeries(order.book_id, order.instrument, bar);
+    }
+  }
+
+  endedSeriesBar(instrument: string): V2Bar | undefined {
+    if (this.deps.closeEndedSeries !== true) return undefined;
+    const bar = this.deps.market.lastBarBefore(instrument, this.tradingDate);
+    return isFresh(bar, this.tradingDate) ? undefined : bar;
+  }
+
+  logEndedSeries(bookId: string, instrument: string, bar: V2Bar): void {
+    this.log(
+      'info',
+      'v2_series_ended_exit',
+      `${bookId} ${instrument}: series ended ${bar.date}, closed at its last close (doc 70 §2.4)`,
+    );
+  }
+
+  simulatedEndedSeriesExit(bookId: string, instrument: string): void {
+    const held = this.deps.books.position(bookId, instrument);
+    if (held === undefined || held.exitClientOrderId !== undefined) return;
+    const bar = this.endedSeriesBar(instrument);
+    if (bar === undefined) return;
+    this.simulatedExit(bookId, held, bar.rawClose, true, 'series_ended_at_last_close');
+    if (this.deps.books.position(bookId, instrument) === undefined) {
+      this.logEndedSeries(bookId, instrument, bar);
+    }
   }
 
   warnIfStale(order: JournalledOrder): void {
@@ -659,6 +746,22 @@ class Cycle {
     // new entry, even when its own bracket levels would otherwise resolve cleanly (#1778)
     const rearm = held.stray ? undefined : nativeRearmPrices(this.deps.journal, held);
     const order = this.deps.risk.approveExit({ book, held, clientOrderId, rearm });
+    const submission = await this.submitExitLeg(book, held, clientOrderId, order, {
+      marks_held: held.marksHeld,
+      reason,
+    });
+    if (submission.outcome !== 'rejected') {
+      this.deps.books.setExitPending(book.id, held.instrument, clientOrderId);
+    }
+  }
+
+  async submitExitLeg(
+    book: BookSpec,
+    held: Position,
+    clientOrderId: string,
+    order: RiskApprovedOrder,
+    legPayload: Record<string, unknown>,
+  ): Promise<Submission> {
     const submission = await this.deps.executor.submit(order);
     this.count(submission.outcome);
     this.deps.journal.recordOrder({
@@ -675,14 +778,11 @@ class Cycle {
       payload: {
         size: order.size,
         detail: submission.detail,
-        marks_held: held.marksHeld,
-        reason,
+        ...legPayload,
         approval: submission.approvalId,
       },
     });
-    if (submission.outcome !== 'rejected') {
-      this.deps.books.setExitPending(book.id, held.instrument, clientOrderId);
-    }
+    return submission;
   }
 
   count(outcome: OrderOutcome): void {
@@ -757,27 +857,10 @@ class Cycle {
       stop: rearm.stop,
       target: rearm.target,
     });
-    const submission = await this.deps.executor.submit(order);
-    this.count(submission.outcome);
-    this.deps.journal.recordOrder({
-      client_order_id: clientOrderId,
-      decision_id: null,
-      book_id: book.id,
-      trading_date: this.tradingDate,
-      instrument: held.instrument,
-      venue: held.venue,
-      leg: 'exit',
-      side: order.side,
-      dry_run: this.deps.dryRun,
-      outcome: submission.outcome,
-      payload: {
-        size: order.size,
-        detail: submission.detail,
-        stop: rearm.stop,
-        target: rearm.target,
-        exit_client_order_id: exitClientOrderId,
-        approval: submission.approvalId,
-      },
+    const submission = await this.submitExitLeg(book, held, clientOrderId, order, {
+      stop: rearm.stop,
+      target: rearm.target,
+      exit_client_order_id: exitClientOrderId,
     });
     if (submission.outcome === 'rejected') {
       const message = `${book.id} ${held.instrument}: backstop rearm after exit ${exitClientOrderId} failed: ${submission.detail}`;
@@ -806,6 +889,7 @@ class Cycle {
     await this.resumePendingExit(book, held);
     if (this.deps.executor.simulates(routeOf(book, held.venue))) {
       this.simulatedBracketExit(book, held);
+      this.simulatedEndedSeriesExit(book.id, held.instrument);
     }
     const afterSimulated = this.deps.books.position(book.id, held.instrument);
     if (afterSimulated === undefined) return;
@@ -834,7 +918,7 @@ class Cycle {
   }
 
   entryOrderId(book: BookSpec, instrument: string): string {
-    return `v2-${book.id.replaceAll('/', '-')}-${this.tradingDate}-${instrument}`;
+    return this.entryOrderIdFor(book, instrument, this.tradingDate);
   }
 
   async submitEntry(
@@ -844,9 +928,10 @@ class Cycle {
     approval: EntryApproval,
   ): Promise<OrderOutcome | undefined> {
     const clientOrderId = this.entryOrderId(book, decision.instrument);
-    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return undefined;
-    if (this.deps.books.position(book.id, decision.instrument) !== undefined) return undefined;
-    if (this.#pendingEntries.has(positionKey(book.id, decision.instrument))) return undefined;
+    if (!this.willSubmitEntry(book, decision)) {
+      this.journalHeldByBrokerBook(book, decision);
+      return undefined;
+    }
     this.tally.entries += 1;
     const submission: Submission =
       approval.order === undefined
@@ -868,6 +953,7 @@ class Cycle {
         size: approval.size,
         detail: submission.detail,
         price: decision.price,
+        trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
         approval: approval.order === undefined ? undefined : submission.approvalId,
@@ -890,16 +976,59 @@ class Cycle {
     return total;
   }
 
-  // #submitEntry no-ops when a client order already exists, a position is already held, or an
-  // entry for this instrument is mid-cycle-fill (#pendingEntries) — the cash gate must only
+  // #submitEntry no-ops when a client order already exists, a position is already held, an
+  // entry for this instrument is mid-cycle-fill (#pendingEntries), or another broker-routed book
+  // holds or rests it — the cash gate must only
   // charge and refuse decisions that take that path, or held/resting lines eat phantom cash and
   // starve later instruments in list order (doc 66 2026-09-28, #1785)
-  willSubmitEntry(book: BookSpec, instrument: string): boolean {
+  willSubmitEntry(book: BookSpec, decision: SleeveDecision): boolean {
+    const { instrument } = decision;
     return (
       this.deps.journal.orderFor(this.entryOrderId(book, instrument)) === undefined &&
       this.deps.books.position(book.id, instrument) === undefined &&
-      !this.#pendingEntries.has(positionKey(book.id, instrument))
+      !this.#pendingEntries.has(positionKey(book.id, instrument)) &&
+      this.brokerBookHolding(book, decision) === undefined
     );
+  }
+
+  // One Alpaca account serves every broker-routed book, so an entry on a symbol another such
+  // book holds or rests would net against it at the broker and its stop legs would compete (#1941)
+  brokerBookHolding(book: BookSpec, decision: SleeveDecision): string | undefined {
+    const routed = (candidate: BookSpec) =>
+      !this.deps.executor.simulates(routeOf(candidate, decision.venue));
+    if (!routed(book)) return undefined;
+    return this.deps.registry
+      .ids()
+      .flatMap((id) => this.deps.books.forSleeve(id))
+      .find(
+        (other) =>
+          other.id !== book.id &&
+          routed(other) &&
+          this.holdsOrRestsAt(other.id, decision.instrument, decision.venue),
+      )?.id;
+  }
+
+  holdsOrRestsAt(bookId: string, instrument: string, venue: Venue): boolean {
+    if (this.deps.books.position(bookId, instrument)?.venue === venue) return true;
+    return this.deps.journal
+      .restingEntries(bookId)
+      .some((order) => order.instrument === instrument && order.venue === venue);
+  }
+
+  journalHeldByBrokerBook(book: BookSpec, decision: SleeveDecision): void {
+    const holder = this.brokerBookHolding(book, decision);
+    if (holder === undefined) return;
+    const message = `${book.id} ${decision.instrument}: held or resting in ${holder} at ${decision.venue}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter: 'symbol_held_by_broker_book',
+      ticket: '#1941',
+      message,
+      book_id: book.id,
+      instrument: decision.instrument,
+    });
+    this.refusals.push(message);
   }
 
   applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
@@ -927,9 +1056,7 @@ class Cycle {
       macroDay: this.macro.macroDay,
     });
     const willSubmit =
-      approval.order !== undefined &&
-      approval.size > 0 &&
-      this.willSubmitEntry(book, decision.instrument);
+      approval.order !== undefined && approval.size > 0 && this.willSubmitEntry(book, decision);
     const gated = willSubmit ? this.applyRoomGate(decision, approval, room) : approval;
     return { decision, gated };
   }
@@ -1009,9 +1136,6 @@ class Cycle {
   async markAll(books: readonly BookSpec[]): Promise<BookReport[]> {
     const previous = new Map(books.map((book) => [book.id, this.deps.books.lastDay(book.id)]));
     for (const book of books) this.markOne(book, previous.get(book.id));
-    // Pooled primary state depends on every primary's mark for tradingDate; settle only once
-    // all of today's marks are committed, so no book's own halt is checked against a partial sum
-    this.deps.books.settlePrimaryBudgets(this.tradingDate);
     const reports: BookReport[] = [];
     for (const book of books) reports.push(await this.reportMark(book, previous.get(book.id)));
     return reports;
@@ -1287,11 +1411,10 @@ async function runUnmarked(
   const cycle = new Cycle(deps, tradingDate, macro, control);
   await cycle.sweepFills();
   cycle.rescaleSplitPositions();
-  deps.books.settleLastPrimaryMark();
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
-  cycle.blockEntries(await reconcileBooks(deps, tradingDate));
+  cycle.blockEntries(await reconcileOrBlockEntries(deps, tradingDate));
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {
@@ -1331,5 +1454,47 @@ async function runUnmarked(
     rejected_orders: tally.rejected,
     refusals,
     books: bookReports,
+  };
+}
+
+export interface EntryPass {
+  readonly tradingDate: string;
+  readonly sleeveId: string;
+  readonly decisionsFor: (book: BookSpec) => readonly SleeveDecision[];
+  readonly entryOrderId: EntryOrderId;
+  readonly blockedBookIds: ReadonlySet<string>;
+}
+
+export interface EntryPassReport {
+  readonly entries: number;
+  readonly submitted_orders: number;
+  readonly simulated_orders: number;
+  readonly dry_run_refusals: number;
+  readonly rejected_orders: number;
+  readonly refusals: readonly string[];
+}
+
+// Entries only: fills, reconcile, exits and marks stay with the daily cycle, which holds the run
+// lease against this pass
+export async function runEntryPass(deps: CycleDeps, pass: EntryPass): Promise<EntryPassReport> {
+  const cycle = new Cycle(
+    deps,
+    pass.tradingDate,
+    macroGate(pass.tradingDate),
+    deps.controls.current(),
+    pass.entryOrderId,
+  );
+  cycle.blockEntries({ blockedBookIds: pass.blockedBookIds, refusals: [] });
+  for (const book of deps.books.forSleeve(pass.sleeveId)) {
+    await cycle.entries(book, pass.decisionsFor(book));
+  }
+  const { tally } = cycle;
+  return {
+    entries: tally.entries,
+    submitted_orders: tally.submitted,
+    simulated_orders: tally.simulated,
+    dry_run_refusals: tally.refused,
+    rejected_orders: tally.rejected,
+    refusals: cycle.refusals,
   };
 }

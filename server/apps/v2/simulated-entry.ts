@@ -4,6 +4,7 @@ export interface LimitEntry {
   readonly side: OrderSide;
   readonly limit: number;
   readonly stop: number | undefined;
+  readonly trigger?: number | undefined;
 }
 
 export type LimitEntryOutcome =
@@ -40,6 +41,27 @@ function limitFill(
   return { price: Math.max(bar.open, entry.limit), crossesSpread: bar.open > entry.limit };
 }
 
+function stopLimitFill(
+  entry: LimitEntry,
+  trigger: number,
+  bar: QuotedBar,
+): { price: number; crossesSpread: boolean } | undefined {
+  const buy = entry.side === 'buy';
+  if (buy ? bar.high < trigger : bar.low > trigger) return undefined;
+  const triggeredAt = buy ? Math.max(bar.open, trigger) : Math.min(bar.open, trigger);
+  const withinLimit = buy ? triggeredAt <= entry.limit : triggeredAt >= entry.limit;
+  return withinLimit ? { price: triggeredAt, crossesSpread: true } : limitFill(entry, bar);
+}
+
+function entryFill(
+  entry: LimitEntry,
+  bar: QuotedBar,
+): { price: number; crossesSpread: boolean } | undefined {
+  return entry.trigger === undefined
+    ? limitFill(entry, bar)
+    : stopLimitFill(entry, entry.trigger, bar);
+}
+
 function stopOnFillBar(entry: LimitEntry, price: number, bar: QuotedBar): number | undefined {
   if (entry.stop === undefined) return undefined;
   if (entry.side === 'buy') return bar.low <= entry.stop ? Math.min(entry.stop, price) : undefined;
@@ -50,7 +72,7 @@ export function simulateLimitEntry(entry: LimitEntry, bars: readonly V2Bar[]): L
   if (bars.length === 0) return { kind: 'pending' };
   for (const bar of bars) {
     const prices = quoted(bar);
-    const fill = limitFill(entry, prices);
+    const fill = entryFill(entry, prices);
     if (fill !== undefined) {
       return { kind: 'filled', bar, ...fill, stoppedAt: stopOnFillBar(entry, fill.price, prices) };
     }

@@ -3,7 +3,7 @@ import { addDays } from './macro-calendar.js';
 
 export const MAX_HEADLINES_PER_NAME = 10;
 const NEWS_LOOKBACK_CALENDAR_DAYS = 1;
-const ROUNDUP_SYMBOL_LIMIT = 5;
+export const ROUNDUP_SYMBOL_LIMIT = 5;
 
 export interface NewsSource {
   headlines(symbol: string, tradingDate: string, now: Date): Promise<readonly string[]>;
@@ -32,14 +32,22 @@ export class AlpacaNewsSource implements NewsSource {
   }
 }
 
-// doc 66 G18(2): "Polymarket and LSE news are skipped for now" — no underlying-key
-// mapping exists for the 22 diversified LSE index/commodity/bond ETFs (unlike the
-// leveraged single-stock-proxy ETPs #522/#960 built the underlying-key pattern for)
-export function newsForVenue(inner: NewsSource, isLse: (symbol: string) => boolean): NewsSource {
+export interface NewsRoutes {
+  readonly us: NewsSource;
+  readonly ukStock: NewsSource;
+  readonly isUkStock: (symbol: string) => boolean;
+  readonly isLseEtf: (symbol: string) => boolean;
+}
+
+// doc 66 G18(2): LSE ETFs stay NO_NEWS — no underlying-key mapping exists for the 22 diversified
+// index/commodity/bond ETFs (unlike the leveraged single-stock-proxy ETPs #522/#960 built the
+// underlying-key pattern for). UK single stocks are the ones with a per-name news source (#1915)
+export function newsForVenue(routes: NewsRoutes): NewsSource {
   return {
-    headlines: (symbol, tradingDate, now) =>
-      isLse(symbol)
-        ? NO_NEWS.headlines(symbol, tradingDate, now)
-        : inner.headlines(symbol, tradingDate, now),
+    headlines: (symbol, tradingDate, now) => {
+      if (routes.isUkStock(symbol)) return routes.ukStock.headlines(symbol, tradingDate, now);
+      if (routes.isLseEtf(symbol)) return NO_NEWS.headlines(symbol, tradingDate, now);
+      return routes.us.headlines(symbol, tradingDate, now);
+    },
   };
 }

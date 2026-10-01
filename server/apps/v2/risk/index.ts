@@ -9,6 +9,7 @@ export {
 export { consumeApproval } from './approval.js';
 export { PaperBooks } from './books.js';
 export { CapitalConfigError, CapitalConfigStore } from './capital-config.js';
+export type { CfdCarryRates } from './cfd-carry.js';
 export { ControlStore } from './controls.js';
 export { V2RiskGate } from './gate.js';
 export { dailyCapGbp, sizeStepMarksGbp } from './loss-budget.js';

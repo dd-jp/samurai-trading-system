@@ -101,6 +101,65 @@ describe('simulateLimitEntry', () => {
   });
 });
 
+describe('simulateLimitEntry with a trigger (a stop-limit entry, #1941)', () => {
+  const BUY_STOP: LimitEntry = { side: 'buy', limit: 20.8, stop: 19.9, trigger: 20.5 };
+  const SELL_STOP: LimitEntry = { side: 'sell', limit: 19.2, stop: 20.1, trigger: 19.5 };
+  const fill = (entry: LimitEntry, overrides: Partial<V2Bar>) =>
+    simulateLimitEntry(entry, [bar('d1', { low: 19.95, high: 20.05, ...overrides })]);
+
+  it('does not fill a buy whose bar never reaches the trigger, though it trades below the limit', () => {
+    expect(fill(BUY_STOP, { open: 20, high: 20.49 })).toEqual({ kind: 'cancelled' });
+  });
+
+  it('fills a buy at the trigger when the bar opens below it and trades up through it', () => {
+    for (const high of [20.5, 21]) {
+      expect(fill(BUY_STOP, { open: 20, high })).toMatchObject({
+        kind: 'filled',
+        price: 20.5,
+        crossesSpread: true,
+      });
+    }
+  });
+
+  it('fills a buy at an open between the trigger and the limit', () => {
+    for (const open of [20.6, 20.8]) {
+      expect(fill(BUY_STOP, { open, high: 21, low: open })).toMatchObject({
+        price: open,
+        crossesSpread: true,
+      });
+    }
+  });
+
+  it('fills a buy that opens above the limit only if it trades back down to it, at the limit', () => {
+    expect(fill(BUY_STOP, { open: 21, high: 21.2, low: 20.7 })).toMatchObject({
+      price: 20.8,
+      crossesSpread: false,
+    });
+    expect(fill(BUY_STOP, { open: 21, high: 21.2, low: 20.81 })).toEqual({ kind: 'cancelled' });
+  });
+
+  it('mirrors every case for a sell trigger below the limit', () => {
+    expect(fill(SELL_STOP, { open: 20, low: 19.51 })).toEqual({ kind: 'cancelled' });
+    for (const low of [19.5, 19]) {
+      expect(fill(SELL_STOP, { open: 20, low })).toMatchObject({
+        price: 19.5,
+        crossesSpread: true,
+      });
+    }
+    for (const open of [19.3, 19.2]) {
+      expect(fill(SELL_STOP, { open, low: 19, high: open })).toMatchObject({
+        price: open,
+        crossesSpread: true,
+      });
+    }
+    expect(fill(SELL_STOP, { open: 19, low: 18.9, high: 19.3 })).toMatchObject({
+      price: 19.2,
+      crossesSpread: false,
+    });
+    expect(fill(SELL_STOP, { open: 19, low: 18.9, high: 19.19 })).toEqual({ kind: 'cancelled' });
+  });
+});
+
 describe('simulateMarketExit', () => {
   it('waits while no bar has come in', () => {
     expect(simulateMarketExit([])).toBeUndefined();

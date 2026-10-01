@@ -189,7 +189,6 @@ async function redistributeFlattenFills(
   return flattenNamedLots;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: all-or-nothing contract over byLot — split, over-fill-warn, persist-unattributed, mark-residuals-unprotected, delete-last are each ordering-critical (see inline comments); extracting risks silently reordering a step relative to the final byLot.delete
 async function redistributeOneFlatten(
   input: FillIngestInput,
   byLot: Map<string, NormalizedFill[]>,
@@ -208,57 +207,10 @@ async function redistributeOneFlatten(
   const rawFills = byLot.get(clientOrderId);
   if (rawFills === undefined) return;
 
-  const journalledHeld = attribution.lot_held_quantities;
-  const totalShare =
-    journalledHeld === null
-      ? await entryTotalShares(store, lotKeys)
-      : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
-
+  const totalShare = await flattenTotalShare(store, attribution);
   const split = splitFlattenFills({ clientOrderId, rawFills, lotKeys, totalShare, attribution });
-  const unattributed: [string, readonly NormalizedFill[]][] = [];
-  for (const [lotKey, splitFills] of split.splits) {
-    const bucket = byLot.get(lotKey);
-    if (bucket === undefined) byLot.set(lotKey, [...splitFills]);
-    else bucket.push(...splitFills);
-    if (!positionKeys.has(lotKey)) unattributed.push([lotKey, splitFills]);
-  }
-  for (const { attributed, leftover } of split.outcomes) {
-    if (leftover > 0) {
-      let alreadyWarned = false;
-      try {
-        for (const { idempotency_key, broker_fill_id } of attributed) {
-          if (await store.hasFill({ idempotency_key, broker_fill_id })) {
-            alreadyWarned = true;
-            break;
-          }
-        }
-      } catch {
-        alreadyWarned = false;
-      }
-
-      if (!alreadyWarned) {
-        try {
-          await input.flattenOverfillAlerts.postFlattenOverfillWarning({
-            trace_id: input.trace_id,
-            idempotency_key: clientOrderId,
-            unattributed_qty: leftover,
-            observed_at: input.clock.now(),
-          });
-        } catch {
-          safeLog(input.logger, {
-            trace_id: input.trace_id,
-            stage: 'execution',
-            event: 'flatten_overfill_alert_send_failed',
-            level: 'warn',
-            message:
-              'flatten-overfill alert delivery failed — the overfill itself was still dropped ' +
-              'as designed; this only lost the diagnostic line about it',
-            payload: { flatten_client_order_id: clientOrderId, unattributed_qty: leftover },
-          });
-        }
-      }
-    }
-  }
+  const unattributed = mergeSplitsIntoLots(byLot, split.splits, positionKeys);
+  await warnOnFlattenOverfills(input, clientOrderId, split.outcomes);
 
   for (const [lotKey, splitFills] of unattributed) {
     await persistUnattributedSplits(
@@ -285,6 +237,84 @@ async function redistributeOneFlatten(
   );
 
   byLot.delete(clientOrderId);
+}
+
+async function flattenTotalShare(
+  store: FillIngestInput['store'],
+  attribution: FlattenAttribution,
+): Promise<Map<string, number>> {
+  const journalledHeld = attribution.lot_held_quantities;
+  if (journalledHeld === null) return entryTotalShares(store, attribution.lot_idempotency_keys);
+  return new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
+}
+
+export function mergeSplitsIntoLots(
+  byLot: Map<string, NormalizedFill[]>,
+  splits: Iterable<readonly [string, readonly NormalizedFill[]]>,
+  positionKeys: ReadonlySet<string>,
+): [string, readonly NormalizedFill[]][] {
+  const unattributed: [string, readonly NormalizedFill[]][] = [];
+  for (const [lotKey, splitFills] of splits) {
+    const bucket = byLot.get(lotKey);
+    if (bucket === undefined) byLot.set(lotKey, [...splitFills]);
+    else bucket.push(...splitFills);
+    if (!positionKeys.has(lotKey)) unattributed.push([lotKey, splitFills]);
+  }
+  return unattributed;
+}
+
+type RecordedFillKey = Parameters<FillIngestInput['store']['hasFill']>[0];
+
+async function warnOnFlattenOverfills(
+  input: FillIngestInput,
+  clientOrderId: string,
+  outcomes: Iterable<{ attributed: Iterable<RecordedFillKey>; leftover: number }>,
+): Promise<void> {
+  for (const { attributed, leftover } of outcomes) {
+    if (leftover > 0) await warnOnFlattenOverfill(input, clientOrderId, attributed, leftover);
+  }
+}
+
+async function warnOnFlattenOverfill(
+  input: FillIngestInput,
+  clientOrderId: string,
+  attributed: Iterable<RecordedFillKey>,
+  leftover: number,
+): Promise<void> {
+  if (await anyFillRecorded(input.store, attributed)) return;
+  try {
+    await input.flattenOverfillAlerts.postFlattenOverfillWarning({
+      trace_id: input.trace_id,
+      idempotency_key: clientOrderId,
+      unattributed_qty: leftover,
+      observed_at: input.clock.now(),
+    });
+  } catch {
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'flatten_overfill_alert_send_failed',
+      level: 'warn',
+      message:
+        'flatten-overfill alert delivery failed — the overfill itself was still dropped ' +
+        'as designed; this only lost the diagnostic line about it',
+      payload: { flatten_client_order_id: clientOrderId, unattributed_qty: leftover },
+    });
+  }
+}
+
+async function anyFillRecorded(
+  store: FillIngestInput['store'],
+  fills: Iterable<RecordedFillKey>,
+): Promise<boolean> {
+  try {
+    for (const { idempotency_key, broker_fill_id } of fills) {
+      if (await store.hasFill({ idempotency_key, broker_fill_id })) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 async function persistUnattributedSplits(

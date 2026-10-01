@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { printSmoke, runV2Smoke } from './smoke.js';
 
 describe('v2 smoke', () => {
-  it('passes every probe against the committed bars', { timeout: 60_000 }, async () => {
+  // CPU-heavy: ~106 s under coverage at load 25
+  it('passes every probe against the local bar store', { timeout: 300_000 }, async () => {
     const result = await runV2Smoke();
     expect(result.probes.filter((probe) => !probe.passed)).toEqual([]);
     expect(result.passed).toBe(true);
-    expect(result.probes).toHaveLength(21);
+    expect(result.probes).toHaveLength(24);
   });
 
   it('prints one line per probe and exits 0 on green, 1 on red', () => {

@@ -3,6 +3,16 @@ import type { CfdAssetType, CfdCatalogue, CfdInstrument } from './cfd-catalogue.
 import { borrowCostPerYear } from './cfd-catalogue.js';
 import { isCfdVenue, quoteCurrencyOf } from './venues.js';
 
+// A daily rate times its day count lands an ulp off the quoted annual rate (2%/365 x 365 is
+// 0.019999999999999997), so the ceiling compares whole billionths, not raw floats
+const RATE_UNITS_PER_ONE = 1e9;
+
+function exceedsCeiling(ratePerYear: number, ceilingPerYear: number): boolean {
+  return (
+    Math.round(ratePerYear * RATE_UNITS_PER_ONE) > Math.round(ceilingPerYear * RATE_UNITS_PER_ONE)
+  );
+}
+
 type RouteSide = 'long' | 'short';
 type AssetKind = 'us_stock' | 'uk_etf';
 export type RouteChoice = { readonly venue: Venue } | { readonly refusal: string };
@@ -35,7 +45,7 @@ function shortRefusal(instrument: CfdInstrument, maxBorrowRatePerYear: number): 
   if (instrument.shortTradeDisabled) return 'ShortTradeDisabled';
   const borrow = borrowCostPerYear(instrument);
   if (borrow === undefined) return 'borrow_cost_unknown';
-  return borrow > maxBorrowRatePerYear ? 'borrow_cost' : undefined;
+  return exceedsCeiling(borrow, maxBorrowRatePerYear) ? 'borrow_cost' : undefined;
 }
 
 function instrumentRefusal(

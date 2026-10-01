@@ -32,24 +32,38 @@ export { ALL_PINS, type ModelPin } from './models.js';
 export { SqliteMonthlySpendCap, utcMonthStart } from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';
 export {
+  ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   ARM2_SLEEVE_SPEC,
   type Arm2EntryThresholds,
+  CFD_BORROW_MODEL,
   CFD_COST_MODEL,
+  CFD_ENTRY_GATES,
+  CFD_FINANCING_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  CFD_SPREAD_MODEL,
   CYCLE_LEVEL_PARAMETERS,
   cfdEntryRefusal,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
+  declaredCfdCosts,
+  G18_SENTIMENT_DEDUP_RULE,
+  G18_SMALL_CAP_FLOORS,
+  G18_SOCIAL_SOURCE,
   isSet,
   LSE_LIQUIDITY_SCREEN,
+  type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,
+  SIGNAL_MIN_REWARD_R,
+  SIGNALS_SLEEVE_ID,
+  SIGNALS_SLEEVE_SPEC,
   SLEEVE_SPECS_BY_ID,
   UnsetParameterError,
 } from './parameters.js';
 export { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
 export { type SecretSource, secretsFromEnv } from './secret-guard.js';
+export { createSignalsSleeve } from './signals-sleeve.js';
 export { SleeveRegistry } from './sleeve.js';

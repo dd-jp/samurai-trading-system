@@ -2,7 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Sleeve, SleeveContext, SleeveSpec } from '../../../contracts/index.js';
+import type {
+  OrderSide,
+  Sleeve,
+  SleeveContext,
+  SleeveSpec,
+  Venue,
+} from '../../../contracts/index.js';
 import { writeKeepAliveState } from '../../pipeline/execution/adapters/saxo-keepalive-state.js';
 import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/index.js';
@@ -15,22 +21,34 @@ import { openSharedStore } from '../../shared/store/index.js';
 import type { CommandRunner } from './backup.js';
 import { type BarRefresh, NO_BAR_REFRESH } from './bar-refresh.js';
 import type { CycleReport } from './cycle.js';
-import { BarsMarketData, NO_NEWS, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
+import { pushDailySummary } from './daily-summary.js';
+import {
+  BarsMarketData,
+  CfdCatalogue,
+  NO_NEWS,
+  ParquetBarsSource,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
 import {
   composeV2Root,
   DEFAULT_HALF_SPREAD_BPS,
   exitCodeFor,
   halfSpreadLookup,
   llmKeysPresent,
+  logFaultFreeWeeks,
   logNewRefusals,
   main,
+  newsWiringFor,
   nousOptionsFrom,
   parseCliArgs,
   rootOptionsFor,
   runAfterPinCheck,
+  runOnce,
+  type V2RootOptions,
   withoutRefusedLse,
 } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
+import { RunLease } from './run-lease.js';
 import type { ModelPin } from './signal/index.js';
 import { BULLISH_SCRIPT, isLseInstrument, ScriptedTransport } from './signal/index.js';
 import { LSE_LIQUIDITY_SCREEN } from './signal/parameters.js';
@@ -318,7 +336,7 @@ describe('rootOptionsFor', () => {
         }),
       );
       expect(lseInstrumentsOf(root)).toEqual([]);
-      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10]);
+      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10, 0]);
     } finally {
       root.close();
     }
@@ -356,7 +374,7 @@ describe('rootOptionsFor', () => {
         root.journal.newRefusals(ENTRY_DATE).filter((r) => r.parameter === 'SAXO_SESSION'),
       ).toEqual([]);
       expect(lseInstrumentsOf(root).length).toBeGreaterThan(0);
-      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10]);
+      expect(universesOf(root).map((universe) => universe.length)).toEqual([10, 10, 0]);
     } finally {
       root.close();
     }
@@ -415,6 +433,89 @@ describe('composeV2Root', () => {
     }
   });
 
+  function cfdEntry(instrument: string, venue: Venue, side: OrderSide) {
+    return {
+      instrument,
+      venue,
+      side,
+      leg: 'entry' as const,
+      qty: 1,
+      priceGbp: 100,
+      feeGbp: 0,
+      clientOrderId: `cfd-${instrument}`,
+      tradingDate: ENTRY_DATE,
+      stopGbp: undefined,
+      targetGbp: undefined,
+    };
+  }
+
+  async function cfdCarryRoot(options: Partial<V2RootOptions>) {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'carry.sqlite');
+    seededStore(storePath).close();
+    return composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      cfdCataloguePath: join(fixtures.directory, 'absent.json'),
+      ...options,
+    });
+  }
+
+  it("carries CFDs on the declared Saxo models, a short's borrow read from the catalogue quote or the 2% ceiling", async () => {
+    const quoted = { symbol: 'TSLA', saxoSymbol: 'TSLA:xnas', uic: 1, borrowCostPerDay: 0.0001 };
+    const cfdCatalogue = new CfdCatalogue({
+      asOf: ENTRY_DATE,
+      instruments: [quoted, { ...quoted, symbol: 'NVDA', uic: 2, borrowCostPerDay: undefined }].map(
+        (row) => ({
+          ...row,
+          assetType: 'CfdOnStock' as const,
+          currency: 'USD' as const,
+          priceToContractFactor: 1,
+          tradable: true,
+          shortTradeDisabled: false,
+        }),
+      ),
+    });
+    const root = await cfdCarryRoot({ cfdCatalogue });
+    try {
+      root.books.applyFill('debate/primary', cfdEntry('TSLA', 'saxo_cfd_usd', 'sell'));
+      root.books.applyFill('debate/primary', cfdEntry('NVDA', 'saxo_cfd_usd', 'sell'));
+      root.books.applyFill('debate/primary', cfdEntry('AMD', 'saxo_cfd_usd', 'sell'));
+      root.books.applyFill('debate/primary', cfdEntry('AAPL', 'saxo_cfd_usd', 'buy'));
+      const day = root.books.markDay('debate/primary', ENTRY_DATE, () => 100, 1);
+      expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0001 + (2 * 100 * 0.02) / 360, 12);
+      expect(day.cfdFinancingAccrualGbp).toBeCloseTo((100 * 0.072) / 360, 12);
+    } finally {
+      root.close();
+    }
+  });
+
+  it('carries CFDs on an injected cost model over the declared one, with no catalogue quote', async () => {
+    const declined = () => {
+      throw new Error('fill-leg model not used by the mark');
+    };
+    const root = await cfdCarryRoot({
+      cfdCosts: {
+        fee: { fee: declined },
+        spread: { halfSpreadBps: declined },
+        financing: { dailyRate: (_venue, side) => (side === 'long' ? 0.01 : 0.002) },
+        borrow: { dailyRate: (_venue, quoted) => quoted ?? 0.03 },
+      },
+    });
+    try {
+      root.books.applyFill('debate/primary', cfdEntry('TSLA', 'saxo_cfd_usd', 'sell'));
+      const day = root.books.markDay('debate/primary', ENTRY_DATE, () => 100, 2);
+      expect(day.cfdFinancingAccrualGbp).toBeCloseTo(100 * 0.002 * 2, 12);
+      expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.03 * 2, 12);
+    } finally {
+      root.close();
+    }
+  });
+
   it('dry run: sizes, reaches the dry-run broker, submits nothing, journals every LLM call and fill', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;
@@ -427,11 +528,13 @@ describe('composeV2Root', () => {
       composeV2Root({ ...fixtures, tradingDate, dryRun: true, storePath, clock, logger });
     const root = open(ENTRY_DATE);
     try {
-      expect(root.registry.ids()).toEqual(['debate', 'arm2']);
+      expect(root.registry.ids()).toEqual(['debate', 'arm2', 'signals']);
       expect(root.books.ids()).toEqual([
         'debate/primary',
         'debate/no-macro-gate',
         'arm2/technical-only',
+        'signals/primary',
+        'signals/no-veto',
       ]);
       const report = await root.run();
       expect(report).toMatchObject({
@@ -442,19 +545,21 @@ describe('composeV2Root', () => {
         simulated_orders: 2,
         rejected_orders: 0,
         fills: 0,
-        sleeves: ['debate', 'arm2'],
+        sleeves: ['debate', 'arm2', 'signals'],
       });
       expect(exitCodeFor(report)).toBe(0);
       const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
-      expect(needsDavid).toHaveLength(10);
+      expect(needsDavid).toHaveLength(6);
+      expect(needsDavid.some((refusal) => refusal.includes('CFD_RESTING_STOP_VERIFIED'))).toBe(
+        true,
+      );
       for (const parameter of [
         'CFD_COST_MODEL',
         'CFD_SPREAD_MODEL',
         'CFD_FINANCING_MODEL',
         'CFD_BORROW_MODEL',
-        'CFD_RESTING_STOP_VERIFIED',
       ]) {
-        expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(true);
+        expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(false);
       }
       const decision = root.db
         .prepare('SELECT action, size_shares, stop_price FROM v2_decisions WHERE book_id = ?')
@@ -480,7 +585,7 @@ describe('composeV2Root', () => {
       });
       expect(count(root, 'v2_orders')).toBe(3);
       expect(count(root, 'v2_fills')).toBe(0);
-      expect(report.books.map((book) => book.positions)).toEqual([0, 0, 0]);
+      expect(report.books.map((book) => book.positions)).toEqual([0, 0, 0, 0, 0]);
       const llmCalls = root.scriptedTransports.reduce((n, t) => n + t.calls.length, 0);
       expect(llmCalls).toBe(3);
       expect(count(root, 'llm_spend')).toBe(llmCalls);
@@ -515,10 +620,116 @@ describe('composeV2Root', () => {
       expect(fill.price_gbp * fx).toBeCloseTo(LAST_CLOSE, 6);
       expect(fill.fee_gbp).toBeGreaterThan(0);
       expect(fill.trading_date).toBe(NEXT_DATE);
-      expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1]);
+      expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1, 0, 0]);
     } finally {
       next.close();
     }
+  });
+
+  it('pushes a daily summary of the fixture cycle that ran since the previous one', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'summary.sqlite');
+    seededStore(storePath).close();
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const open = (tradingDate: string) =>
+      composeV2Root({
+        ...fixtures,
+        tradingDate,
+        dryRun: true,
+        storePath,
+        clock,
+        logger: { log: () => {} },
+      });
+    const first = open(ENTRY_DATE);
+    try {
+      await first.run();
+    } finally {
+      first.close();
+    }
+    clock.advanceTo(new Date(`${NEXT_DATE}T07:00:00.000Z`));
+    const next = open(NEXT_DATE);
+    const sent: string[] = [];
+    try {
+      const report = await next.run();
+      await pushDailySummary(
+        {
+          db: next.db,
+          clock,
+          faults: next.faults,
+          mode: 'dry-run',
+          logger: { log: () => {} },
+          notify: (text) => {
+            sent.push(text);
+            return Promise.resolve();
+          },
+        },
+        report,
+      );
+    } finally {
+      next.close();
+    }
+    expect(sent).toHaveLength(1);
+    const lines = sent[0]?.split('\n') ?? [];
+    expect(lines.slice(0, 2)).toEqual([
+      `Samurai v2 daily summary ${NEXT_DATE} (dry-run)`,
+      `Window: since the last cycle, ${ENTRY_DATE} 07:00 UTC`,
+    ]);
+    expect(
+      lines.filter((line) => /^\S+\/\S+: equity /.test(line)).map((line) => line.split(':')[0]),
+    ).toEqual([
+      'debate/primary',
+      'debate/no-macro-gate',
+      'arm2/technical-only',
+      'signals/primary',
+      'signals/no-veto',
+    ]);
+    expect(lines).toContain(
+      '  decisions 1; entries 0 placed, 1 filled, 0 rejected; exits 0; open 1',
+    );
+    expect(lines.at(-2)).toMatch(
+      /^Faults since the last cycle: 0; fault-free weeks 0 \(2 counted days, no fault yet\)$/,
+    );
+    expect(lines.at(-1)).toMatch(/^LLM spend this month: \$\d+\.\d{2} of \$30\.00$/);
+  });
+
+  it('runOnce pushes the summary after the cycle, and a failing push keeps the exit code', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'run-once.sqlite');
+    seededStore(storePath).close();
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const logs: LogEntry[] = [];
+    const sent: string[] = [];
+    const runOn = (tradingDate: string, notify: (text: string) => Promise<void>) =>
+      runOnce(
+        true,
+        tradingDate,
+        {},
+        clock,
+        { log: (entry) => logs.push(entry) },
+        NO_BAR_REFRESH,
+        notify,
+        (options) => composeV2Root({ ...options, ...fixtures, storePath }),
+      );
+    const written = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(
+        await runOn(ENTRY_DATE, (text) => {
+          sent.push(text);
+          return Promise.resolve();
+        }),
+      ).toBe(0);
+      clock.advanceTo(new Date(`${NEXT_DATE}T07:00:00.000Z`));
+      expect(await runOn(NEXT_DATE, () => Promise.reject(new Error('telegram down')))).toBe(0);
+    } finally {
+      written.mockRestore();
+    }
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(new RegExp(`^Samurai v2 daily summary ${ENTRY_DATE} \\(dry-run\\)\n`));
+    expect(logs.filter((entry) => entry.event === 'v2_daily_summary_failed')).toEqual([
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('telegram down') }),
+    ]);
   });
 
   it('journals one SAXO_SESSION refusal against #1876 when the LSE leg is refused, and none otherwise', async () => {
@@ -543,6 +754,9 @@ describe('composeV2Root', () => {
     );
     try {
       await refused.run();
+      expect(refused.faults.faultsOn(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({ kind: 'token_failure', code: 'SAXO_SESSION' }),
+      );
       expect(refused.journal.newRefusals(ENTRY_DATE)).toContainEqual(
         expect.objectContaining({
           scope: 'data',
@@ -698,6 +912,161 @@ describe('composeV2Root', () => {
         { status: 'clean', detail: 'cash not compared on paper (David 2026-09-29, #1872)' },
       ]);
     } finally {
+      root.close();
+    }
+  });
+
+  it('records a broker reconcile mismatch in the fault ledger through the composed root (#1878)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'mismatch.sqlite');
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const alpacaClient = fakeAlpacaClient(clock);
+    alpacaClient.getPositions = vi
+      .fn()
+      .mockResolvedValue([{ symbol: 'ZZZ', qty: '5', side: 'long', avg_entry_price: '10' }]);
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: false,
+      storePath,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      clock,
+      logger: { log: () => {} },
+      transportFor: scriptedFactory([]),
+      alpacaClient,
+      newsSource: { headlines: () => Promise.resolve([]) },
+    });
+    try {
+      const report = await root.run();
+      expect(report.submitted_orders).toBe(0);
+      expect(root.faults.faultsOn(ENTRY_DATE)).toContainEqual(
+        expect.objectContaining({
+          kind: 'reconcile_mismatch',
+          code: 'BROKER_RECONCILE',
+          detail: expect.stringContaining('position_missing_in_store ZZZ'),
+        }),
+      );
+      expect(root.faults.faultFreeWeeks(ENTRY_DATE)).toMatchObject({
+        weeks: 0,
+        last_fault: ENTRY_DATE,
+      });
+    } finally {
+      root.close();
+    }
+  });
+
+  it('records the weekdays no cycle marked as missed runs, and a cycle that cannot take the lease as refused (#1878)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'missed.sqlite');
+    seededStore(storePath).close();
+    const open = (tradingDate: string, leaseWait?: V2RootOptions['leaseWait']) =>
+      composeV2Root({
+        ...fixtures,
+        tradingDate,
+        dryRun: true,
+        storePath,
+        clock: new SimulatedClock(new Date(`${tradingDate}T07:00:00.000Z`)),
+        logger: { log: () => {} },
+        leaseWait,
+      });
+    const first = open(ENTRY_DATE);
+    try {
+      await first.run();
+      expect(first.faults.faultsOn(ENTRY_DATE).map((fault) => fault.kind)).not.toContain(
+        'missed_run',
+      );
+    } finally {
+      first.close();
+    }
+    const later = '2026-09-23';
+    const second = open(later);
+    try {
+      await second.run();
+      const missed = second.db
+        .prepare(
+          "SELECT trading_date FROM v2_faults WHERE kind = 'missed_run' ORDER BY trading_date",
+        )
+        .all();
+      expect(missed).toEqual([{ trading_date: '2026-09-21' }, { trading_date: '2026-09-22' }]);
+    } finally {
+      second.close();
+    }
+    const blocked = '2026-09-24';
+    const third = open(blocked, { timeoutMs: 0, pollMs: 0, sleep: async () => {}, nowMs: () => 0 });
+    try {
+      new RunLease(third.db, new SimulatedClock(new Date(`${blocked}T06:59:00.000Z`))).tryAcquire(
+        'signals',
+      );
+      await expect(third.run()).rejects.toThrow(/run lease not acquired/);
+      expect(third.faults.faultsOn(blocked)).toEqual([
+        expect.objectContaining({ kind: 'refused_cycle', code: 'v2_cycle_failed' }),
+      ]);
+    } finally {
+      third.close();
+    }
+  });
+
+  it('routes a UK stock to Marketaux through the real news wiring, journals the coverage and keeps the key out of every log', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const storePath = join(fixtures.directory, 'uk-news.sqlite');
+    seededStore(storePath).close();
+    const urls: string[] = [];
+    const publishedAt = new Date(clock.now().getTime() - 20 * 3_600_000).toISOString();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        urls.push(String(url));
+        const article = { title: 'UP beats on revenue', published_at: publishedAt, entities: [{}] };
+        const body = { meta: { found: 1, returned: 1, limit: 3, page: 1 }, data: [article] };
+        return Promise.resolve(new Response(JSON.stringify(body)));
+      }),
+    );
+    vi.stubEnv('ALPACA_API_KEY', 'key');
+    vi.stubEnv('ALPACA_API_SECRET', 'secret');
+    const logs: LogEntry[] = [];
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: false,
+      storePath,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      clock,
+      logger: { log: (entry) => logs.push(entry) },
+      transportFor: scriptedFactory([]),
+      alpacaClient: fakeAlpacaClient(clock),
+      marketauxApiKey: 'mx-secret-key',
+      isUkStock: (symbol) => symbol === 'UP',
+    });
+    try {
+      await root.run();
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain('symbols=UP.L');
+      expect(root.db.prepare('SELECT symbol, status, requested FROM v2_news').all()).toEqual([
+        { symbol: 'UP', status: 'ok', requested: 1 },
+      ]);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          event: 'v2_uk_news_coverage',
+          message: 'UK news: 1 of 1 names had headlines, 0 NO_NEWS',
+        }),
+      );
+      expect(JSON.stringify(logs)).not.toContain('mx-secret-key');
+      const decision = root.db
+        .prepare(
+          "SELECT payload FROM v2_decisions WHERE instrument = 'UP' AND payload LIKE '%headlines%'",
+        )
+        .get() as { payload: string };
+      expect(JSON.parse(decision.payload)).toMatchObject({ headlines: 1 });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
       root.close();
     }
   });
@@ -1054,6 +1423,33 @@ describe('logNewRefusals', () => {
   });
 });
 
+describe('logFaultFreeWeeks', () => {
+  it('logs the weeks since the last fault, or says none was recorded', () => {
+    const entries: LogEntry[] = [];
+    const logger = { log: (entry: LogEntry) => entries.push(entry) };
+    const tallies = {
+      '2026-09-28': { weeks: 2, counted_days: 14, since: '2026-09-15', last_fault: '2026-09-14' },
+      '2026-09-29': { weeks: 0, counted_days: 3, since: '2026-09-27', last_fault: undefined },
+    };
+    const faults = { faultFreeWeeks: (date: string) => tallies[date as keyof typeof tallies] };
+    logFaultFreeWeeks(faults, '2026-09-28', logger);
+    logFaultFreeWeeks(faults, '2026-09-29', logger);
+    expect(entries).toEqual([
+      {
+        trace_id: 'v2-2026-09-28',
+        stage: 'v2',
+        level: 'info',
+        event: 'v2_fault_free_weeks',
+        message: '2 fault-free weeks (14 counted days, last fault 2026-09-14)',
+        payload: tallies['2026-09-28'],
+      },
+      expect.objectContaining({
+        message: '0 fault-free weeks (3 counted days, no fault recorded)',
+      }),
+    ]);
+  });
+});
+
 describe('main', () => {
   const R2 = {
     R2_ACCESS_KEY_ID: 'a',
@@ -1157,5 +1553,83 @@ describe('main', () => {
     );
     expect(warning).toMatchObject({ chat_id: 'chat', disable_notification: true });
     expect(warning.text).toContain('v2_heartbeat_unset: HEALTHCHECKS_PING_URL is not set');
+  });
+});
+
+describe('newsWiringFor', () => {
+  const NOW = new Date('2026-09-29T07:00:00.000Z');
+  const options = {
+    tradingDate: '2026-09-29',
+    dryRun: false,
+    isUkStock: (symbol: string) => symbol === 'VOD',
+    marketauxApiKey: '',
+  };
+  const quiet: Logger = { log: () => {} };
+  beforeEach(() => {
+    vi.stubEnv('ALPACA_API_KEY', 'key');
+    vi.stubEnv('ALPACA_API_SECRET', 'secret');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+  const rows = (db: StoreHandle) => db.prepare('SELECT symbol, status, reason FROM v2_news').all();
+
+  it('journals no_key for a UK stock when MARKETAUX_API_KEY is empty, and leaves ETFs and dry runs alone', async () => {
+    const db = openSharedStore(':memory:');
+    const { news, ukNews } = newsWiringFor(options, db, quiet);
+    expect(ukNews).toBeDefined();
+    expect(await news.headlines('ISF', '2026-09-29', NOW)).toEqual([]);
+    expect(rows(db)).toEqual([]);
+    expect(await news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
+    expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_key', reason: 'no_api_key' }]);
+
+    const dryDb = openSharedStore(':memory:');
+    const dry = newsWiringFor({ ...options, dryRun: true, marketauxApiKey: 'k' }, dryDb, quiet);
+    expect(dry.ukNews).toBeUndefined();
+    expect(await dry.news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
+    expect(rows(dryDb)).toEqual([]);
+  });
+
+  it('treats an unset key like an empty one', async () => {
+    const db = openSharedStore(':memory:');
+    const { news } = newsWiringFor({ ...options, marketauxApiKey: undefined }, db, quiet);
+    await news.headlines('VOD', '2026-09-29', NOW);
+    expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_key', reason: 'no_api_key' }]);
+  });
+
+  it('sends every non-ETF name to the US source until a pool supplies UK stocks', async () => {
+    const db = openSharedStore(':memory:');
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string | URL) => {
+        urls.push(String(url));
+        return Promise.resolve(new Response(JSON.stringify({ news: [], next_page_token: null })));
+      }),
+    );
+    const { news } = newsWiringFor({ ...options, isUkStock: undefined }, db, quiet);
+    expect(await news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('alpaca.markets');
+    expect(rows(db)).toEqual([]);
+  });
+
+  it('uses an injected news source untouched', async () => {
+    const db = openSharedStore(':memory:');
+    const injected = { headlines: () => Promise.resolve(['injected']) };
+    const { news, ukNews } = newsWiringFor({ ...options, newsSource: injected }, db, quiet);
+    expect(news).toBe(injected);
+    expect(ukNews).toBeUndefined();
+  });
+
+  it('reads the key from MARKETAUX_API_KEY', () => {
+    const clock = new SimulatedClock(NOW);
+    expect(
+      rootOptionsFor(false, '2026-09-29', { MARKETAUX_API_KEY: 'from-env' }, clock, quiet),
+    ).toMatchObject({
+      marketauxApiKey: 'from-env',
+    });
+    expect(rootOptionsFor(false, '2026-09-29', {}, clock, quiet).marketauxApiKey).toBeUndefined();
   });
 });

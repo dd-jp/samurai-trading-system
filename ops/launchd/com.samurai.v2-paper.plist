@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 07:30 London, before the US open: the prior session's bars are complete (the Alpaca SIP
+     request must end 16+ minutes after the close, #1928) and entries fill at that day's open -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.samurai.v2-paper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ddjp/.nvm/versions/node/v26.5.0/bin/node</string>
+        <string>--env-file=/Users/ddjp/Documents/projects/samurai-trading-system/.env.local</string>
+        <string>--import</string>
+        <string>tsx</string>
+        <string>/Users/ddjp/Documents/projects/samurai-trading-system/server/apps/v2/index.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/ddjp/.local/bin:/Users/ddjp/.nvm/versions/node/v26.5.0/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system/data/logs/v2-paper.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system/data/logs/v2-paper.log</string>
+</dict>
+</plist>

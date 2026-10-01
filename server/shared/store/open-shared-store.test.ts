@@ -60,13 +60,18 @@ const TABLES = [
   'v2_controls',
   'v2_commands',
   'v2_reconciles',
+  'v2_news',
+  'v2_signals',
+  'v2_signal_events',
+  'v2_run_lease',
+  'v2_faults',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 48;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 53;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 75;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 81;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -436,6 +441,101 @@ describe('openSharedStore', () => {
         last_seen_at: '2026-09-01T00:05:00.000Z',
         alerted_at: '2026-09-01T00:10:00.000Z',
       });
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0079 keeps every legacy book day and reads its CFD carry as zero (#1850)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 77;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw
+        .prepare(
+          `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+           VALUES ('debate/primary', 'debate', 'primary', 600, 400, '2026-09-25T07:00:00.000Z')`,
+        )
+        .run();
+      raw
+        .prepare(
+          `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
+             ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+           VALUES ('debate/primary', '2026-09-29', 600, 400, 200, 0, 1, 0, 0.01,
+             '2026-09-29T21:00:00.000Z')`,
+        )
+        .run();
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw
+          .prepare(
+            'SELECT equity_gbp, custody_accrual_gbp, cfd_financing_accrual_gbp, cfd_borrow_accrual_gbp FROM v2_book_days',
+          )
+          .all(),
+      ).toEqual([
+        {
+          equity_gbp: 600,
+          custody_accrual_gbp: 0.01,
+          cfd_financing_accrual_gbp: 0,
+          cfd_borrow_accrual_gbp: 0,
+        },
+      ]);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0081 keeps the legacy decision and fill journal and makes it append-only (#1883)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 79;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+           VALUES ('debate/primary', 'debate', 'primary', 600, 400, '2026-09-25T07:00:00.000Z');
+         INSERT INTO v2_decisions (decision_id, book_id, trading_date, instrument, venue, inputs_hash,
+           direction, confidence, action, reason, size_shares, stop_price, payload, recorded_at)
+           VALUES ('d1', 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'h', 'bullish', 0.7,
+             'enter_long', 'judge bullish', 3, 96, '{}', '2026-09-29T07:00:00.000Z');
+         INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+           leg, side, dry_run, outcome, payload, recorded_at)
+           VALUES ('o1', 'd1', 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry', 'buy', 0,
+             'submitted', '{}', '2026-09-29T07:00:00.000Z');
+         INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+           side, qty, price_gbp, fee_gbp, recorded_at)
+           VALUES ('alpaca:f1', 'o1', 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry', 'buy',
+             3, 80, 0.1, '2026-09-29T14:30:00.000Z');`,
+      );
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(raw.prepare('SELECT decision_id, action FROM v2_decisions').all()).toEqual([
+        { decision_id: 'd1', action: 'enter_long' },
+      ]);
+      expect(raw.prepare('SELECT fill_id, qty FROM v2_fills').all()).toEqual([
+        { fill_id: 'alpaca:f1', qty: 3 },
+      ]);
+      expect(() => raw.prepare("UPDATE v2_decisions SET action = 'exit'").run()).toThrow(
+        'v2_decisions is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_decisions').run()).toThrow(
+        'v2_decisions is append-only',
+      );
+      expect(() => raw.prepare('UPDATE v2_fills SET qty = 1').run()).toThrow(
+        'v2_fills is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_fills').run()).toThrow('v2_fills is append-only');
+      expect(() => raw.prepare("UPDATE v2_orders SET outcome = 'cancelled'").run()).not.toThrow();
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

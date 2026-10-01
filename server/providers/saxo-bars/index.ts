@@ -12,6 +12,7 @@ export type {
   ChartSample,
   InfoPriceQuote,
   InstrumentDetails,
+  SaxoCfdAssetType,
 } from './saxo-api.js';
 export {
   liveTokenSource,

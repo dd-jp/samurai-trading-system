@@ -306,49 +306,35 @@ function requiredPositiveParam(spec: IndicatorSpec, name: string): number {
   return value;
 }
 
+function periodIndicator(
+  minimumBars: (period: number) => number,
+  recommendedWarmup: (period: number) => number,
+  compute: (bars: Bar[], period: number) => number,
+): IndicatorDefinition {
+  return {
+    minimumBars: (spec) => minimumBars(periodOf(spec)),
+    recommendedWarmup: (spec) => recommendedWarmup(periodOf(spec)),
+    reportedPeriod: (spec) => periodOf(spec),
+    compute: (bars, spec) => compute(bars, periodOf(spec)),
+  };
+}
+
+const lookback = (period: number): number => period;
+const pastLookback = (period: number): number => period + 1;
+const wilderWarmup = (period: number): number => 4 * period + 1;
+
 const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
-  sma: {
-    minimumBars: (spec) => periodOf(spec),
-    recommendedWarmup: (spec) => periodOf(spec),
-    reportedPeriod: (spec) => periodOf(spec),
-    compute: (bars, spec) => sma(closes(bars), periodOf(spec)),
-  },
-  ema: {
-    minimumBars: (spec) => periodOf(spec),
-    recommendedWarmup: (spec) => 4 * periodOf(spec) + 1,
-    reportedPeriod: (spec) => periodOf(spec),
-    compute: (bars, spec) => ema(closes(bars), periodOf(spec)),
-  },
-  rsi: {
-    minimumBars: (spec) => periodOf(spec) + 1,
-    recommendedWarmup: (spec) => 4 * periodOf(spec) + 1,
-    reportedPeriod: (spec) => periodOf(spec),
-    compute: (bars, spec) => rsi(closes(bars), periodOf(spec)),
-  },
-  atr: {
-    minimumBars: (spec) => periodOf(spec) + 1,
-    recommendedWarmup: (spec) => 4 * periodOf(spec) + 1,
-    reportedPeriod: (spec) => periodOf(spec),
-    compute: (bars, spec) => atr(bars, periodOf(spec)),
-  },
-  atr_pct: {
-    minimumBars: (spec) => periodOf(spec) + 1,
-    recommendedWarmup: (spec) => 4 * periodOf(spec) + 1,
-    reportedPeriod: (spec) => periodOf(spec),
-    compute: (bars, spec) => atrPctValue(bars, periodOf(spec)),
-  },
-  donchian_pos: {
-    minimumBars: (spec) => periodOf(spec),
-    recommendedWarmup: (spec) => periodOf(spec),
-    reportedPeriod: (spec) => periodOf(spec),
-    compute: (bars, spec) => donchianPosValue(bars, periodOf(spec)),
-  },
-  adx: {
-    minimumBars: (spec) => 2 * periodOf(spec),
-    recommendedWarmup: (spec) => 2 * periodOf(spec) + 4 * periodOf(spec),
-    reportedPeriod: (spec) => periodOf(spec),
-    compute: (bars, spec) => adxValue(bars, periodOf(spec)),
-  },
+  sma: periodIndicator(lookback, lookback, (bars, period) => sma(closes(bars), period)),
+  ema: periodIndicator(lookback, wilderWarmup, (bars, period) => ema(closes(bars), period)),
+  rsi: periodIndicator(pastLookback, wilderWarmup, (bars, period) => rsi(closes(bars), period)),
+  atr: periodIndicator(pastLookback, wilderWarmup, atr),
+  atr_pct: periodIndicator(pastLookback, wilderWarmup, atrPctValue),
+  donchian_pos: periodIndicator(lookback, lookback, donchianPosValue),
+  adx: periodIndicator(
+    (period) => 2 * period,
+    (period) => 2 * period + 4 * period,
+    adxValue,
+  ),
   macd_histogram: {
     minimumBars: (spec) => {
       const fast = requiredIntParam(spec, 'fast');

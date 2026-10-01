@@ -48,6 +48,8 @@ export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar, ZonedCivilDate } from './trading-calendar.js';
 export {
   AlwaysOpenCalendar,
+  civilDateKey,
+  ET_ZONE,
   LONDON_ZONE,
   LSE_TABLE_COVERAGE_END,
   LseRegularHoursCalendar,

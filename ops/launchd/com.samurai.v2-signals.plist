@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Always on: a signal can arrive at any hour and is processed at once in the US session (#1941).
+     ExitTimeOut covers the final pass on SIGTERM, whose veto calls can queue past launchd's 20 s default. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.samurai.v2-signals</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ddjp/.nvm/versions/node/v26.5.0/bin/node</string>
+        <string>--env-file=/Users/ddjp/Documents/projects/samurai-trading-system/.env.local</string>
+        <string>--import</string>
+        <string>tsx</string>
+        <string>/Users/ddjp/Documents/projects/samurai-trading-system/server/apps/v2/signals/main.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/ddjp/.local/bin:/Users/ddjp/.nvm/versions/node/v26.5.0/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system/data/logs/v2-signals.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/ddjp/Documents/projects/samurai-trading-system/data/logs/v2-signals.log</string>
+</dict>
+</plist>

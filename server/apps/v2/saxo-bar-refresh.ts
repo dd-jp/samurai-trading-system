@@ -25,6 +25,7 @@ import {
   type Buckets,
   logRefresh,
   messageOf,
+  recentDates,
   recordOutcome,
   roundPrices,
   type SymbolOutcome,
@@ -109,11 +110,37 @@ function warnIfRescaled(
   );
 }
 
+function repairedDates(report: ShapeRepairReport): string[] {
+  return [
+    ...report.dropped_glitch_dates,
+    ...report.rescaled_fields.map(({ date }) => date),
+    ...report.neighbour_repairs.map(({ date }) => date),
+  ];
+}
+
+// Widening is left out: it only stretches high/low over the open and close, and about 1.4% of
+// recent Saxo bars need it (#1838), so counting it would take lines dark every few days
+function assertNoRecentRepair(
+  tidm: string,
+  sessions: readonly DailyBar[],
+  report: ShapeRepairReport,
+): void {
+  const recent = [...new Set(recentDates(sessions, repairedDates(report)))];
+  if (recent.length === 0) return;
+  throw new Error(
+    `${tidm}: Saxo bar shape repaired or dropped in a recent session (${recent.join(', ')}); ` +
+      'refusing to write, the line keeps its stored bars until the bar ages out or Saxo corrects it',
+  );
+}
+
 function warnIfShapeRepaired(tidm: string, report: ShapeRepairReport, logger: Logger): void {
   const dropped = report.dropped_glitch_dates.map((date) => `dropped ${date}`);
   const rescaled = report.rescaled_fields.map(({ date, field }) => `rescaled ${date} ${field}`);
+  const replaced = report.neighbour_repairs.map(
+    ({ date, field }) => `replaced ${date} ${field} with the close`,
+  );
   const widened = report.ranges_widened > 0 ? [`widened ${report.ranges_widened} range(s)`] : [];
-  const repairs = [...dropped, ...rescaled, ...widened];
+  const repairs = [...dropped, ...rescaled, ...replaced, ...widened];
   if (repairs.length === 0) return;
   logRefresh(
     logger,
@@ -139,6 +166,7 @@ async function refreshLine(
   if (hygiene.bars.length === 0) throw new Error(`${line.tidm}: Saxo returned no bars`);
   const repaired = repairBarShape(hygiene.bars);
   if (repaired.bars.length === 0) throw new Error(`${line.tidm}: no bars left after shape repair`);
+  assertNoRecentRepair(line.tidm, hygiene.bars, repaired.report);
   const rounded = roundPrices(repaired.bars);
   if (existing !== undefined) assertNoShrink(line.tidm, existing, rounded);
   await options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]);

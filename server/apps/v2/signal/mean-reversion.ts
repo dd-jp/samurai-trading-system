@@ -7,7 +7,12 @@ import type {
   V2Bar,
 } from '../../../../contracts/index.js';
 import type { SleeveFactory } from '../backtest.js';
-import type { BarsSource } from '../data/index.js';
+import {
+  type BarsSource,
+  calendarReferenceFor,
+  sessionsBefore,
+  windowCovered,
+} from '../data/index.js';
 import { baseRead } from './bar-quality.js';
 import { liquidityCore, type PoolContext } from './universe.js';
 
@@ -16,7 +21,7 @@ export const MEAN_REVERSION_UNIVERSE_COUNT = 300;
 export const MEAN_REVERSION_CANDIDATE_ID = 'mean-reversion';
 export const MEAN_REVERSION_BENCHMARK_ID = 'mean-reversion-benchmark';
 
-// Pinned: from/to feed the trial hash, so they must not drift if the store is re-primed. Alpaca SIP starts 2016-01-04; the SMA(200) warm-up puts the first tradable day here
+// Pinned: from/to feed the trial hash, so they must not drift if the store is re-primed. Alpaca SIP starts 2016-01-04, so every name skips on window_coverage until 2016-12-14, the first day with 240 prior SPY sessions (#1912)
 export const MEAN_REVERSION_FROM = '2016-10-11';
 export const MEAN_REVERSION_TO = '2025-09-24';
 
@@ -96,6 +101,42 @@ function meanReversionRead(rawHistory: readonly V2Bar[]): MeanReversionRead | un
   return { ...rest, rsi: relativeStrengthIndex(valid, RSI_PERIOD) };
 }
 
+interface WarmRead extends MeanReversionRead {
+  readonly sma: number;
+  readonly rsi: number;
+  readonly atr: number;
+}
+
+type GatedRead =
+  | { readonly warm: WarmRead }
+  | { readonly skip: string; readonly read: MeanReversionRead | undefined };
+
+// Freshness rides on windowCovered: sessionsBefore is empty on a stale calendar, and coverage
+// needs a bar on the calendar's last session (postmortem section 2, #1912)
+function gatedRead(raw: readonly V2Bar[], sessions: readonly string[]): GatedRead {
+  const read = meanReversionRead(raw);
+  if (read === undefined) return { skip: 'bad_last_bar', read };
+  if (!windowCovered(raw, sessions, LOOKBACK_BARS)) return { skip: 'window_coverage', read };
+  const { sma, rsi, atr } = read;
+  if (sma === undefined || rsi === undefined || atr === undefined) {
+    return { skip: 'insufficient_history', read };
+  }
+  return { warm: { ...read, sma, rsi, atr } };
+}
+
+function gatedReads(
+  bars: BarsSource,
+  market: MarketData,
+  instruments: readonly string[],
+  tradingDate: string,
+): ReadonlyArray<readonly [string, GatedRead]> {
+  const sessions = sessionsBefore(bars, tradingDate, calendarReferenceFor('alpaca'));
+  return instruments.map((instrument) => [
+    instrument,
+    gatedRead(market.barsBefore(instrument, tradingDate, LOOKBACK_BARS), sessions),
+  ]);
+}
+
 function baseDecision(
   sleeveId: string,
   instrument: string,
@@ -122,10 +163,11 @@ function baseDecision(
 function enterDecision(
   sleeveId: string,
   instrument: string,
-  read: MeanReversionRead,
+  read: WarmRead,
   date: string,
 ): SleeveDecision {
-  const atr = read.atr as number;
+  const stopPrice = read.price - STOP_ATR_MULTIPLE * read.atr;
+  if (stopPrice <= 0) return baseDecision(sleeveId, instrument, read, 'non_positive_stop');
   return {
     sleeve_id: sleeveId,
     instrument,
@@ -135,8 +177,8 @@ function enterDecision(
     action: 'enter_long',
     reason: 'close above SMA200, RSI(2) dip',
     price: read.price,
-    atr,
-    stop_price: read.price - STOP_ATR_MULTIPLE * atr,
+    atr: read.atr,
+    stop_price: stopPrice,
     inputs_hash: `${instrument}-${date}`,
     debate_id: undefined,
     payload: { rsi2: read.rsi, sma200: read.sma },
@@ -146,7 +188,7 @@ function enterDecision(
 function exitDecision(
   sleeveId: string,
   instrument: string,
-  read: MeanReversionRead,
+  read: WarmRead,
   date: string,
 ): SleeveDecision {
   return {
@@ -174,22 +216,17 @@ interface RankedDecision {
 function meanReversionDecisionFor(
   sleeveId: string,
   instrument: string,
-  read: MeanReversionRead | undefined,
+  gated: GatedRead,
   date: string,
   entryThreshold: number,
 ): RankedDecision {
-  if (read === undefined) {
+  if ('skip' in gated) {
     return {
-      decision: baseDecision(sleeveId, instrument, undefined, 'bad_last_bar'),
+      decision: baseDecision(sleeveId, instrument, gated.read, gated.skip),
       sortKey: Infinity,
     };
   }
-  if (read.sma === undefined || read.atr === undefined || read.rsi === undefined) {
-    return {
-      decision: baseDecision(sleeveId, instrument, read, 'insufficient_history'),
-      sortKey: Infinity,
-    };
-  }
+  const read = gated.warm;
   if (read.close > read.sma && read.rsi < entryThreshold) {
     return { decision: enterDecision(sleeveId, instrument, read, date), sortKey: read.rsi };
   }
@@ -231,18 +268,17 @@ export function createMeanReversionSleeve(
     universe: (context) =>
       meanReversionUniverse(bars, market, constituentsFor, context.tradingDate),
     decide(context, instruments): Promise<SleeveOutput> {
-      const ranked = instruments.map((instrument) => {
-        const raw = market.barsBefore(instrument, context.tradingDate, LOOKBACK_BARS);
-        const read = meanReversionRead(raw);
-        return meanReversionDecisionFor(
-          sleeveId,
-          instrument,
-          read,
-          context.tradingDate,
-          entryThreshold,
-        );
-      });
-      // Stable: bad_last_bar and insufficient_history share sortKey Infinity and keep liquidityCore's ADV order
+      const ranked = gatedReads(bars, market, instruments, context.tradingDate).map(
+        ([instrument, gated]) =>
+          meanReversionDecisionFor(
+            sleeveId,
+            instrument,
+            gated,
+            context.tradingDate,
+            entryThreshold,
+          ),
+      );
+      // Stable: every gated skip shares sortKey Infinity and keeps liquidityCore's ADV order
       ranked.sort((a, b) => a.sortKey - b.sortKey);
       return Promise.resolve({ decisions: ranked.map((entry) => entry.decision), refusals: [] });
     },
@@ -252,13 +288,11 @@ export function createMeanReversionSleeve(
 function benchmarkDecisionFor(
   sleeveId: string,
   instrument: string,
-  read: MeanReversionRead | undefined,
+  gated: GatedRead,
   date: string,
 ): SleeveDecision {
-  if (read === undefined) return baseDecision(sleeveId, instrument, undefined, 'bad_last_bar');
-  if (read.atr === undefined)
-    return baseDecision(sleeveId, instrument, read, 'insufficient_history');
-  return enterDecision(sleeveId, instrument, read, date);
+  if ('skip' in gated) return baseDecision(sleeveId, instrument, gated.read, gated.skip);
+  return enterDecision(sleeveId, instrument, gated.warm, date);
 }
 
 export function createMeanReversionBenchmarkSleeve(
@@ -271,16 +305,10 @@ export function createMeanReversionBenchmarkSleeve(
     universe: (context) =>
       meanReversionUniverse(bars, market, constituentsFor, context.tradingDate),
     decide(context, instruments): Promise<SleeveOutput> {
-      const decisions = instruments.map((instrument) => {
-        const raw = market.barsBefore(instrument, context.tradingDate, LOOKBACK_BARS);
-        const read = meanReversionRead(raw);
-        return benchmarkDecisionFor(
-          MEAN_REVERSION_BENCHMARK_ID,
-          instrument,
-          read,
-          context.tradingDate,
-        );
-      });
+      const decisions = gatedReads(bars, market, instruments, context.tradingDate).map(
+        ([instrument, gated]) =>
+          benchmarkDecisionFor(MEAN_REVERSION_BENCHMARK_ID, instrument, gated, context.tradingDate),
+      );
       return Promise.resolve({ decisions, refusals: [] });
     },
   });

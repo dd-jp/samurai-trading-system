@@ -1,5 +1,5 @@
 import type { Logger } from '../../shared/index.js';
-import { isMainModule } from '../../tools/cli-entrypoint.js';
+import { exitCodeOrOne, isMainModule } from '../../tools/cli-entrypoint.js';
 import {
   backupTargets,
   type CommandRunner,
@@ -35,8 +35,5 @@ export async function main(
 }
 
 if (isMainModule(import.meta.url)) {
-  process.exitCode = await main(process.argv.slice(2), process.env).catch((error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return 1;
-  });
+  process.exitCode = await exitCodeOrOne(main(process.argv.slice(2), process.env));
 }

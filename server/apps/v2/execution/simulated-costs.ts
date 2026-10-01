@@ -1,6 +1,7 @@
 import {
   type CfdCostModel,
   CfdCostModelUnsetError,
+  type CfdSpreadModel,
   type MarketData,
   type OrderSide,
   type SimulatedFillQuote,
@@ -21,7 +22,7 @@ export const IMPACT_WINDOW_BARS = 20;
 export const FALLBACK_IMPACT_BPS = 25;
 
 export interface FillPricing {
-  halfSpreadBps(instrument: string): number;
+  halfSpreadBps(venue: Venue, instrument: string): number;
   impactBps(instrument: string, qty: number, price: number): number;
   fee(venue: Venue, side: OrderSide, qty: number, price: number): number;
 }
@@ -44,7 +45,18 @@ export function venueFee(
     return alpacaRegulatoryFees({ side, notional, shares: qty, halfSpreadBps: 0 });
   }
   if (cfdCostModel === undefined) throw new CfdCostModelUnsetError();
-  return cfdCostModel.fee(side, qty, price);
+  return cfdCostModel.fee(venue, side, qty, price);
+}
+
+export function venueHalfSpreadBps(
+  cashHalfSpreadBps: (instrument: string) => number,
+  cfdSpreadModel: CfdSpreadModel | undefined,
+): FillPricing['halfSpreadBps'] {
+  return (venue, instrument) => {
+    if (venue === 'saxo' || venue === 'alpaca') return cashHalfSpreadBps(instrument);
+    if (cfdSpreadModel === undefined) throw new CfdCostModelUnsetError();
+    return cfdSpreadModel.halfSpreadBps(venue);
+  };
 }
 
 export function quoteSimulatedFill(
@@ -54,7 +66,7 @@ export function quoteSimulatedFill(
 ): SimulatedFillQuote {
   const { instrument, side, qty } = request;
   const slippageBps = request.crossesSpread
-    ? pricing.halfSpreadBps(instrument) + pricing.impactBps(instrument, qty, request.price)
+    ? pricing.halfSpreadBps(venue, instrument) + pricing.impactBps(instrument, qty, request.price)
     : 0;
   const price = adversePrice(request.price, side, slippageBps);
   return { price, fee: pricing.fee(venue, side, qty, price) };

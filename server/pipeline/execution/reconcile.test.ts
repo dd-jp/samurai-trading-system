@@ -34,6 +34,7 @@ import type {
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
+  ReconcileDivergence,
 } from './types.js';
 import type {
   UnrecordedVenuePositionAlert,
@@ -1571,6 +1572,630 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
     expect(report.checked).toBe(2);
+  });
+
+  describe('the exact divergence, alert and log line of each outcome', () => {
+    const NEVER_DESCRIBED =
+      "the venue has never once described flatten 'flatten-aapl-exit' (resumeFlatten: " +
+      'order-details endpoint 503) and the row is 300s old — past the 300s bound';
+    const RELEASED_TAIL =
+      ' — so no replacement can over-sell, and the journal row is resolved rather than left ' +
+      'blocking every later flatten on the instrument. A fill arriving later is still attributed ' +
+      'to the lots this flatten named (getFlattenAttribution does not filter on status)';
+    const SHORT_TAIL =
+      ', so the row keeps blocking rather than let a replacement be sized off a held quantity ' +
+      'that may be too big. The fills cannot be ingested through an adapter that will not ' +
+      'describe this order: attribute them by hand';
+    const UNSWEPT_PROVENANCE =
+      "the venue reports this flatten 'cancelled' having filled 4, and 1800s after this sweep " +
+      'last examined it ingestFills has still not swept its fills — past the 30min bound';
+    const WEDGED =
+      "the venue still reports this flatten 'submitted' after 300s — past the 300s bound, so it " +
+      'is being CANCELLED at the venue rather than left to block every later flatten on this ' +
+      'instrument. The journal row is unchanged and keeps blocking until the venue reports the ' +
+      'order terminal AND its fills are swept — nothing is re-armed on age alone';
+    const ADOPTED_SUBMITTED = "flatten journal said 'submitted'; broker reports 'submitted'";
+
+    function recordingAlerts(): FlattenReconcileAlertChannel & { reasons: string[] } {
+      const reasons: string[] = [];
+      return {
+        reasons,
+        postFlattenReconcileAlert: async (alert) => {
+          reasons.push(alert.reason);
+        },
+      };
+    }
+
+    function neverConfirmedRow(
+      reason: string,
+      escalation?: ReconcileDivergence['escalation'],
+    ): ReconcileDivergence {
+      return {
+        idempotency_key: FLATTEN_KEY,
+        instrument: 'AAPL',
+        store_state: 'pending',
+        broker_state: null,
+        action: escalation === undefined ? 'rejected' : 'undetermined',
+        kind: 'flatten',
+        reason,
+        ...(escalation === undefined ? {} : { escalation }),
+      };
+    }
+
+    async function neverConfirmedAtBound(
+      store: TestExecutionStore,
+      broker: ReturnType<typeof makeBroker>,
+      venueQty: number,
+    ): Promise<void> {
+      await writeAheadFlatten(store, {
+        submitted_at: new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS),
+      });
+      neverConfirmed(broker, venueQty);
+    }
+
+    async function reconcileFlattenRow(
+      store: TestExecutionStore,
+      broker: ReturnType<typeof makeBroker>,
+      alerts: FlattenReconcileAlertChannel = recordingAlerts(),
+    ): Promise<ReconcileDivergence | undefined> {
+      const report = await new ExecutionImpl(makeInput(store, broker, alerts)).reconcile();
+      return report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY);
+    }
+
+    it('resolves a terminal flatten that filled nothing with its exact reason', async () => {
+      const { store } = openTestExecutionStore();
+      await writeAheadFlatten(store);
+      const broker = makeBroker();
+      broker.flattenBook.set(FLATTEN_KEY, {
+        client_order_id: FLATTEN_KEY,
+        broker_order_ids: [`${FLATTEN_KEY}:order`],
+        order_state: 'cancelled',
+        filled_qty: 0,
+      });
+      const reason =
+        "reconcile: the venue reports this flatten 'cancelled' having filled nothing — it closed " +
+        'no quantity and never will, so the journal row is resolved rather than left standing ' +
+        'as an in-flight flatten on the instrument';
+
+      const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+      expect(report.divergences).toEqual([
+        {
+          idempotency_key: FLATTEN_KEY,
+          instrument: 'AAPL',
+          store_state: 'pending',
+          broker_state: 'cancelled',
+          action: 'rejected',
+          kind: 'flatten',
+          reason,
+        },
+      ]);
+      expect((await store.getFlattenSubmission(FLATTEN_KEY))?.reason).toBe(reason);
+    });
+
+    it('resolves an acked flatten the venue no longer knows once it is exactly at the bound', async () => {
+      const { store } = openTestExecutionStore();
+      await ackedFlatten(store, new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS));
+      const alerts = recordingAlerts();
+      const reason =
+        "flatten 'flatten-aapl-exit' was previously acked by the broker (a durable 'submitted' " +
+        'journal row exists) but the venue now reports no such order. The row has been ' +
+        'unresolved for 300s — past the 300s bound, so the journal row is resolved to stop it ' +
+        'blocking every later flatten on this instrument. This is a DECISION on one unanswered ' +
+        'check against a row that old, not proof the flatten is dead, and not a record of ' +
+        'repeated denial (nothing counts how often the venue was asked): check the venue by ' +
+        'hand, and note that a fill arriving later is still attributed to the lots this flatten ' +
+        'named (getFlattenAttribution does not filter on status)';
+
+      const divergence = await reconcileFlattenRow(store, makeBroker(), alerts);
+
+      expect(divergence).toEqual({
+        idempotency_key: FLATTEN_KEY,
+        instrument: 'AAPL',
+        store_state: 'submitted',
+        broker_state: null,
+        action: 'rejected',
+        kind: 'flatten',
+        reason,
+      });
+      expect(alerts.reasons).toEqual([reason]);
+      expect((await store.getFlattenSubmission(FLATTEN_KEY))?.status).toBe('error');
+    });
+
+    it('cancels and releases a never-confirmed flatten exactly at the bound when the venue holds the whole lot', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 10);
+      const alerts = recordingAlerts();
+      const reason =
+        `${NEVER_DESCRIBED}. It was CANCELLED at the venue, and the venue still holds 10 AAPL — ` +
+        `everything the store considers held (10)${RELEASED_TAIL}`;
+
+      const divergence = await reconcileFlattenRow(store, broker, alerts);
+
+      expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
+      expect(divergence).toEqual(neverConfirmedRow(reason));
+      expect(alerts.reasons).toEqual([reason]);
+    });
+
+    it('releases a never-confirmed SHORT lot the venue still holds short in full', async () => {
+      const { store } = openTestExecutionStore();
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-aapl-entry',
+          side: 'sell',
+          order_state: 'filled',
+          filled_size: 10,
+          requested_size: 10,
+          avg_entry_price: 100,
+        }),
+      );
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 10);
+      broker.venuePositions = [
+        { instrument: 'AAPL', qty: -10, side: 'sell', avg_entry_price: 100 },
+      ];
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(divergence).toEqual(
+        neverConfirmedRow(
+          `${NEVER_DESCRIBED}. It was CANCELLED at the venue, and the venue still holds 10 AAPL — ` +
+            `everything the store considers held (10)${RELEASED_TAIL}`,
+        ),
+      );
+    });
+
+    it('releases a never-confirmed flatten the store holds nothing for, counting only this instrument on both books', async () => {
+      const { store } = openTestExecutionStore();
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-msft-entry',
+          instrument: 'MSFT',
+          order_state: 'filled',
+          filled_size: 5,
+          requested_size: 5,
+          avg_entry_price: 100,
+        }),
+      );
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 0);
+      broker.venuePositions = [{ instrument: 'MSFT', qty: 5, side: 'buy', avg_entry_price: 100 }];
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(divergence).toEqual(
+        neverConfirmedRow(
+          `${NEVER_DESCRIBED}. It was CANCELLED at the venue, and the store holds no AAPL for ` +
+            'this flatten to close, so nothing it could still be owed is at risk — the venue ' +
+            `book says nothing either way about what filled${RELEASED_TAIL}`,
+        ),
+      );
+    });
+
+    it('keeps a never-confirmed flatten blocking with the exact note when the venue holds less', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 6);
+      const alerts = recordingAlerts();
+      const reason =
+        `${NEVER_DESCRIBED}. It was CANCELLED at the venue, but the venue holds 6 AAPL against ` +
+        `10 the store still considers held, so something filled that the store has not booked${SHORT_TAIL}`;
+
+      const divergence = await reconcileFlattenRow(store, broker, alerts);
+
+      expect(divergence).toEqual(neverConfirmedRow(reason, 'never_confirmed_coverage_short'));
+      expect(alerts.reasons).toEqual([reason]);
+    });
+
+    it('keeps a never-confirmed flatten blocking with the exact note when the venue holds more', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 14);
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(divergence?.reason).toBe(
+        `${NEVER_DESCRIBED}. It was CANCELLED at the venue, but the venue holds 14 AAPL against ` +
+          '10 the store considers held — a surplus the store has no lot for, which an unbooked ' +
+          `exit fill of its size would hide inside, so this book cannot corroborate the store${SHORT_TAIL}`,
+      );
+    });
+
+    it('keeps a never-confirmed flatten blocking with the exact note when the store holds both sides', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: 'key-aapl-short',
+          side: 'sell',
+          order_state: 'filled',
+          filled_size: 7,
+          requested_size: 7,
+          avg_entry_price: 100,
+        }),
+      );
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 3);
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(divergence?.reason).toBe(
+        `${NEVER_DESCRIBED}. It was CANCELLED at the venue, but the store holds 10 long and 7 ` +
+          'short AAPL across lots and the venue reports one NETTED position per instrument, so ' +
+          `no venue number can corroborate both sides${SHORT_TAIL}`,
+      );
+    });
+
+    it('keeps a never-confirmed flatten blocking with the exact note when the venue book cannot be read', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 10);
+      broker.failPositions = 'positions endpoint 503';
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(divergence?.reason).toBe(
+        `${NEVER_DESCRIBED}. It was CANCELLED at the venue, but this pass could not read the ` +
+          `venue's positions (positions endpoint 503) to check what it holds${SHORT_TAIL}`,
+      );
+    });
+
+    it('reports the exact cancel failure of a never-confirmed flatten', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 10);
+      broker.failCancel = 'venue refused the cancel';
+      const alerts = recordingAlerts();
+      const reason = `${NEVER_DESCRIBED}. The cancel FAILED (venue refused the cancel); the row keeps blocking`;
+
+      const divergence = await reconcileFlattenRow(store, broker, alerts);
+
+      expect(divergence).toEqual(neverConfirmedRow(reason, 'never_confirmed_cancel_failed'));
+      expect(alerts.reasons).toEqual([reason]);
+    });
+
+    it('names when a throttled never-confirmed flatten was last cancelled', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      const broker = makeBroker();
+      await neverConfirmedAtBound(store, broker, 10);
+      await store.markFlattenCancelAttempted(FLATTEN_KEY, new Date(NOW.getTime() - 60_000));
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(broker.cancelCalls).toEqual([]);
+      expect(divergence).toEqual(
+        neverConfirmedRow(
+          `${NEVER_DESCRIBED}. Already cancelled at the venue at 2026-07-15T13:59:00.000Z; ` +
+            'still blocking, and not re-cancelled or re-paged this pass (FLATTEN_CANCEL_RETRY_EVERY_MS)',
+          'never_confirmed_throttled',
+        ),
+      );
+    });
+
+    it('cancels a working acked flatten exactly at the bound with the exact reason', async () => {
+      const { store } = openTestExecutionStore();
+      await ackedFlatten(store, new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS));
+      const broker = makeBroker();
+      workingFlattenBook(broker);
+      const alerts = recordingAlerts();
+
+      const divergence = await reconcileFlattenRow(store, broker, alerts);
+
+      expect(divergence).toEqual({
+        idempotency_key: FLATTEN_KEY,
+        instrument: 'AAPL',
+        store_state: 'submitted',
+        broker_state: 'submitted',
+        action: 'adopted',
+        kind: 'flatten',
+        reason: `${ADOPTED_SUBMITTED}; ${WEDGED}`,
+        escalation: 'wedge_cancelled',
+      });
+      expect(alerts.reasons).toEqual([WEDGED]);
+    });
+
+    it('reports the exact cancel failure of a wedged flatten', async () => {
+      const { store } = openTestExecutionStore();
+      await ackedFlatten(store, new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS));
+      const broker = makeBroker();
+      workingFlattenBook(broker);
+      broker.failCancel = 'venue refused the cancel';
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(divergence?.reason).toBe(
+        `${ADOPTED_SUBMITTED}; ${WEDGED}. The cancel FAILED (venue refused the cancel); retrying when due`,
+      );
+    });
+
+    it('names when a throttled wedged flatten was last cancelled, and does not cancel it', async () => {
+      const { store } = openTestExecutionStore();
+      await ackedFlatten(store, new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS));
+      await store.markFlattenCancelAttempted(FLATTEN_KEY, new Date(NOW.getTime() - 60_000));
+      const broker = makeBroker();
+      workingFlattenBook(broker);
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(broker.cancelCalls).toEqual([]);
+      expect(divergence?.reason).toBe(
+        `${ADOPTED_SUBMITTED}; the venue still reports this flatten 'submitted' after 300s; it ` +
+          'was already cancelled at the venue at 2026-07-15T13:59:00.000Z and the row keeps ' +
+          'blocking until the venue reports it terminal AND its fills are swept — not ' +
+          're-cancelled or re-paged this pass (FLATTEN_CANCEL_RETRY_EVERY_MS)',
+      );
+    });
+
+    it('cancels again once the last attempt is exactly FLATTEN_CANCEL_RETRY_EVERY_MS old', async () => {
+      const { store } = openTestExecutionStore();
+      await ackedFlatten(store, new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS));
+      await store.markFlattenCancelAttempted(
+        FLATTEN_KEY,
+        new Date(NOW.getTime() - FLATTEN_CANCEL_RETRY_EVERY_MS),
+      );
+      const broker = makeBroker();
+      workingFlattenBook(broker);
+
+      await reconcileFlattenRow(store, broker);
+
+      expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
+    });
+
+    it('records the observed state of an acked working flatten without re-acking it or starting the unswept window', async () => {
+      const { store } = openTestExecutionStore();
+      const ackedAt = new Date(NOW.getTime() - 60_000);
+      await ackedFlatten(store, ackedAt);
+      const before = await store.getFlattenSubmission(FLATTEN_KEY);
+      const broker = makeBroker();
+      broker.flattenBook.set(FLATTEN_KEY, {
+        client_order_id: FLATTEN_KEY,
+        broker_order_ids: [`${FLATTEN_KEY}:order`, `${FLATTEN_KEY}:child`],
+        order_state: 'partially_filled',
+        filled_qty: 3,
+      });
+
+      const divergence = await reconcileFlattenRow(store, broker);
+
+      expect(divergence).toEqual({
+        idempotency_key: FLATTEN_KEY,
+        instrument: 'AAPL',
+        store_state: 'submitted',
+        broker_state: 'partially_filled',
+        action: 'adopted',
+        kind: 'flatten',
+        reason: "flatten journal said 'submitted'; broker reports 'partially_filled'",
+      });
+      const after = await store.getFlattenSubmission(FLATTEN_KEY);
+      expect(after?.order_state).toBe('partially_filled');
+      expect(after?.broker_order_ids).toBe(
+        JSON.stringify([`${FLATTEN_KEY}:order`, `${FLATTEN_KEY}:child`]),
+      );
+      expect(after?.resolved_at).toEqual(before?.resolved_at);
+      expect((await store.getUnresolvedFlattens())[0]?.terminal_unswept_checked_at).toBeNull();
+    });
+
+    it('releases a terminal unswept flatten exactly at the unswept bound with the exact reason', async () => {
+      const { store } = openTestExecutionStore();
+      await bookedPartialExit(store);
+      const broker = makeBroker();
+      await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS);
+      broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+      const alerts = recordingAlerts();
+      const reason =
+        `${UNSWEPT_PROVENANCE}. the venue still holds 6 AAPL — everything the store considers ` +
+        'held (6) — so no replacement can over-sell, and the journal row is resolved rather ' +
+        'than left blocking every later flatten on the instrument. Its fills are still unswept: ' +
+        'this is an INFERENCE that resolving is safe, not a completed sweep, and not a finding ' +
+        'that they reached the store';
+
+      const divergence = await reconcileFlattenRow(store, broker, alerts);
+
+      expect(divergence).toEqual({
+        idempotency_key: FLATTEN_KEY,
+        instrument: 'AAPL',
+        store_state: 'submitted',
+        broker_state: 'cancelled',
+        action: 'rejected',
+        kind: 'flatten',
+        reason,
+      });
+      expect(alerts.reasons).toEqual([reason]);
+    });
+
+    it('keeps a terminal unswept flatten blocking with the exact divergence when the venue holds less', async () => {
+      const { store } = openTestExecutionStore();
+      await heldLot(store, 10);
+      const broker = makeBroker();
+      await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS);
+      broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+      const alerts = recordingAlerts();
+      const reason =
+        `${UNSWEPT_PROVENANCE}. the venue holds 6 AAPL against 10 the store still considers ` +
+        'held, so something filled that the store has not booked, so the fills this flatten ' +
+        'produced are real and not in the store, and no venue number can say which lot each ' +
+        'belongs to. The row keeps blocking: attribute them by hand';
+
+      const divergence = await reconcileFlattenRow(store, broker, alerts);
+
+      expect(divergence).toEqual({
+        idempotency_key: FLATTEN_KEY,
+        instrument: 'AAPL',
+        store_state: 'submitted',
+        broker_state: 'cancelled',
+        action: 'undetermined',
+        kind: 'flatten',
+        reason,
+      });
+      expect(alerts.reasons).toEqual([reason]);
+    });
+
+    it('logs the exact fixed line when a flatten alert fails to deliver', async () => {
+      const { store } = openTestExecutionStore();
+      await writeAheadFlatten(store);
+      const broker = makeBroker();
+      broker.failFlattenLookup = 'venue unreachable';
+      const logger = recordingLogger();
+
+      await new ExecutionImpl(
+        makeInput(
+          store,
+          broker,
+          {
+            postFlattenReconcileAlert: async () => {
+              throw new Error('transport down');
+            },
+          },
+          logger,
+        ),
+      ).reconcile();
+
+      expect(logger.entries).toEqual([
+        {
+          trace_id: 'trace-86',
+          stage: 'execution',
+          event: 'flatten_reconcile_alert_send_failed',
+          level: 'error',
+          message:
+            'postFlattenReconcileAlert delivery failed — an unresolved flatten stays genuinely ' +
+            'ambiguous and the operator was not paged; check the venue by hand',
+          payload: { idempotency_key: FLATTEN_KEY, instrument: 'AAPL' },
+        },
+      ]);
+    });
+  });
+});
+
+describe('reconcile — the exact unrecorded and bracket divergences', () => {
+  it('reports an unreadable venue book as one exact unrecorded divergence', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.failPositions = 'venue positions unreachable';
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(report.divergences).toEqual([
+      {
+        idempotency_key: '',
+        instrument: '',
+        store_state: 'pending',
+        broker_state: null,
+        action: 'undetermined',
+        kind: 'unrecorded',
+        reason:
+          'broker.getOpenPositions failed, so a position the venue holds and the store does not ' +
+          'would not have been seen this pass: venue positions unreachable',
+      },
+    ]);
+  });
+
+  it('reports an unrecorded venue position with its exact reason and logs the exact line when its page fails', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    const logger = recordingLogger();
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, undefined, logger, {
+        postUnrecordedVenuePositionAlert: async () => {
+          throw new Error('telegram 502');
+        },
+      }),
+    ).reconcile();
+
+    expect(report.divergences).toEqual([
+      {
+        idempotency_key: '',
+        instrument: 'ETH-USD',
+        store_state: 'pending',
+        broker_state: null,
+        action: 'unrecorded',
+        kind: 'unrecorded',
+        reason:
+          'venue holds 3 ETH-USD (buy) with no open lot in the store — this exposure is ' +
+          'invisible to the Risk Manager. Nothing was written: adopting it would mean inventing ' +
+          'the bracket, stop and debate_id it has none of. Reconcile it by hand.',
+      },
+    ]);
+    expect(logger.entries).toEqual([
+      {
+        trace_id: 'trace-86',
+        stage: 'execution',
+        event: 'unrecorded_venue_position_alert_send_failed',
+        level: 'error',
+        message:
+          'postUnrecordedVenuePositionAlert delivery failed — a venue position no open lot ' +
+          'explains stays invisible to the Risk Manager and the operator was not paged; see the ' +
+          'unrecorded divergence line for this instrument',
+        payload: { instrument: 'ETH-USD' },
+      },
+    ]);
+  });
+
+  it('rejects a lot the venue has no order for with the exact reason and clears its order ids', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(pendingPosition());
+    await store.updatePositionState(KEY, { order_state: 'pending', broker_order_ids: ['stale'] });
+
+    const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+
+    expect(report.divergences).toEqual([
+      {
+        idempotency_key: KEY,
+        instrument: 'AAPL',
+        store_state: 'pending',
+        broker_state: null,
+        action: 'rejected',
+        kind: 'bracket',
+        reason: 'broker has no order under this client_order_id — the write-ahead never landed',
+      },
+    ]);
+    expect((await store.getPosition(KEY))?.broker_order_ids).toEqual([]);
+  });
+
+  async function submittedLotAgainst(storedIds: string[], brokerIds: string[]) {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(pendingPosition());
+    await store.updatePositionState(KEY, { order_state: 'submitted', broker_order_ids: storedIds });
+    const broker = makeBroker();
+    broker.book.set(KEY, {
+      client_order_id: KEY,
+      broker_order_ids: brokerIds,
+      order_state: 'submitted',
+      filled_qty: 0,
+    });
+    return (await new ExecutionImpl(makeInput(store, broker)).reconcile()).divergences;
+  }
+
+  it('agrees with the venue only when every order id matches in order', async () => {
+    expect(await submittedLotAgainst(['a', 'b'], ['a', 'b'])).toEqual([]);
+  });
+
+  it.each([
+    [
+      ['a', 'b'],
+      ['a', 'c'],
+    ],
+    [['a'], ['a', 'b']],
+    [['a', 'b'], ['a']],
+  ])('adopts the venue ids when the store holds %j and the venue %j', async (stored, venue) => {
+    expect(await submittedLotAgainst(stored, venue)).toEqual([
+      {
+        idempotency_key: KEY,
+        instrument: 'AAPL',
+        store_state: 'submitted',
+        broker_state: 'submitted',
+        action: 'adopted',
+        kind: 'bracket',
+        reason: "store said 'submitted', broker says 'submitted'",
+      },
+    ]);
   });
 });
 

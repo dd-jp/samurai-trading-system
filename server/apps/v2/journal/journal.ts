@@ -5,7 +5,9 @@ import type {
   JournalledOrder,
   JournalledReconcile,
   JournalledRefusal,
+  RecordedFillPart,
   SleeveDecision,
+  Venue,
 } from '../../../../contracts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
@@ -13,6 +15,7 @@ import type { Clock } from '../../../shared/index.js';
 import { digest } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
+import { type Fault, type FaultSink, orderFault, reconcileFaults, refusalFault } from './faults.js';
 
 export function inputsHash(
   bars: readonly DailyBar[],
@@ -32,10 +35,16 @@ export function inputsHash(
   });
 }
 
+export interface ReconcileVerdict {
+  readonly reconciled: ReadonlySet<string>;
+  readonly blocked: ReadonlySet<string>;
+}
+
 export class Journal implements DecisionJournal {
   constructor(
     private readonly db: StoreHandle,
     private readonly clock: Clock,
+    private readonly faults?: FaultSink | undefined,
   ) {}
 
   recordDecision(
@@ -91,6 +100,7 @@ export class Journal implements DecisionJournal {
         JSON.stringify(order.payload),
         this.#now(),
       );
+    this.#recordFault(orderFault(order));
   }
 
   orderFor(clientOrderId: string): JournalledOrder | undefined {
@@ -181,6 +191,15 @@ export class Journal implements DecisionJournal {
     return result.changes === 1;
   }
 
+  fillPartsOf(baseFillId: string): readonly RecordedFillPart[] {
+    return this.db
+      .prepare(
+        `SELECT qty, price_gbp, fee_gbp, trading_date FROM v2_fills
+         WHERE fill_id = @base OR substr(fill_id, 1, length(@base) + 1) = @base || '#'`,
+      )
+      .all({ base: baseFillId }) as RecordedFillPart[];
+  }
+
   recordRefusal(refusal: JournalledRefusal): void {
     this.db
       .prepare(
@@ -198,6 +217,28 @@ export class Journal implements DecisionJournal {
         refusal.instrument ?? null,
         this.#now(),
       );
+    this.#recordFault(refusalFault(refusal));
+  }
+
+  latestReconcile(tradingDate: string, venue: Venue): ReconcileVerdict {
+    const rows = this.db
+      .prepare(
+        `SELECT status, book_ids FROM v2_reconciles r
+         WHERE trading_date = ? AND venue = ? AND reconcile_id = (
+           SELECT MAX(reconcile_id) FROM v2_reconciles
+           WHERE trading_date = r.trading_date AND venue = r.venue AND source = r.source)`,
+      )
+      .all(tradingDate, venue) as { status: string; book_ids: string }[];
+    const reconciled = new Set<string>();
+    const blocked = new Set<string>();
+    for (const row of rows) {
+      const bookIds = JSON.parse(row.book_ids) as string[];
+      for (const bookId of bookIds) {
+        reconciled.add(bookId);
+        if (row.status !== 'clean') blocked.add(bookId);
+      }
+    }
+    return { reconciled, blocked };
   }
 
   recordReconcile(run: JournalledReconcile): void {
@@ -217,6 +258,7 @@ export class Journal implements DecisionJournal {
         run.detail,
         this.#now(),
       );
+    for (const fault of reconcileFaults(run)) this.#recordFault(fault);
   }
 
   newRefusals(tradingDate: string): readonly JournalledRefusal[] {
@@ -232,6 +274,10 @@ export class Journal implements DecisionJournal {
          ORDER BY today.rowid`,
       )
       .all(tradingDate, tradingDate) as JournalledRefusal[];
+  }
+
+  #recordFault(fault: Fault | undefined): void {
+    if (fault !== undefined) this.faults?.record(fault);
   }
 
   #now(): string {

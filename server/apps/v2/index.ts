@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
-import type { BrokerMode, CfdCostModel, Sleeve } from '../../../contracts/index.js';
+import type { BrokerMode, CfdCosts, Sleeve } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -8,55 +7,63 @@ import type {
 } from '../../pipeline/debate-engine/index.js';
 import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
+import { UsEquityRegularHoursCalendar } from '../../providers/market-data-service/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { guardedStore, openSharedStore } from '../../shared/store/index.js';
+import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
 import { composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
+import { pushDailySummary } from './daily-summary.js';
 import {
   AlpacaNewsSource,
   BarsMarketData,
   type BarsSource,
+  CFD_CATALOGUE_PATH,
   type CfdCatalogue,
   createVenueRouter,
   currentConstituents,
   loadCfdCatalogue,
+  MarketauxClient,
+  MarketauxNewsSource,
   MultiVenueBarsSource,
   type NewsSource,
   NO_NEWS,
   newsForVenue,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
+  SqliteNewsLedger,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import { heartbeatFor, withHeartbeat } from './heartbeat.js';
-import type { Journal } from './journal/index.js';
+import type { FaultLedger, Journal } from './journal/index.js';
 import {
   assertArm2RunsBesideDebate,
   assertCapitalShares,
   type CapitalConfigStore,
   type PaperBooks,
 } from './risk/index.js';
+import { describeHolder, type LeaseWait, RunLease, withRunLease } from './run-lease.js';
 import {
   ALL_PINS,
   ARM2_SLEEVE_ID,
   BULLISH_SCRIPT,
   buildLlmPanel,
-  CFD_COST_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   cfdEntryRefusal,
   createArm2Sleeve,
   createDebateSleeve,
+  createSignalsSleeve,
   DEBATE_SLEEVE_ID,
+  declaredCfdCosts,
   isLseInstrument,
-  isSet,
   type LlmPanel,
   type ModelPin,
   NousPinnedTransport,
@@ -67,6 +74,8 @@ import {
   secretsFromEnv,
   verifyNousPins,
 } from './signal/index.js';
+import { processDueSignals, type SignalOutcome, signalsDue } from './signals/processor.js';
+import type { SignalStore } from './signals/store.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
@@ -74,7 +83,6 @@ export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
 export const SAXO_SPREADS_PATH = 'data/bars/saxo-spreads.csv';
 export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
-export const CFD_CATALOGUE_PATH = 'data/saxo-cfd-catalogue.json';
 export const DEFAULT_HALF_SPREAD_BPS = 5;
 const LLM_MAX_IN_FLIGHT_PER_ACCOUNT = 1;
 const LLM_EXPECTED_CALL_MS = 20_000;
@@ -91,7 +99,7 @@ export interface V2RootOptions {
   readonly fxPath?: string | undefined;
   readonly cfdCataloguePath?: string | undefined;
   readonly cfdCatalogue?: CfdCatalogue | undefined;
-  readonly cfdCostModel?: CfdCostModel | undefined;
+  readonly cfdCosts?: CfdCosts | undefined;
   readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly nousBaseUrl?: string | undefined;
   readonly nousApiKey?: string | undefined;
@@ -103,8 +111,12 @@ export interface V2RootOptions {
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly newsSource?: NewsSource | undefined;
+  readonly marketauxApiKey?: string | undefined;
+  readonly isUkStock?: ((symbol: string) => boolean) | undefined;
   readonly lseLegRefusal?: string | undefined;
   readonly knownSecrets?: SecretSource | undefined;
+  readonly leaseWait?: LeaseWait | undefined;
+  readonly sessionCalendar?: { isOpen(instant: Date): boolean } | undefined;
 }
 
 export interface V2Root {
@@ -112,12 +124,32 @@ export interface V2Root {
   readonly books: PaperBooks;
   readonly capital: CapitalConfigStore;
   readonly journal: Journal;
+  readonly faults: FaultLedger;
   readonly panel: LlmPanel;
   readonly db: StoreHandle;
   readonly scriptedTransports: readonly ScriptedTransport[];
   run(): Promise<CycleReport>;
+  processSignals(signals: SignalProcessorStore, now: Date): Promise<SignalPass>;
   close(): void;
 }
+
+export type SignalProcessorStore = Pick<SignalStore, 'due' | 'appendEvent'>;
+
+export type SignalPass =
+  | { readonly ran: true; readonly outcomes: readonly SignalOutcome[] }
+  | { readonly ran: false; readonly reason: 'nothing_due' | 'lease_held'; readonly detail: string };
+
+// The 07:30 cycle can wait behind a signals pass (a few LLM calls); well past that, the holder is
+// taken to be wedged and the cycle fails loudly instead of running beside it
+const CYCLE_LEASE_TIMEOUT_MS = 15 * 60 * 1000;
+const CYCLE_LEASE_POLL_MS = 5_000;
+
+const SYSTEM_LEASE_WAIT: LeaseWait = {
+  timeoutMs: CYCLE_LEASE_TIMEOUT_MS,
+  pollMs: CYCLE_LEASE_POLL_MS,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  nowMs: () => Date.now(),
+};
 
 export function llmKeysPresent(options: V2RootOptions): boolean {
   return (options.nousBaseUrl ?? '').trim() !== '' && (options.nousApiKey ?? '').trim() !== '';
@@ -150,7 +182,7 @@ function nousTransportFactory(
     });
 }
 
-function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
+export function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
   return () => [...secretsFromEnv(env), ...saxoTokenSecrets()];
 }
 
@@ -217,10 +249,31 @@ function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => r
   return (tradingDate) => currentConstituents(csv, tradingDate);
 }
 
-function newsSourceFor(options: V2RootOptions): NewsSource {
-  if (options.newsSource !== undefined) return options.newsSource;
-  const base = options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient());
-  return newsForVenue(base, isLseInstrument);
+function marketauxClientFor(apiKey: string | undefined): MarketauxClient | undefined {
+  return apiKey === undefined || apiKey === '' ? undefined : new MarketauxClient(apiKey);
+}
+
+export interface NewsWiring {
+  readonly news: NewsSource;
+  readonly ukNews: MarketauxNewsSource | undefined;
+}
+
+export function newsWiringFor(options: V2RootOptions, db: StoreHandle, logger: Logger): NewsWiring {
+  if (options.newsSource !== undefined) return { news: options.newsSource, ukNews: undefined };
+  const ukNews = options.dryRun
+    ? undefined
+    : new MarketauxNewsSource({
+        client: marketauxClientFor(options.marketauxApiKey),
+        ledger: new SqliteNewsLedger(guardedStore(db, 'v2')),
+        logger,
+      });
+  const news = newsForVenue({
+    us: options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient()),
+    ukStock: ukNews ?? NO_NEWS,
+    isUkStock: options.isUkStock ?? (() => false),
+    isLseEtf: isLseInstrument,
+  });
+  return { news, ukNews };
 }
 
 const STDERR_LOGGER: Logger = {
@@ -305,13 +358,45 @@ function cfdCatalogueFor(options: V2RootOptions, logger: Logger): CfdCatalogue |
   }
 }
 
-function cfdCostModelFor(options: V2RootOptions): CfdCostModel | undefined {
-  if (options.cfdCostModel !== undefined) return options.cfdCostModel;
-  return isSet(CFD_COST_MODEL) ? CFD_COST_MODEL.value : undefined;
+function cfdCostsFor(options: V2RootOptions): CfdCosts | undefined {
+  return options.cfdCosts ?? declaredCfdCosts();
+}
+
+function quotedBorrowPerDayFrom(
+  catalogue: CfdCatalogue | undefined,
+): (instrument: string) => number | undefined {
+  return (instrument) => catalogue?.lookup(instrument)?.borrowCostPerDay;
 }
 
 function cfdGateFor(options: V2RootOptions): () => string | undefined {
   return options.cfdEntryRefusal ?? cfdEntryRefusal;
+}
+
+function lastMarkedDate(books: Pick<PaperBooks, 'ids' | 'lastDay'>): string | undefined {
+  let latest: string | undefined;
+  for (const bookId of books.ids()) {
+    const date = books.lastDay(bookId)?.tradingDate;
+    if (date !== undefined && (latest === undefined || date > latest)) latest = date;
+  }
+  return latest;
+}
+
+export async function recordingRefusedCycle<T>(
+  faults: Pick<FaultLedger, 'record'>,
+  tradingDate: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    faults.record({
+      kind: 'refused_cycle',
+      trading_date: tradingDate,
+      code: 'v2_cycle_failed',
+      detail: describeThrownSafely(error),
+    });
+    throw error;
+  }
 }
 
 export function composeV2Root(options: V2RootOptions): V2Root {
@@ -319,8 +404,8 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   refuseKeylessPaperRun(options);
   const clock = options.clock ?? new SystemClock();
   const logger = options.logger ?? STDERR_LOGGER;
-  const news = newsSourceFor(options);
   const db = options.store ?? openSharedStore(storePathFor(options));
+  const { news, ukNews } = newsWiringFor(options, db, logger);
   const scripted: ScriptedTransport[] = [];
   const spendSink: LlmSpendSink = new SqliteLlmSpendStore(db, logger, true);
   const spendCap: SpendCap = new SqliteMonthlySpendCap(db, clock, undefined, logger);
@@ -337,10 +422,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
   const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
-  const cfdCostModel = cfdCostModelFor(options);
   const cfdGate = cfdGateFor(options);
+  const catalogue = cfdCatalogueFor(options, logger);
   const router = createVenueRouter({
-    catalogue: cfdCatalogueFor(options, logger),
+    catalogue,
     entryRefusal: cfdGate,
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   });
@@ -366,6 +451,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       clock,
       lseLegRefusal: options.lseLegRefusal,
     }),
+    createSignalsSleeve(),
   ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
@@ -383,22 +469,57 @@ export function composeV2Root(options: V2RootOptions): V2Root {
       options.saxoSpreadsPath ?? SAXO_SPREADS_PATH,
     ),
     alpacaClient: options.alpacaClient,
-    cfdCostModel,
+    cfdCosts: cfdCostsFor(options),
+    quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(catalogue),
     cfdEntryRefusal: cfdGate,
     brokerMode: brokerModeFor(options),
   });
+  const lease = new RunLease(db, clock);
   return {
     registry: cycle.registry,
     books: cycle.books,
     capital: cycle.capital,
     journal: cycle.journal,
+    faults: cycle.faults,
     panel,
     db,
     scriptedTransports: scripted,
-    run: async () => {
-      await prime();
-      journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
-      return runCycle(cycle, options.tradingDate);
+    run: () =>
+      recordingRefusedCycle(cycle.faults, options.tradingDate, async () => {
+        await prime();
+        journalLseLegRefusal(cycle.journal, options.tradingDate, options.lseLegRefusal);
+        return withRunLease(lease, 'cycle', options.leaseWait ?? SYSTEM_LEASE_WAIT, async () => {
+          cycle.faults.recordMissedRuns(() => lastMarkedDate(cycle.books), options.tradingDate);
+          try {
+            return await runCycle(cycle, options.tradingDate);
+          } finally {
+            ukNews?.journalCoverage(options.tradingDate);
+          }
+        });
+      }),
+    processSignals: async (signals, now) => {
+      const deps = {
+        cycle,
+        latestReconcile: (date: string, venue: 'alpaca') =>
+          cycle.journal.latestReconcile(date, venue),
+        signals,
+        panel,
+        constituents,
+        calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),
+      };
+      if (!signalsDue(deps, now)) {
+        return { ran: false, reason: 'nothing_due', detail: 'market closed or no signal due' };
+      }
+      const release = lease.tryAcquire('signals');
+      if (release === undefined) {
+        return { ran: false, reason: 'lease_held', detail: describeHolder(lease.current()) };
+      }
+      try {
+        await prime();
+        return { ran: true, outcomes: await processDueSignals(deps, now) };
+      } finally {
+        release();
+      }
     },
     close: () => db.close(),
   };
@@ -465,6 +586,7 @@ export async function main(
               clock,
               logger,
               barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+              alerts.notify,
             ),
           backup,
         );
@@ -489,6 +611,24 @@ export function logNewRefusals(
   });
 }
 
+export function logFaultFreeWeeks(
+  faults: Pick<FaultLedger, 'faultFreeWeeks'>,
+  tradingDate: string,
+  logger: Logger,
+): void {
+  const tally = faults.faultFreeWeeks(tradingDate);
+  const last =
+    tally.last_fault === undefined ? 'no fault recorded' : `last fault ${tally.last_fault}`;
+  logger.log({
+    trace_id: `v2-${tradingDate}`,
+    stage: 'v2',
+    level: 'info',
+    event: 'v2_fault_free_weeks',
+    message: `${tally.weeks} fault-free weeks (${tally.counted_days} counted days, ${last})`,
+    payload: tally,
+  });
+}
+
 export function rootOptionsFor(
   dryRun: boolean,
   tradingDate: string,
@@ -501,6 +641,7 @@ export function rootOptionsFor(
     dryRun,
     ...nousOptionsFrom(env),
     samuraiMode: env.SAMURAI_MODE,
+    marketauxApiKey: env.MARKETAUX_API_KEY,
     clock,
     logger,
     lseLegRefusal: saxoSessionRefusal(clock.now()),
@@ -508,17 +649,19 @@ export function rootOptionsFor(
   };
 }
 
-async function runOnce(
+export async function runOnce(
   dryRun: boolean,
   tradingDate: string,
   env: NodeJS.ProcessEnv,
   clock: Clock,
   logger: Logger,
   barRefresh: BarRefresh,
+  notify: (text: string) => Promise<void>,
+  compose: (options: V2RootOptions) => V2Root = composeV2Root,
 ): Promise<number> {
   await barRefresh.run();
   const nous = nousOptionsFrom(env);
-  const root = composeV2Root(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
+  const root = compose(rootOptionsFor(dryRun, tradingDate, env, clock, logger));
   try {
     const report = await runAfterPinCheck(root, () =>
       verifyNousPins({
@@ -531,6 +674,18 @@ async function runOnce(
       }),
     );
     logNewRefusals(root.journal, tradingDate, logger);
+    logFaultFreeWeeks(root.faults, tradingDate, logger);
+    await pushDailySummary(
+      {
+        db: root.db,
+        clock,
+        faults: root.faults,
+        mode: dryRun ? 'dry-run' : 'paper',
+        logger,
+        notify,
+      },
+      report,
+    );
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return exitCodeFor(report);
   } finally {
@@ -538,13 +693,4 @@ async function runOnce(
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2), process.env)
-    .then((code) => process.exit(code))
-    .catch((error: unknown) => {
-      process.stderr.write(
-        `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-      );
-      process.exit(1);
-    });
-}
+void runWhenInvoked(import.meta.url, () => main(process.argv.slice(2), process.env), errorStack);

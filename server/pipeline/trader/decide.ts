@@ -36,6 +36,12 @@ import type {
   TraderSkipReason,
 } from './types.js';
 
+type HeldLots = [OpenPosition, ...OpenPosition[]];
+
+export function hasLots(positions: OpenPosition[]): positions is HeldLots {
+  return positions.length > 0;
+}
+
 export function mostRecentOpenLot(positions: readonly OpenPosition[]): OpenPosition {
   return positions.reduce((latest, lot) => (lot.opened_at > latest.opened_at ? lot : latest));
 }
@@ -135,13 +141,22 @@ function decisionBarFor(debate: DebateResult): Date {
   return debate.bar_timestamp;
 }
 
+export function isBookValuationRefusal(error: unknown): boolean {
+  return (
+    error instanceof BookValuationError ||
+    (error instanceof AggregateError &&
+      error.errors.length > 0 &&
+      error.errors.every((member: unknown) => member instanceof BookValuationError))
+  );
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: sequential skip-guard chain (valuation, conviction, flatten window, ATR, mark, sizing) with each guard's position relative to the others explicitly documented and load-bearing; extracting risks silently reordering a guard
 async function buildBracket(
   input: TraderInput,
   direction: TradeDirection,
   intentType: 'entry' | 'scale_in',
   diagnostics: TraderDiagnostic[],
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const { clock, config, debate, instrument, marketData, setupStore } = input;
   const arm = input.arm ?? 'live';
 
@@ -149,12 +164,7 @@ async function buildBracket(
   try {
     equity = await input.equity();
   } catch (error) {
-    const isValuationRefusal =
-      error instanceof BookValuationError ||
-      (error instanceof AggregateError &&
-        error.errors.length > 0 &&
-        error.errors.every((member: unknown) => member instanceof BookValuationError));
-    if (arm === 'control' && isValuationRefusal) {
+    if (arm === 'control' && isBookValuationRefusal(error)) {
       diagnostics.push({
         kind: 'control_arm_valuation_refused',
         asset_class: undefined,
@@ -275,9 +285,9 @@ async function buildBracket(
 
 async function buildExitIntent(
   input: TraderInput,
-  positions: OpenPosition[],
+  positions: HeldLots,
   exitKind: ExitKind,
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const { debate } = input;
   return buildFlattenExit(
     input,
@@ -300,7 +310,7 @@ interface ExitAttribution {
 
 async function readExitPrice(
   input: Pick<TraderInput, 'instrument' | 'marketData' | 'onUnpricedFlatten'>,
-  positions: OpenPosition[],
+  lotAssetClass: AssetClass,
   exitReason: ExitReason,
   asOf: Date,
 ): Promise<{ price: number; asset_class: AssetClass; unpriced: boolean }> {
@@ -309,8 +319,7 @@ async function readExitPrice(
     const mark = await marketData.getMark(instrument, asOf);
     return { price: mark.price, asset_class: mark.asset_class, unpriced: false };
   } catch (error) {
-    const lotAssetClass = positions[0]?.asset_class;
-    if (exitReason !== 'flatten' || lotAssetClass === undefined) throw error;
+    if (exitReason !== 'flatten') throw error;
 
     const reason = describeThrownSafely(error);
     try {
@@ -385,20 +394,17 @@ async function buildFlattenExit(
     TraderInput,
     'arm' | 'clock' | 'config' | 'exitFillSizes' | 'instrument' | 'marketData' | 'onUnpricedFlatten'
   >,
-  positions: OpenPosition[],
+  positions: HeldLots,
   decisionBar: Date,
   attribution: ExitAttribution,
   exitKind: ExitKind,
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const exitReason: ExitReason = exitKind.reason;
   const { clock, config, exitFillSizes, instrument } = input;
   const arm = input.arm ?? 'live';
 
-  const existingSide = positions[0]?.side;
-  if (existingSide === undefined) {
-    throw new Error('buildFlattenExit: positions must be non-empty');
-  }
-  const closingSide = existingSide === 'buy' ? 'sell' : 'buy';
+  const [firstLot] = positions;
+  const closingSide = firstLot.side === 'buy' ? 'sell' : 'buy';
   const held = await heldQuantitiesFor(positions, exitFillSizes);
 
   if (held.some((lot) => lot.held < 0)) return skip('exit_held_quantity_diverged');
@@ -407,7 +413,7 @@ async function buildFlattenExit(
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
   const asOf = clock.now();
-  const priced = await readExitPrice(input, positions, exitReason, asOf);
+  const priced = await readExitPrice(input, firstLot.asset_class, exitReason, asOf);
 
   return emit(
     {
@@ -445,7 +451,6 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
   exit_held_quantity_diverged: 'input_unusable',
   flatten_in_flight: 'declined_on_signal',
   early_exit_signal_unavailable: 'input_unusable',
-  no_position_side: 'input_unusable',
   atr_insufficient_bars: 'input_unusable',
   atr_not_finite: 'input_unusable',
   mark_not_finite: 'input_unusable',
@@ -487,28 +492,31 @@ export interface TraderOutcome {
   diagnostics: readonly TraderDiagnostic[];
 }
 
+type RoutedOutcome = Omit<TraderOutcome, 'decision_class' | 'diagnostics'>;
+
 function skip(
   reason: TraderSkipReason,
   reason_detail: TraderReasonDetail | null = null,
-): TraderOutcome {
-  return {
-    intent: null,
-    skip_reason: reason,
-    decision_class: null,
-    reason_detail,
-    atr: null,
-    diagnostics: [],
-  };
+): RoutedOutcome {
+  return { intent: null, skip_reason: reason, reason_detail, atr: null };
 }
 
-function emit(intent: OrderIntent, atr: number | null): TraderOutcome {
+function emit(intent: OrderIntent, atr: number | null): RoutedOutcome {
+  return { intent, skip_reason: null, reason_detail: null, atr };
+}
+
+function classifiedOutcome(
+  outcome: RoutedOutcome,
+  classify: (skip_reason: TraderSkipReason) => TraderDecisionClass,
+  diagnostics: readonly TraderDiagnostic[],
+): TraderOutcome {
   return {
-    intent,
-    skip_reason: null,
-    decision_class: null,
-    reason_detail: null,
-    atr,
-    diagnostics: [],
+    intent: outcome.intent,
+    skip_reason: outcome.skip_reason,
+    decision_class: outcome.skip_reason === null ? null : classify(outcome.skip_reason),
+    reason_detail: outcome.reason_detail,
+    atr: outcome.atr,
+    diagnostics,
   };
 }
 
@@ -519,46 +527,54 @@ export async function decide(input: TraderInput): Promise<OrderIntent | null> {
 export async function decideWithReason(input: TraderInput): Promise<TraderOutcome> {
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeDecision(input, diagnostics);
-
-  const decision_class =
-    outcome.skip_reason === null ? null : classifyDecision(outcome.skip_reason, input.debate);
-
-  return {
-    ...outcome,
-    decision_class,
-    diagnostics: diagnostics.length === 0 ? outcome.diagnostics : diagnostics,
-  };
+  return classifiedOutcome(
+    outcome,
+    (skip_reason) => classifyDecision(skip_reason, input.debate),
+    diagnostics,
+  );
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: position-state routing where branch ORDER is the safety property (flat-by-close must precede every other holding branch, see comment below) — extracting risks silently reordering a branch
+function entryFromFlat(
+  input: TraderInput,
+  diagnostics: TraderDiagnostic[],
+): RoutedOutcome | Promise<RoutedOutcome> {
+  const { direction } = input.debate;
+  if (direction === 'neutral') return skip('neutral_direction_while_flat');
+  return buildBracket(input, direction, 'entry', diagnostics);
+}
+
 async function routeDecision(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],
-): Promise<TraderOutcome> {
-  const { config, debate, instrument, positionState } = input;
+): Promise<RoutedOutcome> {
+  const { instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
 
-  if (positions.length === 0) {
-    if (debate.direction === 'neutral') return skip('neutral_direction_while_flat');
-    return buildBracket(input, debate.direction, 'entry', diagnostics);
+  if (!hasLots(positions)) return entryFromFlat(input, diagnostics);
+
+  const [{ side: existingSide, asset_class: positionAssetClass }] = positions;
+
+  const flattenWindow = withinFlattenWindow(input, positionAssetClass);
+  if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
+  if (flattenWindow.within) {
+    if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
+    return buildExitIntent(input, positions, {
+      reason: 'flatten',
+      session_close: flattenWindow.enforcing_close,
+    });
   }
 
-  const existingSide = positions[0]?.side;
-  if (existingSide === undefined) return skip('no_position_side');
+  return routeHeldOutsideFlattenWindow(input, positions, existingSide, diagnostics);
+}
 
-  const positionAssetClass = positions[0]?.asset_class;
-  if (positionAssetClass !== undefined) {
-    const flattenWindow = withinFlattenWindow(input, positionAssetClass);
-    if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
-    if (flattenWindow.within) {
-      if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
-      return buildExitIntent(input, positions, {
-        reason: 'flatten',
-        session_close: flattenWindow.enforcing_close,
-      });
-    }
-  }
+async function routeHeldOutsideFlattenWindow(
+  input: TraderInput,
+  positions: HeldLots,
+  existingSide: OpenPosition['side'],
+  diagnostics: TraderDiagnostic[],
+): Promise<RoutedOutcome> {
+  const { config, debate } = input;
 
   if (debate.direction === 'neutral' || !debate.converged) {
     return skip('holding_neutral_or_non_converged');
@@ -600,46 +616,31 @@ export type ExitCheckInput = Pick<
 export async function checkExitsWithReason(input: ExitCheckInput): Promise<TraderOutcome> {
   const diagnostics: TraderDiagnostic[] = [];
   const outcome = await routeExitCheck(input, diagnostics);
-  const decision_class =
-    outcome.skip_reason === null ? null : classifyExitCheckSkip(outcome.skip_reason);
-  return {
-    ...outcome,
-    decision_class,
-    diagnostics: diagnostics.length === 0 ? outcome.diagnostics : diagnostics,
-  };
-}
-
-function classifyExitCheckSkip(skip_reason: TraderSkipReason): TraderDecisionClass {
-  return SKIP_REASON_CLASS[skip_reason];
+  return classifiedOutcome(outcome, (skip_reason) => SKIP_REASON_CLASS[skip_reason], diagnostics);
 }
 
 type ExitPositionContext = {
-  positions: OpenPosition[];
+  positions: HeldLots;
   existingSide: OpenPosition['side'];
   positionAssetClass: AssetClass;
 };
 
 async function resolveExitPositionContext(
   input: ExitCheckInput,
-): Promise<{ ok: true; context: ExitPositionContext } | { ok: false; outcome: TraderOutcome }> {
+): Promise<{ ok: true; context: ExitPositionContext } | { ok: false; outcome: RoutedOutcome }> {
   const { instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
-  if (positions.length === 0) return { ok: false, outcome: skip('no_open_position') };
+  if (!hasLots(positions)) return { ok: false, outcome: skip('no_open_position') };
 
-  const existingSide = positions[0]?.side;
-  if (existingSide === undefined) return { ok: false, outcome: skip('no_position_side') };
-
-  const positionAssetClass = positions[0]?.asset_class;
-  if (positionAssetClass === undefined) return { ok: false, outcome: skip('no_position_side') };
-
+  const [{ side: existingSide, asset_class: positionAssetClass }] = positions;
   return { ok: true, context: { positions, existingSide, positionAssetClass } };
 }
 
 async function routeExitCheck(
   input: ExitCheckInput,
   diagnostics: TraderDiagnostic[],
-): Promise<TraderOutcome> {
+): Promise<RoutedOutcome> {
   const { instrument } = input;
 
   const resolved = await resolveExitPositionContext(input);

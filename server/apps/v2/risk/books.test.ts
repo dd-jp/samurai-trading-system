@@ -50,6 +50,12 @@ function openBooks(
   return new PaperBooks(db, clock, new CapitalConfigStore(db, clock), openingDate, sleeves);
 }
 
+function heldAapl(books: PaperBooks): NonNullable<ReturnType<PaperBooks['position']>> {
+  const held = books.position('debate/primary', 'AAPL');
+  if (held === undefined) throw new Error('expected an AAPL position in debate/primary');
+  return held;
+}
+
 function fill(overrides: Partial<BookFill> = {}): BookFill {
   return {
     instrument: 'AAPL',
@@ -228,16 +234,16 @@ describe('PaperBooks', () => {
     const books = openBooks(seededStore());
     books.applyFill('debate/primary', fill({ qty: 3, priceGbp: 90 }));
     books.applySplit('debate/primary', 'AAPL', 1.5, '2026-09-26');
-    const held = books.position('debate/primary', 'AAPL');
-    expect(held?.qty).toBeCloseTo(4.5, 12);
-    expect(held?.avgPriceGbp).toBeCloseTo(60, 12);
-    expect((held?.qty ?? 0) * (held?.avgPriceGbp ?? 0)).toBeCloseTo(270, 9);
+    const held = heldAapl(books);
+    expect(held.qty).toBeCloseTo(4.5, 12);
+    expect(held.avgPriceGbp).toBeCloseTo(60, 12);
+    expect(held.qty * held.avgPriceGbp).toBeCloseTo(270, 9);
     books.applySplit('debate/primary', 'AAPL', 0.1, '2026-09-29');
-    const reversed = books.position('debate/primary', 'AAPL');
-    expect(reversed?.qty).toBeCloseTo(0.45, 12);
-    expect(reversed?.avgPriceGbp).toBeCloseTo(600, 9);
-    expect(reversed?.splitFactor).toBeCloseTo(0.15, 12);
-    expect(reversed?.splitAnchorDate).toBe('2026-09-29');
+    const reversed = heldAapl(books);
+    expect(reversed.qty).toBeCloseTo(0.45, 12);
+    expect(reversed.avgPriceGbp).toBeCloseTo(600, 9);
+    expect(reversed.splitFactor).toBeCloseTo(0.15, 12);
+    expect(reversed.splitAnchorDate).toBe('2026-09-29');
   });
 
   it('#1865: applySplit mirrors a short and leaves absent levels absent', () => {
@@ -362,6 +368,49 @@ describe('PaperBooks', () => {
     }
   });
 
+  it('accrues CFD financing and borrow beside custody, deducts them from cash and journals both', () => {
+    const db = seededStore();
+    const books = new PaperBooks(
+      db,
+      clock,
+      new CapitalConfigStore(db, clock),
+      '2026-09-25',
+      DEBATE,
+      {
+        financing: { dailyRate: (_venue, side) => (side === 'long' ? 0.001 : 0.0001) },
+        borrow: { dailyRate: (_venue, quoted) => quoted ?? 0 },
+        quotedBorrowPerDay: (instrument) => (instrument === 'TSLA' ? 0.0002 : undefined),
+      },
+    );
+    books.applyFill(
+      'debate/primary',
+      fill({ instrument: 'TSLA', venue: 'saxo_cfd_usd', side: 'sell', qty: 1 }),
+    );
+    books.applyFill(
+      'debate/primary',
+      fill({ instrument: 'VOD', venue: 'saxo_cfd_gbp', qty: 2, clientOrderId: 'o2' }),
+    );
+    const cashBefore = books.cash('debate/primary');
+    const day = books.markDay('debate/primary', '2026-09-25', () => 100, 3);
+    expect(day.cfdFinancingAccrualGbp).toBeCloseTo(200 * 0.001 * 3 + 100 * 0.0001 * 3, 12);
+    expect(day.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0002 * 3, 12);
+    const carried = day.cfdFinancingAccrualGbp + day.cfdBorrowAccrualGbp;
+    expect(books.cash('debate/primary')).toBeCloseTo(cashBefore - carried, 9);
+    expect(day.equityGbp).toBeCloseTo(1_000 - carried, 9);
+    expect(books.lastDay('debate/primary')).toMatchObject({
+      cfdFinancingAccrualGbp: day.cfdFinancingAccrualGbp,
+      cfdBorrowAccrualGbp: day.cfdBorrowAccrualGbp,
+    });
+  });
+
+  it('journals zero CFD carry when no carry rates are wired', () => {
+    const db = seededStore();
+    const books = openBooks(db);
+    books.applyFill('debate/primary', fill({ venue: 'saxo_cfd_usd', side: 'sell', qty: 1 }));
+    const day = books.markDay('debate/primary', '2026-09-25', () => 100, 1);
+    expect(day).toMatchObject({ cfdFinancingAccrualGbp: 0, cfdBorrowAccrualGbp: 0 });
+  });
+
   it('steps size down as a losing fill sequence crosses the loss-budget thresholds and halts at the third', () => {
     const db = seededStore();
     const books = openBooks(db);
@@ -431,259 +480,70 @@ describe('PaperBooks', () => {
     });
   });
 
-  describe('#1799: account-wide pooling across primary books', () => {
-    const TWO_PRIMARIES: readonly Pick<Sleeve, 'id' | 'spec'>[] = [
-      { id: 'debate', spec: { ...DEBATE_SPEC, capitalShare: 0.5 } },
-      { id: 'trend', spec: { ...DEBATE_SPEC, capitalShare: 0.5 } },
+  describe('per-sleeve loss budgets (David 2026-09-30, #1941)', () => {
+    const SLEEVES: readonly Pick<Sleeve, 'id' | 'spec'>[] = [
+      { id: 'signals', spec: { ...DEBATE_SPEC, capitalShare: 0.7 } },
+      { id: 'debate', spec: { ...DEBATE_SPEC, capitalShare: 0.3 } },
     ];
-    const seedTwoPrimaries = (db: StoreHandle) => {
-      new CapitalConfigStore(db, clock).setYear(2026, 1_500, 1_500);
+    const tenThousand = (openingDate = '2026-09-24') => {
+      const db = openSharedStore(':memory:');
+      new CapitalConfigStore(db, clock).setYear(2026, 10_000, 1_500);
+      const books = openBooks(db, openingDate, SLEEVES);
+      for (const id of ['signals/primary', 'debate/primary']) {
+        books.markDay(id, '2026-09-24', flat, 0);
+      }
+      return books;
     };
-    const twoPrimaries = (db: StoreHandle, openingDate = '2026-09-25') => {
-      seedTwoPrimaries(db);
-      return openBooks(db, openingDate, TWO_PRIMARIES);
-    };
-    const lose = (
-      books: PaperBooks,
-      bookId: string,
-      date: string,
-      loss: number,
-      orderId: string,
-    ) => {
-      books.applyFill(bookId, fill({ qty: 1, priceGbp: 100 + loss, clientOrderId: orderId }));
-      books.applyFill(
-        bookId,
-        fill({ side: 'sell', qty: 1, priceGbp: 100, clientOrderId: orderId }),
-      );
+    const lose = (books: PaperBooks, bookId: string, loss: number, date = '2026-09-25') => {
+      books.applyFill(bookId, fill({ qty: 1, priceGbp: 100 + loss, clientOrderId: bookId }));
+      books.applyFill(bookId, fill({ side: 'sell', qty: 1, priceGbp: 100, clientOrderId: bookId }));
       return books.markDay(bookId, date, flat, 1).state;
     };
 
-    it('halts both primaries once their summed loss crosses the full cap, though only one crossed its own share', () => {
-      const books = twoPrimaries(openSharedStore(':memory:'));
-      expect(books.cash('debate/primary')).toBe(750);
-      expect(lose(books, 'debate/primary', '2026-09-25', 1_000, 'a')).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-      expect(lose(books, 'trend/primary', '2026-09-25', 600, 'b')).toMatchObject({
-        halted: false,
-        sizeMultiplier: 0.25,
-      });
-
-      books.settlePrimaryBudgets('2026-09-25');
-
-      expect(books.lastDay('debate/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-        entriesBlockedAtNextFill: true,
-      });
-      expect(books.lastDay('trend/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-        entriesBlockedAtNextFill: true,
-      });
+    it('seeds each primary with its own share of the start capital', () => {
+      const books = tenThousand();
+      expect(books.cash('signals/primary')).toBe(7_000);
+      expect(books.cash('debate/primary')).toBe(3_000);
     });
 
-    it('steps a primary down to the pooled half-size mark though it took no loss of its own', () => {
-      const books = twoPrimaries(openSharedStore(':memory:'));
-      expect(lose(books, 'debate/primary', '2026-09-25', 700, 'a')).toMatchObject({
-        sizeMultiplier: 0.25,
-      });
-      expect(books.markDay('trend/primary', '2026-09-25', flat, 1).state).toMatchObject({
-        sizeMultiplier: 1,
-      });
-
-      books.settlePrimaryBudgets('2026-09-25');
-
-      expect(books.lastDay('debate/primary')?.state).toMatchObject({
-        sizeMultiplier: 0.25,
-        entriesBlockedAtNextFill: false,
-      });
-      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+    it("steps signals down at a third of its £1,050 cap and leaves debate's sizing alone", () => {
+      const books = tenThousand();
+      expect(lose(books, 'signals/primary', 349)).toMatchObject({ sizeMultiplier: 1 });
+      expect(lose(books, 'signals/primary', 1, '2026-09-28')).toMatchObject({
         sizeMultiplier: 0.5,
+        ytdLossGbp: 350,
+      });
+      expect(books.markDay('debate/primary', '2026-09-25', flat, 1).state).toMatchObject({
+        sizeMultiplier: 1,
         entriesBlockedAtNextFill: false,
       });
     });
 
-    it('settlePrimaryBudgets refuses to settle a date a primary was not marked for', () => {
-      const books = twoPrimaries(openSharedStore(':memory:'));
-      books.markDay('debate/primary', '2026-09-25', flat, 0);
-      books.markDay('trend/primary', '2026-09-25', flat, 0);
-
-      expect(() => books.settlePrimaryBudgets('2026-09-24')).toThrow(
-        /settlePrimaryBudgets\(2026-09-24\) called before debate\/primary was marked/,
-      );
-    });
-
-    it('settlePrimaryBudgets refuses to settle a primary that has never been marked at all', () => {
-      const books = twoPrimaries(openSharedStore(':memory:'));
-      books.markDay('debate/primary', '2026-09-25', flat, 0);
-
-      expect(() => books.settlePrimaryBudgets('2026-09-25')).toThrow(
-        /settlePrimaryBudgets\(2026-09-25\) called before trend\/primary was marked/,
-      );
-    });
-
-    it('settleLastPrimaryMark is a no-op when no primary book has any capital', () => {
-      const noPrimaryCapital: readonly Pick<Sleeve, 'id' | 'spec'>[] = [
-        { id: 'debate', spec: { ...DEBATE_SPEC, minimumCapitalGbp: Number.POSITIVE_INFINITY } },
-      ];
-      const db = openSharedStore(':memory:');
-      new CapitalConfigStore(db, clock).setYear(2026, 1_500, 1_500);
-      const books = openBooks(db, '2026-09-25', noPrimaryCapital);
-
-      expect(() => books.settleLastPrimaryMark()).not.toThrow();
-    });
-
-    it('leaves a shadow book on its own independent budget, unpooled', () => {
-      const books = twoPrimaries(openSharedStore(':memory:'));
-      lose(books, 'debate/primary', '2026-09-25', 1_000, 'a');
-      lose(books, 'trend/primary', '2026-09-25', 600, 'b');
-      expect(lose(books, 'debate/no-macro-gate', '2026-09-25', 700, 'c')).toMatchObject({
-        sizeMultiplier: 0.25,
-      });
-
-      books.settlePrimaryBudgets('2026-09-25');
-
-      expect(books.lastDay('debate/no-macro-gate')?.state.sizeMultiplier).toBe(0.25);
-    });
-
-    it('keeps the pooled halt sticky across a restart even once every book recovers', () => {
-      const db = openSharedStore(':memory:');
-      const first = twoPrimaries(db);
-      lose(first, 'debate/primary', '2026-09-25', 1_000, 'a');
-      lose(first, 'trend/primary', '2026-09-25', 600, 'b');
-      first.settlePrimaryBudgets('2026-09-25');
-      expect(first.lastDay('trend/primary')?.state.sizeMultiplier).toBe(0);
-
-      const second = openBooks(db, '2026-09-26', TWO_PRIMARIES);
-      lose(second, 'debate/primary', '2026-09-26', -1_000, 'c');
-      const trendOwnState = lose(second, 'trend/primary', '2026-09-26', -600, 'd');
-      expect(trendOwnState).toMatchObject({ sizeMultiplier: 1, halted: false });
-
-      second.settlePrimaryBudgets('2026-09-26');
-
-      expect(second.lastDay('trend/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-      db.close();
-    });
-
-    it('resets the pooled halt at the calendar year boundary, same as each book resets its own', () => {
-      const books = twoPrimaries(openSharedStore(':memory:'));
-      lose(books, 'debate/primary', '2026-12-31', 1_000, 'a');
-      lose(books, 'trend/primary', '2026-12-31', 600, 'b');
-      books.settlePrimaryBudgets('2026-12-31');
-      expect(books.lastDay('trend/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-
-      books.markDay('debate/primary', '2027-01-04', flat, 4);
-      books.markDay('trend/primary', '2027-01-04', flat, 4);
-      books.settlePrimaryBudgets('2027-01-04');
-
-      expect(books.lastDay('debate/primary')?.state).toMatchObject({
-        halted: false,
+    it("steps debate down at a third of its £450 cap and leaves signals' sizing alone", () => {
+      const books = tenThousand();
+      expect(lose(books, 'debate/primary', 150)).toMatchObject({ sizeMultiplier: 0.5 });
+      expect(books.markDay('signals/primary', '2026-09-25', flat, 1).state).toMatchObject({
         sizeMultiplier: 1,
-      });
-      expect(books.lastDay('trend/primary')?.state).toMatchObject({
-        halted: false,
-        sizeMultiplier: 1,
-      });
-    });
-
-    it('settleLastPrimaryMark repairs a pool a crash left unsettled before the process restarted', () => {
-      const db = openSharedStore(':memory:');
-      const first = twoPrimaries(db);
-      lose(first, 'debate/primary', '2026-09-25', 1_000, 'a');
-      lose(first, 'trend/primary', '2026-09-25', 600, 'b');
-
-      const second = openBooks(db, '2026-09-25', TWO_PRIMARIES);
-      second.settleLastPrimaryMark();
-
-      expect(second.lastDay('debate/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-      expect(second.lastDay('trend/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-
-      second.settleLastPrimaryMark();
-      expect(second.lastDay('trend/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-      db.close();
-    });
-
-    it('settleLastPrimaryMark skips a repair while the primaries disagree on their last mark date', () => {
-      const books = twoPrimaries(openSharedStore(':memory:'));
-      lose(books, 'debate/primary', '2026-09-25', 1_000, 'a');
-      books.markDay('trend/primary', '2026-09-24', flat, 0);
-
-      expect(() => books.settleLastPrimaryMark()).not.toThrow();
-
-      expect(books.lastDay('debate/primary')?.state.sizeMultiplier).toBe(0);
-      expect(books.lastDay('trend/primary')?.state.sizeMultiplier).toBe(1);
-    });
-
-    it('does not pool losses across primaries when constructed unpooled (backtest isolation, ruled 2026-09-28)', () => {
-      const db = openSharedStore(':memory:');
-      seedTwoPrimaries(db);
-      const books = new PaperBooks(
-        db,
-        clock,
-        new CapitalConfigStore(db, clock),
-        '2026-09-25',
-        TWO_PRIMARIES,
-        false,
-      );
-      expect(lose(books, 'debate/primary', '2026-09-25', 1_000, 'a')).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-      expect(lose(books, 'trend/primary', '2026-09-25', 600, 'b')).toMatchObject({
-        halted: false,
-        sizeMultiplier: 0.25,
-      });
-
-      books.settlePrimaryBudgets('2026-09-25');
-
-      expect(books.lastDay('debate/primary')?.state).toMatchObject({
-        halted: true,
-        sizeMultiplier: 0,
-      });
-      expect(books.lastDay('trend/primary')?.state).toMatchObject({
-        halted: false,
-        sizeMultiplier: 0.25,
         entriesBlockedAtNextFill: false,
       });
     });
 
-    it('settleLastPrimaryMark is a no-op unpooled, same as when no primary has capital', () => {
-      const db = openSharedStore(':memory:');
-      seedTwoPrimaries(db);
-      const books = new PaperBooks(
-        db,
-        clock,
-        new CapitalConfigStore(db, clock),
-        '2026-09-25',
-        TWO_PRIMARIES,
-        false,
-      );
-      lose(books, 'debate/primary', '2026-09-25', 1_000, 'a');
-      lose(books, 'trend/primary', '2026-09-25', 600, 'b');
-
-      expect(() => books.settleLastPrimaryMark()).not.toThrow();
-
-      expect(books.lastDay('trend/primary')?.state).toMatchObject({
+    it('halts signals at its own £1,050 cap while debate keeps trading', () => {
+      const books = tenThousand();
+      expect(lose(books, 'signals/primary', 1_050)).toMatchObject({ halted: true });
+      expect(lose(books, 'debate/primary', 299)).toMatchObject({
         halted: false,
-        sizeMultiplier: 0.25,
+        sizeMultiplier: 0.5,
       });
+    });
+
+    it("blocks entries at each sleeve's own daily cap: £70 for signals, £30 for debate", () => {
+      const under = tenThousand();
+      expect(lose(under, 'signals/primary', 69).entriesBlockedAtNextFill).toBe(false);
+      expect(lose(under, 'debate/primary', 29).entriesBlockedAtNextFill).toBe(false);
+      const at = tenThousand();
+      expect(lose(at, 'signals/primary', 70).entriesBlockedAtNextFill).toBe(true);
+      expect(lose(at, 'debate/primary', 30).entriesBlockedAtNextFill).toBe(true);
     });
   });
 

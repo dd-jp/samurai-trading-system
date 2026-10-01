@@ -13,16 +13,18 @@ import type {
   SleeveSpec,
 } from '../../../contracts/index.js';
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
-import type {
-  BrokerAck,
-  BrokerAdapter,
-  NativeBracketRequest,
-  NormalizedFill,
-  NormalizedOrder,
-  ProtectedExitRequest,
-} from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
-import { type LogEntry, SimulatedClock, toBrokerFillId } from '../../shared/index.js';
+import {
+  type BrokerAck,
+  type BrokerAdapter,
+  type LogEntry,
+  type NativeBracketRequest,
+  type NormalizedFill,
+  type NormalizedOrder,
+  type ProtectedExitRequest,
+  SimulatedClock,
+  toBrokerFillId,
+} from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import {
   budgetChanges,
@@ -38,7 +40,9 @@ import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
 import { storeView } from './reconcile.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
-import { CYCLE_LEVEL_PARAMETERS, SleeveRegistry } from './signal/index.js';
+import { CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
+
+const UNSET_CYCLE_PARAMETERS = CYCLE_LEVEL_PARAMETERS.filter((parameter) => !isSet(parameter));
 
 const clock = new SimulatedClock(new Date('2026-09-25T07:00:00.000Z'));
 const FX = 1.25;
@@ -116,6 +120,24 @@ class FakeAlpaca implements BrokerAdapter {
       qty,
       fee: 0.5,
       timestamp: clock.now(),
+    });
+  }
+
+  cumulative(
+    clientOrderId: string,
+    leg: NormalizedFill['leg'],
+    filledQty: number,
+    averagePrice: number,
+  ): void {
+    this.pending.push({
+      client_order_id: clientOrderId,
+      broker_fill_id: toBrokerFillId(`alp-${clientOrderId}-${leg}`),
+      leg,
+      price: averagePrice,
+      qty: filledQty,
+      fee: 0,
+      timestamp: clock.now(),
+      qty_is_cumulative: true,
     });
   }
 
@@ -427,7 +449,7 @@ describe('runCycle', () => {
       macro: { macroDay: false, covered: true },
     });
     expect(report.refusals).toEqual([
-      ...CYCLE_LEVEL_PARAMETERS.map(
+      ...UNSET_CYCLE_PARAMETERS.map(
         (parameter) => `${parameter.name} is not set: needs David (${parameter.ticket})`,
       ),
       'P: unset',
@@ -1259,13 +1281,17 @@ describe('runCycle', () => {
       payload: report,
     });
     expect(log).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'v2_fill_unmatched', level: 'warn' }),
+      expect.objectContaining({
+        event: 'v2_fill_unmatched',
+        level: 'warn',
+        message: 'fill alp-unknown-order-entry matches no v2 order',
+      }),
     );
     const db = (
       deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
     ).db;
     expect(db.prepare('SELECT scope, parameter FROM v2_refusals ORDER BY rowid').all()).toEqual([
-      ...CYCLE_LEVEL_PARAMETERS.map((parameter) => ({
+      ...UNSET_CYCLE_PARAMETERS.map((parameter) => ({
         scope: 'parameter',
         parameter: parameter.name,
       })),
@@ -1550,6 +1576,8 @@ describe('runCycle', () => {
   it('counts calendar days between marks and never negatively', () => {
     expect(calendarDaysBetween(undefined, '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-22', '2026-09-25')).toBe(3);
+    expect(calendarDaysBetween('2026-09-25', '2026-09-28')).toBe(3);
+    expect(calendarDaysBetween('2026-10-23', '2026-10-26')).toBe(3);
     expect(calendarDaysBetween('2026-09-25', '2026-09-25')).toBe(0);
     expect(calendarDaysBetween('2026-09-26', '2026-09-25')).toBe(0);
   });
@@ -2282,6 +2310,150 @@ describe('runCycle: protected exits carry a native Alpaca bracket safely (#1801)
   });
 });
 
+describe('#1873: Alpaca cumulative fills book as increments per broker order', () => {
+  const ENTRY = 'v2-debate-primary-2026-09-25-AAPL';
+
+  async function entered(log = vi.fn()) {
+    const alpaca = new FakeAlpaca();
+    const deps = { ...harness([longAapl], false, alpaca), logger: { log } };
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    return { alpaca, deps, log };
+  }
+
+  function heldQty(deps: CycleDeps): number {
+    return deps.books.position('debate/primary', 'AAPL')?.qty ?? 0;
+  }
+
+  function fillRows(deps: CycleDeps) {
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    return db
+      .prepare(
+        "SELECT fill_id, leg, qty, price_gbp FROM v2_fills WHERE book_id = 'debate/primary' ORDER BY recorded_at, fill_id",
+      )
+      .all();
+  }
+
+  it('kill line: a partial then the complete report books the broker quantity at the true average', async () => {
+    const { alpaca, deps, log } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(fillRows(deps)).toHaveLength(1);
+    expect(heldQty(deps)).toBe(4);
+    alpaca.cumulative(ENTRY, 'entry', 6, 20.2);
+    const complete = await runCycle(deps, '2026-09-29');
+    expect(complete.fills).toBe(1);
+    expect(heldQty(deps)).toBe(6);
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      avgPriceGbp: expect.closeTo(20.2 / FX, 9),
+      stopGbp: expect.closeTo(19.2 / FX, 9),
+      targetGbp: expect.closeTo(21.2 / FX, 9),
+    });
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20.2) / FX, 9);
+    expect(log.mock.calls.some(([entry]) => entry.level === 'warn')).toBe(false);
+    expect(fillRows(deps)).toEqual([
+      { fill_id: `alpaca:alp-${ENTRY}-entry`, leg: 'entry', qty: 4, price_gbp: 20 / FX },
+      {
+        fill_id: `alpaca:alp-${ENTRY}-entry#6`,
+        leg: 'entry',
+        qty: 2,
+        price_gbp: expect.closeTo(20.6 / FX, 9),
+      },
+    ]);
+  });
+
+  it('kill line: a partial then cancel keeps the partial quantity however often it is re-reported', async () => {
+    const { alpaca, deps } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    for (const date of ['2026-09-29', '2026-09-30']) {
+      alpaca.cumulative(ENTRY, 'entry', 4, 20);
+      const report = await runCycle(deps, date);
+      expect(report.fills).toBe(0);
+      expect(heldQty(deps)).toBe(4);
+    }
+    expect(fillRows(deps)).toHaveLength(1);
+  });
+
+  it('kill line: duplicates and a stale report inside one sweep leave the latest cumulative quantity', async () => {
+    const { alpaca, deps, log } = await entered();
+    for (const qty of [4, 4, 6, 4, 6]) alpaca.cumulative(ENTRY, 'entry', qty, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(fillRows(deps)).toHaveLength(2);
+    expect(heldQty(deps)).toBe(6);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        event: 'v2_fill_cumulative_behind',
+        message: `alpaca:alp-${ENTRY}-entry reports cumulative qty 4 below the 6 already booked; ignored`,
+      }),
+    );
+  });
+
+  it('kill line: a report arriving after a later one books the later total once and never goes negative', async () => {
+    const { alpaca, deps, log } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 6, 20.2);
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(heldQty(deps)).toBe(6);
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    const report = await runCycle(deps, '2026-09-29');
+    expect(report.fills).toBe(0);
+    expect(heldQty(deps)).toBe(6);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20.2) / FX, 9);
+    expect(
+      log.mock.calls.filter(([entry]) => entry.event === 'v2_fill_cumulative_behind'),
+    ).toHaveLength(2);
+  });
+
+  it('kill line: each leg order accumulates on its own, so a partial stop after a full entry resizes then closes', async () => {
+    const { alpaca, deps } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 6, 20);
+    await runCycle(deps, '2026-09-28');
+    alpaca.cumulative(ENTRY, 'entry', 6, 20);
+    alpaca.cumulative(ENTRY, 'stop', 2, 19.2);
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(4);
+    alpaca.cumulative(ENTRY, 'stop', 6, 19.1);
+    const report = await runCycle(deps, '2026-09-30');
+    expect(report.refusals.some((refusal) => refusal.includes('(#1778)'))).toBe(false);
+    expect(heldQty(deps)).toBe(0);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - (6 * 20) / FX + (6 * 19.1) / FX,
+      9,
+    );
+  });
+
+  it('a discrete report is booked whole and stays idempotent on its id, never read as a running total', async () => {
+    const { alpaca, deps } = await entered();
+    alpaca.fill(ENTRY, 'entry', 4, 20);
+    alpaca.fill(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(heldQty(deps)).toBe(4);
+    alpaca.fill(ENTRY, 'entry', 6, 20);
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(4);
+  });
+
+  it('warns and books at the running average when the carved increment price is unusable', async () => {
+    const { alpaca, deps, log } = await entered();
+    alpaca.cumulative(ENTRY, 'entry', 4, 30);
+    await runCycle(deps, '2026-09-28');
+    alpaca.cumulative(ENTRY, 'entry', 6, 20);
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(6);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        event: 'v2_fill_increment_price_unusable',
+        message: `alpaca:alp-${ENTRY}-entry: increment of 2 booked at the cumulative average 20`,
+      }),
+    );
+  });
+});
+
 describe('budgetChanges', () => {
   const state = (over: Partial<LossBudgetState>): LossBudgetState => ({
     referenceEquityGbp: 1_000,
@@ -2536,8 +2708,8 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
   });
 });
 
-describe('#1799: account-wide pooled loss budget across primary books', () => {
-  it('halts a second primary once the pooled loss crosses the full cap, and the gate sizes its next entry at zero', async () => {
+describe('per-sleeve loss budgets (David 2026-09-30, #1941)', () => {
+  it("a loss that halts one primary leaves another primary's sizing and next entry untouched", async () => {
     const share = 0.5;
     const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
     const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
@@ -2553,9 +2725,7 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
     };
     const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
 
-    // debate's own share of the £600 cap is £300: a £550 loss halts it on its own
     loseInBook(deps.books, 'debate/primary', '2026-09-25', 550, 'a');
-    // trend's own share is also £300, and £50 loss is under even the half-size step
     loseInBook(deps.books, 'trend/primary', '2026-09-25', 50, 'b');
     await runCycle(deps, '2026-09-25');
 
@@ -2563,66 +2733,103 @@ describe('#1799: account-wide pooled loss budget across primary books', () => {
       halted: true,
       sizeMultiplier: 0,
     });
-    // Without pooling this would still read sizeMultiplier: 1 (its own £50 loss is under
-    // even the half-size mark of its £300 share)
     expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: true,
-      sizeMultiplier: 0,
+      halted: false,
+      sizeMultiplier: 1,
     });
 
     trendDecisions = [{ ...longAapl, sleeve_id: 'trend' }];
     await runCycle(deps, '2026-09-28');
 
-    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBe(0);
-    expect(orders(deps, 'trend/primary')).toEqual([]);
-    expect(deps.books.positions('trend/primary')).toEqual([]);
+    expect(sizeShares(deps, 'trend/primary', '2026-09-28', 'AAPL')).toBeGreaterThan(0);
   });
+});
 
-  it('a crash between marking both primaries and settling the pool is repaired next cycle, before any fill', async () => {
-    const share = 0.5;
-    const specA: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
-    const specB: SleeveSpec = { ...TEST_SPEC, capitalShare: share };
-    const trendDecisions: readonly SleeveDecision[] = [{ ...longAapl, sleeve_id: 'trend' }];
+describe('#1941: one Alpaca account across broker-routed books', () => {
+  function twoPrimaries(dryRun: boolean, alpaca?: FakeAlpaca, trendInstrument = 'AAPL') {
+    const spec: SleeveSpec = { ...TEST_SPEC, capitalShare: 0.5 };
+    const decision = { ...longAapl, sleeve_id: 'trend', instrument: trendInstrument };
     const trend: Sleeve = {
       id: 'trend',
-      spec: specB,
-      universe: () => ({
-        instruments: trendDecisions.map((decision) => decision.instrument),
-        refusals: [],
-      }),
-      decide: () => Promise.resolve({ decisions: trendDecisions, refusals: [] }),
+      spec,
+      universe: () => ({ instruments: [trendInstrument], refusals: [] }),
+      decide: () => Promise.resolve({ decisions: [decision], refusals: [] }),
     };
-    // Each primary's own share of the hardcoded £1,000 start capital is £500 (share 0.5), so its
-    // own loss must stay well under that to leave AAPL's entry sizeable off live post-loss equity
-    const deps = harness([], true, undefined, [2026], specA, SPREAD_ONLY, 600, trend);
+    return harness([longAapl], dryRun, alpaca, [2026], spec, SPREAD_ONLY, 1_500, trend);
+  }
 
-    loseInBook(deps.books, 'debate/primary', '2026-09-25', 400, 'a');
-    loseInBook(deps.books, 'trend/primary', '2026-09-25', 250, 'b');
-    vi.spyOn(deps.books, 'settlePrimaryBudgets').mockImplementationOnce(() => {
-      throw new Error('crash before settling the pool');
-    });
-    await expect(runCycle(deps, '2026-09-25')).rejects.toThrow('crash before settling the pool');
+  it('refuses a second primary entry on a symbol another primary rests at the broker', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca);
 
-    expect(sizeShares(deps, 'trend/primary', '2026-09-25', 'AAPL')).toBeGreaterThan(0);
-    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toBeDefined();
-    // Both primaries were marked (the crash was after markOne, before settlePrimaryBudgets),
-    // but trend/primary's own unpooled step (0.25) is what got persisted, not the pooled halt
-    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: false,
-      sizeMultiplier: 0.25,
-    });
+    const report = await runCycle(deps, '2026-09-25');
+
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+    ]);
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    expect(orders(deps, 'trend/no-macro-gate')).toMatchObject([{ outcome: 'simulated' }]);
+    expect(report.refusals).toContain(
+      'trend/primary AAPL: held or resting in debate/primary at alpaca',
+    );
+  });
+
+  it('refuses it while the other primary holds the position', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
 
     await runCycle(deps, '2026-09-28');
 
-    expect(deps.books.lastDay('trend/primary')?.state).toMatchObject({
-      halted: true,
-      sizeMultiplier: 0,
-    });
-    expect(deps.journal.orderFor('v2-trend-primary-2026-09-25-AAPL')).toMatchObject({
-      outcome: 'cancelled',
-    });
-    expect(deps.books.position('trend/primary', 'AAPL')).toBeUndefined();
-    expect(deps.books.position('trend/no-macro-gate', 'AAPL')).toBeDefined();
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeDefined();
+    expect(orders(deps, 'trend/primary')).toEqual([]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT trading_date, scope, ticket, book_id, instrument FROM v2_refusals WHERE parameter = 'symbol_held_by_broker_book'",
+        )
+        .all(),
+    ).toEqual([
+      {
+        trading_date: '2026-09-25',
+        scope: 'entry',
+        ticket: '#1941',
+        book_id: 'trend/primary',
+        instrument: 'AAPL',
+      },
+      {
+        trading_date: '2026-09-28',
+        scope: 'entry',
+        ticket: '#1941',
+        book_id: 'trend/primary',
+        instrument: 'AAPL',
+      },
+    ]);
+  });
+
+  it('lets another primary enter a different symbol', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca, 'MSFT');
+
+    await runCycle(deps, '2026-09-25');
+
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+      'v2-trend-primary-2026-09-25-MSFT',
+    ]);
+  });
+
+  it('lets both primaries enter in a dry run, where no book reaches the broker', async () => {
+    const deps = twoPrimaries(true);
+
+    await runCycle(deps, '2026-09-25');
+
+    expect(orders(deps, 'debate/primary')).toHaveLength(1);
+    expect(orders(deps, 'trend/primary')).toHaveLength(1);
   });
 });
 
@@ -3630,6 +3837,40 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     ).toEqual([{ status: 'read_failed', detail: 'alpaca 503' }]);
   });
 
+  it('a store throw inside reconcile blocks every book entry, still exits and alerts critical (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([exitAapl, longMsft]);
+    vi.spyOn(deps.journal, 'recordReconcile').mockImplementation(() => {
+      throw new Error('SQLITE_BUSY');
+    });
+    const logs: LogEntry[] = [];
+    const report = await runCycle(
+      { ...deps, logger: { log: (entry) => logs.push(entry) } },
+      '2026-09-28',
+    );
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-28-AAPL-exit']);
+    expect(deps.journal.orderFor(PRIMARY_MSFT)).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-28-MSFT')).toBeUndefined();
+    expect(report.books.map((book) => book.book_id)).toEqual([
+      'debate/primary',
+      'debate/no-macro-gate',
+    ]);
+    expect(report.refusals).toEqual(
+      expect.arrayContaining([
+        'debate/primary: entries blocked, reconcile threw: SQLITE_BUSY',
+        'debate/no-macro-gate: entries blocked, reconcile threw: SQLITE_BUSY',
+      ]),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'v2_reconcile_threw' }),
+    );
+  });
+
   it('live: an unset cash tolerance fails closed, primary entries blocked through a refusal, no critical alert', async () => {
     const { deps, logs } = await heldAaplThen(
       (harnessed) => harnessed.brokerBooks,
@@ -3709,5 +3950,214 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(
       'v2-debate-primary-2026-09-29-MSFT',
     );
+  });
+});
+
+describe('runCycle: a held name whose series ends (doc 70 §2.4, #1911)', () => {
+  const LAST_BAR = bar('2026-09-28', {
+    open: 20.4,
+    low: 20.3,
+    high: 20.6,
+    close: 20.4,
+    rawClose: 20.4,
+  });
+  const LAST_CLOSE_GBP = (20.4 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
+  const BOOKS = ['debate/primary', 'debate/no-macro-gate'] as const;
+  const ENDED_LOGS = BOOKS.map((bookId) => [
+    'info',
+    `${bookId} AAPL: series ended 2026-09-28, closed at its last close (doc 70 §2.4)`,
+  ]);
+
+  function ended(deps: Harness, closeEndedSeries: boolean) {
+    const log = vi.fn();
+    const market: MarketData = {
+      ...deps.market,
+      lastBarBefore: (instrument, tradingDate) =>
+        instrument === 'AAPL' && tradingDate > LAST_BAR.date
+          ? LAST_BAR
+          : deps.market.lastBarBefore(instrument, tradingDate),
+      barsBefore: (instrument, tradingDate, count) =>
+        deps.market
+          .barsBefore(instrument, tradingDate, count)
+          .filter((dated) => instrument !== 'AAPL' || dated.date <= LAST_BAR.date),
+    };
+    const run = (tradingDate: string) =>
+      runCycle({ ...deps, market, logger: { log }, closeEndedSeries }, tradingDate);
+    const endedLogs = () =>
+      log.mock.calls
+        .filter(([entry]) => entry.event === 'v2_series_ended_exit')
+        .map(([entry]) => [entry.level, entry.message]);
+    return { run, endedLogs };
+  }
+
+  const freshnessRefusals = (report: { refusals: readonly string[] }) =>
+    report.refusals.filter((refusal) => refusal.includes('marked at'));
+
+  const exitOrderId = (bookId: string, date: string) =>
+    `v2-${bookId.replace('/', '-')}-${date}-AAPL-exit`;
+
+  it('closes both books at the last close less half a spread once the last bar is 5 days stale, then stays flat', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    await run('2026-09-29');
+    const lastFresh = await run('2026-10-03');
+    expect(lastFresh.exits).toBe(0);
+    expect(freshnessRefusals(lastFresh)).toEqual([]);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')).toBeDefined();
+
+    const closing = await run('2026-10-04');
+    expect(closing).toMatchObject({ exits: 2, simulated_orders: 2, fills: 2 });
+    expect(freshnessRefusals(closing)).toEqual([]);
+    for (const bookId of BOOKS) {
+      const clientOrderId = exitOrderId(bookId, '2026-10-04');
+      expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(clientOrderId)).toMatchObject({
+        leg: 'exit',
+        side: 'sell',
+        outcome: 'simulated',
+        payload: { size: 6, detail: 'series_ended_at_last_close', price: 20.4 },
+      });
+      expect(exitFill(deps, clientOrderId)).toEqual({
+        side: 'sell',
+        qty: 6,
+        price_gbp: expect.closeTo(LAST_CLOSE_GBP, 9),
+      });
+    }
+    expect(endedLogs()).toEqual(ENDED_LOGS);
+
+    const after = await run('2026-10-05');
+    expect(after.exits).toBe(0);
+    expect(freshnessRefusals(after)).toEqual([]);
+    expect(endedLogs()).toEqual(ENDED_LOGS);
+  });
+
+  it('with the flag off keeps the position and journals the stale mark, as forward paper does (#1804)', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, false);
+    const stale = await run('2026-10-04');
+    expect(stale.exits).toBe(0);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')?.qty).toBe(6);
+    expect(freshnessRefusals(stale)).toEqual(
+      BOOKS.map(
+        (bookId) =>
+          `${bookId} AAPL: marked at the 2026-09-28 close, no bar in the 5 days before 2026-10-04`,
+      ),
+    );
+    expect(endedLogs()).toEqual([]);
+  });
+
+  it('leaves a bracket leg on the last bar to close the position, with no second exit', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const touchesTarget = bar('2026-09-28', { low: 20.3, high: 21.3, close: 20.4, rawClose: 20.4 });
+    const { endedLogs } = ended(deps, true);
+    const report = await runCycle(
+      {
+        ...deps,
+        closeEndedSeries: true,
+        market: {
+          ...deps.market,
+          lastBarBefore: (instrument, tradingDate) =>
+            instrument === 'AAPL'
+              ? touchesTarget
+              : deps.market.lastBarBefore(instrument, tradingDate),
+        },
+      },
+      '2026-10-04',
+    );
+    expect(report.exits).toBe(2);
+    for (const bookId of BOOKS) {
+      expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(exitOrderId(bookId, '2026-10-04'))?.payload).toMatchObject({
+        detail: 'bracket_leg_on_daily_bar',
+      });
+    }
+    expect(endedLogs()).toEqual([]);
+  });
+
+  it('keeps a CFD position whose close has no cost model open and unlogged until the model exists', async () => {
+    const state = { unset: false };
+    const pricing: FillPricing = {
+      ...SPREAD_ONLY,
+      fee: (venue) => {
+        if (state.unset && venue.startsWith('saxo_cfd')) throw new CfdCostModelUnsetError();
+        return 0;
+      },
+    };
+    const deps = harness([shortAapl], true, undefined, [2026], TEST_SPEC, pricing);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    state.unset = true;
+    const refused = await run('2026-10-04');
+    expect(refused.exits).toBe(0);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')?.qty).toBe(-6);
+    expect(endedLogs()).toEqual([]);
+    state.unset = false;
+    await run('2026-10-05');
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+    expect(endedLogs()).toHaveLength(2);
+  });
+
+  it('keeps a pending CFD flatten with no cost model open, refused once per book and unlogged', async () => {
+    const state = { unset: false };
+    const pricing: FillPricing = {
+      ...SPREAD_ONLY,
+      fee: (venue) => {
+        if (state.unset && venue.startsWith('saxo_cfd')) throw new CfdCostModelUnsetError();
+        return 0;
+      },
+    };
+    const deps = harness([shortAapl], true, undefined, [2026], TEST_SPEC, pricing);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    deps.setControl('halt');
+    await run('2026-09-29');
+    state.unset = true;
+    const refused = await run('2026-10-04');
+    expect(refused.fills).toBe(0);
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')?.qty).toBe(-6);
+    expect(endedLogs()).toEqual([]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT book_id FROM v2_refusals WHERE parameter = 'CFD_COST_MODEL' AND scope = 'fill' ORDER BY book_id",
+        )
+        .all(),
+    ).toEqual([{ book_id: 'debate/no-macro-gate' }, { book_id: 'debate/primary' }]);
+    state.unset = false;
+    await run('2026-10-05');
+    for (const bookId of BOOKS) expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+    expect(endedLogs()).toHaveLength(2);
+  });
+
+  it('fills a pending flatten at the last close and keeps its journalled reason', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    const { run, endedLogs } = ended(deps, true);
+    deps.setControl('halt');
+    await run('2026-09-29');
+    const waiting = await run('2026-10-03');
+    expect(waiting.fills).toBe(0);
+    deps.setControl('resume');
+    const filled = await run('2026-10-04');
+    expect(filled).toMatchObject({ exits: 0, fills: 2 });
+    for (const bookId of BOOKS) {
+      const clientOrderId = exitOrderId(bookId, '2026-09-29');
+      expect(deps.books.position(bookId, 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(clientOrderId)?.payload).toMatchObject({
+        reason: 'manual_halt',
+      });
+      expect(exitFill(deps, clientOrderId)).toEqual({
+        side: 'sell',
+        qty: 6,
+        price_gbp: expect.closeTo(LAST_CLOSE_GBP, 9),
+      });
+    }
+    expect(endedLogs()).toEqual(ENDED_LOGS);
   });
 });

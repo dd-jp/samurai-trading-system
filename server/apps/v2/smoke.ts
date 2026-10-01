@@ -1,9 +1,10 @@
-import { pathToFileURL } from 'node:url';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
+import { formatDailySummary, readDailySummary } from './daily-summary.js';
 import { createVenueRouter, macroGate } from './data/index.js';
-import { composeV2Root } from './index.js';
+import { composeV2Root, type V2Root } from './index.js';
 import {
   assertArm2RunsBesideDebate,
   bookSpecsFor,
@@ -14,19 +15,35 @@ import {
   ALL_PINS,
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
+  CFD_BORROW_MODEL,
+  CFD_COST_MODEL,
+  CFD_FINANCING_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  CFD_SPREAD_MODEL,
   cfdEntryRefusal,
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   isSet,
   LSE_LIQUIDITY_SCREEN,
+  type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
   SqliteMonthlySpendCap,
 } from './signal/index.js';
 
+const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
+  CFD_COST_MODEL,
+  CFD_SPREAD_MODEL,
+  CFD_FINANCING_MODEL,
+  CFD_BORROW_MODEL,
+];
+const SET_PARAMETERS: readonly Parameter<unknown>[] = [
+  ARM2_ENTRY_THRESHOLDS,
+  LSE_LIQUIDITY_SCREEN,
+  ...CFD_COST_PARAMETERS,
+];
 const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
-  (parameter) => parameter !== ARM2_ENTRY_THRESHOLDS && parameter !== LSE_LIQUIDITY_SCREEN,
+  (parameter) => !SET_PARAMETERS.includes(parameter),
 );
 // The cash tolerance blocks live entries only (David 2026-09-29, #1872), so a paper or dry-run
 // cycle never journals it
@@ -116,10 +133,15 @@ function staticProbes(): SmokeProbe[] {
       `tighten £${SMOKE_LOSS_CAP_GBP} to £${SMOKE_LOSS_CAP_GBP + 1}`,
     ),
     probe(
-      'CFD shorts fail closed: unset CFD gates refuse, then no catalogue refuses',
-      shortRefusal(cfdEntryRefusal) === 'cfd_cost_model_unset' &&
+      'CFD shorts fail closed: the unverified resting stop refuses, then no catalogue refuses',
+      shortRefusal(cfdEntryRefusal) === 'cfd_resting_stop_unverified' &&
         shortRefusal(() => undefined) === 'no_catalogue',
       `${shortRefusal(cfdEntryRefusal)}, ${shortRefusal(() => undefined)}`,
+    ),
+    probe(
+      'the four CFD cost models are set from the sourced Saxo tariff (#1850)',
+      CFD_COST_PARAMETERS.every((parameter) => isSet(parameter)),
+      CFD_COST_PARAMETERS.map((parameter) => parameter.name).join(', '),
     ),
     probe(
       'every still-open David-owned parameter is unset',
@@ -207,6 +229,27 @@ function settledEntries(store: StoreHandle): { filled: number; cancelled: number
     .get(SMOKE_TRADING_DATE) as { filled: number; cancelled: number };
 }
 
+function dailySummaryProbe(
+  store: StoreHandle,
+  root: Pick<V2Root, 'books' | 'faults'>,
+  filled: number,
+): SmokeProbe {
+  const summary = readDailySummary(
+    store,
+    new SimulatedClock(new Date(`${SMOKE_NEXT_DATE}T07:00:00.000Z`)),
+    SMOKE_NEXT_DATE,
+    root.faults,
+  );
+  return probe(
+    "the daily summary covers every book, counts the next day's fills and carries the fault line",
+    summary.books.map((book) => book.book_id).join(',') === root.books.ids().join(',') &&
+      summary.books.reduce((n, book) => n + book.entries_filled, 0) === filled &&
+      summary.faults.recorded.length === 0 &&
+      summary.faults.counted_days === 2,
+    formatDailySummary(summary, 'dry-run').replaceAll('\n', ' | '),
+  );
+}
+
 export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: boolean }> {
   const probes = staticProbes();
   const store = seededSmokeStore();
@@ -229,8 +272,8 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
     const spendRows = root.db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get() as { n: number };
     probes.push(
       probe(
-        'registry holds the debate sleeve and arm 2, beside each other',
-        root.registry.ids().join(',') === 'debate,arm2',
+        'registry holds the debate sleeve and arm 2 beside each other, then the signals sleeve',
+        root.registry.ids().join(',') === 'debate,arm2,signals',
         root.registry.ids().join(','),
       ),
       probe(
@@ -249,8 +292,9 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         `${llmCalls} calls, ${spendRows.n} llm_spend rows`,
       ),
       probe(
-        'debate and arm 2 each have their own paper books',
-        root.books.ids().join(',') === 'debate/primary,debate/no-macro-gate,arm2/technical-only',
+        'debate, arm 2 and signals each have their own paper books',
+        root.books.ids().join(',') ===
+          'debate/primary,debate/no-macro-gate,arm2/technical-only,signals/primary,signals/no-veto',
         root.books.ids().join(', '),
       ),
       probe(
@@ -281,6 +325,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
     const next = await dryRunOn(SMOKE_NEXT_DATE).run();
     const { filled, cancelled } = settledEntries(store);
     probes.push(
+      dailySummaryProbe(store, root, filled),
       probe(
         'every affordable entry fills or is cancelled on the next bar, and fills reach the books',
         filled > 0 &&
@@ -289,6 +334,17 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
         `${filled} filled, ${cancelled} cancelled of ${report.entries}; ${next.books
           .map((book) => `${book.book_id}: ${book.positions} positions`)
           .join(', ')}`,
+      ),
+    );
+    const faults = [SMOKE_TRADING_DATE, SMOKE_NEXT_DATE].flatMap((date) =>
+      root.faults.faultsOn(date),
+    );
+    const tally = root.faults.faultFreeWeeks(SMOKE_NEXT_DATE);
+    probes.push(
+      probe(
+        'two clean dry-run cycles record no plumbing fault and count fault-free days from paper start',
+        faults.length === 0 && tally.since === SMOKE_TRADING_DATE && tally.counted_days === 2,
+        `${faults.map((fault) => `${fault.kind} ${fault.code}`).join(', ') || 'no faults'}; ${tally.counted_days} counted days since ${tally.since}`,
       ),
     );
   } finally {
@@ -308,13 +364,8 @@ export function printSmoke(
   return result.passed ? 0 : 1;
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runV2Smoke()
-    .then((result) => process.exit(printSmoke(result, (line) => process.stdout.write(line))))
-    .catch((error: unknown) => {
-      process.stderr.write(
-        `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-      );
-      process.exit(1);
-    });
-}
+void runWhenInvoked(
+  import.meta.url,
+  async () => printSmoke(await runV2Smoke(), (line) => process.stdout.write(line)),
+  errorStack,
+);

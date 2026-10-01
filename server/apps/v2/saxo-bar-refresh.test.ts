@@ -382,114 +382,230 @@ describe('refreshSaxoBars', () => {
 });
 
 describe('refreshSaxoBars with Saxo chart bars whose shape is broken', () => {
-  const vmid = { samples: samplesFor(VMID, closes(DATES, 30)) };
-  const isfWith = (bars: Record<string, Ohlc>) => ({ ISF: { samples: ohlcSamplesFor(ISF, bars) } });
+  const HISTORY = [
+    '2026-09-11',
+    '2026-09-14',
+    '2026-09-15',
+    '2026-09-16',
+    '2026-09-17',
+    '2026-09-18',
+    ...DATES,
+  ];
+  const vmid = { samples: samplesFor(VMID, closes(HISTORY, 30)) };
+  const isfWith = (bars: Record<string, Ohlc>) => ({
+    ISF: { samples: ohlcSamplesFor(ISF, { ...flatOhlc(HISTORY, 8.5), ...bars }) },
+    VMID: vmid,
+  });
+  const isfBar = async (store: ParquetBarStore, date: string) =>
+    (await store.readSeries('saxo', 'ISF'))?.bars.find((b) => b.date === date);
+  const shapeWarning = (entries: Parameters<Logger['log']>[0][]) =>
+    entries.find((entry) => entry.event === 'v2_saxo_bar_shape_repaired');
+  const closeDisagreeingGlitch = {
+    '2026-09-15': [8.5, 8.5, 5.2, 8.5],
+    '2026-09-16': [5.5, 5.5, 5.5, 5.5],
+  } as const satisfies Record<string, Ohlc>;
 
-  it('widens a bar whose open sits above its high instead of failing the write', async () => {
+  it('widens a recent bar whose open sits above its high, drops nothing and names the one widening', async () => {
     const store = await openStore();
-    const { report } = await refresh(store, {
-      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-22': [8.6, 8.55, 8.4, 8.5] }),
-      VMID: vmid,
-    });
+    const { report, entries } = await refresh(
+      store,
+      isfWith({ '2026-09-22': [8.6, 8.55, 8.4, 8.5] }),
+    );
     expect(report.failed).toEqual([]);
-    const bar = (await store.readSeries('saxo', 'ISF'))?.bars.find((b) => b.date === '2026-09-22');
-    expect(bar).toMatchObject({ open: 8.6, high: 8.6, low: 8.4, close: 8.5 });
+    expect(report.updated.find((u) => u.symbol === 'ISF')?.bars).toBe(HISTORY.length);
+    expect(await isfBar(store, '2026-09-22')).toMatchObject({
+      open: 8.6,
+      high: 8.6,
+      low: 8.4,
+      close: 8.5,
+    });
+    expect(shapeWarning(entries)).toMatchObject({
+      level: 'warn',
+      message: 'ISF: repaired Saxo chart bar shape (widened 1 range(s))',
+    });
+  });
+
+  it('counts every widened range in the warning', async () => {
+    const store = await openStore();
+    const { entries } = await refresh(
+      store,
+      isfWith({ '2026-09-22': [8.6, 8.55, 8.4, 8.5], '2026-09-23': [8.5, 8.6, 8.45, 8.4] }),
+    );
+    expect(shapeWarning(entries)?.message).toBe(
+      'ISF: repaired Saxo chart bar shape (widened 2 range(s))',
+    );
   });
 
   it('rescales a x100 field back into the bar', async () => {
     const store = await openStore();
-    const { report } = await refresh(store, {
-      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-22': [8.5, 850, 8.4, 8.5] }),
-      VMID: vmid,
-    });
+    const { report } = await refresh(store, isfWith({ '2026-09-15': [8.5, 850, 8.4, 8.5] }));
     expect(report.failed).toEqual([]);
-    const bar = (await store.readSeries('saxo', 'ISF'))?.bars.find((b) => b.date === '2026-09-22');
-    expect(bar).toMatchObject({ open: 8.5, high: 8.5, low: 8.4, close: 8.5 });
+    expect(await isfBar(store, '2026-09-15')).toMatchObject({
+      open: 8.5,
+      high: 8.5,
+      low: 8.4,
+      close: 8.5,
+    });
   });
 
-  it('drops a glitch bar and passes the shrink guard against the already repaired stored series', async () => {
+  it('repairs before rounding, so a rescaled field lands on four decimals', async () => {
     const store = await openStore();
-    const kept = ['2026-09-21', '2026-09-22', '2026-09-24'];
-    await store.write('saxo', [storedSeries('ISF', kept, 8.5)]);
-    const { report } = await refresh(store, {
-      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-23': [8.5, 13, 8.4, 8.5] }),
-      VMID: vmid,
-    });
+    const { report } = await refresh(store, isfWith({ '2026-09-15': [8.5, 850.123, 8.4, 8.5] }));
     expect(report.failed).toEqual([]);
-    expect(report.updated.find((u) => u.symbol === 'ISF')?.bars).toBe(3);
+    expect((await isfBar(store, '2026-09-15'))?.high).toBe(8.5012);
+  });
+
+  it('keeps a crash-day close and replaces the bad open and high with it', async () => {
+    const store = await openStore();
+    const crash = Object.fromEntries(
+      HISTORY.slice(3).map((date) => [date, [5.97, 5.97, 5.97, 5.97] as Ohlc]),
+    );
+    const { report, entries } = await refresh(
+      store,
+      isfWith({ ...crash, '2026-09-15': [11.37, 11.37, 6, 6.115] }),
+    );
+    expect(report.failed).toEqual([]);
+    expect(await isfBar(store, '2026-09-15')).toMatchObject({
+      open: 6.115,
+      high: 6.115,
+      low: 6,
+      close: 6.115,
+    });
+    expect(report.updated.find((u) => u.symbol === 'ISF')?.bars).toBe(HISTORY.length);
+    expect(shapeWarning(entries)?.message).toBe(
+      'ISF: repaired Saxo chart bar shape (replaced 2026-09-15 open with the close, replaced 2026-09-15 high with the close)',
+    );
+  });
+
+  it('drops a glitch bar whose close disagrees with its neighbours and passes the shrink guard against the already repaired stored series', async () => {
+    const store = await openStore();
+    const kept = HISTORY.filter((date) => date !== '2026-09-15');
+    await store.write('saxo', [storedSeries('ISF', kept, 8.5)]);
+    const { report } = await refresh(store, isfWith(closeDisagreeingGlitch));
+    expect(report.failed).toEqual([]);
+    expect(report.updated.find((u) => u.symbol === 'ISF')?.bars).toBe(kept.length);
     expect((await store.readSeries('saxo', 'ISF'))?.bars.map((b) => b.date)).toEqual(kept);
   });
 
   it('repairs every defect together and reproduces the same series on a second refresh', async () => {
     const store = await openStore();
-    const fixtures = {
-      ...isfWith({
-        '2026-09-21': [8.6, 8.55, 8.4, 8.5],
-        '2026-09-22': [8.5, 850, 8.4, 8.5],
-        '2026-09-23': [8.5, 13, 8.4, 8.5],
-        '2026-09-24': [8.5, 8.5, 8.5, 8.5],
-      }),
-      VMID: vmid,
-    };
+    const fixtures = isfWith({
+      '2026-09-11': [8.6, 8.55, 8.4, 8.5],
+      '2026-09-14': [8.5, 850, 8.4, 8.5],
+      '2026-09-17': [8.5, 13, 8.4, 8.5],
+      ...closeDisagreeingGlitch,
+    });
     await refresh(store, fixtures);
     const first = await store.readSeries('saxo', 'ISF');
     const { report } = await refresh(store, fixtures);
     expect(report.failed).toEqual([]);
     expect(await store.readSeries('saxo', 'ISF')).toEqual(first);
-    expect(first?.bars.map((b) => b.date)).toEqual(['2026-09-21', '2026-09-22', '2026-09-24']);
+    expect(first?.bars.map((b) => b.date)).toEqual(HISTORY.filter((date) => date !== '2026-09-15'));
+    expect(first?.bars.find((b) => b.date === '2026-09-17')?.high).toBe(8.5);
   });
 
   it('refuses a repair that drops a bar the stored series still holds', async () => {
     const store = await openStore();
-    await store.write('saxo', [storedSeries('ISF', DATES, 8.5)]);
-    const { report } = await refresh(store, {
-      ...isfWith({ ...flatOhlc(DATES, 8.5), '2026-09-23': [8.5, 13, 8.4, 8.5] }),
-      VMID: vmid,
-    });
+    await store.write('saxo', [storedSeries('ISF', HISTORY, 8.5)]);
+    const { report } = await refresh(store, isfWith(closeDisagreeingGlitch));
     expect(report.failed).toEqual([
       {
         symbol: 'ISF',
         reason:
-          'ISF: refresh would shrink history (had 4 bars from 2026-09-21, got 3 from 2026-09-21) — refusing to overwrite',
+          'ISF: refresh would shrink history (had 10 bars from 2026-09-11, got 9 from 2026-09-11) — refusing to overwrite',
       },
     ]);
-    expect((await store.readSeries('saxo', 'ISF'))?.bars).toHaveLength(4);
+    expect((await store.readSeries('saxo', 'ISF'))?.bars).toHaveLength(HISTORY.length);
   });
 
   it('fails a line whose every bar is a glitch rather than writing nothing', async () => {
     const store = await openStore();
-    const glitches = Object.fromEntries(DATES.map((date) => [date, [8.5, 13, 8.4, 8.5] as Ohlc]));
-    const { report } = await refresh(store, { ...isfWith(glitches), VMID: vmid });
+    const glitches = Object.fromEntries(
+      DATES.map((date, index) => [
+        date,
+        (index % 2 === 0 ? [8.5, 8.5, 5.2, 8.5] : [5.5, 9, 5.5, 5.5]) as Ohlc,
+      ]),
+    );
+    const { report } = await refresh(store, {
+      ISF: { samples: ohlcSamplesFor(ISF, glitches) },
+      VMID: vmid,
+    });
     expect(report.failed).toEqual([
       { symbol: 'ISF', reason: 'ISF: no bars left after shape repair' },
     ]);
     expect(await store.readSeries('saxo', 'ISF')).toBeUndefined();
   });
 
-  it('warns which bars were dropped or rescaled', async () => {
+  it('warns which bars were dropped, rescaled or replaced', async () => {
     const store = await openStore();
-    const { entries } = await refresh(store, {
-      ...isfWith({
-        ...flatOhlc(DATES, 8.5),
-        '2026-09-22': [8.5, 850, 8.4, 8.5],
-        '2026-09-23': [8.5, 13, 8.4, 8.5],
+    const { entries } = await refresh(
+      store,
+      isfWith({
+        '2026-09-14': [8.5, 850, 8.4, 8.5],
+        '2026-09-17': [8.5, 13, 8.4, 8.5],
+        ...closeDisagreeingGlitch,
       }),
-      VMID: vmid,
+    );
+    expect(shapeWarning(entries)).toMatchObject({
+      level: 'warn',
+      message:
+        'ISF: repaired Saxo chart bar shape (dropped 2026-09-15, rescaled 2026-09-14 high, replaced 2026-09-17 high with the close)',
     });
-    const warning = entries.find((entry) => entry.event === 'v2_saxo_bar_shape_repaired');
-    expect(warning?.level).toBe('warn');
-    expect(warning?.message).toContain('ISF');
-    expect(warning?.message).toContain('2026-09-23');
-    expect(warning?.message).toContain('2026-09-22');
   });
 
   it('does not warn when nothing needed repair', async () => {
     const store = await openStore();
-    const { entries } = await refresh(store, {
-      ISF: { samples: samplesFor(ISF, closes(DATES, 8.5)) },
-      VMID: vmid,
-    });
+    const { entries } = await refresh(store, isfWith({}));
     expect(entries.map((entry) => entry.event)).not.toContain('v2_saxo_bar_shape_repaired');
+  });
+
+  describe('inside the last five sessions', () => {
+    const refused = (dates: string) =>
+      `ISF: Saxo bar shape repaired or dropped in a recent session (${dates}); refusing to write, the line keeps its stored bars until the bar ages out or Saxo corrects it`;
+
+    it('fails the line on replaced fields, naming every date, and leaves the stored bars untouched', async () => {
+      const store = await openStore();
+      await store.write('saxo', [storedSeries('ISF', HISTORY.slice(0, 8), 8.4)]);
+      const { report, entries } = await refresh(
+        store,
+        isfWith({ '2026-09-21': [8.5, 13, 8.4, 8.5], '2026-09-23': [8.5, 13, 8.4, 8.5] }),
+      );
+      expect(report.failed).toEqual([{ symbol: 'ISF', reason: refused('2026-09-21, 2026-09-23') }]);
+      expect(report.updated.map((u) => u.symbol)).toEqual(['VMID']);
+      expect(entries.map((entry) => entry.event)).toContain('v2_bar_refresh_failed');
+      expect((await store.readSeries('saxo', 'ISF'))?.bars.map((b) => b.close)).toEqual(
+        Array(8).fill(8.4),
+      );
+    });
+
+    it('fails the line on a rescaled field or a dropped bar, naming each date once', async () => {
+      const rescaled = await refresh(
+        await openStore(),
+        isfWith({ '2026-09-22': [8.5, 850, 8.4, 8.5] }),
+      );
+      expect(rescaled.report.failed).toEqual([{ symbol: 'ISF', reason: refused('2026-09-22') }]);
+      const dropped = await refresh(
+        await openStore(),
+        isfWith({
+          '2026-09-22': [8.5, 8.5, 5.2, 8.5],
+          '2026-09-23': [5.5, 5.5, 5.5, 5.5],
+          '2026-09-24': [8.5, 8.5, 8.5, 8.5],
+        }),
+      );
+      expect(dropped.report.failed).toEqual([{ symbol: 'ISF', reason: refused('2026-09-22') }]);
+      const both = await refresh(await openStore(), isfWith({ '2026-09-24': [850, 13, 8.4, 8.5] }));
+      expect(both.report.failed).toEqual([{ symbol: 'ISF', reason: refused('2026-09-24') }]);
+    });
+
+    it('writes a repair six sessions back and fails one five sessions back', async () => {
+      const older = await refresh(
+        await openStore(),
+        isfWith({ '2026-09-17': [8.5, 13, 8.4, 8.5] }),
+      );
+      expect(older.report.failed).toEqual([]);
+      const edge = await refresh(await openStore(), isfWith({ '2026-09-18': [8.5, 13, 8.4, 8.5] }));
+      expect(edge.report.failed).toEqual([{ symbol: 'ISF', reason: refused('2026-09-18') }]);
+    });
   });
 });
 

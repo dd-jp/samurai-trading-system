@@ -1,10 +1,17 @@
 import type {
   CfdBorrowModel,
   CfdCostModel,
+  CfdCosts,
   CfdFinancingModel,
   CfdSpreadModel,
   SleeveSpec,
 } from '../../../../contracts/index.js';
+import {
+  SAXO_CFD_COMMISSION,
+  SAXO_CFD_FINANCING,
+  SAXO_CFD_SPREAD,
+  saxoCfdBorrow,
+} from '../data/index.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -56,7 +63,7 @@ function set<T>(name: string, ticket: string, value: T): Parameter<T> {
 
 export const G18_SOCIAL_SOURCE = unset<string>('G18_SOCIAL_SOURCE', '#1753');
 export const G18_SMALL_CAP_FLOORS = unset<SmallCapFloors>('G18_SMALL_CAP_FLOORS', '#1753');
-export const G18_SENTIMENT_DEDUP_RULE = unset<string>('G18_SENTIMENT_DEDUP_RULE', '#961');
+export const G18_SENTIMENT_DEDUP_RULE = unset<string>('G18_SENTIMENT_DEDUP_RULE', '#1753');
 export const ALPACA_SHORT_EQUITY_FLOOR_USD = unset<number>(
   'ALPACA_SHORT_EQUITY_FLOOR_USD',
   'doc 66 Q8',
@@ -76,10 +83,23 @@ export const RECONCILE_CASH_TOLERANCE_GBP = unset<number>('RECONCILE_CASH_TOLERA
 // the count is the builder's default until David sets it
 export const LSE_RESERVED_SLOTS = 4;
 
-export const CFD_COST_MODEL = unset<CfdCostModel>('CFD_COST_MODEL', '#1850');
-export const CFD_SPREAD_MODEL = unset<CfdSpreadModel>('CFD_SPREAD_MODEL', '#1850');
-export const CFD_FINANCING_MODEL = unset<CfdFinancingModel>('CFD_FINANCING_MODEL', '#1850');
-export const CFD_BORROW_MODEL = unset<CfdBorrowModel>('CFD_BORROW_MODEL', '#1850');
+// David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
+// 2% a year; extended to US CFD shorts by David 2026-09-29 (#1849)
+export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
+
+// ADR item 19: #1850's figures are sourced, not ruled; the sources sit on each in cfd-tariff.ts
+export const CFD_COST_MODEL = set<CfdCostModel>('CFD_COST_MODEL', '#1850', SAXO_CFD_COMMISSION);
+export const CFD_SPREAD_MODEL = set<CfdSpreadModel>('CFD_SPREAD_MODEL', '#1850', SAXO_CFD_SPREAD);
+export const CFD_FINANCING_MODEL = set<CfdFinancingModel>(
+  'CFD_FINANCING_MODEL',
+  '#1850',
+  SAXO_CFD_FINANCING,
+);
+export const CFD_BORROW_MODEL = set<CfdBorrowModel>(
+  'CFD_BORROW_MODEL',
+  '#1850',
+  saxoCfdBorrow(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR),
+);
 export const CFD_RESTING_STOP_VERIFIED = unset<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916');
 
 export interface CfdEntryGate {
@@ -102,9 +122,22 @@ export function cfdEntryRefusal(
     ?.refusal;
 }
 
-// David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
-// 2% a year; extended to US CFD shorts by David 2026-09-29 (#1849)
-export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
+type CfdCostParameters = { readonly [K in keyof CfdCosts]: Parameter<CfdCosts[K]> };
+
+const CFD_COST_PARAMETERS: CfdCostParameters = {
+  fee: CFD_COST_MODEL,
+  spread: CFD_SPREAD_MODEL,
+  financing: CFD_FINANCING_MODEL,
+  borrow: CFD_BORROW_MODEL,
+};
+
+export function declaredCfdCosts(
+  parameters: CfdCostParameters = CFD_COST_PARAMETERS,
+): CfdCosts | undefined {
+  const { fee, spread, financing, borrow } = parameters;
+  if (!isSet(fee) || !isSet(spread) || !isSet(financing) || !isSet(borrow)) return undefined;
+  return { fee: fee.value, spread: spread.value, financing: financing.value, borrow: borrow.value };
+}
 
 // doc 66 ruling (l): keep SGLN, SSLN (PHGP, PHSP are alternates doc 70 noted, not
 // separately committed lines), but no order in a complex line until David records
@@ -163,10 +196,38 @@ export const ARM2_SLEEVE_SPEC: SleeveSpec = {
   books: [{ variant: 'technical-only', instantiated: true }],
 };
 
+export const SIGNALS_SLEEVE_ID = 'signals';
+export const SIGNAL_MIN_REWARD_R = 2;
+// David 2026-09-30 (#1941): the whole idle 70% paper share, the loss and daily caps following it
+const SIGNALS_CAPITAL_SHARE = 0.7;
+const SIGNALS_NO_TIME_STOP_TRADING_DAYS = 1_000_000;
+
+// Sized on R = entry - stop: the decision's atr is R and the stop sits one "ATR" below entry
+export const SIGNALS_SLEEVE_SPEC: SleeveSpec = {
+  capitalShare: SIGNALS_CAPITAL_SHARE,
+  minimumCapitalGbp: 0,
+  capacityGbp: Number.POSITIVE_INFINITY,
+  validation: 'forward-paper',
+  macroGate: false,
+  sizing: {
+    riskFraction: DEBATE_RISK_FRACTION,
+    stopAtrMultiple: 1,
+    targetAtrMultiple: SIGNAL_MIN_REWARD_R,
+    timeStopTradingDays: SIGNALS_NO_TIME_STOP_TRADING_DAYS,
+    advShare: DEBATE_ADV_SHARE,
+    advWindowBars: DEBATE_ADV_WINDOW_BARS,
+  },
+  books: [
+    { variant: 'primary', instantiated: true },
+    { variant: 'no-veto', instantiated: true },
+  ],
+};
+
 // A sleeve missing here is a build gap, not a trading-state check
 export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
   [DEBATE_SLEEVE_ID]: DEBATE_SLEEVE_SPEC,
   [ARM2_SLEEVE_ID]: ARM2_SLEEVE_SPEC,
+  [SIGNALS_SLEEVE_ID]: SIGNALS_SLEEVE_SPEC,
 };
 
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
@@ -182,8 +243,8 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   RECONCILE_CASH_TOLERANCE_GBP,
 ];
 
-// A set parameter never blocks a cycle, so this list only ever holds an unset one;
-// ARM2_ENTRY_THRESHOLDS (#1773, set) stays out of it but stays in DECLARED_PARAMETERS
+// The cycle journals only the unset ones; ARM2_ENTRY_THRESHOLDS (#1773, set) stays out of it
+// but stays in DECLARED_PARAMETERS
 export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SOCIAL_SOURCE,
   G18_SENTIMENT_DEDUP_RULE,

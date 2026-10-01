@@ -29,7 +29,7 @@ import {
   SaxoReadOnlyApi,
   samplesToBars,
 } from '../../../providers/saxo-bars/index.js';
-import { isMainModule } from '../../cli-entrypoint.js';
+import { failExitCodeOnRejection, isMainModule } from '../../cli-entrypoint.js';
 import { barsToCsv, roundBarPrices } from './bar-csv.js';
 import type { FxRate } from './fx.js';
 import { parseBoeXudlussCsv } from './fx.js';
@@ -187,7 +187,7 @@ async function pullLine(ctx: PullContext, line: SaxoLine): Promise<PulledLine> {
   const first = bars[0];
   const last = bars[bars.length - 1];
   console.log(
-    `${line.tidm} (${line.uic}, ${line.unit}): ${bars.length} bars ${first?.date ?? '-'}..${last?.date ?? '-'}, FirstSampleTime ${page.firstSampleTime ?? '?'}, density ${(density(bars) * 100).toFixed(0)}%, dropped ${report.dropped_dates.length}, unit breaks ${report.unit_breaks.map((b) => `${b.date}×${b.factor}`).join(' ') || 'none'}, suspect flips ${report.suspect_flips?.count ?? 0}, shape: rescaled ${report.shape_repair.rescaled_fields.length} widened ${report.shape_repair.ranges_widened} dropped ${report.shape_repair.dropped_glitch_dates.length}`,
+    `${line.tidm} (${line.uic}, ${line.unit}): ${bars.length} bars ${first?.date ?? '-'}..${last?.date ?? '-'}, FirstSampleTime ${page.firstSampleTime ?? '?'}, density ${(density(bars) * 100).toFixed(0)}%, dropped ${report.dropped_dates.length}, unit breaks ${report.unit_breaks.map((b) => `${b.date}×${b.factor}`).join(' ') || 'none'}, suspect flips ${report.suspect_flips?.count ?? 0}, shape: rescaled ${report.shape_repair.rescaled_fields.length} replaced ${report.shape_repair.neighbour_repairs.length} widened ${report.shape_repair.ranges_widened} dropped ${report.shape_repair.dropped_glitch_dates.length}`,
   );
   return { line, details, page, bars, hygiene: report };
 }
@@ -452,8 +452,5 @@ async function main(argv: readonly string[]): Promise<void> {
 }
 
 if (isMainModule(import.meta.url)) {
-  main(process.argv.slice(2)).catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  void failExitCodeOnRejection(main(process.argv.slice(2)));
 }
