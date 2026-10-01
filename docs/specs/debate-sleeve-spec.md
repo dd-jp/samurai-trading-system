@@ -175,7 +175,7 @@ What the root imports from v1: `runDebate` and the three personas plus `Anthropi
 - The debate core has two debater seats; the third provider sits out each day by rotation (§4) rather than arguing.
 - The CFD short-availability check reads a Saxo reference-data catalogue from a file that the bar refresh rewrites before each non-dry cycle (#1916 part 1); the router itself does not call Saxo, so a failed refresh leaves the last file, which reads `no_catalogue` once it is more than 3 calendar days old (fail closed).
 - The 1x gross cap marks at the last bar; a short gapping up inside a session is bounded by the +30% gap sizing, not by the cap.
-- Replay harness (§9) limits that need a journal change, which is David's call (#1880 review, 2026-10-01):
+- Replay harness (§9) limits that need a journal change (#1880 review, 2026-10-01); David ruled on each on 2026-10-01 (doc 66, "replay journal gaps"; built under #1980–#1982):
   - A failed LLM call with no billed usage writes no `llm_call_log` row, and `stop_reason` is not logged. A debate with such a call cannot be reproduced, and a refusal replays as `end_turn` (`server/apps/v2/signal/replay-transport.ts`).
   - The 4,096-character response capture cap sits below what the pins may return (`JUDGE_MAX_TOKENS` 2048, `DEBATER_MAX_TOKENS` 1024, `server/apps/v2/signal/models.ts`). A truncated answer fails the replay closed.
   - There is no independent record of US headlines; they exist only inside the logged prompts. A name whose first prompt hit the 16,384-character prompt cap has unrecoverable headlines and replays as a `news_error` divergence, as does a name refused by the spend cap or by a news error.
