@@ -4830,6 +4830,13 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
         classifyPriorRearm(resting([leg({ type: 'stop', stop_price: null })]), 6, 0, 110),
       ).toBe('stale');
     });
+
+    it('treats a resting order at another target, or with no limit price, as stale', () => {
+      const legs = [leg({ type: 'stop', stop_price: '95' })];
+
+      expect(classifyPriorRearm(resting(legs), 6, 95, 111)).toBe('stale');
+      expect(classifyPriorRearm({ ...resting(legs), limit_price: null }, 6, 95, 0)).toBe('stale');
+    });
   });
 
   describe('since-floor audit edges', () => {
@@ -5039,6 +5046,23 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       const { client } = await rearmedSweep('new');
 
       expect(sweptIds(client).filter((id) => id === 'r0')).toHaveLength(2);
+    });
+
+    it('sweeps a re-armed OCO the venue returns without legs as no fills and no failure', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({}),
+        submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+        getOrder: vi.fn(async (id: string) =>
+          id === 'r0'
+            ? legless(orderAt('r0', `${KEY}:rearm`, { status: 'new' }))
+            : acceptedOrder({ legs: [] }),
+        ),
+      });
+      const adapter = adapterOn(client, { clock: new FixedClock(T0) });
+      await adapter.submitBracket(makeBracket());
+      await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+
+      await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
     });
   });
 
