@@ -11,6 +11,7 @@ import type {
   Sleeve,
   SleeveSpec,
   Valuation,
+  Venue,
 } from '../../../../contracts/index.js';
 import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import type { Clock } from '../../../shared/index.js';
@@ -360,6 +361,7 @@ export class PaperBooks implements BookLedger {
     tradingDate: string,
     markGbp: MarkPriceGbp,
     calendarDaysSinceLastMark: number,
+    timeStopPausedVenues: readonly Venue[] = [],
   ): BookDay {
     const { budget, sleeve } = this.#book(bookId);
     const previous = this.lastDay(bookId);
@@ -416,8 +418,11 @@ export class PaperBooks implements BookLedger {
           recordedAt,
         );
       this.db
-        .prepare('UPDATE v2_positions SET marks_held = marks_held + 1 WHERE book_id = ?')
-        .run(bookId);
+        .prepare(
+          `UPDATE v2_positions SET marks_held = marks_held + 1
+           WHERE book_id = ? AND venue NOT IN (SELECT value FROM json_each(?))`,
+        )
+        .run(bookId, JSON.stringify(timeStopPausedVenues));
       return {
         bookId,
         tradingDate,

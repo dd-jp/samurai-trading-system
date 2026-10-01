@@ -41,6 +41,8 @@ import {
   type MacroGateVerdict,
   macroGate,
   quotePerGbp,
+  type SitOutCode,
+  type VenueSessionGate,
 } from './data/index.js';
 import { type ReconcileOutcome, reconcileOrBlockEntries } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
@@ -69,6 +71,8 @@ export interface CycleDeps {
   readonly logger?: Logger | undefined;
   // Backtest only: forward paper must read a stale series as a data outage (#1804), never a delisting
   readonly closeEndedSeries?: boolean;
+  readonly venueSessions?: VenueSessionGate | undefined;
+  readonly runStartedAt?: Date | undefined;
 }
 
 export interface BookReport {
@@ -104,6 +108,10 @@ const EPOCH_ISO = new Date(0).toISOString();
 export function calendarDaysBetween(from: string | undefined, to: string): number {
   if (from === undefined) return 0;
   return Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / MS_PER_DAY));
+}
+
+function isEntryAction(decision: SleeveDecision): boolean {
+  return decision.action === 'enter_long' || decision.action === 'enter_short';
 }
 
 function opposite(side: OrderSide): OrderSide {
@@ -153,6 +161,15 @@ function positionKey(bookId: string, instrument: string): string {
   return `${bookId}|${instrument}`;
 }
 
+function approvedLimit(approval: EntryApproval): number | undefined {
+  return approval.order?.kind === 'bracket_entry' ? approval.order.entry : undefined;
+}
+
+// Entries journalled before #1815 carry no limit: they went out at the decision price
+function journalledLimit(order: JournalledOrder): number | undefined {
+  return numberOrUndefined(order.payload.limit) ?? numberOrUndefined(order.payload.price);
+}
+
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
@@ -193,6 +210,7 @@ class Cycle {
     private readonly macro: MacroGateVerdict,
     private readonly control: ManualControl,
     private readonly entryOrderIdFor: EntryOrderId = defaultEntryOrderId,
+    private readonly runStartedAt: Date = deps.runStartedAt ?? deps.clock.now(),
   ) {}
 
   fxFor(venue: Venue): number {
@@ -369,7 +387,7 @@ class Cycle {
   }
 
   fillSimulatedEntry(order: JournalledOrder): void {
-    const limit = order.payload.price as number;
+    const limit = journalledLimit(order) as number;
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const outcome = simulateLimitEntry(
@@ -913,6 +931,8 @@ class Cycle {
         size: approval.size,
         detail: submission.detail,
         price: decision.price,
+        limit: approvedLimit(approval),
+        entry_offset_bps: approval.entryOffsetBps,
         trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
@@ -922,15 +942,16 @@ class Cycle {
     return submission.outcome;
   }
 
-  notionalGbp(decision: SleeveDecision, size: number): number {
-    return (size * decision.price) / this.fxFor(decision.venue);
+  notionalGbp(decision: SleeveDecision, approval: EntryApproval): number {
+    const limit = approvedLimit(approval) ?? decision.price;
+    return (approval.size * limit) / this.fxFor(decision.venue);
   }
 
   restingNotionalGbp(bookId: string): number {
     let total = 0;
     for (const order of this.deps.journal.restingEntries(bookId)) {
       const size = numberOrUndefined(order.payload.size) ?? 0;
-      const price = numberOrUndefined(order.payload.price) ?? 0;
+      const price = journalledLimit(order) ?? 0;
       total += (size * price) / this.fxFor(order.venue as Venue);
     }
     return total;
@@ -993,10 +1014,7 @@ class Cycle {
 
   applyRoomGate(decision: SleeveDecision, approval: EntryApproval, room: EntryRoom): EntryApproval {
     if (approval.order === undefined || approval.size <= 0) return approval;
-    const refusal = this.deps.risk.entryRoomRefusal(
-      this.notionalGbp(decision, approval.size),
-      room,
-    );
+    const refusal = this.deps.risk.entryRoomRefusal(this.notionalGbp(decision, approval), room);
     return refusal === undefined ? approval : { size: approval.size, order: undefined, refusal };
   }
 
@@ -1072,11 +1090,39 @@ class Cycle {
     for (const proposed of decisions) {
       const { decision, gated } = this.resolveEntryGate(book, proposed, equityGbp, room);
       await this.settleEntry(book, decision, gated, () => {
-        const notionalGbp = this.notionalGbp(decision, gated.size);
+        const notionalGbp = this.notionalGbp(decision, gated);
         room.cashGbp -= notionalGbp;
         room.grossGbp -= notionalGbp;
       });
     }
+  }
+
+  withoutSittingOut(book: BookSpec, decisions: readonly SleeveDecision[]): SleeveDecision[] {
+    const gate = this.deps.venueSessions;
+    if (gate === undefined) return [...decisions];
+    return decisions.filter((proposed) => {
+      const code = isEntryAction(proposed)
+        ? gate.entrySitOut(proposed.venue, this.tradingDate, this.runStartedAt)
+        : undefined;
+      if (code === undefined) return true;
+      this.journalSitOut(book, proposed, code);
+      return false;
+    });
+  }
+
+  journalSitOut(book: BookSpec, proposed: SleeveDecision, code: SitOutCode): void {
+    this.deps.journal.recordDecision(book.id, this.tradingDate, vetoApplied(book, proposed), 0);
+    const message = `${book.id} ${proposed.instrument}: ${proposed.venue} entry sits out (${code})`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter: code,
+      ticket: '#1933',
+      message,
+      book_id: book.id,
+      instrument: proposed.instrument,
+    });
+    this.refusals.push(message);
   }
 
   journalSizingRefusal(book: BookSpec, decision: SleeveDecision, refusal?: string): void {
@@ -1128,6 +1174,7 @@ class Cycle {
       this.tradingDate,
       (i, v) => this.markGbp(i, v),
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
+      this.deps.venueSessions?.timeStopPausedVenues(previous?.tradingDate, this.tradingDate),
     );
   }
 
@@ -1391,7 +1438,7 @@ async function runUnmarked(
       books.push(book);
       await cycle.cancelStaleEntries(book);
       await cycle.exits(book, output.decisions);
-      await cycle.entries(book, output.decisions);
+      await cycle.entries(book, cycle.withoutSittingOut(book, output.decisions));
     }
   }
   await cycle.sweepFills();

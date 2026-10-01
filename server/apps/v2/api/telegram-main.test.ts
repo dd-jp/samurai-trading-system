@@ -1,20 +1,49 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import type { LogEntry } from '../../../shared/index.js';
-import { openMigratedStore, openSharedStore } from '../../../shared/store/index.js';
+import {
+  openMigratedStore,
+  openSharedStore,
+  type StoreHandle,
+} from '../../../shared/store/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';
-import type { BotFetch, BotResponse } from './telegram-bot.js';
+import type { BotResponse } from './telegram-bot.js';
 import {
   botTokenFrom,
   COMMANDS_SCHEMA_VERSION,
   composeTelegram,
+  main,
   ownerChatIdFrom,
   parseTelegramArgs,
+  type TelegramFetch,
 } from './telegram-main.js';
+
+const storeCalls = vi.hoisted(() => ({
+  opened: [] as StoreHandle[],
+  guarded: [] as unknown[][],
+}));
+
+vi.mock('../../../shared/store/index.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../shared/store/index.js')>();
+  return {
+    ...real,
+    openMigratedStore: (...args: Parameters<typeof real.openMigratedStore>) => {
+      const db = real.openMigratedStore(...args);
+      storeCalls.opened.push(db);
+      return db;
+    },
+    guardedStore: (...args: Parameters<typeof real.guardedStore>) => {
+      storeCalls.guarded.push(args.slice(1));
+      return real.guardedStore(...args);
+    },
+  };
+});
 
 const TOKEN = '123456789:AAH-test-token-abcdefghijklmnop';
 const OWNER = 424242;
@@ -24,6 +53,10 @@ const dirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  storeCalls.opened.length = 0;
+  storeCalls.guarded.length = 0;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -129,6 +162,10 @@ interface Sent {
   text: string;
 }
 
+const PING_URL = 'https://hc-ping.test/telegram-check';
+const ENV = { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USER_IDS: String(OWNER) };
+const ONLINE = 'Samurai v2 Telegram commands online. Send status, halt, resume or flatten.';
+
 function reply(body: unknown): BotResponse {
   return { ok: true, status: 200, json: () => Promise.resolve(body) };
 }
@@ -149,8 +186,13 @@ describe('composeTelegram, every command against a real store', () => {
       () => ({ text: 'resume', chat: OWNER }),
     ];
     let updateId = 0;
-    const fetchImpl: BotFetch = (url, init) => {
-      const body = JSON.parse(init.body) as Record<string, unknown>;
+    const pings: string[] = [];
+    const fetchImpl: TelegramFetch = (url, init) => {
+      if (url.startsWith(PING_URL)) {
+        pings.push(url);
+        return Promise.resolve(reply({}));
+      }
+      const body = JSON.parse(init.body ?? '{}') as Record<string, unknown>;
       if (url.endsWith('/sendMessage')) {
         sent.push(body as unknown as Sent);
         return Promise.resolve(reply({ ok: true }));
@@ -174,7 +216,7 @@ describe('composeTelegram, every command against a real store', () => {
     const logs: LogEntry[] = [];
     const composed = composeTelegram(
       parseTelegramArgs(['--store', storePath]),
-      { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USER_IDS: String(OWNER) },
+      { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL },
       { now: () => new Date(clockMs) },
       fetchImpl,
       { log: (entry) => logs.push(entry) },
@@ -194,7 +236,8 @@ describe('composeTelegram, every command against a real store', () => {
     expect(texts[5]).toMatch(/^Resumed/);
     expect(texts).toHaveLength(6);
     expect(sent.every((message) => message.chat_id === OWNER)).toBe(true);
-    expect(logs).toEqual([]);
+    expect(pings).toEqual([PING_URL]);
+    expect(logs.map((entry) => entry.event)).toEqual(['v2_heartbeat_sent']);
 
     const db = openMigratedStore(storePath, COMMANDS_SCHEMA_VERSION);
     try {
@@ -246,4 +289,300 @@ describe('composeTelegram, every command against a real store', () => {
       ),
     ).toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
   });
+});
+
+function messageFrom(updateId: number, text: string, chat = OWNER) {
+  return {
+    update_id: updateId,
+    message: {
+      date: Math.floor(NOW.getTime() / 1_000),
+      text,
+      chat: { id: chat, type: 'private' },
+      from: { id: chat },
+    },
+  };
+}
+
+interface Bench {
+  readonly fetchImpl: TelegramFetch;
+  readonly sent: Sent[];
+  readonly pings: string[];
+}
+
+function bench(
+  shutdown: AbortController,
+  batches: unknown[][],
+  options: { failSend?: number } = {},
+): Bench {
+  const sent: Sent[] = [];
+  const pings: string[] = [];
+  let sends = 0;
+  const fetchImpl: TelegramFetch = (url, init) => {
+    if (url.startsWith(PING_URL)) {
+      pings.push(url);
+      return Promise.resolve(reply({}));
+    }
+    if (url.endsWith('/sendMessage')) {
+      sends += 1;
+      if (sends === options.failSend) {
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) });
+      }
+      sent.push(JSON.parse(init.body ?? '{}') as Sent);
+      return Promise.resolve(reply({ ok: true }));
+    }
+    const next = batches.shift();
+    if (next === undefined) shutdown.abort();
+    return Promise.resolve(reply({ ok: true, result: next ?? [] }));
+  };
+  return { fetchImpl, sent, pings };
+}
+
+async function runComposed(
+  args: Parameters<typeof composeTelegram>[0],
+  env: NodeJS.ProcessEnv,
+  fetchImpl: TelegramFetch,
+  logs: LogEntry[],
+  shutdown: AbortController,
+): Promise<void> {
+  const composed = composeTelegram(args, env, { now: () => NOW }, fetchImpl, {
+    log: (entry) => logs.push(entry),
+  });
+  try {
+    await composed.run(shutdown.signal);
+  } finally {
+    composed.db.close();
+  }
+}
+
+describe('composeTelegram wiring', () => {
+  it('sends the dead-poller alert as critical, with sound, to the alert chat', async () => {
+    const shutdown = new AbortController();
+    const sent: unknown[] = [];
+    const fetchImpl: TelegramFetch = (url, init) => {
+      if (url.endsWith('/sendMessage')) {
+        const message = JSON.parse(init.body ?? '{}') as Sent;
+        sent.push(message);
+        if (message.text.includes('poller')) shutdown.abort();
+        return Promise.resolve(reply({ ok: true }));
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 429,
+        json: () => Promise.resolve({ parameters: { retry_after: 3600 } }),
+      });
+    };
+    await runComposed(
+      parseTelegramArgs(['--store', migratedStore()]),
+      { ...ENV, TELEGRAM_CHAT_ID: '-100777' },
+      fetchImpl,
+      [],
+      shutdown,
+    );
+    expect(sent.at(-1)).toEqual({
+      chat_id: '-100777',
+      text: 'Samurai v2 CRITICAL\nTelegram command poller: 1 poll failed in a row, last: Telegram getUpdates answered 429. Telegram asked to wait 3600 s. Phone halt, resume and flatten may not reach Samurai.',
+      disable_notification: false,
+    });
+  });
+
+  it('journals 1000 stranger updates from one chat once, replies to none and still answers the owner', async () => {
+    const storePath = migratedStore();
+    const shutdown = new AbortController();
+    const flood = Array.from({ length: 1000 }, (_, i) => messageFrom(i + 1, 'halt', STRANGER));
+    const b = bench(shutdown, [[...flood, messageFrom(1001, 'halt')]]);
+    await runComposed(parseTelegramArgs(['--store', storePath]), ENV, b.fetchImpl, [], shutdown);
+    expect(b.sent).toEqual([
+      { chat_id: OWNER, text: ONLINE },
+      {
+        chat_id: OWNER,
+        text: 'Paused: no new entries from the next cycle. Open positions keep their resting stops.',
+      },
+    ]);
+    const db = openMigratedStore(storePath, COMMANDS_SCHEMA_VERSION);
+    try {
+      expect(
+        db.prepare('SELECT chat_id, outcome FROM v2_commands ORDER BY command_id').all(),
+      ).toEqual([
+        { chat_id: String(STRANGER), outcome: 'refused_unauthorized' },
+        { chat_id: String(OWNER), outcome: 'applied' },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('prefixes the start notice and every reply in a dry run, and sends no heartbeat or alert', async () => {
+    const shutdown = new AbortController();
+    const b = bench(shutdown, [[messageFrom(1, 'status')]]);
+    const logs: LogEntry[] = [];
+    await runComposed(
+      { ...parseTelegramArgs(['--store', migratedStore()]), dryRun: true },
+      { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL, SAMURAI_ALERTS: 'log-only' },
+      b.fetchImpl,
+      logs,
+      shutdown,
+    );
+    expect(b.sent[0]?.text).toBe(`[dry-run] ${ONLINE}`);
+    expect(b.sent[1]?.text).toMatch(/^\[dry-run\] Samurai v2 status \(dry-run\)\n/);
+    expect(b.pings).toEqual([]);
+    expect(logs).toEqual([]);
+  });
+
+  it('builds the paper alert path, which a dry run skips', async () => {
+    const shutdown = new AbortController();
+    const b = bench(shutdown, []);
+    const logs: LogEntry[] = [];
+    await runComposed(
+      parseTelegramArgs(['--store', migratedStore()]),
+      { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL, SAMURAI_ALERTS: 'log-only' },
+      b.fetchImpl,
+      logs,
+      shutdown,
+    );
+    expect(b.sent.map((message) => message.text)).toEqual([ONLINE]);
+    expect(logs.map((entry) => entry.event)).toContain('v2_alerts_log_only');
+  });
+
+  it('warns once at start when the poller heartbeat URL is unset, then never pings', async () => {
+    const shutdown = new AbortController();
+    const b = bench(shutdown, [[], []]);
+    const logs: LogEntry[] = [];
+    await runComposed(
+      parseTelegramArgs(['--store', migratedStore()]),
+      ENV,
+      b.fetchImpl,
+      logs,
+      shutdown,
+    );
+    expect(b.pings).toEqual([]);
+    expect(logs).toEqual([
+      {
+        trace_id: 'v2-telegram',
+        stage: 'v2',
+        level: 'warn',
+        event: 'v2_telegram_heartbeat_unset',
+        message: 'HEALTHCHECKS_TELEGRAM_PING_URL is not set: no healthchecks ping for the poller',
+      },
+    ]);
+  });
+
+  it('logs a failed start notice and keeps polling', async () => {
+    const shutdown = new AbortController();
+    const b = bench(shutdown, [[messageFrom(1, 'resume')]], { failSend: 1 });
+    const logs: LogEntry[] = [];
+    await runComposed(
+      parseTelegramArgs(['--store', migratedStore()]),
+      { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL },
+      b.fetchImpl,
+      logs,
+      shutdown,
+    );
+    expect(logs[0]).toEqual({
+      trace_id: 'v2-telegram',
+      stage: 'v2',
+      level: 'warn',
+      event: 'v2_telegram_start_notice_failed',
+      message: 'Telegram sendMessage answered 500',
+    });
+    expect(b.sent.map((message) => message.text)).toEqual(['Already running.']);
+  });
+
+  it('writes controls and the journal through sole-writer guards that stay on whatever the env says', () => {
+    vi.stubEnv('SAMURAI_STORE_GUARD', 'off');
+    const composed = composeTelegram(
+      parseTelegramArgs(['--store', migratedStore()]),
+      ENV,
+      { now: () => NOW },
+      () => Promise.reject(new Error('unused')),
+      { log: () => undefined },
+    );
+    composed.db.close();
+    expect(storeCalls.guarded).toEqual([
+      ['dashboard', { enabled: true }],
+      ['telegram', { enabled: true }],
+    ]);
+  });
+
+  it('really waits after a failed poll instead of spinning, and wakes on shutdown', async () => {
+    const shutdown = new AbortController();
+    let polls = 0;
+    const fetchImpl: TelegramFetch = async (url) => {
+      if (url.endsWith('/sendMessage')) return reply({ ok: true });
+      polls += 1;
+      await new Promise((resolve) => setImmediate(resolve));
+      throw new TypeError('fetch failed');
+    };
+    setTimeout(() => shutdown.abort(), 50);
+    await runComposed(
+      parseTelegramArgs(['--store', migratedStore()]),
+      ENV,
+      fetchImpl,
+      [],
+      shutdown,
+    );
+    expect(polls).toBe(1);
+  });
+});
+
+describe('main', () => {
+  it('runs until SIGTERM, then closes the store', async () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const sigintBefore = new Set(process.listeners('SIGINT'));
+    const sigtermBefore = process.listenerCount('SIGTERM');
+    let polls = 0;
+    vi.stubGlobal('fetch', (url: string) => {
+      if (!url.endsWith('/sendMessage')) {
+        polls += 1;
+        process.emit('SIGTERM');
+      }
+      return Promise.resolve(reply({ ok: true, result: [] }));
+    });
+    await main(['--store', migratedStore()], ENV);
+    for (const listener of process.listeners('SIGINT')) {
+      if (!sigintBefore.has(listener)) process.off('SIGINT', listener);
+    }
+    expect(polls).toBe(1);
+    expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
+    expect(storeCalls.opened).toHaveLength(1);
+    expect(storeCalls.opened[0]?.open).toBe(false);
+  });
+
+  it('stops on SIGINT too', async () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const sigtermBefore = new Set(process.listeners('SIGTERM'));
+    let polls = 0;
+    vi.stubGlobal('fetch', (url: string) => {
+      if (!url.endsWith('/sendMessage')) {
+        polls += 1;
+        process.emit('SIGINT');
+      }
+      return Promise.resolve(reply({ ok: true, result: [] }));
+    });
+    await main(['--store', migratedStore()], ENV);
+    for (const listener of process.listeners('SIGTERM')) {
+      if (!sigtermBefore.has(listener)) process.off('SIGTERM', listener);
+    }
+    expect(polls).toBe(1);
+    expect(storeCalls.opened[0]?.open).toBe(false);
+  });
+
+  it('refuses to start without the owner, before opening the store', async () => {
+    await expect(main(['--store', migratedStore()], { TELEGRAM_BOT_TOKEN: TOKEN })).rejects.toThrow(
+      /TELEGRAM_ALLOWED_USER_IDS/,
+    );
+    expect(storeCalls.opened).toEqual([]);
+  });
+});
+
+describe('entrypoint', () => {
+  it('prints the error and exits 1', () => {
+    const repo = fileURLToPath(new URL('../../../../', import.meta.url));
+    const run = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', fileURLToPath(new URL('./telegram-main.ts', import.meta.url)), '--wat'],
+      { cwd: repo, encoding: 'utf8', env: { PATH: process.env.PATH ?? '' }, timeout: 60_000 },
+    );
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/Unknown option '--wat'/);
+  }, 60_000);
 });
