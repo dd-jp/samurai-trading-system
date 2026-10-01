@@ -172,6 +172,7 @@ async function openMultiVenueMarket(
 
 export async function runCrossAssetTrendAgainst(
   market: MarketData,
+  bars: BarsSource,
   halfSpreadBps: (instrument: string) => number,
   ledger: TrialLedger,
   logger: Logger,
@@ -179,9 +180,12 @@ export async function runCrossAssetTrendAgainst(
 ): Promise<CrossAssetTrendRunReport> {
   const trials = [100, 200].map((sma) => ({
     config: { sma_window: sma },
-    sleeve: createCrossAssetTrendSleeve(sma as 100 | 200),
+    sleeve: createCrossAssetTrendSleeve(bars, sma as 100 | 200),
   }));
-  const benchmark = { config: { benchmark: true }, sleeve: createCrossAssetTrendBenchmarkSleeve() };
+  const benchmark = {
+    config: { benchmark: true },
+    sleeve: createCrossAssetTrendBenchmarkSleeve(bars),
+  };
   return runCandidateAgainst(
     {
       candidate: CROSS_ASSET_TREND_CANDIDATE_ID,
@@ -201,12 +205,12 @@ export async function runCrossAssetTrendCandidate(
   cliOptions: BacktestCliOptions = {},
 ): Promise<CrossAssetTrendRunReport> {
   const options = resolveCliOptions(cliOptions);
-  const { market } = await openMultiVenueMarket(options);
+  const { market, bars } = await openMultiVenueMarket(options);
   const halfSpreadBps = halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath);
   const db = openSharedStore(options.storePath);
   try {
     const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());
-    return await runCrossAssetTrendAgainst(market, halfSpreadBps, ledger, options.logger);
+    return await runCrossAssetTrendAgainst(market, bars, halfSpreadBps, ledger, options.logger);
   } finally {
     db.close();
   }
