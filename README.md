@@ -311,7 +311,7 @@ CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 - **checks** — `npm run lint:oxlint`, `npm run lint:biome`, Fallow architecture boundaries, `npm run fallow:dead-code`, Fallow duplication (advisory), Fallow design-system drift (advisory), `npm run typecheck`, `npm run build`, `npm run build:web`, `npm run test`, `npm run check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
 - **e2e** — the Playwright suite against the built bundle, on its own runner with Chromium installed; failures upload traces.
 
-`npm run mutation:local` and `npm run knip` are not wired into CI — implementer-run gates only.
+`npm run knip` is not wired into CI — an implementer-run gate only. Mutation testing runs on CI as `mutation-shard` (four runners) and `mutation` (the merged 80% score) when a PR changes a risk, sizing or loss-budget line.
 
 Both must pass before merge.
 
@@ -416,7 +416,7 @@ Every script in `package.json`, all 42 of them. There are no others.
 | quality | `npm run test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate. What `precommit` runs |
 | quality | `npm run test:watch` | Vitest in watch mode |
 | quality | `npm run e2e` | Playwright suite against the built bundle, on a port picked fresh per run (#1298) so two checkouts can run it at once. CI job of its own |
-| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator, scoped to trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`) changed vs a base ref, mirroring `test:local`'s diff pattern. 80% score bar on those packages only (#1634). Implementer gate, not wired into `ci.yml` |
+| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator on the lines of trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`, v2 `risk`, momentum `loss-budget` and `sizing`) changed vs a base ref, incremental, 80% score bar on those lines (#1634; doc 66, 2026-10-01). Runs on CI in four shards |
 | quality | `npm run lint:oxlint` | `oxlint` — barrel/import-boundary enforcement (`.oxlintrc.json`), comment-slop rules, unused-vars (sole owner — Biome's `noUnusedVariables` is off) |
 | quality | `npm run lint:oxlint:fix` | `oxlint --fix` |
 | quality | `npm run lint:biome` | `biome check .` — Biome's recommended rules + formatting |
