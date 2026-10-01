@@ -41,6 +41,8 @@ import {
   type MacroGateVerdict,
   macroGate,
   quotePerGbp,
+  type SitOutCode,
+  type VenueSessionGate,
 } from './data/index.js';
 import { type ReconcileOutcome, reconcileOrBlockEntries } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
@@ -67,6 +69,8 @@ export interface CycleDeps {
   readonly logger?: Logger | undefined;
   // Backtest only: forward paper must read a stale series as a data outage (#1804), never a delisting
   readonly closeEndedSeries?: boolean;
+  readonly venueSessions?: VenueSessionGate | undefined;
+  readonly runStartedAt?: Date | undefined;
 }
 
 export interface BookReport {
@@ -140,6 +144,10 @@ function bracketExit(
     return { priceGbp: held.targetGbp, crossesSpread: false };
   }
   return undefined;
+}
+
+function isEntryAction(decision: SleeveDecision): boolean {
+  return decision.action === 'enter_long' || decision.action === 'enter_short';
 }
 
 function opposite(side: OrderSide): OrderSide {
@@ -233,6 +241,7 @@ class Cycle {
     private readonly macro: MacroGateVerdict,
     private readonly control: ManualControl,
     private readonly entryOrderIdFor: EntryOrderId = defaultEntryOrderId,
+    private readonly runStartedAt: Date = deps.runStartedAt ?? deps.clock.now(),
   ) {}
 
   fxFor(venue: Venue): number {
@@ -1119,6 +1128,34 @@ class Cycle {
     }
   }
 
+  withoutSittingOut(book: BookSpec, decisions: readonly SleeveDecision[]): SleeveDecision[] {
+    const gate = this.deps.venueSessions;
+    if (gate === undefined) return [...decisions];
+    return decisions.filter((proposed) => {
+      const code = isEntryAction(proposed)
+        ? gate.entrySitOut(proposed.venue, this.tradingDate, this.runStartedAt)
+        : undefined;
+      if (code === undefined) return true;
+      this.journalSitOut(book, proposed, code);
+      return false;
+    });
+  }
+
+  journalSitOut(book: BookSpec, proposed: SleeveDecision, code: SitOutCode): void {
+    this.deps.journal.recordDecision(book.id, this.tradingDate, vetoApplied(book, proposed), 0);
+    const message = `${book.id} ${proposed.instrument}: ${proposed.venue} entry sits out (${code})`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter: code,
+      ticket: '#1933',
+      message,
+      book_id: book.id,
+      instrument: proposed.instrument,
+    });
+    this.refusals.push(message);
+  }
+
   journalSizingRefusal(book: BookSpec, decision: SleeveDecision, refusal?: string): void {
     const parameter = SIZING_REFUSAL_PARAMETERS[refusal ?? ''];
     if (parameter === undefined) return;
@@ -1168,6 +1205,7 @@ class Cycle {
       this.tradingDate,
       (i, v) => this.markGbp(i, v),
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
+      this.deps.venueSessions?.timeStopPausedVenues(previous?.tradingDate, this.tradingDate),
     );
   }
 
@@ -1431,7 +1469,7 @@ async function runUnmarked(
       books.push(book);
       await cycle.cancelStaleEntries(book);
       await cycle.exits(book, output.decisions);
-      await cycle.entries(book, output.decisions);
+      await cycle.entries(book, cycle.withoutSittingOut(book, output.decisions));
     }
   }
   await cycle.sweepFills();

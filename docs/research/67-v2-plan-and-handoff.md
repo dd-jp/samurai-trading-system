@@ -173,7 +173,7 @@ Extend `Sleeve` with universe, signal and sizing hints, a minimum capital and a 
   - The freshness check stays alongside.
   - Four dry-run dates: one change in 160 decisions. GEV on 2024-11-06 (152 bars since its 2024-04-02 listing) was debated on a partial SMA; it is now skipped `window_coverage` in both books that saw it. The 60 orders are unchanged.
   - The debate's `atr_unavailable` branch is gone: a covered 200-session window always yields ATR(20) and the 200-day SMA.
-  - Known limit: the calendar is US-only. Before Saxo LSE names join the universe, the calendar must be per venue, or UK holidays count as gaps and LSE bars on US holidays are ignored.
+  - ~~Known limit: the calendar is US-only. Before Saxo LSE names join the universe, the calendar must be per venue, or UK holidays count as gaps and LSE bars on US holidays are ignored.~~ Resolved: window coverage reads each venue's own reference bars (`calendarReferenceFor`: SPY for US names, ISF for LSE names), and since #1933 the paper cycle's trading-day rule is per venue too (`server/apps/v2/data/venue-sessions.ts`, doc 66 2026-09-30).
 - **PR 3b (simulated costs):**
   - Every simulated fill moves against the order by half the spread plus impact (spec C1, v1's uncalibrated coefficient; it probably understates impact at larger capital), and pays the venue fee: Alpaca regulatory fees, Saxo 0.08% per side.
   - A bracket stop pays spread, impact and fee; a target (a resting limit) pays the fee only. Both used to fill at the leg price with no cost.
@@ -369,7 +369,7 @@ The **Question** and **Recommendation** columns are what was asked and proposed 
 | R6 | **News source for LSE ETFs** for the debate (Alpaca news is US-only; Saxo news is unreachable over OpenAPI, memory saxo-platform-oapi-vs-openapi). | Step 3 |
 | R7 | **Live end-of-day price source for LSE** that permits automated use (Yahoo terms; Saxo is 15-min delayed). | Step 3 |
 | R8 | **Dividends and corporate actions:** accumulating vs distributing ETFs, backtest vs live treatment, ex-dividend drops tripping stops. | Step 3 |
-| R9 | **Holiday calendars** for US and UK, and their expiry. | Paper start |
+| R9 | **Holiday calendars** for US and UK, and their expiry. *(Built 2026-09-30, #1933: the paper cycle reads the in-tree hand tables, US through 2027-12-31 and LSE through 2028-12-31. A weekday past a table refuses that venue's entries (`venue_calendar_uncovered`) and never skips the cycle, so the tables must be extended before 2027-12-31. The backtest takes its sessions from one venue's reference bars, so a closed day never runs there.)* | Paper start |
 | R10 | **LLM providers:** can GPT and DeepSeek versions be pinned via OpenRouter; data-retention/privacy terms (DeepSeek especially); rate limits. | Step 3 |
 | R11 | **Funding Alpaca from the UK:** wire fees, Wise support, conversion cost. | Live |
 | R12 | **UK tax on funds:** offshore-fund rules (gains on non-reporting funds taxed as income, not CGT; most US-listed ETFs are non-reporting; screen LSE ETFs for HMRC reporting-fund status); share matching (same-day and 30-day rules) under weekly rebalances, which the tax log must implement. | Step 1 |

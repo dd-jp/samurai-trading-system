@@ -31,9 +31,10 @@ import {
   type CycleDeps,
   calendarDaysBetween,
   runCycle,
+  runEntryPass,
   vetoApplied,
 } from './cycle.js';
-import { addDays, BarsMarketData } from './data/index.js';
+import { addDays, BarsMarketData, TABLE_VENUE_SESSIONS } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import type { FillPricing } from './execution/simulated-costs.js';
@@ -4159,5 +4160,192 @@ describe('runCycle: a held name whose series ends (doc 70 §2.4, #1911)', () => 
       });
     }
     expect(endedLogs()).toEqual(ENDED_LOGS);
+  });
+});
+
+describe('runCycle with per-venue sessions (#1933)', () => {
+  const longIsf: SleeveDecision = { ...longAapl, instrument: 'ISF', venue: 'saxo' };
+  const BOOKS = ['debate/primary', 'debate/no-macro-gate'];
+
+  function sessioned(decisions: readonly SleeveDecision[], now: string): Harness {
+    return {
+      ...harness(decisions, true),
+      clock: new SimulatedClock(new Date(now)),
+      venueSessions: TABLE_VENUE_SESSIONS,
+    };
+  }
+
+  function sitOuts(deps: CycleDeps) {
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    return db
+      .prepare(
+        "SELECT scope, parameter, book_id, instrument, message FROM v2_refusals WHERE ticket = '#1933' ORDER BY rowid",
+      )
+      .all();
+  }
+
+  function entryInstruments(deps: CycleDeps, bookId: string) {
+    return orders(deps, bookId)
+      .filter((order) => order.leg === 'entry')
+      .map((order) => order.client_order_id.split('-').at(-1));
+  }
+
+  it('Thanksgiving: US names sit out with venue_closed while LSE names enter', async () => {
+    const deps = sessioned([longAapl, longIsf], '2026-11-26T06:30:00.000Z');
+    const report = await runCycle(deps, '2026-11-26');
+    expect(report).toMatchObject({ decisions: 2, entries: 2 });
+    for (const bookId of BOOKS) {
+      expect(entryInstruments(deps, bookId)).toEqual(['ISF']);
+      expect(sizeShares(deps, bookId, '2026-11-26', 'AAPL')).toBe(0);
+    }
+    expect(sitOuts(deps)).toEqual(
+      BOOKS.map((bookId) => ({
+        scope: 'entry',
+        parameter: 'venue_closed',
+        book_id: bookId,
+        instrument: 'AAPL',
+        message: `${bookId} AAPL: alpaca entry sits out (venue_closed)`,
+      })),
+    );
+    expect(report.refusals).toContain('debate/primary AAPL: alpaca entry sits out (venue_closed)');
+  });
+
+  it('Thanksgiving sits a US CFD short out too', async () => {
+    const deps = sessioned([shortAapl], '2026-11-26T06:30:00.000Z');
+    await runCycle(deps, '2026-11-26');
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual([]);
+    expect(sitOuts(deps)).toMatchObject(
+      BOOKS.map((bookId) => ({ parameter: 'venue_closed', book_id: bookId, instrument: 'AAPL' })),
+    );
+  });
+
+  it('an LSE-only holiday sits the LSE names out and the US names enter', async () => {
+    const deps = sessioned([longAapl, longIsf], '2026-12-28T06:30:00.000Z');
+    await runCycle(deps, '2026-12-28');
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(['AAPL']);
+    expect(sitOuts(deps)).toMatchObject(
+      BOOKS.map((bookId) => ({ parameter: 'venue_closed', book_id: bookId, instrument: 'ISF' })),
+    );
+  });
+
+  it.each([
+    ['2026-09-30T06:30:00.000Z', ['AAPL', 'ISF'], []],
+    ['2026-09-30T07:00:00.000Z', ['AAPL'], ['ISF']],
+    ['2026-09-30T13:30:00.000Z', [], ['AAPL', 'ISF']],
+  ])('a run starting %s enters %j and refuses %j as a late wake', async (now, entered, late) => {
+    const deps = sessioned([longAapl, longIsf], now);
+    await runCycle(deps, '2026-09-30');
+    expect(entryInstruments(deps, 'debate/primary')).toEqual(entered);
+    expect(
+      (sitOuts(deps) as { parameter: string; book_id: string; instrument: string }[])
+        .filter((row) => row.book_id === 'debate/primary')
+        .map((row) => [row.parameter, row.instrument]),
+    ).toEqual(late.map((instrument) => ['late_wake_entry_cutoff', instrument]));
+  });
+
+  function slowDebate(deps: Harness, debateEndsAt: string): Harness {
+    const registry = new SleeveRegistry();
+    registry.register({
+      ...deps.sleeve,
+      decide: (...args: Parameters<Sleeve['decide']>) => {
+        (deps.clock as SimulatedClock).advanceTo(new Date(debateEndsAt));
+        return deps.sleeve.decide(...args);
+      },
+    });
+    return { ...deps, registry };
+  }
+
+  it('an on-time run whose debate drags past both opens still enters in both books', async () => {
+    const deps = slowDebate(
+      sessioned([longAapl, longIsf], '2026-09-30T06:30:00.000Z'),
+      '2026-09-30T14:00:00.000Z',
+    );
+    const report = await runCycle(deps, '2026-09-30');
+    expect(deps.clock.now().toISOString()).toBe('2026-09-30T14:00:00.000Z');
+    expect(report.entries).toBe(4);
+    for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(['AAPL', 'ISF']);
+    expect(sitOuts(deps)).toEqual([]);
+  });
+
+  it.each([
+    ['2026-09-30T06:30:00.000Z', '2026-09-30T14:00:00.000Z', ['AAPL', 'ISF']],
+    ['2026-09-30T13:30:00.000Z', '2026-09-30T06:30:00.000Z', []],
+  ])(
+    'judges the cutoff by a run start of %s, not the cycle clock of %s',
+    async (started, now, entered) => {
+      const deps = { ...sessioned([longAapl, longIsf], now), runStartedAt: new Date(started) };
+      await runCycle(deps, '2026-09-30');
+      for (const bookId of BOOKS) expect(entryInstruments(deps, bookId)).toEqual(entered);
+    },
+  );
+
+  it('a late wake still exits and marks', async () => {
+    const deps = sessioned([longAapl], '2026-09-24T06:30:00.000Z');
+    await openBooks(deps);
+    const late = { ...deps, clock: new SimulatedClock(new Date('2026-09-28T20:00:00.000Z')) };
+    late.setDecisions([{ ...longAapl, action: 'exit' }]);
+    const report = await runCycle(late, '2026-09-28');
+    expect(report).toMatchObject({ skipped: false, exits: 2 });
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+  });
+
+  it('the run after a closed venue day, whose mark repeats the bar, does not count toward its time stop', async () => {
+    const deps = sessioned([longAapl, longIsf], '2026-11-24T06:30:00.000Z');
+    await runCycle(deps, '2026-11-24');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-11-25');
+    const marks = () =>
+      ['AAPL', 'ISF'].map((instrument) => [
+        instrument,
+        deps.books.position('debate/no-macro-gate', instrument)?.marksHeld,
+      ]);
+    expect(marks()).toEqual([
+      ['AAPL', 1],
+      ['ISF', 1],
+    ]);
+    await runCycle(deps, '2026-11-26');
+    expect(marks()).toEqual([
+      ['AAPL', 2],
+      ['ISF', 2],
+    ]);
+    await runCycle(deps, '2026-11-27');
+    expect(marks()).toEqual([
+      ['AAPL', 2],
+      ['ISF', 3],
+    ]);
+    await runCycle(deps, '2026-11-30');
+    expect(marks()).toEqual([
+      ['AAPL', 3],
+      ['ISF', 4],
+    ]);
+  });
+
+  it('exits a US name on Thanksgiving when its exit is signalled', async () => {
+    const deps = sessioned([longAapl], '2026-11-24T06:30:00.000Z');
+    await runCycle(deps, '2026-11-24');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-11-25');
+    deps.setDecisions([{ ...longAapl, action: 'exit' }]);
+    const report = await runCycle(deps, '2026-11-26');
+    expect(report.exits).toBe(2);
+    expect(
+      deps.journal.orderFor('v2-debate-no-macro-gate-2026-11-26-AAPL-exit')?.payload,
+    ).toMatchObject({ reason: 'signal_exit' });
+    expect(sitOuts(deps)).toEqual([]);
+  });
+
+  it('never gates the intraday entry pass, which trades inside the session by design', async () => {
+    const deps = sessioned([], '2026-09-30T15:00:00.000Z');
+    const report = await runEntryPass(deps, {
+      tradingDate: '2026-09-30',
+      sleeveId: 'debate',
+      decisionsFor: () => [longAapl],
+      entryOrderId: (book, instrument, date) => `sig-${book.id}-${date}-${instrument}`,
+      blockedBookIds: new Set(),
+    });
+    expect(report.entries).toBe(2);
+    expect(sitOuts(deps)).toEqual([]);
   });
 });

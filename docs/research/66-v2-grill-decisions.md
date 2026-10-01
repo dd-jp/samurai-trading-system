@@ -323,6 +323,17 @@ Open after these rulings: whether #1854 (stale-price guard, parked "until an ext
 
 Still open and recorded, not ruled: the universe is only the current S&P 500 constituents; the shadow fills over the whole day's bar; the ≤10% veto-rate cap is not enforced in code; a failed signal is never retried; a zone that straddles the close enters at its high.
 
+## Rulings of 2026-09-30 — venue holidays and late wakes (#1933)
+
+David ruled in chat, recorded on [#1933](https://github.com/dd-jp/samurai-trading-system/issues/1933), and approved building it ahead of the ticket's "when logs show it" gating, with Thanksgiving (26 November 2026) as the first case.
+
+1. **Holidays are per venue.** On a day one venue is closed, its names sit out: no entries (`venue_closed`), and the day does not count toward their time stop. The other venue trades normally. Build note (not a ruling): a run marks the last bar before its trading date, so the holiday's own run still marks a new bar (the day before) and counts; the run after it repeats that bar and is the one not counted. A run counts for a venue when that venue had a session on or after the previous mark's trading date and before the run's own. The whole cycle skips only when both are closed; that skip is journalled (`venues_closed`), and the missed-run check (#1878) passes over it by the same day rule.
+2. **Late wake is per venue.** A run that starts late places no new LSE entries from 08:00 London (the LSE open) and no new US entries from the New York open, refused as `late_wake_entry_cutoff`. Exits and marks always run.
+3. **The cutoff is measured at run start** (ruled on PR #1957's open questions). The clock is read once when the run starts, before the bar refresh, and that instant judges every book. An on-time run never loses entries to slow debates, and paired books (primary vs no-macro-gate, debate vs arm 2) are always treated alike.
+4. **The US cutoff follows the actual New York open in London time** (same ruling): 09:30 New York, which is 13:30 London in the weeks the two clock changes differ (26–30 October 2026, 15–26 March 2027) and 14:30 London otherwise. The LSE cutoff stays 08:00 London.
+
+Built (not ruled): the day rule reads the in-tree hand calendars, and a weekday past a calendar's coverage refuses that venue's entries (`venue_calendar_uncovered`) rather than counting the day closed, so exits and marks keep running. Saxo CFDs follow their underlying's exchange (`saxo_cfd_usd` US, `saxo_cfd_gbp` LSE). The intraday signals pass is not gated: it trades inside the US session by design. Open for David: a manual `--date` rerun of a past date refuses every entry as a late wake, because that date's cutoffs fall before any rerun starts. Measuring at run start leaves this unchanged (a start is never later than an entry, so the change can only turn a refusal into an entry); the behaviour stands until ruled.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
