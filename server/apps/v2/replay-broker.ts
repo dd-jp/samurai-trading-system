@@ -176,7 +176,7 @@ export class JournalReplayBroker implements BrokerAdapter {
   }
 
   // The cycle reconciles after its first sweep, so a fill journalled after the day's first
-  // reconcile was booked at the second sweep and must not be visible to the decisions
+  // reconcile was booked at the second sweep and must not be visible to the decisions or exits
   #firstReconcileAt(): string {
     const row = this.day.db
       .prepare('SELECT MIN(recorded_at) AS at FROM v2_reconciles WHERE trading_date = ?')
@@ -197,12 +197,17 @@ export class JournalReplayBroker implements BrokerAdapter {
       .prepare(
         `SELECT json_extract(o.payload, '$.size') AS size,
            (SELECT SUM(f.qty) FROM v2_fills f
-             WHERE f.client_order_id = o.client_order_id AND f.trading_date <= @date) AS filled,
+             WHERE f.client_order_id = o.client_order_id
+               AND (f.trading_date < @date OR (f.trading_date = @date AND f.recorded_at <= @cut)))
+             AS filled,
            EXISTS (SELECT 1 FROM v2_fills f
-             WHERE f.client_order_id = o.client_order_id AND f.trading_date = @date) AS today
+             WHERE f.client_order_id = o.client_order_id AND f.trading_date = @date
+               AND f.recorded_at <= @cut) AS today
          FROM v2_orders o WHERE o.client_order_id = @id`,
       )
-      .get({ date: tradingDate, id: clientOrderId }) as FlattenFills | undefined;
+      .get({ date: tradingDate, id: clientOrderId, cut: this.#firstReconcileAt() }) as
+      | FlattenFills
+      | undefined;
     if (flatten?.today !== 1) return 'submitted';
     return (flatten.filled ?? 0) < (flatten.size ?? 0) ? 'partially_filled' : 'filled';
   }

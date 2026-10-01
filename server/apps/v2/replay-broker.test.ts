@@ -134,6 +134,18 @@ describe('JournalReplayBroker', () => {
     expect(await state()).toBe('filled');
   });
 
+  it('reads a flatten only by the fills journalled by the first reconcile, as the resume saw it live', async () => {
+    order('late-exit', 'submitted', { size: 10 });
+    fill('alpaca:l1', 'late-exit', 7, 0, { qty: 4, at: `${DAY}T07:31:00.000Z` });
+    reconciled(`${DAY}T07:32:00.000Z`);
+    fill('alpaca:l2', 'late-exit', 7, 0, { qty: 6, at: `${DAY}T07:40:00.000Z` });
+    order('swept-exit', 'submitted', { size: 3 });
+    fill('alpaca:s1', 'swept-exit', 7, 0, { at: `${DAY}T07:40:00.000Z` });
+    const state = async (id: string) => (await broker().resumeFlatten(id))?.order_state;
+    expect(await state('late-exit')).toBe('partially_filled');
+    expect(await state('swept-exit')).toBe('submitted');
+  });
+
   it('reads a flatten as cancelled when the day rearmed it, filled when it filled, else still working', async () => {
     order('rearmed-exit', 'submitted', {});
     order('rearm', 'submitted', { exit_client_order_id: 'rearmed-exit' });
