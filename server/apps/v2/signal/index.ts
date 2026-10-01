@@ -64,6 +64,7 @@ export {
   UnsetParameterError,
 } from './parameters.js';
 export {
+  commonPrefixLength,
   type LoggedCall,
   loggedNewsSource,
   ReplayLog,
@@ -71,6 +72,11 @@ export {
   ReplayTransport,
 } from './replay-transport.js';
 export { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
-export { MIN_SECRET_LENGTH, type SecretSource, secretsFromEnv } from './secret-guard.js';
+export {
+  MIN_SECRET_LENGTH,
+  type SecretSource,
+  secretsFromEnv,
+  secretWireForms,
+} from './secret-guard.js';
 export { createSignalsSleeve } from './signals-sleeve.js';
 export { SleeveRegistry } from './sleeve.js';

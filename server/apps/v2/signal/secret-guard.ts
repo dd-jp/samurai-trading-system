@@ -53,7 +53,7 @@ export function secretsFromEnv(env: NodeJS.ProcessEnv): KnownSecret[] {
   return SECRET_ENV_NAMES.map((name) => ({ name, value: env[name] ?? '' }));
 }
 
-function wireForms(value: string): string[] {
+export function secretWireForms(value: string): string[] {
   return [value, encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
 }
 
@@ -75,6 +75,8 @@ export function leakedSecret(
   return secrets.find(
     (secret) =>
       secret.value.length >= MIN_SECRET_LENGTH &&
-      wireForms(secret.value).some((form) => surfaces.some((surface) => surface.includes(form))),
+      secretWireForms(secret.value).some((form) =>
+        surfaces.some((surface) => surface.includes(form)),
+      ),
   )?.name;
 }

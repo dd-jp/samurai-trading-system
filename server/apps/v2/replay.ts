@@ -15,6 +15,7 @@ import {
   ARM2_SLEEVE_ID,
   buildLlmPanel,
   cfdEntryRefusal,
+  commonPrefixLength,
   DEBATE_SLEEVE_ID,
   type LoggedCall,
   loggedNewsSource,
@@ -23,6 +24,7 @@ import {
   type ReplayMiss,
   ReplayTransport,
   type SecretSource,
+  secretWireForms,
 } from './signal/index.js';
 
 const REPLAYED_SLEEVES: readonly string[] = [DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID];
@@ -190,8 +192,6 @@ function isInputsDivergence(divergence: Divergence): boolean {
   return divergence.kind === 'decision_field' && divergence.field === 'inputs_hash';
 }
 
-// Causal order: what the sleeve read, then what it asked the models, then what it decided, then
-// logged calls nothing in the replay asked for
 export function divergencesOf(
   rows: readonly JournalledDecision[],
   replayed: ReplayedBySleeve,
@@ -273,33 +273,45 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
   };
 }
 
-export function redactor(secrets: SecretSource): (text: string) => string {
-  return (text) => {
-    let redacted = maskCredentials(text);
-    for (const secret of secrets()) {
-      if (secret.value.length >= MIN_SECRET_LENGTH)
-        redacted = redacted.split(secret.value).join('[REDACTED]');
-    }
-    return redacted;
-  };
+export type Redact = (text: string) => string;
+
+function maskSecret(text: string, value: string): string {
+  return secretWireForms(value).reduce(
+    (masked, form) => masked.split(form).join('[REDACTED]'),
+    text,
+  );
+}
+
+export function redactor(secrets: SecretSource): Redact {
+  return (text) =>
+    secrets()
+      .filter((secret) => secret.value.length >= MIN_SECRET_LENGTH)
+      .reduce((masked, secret) => maskSecret(masked, secret.value), maskCredentials(text));
 }
 
 function excerpt(text: string, offset: number): string {
   return JSON.stringify(text.slice(offset, offset + EXCERPT_CHARS));
 }
 
-function describeMiss(miss: ReplayMiss): string {
+// Redacted whole before the excerpt is cut, so a secret straddling the window edge is still caught
+function describeMiss(miss: ReplayMiss, redact: Redact): string {
   const head = `LLM request ${miss.kind} for ${miss.model}`;
   if (miss.nearest === undefined) return `${head}: no logged call for that model is left`;
+  const replayed = redact(miss.prompt);
+  const logged = redact(miss.nearest.prompt);
+  const offset = commonPrefixLength(replayed, logged);
   return [
-    `${head}: nearest logged call ${miss.nearest.id} (${miss.nearest.traceId}) differs at offset ${miss.offset}`,
-    `  replayed: ${excerpt(miss.prompt, miss.offset)}`,
-    `  logged:   ${excerpt(miss.nearest.prompt, miss.offset)}`,
+    `${head}: nearest logged call ${miss.nearest.id} (${miss.nearest.traceId}) differs at offset ${offset}`,
+    `  replayed: ${excerpt(replayed, offset)}`,
+    `  logged:   ${excerpt(logged, offset)}`,
   ].join('\n');
 }
 
 type DescriberOf = {
-  readonly [K in Divergence['kind']]: (divergence: Extract<Divergence, { kind: K }>) => string;
+  readonly [K in Divergence['kind']]: (
+    divergence: Extract<Divergence, { kind: K }>,
+    redact: Redact,
+  ) => string;
 };
 
 const DESCRIBERS: DescriberOf = {
@@ -315,17 +327,17 @@ const DESCRIBERS: DescriberOf = {
     `${divergence.bookId} ${divergence.instrument}: journalled, not replayed`,
   decision_extra: (divergence) =>
     `${divergence.bookId} ${divergence.instrument}: replayed, not journalled`,
-  llm_request: (divergence) => describeMiss(divergence.miss),
+  llm_request: (divergence, redact) => describeMiss(divergence.miss, redact),
   call_not_replayed: ({ call }) =>
     `logged call ${call.id} (${call.traceId}, ${call.model}) was never requested`,
 };
 
-function describeDivergence(divergence: Divergence): string {
-  const describe = DESCRIBERS[divergence.kind] as (entry: Divergence) => string;
-  return describe(divergence);
+function describeDivergence(divergence: Divergence, redact: Redact): string {
+  const describe = DESCRIBERS[divergence.kind] as (entry: Divergence, redact: Redact) => string;
+  return describe(divergence, redact);
 }
 
-export function formatReplay(result: ReplayResult, redact: (text: string) => string): string {
+export function formatReplay(result: ReplayResult, redact: Redact): string {
   const head = `replay ${result.tradingDate}: ${result.decisions} journalled decisions, ${result.calls} logged calls`;
   const [first] = result.divergences;
   if (first === undefined) return `${head}\nidentical`;
@@ -333,7 +345,7 @@ export function formatReplay(result: ReplayResult, redact: (text: string) => str
     [
       head,
       `DIVERGED (${result.divergences.length} divergences); first:`,
-      describeDivergence(first),
+      describeDivergence(first, redact),
     ].join('\n'),
   );
 }

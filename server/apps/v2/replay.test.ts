@@ -3,13 +3,14 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SleeveDecision } from '../../../contracts/index.js';
 import type { AnthropicMessageRequest } from '../../pipeline/debate-engine/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';
 import type { VenueSessionGate } from './data/index.js';
 import { composeV2Root } from './index.js';
 import {
@@ -26,6 +27,11 @@ import { main, parseReplayArgs, type ReplayCliOptions, replayFromFiles } from '.
 import { CapitalConfigStore } from './risk/index.js';
 import type { LoggedCall, ModelPin } from './signal/index.js';
 import { ReplayLog, ScriptedTransport } from './signal/index.js';
+
+vi.mock('../../shared/store/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shared/store/index.js')>();
+  return { ...actual, openReadOnlyStore: vi.fn(actual.openReadOnlyStore) };
+});
 
 const ORIGIN = Date.UTC(2026, 0, 1);
 const dateAt = (day: number) => new Date(ORIGIN + day * 86_400_000).toISOString().slice(0, 10);
@@ -149,6 +155,21 @@ describe('replayFromFiles', () => {
     expect(result.calls).toBe(3);
     expect(result.divergences).toEqual([]);
     expect(digestOf(options.storePath)).toBe(before);
+  });
+
+  it('opens the store read-only by default, so any write through it throws', async () => {
+    const opened = vi.mocked(openReadOnlyStore);
+    opened.mockClear();
+    await replayFromFiles(options);
+    expect(opened).toHaveBeenCalledWith(options.storePath);
+    const handle = opened.mock.results[0]?.value as StoreHandle;
+    expect(handle.readonly).toBe(true);
+    const writable = new BetterSqlite3(options.storePath);
+    try {
+      expect(writable.readonly).toBe(false);
+    } finally {
+      writable.close();
+    }
   });
 
   it('detects a changed judge response as a changed decision', async () => {
@@ -462,11 +483,56 @@ describe('formatReplay', () => {
 });
 
 describe('redactor', () => {
-  it('masks known secret values of usable length', () => {
+  it('masks known secret values of usable length in raw, JSON-escaped and URI forms', () => {
     const redact = redactor(() => [
-      { name: 'A', value: 'longsecretvalue' },
+      { name: 'A', value: 'long/secret"value' },
       { name: 'B', value: 'short' },
     ]);
-    expect(redact('x longsecretvalue y short')).toBe('x [REDACTED] y short');
+    expect(
+      redact('x long/secret"value y long/secret\\"value z long%2Fsecret%22value w short'),
+    ).toBe('x [REDACTED] y [REDACTED] z [REDACTED] w short');
+  });
+});
+
+describe('main redaction', () => {
+  it('masks a secret in a printed prompt excerpt even where the excerpt window would cut it', async () => {
+    const secret = 'sk-nous-0123456789abcdef';
+    const lines: string[] = [];
+    const prefix = 'p'.repeat(70);
+    const call: LoggedCall = {
+      id: 1,
+      traceId: 'v2-2026-09-30-UP',
+      model: 'm',
+      prompt: `${prefix}${secret} logged`,
+      response: 'r',
+    };
+    const code = await main(
+      ['--date', '2026-09-30'],
+      (line) => lines.push(line),
+      { NOUS_API_KEY: secret },
+      () =>
+        Promise.resolve({
+          tradingDate: '2026-09-30',
+          decisions: 1,
+          calls: 1,
+          divergences: [
+            {
+              kind: 'llm_request',
+              miss: {
+                kind: 'request_not_logged',
+                model: 'm',
+                prompt: `${prefix}${secret} replayed`,
+                nearest: call,
+                offset: 95,
+              },
+            },
+          ],
+        }),
+    );
+    const printed = lines.join('\n');
+    expect(code).toBe(1);
+    expect(printed).not.toContain(secret.slice(0, 8));
+    expect(printed).not.toContain(secret.slice(-8));
+    expect(printed).toContain('differs at offset 81\n  replayed: "replayed"\n  logged:   "logged"');
   });
 });
