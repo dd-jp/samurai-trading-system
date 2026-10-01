@@ -42,7 +42,7 @@ import {
   type SaxoSessionLedger,
 } from './saxo-session-loss.js';
 import { LSE_LINES } from './signal/index.js';
-import { SPLIT_STEP_THRESHOLD, splitRatioAcross } from './split.js';
+import { isSplitStep, splitRatioAcross } from './split.js';
 
 const HISTORY_RESCALE_TOLERANCE = 0.05;
 // Between the 2026-09-25 pull (data/bars/saxo-aux/raw) and the 2026-09-30 store, 0 of 85,175
@@ -189,10 +189,6 @@ function carryRawClose(
   );
 }
 
-function isSplitScale(factor: number): boolean {
-  return Math.max(factor, 1 / factor) >= SPLIT_STEP_THRESHOLD;
-}
-
 function rescaledMessage(symbol: string, factor: number, outcome: string): string {
   return `${symbol}: Saxo rewrote the stored history by ${Number(factor.toPrecision(4))}x (split?); ${outcome}`;
 }
@@ -271,7 +267,7 @@ function withSplitStep(
       'v2_saxo_history_rescaled',
       rescaledMessage(existing.symbol, factor, outcome),
     );
-  } else if (isSplitScale(factor)) {
+  } else if (isSplitStep(factor)) {
     return stepFromRewrite(existing, pulled, factor, logger);
   } else {
     const outcome = 'too small for a split, nothing rescaled, check the line';

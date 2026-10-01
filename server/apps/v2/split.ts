@@ -4,6 +4,15 @@ import type { V2Bar } from '../../../contracts/index.js';
 // restates the factor by as much and would read as a split; a split smaller than 6:5 is missed
 export const SPLIT_STEP_THRESHOLD = 1.2;
 
+// Closes are stored to 4 dp, so a 6:5 step measured across four rounded closes lands up to
+// ~4 x 0.00005 / close under 1.2: 1.199994 at a close near 8, ~2e-4 relative at a 1.00 close
+// 5e-4 covers sub-1.00 closes and sits ~3x below the 0.17% a 1.198 non-split move shows
+export const SPLIT_STEP_EPSILON = 5e-4;
+
+export function isSplitStep(factor: number): boolean {
+  return Math.max(factor, 1 / factor) >= SPLIT_STEP_THRESHOLD * (1 - SPLIT_STEP_EPSILON);
+}
+
 const SNAP_MAX_DENOMINATOR = 5;
 const SNAP_TOLERANCE = 0.005;
 
@@ -61,7 +70,7 @@ function judgeSplitStep(previous: V2Bar, bar: V2Bar, step: number): SplitReading
 
 function readSplitStep(previous: V2Bar, bar: V2Bar): SplitReading {
   const step = adjustmentFactor(previous) / adjustmentFactor(bar);
-  return magnitude(step) >= SPLIT_STEP_THRESHOLD ? judgeSplitStep(previous, bar, step) : NO_SPLIT;
+  return isSplitStep(step) ? judgeSplitStep(previous, bar, step) : NO_SPLIT;
 }
 
 // rawClose/close is the cumulative adjustment for every corporate action after that bar, so it
