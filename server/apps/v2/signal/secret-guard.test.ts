@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import type { LlmSpendRecord } from '../../../pipeline/debate-engine/index.js';
 import {
   type KnownSecret,
   leakedSecret,
   MIN_SECRET_LENGTH,
   type OutgoingRequest,
   SECRET_ENV_NAMES,
+  SECRET_WITHHELD,
+  secretGuardedSink,
   secretsFromEnv,
 } from './secret-guard.js';
 
@@ -76,5 +79,44 @@ describe('secretsFromEnv', () => {
       'fake-telegram-token',
     );
     expect(secrets.find((secret) => secret.name === 'ALPACA_API_KEY')?.value).toBe('');
+  });
+});
+
+describe('secretGuardedSink', () => {
+  const entry: LlmSpendRecord = {
+    trace_id: 't',
+    stage: 'debate',
+    model: 'm',
+    usage: { input_tokens: 0, output_tokens: 0 },
+    latency_ms: 1,
+    timestamp: new Date('2026-10-01T07:30:00.000Z'),
+    prompt: 'p',
+  };
+  const recorded = () => {
+    const records: LlmSpendRecord[] = [];
+    return { records, sink: { record: (record: LlmSpendRecord) => records.push(record) } };
+  };
+
+  it('passes a record carrying no known secret through unchanged', () => {
+    const { records, sink } = recorded();
+    const passed = { ...entry, response: 'r', stop_reason: 'end_turn' };
+    secretGuardedSink(sink, () => SECRETS).record(passed);
+    expect(records).toEqual([passed]);
+  });
+
+  it.each([
+    ['prompt', { prompt: `a ${OTHER}` }],
+    ['response', { response: encodeURIComponent(OTHER) }],
+    ['error message', { error_class: 'LlmProviderError', error_message: JSON.stringify(OTHER) }],
+    ['stop reason', { stop_reason: PROVIDER_KEY }],
+    ['error class', { error_class: PROVIDER_KEY }],
+  ])('withholds every text field when the %s carries a secret', (_, fields) => {
+    const { records, sink } = recorded();
+    secretGuardedSink(sink, () => SECRETS).record({ ...entry, ...fields });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ usage: entry.usage, error_class: SECRET_WITHHELD });
+    for (const field of ['prompt', 'response', 'error_message', 'stop_reason'] as const) {
+      expect(records[0]?.[field]).toBeUndefined();
+    }
   });
 });

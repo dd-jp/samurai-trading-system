@@ -57,6 +57,55 @@ describe('llm_call_log capture', () => {
     expect(row?.spend_id).toBe(spendId);
   });
 
+  it('records the stop reason, and a failed call as its class and masked message with no response', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteLlmSpendStore(db, undefined, true);
+    store.record({ ...ENTRY, stop_reason: 'refusal' });
+    store.record({
+      ...ENTRY,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      response: undefined,
+      error_class: 'LlmProviderError',
+      error_message: 'Nous 401: Authorization: Bearer sk-ant-echoed-by-the-provider',
+    });
+    const rows = db
+      .prepare('SELECT stop_reason, error_class, error_message, response FROM llm_call_log')
+      .all() as Record<string, string | null>[];
+    expect(rows[0]).toEqual({
+      stop_reason: 'refusal',
+      error_class: null,
+      error_message: null,
+      response: ENTRY.response,
+    });
+    expect(rows[1]).toMatchObject({ stop_reason: null, error_class: 'LlmProviderError' });
+    expect(rows[1]?.response).toBeNull();
+    expect(rows[1]?.error_message).not.toContain('sk-ant-echoed-by-the-provider');
+  });
+
+  it('writes a row for a call with an outcome and no text, and none for a record with nothing', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteLlmSpendStore(db, undefined, true);
+    const bare = { ...ENTRY, prompt: undefined, response: undefined };
+    store.record(bare);
+    store.record({ ...bare, error_class: 'secret_withheld' });
+    store.record({ ...bare, stop_reason: 'end_turn' });
+    const rows = db.prepare('SELECT prompt, error_class FROM llm_call_log').all();
+    expect(rows).toEqual([
+      { prompt: null, error_class: 'secret_withheld' },
+      { prompt: null, error_class: null },
+    ]);
+  });
+
+  it('keeps a 16,384-character response whole and caps one past it', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteLlmSpendStore(db, undefined, true);
+    store.record({ ...ENTRY, response: 'r'.repeat(16_384) });
+    store.record({ ...ENTRY, response: 'r'.repeat(16_385) });
+    const [whole, capped] = callRows(db);
+    expect(whole?.response).toBe('r'.repeat(16_384));
+    expect(capped?.response).toBe(`${'r'.repeat(16_384)}… (truncated, 16385 chars total)`);
+  });
+
   it('masks a credential that reached the prompt through ingested text', () => {
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db, undefined, true).record({
