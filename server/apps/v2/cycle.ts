@@ -53,7 +53,13 @@ import {
   simulateMarketExit,
   withinLimit,
 } from './simulated-entry.js';
-import { cumulativeSplitRatios, splitRatioAcross } from './split.js';
+import { cumulativeSplitRatios, fractionalShares, splitRatioAcross } from './split.js';
+
+interface CashInLieu {
+  readonly fraction: number;
+  readonly priceGbp: number;
+  readonly anchorDate: string;
+}
 
 export interface CycleDeps {
   readonly registry: SleeveSource;
@@ -330,11 +336,11 @@ class Cycle {
     }
     const ratio = this.splitBefore(held, date);
     if (ratio === 1) return;
-    this.deps.books.applySplit(order.book_id, order.instrument, ratio, date);
+    const qty = this.splitHeld(order.book_id, held, ratio, date);
     this.log(
       'warn',
       'v2_fill_post_split_rescaled',
-      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} is in units after a x${ratio} split; ledger qty ${held.qty} -> ${held.qty * ratio} before it books`,
+      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} is in units after a x${ratio} split; ledger qty ${held.qty} -> ${qty} before it books`,
     );
   }
 
@@ -439,19 +445,64 @@ class Cycle {
       );
     }
     if (ratio === 1) return;
-    if (!this.deps.executor.simulates(routeOf(book, held.venue))) {
-      this.log(
-        'warn',
-        'v2_split_broker_qty',
-        `${book.id} ${held.instrument}: split x${ratio} on a broker-held position; ledger qty ${held.qty} not rescaled, reconcile (#1872) flags the broker qty and blocks entries`,
-      );
-      return;
-    }
-    this.deps.books.applySplit(book.id, held.instrument, ratio, latest.date);
+    const qty = this.splitHeld(book.id, held, ratio, latest.date);
     this.log(
       'info',
       'v2_split_rescaled',
-      `${book.id} ${held.instrument}: qty ${held.qty} -> ${held.qty * ratio}, levels / ${ratio}`,
+      `${book.id} ${held.instrument}: qty ${held.qty} -> ${qty}, levels / ${ratio}`,
+    );
+  }
+
+  // David ruled 2026-10-01 (#1984): the broker keeps whole shares and pays cash for the rest, so
+  // the ledger floors too and books the remainder as a disposal; reconcile (#1872) flags any
+  // broker qty that differs
+  splitHeld(bookId: string, held: Position, ratio: number, anchorDate: string): number {
+    this.deps.books.applySplit(bookId, held.instrument, ratio, anchorDate);
+    const fraction = fractionalShares(held.qty * ratio);
+    if (fraction === 0) return held.qty * ratio;
+    const priceGbp = this.markGbp(held.instrument, held.venue) ?? held.avgPriceGbp / ratio;
+    this.disposeCashInLieu(bookId, held, { fraction, priceGbp, anchorDate });
+    return held.qty * ratio - fraction;
+  }
+
+  // The broker's cash-in-lieu amount is not read from any venue; the disposal books at the
+  // latest close, which is already in post-split units
+  disposeCashInLieu(
+    bookId: string,
+    held: Position,
+    { fraction, priceGbp, anchorDate }: CashInLieu,
+  ): void {
+    const side: OrderSide = fraction > 0 ? 'sell' : 'buy';
+    const qty = Math.abs(fraction);
+    const recorded = this.deps.journal.recordFill({
+      fill_id: `${held.venue}:cash-in-lieu:${bookId}:${held.instrument}:${anchorDate}`,
+      client_order_id: held.clientOrderId,
+      book_id: bookId,
+      trading_date: this.tradingDate,
+      instrument: held.instrument,
+      venue: held.venue,
+      leg: 'cash_in_lieu',
+      side,
+      qty,
+      price_gbp: priceGbp,
+      fee_gbp: 0,
+    });
+    if (!recorded) return;
+    this.deps.books.applyFill(bookId, {
+      instrument: held.instrument,
+      venue: held.venue,
+      side,
+      leg: 'cash_in_lieu',
+      qty,
+      priceGbp,
+      feeGbp: 0,
+      clientOrderId: held.clientOrderId,
+      tradingDate: this.tradingDate,
+    });
+    this.log(
+      'warn',
+      'v2_split_cash_in_lieu',
+      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the broker's amount is not read`,
     );
   }
 

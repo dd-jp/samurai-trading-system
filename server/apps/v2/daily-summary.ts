@@ -99,7 +99,7 @@ const PER_BOOK_COUNTS = {
   filled: `SELECT book_id, COUNT(DISTINCT client_order_id) AS n FROM v2_fills
             WHERE leg = 'entry' AND recorded_at > ? AND recorded_at <= ? GROUP BY book_id`,
   exits: `SELECT book_id, COUNT(DISTINCT client_order_id) AS n FROM v2_fills
-           WHERE leg <> 'entry' AND recorded_at > ? AND recorded_at <= ? GROUP BY book_id`,
+           WHERE leg NOT IN ('entry', 'cash_in_lieu') AND recorded_at > ? AND recorded_at <= ? GROUP BY book_id`,
 } as const;
 
 type CountName = keyof typeof PER_BOOK_COUNTS;
