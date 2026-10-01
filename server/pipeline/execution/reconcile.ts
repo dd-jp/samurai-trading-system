@@ -258,16 +258,28 @@ async function cancelWedgedFlatten(
     'rather than left to block every later flatten on this instrument. The journal row is ' +
     'unchanged and keeps blocking until the venue reports the order terminal AND its fills ' +
     'are swept — nothing is re-armed on age alone';
+  const failure = await markAndCancelFlatten(input, row, now, provenance, 'retrying when due');
+  if (failure !== undefined) return failure;
+  await postFlattenReconcileAlert(input, row, provenance, now);
+  return provenance;
+}
+
+async function markAndCancelFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  now: Date,
+  provenance: string,
+  onFailure: string,
+): Promise<string | undefined> {
   await input.store.markFlattenCancelAttempted(row.idempotency_key, now);
   try {
     await input.broker.cancel(row.idempotency_key, row.instrument);
+    return undefined;
   } catch (error) {
-    const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); retrying when due`;
+    const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); ${onFailure}`;
     await postFlattenReconcileAlert(input, row, reason, now);
     return reason;
   }
-  await postFlattenReconcileAlert(input, row, provenance, now);
-  return provenance;
 }
 
 function cancelDue(row: UnresolvedFlattenSubmission, now: Date): boolean {
@@ -307,14 +319,8 @@ async function cancelNeverConfirmedFlatten(
     );
   }
 
-  await input.store.markFlattenCancelAttempted(row.idempotency_key, now);
-  try {
-    await input.broker.cancel(row.idempotency_key, row.instrument);
-  } catch (error) {
-    const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); the row keeps blocking`;
-    await postFlattenReconcileAlert(input, row, reason, now);
-    return blocked(reason, 'never_confirmed_cancel_failed');
-  }
+  const failure = await markAndCancelFlatten(input, row, now, provenance, 'the row keeps blocking');
+  if (failure !== undefined) return blocked(failure, 'never_confirmed_cancel_failed');
 
   const coverage = await venueCoversStoreHeld(input, row, storePositions);
   if (!coverage.covered) {

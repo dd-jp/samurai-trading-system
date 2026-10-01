@@ -65,7 +65,12 @@ export {
 } from './safe-log.js';
 export { maskAndCap, maskCredentials, sanitizeLogText } from './sanitize-log-text.js';
 export type { ContinueOnFaultEffects, ErrorStream, StdoutStream } from './stdout-fault-guard.js';
-export { guardedWrite, installContinueOnFault, watchStdoutErrors } from './stdout-fault-guard.js';
+export {
+  guardedWrite,
+  installContinueOnFault,
+  retireStdoutOnFirstError,
+  watchStdoutErrors,
+} from './stdout-fault-guard.js';
 export {
   assertThresholdsWithinBounds,
   assertThresholdWithinBounds,
