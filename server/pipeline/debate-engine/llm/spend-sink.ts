@@ -164,6 +164,8 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
 
   private maybeAlertPromptTierCrossing(entry: LlmSpendRecord): void {
     const crossed = crossesPromptTier(entry.model, entry.usage);
+    // A failed attempt may extend a crossing streak but never resets it: its usage is usually zero
+    if (!crossed && entry.error_class !== undefined) return;
     const { alert, consecutive } = this.promptTierThrottle.observe(entry.model, crossed);
     if (!alert) return;
 

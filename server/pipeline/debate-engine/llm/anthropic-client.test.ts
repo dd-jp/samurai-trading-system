@@ -1122,6 +1122,24 @@ describe('AnthropicLlmClient bills replies the transport rejected', () => {
     expect(misnamed.records[0]?.model).toBe('openai/gpt-5.6-luna');
   });
 
+  it('meters an unbilled failure under the configured priced model when one is set', async () => {
+    const sink = recordingSink();
+    await new AnthropicLlmClient(
+      { createMessage: vi.fn().mockRejectedValue(new LlmProviderError('down')) },
+      {
+        model: 'wire/model',
+        pricedModel: 'priced/model',
+        max_tokens: 100,
+        timeoutMs: 1000,
+        retry: NO_RETRY,
+      },
+      sink,
+    )
+      .complete(request())
+      .catch(() => {});
+    expect(sink.records[0]?.model).toBe('priced/model');
+  });
+
   it('records a zero-usage row with the error class for an error that carries no usage or a malformed one', async () => {
     for (const error of [
       new LlmProviderError('down'),

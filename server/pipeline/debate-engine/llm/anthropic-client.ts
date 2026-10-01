@@ -75,6 +75,7 @@ export interface LlmCallFailureReport {
 
 export interface AnthropicLlmClientConfig {
   model: string;
+  pricedModel?: string | undefined;
   max_tokens: number;
   timeoutMs: number;
   retry: LlmRetryConfig;
@@ -294,7 +295,7 @@ export class AnthropicLlmClient implements LlmClient {
       trace_id: request.context.attribution?.trace_id ?? 'unattributed',
       stage: request.context.attribution?.stage ?? 'debate',
       debate_id: request.context.attribution?.debate_id,
-      model: response.model ?? this.config.model,
+      model: response.model ?? this.config.pricedModel ?? this.config.model,
       usage: response.usage,
       latency_ms,
       ttfb_ms: response.ttfb_ms,

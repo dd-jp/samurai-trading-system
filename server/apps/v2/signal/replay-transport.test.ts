@@ -60,7 +60,8 @@ describe('isTruncatedResponse', () => {
   it('needs both the cap length and the suffix', () => {
     expect(isTruncatedResponse(`${'x'.repeat(16_384)}… (truncated, 20000 chars total)`)).toBe(true);
     expect(isTruncatedResponse('short… (truncated, 5000 chars total)')).toBe(false);
-    expect(isTruncatedResponse(`${'x'.repeat(4_096)}… (truncated, 5000 chars total)`)).toBe(false);
+    expect(isTruncatedResponse(`${'x'.repeat(4_096)}… (truncated, 5000 chars total)`)).toBe(true);
+    expect(isTruncatedResponse(`${'x'.repeat(5_000)}… (truncated, 9000 chars total)`)).toBe(false);
     expect(isTruncatedResponse('x'.repeat(5_000))).toBe(false);
   });
 });

@@ -74,7 +74,7 @@ function answer(request: AnthropicMessageRequest): string {
 
 let directory: string;
 let options: ReplayCliOptions;
-let files: Omit<ReplayCliOptions, 'storePath'> & { readonly spreadsPath: string };
+let files: Omit<ReplayCliOptions, 'storePath' | 'venueSessions'>;
 
 async function seedDay(
   name: string,
@@ -89,7 +89,12 @@ async function seedDay(
   );
   seed.close();
   const root = composeV2Root({
-    ...files,
+    tradingDate: files.tradingDate,
+    barStoreRoot: files.barStoreRoot,
+    constituentsPath: files.constituentsPath,
+    fxPath: files.fxPath,
+    spreadsPath: files.spreadsPath,
+    cfdCataloguePath: files.cfdCataloguePath,
     dryRun: true,
     storePath,
     clock: new SimulatedClock(new Date(`${TRADING_DATE}T07:30:00.000Z`)),
@@ -106,8 +111,7 @@ async function seedDay(
   } finally {
     root.close();
   }
-  const { spreadsPath: _, ...cliFiles } = files;
-  return { ...cliFiles, storePath };
+  return { ...files, storePath, venueSessions: OPEN_EVERY_DAY };
 }
 
 beforeAll(async () => {
@@ -132,6 +136,7 @@ beforeAll(async () => {
     fxPath,
     spreadsPath,
     cfdCataloguePath: join(directory, 'absent-catalogue.json'),
+    saxoSpreadsPath: join(directory, 'absent-saxo-spreads.csv'),
   };
   options = await seedDay('paper', (pin) => new ScriptedTransport(pin, answer));
 });
@@ -163,6 +168,7 @@ describe('replayFromFiles', () => {
     const result = await replayFromFiles(options);
     expect(result.decisions).toBe(3);
     expect(result.calls).toBe(3);
+    expect(result.orders).toBe(3);
     expect(result.divergences).toEqual([]);
     expect(digestOf(options.storePath)).toBe(before);
   });
@@ -227,17 +233,20 @@ describe('replayFromFiles', () => {
     expect(result.divergences.some((entry) => entry.kind === 'decision_field')).toBe(true);
   });
 
-  it('fails closed on a logged response the capture cap truncated', async () => {
-    const long = `${'x'.repeat(16_384)}… (truncated, 20000 chars total)`;
-    const result = await replayFromFiles(
-      tamperedCopy(
-        'truncated',
-        `UPDATE llm_call_log SET response = '${long}' WHERE model = 'anthropic/claude-opus-5.5'`,
-      ),
-    );
-    const [first] = result.divergences;
-    expect(first?.kind === 'llm_request' && first.miss.kind).toBe('response_truncated');
-  });
+  it.each([16_384, 4_096])(
+    'fails closed on a logged response a %i-character capture cap truncated',
+    async (cap) => {
+      const long = `${'x'.repeat(cap)}… (truncated, 20000 chars total)`;
+      const result = await replayFromFiles(
+        tamperedCopy(
+          `truncated-${cap}`,
+          `UPDATE llm_call_log SET response = '${long}' WHERE model = 'anthropic/claude-opus-5.5'`,
+        ),
+      );
+      const [first] = result.divergences;
+      expect(first?.kind === 'llm_request' && first.miss.kind).toBe('response_truncated');
+    },
+  );
 
   it('names changed bars as an inputs hash divergence before the requests they change', async () => {
     const barStoreRoot = join(directory, 'revised-parquet');
@@ -379,6 +388,8 @@ describe('main', () => {
         '--constituents': options.constituentsPath,
         '--fx': options.fxPath,
         '--cfd-catalogue': options.cfdCataloguePath,
+        '--spreads': options.spreadsPath,
+        '--saxo-spreads': options.saxoSpreadsPath,
       }).flat(),
       (line) => lines.push(line),
       {},
@@ -398,6 +409,8 @@ describe('main', () => {
           tradingDate: TRADING_DATE,
           decisions: 1,
           calls: 0,
+          orders: 0,
+          fills: 0,
           divergences: [
             {
               kind: 'decision_field',
@@ -429,6 +442,12 @@ describe('parseReplayArgs', () => {
       tradingDate: '2026-09-30',
       storePath: 'data/samurai-v2-paper.sqlite',
     });
+  });
+
+  it('reads the spread tables the fill model prices with', () => {
+    expect(
+      parseReplayArgs(['--date', '2026-09-30', '--spreads', 'a.csv', '--saxo-spreads', 'b.csv']),
+    ).toMatchObject({ spreadsPath: 'a.csv', saxoSpreadsPath: 'b.csv' });
   });
 
   it('refuses an unknown flag and a flag without a value', () => {
@@ -541,6 +560,8 @@ describe('formatReplay', () => {
     tradingDate: '2026-09-30',
     decisions: 2,
     calls: 3,
+    orders: 4,
+    fills: 1,
     divergences,
   });
   const logged: LoggedCall = {
@@ -554,16 +575,53 @@ describe('formatReplay', () => {
 
   it('says identical when nothing diverged', () => {
     expect(formatReplay(result([]), (text) => text)).toBe(
-      'replay 2026-09-30: 2 journalled decisions, 3 logged calls\nidentical',
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills\nidentical',
     );
   });
 
   it.each([
     [
       { kind: 'nothing_to_replay', tradingDate: '2026-09-30' },
-      'no debate or arm 2 decision is journalled for 2026-09-30',
+      'no debate or arm 2 decision and no mark is journalled for 2026-09-30',
     ],
     [{ kind: 'decision_missing', bookId: 'b', instrument: 'UP' }, 'b UP: journalled, not replayed'],
+    [
+      {
+        kind: 'book_state',
+        stage: 'book',
+        bookId: 'b',
+        asOf: '2026-09-29',
+        field: 'cash_gbp',
+        journalled: 1,
+        replayed: 2,
+      },
+      'book: b at the 2026-09-29 mark: cash_gbp rebuilt from the journal differs\n  journalled: 1\n  replayed:   2',
+    ],
+    [
+      {
+        kind: 'book_state',
+        stage: 'gate',
+        bookId: 'b',
+        asOf: '2026-09-29',
+        field: 'entries_blocked',
+        journalled: 1,
+        replayed: 0,
+      },
+      'gate: b loss budget at the 2026-09-29 mark: entries_blocked differs from what its equity history gives',
+    ],
+    [
+      {
+        kind: 'row_field',
+        stage: 'fills',
+        key: 'alpaca:sim-x',
+        field: 'price_gbp',
+        journalled: 1.5,
+        replayed: 1.25,
+      },
+      'fills: alpaca:sim-x: price_gbp differs\n  journalled: 1.5\n  replayed:   1.25',
+    ],
+    [{ kind: 'row_missing', stage: 'orders', key: 'o1' }, 'orders: o1: journalled, not replayed'],
+    [{ kind: 'row_extra', stage: 'marks', key: 'b' }, 'marks: b: replayed, not journalled'],
     [{ kind: 'decision_extra', bookId: 'b', instrument: 'UP' }, 'b UP: replayed, not journalled'],
     [
       { kind: 'call_not_replayed', call: logged },
@@ -630,6 +688,8 @@ describe('main redaction', () => {
           tradingDate: '2026-09-30',
           decisions: 1,
           calls: 1,
+          orders: 0,
+          fills: 0,
           divergences: [
             {
               kind: 'llm_request',

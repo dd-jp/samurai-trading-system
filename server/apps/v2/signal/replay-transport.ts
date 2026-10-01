@@ -52,8 +52,12 @@ export function loggedPromptOf(content: string): string {
   return maskAndCap(content, MAX_CAPTURED_PROMPT_CHARS);
 }
 
+// Rows written before #1980 were capped at 4,096 characters and must still fail closed
+const RESPONSE_CAPS = [4_096, MAX_CAPTURED_RESPONSE_CHARS];
+
 export function isTruncatedResponse(response: string): boolean {
-  return response.length > MAX_CAPTURED_RESPONSE_CHARS && TRUNCATION_SUFFIX.test(response);
+  const suffix = TRUNCATION_SUFFIX.exec(response);
+  return suffix !== null && RESPONSE_CAPS.includes(suffix.index);
 }
 
 export function commonPrefixLength(left: string, right: string): number {

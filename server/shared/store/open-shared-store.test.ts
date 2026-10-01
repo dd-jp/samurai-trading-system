@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { listMigrations, MIGRATIONS_DIR, runMigrations } from './migrate.js';
 import {
+  inMemoryCopyOf,
   openMigratedStore,
   openReadOnlyStore,
   openSharedStore,
@@ -873,6 +874,26 @@ describe('openMigratedStore', () => {
     const path = tempDbPath();
     expect(() => openMigratedStore(path, 1)).toThrow();
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('inMemoryCopyOf', () => {
+  it('copies a WAL store read-only into a writable in-memory store and leaves the file alone', () => {
+    const path = tempDbPath();
+    const seed = openSharedStore(path);
+    seed.exec(
+      "INSERT INTO v2_controls (action, reason, source, idempotency_key, set_at) VALUES ('pause', 'r', 's', 'k', 'now')",
+    );
+    seed.close();
+    const source = openReadOnlyStore(path);
+    const copy = inMemoryCopyOf(source);
+    copy.exec('DROP TRIGGER v2_controls_no_delete');
+    copy.exec('DELETE FROM v2_controls');
+    expect(copy.prepare('SELECT COUNT(*) AS n FROM v2_controls').get()).toEqual({ n: 0 });
+    expect(copy.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(source.prepare('SELECT COUNT(*) AS n FROM v2_controls').get()).toEqual({ n: 1 });
+    copy.close();
+    source.close();
   });
 });
 
