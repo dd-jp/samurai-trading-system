@@ -248,6 +248,7 @@ describe('fencedMarket', () => {
   });
 });
 
+// CPU-heavy: cases ran up to ~32 s under coverage at load 25
 describe('runBacktest', { timeout: 120_000 }, () => {
   it('runs every trial and the benchmark through the cycle and counts the trials after Session B', async () => {
     const run = input();

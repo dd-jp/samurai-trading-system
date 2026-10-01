@@ -17,7 +17,6 @@ export default defineConfig({
       'client/**/*.test.tsx',
     ],
     environment: 'node',
-    testTimeout: 30_000,
     globals: true,
     globalSetup: ['./vitest.global-setup.ts'],
     setupFiles: ['./vitest.setup.ts'],

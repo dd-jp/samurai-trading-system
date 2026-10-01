@@ -2877,7 +2877,10 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       return violations;
     }
 
-    it('holds the money invariants across every reachable prior-status sequence', async () => {
+    // CPU-heavy: 9-12 s under coverage at load 25
+    it('holds the money invariants across every reachable prior-status sequence', {
+      timeout: 40_000,
+    }, async () => {
       const sequences = buildPriorStatusSequences(4);
       expect(sequences).toHaveLength(2801);
 

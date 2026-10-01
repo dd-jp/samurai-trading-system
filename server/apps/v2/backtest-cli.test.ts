@@ -82,7 +82,10 @@ const SYNTHETIC_BARS = new Map<string, BarSeries>(
 );
 
 describe('runCrossAssetTrendAgainst', () => {
-  it('#1785: orchestrates trials, benchmark and the cost-stress rerun over a fixed window', async () => {
+  // CPU-heavy: 9-12 s under coverage at load 25
+  it('#1785: orchestrates trials, benchmark and the cost-stress rerun over a fixed window', {
+    timeout: 40_000,
+  }, async () => {
     const market = new BarsMarketData(
       { load: (symbol) => SYNTHETIC_BARS.get(symbol) },
       parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'),
@@ -169,6 +172,7 @@ function meanReversionBarsSource() {
 }
 
 describe('runMeanReversionAgainst', () => {
+  // CPU-heavy: ~68 s under coverage at load 25
   it('#1785: orchestrates trials, benchmark and the cost-stress rerun with the #1515 embargo baked in', {
     timeout: 180_000,
   }, async () => {

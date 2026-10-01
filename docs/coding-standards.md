@@ -62,11 +62,11 @@ given test may have either or both:
   the advanced window instead — it costs nothing to leave un-fired.
 
 Either way, prefer shrinking the work over raising the ceiling for fake-timer
-slowness. CPU load is a different cause: the suite's default `testTimeout` is
-30 s (David, 2026-10-01) because gates and CI runners run under contention
-that multiplies wall time, and a test on vitest's 5 s default failed CI on
-that alone. A test that needs more than 30 s sets its own budget at about 3×
-its time measured under load.
+slowness. The suite default stays at vitest's 5 s (David, 2026-10-01): a
+raised global timeout hides the next slow test instead of fixing this one. A
+CPU-heavy test, whose wall time grows with gate or runner load rather than
+with fake-timer work, may set its own `{ timeout }` at about 3× its time
+measured under load, with a one-line comment at that test saying so.
 
 **Watch the 32-bit `setTimeout` ceiling when "parking" a timer far out.** A
 delay above `2^31 - 1` ms (~24.8 days) overflows Node's signed 32-bit timer

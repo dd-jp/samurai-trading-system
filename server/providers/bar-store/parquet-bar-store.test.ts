@@ -106,6 +106,7 @@ describe('ParquetBarStore', () => {
     }
   });
 
+  // CPU-heavy: ~42 s under coverage at load 25
   it('writes one file per partition and reads back across chunks however many rows a write carries', {
     timeout: 180_000,
   }, async () => {
