@@ -17,6 +17,7 @@ import type {
   OrderSide,
   Position,
   RearmPrices,
+  RiskApprovedOrder,
   RiskGate,
   SimulatedFillQuote,
   SimulatedFillRequest,
@@ -745,6 +746,22 @@ class Cycle {
     // new entry, even when its own bracket levels would otherwise resolve cleanly (#1778)
     const rearm = held.stray ? undefined : nativeRearmPrices(this.deps.journal, held);
     const order = this.deps.risk.approveExit({ book, held, clientOrderId, rearm });
+    const submission = await this.submitExitLeg(book, held, clientOrderId, order, {
+      marks_held: held.marksHeld,
+      reason,
+    });
+    if (submission.outcome !== 'rejected') {
+      this.deps.books.setExitPending(book.id, held.instrument, clientOrderId);
+    }
+  }
+
+  async submitExitLeg(
+    book: BookSpec,
+    held: Position,
+    clientOrderId: string,
+    order: RiskApprovedOrder,
+    legPayload: Record<string, unknown>,
+  ): Promise<Submission> {
     const submission = await this.deps.executor.submit(order);
     this.count(submission.outcome);
     this.deps.journal.recordOrder({
@@ -761,14 +778,11 @@ class Cycle {
       payload: {
         size: order.size,
         detail: submission.detail,
-        marks_held: held.marksHeld,
-        reason,
+        ...legPayload,
         approval: submission.approvalId,
       },
     });
-    if (submission.outcome !== 'rejected') {
-      this.deps.books.setExitPending(book.id, held.instrument, clientOrderId);
-    }
+    return submission;
   }
 
   count(outcome: OrderOutcome): void {
@@ -843,27 +857,10 @@ class Cycle {
       stop: rearm.stop,
       target: rearm.target,
     });
-    const submission = await this.deps.executor.submit(order);
-    this.count(submission.outcome);
-    this.deps.journal.recordOrder({
-      client_order_id: clientOrderId,
-      decision_id: null,
-      book_id: book.id,
-      trading_date: this.tradingDate,
-      instrument: held.instrument,
-      venue: held.venue,
-      leg: 'exit',
-      side: order.side,
-      dry_run: this.deps.dryRun,
-      outcome: submission.outcome,
-      payload: {
-        size: order.size,
-        detail: submission.detail,
-        stop: rearm.stop,
-        target: rearm.target,
-        exit_client_order_id: exitClientOrderId,
-        approval: submission.approvalId,
-      },
+    const submission = await this.submitExitLeg(book, held, clientOrderId, order, {
+      stop: rearm.stop,
+      target: rearm.target,
+      exit_client_order_id: exitClientOrderId,
     });
     if (submission.outcome === 'rejected') {
       const message = `${book.id} ${held.instrument}: backstop rearm after exit ${exitClientOrderId} failed: ${submission.detail}`;

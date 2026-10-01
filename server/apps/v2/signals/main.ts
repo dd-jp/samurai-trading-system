@@ -1,4 +1,3 @@
-import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
 import {
@@ -9,6 +8,7 @@ import {
   sanitizeLogText,
 } from '../../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import {
   composeV2Root,
   knownSecretsFrom,
@@ -154,9 +154,4 @@ export async function main(
   process.once('SIGTERM', shutdown);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2), process.env).catch((error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  });
-}
+void runWhenInvoked(import.meta.url, () => main(process.argv.slice(2), process.env));
