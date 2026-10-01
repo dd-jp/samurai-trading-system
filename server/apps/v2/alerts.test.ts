@@ -269,6 +269,19 @@ describe('alertsFor', () => {
     ]);
   });
 
+  it('alarms under the critical header, with sound, token scrubbed, and sends nothing on a dry run', async () => {
+    const fetchImpl = okFetch();
+    await alertsFor([], ENV, fetchImpl, recorder().logger).alarm(`poller down ${TOKEN}`);
+    await alertsFor(['--dry-run'], ENV, fetchImpl, recorder().logger).alarm('dry');
+    expect(sentBodies(fetchImpl)).toEqual([
+      {
+        chat_id: '-100777',
+        text: 'Samurai v2 CRITICAL\npoller down [TELEGRAM_BOT_TOKEN]',
+        disable_notification: false,
+      },
+    ]);
+  });
+
   it('truncates an oversized summary to the Telegram limit after scrubbing the token', async () => {
     const fetchImpl = okFetch();
     await alertsFor([], ENV, fetchImpl, recorder().logger).notify(`${TOKEN} ${'x'.repeat(5_000)}`);

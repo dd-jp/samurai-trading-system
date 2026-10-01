@@ -355,6 +355,36 @@ async function runComposed(
 }
 
 describe('composeTelegram wiring', () => {
+  it('sends the dead-poller alert as critical, with sound, to the alert chat', async () => {
+    const shutdown = new AbortController();
+    const sent: unknown[] = [];
+    const fetchImpl: TelegramFetch = (url, init) => {
+      if (url.endsWith('/sendMessage')) {
+        const message = JSON.parse(init.body ?? '{}') as Sent;
+        sent.push(message);
+        if (message.text.includes('poller')) shutdown.abort();
+        return Promise.resolve(reply({ ok: true }));
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 429,
+        json: () => Promise.resolve({ parameters: { retry_after: 3600 } }),
+      });
+    };
+    await runComposed(
+      parseTelegramArgs(['--store', migratedStore()]),
+      { ...ENV, TELEGRAM_CHAT_ID: '-100777' },
+      fetchImpl,
+      [],
+      shutdown,
+    );
+    expect(sent.at(-1)).toEqual({
+      chat_id: '-100777',
+      text: 'Samurai v2 CRITICAL\nTelegram command poller: 1 poll failed in a row, last: Telegram getUpdates answered 429. Telegram asked to wait 3600 s. Phone halt, resume and flatten may not reach Samurai.',
+      disable_notification: false,
+    });
+  });
+
   it('journals 1000 stranger updates from one chat once, replies to none and still answers the owner', async () => {
     const storePath = migratedStore();
     const shutdown = new AbortController();

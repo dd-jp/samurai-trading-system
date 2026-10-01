@@ -175,7 +175,7 @@ export function composeTelegram(
             logger,
             replyPrefix,
             sleep: (ms, signal) => delay(ms, undefined, { signal }).catch(() => undefined),
-            alert: (text) => alerts.notify(text),
+            alert: (text) => alerts.alarm(text),
             heartbeat,
             nowMs: () => clock.now().getTime(),
           },
