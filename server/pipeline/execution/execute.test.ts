@@ -2789,6 +2789,20 @@ describe('#1001: submit-time quote and decision price', () => {
       const marketState = vi.mocked(costModel.fill).mock.calls[0]?.[1];
       expect(marketState?.venue).toBe('saxo');
     });
+
+    it('leaves MarketState.venue absent when executionConfig.simulated names no venue', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel = makeSnapshotCostModel();
+      const marketData = makeSnapshotMarketData();
+      const base = makeInput({ store, broker: makeBroker(), costModel, marketData });
+      const { venue: _venue, ...unnamed } = base.config.simulated;
+
+      await new ExecutionImpl({ ...base, config: { simulated: unnamed } }).execute(makeGo());
+
+      const marketState = vi.mocked(costModel.fill).mock.calls[0]?.[1];
+      expect(marketState).toBeDefined();
+      expect(Object.hasOwn(marketState ?? {}, 'venue')).toBe(false);
+    });
   });
 
   describe('bracket (entry) path — open_positions', () => {

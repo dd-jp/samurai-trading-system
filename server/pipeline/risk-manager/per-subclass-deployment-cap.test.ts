@@ -601,11 +601,11 @@ describe('D5 refusal wording and the generic caps it replaces', () => {
   it('lists the known subclasses in the missing-cap refusal, or says none', () => {
     const holed = {
       subclass_of: SUBCLASS_OF,
-      cap_fraction_of_equity: { crypto: null },
+      cap_fraction_of_equity: { crypto: null, index_etp_1x: null },
     } as unknown as SubclassDeploymentCap;
     expect(messageOf(() => decide(intentFor('3USL', 10_000), {}, holed))).toBe(
       "per_subclass_deployment_cap declares 3USL as 'index_etp_3x' but carries no cap for that " +
-        "subclass (known: crypto). ADR-0018 D5's envelope cannot be resolved without one, and " +
+        "subclass (known: crypto, index_etp_1x). ADR-0018 D5's envelope cannot be resolved without one, and " +
         'the alternative to this throw is sizing the position with no envelope at all. Add the ' +
         'subclass to the cap record.',
     );
