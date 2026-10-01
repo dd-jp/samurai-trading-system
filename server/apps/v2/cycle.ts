@@ -239,13 +239,13 @@ class Cycle {
     return earliest === undefined ? EPOCH_ISO : new Date(earliest).toISOString();
   }
 
-  ingest(reported: V2Fill): void {
-    const order = this.deps.journal.orderFor(reported.client_order_id);
+  ingest(fill: V2Fill): void {
+    const order = this.deps.journal.orderFor(fill.client_order_id);
     if (order === undefined) {
-      this.log('warn', 'v2_fill_unmatched', `fill ${reported.broker_fill_id} matches no v2 order`);
+      this.log('warn', 'v2_fill_unmatched', `fill ${fill.broker_fill_id} matches no v2 order`);
       return;
     }
-    const fill = this.inLedgerUnits(order, reported);
+    this.rescaleHeldToFill(order, fill);
     const baseFillId = `${order.venue}:${fill.broker_fill_id}`;
     const increment = this.incrementOf(order, fill, baseFillId);
     if (increment === undefined) return;
@@ -304,26 +304,47 @@ class Cycle {
     this.deps.books.applySplit(order.book_id, order.instrument, 1, date);
   }
 
-  // A broker-held ledger position keeps the units it opened in (#1872 reconciles quantity), so a
-  // fill reported in the units after a split that precedes it is converted back into them
-  inLedgerUnits(order: JournalledOrder, fill: V2Fill): V2Fill {
-    const date = this.fillDate(fill);
+  brokerHeld(order: JournalledOrder): Position | undefined {
     const held = this.deps.books.position(order.book_id, order.instrument);
+    if (held === undefined) return undefined;
     const book = [...this.deps.registry.ids()]
       .flatMap((sleeveId) => this.deps.books.forSleeve(sleeveId))
       .find((spec) => spec.id === order.book_id);
-    if (date === undefined || held === undefined || book === undefined || fill.leg === 'entry') {
-      return fill;
+    if (book === undefined || this.deps.executor.simulates(routeOf(book, held.venue))) {
+      return undefined;
     }
-    if (this.deps.executor.simulates(routeOf(book, held.venue))) return fill;
+    return held;
+  }
+
+  // The broker reports a fill in the units of its own day. The ledger position is rescaled to
+  // them before the fill books, so a re-reported cumulative fill finds the same units booked
+  // (the parts hold the broker's quantity) instead of a converted figure it cannot match
+  rescaleHeldToFill(order: JournalledOrder, fill: V2Fill): void {
+    if (fill.leg === 'entry') return;
+    const held = this.brokerHeld(order);
+    if (held === undefined) return;
+    const date = this.fillDate(fill);
+    if (date === undefined) {
+      this.warnUndatedFill(order, fill);
+      return;
+    }
     const ratio = this.splitBefore(held, date);
-    if (ratio === 1) return fill;
+    if (ratio === 1) return;
+    this.deps.books.applySplit(order.book_id, order.instrument, ratio, date);
     this.log(
       'warn',
-      'v2_fill_post_split_converted',
-      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} qty ${fill.qty} at ${fill.price} is in units after a x${ratio} split; booked as ${fill.qty / ratio} at ${fill.price * ratio}`,
+      'v2_fill_post_split_rescaled',
+      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} is in units after a x${ratio} split; ledger qty ${held.qty} -> ${held.qty * ratio} before it books`,
     );
-    return { ...fill, qty: fill.qty / ratio, price: fill.price * ratio };
+  }
+
+  warnUndatedFill(order: JournalledOrder, fill: V2Fill): void {
+    if (fill.filled_at !== undefined) return;
+    this.log(
+      'warn',
+      'v2_fill_undated',
+      `${order.book_id} ${order.instrument}: broker fill ${fill.broker_fill_id} carries no fill time; a split before it cannot be placed`,
+    );
   }
 
   splitBefore(held: Position, fillDate: string): number {
@@ -466,18 +487,20 @@ class Cycle {
       this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       return;
     }
-    const atFill = ratios[bars.findIndex((bar) => bar.date === outcome.bar.date)] as number;
-    this.settleEntryFill(order, limit, outcome, { atFill, latest: ratios.at(-1) as number });
+    this.settleEntryFill(order, limit, outcome, {
+      ratio: ratios.at(-1) as number,
+      date: bars.at(-1)?.date as string,
+    });
   }
 
-  // The order, the bars it fills against and its stop are in the units it was priced in. A new
-  // position books in those units and is then rescaled to the fill bar's; an add to a position
-  // already rescaled to the latest bar is converted to that bar's units before it books
+  // The order and its stop are in the units it was priced in, the position book in the latest
+  // bar's: a new position books in order units and is rescaled to the latest bar's and anchored
+  // there, an add is converted before it books
   settleEntryFill(
     order: JournalledOrder,
     limit: number,
     outcome: FilledLimitEntry,
-    units: { readonly atFill: number; readonly latest: number },
+    units: { readonly ratio: number; readonly date: string },
   ): void {
     const side = order.side as OrderSide;
     const opening = this.deps.books.position(order.book_id, order.instrument) === undefined;
@@ -493,7 +516,7 @@ class Cycle {
       this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
       return;
     }
-    const bookedUnits = opening ? 1 : units.latest;
+    const bookedUnits = opening ? 1 : units.ratio;
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
@@ -502,24 +525,24 @@ class Cycle {
       qty: qty * bookedUnits,
       fee: quote.fee,
     });
-    this.afterEntryFill(order, outcome, opening ? units.atFill : units.latest, opening);
+    this.afterEntryFill(order, outcome, units, opening);
   }
 
   afterEntryFill(
     order: JournalledOrder,
     outcome: FilledLimitEntry,
-    heldUnits: number,
+    units: { readonly ratio: number; readonly date: string },
     opening: boolean,
   ): void {
     if (opening && this.deps.books.position(order.book_id, order.instrument) !== undefined) {
-      this.deps.books.applySplit(order.book_id, order.instrument, heldUnits, outcome.bar.date);
+      this.deps.books.applySplit(order.book_id, order.instrument, units.ratio, units.date);
     }
     const held = this.deps.books.position(order.book_id, order.instrument);
     if (outcome.stoppedAt !== undefined && held !== undefined) {
       this.simulatedExit(
         order.book_id,
         held,
-        outcome.stoppedAt / heldUnits,
+        outcome.stoppedAt / units.ratio,
         true,
         'stop_on_entry_bar',
       );
