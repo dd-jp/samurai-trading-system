@@ -1,0 +1,472 @@
+import { createHash } from 'node:crypto';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { SleeveDecision } from '../../../contracts/index.js';
+import type { AnthropicMessageRequest } from '../../pipeline/debate-engine/index.js';
+import type { DailyBar } from '../../pipeline/momentum/index.js';
+import { ParquetBarStore } from '../../providers/bar-store/index.js';
+import { SimulatedClock } from '../../shared/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
+import type { VenueSessionGate } from './data/index.js';
+import { composeV2Root } from './index.js';
+import {
+  compareDecision,
+  type Divergence,
+  divergencesOf,
+  formatReplay,
+  type JournalledDecision,
+  journalledLseRefusal,
+  type ReplayResult,
+  redactor,
+} from './replay.js';
+import { main, parseReplayArgs, type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
+import { CapitalConfigStore } from './risk/index.js';
+import type { LoggedCall, ModelPin } from './signal/index.js';
+import { ReplayLog, ScriptedTransport } from './signal/index.js';
+
+const ORIGIN = Date.UTC(2026, 0, 1);
+const dateAt = (day: number) => new Date(ORIGIN + day * 86_400_000).toISOString().slice(0, 10);
+const TRADING_DATE = dateAt(260);
+const OPEN_EVERY_DAY: VenueSessionGate = {
+  entrySitOut: () => undefined,
+  timeStopPausedVenues: () => [],
+};
+
+function rising(): DailyBar[] {
+  const bars: DailyBar[] = [];
+  for (let i = 0; i <= 260; i += 1) {
+    const close = 20 * (1 + 0.001 * i);
+    bars.push({
+      date: dateAt(i),
+      open: close,
+      high: close * 1.01,
+      low: close * 0.99,
+      close,
+      volume: 1_000_000,
+      rawClose: close,
+    });
+  }
+  return bars;
+}
+
+function answer(request: AnthropicMessageRequest): string {
+  const prompt = request.messages[0]?.content ?? '';
+  if (prompt.includes('Mediator persona')) {
+    return '{"stance":"bullish","rationale":"trend and headlines agree","converged":true}';
+  }
+  return prompt.includes('Bull persona')
+    ? '{"stance":"bullish","rationale":"above the 200-day"}'
+    : '{"stance":"bearish","rationale":"stretched"}';
+}
+
+let directory: string;
+let options: ReplayCliOptions;
+
+beforeAll(async () => {
+  directory = mkdtempSync(join(tmpdir(), 'v2-replay-'));
+  const barStoreRoot = join(directory, 'parquet');
+  const store = await ParquetBarStore.open(barStoreRoot);
+  await store.write('alpaca', [
+    { symbol: 'UP', bars: rising() },
+    { symbol: 'SPY', bars: rising() },
+  ]);
+  store.close();
+  const constituentsPath = join(directory, 'constituents.csv');
+  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,MISSING"\n');
+  const fxPath = join(directory, 'fx.csv');
+  writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
+  const spreadsPath = join(directory, 'spreads.csv');
+  writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\nUP,10,0\n');
+  const storePath = join(directory, 'paper.sqlite');
+  const seed = openSharedStore(storePath);
+  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
+    2026,
+    1_000,
+    1_500,
+  );
+  seed.close();
+  const cfdCataloguePath = join(directory, 'absent-catalogue.json');
+  const root = composeV2Root({
+    tradingDate: TRADING_DATE,
+    dryRun: true,
+    storePath,
+    barStoreRoot,
+    constituentsPath,
+    fxPath,
+    spreadsPath,
+    cfdCataloguePath,
+    clock: new SimulatedClock(new Date(`${TRADING_DATE}T07:30:00.000Z`)),
+    logger: { log: () => {} },
+    venueSessions: OPEN_EVERY_DAY,
+    transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer),
+    newsSource: {
+      headlines: (symbol) =>
+        Promise.resolve(symbol === 'UP' ? ['UP beats estimates', 'UP raises guidance'] : []),
+    },
+  });
+  try {
+    await root.run();
+  } finally {
+    root.close();
+  }
+  options = {
+    tradingDate: TRADING_DATE,
+    storePath,
+    barStoreRoot,
+    constituentsPath,
+    fxPath,
+    cfdCataloguePath,
+  };
+});
+
+afterAll(() => {
+  rmSync(directory, { recursive: true, force: true });
+});
+
+function digestOf(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function tamperedCopy(name: string, sql: string): ReplayCliOptions {
+  const storePath = join(directory, `${name}.sqlite`);
+  copyFileSync(options.storePath, storePath);
+  const db = new BetterSqlite3(storePath);
+  db.exec(sql);
+  db.close();
+  return { ...options, storePath };
+}
+
+const DEBATE_CALLS = `SELECT id FROM llm_call_log WHERE trace_id LIKE 'v2-${TRADING_DATE}-UP'`;
+
+describe('replayFromFiles', () => {
+  it('replays the fixture day to identical decisions and inputs hashes without writing', async () => {
+    const before = digestOf(options.storePath);
+    const result = await replayFromFiles(options);
+    expect(result.decisions).toBe(3);
+    expect(result.calls).toBe(3);
+    expect(result.divergences).toEqual([]);
+    expect(digestOf(options.storePath)).toBe(before);
+  });
+
+  it('detects a changed judge response as a changed decision', async () => {
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'judge',
+        `UPDATE llm_call_log SET response = '{"stance":"bearish","rationale":"tampered","converged":true}'
+          WHERE model = 'anthropic/claude-opus-5.5'`,
+      ),
+    );
+    expect(result.divergences[0]).toMatchObject({
+      kind: 'decision_field',
+      instrument: 'UP',
+      field: 'direction',
+      journalled: 'bullish',
+      replayed: 'bearish',
+    });
+  });
+
+  it('detects a changed debater response at the judge request it changes', async () => {
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'bull',
+        `UPDATE llm_call_log SET response = '{"stance":"bullish","rationale":"tampered"}'
+          WHERE id = (${DEBATE_CALLS} ORDER BY id LIMIT 1)`,
+      ),
+    );
+    const [first] = result.divergences;
+    expect(first?.kind).toBe('llm_request');
+    expect(first?.kind === 'llm_request' && first.miss).toMatchObject({
+      kind: 'request_not_logged',
+      model: 'anthropic/claude-opus-5.5',
+    });
+  });
+
+  it('fails closed on a request with no logged response', async () => {
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'missing',
+        `DELETE FROM llm_call_log WHERE id = (${DEBATE_CALLS} ORDER BY id DESC LIMIT 1)`,
+      ),
+    );
+    const [first] = result.divergences;
+    expect(first?.kind === 'llm_request' && first.miss.kind).toBe('request_not_logged');
+    expect(result.divergences.some((entry) => entry.kind === 'decision_field')).toBe(true);
+  });
+
+  it('fails closed on a logged response the capture cap truncated', async () => {
+    const long = `${'x'.repeat(4_096)}… (truncated, 5000 chars total)`;
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'truncated',
+        `UPDATE llm_call_log SET response = '${long}' WHERE model = 'anthropic/claude-opus-5.5'`,
+      ),
+    );
+    const [first] = result.divergences;
+    expect(first?.kind === 'llm_request' && first.miss.kind).toBe('response_truncated');
+  });
+
+  it('names changed bars as an inputs hash divergence before the requests they change', async () => {
+    const barStoreRoot = join(directory, 'revised-parquet');
+    const revised = await ParquetBarStore.open(barStoreRoot);
+    const bars = rising().map((bar, index) =>
+      index === 250 ? { ...bar, high: bar.high * 1.05, close: bar.close * 1.05 } : bar,
+    );
+    await revised.write('alpaca', [
+      { symbol: 'UP', bars },
+      { symbol: 'SPY', bars: rising() },
+    ]);
+    revised.close();
+    const result = await replayFromFiles({ ...options, barStoreRoot });
+    expect(result.divergences[0]).toMatchObject({
+      kind: 'decision_field',
+      instrument: 'UP',
+      field: 'inputs_hash',
+    });
+    expect(result.divergences.some((entry) => entry.kind === 'llm_request')).toBe(true);
+  });
+
+  it('reports a day with no journalled decision', async () => {
+    const result = await replayFromFiles({ ...options, tradingDate: dateAt(100) });
+    expect(result.divergences).toEqual([{ kind: 'nothing_to_replay', tradingDate: dateAt(100) }]);
+  });
+});
+
+describe('main', () => {
+  it('prints identical and exits 0 on a matching day', async () => {
+    const lines: string[] = [];
+    const code = await main(
+      Object.entries({
+        '--date': options.tradingDate,
+        '--store': options.storePath,
+        '--bars': options.barStoreRoot,
+        '--constituents': options.constituentsPath,
+        '--fx': options.fxPath,
+        '--cfd-catalogue': options.cfdCataloguePath,
+      }).flat(),
+      (line) => lines.push(line),
+      {},
+    );
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toMatch(/identical$/);
+  });
+
+  it('exits 1 and redacts known secret values from the divergence it prints', async () => {
+    const lines: string[] = [];
+    const code = await main(
+      ['--date', TRADING_DATE],
+      (line) => lines.push(line),
+      { NOUS_API_KEY: 'sk-nous-0123456789' },
+      () =>
+        Promise.resolve({
+          tradingDate: TRADING_DATE,
+          decisions: 1,
+          calls: 0,
+          divergences: [
+            {
+              kind: 'decision_field',
+              bookId: 'debate',
+              instrument: 'UP',
+              field: 'reason',
+              journalled: 'judge bullish',
+              replayed: 'llm_error: sk-nous-0123456789',
+            },
+          ],
+        }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join('\n')).toContain('reason differs');
+    expect(lines.join('\n')).not.toContain('sk-nous-0123456789');
+  });
+
+  it('exits 1 with the error when the replay throws', async () => {
+    const lines: string[] = [];
+    const code = await main(['--date', 'yesterday'], (line) => lines.push(line), {});
+    expect(code).toBe(1);
+    expect(lines).toEqual(['replay failed: --date YYYY-MM-DD is required']);
+  });
+});
+
+describe('parseReplayArgs', () => {
+  it('fills defaults around the date', () => {
+    expect(parseReplayArgs(['--date', '2026-09-30'])).toMatchObject({
+      tradingDate: '2026-09-30',
+      storePath: 'data/samurai-v2-paper.sqlite',
+    });
+  });
+
+  it('refuses an unknown flag and a flag without a value', () => {
+    expect(() => parseReplayArgs(['--dry-run', 'x'])).toThrow(
+      'unknown or valueless argument --dry-run',
+    );
+    expect(() => parseReplayArgs(['--date'])).toThrow('unknown or valueless argument --date');
+  });
+});
+
+const ROW: JournalledDecision = {
+  book_id: 'debate/primary',
+  sleeve_id: 'debate',
+  variant: 'primary',
+  instrument: 'UP',
+  venue: 'alpaca',
+  inputs_hash: 'h',
+  direction: 'bullish',
+  confidence: 0.75,
+  action: 'enter_long',
+  reason: 'judge bullish',
+  stop_price: 9,
+  payload: '{"synthesis":"s","debate_id":"d1"}',
+};
+
+const DECISION: SleeveDecision = {
+  sleeve_id: 'debate',
+  instrument: 'UP',
+  venue: 'alpaca',
+  direction: 'bullish',
+  confidence: 0.75,
+  action: 'enter_long',
+  reason: 'judge bullish',
+  price: 10,
+  atr: 0.5,
+  stop_price: 9,
+  inputs_hash: 'h',
+  debate_id: 'd1',
+  payload: { synthesis: 's' },
+};
+
+describe('compareDecision', () => {
+  it('matches a replayed decision byte for byte, debate id included', () => {
+    expect(compareDecision(ROW, DECISION)).toBeUndefined();
+  });
+
+  it('names a missing decision and the first differing field', () => {
+    expect(compareDecision(ROW, undefined)).toEqual({
+      kind: 'decision_missing',
+      bookId: 'debate/primary',
+      instrument: 'UP',
+    });
+    expect(compareDecision(ROW, { ...DECISION, stop_price: undefined })).toMatchObject({
+      field: 'stop_price',
+      journalled: 9,
+      replayed: null,
+    });
+    expect(compareDecision(ROW, { ...DECISION, debate_id: 'd2' })).toMatchObject({
+      field: 'payload',
+    });
+  });
+});
+
+describe('divergencesOf', () => {
+  it('orders inputs, then requests, then outputs, then calls never requested', () => {
+    const log = new ReplayLog([
+      { id: 7, traceId: 'v2-x-UP', model: 'm', prompt: 'p', response: 'r' },
+    ]);
+    expect(() => log.serve('m', 'q')).toThrow('request_not_logged');
+    const replayed = new Map([
+      [
+        'debate',
+        [
+          { ...DECISION, inputs_hash: 'other' },
+          { ...DECISION, instrument: 'NEW' },
+        ],
+      ],
+    ]);
+    const kinds = divergencesOf([ROW, { ...ROW, instrument: 'GONE' }], replayed, log).map(
+      (entry) => (entry.kind === 'decision_field' ? `${entry.kind}:${entry.field}` : entry.kind),
+    );
+    expect(kinds).toEqual([
+      'decision_field:inputs_hash',
+      'llm_request',
+      'decision_missing',
+      'decision_extra',
+      'call_not_replayed',
+    ]);
+  });
+});
+
+describe('journalledLseRefusal', () => {
+  it('reads the day SAXO_SESSION refusal back without its prefix', () => {
+    const db = openSharedStore(':memory:');
+    const insert = db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES (?, 'data', 'SAXO_SESSION', '#1876', ?, 'now')`,
+    );
+    insert.run('2026-09-29', 'LSE leg refused: token expired');
+    insert.run('2026-09-30', 'other wording');
+    expect(journalledLseRefusal(db, '2026-09-29')).toBe('token expired');
+    expect(journalledLseRefusal(db, '2026-09-30')).toBe('other wording');
+    expect(journalledLseRefusal(db, '2026-10-01')).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('formatReplay', () => {
+  const result = (divergences: Divergence[]): ReplayResult => ({
+    tradingDate: '2026-09-30',
+    decisions: 2,
+    calls: 3,
+    divergences,
+  });
+  const logged: LoggedCall = {
+    id: 4,
+    traceId: 'v2-2026-09-30-UP',
+    model: 'm',
+    prompt: 'abc',
+    response: 'r',
+  };
+
+  it('says identical when nothing diverged', () => {
+    expect(formatReplay(result([]), (text) => text)).toBe(
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls\nidentical',
+    );
+  });
+
+  it.each([
+    [
+      { kind: 'nothing_to_replay', tradingDate: '2026-09-30' },
+      'no debate or arm 2 decision is journalled for 2026-09-30',
+    ],
+    [{ kind: 'decision_missing', bookId: 'b', instrument: 'UP' }, 'b UP: journalled, not replayed'],
+    [{ kind: 'decision_extra', bookId: 'b', instrument: 'UP' }, 'b UP: replayed, not journalled'],
+    [
+      { kind: 'call_not_replayed', call: logged },
+      'logged call 4 (v2-2026-09-30-UP, m) was never requested',
+    ],
+    [
+      {
+        kind: 'llm_request',
+        miss: {
+          kind: 'request_not_logged',
+          model: 'm',
+          prompt: 'p',
+          nearest: undefined,
+          offset: 0,
+        },
+      },
+      'LLM request request_not_logged for m: no logged call for that model is left',
+    ],
+    [
+      {
+        kind: 'llm_request',
+        miss: { kind: 'request_not_logged', model: 'm', prompt: 'abd', nearest: logged, offset: 2 },
+      },
+      'nearest logged call 4 (v2-2026-09-30-UP) differs at offset 2\n  replayed: "d"\n  logged:   "c"',
+    ],
+  ] as [Divergence, string][])('describes %o', (divergence, text) => {
+    const printed = formatReplay(result([divergence, divergence]), (line) => line);
+    expect(printed).toContain('DIVERGED (2 divergences); first:');
+    expect(printed).toContain(text);
+  });
+});
+
+describe('redactor', () => {
+  it('masks known secret values of usable length', () => {
+    const redact = redactor(() => [
+      { name: 'A', value: 'longsecretvalue' },
+      { name: 'B', value: 'short' },
+    ]);
+    expect(redact('x longsecretvalue y short')).toBe('x [REDACTED] y short');
+  });
+});
