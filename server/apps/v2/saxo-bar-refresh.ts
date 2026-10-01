@@ -128,7 +128,7 @@ function revisedCloses(existing: BarSeries, next: readonly DailyBar[]): string |
   return `revises stored close(s) by more than ${MAX_CLOSE_REVISION * 100}%: ${listed(shown)}`;
 }
 
-export function assertHistoryConsistent(
+function assertHistoryConsistent(
   symbol: string,
   existing: BarSeries,
   next: readonly DailyBar[],
@@ -312,11 +312,11 @@ type SaxoConnect = (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
 
 // Each 429 costs a 65 s backoff and each request may wait 60 s, so an all-429 day runs past 1.5
 // hours; ten minutes covers a clean pull of the 22 lines with room for several backoffs
-export const SAXO_REFRESH_TIME_LIMIT_MS = 10 * 60_000;
+const SAXO_REFRESH_TIME_LIMIT_MS = 10 * 60_000;
 
 export interface SaxoBarRefreshDeps {
   readonly storeRoot?: string;
-  readonly connect?: SaxoConnect;
+  readonly connect?: (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
   readonly tokenPath?: string;
   readonly now?: () => Date;
   readonly timeLimitMs?: number;
