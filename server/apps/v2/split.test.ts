@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { V2Bar } from '../../../contracts/index.js';
 import {
+  isSplitStep,
   SPLIT_ADJUSTED_GAP_BAND,
+  SPLIT_STEP_EPSILON,
   SPLIT_STEP_THRESHOLD,
   snapToSplitRatio,
   splitRatioAcross,
@@ -147,5 +149,45 @@ describe('splitRatioAcross', () => {
       expect(reading.ratio).toBe(10);
       expect(reading.rejected).toHaveLength(1);
     });
+  });
+});
+
+describe('rounding tolerance at the split threshold', () => {
+  const rounded = (close: number, rawClose: number, date: string): V2Bar => ({
+    date,
+    open: close,
+    high: close,
+    low: close,
+    close,
+    volume: 1,
+    rawClose,
+  });
+
+  it('reads a 6:5 split whose 4 dp closes land under 1.2 as the split it is', () => {
+    const bars = [
+      rounded(6.6667, 8, '2026-09-10'),
+      rounded(6.6667, 8, '2026-09-11'),
+      rounded(6.7, 6.7, '2026-09-14'),
+    ];
+    expect(8 / 6.6667).toBeLessThan(SPLIT_STEP_THRESHOLD);
+    expect(splitRatioAcross(bars).ratio).toBe(1.2);
+  });
+
+  it('reads the reverse 5:6 step the same way', () => {
+    const bars = [rounded(8, 6.6667, '2026-09-10'), rounded(8.1, 8.1, '2026-09-11')];
+    expect(splitRatioAcross(bars).ratio).toBeCloseTo(5 / 6, 12);
+  });
+
+  it('still rejects a step below the epsilon band', () => {
+    const below = SPLIT_STEP_THRESHOLD * (1 - 2 * SPLIT_STEP_EPSILON);
+    expect(isSplitStep(below)).toBe(false);
+    expect(isSplitStep(1 / below)).toBe(false);
+    expect(isSplitStep(1.198)).toBe(false);
+    expect(ratioOf(series(1.198, 1))).toBe(1);
+  });
+
+  it('accepts the threshold and a step inside the band', () => {
+    expect(isSplitStep(SPLIT_STEP_THRESHOLD)).toBe(true);
+    expect(isSplitStep(SPLIT_STEP_THRESHOLD * (1 - SPLIT_STEP_EPSILON / 2))).toBe(true);
   });
 });
