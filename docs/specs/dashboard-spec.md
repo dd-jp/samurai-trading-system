@@ -39,7 +39,7 @@ One page, three hash views, no router library. A status strip sits above every v
 
 Width: one column under 720 px, two above. Every panel has three states: **fed** (data), **empty** (fed, nothing yet: "no closed trades"), **not yet fed** (the server says which step or ruling owns the data, with its ticket). A panel never reads a field nobody writes; "not yet fed" is itself a served value (§6).
 
-Refresh: poll every 30 s. The v2 cycle runs once per trading day, so nothing faster is needed; the status strip shows the age of the data. Its "next due" and heartbeat fields come from P14; the next-due date is the first day after the newest journalled cycle (a recorded book day or a `venues_closed` skip) on which either venue trades, and the ping is the newest delivered healthchecks.io ping, journalled by the run in `v2_heartbeat_pings` (success or fail); each reads empty until the run has journalled one.
+Refresh: poll every 30 s. The v2 cycle runs once per trading day, so nothing faster is needed; the status strip shows the age of the data. Its "next due" and heartbeat fields come from P14; the next-due date is an estimate, shown as overdue once it is past: the first day after the newest journalled cycle (a recorded book day or a `venues_closed` skip) on which either venue trades, and the ping is the newest delivered healthchecks.io ping, journalled by the run in `v2_heartbeat_pings` (success or fail); each reads empty until the run has journalled one.
 
 ## 4. Panels
 

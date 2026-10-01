@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { withBackup } from './backup.js';
 import {
   healthchecksHeartbeat,
   heartbeatFor,
@@ -187,6 +188,7 @@ describe('journalling a delivered ping', () => {
   it('pingJournal appends one row per ping to the store, stamped by the clock', () => {
     const dir = mkdtempSync(join(tmpdir(), 'heartbeat-journal-'));
     const storePath = join(dir, 'v2.sqlite');
+    openSharedStore(storePath).close();
     try {
       const sink = pingJournal(storePath, { now: () => new Date('2026-10-05T07:31:00.000Z') });
       sink('success');
@@ -200,9 +202,45 @@ describe('journalling a delivered ping', () => {
           { outcome: 'fail', pinged_at: '2026-10-05T07:31:00.000Z' },
         ]);
         expect(() => db.prepare('DELETE FROM v2_heartbeat_pings').run()).toThrow(/append-only/);
+        expect(() =>
+          db.prepare("INSERT OR REPLACE INTO v2_heartbeat_pings VALUES (1, 'fail', 'x')").run(),
+        ).toThrow(/append-only/);
       } finally {
         db.close();
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a missing store', () => {
+  it('is never created by the ping sink, so a failed restore cannot leave an empty book behind', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'heartbeat-missing-'));
+    const missing = join(dir, 'v2.sqlite');
+    const { entries, logger } = recorder();
+    const clock = { now: () => new Date('2026-10-05T07:31:00.000Z') };
+    try {
+      expect(() => pingJournal(missing, clock)('fail')).toThrow();
+      expect(existsSync(missing)).toBe(false);
+      const boom = new Error('restore failed');
+      const backup = {
+        restore: () => Promise.reject(boom),
+        replicate: () => Promise.resolve(),
+      };
+      await expect(
+        withHeartbeat(
+          () => withBackup(() => Promise.resolve(0), backup),
+          healthchecksHeartbeat(
+            SECRET,
+            vi.fn().mockResolvedValue({ ok: true, status: 200 }),
+            logger,
+            pingJournal(missing, clock),
+          ),
+        ),
+      ).rejects.toBe(boom);
+      expect(existsSync(missing)).toBe(false);
+      expect(entries.map((entry) => entry.event)).toContain('v2_heartbeat_unjournaled');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

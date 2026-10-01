@@ -15,3 +15,10 @@ BEFORE DELETE ON v2_heartbeat_pings
 BEGIN
   SELECT RAISE(ABORT, 'v2_heartbeat_pings is append-only');
 END;
+
+CREATE TRIGGER IF NOT EXISTS v2_heartbeat_pings_no_replace
+BEFORE INSERT ON v2_heartbeat_pings
+WHEN NEW.ping_id IS NOT NULL AND EXISTS (SELECT 1 FROM v2_heartbeat_pings WHERE ping_id = NEW.ping_id)
+BEGIN
+  SELECT RAISE(ABORT, 'v2_heartbeat_pings is append-only');
+END;

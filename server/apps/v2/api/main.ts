@@ -25,7 +25,7 @@ import { ReconcileReader } from './records.js';
 import { ResearchReader } from './research.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
 
-const CONTROLS_SCHEMA_VERSION = 82;
+export const DASHBOARD_SCHEMA_VERSION = 82;
 const DEFAULT_PORT = 8788;
 
 export interface V2DashboardArgs {
@@ -105,7 +105,7 @@ export function composeV2Dashboard(
     new ParquetMarkSource(args.barStoreRoot),
     new BarsMarketData({ load: () => undefined }, fx),
   );
-  const db = openMigratedStore(args.storePath, CONTROLS_SCHEMA_VERSION);
+  const db = openMigratedStore(args.storePath, DASHBOARD_SCHEMA_VERSION);
   try {
     const store = guardedStore(db, 'dashboard', { enabled: true });
     const reader = new OverviewReader(store, clock, args.mode, positions);

@@ -13,7 +13,7 @@ describe('StatusStrip (P14 and the feed state)', () => {
     );
     const line = screen.getByRole('banner').querySelector('.strip-line');
     expect(line?.textContent).toBe(
-      'PAPERLast cycle 2026-10-05, recorded 2026-10-05 21:40ZNext due 2026-10-06Ping success 2026-10-05 21:41ZData as of 2026-10-06 21:40Z',
+      'PAPERLast cycle 2026-10-05, recorded 2026-10-05 21:40ZNext due 2026-10-06 (estimate)Ping success 2026-10-05 21:41ZData as of 2026-10-06 21:40Z',
     );
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -37,6 +37,27 @@ describe('StatusStrip (P14 and the feed state)', () => {
     expect(screen.getByRole('banner').textContent).toContain('Next due not yet fed (#9)');
   });
 
+  it('marks a next due day before the data time as overdue', () => {
+    render(
+      <StatusStrip
+        overview={overview({
+          heartbeat: {
+            last_cycle: { status: 'empty' },
+            next_due: { status: 'fed', due_date: '2026-10-05' },
+            last_ping: { status: 'empty' },
+          },
+        })}
+        status="ok"
+        error={null}
+        token="t"
+        onRecorded={noop}
+      />,
+    );
+    expect(screen.getByRole('banner').textContent).toContain(
+      'Next due 2026-10-05 (overdue, estimate)',
+    );
+  });
+
   it('shows the heartbeat as fed or empty when the server says so', () => {
     render(
       <StatusStrip
@@ -57,7 +78,7 @@ describe('StatusStrip (P14 and the feed state)', () => {
     const text = screen.getByRole('banner').textContent;
     expect(text).toContain('DRY-RUN');
     expect(text).toContain('Last cycle none yet');
-    expect(text).toContain('Next due 2026-10-07');
+    expect(text).toContain('Next due 2026-10-07 (estimate)');
     expect(text).toContain('Ping fail 2026-10-06 21:41Z');
   });
 

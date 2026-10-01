@@ -1,5 +1,5 @@
 import type { Clock, Logger } from '../../shared/index.js';
-import { guardedStore, openSharedStore } from '../../shared/store/index.js';
+import { guardedStore, openMigratedStore } from '../../shared/store/index.js';
 
 export type HeartbeatOutcome = 'success' | 'fail';
 
@@ -14,6 +14,8 @@ type Fetch = (
 }>;
 
 const PING_TIMEOUT_MS = 10_000;
+
+const PING_SCHEMA_VERSION = 82;
 
 export type PingSink = (outcome: HeartbeatOutcome) => void;
 
@@ -33,7 +35,7 @@ export function heartbeatFor(
 
 export function pingJournal(storePath: string, clock: Clock): PingSink {
   return (outcome) => {
-    const db = openSharedStore(storePath);
+    const db = openMigratedStore(storePath, PING_SCHEMA_VERSION);
     try {
       guardedStore(db, 'v2')
         .prepare('INSERT INTO v2_heartbeat_pings (outcome, pinged_at) VALUES (?, ?)')
