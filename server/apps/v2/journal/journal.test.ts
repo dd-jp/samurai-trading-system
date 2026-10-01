@@ -223,6 +223,52 @@ describe('Journal', () => {
     ]);
   });
 
+  it('records an identical refusal once per trading date, and once more on the next (#1907)', () => {
+    const db = openSharedStore(':memory:');
+    const faults: unknown[] = [];
+    const journal = new Journal(db, clock, { record: (fault) => faults.push(fault) });
+    const saxo = (trading_date: string) =>
+      journal.recordRefusal({
+        trading_date,
+        scope: 'data',
+        parameter: 'SAXO_SESSION',
+        ticket: '#1876',
+        message: 'LSE leg refused: the Saxo live session was lost',
+      });
+    const stale = (instrument: string) =>
+      journal.recordRefusal({
+        trading_date: '2026-09-25',
+        scope: 'data',
+        parameter: 'MARK_FRESHNESS',
+        ticket: '#1804',
+        message: `debate/primary ${instrument}: stale`,
+        book_id: 'debate/primary',
+        instrument,
+      });
+    saxo('2026-09-25');
+    saxo('2026-09-25');
+    stale('AAPL');
+    stale('AAPL');
+    stale('MSFT');
+    saxo('2026-09-28');
+    expect(
+      db
+        .prepare('SELECT trading_date, parameter, instrument FROM v2_refusals ORDER BY refusal_id')
+        .all(),
+    ).toEqual([
+      { trading_date: '2026-09-25', parameter: 'SAXO_SESSION', instrument: null },
+      { trading_date: '2026-09-25', parameter: 'MARK_FRESHNESS', instrument: 'AAPL' },
+      { trading_date: '2026-09-25', parameter: 'MARK_FRESHNESS', instrument: 'MSFT' },
+      { trading_date: '2026-09-28', parameter: 'SAXO_SESSION', instrument: null },
+    ]);
+    expect(faults).toHaveLength(4);
+    expect(journal.newRefusals('2026-09-25').map((refusal) => refusal.parameter)).toEqual([
+      'SAXO_SESSION',
+      'MARK_FRESHNESS',
+      'MARK_FRESHNESS',
+    ]);
+  });
+
   it('lists submitted entries from earlier dates that never filled and marks them cancelled', () => {
     const db = openSharedStore(':memory:');
     const capital = new CapitalConfigStore(db, clock);

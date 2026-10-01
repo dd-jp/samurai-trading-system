@@ -1,7 +1,10 @@
 import { resolveSaxoOAuthConfig } from '../../pipeline/execution/adapters/saxo-oauth.js';
 import { tokenFilePath } from '../../pipeline/execution/adapters/saxo-token-file.js';
 import type { SaxoTokenSource } from '../../pipeline/execution/adapters/saxo-token-source.js';
-import { SaxoTokenRefresher } from '../../pipeline/execution/adapters/saxo-token-source.js';
+import {
+  SaxoSessionLostError,
+  SaxoTokenRefresher,
+} from '../../pipeline/execution/adapters/saxo-token-source.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import type { Logger } from '../../shared/index.js';
 import { delay, isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
@@ -163,7 +166,7 @@ export function liveTokenSource(
   });
   const state = refresher.start();
   if (state.status !== 'active') {
-    throw new Error(
+    throw new SaxoSessionLostError(
       `Saxo token dead, needs \`npm run saxo:login\` (${state.status === 'lost' ? state.reason : 'unrefreshable'})`,
     );
   }
@@ -173,6 +176,7 @@ export function liveTokenSource(
 export interface SaxoLiveSession {
   readonly api: SaxoReadOnlyApi;
   readonly stop: () => Promise<void>;
+  readonly lostReason: () => string | undefined;
 }
 
 export function openSaxoLiveSession(
@@ -182,7 +186,14 @@ export function openSaxoLiveSession(
 ): SaxoLiveSession {
   const { gatewayBaseUrl } = resolveSaxoOAuthConfig('live', env);
   const tokens = liveTokenSource(env, tokenPath, logger);
-  return { api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl), stop: () => tokens.stop() };
+  return {
+    api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl),
+    stop: () => tokens.stop(),
+    lostReason: () => {
+      const state = tokens.sessionState();
+      return state.status === 'lost' ? state.reason : undefined;
+    },
+  };
 }
 
 function requestUrl(gatewayBaseUrl: string, path: string, params?: Record<string, string>): string {

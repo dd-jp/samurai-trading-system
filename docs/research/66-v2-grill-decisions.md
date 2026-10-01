@@ -341,6 +341,13 @@ David ruled in chat on PR #1959's open items, recorded on [#1884](https://github
 1. **The report's derived definitions are accepted.** Realised cost is measured against the simulator's own pre-cost price on the same bar (the open, the limit, or the stop clamped to the bar), not the decision close, so the overnight gap is not counted as cost. Pass is one total realised ÷ modelled ratio per entry-offset group (#1815, 2026-09-30) within ±25%, not ±25% on each order. The default window is the whole journal; from/to are optional.
 2. **On paper the check compares slippage only.** Alpaca paper charges no fee while the cost model charges SEC, TAF and CAT fees, so a fee comparison on paper reads low by construction. The fee legs are still printed. Fees join the comparison on live, where they are real.
 
+## Rulings of 2026-10-01 — Saxo bar refresh guard and refusal dedup (#1901, #1907)
+
+David ruled in chat on PR #1960's open questions, recorded on [#1901](https://github.com/dd-jp/samurai-trading-system/issues/1901#issuecomment-5926944294) and [#1907](https://github.com/dd-jp/samurai-trading-system/issues/1907#issuecomment-5926943914). Both keep the PR as built.
+
+1. **Refresh history guard (#1901): keep as built.** The daily Saxo re-pull refuses to write a line when it starts earlier than the stored series, drops a stored bar, or moves a stored close by more than 0.5% against the overlap's median ratio. A uniform split rescale still writes, with its existing warning. Interior insertions are allowed (the ~25 real bars #1904's neighbour step keeps). A refused line needs a manual re-seed. Build note (not a ruling): the 0.5% tolerance assumes Saxo closes are price-only. The ISF/CUKX check in `data/bars/saxo/manifest.json` (`checks.distribution_adjustment`, −3.76%/yr drift, the dividend yield) shows they are, so an ex-dividend date does not revise past closes.
+2. **Refusal dedup key (#1907): every field.** A refusal identical to one already recorded that trading day (same book, instrument, parameter, ticket and message) is one row; one that differs in any field gets its own row.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

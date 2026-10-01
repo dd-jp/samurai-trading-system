@@ -2,10 +2,19 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { writeKeepAliveState } from '../../../pipeline/execution/adapters/saxo-keepalive-state.js';
+import {
+  readKeepAliveState,
+  writeKeepAliveState,
+} from '../../../pipeline/execution/adapters/saxo-keepalive-state.js';
 import type { SaxoTokenFileRecord } from '../../../pipeline/execution/adapters/saxo-token-file.js';
 import { writeTokenFile } from '../../../pipeline/execution/adapters/saxo-token-file.js';
-import { saxoSessionRefusal } from './saxo-session.js';
+import { SaxoSessionLostError } from '../../../pipeline/execution/adapters/saxo-token-source.js';
+import {
+  recordedSessionLoss,
+  recordSessionLoss,
+  saxoSessionRefusal,
+  sessionLossOf,
+} from './saxo-session.js';
 
 const NOW = new Date('2026-09-29T12:00:00.000Z');
 const iso = (offsetMs: number) => new Date(NOW.getTime() + offsetMs).toISOString();
@@ -95,5 +104,61 @@ describe('saxoSessionRefusal', () => {
     writeKeepAliveState(tokenPath, { warnedAt: iso(-1_000) });
 
     expect(saxoSessionRefusal(NOW, tokenPath)).toBeUndefined();
+  });
+});
+
+describe('recordSessionLoss', () => {
+  let dir: string;
+  let tokenPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'saxo-session-loss-'));
+    tokenPath = join(dir, 'live.json');
+    writeTokenFile(tokenPath, record({ obtainedAt: iso(-600_000) }));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('records the loss so the refusal reads it, keeping an earlier warning', () => {
+    writeKeepAliveState(tokenPath, { warnedAt: iso(-60_000) });
+    recordSessionLoss('rejected (HTTP 401)', NOW, tokenPath);
+
+    expect(readKeepAliveState(tokenPath)).toEqual({
+      warnedAt: iso(-60_000),
+      lostAt: NOW.toISOString(),
+      lostReason: 'rejected (HTTP 401)',
+    });
+    expect(recordedSessionLoss(tokenPath)).toContain('rejected (HTTP 401)');
+    expect(saxoSessionRefusal(NOW, tokenPath)).toContain('rejected (HTTP 401)');
+  });
+
+  it('keeps the first record of an outage', () => {
+    writeKeepAliveState(tokenPath, { lostAt: iso(-300_000), lostReason: 'first' });
+    recordSessionLoss('second', NOW, tokenPath);
+
+    expect(readKeepAliveState(tokenPath)).toEqual({ lostAt: iso(-300_000), lostReason: 'first' });
+  });
+
+  it('overwrites a loss record older than the current session', () => {
+    writeKeepAliveState(tokenPath, { lostAt: iso(-900_000), lostReason: 'stale' });
+    recordSessionLoss('fresh', NOW, tokenPath);
+
+    expect(readKeepAliveState(tokenPath)).toEqual({
+      lostAt: NOW.toISOString(),
+      lostReason: 'fresh',
+    });
+  });
+
+  it('reports no recorded loss without a saved session', () => {
+    expect(recordedSessionLoss(join(dir, 'absent.json'))).toBeUndefined();
+  });
+});
+
+describe('sessionLossOf', () => {
+  it('reads a session-lost error and ignores any other failure', () => {
+    expect(sessionLossOf(new SaxoSessionLostError('lost'))).toBe('lost');
+    expect(sessionLossOf(new Error('SAXO_LIVE_APP_KEY is not set'))).toBeUndefined();
   });
 });
