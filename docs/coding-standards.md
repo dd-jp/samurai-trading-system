@@ -61,10 +61,12 @@ given test may have either or both:
   nothing in the test asserts on it. Park that timer's interval well outside
   the advanced window instead — it costs nothing to leave un-fired.
 
-Either way, prefer shrinking the work over raising the ceiling. Reach for a
-per-test `testTimeout` bump only when the slow cadence itself is the thing
-under test, and say why in a comment — a raised global timeout hides the
-next slow test instead of fixing this one.
+Either way, prefer shrinking the work over raising the ceiling for fake-timer
+slowness. The suite default stays at vitest's 5 s (David, 2026-10-01): a
+raised global timeout hides the next slow test instead of fixing this one. A
+CPU-heavy test, whose wall time grows with gate or runner load rather than
+with fake-timer work, may set its own `{ timeout }` at about 3× its time
+measured under load, with a one-line comment at that test saying so.
 
 **Watch the 32-bit `setTimeout` ceiling when "parking" a timer far out.** A
 delay above `2^31 - 1` ms (~24.8 days) overflows Node's signed 32-bit timer
@@ -86,7 +88,7 @@ So the rule is structural rather than a reminder to be careful:
 
 - **When you wire a new mechanism into `buildProductionComponents`, add a probe for it to `PROBES` and a field for its evidence to `SmokeEvidence`** (`server/apps/orchestrator/smoke-run.ts`). `npm run smoke` drives the real composition root, and it is the only automated check that has ever caught this class.
 - **Aim the assertion at the ENFORCEMENT, not the construction.** Assert the mechanism's own durable effect — a row only it writes, a counter only it increments. A check on "was it constructed" passes for a component nothing calls, which is the defect itself.
-- **Prove the assertion can fail.** Delete the effect from an otherwise-healthy observation set and confirm the gate goes red. PR #390 shipped three checks in one branch that all read as correct and enforced nothing (a config never read, a gate assertion made vacuous by a dropped argument, and `windowMs: 0` at which the limiter enforced nothing) — none was caught by review, all three by mutation. **For trading-path packages (`pipeline/trader`, `risk-manager`, `verdict`, `execution`), `npm run mutation:local` (#1634, decided by #1626) now automates this proof** — it mutates only the trading-path files changed vs a base ref (mirroring `test:local`'s diff pattern) and fails below an 80% mutation score. Do it by hand only for packages that script doesn't cover (analysts, debate-engine, feedback-loop, dashboard, tooling) or for a change the diff scope can't see (e.g. a smoke probe wired against an already-committed file). Its dry run's test scope is the four trading-path packages' own tests, not the whole suite (a worker_threads incompatibility blocks widening it — see `server/tools/mutation-local.ts`), so a line whose only covering test lives elsewhere (e.g. an orchestrator wiring test) reads as uncovered and can fail the gate on a change that already has real coverage; check for that before adding a redundant test.
+- **Prove the assertion can fail.** Delete the effect from an otherwise-healthy observation set and confirm the gate goes red. PR #390 shipped three checks in one branch that all read as correct and enforced nothing (a config never read, a gate assertion made vacuous by a dropped argument, and `windowMs: 0` at which the limiter enforced nothing) — none was caught by review, all three by mutation. **For trading-path packages (`pipeline/trader`, `risk-manager`, `verdict`, `execution`, v2 `risk`, momentum `loss-budget` and `sizing`), `npm run mutation:local` (#1634, decided by #1626) now automates this proof, and CI runs it on every PR that changes one of them** — it mutates only the trading-path files changed vs a base ref (mirroring `test:local`'s diff pattern) and fails below an 80% mutation score. Do it by hand only for packages that script doesn't cover (analysts, debate-engine, feedback-loop, dashboard, tooling) or for a change the diff scope can't see (e.g. a smoke probe wired against an already-committed file). Its dry run's test scope is the trading-path packages' own tests, not the whole suite (a worker_threads incompatibility blocks widening it — see `server/tools/mutation-local.ts`), so a line whose only covering test lives elsewhere (e.g. an orchestrator wiring test) reads as uncovered and can fail the gate on a change that already has real coverage; check for that before adding a redundant test.
 - **Prefer a required field to an optional one.** Every `SmokeEvidence` field is required and every probe must appear in `PROBE_RUN_ORDER`, so omitting one fails to compile — when the rate-limiter snapshot was an optional argument, deleting the one line that passed it left the check vacuously true and the whole suite green.
 
 ## Comments state invariants, not changelogs

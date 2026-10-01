@@ -13,6 +13,7 @@ import type {
   TickPlan,
   TickRunner,
   TickStage,
+  UniverseInstrument,
 } from './types.js';
 
 export interface TickLoopConfig {
@@ -64,130 +65,210 @@ export async function runTickPlan(
   clock: Clock,
   config: TickLoopConfig,
 ): Promise<TickOutcome[]> {
-  const newTraceId = config.newTraceId ?? randomUUID;
-  const outcomes = Array.from<TickOutcome>({ length: plan.instruments.length });
-
-  let cursor = 0;
-  const tails = new TailSequencer();
+  const run: PlanRun = {
+    plan,
+    runner,
+    clock,
+    config,
+    newTraceId: config.newTraceId ?? randomUUID,
+    outcomes: Array.from<TickOutcome>({ length: plan.instruments.length }),
+    tails: new TailSequencer(),
+    cursor: 0,
+  };
   const workerCount = Math.min(
     Math.max(Math.floor(config.max_concurrent_instruments), 1),
     plan.instruments.length,
   );
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: every allocated index must reach tails.finish (including the gate-claim throw path, which calls it before re-throwing, #1040) and the crash-handling guards (safeLog, currentTickStore read, auditLog.record) exist so worker() can never reject (#507's orphaned-worker leak) — both invariants are compiler-invisible and an extraction deep enough to matter would take several more cuts through code an earlier session already called untouchable
-  async function worker(): Promise<void> {
-    while (true) {
-      const index = cursor++;
-      const instrument = plan.instruments[index];
-      if (instrument === undefined) return;
+  await Promise.all(Array.from({ length: workerCount }, () => runPlanWorker(run)));
 
-      const signal: Signal = {
-        asset: instrument.asset,
-        asset_class: instrument.asset_class,
-      };
-      const trace_id = newTraceId();
+  return run.outcomes;
+}
 
-      let decisionBar: DecisionBar | undefined;
-      try {
-        decisionBar =
-          plan.grace_only === true
-            ? undefined
-            : config.decisionGate.claim(instrument.asset, plan.tick_time);
-      } catch (error) {
-        tails.finish(index);
-        throw error;
-      }
+interface PlanRun {
+  plan: TickPlan;
+  runner: TickRunner;
+  clock: Clock;
+  config: TickLoopConfig;
+  newTraceId: () => string;
+  outcomes: TickOutcome[];
+  tails: TailSequencer;
+  cursor: number;
+}
 
-      try {
-        outcomes[index] = await runner.runInstrument(signal, {
-          clock,
-          trace_id,
-          logger: config.logger,
-          auditLog: config.auditLog,
-          currentTickStore: config.currentTickStore,
-          ...(decisionBar === undefined ? {} : { decision_bar: decisionBar }),
-          beginPortfolioTail: () => tails.begin(index),
-        });
-      } catch (error) {
-        if (decisionBar !== undefined) {
-          const refused = error instanceof LlmRefusalError;
-          const rescindResult = refused
-            ? 'forfeited'
-            : config.decisionGate.rescind(instrument.asset, decisionBar);
-          if (rescindResult === 'forfeited') {
-            safeLog(config.logger, {
-              trace_id,
-              stage: 'tick-loop',
-              event: 'decision_pass_bar_forfeit',
-              level: 'error',
-              message: refused
-                ? `decision pass refused by the provider, bar forfeit: ${instrument.asset} — ` +
-                  `bar ${decisionBar.id} will run the tick path only for its remainder, and no ` +
-                  'retry is attempted because the refusal is deterministic in the request'
-                : `decision pass retry budget exhausted, bar forfeit: ${instrument.asset} — ` +
-                  `bar ${decisionBar.id} will run the tick path only for its remainder`,
-              payload: {
-                instrument: instrument.asset,
-                asset_class: instrument.asset_class,
-                bar: decisionBar.id,
-                reason: refused ? 'refusal' : 'retry_budget_exhausted',
-              },
-            });
-          }
-        }
-        const message = describeThrown(error);
-        let crashedStage: TickStage | undefined;
-        try {
-          const currentTick = config.currentTickStore.get(instrument.asset);
-          crashedStage = currentTick?.trace_id === trace_id ? currentTick.stage : undefined;
-        } catch {}
-        safeLog(config.logger, {
-          trace_id,
-          stage: 'tick-loop',
-          event: 'instrument_pass_failed',
-          level: 'error',
-          message: `instrument failed: ${instrument.asset}`,
-          payload: {
-            instrument: instrument.asset,
-            asset_class: instrument.asset_class,
-            error: message,
-            stage: crashedStage,
-          },
-        });
-        try {
-          config.auditLog.record({
-            trace_id,
-            stage: crashedStage === undefined ? 'tick-loop' : `tick-loop:${crashedStage}`,
-            decision: 'crashed',
-            input_digest: digest(signal),
-            output_digest: digest({ error: message }),
-            timestamp: clock.now(),
-            instrument: instrument.asset,
-            asset_class: instrument.asset_class,
-          });
-        } catch (auditError) {
-          safeLog(config.logger, {
-            trace_id,
-            stage: 'tick-loop',
-            event: 'audit_log_write_failed',
-            level: 'error',
-            message: `audit_log record failed for crashed instrument: ${instrument.asset}`,
-            payload: {
-              instrument: instrument.asset,
-              asset_class: instrument.asset_class,
-              original_error: message,
-              audit_error: describeThrown(auditError),
-            },
-          });
-        }
-        outcomes[index] = { trace_id, error: message };
-      } finally {
-        tails.finish(index);
-      }
+// Every allocated index must reach tails.finish, including the gate-claim throw path, which calls it
+// before re-throwing (#1040)
+async function runPlanWorker(run: PlanRun): Promise<void> {
+  const { plan, runner, clock, config, outcomes, tails, newTraceId } = run;
+  while (true) {
+    const index = run.cursor++;
+    const instrument = plan.instruments[index];
+    if (instrument === undefined) return;
+
+    const pass: InstrumentPass = {
+      instrument,
+      signal: { asset: instrument.asset, asset_class: instrument.asset_class },
+      trace_id: newTraceId(),
+    };
+
+    const decisionBar = claimOrFinish(run, index, instrument.asset);
+
+    try {
+      outcomes[index] = await runner.runInstrument(pass.signal, {
+        clock,
+        trace_id: pass.trace_id,
+        logger: config.logger,
+        auditLog: config.auditLog,
+        currentTickStore: config.currentTickStore,
+        ...decisionBarField(decisionBar),
+        beginPortfolioTail: () => tails.begin(index),
+      });
+    } catch (error) {
+      outcomes[index] = settleCrashedPass(config, clock, pass, decisionBar, error);
+    } finally {
+      tails.finish(index);
     }
   }
+}
 
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+function claimOrFinish(run: PlanRun, index: number, asset: string): DecisionBar | undefined {
+  try {
+    return claimDecisionBar(run.plan, run.config.decisionGate, asset);
+  } catch (error) {
+    run.tails.finish(index);
+    throw error;
+  }
+}
 
-  return outcomes;
+interface InstrumentPass {
+  instrument: UniverseInstrument;
+  signal: Signal;
+  trace_id: string;
+}
+
+export function claimDecisionBar(
+  plan: TickPlan,
+  gate: DecisionGate,
+  asset: string,
+): DecisionBar | undefined {
+  return plan.grace_only === true ? undefined : gate.claim(asset, plan.tick_time);
+}
+
+export function decisionBarField(decisionBar: DecisionBar | undefined): {
+  decision_bar?: DecisionBar;
+} {
+  return decisionBar === undefined ? {} : { decision_bar: decisionBar };
+}
+
+// The crash-handling guards (safeLog, the currentTickStore read, auditLog.record) exist so
+// runPlanWorker() can never reject (#507's orphaned-worker leak)
+function settleCrashedPass(
+  config: TickLoopConfig,
+  clock: Clock,
+  pass: InstrumentPass,
+  decisionBar: DecisionBar | undefined,
+  error: unknown,
+): TickOutcome {
+  if (decisionBar !== undefined) releaseDecisionBar(config, pass, decisionBar, error);
+  const message = describeThrown(error);
+  const crashedStage = readCrashedStage(config.currentTickStore, pass);
+  safeLog(config.logger, {
+    trace_id: pass.trace_id,
+    stage: 'tick-loop',
+    event: 'instrument_pass_failed',
+    level: 'error',
+    message: `instrument failed: ${pass.instrument.asset}`,
+    payload: {
+      instrument: pass.instrument.asset,
+      asset_class: pass.instrument.asset_class,
+      error: message,
+      stage: crashedStage,
+    },
+  });
+  recordCrashAudit(config, clock, pass, crashedStage, message);
+  return { trace_id: pass.trace_id, error: message };
+}
+
+function releaseDecisionBar(
+  config: TickLoopConfig,
+  pass: InstrumentPass,
+  decisionBar: DecisionBar,
+  error: unknown,
+): void {
+  const { instrument } = pass;
+  const refused = error instanceof LlmRefusalError;
+  const rescindResult = refused
+    ? 'forfeited'
+    : config.decisionGate.rescind(instrument.asset, decisionBar);
+  if (rescindResult !== 'forfeited') return;
+  safeLog(config.logger, {
+    trace_id: pass.trace_id,
+    stage: 'tick-loop',
+    event: 'decision_pass_bar_forfeit',
+    level: 'error',
+    message: barForfeitMessage(refused, instrument.asset, decisionBar.id),
+    payload: {
+      instrument: instrument.asset,
+      asset_class: instrument.asset_class,
+      bar: decisionBar.id,
+      reason: refused ? 'refusal' : 'retry_budget_exhausted',
+    },
+  });
+}
+
+export function barForfeitMessage(refused: boolean, asset: string, barId: string): string {
+  return refused
+    ? `decision pass refused by the provider, bar forfeit: ${asset} — ` +
+        `bar ${barId} will run the tick path only for its remainder, and no ` +
+        'retry is attempted because the refusal is deterministic in the request'
+    : `decision pass retry budget exhausted, bar forfeit: ${asset} — ` +
+        `bar ${barId} will run the tick path only for its remainder`;
+}
+
+export function readCrashedStage(
+  store: CurrentTickStore,
+  pass: Pick<InstrumentPass, 'instrument' | 'trace_id'>,
+): TickStage | undefined {
+  try {
+    const currentTick = store.get(pass.instrument.asset);
+    return currentTick?.trace_id === pass.trace_id ? currentTick.stage : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recordCrashAudit(
+  config: TickLoopConfig,
+  clock: Clock,
+  pass: InstrumentPass,
+  crashedStage: TickStage | undefined,
+  message: string,
+): void {
+  const { instrument, trace_id } = pass;
+  try {
+    config.auditLog.record({
+      trace_id,
+      stage: crashedStage === undefined ? 'tick-loop' : `tick-loop:${crashedStage}`,
+      decision: 'crashed',
+      input_digest: digest(pass.signal),
+      output_digest: digest({ error: message }),
+      timestamp: clock.now(),
+      instrument: instrument.asset,
+      asset_class: instrument.asset_class,
+    });
+  } catch (auditError) {
+    safeLog(config.logger, {
+      trace_id,
+      stage: 'tick-loop',
+      event: 'audit_log_write_failed',
+      level: 'error',
+      message: `audit_log record failed for crashed instrument: ${instrument.asset}`,
+      payload: {
+        instrument: instrument.asset,
+        asset_class: instrument.asset_class,
+        original_error: message,
+        audit_error: describeThrown(auditError),
+      },
+    });
+  }
 }

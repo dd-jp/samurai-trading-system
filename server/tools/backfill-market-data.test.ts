@@ -21,8 +21,67 @@ import { openSharedStore } from '../shared/store/index.js';
 import {
   backfillMarketData,
   buildBackfillFailoverAlerter,
+  type CoverageRow,
+  reportBackfillOutcome,
   WARM_START_WINDOWS,
 } from './backfill-market-data.js';
+
+describe('reportBackfillOutcome', () => {
+  function row(overrides: Partial<CoverageRow> = {}): CoverageRow {
+    return {
+      instrument: 'SPY',
+      timeframe: '1d',
+      rows: 10,
+      required: 10,
+      first_bar: undefined,
+      last_bar: undefined,
+      satisfied: true,
+      error: undefined,
+      source: 'alpaca',
+      quarantined: false,
+      ...overrides,
+    };
+  }
+
+  function capture() {
+    const logged: string[] = [];
+    const errors: string[] = [];
+    return {
+      out: { log: (line: string) => logged.push(line), error: (line: string) => errors.push(line) },
+      logged,
+      errors,
+    };
+  }
+
+  it('reports a warm store when every pair is satisfied and clean', () => {
+    const { out, logged, errors } = capture();
+    expect(reportBackfillOutcome([row(), row()], out)).toBe(true);
+    expect(logged).toEqual([
+      'Backfill complete — store is warm for every DEFAULT_UNIVERSE instrument.',
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it('fails on a short pair before looking at quarantine', () => {
+    const { out, logged, errors } = capture();
+    expect(reportBackfillOutcome([row({ satisfied: false, quarantined: true }), row()], out)).toBe(
+      false,
+    );
+    expect(errors).toEqual([
+      'Backfill incomplete: 1 of 2 (instrument, timeframe) pair(s) short of the derived minimum — see the SHORT rows above.',
+    ]);
+    expect(logged).toEqual([]);
+  });
+
+  it('fails when a satisfied pair came from the quarantined fallback', () => {
+    const { out, logged, errors } = capture();
+    expect(reportBackfillOutcome([row({ quarantined: true }), row()], out)).toBe(false);
+    expect(errors[0]).toMatch(
+      /^Backfill served 1 of 2 \(instrument, timeframe\) pair\(s\) from the QUARANTINED/,
+    );
+    expect(logged).toEqual([]);
+  });
+});
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}

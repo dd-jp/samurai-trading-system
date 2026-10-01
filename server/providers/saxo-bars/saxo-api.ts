@@ -4,7 +4,7 @@ import type { SaxoTokenSource } from '../../pipeline/execution/adapters/saxo-tok
 import { SaxoTokenRefresher } from '../../pipeline/execution/adapters/saxo-token-source.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import type { Logger } from '../../shared/index.js';
-import { isFiniteNumber, maskCredentials } from '../../shared/index.js';
+import { delay, isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
 import type { FetchResult, Sleeper } from '../bar-store/index.js';
 
 export const SAXO_CHART_PAGE = 1200;
@@ -203,7 +203,7 @@ export class SaxoReadOnlyApi {
     private readonly tokens: SaxoTokenSource,
     private readonly gatewayBaseUrl: string,
     private readonly fetcher: SaxoFetcher = jsonFetcher,
-    private readonly sleep: Sleeper = defaultSleep,
+    private readonly sleep: Sleeper = delay,
   ) {}
 
   async dailyHistory(uic: number, assetType: SaxoAssetType): Promise<ChartPage> {
@@ -327,16 +327,5 @@ async function jsonFetcher(url: string, accessToken: string): Promise<FetchResul
     headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  const text = await response.text();
-  let body: unknown = text;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-  return { status: response.status, body };
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return jsonOrTextResult(response);
 }

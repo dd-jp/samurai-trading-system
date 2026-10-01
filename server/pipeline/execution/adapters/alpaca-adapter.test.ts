@@ -9,7 +9,7 @@ import { recordingLogger } from '../../../shared/recording-logger.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
 import { BrokerError } from '../broker-error.js';
-import { InMemoryBrokerStateStore } from '../broker-state-store.js';
+import { InMemoryBrokerStateStore, toRequestFields } from '../broker-state-store.js';
 import { ExecutionImpl } from '../execute.js';
 import { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
@@ -18,7 +18,11 @@ import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { UnrecordedVenuePositionThrottle } from '../unrecorded-venue-position-throttle.js';
-import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
+import {
+  AlpacaBrokerAdapter,
+  classifyPriorRearm,
+  DEFAULT_UNPRICED_FILL_AGE_OUT_MS,
+} from './alpaca-adapter.js';
 import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
 import type { AlpacaBrokerClient, AlpacaOcoOrderRequest, AlpacaOrder } from './alpaca-client.js';
 import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
@@ -2877,7 +2881,10 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       return violations;
     }
 
-    it('holds the money invariants across every reachable prior-status sequence', async () => {
+    // CPU-heavy: 9-12 s under coverage at load 25
+    it('holds the money invariants across every reachable prior-status sequence', {
+      timeout: 40_000,
+    }, async () => {
       const sequences = buildPriorStatusSequences(4);
       expect(sequences).toHaveLength(2801);
 
@@ -3996,5 +4003,1212 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
     await adapter.submitProtectedExit(request());
 
     expect(cancelOrder).toHaveBeenCalledExactlyOnceWith(STOP_LEG_ID);
+  });
+});
+
+describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => {
+  const KEY = 'key-aapl-1355';
+  const EXIT = `${KEY}-exit`;
+  const T0 = new Date('2026-07-20T16:00:00Z');
+  const MINUTE = 60_000;
+
+  type AdapterInput = ConstructorParameters<typeof AlpacaBrokerAdapter>[0];
+
+  function adapterOn(
+    client: AlpacaBrokerClient,
+    extra: Partial<AdapterInput> = {},
+  ): AlpacaBrokerAdapter {
+    return new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
+      ...extra,
+    });
+  }
+
+  function orderAt(id: string, clientOrderId: string, overrides: Partial<AlpacaOrder> = {}) {
+    return acceptedOrder({ id, client_order_id: clientOrderId, ...overrides });
+  }
+
+  function lookupBy(byClientOrderId: Record<string, AlpacaOrder | Error>) {
+    return vi.fn(async (clientOrderId: string) => {
+      const found = byClientOrderId[clientOrderId];
+      if (found instanceof Error) throw found;
+      return found ?? null;
+    });
+  }
+
+  function leg(overrides: Partial<NonNullable<AlpacaOrder['legs']>[number]>) {
+    return {
+      id: 'leg',
+      type: 'limit' as const,
+      status: 'new',
+      filled_qty: '0',
+      filled_avg_price: null,
+      filled_at: null,
+      ...overrides,
+    };
+  }
+
+  function restingEntry(stopStatus = 'new', targetStatus = 'new'): AlpacaOrder {
+    return orderAt('alpaca-entry-1', KEY, {
+      status: 'filled',
+      filled_qty: '6',
+      legs: [
+        leg({ id: 'alpaca-target-1', type: 'limit', status: targetStatus }),
+        leg({ id: 'alpaca-stop-1', type: 'stop', status: stopStatus }),
+      ],
+    });
+  }
+
+  function exitClient(overrides: Partial<AlpacaBrokerClient> = {}): AlpacaBrokerClient {
+    return makeClient({
+      getOrderByClientOrderId: lookupBy({ [KEY]: restingEntry() }),
+      cancelOrder: vi.fn().mockResolvedValue(undefined),
+      getOrder: vi.fn().mockResolvedValue({ ...acceptedOrder(), status: 'canceled' }),
+      getPositions: vi
+        .fn()
+        .mockResolvedValue([{ symbol: 'AAPL', qty: '6', side: 'long', avg_entry_price: '100' }]),
+      submitMarketOrder: vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'accepted' }),
+      submitOcoOrder: vi.fn().mockResolvedValue(orderAt('rearm-1', `${KEY}:rearm`, { legs: [] })),
+      ...overrides,
+    });
+  }
+
+  function exitRequest(
+    overrides: Partial<Parameters<AlpacaBrokerAdapter['submitProtectedExit']>[0]> = {},
+  ) {
+    return {
+      entryClientOrderId: KEY,
+      clientOrderId: EXIT,
+      instrument: 'AAPL',
+      side: 'sell' as const,
+      size: 6,
+      rearm: { stop: 95, target: 110 },
+      ...overrides,
+    };
+  }
+
+  function cancelledIds(client: AlpacaBrokerClient): unknown[] {
+    return vi.mocked(client.cancelOrder).mock.calls.map(([id]) => id);
+  }
+
+  function lookedUp(client: AlpacaBrokerClient): unknown[] {
+    return vi.mocked(client.getOrderByClientOrderId).mock.calls.map(([id]) => id);
+  }
+
+  function sweptIds(client: AlpacaBrokerClient): unknown[] {
+    return vi.mocked(client.getOrder).mock.calls.map(([id]) => id);
+  }
+
+  async function caught(promise: Promise<unknown>): Promise<Error> {
+    const error = await promise.then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    if (!(error instanceof Error)) throw new Error('expected the call to reject with an Error');
+    return error;
+  }
+
+  function legless(order: AlpacaOrder): AlpacaOrder {
+    const { legs: _legs, ...rest } = order;
+    return rest;
+  }
+
+  function payloadOf(entries: readonly { payload?: unknown }[], field: string): unknown[] {
+    return entries.map((entry) => (entry.payload as Record<string, unknown> | undefined)?.[field]);
+  }
+
+  class FaultyState extends InMemoryBrokerStateStore {
+    readonly failing = new Set<string>();
+
+    private fault(operation: string): void {
+      if (this.failing.has(operation)) throw new Error(`${operation} failed`);
+    }
+
+    override clearUnpricedFill(
+      ...args: Parameters<InMemoryBrokerStateStore['clearUnpricedFill']>
+    ): void {
+      this.fault('clearUnpricedFill');
+      super.clearUnpricedFill(...args);
+    }
+
+    override recordUnpricedFill(
+      ...args: Parameters<InMemoryBrokerStateStore['recordUnpricedFill']>
+    ): void {
+      this.fault('recordUnpricedFill');
+      super.recordUnpricedFill(...args);
+    }
+
+    override loadUnpricedFills(
+      ...args: Parameters<InMemoryBrokerStateStore['loadUnpricedFills']>
+    ): ReturnType<InMemoryBrokerStateStore['loadUnpricedFills']> {
+      this.fault('loadUnpricedFills');
+      return super.loadUnpricedFills(...args);
+    }
+
+    override markUnpricedFillAlerted(
+      ...args: Parameters<InMemoryBrokerStateStore['markUnpricedFillAlerted']>
+    ): void {
+      this.fault('markUnpricedFillAlerted');
+      super.markUnpricedFillAlerted(...args);
+    }
+  }
+
+  const SWEEP_TRACE = 'alpaca-fetch-new-fills';
+  const PREDATES_MESSAGE =
+    '#1123: Alpaca fill dated before its own order was submitted — the ingest-fills ' +
+    'since-floor invariant may be violated';
+
+  describe('operation names on venue failures', () => {
+    const outage = new Error('venue down');
+
+    it('names getOpenPositions, getOrder and resumeFlatten', async () => {
+      const adapter = adapterOn(
+        makeClient({
+          getPositions: vi.fn().mockRejectedValue(outage),
+          getOrderByClientOrderId: vi.fn().mockRejectedValue(outage),
+        }),
+      );
+
+      await expect(adapter.getOpenPositions()).rejects.toMatchObject({
+        operation: 'getOpenPositions',
+      });
+      await expect(adapter.getOrder(KEY, 'AAPL')).rejects.toMatchObject({ operation: 'getOrder' });
+      await expect(adapter.resumeFlatten(KEY, 'AAPL')).rejects.toMatchObject({
+        operation: 'resumeFlatten',
+      });
+    });
+
+    it('names cancel on a failed re-armed-order cancel, which goes first', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({
+          [KEY]: orderAt('e1', KEY),
+          [`${KEY}:rearm`]: orderAt('r0', `${KEY}:rearm`),
+        }),
+        cancelOrder: vi.fn().mockRejectedValue(outage),
+      });
+
+      await expect(adapterOn(client).cancel(KEY, 'AAPL')).rejects.toMatchObject({
+        operation: 'cancel',
+      });
+      expect(cancelledIds(client)).toEqual(['r0']);
+    });
+
+    it('names cancel on a failed bracket cancel', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({ [KEY]: orderAt('e1', KEY) }),
+        cancelOrder: vi.fn().mockRejectedValue(outage),
+      });
+
+      await expect(adapterOn(client).cancel(KEY, 'AAPL')).rejects.toMatchObject({
+        operation: 'cancel',
+      });
+      expect(cancelledIds(client)).toEqual(['e1']);
+    });
+
+    it('rethrows the lookup failure, named cancel, when the open-order list also fails', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: vi.fn().mockRejectedValue(outage),
+        listOpenOrders: vi.fn().mockRejectedValue(new Error('list down')),
+      });
+
+      await expect(adapterOn(client).cancel(KEY, 'AAPL')).rejects.toMatchObject({
+        name: 'BrokerError',
+        operation: 'cancel',
+      });
+    });
+
+    it('rethrows the order lookup failure even with an in-process re-arm on record', async () => {
+      let lookupsFail = false;
+      const client = makeClient({
+        getOrderByClientOrderId: vi.fn(async () => {
+          if (lookupsFail) throw outage;
+          return null;
+        }),
+        submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+        listOpenOrders: vi.fn().mockRejectedValue(new Error('list down')),
+      });
+      const adapter = adapterOn(client);
+      await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+      lookupsFail = true;
+
+      await expect(adapter.cancel(KEY, 'AAPL')).rejects.toMatchObject({
+        name: 'BrokerError',
+        operation: 'cancel',
+      });
+    });
+
+    it('names submitProtectedExit on the position read, the entry lookup, the leg cancel and the leg poll', async () => {
+      await expect(
+        adapterOn(
+          exitClient({ getPositions: vi.fn().mockRejectedValue(outage) }),
+        ).submitProtectedExit(exitRequest()),
+      ).rejects.toMatchObject({ operation: 'submitProtectedExit' });
+      await expect(
+        adapterOn(
+          exitClient({ getOrderByClientOrderId: lookupBy({ [KEY]: outage }) }),
+        ).submitProtectedExit(exitRequest()),
+      ).rejects.toMatchObject({ operation: 'submitProtectedExit' });
+      await expect(
+        adapterOn(
+          exitClient({ cancelOrder: vi.fn().mockRejectedValue(outage) }),
+        ).submitProtectedExit(exitRequest()),
+      ).rejects.toMatchObject({ operation: 'submitProtectedExit' });
+      await expect(
+        adapterOn(exitClient({ getOrder: vi.fn().mockRejectedValue(outage) })).submitProtectedExit(
+          exitRequest(),
+        ),
+      ).rejects.toMatchObject({ operation: 'submitProtectedExit' });
+    });
+
+    it('names rearmProtectiveLegs on the wire-id walk', async () => {
+      const client = makeClient({ getOrderByClientOrderId: vi.fn().mockRejectedValue(outage) });
+
+      await expect(
+        adapterOn(client).rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110),
+      ).rejects.toMatchObject({ operation: 'rearmProtectiveLegs' });
+    });
+
+    it('names rearmProtectiveLegs on cancelling a superseded live re-arm', async () => {
+      const live = (id: string, wireId: string) =>
+        orderAt(id, wireId, {
+          qty: '6',
+          limit_price: '110',
+          status: 'new',
+          legs: [leg({ id: `${id}-stop`, type: 'stop', stop_price: '95' })],
+        });
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({
+          [`${KEY}:rearm`]: live('r0', `${KEY}:rearm`),
+          [`${KEY}:rearm-1`]: live('r1', `${KEY}:rearm-1`),
+        }),
+        cancelOrder: vi.fn().mockRejectedValue(outage),
+      });
+
+      await expect(
+        adapterOn(client).rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110),
+      ).rejects.toMatchObject({ operation: 'rearmProtectiveLegs' });
+      expect(cancelledIds(client)).toEqual(['r0']);
+    });
+
+    it('names rearmProtectiveLegs on cancelling a stale re-arm', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({
+          [`${KEY}:rearm`]: orderAt('r0', `${KEY}:rearm`, { qty: '5', status: 'new' }),
+        }),
+        cancelOrder: vi.fn().mockRejectedValue(outage),
+      });
+
+      await expect(
+        adapterOn(client).rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110),
+      ).rejects.toMatchObject({ operation: 'rearmProtectiveLegs' });
+    });
+
+    it('names rearmProtectiveLegs on the entry read behind a settled re-arm', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({
+          [`${KEY}:rearm`]: orderAt('r0', `${KEY}:rearm`, { status: 'filled', filled_qty: '6' }),
+          [KEY]: outage,
+        }),
+      });
+
+      await expect(
+        adapterOn(client).rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110),
+      ).rejects.toMatchObject({ operation: 'rearmProtectiveLegs' });
+    });
+
+    it.each([
+      ['bracket', { bracket_failures: 1, flatten_failures: 0, rearm_failures: 0 }],
+      ['flatten', { bracket_failures: 0, flatten_failures: 1, rearm_failures: 0 }],
+      ['rearm', { bracket_failures: 0, flatten_failures: 0, rearm_failures: 1 }],
+    ] as const)(
+      'names fetchNewFills on a failed %s read and logs the exact failure line',
+      async (source, counts) => {
+        const logger = recordingLogger();
+        const client = makeClient({
+          getOrder: vi.fn().mockRejectedValue(outage),
+          getOrderByClientOrderId: vi.fn().mockResolvedValue(null),
+          submitMarketOrder: vi.fn().mockResolvedValue(orderAt('f1', EXIT)),
+          submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+        });
+        const adapter = adapterOn(client, { logger });
+        if (source === 'bracket') await adapter.submitBracket(makeBracket());
+        if (source === 'flatten') await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
+        if (source === 'rearm') await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+
+        const error = await caught(adapter.fetchNewFills(new Date(0)));
+
+        expect(error).toBeInstanceOf(AggregateError);
+        expect((error as AggregateError).errors).toEqual([
+          expect.objectContaining({ operation: 'fetchNewFills' }),
+        ]);
+        expect(error.message).toBe(
+          'Alpaca fetchNewFills: 1 failure(s) during the sweep ' +
+            `(${counts.bracket_failures} bracket(s), ${counts.flatten_failures} flatten(s), ` +
+            `${counts.rearm_failures} rearm(s), 0 emulated crypto bracket(s) failed); ` +
+            'no fills could be read',
+        );
+        expect(logger.entries).toEqual([
+          {
+            trace_id: SWEEP_TRACE,
+            stage: 'execution',
+            event: 'alpaca_fill_sweep_source_failed',
+            level: 'error',
+            message: 'Alpaca fetchNewFills: per-source failure',
+            payload: {
+              ...counts,
+              emulation_failures: 0,
+              fills_read: 0,
+              error: 'alpaca fetchNewFills failed (status unknown)',
+            },
+          },
+        ]);
+      },
+    );
+  });
+
+  describe('order ids', () => {
+    it('returns null for an order the venue does not know', async () => {
+      const adapter = adapterOn(makeClient({ getOrderByClientOrderId: lookupBy({}) }));
+
+      expect(await adapter.getOrder(KEY, 'AAPL')).toBeNull();
+    });
+
+    it('lists the parent and every leg id, or the parent alone when there are no legs', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({
+          [KEY]: orderAt('e1', KEY),
+          [EXIT]: legless(orderAt('f1', EXIT)),
+        }),
+      });
+      const adapter = adapterOn(client);
+
+      expect((await adapter.getOrder(KEY, 'AAPL'))?.broker_order_ids).toEqual([
+        'e1',
+        'alpaca-target-1',
+        'alpaca-stop-1',
+      ]);
+      expect((await adapter.resumeFlatten(EXIT, 'AAPL'))?.broker_order_ids).toEqual(['f1']);
+    });
+
+    it('acks a legless bracket response with the parent id alone', async () => {
+      const client = makeClient({
+        submitOrder: vi.fn().mockResolvedValue(legless(acceptedOrder())),
+      });
+
+      const ack = await adapterOn(client).submitBracket(makeBracket());
+
+      expect(ack.broker_order_ids).toEqual(['alpaca-entry-1']);
+    });
+
+    it.each([
+      ['target first', ['limit', 'stop']],
+      ['stop first', ['stop', 'limit']],
+    ] as const)('journals each leg id under its own name (%s)', async (_label, types) => {
+      const state = new InMemoryBrokerStateStore();
+      const legs = types.map((type) =>
+        leg({ id: type === 'stop' ? 'alpaca-stop-1' : 'alpaca-target-1', type, status: 'held' }),
+      );
+      const client = makeClient({
+        submitOrder: vi.fn().mockResolvedValue(acceptedOrder({ legs })),
+      });
+
+      await adapterOn(client, { state }).submitBracket(makeBracket());
+
+      expect(state.loadBrackets('alpaca')).toEqual([
+        expect.objectContaining({
+          entry_order_id: 'alpaca-entry-1',
+          stop_order_id: 'alpaca-stop-1',
+          target_order_id: 'alpaca-target-1',
+        }),
+      ]);
+    });
+
+    it('journals a re-armed OCO under the lot on the alpaca venue', async () => {
+      const state = new InMemoryBrokerStateStore();
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({}),
+        submitOcoOrder: vi.fn().mockResolvedValue(
+          orderAt('r0', `${KEY}:rearm`, {
+            legs: [leg({ id: 'r0-stop', type: 'stop' })],
+          }),
+        ),
+      });
+
+      await adapterOn(client, { state }).rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+
+      expect(state.loadBrackets('alpaca')).toEqual([
+        expect.objectContaining({
+          client_order_id: KEY,
+          stop_order_id: 'r0-stop',
+          target_order_id: 'r0',
+        }),
+      ]);
+    });
+
+    it('reloads only stocks brackets with an entry id after a restart', async () => {
+      const state = new InMemoryBrokerStateStore();
+      const record = (clientOrderId: string, entryId: string | null, crypto: boolean | null) =>
+        state.saveBracket({
+          venue: 'alpaca',
+          client_order_id: clientOrderId,
+          phase: 'armed',
+          entry_order_id: entryId,
+          stop_order_id: null,
+          target_order_id: null,
+          request:
+            crypto === null
+              ? null
+              : toRequestFields(
+                  makeBracket(
+                    crypto
+                      ? { instrument: 'BTC-USD', asset_class: 'crypto' }
+                      : { instrument: 'AAPL' },
+                  ),
+                ),
+          armed_qty: null,
+          arming_qty: null,
+          arm_attempt: 0,
+        });
+      record('crypto-lot', 'c1', true);
+      record('unsubmitted-lot', null, false);
+      record('legacy-lot', 'n1', null);
+      record('stocks-lot', 's1', false);
+      const client = makeClient({
+        getOrder: vi.fn().mockResolvedValue(acceptedOrder({ legs: [] })),
+      });
+
+      await adapterOn(client, { state }).fetchNewFills(new Date(0));
+
+      expect(sweptIds(client)).toEqual(['n1', 's1', 'c1']);
+    });
+  });
+
+  describe('cancel target resolution', () => {
+    it('falls back to the open-order list, picking the exact entry and the highest re-arm attempt', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: vi.fn().mockRejectedValue(new Error('lookup down')),
+        listOpenOrders: vi
+          .fn()
+          .mockResolvedValue([
+            orderAt('x', 'someone-else'),
+            orderAt('e1', KEY),
+            orderAt('r1', `${KEY}:rearm-1`),
+            orderAt('r4', `${KEY}:rearm-4`),
+            orderAt('r2', `${KEY}:rearm-2`),
+            orderAt('r2b', `${KEY}:rearm-2`),
+            orderAt('r0', `${KEY}:rearm`),
+          ]),
+        cancelOrder: vi.fn().mockResolvedValue(undefined),
+      });
+
+      await adapterOn(client).cancel(KEY, 'AAPL');
+
+      expect(cancelledIds(client)).toEqual(['r2', 'e1']);
+    });
+
+    it('does not walk re-arm ids by lookup once the entry lookup has failed', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({
+          [KEY]: new Error('lookup down'),
+          [`${KEY}:rearm`]: orderAt('r0', `${KEY}:rearm`),
+        }),
+        listOpenOrders: vi.fn().mockResolvedValue([orderAt('e1', KEY)]),
+        cancelOrder: vi.fn().mockResolvedValue(undefined),
+      });
+
+      await adapterOn(client).cancel(KEY, 'AAPL');
+
+      expect(cancelledIds(client)).toEqual(['e1']);
+    });
+
+    it('stops the re-arm walk at the last wire id and cancels the latest', async () => {
+      const wireIds = [`${KEY}:rearm`, `${KEY}:rearm-1`, `${KEY}:rearm-2`, `${KEY}:rearm-3`];
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({
+          [KEY]: orderAt('e1', KEY),
+          ...Object.fromEntries(wireIds.map((id, i) => [id, orderAt(`r${i}`, id)])),
+          [`${KEY}:rearm-4`]: orderAt('r4', `${KEY}:rearm-4`),
+        }),
+        cancelOrder: vi.fn().mockResolvedValue(undefined),
+      });
+
+      await adapterOn(client).cancel(KEY, 'AAPL');
+
+      expect(cancelledIds(client)).toEqual(['r3', 'e1']);
+      expect(lookedUp(client)).not.toContain(`${KEY}:rearm-4`);
+    });
+
+    it('stops sweeping a bracket and a re-arm once each is cancelled', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({}),
+        submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+        cancelOrder: vi.fn().mockResolvedValue(undefined),
+      });
+      const adapter = adapterOn(client);
+      await adapter.submitBracket(makeBracket());
+      await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+      vi.mocked(client.getOrderByClientOrderId).mockImplementation(async (id) =>
+        id === KEY ? orderAt('alpaca-entry-1', KEY) : null,
+      );
+
+      await adapter.cancel(KEY, 'AAPL');
+      await adapter.fetchNewFills(new Date(0));
+
+      expect(cancelledIds(client)).toEqual(['r0', 'alpaca-entry-1']);
+      expect(sweptIds(client)).toEqual([]);
+    });
+  });
+
+  describe('submitProtectedExit edges', () => {
+    it('re-submits over an existing exit the venue rejected', async () => {
+      const client = exitClient({
+        getOrderByClientOrderId: lookupBy({
+          [KEY]: restingEntry(),
+          [EXIT]: orderAt('flatten-0', EXIT, { status: 'rejected', legs: [] }),
+        }),
+      });
+
+      const ack = await adapterOn(client).submitProtectedExit(exitRequest());
+
+      expect(ack.broker_order_ids).toEqual(['flatten-1']);
+      expect(cancelledIds(client)).toEqual(['alpaca-target-1', 'alpaca-stop-1']);
+    });
+
+    it('refuses to cancel anything when the re-arm lookup fails', async () => {
+      const client = exitClient({
+        getOrderByClientOrderId: lookupBy({
+          [KEY]: restingEntry(),
+          [`${KEY}:rearm`]: new Error('lookup down'),
+        }),
+      });
+
+      await expect(adapterOn(client).submitProtectedExit(exitRequest())).rejects.toMatchObject({
+        operation: 'cancel',
+      });
+      expect(client.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('flattens without cancelling when the entry order is unknown', async () => {
+      const client = exitClient({ getOrderByClientOrderId: lookupBy({}) });
+
+      const ack = await adapterOn(client).submitProtectedExit(exitRequest());
+
+      expect(client.cancelOrder).not.toHaveBeenCalled();
+      expect(ack.broker_order_ids).toEqual(['flatten-1']);
+    });
+
+    it('cancels only the target when the stop has left the resting set', async () => {
+      const client = exitClient({
+        getOrderByClientOrderId: lookupBy({ [KEY]: restingEntry('filled') }),
+      });
+
+      await adapterOn(client).submitProtectedExit(exitRequest());
+
+      expect(cancelledIds(client)).toEqual(['alpaca-target-1']);
+    });
+
+    it('polls a stuck leg exactly five times, waiting the configured gap between checks', async () => {
+      const wait = vi.fn().mockResolvedValue(undefined);
+      const client = exitClient({
+        getOrder: vi.fn().mockResolvedValue({ ...acceptedOrder(), status: 'new' }),
+      });
+      const adapter = adapterOn(client, { cancelConfirmWait: wait, cancelConfirmWaitMs: 7 });
+
+      const error = await caught(adapter.submitProtectedExit(exitRequest()));
+
+      expect(error.message).toBe(
+        'submitProtectedExit: leg alpaca-target-1 on AAPL did not confirm cancelled after 5 checks',
+      );
+      expect(client.getOrder).toHaveBeenCalledTimes(5);
+      expect(wait.mock.calls).toEqual([[7], [7], [7], [7]]);
+    });
+
+    it('never waits before the first check, and waits 250 ms by default', async () => {
+      const wait = vi.fn().mockResolvedValue(undefined);
+      const confirmed = exitClient();
+      await adapterOn(confirmed, { cancelConfirmWait: wait }).submitProtectedExit(exitRequest());
+      expect(wait).not.toHaveBeenCalled();
+
+      const getOrder = vi
+        .fn()
+        .mockResolvedValueOnce({ ...acceptedOrder(), status: 'new' })
+        .mockResolvedValue({ ...acceptedOrder(), status: 'canceled' });
+      await adapterOn(exitClient({ getOrder }), { cancelConfirmWait: wait }).submitProtectedExit(
+        exitRequest(),
+      );
+      expect(wait.mock.calls).toEqual([[250]]);
+    });
+
+    it('waits on a real timer when no wait is injected', async () => {
+      const getOrder = vi
+        .fn()
+        .mockResolvedValueOnce({ ...acceptedOrder(), status: 'new' })
+        .mockResolvedValue({ ...acceptedOrder(), status: 'canceled' });
+
+      const ack = await adapterOn(exitClient({ getOrder }), {
+        cancelConfirmWaitMs: 5,
+      }).submitProtectedExit(exitRequest());
+
+      expect(ack.broker_order_ids).toEqual(['flatten-1']);
+    });
+
+    it('holds the next cancel check until the default timer fires', async () => {
+      vi.useFakeTimers();
+      try {
+        const getOrder = vi
+          .fn()
+          .mockResolvedValueOnce({ ...acceptedOrder(), status: 'new' })
+          .mockResolvedValue({ ...acceptedOrder(), status: 'canceled' });
+        const pending = adapterOn(exitClient({ getOrder }), {
+          cancelConfirmWaitMs: 5,
+        }).submitProtectedExit(exitRequest());
+
+        await vi.advanceTimersByTimeAsync(4);
+        expect(getOrder).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(pending).resolves.toMatchObject({ broker_order_ids: ['flatten-1'] });
+        expect(getOrder.mock.calls.length).toBeGreaterThan(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('names the missing rearm price exactly and keeps the rejection as the cause', async () => {
+      const client = exitClient({
+        submitMarketOrder: vi
+          .fn()
+          .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'rejected' }),
+      });
+
+      const error = await caught(
+        adapterOn(client).submitProtectedExit(exitRequest({ rearm: undefined })),
+      );
+
+      expect(error.message).toBe(
+        `submitProtectedExit: the flatten for AAPL (${KEY}) failed with no journalled rearm ` +
+          'price available; the position is UNPROTECTED',
+      );
+      expect(error.cause).toMatchObject({
+        message:
+          `submitProtectedExit: day flatten '${EXIT}' for AAPL was rejected by Alpaca; ` +
+          'protective legs were re-armed inline',
+      });
+    });
+
+    it('keeps the flatten failure as the cause when the inline re-arm also fails', async () => {
+      const client = exitClient({
+        submitMarketOrder: vi.fn().mockRejectedValue(new Error('network blip')),
+        submitOcoOrder: vi.fn().mockRejectedValue(new Error('venue unavailable')),
+      });
+
+      const error = await caught(adapterOn(client).submitProtectedExit(exitRequest()));
+
+      expect(error.cause).toMatchObject({ name: 'BrokerError', operation: 'submitFlatten' });
+    });
+
+    it('re-arms a short on the buy side after its buy-to-cover flatten is rejected', async () => {
+      const client = exitClient({
+        getPositions: vi
+          .fn()
+          .mockResolvedValue([
+            { symbol: 'AAPL', qty: '-6', side: 'short', avg_entry_price: '100' },
+          ]),
+        submitMarketOrder: vi
+          .fn()
+          .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'rejected' }),
+      });
+
+      await caught(
+        adapterOn(client).submitProtectedExit(
+          exitRequest({ side: 'buy', rearm: { stop: 105, target: 90 } }),
+        ),
+      );
+
+      expect(client.submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ side: 'buy' }));
+    });
+
+    it('cancels an emulated crypto bracket through the emulation, not the native lookup', async () => {
+      const client = makeClient({
+        submitLimitOrder: vi.fn().mockResolvedValue(orderAt('entry-1', 'key-btc', { legs: [] })),
+        getOrderByClientOrderId: lookupBy({}),
+        cancelOrder: vi.fn().mockResolvedValue(undefined),
+        getPositions: vi.fn().mockResolvedValue([]),
+      });
+      const adapter = adapterOn(client);
+      await adapter.submitBracket(
+        makeBracket({ client_order_id: 'key-btc', instrument: 'BTC-USD', asset_class: 'crypto' }),
+      );
+
+      await adapter.submitProtectedExit(
+        exitRequest({ entryClientOrderId: 'key-btc', instrument: 'BTC-USD' }),
+      );
+
+      expect(cancelledIds(client)).toEqual(['entry-1']);
+      expect(lookedUp(client)).not.toContain('key-btc:rearm');
+    });
+
+    it('reports an emulated crypto bracket by its emulated ids', async () => {
+      const client = makeClient({
+        submitLimitOrder: vi.fn().mockResolvedValue(orderAt('entry-1', 'key-btc', { legs: [] })),
+        getOrderByClientOrderId: lookupBy({
+          'key-btc': orderAt('venue-view', 'key-btc', { legs: [] }),
+        }),
+      });
+      const adapter = adapterOn(client);
+      await adapter.submitBracket(
+        makeBracket({ client_order_id: 'key-btc', instrument: 'BTC-USD', asset_class: 'crypto' }),
+      );
+
+      const order = await adapter.getOrder('key-btc', 'BTC-USD');
+
+      expect(order?.broker_order_ids).toEqual(['entry-1']);
+    });
+  });
+
+  describe('rearmProtectiveLegs edges', () => {
+    it('names the crypto refusal exactly', async () => {
+      const error = await caught(
+        adapterOn(makeClient()).rearmProtectiveLegs('key-btc', 'BTC-USD', 'buy', 1, 50, 70),
+      );
+
+      expect(error.message).toBe(
+        "Alpaca adapter cannot re-arm crypto residual 'key-btc' (BTC-USD): no journalled " +
+          'emulated bracket exists for this lot, and the native OCO order class is rejected for ' +
+          'crypto (verified, #550). The residual stays alert-only.',
+      );
+    });
+
+    it('re-arms a short lot with a buy-side OCO', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({}),
+        submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+      });
+
+      await adapterOn(client).rearmProtectiveLegs(KEY, 'AAPL', 'sell', 6, 105, 90);
+
+      expect(client.submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ side: 'buy' }));
+    });
+
+    it('does not read the entry when no prior re-arm has settled', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({}),
+        submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+      });
+
+      await adapterOn(client).rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+
+      expect(lookedUp(client)).toEqual([`${KEY}:rearm`]);
+    });
+
+    it('names the exhausted wire ids exactly, as an alpaca rearm-unsupported error', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: vi.fn(async (id: string) =>
+          orderAt(`venue-${id}`, id, { status: 'canceled' }),
+        ),
+      });
+
+      const error = await caught(
+        adapterOn(client).rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110),
+      );
+
+      expect(isProtectiveRearmUnsupported(error)).toBe(true);
+      expect(error).toMatchObject({ venue: 'alpaca' });
+      expect(error.message).toBe(
+        `Alpaca adapter exhausted all 4 re-arm wire ids for lot '${KEY}' ` +
+          `(${KEY}:rearm .. ${KEY}:rearm-3): each is already owned by an order at the venue ` +
+          'that is not protecting this residual, and Alpaca refuses a reused client_order_id ' +
+          'permanently (measured, docs/research/43). The residual is NOT protected, and no ' +
+          'retry of this call can change that.',
+      );
+    });
+  });
+
+  describe('classifyPriorRearm', () => {
+    const resting = (legs: NonNullable<AlpacaOrder['legs']> | null): AlpacaOrder => {
+      const order = orderAt('r0', `${KEY}:rearm`, { status: 'new', qty: '6', limit_price: '110' });
+      return legs === null ? legless(order) : { ...order, legs };
+    };
+
+    it('reads the stop price off the stop leg wherever it sits', () => {
+      const legs = [
+        leg({ id: 'target', type: 'limit' }),
+        leg({ id: 'stop', type: 'stop', stop_price: '95' }),
+      ];
+
+      expect(classifyPriorRearm(resting(legs), 6, 95, 110)).toBe('live');
+    });
+
+    it('treats a resting order with no legs, no stop leg, or a stop leg without a price as stale', () => {
+      expect(classifyPriorRearm(resting(null), 6, 95, 110)).toBe('stale');
+      expect(classifyPriorRearm(resting([leg({ type: 'limit' })]), 6, 95, 110)).toBe('stale');
+      expect(
+        classifyPriorRearm(resting([leg({ type: 'stop', stop_price: null })]), 6, 0, 110),
+      ).toBe('stale');
+    });
+
+    it('treats a resting order at another target, or with no limit price, as stale', () => {
+      const legs = [leg({ type: 'stop', stop_price: '95' })];
+
+      expect(classifyPriorRearm(resting(legs), 6, 95, 111)).toBe('stale');
+      expect(classifyPriorRearm({ ...resting(legs), limit_price: null }, 6, 95, 0)).toBe('stale');
+    });
+  });
+
+  describe('since-floor audit edges', () => {
+    function bracketFill(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
+      return acceptedOrder({
+        status: 'filled',
+        filled_qty: '100',
+        filled_avg_price: '100.02',
+        filled_at: '2026-07-20T15:59:00Z',
+        ...overrides,
+      });
+    }
+
+    async function sweepAfterBracket(fill: AlpacaOrder, logger = recordingLogger()) {
+      const adapter = adapterOn(makeClient({ getOrder: vi.fn().mockResolvedValue(fill) }), {
+        logger,
+        clock: new FixedClock(T0),
+      });
+      await adapter.submitBracket(makeBracket());
+      await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+      return logger.entries.filter((entry) => entry.level === 'warn');
+    }
+
+    it('logs the exact predates line', async () => {
+      const warns = await sweepAfterBracket(bracketFill());
+
+      expect(warns).toEqual([
+        {
+          trace_id: SWEEP_TRACE,
+          stage: 'execution',
+          event: 'alpaca_fill_predates_bracket_submission',
+          level: 'warn',
+          message: PREDATES_MESSAGE,
+          payload: {
+            client_order_id: KEY,
+            broker_fill_id: 'alpaca-entry-1',
+            leg: 'entry',
+            instrument: 'AAPL',
+            filled_at: '2026-07-20T15:59:00.000Z',
+            submitted_at: T0.toISOString(),
+          },
+        },
+      ]);
+    });
+
+    it.each([
+      ['a zero fill', { filled_qty: '0' }],
+      ['an unparseable fill', { filled_qty: 'garbage' }],
+      ['a fill exactly at submission', { filled_at: T0.toISOString() }],
+    ])('stays silent on %s', async (_label, overrides) => {
+      expect(await sweepAfterBracket(bracketFill(overrides))).toEqual([]);
+    });
+
+    it.each([
+      ['empty', ''],
+      ['missing', undefined],
+    ])('audits a %s symbol under the unknown instrument', async (_label, symbol) => {
+      const warns = await sweepAfterBracket(bracketFill({ symbol: symbol as string }));
+
+      expect(payloadOf(warns, 'instrument')).toEqual(['unknown']);
+    });
+
+    it('audits each bracket leg', async () => {
+      const warns = await sweepAfterBracket(
+        bracketFill({
+          filled_at: '2026-07-20T16:01:00Z',
+          legs: [
+            leg({
+              id: 'alpaca-target-1',
+              type: 'limit',
+              status: 'filled',
+              filled_qty: '100',
+              filled_avg_price: '110',
+              filled_at: '2026-07-20T15:58:00Z',
+            }),
+          ],
+        }),
+      );
+
+      expect(payloadOf(warns, 'leg')).toEqual(['target']);
+    });
+
+    it('sweeps a bracket whose entry has no legs without a parse failure', async () => {
+      const logger = recordingLogger();
+      await sweepAfterBracket(legless(bracketFill({ filled_at: T0.toISOString() })), logger);
+
+      expect(logger.entries).toEqual([]);
+    });
+
+    it('keeps the first submission time when a bracket is re-submitted', async () => {
+      const logger = recordingLogger();
+      const clock = new FixedClock(T0);
+      const client = makeClient({
+        getOrder: vi
+          .fn()
+          .mockResolvedValue(bracketFill({ filled_at: '2026-07-20T16:05:00Z', legs: [] })),
+      });
+      const adapter = adapterOn(client, { logger, clock });
+      await adapter.submitBracket(makeBracket());
+      clock.advance(10 * MINUTE);
+      await adapter.submitBracket(makeBracket());
+
+      await adapter.fetchNewFills(new Date(0));
+
+      expect(logger.entries).toEqual([]);
+    });
+
+    it('keeps the first submission time when a flatten is re-submitted', async () => {
+      const logger = recordingLogger();
+      const clock = new FixedClock(T0);
+      const client = makeClient({
+        submitMarketOrder: vi.fn().mockResolvedValue(orderAt('f1', EXIT)),
+        getOrder: vi
+          .fn()
+          .mockResolvedValue(legless(bracketFill({ id: 'f1', filled_at: '2026-07-20T16:05:00Z' }))),
+      });
+      const adapter = adapterOn(client, { logger, clock });
+      await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
+      clock.advance(10 * MINUTE);
+      await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
+
+      await adapter.fetchNewFills(new Date(0));
+
+      expect(logger.entries).toEqual([]);
+    });
+
+    it('forgets a settled flatten submission time, so a later re-use is audited afresh', async () => {
+      const logger = recordingLogger();
+      const clock = new FixedClock(T0);
+      const getOrder = vi
+        .fn()
+        .mockResolvedValueOnce(bracketFill({ id: 'f1', filled_at: '2026-07-20T16:01:00Z' }))
+        .mockResolvedValue(bracketFill({ id: 'f1', filled_at: '2026-07-20T16:05:00Z' }));
+      const client = makeClient({
+        submitMarketOrder: vi.fn().mockResolvedValue(orderAt('f1', EXIT)),
+        getOrder,
+      });
+      const adapter = adapterOn(client, { logger, clock });
+      await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
+      await adapter.fetchNewFills(new Date(0));
+      clock.advance(10 * MINUTE);
+      await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
+
+      await adapter.fetchNewFills(new Date(0));
+
+      expect(payloadOf(logger.entries, 'leg')).toEqual(['exit']);
+    });
+  });
+
+  describe('flatten and re-arm sweeps', () => {
+    it('keeps sweeping a flatten the venue still holds open', async () => {
+      const client = makeClient({
+        submitMarketOrder: vi.fn().mockResolvedValue(orderAt('f1', EXIT)),
+        getOrder: vi.fn().mockResolvedValue(orderAt('f1', EXIT, { status: 'accepted' })),
+      });
+      const adapter = adapterOn(client);
+      await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
+
+      await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills(new Date(0));
+
+      expect(sweptIds(client)).toEqual(['f1', 'f1']);
+    });
+
+    async function rearmedSweep(status: string) {
+      const logger = recordingLogger();
+      const clock = new FixedClock(T0);
+      const rearmOrder = orderAt('r0', `${KEY}:rearm`, {
+        status,
+        legs: [
+          leg({
+            id: 'r0-stop',
+            type: 'stop',
+            status: 'filled',
+            filled_qty: '6',
+            filled_avg_price: '95',
+            filled_at: '2026-07-20T15:59:00Z',
+          }),
+        ],
+      });
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({}),
+        submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+        getOrder: vi.fn(async (id: string) =>
+          id === 'r0' ? rearmOrder : acceptedOrder({ legs: [] }),
+        ),
+      });
+      const adapter = adapterOn(client, { logger, clock });
+      await adapter.submitBracket(makeBracket());
+      await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+      const first = await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills(new Date(0));
+      return { client, first, logger };
+    }
+
+    it('collects and audits a re-armed leg fill, then stops sweeping the settled OCO', async () => {
+      const { client, first, logger } = await rearmedSweep('filled');
+
+      expect(first).toEqual([
+        expect.objectContaining({ client_order_id: KEY, broker_fill_id: 'r0-stop', leg: 'stop' }),
+      ]);
+      expect(payloadOf(logger.entries, 'leg')).toEqual(['stop']);
+      expect(sweptIds(client).filter((id) => id === 'r0')).toHaveLength(1);
+    });
+
+    it('keeps sweeping a re-armed OCO the venue still holds open', async () => {
+      const { client } = await rearmedSweep('new');
+
+      expect(sweptIds(client).filter((id) => id === 'r0')).toHaveLength(2);
+    });
+
+    it('sweeps a re-armed OCO the venue returns without legs as no fills and no failure', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: lookupBy({}),
+        submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
+        getOrder: vi.fn(async (id: string) =>
+          id === 'r0'
+            ? legless(orderAt('r0', `${KEY}:rearm`, { status: 'new' }))
+            : acceptedOrder({ legs: [] }),
+        ),
+      });
+      const adapter = adapterOn(client, { clock: new FixedClock(T0) });
+      await adapter.submitBracket(makeBracket());
+      await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
+
+      await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
+    });
+  });
+
+  describe('unpriced-fill state failures', () => {
+    const observation = {
+      client_order_id: KEY,
+      broker_fill_id: 'fill-1',
+      leg: 'entry' as const,
+      instrument: 'AAPL',
+      qty: 100,
+    };
+
+    it('logs a failed unpriced-fill clear without losing the fills', async () => {
+      const logger = recordingLogger();
+      const state = new FaultyState();
+      state.failing.add('clearUnpricedFill');
+      const client = makeClient({
+        getOrder: vi.fn().mockResolvedValue(
+          acceptedOrder({
+            status: 'filled',
+            filled_qty: '100',
+            filled_avg_price: '100',
+            filled_at: '2026-07-20T16:01:00Z',
+            legs: [],
+          }),
+        ),
+      });
+      const adapter = adapterOn(client, { logger, state, clock: new FixedClock(T0) });
+      await adapter.submitBracket(makeBracket());
+
+      const fills = await adapter.fetchNewFills(new Date(0));
+
+      expect(fills).toHaveLength(1);
+      expect(payloadOf(logger.entries, 'error')).toEqual(['clearUnpricedFill failed']);
+    });
+
+    it('counts a failed unpriced-fill record against the bracket sweep', async () => {
+      const state = new FaultyState();
+      state.failing.add('recordUnpricedFill');
+      const client = makeClient({
+        getOrder: vi.fn().mockResolvedValue(unpricedOrder({ legs: [] })),
+      });
+      const adapter = adapterOn(client, { state });
+      await adapter.submitBracket(makeBracket());
+
+      const error = await caught(adapter.fetchNewFills(new Date(0)));
+
+      expect((error as AggregateError).errors).toEqual([new Error('recordUnpricedFill failed')]);
+      expect(error.message).toContain('(1 bracket(s), 0 flatten(s), 0 rearm(s)');
+    });
+
+    it('surfaces a failed unpriced-fill load', async () => {
+      const state = new FaultyState();
+      state.failing.add('loadUnpricedFills');
+
+      const error = await caught(adapterOn(makeClient(), { state }).fetchNewFills(new Date(0)));
+
+      expect((error as AggregateError).errors).toEqual([new Error('loadUnpricedFills failed')]);
+    });
+
+    it('surfaces a failed alerted mark after the alert went out', async () => {
+      const state = new FaultyState();
+      state.recordUnpricedFill('alpaca', observation, new Date(T0.getTime() - 20 * MINUTE));
+      state.failing.add('markUnpricedFillAlerted');
+      const alerts = recordingAlerts();
+
+      const error = await caught(
+        adapterOn(makeClient(), {
+          state,
+          unpricedFillAlerts: alerts,
+          clock: new FixedClock(T0),
+        }).fetchNewFills(new Date(0)),
+      );
+
+      expect(alerts.posted).toHaveLength(1);
+      expect((error as AggregateError).errors).toEqual([
+        new Error('markUnpricedFillAlerted failed'),
+      ]);
+    });
+
+    it('names a failed unpriced-fill alert exactly', async () => {
+      const state = new InMemoryBrokerStateStore();
+      state.recordUnpricedFill('alpaca', observation, new Date(T0.getTime() - 20 * MINUTE));
+
+      const error = await caught(
+        adapterOn(makeClient(), {
+          state,
+          unpricedFillAlerts: {
+            postUnpricedFillAlert: async () => {
+              throw new Error('telegram down');
+            },
+          },
+          clock: new FixedClock(T0),
+        }).fetchNewFills(new Date(0)),
+      );
+
+      expect((error as AggregateError).errors).toEqual([
+        new Error(
+          `Alpaca unpriced-fill alert delivery failed for order fill-1 (entry leg of '${KEY}')`,
+        ),
+      ]);
+    });
+  });
+
+  it('paces with an alpaca-named default bucket that logs its waits', async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = recordingLogger();
+      const adapter = new AlpacaBrokerAdapter({
+        client: makeClient({ getPositions: vi.fn().mockResolvedValue([]) }),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger,
+      });
+
+      const reads = Array.from({ length: 45 }, () => adapter.getOpenPositions());
+      await vi.advanceTimersByTimeAsync(10_000);
+      await Promise.all(reads);
+
+      const buckets = payloadOf(logger.entries, 'bucket');
+      expect(buckets.length).toBeGreaterThan(0);
+      expect(new Set(buckets)).toEqual(new Set(['alpaca']));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { TokenBucket } from '../../../shared/index.js';
+import { credentialReader, TokenBucket } from '../../../shared/index.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
 
@@ -94,15 +94,7 @@ function validateArticle(raw: unknown): AlpacaNewsArticle {
   };
 }
 
-function requireCredential(value: string | undefined, envVar: string, field: string): string {
-  if (value === undefined || value.length === 0) {
-    throw new Error(
-      `AlpacaNewsClient: ${envVar} is not set. Provide it via the environment ` +
-        `(.env.local) or pass { ${field} } explicitly.`,
-    );
-  }
-  return value;
-}
+const requireCredential = credentialReader('AlpacaNewsClient');
 
 export class AlpacaNewsClient {
   private readonly apiKey: string;

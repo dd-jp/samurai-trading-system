@@ -2,29 +2,23 @@ import {
   type ContinueOnFaultEffects,
   describeThrown,
   type ErrorStream,
-  guardedWrite,
   installContinueOnFault,
+  retireStdoutOnFirstError,
   type StdoutStream,
-  watchStdoutErrors,
 } from '../../shared/index.js';
 
 export function watchSupervisorStdout(
   stdout: StdoutStream = process.stdout,
   stderr: StdoutStream & ErrorStream = process.stderr,
 ): void {
-  watchStdoutErrors(stderr, () => {});
-
-  let reported = false;
-  watchStdoutErrors(stdout, (error) => {
-    if (reported) return;
-    reported = true;
-    guardedWrite(
-      stderr,
+  retireStdoutOnFirstError(
+    stdout,
+    stderr,
+    (error) =>
       'supervisor: stdout write failed and is retired for the rest of this process ' +
-        `(${describeThrown(error)}). The orchestrator and dashboard children write to their ` +
-        'own inherited stdio and are unaffected (#764).\n',
-    );
-  });
+      `(${describeThrown(error)}). The orchestrator and dashboard children write to their ` +
+      'own inherited stdio and are unaffected (#764).\n',
+  );
 }
 
 export function installSupervisorContinueOnFault(effects?: ContinueOnFaultEffects): void {

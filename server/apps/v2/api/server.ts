@@ -9,6 +9,13 @@ import {
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
 } from '../../../../contracts/index.js';
+import {
+  declaresLengthOver,
+  isJsonRequest,
+  JSON_HEADERS,
+  parseJson,
+  serverLifecycle,
+} from '../json-http.js';
 import { carriesToken, DASHBOARD_TOKEN_ENV_VAR, isConfiguredToken } from './auth.js';
 import { serveBundle } from './bundle.js';
 import {
@@ -21,12 +28,6 @@ import { parseTaxQuery, TAX_CSV_NOT_FED, taxWire } from './records.js';
 
 export const CONTROL_BODY_MAX_BYTES = 1_024;
 const BUSY_RETRY_AFTER_SECONDS = 1;
-
-const JSON_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Cache-Control': 'no-store',
-  'X-Content-Type-Options': 'nosniff',
-} as const;
 
 export interface V2DashboardServerOptions {
   readonly host: string;
@@ -69,10 +70,6 @@ function refuseAndClose(
   sendError(res, status, error, { ...headers, Connection: 'close' });
 }
 
-function declaredTooLarge(req: IncomingMessage): boolean {
-  return Number(req.headers['content-length'] ?? 0) > CONTROL_BODY_MAX_BYTES;
-}
-
 function readCappedBody(req: IncomingMessage): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -93,18 +90,6 @@ function readCappedBody(req: IncomingMessage): Promise<string | null> {
     });
     req.on('error', reject);
   });
-}
-
-function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
-  try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch {
-    return { ok: false };
-  }
-}
-
-function isJsonRequest(req: IncomingMessage): boolean {
-  return (req.headers['content-type'] ?? '').split(';')[0]?.trim() === 'application/json';
 }
 
 function sendWriteResult(res: ServerResponse, result: ControlWriteResult): void {
@@ -149,7 +134,7 @@ async function readControlRequest(req: IncomingMessage): Promise<BodyOutcome> {
   if (!isJsonRequest(req)) {
     return { ok: false, status: 415, error: 'content-type must be application/json' };
   }
-  const text = declaredTooLarge(req) ? null : await readCappedBody(req);
+  const text = declaresLengthOver(req, CONTROL_BODY_MAX_BYTES) ? null : await readCappedBody(req);
   return text === null ? OVERSIZED : parseBody(text);
 }
 
@@ -274,22 +259,13 @@ export function createV2DashboardServer(opts: V2DashboardServerOptions): V2Dashb
       });
   });
   let port = opts.port;
+  const lifecycle = serverLifecycle(server, opts.host, opts.port, (bound) => {
+    port = bound;
+  });
   return {
     get url() {
       return `http://${opts.host}:${port}`;
     },
-    start: () =>
-      new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(opts.port, opts.host, () => {
-          const address = server.address();
-          port = typeof address === 'object' && address !== null ? address.port : opts.port;
-          resolve();
-        });
-      }),
-    stop: () =>
-      new Promise((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+    ...lifecycle,
   };
 }
