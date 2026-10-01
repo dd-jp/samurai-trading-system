@@ -4658,6 +4658,28 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       expect(ack.broker_order_ids).toEqual(['flatten-1']);
     });
 
+    it('holds the next cancel check until the default timer fires', async () => {
+      vi.useFakeTimers();
+      try {
+        const getOrder = vi
+          .fn()
+          .mockResolvedValueOnce({ ...acceptedOrder(), status: 'new' })
+          .mockResolvedValue({ ...acceptedOrder(), status: 'canceled' });
+        const pending = adapterOn(exitClient({ getOrder }), {
+          cancelConfirmWaitMs: 5,
+        }).submitProtectedExit(exitRequest());
+
+        await vi.advanceTimersByTimeAsync(4);
+        expect(getOrder).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(pending).resolves.toMatchObject({ broker_order_ids: ['flatten-1'] });
+        expect(getOrder.mock.calls.length).toBeGreaterThan(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('names the missing rearm price exactly and keeps the rejection as the cause', async () => {
       const client = exitClient({
         submitMarketOrder: vi
