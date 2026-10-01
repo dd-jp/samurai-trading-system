@@ -33,6 +33,7 @@ export interface CommandDeps {
   readonly overview: () => Promise<V2OverviewWire>;
   readonly log: {
     has(updateId: number): boolean;
+    refusedSince(chatId: string, since: Date): boolean;
     record(entry: CommandRecord): void;
   };
   readonly newCode: () => string;
@@ -94,11 +95,13 @@ export class CommandHandler {
       sentAt,
     };
     if (!this.isOwner(message)) {
-      this.deps.log.record({
-        ...base,
-        outcome: 'refused_unauthorized',
-        detail: 'not the owner chat',
-      });
+      if (!this.deps.log.refusedSince(base.chatId, this.startOfUtcDay())) {
+        this.deps.log.record({
+          ...base,
+          outcome: 'refused_unauthorized',
+          detail: 'not the owner chat',
+        });
+      }
       return undefined;
     }
     const result = this.isStale(sentAt)
@@ -118,6 +121,12 @@ export class CommandHandler {
     return (
       message.chat.type === 'private' && message.chat.id === owner && message.from?.id === owner
     );
+  }
+
+  private startOfUtcDay(): Date {
+    const day = new Date(this.deps.clock.now());
+    day.setUTCHours(0, 0, 0, 0);
+    return day;
   }
 
   private isStale(sentAt: Date): boolean {
