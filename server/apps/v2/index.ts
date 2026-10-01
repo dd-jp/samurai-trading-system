@@ -378,7 +378,7 @@ function venueSessionsFor(options: V2RootOptions): VenueSessionGate {
   return options.venueSessions ?? TABLE_VENUE_SESSIONS;
 }
 
-function quotedBorrowPerDayFrom(
+export function quotedBorrowPerDayFrom(
   catalogue: CfdCatalogue | undefined,
 ): (instrument: string) => number | undefined {
   return (instrument) => catalogue?.lookup(instrument)?.borrowCostPerDay;

@@ -122,3 +122,17 @@ export function openReadOnlyStore(dbPath: string): StoreHandle {
   db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
   return db;
 }
+
+// Header bytes 18-19 mark a WAL-mode file; a deserialised copy has no WAL file to open, so it is
+// read as a rollback-journal database instead
+const FILE_FORMAT_VERSION_OFFSETS = [18, 19] as const;
+const ROLLBACK_JOURNAL_FORMAT = 1;
+
+export function inMemoryCopyOf(db: StoreHandle): StoreHandle {
+  const image = db.serialize();
+  for (const offset of FILE_FORMAT_VERSION_OFFSETS) image[offset] = ROLLBACK_JOURNAL_FORMAT;
+  const copy = new BetterSqlite3(image);
+  copy.pragma('foreign_keys = ON');
+  runMigrations(copy);
+  return copy;
+}
