@@ -184,7 +184,7 @@ export class MarketauxNewsSource implements NewsSource {
   }
 
   #logCoverage(tradingDate: string): UkNewsCoverage | undefined {
-    const coverage = ukNewsCoverage(this.deps.ledger.forDate(tradingDate));
+    const coverage = ukNewsCoverage(this.deps.ledger.forDate(tradingDate, MARKETAUX_PROVIDER));
     if (coverage.names === 0) return undefined;
     this.deps.logger?.log({
       trace_id: `v2-${tradingDate}`,
@@ -198,7 +198,7 @@ export class MarketauxNewsSource implements NewsSource {
   }
 
   async #resolve(tidm: string, tradingDate: string, now: Date): Promise<NewsRecord> {
-    const cached = this.deps.ledger.cached(tradingDate, tidm);
+    const cached = this.deps.ledger.cached(MARKETAUX_PROVIDER, tradingDate, tidm);
     if (cached !== undefined) return cached;
     const record = await this.#fetch(tidm, tradingDate, now);
     this.deps.ledger.record(record);

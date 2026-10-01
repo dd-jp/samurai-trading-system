@@ -6,12 +6,14 @@ import BetterSqlite3 from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SleeveDecision } from '../../../contracts/index.js';
 import type { AnthropicMessageRequest } from '../../pipeline/debate-engine/index.js';
+import { MAX_CAPTURED_PROMPT_CHARS } from '../../pipeline/debate-engine/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';
-import type { VenueSessionGate } from './data/index.js';
+import { guardedStore, openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';
+import type { NewsSource, VenueSessionGate } from './data/index.js';
+import { AlpacaNewsSource, SqliteNewsLedger } from './data/index.js';
 import { composeV2Root } from './index.js';
 import {
   compareDecision,
@@ -70,6 +72,39 @@ function answer(request: AnthropicMessageRequest): string {
 
 let directory: string;
 let options: ReplayCliOptions;
+let fixture: {
+  barStoreRoot: string;
+  constituentsPath: string;
+  fxPath: string;
+  spreadsPath: string;
+};
+
+async function runFixtureDay(storePath: string, newsSource: NewsSource): Promise<void> {
+  const seed = openSharedStore(storePath);
+  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
+    2026,
+    1_000,
+    1_500,
+  );
+  seed.close();
+  const root = composeV2Root({
+    ...fixture,
+    tradingDate: TRADING_DATE,
+    dryRun: true,
+    storePath,
+    cfdCataloguePath: join(directory, 'absent-catalogue.json'),
+    clock: new SimulatedClock(new Date(`${TRADING_DATE}T07:30:00.000Z`)),
+    logger: { log: () => {} },
+    venueSessions: OPEN_EVERY_DAY,
+    transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer),
+    newsSource,
+  });
+  try {
+    await root.run();
+  } finally {
+    root.close();
+  }
+}
 
 beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), 'v2-replay-'));
@@ -87,37 +122,12 @@ beforeAll(async () => {
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\nUP,10,0\n');
   const storePath = join(directory, 'paper.sqlite');
-  const seed = openSharedStore(storePath);
-  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
-    2026,
-    1_000,
-    1_500,
-  );
-  seed.close();
-  const cfdCataloguePath = join(directory, 'absent-catalogue.json');
-  const root = composeV2Root({
-    tradingDate: TRADING_DATE,
-    dryRun: true,
-    storePath,
-    barStoreRoot,
-    constituentsPath,
-    fxPath,
-    spreadsPath,
-    cfdCataloguePath,
-    clock: new SimulatedClock(new Date(`${TRADING_DATE}T07:30:00.000Z`)),
-    logger: { log: () => {} },
-    venueSessions: OPEN_EVERY_DAY,
-    transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer),
-    newsSource: {
-      headlines: (symbol) =>
-        Promise.resolve(symbol === 'UP' ? ['UP beats estimates', 'UP raises guidance'] : []),
-    },
+  fixture = { barStoreRoot, constituentsPath, fxPath, spreadsPath };
+  await runFixtureDay(storePath, {
+    headlines: (symbol) =>
+      Promise.resolve(symbol === 'UP' ? ['UP beats estimates', 'UP raises guidance'] : []),
   });
-  try {
-    await root.run();
-  } finally {
-    root.close();
-  }
+  const cfdCataloguePath = join(directory, 'absent-catalogue.json');
   options = {
     tradingDate: TRADING_DATE,
     storePath,
@@ -252,6 +262,67 @@ describe('replayFromFiles', () => {
   it('reports a day with no journalled decision', async () => {
     const result = await replayFromFiles({ ...options, tradingDate: dateAt(100) });
     expect(result.divergences).toEqual([{ kind: 'nothing_to_replay', tradingDate: dateAt(100) }]);
+  });
+});
+
+describe('replay from the US headline journal (#1981)', () => {
+  let capped: ReplayCliOptions;
+
+  beforeAll(async () => {
+    const storePath = join(directory, 'capped.sqlite');
+    const writer = openSharedStore(storePath);
+    const long = (index: number) => `UP headline ${index} ${'x'.repeat(2_000)}`;
+    const articles = Array.from({ length: 10 }, (_, index) => ({
+      id: `bz-${index}`,
+      headline: long(index),
+      summary: '',
+      symbols: ['UP'],
+      source: 'benzinga',
+      url: '',
+      created_at: new Date(Date.UTC(2026, 8, 17, index)),
+      updated_at: new Date(Date.UTC(2026, 8, 17, index)),
+      payload: '',
+    }));
+    const news = new AlpacaNewsSource(
+      { fetchNews: ([symbol]) => Promise.resolve(symbol === 'UP' ? articles : []) },
+      new SqliteNewsLedger(guardedStore(writer, 'v2')),
+    );
+    try {
+      await runFixtureDay(storePath, news);
+    } finally {
+      writer.close();
+    }
+    capped = { ...options, storePath };
+  });
+
+  it('replays identical a name whose logged prompt hit the capture cap', async () => {
+    const db = new BetterSqlite3(capped.storePath, { readonly: true });
+    const prompts = db
+      .prepare(`SELECT prompt FROM llm_call_log WHERE trace_id = 'v2-${TRADING_DATE}-UP'`)
+      .all() as { prompt: string }[];
+    db.close();
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts.every((row) => row.prompt.length >= MAX_CAPTURED_PROMPT_CHARS)).toBe(true);
+    const result = await replayFromFiles(capped);
+    expect(result.decisions).toBe(3);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges as a news error without the journal, as before #1981', async () => {
+    const storePath = join(directory, 'capped-unjournalled.sqlite');
+    copyFileSync(capped.storePath, storePath);
+    const db = new BetterSqlite3(storePath);
+    db.exec("DROP TRIGGER v2_news_no_delete; DELETE FROM v2_news WHERE provider = 'alpaca'");
+    db.close();
+    const result = await replayFromFiles({ ...capped, storePath });
+    expect(result.divergences).toContainEqual(
+      expect.objectContaining({
+        kind: 'decision_field',
+        instrument: 'UP',
+        field: 'inputs_hash',
+        replayed: '',
+      }),
+    );
   });
 });
 

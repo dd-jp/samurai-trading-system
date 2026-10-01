@@ -1795,7 +1795,56 @@ describe('newsWiringFor', () => {
     expect(await news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
     expect(urls).toHaveLength(1);
     expect(urls[0]).toContain('alpaca.markets');
-    expect(rows(db)).toEqual([]);
+    expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_news', reason: '' }]);
+  });
+
+  it('journals US headlines to v2_news without the keys or request headers (#1981)', async () => {
+    vi.stubEnv('ALPACA_API_KEY', 'alpaca-key-id-0123456789');
+    vi.stubEnv('ALPACA_API_SECRET', 'alpaca-secret-0123456789');
+    const db = openSharedStore(':memory:');
+    const news = {
+      news: [
+        {
+          id: 101,
+          headline: 'NVDA wins order',
+          summary: 'body text',
+          author: 'a',
+          symbols: ['NVDA'],
+          source: 'benzinga',
+          url: 'https://example.test/a',
+          created_at: '2026-09-28T13:00:00Z',
+          updated_at: '2026-09-28T13:00:00Z',
+        },
+      ],
+      next_page_token: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(news)))),
+    );
+    const wiring = newsWiringFor({ ...options, isUkStock: undefined }, db, quiet);
+    expect(await wiring.news.headlines('NVDA', '2026-09-29', NOW)).toEqual(['NVDA wins order']);
+    const stored = db.prepare('SELECT * FROM v2_news').all();
+    expect(stored).toMatchObject([
+      {
+        symbol: 'NVDA',
+        provider: 'alpaca',
+        status: 'ok',
+        headlines: JSON.stringify([
+          { title: 'NVDA wins order', publishedAt: '2026-09-28T13:00:00.000Z', sourceId: '101' },
+        ]),
+      },
+    ]);
+    const dump = JSON.stringify(stored);
+    for (const forbidden of [
+      'alpaca-key-id',
+      'alpaca-secret',
+      'APCA',
+      'body text',
+      'example.test',
+    ]) {
+      expect(dump).not.toContain(forbidden);
+    }
   });
 
   it('uses an injected news source untouched', async () => {

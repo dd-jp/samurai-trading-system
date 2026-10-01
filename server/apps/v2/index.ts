@@ -269,15 +269,16 @@ export interface NewsWiring {
 
 export function newsWiringFor(options: V2RootOptions, db: StoreHandle, logger: Logger): NewsWiring {
   if (options.newsSource !== undefined) return { news: options.newsSource, ukNews: undefined };
+  const ledger = new SqliteNewsLedger(guardedStore(db, 'v2'));
   const ukNews = options.dryRun
     ? undefined
     : new MarketauxNewsSource({
         client: marketauxClientFor(options.marketauxApiKey),
-        ledger: new SqliteNewsLedger(guardedStore(db, 'v2')),
+        ledger,
         logger,
       });
   const news = newsForVenue({
-    us: options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient()),
+    us: options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient(), ledger),
     ukStock: ukNews ?? NO_NEWS,
     isUkStock: options.isUkStock ?? (() => false),
     isLseEtf: isLseInstrument,
