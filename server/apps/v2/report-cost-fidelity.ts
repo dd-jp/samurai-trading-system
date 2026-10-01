@@ -1,5 +1,12 @@
 import { readFileSync } from 'node:fs';
-import type { FillLeg, MarketData, OrderLeg, OrderSide, Venue } from '../../../contracts/index.js';
+import type {
+  BrokerMode,
+  FillLeg,
+  MarketData,
+  OrderLeg,
+  OrderSide,
+  Venue,
+} from '../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openReadOnlyStore } from '../../shared/store/index.js';
@@ -67,6 +74,11 @@ const BROKER_ORDERS_SQL = `
 const FILLS_SQL = `
   SELECT client_order_id, leg, side, trading_date, qty, price_gbp, fee_gbp FROM v2_fills
    ORDER BY trading_date, fill_id`;
+
+function brokerModeOf(arg: string): BrokerMode {
+  if (arg === 'paper' || arg === 'live') return arg;
+  throw new Error(`broker mode must be paper or live, got ${arg}`);
+}
 
 function numberIn(payload: Record<string, unknown>, key: string): number | undefined {
   const value = payload[key];
@@ -146,6 +158,7 @@ export interface CostFidelityInputs {
   readonly barRoot: string;
   readonly from: string;
   readonly to: string;
+  readonly mode: BrokerMode;
 }
 
 export async function reportCostFidelity(
@@ -161,6 +174,7 @@ export async function reportCostFidelity(
       readBrokerOrders(db, inputs),
       market,
       fillQuoter(market, halfSpreadLookup(SPREADS_PATH, SAXO_SPREADS_PATH)),
+      inputs.mode,
     );
     return formatCostFidelityReport(report);
   } finally {
@@ -178,9 +192,10 @@ export async function main(
     barRoot = DEFAULT_BAR_STORE_ROOT,
     from = OPEN_WINDOW.from,
     to = OPEN_WINDOW.to,
+    mode = 'paper',
   ] = argv;
   try {
-    write(await report({ storePath, barRoot, from, to }));
+    write(await report({ storePath, barRoot, from, to, mode: brokerModeOf(mode) }));
     return 0;
   } catch (error) {
     write(error instanceof Error ? error.message : String(error));

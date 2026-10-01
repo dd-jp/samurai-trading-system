@@ -321,6 +321,13 @@ Open after these rulings: whether #1854 (stale-price guard, parked "until an ext
 
 Still open and recorded, not ruled: the universe is only the current S&P 500 constituents; the shadow fills over the whole day's bar; the ≤10% veto-rate cap is not enforced in code; a failed signal is never retried; a zone that straddles the close enters at its high.
 
+## Rulings of 2026-10-01 — cost fidelity (#1884)
+
+David ruled in chat on PR #1959's open items, recorded on [#1884](https://github.com/dd-jp/samurai-trading-system/issues/1884#issuecomment-5926944618). They settle how Q19's "costs within ±25%" is measured.
+
+1. **The report's derived definitions are accepted.** Realised cost is measured against the simulator's own pre-cost price on the same bar (the open, the limit, or the stop clamped to the bar), not the decision close, so the overnight gap is not counted as cost. Pass is one total realised ÷ modelled ratio per entry-offset group (#1815, 2026-09-30) within ±25%, not ±25% on each order. The default window is the whole journal; from/to are optional.
+2. **On paper the check compares slippage only.** Alpaca paper charges no fee while the cost model charges SEC, TAF and CAT fees, so a fee comparison on paper reads low by construction. The fee legs are still printed. Fees join the comparison on live, where they are real.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

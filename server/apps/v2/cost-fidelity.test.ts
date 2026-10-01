@@ -96,7 +96,7 @@ const ENTRY_WITH_STOP = order({
 describe('costFidelityReport', () => {
   it('prices a cumulative entry and its stop against the simulator on the same order', () => {
     quoteCalls.length = 0;
-    const report = costFidelityReport([ENTRY_WITH_STOP], MARKET, tenBpsAndOneDollar);
+    const report = costFidelityReport([ENTRY_WITH_STOP], MARKET, tenBpsAndOneDollar, 'paper');
     const near = (value: number) => expect.closeTo(value, 9);
     expect(report.rows).toMatchObject([
       {
@@ -125,11 +125,49 @@ describe('costFidelityReport', () => {
     expect(report.samples).toMatchObject([
       {
         counts: { match: 2 },
-        realisedGbp: near(usd(1.98 + 1) + 0.04),
-        modelledGbp: near(usd(0.99 + 1 + 0.95 + 1)),
+        realisedGbp: near(usd(1.98 + 1)),
+        modelledGbp: near(usd(0.99 + 0.95)),
+        verdict: 'fail',
+      },
+    ]);
+  });
+
+  it('adds the fee legs to the comparison on live', () => {
+    const report = costFidelityReport([ENTRY_WITH_STOP], MARKET, tenBpsAndOneDollar, 'live');
+    expect(report.samples).toMatchObject([
+      {
+        realisedGbp: expect.closeTo(usd(1.98 + 1) + 0.04, 9),
+        modelledGbp: expect.closeTo(usd(0.99 + 1 + 0.95 + 1), 9),
         verdict: 'pass',
       },
     ]);
+  });
+
+  it('passes a paper fill that matches the modelled slippage although paper charges no fee', () => {
+    const paperFill = order({
+      fills: [
+        {
+          leg: 'entry',
+          side: 'buy',
+          tradingDate: '2026-09-02',
+          qty: 10,
+          priceGbp: usd(99.099),
+          feeGbp: 0,
+        },
+      ],
+    });
+    const paper = costFidelityReport([paperFill], MARKET, tenBpsAndOneDollar, 'paper');
+    expect(paper.rows[0]?.cost).toMatchObject({ realisedFeeGbp: 0, modelledFeeGbp: usd(1) });
+    expect(paper.samples[0]?.ratio).toBeCloseTo(1, 9);
+    expect(paper.samples[0]?.verdict).toBe('pass');
+    expect(formatCostFidelityReport(paper).split('\n')).toEqual([
+      '0 bps offset: 1 legs scored, realised £0.79, modelled £0.79, ratio 1.000, PASS (±25%, slippage only)',
+      expect.any(String),
+      'per order leg:',
+      'e1 entry match realised £0.79 + fee £0.00, modelled £0.79 + fee £0.80, delta 0.0 bps',
+    ]);
+    const live = costFidelityReport([paperFill], MARKET, tenBpsAndOneDollar, 'live');
+    expect(live.samples[0]?.verdict).toBe('fail');
   });
 
   it('caps the modelled entry at the limit, as the simulated book is', () => {
@@ -146,7 +184,7 @@ describe('costFidelityReport', () => {
         },
       ],
     });
-    const [row] = costFidelityReport([tight], MARKET, tenBpsAndOneDollar).rows;
+    const [row] = costFidelityReport([tight], MARKET, tenBpsAndOneDollar, 'paper').rows;
     expect(row?.cost?.modelledSlippageGbp).toBeCloseTo(usd(0.5), 9);
     expect(row?.cost?.realisedSlippageGbp).toBeCloseTo(usd(0.5), 9);
   });
@@ -176,7 +214,7 @@ describe('costFidelityReport', () => {
         },
       ],
     });
-    const [entry, target] = costFidelityReport([short], MARKET, tenBpsAndOneDollar).rows;
+    const [entry, target] = costFidelityReport([short], MARKET, tenBpsAndOneDollar, 'paper').rows;
     expect(entry?.fidelity).toBe('match');
     expect(entry?.cost?.realisedSlippageGbp).toBeCloseTo(usd(1), 9);
     expect(entry?.cost?.modelledSlippageGbp).toBeCloseTo(0, 9);
@@ -233,6 +271,7 @@ describe('costFidelityReport', () => {
       ],
       MARKET,
       tenBpsAndOneDollar,
+      'paper',
     ).rows;
     expect(rows.map((row) => [row.clientOrderId, row.fidelity, row.cost])).toEqual([
       ['target-untouched', 'broker_only', undefined],
@@ -258,7 +297,7 @@ describe('costFidelityReport', () => {
         },
       ],
     });
-    const report = costFidelityReport([late], MARKET, tenBpsAndOneDollar);
+    const report = costFidelityReport([late], MARKET, tenBpsAndOneDollar, 'paper');
     expect(report.rows[0]?.fidelity).toBe('bar_mismatch');
     expect(report.samples).toEqual([
       {
@@ -329,6 +368,7 @@ describe('costFidelityReport', () => {
       ],
       MARKET,
       tenBpsAndOneDollar,
+      'paper',
     ).rows;
     expect(rows.map((row) => row.fidelity)).toEqual(['pending', 'pending', 'pending']);
   });
@@ -351,7 +391,7 @@ describe('costFidelityReport', () => {
       ],
       tradingDate: '2026-09-03',
     });
-    const report = costFidelityReport([exit], MARKET, tenBpsAndOneDollar);
+    const report = costFidelityReport([exit], MARKET, tenBpsAndOneDollar, 'paper');
     expect(report.rows[0]?.fidelity).toBe('match');
     expect(report.rows[0]?.cost?.realisedSlippageGbp).toBeCloseTo(usd(1), 9);
     expect(report.samples[0]?.offsetBps).toBeUndefined();
@@ -368,6 +408,7 @@ describe('costFidelityReport', () => {
       ],
       MARKET,
       tenBpsAndOneDollar,
+      'paper',
     ).rows;
     expect(rows.map((row) => [row.clientOrderId, row.fidelity])).toEqual([
       ['would-fill', 'sim_only'],
@@ -395,6 +436,7 @@ describe('costFidelityReport', () => {
       ],
       MARKET,
       tenBpsAndOneDollar,
+      'paper',
     );
     expect(report.samples.map((sample) => [sample.offsetBps, sample.verdict])).toEqual([
       [0, 'pass'],
@@ -417,12 +459,12 @@ describe('costVerdict', () => {
 
 describe('formatCostFidelityReport', () => {
   it('says so when the window holds no broker order', () => {
-    expect(formatCostFidelityReport({ rows: [], samples: [] })).toBe(
+    expect(formatCostFidelityReport({ mode: 'paper', rows: [], samples: [] })).toBe(
       'no broker orders in the window',
     );
   });
 
-  it('prints each offset sample, then each order leg with its delta', () => {
+  it('prints each offset sample, then each order leg with its delta, fees included on live', () => {
     const report = costFidelityReport(
       [
         order({
@@ -447,13 +489,14 @@ describe('formatCostFidelityReport', () => {
       ],
       MARKET,
       tenBpsAndOneDollar,
+      'live',
     );
     expect(formatCostFidelityReport(report).split('\n')).toEqual([
-      '0 bps offset: 1 legs scored, realised £1.58, modelled £1.59, ratio 0.995, PASS (±25%)',
+      '0 bps offset: 1 legs scored, realised £1.58, modelled £1.59, ratio 0.995, PASS (±25%, slippage and fees)',
       '  fidelity: bar mismatch 0, broker only 0, simulator only 0, both unfilled 0, pending 0',
-      'sleeve-set limit: 0 legs scored, realised £0.00, modelled £0.00, ratio n/a, INSUFFICIENT (±25%)',
+      'sleeve-set limit: 0 legs scored, realised £0.00, modelled £0.00, ratio n/a, INSUFFICIENT (±25%, slippage and fees)',
       '  fidelity: bar mismatch 0, broker only 0, simulator only 1, both unfilled 0, pending 0',
-      'entry not journalled: 0 legs scored, realised £0.00, modelled £0.00, ratio n/a, INSUFFICIENT (±25%)',
+      'entry not journalled: 0 legs scored, realised £0.00, modelled £0.00, ratio n/a, INSUFFICIENT (±25%, slippage and fees)',
       '  fidelity: bar mismatch 0, broker only 0, simulator only 0, both unfilled 1, pending 0',
       'per order leg:',
       'e1 entry match realised £1.58 + fee £0.00, modelled £0.79 + fee £0.80, delta -0.1 bps',

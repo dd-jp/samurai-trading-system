@@ -1,4 +1,5 @@
 import type {
+  BrokerMode,
   FillLeg,
   MarketData,
   OrderLeg,
@@ -90,6 +91,7 @@ export interface CostSample {
 }
 
 export interface CostFidelityReport {
+  readonly mode: BrokerMode;
   readonly rows: readonly CostRow[];
   readonly samples: readonly CostSample[];
 }
@@ -287,11 +289,18 @@ function rowsOf(market: MarketData, order: BrokerOrder, quoteFill: QuoteFill): r
   return fillGroups(order.fills).map((group) => filledRow(market, order, group, quoteFill));
 }
 
-function totalCost(cost: LegCost | undefined, kind: 'realised' | 'modelled'): number {
-  if (cost === undefined) return 0;
-  return kind === 'realised'
-    ? cost.realisedSlippageGbp + cost.realisedFeeGbp
-    : cost.modelledSlippageGbp + cost.modelledFeeGbp;
+// Alpaca paper charges no fee while the model charges SEC, TAF and CAT, so on paper the
+// comparison is slippage only; fees join it on live (#1884, 2026-10-01)
+function comparedCost(
+  cost: LegCost | undefined,
+  mode: BrokerMode,
+): { readonly realised: number; readonly modelled: number } {
+  if (cost === undefined) return { realised: 0, modelled: 0 };
+  const withFees = mode === 'live';
+  return {
+    realised: cost.realisedSlippageGbp + (withFees ? cost.realisedFeeGbp : 0),
+    modelled: cost.modelledSlippageGbp + (withFees ? cost.modelledFeeGbp : 0),
+  };
 }
 
 export function costVerdict(ratio: number | undefined): CostVerdict {
@@ -310,14 +319,19 @@ function emptyCounts(): Record<Fidelity, number> {
   };
 }
 
-function sampleOf(offsetBps: CostSample['offsetBps'], rows: readonly CostRow[]): CostSample {
+function sampleOf(
+  offsetBps: CostSample['offsetBps'],
+  rows: readonly CostRow[],
+  mode: BrokerMode,
+): CostSample {
   const counts = emptyCounts();
   let realisedGbp = 0;
   let modelledGbp = 0;
   for (const row of rows) {
     counts[row.fidelity] += 1;
-    realisedGbp += totalCost(row.cost, 'realised');
-    modelledGbp += totalCost(row.cost, 'modelled');
+    const compared = comparedCost(row.cost, mode);
+    realisedGbp += compared.realised;
+    modelledGbp += compared.modelled;
   }
   const ratio = modelledGbp > 0 ? realisedGbp / modelledGbp : undefined;
   return { offsetBps, counts, realisedGbp, modelledGbp, ratio, verdict: costVerdict(ratio) };
@@ -327,14 +341,16 @@ export function costFidelityReport(
   orders: readonly BrokerOrder[],
   market: MarketData,
   quoteFill: QuoteFill,
+  mode: BrokerMode,
 ): CostFidelityReport {
   const rows = orders.flatMap((order) => rowsOf(market, order, quoteFill));
   const byOffset = new Map<CostSample['offsetBps'], CostRow[]>();
   for (const row of rows)
     byOffset.set(row.offsetBps, [...(byOffset.get(row.offsetBps) ?? []), row]);
   return {
+    mode,
     rows,
-    samples: [...byOffset].map(([offsetBps, sampleRows]) => sampleOf(offsetBps, sampleRows)),
+    samples: [...byOffset].map(([offsetBps, sampleRows]) => sampleOf(offsetBps, sampleRows, mode)),
   };
 }
 
@@ -347,21 +363,24 @@ function gbp(value: number): string {
   return `£${value.toFixed(2)}`;
 }
 
-function sampleLines(sample: CostSample): readonly string[] {
+function basisLabel(mode: BrokerMode): string {
+  return mode === 'live' ? 'slippage and fees' : 'slippage only';
+}
+
+function sampleLines(sample: CostSample, mode: BrokerMode): readonly string[] {
   const { counts } = sample;
   const ratio = sample.ratio === undefined ? 'n/a' : sample.ratio.toFixed(3);
   return [
-    `${offsetLabel(sample.offsetBps)}: ${counts.match} legs scored, realised ${gbp(sample.realisedGbp)}, modelled ${gbp(sample.modelledGbp)}, ratio ${ratio}, ${sample.verdict.toUpperCase()} (±${COST_TOLERANCE * 100}%)`,
+    `${offsetLabel(sample.offsetBps)}: ${counts.match} legs scored, realised ${gbp(sample.realisedGbp)}, modelled ${gbp(sample.modelledGbp)}, ratio ${ratio}, ${sample.verdict.toUpperCase()} (±${COST_TOLERANCE * 100}%, ${basisLabel(mode)})`,
     `  fidelity: bar mismatch ${counts.bar_mismatch}, broker only ${counts.broker_only}, simulator only ${counts.sim_only}, both unfilled ${counts.both_unfilled}, pending ${counts.pending}`,
   ];
 }
 
-function rowLine(row: CostRow): string {
+function rowLine(row: CostRow, mode: BrokerMode): string {
   const head = `${row.clientOrderId} ${row.leg} ${row.fidelity}`;
   const { cost } = row;
   if (cost === undefined) return head;
-  const realised = cost.realisedSlippageGbp + cost.realisedFeeGbp;
-  const modelled = cost.modelledSlippageGbp + cost.modelledFeeGbp;
+  const { realised, modelled } = comparedCost(cost, mode);
   const deltaBps = ((realised - modelled) / cost.notionalGbp) * 10_000;
   return `${head} realised ${gbp(cost.realisedSlippageGbp)} + fee ${gbp(cost.realisedFeeGbp)}, modelled ${gbp(cost.modelledSlippageGbp)} + fee ${gbp(cost.modelledFeeGbp)}, delta ${deltaBps.toFixed(1)} bps`;
 }
@@ -369,8 +388,8 @@ function rowLine(row: CostRow): string {
 export function formatCostFidelityReport(report: CostFidelityReport): string {
   if (report.rows.length === 0) return 'no broker orders in the window';
   return [
-    ...report.samples.flatMap(sampleLines),
+    ...report.samples.flatMap((sample) => sampleLines(sample, report.mode)),
     'per order leg:',
-    ...report.rows.map(rowLine),
+    ...report.rows.map((row) => rowLine(row, report.mode)),
   ].join('\n');
 }

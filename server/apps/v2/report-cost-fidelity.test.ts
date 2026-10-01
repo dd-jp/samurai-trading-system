@@ -241,10 +241,11 @@ describe('reportCostFidelity', () => {
       barRoot: join(dir, 'bars'),
       from: '2026-09-01',
       to: '2026-09-30',
+      mode: 'paper',
     });
     expect(text.split('\n')).toEqual([
       expect.stringMatching(
-        /^0 bps offset: 1 legs scored, realised £0\.00, modelled £[\d.]+, ratio 0\.000, FAIL/,
+        /^0 bps offset: 1 legs scored, realised £0\.00, modelled £[\d.]+, ratio 0\.000, FAIL \(±25%, slippage only\)$/,
       ),
       '  fidelity: bar mismatch 0, broker only 0, simulator only 0, both unfilled 0, pending 0',
       'per order leg:',
@@ -267,7 +268,13 @@ describe('reportCostFidelity', () => {
     };
     await expect(
       reportCostFidelity(
-        { storePath, barRoot: join(scratch(), 'none', '\0'), from: '0', to: '9' },
+        {
+          storePath,
+          barRoot: join(scratch(), 'none', '\0'),
+          from: '0',
+          to: '9',
+          mode: 'paper',
+        },
         open,
       ),
     ).rejects.toThrow();
@@ -276,7 +283,7 @@ describe('reportCostFidelity', () => {
 });
 
 describe('main', () => {
-  it('defaults to the paper store, the bar store and the whole journal', async () => {
+  it('defaults to the paper store, the bar store, the whole journal and paper costs', async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];
     const code = await main(
@@ -296,6 +303,7 @@ describe('main', () => {
           barRoot: 'data/bars/parquet',
           from: '0000-01-01',
           to: '9999-12-31',
+          mode: 'paper',
         },
       ],
     ]);
@@ -309,6 +317,23 @@ describe('main', () => {
       (inputs) => Promise.reject(new Error(`no ${inputs.storePath} ${inputs.from}..${inputs.to}`)),
     );
     expect([code, lines]).toEqual([1, ['no store.sqlite 2026-09-01..2026-09-30']]);
+  });
+
+  it('passes live through and refuses any other broker mode', async () => {
+    const modes: string[] = [];
+    const lines: string[] = [];
+    const record = async (inputs: { readonly mode: string }) => {
+      modes.push(inputs.mode);
+      return 'report';
+    };
+    const live = await main(['s', 'b', 'f', 't', 'live'], (line) => lines.push(line), record);
+    const bad = await main(['s', 'b', 'f', 't', 'sim'], (line) => lines.push(line), record);
+    expect([live, bad, modes, lines]).toEqual([
+      0,
+      1,
+      ['live'],
+      ['report', 'broker mode must be paper or live, got sim'],
+    ]);
   });
 
   it('prints a non-Error rejection as text', async () => {
