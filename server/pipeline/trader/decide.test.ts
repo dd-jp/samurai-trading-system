@@ -26,6 +26,7 @@ import {
   decide,
   decideWithReason,
   type ExitCheckInput,
+  hasLots,
   mostRecentOpenLot,
 } from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
@@ -2468,6 +2469,11 @@ describe('decide — exact reasons, details and metadata', () => {
 
     expect(mostRecentOpenLot([newer, older])).toBe(newer);
     expect(mostRecentOpenLot([older, twin])).toBe(older);
+  });
+
+  it('counts a lot list as held only when it has at least one lot', () => {
+    expect(hasLots([])).toBe(false);
+    expect(hasLots([openPosition()])).toBe(true);
   });
 
   it('names the non-positive flatten window and grace exactly', async () => {

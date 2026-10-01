@@ -36,6 +36,12 @@ import type {
   TraderSkipReason,
 } from './types.js';
 
+type HeldLots = [OpenPosition, ...OpenPosition[]];
+
+export function hasLots(positions: OpenPosition[]): positions is HeldLots {
+  return positions.length > 0;
+}
+
 export function mostRecentOpenLot(positions: readonly OpenPosition[]): OpenPosition {
   return positions.reduce((latest, lot) => (lot.opened_at > latest.opened_at ? lot : latest));
 }
@@ -279,7 +285,7 @@ async function buildBracket(
 
 async function buildExitIntent(
   input: TraderInput,
-  positions: OpenPosition[],
+  positions: HeldLots,
   exitKind: ExitKind,
 ): Promise<TraderOutcome> {
   const { debate } = input;
@@ -304,7 +310,7 @@ interface ExitAttribution {
 
 async function readExitPrice(
   input: Pick<TraderInput, 'instrument' | 'marketData' | 'onUnpricedFlatten'>,
-  positions: OpenPosition[],
+  lotAssetClass: AssetClass,
   exitReason: ExitReason,
   asOf: Date,
 ): Promise<{ price: number; asset_class: AssetClass; unpriced: boolean }> {
@@ -313,8 +319,7 @@ async function readExitPrice(
     const mark = await marketData.getMark(instrument, asOf);
     return { price: mark.price, asset_class: mark.asset_class, unpriced: false };
   } catch (error) {
-    const lotAssetClass = positions[0]?.asset_class;
-    if (exitReason !== 'flatten' || lotAssetClass === undefined) throw error;
+    if (exitReason !== 'flatten') throw error;
 
     const reason = describeThrownSafely(error);
     try {
@@ -389,7 +394,7 @@ async function buildFlattenExit(
     TraderInput,
     'arm' | 'clock' | 'config' | 'exitFillSizes' | 'instrument' | 'marketData' | 'onUnpricedFlatten'
   >,
-  positions: OpenPosition[],
+  positions: HeldLots,
   decisionBar: Date,
   attribution: ExitAttribution,
   exitKind: ExitKind,
@@ -398,11 +403,8 @@ async function buildFlattenExit(
   const { clock, config, exitFillSizes, instrument } = input;
   const arm = input.arm ?? 'live';
 
-  const existingSide = positions[0]?.side;
-  if (existingSide === undefined) {
-    throw new Error('buildFlattenExit: positions must be non-empty');
-  }
-  const closingSide = existingSide === 'buy' ? 'sell' : 'buy';
+  const [firstLot] = positions;
+  const closingSide = firstLot.side === 'buy' ? 'sell' : 'buy';
   const held = await heldQuantitiesFor(positions, exitFillSizes);
 
   if (held.some((lot) => lot.held < 0)) return skip('exit_held_quantity_diverged');
@@ -411,7 +413,7 @@ async function buildFlattenExit(
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
   const asOf = clock.now();
-  const priced = await readExitPrice(input, positions, exitReason, asOf);
+  const priced = await readExitPrice(input, firstLot.asset_class, exitReason, asOf);
 
   return emit(
     {
@@ -449,7 +451,6 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
   exit_held_quantity_diverged: 'input_unusable',
   flatten_in_flight: 'declined_on_signal',
   early_exit_signal_unavailable: 'input_unusable',
-  no_position_side: 'input_unusable',
   atr_insufficient_bars: 'input_unusable',
   atr_not_finite: 'input_unusable',
   mark_not_finite: 'input_unusable',
@@ -543,7 +544,6 @@ function entryFromFlat(
   return buildBracket(input, direction, 'entry', diagnostics);
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: position-state routing where branch ORDER is the safety property (flat-by-close must precede every other holding branch, see comment below) — extracting risks silently reordering a branch
 async function routeDecision(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],
@@ -552,22 +552,18 @@ async function routeDecision(
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
 
-  if (positions.length === 0) return entryFromFlat(input, diagnostics);
+  if (!hasLots(positions)) return entryFromFlat(input, diagnostics);
 
-  const existingSide = positions[0]?.side;
-  if (existingSide === undefined) return skip('no_position_side');
+  const [{ side: existingSide, asset_class: positionAssetClass }] = positions;
 
-  const positionAssetClass = positions[0]?.asset_class;
-  if (positionAssetClass !== undefined) {
-    const flattenWindow = withinFlattenWindow(input, positionAssetClass);
-    if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
-    if (flattenWindow.within) {
-      if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
-      return buildExitIntent(input, positions, {
-        reason: 'flatten',
-        session_close: flattenWindow.enforcing_close,
-      });
-    }
+  const flattenWindow = withinFlattenWindow(input, positionAssetClass);
+  if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
+  if (flattenWindow.within) {
+    if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
+    return buildExitIntent(input, positions, {
+      reason: 'flatten',
+      session_close: flattenWindow.enforcing_close,
+    });
   }
 
   if (debate.direction === 'neutral' || !debate.converged) {
@@ -624,7 +620,7 @@ function classifyExitCheckSkip(skip_reason: TraderSkipReason): TraderDecisionCla
 }
 
 type ExitPositionContext = {
-  positions: OpenPosition[];
+  positions: HeldLots;
   existingSide: OpenPosition['side'];
   positionAssetClass: AssetClass;
 };
@@ -635,14 +631,9 @@ async function resolveExitPositionContext(
   const { instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
-  if (positions.length === 0) return { ok: false, outcome: skip('no_open_position') };
+  if (!hasLots(positions)) return { ok: false, outcome: skip('no_open_position') };
 
-  const existingSide = positions[0]?.side;
-  if (existingSide === undefined) return { ok: false, outcome: skip('no_position_side') };
-
-  const positionAssetClass = positions[0]?.asset_class;
-  if (positionAssetClass === undefined) return { ok: false, outcome: skip('no_position_side') };
-
+  const [{ side: existingSide, asset_class: positionAssetClass }] = positions;
   return { ok: true, context: { positions, existingSide, positionAssetClass } };
 }
 
