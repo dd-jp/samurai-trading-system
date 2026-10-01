@@ -21,6 +21,7 @@
     "v2:capital": "tsx server/apps/v2/set-capital.ts",
     "v2:entry-offsets": "tsx server/apps/v2/report-entry-offsets.ts",
     "v2:cost-fidelity": "tsx server/apps/v2/report-cost-fidelity.ts",
+    "v2:replay": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/replay-cli.ts",
     "v2:backup": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/backup-cli.ts backup",
     "v2:restore": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/backup-cli.ts restore",
     "v2:dashboard": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/api/main.ts",

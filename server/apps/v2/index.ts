@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import type { BrokerMode, CfdCosts, Sleeve } from '../../../contracts/index.js';
+import type { BrokerMode, CfdCosts, Sleeve, Venue } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -42,6 +42,7 @@ import {
   parseBoeGbpUsdCsv,
   SqliteNewsLedger,
   TABLE_VENUE_SESSIONS,
+  type VenueRouter,
   type VenueSessionGate,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
@@ -250,7 +251,9 @@ export function halfSpreadLookup(
   return (instrument) => spreads.get(instrument) ?? DEFAULT_HALF_SPREAD_BPS;
 }
 
-function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => readonly string[] {
+export function constituentsFromCsv(
+  options: Pick<V2RootOptions, 'constituentsPath'>,
+): (tradingDate: string) => readonly string[] {
   const csv = readFileSync(options.constituentsPath ?? CONSTITUENTS_PATH, 'utf8');
   return (tradingDate) => currentConstituents(csv, tradingDate);
 }
@@ -302,7 +305,7 @@ function storePathFor(options: V2RootOptions): string {
   return options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH);
 }
 
-function barsSourceFor(options: V2RootOptions): {
+export function barsSourceFor(options: Pick<V2RootOptions, 'bars' | 'barStoreRoot'>): {
   bars: BarsSource;
   prime: () => Promise<void>;
 } {
@@ -348,7 +351,10 @@ function journalLseLegRefusal(
   });
 }
 
-function cfdCatalogueFor(options: V2RootOptions, logger: Logger): CfdCatalogue | undefined {
+export function cfdCatalogueFor(
+  options: Pick<V2RootOptions, 'cfdCatalogue' | 'cfdCataloguePath'>,
+  logger: Logger,
+): CfdCatalogue | undefined {
   if (options.cfdCatalogue !== undefined) return options.cfdCatalogue;
   try {
     return loadCfdCatalogue(options.cfdCataloguePath ?? CFD_CATALOGUE_PATH);
@@ -391,6 +397,43 @@ function lastMarkedDate(books: Pick<PaperBooks, 'ids' | 'lastDay'>): string | un
   return latest;
 }
 
+export function venueRouterFor(
+  catalogue: CfdCatalogue | undefined,
+  entryRefusal: () => string | undefined,
+): VenueRouter {
+  return createVenueRouter({
+    catalogue,
+    entryRefusal,
+    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  });
+}
+
+export interface DecisionSleeveInputs {
+  readonly panel: LlmPanel;
+  readonly bars: BarsSource;
+  readonly constituents: (tradingDate: string) => readonly string[];
+  readonly market: BarsMarketData;
+  readonly news: NewsSource;
+  readonly clock: Clock;
+  readonly logger: Logger;
+  readonly router: VenueRouter;
+  readonly lseLegRefusal: string | undefined;
+}
+
+function venueOf(symbol: string): Venue {
+  return isLseInstrument(symbol) ? 'saxo' : 'alpaca';
+}
+
+export function decisionSleeves(inputs: DecisionSleeveInputs): Sleeve[] {
+  const { panel, news, clock, logger, ...technical } = inputs;
+  const shared = { ...technical, venueFor: venueOf };
+  return [
+    createDebateSleeve({ ...shared, panel, news, clock, logger }),
+    createArm2Sleeve({ ...shared, clock }),
+    createSignalsSleeve(),
+  ].map((sleeve) => withoutRefusedLse(sleeve, inputs.lseLegRefusal));
+}
+
 export async function recordingRefusedCycle<T>(
   faults: Pick<FaultLedger, 'record'>,
   tradingDate: string,
@@ -431,38 +474,19 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     bars,
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
-  const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
   const cfdGate = cfdGateFor(options);
   const catalogue = cfdCatalogueFor(options, logger);
-  const router = createVenueRouter({
-    catalogue,
-    entryRefusal: cfdGate,
-    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  const sleeves = decisionSleeves({
+    panel,
+    bars,
+    constituents,
+    market,
+    news,
+    clock,
+    logger,
+    router: venueRouterFor(catalogue, cfdGate),
+    lseLegRefusal: options.lseLegRefusal,
   });
-  const sleeves = [
-    createDebateSleeve({
-      panel,
-      bars,
-      constituents,
-      venueFor,
-      router,
-      market,
-      news,
-      clock,
-      logger,
-      lseLegRefusal: options.lseLegRefusal,
-    }),
-    createArm2Sleeve({
-      bars,
-      constituents,
-      venueFor,
-      router,
-      market,
-      clock,
-      lseLegRefusal: options.lseLegRefusal,
-    }),
-    createSignalsSleeve(),
-  ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
   const cycle = composeCycle({
