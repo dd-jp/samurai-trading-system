@@ -72,9 +72,11 @@ const CSV_COLUMNS = [
 
 type CsvCell = string | number | boolean | null;
 
+const CSV_QUOTED = ['"', ',', '\n'];
+
 function csvField(value: CsvCell): string {
   const text = value === null ? '' : String(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  return CSV_QUOTED.some((char) => text.includes(char)) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 function csvLine(cells: Partial<Record<(typeof CSV_COLUMNS)[number], CsvCell>>): string {

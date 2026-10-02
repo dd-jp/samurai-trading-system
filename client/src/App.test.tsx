@@ -45,7 +45,12 @@ describe('App', () => {
       '/api/v2/journal': JOURNAL,
       '/api/v2/research': research(),
       '/api/v2/reconcile': { contract_version: JOURNAL.contract_version, reconcile: {} },
-      '/api/v2/tax': { contract_version: JOURNAL.contract_version, year: null, disposals: {} },
+      '/api/v2/tax': {
+        contract_version: JOURNAL.contract_version,
+        year: 2026,
+        years: [],
+        disposals: { status: 'empty' },
+      },
     };
     const fetchImpl = vi
       .fn<typeof fetch>()
