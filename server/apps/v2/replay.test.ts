@@ -22,6 +22,7 @@ import { guardedStore, openReadOnlyStore, openSharedStore } from '../../shared/s
 import type { NewsSource, VenueSessionGate } from './data/index.js';
 import { AlpacaNewsSource, MarketauxNewsSource, SqliteNewsLedger } from './data/index.js';
 import { composeV2Root } from './index.js';
+import type { InputDigest } from './input-digest.js';
 import {
   compareDecision,
   type Divergence,
@@ -258,7 +259,63 @@ describe('replayFromFiles', () => {
     },
   );
 
-  it('names changed bars as an inputs hash divergence before the requests they change', async () => {
+  it('journals one digest per name the cycle read and one for the catalogue', () => {
+    const db = openReadOnlyStore(options.storePath);
+    try {
+      const rows = db
+        .prepare('SELECT input, name, row_count, last_bar_date, sha256 FROM v2_input_digests')
+        .all() as { input: string; name: string; row_count: number | null; sha256: string }[];
+      const keys = rows.map((row) => `${row.input}:${row.name}`);
+      expect(new Set(keys).size).toBe(keys.length);
+      expect(keys).toEqual(
+        expect.arrayContaining([
+          'bars:ISF',
+          'bars:MISSING',
+          'bars:SPY',
+          'bars:UP',
+          'cfd_catalogue:saxo-cfd-catalogue',
+        ]),
+      );
+      expect(rows.find((row) => row.name === 'MISSING')?.row_count).toBe(0);
+      expect(rows.find((row) => row.name === 'UP')).toMatchObject({
+        row_count: 260,
+        last_bar_date: dateAt(259),
+      });
+      expect(rows.find((row) => row.input === 'cfd_catalogue')?.sha256).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('journals no digest from a re-run the marked day skips', async () => {
+    const { storePath } = tamperedCopy(
+      'before-digests',
+      'DROP TRIGGER v2_input_digests_no_delete; DELETE FROM v2_input_digests;',
+    );
+    const rerun = composeV2Root({
+      tradingDate: TRADING_DATE,
+      dryRun: true,
+      storePath,
+      barStoreRoot: options.barStoreRoot,
+      fxPath: options.fxPath,
+      spreadsPath: options.spreadsPath,
+      cfdCataloguePath: options.cfdCataloguePath,
+      clock: new SimulatedClock(new Date(`${TRADING_DATE}T09:00:00.000Z`)),
+      logger: { log: () => {} },
+      venueSessions: OPEN_EVERY_DAY,
+      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer),
+    });
+    try {
+      expect(await rerun.run()).toMatchObject({ skipped: true });
+      expect(rerun.db.prepare('SELECT COUNT(*) AS n FROM v2_input_digests').get()).toEqual({
+        n: 0,
+      });
+    } finally {
+      rerun.close();
+    }
+  });
+
+  it('names a rewritten bar window as an input change before any decision divergence', async () => {
     const barStoreRoot = join(directory, 'revised-parquet');
     const revised = await ParquetBarStore.open(barStoreRoot);
     const bars = rising().map((bar, index) =>
@@ -270,12 +327,31 @@ describe('replayFromFiles', () => {
     ]);
     revised.close();
     const result = await replayFromFiles({ ...options, barStoreRoot });
-    expect(result.divergences[0]).toMatchObject({
+    const changes = result.divergences.filter((entry) => entry.kind === 'input_changed_since');
+    expect(changes).toEqual([
+      expect.objectContaining({
+        tradingDate: TRADING_DATE,
+        journalled: expect.objectContaining({ input: 'bars', name: 'UP', row_count: 260 }),
+        current: expect.objectContaining({ input: 'bars', name: 'UP', row_count: 260 }),
+      }),
+    ]);
+    expect(result.divergences[0]).toBe(changes[0]);
+    expect(result.divergences[1]).toMatchObject({
       kind: 'decision_field',
       instrument: 'UP',
       field: 'inputs_hash',
     });
-    expect(result.divergences.some((entry) => entry.kind === 'llm_request')).toBe(true);
+  });
+
+  it('names a catalogue written since the day as an input change', async () => {
+    const cfdCataloguePath = join(directory, 'written-later.json');
+    writeFileSync(cfdCataloguePath, JSON.stringify({ asOf: TRADING_DATE, instruments: [] }));
+    const result = await replayFromFiles({ ...options, cfdCataloguePath });
+    expect(result.divergences[0]).toMatchObject({
+      kind: 'input_changed_since',
+      journalled: { input: 'cfd_catalogue', sha256: null },
+      current: { input: 'cfd_catalogue', sha256: digestOf(cfdCataloguePath), as_of: TRADING_DATE },
+    });
   });
 
   it('reports a day with no journalled decision', async () => {
@@ -678,6 +754,26 @@ describe('journalledLseRefusal', () => {
   });
 });
 
+const BARS_DIGEST: InputDigest = {
+  input: 'bars',
+  name: 'UP',
+  sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  first_bar_date: '2026-09-28',
+  last_bar_date: '2026-09-29',
+  row_count: 2,
+  as_of: null,
+};
+
+const CATALOGUE_DIGEST: InputDigest = {
+  input: 'cfd_catalogue',
+  name: 'saxo-cfd-catalogue',
+  sha256: 'd'.repeat(64),
+  first_bar_date: null,
+  last_bar_date: null,
+  row_count: null,
+  as_of: '2026-09-29',
+};
+
 describe('formatReplay', () => {
   const result = (divergences: Divergence[]): ReplayResult => ({
     tradingDate: '2026-09-30',
@@ -708,6 +804,33 @@ describe('formatReplay', () => {
       'no debate or arm 2 decision and no mark is journalled for 2026-09-30',
     ],
     [{ kind: 'decision_missing', bookId: 'b', instrument: 'UP' }, 'b UP: journalled, not replayed'],
+    [
+      {
+        kind: 'input_changed_since',
+        tradingDate: '2026-09-30',
+        journalled: { ...BARS_DIGEST, sha256: 'a'.repeat(64) },
+        current: { ...BARS_DIGEST, sha256: 'b'.repeat(64) },
+      },
+      'UP: bars changed since 2026-09-30\n  journalled: sha256 aaaaaaaaaaaa, 2 bars 2026-09-28..2026-09-29\n  current:    sha256 bbbbbbbbbbbb, 2 bars 2026-09-28..2026-09-29',
+    ],
+    [
+      {
+        kind: 'input_changed_since',
+        tradingDate: '2026-09-30',
+        journalled: { ...BARS_DIGEST, row_count: 0, first_bar_date: null, last_bar_date: null },
+        current: { ...CATALOGUE_DIGEST, sha256: null, as_of: null },
+      },
+      '  journalled: sha256 e3b0c44298fc, 0 bars -..-\n  current:    absent, asOf -',
+    ],
+    [
+      {
+        kind: 'input_changed_since',
+        tradingDate: '2026-09-30',
+        journalled: CATALOGUE_DIGEST,
+        current: { ...CATALOGUE_DIGEST, sha256: 'c'.repeat(64) },
+      },
+      'saxo-cfd-catalogue: cfd_catalogue changed since 2026-09-30\n  journalled: sha256 dddddddddddd, asOf 2026-09-29',
+    ],
     [
       {
         kind: 'book_state',

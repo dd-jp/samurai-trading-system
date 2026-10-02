@@ -179,6 +179,25 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_input_digests',
+    seed: `INSERT INTO v2_input_digests (digest_id, trading_date, input, name, sha256, first_bar_date, last_bar_date, row_count, recorded_at)
+      VALUES (1, '2026-10-01', 'bars', 'UP', 'aaa', '2026-01-01', '2026-09-30', 10, '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same digest_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_input_digests (digest_id, trading_date, input, name, sha256, first_bar_date, last_bar_date, row_count, recorded_at)
+          VALUES (1, '2026-10-01', 'bars', 'UPX', 'bbb', '2026-01-01', '2026-09-30', 10, '2026-10-01T08:00:00.000Z')`,
+      },
+      {
+        name: 'same trading_date, input and name under a new id',
+        outcome: 'ignored',
+        sql: `INSERT OR REPLACE INTO v2_input_digests (trading_date, input, name, sha256, first_bar_date, last_bar_date, row_count, recorded_at)
+          VALUES ('2026-10-01', 'bars', 'UP', 'bbb', '2026-01-01', '2026-09-30', 10, '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_splits',
     seed: `INSERT INTO v2_splits (instrument, venue, split_date, ratio, trading_date, recorded_at)
       VALUES ('NVDA', 'alpaca', '2026-09-30', 4, '2026-10-01', '2026-10-01T07:00:00.000Z')`,

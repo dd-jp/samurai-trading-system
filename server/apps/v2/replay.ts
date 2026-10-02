@@ -24,6 +24,7 @@ import {
 } from './data/index.js';
 import { brokerAccessFor } from './execution/index.js';
 import { decisionSleeves, quotedBorrowPerDayFrom, venueRouterFor } from './index.js';
+import { type InputChange, type InputDigest, inputChangesSince } from './input-digest.js';
 import { storeView } from './reconcile.js';
 import {
   type BookDivergence,
@@ -79,6 +80,7 @@ export interface JournalledDecision {
 
 export type Divergence =
   | { readonly kind: 'nothing_to_replay'; readonly tradingDate: string }
+  | ({ readonly kind: 'input_changed_since'; readonly tradingDate: string } & InputChange)
   | {
       readonly kind: 'decision_field';
       readonly bookId: string;
@@ -396,6 +398,9 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
       divergences: [{ kind: 'nothing_to_replay', tradingDate }],
     };
   }
+  const changed = inputChangesSince(db, tradingDate, inputs.bars, inputs.catalogue).map(
+    (change): Divergence => ({ kind: 'input_changed_since', tradingDate, ...change }),
+  );
   const log = new ReplayLog(calls);
   const replayed = new Map<string, readonly SleeveDecision[]>();
   const sleeves = replaySleeves(inputs, log, calls).map((sleeve) => capturing(sleeve, replayed));
@@ -414,7 +419,7 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
       decisions: rows.length,
       calls: calls.length,
       ...counts,
-      divergences: [...state, ...divergencesOf(rows, replayed, log, trading)],
+      divergences: [...changed, ...state, ...divergencesOf(rows, replayed, log, trading)],
     };
   } finally {
     copy.close();
@@ -455,6 +460,13 @@ function describeMiss(miss: ReplayMiss, redact: Redact): string {
   ].join('\n');
 }
 
+function describeDigest(digest: InputDigest): string {
+  const content = digest.sha256 === null ? 'absent' : `sha256 ${digest.sha256.slice(0, 12)}`;
+  return digest.input === 'bars'
+    ? `${content}, ${digest.row_count} bars ${digest.first_bar_date ?? '-'}..${digest.last_bar_date ?? '-'}`
+    : `${content}, asOf ${digest.as_of ?? '-'}`;
+}
+
 type DescriberOf = {
   readonly [K in Divergence['kind']]: (
     divergence: Extract<Divergence, { kind: K }>,
@@ -465,6 +477,12 @@ type DescriberOf = {
 const DESCRIBERS: DescriberOf = {
   nothing_to_replay: (divergence) =>
     `no debate or arm 2 decision and no mark is journalled for ${divergence.tradingDate}`,
+  input_changed_since: ({ tradingDate, journalled, current }) =>
+    [
+      `${journalled.name}: ${journalled.input} changed since ${tradingDate}`,
+      `  journalled: ${describeDigest(journalled)}`,
+      `  current:    ${describeDigest(current)}`,
+    ].join('\n'),
   decision_field: (divergence) =>
     [
       `${divergence.bookId} ${divergence.instrument}: ${divergence.field} differs`,
