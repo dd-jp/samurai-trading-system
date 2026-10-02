@@ -2501,8 +2501,10 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
         filled_qty: 4,
       });
     };
+    deps.setDecisions([longAapl]);
     await runCycle(deps, '2026-09-28');
     expect(alpaca.cancelled).not.toContain(ENTRY);
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([ENTRY]);
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
         level: 'warn',
