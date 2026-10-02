@@ -80,6 +80,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'v2_heartbeat_pings',
     'v2_splits',
     'v2_input_digests',
+    'v2_rescales',
   ],
   verdict: ['verdict_log'],
 };

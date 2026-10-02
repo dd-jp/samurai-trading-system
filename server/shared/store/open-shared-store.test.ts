@@ -69,13 +69,14 @@ const TABLES = [
   'v2_heartbeat_pings',
   'v2_splits',
   'v2_input_digests',
+  'v2_rescales',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 56;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 57;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 86;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 87;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -540,6 +541,55 @@ describe('openSharedStore', () => {
       );
       expect(() => raw.prepare('DELETE FROM v2_fills').run()).toThrow('v2_fills is append-only');
       expect(() => raw.prepare("UPDATE v2_orders SET outcome = 'cancelled'").run()).not.toThrow();
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0087 leaves a legacy fill undated and journals rescales append-only (#1983)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 86;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+           leg, side, dry_run, outcome, payload, recorded_at)
+           VALUES ('o1', NULL, 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry', 'buy', 0,
+             'submitted', '{}', '2026-09-29T07:00:00.000Z');
+         INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+           side, qty, price_gbp, fee_gbp, recorded_at)
+           VALUES ('alpaca:f1', 'o1', 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry', 'buy',
+             3, 80, 0.1, '2026-09-29T14:30:00.000Z');`,
+      );
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(raw.prepare('SELECT filled_at FROM v2_fills').all()).toEqual([{ filled_at: null }]);
+      const rescale = (ratio: number, source = 'detector') =>
+        raw
+          .prepare(
+            `INSERT INTO v2_rescales (trading_date, book_id, instrument, source, ratio, anchor_date,
+               fills_before, qty_before, qty_after, entry_before, entry_after, recorded_at)
+             VALUES ('2026-10-02', 'debate/primary', 'AAPL', ?, ?, '2026-10-01', 1, 3, 6, 80, 40,
+               '2026-10-02T07:00:00.000Z')`,
+          )
+          .run(source, ratio);
+      rescale(2);
+      expect(raw.prepare('SELECT rescale_id, ratio, qty_after FROM v2_rescales').all()).toEqual([
+        { rescale_id: 1, ratio: 2, qty_after: 6 },
+      ]);
+      expect(() => raw.prepare('UPDATE v2_rescales SET ratio = 4').run()).toThrow(
+        'v2_rescales is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_rescales').run()).toThrow(
+        'v2_rescales is append-only',
+      );
+      expect(() => rescale(0)).toThrow(/CHECK constraint/);
+      expect(() => rescale(2, 'guess')).toThrow(/CHECK constraint/);
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

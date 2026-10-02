@@ -547,7 +547,8 @@ describe('decision and fill journal append-only (#1883)', () => {
         .prepare(
           `INSERT OR REPLACE INTO v2_fills SELECT fill_id, client_order_id, book_id, trading_date,
              instrument, venue, leg, side, 1, price_gbp, fee_gbp, recorded_at, currency,
-             price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date FROM v2_fills`,
+             price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date, filled_at
+           FROM v2_fills`,
         )
         .run().changes,
     ).toBe(0);
@@ -643,11 +644,12 @@ describe('tax capture on fills and the split journal (#1947)', () => {
       fx_quote_per_gbp: 1.25,
       fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
       fill_date: '2026-10-01',
+      filled_at: '2026-10-01T19:30:00.000Z',
     });
     expect(
       db
         .prepare(
-          'SELECT currency, price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date FROM v2_fills',
+          'SELECT currency, price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date, filled_at FROM v2_fills',
         )
         .get(),
     ).toEqual({
@@ -657,6 +659,7 @@ describe('tax capture on fills and the split journal (#1947)', () => {
       fx_quote_per_gbp: 1.25,
       fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
       fill_date: '2026-10-01',
+      filled_at: '2026-10-01T19:30:00.000Z',
     });
   });
 
@@ -682,6 +685,89 @@ describe('tax capture on fills and the split journal (#1947)', () => {
     ).toEqual([
       { ...split, recorded_at: '2026-10-02T07:00:00.000Z' },
       { ...split, venue: 'saxo', recorded_at: '2026-10-02T07:00:00.000Z' },
+    ]);
+  });
+
+  it('journals each rescale with the fills already journalled before it, so replay can place it (#1983)', () => {
+    const db = openSharedStore(':memory:');
+    const journal = new Journal(db, clock);
+    const levels = { qty: 10, avgPriceGbp: 400, stopGbp: 380, targetGbp: undefined };
+    const rescale = {
+      trading_date: '2026-10-02',
+      book_id: 'debate/primary',
+      instrument: 'NVDA',
+      source: 'detector' as const,
+      ratio: 4,
+      anchor_date: '2026-10-01',
+      before: levels,
+      after: { qty: 40, avgPriceGbp: 100, stopGbp: 95, targetGbp: undefined },
+    };
+    journal.recordRescale(rescale);
+    journal.recordOrder({
+      client_order_id: 'o1',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-10-01',
+      instrument: 'NVDA',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'submitted',
+      payload: {},
+    });
+    journal.recordFill({
+      fill_id: 'alpaca:f1',
+      client_order_id: 'o1',
+      book_id: 'debate/primary',
+      trading_date: '2026-10-02',
+      instrument: 'NVDA',
+      venue: 'alpaca',
+      leg: 'stop',
+      side: 'sell',
+      qty: 40,
+      price_gbp: 95,
+      fee_gbp: 0,
+      ...CAPTURED,
+    });
+    journal.recordRescale({ ...rescale, source: 'broker', ratio: 1, before: rescale.after });
+    expect(
+      db
+        .prepare(
+          `SELECT rescale_id, trading_date, book_id, instrument, source, ratio, anchor_date,
+             fills_before, qty_before, qty_after, entry_before, entry_after, stop_before,
+             stop_after, target_before, target_after, recorded_at
+           FROM v2_rescales ORDER BY rescale_id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        rescale_id: 1,
+        trading_date: '2026-10-02',
+        book_id: 'debate/primary',
+        instrument: 'NVDA',
+        source: 'detector',
+        ratio: 4,
+        anchor_date: '2026-10-01',
+        fills_before: 0,
+        qty_before: 10,
+        qty_after: 40,
+        entry_before: 400,
+        entry_after: 100,
+        stop_before: 380,
+        stop_after: 95,
+        target_before: null,
+        target_after: null,
+        recorded_at: '2026-10-02T07:00:00.000Z',
+      },
+      expect.objectContaining({
+        rescale_id: 2,
+        source: 'broker',
+        ratio: 1,
+        fills_before: 1,
+        qty_before: 40,
+        stop_before: 95,
+      }),
     ]);
   });
 });

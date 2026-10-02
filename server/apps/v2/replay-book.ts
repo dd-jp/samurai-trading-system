@@ -12,7 +12,7 @@ import { inMemoryCopyOf, type StoreHandle } from '../../shared/store/index.js';
 import { quotePerGbp, type VenueSessionGate } from './data/index.js';
 import { CapitalConfigStore, PaperBooks } from './risk/index.js';
 
-export type ReplayStage = 'book' | 'gate' | 'sizing' | 'orders' | 'fills' | 'marks';
+export type ReplayStage = 'book' | 'gate' | 'sizing' | 'orders' | 'rescales' | 'fills' | 'marks';
 
 export type BookDivergence =
   | {
@@ -53,6 +53,7 @@ const DATED_TABLES = [
   'v2_refusals',
   'v2_reconciles',
   'v2_faults',
+  'v2_rescales',
 ] as const;
 
 const APPEND_ONLY_TRIGGERS = [
@@ -61,6 +62,7 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_reconciles_no_delete',
   'v2_faults_no_delete',
   'v2_controls_no_delete',
+  'v2_rescales_no_delete',
 ] as const;
 
 // An order cancelled after the cut still rested at it; the outcome it rested under follows from
@@ -149,6 +151,16 @@ interface JournalFill {
   readonly client_order_id: string;
   readonly stop: number | null;
   readonly target: number | null;
+  readonly ordinal: number;
+}
+
+interface JournalRescale {
+  readonly book_id: string;
+  readonly trading_date: string;
+  readonly instrument: string;
+  readonly ratio: number;
+  readonly anchor_date: string;
+  readonly fills_before: number;
 }
 
 interface JournalMark {
@@ -186,11 +198,23 @@ function fillsBefore(copy: StoreHandle): JournalFill[] {
     .prepare(
       `SELECT f.book_id, f.trading_date, f.instrument, f.venue, f.leg, f.side, f.qty, f.price_gbp,
          f.fee_gbp, f.client_order_id, json_extract(o.payload, '$.stop') AS stop,
-         json_extract(o.payload, '$.target') AS target
-       FROM v2_fills f JOIN v2_orders o ON o.client_order_id = f.client_order_id
-       ORDER BY f.trading_date, f.rowid`,
+         json_extract(o.payload, '$.target') AS target, f.ordinal
+       FROM (SELECT *, rowid AS seq,
+                    ROW_NUMBER() OVER (PARTITION BY trading_date ORDER BY rowid) - 1 AS ordinal
+               FROM v2_fills) f
+       JOIN v2_orders o ON o.client_order_id = f.client_order_id
+       ORDER BY f.trading_date, f.seq`,
     )
     .all() as JournalFill[];
+}
+
+function rescalesBefore(copy: StoreHandle): JournalRescale[] {
+  return copy
+    .prepare(
+      `SELECT book_id, trading_date, instrument, ratio, anchor_date, fills_before
+       FROM v2_rescales ORDER BY trading_date, rescale_id`,
+    )
+    .all() as JournalRescale[];
 }
 
 function bookFillOf(fill: JournalFill, market: MarketData): BookFill {
@@ -259,15 +283,19 @@ function restorePendingExits(rebuild: BookRebuild): void {
 interface LedgerEvent {
   readonly date: string;
   readonly rank: number;
+  readonly seq: number;
   readonly apply: () => void;
 }
 
 function byDateThenRank(a: LedgerEvent, b: LedgerEvent): number {
-  return a.date === b.date ? a.rank - b.rank : a.date < b.date ? -1 : 1;
+  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+  return a.rank === b.rank ? a.seq - b.seq : a.rank - b.rank;
 }
 
-// A day's fills land before its mark, each in journal order, so cash is rebuilt by the same
-// floating-point operations that produced the journalled cash
+// A day's fills and split rescales land before its mark, in journal order, so cash and
+// positions are rebuilt by the same floating-point operations that produced the journalled ones;
+// a rescale written after n of its day's fills sorts between the day's fill n - 1 (seq 2n - 1)
+// and fill n (seq 2n + 1)
 export function rebuildBooks(rebuild: BookRebuild): void {
   const known = new Set(rebuild.books.ids());
   const previous = new Map<string, string>();
@@ -276,19 +304,35 @@ export function rebuildBooks(rebuild: BookRebuild): void {
     .map((fill) => ({
       date: fill.trading_date,
       rank: 0,
+      seq: 2 * fill.ordinal + 1,
       apply: () => rebuild.books.applyFill(fill.book_id, bookFillOf(fill, rebuild.market)),
+    }));
+  const rescales = rescalesBefore(rebuild.copy)
+    .filter((rescale) => known.has(rescale.book_id))
+    .map((rescale) => ({
+      date: rescale.trading_date,
+      rank: 0,
+      seq: 2 * rescale.fills_before,
+      apply: () =>
+        rebuild.books.applySplit(
+          rescale.book_id,
+          rescale.instrument,
+          rescale.ratio,
+          rescale.anchor_date,
+        ),
     }));
   const marks = marksBefore(rebuild.copy)
     .filter((mark) => known.has(mark.book_id))
     .map((mark) => ({
       date: mark.trading_date,
       rank: 1,
+      seq: 0,
       apply: () => {
         applyMark(rebuild, mark, previous.get(mark.book_id));
         previous.set(mark.book_id, mark.trading_date);
       },
     }));
-  for (const event of [...fills, ...marks].sort(byDateThenRank)) event.apply();
+  for (const event of [...fills, ...rescales, ...marks].sort(byDateThenRank)) event.apply();
   restorePendingExits(rebuild);
 }
 
@@ -410,6 +454,14 @@ const TABLES: readonly TableSpec[] = [
                  WHERE trading_date = @date AND recorded_at <= @end ORDER BY rowid`,
   },
   { stage: 'orders', presence: true, sql: ORDER_SQL },
+  {
+    stage: 'rescales',
+    presence: true,
+    sql: () => `SELECT book_id || '|' || instrument || '|' || source || '|' || anchor_date AS key,
+                  ratio, qty_before, qty_after, entry_before, entry_after, stop_before, stop_after,
+                  target_before, target_after FROM v2_rescales
+                 WHERE trading_date = @date AND recorded_at <= @end ORDER BY rescale_id`,
+  },
   {
     stage: 'fills',
     presence: true,
