@@ -151,6 +151,21 @@ describe('splitRatioAcross', () => {
       expect(reading.ratio).toBe(10);
       expect(reading.rejected).toHaveLength(1);
     });
+
+    it('dates each accepted step on the first bar in the new units, and never a rejected one', () => {
+      const bars = [
+        pricedBar('2026-09-10', 100, 100),
+        pricedBar('2026-09-11', 100 / 9.6, 100 / 1.2),
+        pricedBar('2026-09-14', 100 / 9.6, 100 / 12),
+        pricedBar('2026-09-15', 100 / 9.6, 100 / 12),
+        pricedBar('2026-09-16', 100 / 9.6, 100 / 18),
+      ];
+      expect(splitRatioAcross(bars).steps).toEqual([
+        { date: '2026-09-14', ratio: 10 },
+        { date: '2026-09-16', ratio: 1.5 },
+      ]);
+      expect(splitRatioAcross(bars.slice(0, 2)).steps).toEqual([]);
+    });
   });
 });
 

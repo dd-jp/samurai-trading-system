@@ -25,10 +25,18 @@ export {
   SAXO_CFD_SPREAD,
   saxoCfdBorrow,
 } from './cfd-tariff.js';
-export { parseBoeGbpUsdCsv } from './fx.js';
+export type { DayFix, FxObservation } from './fx.js';
+export {
+  DAY_FIX_MAX_GAP_DAYS,
+  dayFxSource,
+  dayGbpUsd,
+  FX_SOURCE_GBP,
+  parseBoeGbpUsdCsv,
+} from './fx.js';
 export type { MacroGateVerdict } from './macro-calendar.js';
 export { addDays, MACRO_DAY_SIZE_FRACTION, macroGate } from './macro-calendar.js';
-export { BarsMarketData, quotePerGbp } from './market-data.js';
+export type { FillFx } from './market-data.js';
+export { BarsMarketData, fillFxOf, londonDateOf, quotePerGbp } from './market-data.js';
 export { MarketauxClient } from './marketaux-client.js';
 export { MarketauxNewsSource } from './marketaux-news.js';
 export type { HeldInstrument, LastBar, MarkSource } from './marks.js';

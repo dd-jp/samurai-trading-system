@@ -497,6 +497,20 @@ export interface JournalledFill {
   readonly qty: number;
   readonly price_gbp: number;
   readonly fee_gbp: number;
+  readonly currency: string;
+  readonly price_native: number;
+  readonly fee_native: number;
+  readonly fx_quote_per_gbp: number;
+  readonly fx_source: string;
+  readonly fill_date: string | null;
+}
+
+export interface JournalledSplit {
+  readonly instrument: string;
+  readonly venue: string;
+  readonly split_date: string;
+  readonly ratio: number;
+  readonly trading_date: string;
 }
 
 export interface RecordedFillPart {
@@ -531,6 +545,7 @@ export interface DecisionJournal {
   markCancelled(clientOrderId: string, detail: string): void;
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
+  recordSplit(split: JournalledSplit): void;
   recordRefusal(refusal: JournalledRefusal): void;
   recordReconcile(run: JournalledReconcile): void;
 }

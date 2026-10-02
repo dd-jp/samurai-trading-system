@@ -5,6 +5,15 @@ import { openSharedStore } from '../../../shared/store/index.js';
 import { CapitalConfigStore, PaperBooks } from '../risk/index.js';
 import { inputsHash, Journal } from './journal.js';
 
+const CAPTURED = {
+  currency: 'USD',
+  price_native: 100,
+  fee_native: 0,
+  fx_quote_per_gbp: 1.25,
+  fx_source: 'boe-xudluss:year-start:2026',
+  fill_date: null,
+} as const;
+
 const decision: SleeveDecision = {
   sleeve_id: 'debate',
   instrument: 'AAPL',
@@ -100,6 +109,7 @@ describe('Journal', () => {
     expect(journal.orderFor('o1')).toEqual(order);
     expect(journal.orderFor('missing')).toBeUndefined();
     const fill = {
+      ...CAPTURED,
       fill_id: 'alpaca:f1',
       client_order_id: 'o1',
       book_id: 'debate/primary',
@@ -159,6 +169,7 @@ describe('Journal', () => {
     };
     journal.recordFill({
       ...base,
+      ...CAPTURED,
       fill_id: 'alpaca:f1',
       trading_date: '2026-09-25',
       qty: 4,
@@ -166,6 +177,7 @@ describe('Journal', () => {
     });
     journal.recordFill({
       ...base,
+      ...CAPTURED,
       fill_id: 'alpaca:f1#10',
       trading_date: '2026-09-28',
       qty: 6,
@@ -174,6 +186,7 @@ describe('Journal', () => {
     });
     journal.recordFill({
       ...base,
+      ...CAPTURED,
       fill_id: 'alpaca:f10',
       trading_date: '2026-09-25',
       qty: 1,
@@ -181,6 +194,7 @@ describe('Journal', () => {
     });
     journal.recordFill({
       ...base,
+      ...CAPTURED,
       fill_id: 'alpaca:f1x#2',
       trading_date: '2026-09-25',
       qty: 1,
@@ -294,6 +308,7 @@ describe('Journal', () => {
     journal.recordOrder({ ...base, client_order_id: 'exit', leg: 'exit', side: 'sell' });
     journal.recordOrder({ ...base, client_order_id: 'refused', outcome: 'refused_dry_run' });
     journal.recordFill({
+      ...CAPTURED,
       fill_id: 'alpaca:1',
       client_order_id: 'filled',
       book_id: 'debate/primary',
@@ -352,6 +367,7 @@ describe('Journal', () => {
       trading_date: '2026-09-25',
     });
     journal.recordFill({
+      ...CAPTURED,
       fill_id: 'alpaca:sim-filled',
       client_order_id: 'filled',
       book_id: 'debate/primary',
@@ -474,6 +490,7 @@ describe('decision and fill journal append-only (#1883)', () => {
       payload: {},
     });
     const fill = {
+      ...CAPTURED,
       fill_id: 'alpaca:f1',
       client_order_id: 'o1',
       book_id: 'debate/primary',
@@ -529,7 +546,8 @@ describe('decision and fill journal append-only (#1883)', () => {
       db
         .prepare(
           `INSERT OR REPLACE INTO v2_fills SELECT fill_id, client_order_id, book_id, trading_date,
-             instrument, venue, leg, side, 1, price_gbp, fee_gbp, recorded_at FROM v2_fills`,
+             instrument, venue, leg, side, 1, price_gbp, fee_gbp, recorded_at, currency,
+             price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date FROM v2_fills`,
         )
         .run().changes,
     ).toBe(0);
@@ -585,5 +603,85 @@ describe('Journal.latestReconcile (#1941)', () => {
     expect([...alpaca.blocked]).toEqual(['signals/no-veto']);
     const saxo = journal.latestReconcile('2026-09-30', 'saxo');
     expect([...saxo.blocked]).toEqual(['signals/primary']);
+  });
+});
+
+describe('tax capture on fills and the split journal (#1947)', () => {
+  const clock = new SimulatedClock(new Date('2026-10-02T07:00:00.000Z'));
+
+  it('stores the native price, currency, FX rate and source and the fill date of each fill', () => {
+    const db = openSharedStore(':memory:');
+    const journal = new Journal(db, clock);
+    journal.recordOrder({
+      client_order_id: 'o1',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-10-02',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'submitted',
+      payload: {},
+    });
+    journal.recordFill({
+      fill_id: 'alpaca:f1',
+      client_order_id: 'o1',
+      book_id: 'debate/primary',
+      trading_date: '2026-10-02',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      qty: 2,
+      price_gbp: 160,
+      fee_gbp: 0.4,
+      currency: 'USD',
+      price_native: 200,
+      fee_native: 0.5,
+      fx_quote_per_gbp: 1.25,
+      fx_source: 'boe-xudluss:year-start:2026',
+      fill_date: '2026-10-01',
+    });
+    expect(
+      db
+        .prepare(
+          'SELECT currency, price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date FROM v2_fills',
+        )
+        .get(),
+    ).toEqual({
+      currency: 'USD',
+      price_native: 200,
+      fee_native: 0.5,
+      fx_quote_per_gbp: 1.25,
+      fx_source: 'boe-xudluss:year-start:2026',
+      fill_date: '2026-10-01',
+    });
+  });
+
+  it('journals a split once per instrument, venue and date, whichever book sees it first', () => {
+    const db = openSharedStore(':memory:');
+    const journal = new Journal(db, clock);
+    const split = {
+      instrument: 'NVDA',
+      venue: 'alpaca',
+      split_date: '2026-09-30',
+      ratio: 4,
+      trading_date: '2026-10-01',
+    };
+    journal.recordSplit(split);
+    journal.recordSplit({ ...split, trading_date: '2026-10-02' });
+    journal.recordSplit({ ...split, venue: 'saxo' });
+    expect(
+      db
+        .prepare(
+          'SELECT instrument, venue, split_date, ratio, trading_date, recorded_at FROM v2_splits',
+        )
+        .all(),
+    ).toEqual([
+      { ...split, recorded_at: '2026-10-02T07:00:00.000Z' },
+      { ...split, venue: 'saxo', recorded_at: '2026-10-02T07:00:00.000Z' },
+    ]);
   });
 });

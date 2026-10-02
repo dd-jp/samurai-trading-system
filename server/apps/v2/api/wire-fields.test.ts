@@ -11,8 +11,18 @@ import { createFixtureStore, FIXTURE_TRADING_DATE } from './fixture-server.js';
 import { JournalReader } from './journal-reader.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
-import { ReconcileReader, taxWire } from './records.js';
+import { ReconcileReader } from './records.js';
 import { ResearchReader } from './research.js';
+import { TaxReader } from './tax.js';
+
+const CAPTURED = {
+  currency: 'USD',
+  price_native: 100,
+  fee_native: 0,
+  fx_quote_per_gbp: 1.25,
+  fx_source: 'boe-xudluss:year-start:2026',
+  fill_date: null,
+} as const;
 
 type WireType = keyof typeof V2_WIRE_FIELD_NAMES;
 
@@ -160,6 +170,7 @@ describe('the Evidence and Records routes the client reads, served over the seed
       payload: {},
     });
     journal.recordFill({
+      ...CAPTURED,
       fill_id: 'fill-1',
       client_order_id: 'exit-1',
       book_id: 'debate/primary',
@@ -172,6 +183,43 @@ describe('the Evidence and Records routes the client reads, served over the seed
       price_gbp: 300,
       fee_gbp: 0.4,
     });
+    for (const [orderId, side] of [
+      ['vusa-entry', 'buy'],
+      ['vusa-exit', 'sell'],
+    ] as const) {
+      journal.recordOrder({
+        client_order_id: orderId,
+        decision_id: null,
+        book_id: 'debate/primary',
+        trading_date: FIXTURE_TRADING_DATE,
+        instrument: 'VUSA',
+        venue: 'saxo',
+        leg: side === 'buy' ? 'entry' : 'exit',
+        side,
+        dry_run: false,
+        outcome: 'submitted',
+        payload: {},
+      });
+      journal.recordFill({
+        fill_id: `saxo:${orderId}`,
+        client_order_id: orderId,
+        book_id: 'debate/primary',
+        trading_date: FIXTURE_TRADING_DATE,
+        instrument: 'VUSA',
+        venue: 'saxo',
+        leg: side === 'buy' ? 'entry' : 'exit',
+        side,
+        qty: 4,
+        price_gbp: side === 'buy' ? 90 : 95,
+        fee_gbp: 0,
+        currency: 'GBP',
+        price_native: side === 'buy' ? 90 : 95,
+        fee_native: 0,
+        fx_quote_per_gbp: 1,
+        fx_source: 'gbp',
+        fill_date: FIXTURE_TRADING_DATE,
+      });
+    }
     journal.recordRefusal({
       trading_date: FIXTURE_TRADING_DATE,
       scope: 'control',
@@ -256,8 +304,11 @@ describe('the Evidence and Records routes the client reads, served over the seed
     const run = first(served.reconcile.runs);
     expect(keysOf(run)).toEqual(fieldsOf('reconcileRun'));
     expect(keysOf(first(run.diffs))).toEqual(fieldsOf('reconcileDiff'));
-    const tax = taxWire({ year: null, format: 'json' });
+    const tax = new TaxReader(routeDb, clock, []).read({ year: null, format: 'json' });
     expect(keysOf(tax)).toEqual(fieldsOf('tax'));
-    expect(keysOf(tax.disposals)).toEqual(fieldsOf('panel'));
+    if (tax.disposals.status !== 'fed') throw new Error(`tax ${tax.disposals.status}`);
+    expect(keysOf(tax.disposals)).toEqual(fieldsOf('taxLog', true));
+    expect(keysOf(first(tax.disposals.rows))).toEqual(fieldsOf('taxDisposal'));
+    expect(keysOf(first(tax.disposals.held_out))).toEqual(fieldsOf('taxHeldOut'));
   });
 });

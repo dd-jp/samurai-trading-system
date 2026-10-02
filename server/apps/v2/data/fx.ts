@@ -48,3 +48,43 @@ export function yearStartGbpUsd(observations: readonly FxObservation[], year: nu
   if (last === undefined) throw new Error(`fx: no GBPUSD observation on or before ${cutoff}`);
   return last.gbpUsd;
 }
+
+export const FX_SOURCE_GBP = 'gbp';
+
+// BoE publishes no fix on UK bank holidays; Easter and Christmas leave at most four days between
+// fixes, so a longer gap is a hole in the series, not a holiday
+export const DAY_FIX_MAX_GAP_DAYS = 7;
+
+export type DayFix =
+  | { readonly ok: true; readonly gbpUsd: number; readonly fixDate: string }
+  | { readonly ok: false; readonly reason: string };
+
+export function yearStartFxSource(year: number): string {
+  return `boe-xudluss:year-start:${year}`;
+}
+
+export function dayFxSource(fixDate: string): string {
+  return `boe-xudluss:${fixDate}`;
+}
+
+function daysBetween(from: string, to: string): number {
+  return (Date.parse(to) - Date.parse(from)) / 86_400_000;
+}
+
+export function dayGbpUsd(observations: readonly FxObservation[], date: string): DayFix {
+  const last = observations.at(-1);
+  if (last === undefined || last.date < date) {
+    return {
+      ok: false,
+      reason: `BoE XUDLUSS series ends ${last?.date ?? 'empty'}, before ${date}`,
+    };
+  }
+  const fix = observations.findLast((row) => row.date <= date);
+  if (fix === undefined || daysBetween(fix.date, date) > DAY_FIX_MAX_GAP_DAYS) {
+    return {
+      ok: false,
+      reason: `no BoE XUDLUSS fix in the ${DAY_FIX_MAX_GAP_DAYS} days to ${date}`,
+    };
+  }
+  return { ok: true, gbpUsd: fix.gbpUsd, fixDate: fix.date };
+}

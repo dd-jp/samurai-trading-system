@@ -775,6 +775,57 @@ describe('runCycle', () => {
       { leg: 'entry', side: 'buy', price_gbp: 20 / FX, fee_gbp: 0.5 / FX },
       { leg: 'stop', side: 'sell', price_gbp: 19.2 / FX, fee_gbp: 0.5 / FX },
     ]);
+    expect(
+      db
+        .prepare(
+          `SELECT leg, currency, price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date
+           FROM v2_fills WHERE book_id = 'debate/primary' ORDER BY leg`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        leg: 'entry',
+        currency: 'USD',
+        price_native: 20,
+        fee_native: 0.5,
+        fx_quote_per_gbp: FX,
+        fx_source: 'boe-xudluss:year-start:2026',
+        fill_date: '2026-09-25',
+      },
+      {
+        leg: 'stop',
+        currency: 'USD',
+        price_native: 19.2,
+        fee_native: 0.5,
+        fx_quote_per_gbp: FX,
+        fx_source: 'boe-xudluss:year-start:2026',
+        fill_date: '2026-09-25',
+      },
+    ]);
+  });
+
+  it('dates a fill by its London calendar day, not the UTC day or the cycle that books it', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-late-evening'),
+      leg: 'entry',
+      price: 20,
+      qty: 6,
+      fee: 0,
+      timestamp: new Date('2026-09-25T23:30:00.000Z'),
+    });
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { get: () => unknown } } }
+    ).db;
+    expect(db.prepare('SELECT trading_date, fill_date FROM v2_fills').get()).toEqual({
+      trading_date: '2026-09-28',
+      fill_date: '2026-09-26',
+    });
   });
 
   it('#1778: one oversized fill that flips long straight to short is journaled loudly, unbracketed', async () => {
@@ -3992,6 +4043,39 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(
       deps.journal.fillPartsOf('alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29'),
     ).toMatchObject([{ qty: 0.5, price_gbp: expect.closeTo(40 / 3 / FX, 9) }]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(db.prepare('SELECT instrument, venue, split_date, ratio FROM v2_splits').all()).toEqual([
+      { instrument: 'AAPL', venue: 'alpaca', split_date: '2026-09-28', ratio: 1.5 },
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT leg, side, qty, currency, price_native, fx_source, fill_date FROM v2_fills
+           WHERE leg IN ('stop', 'cash_in_lieu') ORDER BY leg`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        leg: 'cash_in_lieu',
+        side: 'sell',
+        qty: 0.5,
+        currency: 'USD',
+        price_native: expect.closeTo(40 / 3, 9),
+        fx_source: 'boe-xudluss:year-start:2026',
+        fill_date: '2026-09-29',
+      },
+      {
+        leg: 'stop',
+        side: 'sell',
+        qty: 151,
+        currency: 'USD',
+        price_native: 12.8,
+        fx_source: 'boe-xudluss:year-start:2026',
+        fill_date: '2026-09-29',
+      },
+    ]);
   });
 
   it('a resting simulated entry that fills on the split day books the order units rescaled, with no false stop_on_entry_bar', async () => {

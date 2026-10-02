@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { V2Bar } from '../../../../contracts/index.js';
-import { BarsMarketData, quotePerGbp } from './market-data.js';
+import { BarsMarketData, fillFxOf, londonDateOf, quotePerGbp } from './market-data.js';
 
 function bar(date: string, rawClose: number): V2Bar {
   return { date, open: 1, high: 1, low: 1, close: 1, volume: 1, rawClose };
@@ -36,5 +36,33 @@ describe('BarsMarketData', () => {
     expect(quotePerGbp(market, 'alpaca', '2026-09-25')).toBe(first);
     expect(quotePerGbp(market, 'saxo', '2026-09-25')).toBe(1);
     expect(() => market.gbpUsdAtYearStart(2024)).toThrow(/no GBPUSD/);
+  });
+});
+
+describe('fillFxOf and londonDateOf (#1947)', () => {
+  const market = { gbpUsdAtYearStart: (year: number) => (year === 2026 ? 1.3 : 1.2) };
+
+  it('names the currency, the rate the fill was booked at and where it came from', () => {
+    expect(fillFxOf(market, 'alpaca', '2026-09-25')).toEqual({
+      currency: 'USD',
+      quotePerGbp: 1.3,
+      source: 'boe-xudluss:year-start:2026',
+    });
+    expect(fillFxOf(market, 'alpaca', '2027-01-04')).toMatchObject({
+      quotePerGbp: 1.2,
+      source: 'boe-xudluss:year-start:2027',
+    });
+    expect(fillFxOf(market, 'saxo', '2026-09-25')).toEqual({
+      currency: 'GBP',
+      quotePerGbp: 1,
+      source: 'gbp',
+    });
+  });
+
+  it('dates a timestamp by the London calendar, across both clock changes', () => {
+    expect(londonDateOf('2026-07-01T22:59:59.000Z')).toBe('2026-07-01');
+    expect(londonDateOf('2026-07-01T23:00:00.000Z')).toBe('2026-07-02');
+    expect(londonDateOf('2026-12-01T23:59:59.000Z')).toBe('2026-12-01');
+    expect(londonDateOf('2026-12-02T00:00:00.000Z')).toBe('2026-12-02');
   });
 });

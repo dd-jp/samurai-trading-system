@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { parseBoeGbpUsdCsv, yearStartGbpUsd } from './fx.js';
+import {
+  DAY_FIX_MAX_GAP_DAYS,
+  dayFxSource,
+  dayGbpUsd,
+  parseBoeGbpUsdCsv,
+  yearStartFxSource,
+  yearStartGbpUsd,
+} from './fx.js';
 
 const CSV = ['DATE,XUDLUSS', '30 Dec 2025,1.34', '31 Dec 2025,1.35', '02 Jan 2026,1.36', ''].join(
   '\n',
@@ -40,5 +47,62 @@ describe('fx', () => {
     expect(() => parseBoeGbpUsdCsv('DATE,XUDLUSS\n,1.2')).toThrow(/unparseable/);
     expect(() => parseBoeGbpUsdCsv('DATE,XUDLUSS\n01 Jan 2026,abc')).toThrow(/bad row/);
     expect(() => parseBoeGbpUsdCsv('DATE,XUDLUSS\n01 Foo 2026,1.2')).toThrow(/unparseable/);
+  });
+});
+
+describe('dayGbpUsd (#1947)', () => {
+  const easter = [
+    { date: '2026-04-02', gbpUsd: 1.31 },
+    { date: '2026-04-07', gbpUsd: 1.32 },
+    { date: '2026-04-08', gbpUsd: 1.33 },
+  ];
+
+  it('takes the fix of the day itself', () => {
+    expect(dayGbpUsd(easter, '2026-04-07')).toEqual({
+      ok: true,
+      gbpUsd: 1.32,
+      fixDate: '2026-04-07',
+    });
+  });
+
+  it('takes the last fix before a day BoE publishes none, such as Easter Monday', () => {
+    expect(dayGbpUsd(easter, '2026-04-06')).toEqual({
+      ok: true,
+      gbpUsd: 1.31,
+      fixDate: '2026-04-02',
+    });
+  });
+
+  it('refuses a date the series does not reach yet, rather than reuse a stale fix', () => {
+    expect(dayGbpUsd(easter, '2026-04-09')).toEqual({
+      ok: false,
+      reason: 'BoE XUDLUSS series ends 2026-04-08, before 2026-04-09',
+    });
+    expect(dayGbpUsd([], '2026-04-09')).toEqual({
+      ok: false,
+      reason: 'BoE XUDLUSS series ends empty, before 2026-04-09',
+    });
+  });
+
+  it('refuses a hole longer than any holiday gap, and a date before the series starts', () => {
+    const holed = [
+      { date: '2026-03-01', gbpUsd: 1.3 },
+      { date: '2026-03-30', gbpUsd: 1.31 },
+    ];
+    expect(dayGbpUsd(holed, '2026-03-08')).toEqual({
+      ok: true,
+      gbpUsd: 1.3,
+      fixDate: '2026-03-01',
+    });
+    expect(dayGbpUsd(holed, '2026-03-09')).toEqual({
+      ok: false,
+      reason: `no BoE XUDLUSS fix in the ${DAY_FIX_MAX_GAP_DAYS} days to 2026-03-09`,
+    });
+    expect(dayGbpUsd(holed, '2026-02-27')).toMatchObject({ ok: false });
+  });
+
+  it('names its sources', () => {
+    expect(dayFxSource('2026-04-02')).toBe('boe-xudluss:2026-04-02');
+    expect(yearStartFxSource(2026)).toBe('boe-xudluss:year-start:2026');
   });
 });

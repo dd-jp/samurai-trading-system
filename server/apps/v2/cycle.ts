@@ -36,7 +36,9 @@ import { describeThrownSafely } from '../../shared/index.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   CALENDAR_REFERENCE,
+  fillFxOf,
   isFresh,
+  londonDateOf,
   MAX_BAR_AGE_CALENDAR_DAYS,
   type MacroGateVerdict,
   macroGate,
@@ -53,7 +55,12 @@ import {
   simulateMarketExit,
   withinLimit,
 } from './simulated-entry.js';
-import { cumulativeSplitRatios, fractionalShares, splitRatioAcross } from './split.js';
+import {
+  cumulativeSplitRatios,
+  fractionalShares,
+  type SplitReading,
+  splitRatioAcross,
+} from './split.js';
 
 interface CashInLieu {
   readonly fraction: number;
@@ -256,7 +263,8 @@ class Cycle {
     const increment = this.incrementOf(order, fill, baseFillId);
     if (increment === undefined) return;
     const side = fill.leg === 'entry' || order.leg === 'exit' ? order.side : opposite(order.side);
-    const fx = this.fxFor(order.venue as Venue);
+    const fillFx = fillFxOf(this.deps.market, order.venue as Venue, this.tradingDate);
+    const fx = fillFx.quotePerGbp;
     const priceGbp = increment.price / fx;
     const recorded = this.deps.journal.recordFill({
       fill_id: `${baseFillId}${increment.idSuffix}`,
@@ -270,6 +278,12 @@ class Cycle {
       qty: increment.qty,
       price_gbp: priceGbp,
       fee_gbp: increment.fee / fx,
+      currency: fillFx.currency,
+      price_native: increment.price,
+      fee_native: increment.fee,
+      fx_quote_per_gbp: fx,
+      fx_source: fillFx.source,
+      fill_date: fill.filled_at === undefined ? null : londonDateOf(fill.filled_at),
     });
     if (!recorded) return;
     this.tally.fills += 1;
@@ -334,13 +348,13 @@ class Cycle {
       this.warnUndatedFill(order, fill);
       return;
     }
-    const ratio = this.splitBefore(held, date);
-    if (ratio === 1) return;
-    const qty = this.splitHeld(order.book_id, held, ratio, date);
+    const reading = this.splitBefore(held, date);
+    if (reading.ratio === 1) return;
+    const qty = this.splitHeld(order.book_id, held, reading, date);
     this.log(
       'warn',
       'v2_fill_post_split_rescaled',
-      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} is in units after a x${ratio} split; ledger qty ${held.qty} -> ${qty} before it books`,
+      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} is in units after a x${reading.ratio} split; ledger qty ${held.qty} -> ${qty} before it books`,
     );
   }
 
@@ -353,16 +367,16 @@ class Cycle {
     );
   }
 
-  splitBefore(held: Position, fillDate: string): number {
+  splitBefore(held: Position, fillDate: string): SplitReading {
     const anchorDate =
       held.splitAnchorDate ??
       this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
-    if (anchorDate === undefined) return 1;
+    if (anchorDate === undefined) return splitRatioAcross([]);
     const days = calendarDaysBetween(anchorDate, this.tradingDate);
     const bars = this.deps.market
       .barsBefore(held.instrument, this.tradingDate, days)
       .filter((dated) => dated.date >= anchorDate && dated.date <= fillDate);
-    return splitRatioAcross(bars).ratio;
+    return splitRatioAcross(bars);
   }
 
   // Alpaca re-reports each order's running filled_qty and average price under one order id
@@ -436,7 +450,8 @@ class Cycle {
       .filter((dated) => dated.date >= anchorDate);
     const latest = bars.at(-1);
     if (latest === undefined) return;
-    const { ratio, rejected } = splitRatioAcross(bars);
+    const reading = splitRatioAcross(bars);
+    const { ratio, rejected } = reading;
     for (const step of rejected) {
       this.log(
         'warn',
@@ -445,7 +460,7 @@ class Cycle {
       );
     }
     if (ratio === 1) return;
-    const qty = this.splitHeld(book.id, held, ratio, latest.date);
+    const qty = this.splitHeld(book.id, held, reading, latest.date);
     this.log(
       'info',
       'v2_split_rescaled',
@@ -456,7 +471,17 @@ class Cycle {
   // David ruled 2026-10-01 (#1984): the broker keeps whole shares and pays cash for the rest, so
   // the ledger floors too and books the remainder as a disposal; reconcile (#1872) flags any
   // broker qty that differs
-  splitHeld(bookId: string, held: Position, ratio: number, anchorDate: string): number {
+  splitHeld(bookId: string, held: Position, reading: SplitReading, anchorDate: string): number {
+    const { ratio } = reading;
+    for (const step of reading.steps) {
+      this.deps.journal.recordSplit({
+        instrument: held.instrument,
+        venue: held.venue,
+        split_date: step.date,
+        ratio: step.ratio,
+        trading_date: this.tradingDate,
+      });
+    }
     this.deps.books.applySplit(bookId, held.instrument, ratio, anchorDate);
     const fraction = fractionalShares(held.qty * ratio);
     if (fraction === 0) return held.qty * ratio;
@@ -474,6 +499,7 @@ class Cycle {
   ): void {
     const side: OrderSide = fraction > 0 ? 'sell' : 'buy';
     const qty = Math.abs(fraction);
+    const fillFx = fillFxOf(this.deps.market, held.venue, this.tradingDate);
     const recorded = this.deps.journal.recordFill({
       fill_id: `${held.venue}:cash-in-lieu:${bookId}:${held.instrument}:${anchorDate}`,
       client_order_id: held.clientOrderId,
@@ -486,6 +512,12 @@ class Cycle {
       qty,
       price_gbp: priceGbp,
       fee_gbp: 0,
+      currency: fillFx.currency,
+      price_native: priceGbp * fillFx.quotePerGbp,
+      fee_native: 0,
+      fx_quote_per_gbp: fillFx.quotePerGbp,
+      fx_source: fillFx.source,
+      fill_date: anchorDate,
     });
     if (!recorded) return;
     this.deps.books.applyFill(bookId, {
