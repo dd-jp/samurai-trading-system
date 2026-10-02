@@ -3,6 +3,14 @@
 set -eu
 SNAPSHOT=ff29a7322511ac41c28a814bf3fd5b5ae97601b9
 STORE=data/bars/parquet
+FX=data/bars/fx/gbpusd-boe-xudluss.csv
+FX_SNAPSHOT=data/bars/fx/gbpusd-boe-xudluss.snapshot.csv
+
+# The live FX file is seeded only when absent, so a store refusal below never costs its rows.
+if [ ! -e "$FX" ] && [ ! -L "$FX" ]; then
+  cp "$FX_SNAPSHOT" "$FX"
+  echo "bars:snapshot: seeded $FX from $FX_SNAPSHOT"
+fi
 
 # rmdir succeeds only on an empty directory, so a store that cannot be listed fails closed;
 # git restore would replace a symlink or a file at this path rather than write through it.

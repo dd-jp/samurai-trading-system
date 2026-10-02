@@ -8,6 +8,7 @@ import {
   ParquetBarStore,
   violatesBarShape,
 } from '../../../providers/bar-store/index.js';
+import { readSeededFile } from '../../../shared/index.js';
 import { isMainModule } from '../../cli-entrypoint.js';
 import { PointInTimeMembership, parseConstituentsCsv } from './constituents.js';
 import type { BookFx } from './fx.js';
@@ -157,7 +158,7 @@ async function loadUsData(
     market,
     universe: (date) => membership.membersOn(date),
     costs: { venue: 'us', halfSpreadBps: spreads.halfSpreadBps },
-    fx: new YearFixedFx(parseBoeXudlussCsv(readFileSync(options.fxPath, 'utf8'))),
+    fx: new YearFixedFx(parseBoeXudlussCsv(readSeededFile(options.fxPath))),
     missingCoverageFraction: coverage.missingFraction,
     missingNames: coverage.missingNames,
     spreadFallbackBps: spreads.fallbackBps,

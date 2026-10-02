@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import type {
   BrokerMode,
   FillLeg,
@@ -8,6 +7,7 @@ import type {
   Venue,
 } from '../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
+import { readSeededFile } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openReadOnlyStore } from '../../shared/store/index.js';
 import { setExitCodeWhenInvoked, writeOrFail } from '../../tools/cli-entrypoint.js';
@@ -161,6 +161,7 @@ export interface CostFidelityInputs {
   readonly from: string;
   readonly to: string;
   readonly mode: BrokerMode;
+  readonly fxPath?: string;
 }
 
 export async function reportCostFidelity(
@@ -171,7 +172,10 @@ export async function reportCostFidelity(
   try {
     const bars = new ParquetBarsSource(inputs.barRoot, 'alpaca');
     await bars.prime();
-    const market = new BarsMarketData(bars, parseBoeGbpUsdCsv(readFileSync(FX_PATH, 'utf8')));
+    const market = new BarsMarketData(
+      bars,
+      parseBoeGbpUsdCsv(readSeededFile(inputs.fxPath ?? FX_PATH)),
+    );
     const report = costFidelityReport(
       readBrokerOrders(db, inputs),
       market,

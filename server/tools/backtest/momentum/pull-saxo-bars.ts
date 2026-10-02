@@ -29,6 +29,7 @@ import {
   SaxoReadOnlyApi,
   samplesToBars,
 } from '../../../providers/saxo-bars/index.js';
+import { readSeededFile } from '../../../shared/index.js';
 import { failExitCodeOnRejection, isMainModule } from '../../cli-entrypoint.js';
 import { barsToCsv, roundBarPrices } from './bar-csv.js';
 import type { FxRate } from './fx.js';
@@ -420,10 +421,14 @@ export function saxoPullSummary(outDir: string, manifest: SaxoBarsManifest): str
   return `wrote ${Object.keys(manifest.symbols).length} lines to ${outDir} (window from ${manifest.window_start}, binding ${manifest.window_binding_line}); excluded ${Object.keys(manifest.excluded).join(', ') || 'none'}; last bar ${lastBar}`;
 }
 
+export function readFxRates(path: string): FxRate[] {
+  return parseBoeXudlussCsv(readSeededFile(path));
+}
+
 async function main(argv: readonly string[]): Promise<void> {
   const args = parseSaxoPullArgs(argv);
   const spreads = parseSaxoSpreadCsv(readFileSync(args.spreads, 'utf8'));
-  const fxRates = parseBoeXudlussCsv(readFileSync(args.fx, 'utf8'));
+  const fxRates = readFxRates(args.fx);
   const tokens = liveTokenSource(process.env, args.tokenFile);
   const store = await ParquetBarStore.open(args.storeRoot);
   const ctx: PullContext = {

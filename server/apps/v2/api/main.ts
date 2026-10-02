@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import type { V2ModeWire } from '../../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import {
   type Clock,
   describeThrownSafely,
+  readSeededFile,
   SystemClock,
   sanitizeLogText,
 } from '../../../shared/index.js';
@@ -81,13 +82,37 @@ export function parseDashboardArgs(
 
 export function readFxOrNone(fxPath: string): ReturnType<typeof parseBoeGbpUsdCsv> {
   try {
-    return parseBoeGbpUsdCsv(readFileSync(fxPath, 'utf8'));
+    return parseBoeGbpUsdCsv(readSeededFile(fxPath));
   } catch (error) {
     process.stderr.write(
       `v2 dashboard: no FX rates (${sanitizeLogText(describeThrownSafely(error))}); USD marks unavailable\n`,
     );
     return [];
   }
+}
+
+function fileVersion(path: string): string | undefined {
+  try {
+    const { ino, mtimeMs, size } = statSync(path);
+    return `${ino}:${mtimeMs}:${size}`;
+  } catch {
+    return undefined;
+  }
+}
+
+// The bar refresh appends BoE fixes to the file while the dashboard runs, so the tax reader
+// re-reads it whenever it changes rather than pricing from the copy it started with
+export function reloadingFx(fxPath: string): () => ReturnType<typeof parseBoeGbpUsdCsv> {
+  let version = fileVersion(fxPath);
+  let fx = readFxOrNone(fxPath);
+  return () => {
+    const current = fileVersion(fxPath);
+    if (current !== version) {
+      version = current;
+      fx = readFxOrNone(fxPath);
+    }
+    return fx;
+  };
 }
 
 export interface ComposedDashboard {
@@ -101,10 +126,10 @@ export function composeV2Dashboard(
   env: NodeJS.ProcessEnv,
   clock: Clock,
 ): ComposedDashboard {
-  const fx = readFxOrNone(args.fxPath);
+  const fx = reloadingFx(args.fxPath);
   const positions = new PositionsPanel(
     new ParquetMarkSource(args.barStoreRoot),
-    new BarsMarketData({ load: () => undefined }, fx),
+    new BarsMarketData({ load: () => undefined }, fx()),
   );
   const db = openMigratedStore(args.storePath, DASHBOARD_SCHEMA_VERSION);
   try {

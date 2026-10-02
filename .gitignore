@@ -276,5 +276,7 @@ graphify-out
 .code-review-graph/
 # The daily bar refresh rewrites the store in place; a re-pull rebuilds it (#1929).
 data/bars/parquet/
+# The paper run appends BoE fixes to it daily; it is seeded from the tracked snapshot (#2000).
+data/bars/fx/gbpusd-boe-xudluss.csv
 # Research bar cache (#787).
 docs/research/data/
