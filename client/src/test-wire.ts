@@ -243,10 +243,19 @@ export const JOURNAL: JournalWire = {
           fills: [
             {
               fill_id: 'f-1',
+              leg: 'entry',
               qty: 2,
               price_gbp: 310,
               fee_gbp: 0.5,
               recorded_at: '2026-10-05T21:42:00.000Z',
+            },
+            {
+              fill_id: 'f-2',
+              leg: 'cash_in_lieu',
+              qty: 0.5,
+              price_gbp: 300,
+              fee_gbp: 0,
+              recorded_at: '2026-10-05T21:43:00.000Z',
             },
           ],
         },
