@@ -39,6 +39,7 @@ import {
   calendarDaysBetween,
   runCycle,
   runEntryPass,
+  stopReplaceable,
   vetoApplied,
 } from './cycle.js';
 import { addDays, BarsMarketData, TABLE_VENUE_SESSIONS } from './data/index.js';
@@ -3318,6 +3319,32 @@ describe('#1849: a CFD fill with no cost model', () => {
     await runCycle(deps, '2026-09-25');
     deps.setDecisions([]);
     await expect(runCycle(deps, '2026-09-28')).rejects.toThrow('boom');
+  });
+});
+
+describe('stopReplaceable (#1990)', () => {
+  const held = {
+    instrument: 'AAPL',
+    venue: 'alpaca',
+    qty: 151,
+    avgPriceGbp: 10,
+    stopGbp: 9,
+    targetGbp: 12,
+    clientOrderId: 'entry',
+    exitClientOrderId: undefined,
+    openedDate: '2026-09-25',
+    marksHeld: 1,
+    stray: false,
+    splitFactor: 1.5,
+    splitAnchorDate: undefined,
+  } as const;
+
+  it('replaces only a held, non-stray position on the venue with no exit pending', () => {
+    expect(stopReplaceable(held, 'alpaca')).toBe(true);
+    expect(stopReplaceable(undefined, 'alpaca')).toBe(false);
+    expect(stopReplaceable(held, 'saxo')).toBe(false);
+    expect(stopReplaceable({ ...held, stray: true }, 'alpaca')).toBe(false);
+    expect(stopReplaceable({ ...held, exitClientOrderId: 'exit' }, 'alpaca')).toBe(false);
   });
 });
 

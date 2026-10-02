@@ -231,6 +231,11 @@ function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: st
   return `v2-${book.id.replaceAll('/', '-')}-${tradingDate}-${instrument}`;
 }
 
+// A stray has no entry stop to re-place at, and a pending exit has already cancelled the legs
+export function stopReplaceable(held: Position | undefined, venue: Venue): held is Position {
+  return held?.venue === venue && !held.stray && held.exitClientOrderId === undefined;
+}
+
 class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
@@ -1203,7 +1208,7 @@ class Cycle {
     return this.deps.registry.ids().flatMap((sleeveId) =>
       this.deps.books.forSleeve(sleeveId).flatMap((book): [BookSpec, Position][] => {
         const held = this.deps.books.position(book.id, instrument);
-        if (held?.venue !== venue || held.stray || held.exitClientOrderId !== undefined) return [];
+        if (!stopReplaceable(held, venue)) return [];
         return this.deps.executor.simulates(routeOf(book, venue)) ? [] : [[book, held]];
       }),
     );

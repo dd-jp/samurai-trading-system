@@ -510,6 +510,25 @@ describe('reconcileOrBlockEntries', () => {
     expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
   });
 
+  it.each([
+    ['qty', { qty: 2, stopPrice: 60 }],
+    ['price', { qty: 6, stopPrice: 90 }],
+  ])('names a stale stop whose %s alone differs', async (_what, sized) => {
+    const { deps } = harness(
+      {
+        ...CLEAN_BROKER,
+        openOrders: [
+          { clientOrderId: 'leg', instrument: 'AAPL', protects: 'long', ...sized },
+          ...CLEAN_BROKER.openOrders.slice(1),
+        ],
+      },
+      { entryStops: { 'entry-AAPL': 60 } },
+    );
+    expect((await reconcileBooks(deps, DATE)).staleStops).toEqual([
+      { venue: 'alpaca', instrument: 'AAPL' },
+    ]);
+  });
+
   it('names no stale stop for a mismatch that is not about a stop', async () => {
     const { deps } = harness({ ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 5 }] });
     expect((await reconcileBooks(deps, DATE)).staleStops).toEqual([]);

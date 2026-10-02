@@ -3792,6 +3792,8 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
 
       expect(thrown).toBeInstanceOf(ProtectiveReplaceError);
       expect(thrown).toMatchObject({
+        name: 'ProtectiveReplaceError',
+        cause: expect.objectContaining({ message: expect.stringContaining('did not confirm') }),
         step: 'cancel',
         message: expect.stringMatching(
           /^replaceProtectiveLegs: the stale legs of key-aapl-1355 on AAPL did not cancel: submitProtectedExit: leg alpaca-target-1/,
@@ -3813,6 +3815,7 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
       const thrown = await adapter.replaceProtectiveLegs(replace).catch((error: unknown) => error);
 
       expect(thrown).toBeInstanceOf(ProtectiveReplaceError);
+      expect((thrown as Error).cause).toBeInstanceOf(Error);
       expect(thrown).toMatchObject({
         step: 'place',
         message: expect.stringMatching(
