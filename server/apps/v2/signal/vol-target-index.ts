@@ -123,8 +123,8 @@ function decision(
   action: SleeveAction,
   reason: string,
   date: string,
+  stopPrice?: number,
 ): SleeveDecision {
-  const price = read?.price ?? 0;
   const entering = action === 'enter_long';
   return {
     sleeve_id: sleeveId,
@@ -134,9 +134,9 @@ function decision(
     confidence: action === 'skip' ? 0 : 1,
     action,
     reason,
-    price,
+    price: read?.price ?? 0,
     atr: read?.atr,
-    stop_price: entering ? price - STOP_ATR_MULTIPLE * (read?.atr ?? 0) : undefined,
+    stop_price: stopPrice,
     inputs_hash: action === 'skip' ? '' : `${instrument}-${date}`,
     debate_id: undefined,
     payload: { realised_vol: read?.vol },
@@ -155,10 +155,11 @@ function decisionFor(
   if (!holds(read.vol)) {
     return decision(sleeveId, instrument, read, 'exit', 'realised vol above ceiling', date);
   }
-  if (read.price - STOP_ATR_MULTIPLE * read.atr <= 0) {
+  const stopPrice = read.price - STOP_ATR_MULTIPLE * read.atr;
+  if (stopPrice <= 0) {
     return decision(sleeveId, instrument, read, 'skip', 'non_positive_stop', date);
   }
-  return decision(sleeveId, instrument, read, 'enter_long', 'vol rule holds', date);
+  return decision(sleeveId, instrument, read, 'enter_long', 'vol rule holds', date, stopPrice);
 }
 
 function createSleeve(

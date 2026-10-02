@@ -173,6 +173,11 @@ describe('realisedVolatility', () => {
     expect(realisedVolatility(datedBars(alternatingCloses(1, 21)), 20)).toBeCloseTo(expected, 12);
   });
 
+  it('subtracts the mean, so a constant daily return has zero volatility', () => {
+    const closes = Array.from({ length: 21 }, (_, index) => 100 * 1.01 ** index);
+    expect(realisedVolatility(datedBars(closes), 20)).toBeCloseTo(0, 12);
+  });
+
   it('reads only the last window + 1 closes', () => {
     const closes = [1, 1_000, ...flatCloses(21)];
     expect(realisedVolatility(datedBars(closes), 20)).toBe(0);
@@ -192,8 +197,11 @@ describe('realisedVolatility', () => {
 });
 
 describe('createVolTargetIndexSleeve', () => {
-  it('decides every declared line in order', async () => {
-    const decisions = await decide(datedBars(flatCloses()));
+  it('decides every declared line in order with no refusals', async () => {
+    const sleeve = createVolTargetIndexSleeve(CALENDAR, 0.2)(marketOf(datedBars(flatCloses())));
+    const output = await sleeve.decide(CONTEXT, VOL_TARGET_INDEX_TIDMS);
+    expect(output.refusals).toEqual([]);
+    const decisions = output.decisions;
     expect(decisions.map((row) => row.instrument)).toEqual(VOL_TARGET_INDEX_TIDMS);
     expect(new Set(decisions.map((row) => row.sleeve_id))).toEqual(
       new Set(['vol-target-index-v20']),
@@ -264,6 +272,22 @@ describe('createVolTargetIndexSleeve', () => {
       inputs_hash: '',
       price: 10,
     });
+  });
+
+  it('skips a stop of exactly zero', async () => {
+    const decision = first(await decide(datedBars(flatCloses(LOOKBACK_BARS, 10), 1)));
+    expect(decision).toMatchObject({ atr: 2, reason: 'non_positive_stop' });
+  });
+
+  it('skips as insufficient_history when a non-positive close leaves vol undefined', async () => {
+    const bars = datedBars(flatCloses());
+    bars[30] = { ...(bars[30] as V2Bar), open: 0, high: 0, low: 0, close: 0, rawClose: 0 };
+    expect(first(await decide(bars))).toMatchObject({
+      action: 'skip',
+      reason: 'insufficient_history',
+      payload: { realised_vol: undefined },
+    });
+    expect(first(await decide(bars)).atr).toBeGreaterThan(0);
   });
 
   it('still exits on high vol when the stop would be non-positive', async () => {
