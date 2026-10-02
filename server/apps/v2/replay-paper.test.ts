@@ -120,8 +120,6 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
     }),
     submitMarketOrder: vi.fn().mockRejectedValue(new Error('unused')),
     submitOcoOrder: vi.fn().mockRejectedValue(new Error('unused')),
-    submitLimitOrder: vi.fn().mockRejectedValue(new Error('unused')),
-    submitStopLimitOrder: vi.fn().mockRejectedValue(new Error('unused')),
     cancelOrder: vi.fn().mockResolvedValue(undefined),
     listOpenOrders: vi.fn(() =>
       Promise.resolve(

@@ -107,8 +107,6 @@ function stubBrokerClient(): NonNullable<ProductionConfig['alpacaBrokerClient']>
     submitOrder: vi.fn(),
     submitMarketOrder: vi.fn(),
     submitOcoOrder: vi.fn(),
-    submitLimitOrder: vi.fn(),
-    submitStopLimitOrder: vi.fn(),
     cancelOrder: vi.fn(),
     getPositions: vi.fn(async () => []),
     listOpenOrders: vi.fn(async () => []),

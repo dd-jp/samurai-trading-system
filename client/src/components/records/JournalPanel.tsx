@@ -49,8 +49,8 @@ function Order({ order }: { order: JournalOrderWire }) {
         <ul>
           {order.fills.map((fill) => (
             <li key={fill.fill_id}>
-              Fill {fill.qty} at {gbp(fill.price_gbp)}, fee {gbp(fill.fee_gbp)},{' '}
-              {utcMinute(fill.recorded_at)}
+              {fill.leg === 'cash_in_lieu' ? 'Cash in lieu' : 'Fill'} {fill.qty} at{' '}
+              {gbp(fill.price_gbp)}, fee {gbp(fill.fee_gbp)}, {utcMinute(fill.recorded_at)}
             </li>
           ))}
         </ul>

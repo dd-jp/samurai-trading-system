@@ -10,7 +10,7 @@ import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../providers/market-data-service/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
-import { describeThrownSafely, SystemClock } from '../../shared/index.js';
+import { describeThrownSafely, readSeededFile, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
@@ -30,6 +30,7 @@ import {
   type CfdCatalogue,
   createVenueRouter,
   currentConstituents,
+  FX_PATH,
   loadCfdCatalogue,
   MarketauxClient,
   MarketauxNewsSource,
@@ -89,7 +90,7 @@ export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
 export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
 export const SAXO_SPREADS_PATH = 'data/bars/saxo-spreads.csv';
-export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
+export { FX_PATH };
 export const DEFAULT_HALF_SPREAD_BPS = 5;
 const LLM_MAX_IN_FLIGHT_PER_ACCOUNT = 1;
 const LLM_EXPECTED_CALL_MS = 20_000;
@@ -511,7 +512,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const constituents = options.constituents ?? constituentsFromCsv(options);
   const market = new BarsMarketData(
     bars,
-    parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
+    parseBoeGbpUsdCsv(readSeededFile(options.fxPath ?? FX_PATH)),
   );
   const cfdGate = cfdGateFor(options);
   const catalogue = cfdCatalogueFor(options, logger);

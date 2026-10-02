@@ -93,6 +93,7 @@ async function seedDay(
   name: string,
   transportFor: (pin: ModelPin) => AnthropicMessagesClient,
   newsSource: NewsSource = FIXTURE_NEWS,
+  prepare: (seed: StoreHandle) => void = () => {},
 ): Promise<ReplayCliOptions> {
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
@@ -101,6 +102,7 @@ async function seedDay(
     1_000,
     1_500,
   );
+  prepare(seed);
   seed.close();
   const root = composeV2Root({
     tradingDate: files.tradingDate,
@@ -573,6 +575,76 @@ describe('replayFromFiles on failed calls (#1980)', () => {
     db.close();
     const result = await replayFromFiles({ ...failed, storePath });
     expect(result.divergences[0]).toMatchObject({ kind: 'decision_field', field: 'reason' });
+  });
+});
+
+// CPU-heavy: runs a full composed day
+describe('replay of a spend-refused name (#1987)', { timeout: 30_000 }, () => {
+  let spent: ReplayCliOptions;
+
+  beforeAll(async () => {
+    const writer = openSharedStore(join(directory, 'spent.sqlite'));
+    const article = {
+      id: 'bz-1',
+      headline: 'UP beats estimates',
+      summary: '',
+      symbols: ['UP'],
+      source: 'benzinga',
+      url: '',
+      created_at: new Date(Date.UTC(2026, 8, 17)),
+      updated_at: new Date(Date.UTC(2026, 8, 17)),
+      payload: '',
+    };
+    const news = new AlpacaNewsSource(
+      { fetchNews: ([symbol]) => Promise.resolve(symbol === 'UP' ? [article] : []) },
+      new SqliteNewsLedger(guardedStore(writer, 'v2')),
+    );
+    try {
+      spent = await seedDay('spent', scripted, news, (seed) => {
+        seed
+          .prepare(
+            `INSERT INTO llm_spend (trace_id, stage, model, input_tokens, output_tokens, cost_usd, latency_ms, timestamp)
+             VALUES ('t', 'debate', 'm', 1, 1, 30, 1, '${TRADING_DATE}T00:00:00.000Z')`,
+          )
+          .run();
+      });
+    } finally {
+      writer.close();
+    }
+  }, 30_000);
+
+  function reasonsOf(path: string): unknown[] {
+    const db = new BetterSqlite3(path, { readonly: true });
+    try {
+      return db
+        .prepare(
+          `SELECT DISTINCT d.reason FROM v2_decisions d JOIN v2_books b ON b.book_id = d.book_id
+            WHERE b.sleeve_id = 'debate' AND d.instrument = 'UP'`,
+        )
+        .all();
+    } finally {
+      db.close();
+    }
+  }
+
+  it('replays identical from the journalled refusal, with no logged call', async () => {
+    expect(reasonsOf(spent.storePath)).toEqual([{ reason: 'llm_spend_cap:budget' }]);
+    const result = await replayFromFiles(spent);
+    expect(result.calls).toBe(0);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges once the refusal row is gone', async () => {
+    const storePath = join(directory, 'spent-unjournalled.sqlite');
+    copyFileSync(spent.storePath, storePath);
+    const db = new BetterSqlite3(storePath);
+    db.exec(
+      `DROP TRIGGER v2_decisions_no_delete;
+       DELETE FROM v2_decisions WHERE reason = 'llm_spend_cap:budget'`,
+    );
+    db.close();
+    const result = await replayFromFiles({ ...spent, storePath });
+    expect(result.divergences).toContainEqual(expect.objectContaining({ kind: 'llm_request' }));
   });
 });
 

@@ -8,7 +8,6 @@ import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './adapters/alpaca-client.js';
 import type { BrokerVenue } from './broker-state-store.js';
 import { InMemoryBrokerStateStore } from './broker-state-store.js';
-import type { OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 import { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
 import type { NativeBracketRequest } from './types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
@@ -54,10 +53,6 @@ function recordingAlerts(): UnpricedFillAlertChannel & { readonly posted: Unpric
       posted.push(alert);
     },
   };
-}
-
-function noopDoubleFillAlerts(): OcoDoubleFillAlertChannel {
-  return { postOcoDoubleFillAlert: async () => {} };
 }
 
 const tempDirs: string[] = [];
@@ -126,7 +121,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(db),
       unpricedFillAlerts: recordingAlerts(),
-      ocoDoubleFillAlerts: noopDoubleFillAlerts(),
       logger: recordingLogger(),
     });
     await first.submitBracket(STOCK_REQUEST);
@@ -136,7 +130,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(reopen(path)),
       unpricedFillAlerts: recordingAlerts(),
-      ocoDoubleFillAlerts: noopDoubleFillAlerts(),
       logger: recordingLogger(),
     });
     const fills = await second.fetchNewFills(SINCE);
@@ -163,7 +156,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       rateLimiter: permissiveLimiter(),
       state: dyingState,
       unpricedFillAlerts: recordingAlerts(),
-      ocoDoubleFillAlerts: noopDoubleFillAlerts(),
       logger: recordingLogger(),
     });
     await expect(first.submitBracket(STOCK_REQUEST)).rejects.toThrow(/simulated DB failure/);
@@ -175,7 +167,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(reopen(path)),
       unpricedFillAlerts: recordingAlerts(),
-      ocoDoubleFillAlerts: noopDoubleFillAlerts(),
       logger: recordingLogger(),
     });
     expect(await second.fetchNewFills(SINCE)).toEqual([]);
@@ -208,7 +199,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(db),
       unpricedFillAlerts: firstAlerts,
-      ocoDoubleFillAlerts: noopDoubleFillAlerts(),
       logger: recordingLogger(),
       unpricedFillAgeOutMs: AGE_OUT_MS,
       clock: fixedClock(FIRST_SEEN),
@@ -224,7 +214,6 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(reopen(path)),
       unpricedFillAlerts: secondAlerts,
-      ocoDoubleFillAlerts: noopDoubleFillAlerts(),
       logger: recordingLogger(),
       unpricedFillAgeOutMs: AGE_OUT_MS,
       clock: fixedClock(new Date(FIRST_SEEN.getTime() + AGE_OUT_MS)),

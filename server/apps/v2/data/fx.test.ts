@@ -9,7 +9,10 @@ import {
   yearStartGbpUsd,
 } from './fx.js';
 
-const FX_FILE = new URL('../../../../data/bars/fx/gbpusd-boe-xudluss.csv', import.meta.url);
+const FX_FILE = new URL(
+  '../../../../data/bars/fx/gbpusd-boe-xudluss.snapshot.csv',
+  import.meta.url,
+);
 
 const CSV = ['DATE,XUDLUSS', '30 Dec 2025,1.34', '31 Dec 2025,1.35', '02 Jan 2026,1.36', ''].join(
   '\n',

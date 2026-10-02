@@ -24,7 +24,8 @@ describe('JournalPanel (P9)', () => {
     const decision = within(day).getByText(/AAPL long, debate\/primary: vetoed, 64%/);
     expect(decision.closest('details')?.dataset.outcome).toBe('vetoed');
     expect(within(day).getByRole('list', { name: 'Orders no decision owns' }).textContent).toBe(
-      'exit sell MSFT (alpaca), filled, 2026-10-05 21:41ZFill 2 at £310.00, fee £0.50, 2026-10-05 21:42Z',
+      'exit sell MSFT (alpaca), filled, 2026-10-05 21:41ZFill 2 at £310.00, fee £0.50, 2026-10-05 21:42Z' +
+        'Cash in lieu 0.5 at £300.00, fee £0.00, 2026-10-05 21:43Z',
     );
     expect(
       within(within(day).getByRole('list', { name: 'Refusals' }))

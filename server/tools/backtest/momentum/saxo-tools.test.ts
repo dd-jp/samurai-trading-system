@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { SaxoSessionState } from '../../../pipeline/execution/adapters/saxo-token-source.js';
 import type { FetchResult } from '../../../providers/bar-store/index.js';
 import type { ChartSample, InfoPriceQuote } from '../../../providers/saxo-bars/index.js';
@@ -29,6 +32,7 @@ import {
   density,
   distributionAdjustmentCheck,
   parseSaxoPullArgs,
+  readFxRates,
   windowStartOf,
 } from './pull-saxo-bars.js';
 import {
@@ -423,5 +427,19 @@ describe('pull-saxo-bars helpers', () => {
     });
     expect(parseSaxoPullArgs(['--out', 'o', '--token-file', 't']).tokenFile).toBe('t');
     expect(parseSaxoPullArgs(['--store', 's']).storeRoot).toBe('s');
+  });
+});
+
+describe('readFxRates', () => {
+  it('restores a deleted FX file from its snapshot before reading it (#2000)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'saxo-pull-fx-'));
+    try {
+      writeFileSync(join(dir, 'fx.snapshot.csv'), 'DATE,XUDLUSS\n31 Dec 2025,1.25\n');
+      const fxPath = join(dir, 'fx.csv');
+      expect(readFxRates(fxPath)).toHaveLength(1);
+      expect(existsSync(fxPath)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

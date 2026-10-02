@@ -73,16 +73,6 @@ function stubConfig(
         status: 'accepted',
         legs: [],
       })),
-      submitLimitOrder: vi.fn(async () => ({
-        id: 'alpaca-order-1',
-        client_order_id: 'k',
-        status: 'accepted',
-      })),
-      submitStopLimitOrder: vi.fn(async () => ({
-        id: 'alpaca-order-2',
-        client_order_id: 'k:stop',
-        status: 'accepted',
-      })),
       cancelOrder: vi.fn(async () => undefined),
       getOrder: vi.fn(async () => ({
         id: 'alpaca-order-1',

@@ -33,9 +33,6 @@ import {
 } from '../../pipeline/debate-engine/index.js';
 import type {
   AlpacaBrokerClient,
-  AlpacaLimitOrderRequest,
-  AlpacaOrder,
-  AlpacaStopLimitOrderRequest,
   BrokerAck,
   BrokerAdapter,
   ExecutionConfig,
@@ -53,11 +50,9 @@ import type {
 } from '../../pipeline/execution/index.js';
 import {
   ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
-  AlpacaBrokerAdapter,
   FILLED_WITH_ZERO_SIZE,
   FilledZeroSizeThrottle,
   SimulatedBrokerAdapter,
-  SqliteBrokerStateStore,
   SqliteExecutionStore,
   TERMINAL_SWEEP_AGE_MS,
   UnrecordedVenuePositionThrottle,
@@ -134,7 +129,6 @@ import {
   GUARDED_THRESHOLD_NAMES,
   isThresholdBoundViolation,
   SimulatedClock,
-  TokenBucket,
   toBrokerFillId,
 } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
@@ -463,14 +457,6 @@ export class UnreachableAlpacaClient implements AlpacaBrokerClient {
 
   async submitOcoOrder(): Promise<never> {
     return this.refuse('submitOcoOrder');
-  }
-
-  async submitLimitOrder(): Promise<never> {
-    return this.refuse('submitLimitOrder');
-  }
-
-  async submitStopLimitOrder(): Promise<never> {
-    return this.refuse('submitStopLimitOrder');
   }
 
   async cancelOrder(): Promise<never> {
@@ -1581,265 +1567,6 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
 
   return { restarted, restartReconcile };
 }
-
-class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
-  private readonly orders = new Map<string, AlpacaOrder>();
-  private readonly idsByClientOrderId = new Map<string, string>();
-  readonly cancelledOrderIds: string[] = [];
-  private nextId = 1;
-
-  private accept(request: {
-    symbol: string;
-    side: 'buy' | 'sell';
-    qty: string;
-    client_order_id: string;
-  }): AlpacaOrder {
-    if (!request.symbol.endsWith('/USD')) {
-      throw new Error(
-        `smoke crypto-emulation scenario: order for '${request.symbol}' reached the wire in ` +
-          'dash form — the adapter boundary stopped converting (#585); the live venue rejects ' +
-          'this with 422 "asset not found"',
-      );
-    }
-    const order: AlpacaOrder = {
-      id: `scenario-alpaca-${this.nextId++}`,
-      client_order_id: request.client_order_id,
-      symbol: request.symbol,
-      side: request.side,
-      qty: request.qty,
-      order_class: '',
-      status: 'accepted',
-      filled_qty: '0',
-      filled_avg_price: null,
-      filled_at: null,
-    };
-    this.orders.set(order.id, order);
-    this.idsByClientOrderId.set(request.client_order_id, order.id);
-    return { ...order };
-  }
-
-  private rejectAdvancedOrderClass(method: string): never {
-    throw new Error(
-      `smoke crypto-emulation scenario: ${method} sent an advanced order_class for crypto — ` +
-        'the live venue rejects this with 422 {"code":42210000,"message":"crypto orders not ' +
-        'allowed for advanced order_class"} (verified #550). The adapter must take the ' +
-        'emulated path (#586), never this one.',
-    );
-  }
-
-  async submitOrder(): Promise<never> {
-    this.rejectAdvancedOrderClass('submitOrder (order_class: bracket)');
-  }
-
-  async submitOcoOrder(): Promise<never> {
-    this.rejectAdvancedOrderClass('submitOcoOrder (order_class: oco)');
-  }
-
-  async submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder> {
-    return this.accept(request);
-  }
-
-  async submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder> {
-    return this.accept(request);
-  }
-
-  async submitMarketOrder(): Promise<never> {
-    throw new Error('smoke crypto-emulation scenario: no flatten is scripted here');
-  }
-
-  async cancelOrder(alpacaOrderId: string): Promise<void> {
-    this.cancelledOrderIds.push(alpacaOrderId);
-    const order = this.orders.get(alpacaOrderId);
-    if (order !== undefined && order.status !== 'filled') order.status = 'canceled';
-  }
-
-  async getOrder(alpacaOrderId: string): Promise<AlpacaOrder> {
-    const order = this.orders.get(alpacaOrderId);
-    if (order === undefined) {
-      throw new Error(`smoke crypto-emulation scenario: unknown order id '${alpacaOrderId}'`);
-    }
-    return { ...order };
-  }
-
-  async getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null> {
-    const id = this.idsByClientOrderId.get(clientOrderId);
-    return id === undefined ? null : this.getOrder(id);
-  }
-
-  async getPositions(): Promise<never> {
-    throw new Error('smoke crypto-emulation scenario: getPositions is not scripted here');
-  }
-
-  async listOpenOrders(): Promise<AlpacaOrder[]> {
-    return [...this.orders.values()]
-      .filter((order) => order.status !== 'filled' && order.status !== 'canceled')
-      .map((order) => ({ ...order }));
-  }
-
-  async getAccount(): Promise<never> {
-    throw new Error('smoke crypto-emulation scenario: getAccount is not scripted here');
-  }
-
-  fillByClientOrderId(clientOrderId: string, price: number, filledAt: string): void {
-    const id = this.idsByClientOrderId.get(clientOrderId);
-    const order = id === undefined ? undefined : this.orders.get(id);
-    if (order === undefined) {
-      throw new Error(
-        `smoke crypto-emulation scenario: cannot fill unknown client order id '${clientOrderId}'`,
-      );
-    }
-    order.status = 'filled';
-    order.filled_qty = order.qty;
-    order.filled_avg_price = String(price);
-    order.filled_at = filledAt;
-  }
-
-  venueOrderId(clientOrderId: string): string | undefined {
-    return this.idsByClientOrderId.get(clientOrderId);
-  }
-}
-
-export interface CryptoEmulationEvidence {
-  journalRow:
-    | {
-        phase: string;
-        asset_class: string | null;
-        stop_order_id: string | null;
-        target_order_id: string | null;
-      }
-    | undefined;
-  entryFillSeen: boolean;
-  stopFillSeen: boolean;
-  siblingCancelled: boolean;
-}
-
-const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
-
-async function runCryptoEmulationScenario(
-  db: StoreHandle,
-  logger: Logger,
-): Promise<CryptoEmulationEvidence> {
-  const client = new CryptoEmulationScenarioClient();
-  const adapter = new AlpacaBrokerAdapter({
-    client,
-    rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
-    state: new SqliteBrokerStateStore(db),
-    unpricedFillAlerts: {
-      postUnpricedFillAlert: async () => {},
-    },
-    logger,
-    ocoDoubleFillAlerts: {
-      postOcoDoubleFillAlert: async (alert) => {
-        throw new Error(
-          `smoke crypto-emulation scenario: unexpected double-fill alert for ` +
-            `'${alert.client_order_id}'`,
-        );
-      },
-    },
-  });
-
-  const ack = await adapter.submitBracket({
-    client_order_id: CRYPTO_EMULATION_LOT_KEY,
-    instrument: 'BTC-USD',
-    asset_class: 'crypto',
-    side: 'buy',
-    size: 0.5,
-    entry: 60_000,
-    stop: 57_000,
-    target: 66_000,
-    time_in_force: 'gtc',
-  });
-  if (ack.order_state !== 'submitted') {
-    throw new Error(
-      `smoke crypto-emulation scenario: entry ack was '${ack.order_state}', not 'submitted' — ` +
-        'a scenario precondition is wrong, not the gate',
-    );
-  }
-
-  client.fillByClientOrderId(CRYPTO_EMULATION_LOT_KEY, 60_000, '2026-01-02T00:00:00Z');
-  const armSweep = await adapter.fetchNewFills(new Date(0));
-
-  client.fillByClientOrderId(`${CRYPTO_EMULATION_LOT_KEY}:stop`, 57_000, '2026-01-02T00:01:00Z');
-  const exitSweep = await adapter.fetchNewFills(new Date(0));
-
-  const journalRow = db
-    .prepare(
-      'SELECT phase, asset_class, stop_order_id, target_order_id FROM broker_brackets ' +
-        "WHERE venue = 'alpaca' AND client_order_id = ?",
-    )
-    .get(CRYPTO_EMULATION_LOT_KEY) as CryptoEmulationEvidence['journalRow'];
-
-  const targetVenueId = client.venueOrderId(`${CRYPTO_EMULATION_LOT_KEY}:target`);
-  return {
-    journalRow,
-    entryFillSeen: armSweep.some(
-      (fill) => fill.leg === 'entry' && fill.client_order_id === CRYPTO_EMULATION_LOT_KEY,
-    ),
-    stopFillSeen: exitSweep.some(
-      (fill) => fill.leg === 'stop' && fill.client_order_id === CRYPTO_EMULATION_LOT_KEY,
-    ),
-    siblingCancelled:
-      targetVenueId !== undefined && client.cancelledOrderIds.includes(targetVenueId),
-  };
-}
-
-const cryptoEmulationProbe: Probe<'cryptoEmulation'> = {
-  run({ db, logger }) {
-    return runCryptoEmulationScenario(db, logger);
-  },
-  verdict(evidence) {
-    const failures: string[] = [];
-    const emulation = evidence;
-    if (emulation.journalRow === undefined || emulation.journalRow.asset_class !== 'crypto') {
-      failures.push(
-        "the emulated-leg journal (broker_brackets, venue 'alpaca') has no crypto row for the " +
-          "crypto-emulation scenario's lot — submitBracket stopped journalling the emulated " +
-          'bracket (#586), so a crash between the entry and its protective legs leaves a live ' +
-          'crypto position nothing knows to protect',
-      );
-    } else {
-      if (
-        emulation.journalRow.stop_order_id == null ||
-        emulation.journalRow.target_order_id == null
-      ) {
-        failures.push(
-          "the crypto-emulation scenario's journal row is missing protective-leg order ids after " +
-            'the entry filled — the legs were never submitted as plain crypto orders (#586), so ' +
-            'the filled lot sat naked',
-        );
-      }
-      if (emulation.journalRow.phase !== 'resolved') {
-        failures.push(
-          `the crypto-emulation scenario's journal row ended in phase ` +
-            `'${emulation.journalRow.phase}', expected 'resolved' — the emulated OCO edge ` +
-            '(leg fill -> sibling cancel) did not complete (#586)',
-        );
-      }
-    }
-    if (!emulation.entryFillSeen) {
-      failures.push(
-        "the crypto-emulation scenario's entry fill never came back through fetchNewFills — the " +
-          'emulation sweep is not polling its plain entry order (#586), so ingestFills would ' +
-          'never learn a crypto entry filled',
-      );
-    }
-    if (!emulation.stopFillSeen) {
-      failures.push(
-        "the crypto-emulation scenario's stop-leg fill never came back through fetchNewFills — " +
-          'the emulation sweep is not polling its resting legs (#586), so a stop-out would go ' +
-          'unbooked',
-      );
-    }
-    if (!emulation.siblingCancelled) {
-      failures.push(
-        'the surviving take-profit leg was never cancelled after the stop leg filled — the ' +
-          'emulated one-cancels-other edge is not firing (#586), leaving a resting order that ' +
-          'can fire into a flat position and open a reverse one',
-      );
-    }
-    return failures;
-  },
-};
 
 export interface LoggerResilienceEvidence {
   stdoutRetired: boolean;
@@ -3840,7 +3567,6 @@ export interface SmokeEvidence {
   tickLoop: TickLoopEvidence;
   llmRateLimiterSnapshot: RateLimiterSnapshot;
   exitPath: ExitPathEvidence;
-  cryptoEmulation: CryptoEmulationEvidence;
   loggerResilience: LoggerResilienceEvidence;
   logRetention: LogRetentionEvidence;
   entrypointFaultGuards: EntrypointFaultGuardEvidence;
@@ -4307,7 +4033,6 @@ const PROBES: { [K in ProbeId]: Probe<K, ProbeId> } = {
   tickLoop: tickLoopProbe,
   llmRateLimiterSnapshot: llmRateLimiterSnapshotProbe,
   exitPath: exitPathProbe,
-  cryptoEmulation: cryptoEmulationProbe,
   loggerResilience: loggerResilienceProbe,
   logRetention: logRetentionProbe,
   entrypointFaultGuards: entrypointFaultGuardsProbe,
@@ -4342,7 +4067,6 @@ function everyProbeOnce<const Order extends readonly ProbeId[]>(
 const PROBE_RUN_ORDER = everyProbeOnce([
   'tickLoop',
   'exitPath',
-  'cryptoEmulation',
   'loggerResilience',
   'logRetention',
   'entrypointFaultGuards',
@@ -4384,7 +4108,6 @@ const PROBE_VERDICT_ORDER = everyProbeOnce([
   'analystFailureCause',
   'filledZeroSizeWedge',
   'exitPath',
-  'cryptoEmulation',
   'fillSync',
   'marketDataFetch',
 ]);
@@ -4486,12 +4209,19 @@ export interface SmokeRunResult {
   report: string[];
 }
 
+function resolveSmokeTiming(options: SmokeRunOptions) {
+  return {
+    targetTicks: options.ticks ?? DEFAULT_SMOKE_TICKS,
+    tickIntervalMs: options.tickIntervalMs ?? DEFAULT_SMOKE_TICK_INTERVAL_MS,
+    fillPollIntervalMs: options.fillPollIntervalMs ?? DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS,
+    heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS,
+    deadlineMs: options.deadlineMs ?? DEFAULT_SMOKE_DEADLINE_MS,
+  };
+}
+
 export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunResult> {
-  const targetTicks = options.ticks ?? DEFAULT_SMOKE_TICKS;
-  const tickIntervalMs = options.tickIntervalMs ?? DEFAULT_SMOKE_TICK_INTERVAL_MS;
-  const fillPollIntervalMs = options.fillPollIntervalMs ?? DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS;
-  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS;
-  const deadlineMs = options.deadlineMs ?? DEFAULT_SMOKE_DEADLINE_MS;
+  const { targetTicks, tickIntervalMs, fillPollIntervalMs, heartbeatIntervalMs, deadlineMs } =
+    resolveSmokeTiming(options);
   const fillSyncFailures = new FillSyncFailureRecorder(options.logger ?? new JsonLogger());
   const marketDataFetch = new MarketDataFetchRecorder(fillSyncFailures);
   const logger: Logger = marketDataFetch;
@@ -4524,7 +4254,6 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       heartbeatChannel: loggingAlertChannel('heartbeatChannel', logger),
       orphanAlerts: loggingAlertChannel('orphanAlerts', logger),
       unpricedFillAlerts: loggingAlertChannel('unpricedFillAlerts', logger),
-      ocoDoubleFillAlerts: loggingAlertChannel('ocoDoubleFillAlerts', logger),
       breachAlerts: loggingAlertChannel('breachAlerts', logger),
       loosenNotices: loggingAlertChannel('loosenNotices', logger),
       analystSkipAlerts: loggingAlertChannel('analystSkipAlerts', logger),

@@ -12,7 +12,6 @@ import type {
   FlattenReconcileAlertChannel,
   LegResizeUnverifiedAlertChannel,
   NonSterlingFeeAlertChannel,
-  OcoDoubleFillAlertChannel,
   ResidualExposureAlertChannel,
   SaxoOpenApiClient,
   SaxoSessionLostAlertChannel,
@@ -90,7 +89,6 @@ export interface AlertChannelSlots {
   orphanAlerts?: OrphanAlertChannel;
   unpricedFillAlerts?: UnpricedFillAlertChannel;
   residualExposureAlerts?: ResidualExposureAlertChannel;
-  ocoDoubleFillAlerts?: OcoDoubleFillAlertChannel;
   legResizeAlerts?: LegResizeUnverifiedAlertChannel;
   dormantLegsAlerts?: DormantLegsUnresolvedAlertChannel;
   priceUnitAlerts?: UnresolvedPriceUnitAlertChannel;

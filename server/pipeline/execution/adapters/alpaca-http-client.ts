@@ -11,12 +11,10 @@ import type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaBrokerClient,
-  AlpacaLimitOrderRequest,
   AlpacaMarketOrderRequest,
   AlpacaOcoOrderRequest,
   AlpacaOrder,
   AlpacaPosition,
-  AlpacaStopLimitOrderRequest,
 } from './alpaca-client.js';
 
 type AlpacaRequestInit = Omit<RequestInit, 'method'> & { method: AlpacaHttpMethod };
@@ -356,24 +354,6 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOcoOrder',
-      validateAlpacaOrder,
-    );
-  }
-
-  async submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder> {
-    return this.submitPlacement<AlpacaOrder>(
-      '/v2/orders',
-      { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
-      'submitLimitOrder',
-      validateAlpacaOrder,
-    );
-  }
-
-  async submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder> {
-    return this.submitPlacement<AlpacaOrder>(
-      '/v2/orders',
-      { method: 'POST', body: JSON.stringify({ ...request, type: 'stop_limit' }) },
-      'submitStopLimitOrder',
       validateAlpacaOrder,
     );
   }

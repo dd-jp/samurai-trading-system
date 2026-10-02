@@ -76,8 +76,8 @@ async function start(
     research: () => new ResearchReader(join(tmpdir(), 'no-such-research.sqlite'), clock).read(),
     evidence: () => new EvidenceReader(store, clock).read(),
     reconcile: () => new ReconcileReader(store).read(),
-    tax: (query) => new TaxReader(store, clock, []).read(query),
-    taxCsv: (query) => new TaxReader(store, clock, []).csv(query),
+    tax: (query) => new TaxReader(store, clock, () => []).read(query),
+    taxCsv: (query) => new TaxReader(store, clock, () => []).csv(query),
     onFault: (error) => faults.push(error),
   });
   await server.start();

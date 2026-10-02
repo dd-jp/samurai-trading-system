@@ -1,20 +1,31 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { listMigrations, MIGRATIONS_DIR } from '../../../shared/store/migrate.js';
+import { FX_SNAPSHOT_PATH } from '../data/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { researchStorePath } from '../trial-ledger.js';
-import { composeV2Dashboard, DASHBOARD_SCHEMA_VERSION, parseDashboardArgs } from './main.js';
+import {
+  composeV2Dashboard,
+  DASHBOARD_SCHEMA_VERSION,
+  parseDashboardArgs,
+  readFxOrNone,
+  reloadingFx,
+} from './main.js';
 
-const PATHS = {
+const DEFAULT_PATHS = {
   barStoreRoot: DEFAULT_BAR_STORE_ROOT,
   fxPath: FX_PATH,
   researchStorePath: researchStorePath({}),
   bundleRoot: 'dist/client',
 };
+const TEST_FX_DIR = mkdtempSync(join(tmpdir(), 'v2-dashboard-fx-'));
+const PATHS = { ...DEFAULT_PATHS, fxPath: join(TEST_FX_DIR, 'fx.csv') };
+copyFileSync(FX_SNAPSHOT_PATH, PATHS.fxPath);
+afterAll(() => rmSync(TEST_FX_DIR, { recursive: true, force: true }));
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 const dirs: string[] = [];
 
@@ -34,7 +45,7 @@ afterEach(() => {
 describe('parseDashboardArgs', () => {
   it('defaults to the paper store on loopback', () => {
     expect(parseDashboardArgs([], {})).toEqual({
-      ...PATHS,
+      ...DEFAULT_PATHS,
       storePath: V2_STORE_PATH,
       mode: 'paper',
       host: '127.0.0.1',
@@ -49,7 +60,13 @@ describe('parseDashboardArgs', () => {
     });
     expect(
       parseDashboardArgs(['--store', 'x.sqlite'], { HOST: '0.0.0.0', V2_DASHBOARD_PORT: '9000' }),
-    ).toEqual({ ...PATHS, storePath: 'x.sqlite', mode: 'paper', host: '0.0.0.0', port: 9000 });
+    ).toEqual({
+      ...DEFAULT_PATHS,
+      storePath: 'x.sqlite',
+      mode: 'paper',
+      host: '0.0.0.0',
+      port: 9000,
+    });
   });
 
   it.each([
@@ -245,6 +262,39 @@ describe('composeV2Dashboard', () => {
         clock,
       ),
     ).toThrow();
+  });
+});
+
+describe('readFxOrNone', () => {
+  it('restores a deleted FX file from its snapshot before reading it (#2000)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'v2-fx-seed-'));
+    dirs.push(dir);
+    writeFileSync(join(dir, 'fx.snapshot.csv'), 'DATE,XUDLUSS\n24 Sep 2026,1.322\n');
+    const path = join(dir, 'fx.csv');
+    expect(readFxOrNone(path)).toEqual([{ date: '2026-09-24', gbpUsd: 1.322 }]);
+    expect(existsSync(path)).toBe(true);
+  });
+});
+
+describe('reloadingFx', () => {
+  it('re-reads the file only when it changes, and reads a missing file as no rates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'v2-fx-'));
+    dirs.push(dir);
+    const path = join(dir, 'fx.csv');
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const fx = reloadingFx(path);
+    expect(fx()).toEqual([]);
+    writeFileSync(path, 'DATE,XUDLUSS\n24 Sep 2026,1.322\n');
+    const first = fx();
+    expect(first).toEqual([{ date: '2026-09-24', gbpUsd: 1.322 }]);
+    expect(fx()).toBe(first);
+    writeFileSync(path, 'DATE,XUDLUSS\n24 Sep 2026,1.322\n25 Sep 2026,1.3301\n');
+    expect(fx().at(-1)).toEqual({ date: '2026-09-25', gbpUsd: 1.3301 });
+    rmSync(path);
+    expect(fx()).toEqual([]);
+    const unread = stderr.mock.calls.filter(([text]) => String(text).includes(path));
+    expect(unread).toHaveLength(2);
+    stderr.mockRestore();
   });
 });
 
