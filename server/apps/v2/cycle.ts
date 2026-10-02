@@ -172,6 +172,7 @@ interface Tally {
 
 type ExitReason = 'time_stop' | 'manual_halt' | 'crossing_fill' | 'signal_exit';
 
+const BPS = 10_000;
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
 
 function positionKey(bookId: string, instrument: string): string {
@@ -951,6 +952,7 @@ class Cycle {
         size: order.size,
         detail: submission.detail,
         ...legPayload,
+        modelled_slippage_bps: this.exitSlippageBps(held, order.size, submission.outcome),
         approval: submission.approvalId,
       },
     });
@@ -1105,6 +1107,7 @@ class Cycle {
       return undefined;
     }
     this.tally.entries += 1;
+    const side: OrderSide = decision.action === 'enter_short' ? 'sell' : 'buy';
     const submission: Submission =
       approval.order === undefined
         ? { outcome: 'rejected', detail: approval.refusal, approvalId: '' }
@@ -1118,7 +1121,7 @@ class Cycle {
       instrument: decision.instrument,
       venue: decision.venue,
       leg: 'entry',
-      side: decision.action === 'enter_short' ? 'sell' : 'buy',
+      side,
       dry_run: this.deps.dryRun,
       outcome: submission.outcome,
       payload: {
@@ -1127,6 +1130,17 @@ class Cycle {
         price: decision.price,
         limit: approvedLimit(approval),
         entry_offset_bps: approval.entryOffsetBps,
+        modelled_slippage_bps: this.modelledSlippageBps(
+          decision.venue,
+          {
+            instrument: decision.instrument,
+            side,
+            qty: approval.size,
+            price: approvedLimit(approval) ?? decision.price,
+            crossesSpread: true,
+          },
+          submission.outcome,
+        ),
         trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
@@ -1134,6 +1148,30 @@ class Cycle {
       },
     });
     return submission.outcome;
+  }
+
+  // Only a submitted order reached a broker, so only its modelled cost is ever compared. The
+  // slippage a crossing fill would be charged at the cost tables of the day the order goes out,
+  // journalled so a later table refresh does not move the cost-fidelity check (#1884)
+  modelledSlippageBps(
+    venue: Venue,
+    request: SimulatedFillRequest,
+    outcome: OrderOutcome,
+  ): number | undefined {
+    if (outcome !== 'submitted' || request.price <= 0) return undefined;
+    const quote = this.deps.executor.quoteSimulatedFill(venue, request);
+    return (Math.abs(quote.price - request.price) / request.price) * BPS;
+  }
+
+  exitSlippageBps(held: Position, qty: number, outcome: OrderOutcome): number | undefined {
+    const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
+    if (bar === undefined) return undefined;
+    const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
+    return this.modelledSlippageBps(
+      held.venue,
+      { instrument: held.instrument, side, qty, price: bar.rawClose, crossesSpread: true },
+      outcome,
+    );
   }
 
   notionalGbp(decision: SleeveDecision, approval: EntryApproval): number {
