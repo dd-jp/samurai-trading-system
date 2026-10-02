@@ -2670,6 +2670,28 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(sweeps.map((sweep) => sweep.trading_date)).toEqual(['2026-09-28', '2026-09-28']);
   });
 
+  it('journals the cut of a sweep whose fetch throws', async () => {
+    const { deps } = await partFilledAtVenue(0);
+    const before = venueReads(deps).sweeps.length;
+    let thrown = false;
+    const failing = new Proxy(deps.executor, {
+      get: (target, key) => {
+        const value = Reflect.get(target, key, target);
+        if (key !== 'fetchNewFills' || thrown) {
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return () => {
+          thrown = true;
+          return Promise.reject(new Error('sweep down'));
+        };
+      },
+    });
+    await runCycle({ ...deps, executor: failing }, '2026-09-28').catch(() => undefined);
+    expect(thrown).toBe(true);
+    const sweeps = (venueReads(deps).sweeps as { trading_date: string }[]).slice(before);
+    expect(sweeps.map((sweep) => sweep.trading_date)).toEqual(['2026-09-28', '2026-09-28']);
+  });
+
   it('journals a read the venue answered with no order as null, and a failed read with its error', async () => {
     const { alpaca, deps } = await partFilledAtVenue(0);
     await runCycle(deps, '2026-09-28');

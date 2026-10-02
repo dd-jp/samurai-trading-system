@@ -495,19 +495,18 @@ describe('replay of an entry part filled at the venue before the journal booked 
     expect(result.divergences).toEqual([]);
   });
 
-  it('replays a retried date identical from the run that marked it, whatever the run before it journalled (#1990)', async () => {
-    const storePath = tamperedCopy(
-      'retried',
+  const withEarlierRun = (name: string, extra: string) =>
+    tamperedCopy(
+      name,
       `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
-         SELECT 'crashed', trading_date, last_fill_rowid, '${SPLIT_DAY}T07:29:00.000Z'
+         SELECT 'earlier', trading_date, last_fill_rowid, '${SPLIT_DAY}T07:29:00.000Z'
            FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}' ORDER BY sweep_id LIMIT 1;
-       INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
-           recorded_at)
-         SELECT 'crashed', trading_date, client_order_id, NULL, 'order read timed out',
-                '${SPLIT_DAY}T07:29:00.000Z'
-           FROM v2_fill_reads WHERE trading_date = '${SPLIT_DAY}';`,
+       ${extra}`,
       partOptions.storePath,
     );
+
+  it('replays identical a date whose earlier run stopped after its opening sweep (#1990)', async () => {
+    const storePath = withEarlierRun('stopped-at-opening', '');
     expect(
       journalRows(
         `SELECT COUNT(DISTINCT run_id) AS runs FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'`,
@@ -517,6 +516,42 @@ describe('replay of an entry part filled at the venue before the journal booked 
     const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
     expect(result.divergences).toEqual([]);
   });
+
+  it('replays identical a date with a flatten pass that did nothing, before the cycle or after its marks', async () => {
+    const storePath = withEarlierRun(
+      'idle-flatten',
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
+         VALUES ('later-flatten', '${SPLIT_DAY}', 99, '${SPLIT_DAY}T15:00:00.000Z');
+       INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES ('later-flatten', '${SPLIT_DAY}', 'v2-debate-primary-${ENTRY_DAY}-UP', 0, NULL,
+                 '${SPLIT_DAY}T15:00:00.000Z');`,
+    );
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
+  it.each([
+    [
+      'read an entry',
+      `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error, recorded_at)
+         VALUES ('earlier', '${SPLIT_DAY}', 'v2-debate-primary-${ENTRY_DAY}-UP', NULL, 'order read timed out', '${SPLIT_DAY}T07:29:00.000Z');`,
+    ],
+    [
+      'swept again',
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
+         VALUES ('earlier', '${SPLIT_DAY}', 0, '${SPLIT_DAY}T07:29:01.000Z');`,
+    ],
+  ])(
+    'flags multiple_runs, not a mismatch, when an earlier run %s (David 2026-10-02, #1990)',
+    async (_what, extra) => {
+      const storePath = withEarlierRun(`earlier-${_what.replace(' ', '-')}`, extra);
+      const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+      expect(result.divergences).toEqual([
+        { kind: 'multiple_runs', tradingDate: SPLIT_DAY, earlierRuns: ['earlier'] },
+      ]);
+    },
+  );
 
   it('diverges when the journalled fill read is missing, never defaulting it', async () => {
     const storePath = tamperedCopy(
@@ -548,4 +583,81 @@ describe('replay of an entry part filled at the venue before the journal booked 
       key: `v2-debate-primary-${SPLIT_DAY}-UP-restop`,
     });
   });
+});
+
+async function journalRetried(name: string, base: ReplayCliOptions, mode: 'restop' | 'read') {
+  const storePath = join(directory, `${name}.sqlite`);
+  const seed = openSharedStore(storePath);
+  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
+    2026,
+    100_000,
+    1_500,
+  );
+  seed.close();
+  const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
+  const broker: Broker = { filled: false, positionScale: 1 };
+  const venue: Venue = { staleStop: false, ocos: [], cancelled: new Set() };
+  const inner = splitAlpaca(broker, venue);
+  const gate = { hang: false };
+  const alpacaClient: AlpacaBrokerClient = {
+    ...inner,
+    cancelOrder: (id: string) =>
+      gate.hang && mode === 'read' ? new Promise(() => {}) : inner.cancelOrder(id),
+    getOrder: (id: string) =>
+      gate.hang && venue.ocos.length > 0 ? new Promise(() => {}) : inner.getOrder(id),
+  };
+  const runOnce = async (tradingDate: string, at: string, waitMs?: number) => {
+    clock.advanceTo(new Date(at));
+    const root = composeV2Root({
+      ...base,
+      tradingDate,
+      dryRun: false,
+      storePath,
+      clock,
+      logger: { log: () => {} },
+      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
+      newsSource: { headlines: () => Promise.resolve([]) },
+      alpacaClient,
+    });
+    try {
+      if (waitMs === undefined) await root.run();
+      else await Promise.race([root.run(), new Promise((resolve) => setTimeout(resolve, waitMs))]);
+    } finally {
+      root.close();
+    }
+  };
+  await runOnce(ENTRY_DAY, `${ENTRY_DAY}T07:30:00.000Z`);
+  Object.assign(broker, { filled: false, positionScale: 2, partial: 3, failSweeps: 1 });
+  if (mode === 'read') Object.assign(broker, { partial: undefined, failSweeps: 0 });
+  gate.hang = true;
+  await runOnce(SPLIT_DAY, `${SPLIT_DAY}T07:30:00.000Z`, 1_500);
+  gate.hang = false;
+  if (mode === 'read') Object.assign(broker, { partial: 3, failSweeps: 0 });
+  const lease = new BetterSqlite3(storePath);
+  lease.prepare('DELETE FROM v2_run_lease').run();
+  lease.close();
+  await runOnce(SPLIT_DAY, `${SPLIT_DAY}T09:30:00.000Z`);
+  return { ...base, storePath };
+}
+
+describe('replay of a date a crashed run acted on before the retry that marked it (#1990)', () => {
+  it.each([
+    ['sent a re-arm and hung before the marks', 'restop'],
+    ['read a different fill and hung cancelling', 'read'],
+  ] as const)(
+    'reports one multiple_runs and no per-order mismatch when the first run %s',
+    async (_what, mode) => {
+      const retried = await journalRetried(`retried-${mode}`, options, mode);
+      const runs = journalRows(
+        `SELECT COUNT(DISTINCT run_id) AS runs FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'`,
+        retried.storePath,
+      );
+      expect(runs).toEqual([{ runs: 2 }]);
+      const result = await replayFromFiles({ ...retried, tradingDate: SPLIT_DAY });
+      expect(result.divergences).toEqual([
+        { kind: 'multiple_runs', tradingDate: SPLIT_DAY, earlierRuns: [expect.any(String)] },
+      ]);
+    },
+    60_000,
+  );
 });

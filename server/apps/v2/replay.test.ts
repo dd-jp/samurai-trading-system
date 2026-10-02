@@ -946,6 +946,10 @@ describe('formatReplay', () => {
       'logged call 4 (v2-2026-09-30-UP, m) was never requested',
     ],
     [
+      { kind: 'multiple_runs', tradingDate: '2026-09-30', earlierRuns: ['run-1'] },
+      '2026-09-30 ran more than once: 1 earlier run(s) acted before the run that marked it, so it is not replayed; review it by hand',
+    ],
+    [
       {
         kind: 'llm_request',
         miss: {

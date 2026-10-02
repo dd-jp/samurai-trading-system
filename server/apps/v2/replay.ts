@@ -28,6 +28,7 @@ import { storeView } from './reconcile.js';
 import {
   type BookDivergence,
   bookStateDivergences,
+  earlierRunsThatActed,
   type JournalledDay,
   journalledDay,
   journalledSessions,
@@ -93,6 +94,11 @@ export type Divergence =
   | { readonly kind: 'decision_extra'; readonly bookId: string; readonly instrument: string }
   | { readonly kind: 'llm_request'; readonly miss: ReplayMiss }
   | { readonly kind: 'call_not_replayed'; readonly call: LoggedCall }
+  | {
+      readonly kind: 'multiple_runs';
+      readonly tradingDate: string;
+      readonly earlierRuns: readonly string[];
+    }
   | BookDivergence;
 
 export interface ReplayResult {
@@ -384,6 +390,31 @@ async function replayTrading(replay: ReplayCycle): Promise<{
   return { state, trading: divergences, counts };
 }
 
+function multipleRuns(
+  inputs: ReplayInputs,
+  decisions: number,
+  calls: number,
+  earlierRuns: readonly string[],
+): ReplayResult {
+  const { tradingDate } = inputs;
+  (inputs.logger ?? SILENT).log({
+    trace_id: `v2-replay-${tradingDate}`,
+    stage: 'v2',
+    level: 'error',
+    event: 'v2_replay_multiple_runs',
+    message: `${tradingDate} ran more than once and ${earlierRuns.length} earlier run(s) acted before the run that marked it; not replayed, review it by hand (David 2026-10-02, #1990)`,
+    payload: { earlier_runs: earlierRuns },
+  });
+  return {
+    tradingDate,
+    decisions,
+    calls,
+    orders: 0,
+    fills: 0,
+    divergences: [{ kind: 'multiple_runs', tradingDate, earlierRuns }],
+  };
+}
+
 export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
   const { db, tradingDate } = inputs;
   const rows = journalledDecisions(db, tradingDate);
@@ -399,6 +430,8 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
       divergences: [{ kind: 'nothing_to_replay', tradingDate }],
     };
   }
+  const earlierRuns = earlierRunsThatActed(db, day, tradingDate);
+  if (earlierRuns.length > 0) return multipleRuns(inputs, rows.length, calls.length, earlierRuns);
   const changed = inputChangesSince(db, tradingDate, inputs.bars, inputs.catalogue).map(
     (change): Divergence => ({ kind: 'input_changed_since', tradingDate, ...change }),
   );
@@ -497,6 +530,8 @@ const DESCRIBERS: DescriberOf = {
   decision_extra: (divergence) =>
     `${divergence.bookId} ${divergence.instrument}: replayed, not journalled`,
   llm_request: (divergence, redact) => describeMiss(divergence.miss, redact),
+  multiple_runs: ({ tradingDate, earlierRuns }) =>
+    `${tradingDate} ran more than once: ${earlierRuns.length} earlier run(s) acted before the run that marked it, so it is not replayed; review it by hand`,
   call_not_replayed: ({ call }) =>
     `logged call ${call.id} (${call.traceId}, ${call.model}) was never requested`,
   book_state: (divergence) =>

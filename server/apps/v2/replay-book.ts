@@ -112,6 +112,44 @@ export function journalledDay(db: StoreHandle, tradingDate: string): JournalledD
   };
 }
 
+// David 2026-10-02 (#1990): a date another run acted on before the run that marked it is flagged,
+// not replayed. A run that only swept once acted on nothing: the marking run's own opening sweep
+// re-reads the venue it saw
+export function earlierRunsThatActed(
+  db: StoreHandle,
+  day: JournalledDay,
+  tradingDate: string,
+): string[] {
+  const end = day.markedAt ?? LATEST;
+  const marking = db
+    .prepare(
+      `SELECT run_id, MIN(recorded_at) OVER (PARTITION BY run_id) AS started FROM v2_fill_sweeps
+        WHERE trading_date = ? AND recorded_at <= ?
+        ORDER BY recorded_at DESC, sweep_id DESC LIMIT 1`,
+    )
+    .get(tradingDate, end) as { run_id: string; started: string } | undefined;
+  if (marking === undefined) return [];
+  const rows = db
+    .prepare(
+      `WITH runs AS (
+         SELECT run_id, COUNT(*) AS sweeps, MIN(recorded_at) AS first FROM v2_fill_sweeps
+          WHERE trading_date = @date AND run_id <> @marking AND recorded_at <= @end
+          GROUP BY run_id)
+       SELECT run_id FROM runs
+        WHERE sweeps > 1
+           OR EXISTS (SELECT 1 FROM v2_fill_reads r WHERE r.run_id = runs.run_id)
+           OR EXISTS (SELECT 1 FROM v2_orders o WHERE o.trading_date = @date
+                        AND o.recorded_at > runs.first AND o.recorded_at < @started)
+           OR EXISTS (SELECT 1 FROM v2_fills f WHERE f.trading_date = @date
+                        AND f.recorded_at > runs.first AND f.recorded_at < @started)
+        ORDER BY first`,
+    )
+    .all({ date: tradingDate, marking: marking.run_id, end, started: marking.started }) as {
+    run_id: string;
+  }[];
+  return rows.map((row) => row.run_id);
+}
+
 const UNREAD_BY_THE_CYCLE = ['llm_call_log', 'llm_spend'] as const;
 
 export function rewoundCopy(db: StoreHandle, tradingDate: string, startedAt: string): StoreHandle {

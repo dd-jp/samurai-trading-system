@@ -306,9 +306,9 @@ class Cycle {
   }
 
   async sweepFills(): Promise<void> {
-    const sweep = await this.deps.executor.fetchNewFills(this.since());
-    for (const failure of sweep.failures) this.log('warn', 'v2_fill_sweep_failed', failure);
     try {
+      const sweep = await this.deps.executor.fetchNewFills(this.since());
+      for (const failure of sweep.failures) this.log('warn', 'v2_fill_sweep_failed', failure);
       for (const fill of sweep.fills) this.ingest(fill);
     } finally {
       this.deps.journal.recordFillSweep(this.runId, this.tradingDate);
