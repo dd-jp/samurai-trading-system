@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
@@ -155,7 +162,7 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     expect(report).toContain('## £5000 start capital, fractional');
   });
 
-  it('is reproducible: two runs over the same fixture produce byte-identical verdicts', async () => {
+  it('is reproducible: two runs over the same fixture produce byte-identical verdicts, the first from an FX file restored from its snapshot (#2000)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'momentum-repro-'));
     const fixture = await writeUsFixture(root);
     const options = {
@@ -167,7 +174,9 @@ describe('momentum runner end to end on a synthetic fixture', () => {
       fxPath: fixture.fx,
       spreadPath: fixture.spreads,
     };
+    renameSync(fixture.fx, join(root, 'fx.snapshot.csv'));
     await runVenue({ ...options, outDir: join(root, 'a') });
+    expect(existsSync(fixture.fx)).toBe(true);
     await runVenue({ ...options, outDir: join(root, 'b') });
     for (const name of ['verdict-1000-whole.json', 'verdict-1000-fractional.json']) {
       expect(readFileSync(join(root, 'a', 'us', name), 'utf8')).toBe(

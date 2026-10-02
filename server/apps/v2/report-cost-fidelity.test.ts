@@ -1,18 +1,22 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MarketData } from '../../../contracts/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { openReadOnlyStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
-import { BarsMarketData, type BarsSource, parseBoeGbpUsdCsv } from './data/index.js';
-import { FX_PATH } from './index.js';
+import {
+  BarsMarketData,
+  type BarsSource,
+  FX_SNAPSHOT_PATH,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
 import { fillQuoter, main, readBrokerOrders, reportCostFidelity } from './report-cost-fidelity.js';
 
 const NO_BARS: BarsSource = { load: () => undefined };
 const YEAR_START_GBPUSD = new BarsMarketData(
   NO_BARS,
-  parseBoeGbpUsdCsv(readFileSync(FX_PATH, 'utf8')),
+  parseBoeGbpUsdCsv(readFileSync(FX_SNAPSHOT_PATH, 'utf8')),
 ).gbpUsdAtYearStart(2026);
 
 const dirs: string[] = [];
@@ -203,7 +207,7 @@ describe('fillQuoter', () => {
 });
 
 describe('reportCostFidelity', () => {
-  it('scores the journal against the bar store and the cost model', async () => {
+  it('scores the journal against the bar store and the cost model, seeding an absent FX file from its snapshot', async () => {
     const dir = scratch();
     const storePath = join(dir, 'v2.sqlite');
     journal(
@@ -229,13 +233,17 @@ describe('reportCostFidelity', () => {
       },
     ]);
     store.close();
+    const fxPath = join(dir, 'fx.csv');
+    copyFileSync(FX_SNAPSHOT_PATH, join(dir, 'fx.snapshot.csv'));
     const text = await reportCostFidelity({
       storePath,
       barRoot: join(dir, 'bars'),
       from: '2026-09-01',
       to: '2026-09-30',
       mode: 'paper',
+      fxPath,
     });
+    expect(existsSync(fxPath)).toBe(true);
     expect(text.split('\n')).toEqual([
       expect.stringMatching(
         /^0 bps offset: 1 legs scored, realised £0\.00, modelled £[\d.]+, ratio 0\.000, FAIL \(±25%, slippage only\)$/,

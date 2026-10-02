@@ -1,4 +1,4 @@
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
   openSaxoLiveSession,
@@ -295,7 +295,13 @@ export function catalogueText(report: CfdCatalogueRefreshReport): string {
 export function writeAtomically(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const staging = `${path}.${process.pid}.tmp`;
-  writeFileSync(staging, text);
+  const fd = openSync(staging, 'w');
+  try {
+    writeFileSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(staging, path);
 }
 

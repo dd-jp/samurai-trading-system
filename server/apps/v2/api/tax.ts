@@ -119,7 +119,7 @@ export class TaxReader {
   constructor(
     private readonly db: StoreHandle,
     private readonly clock: Clock,
-    private readonly fx: readonly FxObservation[],
+    private readonly fx: () => readonly FxObservation[],
   ) {}
 
   read(query: TaxQuery): TaxWire {
@@ -148,10 +148,11 @@ export class TaxReader {
     const splits = this.db
       .prepare('SELECT instrument, split_date, ratio FROM v2_splits')
       .all() as TaxSplitRow[];
+    const fx = this.fx();
     const log = buildTaxLog(
       fills,
       splits,
-      (currency, date) => dayRateOf(this.fx, currency, date),
+      (currency, date) => dayRateOf(fx, currency, date),
       today,
     );
     return { log, year: query.year ?? taxYearOf(today) };

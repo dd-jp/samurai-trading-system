@@ -6,6 +6,7 @@ import { formatDailySummary, readDailySummary } from './daily-summary.js';
 import {
   bothVenuesClosed,
   createVenueRouter,
+  FX_SNAPSHOT_PATH,
   macroGate,
   sessionDay,
   TABLE_VENUE_SESSIONS,
@@ -232,7 +233,12 @@ function killLineEnforced(): boolean {
 
 function keylessPaperRunRefused(): boolean {
   try {
-    composeV2Root({ tradingDate: SMOKE_TRADING_DATE, dryRun: false, storePath: ':memory:' });
+    composeV2Root({
+      tradingDate: SMOKE_TRADING_DATE,
+      dryRun: false,
+      storePath: ':memory:',
+      fxPath: FX_SNAPSHOT_PATH,
+    });
     return false;
   } catch (error) {
     return error instanceof Error && /without NOUS_BASE_URL and a Nous key/.test(error.message);
@@ -308,6 +314,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
       tradingDate,
       dryRun: true,
       store,
+      fxPath: FX_SNAPSHOT_PATH,
       clock: new SimulatedClock(new Date(`${tradingDate}${SMOKE_START_UTC}`)),
       logger: { log: () => {} },
     });

@@ -80,6 +80,57 @@ function readNext(body: unknown): string | undefined {
   return isRecord(body) && typeof body.__next === 'string' ? body.__next : undefined;
 }
 
+function probeUrl(path: string): URL {
+  return new URL(path, 'https://saxo-next.invalid');
+}
+
+function nextOnRoute(nextPath: string, route: string, context: string): URLSearchParams {
+  const parsed = /^\/(?![/\\])/.test(nextPath) ? probeUrl(nextPath) : undefined;
+  if (parsed === undefined || parsed.pathname !== route) {
+    throw new SaxoBrokerProviderError(
+      `Saxo API error: __next left the ${route} route (${context}).`,
+    );
+  }
+  return parsed.searchParams;
+}
+
+function keepAccountScope(
+  nextPath: string,
+  route: string,
+  identity: AccountIdentity,
+  context: string,
+): string {
+  const echoed = [...nextOnRoute(nextPath, route, context)];
+  const missing = new URLSearchParams();
+  for (const [key, pinnedValue] of [
+    ['AccountKey', identity.accountKey],
+    ['ClientKey', identity.clientKey],
+  ] as const) {
+    const echoedValues = valuesOf(echoed, key);
+    if (echoedValues.length === 0) {
+      missing.set(key, pinnedValue);
+    } else if (echoedValues.some((value) => value !== pinnedValue)) {
+      throw new SaxoBrokerProviderError(
+        `Saxo API error: __next changed ${key} between pages (${context}).`,
+      );
+    }
+  }
+  return appendQuery(nextPath, missing.toString());
+}
+
+function valuesOf(params: readonly [string, string][], key: string): string[] {
+  const wanted = key.toLowerCase();
+  return params.filter(([name]) => name.toLowerCase() === wanted).map(([, value]) => value);
+}
+
+function appendQuery(path: string, query: string): string {
+  if (query === '') return path;
+  const hashAt = path.includes('#') ? path.indexOf('#') : path.length;
+  const head = path.slice(0, hashAt);
+  const fragment = path.slice(hashAt);
+  return `${head}${head.includes('?') ? '&' : '?'}${query}${fragment}`;
+}
+
 function requireString(row: Record<string, unknown>, field: string, context: string): string {
   const value = row[field];
   if (typeof value !== 'string') failValidation(context, `${field} must be a string`, row);
@@ -427,12 +478,18 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     return this.identity;
   }
 
+  private relativeToGateway(next: string): string {
+    return next.startsWith(this.baseUrl) ? next.slice(this.baseUrl.length) : next;
+  }
+
   private async listAll<T>(
     firstPath: string,
     context: string,
     validateRow: (raw: unknown, context: string) => T,
     priority: SaxoRequestPriority,
   ): Promise<T[]> {
+    const identity = await this.resolveIdentity();
+    const route = probeUrl(firstPath).pathname;
     const rows: T[] = [];
     let path: string | undefined = firstPath;
     while (path !== undefined) {
@@ -447,7 +504,10 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
         priority,
       );
       rows.push(...page.rows);
-      path = page.next?.startsWith(this.baseUrl) ? page.next.slice(this.baseUrl.length) : page.next;
+      path =
+        page.next === undefined
+          ? undefined
+          : keepAccountScope(this.relativeToGateway(page.next), route, identity, context);
     }
     return rows;
   }

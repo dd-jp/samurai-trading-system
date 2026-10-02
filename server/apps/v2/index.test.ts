@@ -443,6 +443,30 @@ describe('composeV2Root', () => {
     }
   });
 
+  it('restores a deleted FX file from its snapshot before composing, as the signals process needs (#2000)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    writeFileSync(join(fixtures.directory, 'fx.snapshot.csv'), readFileSync(fixtures.fxPath));
+    rmSync(fixtures.fxPath);
+    const storePath = join(fixtures.directory, 'seed.sqlite');
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      cfdCataloguePath: join(fixtures.directory, 'absent.json'),
+    });
+    try {
+      expect(readFileSync(fixtures.fxPath, 'utf8')).toBe(
+        'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n',
+      );
+    } finally {
+      root.close();
+    }
+  });
+
   function cfdEntry(instrument: string, venue: Venue, side: OrderSide) {
     return {
       instrument,

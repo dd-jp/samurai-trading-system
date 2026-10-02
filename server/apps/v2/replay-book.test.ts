@@ -193,6 +193,15 @@ describe('replay of sizing, orders, fills and marks', () => {
     },
   );
 
+  it('restores a deleted FX file from its snapshot before replaying (#2000)', async () => {
+    const fxDir = mkdtempSync(join(directory, 'fx-'));
+    copyFileSync(options.fxPath, join(fxDir, 'fx.snapshot.csv'));
+    const fxPath = join(fxDir, 'fx.csv');
+    const result = await replayFromFiles({ ...options, fxPath });
+    expect(result.divergences).toEqual([]);
+    expect(readFileSync(fxPath, 'utf8')).toBe(readFileSync(options.fxPath, 'utf8'));
+  });
+
   it('replays the exit day with its bracket exit, its fills and its re-entry', async () => {
     const result = await replayFromFiles(options);
     expect(result).toMatchObject({ orders: 6, fills: 3, divergences: [] });

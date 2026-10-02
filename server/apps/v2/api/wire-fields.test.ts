@@ -305,7 +305,7 @@ describe('the Evidence and Records routes the client reads, served over the seed
     const run = first(served.reconcile.runs);
     expect(keysOf(run)).toEqual(fieldsOf('reconcileRun'));
     expect(keysOf(first(run.diffs))).toEqual(fieldsOf('reconcileDiff'));
-    const tax = new TaxReader(routeDb, clock, []).read({ year: null, format: 'json' });
+    const tax = new TaxReader(routeDb, clock, () => []).read({ year: null, format: 'json' });
     expect(keysOf(tax)).toEqual(fieldsOf('tax'));
     if (tax.disposals.status !== 'fed') throw new Error(`tax ${tax.disposals.status}`);
     expect(keysOf(tax.disposals)).toEqual(fieldsOf('taxLog', true));

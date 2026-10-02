@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
-import type { Logger } from '../../shared/index.js';
+import { type Logger, readSeededFile } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openReadOnlyStore } from '../../shared/store/index.js';
 import { errorMessage, setExitCodeWhenInvoked } from '../../tools/cli-entrypoint.js';
@@ -94,7 +93,7 @@ export async function replayFromFiles(
       tradingDate: options.tradingDate,
       bars,
       constituents: constituentsFromCsv({ constituentsPath: options.constituentsPath }),
-      market: new BarsMarketData(bars, parseBoeGbpUsdCsv(readFileSync(options.fxPath, 'utf8'))),
+      market: new BarsMarketData(bars, parseBoeGbpUsdCsv(readSeededFile(options.fxPath))),
       catalogue: cfdCatalogueFor({ cfdCataloguePath: options.cfdCataloguePath }, SILENT),
       halfSpreadBps: halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath),
       venueSessions: options.venueSessions,

@@ -30,8 +30,10 @@ import {
   CALENDAR_REFERENCE,
   CFD_CATALOGUE_PATH,
   currentConstituents,
+  FX_PATH,
   isFresh,
 } from './data/index.js';
+import { type FxFetch, fxRefreshFor } from './fx-refresh.js';
 import { saxoBarRefreshFor } from './saxo-bar-refresh.js';
 
 export type { BarRefresh };
@@ -162,6 +164,7 @@ export function barRefreshFor(
   constituentsPath: string,
   logger: Logger,
   cfdCataloguePath: string = CFD_CATALOGUE_PATH,
+  fx: { readonly path: string; readonly fetch: FxFetch } = { path: FX_PATH, fetch },
 ): BarRefresh {
   if (dryRun) return NO_BAR_REFRESH;
   const api = new AlpacaBarsApi(credentialsFromEnv(env));
@@ -182,5 +185,10 @@ export function barRefreshFor(
     path: cfdCataloguePath,
     logger,
   });
-  return inSequence([alpaca, saxoBarRefreshFor(env, tradingDate, logger), cfdCatalogue]);
+  return inSequence([
+    alpaca,
+    saxoBarRefreshFor(env, tradingDate, logger),
+    cfdCatalogue,
+    fxRefreshFor({ ...fx, logger }),
+  ]);
 }
