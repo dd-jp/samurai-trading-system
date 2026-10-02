@@ -298,7 +298,7 @@ describe('reconcileBooks', () => {
         trading_date: DATE,
         scope: 'reconcile',
         parameter: 'BROKER_RECONCILE',
-        ticket: '#1872',
+        ticket: '#1927',
         message: `${PRIMARY.id}: entries blocked, ${summary}`,
         book_id: PRIMARY.id,
       },
@@ -352,7 +352,7 @@ describe('reconcileBooks', () => {
     });
     expect(logs).toEqual([]);
     expect(refusals).toMatchObject([
-      { parameter: 'RECONCILE_CASH_TOLERANCE_GBP', ticket: '#1872', book_id: PRIMARY.id },
+      { parameter: 'RECONCILE_CASH_TOLERANCE_GBP', ticket: '#1927', book_id: PRIMARY.id },
     ]);
   });
 
@@ -460,6 +460,28 @@ describe('reconcileOrBlockEntries', () => {
         message: summary,
       },
     ]);
+  });
+
+  it('a throwing logger does not escape the catch (#1927)', async () => {
+    const { deps } = harness(CLEAN_BROKER);
+    const outcome = await reconcileOrBlockEntries(
+      {
+        ...deps,
+        logger: {
+          log: () => {
+            throw new Error('logger down');
+          },
+        },
+        books: {
+          ...deps.books,
+          positions: () => {
+            throw new Error('SQLITE_CORRUPT');
+          },
+        },
+      },
+      DATE,
+    );
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id, SHADOW.id]));
   });
 
   it('still blocks every book when no logger is wired', async () => {
