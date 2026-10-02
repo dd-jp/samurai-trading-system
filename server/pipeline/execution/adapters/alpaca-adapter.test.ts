@@ -4628,7 +4628,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       expect(lookedUp(client)).not.toContain(`${KEY}:rearm-4`);
     });
 
-    it('stops sweeping a bracket and a re-arm once each is cancelled', async () => {
+    it('stops sweeping a cancelled re-arm, and keeps sweeping a cancelled bracket for a fill that landed before the cancel (#1990)', async () => {
       const client = makeClient({
         getOrderByClientOrderId: lookupBy({}),
         submitOcoOrder: vi.fn().mockResolvedValue(orderAt('r0', `${KEY}:rearm`, { legs: [] })),
@@ -4645,7 +4645,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       await adapter.fetchNewFills(new Date(0));
 
       expect(cancelledIds(client)).toEqual(['r0', 'alpaca-entry-1']);
-      expect(sweptIds(client)).toEqual([]);
+      expect(sweptIds(client)).toEqual(['alpaca-entry-1']);
     });
   });
 

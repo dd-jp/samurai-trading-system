@@ -204,10 +204,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       this.rearmedLegs.delete(clientOrderId);
     }
 
-    if (order !== null) {
-      await this.call('cancel', () => this.input.client.cancelOrder(order));
-      this.brackets.delete(clientOrderId);
-    }
+    // The bracket stays on the sweep's worklist, as it does across a restart: a part fill that
+    // landed before the cancel is still booked by the next sweep (#1990)
+    if (order !== null) await this.call('cancel', () => this.input.client.cancelOrder(order));
   }
 
   private async resolveCancelTargets(

@@ -50,6 +50,8 @@ type Leg = NonNullable<AlpacaOrder['legs']>[number];
 interface Broker {
   filled: boolean;
   positionScale: number;
+  partial?: number | undefined;
+  failSweeps?: number | undefined;
 }
 
 interface Venue {
@@ -79,17 +81,29 @@ function listedStop(order: AlpacaOrder, broker: Broker, venue: Venue): Record<st
 function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
   const orders: AlpacaOrder[] = [];
   const view = (order: AlpacaOrder): AlpacaOrder =>
-    broker.filled
+    broker.partial !== undefined
       ? {
           ...order,
-          status: 'filled',
-          filled_qty: order.qty,
+          status: 'partially_filled',
+          filled_qty: String(broker.partial),
           filled_avg_price: order.limit_price ?? null,
           filled_at: BROKER_FILLED_AT,
-          legs: (order.legs ?? []).map((leg) => ({ ...leg, status: legStatus(venue, leg) })),
+          legs: (order.legs ?? []).map((leg) => ({
+            ...leg,
+            status: venue.cancelled.has(leg.id) ? 'canceled' : 'held',
+          })),
         }
-      : order;
-  const held = () => (broker.filled ? orders : []);
+      : broker.filled
+        ? {
+            ...order,
+            status: 'filled',
+            filled_qty: order.qty,
+            filled_avg_price: order.limit_price ?? null,
+            filled_at: BROKER_FILLED_AT,
+            legs: (order.legs ?? []).map((leg) => ({ ...leg, status: legStatus(venue, leg) })),
+          }
+        : order;
+  const held = () => (broker.filled || broker.partial !== undefined ? orders : []);
   return {
     submitOrder: vi.fn((request) => {
       const id = `alp-${orders.length + 1}`;
@@ -122,8 +136,15 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
       return Promise.resolve(order);
     }),
     getOrder: vi.fn((id: string) => {
-      if (venue.cancelled.has(id)) return Promise.resolve({ ...orders[0], id, status: 'canceled' });
+      if ((broker.failSweeps ?? 0) > 0 && orders.some((order) => order.id === id)) {
+        broker.failSweeps = (broker.failSweeps ?? 0) - 1;
+        return Promise.reject(new Error('alpaca order read timed out'));
+      }
       const order = orders.find((candidate) => candidate.id === id);
+      if (venue.cancelled.has(id)) {
+        const cancelled = order === undefined ? orders[0] : view(order);
+        return Promise.resolve({ ...cancelled, id, status: 'canceled' });
+      }
       return order === undefined
         ? Promise.reject(new Error(`no order ${id}`))
         : Promise.resolve(view(order));
@@ -187,7 +208,7 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
       Promise.resolve(
         held().map((order) => ({
           symbol: order.symbol,
-          qty: String(Number(order.qty) * broker.positionScale),
+          qty: String((broker.partial ?? Number(order.qty)) * broker.positionScale),
           side: order.side === 'buy' ? ('long' as const) : ('short' as const),
           avg_entry_price: order.limit_price ?? '0',
         })),
@@ -222,9 +243,9 @@ function journalRows(sql: string, storePath = options.storePath): unknown[] {
   }
 }
 
-function tamperedCopy(name: string, sql: string): string {
+function tamperedCopy(name: string, sql: string, source = options.storePath): string {
   const storePath = join(directory, `${name}.sqlite`);
-  copyFileSync(options.storePath, storePath);
+  copyFileSync(source, storePath);
   const db = new BetterSqlite3(storePath);
   try {
     db.exec(sql);
@@ -236,7 +257,14 @@ function tamperedCopy(name: string, sql: string): string {
 
 let staleOptions: ReplayCliOptions;
 
-async function journalDays(name: string, base: ReplayCliOptions, staleStop: boolean) {
+let partOptions: ReplayCliOptions;
+
+async function journalDays(
+  name: string,
+  base: ReplayCliOptions,
+  staleStop: boolean,
+  splitDay: Broker = { filled: true, positionScale: 2 },
+) {
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
   new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
@@ -250,8 +278,8 @@ async function journalDays(name: string, base: ReplayCliOptions, staleStop: bool
   const alpacaClient = splitAlpaca(broker, { staleStop, ocos: [], cancelled: new Set() });
   const days: [string, Broker][] = [
     [ENTRY_DAY, { filled: false, positionScale: 1 }],
-    [SPLIT_DAY, { filled: true, positionScale: 2 }],
-    [DAY_AFTER, { filled: true, positionScale: 2 }],
+    [SPLIT_DAY, splitDay],
+    [DAY_AFTER, { ...splitDay, failSweeps: 0 }],
   ];
   for (const [tradingDate, state] of days) {
     clock.advanceTo(new Date(`${tradingDate}T07:30:00.000Z`));
@@ -304,6 +332,12 @@ beforeAll(async () => {
   };
   options = await journalDays('paper', base, false);
   staleOptions = await journalDays('stale-stop', base, true);
+  partOptions = await journalDays('part-fill', base, false, {
+    filled: false,
+    positionScale: 2,
+    partial: 3,
+    failSweeps: 1,
+  });
 });
 
 afterAll(() => {
@@ -421,5 +455,74 @@ describe('replay of a split the broker left the stop unchanged on (#1990)', () =
   it.each([ENTRY_DAY, SPLIT_DAY, DAY_AFTER])('replays %s identical', async (tradingDate) => {
     const result = await replayFromFiles({ ...staleOptions, tradingDate });
     expect(result.divergences).toEqual([]);
+  });
+});
+
+describe('replay of an entry part filled at the venue before the journal booked it (#1990)', () => {
+  const rows = (sql: string) => journalRows(sql, partOptions.storePath);
+
+  it('reads the part fill, cancels the remainder, books the fill at a mid-run sweep and re-arms it', () => {
+    expect(
+      rows(
+        `SELECT trading_date, filled_qty, error FROM v2_fill_reads WHERE filled_qty IS NOT NULL
+          ORDER BY read_id`,
+      ),
+    ).toEqual([{ trading_date: SPLIT_DAY, filled_qty: 3, error: null }]);
+    expect(
+      rows(
+        `SELECT trading_date, outcome FROM v2_orders WHERE book_id = 'debate/primary'
+            AND (leg = 'entry' OR substr(client_order_id, -7) = '-restop')
+            AND trading_date <= '${SPLIT_DAY}' ORDER BY rowid`,
+      ),
+    ).toEqual([
+      { trading_date: ENTRY_DAY, outcome: 'cancelled' },
+      { trading_date: SPLIT_DAY, outcome: 'submitted' },
+    ]);
+    const [opening, protecting] = rows(
+      `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'
+        ORDER BY sweep_id`,
+    ) as { cut: number }[];
+    expect(
+      rows(
+        `SELECT rowid AS id FROM v2_fills WHERE book_id = 'debate/primary' AND trading_date = '${SPLIT_DAY}'`,
+      ),
+    ).toEqual([{ id: protecting?.cut }]);
+    expect(opening?.cut).toBeLessThan(protecting?.cut ?? 0);
+  });
+
+  it('replays the part-fill day identical, the read and the mid-run sweep served as journalled', async () => {
+    const result = await replayFromFiles({ ...partOptions, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges when the journalled fill read is missing, never defaulting it', async () => {
+    const storePath = tamperedCopy(
+      'no-fill-reads',
+      `DROP TRIGGER v2_fill_reads_no_delete; DELETE FROM v2_fill_reads;`,
+      partOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toContainEqual({
+      kind: 'row_missing',
+      stage: 'orders',
+      key: `v2-debate-primary-${SPLIT_DAY}-UP-restop`,
+    });
+  });
+
+  it('books the fill at the sweep the journal says booked it: a later cut there loses the re-arm', async () => {
+    const storePath = tamperedCopy(
+      'late-sweep',
+      `DROP TRIGGER v2_fill_sweeps_no_update;
+       UPDATE v2_fill_sweeps SET last_fill_rowid = 0
+        WHERE sweep_id = (SELECT MIN(sweep_id) + 1 FROM v2_fill_sweeps
+                           WHERE trading_date = '${SPLIT_DAY}');`,
+      partOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toContainEqual({
+      kind: 'row_missing',
+      stage: 'orders',
+      key: `v2-debate-primary-${SPLIT_DAY}-UP-restop`,
+    });
   });
 });

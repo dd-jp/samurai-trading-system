@@ -578,6 +578,13 @@ export interface JournalledRefusal {
   readonly instrument?: string | undefined;
 }
 
+export interface JournalledFillRead {
+  readonly trading_date: string;
+  readonly client_order_id: string;
+  readonly filled_qty: number | null;
+  readonly error: string | null;
+}
+
 export interface DecisionJournal {
   recordDecision(
     bookId: string,
@@ -592,6 +599,8 @@ export interface DecisionJournal {
   restingEntries(bookId: string): readonly JournalledOrder[];
   partFilledEntries(bookId: string, before?: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
+  recordFillRead(read: JournalledFillRead): void;
+  recordFillSweep(tradingDate: string): void;
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordSplit(split: JournalledSplit): void;

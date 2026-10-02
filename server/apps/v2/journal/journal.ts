@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   DecisionJournal,
   JournalledFill,
+  JournalledFillRead,
   JournalledOrder,
   JournalledReconcile,
   JournalledRefusal,
@@ -175,6 +176,24 @@ export class Journal implements DecisionJournal {
       )
       .all(bookId, before ?? null, before ?? null) as { client_order_id: string }[];
     return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
+  }
+
+  recordFillRead(read: JournalledFillRead): void {
+    this.db
+      .prepare(
+        `INSERT INTO v2_fill_reads (trading_date, client_order_id, filled_qty, error, recorded_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(read.trading_date, read.client_order_id, read.filled_qty, read.error, this.#now());
+  }
+
+  recordFillSweep(tradingDate: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO v2_fill_sweeps (trading_date, last_fill_rowid, recorded_at)
+         VALUES (?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), ?)`,
+      )
+      .run(tradingDate, this.#now());
   }
 
   markCancelled(clientOrderId: string, detail: string): void {

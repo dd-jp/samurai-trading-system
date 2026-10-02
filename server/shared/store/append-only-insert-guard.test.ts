@@ -18,6 +18,32 @@ const SIGNAL_COLUMNS = `signal_id, payload_digest, symbol, entry_low, entry_high
 
 const CASES: readonly Case[] = [
   {
+    table: 'v2_fill_reads',
+    seed: `INSERT INTO v2_fill_reads (read_id, trading_date, client_order_id, filled_qty, error, recorded_at)
+      VALUES (1, '2026-10-01', 'entry', 4, NULL, '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same read_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_fill_reads (read_id, trading_date, client_order_id, filled_qty, error, recorded_at)
+          VALUES (1, '2026-10-01', 'entry', 0, NULL, '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
+    table: 'v2_fill_sweeps',
+    seed: `INSERT INTO v2_fill_sweeps (sweep_id, trading_date, last_fill_rowid, recorded_at)
+      VALUES (1, '2026-10-01', 3, '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same sweep_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_fill_sweeps (sweep_id, trading_date, last_fill_rowid, recorded_at)
+          VALUES (1, '2026-10-01', 9, '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_reconciles',
     seed: `INSERT INTO v2_reconciles (reconcile_id, trading_date, venue, source, status, book_ids, diffs, detail, recorded_at)
       VALUES (1, '2026-10-01', 'alpaca', 'broker', 'mismatch', '[]', '[]', 'original', '2026-10-01T07:00:00.000Z')`,

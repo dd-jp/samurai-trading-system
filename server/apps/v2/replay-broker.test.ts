@@ -117,6 +117,63 @@ describe('JournalReplayBroker', () => {
     expect(await ids()).toEqual(['early', 'late']);
   });
 
+  const swept = () =>
+    db
+      .prepare(
+        `INSERT INTO v2_fill_sweeps (trading_date, last_fill_rowid, recorded_at)
+         VALUES (?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), 'now')`,
+      )
+      .run(DAY);
+
+  it('serves each sweep exactly the fills its journalled sweep had booked, and fails a sweep never journalled (#1990)', async () => {
+    order('sent', 'submitted', {});
+    fill('alpaca:first', 'sent', 7);
+    swept();
+    swept();
+    fill('alpaca:mid', 'sent', 7);
+    swept();
+    fill('alpaca:after', 'sent', 7);
+    const sweeping = broker();
+    const ids = async () => (await sweeping.fetchNewFills()).map((f) => f.broker_fill_id);
+    expect(await ids()).toEqual(['first']);
+    expect(await ids()).toEqual(['first']);
+    expect(await ids()).toEqual(['first', 'mid']);
+    await expect(sweeping.fetchNewFills()).rejects.toThrow(
+      `replay: row_missing: no journalled fill sweep 4 on ${DAY}`,
+    );
+  });
+
+  it('re-serves each journalled fill read of an order in turn, and fails one never journalled (#1990)', async () => {
+    const read = (clientOrderId: string, qty: number | null, error: string | null = null) =>
+      db
+        .prepare(
+          `INSERT INTO v2_fill_reads (trading_date, client_order_id, filled_qty, error, recorded_at)
+           VALUES (?, ?, ?, ?, 'now')`,
+        )
+        .run(DAY, clientOrderId, qty, error);
+    read('entry', 4);
+    read('entry', null);
+    read('entry', null, 'order read timed out');
+    read('other', 2);
+    db.prepare(
+      `INSERT INTO v2_fill_reads (trading_date, client_order_id, filled_qty, error, recorded_at)
+       VALUES ('2026-09-29', 'entry', 9, NULL, 'now')`,
+    ).run();
+    const replay = broker();
+    await expect(replay.getOrder('entry')).resolves.toEqual({
+      client_order_id: 'entry',
+      broker_order_ids: [],
+      order_state: 'submitted',
+      filled_qty: 4,
+    });
+    await expect(replay.getOrder('entry')).resolves.toBeNull();
+    await expect(replay.getOrder('entry')).rejects.toThrow('order read timed out');
+    await expect(replay.getOrder('entry')).rejects.toThrow(
+      `replay: row_missing: no journalled fill read 4 of entry on ${DAY}`,
+    );
+    await expect(replay.getOrder('other')).resolves.toMatchObject({ filled_qty: 2 });
+  });
+
   it('serves every fill at the first sweep when the day journalled no reconcile', async () => {
     order('sent', 'submitted', {});
     fill('alpaca:late', 'sent', 7, 0, { at: `${DAY}T23:59:00.000Z` });
@@ -156,7 +213,6 @@ describe('JournalReplayBroker', () => {
     expect(await state('rearmed-exit')).toBe('cancelled');
     expect(await state('filled-exit')).toBe('filled');
     expect(await state('working-exit')).toBe('submitted');
-    await expect(broker().getOrder()).resolves.toBeNull();
     await expect(broker().getOpenPositions()).resolves.toEqual([]);
     await expect(broker().resizeProtectiveLegs()).resolves.toBeUndefined();
   });

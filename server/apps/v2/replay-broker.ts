@@ -76,9 +76,12 @@ function replaceRefusal(step: StopReplaceStep | null, detail: string): Error {
     : new ProtectiveReplaceError(step, detail, { cause: undefined });
 }
 
+const ALL_ROWS = Number.MAX_SAFE_INTEGER;
+
 export class JournalReplayBroker implements BrokerAdapter {
   #sweeps = 0;
   readonly #restops = new Map<string, number>();
+  readonly #reads = new Map<string, number>();
 
   constructor(private readonly day: JournalBrokerDay) {}
 
@@ -95,8 +98,34 @@ export class JournalReplayBroker implements BrokerAdapter {
     return this.#answer(clientOrderId);
   }
 
-  getOrder(): Promise<NormalizedOrder | null> {
-    return Promise.resolve(null);
+  // Each read the replayed cycle makes re-serves the journalled read in turn; one with no recording
+  // fails, since a default would decide the replay differently from the run
+  getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
+    const index = this.#reads.get(clientOrderId) ?? 0;
+    this.#reads.set(clientOrderId, index + 1);
+    const read = this.day.db
+      .prepare(
+        `SELECT filled_qty, error FROM v2_fill_reads
+         WHERE trading_date = ? AND client_order_id = ? ORDER BY read_id LIMIT 1 OFFSET ?`,
+      )
+      .get(this.day.tradingDate, clientOrderId, index) as
+      | { filled_qty: number | null; error: string | null }
+      | undefined;
+    if (read === undefined) {
+      return Promise.reject(
+        new Error(
+          `replay: row_missing: no journalled fill read ${index + 1} of ${clientOrderId} on ${this.day.tradingDate}`,
+        ),
+      );
+    }
+    if (read.error !== null) return Promise.reject(new Error(read.error));
+    if (read.filled_qty === null) return Promise.resolve(null);
+    return Promise.resolve({
+      client_order_id: clientOrderId,
+      broker_order_ids: [],
+      order_state: 'submitted',
+      filled_qty: read.filled_qty,
+    });
   }
 
   resumeFlatten(clientOrderId: string): Promise<NormalizedOrder | null> {
@@ -111,13 +140,18 @@ export class JournalReplayBroker implements BrokerAdapter {
   fetchNewFills(): Promise<NormalizedFill[]> {
     const { db, tradingDate, venue, quotePerGbp } = this.day;
     this.#sweeps += 1;
-    const cut = this.#sweeps === 1 ? this.#firstReconcileAt() : LATEST;
+    let cut: number;
+    try {
+      cut = this.#sweepCut(this.#sweeps);
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const rows = db
       .prepare(
         `SELECT fill_id, client_order_id, leg, qty, price_gbp, fee_gbp, filled_at, recorded_at
          FROM v2_fills
          WHERE trading_date = ? AND venue = ? AND substr(fill_id, 1, length(?)) <> ?
-           AND recorded_at <= ?
+           AND rowid <= ?
          ORDER BY rowid`,
       )
       .all(tradingDate, venue, `${venue}:sim-`, `${venue}:sim-`, cut) as BrokerFillRow[];
@@ -214,6 +248,32 @@ export class JournalReplayBroker implements BrokerAdapter {
 
   // The cycle reconciles after its first sweep, so a fill journalled after the day's first
   // reconcile was booked at the second sweep and must not be visible to the decisions or exits
+  // Each sweep serves the fills the journalled sweep in the same place had booked. A day journalled
+  // before sweeps were recorded swept once before its first reconcile and once at the close
+  #sweepCut(sweep: number): number {
+    const { db, tradingDate } = this.day;
+    const recorded = db
+      .prepare(
+        `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps WHERE trading_date = ?
+         ORDER BY sweep_id`,
+      )
+      .all(tradingDate) as { cut: number }[];
+    if (recorded.length === 0)
+      return sweep === 1 ? this.#rowidAt(this.#firstReconcileAt()) : ALL_ROWS;
+    const row = recorded[sweep - 1];
+    if (row === undefined) {
+      throw new Error(`replay: row_missing: no journalled fill sweep ${sweep} on ${tradingDate}`);
+    }
+    return row.cut;
+  }
+
+  #rowidAt(at: string): number {
+    const row = this.day.db
+      .prepare('SELECT COALESCE(MAX(rowid), 0) AS cut FROM v2_fills WHERE recorded_at <= ?')
+      .get(at) as { cut: number };
+    return row.cut;
+  }
+
   #firstReconcileAt(): string {
     const row = this.day.db
       .prepare('SELECT MIN(recorded_at) AS at FROM v2_reconciles WHERE trading_date = ?')

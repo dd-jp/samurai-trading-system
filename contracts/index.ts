@@ -102,6 +102,7 @@ export type {
   FillLeg,
   FillSweep,
   JournalledFill,
+  JournalledFillRead,
   JournalledOrder,
   JournalledReconcile,
   JournalledRefusal,

@@ -307,6 +307,7 @@ class Cycle {
     const sweep = await this.deps.executor.fetchNewFills(this.since());
     for (const failure of sweep.failures) this.log('warn', 'v2_fill_sweep_failed', failure);
     for (const fill of sweep.fills) this.ingest(fill);
+    this.deps.journal.recordFillSweep(this.tradingDate);
   }
 
   since(): string {
@@ -987,8 +988,10 @@ class Cycle {
     try {
       filled = await this.deps.executor.filledQty(route, id, instrument);
     } catch (error) {
+      this.recordFillRead(id, null, describeThrownSafely(error));
       return this.keepEntry(book, order, 'error', 'v2_entry_fill_read_failed', error);
     }
+    this.recordFillRead(id, filled ?? null, null);
     try {
       await this.deps.executor.cancel(route, id, instrument);
       this.deps.journal.markCancelled(id, this.tradingDate);
@@ -996,6 +999,15 @@ class Cycle {
       return this.keepEntry(book, order, 'warn', 'v2_cancel_failed', error);
     }
     return filled ?? 0;
+  }
+
+  recordFillRead(clientOrderId: string, filledQty: number | null, error: string | null): void {
+    this.deps.journal.recordFillRead({
+      trading_date: this.tradingDate,
+      client_order_id: clientOrderId,
+      filled_qty: filledQty,
+      error,
+    });
   }
 
   // Still resting at the broker: block a fresh opposite entry here too, or its fill could later
