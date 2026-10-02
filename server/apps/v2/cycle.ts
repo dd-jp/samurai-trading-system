@@ -960,15 +960,19 @@ class Cycle {
     let cancelled = 0;
     const partFilled: JournalledOrder[] = [];
     for (const order of [...orders, ...booked]) {
-      const route = routeOf(book, order.venue as Venue);
-      if (!this.deps.executor.canRoute(route)) continue;
-      const filled = await this.cancelEntry(book, route, order);
+      const filled = await this.cancelRoutable(book, order);
       if (filled === undefined) continue;
       cancelled += 1;
       if (filled > 0 || booked.includes(order)) partFilled.push(order);
     }
     if (partFilled.length > 0) await this.protectPartFills(book, partFilled, protect);
     return cancelled;
+  }
+
+  cancelRoutable(book: BookSpec, order: JournalledOrder): Promise<number | undefined> {
+    const route = routeOf(book, order.venue as Venue);
+    if (!this.deps.executor.canRoute(route)) return Promise.resolve(undefined);
+    return this.cancelEntry(book, route, order);
   }
 
   // The journal calls an entry unfilled until a sweep books its fill, and Alpaca holds a bracket's
@@ -1016,20 +1020,26 @@ class Cycle {
     protect: PartFillProtection,
   ): Promise<void> {
     await this.sweepFills();
-    for (const order of orders) {
-      const held = this.deps.books.position(book.id, order.instrument);
-      if (held === undefined) {
-        this.log(
-          'error',
-          'v2_part_fill_unbooked',
-          `${order.client_order_id}: cancelled with a fill the venue reports and the sweep has not delivered; the next reconcile re-arms it`,
-        );
-        continue;
-      }
-      if (!stopReplaceable(held, order.venue as Venue)) continue;
-      if (protect === 'exit') await this.submitExit(book, held, 'manual_halt');
-      else await this.replaceStop(book, held);
+    for (const order of orders) await this.protectPartFill(book, order, protect);
+  }
+
+  async protectPartFill(
+    book: BookSpec,
+    order: JournalledOrder,
+    protect: PartFillProtection,
+  ): Promise<void> {
+    const held = this.deps.books.position(book.id, order.instrument);
+    if (held === undefined) {
+      this.log(
+        'error',
+        'v2_part_fill_unbooked',
+        `${order.client_order_id}: cancelled with a fill the venue reports and the sweep has not delivered; the next reconcile re-arms it`,
+      );
+      return;
     }
+    if (!stopReplaceable(held, order.venue as Venue)) return;
+    if (protect === 'exit') await this.submitExit(book, held, 'manual_halt');
+    else await this.replaceStop(book, held);
   }
 
   async cancelEntriesBlockedAtLastMark(): Promise<void> {
