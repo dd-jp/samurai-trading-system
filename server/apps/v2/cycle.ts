@@ -446,8 +446,9 @@ class Cycle {
     this.log('error', 'v2_crossing_fill', message);
   }
 
-  // A position whose rescale threw keeps its pre-split qty and levels: an exit or mark on them
-  // books a phantom split-sized loss, so it waits for a cycle whose rescale succeeds
+  // A position whose rescale threw keeps its pre-split qty and levels: an exit on them trades the
+  // wrong qty at the wrong levels and a mark persists a loss-budget row the next cycle sizes from,
+  // so both wait for a cycle whose rescale succeeds
   rescaleSplitPositions(): void {
     const thrown: unknown[] = [];
     for (const sleeveId of this.deps.registry.ids()) {
@@ -463,9 +464,6 @@ class Cycle {
       positions = this.deps.books.positions(book.id);
     } catch (error) {
       this.#unrescaledBooks.add(book.id);
-      this.refusals.push(
-        `${book.id}: split rescale threw reading its positions, so no exit and marked at the entry price this cycle`,
-      );
       return [error];
     }
     const thrown: unknown[] = [];
@@ -474,13 +472,18 @@ class Cycle {
         this.rescaleForSplit(book, held);
       } catch (error) {
         this.#unrescaled.add(positionKey(book.id, held.instrument));
-        this.refusals.push(
-          `${book.id} ${held.instrument}: split rescale threw, so no exit and marked at the entry price this cycle`,
-        );
         thrown.push(error);
       }
     }
     return thrown;
+  }
+
+  refuseMarkIfRescaleThrew(): void {
+    const unrescaled = [...this.#unrescaledBooks, ...this.#unrescaled];
+    if (unrescaled.length === 0) return;
+    const message = `split rescale threw for ${unrescaled.join(', ')}; the date stays unmarked for a retry`;
+    this.log('error', 'v2_split_rescale_unmarked', message);
+    throw new Error(message);
   }
 
   rescaleThrew(bookId: string, instrument: string): boolean {
@@ -1513,7 +1516,7 @@ class Cycle {
     this.deps.books.markDay(
       book.id,
       this.tradingDate,
-      (i, v) => (this.rescaleThrew(book.id, i) ? undefined : this.markGbp(i, v)),
+      (i, v) => this.markGbp(i, v),
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
       this.deps.venueSessions?.timeStopPausedVenues(previous?.tradingDate, this.tradingDate),
     );
@@ -1840,6 +1843,7 @@ async function runUnmarked(
     }
   }
   await sweepFillsBeforeMarks(deps, cycle, tradingDate);
+  cycle.refuseMarkIfRescaleThrew();
   const bookReports = await cycle.markAll(books);
   refusals.push(...cycle.refusals);
   const { tally } = cycle;

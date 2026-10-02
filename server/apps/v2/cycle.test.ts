@@ -3726,15 +3726,24 @@ describe('runCycle: positions held across a split (#1865)', () => {
     });
   }
 
-  it('a position whose split rescale throws rolls back, books no exit and marks at entry, while the others rescale and exit (#1927)', async () => {
+  it('a position whose split rescale throws rolls back, books no exit and leaves the date unmarked, while the others rescale and exit (#1927)', async () => {
     const deps = harness([], true);
-    hold(deps, 101);
+    hold(deps, 101, '2026-09-25', 0.98);
     holdMsft(deps, 4);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const before = deps.books.lastDay('debate/primary');
     const exitAapl: SleeveDecision = { ...longAapl, action: 'exit', reason: 'judge exit' };
     deps.setDecisions([exitAapl, { ...exitAapl, instrument: 'MSFT', inputs_hash: 'm' }]);
-    const journal = cashInLieuFails(deps, 'seed');
-    const report = await runCycle({ ...withMarket(deps, threeForTwo), journal }, '2026-09-29');
+    const logs: LogEntry[] = [];
+    const failing = {
+      ...withMarket(deps, threeForTwo),
+      journal: cashInLieuFails(deps, 'seed'),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
 
+    await expect(runCycle(failing, '2026-09-29')).rejects.toThrow(
+      'split rescale threw for debate/primary|AAPL; the date stays unmarked for a retry',
+    );
     expect(primary(deps)).toMatchObject({ qty: 101, splitFactor: 1 });
     expect(primary(deps)?.splitAnchorDate).toBeUndefined();
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
@@ -3745,24 +3754,23 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT-exit')).toMatchObject({
       payload: { size: 6, reason: 'signal_exit' },
     });
-    expect(report.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
-    expect(deps.books.lastDay('debate/primary')?.state).toMatchObject({
-      halted: false,
-      sizeMultiplier: 1,
-    });
-    expect(report.refusals).toEqual(
-      expect.arrayContaining([
-        'debate/primary AAPL: split rescale threw, so no exit and marked at the entry price this cycle',
-        'debate/primary: entries blocked, split rescale threw: disk full',
-      ]),
-    );
+    expect(deps.books.isMarked('2026-09-29')).toBe(false);
+    expect(deps.books.lastDay('debate/primary')).toEqual(before);
+    expect(logs.filter((entry) => entry.level === 'error').map((entry) => entry.event)).toEqual([
+      'v2_split_rescale_threw',
+      'v2_split_rescale_unmarked',
+    ]);
 
-    const next = await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    const retry = await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
     expect(primary(deps)).toMatchObject({ qty: 151, splitFactor: 1.5 });
-    expect(next.books[0]?.equity_gbp).toBeCloseTo(1_000, 0);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
+      payload: { size: 151, reason: 'signal_exit' },
+    });
+    expect(retry.books[0]?.equity_gbp).toBeCloseTo(before?.equityGbp ?? 0, 9);
+    expect(before?.equityGbp).toBeCloseTo(1_000 + (101 * 20 * 0.02) / FX, 9);
   });
 
-  it('a throw reading a book for its split rescale holds every exit in that book this cycle (#1927)', async () => {
+  it('a throw reading a book for its split rescale holds every exit in that book and leaves the date unmarked (#1927)', async () => {
     const deps = harness([], true);
     hold(deps, 101);
     let reads = 0;
@@ -3772,14 +3780,13 @@ describe('runCycle: positions held across a split (#1865)', () => {
       if (reads === 1) throw new Error('SQLITE_BUSY');
       return positions(bookId);
     });
-    const report = await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
 
+    await expect(runCycle(withMarket(deps, threeForTwo), '2026-09-29')).rejects.toThrow(
+      'split rescale threw for debate/primary; the date stays unmarked for a retry',
+    );
     expect(primary(deps)).toMatchObject({ qty: 101, splitFactor: 1 });
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
-    expect(report.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
-    expect(report.refusals).toContain(
-      'debate/primary: split rescale threw reading its positions, so no exit and marked at the entry price this cycle',
-    );
+    expect(deps.books.lastDay('debate/primary')).toBeUndefined();
   });
 
   it('measures a second split from the anchor the first one left', async () => {
@@ -3856,6 +3863,23 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toBeUndefined();
     const proceeds = (60 * 2 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
     expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX + proceeds, 9);
+  });
+
+  it('leaves a pending simulated flatten unfilled while its position cannot be rescaled (#1927)', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    deps.setControl('halt');
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const journal = cashInLieuFails(deps, 'seed');
+
+    await expect(
+      runCycle({ ...withMarket(deps, threeForTwo), journal }, '2026-09-29'),
+    ).rejects.toThrow('split rescale threw for debate/primary|AAPL');
+    expect(exitFill(deps, 'v2-debate-primary-2026-09-28-AAPL-exit')).toBeUndefined();
+    expect(primary(deps)).toMatchObject({
+      qty: 101,
+      exitClientOrderId: 'v2-debate-primary-2026-09-28-AAPL-exit',
+    });
   });
 
   function loggedDeps(deps: Harness): { deps: Harness; entries: LogEntry[] } {
@@ -4767,11 +4791,8 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     });
     arm(deps, () => sweeps > 0);
     const logs: LogEntry[] = [];
-    const report = await runCycle(
-      { ...deps, logger: { log: (entry) => logs.push(entry) } },
-      '2026-09-29',
-    );
-    return { alpaca, deps, report, logs };
+    const run = runCycle({ ...deps, logger: { log: (entry) => logs.push(entry) } }, '2026-09-29');
+    return { alpaca, deps, run, logs };
   }
 
   function throwOnceWhen<T extends object>(target: T, method: keyof T, when: () => boolean) {
@@ -4786,46 +4807,62 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     }) as never);
   }
 
-  it.each([
-    {
-      step: 'split rescale',
-      event: 'v2_split_rescale_threw',
-      arm: (deps: Harness, swept: () => boolean) => throwOnceWhen(deps.books, 'positions', swept),
-      flattens: [],
-    },
-    {
-      step: 'cancel of entries blocked at the last mark',
-      event: 'v2_entry_cancel_threw',
-      arm: (deps: Harness, swept: () => boolean) => throwOnceWhen(deps.books, 'lastDay', swept),
-      flattens: ['v2-debate-primary-2026-09-29-AAPL-exit'],
-    },
-  ])(
-    'a throw from the $step blocks every book entry, exits what it can and alerts critical (#1927)',
-    async ({ step, event, arm, flattens }) => {
-      const { alpaca, deps, report, logs } = await heldAaplThrowingAfterSweep(arm);
+  it('a throw from the cancel of entries blocked at the last mark blocks every book entry, still exits and alerts critical (#1927)', async () => {
+    const { alpaca, deps, run, logs } = await heldAaplThrowingAfterSweep((armed, swept) =>
+      throwOnceWhen(armed.books, 'lastDay', swept),
+    );
+    const report = await run;
+    const step = 'cancel of entries blocked at the last mark';
 
-      expect(report.skipped).toBe(false);
-      expect(alpaca.flattens).toEqual(flattens);
-      expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
-      expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
-      expect(report.refusals).toEqual(
-        expect.arrayContaining([
-          `debate/primary: entries blocked, ${step} threw: SQLITE_BUSY`,
-          `debate/no-macro-gate: entries blocked, ${step} threw: SQLITE_BUSY`,
-        ]),
-      );
-      expect(logs).toContainEqual(expect.objectContaining({ level: 'error', event }));
-      expect(logs.map((entry) => entry.event)).not.toContain('v2_reconcile_threw');
-    },
-  );
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
+    expect(report.refusals).toEqual(
+      expect.arrayContaining([
+        `debate/primary: entries blocked, ${step} threw: SQLITE_BUSY`,
+        `debate/no-macro-gate: entries blocked, ${step} threw: SQLITE_BUSY`,
+      ]),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'v2_entry_cancel_threw' }),
+    );
+    expect(logs.map((entry) => entry.event)).not.toContain('v2_reconcile_threw');
+  });
+
+  it('a throw from the split rescale blocks every book entry, holds that book exits and leaves the date unmarked (#1927)', async () => {
+    const { alpaca, deps, run, logs } = await heldAaplThrowingAfterSweep((armed, swept) =>
+      throwOnceWhen(armed.books, 'positions', swept),
+    );
+
+    await expect(run).rejects.toThrow(
+      'split rescale threw for debate/primary; the date stays unmarked for a retry',
+    );
+    expect(alpaca.flattens).toEqual([]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+    expect(logs.filter((entry) => entry.level === 'error').map((entry) => entry.event)).toEqual([
+      'v2_split_rescale_threw',
+      'v2_split_rescale_unmarked',
+    ]);
+    expect((deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca').blocked).toContain(
+      'debate/primary',
+    );
+  });
 
   it('two throwing steps journal one combined refusal per book and one read_failed row per venue group (#1927)', async () => {
-    const { deps, report, logs } = await heldAaplThrowingAfterSweep((armed, swept) => {
-      throwOnceWhen(armed.books, 'positions', swept);
-      throwOnceWhen(armed.books, 'lastDay', swept);
+    const { deps, run, logs } = await heldAaplThrowingAfterSweep((armed) => {
+      let swept = false;
+      vi.mocked(armed.executor.fetchNewFills).mockImplementationOnce(() => {
+        swept = true;
+        return Promise.reject(new Error('SQLITE_BUSY'));
+      });
+      throwOnceWhen(armed.books, 'lastDay', () => swept);
     });
+    const report = await run;
     const summary =
-      'split rescale threw: SQLITE_BUSY; cancel of entries blocked at the last mark threw: SQLITE_BUSY';
+      'fill sweep threw: SQLITE_BUSY; cancel of entries blocked at the last mark threw: SQLITE_BUSY';
 
     expect(report.refusals.filter((refusal) => refusal.includes('entries blocked'))).toEqual([
       `debate/primary: entries blocked, ${summary}`,
@@ -4838,7 +4875,7 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
       ),
     ).toEqual([{ detail: summary }]);
     expect(logs.filter((entry) => entry.level === 'error').map((entry) => entry.event)).toEqual(
-      expect.arrayContaining(['v2_split_rescale_threw', 'v2_entry_cancel_threw']),
+      expect.arrayContaining(['v2_fill_sweep_threw', 'v2_entry_cancel_threw']),
     );
   });
 
