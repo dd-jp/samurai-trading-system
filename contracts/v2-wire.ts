@@ -1,4 +1,4 @@
-import type { ControlAction, SleeveAction, Venue } from './v2.js';
+import type { ControlAction, FillLeg, SleeveAction, Venue } from './v2.js';
 import { contractVersionOf } from './version.js';
 
 export type PanelWire<T> =
@@ -200,6 +200,7 @@ export type JournalActionFilterWire = SleeveAction | 'vetoed';
 
 export interface JournalFillWire {
   readonly fill_id: string;
+  readonly leg: FillLeg;
   readonly qty: number;
   readonly price_gbp: number;
   readonly fee_gbp: number;
@@ -561,6 +562,7 @@ export const V2_WIRE_FIELD_NAMES = {
   ]),
   journalFill: fieldsOf<JournalFillWire>()([
     'fill_id',
+    'leg',
     'qty',
     'price_gbp',
     'fee_gbp',
