@@ -45,7 +45,12 @@ test.describe('pause, halt and resume from the UI', () => {
     await expect(state).toContainText('State: RUNNING');
     await expect(panel.getByRole('button', { name: 'Resume' })).toHaveCount(0);
 
-    await send(panel, 'Pause entries', 'e2e pause', /^Recorded: pause #1\./);
+    await send(
+      panel,
+      'Pause entries',
+      'e2e pause',
+      /^Recorded: pause #1\. It takes effect at the next cycle\.$/,
+    );
     await expect(state).toContainText('State: PAUSED');
     await expect(state).toContainText('from dashboard 127.0.0.1: e2e pause');
     await expect(page.getByRole('banner')).toContainText('PAUSED');
@@ -55,7 +60,12 @@ test.describe('pause, halt and resume from the UI', () => {
     expect(await retryAfterSeconds(panel.getByRole('status'))).toBeGreaterThanOrEqual(8);
     await expect(state).toContainText('State: PAUSED');
 
-    await send(panel, 'Halt: flat at next fill', 'e2e halt', /^Recorded: halt #2\./);
+    await send(
+      panel,
+      'Halt: flat at next fill',
+      'e2e halt',
+      /^Recorded: halt #2\. Positions close within about a minute, or at the next cycle if the signals process is down\.$/,
+    );
     await expect(state).toContainText('State: HALTED (manual)');
     await expect(state).toContainText('e2e halt');
 
