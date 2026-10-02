@@ -9,6 +9,7 @@ import {
   healthchecksHeartbeat,
   heartbeatFor,
   NO_HEARTBEAT,
+  optionalHeartbeat,
   pingJournal,
   withHeartbeat,
 } from './heartbeat.js';
@@ -244,5 +245,53 @@ describe('a missing store', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('optionalHeartbeat', () => {
+  const spec = {
+    dryRun: false,
+    envName: 'HC_TEST_URL',
+    subject: 'widget',
+    traceId: 'v2-widget',
+    unsetEvent: 'v2_widget_heartbeat_unset',
+  };
+
+  it('pings the env URL when set', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const { logger } = recorder();
+    await optionalHeartbeat(spec, { HC_TEST_URL: SECRET }, fetchImpl, logger)('success');
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([SECRET]);
+  });
+
+  it.each([undefined, '', '  '])('warns once and never pings when the URL is %j', async (raw) => {
+    const fetchImpl = vi.fn();
+    const { entries, logger } = recorder();
+    const beat = optionalHeartbeat(spec, { HC_TEST_URL: raw }, fetchImpl, logger);
+    await beat('success');
+    await beat('fail');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(entries).toEqual([
+      {
+        trace_id: 'v2-widget',
+        stage: 'v2',
+        level: 'warn',
+        event: 'v2_widget_heartbeat_unset',
+        message: 'HC_TEST_URL is not set: no healthchecks ping for the widget',
+      },
+    ]);
+  });
+
+  it('never pings or warns in a dry run', async () => {
+    const fetchImpl = vi.fn();
+    const { entries, logger } = recorder();
+    await optionalHeartbeat(
+      { ...spec, dryRun: true },
+      { HC_TEST_URL: SECRET },
+      fetchImpl,
+      logger,
+    )('success');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(entries).toEqual([]);
   });
 });

@@ -11,6 +11,7 @@ export interface SignalLoopDeps {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly openRoot: (tradingDate: string) => Pick<V2Root, 'processSignals' | 'close'>;
+  readonly onPass?: (ok: boolean) => void;
 }
 
 export class SignalLoop {
@@ -44,8 +45,10 @@ export class SignalLoop {
       if (!signalsDue(this.deps, now)) return;
       root = this.deps.openRoot(sessionDate(now));
       this.#report(await root.processSignals(this.deps.signals, now));
+      this.deps.onPass?.(true);
     } catch (error) {
       this.#log('error', 'v2_signal_pass_failed', describeThrownSafely(error));
+      this.deps.onPass?.(false);
     } finally {
       root?.close();
     }

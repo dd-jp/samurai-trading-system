@@ -5,7 +5,7 @@ export type HeartbeatOutcome = 'success' | 'fail';
 
 export type Heartbeat = (outcome: HeartbeatOutcome) => Promise<void>;
 
-type Fetch = (
+export type HeartbeatFetch = (
   url: string,
   init: { method: string; signal: AbortSignal },
 ) => Promise<{
@@ -24,13 +24,41 @@ export const NO_HEARTBEAT: Heartbeat = () => Promise.resolve();
 export function heartbeatFor(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
-  fetchImpl: Fetch,
+  fetchImpl: HeartbeatFetch,
   logger: Logger,
   onSent?: PingSink,
 ): Heartbeat {
   return argv.includes('--dry-run')
     ? NO_HEARTBEAT
     : healthchecksHeartbeat(env.HEALTHCHECKS_PING_URL, fetchImpl, logger, onSent);
+}
+
+export interface OptionalHeartbeatSpec {
+  readonly dryRun: boolean;
+  readonly envName: string;
+  readonly subject: string;
+  readonly traceId: string;
+  readonly unsetEvent: string;
+}
+
+export function optionalHeartbeat(
+  spec: OptionalHeartbeatSpec,
+  env: NodeJS.ProcessEnv,
+  fetchImpl: HeartbeatFetch,
+  logger: Logger,
+): Heartbeat {
+  if (spec.dryRun) return NO_HEARTBEAT;
+  if ((env[spec.envName]?.trim() ?? '') === '') {
+    logger.log({
+      trace_id: spec.traceId,
+      stage: 'v2',
+      level: 'warn',
+      event: spec.unsetEvent,
+      message: `${spec.envName} is not set: no healthchecks ping for the ${spec.subject}`,
+    });
+    return NO_HEARTBEAT;
+  }
+  return healthchecksHeartbeat(env[spec.envName], fetchImpl, logger);
 }
 
 export function pingJournal(storePath: string, clock: Clock): PingSink {
@@ -48,7 +76,7 @@ export function pingJournal(storePath: string, clock: Clock): PingSink {
 
 export function healthchecksHeartbeat(
   pingUrl: string | undefined,
-  fetchImpl: Fetch,
+  fetchImpl: HeartbeatFetch,
   logger: Logger,
   onSent?: PingSink,
 ): Heartbeat {

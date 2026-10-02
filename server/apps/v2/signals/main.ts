@@ -10,6 +10,12 @@ import {
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { onTerminationSignal, runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import {
+  type Heartbeat,
+  type HeartbeatFetch,
+  NO_HEARTBEAT,
+  optionalHeartbeat,
+} from '../heartbeat.js';
+import {
   composeV2Root,
   knownSecretsFrom,
   llmKeysPresent,
@@ -20,11 +26,13 @@ import {
 } from '../index.js';
 import { parseListenPort } from '../json-http.js';
 import { ALL_PINS, verifyNousPins } from '../signal/index.js';
+import { SignalsLiveness } from './liveness.js';
 import { SIGNAL_POLL_MS, SignalLoop } from './loop.js';
 import { createSignalsServer, type SignalsServer } from './server.js';
 import { SignalStore } from './store.js';
 
 const DEFAULT_PORT = 8789;
+const SIGNALS_PING_ENV = 'HEALTHCHECKS_SIGNALS_PING_URL';
 
 export interface SignalsArgs {
   readonly storePath: string;
@@ -57,6 +65,7 @@ export interface ComposedSignals {
   readonly server: SignalsServer;
   readonly db: StoreHandle;
   readonly loop: SignalLoop;
+  readonly liveness: SignalsLiveness;
 }
 
 const STDERR_LOGGER: Logger = {
@@ -70,10 +79,12 @@ export function composeSignals(
   clock: Clock,
   env: NodeJS.ProcessEnv = {},
   logger: Logger = STDERR_LOGGER,
+  heartbeat: Heartbeat = NO_HEARTBEAT,
 ): ComposedSignals {
   const db = openSharedStore(args.storePath);
   const store = new SignalStore(guardedStore(db, 'v2', { enabled: true }), clock);
   const calendar = new UsEquityRegularHoursCalendar();
+  const liveness = new SignalsLiveness(heartbeat, () => clock.now().getTime());
   const loop = new SignalLoop({
     signals: store,
     calendar,
@@ -84,6 +95,7 @@ export function composeSignals(
         ...rootOptionsFor(args.dryRun, tradingDate, env, clock, logger),
         storePath: args.storePath,
       }),
+    onPass: (ok) => liveness.passFinished(ok),
   });
   const server = createSignalsServer({
     port: args.port,
@@ -96,7 +108,27 @@ export function composeSignals(
     onFault: (error) =>
       process.stderr.write(`v2 signals fault: ${sanitizeLogText(describeThrownSafely(error))}\n`),
   });
-  return { server, db, loop };
+  return { server, db, loop, liveness };
+}
+
+export function signalsHeartbeat(
+  args: SignalsArgs,
+  env: NodeJS.ProcessEnv,
+  fetchImpl: HeartbeatFetch,
+  logger: Logger,
+): Heartbeat {
+  return optionalHeartbeat(
+    {
+      dryRun: args.dryRun,
+      envName: SIGNALS_PING_ENV,
+      subject: 'signals process',
+      traceId: 'v2-signals',
+      unsetEvent: 'v2_signals_heartbeat_unset',
+    },
+    env,
+    fetchImpl,
+    logger,
+  );
 }
 
 export type PinCheck = (dryRun: boolean, env: NodeJS.ProcessEnv) => Promise<void>;
@@ -117,6 +149,7 @@ export async function main(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
   pinCheck: PinCheck = NOUS_PIN_CHECK,
+  fetchImpl: HeartbeatFetch = fetch,
 ): Promise<void> {
   const args = parseSignalsArgs(argv, env);
   if (
@@ -128,7 +161,14 @@ export async function main(
     );
   }
   await pinCheck(args.dryRun, env);
-  const { server, db, loop } = composeSignals(args, new SystemClock(), env);
+  const heartbeat = signalsHeartbeat(args, env, fetchImpl, STDERR_LOGGER);
+  const { server, db, loop, liveness } = composeSignals(
+    args,
+    new SystemClock(),
+    env,
+    STDERR_LOGGER,
+    heartbeat,
+  );
   try {
     await server.start();
   } catch (error) {
@@ -138,6 +178,7 @@ export async function main(
   process.stdout.write(`v2 signals API on ${server.url} (Swagger UI at ${server.url}/docs)\n`);
   const poll = setInterval(() => {
     void loop.tick();
+    liveness.beat();
   }, SIGNAL_POLL_MS);
   void loop.tick();
   onTerminationSignal(() => {

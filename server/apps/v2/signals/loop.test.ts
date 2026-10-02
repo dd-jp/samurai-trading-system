@@ -127,4 +127,27 @@ describe('SignalLoop', () => {
     await loop.tick();
     expect(processSignals).toHaveBeenCalledTimes(3);
   });
+
+  it('reports a settled pass as ok and a thrown one as not ok, and nothing when no pass is due', async () => {
+    const onPass = vi.fn();
+    await harness({ onPass }).loop.tick();
+    expect(onPass.mock.calls).toEqual([[true]]);
+    onPass.mockClear();
+    await harness({ onPass }, () => Promise.reject(new Error('boom'))).loop.tick();
+    expect(onPass.mock.calls).toEqual([[false]]);
+    onPass.mockClear();
+    await harness({ onPass, calendar: { isOpen: () => false } }).loop.tick();
+    expect(onPass).not.toHaveBeenCalled();
+  });
+
+  it('reports a root that fails to open as a failed pass', async () => {
+    const onPass = vi.fn();
+    await harness({
+      onPass,
+      openRoot: () => {
+        throw new Error('no keys');
+      },
+    }).loop.tick();
+    expect(onPass.mock.calls).toEqual([[false]]);
+  });
 });

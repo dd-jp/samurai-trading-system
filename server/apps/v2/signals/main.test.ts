@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LogEntry } from '../../../shared/index.js';
 import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
-import { composeSignals, main, parsePort, parseSignalsArgs } from './main.js';
+import { SIGNALS_BEAT_EVERY_MS } from './liveness.js';
+import { SIGNAL_POLL_MS } from './loop.js';
+import { composeSignals, main, parsePort, parseSignalsArgs, signalsHeartbeat } from './main.js';
 
 const clock = { now: () => new Date('2026-09-30T15:00:00.000Z') };
 const dirs: string[] = [];
@@ -17,6 +19,7 @@ function tempStorePath(): string {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -92,6 +95,40 @@ describe('composeSignals', () => {
       db.close();
     }
   });
+
+  it('pings fail through its heartbeat after five failed passes in a row', async () => {
+    const beats: string[] = [];
+    const logs: LogEntry[] = [];
+    const failedPasses = () => logs.filter((e) => e.event === 'v2_signal_pass_failed').length;
+    const { server, db, loop } = composeSignals(
+      { storePath: tempStorePath(), port: 0, dryRun: false },
+      clock,
+      {},
+      { log: (entry) => logs.push(entry) },
+      (outcome) => {
+        beats.push(outcome);
+        return Promise.resolve();
+      },
+    );
+    try {
+      await server.start();
+      await fetch(`${server.url}/api/v2/signals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: 'INTC', entry: 24.5, targets: [26], stop: 23 }),
+      });
+      await loop.tick();
+      while (failedPasses() < 4) await loop.tick();
+      expect(failedPasses()).toBe(4);
+      expect(beats).toEqual([]);
+      await loop.tick();
+      expect(failedPasses()).toBe(5);
+      expect(beats).toEqual(['fail']);
+    } finally {
+      await server.stop();
+      db.close();
+    }
+  });
 });
 
 const NOUS_ENV = { NOUS_BASE_URL: 'https://nous.test/v1', NOUS_API_KEY: 'present' };
@@ -149,5 +186,79 @@ describe('main', () => {
     } finally {
       await new Promise((resolve) => blocker.close(resolve));
     }
+  });
+
+  describe('liveness ping', () => {
+    const PING_URL = 'https://hc-ping.test/signals-check';
+    const okFetch = () => vi.fn().mockResolvedValue({ ok: true, status: 200 });
+
+    async function bootAndRun(
+      env: NodeJS.ProcessEnv,
+      fetchImpl: ReturnType<typeof okFetch>,
+      runMs: number,
+    ): Promise<string[]> {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const sigintBefore = new Set(process.listeners('SIGINT'));
+      await main(
+        ['--store', tempStorePath()],
+        { ...NOUS_ENV, V2_SIGNALS_PORT: '0', ...env },
+        noPinCheck,
+        fetchImpl,
+      );
+      await vi.advanceTimersByTimeAsync(runMs);
+      process.emit('SIGTERM');
+      for (const listener of process.listeners('SIGINT')) {
+        if (!sigintBefore.has(listener)) process.off('SIGINT', listener);
+      }
+      return stderr.mock.calls.map(([chunk]) => String(chunk));
+    }
+
+    it('pings the signals check only after a full interval of uptime', async () => {
+      const fetchImpl = okFetch();
+      await bootAndRun(
+        { HEALTHCHECKS_SIGNALS_PING_URL: PING_URL },
+        fetchImpl,
+        SIGNALS_BEAT_EVERY_MS - SIGNAL_POLL_MS,
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('then pings it once per interval', async () => {
+      const fetchImpl = okFetch();
+      await bootAndRun(
+        { HEALTHCHECKS_SIGNALS_PING_URL: PING_URL },
+        fetchImpl,
+        SIGNALS_BEAT_EVERY_MS * 2 + SIGNAL_POLL_MS,
+      );
+      expect(fetchImpl.mock.calls.map(([url, init]) => [url, init.method])).toEqual([
+        [PING_URL, 'POST'],
+        [PING_URL, 'POST'],
+      ]);
+    });
+
+    it('warns once at start and never pings when the URL is unset', async () => {
+      const fetchImpl = okFetch();
+      const lines = await bootAndRun({}, fetchImpl, SIGNALS_BEAT_EVERY_MS * 2);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(lines.filter((line) => line.includes('v2_signals_heartbeat_unset'))).toHaveLength(1);
+    });
+  });
+
+  describe('signalsHeartbeat', () => {
+    it('is silent in a dry run even with the URL set', async () => {
+      const fetchImpl = vi.fn();
+      const logs: LogEntry[] = [];
+      const beat = signalsHeartbeat(
+        { storePath: 'x', port: 0, dryRun: true },
+        { HEALTHCHECKS_SIGNALS_PING_URL: 'https://hc-ping.test/x' },
+        fetchImpl,
+        { log: (entry) => logs.push(entry) },
+      );
+      await beat('success');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(logs).toEqual([]);
+    });
   });
 });
