@@ -26,6 +26,7 @@ export {
   saxoCfdBorrow,
 } from './cfd-tariff.js';
 export { parseBoeGbpUsdCsv } from './fx.js';
+export { journalledNewsSource } from './journalled-news.js';
 export type { MacroGateVerdict } from './macro-calendar.js';
 export { addDays, MACRO_DAY_SIZE_FRACTION, macroGate } from './macro-calendar.js';
 export { BarsMarketData, quotePerGbp } from './market-data.js';
@@ -34,7 +35,7 @@ export { MarketauxNewsSource } from './marketaux-news.js';
 export type { HeldInstrument, LastBar, MarkSource } from './marks.js';
 export { heldKey, ParquetMarkSource } from './marks.js';
 export type { NewsSource } from './news.js';
-export { AlpacaNewsSource, NO_NEWS, newsForVenue } from './news.js';
+export { AlpacaNewsSource, NO_NEWS, newsFailureReason, newsForVenue } from './news.js';
 export { SqliteNewsLedger } from './news-ledger.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export { CLOSED_VENUE_ROUTER, createVenueRouter } from './venue-routes.js';

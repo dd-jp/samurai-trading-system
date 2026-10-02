@@ -15,7 +15,7 @@ import type {
   StoredHeadline,
 } from './news-ledger.js';
 
-const MARKETAUX_PROVIDER = 'marketaux';
+export const MARKETAUX_PROVIDER = 'marketaux';
 // free tier is 100 requests a day; the gap covers manual probes on the same key and an unknown reset timezone
 export const MARKETAUX_REQUEST_CEILING = 80;
 // documented 429 is "too many requests in the past 60 seconds"
@@ -184,7 +184,7 @@ export class MarketauxNewsSource implements NewsSource {
   }
 
   #logCoverage(tradingDate: string): UkNewsCoverage | undefined {
-    const coverage = ukNewsCoverage(this.deps.ledger.forDate(tradingDate));
+    const coverage = ukNewsCoverage(this.deps.ledger.forDate(tradingDate, MARKETAUX_PROVIDER));
     if (coverage.names === 0) return undefined;
     this.deps.logger?.log({
       trace_id: `v2-${tradingDate}`,
@@ -198,7 +198,7 @@ export class MarketauxNewsSource implements NewsSource {
   }
 
   async #resolve(tidm: string, tradingDate: string, now: Date): Promise<NewsRecord> {
-    const cached = this.deps.ledger.cached(tradingDate, tidm);
+    const cached = this.deps.ledger.cached(MARKETAUX_PROVIDER, tradingDate, tidm);
     if (cached !== undefined) return cached;
     const record = await this.#fetch(tidm, tradingDate, now);
     this.deps.ledger.record(record);

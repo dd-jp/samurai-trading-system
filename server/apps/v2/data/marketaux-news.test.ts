@@ -526,6 +526,25 @@ describe('MarketauxNewsSource', () => {
       expect(logs[0]).toMatchObject({ level: 'warn', event: 'v2_uk_news_coverage' });
     });
 
+    it('neither counts nor serves from cache the US rows sharing v2_news (#1981)', async () => {
+      const client = scripted({});
+      const { ledger, source } = build(client);
+      ledger.record({
+        tradingDate: TRADING_DATE,
+        symbol: 'AZN',
+        provider: 'alpaca',
+        status: 'ok',
+        reason: '',
+        requested: true,
+        found: 1,
+        headlines: [{ title: 'us', publishedAt: '2026-09-28T10:00:00.000Z', sourceId: '7' }],
+        fetchedAt: NOW.toISOString(),
+      });
+      expect(source.journalCoverage(TRADING_DATE)).toBeUndefined();
+      expect(await source.headlines('AZN', TRADING_DATE, NOW)).toEqual([]);
+      expect(client.calls).toEqual(['AZN']);
+    });
+
     it('says nothing on a day with no UK names', () => {
       const logs: LogEntry[] = [];
       const { source } = build(scripted({}), { logs });
