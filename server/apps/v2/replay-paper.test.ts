@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
@@ -306,6 +306,24 @@ describe('replay of a paper store against journalled Alpaca fills', () => {
       { book_id: 'debate/no-macro-gate', above_spread: null },
       { book_id: 'debate/primary', above_spread: 1 },
     ]);
+  });
+
+  it('replays a day journalled before #1884, whose orders carry no modelled slippage, identical', async () => {
+    const before = join(directory, 'before-1884.sqlite');
+    copyFileSync(options.storePath, before);
+    const db = new BetterSqlite3(before);
+    try {
+      const stripped = db
+        .prepare(`UPDATE v2_orders SET payload = json_remove(payload, '$.modelled_slippage_bps')`)
+        .run();
+      expect(stripped.changes).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+    for (const tradingDate of [ENTRY_DAY, FILL_DAY, STOP_DAY]) {
+      const result = await replayFromFiles({ ...options, storePath: before, tradingDate });
+      expect(result.divergences).toEqual([]);
+    }
   });
 
   it('shows a half-spread refresh since the day as an orders divergence', async () => {
