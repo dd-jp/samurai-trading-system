@@ -92,6 +92,14 @@ function daysBetween(from: string, to: string): number {
   return (Date.parse(to) - Date.parse(from)) / 86_400_000;
 }
 
+// Exits, fills and marks keep pricing at a stale year-start fix, named in fx_source (#1947);
+// only entries refuse it (#2009)
+export function staleYearStartReason(year: number, fixDate: string): string | undefined {
+  const cutoff = `${year}-01-01`;
+  if (daysBetween(fixDate, cutoff) <= DAY_FIX_MAX_GAP_DAYS) return undefined;
+  return `last BoE XUDLUSS fix on or before ${cutoff} is ${fixDate}, more than ${DAY_FIX_MAX_GAP_DAYS} days before it`;
+}
+
 export function dayGbpUsd(observations: readonly FxObservation[], date: string): DayFix {
   const last = observations.at(-1);
   if (last === undefined || last.date < date) {

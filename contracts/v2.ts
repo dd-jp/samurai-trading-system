@@ -325,6 +325,7 @@ export interface RiskGate {
   approveExit(request: ExitRequest): RiskApprovedOrder;
   approveRearm(request: RearmRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;
+  fxRefusal(tradingDate: string): string | undefined;
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined;
 }
 

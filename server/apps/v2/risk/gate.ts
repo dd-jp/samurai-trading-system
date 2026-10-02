@@ -15,7 +15,7 @@ import type {
   SleeveSpec,
   Venue,
 } from '../../../../contracts/index.js';
-import { isCfdVenue, quotePerGbp } from '../data/index.js';
+import { isCfdVenue, quotePerGbp, yearStartCoverageRefusal } from '../data/index.js';
 import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
@@ -129,8 +129,16 @@ export class V2RiskGate implements RiskGate {
     return `${allocation} (minimum £${sleeve.spec.minimumCapitalGbp}, capacity £${sleeve.spec.capacityGbp}): no allocation (doc 66 D8)`;
   }
 
+  fxRefusal(tradingDate: string): string | undefined {
+    const reason = yearStartCoverageRefusal(this.deps.market, tradingDate);
+    return reason === undefined ? undefined : `${reason}: entries refused (postmortem §2, #2009)`;
+  }
+
   approveEntry(request: EntryRequest): EntryApproval {
     const { decision } = request;
+    if (this.fxRefusal(request.tradingDate) !== undefined) {
+      return { size: 0, order: undefined, refusal: 'fx_year_start_stale' };
+    }
     const venueRefusal = venueRefusalFor(decision, this.deps.venueRefusal);
     if (venueRefusal !== undefined) return { size: 0, order: undefined, refusal: venueRefusal };
     const { size, refusal: sizingRefusal } = this.#size(request);

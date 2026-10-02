@@ -5200,3 +5200,85 @@ describe('runCycle: modelled slippage journalled when the order goes out (#1884)
     expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeUndefined();
   });
 });
+
+describe('a stale 1 January GBP/USD fix (#2009)', () => {
+  const STALE =
+    'last BoE XUDLUSS fix on or before 2026-01-01 is 2025-12-19, more than 7 days before it: entries refused (postmortem §2, #2009)';
+
+  function journalDb(deps: CycleDeps) {
+    return (
+      deps.journal as unknown as {
+        db: { prepare: (sql: string) => { all: (...a: unknown[]) => unknown[] } };
+      }
+    ).db;
+  }
+
+  it('refuses entries with an error alert while the crossed stop still exits and the books mark', async () => {
+    const deps = harness([longAapl], true);
+    await openBooks(deps);
+    vi.spyOn(deps.market, 'gbpUsdYearStartFixDate').mockReturnValue('2025-12-19');
+    deps.barsByDate.set('2026-09-28', bar('2026-09-25', { low: 19.0, high: 20.2 }));
+    deps.setDecisions([{ ...longAapl, instrument: 'MSFT' }]);
+    const log = vi.fn();
+    const report = await runCycle({ ...deps, logger: { log } }, '2026-09-28');
+    expect(report).toMatchObject({ exits: 2, simulated_orders: 2, fills: 2, decisions: 1 });
+    expect(report.refusals).toContain(STALE);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'error', event: 'v2_fx_year_start_stale', message: STALE }),
+    );
+    expect(deps.books.positions('debate/primary')).toEqual([]);
+    expect(deps.books.positions('debate/no-macro-gate')).toEqual([]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')).toMatchObject({
+      leg: 'exit',
+      outcome: 'simulated',
+    });
+    const db = journalDb(deps);
+    expect(
+      db
+        .prepare(
+          "SELECT fx_quote_per_gbp, fx_source FROM v2_fills WHERE leg = 'exit' AND book_id = ?",
+        )
+        .all('debate/primary'),
+    ).toEqual([{ fx_quote_per_gbp: FX, fx_source: 'boe-xudluss:year-start:2026@2025-12-19' }]);
+    expect(sizeShares(deps, 'debate/primary', '2026-09-28', 'MSFT')).toBe(0);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')).toBeUndefined();
+    expect(
+      db
+        .prepare(
+          "SELECT scope, parameter, book_id, instrument FROM v2_refusals WHERE parameter = 'FX_YEAR_START_COVERAGE' ORDER BY scope, book_id",
+        )
+        .all(),
+    ).toEqual([
+      { scope: 'data', parameter: 'FX_YEAR_START_COVERAGE', book_id: null, instrument: null },
+      {
+        scope: 'entry',
+        parameter: 'FX_YEAR_START_COVERAGE',
+        book_id: 'debate/no-macro-gate',
+        instrument: 'MSFT',
+      },
+      {
+        scope: 'entry',
+        parameter: 'FX_YEAR_START_COVERAGE',
+        book_id: 'debate/primary',
+        instrument: 'MSFT',
+      },
+    ]);
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+    expect(report.books.map((book) => book.book_id)).toEqual([
+      'debate/primary',
+      'debate/no-macro-gate',
+    ]);
+  });
+
+  it('a fresh fix leaves entries and the cycle refusals unchanged', async () => {
+    const deps = harness([longAapl], true);
+    const log = vi.fn();
+    const report = await runCycle({ ...deps, logger: { log } }, '2026-09-25');
+    expect(report.entries).toBe(2);
+    expect(report.refusals).not.toContain(STALE);
+    expect(log).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'v2_fx_year_start_stale' }),
+    );
+    expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'AAPL')).toBe(6);
+  });
+});

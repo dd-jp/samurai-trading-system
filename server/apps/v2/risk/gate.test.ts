@@ -89,6 +89,7 @@ function gate(
     bars?: readonly V2Bar[];
     spec?: SleeveSpec;
     venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
+    fixDate?: string;
   } = {},
 ) {
   const lastDay = (): BookDay | undefined =>
@@ -117,7 +118,10 @@ function gate(
   return new V2RiskGate({
     books: { lastDay },
     capital: { inForce: () => capital },
-    market: marketWith(options.bars ?? liquidBars()),
+    market: {
+      ...marketWith(options.bars ?? liquidBars()),
+      gbpUsdYearStartFixDate: () => options.fixDate ?? '2025-12-31',
+    },
     spec: () => options.spec ?? SPEC,
     venueRefusal: 'venueRefusal' in options ? options.venueRefusal : () => undefined,
   });
@@ -608,6 +612,43 @@ describe('V2RiskGate', () => {
     expect(() =>
       gate().approveExit({ book: primary, held: { ...held, qty: 0 }, clientOrderId: 'x3' }),
     ).toThrow(/no exit for AAPL at qty 0/);
+  });
+
+  it('refuses every entry on a stale year-start fix but still approves exits (#2009)', () => {
+    const stale = gate({ fixDate: '2025-12-19' });
+    expect(stale.fxRefusal('2026-01-05')).toBe(
+      'last BoE XUDLUSS fix on or before 2026-01-01 is 2025-12-19, more than 7 days before it: entries refused (postmortem §2, #2009)',
+    );
+    expect(gate().fxRefusal('2026-09-25')).toBeUndefined();
+    expect(stale.approveEntry(request())).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'fx_year_start_stale',
+    });
+    expect(stale.approveEntry(request({ decision: { ...decision, venue: 'saxo' } }))).toMatchObject(
+      { size: 0, refusal: 'fx_year_start_stale' },
+    );
+    expect(gate({ fixDate: '2025-12-25' }).approveEntry(request()).size).toBe(6);
+    const held: Position = {
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      qty: 4,
+      avgPriceGbp: 16,
+      stopGbp: undefined,
+      targetGbp: undefined,
+      clientOrderId: 'c0',
+      exitClientOrderId: undefined,
+      openedDate: '2026-09-01',
+      marksHeld: 10,
+      stray: false,
+      splitFactor: 1,
+      splitAnchorDate: undefined,
+    };
+    expect(stale.approveExit({ book: primary, held, clientOrderId: 'x1' })).toMatchObject({
+      kind: 'flatten',
+      side: 'sell',
+      size: 4,
+    });
   });
 
   it('carries the entry order id and native rearm prices on a flatten, and mints a rearm order', () => {
