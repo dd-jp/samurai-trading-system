@@ -2606,6 +2606,67 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(alpaca.replaces).toEqual([]);
   });
 
+  function venueReads(deps: CycleDeps) {
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    return {
+      reads: db
+        .prepare(
+          'SELECT trading_date, client_order_id, filled_qty, error FROM v2_fill_reads ORDER BY read_id',
+        )
+        .all(),
+      sweeps: db
+        .prepare(
+          'SELECT trading_date, last_fill_rowid AS cut FROM v2_fill_sweeps ORDER BY sweep_id',
+        )
+        .all(),
+      fills: db.prepare(`SELECT rowid AS id FROM v2_fills WHERE book_id = 'debate/primary'`).all(),
+    };
+  }
+
+  it('journals each venue fill read and the cut of every sweep, for the replay to serve (#1990)', async () => {
+    const { deps } = await partFilledAtVenue(4);
+    const before = venueReads(deps).sweeps.length;
+    await runCycle(deps, '2026-09-28');
+    const { reads, sweeps, fills } = venueReads(deps);
+    expect(reads).toEqual([
+      { trading_date: '2026-09-28', client_order_id: ENTRY, filled_qty: 4, error: null },
+    ]);
+    const [booked] = fills as { id: number }[];
+    const today = (sweeps as { trading_date: string; cut: number }[]).slice(before);
+    expect(today.map((sweep) => sweep.trading_date)).toEqual([
+      '2026-09-28',
+      '2026-09-28',
+      '2026-09-28',
+    ]);
+    expect(today[0]?.cut).toBeLessThan(booked?.id ?? 0);
+    expect(today.slice(1).map((sweep) => sweep.cut >= (booked?.id ?? Infinity))).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  it('journals a read the venue answered with no order as null, and a failed read with its error', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(0);
+    await runCycle(deps, '2026-09-28');
+    expect(venueReads(deps).reads).toEqual([
+      { trading_date: '2026-09-28', client_order_id: ENTRY, filled_qty: null, error: null },
+    ]);
+    const failing = await partFilledAtVenue(0);
+    failing.alpaca.readError = new Error('order read timed out');
+    await runCycle(failing.deps, '2026-09-28');
+    expect(venueReads(failing.deps).reads).toEqual([
+      {
+        trading_date: '2026-09-28',
+        client_order_id: ENTRY,
+        filled_qty: null,
+        error: 'order read timed out',
+      },
+    ]);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
   it('sweeps no extra time for an entry cancelled with nothing filled', async () => {
     const { alpaca, deps } = await partFilledAtVenue(0);
     await runCycle(deps, '2026-09-28');
