@@ -135,6 +135,13 @@ describe('readBrokerOrders', () => {
         { id: 'alpaca:f1', order: 'entry', qty: 4, price: 80 },
         { id: 'alpaca:f1#2', order: 'entry', qty: 6, price: 81 },
         {
+          id: 'alpaca:cash-in-lieu:debate/primary:AAA:2026-09-03',
+          order: 'entry',
+          leg: 'cash_in_lieu',
+          side: 'sell',
+          qty: 0.5,
+        },
+        {
           id: 'alpaca:f2',
           order: 'flatten',
           leg: 'exit',

@@ -73,7 +73,7 @@ const BROKER_ORDERS_SQL = `
 
 const FILLS_SQL = `
   SELECT client_order_id, leg, side, trading_date, qty, price_gbp, fee_gbp FROM v2_fills
-   ORDER BY trading_date, fill_id`;
+   WHERE leg <> 'cash_in_lieu' ORDER BY trading_date, fill_id`;
 
 function brokerModeOf(arg: string): BrokerMode {
   if (arg === 'paper' || arg === 'live') return arg;
