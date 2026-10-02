@@ -24,6 +24,13 @@ BEGIN
   SELECT RAISE(ABORT, 'v2_input_digests is append-only');
 END;
 
+CREATE TRIGGER IF NOT EXISTS v2_input_digests_no_replace
+BEFORE INSERT ON v2_input_digests
+WHEN NEW.digest_id IS NOT NULL AND EXISTS (SELECT 1 FROM v2_input_digests WHERE digest_id = NEW.digest_id)
+BEGIN
+  SELECT RAISE(ABORT, 'v2_input_digests is append-only');
+END;
+
 CREATE TRIGGER IF NOT EXISTS v2_input_digests_first_cycle_kept
 BEFORE INSERT ON v2_input_digests
 WHEN EXISTS (
