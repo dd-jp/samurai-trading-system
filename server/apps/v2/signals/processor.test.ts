@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AnthropicMessageRequest,
@@ -641,6 +642,27 @@ describe('the run lease between the processor and the cycle', () => {
       /v2 run lease not acquired for cycle within 0 ms: held by signals/,
     );
     expect(root.books.isMarked(D)).toBe(false);
+  });
+});
+
+describe('long-lived store handles (#2012)', () => {
+  it('signals passes and cycles prepare no new statements once every query has run once', async () => {
+    const prepare = vi.spyOn(BetterSqlite3.prototype, 'prepare');
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
+    const pass = async (i: number): Promise<void> => {
+      post(signals, { source: `desk-${i}` });
+      await root.processSignals(signals, IN_SESSION);
+      signals.due(IN_SESSION);
+      await root.run();
+    };
+    for (let i = 0; i < 3; i++) await pass(i);
+    const warm = prepare.mock.calls.length;
+
+    for (let i = 3; i < 23; i++) await pass(i);
+
+    expect(warm).toBeGreaterThan(0);
+    expect(prepare.mock.calls.length).toBe(warm);
   });
 });
 
