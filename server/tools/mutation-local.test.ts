@@ -62,6 +62,10 @@ describe('isTradingPathFile', () => {
 describe('risk, sizing and loss-budget paths', () => {
   it.each([
     'server/apps/v2/risk/position-size.ts',
+    'server/apps/v2/cycle.ts',
+    'server/apps/v2/split.ts',
+    'server/apps/v2/reconcile.ts',
+    'server/apps/v2/reconcile-compare.ts',
     'server/pipeline/momentum/loss-budget.ts',
     'server/pipeline/momentum/sizing.ts',
   ])('%s is trading-path', (path) => {
@@ -70,6 +74,14 @@ describe('risk, sizing and loss-budget paths', () => {
 
   it('leaves the rest of momentum out', () => {
     expect(isTradingPathFile('server/pipeline/momentum/signal.ts')).toBe(false);
+  });
+
+  it.each([
+    'server/apps/v2/index.ts',
+    'server/apps/v2/daily-summary.ts',
+    'server/apps/v2/smoke.ts',
+  ])('leaves %s out of the rest of apps/v2', (path) => {
+    expect(isTradingPathFile(path)).toBe(false);
   });
 });
 

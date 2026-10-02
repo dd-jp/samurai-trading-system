@@ -416,7 +416,7 @@ Every script in `package.json`, all 42 of them. There are no others.
 | quality | `npm run test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate. What `precommit` runs |
 | quality | `npm run test:watch` | Vitest in watch mode |
 | quality | `npm run e2e` | Playwright suite against the built bundle, on a port picked fresh per run (#1298) so two checkouts can run it at once. CI job of its own |
-| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator on the lines of trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`, v2 `risk`, momentum `loss-budget` and `sizing`) changed vs a base ref, incremental, 80% score bar on those lines (#1634; doc 66, 2026-10-01). Runs on CI in four shards |
+| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator on the lines of trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`, v2 `risk`, v2 `cycle`, `split`, `reconcile` and `reconcile-compare`, momentum `loss-budget` and `sizing`) changed vs a base ref, incremental, 80% score bar on those lines (#1634; doc 66, 2026-10-01). Runs on CI in four shards |
 | quality | `npm run lint:oxlint` | `oxlint` — barrel/import-boundary enforcement (`.oxlintrc.json`), comment-slop rules, unused-vars (sole owner — Biome's `noUnusedVariables` is off) |
 | quality | `npm run lint:oxlint:fix` | `oxlint --fix` |
 | quality | `npm run lint:biome` | `biome check .` — Biome's recommended rules + formatting |
