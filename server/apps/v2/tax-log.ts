@@ -182,6 +182,30 @@ function logInstrument(
   return { ok: true, disposals: disposalsOf(converted, outcome.matches, asOf) };
 }
 
+// A split is journalled once per venue holding the name; its ratio counts once per date
+function distinctSplits(splits: readonly TaxSplitRow[]): readonly TaxSplitRow[] | string {
+  const byDate = new Map<string, TaxSplitRow>();
+  for (const split of splits) {
+    const seen = byDate.get(split.split_date);
+    if (seen !== undefined && seen.ratio !== split.ratio) {
+      return `split on ${split.split_date} journalled at ratios ${seen.ratio} and ${split.ratio}`;
+    }
+    byDate.set(split.split_date, split);
+  }
+  return [...byDate.values()];
+}
+
+function logGroup(
+  fills: readonly TaxFillRow[],
+  splits: readonly TaxSplitRow[],
+  dayRate: DayRate,
+  asOf: string,
+): InstrumentLog {
+  const distinct = distinctSplits(splits);
+  if (typeof distinct === 'string') return { ok: false, heldOut: heldOut(fills, distinct) };
+  return logInstrument(fills, distinct, dayRate, asOf);
+}
+
 function byInstrument<T extends { readonly instrument: string }>(
   rows: readonly T[],
 ): Map<string, T[]> {
@@ -201,7 +225,7 @@ export function buildTaxLog(
   const held: HeldOutInstrument[] = [];
   const shares = fills.filter((fill) => !isCfdVenue(fill.venue as Venue));
   for (const [instrument, group] of byInstrument(shares)) {
-    const log = logInstrument(group, splitsOf.get(instrument) ?? [], dayRate, asOf);
+    const log = logGroup(group, splitsOf.get(instrument) ?? [], dayRate, asOf);
     if (log.ok) disposals.push(...log.disposals);
     else held.push(log.heldOut);
   }

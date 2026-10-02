@@ -70,6 +70,7 @@ interface CashInLieu {
   readonly fraction: number;
   readonly priceGbp: number;
   readonly anchorDate: string;
+  readonly disposalDate: string;
 }
 
 export interface CycleDeps {
@@ -355,7 +356,8 @@ class Cycle {
     }
     const reading = this.splitBefore(held, date);
     if (reading.ratio === 1) return;
-    const qty = this.splitHeld(order.book_id, held, reading, date);
+    const london = londonDateOf(fill.filled_at as string);
+    const qty = this.splitHeld(order.book_id, held, reading, date, london);
     this.log(
       'warn',
       'v2_fill_post_split_rescaled',
@@ -476,7 +478,13 @@ class Cycle {
   // David ruled 2026-10-01 (#1984): the broker keeps whole shares and pays cash for the rest, so
   // the ledger floors too and books the remainder as a disposal; reconcile (#1872) flags any
   // broker qty that differs
-  splitHeld(bookId: string, held: Position, reading: SplitReading, anchorDate: string): number {
+  splitHeld(
+    bookId: string,
+    held: Position,
+    reading: SplitReading,
+    anchorDate: string,
+    disposalDate = anchorDate,
+  ): number {
     const { ratio } = reading;
     for (const step of reading.steps) {
       this.deps.journal.recordSplit({
@@ -491,7 +499,7 @@ class Cycle {
     const fraction = fractionalShares(held.qty * ratio);
     if (fraction === 0) return held.qty * ratio;
     const priceGbp = this.markGbp(held.instrument, held.venue) ?? held.avgPriceGbp / ratio;
-    this.disposeCashInLieu(bookId, held, { fraction, priceGbp, anchorDate });
+    this.disposeCashInLieu(bookId, held, { fraction, priceGbp, anchorDate, disposalDate });
     return held.qty * ratio - fraction;
   }
 
@@ -500,7 +508,7 @@ class Cycle {
   disposeCashInLieu(
     bookId: string,
     held: Position,
-    { fraction, priceGbp, anchorDate }: CashInLieu,
+    { fraction, priceGbp, anchorDate, disposalDate }: CashInLieu,
   ): void {
     const side: OrderSide = fraction > 0 ? 'sell' : 'buy';
     const qty = Math.abs(fraction);
@@ -522,7 +530,7 @@ class Cycle {
       fee_native: 0,
       fx_quote_per_gbp: fillFx.quotePerGbp,
       fx_source: fillFx.source,
-      fill_date: anchorDate,
+      fill_date: disposalDate,
     });
     if (!recorded) return;
     this.deps.books.applyFill(bookId, {

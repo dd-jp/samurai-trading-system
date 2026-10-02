@@ -10,7 +10,7 @@ const CAPTURED = {
   price_native: 100,
   fee_native: 0,
   fx_quote_per_gbp: 1.25,
-  fx_source: 'boe-xudluss:year-start:2026',
+  fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
   fill_date: null,
 } as const;
 
@@ -641,7 +641,7 @@ describe('tax capture on fills and the split journal (#1947)', () => {
       price_native: 200,
       fee_native: 0.5,
       fx_quote_per_gbp: 1.25,
-      fx_source: 'boe-xudluss:year-start:2026',
+      fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
       fill_date: '2026-10-01',
     });
     expect(
@@ -655,7 +655,7 @@ describe('tax capture on fills and the split journal (#1947)', () => {
       price_native: 200,
       fee_native: 0.5,
       fx_quote_per_gbp: 1.25,
-      fx_source: 'boe-xudluss:year-start:2026',
+      fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
       fill_date: '2026-10-01',
     });
   });

@@ -82,7 +82,7 @@ The evidence behind the reframe (doc 65 §1, doc 67 §3, doc 71):
 
 - Every mandatory protective action is venue-resting or watchdog-backed, never tick-dependent (postmortem §3).
 - Windowed data reads carry tested coverage invariants (postmortem §2).
-- Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN. The live equity account is a Saxo GIA, so disposals are CGT events.
+- Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN. The live equity account is a Saxo GIA, so disposals are CGT events. The day's rate is the BoE XUDLUSS fix for the fill's date (ruled 2026-10-02, doc 66, #1947); its refresh is #2000.
 - Paper profit is not evidence of edge; paper gates on fidelity to the backtest.
 
 ## 3. Definition of done for every step (doc 67 §5)

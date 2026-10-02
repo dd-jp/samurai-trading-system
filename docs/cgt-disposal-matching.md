@@ -27,7 +27,9 @@ describe the v1 report, whose matching rules it reuses.
   `price_native`, `fee_native`, `fx_quote_per_gbp`, `fx_source` and
   `fill_date`. The rate is quoted as native units per £1, so GBP = native ÷
   rate. It is the rate the row's `price_gbp` was booked at: the fixed
-  1 January BoE rate for USD (U3, source `boe-xudluss:year-start:<year>`) and
+  1 January BoE rate for USD (U3, source `boe-xudluss:year-start:<year>@<fix
+  date>`, naming the fix used, so a series that ends before 1 January shows
+  as a stale fix) and
   1 for GBP (source `gbp`). `fill_date` is the London calendar date of the
   broker's fill time. A row with no fill time is dated by its trading date.
 - **The day's rate.** Doc 66's carried constraint converts each US disposal at
@@ -35,12 +37,17 @@ describe the v1 report, whose matching rules it reuses.
   every USD fill, acquisitions included, at the BoE XUDLUSS fix for its date,
   or the last fix before it when BoE publishes none, within 7 days. It refuses
   a date the loaded series has not reached yet. Each disposal shows the rate
-  and the fix date it used (`boe-xudluss:<fix date>`). BoE XUDLUSS is the only
-  daily GBP/USD series in the repo. No ruling names the source, so David
-  should confirm it before live.
+  and the fix date it used (`boe-xudluss:<fix date>`). David ruled the BoE
+  XUDLUSS source on 2026-10-02 (doc 66). The committed series ends on
+  2026-09-24 and nothing refreshes it yet (#2000), so a later USD fill holds
+  its instrument out. The dashboard reads the file once at start, so a
+  refresh needs a dashboard restart. The parser refuses a series that is not
+  in strictly ascending date order.
 - **Splits.** When the cycle rescales a held position it journals each split
   step in `v2_splits` (instrument, venue, the date of the first bar in the new
-  units, ratio). The log matches in post-split units and shows each disposal
+  units, ratio). A split held at two venues is journalled twice and counted
+  once; two venues that disagree on its ratio hold the instrument out. The
+  log matches in post-split units and shows each disposal
   in its own day's units. A split while nothing is held is not journalled. A
   sale before such a split and a buy back after it within 30 days would then
   match in mixed units.

@@ -304,6 +304,35 @@ describe('buildTaxLog', () => {
     expect(log.heldOut).toEqual([]);
   });
 
+  it('counts a split journalled by two venues once, and holds out venues that disagree on it', () => {
+    const fills = [
+      { ...usd('buy', '2026-05-01', 10, 400), fee_native: 1 },
+      { ...usd('sell', '2026-07-01', 40, 110), fee_native: 1 },
+    ];
+    const once: TaxSplitRow[] = [{ instrument: 'AAPL', split_date: '2026-06-10', ratio: 4 }];
+    const twice = [...once, { instrument: 'AAPL', split_date: '2026-06-10', ratio: 4 }];
+    const expected = {
+      qty: 40,
+      cost_gbp: expect.closeTo(4_001 / 1.25, 9),
+      gain_gbp: expect.closeTo(4_399 / 1.3 - 4_001 / 1.25, 9),
+    };
+    expect(buildTaxLog(fills, once, dayRate, AS_OF).disposals).toMatchObject([expected]);
+    expect(buildTaxLog(fills, twice, dayRate, AS_OF).disposals).toMatchObject([expected]);
+    const disagreeing = [...once, { instrument: 'AAPL', split_date: '2026-06-10', ratio: 2 }];
+    expect(buildTaxLog(fills, disagreeing, dayRate, AS_OF)).toEqual({
+      disposals: [],
+      heldOut: [
+        {
+          instrument: 'AAPL',
+          venue: 'alpaca',
+          reason: 'split on 2026-06-10 journalled at ratios 4 and 2',
+          fills: 2,
+          taxYears: [2026],
+        },
+      ],
+    });
+  });
+
   it('applies only the splits after a fill, compounding two of them', () => {
     const splits: TaxSplitRow[] = [
       { instrument: 'VUSA', split_date: '2026-06-01', ratio: 2 },

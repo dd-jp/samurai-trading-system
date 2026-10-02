@@ -309,6 +309,7 @@ function harness(
       });
     },
     gbpUsdAtYearStart: () => FX,
+    gbpUsdYearStartFixDate: () => '2025-12-31',
   };
   const books = new PaperBooks(
     db,
@@ -789,7 +790,7 @@ describe('runCycle', () => {
         price_native: 20,
         fee_native: 0.5,
         fx_quote_per_gbp: FX,
-        fx_source: 'boe-xudluss:year-start:2026',
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
         fill_date: '2026-09-25',
       },
       {
@@ -798,7 +799,7 @@ describe('runCycle', () => {
         price_native: 19.2,
         fee_native: 0.5,
         fx_quote_per_gbp: FX,
-        fx_source: 'boe-xudluss:year-start:2026',
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
         fill_date: '2026-09-25',
       },
     ]);
@@ -3346,6 +3347,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       barsBefore: (_instrument, tradingDate, count) =>
         bars.filter((dated) => dated.date < tradingDate).slice(-count),
       gbpUsdAtYearStart: () => FX,
+      gbpUsdYearStartFixDate: () => '2025-12-31',
     };
   }
 
@@ -3659,6 +3661,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       lastBarBefore: (instrument, date) => real.lastBarBefore(instrument, date),
       barsBefore: (instrument, date, count) => real.barsBefore(instrument, date, count),
       gbpUsdAtYearStart: () => FX,
+      gbpUsdYearStartFixDate: () => '2025-12-31',
     };
     const report = await runCycle({ ...deps, market }, '2026-09-29');
     expect(report.exits).toBe(0);
@@ -3872,6 +3875,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
           lastBarBefore: (instrument, date) => real.lastBarBefore(instrument, date),
           barsBefore: (instrument, date, count) => real.barsBefore(instrument, date, count),
           gbpUsdAtYearStart: () => FX,
+          gbpUsdYearStartFixDate: () => '2025-12-31',
         };
         const across = await runCycle({ ...deps, market }, '2026-09-30');
         expect(across.exits).toBe(0);
@@ -4022,6 +4026,42 @@ describe('runCycle: positions held across a split (#1865)', () => {
     );
   });
 
+  it('dates the cash in lieu of a late-evening broker exit by the London day, as the exit itself', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 101, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-late-evening'),
+      leg: 'stop',
+      price: 12.8,
+      qty: 151,
+      fee: 0,
+      timestamp: new Date('2026-09-29T23:30:00.000Z'),
+    });
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT fill_id, leg, fill_date FROM v2_fills WHERE leg IN ('stop', 'cash_in_lieu') ORDER BY leg",
+        )
+        .all(),
+    ).toEqual([
+      {
+        fill_id: 'alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29',
+        leg: 'cash_in_lieu',
+        fill_date: '2026-09-30',
+      },
+      { fill_id: 'alpaca:alp-stop-late-evening', leg: 'stop', fill_date: '2026-09-30' },
+    ]);
+  });
+
   it('a broker exit fill of 151 after a 3:2 split on 101 shares closes the position with no stuck half share', async () => {
     const alpaca = new SplitAlpaca();
     const deps = harness([longAapl], false, alpaca);
@@ -4063,7 +4103,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
         qty: 0.5,
         currency: 'USD',
         price_native: expect.closeTo(40 / 3, 9),
-        fx_source: 'boe-xudluss:year-start:2026',
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
         fill_date: '2026-09-29',
       },
       {
@@ -4072,7 +4112,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
         qty: 151,
         currency: 'USD',
         price_native: 12.8,
-        fx_source: 'boe-xudluss:year-start:2026',
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
         fill_date: '2026-09-29',
       },
     ]);

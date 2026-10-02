@@ -40,18 +40,31 @@ describe('BarsMarketData', () => {
 });
 
 describe('fillFxOf and londonDateOf (#1947)', () => {
-  const market = { gbpUsdAtYearStart: (year: number) => (year === 2026 ? 1.3 : 1.2) };
+  const market = new BarsMarketData({ load: () => undefined }, [
+    { date: '2025-12-31', gbpUsd: 1.3 },
+    { date: '2026-09-24', gbpUsd: 1.2 },
+  ]);
 
-  it('names the currency, the rate the fill was booked at and where it came from', () => {
+  it('names the currency, the rate the fill was booked at and the fix it came from', () => {
     expect(fillFxOf(market, 'alpaca', '2026-09-25')).toEqual({
       currency: 'USD',
       quotePerGbp: 1.3,
-      source: 'boe-xudluss:year-start:2026',
+      source: 'boe-xudluss:year-start:2026@2025-12-31',
     });
+    expect(market.gbpUsdYearStartFixDate(2026)).toBe('2025-12-31');
+  });
+
+  it('names a stale fix as stale when the series ends before 1 January', () => {
     expect(fillFxOf(market, 'alpaca', '2027-01-04')).toMatchObject({
       quotePerGbp: 1.2,
-      source: 'boe-xudluss:year-start:2027',
+      source: 'boe-xudluss:year-start:2027@2026-09-24',
     });
+    expect(fillFxOf({ gbpUsdAtYearStart: () => 1.25 }, 'alpaca', '2027-01-04').source).toBe(
+      'boe-xudluss:year-start:2027@unknown',
+    );
+  });
+
+  it('needs no rate for sterling', () => {
     expect(fillFxOf(market, 'saxo', '2026-09-25')).toEqual({
       currency: 'GBP',
       quotePerGbp: 1,

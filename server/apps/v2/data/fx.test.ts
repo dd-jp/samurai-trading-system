@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DAY_FIX_MAX_GAP_DAYS,
@@ -7,6 +8,8 @@ import {
   yearStartFxSource,
   yearStartGbpUsd,
 } from './fx.js';
+
+const FX_FILE = new URL('../../../../data/bars/fx/gbpusd-boe-xudluss.csv', import.meta.url);
 
 const CSV = ['DATE,XUDLUSS', '30 Dec 2025,1.34', '31 Dec 2025,1.35', '02 Jan 2026,1.36', ''].join(
   '\n',
@@ -31,6 +34,20 @@ describe('fx', () => {
     expect(parseBoeGbpUsdCsv('DATE,XUDLUSS\r\n 5 Jan 2026 ,1.3\r\n   \r\n')).toEqual([
       { date: '2026-01-05', gbpUsd: 1.3 },
     ]);
+  });
+
+  it('refuses a series out of date order, which every lookup by date relies on', () => {
+    expect(() => parseBoeGbpUsdCsv('DATE,XUDLUSS\n02 Jan 2026,1.3\n01 Jan 2026,1.2')).toThrow(
+      'fx: dates not strictly ascending at 2026-01-01 after 2026-01-02',
+    );
+    expect(() => parseBoeGbpUsdCsv('DATE,XUDLUSS\n02 Jan 2026,1.3\n02 Jan 2026,1.2')).toThrow(
+      /not strictly ascending/,
+    );
+  });
+
+  it('reads the committed BoE series in date order', () => {
+    const series = parseBoeGbpUsdCsv(readFileSync(FX_FILE, 'utf8'));
+    expect(series.length).toBeGreaterThan(1_000);
   });
 
   it('rejects a foreign header or a bad row', () => {
@@ -108,6 +125,7 @@ describe('dayGbpUsd (#1947)', () => {
 
   it('names its sources', () => {
     expect(dayFxSource('2026-04-02')).toBe('boe-xudluss:2026-04-02');
-    expect(yearStartFxSource(2026)).toBe('boe-xudluss:year-start:2026');
+    expect(yearStartFxSource(2026, '2025-12-31')).toBe('boe-xudluss:year-start:2026@2025-12-31');
+    expect(yearStartFxSource(2026, undefined)).toBe('boe-xudluss:year-start:2026@unknown');
   });
 });

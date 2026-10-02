@@ -242,6 +242,8 @@ describe('fencedMarket', () => {
     );
     expect(fenced.lastBarBefore('UP', DATES[30] as string)?.date).toBe(DATES[29]);
     expect(fenced.gbpUsdAtYearStart(2024)).toBe(market.gbpUsdAtYearStart(2024));
+    expect(fenced.gbpUsdYearStartFixDate?.(2024)).toBe(market.gbpUsdYearStartFixDate(2024));
+    expect(() => fenced.gbpUsdYearStartFixDate?.(2025)).toThrow(/lookahead/);
     expect(() => fenced.lastBarBefore('UP', DATES[31] as string)).toThrow(/lookahead/);
     expect(() => fenced.barsBefore('UP', DATES[31] as string, 1)).toThrow(/lookahead/);
     expect(() => fenced.gbpUsdAtYearStart(2025)).toThrow(

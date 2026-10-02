@@ -20,6 +20,7 @@ export interface MarketData {
   lastBarBefore(instrument: string, tradingDate: string): V2Bar | undefined;
   barsBefore(instrument: string, tradingDate: string, count: number): readonly V2Bar[];
   gbpUsdAtYearStart(year: number): number;
+  gbpUsdYearStartFixDate?(year: number): string | undefined;
 }
 
 export type SleeveAction = 'enter_long' | 'enter_short' | 'exit' | 'skip' | 'none';

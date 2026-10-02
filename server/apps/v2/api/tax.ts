@@ -40,7 +40,7 @@ export function dayRateOf(
 }
 
 // Shadow and control books never trade at a broker, so only fills of broker-routed orders are
-// disposals; CFD venues are dropped in buildTaxLog (#1867)
+// disposals
 const BROKER_FILLS = `
   SELECT f.fill_id, f.instrument, f.venue, f.leg, f.side, f.qty, f.trading_date, f.fill_date,
     f.currency, f.price_native, f.fee_native
