@@ -706,6 +706,31 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     return 1;
   }
 
+  private collectOrderAndLegs(
+    order: AlpacaOrder,
+    leg: 'entry' | 'target',
+    clientOrderId: string,
+    since: Date,
+    observedAt: Date,
+    fills: NormalizedFill[],
+  ): void {
+    const instrument = symbolOf(order);
+    const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
+    this.auditSinceFloorInvariant(order, leg, clientOrderId, instrument, observedAt, submittedAt);
+    collectFill(order, leg, clientOrderId, instrument, since, observedAt, fills);
+    for (const child of order.legs ?? []) {
+      this.auditSinceFloorInvariant(
+        child,
+        legName(child),
+        clientOrderId,
+        instrument,
+        observedAt,
+        submittedAt,
+      );
+      collectFill(child, legName(child), clientOrderId, instrument, since, observedAt, fills);
+    }
+  }
+
   private async sweepBrackets(
     since: Date,
     observedAt: Date,
@@ -720,28 +745,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.input.client.getOrder(entryOrderId),
         );
 
-        const instrument = symbolOf(entry);
-        const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
-        this.auditSinceFloorInvariant(
-          entry,
-          'entry',
-          clientOrderId,
-          instrument,
-          observedAt,
-          submittedAt,
-        );
-        collectFill(entry, 'entry', clientOrderId, instrument, since, observedAt, fills);
-        for (const leg of entry.legs ?? []) {
-          this.auditSinceFloorInvariant(
-            leg,
-            legName(leg),
-            clientOrderId,
-            instrument,
-            observedAt,
-            submittedAt,
-          );
-          collectFill(leg, legName(leg), clientOrderId, instrument, since, observedAt, fills);
-        }
+        this.collectOrderAndLegs(entry, 'entry', clientOrderId, since, observedAt, fills);
       } catch (error) {
         bracketFailures += this.recordSweepError(error, failures);
       }
@@ -792,21 +796,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     for (const [lotKey, orderId] of [...this.rearmedLegs]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        const instrument = symbolOf(order);
-        const submittedAt = this.bracketSubmittedAt.get(lotKey);
-        this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt, submittedAt);
-        collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
-        for (const leg of order.legs ?? []) {
-          this.auditSinceFloorInvariant(
-            leg,
-            legName(leg),
-            lotKey,
-            instrument,
-            observedAt,
-            submittedAt,
-          );
-          collectFill(leg, legName(leg), lotKey, instrument, since, observedAt, fills);
-        }
+        this.collectOrderAndLegs(order, 'target', lotKey, since, observedAt, fills);
         if (mapOrderState(order.status) !== 'submitted') {
           this.rearmedLegs.delete(lotKey);
         }

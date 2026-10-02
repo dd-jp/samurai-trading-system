@@ -4209,12 +4209,19 @@ export interface SmokeRunResult {
   report: string[];
 }
 
+function resolveSmokeTiming(options: SmokeRunOptions) {
+  return {
+    targetTicks: options.ticks ?? DEFAULT_SMOKE_TICKS,
+    tickIntervalMs: options.tickIntervalMs ?? DEFAULT_SMOKE_TICK_INTERVAL_MS,
+    fillPollIntervalMs: options.fillPollIntervalMs ?? DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS,
+    heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS,
+    deadlineMs: options.deadlineMs ?? DEFAULT_SMOKE_DEADLINE_MS,
+  };
+}
+
 export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunResult> {
-  const targetTicks = options.ticks ?? DEFAULT_SMOKE_TICKS;
-  const tickIntervalMs = options.tickIntervalMs ?? DEFAULT_SMOKE_TICK_INTERVAL_MS;
-  const fillPollIntervalMs = options.fillPollIntervalMs ?? DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS;
-  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS;
-  const deadlineMs = options.deadlineMs ?? DEFAULT_SMOKE_DEADLINE_MS;
+  const { targetTicks, tickIntervalMs, fillPollIntervalMs, heartbeatIntervalMs, deadlineMs } =
+    resolveSmokeTiming(options);
   const fillSyncFailures = new FillSyncFailureRecorder(options.logger ?? new JsonLogger());
   const marketDataFetch = new MarketDataFetchRecorder(fillSyncFailures);
   const logger: Logger = marketDataFetch;
