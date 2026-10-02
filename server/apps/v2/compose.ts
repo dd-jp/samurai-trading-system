@@ -154,5 +154,6 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     logger,
     venueSessions: options.venueSessions,
     runStartedAt: options.runStartedAt,
+    atomically: (work) => v2Store.transaction(work)(),
   };
 }

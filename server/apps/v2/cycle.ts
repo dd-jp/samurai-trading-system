@@ -59,6 +59,7 @@ interface CashInLieu {
   readonly fraction: number;
   readonly priceGbp: number;
   readonly anchorDate: string;
+  readonly sourceOrderId: string;
 }
 
 export interface CycleDeps {
@@ -79,6 +80,7 @@ export interface CycleDeps {
   readonly closeEndedSeries?: boolean;
   readonly venueSessions?: VenueSessionGate | undefined;
   readonly runStartedAt?: Date | undefined;
+  readonly atomically?: (<T>(work: () => T) => T) | undefined;
 }
 
 export interface BookReport {
@@ -337,6 +339,7 @@ class Cycle {
     const ratio = this.splitBefore(held, date);
     if (ratio === 1) return;
     const qty = this.splitHeld(order.book_id, held, ratio, date);
+    this.alertBrokerSplit(order.book_id, held, ratio, qty);
     this.log(
       'warn',
       'v2_fill_post_split_rescaled',
@@ -451,32 +454,56 @@ class Cycle {
       'v2_split_rescaled',
       `${book.id} ${held.instrument}: qty ${held.qty} -> ${qty}, levels / ${ratio}`,
     );
+    if (!this.deps.executor.simulates(routeOf(book, held.venue))) {
+      this.alertBrokerSplit(book.id, held, ratio, qty);
+    }
+  }
+
+  // Nothing reads or amends the venue's resting stop and bracket after a split, and reconcile
+  // checks only that a closing-side stop exists, so a person checks its qty and price
+  alertBrokerSplit(bookId: string, held: Position, ratio: number, qty: number): void {
+    this.log(
+      'error',
+      'v2_split_broker_check',
+      `${bookId} ${held.instrument}: x${ratio} split on a broker-held position, ledger qty ${held.qty} -> ${qty}; check the venue's resting stop and bracket qty and price by hand, nothing amends them`,
+    );
+  }
+
+  atomically<T>(work: () => T): T {
+    return this.deps.atomically === undefined ? work() : this.deps.atomically(work);
   }
 
   // David ruled 2026-10-01 (#1984): the broker keeps whole shares and pays cash for the rest, so
   // the ledger floors too and books the remainder as a disposal; reconcile (#1872) flags any
   // broker qty that differs
   splitHeld(bookId: string, held: Position, ratio: number, anchorDate: string): number {
-    this.deps.books.applySplit(bookId, held.instrument, ratio, anchorDate);
-    const fraction = fractionalShares(held.qty * ratio);
-    if (fraction === 0) return held.qty * ratio;
-    const priceGbp = this.markGbp(held.instrument, held.venue) ?? held.avgPriceGbp / ratio;
-    this.disposeCashInLieu(bookId, held, { fraction, priceGbp, anchorDate });
-    return held.qty * ratio - fraction;
+    return this.atomically(() => {
+      this.deps.books.applySplit(bookId, held.instrument, ratio, anchorDate);
+      return this.floorHeld(bookId, held.instrument, anchorDate, held.clientOrderId);
+    });
   }
 
   // The broker's cash-in-lieu amount is not read from any venue; the disposal books at the
-  // latest close, which is already in post-split units
+  // latest close, already in post-split units
+  floorHeld(bookId: string, instrument: string, anchorDate: string, sourceOrderId: string): number {
+    const held = this.deps.books.position(bookId, instrument) as Position;
+    const fraction = fractionalShares(held.qty);
+    if (fraction === 0) return held.qty;
+    const priceGbp = this.markGbp(instrument, held.venue) ?? held.avgPriceGbp;
+    this.disposeCashInLieu(bookId, held, { fraction, priceGbp, anchorDate, sourceOrderId });
+    return held.qty - fraction;
+  }
+
   disposeCashInLieu(
     bookId: string,
     held: Position,
-    { fraction, priceGbp, anchorDate }: CashInLieu,
+    { fraction, priceGbp, anchorDate, sourceOrderId }: CashInLieu,
   ): void {
     const side: OrderSide = fraction > 0 ? 'sell' : 'buy';
     const qty = Math.abs(fraction);
     const recorded = this.deps.journal.recordFill({
-      fill_id: `${held.venue}:cash-in-lieu:${bookId}:${held.instrument}:${anchorDate}`,
-      client_order_id: held.clientOrderId,
+      fill_id: `${held.venue}:cash-in-lieu:${bookId}:${held.instrument}:${anchorDate}:${sourceOrderId}`,
+      client_order_id: sourceOrderId,
       book_id: bookId,
       trading_date: this.tradingDate,
       instrument: held.instrument,
@@ -496,7 +523,7 @@ class Cycle {
       qty,
       priceGbp,
       feeGbp: 0,
-      clientOrderId: held.clientOrderId,
+      clientOrderId: sourceOrderId,
       tradingDate: this.tradingDate,
     });
     this.log(
@@ -585,9 +612,7 @@ class Cycle {
     units: { readonly ratio: number; readonly date: string },
     opening: boolean,
   ): void {
-    if (opening && this.deps.books.position(order.book_id, order.instrument) !== undefined) {
-      this.deps.books.applySplit(order.book_id, order.instrument, units.ratio, units.date);
-    }
+    this.splitEntryFill(order, units, opening);
     const held = this.deps.books.position(order.book_id, order.instrument);
     if (outcome.stoppedAt !== undefined && held !== undefined) {
       this.simulatedExit(
@@ -598,6 +623,23 @@ class Cycle {
         'stop_on_entry_bar',
       );
     }
+  }
+
+  // An add-on books qty x ratio in the latest bar's units, which the broker would floor too
+  splitEntryFill(
+    order: JournalledOrder,
+    units: { readonly ratio: number; readonly date: string },
+    opening: boolean,
+  ): void {
+    const held = this.deps.books.position(order.book_id, order.instrument);
+    if (held === undefined) return;
+    if (opening) {
+      this.splitHeld(order.book_id, held, units.ratio, units.date);
+      return;
+    }
+    this.atomically(() =>
+      this.floorHeld(order.book_id, order.instrument, units.date, order.client_order_id),
+    );
   }
 
   quoteOrRefuse(

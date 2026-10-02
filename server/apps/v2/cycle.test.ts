@@ -30,7 +30,7 @@ import {
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import {
   budgetChanges,
   type CycleDeps,
@@ -336,6 +336,7 @@ function harness(
     books,
     journal,
     brokerBooks: primaryBooksMirror(registry, books, journal),
+    atomically: (work) => db.transaction(work)(),
     brokerMode: 'paper',
     reconcileCashToleranceGbp: MIRROR_CASH_TOLERANCE_GBP,
     risk: new V2RiskGate({
@@ -3507,7 +3508,10 @@ describe('runCycle: positions held across a split (#1865)', () => {
     seriesBar('2026-09-28', THREE_FOR_TWO, 1),
     seriesBar('2026-09-29', THREE_FOR_TWO, 1),
   ];
-  const CASH_IN_LIEU_PRIMARY = 'alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-28';
+  const BROKER_ENTRY = 'v2-debate-primary-2026-09-25-AAPL';
+  const cashInLieuId = (date: string, source = 'seed') =>
+    `alpaca:cash-in-lieu:debate/primary:AAPL:${date}:${source}`;
+  const CASH_IN_LIEU_PRIMARY = cashInLieuId('2026-09-28');
 
   it('a 3:2 split on 101 shares holds 151 and disposes of the half share as cash in lieu at the rescaled close, keeping equity', async () => {
     const deps = harness([], true);
@@ -3556,6 +3560,88 @@ describe('runCycle: positions held across a split (#1865)', () => {
       1_000 + (101 * 20) / FX - (0.5 * 40) / 3 / FX,
       9,
     );
+  });
+
+  it('a cash-in-lieu row already journalled for the split books no second disposal', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    deps.journal.recordFill({
+      fill_id: CASH_IN_LIEU_PRIMARY,
+      client_order_id: 'seed',
+      book_id: 'debate/primary',
+      trading_date: '2026-09-29',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'cash_in_lieu',
+      side: 'sell',
+      qty: 0.5,
+      price_gbp: 1,
+      fee_gbp: 0,
+    });
+    const cash = deps.books.cash('debate/primary');
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(cash, 9);
+    expect(primary(deps)?.qty).toBeCloseTo(151.5, 12);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toMatchObject([{ price_gbp: 1 }]);
+  });
+
+  it('journals the cash in lieu as its own leg and side', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    expect(journalledFills(deps, CASH_IN_LIEU_PRIMARY)).toEqual([
+      {
+        client_order_id: 'seed',
+        leg: 'cash_in_lieu',
+        side: 'sell',
+        qty: 0.5,
+        price_gbp: expect.closeTo(40 / 3 / FX, 9),
+      },
+    ]);
+  });
+
+  it('prices the cash in lieu at the rescaled average when the name has no mark', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    deps.books.applySplit('debate/primary', 'AAPL', 1, '2026-09-25');
+    const market = seriesMarket(threeForTwo);
+    await runCycle(
+      { ...deps, market: { ...market, lastBarBefore: () => undefined } },
+      '2026-09-29',
+    );
+    expect(journalledFills(deps, CASH_IN_LIEU_PRIMARY)).toMatchObject([
+      { side: 'sell', qty: 0.5, price_gbp: expect.closeTo(20 / 1.5 / FX, 9) },
+    ]);
+  });
+
+  it('floors without a transaction seam when none is given', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    await runCycle({ ...withMarket(deps, threeForTwo), atomically: undefined }, '2026-09-29');
+    expect(primary(deps)?.qty).toBe(151);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toHaveLength(1);
+  });
+
+  it('rolls the split back when its cash in lieu cannot be journalled', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    const journal = new Proxy(deps.journal, {
+      get(target, property) {
+        if (property === 'recordFill') {
+          return (fill: { leg: string }) => {
+            if (fill.leg === 'cash_in_lieu') throw new Error('disk full');
+            return target.recordFill(fill as Parameters<typeof target.recordFill>[0]);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      runCycle({ ...withMarket(deps, threeForTwo), journal }, '2026-09-29'),
+    ).rejects.toThrow('disk full');
+    expect(primary(deps)).toMatchObject({ qty: 101, splitFactor: 1 });
+    expect(primary(deps)?.splitAnchorDate).toBeUndefined();
   });
 
   it('measures a second split from the anchor the first one left', async () => {
@@ -3688,9 +3774,9 @@ describe('runCycle: positions held across a split (#1865)', () => {
       { message: expect.stringContaining('qty 6 -> 0,') },
     ]);
     expect(primary(deps)).toBeUndefined();
-    expect(
-      deps.journal.fillPartsOf('alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29'),
-    ).toMatchObject([{ qty: expect.closeTo(0.03, 12), price_gbp: expect.closeTo(6400 / FX, 9) }]);
+    expect(deps.journal.fillPartsOf(cashInLieuId('2026-09-29'))).toMatchObject([
+      { qty: expect.closeTo(0.03, 12), price_gbp: expect.closeTo(6400 / FX, 9) },
+    ]);
   });
 
   it('a simulated entry filled on a bar before a split already visible this cycle books rescaled to the latest bar, with no phantom loss', async () => {
@@ -3713,6 +3799,66 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(report.books[0]?.equity_gbp).toBeGreaterThan(995);
     await runCycle(withMarket(deps, bars), '2026-10-01');
     expect(primary(deps)).toMatchObject({ splitFactor: 10, splitAnchorDate: '2026-09-29' });
+  });
+
+  const PRE_SIX_FOR_FIVE: RawBar = { open: 20, high: 20.5, low: 19.5, close: 20 };
+  const SIX_FOR_FIVE: RawBar = { open: 50 / 3, high: 17.1, low: 16.3, close: 50 / 3 };
+  const sixForFive = [
+    seriesBar('2026-09-24', PRE_SIX_FOR_FIVE, 1.2),
+    seriesBar('2026-09-25', PRE_SIX_FOR_FIVE, 1.2),
+    seriesBar('2026-09-28', SIX_FOR_FIVE, 1),
+    seriesBar('2026-09-29', SIX_FOR_FIVE, 1),
+  ];
+
+  function journalledFills(deps: CycleDeps, fillId: string) {
+    const db = (deps.journal as unknown as { db: StoreHandle }).db;
+    return db
+      .prepare('SELECT client_order_id, leg, side, qty, price_gbp FROM v2_fills WHERE fill_id = ?')
+      .all(fillId);
+  }
+
+  it('a simulated entry opening across a 6:5 split floors size x 1.2 and books the rest as cash in lieu', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(withMarket(deps, sixForFive), '2026-09-30');
+    const entry = deps.journal.orderFor(BROKER_ENTRY);
+    const size = entry?.payload.size as number;
+    expect(size % 5).not.toBe(0);
+    const whole = Math.floor(size * 1.2);
+    expect(primary(deps)).toMatchObject({
+      qty: whole,
+      splitFactor: 1.2,
+      splitAnchorDate: '2026-09-29',
+    });
+    expect(journalledFills(deps, cashInLieuId('2026-09-29', BROKER_ENTRY))).toEqual([
+      {
+        client_order_id: BROKER_ENTRY,
+        leg: 'cash_in_lieu',
+        side: 'sell',
+        qty: expect.closeTo(size * 1.2 - whole, 9),
+        price_gbp: expect.closeTo(50 / 3 / FX, 9),
+      },
+    ]);
+  });
+
+  it('a simulated add-on across a 6:5 split leaves the held position in whole shares', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    hold(deps, 6, '2026-09-24');
+    deps.books.applySplit('debate/primary', 'AAPL', 1, '2026-09-24');
+    await runCycle(withMarket(deps, sixForFive), '2026-09-30');
+    const size = deps.journal.orderFor(BROKER_ENTRY)?.payload.size as number;
+    const held = primary(deps)?.qty as number;
+    expect(Number.isInteger(held)).toBe(true);
+    expect(held).toBe(Math.floor(7 + size * 1.2));
+    expect(journalledFills(deps, cashInLieuId('2026-09-29'))).toMatchObject([
+      { leg: 'cash_in_lieu', side: 'sell', qty: expect.closeTo(0.2, 9) },
+    ]);
+    expect(journalledFills(deps, cashInLieuId('2026-09-29', BROKER_ENTRY))).toMatchObject([
+      { leg: 'cash_in_lieu', side: 'sell', qty: expect.closeTo(7 + size * 1.2 - held, 9) },
+    ]);
   });
 
   it('a simulated entry filling into an already-held position leaves its split anchor untouched', async () => {
@@ -3915,6 +4061,14 @@ describe('runCycle: positions held across a split (#1865)', () => {
       expect.stringContaining('debate/primary AAPL: qty 6 -> 60'),
       expect.stringContaining('debate/no-macro-gate AAPL'),
     ]);
+    expect(eventsOf(entries, 'v2_split_broker_check')).toMatchObject([
+      {
+        level: 'error',
+        message: expect.stringMatching(
+          /^debate\/primary AAPL: x10 split on a broker-held position, ledger qty 6 -> 60; check the venue's resting stop and bracket qty and price/,
+        ),
+      },
+    ]);
   });
 
   function brokerHolding(deps: Harness, qty: number): BrokerBookReader {
@@ -3943,7 +4097,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
   it('a broker-held 101 shares across 3:2 books 151 and a half-share cash in lieu, and reconciles clean against a broker holding 151', async () => {
     const { deps, entries, across } = await brokerHeld101AcrossThreeForTwo(151);
     expect(primary(deps)).toMatchObject({ qty: 151, splitFactor: 1.5 });
-    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toEqual([
+    expect(deps.journal.fillPartsOf(cashInLieuId('2026-09-28', BROKER_ENTRY))).toEqual([
       {
         qty: 0.5,
         price_gbp: expect.closeTo(40 / 3 / FX, 9),
@@ -3973,7 +4127,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
 
   it('a broker exit fill of 151 after a 3:2 split on 101 shares closes the position with no stuck half share', async () => {
     const alpaca = new SplitAlpaca();
-    const deps = harness([longAapl], false, alpaca);
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
     await runCycle(deps, '2026-09-25');
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 101, 20);
     deps.setControl('halt');
@@ -3989,9 +4143,17 @@ describe('runCycle: positions held across a split (#1865)', () => {
     });
     await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
     expect(primary(deps)).toBeUndefined();
-    expect(
-      deps.journal.fillPartsOf('alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29'),
-    ).toMatchObject([{ qty: 0.5, price_gbp: expect.closeTo(40 / 3 / FX, 9) }]);
+    expect(deps.journal.fillPartsOf(cashInLieuId('2026-09-29', BROKER_ENTRY))).toMatchObject([
+      { qty: 0.5, price_gbp: expect.closeTo(40 / 3 / FX, 9) },
+    ]);
+    expect(eventsOf(entries, 'v2_split_broker_check')).toMatchObject([
+      {
+        level: 'error',
+        message: expect.stringContaining(
+          'x1.5 split on a broker-held position, ledger qty 101 -> 151;',
+        ),
+      },
+    ]);
   });
 
   it('a resting simulated entry that fills on the split day books the order units rescaled, with no false stop_on_entry_bar', async () => {
