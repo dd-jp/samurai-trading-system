@@ -48,8 +48,11 @@ import {
 } from './data/index.js';
 import {
   blockEntriesOnThrow,
+  blockEntriesOnThrows,
   type ReconcileOutcome,
   reconcileOrBlockEntries,
+  type StepThrow,
+  type ThrowFailure,
 } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
@@ -215,6 +218,8 @@ class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
   readonly #entriesBlocked = new Set<string>();
+  readonly #unrescaled = new Set<string>();
+  readonly #unrescaledBooks = new Set<string>();
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -441,12 +446,50 @@ class Cycle {
     this.log('error', 'v2_crossing_fill', message);
   }
 
+  // A position whose rescale threw keeps its pre-split qty and levels: an exit on them trades the
+  // wrong qty at the wrong levels and a mark persists a loss-budget row the next cycle sizes from,
+  // so both wait for a cycle whose rescale succeeds
   rescaleSplitPositions(): void {
+    const thrown: unknown[] = [];
     for (const sleeveId of this.deps.registry.ids()) {
-      for (const book of this.deps.books.forSleeve(sleeveId)) {
-        for (const held of this.deps.books.positions(book.id)) this.rescaleForSplit(book, held);
+      for (const book of this.deps.books.forSleeve(sleeveId))
+        thrown.push(...this.rescaleBook(book));
+    }
+    if (thrown.length > 0) throw thrown[0];
+  }
+
+  rescaleBook(book: BookSpec): unknown[] {
+    let positions: readonly Position[];
+    try {
+      positions = this.deps.books.positions(book.id);
+    } catch (error) {
+      this.#unrescaledBooks.add(book.id);
+      return [error];
+    }
+    const thrown: unknown[] = [];
+    for (const held of positions) {
+      try {
+        this.rescaleForSplit(book, held);
+      } catch (error) {
+        this.#unrescaled.add(positionKey(book.id, held.instrument));
+        thrown.push(error);
       }
     }
+    return thrown;
+  }
+
+  refuseMarkIfRescaleThrew(): void {
+    const unrescaled = [...this.#unrescaledBooks, ...this.#unrescaled];
+    if (unrescaled.length === 0) return;
+    const message = `split rescale threw for ${unrescaled.join(', ')}; the date stays unmarked for a retry`;
+    this.log('error', 'v2_split_rescale_unmarked', message);
+    throw new Error(message);
+  }
+
+  rescaleThrew(bookId: string, instrument: string): boolean {
+    return (
+      this.#unrescaledBooks.has(bookId) || this.#unrescaled.has(positionKey(bookId, instrument))
+    );
   }
 
   rescaleForSplit(book: BookSpec, held: Position): void {
@@ -734,7 +777,9 @@ class Cycle {
 
   fillSimulatedExits(): void {
     for (const bookId of this.deps.books.ids()) {
-      for (const held of this.deps.books.positions(bookId)) this.fillSimulatedExit(held);
+      for (const held of this.deps.books.positions(bookId)) {
+        if (!this.rescaleThrew(bookId, held.instrument)) this.fillSimulatedExit(held);
+      }
     }
   }
 
@@ -956,7 +1001,9 @@ class Cycle {
 
   async haltExits(book: BookSpec): Promise<void> {
     for (const held of this.deps.books.positions(book.id)) {
-      if (held.exitClientOrderId !== undefined) continue;
+      if (held.exitClientOrderId !== undefined || this.rescaleThrew(book.id, held.instrument)) {
+        continue;
+      }
       if (this.deps.executor.canRoute(routeOf(book, held.venue))) {
         await this.submitExit(book, held, 'manual_halt');
         continue;
@@ -1124,6 +1171,7 @@ class Cycle {
     held: Position,
     exitSignalled: ReadonlySet<string>,
   ): Promise<void> {
+    if (this.rescaleThrew(book.id, held.instrument)) return;
     await this.resumePendingExit(book, held);
     if (this.deps.executor.simulates(routeOf(book, held.venue))) {
       this.simulatedBracketExit(book, held);
@@ -1701,17 +1749,35 @@ export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<Cy
   return report;
 }
 
-async function sweepFillsOrBlockEntries(
-  deps: CycleDeps,
-  cycle: Cycle,
-  tradingDate: string,
-): Promise<ReconcileOutcome | undefined> {
-  try {
-    await cycle.sweepFills();
-    return undefined;
-  } catch (error) {
-    return blockEntriesOnThrow(deps, tradingDate, 'v2_fill_sweep_threw', 'fill sweep', error);
+interface SyncStep extends ThrowFailure {
+  readonly run: (cycle: Cycle) => unknown;
+}
+
+// fillSimulatedEntries is not a guarded step: a fill quote error must stop the cycle (#1849)
+const SYNC_STEPS: readonly SyncStep[] = [
+  { event: 'v2_fill_sweep_threw', what: 'fill sweep', run: (cycle) => cycle.sweepFills() },
+  {
+    event: 'v2_split_rescale_threw',
+    what: 'split rescale',
+    run: (cycle) => cycle.rescaleSplitPositions(),
+  },
+  {
+    event: 'v2_entry_cancel_threw',
+    what: 'cancel of entries blocked at the last mark',
+    run: (cycle) => cycle.cancelEntriesBlockedAtLastMark(),
+  },
+];
+
+async function syncStepThrows(cycle: Cycle): Promise<StepThrow[]> {
+  const thrown: StepThrow[] = [];
+  for (const step of SYNC_STEPS) {
+    try {
+      await step.run(cycle);
+    } catch (error) {
+      thrown.push({ failure: step, error });
+    }
   }
+  return thrown;
 }
 
 async function syncBooksThenReconcile(
@@ -1719,12 +1785,30 @@ async function syncBooksThenReconcile(
   cycle: Cycle,
   tradingDate: string,
 ): Promise<ReconcileOutcome> {
-  const sweepFailure = await sweepFillsOrBlockEntries(deps, cycle, tradingDate);
-  cycle.rescaleSplitPositions();
-  await cycle.cancelEntriesBlockedAtLastMark();
+  const thrown = await syncStepThrows(cycle);
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
-  return sweepFailure ?? (await reconcileOrBlockEntries(deps, tradingDate));
+  if (thrown.length === 0) return reconcileOrBlockEntries(deps, tradingDate);
+  return blockEntriesOnThrows(deps, tradingDate, thrown);
+}
+
+// The date stays unmarked for a retry rather than marked on books missing this cycle's fills
+async function sweepFillsBeforeMarks(
+  deps: CycleDeps,
+  cycle: Cycle,
+  tradingDate: string,
+): Promise<void> {
+  try {
+    await cycle.sweepFills();
+  } catch (error) {
+    blockEntriesOnThrow(
+      deps,
+      tradingDate,
+      { event: 'v2_fill_sweep_threw', what: 'fill sweep before the marks' },
+      error,
+    );
+    throw error;
+  }
 }
 
 async function runUnmarked(
@@ -1758,7 +1842,8 @@ async function runUnmarked(
       await cycle.entries(book, cycle.withoutSittingOut(book, output.decisions));
     }
   }
-  await cycle.sweepFills();
+  await sweepFillsBeforeMarks(deps, cycle, tradingDate);
+  cycle.refuseMarkIfRescaleThrew();
   const bookReports = await cycle.markAll(books);
   refusals.push(...cycle.refusals);
   const { tally } = cycle;

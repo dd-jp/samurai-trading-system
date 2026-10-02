@@ -50,7 +50,11 @@ const VENUE_SET: Readonly<Record<Venue, true>> = {
 const VENUES = Object.keys(VENUE_SET) as Venue[];
 const TICKET = '#1927';
 
-function sourceOf(deps: ReconcileDeps, book: BookSpec, venue: Venue): ReconcileSource {
+function sourceOf(
+  deps: Pick<ReconcileDeps, 'executor'>,
+  book: BookSpec,
+  venue: Venue,
+): ReconcileSource {
   return deps.executor.simulates({ bookVariant: book.variant, venue }) ? 'simulated' : 'broker';
 }
 
@@ -70,7 +74,7 @@ function allBooks(deps: Pick<ReconcileDeps, 'registry' | 'books'>): BookSpec[] {
   return deps.registry.ids().flatMap((sleeveId) => deps.books.forSleeve(sleeveId));
 }
 
-function venueGroups(deps: ReconcileDeps): VenueGroup[] {
+function venueGroups(deps: Pick<ReconcileDeps, 'registry' | 'books' | 'executor'>): VenueGroup[] {
   const groups = new Map<string, { venue: Venue; source: ReconcileSource; books: BookSpec[] }>();
   for (const book of allBooks(deps)) {
     for (const venue of VENUES) addToGroup(groups, venue, sourceOf(deps, book, venue), book);
@@ -254,24 +258,74 @@ export async function reconcileBooks(
   return { blockedBookIds, refusals };
 }
 
-// A throw in the fill sweep or reconcile blocks entries and must never skip the exits and resting
-// stops after it (postmortem §3, #1927). Logged, not journalled: the journal may be the store
-// that threw, and a throwing logger must not escape either
+export type SyncThrowEvent =
+  | 'v2_fill_sweep_threw'
+  | 'v2_split_rescale_threw'
+  | 'v2_entry_cancel_threw'
+  | 'v2_reconcile_threw';
+
+export interface ThrowFailure {
+  readonly event: SyncThrowEvent;
+  readonly what: string;
+}
+
+export interface StepThrow {
+  readonly failure: ThrowFailure;
+  readonly error: unknown;
+}
+
+type ThrowDeps = Pick<ReconcileDeps, 'registry' | 'books' | 'executor' | 'journal' | 'logger'>;
+
+// The signals entry pass gates on the latest journalled reconcile for the date, so a throw must
+// supersede an earlier clean row from a same-date retry. Best effort: the journal may be the
+// store that threw
+function journalThrow(deps: ThrowDeps, tradingDate: string, summary: string): void {
+  try {
+    for (const group of venueGroups(deps)) {
+      deps.journal.recordReconcile({
+        trading_date: tradingDate,
+        venue: group.venue,
+        source: group.source,
+        status: 'read_failed',
+        book_ids: group.books.map((book) => book.id),
+        diffs: [],
+        detail: summary,
+      });
+    }
+  } catch {
+    return;
+  }
+}
+
+// A throw in a step before reconcile, or in reconcile, blocks entries and must never skip the
+// exits and resting stops after it (postmortem §3, #1927); a throwing logger must not escape either
 export function blockEntriesOnThrow(
-  deps: Pick<ReconcileDeps, 'registry' | 'books' | 'logger'>,
+  deps: ThrowDeps,
   tradingDate: string,
-  event: 'v2_fill_sweep_threw' | 'v2_reconcile_threw',
-  what: string,
+  failure: ThrowFailure,
   error: unknown,
 ): ReconcileOutcome {
-  const summary = `${what} threw: ${describeThrownSafely(error)}`;
-  logIfPresent(deps.logger, {
-    trace_id: `v2-${tradingDate}`,
-    stage: 'v2',
-    level: 'error',
-    event,
-    message: summary,
+  return blockEntriesOnThrows(deps, tradingDate, [{ failure, error }]);
+}
+
+export function blockEntriesOnThrows(
+  deps: ThrowDeps,
+  tradingDate: string,
+  thrown: readonly StepThrow[],
+): ReconcileOutcome {
+  const summaries = thrown.map(({ failure: { event, what }, error }) => {
+    const message = `${what} threw: ${describeThrownSafely(error)}`;
+    logIfPresent(deps.logger, {
+      trace_id: `v2-${tradingDate}`,
+      stage: 'v2',
+      level: 'error',
+      event,
+      message,
+    });
+    return message;
   });
+  const summary = summaries.join('; ');
+  journalThrow(deps, tradingDate, summary);
   const bookIds = allBooks(deps).map((book) => book.id);
   return {
     blockedBookIds: new Set(bookIds),
@@ -286,6 +340,11 @@ export async function reconcileOrBlockEntries(
   try {
     return await reconcileBooks(deps, tradingDate);
   } catch (error) {
-    return blockEntriesOnThrow(deps, tradingDate, 'v2_reconcile_threw', 'reconcile', error);
+    return blockEntriesOnThrow(
+      deps,
+      tradingDate,
+      { event: 'v2_reconcile_threw', what: 'reconcile' },
+      error,
+    );
   }
 }

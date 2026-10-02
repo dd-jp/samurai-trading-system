@@ -3697,15 +3697,96 @@ describe('runCycle: positions held across a split (#1865)', () => {
     });
   }
 
-  it('rolls the split back when its cash in lieu cannot be journalled', async () => {
+  function holdMsft(deps: Harness, qty: number): void {
+    deps.journal.recordOrder({
+      client_order_id: 'seed-msft',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'MSFT',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: true,
+      outcome: 'simulated',
+      payload: {},
+    });
+    deps.books.applyFill('debate/primary', {
+      instrument: 'MSFT',
+      venue: 'alpaca',
+      side: 'buy',
+      leg: 'entry',
+      qty,
+      priceGbp: 20 / FX,
+      feeGbp: 0,
+      clientOrderId: 'seed-msft',
+      tradingDate: '2026-09-25',
+      stopGbp: 19.2 / FX,
+      targetGbp: 21.2 / FX,
+    });
+  }
+
+  it('a position whose split rescale throws rolls back, books no exit and leaves the date unmarked, while the others rescale and exit (#1927)', async () => {
     const deps = harness([], true);
-    hold(deps, 101);
-    const journal = cashInLieuFails(deps);
-    await expect(
-      runCycle({ ...withMarket(deps, threeForTwo), journal }, '2026-09-29'),
-    ).rejects.toThrow('disk full');
+    hold(deps, 101, '2026-09-25', 0.98);
+    holdMsft(deps, 4);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const before = deps.books.lastDay('debate/primary');
+    const exitAapl: SleeveDecision = { ...longAapl, action: 'exit', reason: 'judge exit' };
+    deps.setDecisions([exitAapl, { ...exitAapl, instrument: 'MSFT', inputs_hash: 'm' }]);
+    const logs: LogEntry[] = [];
+    const failing = {
+      ...withMarket(deps, threeForTwo),
+      journal: cashInLieuFails(deps, 'seed'),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+
+    await expect(runCycle(failing, '2026-09-29')).rejects.toThrow(
+      'split rescale threw for debate/primary|AAPL; the date stays unmarked for a retry',
+    );
     expect(primary(deps)).toMatchObject({ qty: 101, splitFactor: 1 });
     expect(primary(deps)?.splitAnchorDate).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
+    expect(deps.books.position('debate/primary', 'MSFT')).toMatchObject({
+      qty: 6,
+      splitFactor: 1.5,
+    });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT-exit')).toMatchObject({
+      payload: { size: 6, reason: 'signal_exit' },
+    });
+    expect(deps.books.isMarked('2026-09-29')).toBe(false);
+    expect(deps.books.lastDay('debate/primary')).toEqual(before);
+    expect(logs.filter((entry) => entry.level === 'error').map((entry) => entry.event)).toEqual([
+      'v2_split_rescale_threw',
+      'v2_split_rescale_unmarked',
+    ]);
+
+    const retry = await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    expect(primary(deps)).toMatchObject({ qty: 151, splitFactor: 1.5 });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
+      payload: { size: 151, reason: 'signal_exit' },
+    });
+    expect(retry.books[0]?.equity_gbp).toBeCloseTo(before?.equityGbp ?? 0, 9);
+    expect(before?.equityGbp).toBeCloseTo(1_000 + (101 * 20 * 0.02) / FX, 9);
+  });
+
+  it('a throw reading a book for its split rescale holds every exit in that book and leaves the date unmarked (#1927)', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    let reads = 0;
+    const positions = deps.books.positions.bind(deps.books);
+    vi.spyOn(deps.books, 'positions').mockImplementation((bookId) => {
+      reads += 1;
+      if (reads === 1) throw new Error('SQLITE_BUSY');
+      return positions(bookId);
+    });
+
+    await expect(runCycle(withMarket(deps, threeForTwo), '2026-09-29')).rejects.toThrow(
+      'split rescale threw for debate/primary; the date stays unmarked for a retry',
+    );
+    expect(primary(deps)).toMatchObject({ qty: 101, splitFactor: 1 });
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
+    expect(deps.books.lastDay('debate/primary')).toBeUndefined();
   });
 
   it('measures a second split from the anchor the first one left', async () => {
@@ -3782,6 +3863,23 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(primary(deps)).toBeUndefined();
     const proceeds = (60 * 2 * (1 - HALF_SPREAD_BPS / 10_000)) / FX;
     expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX + proceeds, 9);
+  });
+
+  it('leaves a pending simulated flatten unfilled while its position cannot be rescaled (#1927)', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    deps.setControl('halt');
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const journal = cashInLieuFails(deps, 'seed');
+
+    await expect(
+      runCycle({ ...withMarket(deps, threeForTwo), journal }, '2026-09-29'),
+    ).rejects.toThrow('split rescale threw for debate/primary|AAPL');
+    expect(exitFill(deps, 'v2-debate-primary-2026-09-28-AAPL-exit')).toBeUndefined();
+    expect(primary(deps)).toMatchObject({
+      qty: 101,
+      exitClientOrderId: 'v2-debate-primary-2026-09-28-AAPL-exit',
+    });
   });
 
   function loggedDeps(deps: Harness): { deps: Harness; entries: LogEntry[] } {
@@ -4674,6 +4772,195 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
 
     expect(report.skipped).toBe(false);
     expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+  });
+
+  async function heldAaplThrowingAfterSweep(arm: (deps: Harness, swept: () => boolean) => void) {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([exitAapl, longMsft]);
+    let sweeps = 0;
+    const fetchNewFills = deps.executor.fetchNewFills.bind(deps.executor);
+    vi.spyOn(deps.executor, 'fetchNewFills').mockImplementation(async (since) => {
+      const sweep = await fetchNewFills(since);
+      sweeps += 1;
+      return sweep;
+    });
+    arm(deps, () => sweeps > 0);
+    const logs: LogEntry[] = [];
+    const run = runCycle({ ...deps, logger: { log: (entry) => logs.push(entry) } }, '2026-09-29');
+    return { alpaca, deps, run, logs };
+  }
+
+  function throwOnceWhen<T extends object>(target: T, method: keyof T, when: () => boolean) {
+    const original = (target[method] as (...args: unknown[]) => unknown).bind(target);
+    let thrown = false;
+    vi.spyOn(target, method as never).mockImplementation(((...args: unknown[]) => {
+      if (when() && !thrown) {
+        thrown = true;
+        throw new Error('SQLITE_BUSY');
+      }
+      return original(...args);
+    }) as never);
+  }
+
+  it('a throw from the cancel of entries blocked at the last mark blocks every book entry, still exits and alerts critical (#1927)', async () => {
+    const { alpaca, deps, run, logs } = await heldAaplThrowingAfterSweep((armed, swept) =>
+      throwOnceWhen(armed.books, 'lastDay', swept),
+    );
+    const report = await run;
+    const step = 'cancel of entries blocked at the last mark';
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
+    expect(report.refusals).toEqual(
+      expect.arrayContaining([
+        `debate/primary: entries blocked, ${step} threw: SQLITE_BUSY`,
+        `debate/no-macro-gate: entries blocked, ${step} threw: SQLITE_BUSY`,
+      ]),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'v2_entry_cancel_threw' }),
+    );
+    expect(logs.map((entry) => entry.event)).not.toContain('v2_reconcile_threw');
+  });
+
+  it('a throw from the split rescale blocks every book entry, holds that book exits and leaves the date unmarked (#1927)', async () => {
+    const { alpaca, deps, run, logs } = await heldAaplThrowingAfterSweep((armed, swept) =>
+      throwOnceWhen(armed.books, 'positions', swept),
+    );
+
+    await expect(run).rejects.toThrow(
+      'split rescale threw for debate/primary; the date stays unmarked for a retry',
+    );
+    expect(alpaca.flattens).toEqual([]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+    expect(logs.filter((entry) => entry.level === 'error').map((entry) => entry.event)).toEqual([
+      'v2_split_rescale_threw',
+      'v2_split_rescale_unmarked',
+    ]);
+    expect((deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca').blocked).toContain(
+      'debate/primary',
+    );
+  });
+
+  it('two throwing steps journal one combined refusal per book and one read_failed row per venue group (#1927)', async () => {
+    const { deps, run, logs } = await heldAaplThrowingAfterSweep((armed) => {
+      let swept = false;
+      vi.mocked(armed.executor.fetchNewFills).mockImplementationOnce(() => {
+        swept = true;
+        return Promise.reject(new Error('SQLITE_BUSY'));
+      });
+      throwOnceWhen(armed.books, 'lastDay', () => swept);
+    });
+    const report = await run;
+    const summary =
+      'fill sweep threw: SQLITE_BUSY; cancel of entries blocked at the last mark threw: SQLITE_BUSY';
+
+    expect(report.refusals.filter((refusal) => refusal.includes('entries blocked'))).toEqual([
+      `debate/primary: entries blocked, ${summary}`,
+      `debate/no-macro-gate: entries blocked, ${summary}`,
+    ]);
+    expect(
+      rows(
+        deps,
+        "SELECT detail FROM v2_reconciles WHERE trading_date = '2026-09-29' AND venue = 'alpaca' AND source = 'broker'",
+      ),
+    ).toEqual([{ detail: summary }]);
+    expect(logs.filter((entry) => entry.level === 'error').map((entry) => entry.event)).toEqual(
+      expect.arrayContaining(['v2_fill_sweep_threw', 'v2_entry_cancel_threw']),
+    );
+  });
+
+  it('a fill sweep throw supersedes an earlier clean reconcile of the same date for the signals pass (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.journal.recordReconcile({
+      trading_date: '2026-09-29',
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'clean',
+      book_ids: ['debate/primary', 'debate/no-macro-gate'],
+      diffs: [],
+      detail: 'attempt 1',
+    });
+    vi.spyOn(deps.executor, 'fetchNewFills').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    await runCycle(deps, '2026-09-29');
+
+    const verdict = (deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca');
+    expect([...verdict.blocked].sort()).toEqual(['debate/no-macro-gate', 'debate/primary']);
+    expect(
+      rows(
+        deps,
+        "SELECT source, status, detail FROM v2_reconciles WHERE trading_date = '2026-09-29' AND venue = 'alpaca' AND source = 'broker' ORDER BY reconcile_id DESC LIMIT 1",
+      ),
+    ).toEqual([
+      { source: 'broker', status: 'read_failed', detail: 'fill sweep threw: SQLITE_BUSY' },
+    ]);
+  });
+
+  it('a persistent fill sweep failure still exits, then rejects with the date unmarked and entries blocked for the signals pass (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([exitAapl, longMsft]);
+    vi.spyOn(deps.executor, 'fetchNewFills').mockRejectedValue(new Error('alpaca 503'));
+    const logs: LogEntry[] = [];
+
+    await expect(
+      runCycle({ ...deps, logger: { log: (entry) => logs.push(entry) } }, '2026-09-29'),
+    ).rejects.toThrow('alpaca 503');
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_fill_sweep_threw',
+        message: 'fill sweep before the marks threw: alpaca 503',
+      }),
+    );
+    expect((deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca').blocked).toContain(
+      'debate/primary',
+    );
+  });
+
+  it('a fill sweep throw before the marks supersedes the clean reconcile journalled earlier in the run (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    const fetchNewFills = deps.executor.fetchNewFills.bind(deps.executor);
+    vi.spyOn(deps.executor, 'fetchNewFills')
+      .mockImplementationOnce(fetchNewFills)
+      .mockRejectedValueOnce(new Error('alpaca 503'));
+
+    await expect(runCycle(deps, '2026-09-29')).rejects.toThrow('alpaca 503');
+    expect(
+      rows(
+        deps,
+        "SELECT status FROM v2_reconciles WHERE trading_date = '2026-09-29' AND venue = 'alpaca' AND source = 'broker' ORDER BY reconcile_id",
+      ),
+    ).toEqual([{ status: 'clean' }, { status: 'read_failed' }]);
+    expect((deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca').blocked).toContain(
+      'debate/primary',
+    );
   });
 
   it('live: an unset cash tolerance fails closed, primary entries blocked through a refusal, no critical alert', async () => {
