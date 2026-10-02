@@ -26,10 +26,16 @@ const ACTION_LABELS: Readonly<Record<ControlAction, string>> = {
   resume: 'Resume',
 };
 
+const ACTION_EFFECTS: Readonly<Record<ControlAction, string>> = {
+  pause: 'It takes effect at the next cycle.',
+  halt: 'Exits go out within about a minute, or at the next cycle if the signals process is down.',
+  resume: 'It takes effect at the next cycle.',
+};
+
 function outcomeMessage(outcome: ControlOutcome): string {
   switch (outcome.kind) {
     case 'recorded':
-      return `${outcome.replayed ? 'Already recorded' : 'Recorded'}: ${outcome.control.action} #${outcome.control.control_id}. It takes effect at the next cycle.`;
+      return `${outcome.replayed ? 'Already recorded' : 'Recorded'}: ${outcome.control.action} #${outcome.control.control_id}. ${ACTION_EFFECTS[outcome.control.action]}`;
     case 'too-soon':
       return `One control per 10 seconds: try again in ${outcome.retryAfterSeconds} s.`;
     case 'refused':

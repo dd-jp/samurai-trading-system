@@ -88,6 +88,26 @@ describe('ControlPanel (P2)', () => {
     expect((screen.getByLabelText('Reason') as HTMLInputElement).value).toBe('');
   });
 
+  it('says a recorded halt sends exits within about a minute while the signals process runs', async () => {
+    const { fetchImpl, onRecorded } = setup();
+    fetchImpl.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          contract_version: V2_CONTRACT_VERSION,
+          control: { ...PAUSE_ROW, control_id: 8, action: 'halt' },
+          replayed: false,
+        },
+        201,
+      ),
+    );
+    typeReason('shock');
+    fireEvent.click(screen.getByRole('button', { name: 'Halt: flat at next fill' }));
+    await waitFor(() => expect(onRecorded).toHaveBeenCalledOnce());
+    expect(screen.getByRole('status').textContent).toBe(
+      'Recorded: halt #8. Exits go out within about a minute, or at the next cycle if the signals process is down.',
+    );
+  });
+
   it('retries a failed send with the same key, and takes a new key for a different control', async () => {
     const { fetchImpl, onRecorded } = setup();
     fetchImpl.mockRejectedValueOnce(new Error('network down'));

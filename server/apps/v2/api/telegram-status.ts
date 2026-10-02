@@ -13,7 +13,8 @@ const MAX_LISTED_POSITIONS = 10;
 const STATE_LABELS: Readonly<Record<ControlWire['state'], string>> = {
   running: 'RUNNING',
   paused: 'PAUSED (entries blocked)',
-  'halted-manual': 'HALTED (manual, closing every position at the next cycle)',
+  'halted-manual':
+    'HALTED (manual, exits go out within about a minute, or at the next cycle if the signals process is down)',
   'halted-loss-budget': 'HALTED (loss budget)',
 };
 
