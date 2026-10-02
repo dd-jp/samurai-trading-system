@@ -13,6 +13,7 @@ import { InMemoryBrokerStateStore, toRequestFields } from '../broker-state-store
 import { ExecutionImpl } from '../execute.js';
 import { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import { isProtectiveRearmUnsupported } from '../protective-rearm-unsupported.js';
+import { ProtectiveReplaceError } from '../protective-replace-error.js';
 import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
@@ -3732,6 +3733,93 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
     await adapter.submitProtectedExit(request());
 
     expect(cancelOrder).toHaveBeenCalledExactlyOnceWith(STOP_LEG_ID);
+  });
+
+  describe('replaceProtectiveLegs (#1990)', () => {
+    const replace = {
+      entryClientOrderId: ENTRY_ID,
+      instrument: 'AAPL',
+      side: 'buy' as const,
+      qty: 151,
+      stop: 63.333,
+      target: 80.001,
+    };
+
+    it('cancels the stale target and stop legs, confirms each, and only then places the rescaled OCO', async () => {
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const getOrder = confirmingGetOrder();
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'oco-1', status: 'accepted' });
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+          cancelOrder,
+          getOrder,
+          submitOcoOrder,
+        }),
+      );
+
+      await adapter.replaceProtectiveLegs(replace);
+
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([TARGET_LEG_ID, STOP_LEG_ID]);
+      expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith({
+        symbol: 'AAPL',
+        side: 'sell',
+        qty: '151',
+        time_in_force: 'gtc',
+        client_order_id: `${ENTRY_ID}:rearm`,
+        order_class: 'oco',
+        take_profit: { limit_price: '80.00' },
+        stop_loss: { stop_price: '63.34' },
+      });
+      const lastConfirm = Math.max(...getOrder.mock.invocationCallOrder);
+      expect(submitOcoOrder.mock.invocationCallOrder[0]).toBeGreaterThan(lastConfirm);
+    });
+
+    it('places nothing when a stale leg never confirms cancelled, and names the cancel step', async () => {
+      const submitOcoOrder = vi.fn();
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+          cancelOrder: vi.fn().mockResolvedValue(undefined),
+          getOrder: vi.fn().mockResolvedValue({ ...acceptedOrder(), status: 'new' }),
+          submitOcoOrder,
+        }),
+      );
+
+      const thrown = await adapter.replaceProtectiveLegs(replace).catch((error: unknown) => error);
+
+      expect(thrown).toBeInstanceOf(ProtectiveReplaceError);
+      expect(thrown).toMatchObject({
+        step: 'cancel',
+        message: expect.stringMatching(
+          /^replaceProtectiveLegs: the stale legs of key-aapl-1355 on AAPL did not cancel: submitProtectedExit: leg alpaca-target-1/,
+        ),
+      });
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+    });
+
+    it('names the place step when the OCO is refused after the stale legs cancelled', async () => {
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+          cancelOrder: vi.fn().mockResolvedValue(undefined),
+          getOrder: confirmingGetOrder(),
+          submitOcoOrder: vi.fn().mockRejectedValue(new Error('insufficient qty')),
+        }),
+      );
+
+      const thrown = await adapter.replaceProtectiveLegs(replace).catch((error: unknown) => error);
+
+      expect(thrown).toBeInstanceOf(ProtectiveReplaceError);
+      expect(thrown).toMatchObject({
+        step: 'place',
+        message: expect.stringMatching(
+          /^replaceProtectiveLegs: the stale legs of key-aapl-1355 on AAPL are cancelled and the replacement failed: /,
+        ),
+      });
+    });
   });
 });
 

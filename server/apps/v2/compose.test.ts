@@ -367,6 +367,7 @@ describe('composeCycle: broker reconcile wiring (#1872)', () => {
           side: 'sell',
           type: 'stop',
           qty: '6',
+          filled_qty: '0',
           stop_price: '180.5',
         },
       ]),

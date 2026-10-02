@@ -248,7 +248,19 @@ export interface ApprovedRearm extends ApprovedOrderFields {
   readonly target: number;
 }
 
-export type RiskApprovedOrder = (ApprovedBracketEntry | ApprovedFlatten | ApprovedRearm) & {
+export interface ApprovedStopReplace extends ApprovedOrderFields {
+  readonly kind: 'replace_stop';
+  readonly entryClientOrderId: string;
+  readonly stop: number;
+  readonly target: number;
+}
+
+export type RiskApprovedOrder = (
+  | ApprovedBracketEntry
+  | ApprovedFlatten
+  | ApprovedRearm
+  | ApprovedStopReplace
+) & {
   readonly [riskApproved]: true;
 };
 
@@ -324,6 +336,7 @@ export interface RiskGate {
   ): 'insufficient_cash' | 'gross_cap' | undefined;
   approveExit(request: ExitRequest): RiskApprovedOrder;
   approveRearm(request: RearmRequest): RiskApprovedOrder;
+  approveStopReplace(request: RearmRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;
   fxRefusal(tradingDate: string): string | undefined;
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined;
@@ -345,10 +358,13 @@ export interface V2Fill {
   readonly filled_at?: string | undefined;
 }
 
+export type StopReplaceStep = 'cancel' | 'place';
+
 export interface Submission {
   readonly outcome: OrderOutcome;
   readonly detail: string;
   readonly approvalId: string;
+  readonly failedStep?: StopReplaceStep | undefined;
 }
 
 export interface FillSweep {

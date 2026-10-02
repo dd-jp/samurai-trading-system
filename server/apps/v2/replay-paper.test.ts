@@ -103,7 +103,10 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
         filled_avg_price: null,
         filled_at: null,
         limit_price: request.limit_price,
-        legs: [leg('tp', 'limit'), leg('sl', 'stop')],
+        legs: [
+          leg('tp', 'limit'),
+          { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
+        ],
       };
       orders.push(order);
       return Promise.resolve(order);
@@ -131,6 +134,9 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
           type: 'stop',
           order_class: 'simple',
           status: 'new',
+          qty: String(filledQty(order)),
+          filled_qty: '0',
+          stop_price: order.legs?.[1]?.stop_price ?? null,
         })),
       ),
     ),
@@ -254,6 +260,14 @@ afterAll(() => {
 });
 
 describe('replay of a paper store against journalled Alpaca fills', () => {
+  it('reconciles each paper day clean, the venue stop sized and priced as the ledger holds it', () => {
+    expect(
+      journalRows("SELECT trading_date, status FROM v2_reconciles WHERE source = 'broker'"),
+    ).toEqual(
+      [ENTRY_DAY, FILL_DAY, STOP_DAY].map((date) => ({ trading_date: date, status: 'clean' })),
+    );
+  });
+
   it('journals a partial entry fill, its cumulative remainder and a stop fill booked at the second sweep', () => {
     const fills = journalRows(
       `SELECT trading_date, leg, fill_id, qty FROM v2_fills

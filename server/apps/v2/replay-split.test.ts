@@ -52,7 +52,31 @@ interface Broker {
   positionScale: number;
 }
 
-function splitAlpaca(broker: Broker): AlpacaBrokerClient {
+interface Venue {
+  readonly staleStop: boolean;
+  readonly ocos: AlpacaOrder[];
+  readonly cancelled: Set<string>;
+}
+
+function legStatus(venue: Venue, leg: Leg): string {
+  return venue.cancelled.has(leg.id) ? 'canceled' : 'new';
+}
+
+function listedStop(order: AlpacaOrder, broker: Broker, venue: Venue): Record<string, unknown> {
+  const oco = venue.ocos.find(
+    (placed) => placed.client_order_id === `${order.client_order_id}:rearm`,
+  );
+  if (oco !== undefined) return { qty: oco.qty, stop_price: oco.legs?.[0]?.stop_price ?? null };
+  const stop = Number(order.legs?.[1]?.stop_price);
+  return venue.staleStop
+    ? { qty: order.qty, stop_price: String(stop) }
+    : {
+        qty: String(Number(order.qty) * broker.positionScale),
+        stop_price: String(stop / broker.positionScale),
+      };
+}
+
+function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
   const orders: AlpacaOrder[] = [];
   const view = (order: AlpacaOrder): AlpacaOrder =>
     broker.filled
@@ -62,6 +86,7 @@ function splitAlpaca(broker: Broker): AlpacaBrokerClient {
           filled_qty: order.qty,
           filled_avg_price: order.limit_price ?? null,
           filled_at: BROKER_FILLED_AT,
+          legs: (order.legs ?? []).map((leg) => ({ ...leg, status: legStatus(venue, leg) })),
         }
       : order;
   const held = () => (broker.filled ? orders : []);
@@ -88,24 +113,61 @@ function splitAlpaca(broker: Broker): AlpacaBrokerClient {
         filled_avg_price: null,
         filled_at: null,
         limit_price: request.limit_price,
-        legs: [leg('tp', 'limit'), leg('sl', 'stop')],
+        legs: [
+          leg('tp', 'limit'),
+          { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
+        ],
       };
       orders.push(order);
       return Promise.resolve(order);
     }),
     getOrder: vi.fn((id: string) => {
+      if (venue.cancelled.has(id)) return Promise.resolve({ ...orders[0], id, status: 'canceled' });
       const order = orders.find((candidate) => candidate.id === id);
       return order === undefined
         ? Promise.reject(new Error(`no order ${id}`))
         : Promise.resolve(view(order));
     }),
     getOrderByClientOrderId: vi.fn((clientOrderId: string) => {
-      const order = orders.find((candidate) => candidate.client_order_id === clientOrderId);
-      return Promise.resolve(order === undefined ? null : view(order));
+      const order = [...orders, ...venue.ocos].find(
+        (candidate) => candidate.client_order_id === clientOrderId,
+      );
+      if (order === undefined) return Promise.resolve(null);
+      return Promise.resolve(venue.ocos.includes(order) ? order : view(order));
     }),
     submitMarketOrder: vi.fn().mockRejectedValue(new Error('unused')),
-    submitOcoOrder: vi.fn().mockRejectedValue(new Error('unused')),
-    cancelOrder: vi.fn().mockResolvedValue(undefined),
+    submitOcoOrder: vi.fn((request) => {
+      const oco: AlpacaOrder = {
+        id: `oco-${venue.ocos.length + 1}`,
+        client_order_id: request.client_order_id,
+        symbol: request.symbol,
+        side: request.side,
+        qty: request.qty,
+        order_class: 'oco',
+        status: 'new',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        limit_price: request.take_profit.limit_price,
+        legs: [
+          {
+            id: `oco-${venue.ocos.length + 1}-sl`,
+            type: 'stop',
+            status: 'new',
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+            stop_price: request.stop_loss.stop_price,
+          },
+        ],
+      };
+      venue.ocos.push(oco);
+      return Promise.resolve(oco);
+    }),
+    cancelOrder: vi.fn((id: string) => {
+      venue.cancelled.add(id);
+      return Promise.resolve();
+    }),
     listOpenOrders: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({
@@ -116,6 +178,8 @@ function splitAlpaca(broker: Broker): AlpacaBrokerClient {
           type: 'stop',
           order_class: 'simple',
           status: 'new',
+          filled_qty: '0',
+          ...listedStop(order, broker, venue),
         })),
       ),
     ),
@@ -170,6 +234,48 @@ function tamperedCopy(name: string, sql: string): string {
   return storePath;
 }
 
+let staleOptions: ReplayCliOptions;
+
+async function journalDays(name: string, base: ReplayCliOptions, staleStop: boolean) {
+  const storePath = join(directory, `${name}.sqlite`);
+  const seed = openSharedStore(storePath);
+  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
+    2026,
+    100_000,
+    1_500,
+  );
+  seed.close();
+  const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
+  const broker: Broker = { filled: false, positionScale: 1 };
+  const alpacaClient = splitAlpaca(broker, { staleStop, ocos: [], cancelled: new Set() });
+  const days: [string, Broker][] = [
+    [ENTRY_DAY, { filled: false, positionScale: 1 }],
+    [SPLIT_DAY, { filled: true, positionScale: 2 }],
+    [DAY_AFTER, { filled: true, positionScale: 2 }],
+  ];
+  for (const [tradingDate, state] of days) {
+    clock.advanceTo(new Date(`${tradingDate}T07:30:00.000Z`));
+    Object.assign(broker, state);
+    const root = composeV2Root({
+      ...base,
+      tradingDate,
+      dryRun: false,
+      storePath,
+      clock,
+      logger: { log: () => {} },
+      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
+      newsSource: { headlines: () => Promise.resolve([]) },
+      alpacaClient,
+    });
+    try {
+      await root.run();
+    } finally {
+      root.close();
+    }
+  }
+  return { ...base, storePath };
+}
+
 beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), 'v2-replay-split-'));
   const barStoreRoot = join(directory, 'parquet');
@@ -185,17 +291,9 @@ beforeAll(async () => {
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\nUP,10,2\n');
-  const storePath = join(directory, 'paper.sqlite');
-  const seed = openSharedStore(storePath);
-  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
-    2026,
-    100_000,
-    1_500,
-  );
-  seed.close();
-  options = {
+  const base: ReplayCliOptions = {
     tradingDate: SPLIT_DAY,
-    storePath,
+    storePath: join(directory, 'unused.sqlite'),
     barStoreRoot,
     constituentsPath,
     fxPath,
@@ -204,40 +302,8 @@ beforeAll(async () => {
     cfdCataloguePath: join(directory, 'absent-catalogue.json'),
     venueSessions: OPEN_EVERY_DAY,
   };
-  const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
-  const broker: Broker = { filled: false, positionScale: 1 };
-  const alpacaClient = splitAlpaca(broker);
-  const days: [string, Broker][] = [
-    [ENTRY_DAY, { filled: false, positionScale: 1 }],
-    [SPLIT_DAY, { filled: true, positionScale: 2 }],
-    [DAY_AFTER, { filled: true, positionScale: 2 }],
-  ];
-  for (const [tradingDate, state] of days) {
-    clock.advanceTo(new Date(`${tradingDate}T07:30:00.000Z`));
-    Object.assign(broker, state);
-    const root = composeV2Root({
-      tradingDate,
-      dryRun: false,
-      storePath,
-      barStoreRoot,
-      constituentsPath,
-      fxPath,
-      spreadsPath,
-      saxoSpreadsPath: options.saxoSpreadsPath,
-      cfdCataloguePath: options.cfdCataloguePath,
-      clock,
-      logger: { log: () => {} },
-      venueSessions: OPEN_EVERY_DAY,
-      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
-      newsSource: { headlines: () => Promise.resolve([]) },
-      alpacaClient,
-    });
-    try {
-      await root.run();
-    } finally {
-      root.close();
-    }
-  }
+  options = await journalDays('paper', base, false);
+  staleOptions = await journalDays('stale-stop', base, true);
 });
 
 afterAll(() => {
@@ -329,5 +395,31 @@ describe('replay of positions held across a 2:1 split (#1983)', () => {
       stage: 'rescales',
       key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}`,
     });
+  });
+});
+
+describe('replay of a split the broker left the stop unchanged on (#1990)', () => {
+  it('journals the mismatch, the stop replace on the split day, and a clean reconcile the day after', () => {
+    const rows = (sql: string) => journalRows(sql, staleOptions.storePath);
+    expect(
+      rows(
+        `SELECT trading_date, status FROM v2_reconciles WHERE source = 'broker' ORDER BY reconcile_id`,
+      ),
+    ).toEqual([
+      { trading_date: ENTRY_DAY, status: 'clean' },
+      { trading_date: SPLIT_DAY, status: 'mismatch' },
+      { trading_date: DAY_AFTER, status: 'clean' },
+    ]);
+    expect(
+      rows(
+        `SELECT trading_date, outcome, json_extract(payload, '$.reason') AS reason FROM v2_orders
+          WHERE substr(client_order_id, -7) = '-restop'`,
+      ),
+    ).toEqual([{ trading_date: SPLIT_DAY, outcome: 'submitted', reason: 'split_stop_replace' }]);
+  });
+
+  it.each([ENTRY_DAY, SPLIT_DAY, DAY_AFTER])('replays %s identical', async (tradingDate) => {
+    const result = await replayFromFiles({ ...staleOptions, tradingDate });
+    expect(result.divergences).toEqual([]);
   });
 });

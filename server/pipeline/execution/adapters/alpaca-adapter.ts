@@ -15,6 +15,7 @@ import {
   type UnpricedFillRecord,
 } from '../broker-state-store.js';
 import { ProtectiveRearmUnsupportedError } from '../protective-rearm-unsupported.js';
+import { ProtectiveReplaceError } from '../protective-replace-error.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -23,6 +24,7 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
   ProtectedExitRequest,
+  ProtectiveReplaceRequest,
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
@@ -484,6 +486,37 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   async resizeProtectiveLegs(): Promise<void> {}
+
+  // Cancel is confirmed before the new legs go out, so the venue never holds two closing stops
+  // whose sum oversells; the window with no stop is accepted (David 2026-10-02, #1990)
+  async replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<void> {
+    const { entryClientOrderId, instrument } = request;
+    try {
+      await this.cancelBracketLegsForExit(entryClientOrderId, instrument);
+    } catch (cause) {
+      throw new ProtectiveReplaceError(
+        'cancel',
+        `replaceProtectiveLegs: the stale legs of ${entryClientOrderId} on ${instrument} did not cancel: ${(cause as Error).message}`,
+        { cause },
+      );
+    }
+    try {
+      await this.rearmProtectiveLegs(
+        entryClientOrderId,
+        instrument,
+        request.side,
+        request.qty,
+        request.stop,
+        request.target,
+      );
+    } catch (cause) {
+      throw new ProtectiveReplaceError(
+        'place',
+        `replaceProtectiveLegs: the stale legs of ${entryClientOrderId} on ${instrument} are cancelled and the replacement failed: ${(cause as Error).message}`,
+        { cause },
+      );
+    }
+  }
 
   async rearmProtectiveLegs(
     clientOrderId: string,

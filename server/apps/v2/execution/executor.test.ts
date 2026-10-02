@@ -6,6 +6,7 @@ import type {
   SleeveDecision,
   Venue,
 } from '../../../../contracts/index.js';
+import { ProtectiveReplaceError } from '../../../pipeline/execution/index.js';
 import { type BrokerAdapter, type NormalizedFill, toBrokerFillId } from '../../../shared/index.js';
 import { V2RiskGate } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
@@ -291,6 +292,59 @@ describe('V2OrderExecutor', () => {
       approvalId: 'rearm:r1:6',
     });
     expect(alpaca.rearmProtectiveLegs).toHaveBeenCalledWith('c0', 'AAPL', 'buy', 6, 21, 18);
+  });
+
+  it('submits a stop replace through the venue on the entry side, and names the step a replace failed at (#1990)', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const replaceProtectiveLegs = vi.fn().mockResolvedValue(undefined);
+    (
+      alpaca as unknown as { replaceProtectiveLegs: typeof replaceProtectiveLegs }
+    ).replaceProtectiveLegs = replaceProtectiveLegs;
+    const approve = (clientOrderId: string) =>
+      gate.approveStopReplace({ book: primary, held, clientOrderId, stop: 21, target: 18 });
+    expect(await paper.submit(approve('s1'))).toEqual({
+      outcome: 'submitted',
+      detail: 'submitted',
+      approvalId: 'replace_stop:s1:6',
+    });
+    expect(replaceProtectiveLegs).toHaveBeenCalledExactlyOnceWith({
+      entryClientOrderId: 'c0',
+      instrument: 'AAPL',
+      side: 'buy',
+      qty: 6,
+      stop: 21,
+      target: 18,
+    });
+    expect(alpaca.rearmProtectiveLegs).not.toHaveBeenCalled();
+    replaceProtectiveLegs.mockRejectedValueOnce(
+      new ProtectiveReplaceError('place', 'oco refused', { cause: undefined }),
+    );
+    expect(await paper.submit(approve('s2'))).toEqual({
+      outcome: 'rejected',
+      detail: 'oco refused',
+      approvalId: 'replace_stop:s2:6',
+      failedStep: 'place',
+    });
+    replaceProtectiveLegs.mockRejectedValueOnce(new Error('network'));
+    expect(await paper.submit(approve('s3'))).not.toHaveProperty('failedStep');
+  });
+
+  it('a venue that cannot replace a stop fails the replace at the cancel step, touching nothing', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const order = gate.approveStopReplace({
+      book: primary,
+      held,
+      clientOrderId: 's1',
+      stop: 21,
+      target: 18,
+    });
+    expect(await paper.submit(order)).toMatchObject({
+      outcome: 'rejected',
+      detail: expect.stringContaining('alpaca cannot replace a resting stop'),
+      failedStep: 'cancel',
+    });
+    expect(alpaca.rearmProtectiveLegs).not.toHaveBeenCalled();
+    expect(alpaca.submitBracket).not.toHaveBeenCalled();
   });
 
   it('a primary saxo order routes to the simulated broker (#1400: no live Saxo adapter), and a broker error rejects', async () => {

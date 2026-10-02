@@ -16,6 +16,7 @@ import type {
   SleeveSpec,
 } from '../../../contracts/index.js';
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
+import { ProtectiveReplaceError } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { type InstrumentDetails, LSE_MOMENTUM_LINES } from '../../providers/saxo-bars/index.js';
@@ -27,6 +28,7 @@ import {
   type NormalizedFill,
   type NormalizedOrder,
   type ProtectedExitRequest,
+  type ProtectiveReplaceRequest,
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
@@ -4287,7 +4289,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       {
         level: 'error',
         message: expect.stringMatching(
-          /^debate\/primary AAPL: x10 split on a broker-held position, ledger qty 6 -> 60; nothing amends the venue's resting stop and bracket, reconcile blocks entries until their qty and price match$/,
+          /^debate\/primary AAPL: x10 split on a broker-held position, ledger qty 6 -> 60; reconcile checks the venue's stop against it and re-places a stale one$/,
         ),
       },
     ]);
@@ -4359,49 +4361,92 @@ describe('runCycle: positions held across a split (#1865)', () => {
     readonly stopPrice: number;
   }
 
-  function brokerStop(deps: Harness, held: number, stop: RestingStop): BrokerBookReader {
-    return {
-      read: async (venue) => {
-        const book = await deps.brokerBooks.read(venue);
-        if (venue !== 'alpaca') return book;
-        return {
-          ...book,
-          positions: [{ instrument: 'AAPL', qty: held }],
-          openOrders: [
-            ...book.openOrders.filter((order) => order.instrument !== 'AAPL'),
-            { clientOrderId: 'alpaca-stop-leg', instrument: 'AAPL', protects: 'long', ...stop },
-          ],
-        };
-      },
-    };
+  class StopVenue {
+    constructor(
+      readonly held: number,
+      public stop: RestingStop,
+    ) {}
+
+    reader(deps: Harness): BrokerBookReader {
+      return {
+        read: async (venue) => {
+          const book = await deps.brokerBooks.read(venue);
+          if (venue !== 'alpaca') return book;
+          return {
+            ...book,
+            positions: [{ instrument: 'AAPL', qty: this.held }],
+            openOrders: [
+              ...book.openOrders.filter((order) => order.instrument !== 'AAPL'),
+              {
+                clientOrderId: 'alpaca-stop-leg',
+                instrument: 'AAPL',
+                protects: 'long',
+                ...this.stop,
+              },
+            ],
+          };
+        },
+      };
+    }
   }
+
+  class ReplacingAlpaca extends SplitAlpaca {
+    readonly replaces: ProtectiveReplaceRequest[] = [];
+    readonly exits: ProtectedExitRequest[] = [];
+    replaceError: ProtectiveReplaceError | undefined;
+    venue: StopVenue | undefined;
+
+    replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<void> {
+      this.replaces.push(request);
+      if (this.replaceError !== undefined) return Promise.reject(this.replaceError);
+      if (this.venue !== undefined) {
+        this.venue.stop = { qty: request.qty, stopPrice: Math.round(request.stop * 100) / 100 };
+      }
+      return Promise.resolve();
+    }
+
+    override submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
+      this.exits.push(request);
+      return super.submitProtectedExit(request);
+    }
+  }
+
+  const RESTOP = 'v2-debate-primary-2026-09-29-AAPL-restop';
 
   async function brokerHeld101Across(
     bars: readonly DailyBar[],
-    broker: (deps: Harness, entryStop: number) => BrokerBookReader,
+    held: number,
+    stopAt: (entryStop: number) => RestingStop,
+    replaceError?: ProtectiveReplaceError,
   ) {
-    const alpaca = new SplitAlpaca();
+    const alpaca = new ReplacingAlpaca();
+    alpaca.replaceError = replaceError;
     const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
     await runCycle(deps, '2026-09-25');
     alpaca.fill(BROKER_ENTRY, 'entry', 101, 20);
     deps.setDecisions([]);
     await runCycle(withMarket(deps, bars), '2026-09-28');
-    const entryStop = deps.journal.orderFor(BROKER_ENTRY)?.payload.stop as number;
-    const across = await runCycle(
-      { ...withMarket(deps, bars), brokerBooks: broker(deps, entryStop) },
-      '2026-09-29',
-    );
-    return { deps, entries, across, entryStop };
+    const entry = deps.journal.orderFor(BROKER_ENTRY)?.payload as { stop: number; target: number };
+    const venue = new StopVenue(held, stopAt(entry.stop));
+    alpaca.venue = venue;
+    const next = (date: string) =>
+      runCycle({ ...withMarket(deps, bars), brokerBooks: venue.reader(deps) }, date);
+    const across = await next('2026-09-29');
+    return { deps, entries, across, entry, alpaca, venue, next };
   }
 
-  it.each([
+  const SPLITS = [
     { split: '3:2 forward', bars: () => threeForTwo, held: 151, ratio: 1.5 },
     { split: '1:2 reverse', bars: () => oneForTwo, held: 50, ratio: 0.5 },
-  ])(
-    'a $split split the broker left the 101-share stop unchanged on raises the reconcile mismatch on its qty and price and blocks entries (#1990)',
+  ];
+
+  it.each(SPLITS)(
+    'a $split split the broker left the 101-share stop unchanged on raises the reconcile mismatch, cancels the stale stop and re-places it at the rescaled qty and price, then reconciles clean (#1990)',
     async ({ bars, held, ratio }) => {
-      const { deps, entries, across, entryStop } = await brokerHeld101Across(bars(), (d, stop) =>
-        brokerStop(d, held, { qty: 101, stopPrice: stop }),
+      const { deps, entries, across, entry, alpaca, venue, next } = await brokerHeld101Across(
+        bars(),
+        held,
+        (stop) => ({ qty: 101, stopPrice: stop }),
       );
       expect(primary(deps)).toMatchObject({ qty: held, splitFactor: ratio });
       expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
@@ -4413,8 +4458,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
               kind: 'protective_price',
               instrument: 'AAPL',
               order_id: 'alpaca-stop-leg',
-              store: expect.closeTo(entryStop / ratio, 9),
-              broker: entryStop,
+              store: expect.closeTo(entry.stop / ratio, 9),
+              broker: entry.stop,
             },
           ],
         },
@@ -4424,22 +4469,166 @@ describe('runCycle: positions held across a split (#1865)', () => {
           /^debate\/primary: entries blocked, alpaca broker reconcile mismatch: protective_qty AAPL/,
         ),
       );
+      expect(alpaca.replaces).toEqual([
+        {
+          entryClientOrderId: BROKER_ENTRY,
+          instrument: 'AAPL',
+          side: 'buy',
+          qty: held,
+          stop: expect.closeTo(entry.stop / ratio, 9),
+          target: expect.closeTo(entry.target / ratio, 9),
+        },
+      ]);
+      expect(alpaca.exits).toEqual([]);
+      expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+        leg: 'exit',
+        side: 'sell',
+        outcome: 'submitted',
+        payload: { size: held, reason: 'split_stop_replace' },
+      });
+      expect(eventsOf(entries, 'v2_stop_replaced')).toMatchObject([
+        {
+          level: 'warn',
+          message: `debate/primary AAPL: stale stop cancelled, re-placed at qty ${held}`,
+        },
+      ]);
+      expect(venue.stop).toEqual({
+        qty: held,
+        stopPrice: Math.round((entry.stop / ratio) * 100) / 100,
+      });
+
+      const after = await next('2026-09-30');
+      expect(eventsOf(entries, 'v2_reconcile_mismatch')).toHaveLength(1);
+      expect(after.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+      expect(alpaca.replaces).toHaveLength(1);
     },
   );
 
-  it.each([
-    { split: '3:2 forward', bars: () => threeForTwo, held: 151, ratio: 1.5 },
-    { split: '1:2 reverse', bars: () => oneForTwo, held: 50, ratio: 0.5 },
-  ])(
-    'a $split split whose stop the venue resized and repriced to the rescaled ledger reconciles clean',
+  it.each(SPLITS)(
+    'a $split split whose stop the venue resized and repriced to the rescaled ledger reconciles clean and replaces nothing',
     async ({ bars, held, ratio }) => {
-      const { entries, across } = await brokerHeld101Across(bars(), (d, stop) =>
-        brokerStop(d, held, { qty: held, stopPrice: Math.round((stop / ratio) * 100) / 100 }),
-      );
+      const { entries, across, alpaca } = await brokerHeld101Across(bars(), held, (stop) => ({
+        qty: held,
+        stopPrice: Math.round((stop / ratio) * 100) / 100,
+      }));
       expect(eventsOf(entries, 'v2_reconcile_mismatch')).toEqual([]);
       expect(across.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+      expect(alpaca.replaces).toEqual([]);
     },
   );
+
+  it.each(SPLITS)(
+    'a $split split whose re-place fails after the cancel flattens the position at market and alerts critical',
+    async ({ bars, held }) => {
+      const failed = new ProtectiveReplaceError('place', 'oco rejected', { cause: undefined });
+      const { deps, entries, across, alpaca } = await brokerHeld101Across(
+        bars(),
+        held,
+        (stop) => ({ qty: 101, stopPrice: stop }),
+        failed,
+      );
+      expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+        outcome: 'rejected',
+        payload: { failed_step: 'place' },
+      });
+      expect(alpaca.exits).toMatchObject([
+        {
+          entryClientOrderId: BROKER_ENTRY,
+          clientOrderId: 'v2-debate-primary-2026-09-29-AAPL-exit',
+          side: 'sell',
+          size: held,
+        },
+      ]);
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')?.payload,
+      ).toMatchObject({
+        reason: 'stop_replace_failed',
+      });
+      expect(primary(deps)?.exitClientOrderId).toBe('v2-debate-primary-2026-09-29-AAPL-exit');
+      expect(eventsOf(entries, 'v2_stop_replace_failed')).toMatchObject([
+        {
+          level: 'error',
+          message: expect.stringMatching(
+            /^debate\/primary AAPL: stale stop cancelled but the re-place failed, flattening at market: /,
+          ),
+        },
+      ]);
+      expect(across.refusals).toContainEqual(expect.stringContaining('the re-place failed'));
+    },
+  );
+
+  it('a stale stop that will not cancel is left alone: nothing re-placed or flattened, an alert, entries blocked', async () => {
+    const failed = new ProtectiveReplaceError('cancel', 'cancel unconfirmed', { cause: undefined });
+    const { deps, entries, across, alpaca } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      failed,
+    );
+    expect(alpaca.replaces).toHaveLength(1);
+    expect(alpaca.exits).toEqual([]);
+    expect(primary(deps)?.exitClientOrderId).toBeUndefined();
+    expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+      outcome: 'rejected',
+      payload: { failed_step: 'cancel' },
+    });
+    expect(eventsOf(entries, 'v2_stop_cancel_failed')).toMatchObject([
+      {
+        level: 'error',
+        message: expect.stringMatching(
+          /^debate\/primary AAPL: the stale stop did not cancel, nothing re-placed: /,
+        ),
+      },
+    ]);
+    expect(across.refusals).toContainEqual(
+      expect.stringMatching(/^debate\/primary: entries blocked, alpaca broker reconcile mismatch/),
+    );
+  });
+
+  it('a stale stop on a position with no journalled entry stop is alerted and never cancelled', async () => {
+    const { deps, entries, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 151, stopPrice: stop / 1.5 }),
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { run: (id: string) => void } } }
+    ).db;
+    db.prepare(
+      "UPDATE v2_orders SET payload = json_remove(payload, '$.stop') WHERE client_order_id = ?",
+    ).run(BROKER_ENTRY);
+    venue.stop = { qty: 101, stopPrice: 90 };
+    await next('2026-09-30');
+    expect(alpaca.replaces).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_replace_unpriced')).toMatchObject([
+      {
+        level: 'error',
+        message:
+          "debate/primary AAPL: the venue's stop does not match the ledger and no journalled entry stop exists to re-place it at; nothing was cancelled",
+      },
+    ]);
+  });
+
+  it('replaces a stale stop at most once a date: the journalled restop order makes a same-date re-run a no-op', async () => {
+    const { deps, alpaca, venue } = await brokerHeld101Across(threeForTwo, 151, (stop) => ({
+      qty: 101,
+      stopPrice: stop,
+    }));
+    venue.stop = { qty: 101, stopPrice: 90 };
+    const unmarked = new Proxy(deps.books, {
+      get: (target, key) => {
+        if (key === 'isMarked') return () => false;
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await runCycle(
+      { ...withMarket(deps, threeForTwo), books: unmarked, brokerBooks: venue.reader(deps) },
+      '2026-09-29',
+    ).catch(() => undefined);
+    expect(alpaca.replaces).toHaveLength(1);
+    expect(deps.journal.orderFor(RESTOP)?.outcome).toBe('submitted');
+  });
 
   it('dates the cash in lieu of a late-evening broker exit by the London day, as the exit itself', async () => {
     const alpaca = new SplitAlpaca();

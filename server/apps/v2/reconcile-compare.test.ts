@@ -399,6 +399,18 @@ describe('compareVenue: the protective stop against the position (#1990)', () =>
     ).toMatchObject([{ kind: 'protective_qty' }, { kind: 'order_missing_at_broker' }]);
   });
 
+  it('names a bracket stop left at the whole order once a part-filled entry is cancelled', () => {
+    expect(
+      compareVenue(
+        store(40, [60]),
+        broker(40, stop('AAPL', 'leg', 'long', sized(100, 60))),
+        NO_CASH,
+      ),
+    ).toEqual([
+      { kind: 'protective_qty', instrument: 'AAPL', order_id: null, store: 40, broker: 100 },
+    ]);
+  });
+
   it('leaves an unguarded or mismatched position to the diffs that already name it', () => {
     expect(compareVenue(store(151, [60]), broker(151), NO_CASH).map((d) => d.kind)).toEqual([
       'position_unprotected',

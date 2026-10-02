@@ -110,6 +110,7 @@ export type {
   OrderIntent,
   OrderState,
   ProtectedExitRequest,
+  ProtectiveReplaceRequest,
   SetupNeighbor,
   SetupStore,
   SetupVector,

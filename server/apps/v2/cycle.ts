@@ -53,6 +53,7 @@ import {
   blockEntriesOnThrows,
   type ReconcileOutcome,
   reconcileOrBlockEntries,
+  type StaleStop,
   type StepThrow,
   type ThrowFailure,
 } from './reconcile.js';
@@ -187,7 +188,12 @@ interface Tally {
   fills: number;
 }
 
-type ExitReason = 'time_stop' | 'manual_halt' | 'crossing_fill' | 'signal_exit';
+type ExitReason =
+  | 'time_stop'
+  | 'manual_halt'
+  | 'crossing_fill'
+  | 'signal_exit'
+  | 'stop_replace_failed';
 
 const BPS = 10_000;
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
@@ -536,13 +542,11 @@ class Cycle {
     }
   }
 
-  // Nothing amends the venue's resting stop and bracket after a split: reconcile compares the stop's
-  // qty and price with the rescaled ledger and blocks entries until they match (#1990)
   alertBrokerSplit(bookId: string, held: Position, ratio: number, qty: number): void {
     this.log(
       'error',
       'v2_split_broker_check',
-      `${bookId} ${held.instrument}: x${ratio} split on a broker-held position, ledger qty ${held.qty} -> ${qty}; nothing amends the venue's resting stop and bracket, reconcile blocks entries until their qty and price match`,
+      `${bookId} ${held.instrument}: x${ratio} split on a broker-held position, ledger qty ${held.qty} -> ${qty}; reconcile checks the venue's stop against it and re-places a stale one`,
     );
   }
 
@@ -1098,6 +1102,7 @@ class Cycle {
       payload: {
         size: order.size,
         detail: submission.detail,
+        failed_step: submission.failedStep,
         ...legPayload,
         modelled_slippage_bps: this.exitSlippageBps(held, order.size, submission.outcome),
         approval: submission.approvalId,
@@ -1188,6 +1193,77 @@ class Cycle {
       this.refusals.push(message);
       this.log('error', 'v2_rearm_backstop_failed', message);
     }
+  }
+
+  stopReplaceOrderId(bookId: string, instrument: string): string {
+    return `v2-${bookId.replaceAll('/', '-')}-${this.tradingDate}-${instrument}-restop`;
+  }
+
+  brokerHolders({ venue, instrument }: StaleStop): [BookSpec, Position][] {
+    return this.deps.registry.ids().flatMap((sleeveId) =>
+      this.deps.books.forSleeve(sleeveId).flatMap((book): [BookSpec, Position][] => {
+        const held = this.deps.books.position(book.id, instrument);
+        if (held?.venue !== venue || held.stray || held.exitClientOrderId !== undefined) return [];
+        return this.deps.executor.simulates(routeOf(book, venue)) ? [] : [[book, held]];
+      }),
+    );
+  }
+
+  // David 2026-10-02 (#1990): a stop that no longer matches the ledger is cancelled and re-placed;
+  // a failed re-place flattens, a failed cancel does nothing more. Entries stay blocked by the
+  // mismatch that found it
+  async replaceStaleStops(staleStops: readonly StaleStop[]): Promise<void> {
+    for (const stale of staleStops) {
+      for (const [book, held] of this.brokerHolders(stale)) await this.replaceStop(book, held);
+    }
+  }
+
+  async replaceStop(book: BookSpec, held: Position): Promise<void> {
+    const clientOrderId = this.stopReplaceOrderId(book.id, held.instrument);
+    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
+    const prices = nativeRearmPrices(this.deps.journal, held);
+    if (prices === undefined) {
+      this.stopReplaceAlert(
+        'v2_stop_replace_unpriced',
+        `${book.id} ${held.instrument}: the venue's stop does not match the ledger and no journalled entry stop exists to re-place it at; nothing was cancelled`,
+      );
+      return;
+    }
+    const order = this.deps.risk.approveStopReplace({ book, held, clientOrderId, ...prices });
+    const submission = await this.submitExitLeg(book, held, clientOrderId, order, {
+      ...prices,
+      reason: 'split_stop_replace',
+    });
+    await this.afterStopReplace(book, held, submission);
+  }
+
+  async afterStopReplace(book: BookSpec, held: Position, submission: Submission): Promise<void> {
+    const subject = `${book.id} ${held.instrument}`;
+    if (submission.outcome !== 'rejected') {
+      this.log(
+        'warn',
+        'v2_stop_replaced',
+        `${subject}: stale stop cancelled, re-placed at qty ${Math.abs(held.qty)}`,
+      );
+      return;
+    }
+    if (submission.failedStep === 'place') {
+      this.stopReplaceAlert(
+        'v2_stop_replace_failed',
+        `${subject}: stale stop cancelled but the re-place failed, flattening at market: ${submission.detail}`,
+      );
+      await this.submitExit(book, held, 'stop_replace_failed');
+      return;
+    }
+    this.stopReplaceAlert(
+      'v2_stop_cancel_failed',
+      `${subject}: the stale stop did not cancel, nothing re-placed: ${submission.detail}`,
+    );
+  }
+
+  stopReplaceAlert(event: string, message: string): void {
+    this.refusals.push(message);
+    this.log('error', event, message);
   }
 
   async exits(book: BookSpec, decisions: readonly SleeveDecision[]): Promise<void> {
@@ -1882,7 +1958,9 @@ async function runUnmarked(
     ...controlRefusals(deps, tradingDate, control),
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
-  cycle.blockEntries(await syncBooksThenReconcile(deps, cycle, tradingDate));
+  const reconciled = await syncBooksThenReconcile(deps, cycle, tradingDate);
+  cycle.blockEntries(reconciled);
+  await cycle.replaceStaleStops(reconciled.staleStops ?? []);
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {

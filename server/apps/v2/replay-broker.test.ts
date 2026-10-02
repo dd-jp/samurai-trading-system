@@ -166,6 +166,58 @@ describe('JournalReplayBroker', () => {
     order('v2-debate-primary-2026-09-30-UP-rearm', 'rejected', { detail: 'legs held' });
     await expect(broker().rearmProtectiveLegs('entry', 'UP')).rejects.toThrow('legs held');
   });
+
+  it('replaces a stale stop as the journalled replace went: refused at its step with its detail, else accepted (#1990)', async () => {
+    order('entry', 'submitted', {});
+    const replace = {
+      entryClientOrderId: 'entry',
+      instrument: 'UP',
+      side: 'buy' as const,
+      qty: 3,
+      stop: 9,
+      target: 12,
+    };
+    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBeUndefined();
+    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', {
+      detail: 'oco refused',
+      failed_step: 'place',
+    });
+    await expect(broker().replaceProtectiveLegs(replace)).rejects.toMatchObject({
+      name: 'ProtectiveReplaceError',
+      step: 'place',
+      message: 'oco refused',
+    });
+  });
+
+  it('replays a journalled replace refused with no step journalled as a cancel failure', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', {});
+    await expect(
+      broker().replaceProtectiveLegs({
+        entryClientOrderId: 'entry',
+        instrument: 'UP',
+        side: 'buy',
+        qty: 3,
+        stop: 9,
+        target: 12,
+      }),
+    ).rejects.toMatchObject({ step: 'cancel', message: '' });
+  });
+
+  it('accepts a replace the journal sent and the venue accepted', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'submitted', { detail: 'submitted' });
+    await expect(
+      broker().replaceProtectiveLegs({
+        entryClientOrderId: 'entry',
+        instrument: 'UP',
+        side: 'buy',
+        qty: 3,
+        stop: 9,
+        target: 12,
+      }),
+    ).resolves.toBeUndefined();
+  });
 });
 
 describe('nativeAmountFor', () => {
@@ -235,5 +287,57 @@ describe('JournalReplayBrokerBooks', () => {
     await expect(books().read('alpaca')).rejects.toThrow('reconcile on 2026-09-30 was not run');
     reconcile('mismatch');
     await expect(books().read('alpaca')).rejects.toThrow('was mismatch: detail');
+  });
+
+  const mismatched = (diffs: readonly Record<string, unknown>[]) =>
+    db
+      .prepare(
+        `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+           recorded_at)
+         VALUES (?, 'alpaca', 'broker', 'mismatch', '[]', ?, 'stale', 'now')`,
+      )
+      .run(DAY, JSON.stringify(diffs));
+  const diff = (kind: string, fields: Record<string, unknown>) => ({
+    kind,
+    instrument: 'UP',
+    order_id: null,
+    store: 3,
+    broker: null,
+    ...fields,
+  });
+
+  it('mirrors a reconcile that found only stale stops with those stops, so the replay re-finds them (#1990)', async () => {
+    mismatched([
+      diff('protective_qty', { broker: 2 }),
+      diff('protective_price', { order_id: 'leg', store: 6, broker: 9 }),
+    ]);
+    const { openOrders } = await books().read('alpaca');
+    expect(openOrders.slice(1)).toEqual([
+      { clientOrderId: 'leg', instrument: 'UP', protects: 'long', qty: 2, stopPrice: 9 },
+      {
+        clientOrderId: 'replay-DN-stop',
+        instrument: 'DN',
+        protects: 'short',
+        qty: 2,
+        stopPrice: null,
+      },
+    ]);
+  });
+
+  it('mirrors a stale price alone at the mirrored qty', async () => {
+    mismatched([diff('protective_price', { order_id: 'leg', store: 6, broker: 9 })]);
+    const { openOrders } = await books().read('alpaca');
+    expect(openOrders[1]).toEqual({
+      clientOrderId: 'leg',
+      instrument: 'UP',
+      protects: 'long',
+      qty: 3,
+      stopPrice: 9,
+    });
+  });
+
+  it('still fails the read on a mismatch that is not only stale stops', async () => {
+    mismatched([diff('protective_qty', { broker: 2 }), diff('position_qty', { broker: 4 })]);
+    await expect(books().read('alpaca')).rejects.toThrow('was mismatch: stale');
   });
 });

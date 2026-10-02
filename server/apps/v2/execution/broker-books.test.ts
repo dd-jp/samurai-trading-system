@@ -14,6 +14,21 @@ function client(overrides: {
   } as unknown as AlpacaBrokerClient;
 }
 
+const HELD_AAPL = [{ symbol: 'AAPL', qty: '3', side: 'long' }];
+
+function stopOrder(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    client_order_id: 's',
+    symbol: 'AAPL',
+    side: 'sell',
+    type: 'stop',
+    qty: '3',
+    filled_qty: '0',
+    stop_price: '9',
+    ...overrides,
+  };
+}
+
 describe('AlpacaBrokerBooks', () => {
   it('reads positions signed by side, open orders by client id with the side a stop protects, and cash in USD', async () => {
     const books = new AlpacaBrokerBooks(
@@ -30,7 +45,8 @@ describe('AlpacaBrokerBooks', () => {
             symbol: 'AAPL',
             side: 'sell',
             type: 'stop',
-            qty: '6.5',
+            qty: '10',
+            filled_qty: '3.5',
             stop_price: '181.25',
           },
           {
@@ -39,6 +55,7 @@ describe('AlpacaBrokerBooks', () => {
             side: 'buy',
             type: 'stop_limit',
             qty: '3',
+            filled_qty: '0',
             stop_price: '402.1',
           },
           { client_order_id: 'nvda-tp', symbol: 'NVDA', side: 'buy', type: 'limit' },
@@ -103,31 +120,46 @@ describe('AlpacaBrokerBooks', () => {
     ],
     [
       'stop quantity',
-      {
-        orders: [
-          { client_order_id: 's', symbol: 'AAPL', side: 'sell', type: 'stop', stop_price: '9' },
-        ],
-      },
+      { positions: HELD_AAPL, orders: [stopOrder({ qty: undefined })] },
       'Alpaca AAPL stop s qty "" is not a number',
     ],
     [
+      'stop filled quantity',
+      { positions: HELD_AAPL, orders: [stopOrder({ filled_qty: 'x' })] },
+      'Alpaca AAPL stop s filled qty "x" is not a number',
+    ],
+    [
       'stop price',
-      {
-        orders: [
-          {
-            client_order_id: 's',
-            symbol: 'AAPL',
-            side: 'sell',
-            type: 'stop',
-            qty: '3',
-            stop_price: null,
-          },
-        ],
-      },
+      { positions: HELD_AAPL, orders: [stopOrder({ stop_price: null })] },
       'Alpaca AAPL stop s stop price "" is not a number',
     ],
   ])('refuses a %s that is not a number', async (_what, overrides, message) => {
     await expect(new AlpacaBrokerBooks(client(overrides)).read('alpaca')).rejects.toThrow(message);
+  });
+
+  it.each([
+    ['qty', { qty: undefined }],
+    ['stop price', { stop_price: null }],
+  ])(
+    'classes a stop with no %s on a name the account does not hold as an unknown order',
+    async (_what, broken) => {
+      const books = new AlpacaBrokerBooks(
+        client({ positions: HELD_AAPL, orders: [stopOrder({ ...broken, symbol: 'TSLA' })] }),
+      );
+      expect((await books.read('alpaca')).openOrders).toEqual([
+        { clientOrderId: 's', instrument: 'TSLA', protects: null, qty: null, stopPrice: null },
+      ]);
+    },
+  );
+
+  it('a flat position does not make a malformed stop on its name fail the read', async () => {
+    const books = new AlpacaBrokerBooks(
+      client({
+        positions: [{ symbol: 'AAPL', qty: '0', side: 'long' }],
+        orders: [stopOrder({ qty: undefined })],
+      }),
+    );
+    expect((await books.read('alpaca')).openOrders).toMatchObject([{ protects: null }]);
   });
 
   it('has no reader for a venue other than Alpaca and calls nothing', async () => {

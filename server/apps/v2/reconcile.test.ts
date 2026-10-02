@@ -216,7 +216,7 @@ describe('reconcileBooks', () => {
     const outcome = await reconcileBooks(deps, DATE);
 
     expect(reads).toEqual(['alpaca']);
-    expect(outcome).toEqual({ blockedBookIds: new Set(), refusals: [] });
+    expect(outcome).toEqual({ blockedBookIds: new Set(), refusals: [], staleStops: [] });
     expect(refusals).toEqual([]);
     expect(logs).toEqual([]);
     expect(reconciles).toEqual([
@@ -323,6 +323,7 @@ describe('reconcileBooks', () => {
     expect(outcome).toEqual({
       blockedBookIds: new Set([PRIMARY.id]),
       refusals: [`${PRIMARY.id}: entries blocked, ${summary}`],
+      staleStops: [],
     });
     expect(reconciles[0]).toMatchObject({ source: 'broker', status: 'mismatch', diffs });
     expect(logs).toEqual([
@@ -481,7 +482,37 @@ describe('reconcileOrBlockEntries', () => {
     expect(await reconcileOrBlockEntries(deps, DATE)).toEqual({
       blockedBookIds: new Set(),
       refusals: [],
+      staleStops: [],
     });
+  });
+
+  it('names each instrument whose stop no longer matches the ledger once, by venue, beside the block (#1990)', async () => {
+    const stale = (clientOrderId: string, qty: number, stopPrice: number) => ({
+      clientOrderId,
+      instrument: 'AAPL',
+      protects: 'long' as const,
+      qty,
+      stopPrice,
+    });
+    const { deps } = harness(
+      {
+        ...CLEAN_BROKER,
+        openOrders: [
+          stale('leg-a', 2, 90),
+          stale('leg-b', 2, 91),
+          ...CLEAN_BROKER.openOrders.slice(1),
+        ],
+      },
+      { entryStops: { 'entry-AAPL': 60 } },
+    );
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(outcome.staleStops).toEqual([{ venue: 'alpaca', instrument: 'AAPL' }]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
+  it('names no stale stop for a mismatch that is not about a stop', async () => {
+    const { deps } = harness({ ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 5 }] });
+    expect((await reconcileBooks(deps, DATE)).staleStops).toEqual([]);
   });
 
   it('a store throw blocks every book with an error alert and journals nothing (#1927)', async () => {

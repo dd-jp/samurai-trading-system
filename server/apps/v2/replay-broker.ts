@@ -3,6 +3,8 @@ import type {
   BrokerBookReader,
   BrokerOpenOrder,
   OrderState,
+  ReconcileDiff,
+  StopReplaceStep,
   Venue,
 } from '../../../contracts/index.js';
 import type {
@@ -12,9 +14,11 @@ import type {
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
+  ProtectiveReplaceRequest,
 } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
+import { ProtectiveReplaceError } from './execution/index.js';
 
 interface SentOrder {
   readonly outcome: string;
@@ -140,6 +144,27 @@ export class JournalReplayBroker implements BrokerAdapter {
     return Promise.resolve();
   }
 
+  replaceProtectiveLegs({
+    entryClientOrderId,
+    instrument,
+  }: ProtectiveReplaceRequest): Promise<void> {
+    const sent = this.day.db
+      .prepare(
+        `SELECT r.outcome, json_extract(r.payload, '$.detail') AS detail,
+                json_extract(r.payload, '$.failed_step') AS step
+           FROM v2_orders r JOIN v2_orders e ON e.client_order_id = ?
+          WHERE r.book_id = e.book_id AND r.instrument = ? AND r.trading_date = ?
+            AND substr(r.client_order_id, -7) = '-restop'`,
+      )
+      .get(entryClientOrderId, instrument, this.day.tradingDate) as
+      | (SentOrder & { readonly step: StopReplaceStep | null })
+      | undefined;
+    if (sent?.outcome !== 'rejected') return Promise.resolve();
+    return Promise.reject(
+      new ProtectiveReplaceError(sent.step ?? 'cancel', sent.detail ?? '', { cause: undefined }),
+    );
+  }
+
   cancel(clientOrderId: string): Promise<void> {
     const row = this.day.db
       .prepare(
@@ -232,8 +257,31 @@ function protectiveStops(positions: ReadonlyMap<string, number>): BrokerOpenOrde
     }));
 }
 
-// Only a clean journalled reconcile is mirrored; any other status blocks the replayed books' entries
-// as it blocked the journalled ones
+const STALE_STOP_KINDS: ReadonlySet<string> = new Set(['protective_qty', 'protective_price']);
+
+// A reconcile whose only differences were stale stops is mirrored with those stops, so the replay
+// finds them and re-runs the replacement the journalled cycle sent (#1990)
+function staleStop(stop: BrokerOpenOrder, diffs: readonly ReconcileDiff[]): BrokerOpenOrder {
+  const mine = diffs.filter((entry) => entry.instrument === stop.instrument);
+  const qty = mine.find((entry) => entry.kind === 'protective_qty');
+  const price = mine.find((entry) => entry.kind === 'protective_price');
+  return {
+    ...stop,
+    clientOrderId: price?.order_id ?? stop.clientOrderId,
+    qty: qty?.broker ?? stop.qty,
+    stopPrice: price?.broker ?? stop.stopPrice,
+  };
+}
+
+function staleStopsOnly(row: { status: string; diffs: string }): ReconcileDiff[] | undefined {
+  if (row.status !== 'mismatch') return undefined;
+  const diffs = JSON.parse(row.diffs) as ReconcileDiff[];
+  const onlyStale = diffs.length > 0 && diffs.every((entry) => STALE_STOP_KINDS.has(entry.kind));
+  return onlyStale ? diffs : undefined;
+}
+
+// Only a clean journalled reconcile, or one that found only stale stops, is mirrored; any other
+// status blocks the replayed books' entries as it blocked the journalled ones
 export class JournalReplayBrokerBooks implements BrokerBookReader {
   constructor(
     private readonly db: StoreHandle,
@@ -244,21 +292,25 @@ export class JournalReplayBrokerBooks implements BrokerBookReader {
   read(venue: Venue): Promise<BrokerBook> {
     const row = this.db
       .prepare(
-        `SELECT status, detail FROM v2_reconciles
+        `SELECT status, detail, diffs FROM v2_reconciles
          WHERE trading_date = ? AND venue = ? AND source = 'broker'
          ORDER BY reconcile_id LIMIT 1`,
       )
-      .get(this.tradingDate, venue) as { status: string; detail: string } | undefined;
-    if (row?.status !== 'clean') {
+      .get(this.tradingDate, venue) as
+      | { status: string; detail: string; diffs: string }
+      | undefined;
+    const stale = row === undefined ? undefined : staleStopsOnly(row);
+    if (row?.status !== 'clean' && stale === undefined) {
       const status = row === undefined ? 'not run' : `${row.status}: ${row.detail}`;
       return Promise.reject(
         new Error(`replay: the journalled ${venue} reconcile on ${this.tradingDate} was ${status}`),
       );
     }
     const book = this.mirror(venue);
+    const stops = protectiveStops(book.positions).map((stop) => staleStop(stop, stale ?? []));
     return Promise.resolve({
       positions: [...book.positions].map(([instrument, qty]) => ({ instrument, qty })),
-      openOrders: [...book.openOrders, ...protectiveStops(book.positions)],
+      openOrders: [...book.openOrders, ...stops],
       cashQuote: 0,
     });
   }

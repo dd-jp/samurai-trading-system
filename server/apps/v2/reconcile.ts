@@ -40,9 +40,15 @@ export interface ReconcileDeps {
   readonly logger?: Logger | undefined;
 }
 
+export interface StaleStop {
+  readonly venue: Venue;
+  readonly instrument: string;
+}
+
 export interface ReconcileOutcome {
   readonly blockedBookIds: ReadonlySet<string>;
   readonly refusals: readonly string[];
+  readonly staleStops?: readonly StaleStop[] | undefined;
 }
 
 interface VenueGroup {
@@ -269,12 +275,25 @@ function blockGroup(
   });
 }
 
+const PROTECTIVE_KINDS: ReadonlySet<ReconcileDiff['kind']> = new Set([
+  'protective_qty',
+  'protective_price',
+]);
+
+function staleStopsOf(venue: Venue, diffs: readonly ReconcileDiff[]): StaleStop[] {
+  const instruments = diffs
+    .filter((entry) => PROTECTIVE_KINDS.has(entry.kind))
+    .map((entry) => entry.instrument as string);
+  return [...new Set(instruments)].map((instrument) => ({ venue, instrument }));
+}
+
 export async function reconcileBooks(
   deps: ReconcileDeps,
   tradingDate: string,
 ): Promise<ReconcileOutcome> {
   const blockedBookIds = new Set<string>();
   const refusals: string[] = [];
+  const staleStops: StaleStop[] = [];
   for (const group of venueGroups(deps)) {
     const result = await reconcileGroup(deps, group, tradingDate);
     deps.journal.recordReconcile({
@@ -289,8 +308,9 @@ export async function reconcileBooks(
     if (result.status === 'clean') continue;
     refusals.push(...blockGroup(deps, group, tradingDate, { ...result, status: result.status }));
     for (const book of group.books) blockedBookIds.add(book.id);
+    staleStops.push(...staleStopsOf(group.venue, result.diffs));
   }
-  return { blockedBookIds, refusals };
+  return { blockedBookIds, refusals, staleStops };
 }
 
 export type SyncThrowEvent =

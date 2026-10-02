@@ -434,6 +434,14 @@ David ruled in chat on 2026-10-02, recorded on [#2009](https://github.com/dd-jp/
 1. **A stale year-start fix blocks entries only ([#2009](https://github.com/dd-jp/samurai-trading-system/issues/2009#issuecomment-5956109366)).** When the last BoE XUDLUSS fix on or before 1 January is more than `DAY_FIX_MAX_GAP_DAYS` (7) days before it, the risk gate refuses every entry (`FX_YEAR_START_COVERAGE`) and the cycle sends a critical alert. Exits, fill ingest, cash in lieu and marks keep pricing at the stale fix, named in `fx_source` as #1947 does, so a stale rate never skips an exit. FX is excluded from the loss budget, so the error this leaves is small. The dashboard positions panel and the Telegram poller reload the FX file as the tax reader does.
 2. **The block covers all venues ([#2009](https://github.com/dd-jp/samurai-trading-system/issues/2009#issuecomment-5956394097)).** GBP entries are refused too: the loss budget values USD holdings at this rate, so a GBP entry would otherwise be sized against the wrong equity.
 
+## Rulings of 2026-10-02 — split stops (#1990)
+
+David ruled in chat on 2026-10-02, recorded on [#1990](https://github.com/dd-jp/samurai-trading-system/issues/1990#issuecomment-5957339896). It answers #1990's kill line: Alpaca cannot change a bracket leg's qty, so resizing a stop left stale by a split means cancelling it and placing a new one, which leaves a window with no stop at the venue.
+
+1. **Cancel and re-place.** When reconcile finds a broker stop whose qty or price does not match the rescaled ledger, the cycle cancels the stale stop and at once places a GTC stop sized and priced to the ledger. The window with no stop is one API round-trip, and the ruling accepts it. The cancel is confirmed before the new stop goes out, so the venue never holds two closing stops that together oversell.
+2. **A failed re-place flattens.** If the new stop is refused after the cancel, the cycle flattens the position at market and sends a critical alert. If the cancel itself fails, the cycle does nothing more than alert.
+3. **Entries stay blocked until reconcile is clean.** The mismatch that found the stale stop blocks the venue's entries; the next clean reconcile lifts it.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

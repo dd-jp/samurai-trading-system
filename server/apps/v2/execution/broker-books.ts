@@ -26,25 +26,40 @@ function signedPosition(position: {
 
 const PROTECTIVE_STOP_TYPES: ReadonlySet<string | undefined> = new Set(['stop', 'stop_limit']);
 
-function stopOrder(order: AlpacaOrder): BrokerOpenOrder {
-  const what = `${order.symbol} stop ${order.client_order_id}`;
-  return {
-    clientOrderId: order.client_order_id,
-    instrument: order.symbol,
-    protects: order.side === 'sell' ? 'long' : 'short',
-    qty: finite(order.qty ?? '', `${what} qty`),
-    stopPrice: finite(order.stop_price ?? '', `${what} stop price`),
-  };
-}
-
-function openOrder(order: AlpacaOrder): BrokerOpenOrder {
-  if (PROTECTIVE_STOP_TYPES.has(order.type)) return stopOrder(order);
+function unknownOrder(order: AlpacaOrder): BrokerOpenOrder {
   return {
     clientOrderId: order.client_order_id,
     instrument: order.symbol,
     protects: null,
     qty: null,
     stopPrice: null,
+  };
+}
+
+// A stop part-filled on an earlier session guards only what it has left to sell
+function stopOrder(order: AlpacaOrder): BrokerOpenOrder {
+  const what = `${order.symbol} stop ${order.client_order_id}`;
+  const qty = finite(order.qty ?? '', `${what} qty`);
+  return {
+    clientOrderId: order.client_order_id,
+    instrument: order.symbol,
+    protects: order.side === 'sell' ? 'long' : 'short',
+    qty: qty - finite(order.filled_qty ?? '', `${what} filled qty`),
+    stopPrice: finite(order.stop_price ?? '', `${what} stop price`),
+  };
+}
+
+// A stop the reader cannot size or price fails the read only where the account holds the name;
+// elsewhere it guards nothing and reconcile names it as an order the store does not know
+function openOrder(held: ReadonlySet<string>): (order: AlpacaOrder) => BrokerOpenOrder {
+  return (order) => {
+    if (!PROTECTIVE_STOP_TYPES.has(order.type)) return unknownOrder(order);
+    if (held.has(order.symbol)) return stopOrder(order);
+    try {
+      return stopOrder(order);
+    } catch {
+      return unknownOrder(order);
+    }
   };
 }
 
@@ -58,9 +73,11 @@ export class AlpacaBrokerBooks implements BrokerBookReader {
       this.client.listOpenOrders(),
       this.client.getAccount(),
     ]);
+    const signed = positions.map(signedPosition);
+    const held = new Set(signed.filter((position) => position.qty !== 0).map((p) => p.instrument));
     return {
-      positions: positions.map(signedPosition),
-      openOrders: orders.map(openOrder),
+      positions: signed,
+      openOrders: orders.map(openOrder(held)),
       cashQuote: finite(account.cash, 'cash'),
     };
   }
