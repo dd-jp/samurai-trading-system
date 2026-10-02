@@ -1,10 +1,11 @@
 import BetterSqlite3 from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cacheStatements } from './statement-cache.js';
 
 const handles: BetterSqlite3.Database[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const handle of handles.splice(0)) handle.close();
 });
 
@@ -45,7 +46,23 @@ describe('cacheStatements', () => {
     expect(inner.all()).toEqual([{ a: 1 }, { a: 2 }]);
     expect(outer.next().value).toEqual({ a: 2 });
     outer.return?.();
-    expect(db.prepare(sql)).not.toBe(inner);
+    expect(db.prepare(sql)).toBe(inner);
+  });
+
+  it('costs one extra statement per iterator dropped mid-iteration, then reuses again', () => {
+    const native = vi.spyOn(BetterSqlite3.prototype, 'prepare');
+    const db = cachedHandle();
+    const sql = 'SELECT a FROM t ORDER BY a';
+    const before = native.mock.calls.length;
+    const dropped: IterableIterator<unknown>[] = [];
+    for (let i = 0; i < 3; i++) {
+      dropped.push(db.prepare(sql).iterate() as IterableIterator<unknown>);
+      dropped[i]?.next();
+    }
+    for (let i = 0; i < 1_000; i++) db.prepare(sql).all();
+
+    expect(native.mock.calls.length - before).toBe(4);
+    for (const iterator of dropped) iterator.return?.();
   });
 
   it('clears a previous caller’s pluck, raw or expand mode before reuse', () => {
@@ -57,6 +74,23 @@ describe('cacheStatements', () => {
     expect(db.prepare(sql).get()).toEqual({ a: 1, b: 'x' });
     db.prepare(sql).expand();
     expect(db.prepare(sql).get()).toEqual({ a: 1, b: 'x' });
+  });
+
+  it('clears a previous caller’s safeIntegers mode, readers and writers alike', () => {
+    const db = cachedHandle();
+    const select = 'SELECT a FROM t WHERE a = 1';
+    db.prepare(select).safeIntegers();
+    expect(db.prepare(select).get()).toEqual({ a: 1 });
+    const insert = "INSERT INTO t (a, b) VALUES (3, 'z')";
+    db.prepare(insert).safeIntegers();
+    expect(db.prepare(insert).run().lastInsertRowid).toBe(3);
+  });
+
+  it('refuses bind(), which would fix one caller’s parameters for every caller of that SQL', () => {
+    const db = cachedHandle();
+    const sql = 'SELECT b FROM t WHERE a = ?';
+    expect(() => db.prepare(sql).bind(1)).toThrow(/bind\(\) is refused on a store statement/);
+    expect(db.prepare(sql).get(2)).toEqual({ b: 'y' });
   });
 
   it('reuses writers too, and a statement that fails to prepare is not cached', () => {
