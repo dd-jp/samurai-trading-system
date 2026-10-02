@@ -4,7 +4,12 @@ import type {
   AnthropicMessagesClient,
 } from '../../../pipeline/debate-engine/index.js';
 import {
+  LlmMalformedResponseError,
   LlmProviderError,
+  LlmRateLimitError,
+  LlmRefusalError,
+  LlmTimeoutError,
+  LlmTruncatedError,
   MAX_CAPTURED_PROMPT_CHARS,
   MAX_CAPTURED_RESPONSE_CHARS,
   wrapUntrusted,
@@ -20,6 +25,9 @@ export interface LoggedCall {
   readonly model: string;
   readonly prompt: string;
   readonly response: string | null;
+  readonly stopReason: string | null;
+  readonly errorClass: string | null;
+  readonly errorMessage: string | null;
 }
 
 export type ReplayMissKind = 'request_not_logged' | 'response_not_logged' | 'response_truncated';
@@ -44,8 +52,12 @@ export function loggedPromptOf(content: string): string {
   return maskAndCap(content, MAX_CAPTURED_PROMPT_CHARS);
 }
 
+// Rows written before #1980 were capped at 4,096 characters and must still fail closed
+const RESPONSE_CAPS = [4_096, MAX_CAPTURED_RESPONSE_CHARS];
+
 export function isTruncatedResponse(response: string): boolean {
-  return response.length > MAX_CAPTURED_RESPONSE_CHARS && TRUNCATION_SUFFIX.test(response);
+  const suffix = TRUNCATION_SUFFIX.exec(response);
+  return suffix !== null && RESPONSE_CAPS.includes(suffix.index);
 }
 
 export function commonPrefixLength(left: string, right: string): number {
@@ -57,6 +69,7 @@ export function commonPrefixLength(left: string, right: string): number {
 
 function missKindOf(call: LoggedCall | undefined): ReplayMissKind | undefined {
   if (call === undefined) return 'request_not_logged';
+  if (call.errorClass !== null) return undefined;
   if (call.response === null) return 'response_not_logged';
   return isTruncatedResponse(call.response) ? 'response_truncated' : undefined;
 }
@@ -73,7 +86,7 @@ export class ReplayLog {
     return this.#unserved;
   }
 
-  serve(model: string, content: string): string {
+  serve(model: string, content: string): LoggedCall {
     const identity = promptIdentity(loggedPromptOf(content));
     const index = this.#unserved.findIndex(
       (call) => call.model === model && promptIdentity(call.prompt) === identity,
@@ -81,8 +94,8 @@ export class ReplayLog {
     const call = this.#unserved[index];
     const kind = missKindOf(call);
     if (kind !== undefined) throw this.#miss(kind, model, identity, call);
-    this.#unserved.splice(index, 1);
-    return call?.response ?? '';
+    const [served] = this.#unserved.splice(index, 1) as [LoggedCall];
+    return served;
   }
 
   #miss(
@@ -110,6 +123,26 @@ export class ReplayLog {
   }
 }
 
+type FailureFactory = (message: string, detail: string | undefined) => Error;
+
+// Rebuilt by class because retries and the latency budget branch on it; the decision reason
+// carries only the message
+const REPLAYED_FAILURES: Readonly<Record<string, FailureFactory>> = {
+  LlmTimeoutError: (message, source) =>
+    new LlmTimeoutError(message, source === 'status' ? 'status' : 'deadline'),
+  LlmRateLimitError: (message) => new LlmRateLimitError(message),
+  LlmMalformedResponseError: (message) =>
+    Object.assign(new LlmMalformedResponseError(''), { message }),
+  LlmRefusalError: (message) => new LlmRefusalError(message, 'replayed'),
+  LlmTruncatedError: (message) => new LlmTruncatedError(message, 'replayed', 0),
+};
+
+function replayedFailure(errorClass: string, message: string): Error {
+  const [name = '', detail] = errorClass.split(':');
+  const factory = REPLAYED_FAILURES[name];
+  return factory === undefined ? new LlmProviderError(message) : factory(message, detail);
+}
+
 export class ReplayTransport implements AnthropicMessagesClient {
   constructor(
     private readonly pin: ModelPin,
@@ -118,11 +151,14 @@ export class ReplayTransport implements AnthropicMessagesClient {
 
   createMessage(request: AnthropicMessageRequest): Promise<AnthropicMessageResponse> {
     try {
-      const text = this.log.serve(this.pin.priced, request.messages[0]?.content ?? '');
+      const call = this.log.serve(this.pin.priced, request.messages[0]?.content ?? '');
+      if (call.errorClass !== null) {
+        return Promise.reject(replayedFailure(call.errorClass, call.errorMessage ?? ''));
+      }
       return Promise.resolve({
-        content: [{ type: 'text', text }],
+        content: [{ type: 'text', text: call.response ?? '' }],
         usage: { input_tokens: 0, output_tokens: 0 },
-        stop_reason: 'end_turn',
+        stop_reason: call.stopReason ?? 'end_turn',
         model: this.pin.priced,
       });
     } catch (error) {
