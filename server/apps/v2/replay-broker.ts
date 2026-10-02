@@ -28,6 +28,7 @@ interface BrokerFillRow {
   readonly qty: number;
   readonly price_gbp: number;
   readonly fee_gbp: number;
+  readonly filled_at: string | null;
   readonly recorded_at: string;
 }
 
@@ -102,7 +103,8 @@ export class JournalReplayBroker implements BrokerAdapter {
     const cut = this.#sweeps === 1 ? this.#firstReconcileAt() : LATEST;
     const rows = db
       .prepare(
-        `SELECT fill_id, client_order_id, leg, qty, price_gbp, fee_gbp, recorded_at FROM v2_fills
+        `SELECT fill_id, client_order_id, leg, qty, price_gbp, fee_gbp, filled_at, recorded_at
+         FROM v2_fills
          WHERE trading_date = ? AND venue = ? AND substr(fill_id, 1, length(?)) <> ?
            AND recorded_at <= ?
          ORDER BY rowid`,
@@ -116,7 +118,7 @@ export class JournalReplayBroker implements BrokerAdapter {
         price: nativeAmountFor(row.price_gbp, quotePerGbp),
         qty: row.qty,
         fee: nativeAmountFor(row.fee_gbp, quotePerGbp),
-        timestamp: new Date(row.recorded_at),
+        timestamp: new Date(row.filled_at ?? row.recorded_at),
       })),
     );
   }

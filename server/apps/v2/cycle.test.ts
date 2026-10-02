@@ -3405,6 +3405,19 @@ describe('runCycle: positions held across a split (#1865)', () => {
     return deps.books.position('debate/primary', 'AAPL');
   }
 
+  function rescalesOf(deps: CycleDeps, instrument = 'AAPL'): unknown[] {
+    const { db } = deps.journal as unknown as {
+      db: { prepare: (sql: string) => { all: (instrument: string) => unknown[] } };
+    };
+    return db
+      .prepare(
+        `SELECT trading_date, book_id, source, ratio, anchor_date, fills_before, qty_before,
+           qty_after FROM v2_rescales WHERE book_id = 'debate/primary' AND instrument = ?
+         ORDER BY rescale_id`,
+      )
+      .all(instrument);
+  }
+
   it('a 10:1 split does not stop the position out, rescales it, and keeps marked equity continuous', async () => {
     const deps = harness([], true);
     hold(deps, 6);
@@ -3421,6 +3434,18 @@ describe('runCycle: positions held across a split (#1865)', () => {
       splitAnchorDate: '2026-09-28',
     });
     expect(across.books[0]?.equity_gbp).toBeCloseTo(before.books[0]?.equity_gbp ?? 0, 9);
+    expect(rescalesOf(deps)).toEqual([
+      {
+        trading_date: '2026-09-29',
+        book_id: 'debate/primary',
+        source: 'detector',
+        ratio: 10,
+        anchor_date: '2026-09-28',
+        fills_before: 0,
+        qty_before: 6,
+        qty_after: 60,
+      },
+    ]);
     expect(across.books[0]).toMatchObject({ size_multiplier: 1 });
     expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(false);
     expect(deps.books.cash('debate/primary')).toBeCloseTo(1_000 - (6 * 20) / FX, 9);
@@ -3746,6 +3771,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
     );
     expect(primary(deps)).toMatchObject({ qty: 101, splitFactor: 1 });
     expect(primary(deps)?.splitAnchorDate).toBeUndefined();
+    expect(rescalesOf(deps)).toEqual([]);
+    expect(rescalesOf(deps, 'MSFT')).toMatchObject([{ qty_before: 4, qty_after: 6 }]);
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
     expect(deps.books.position('debate/primary', 'MSFT')).toMatchObject({
       qty: 6,
@@ -3763,6 +3790,9 @@ describe('runCycle: positions held across a split (#1865)', () => {
 
     const retry = await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
     expect(primary(deps)).toMatchObject({ qty: 151, splitFactor: 1.5 });
+    expect(rescalesOf(deps)).toMatchObject([
+      { source: 'detector', ratio: 1.5, qty_before: 101, qty_after: 151.5 },
+    ]);
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
       payload: { size: 151, reason: 'signal_exit' },
     });
@@ -4434,6 +4464,9 @@ describe('runCycle: positions held across a split (#1865)', () => {
     const entry = deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL');
     expect(primary(deps)?.qty).toBeCloseTo((entry?.payload.size as number) * 10, 9);
     expect(primary(deps)?.stopGbp).toBeCloseTo(1.92 / FX, 9);
+    expect(rescalesOf(deps)).toMatchObject([
+      { source: 'entry', ratio: 10, anchor_date: '2026-09-28', fills_before: 2, qty_after: 60 },
+    ]);
   });
 
   it('a split between a broker fill bar and the ingest cycle after skipped cycles is still detected', async () => {
@@ -4444,6 +4477,10 @@ describe('runCycle: positions held across a split (#1865)', () => {
     deps.setControl('halt');
     await runCycle(withMarket(deps, snapshot), '2026-09-30');
     expect(primary(deps)).toMatchObject({ qty: 60, splitAnchorDate: '2026-09-29' });
+    expect(rescalesOf(deps)).toMatchObject([
+      { source: 'anchor', ratio: 1, anchor_date: '2026-09-25', fills_before: 1, qty_after: 6 },
+      { source: 'detector', ratio: 10, anchor_date: '2026-09-29', fills_before: 1, qty_after: 60 },
+    ]);
     expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
       { message: expect.stringContaining('debate/primary AAPL: qty 6 -> 60') },
     ]);
@@ -4467,6 +4504,10 @@ describe('runCycle: positions held across a split (#1865)', () => {
     });
     await runCycle(withMarket(deps, snapshot), '2026-09-30');
     expect(primary(deps)).toBeUndefined();
+    expect(rescalesOf(deps)).toMatchObject([
+      { trading_date: '2026-09-28', source: 'anchor', ratio: 1, anchor_date: '2026-09-25' },
+      { trading_date: '2026-09-30', source: 'broker', ratio: 10, anchor_date: '2026-09-29' },
+    ]);
   });
 
   class ReReportingAlpaca extends SplitAlpaca {

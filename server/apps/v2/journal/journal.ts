@@ -5,6 +5,7 @@ import type {
   JournalledOrder,
   JournalledReconcile,
   JournalledRefusal,
+  JournalledRescale,
   JournalledSplit,
   RecordedFillPart,
   SleeveDecision,
@@ -173,8 +174,8 @@ export class Journal implements DecisionJournal {
       .prepare(
         `INSERT OR IGNORE INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument,
            venue, leg, side, qty, price_gbp, fee_gbp, currency, price_native, fee_native,
-           fx_quote_per_gbp, fx_source, fill_date, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           fx_quote_per_gbp, fx_source, fill_date, filled_at, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         fill.fill_id,
@@ -194,6 +195,7 @@ export class Journal implements DecisionJournal {
         fill.fx_quote_per_gbp,
         fill.fx_source,
         fill.fill_date,
+        fill.filled_at ?? null,
         this.#now(),
       );
     return result.changes === 1;
@@ -214,6 +216,37 @@ export class Journal implements DecisionJournal {
         split.trading_date,
         this.#now(),
       );
+  }
+
+  recordRescale(rescale: JournalledRescale): void {
+    const { before, after } = rescale;
+    this.db
+      .prepare(
+        `INSERT INTO v2_rescales (trading_date, book_id, instrument, source, ratio, anchor_date,
+           fills_before, qty_before, qty_after, entry_before, entry_after, stop_before, stop_after,
+           target_before, target_after, recorded_at)
+         VALUES (@trading_date, @book_id, @instrument, @source, @ratio, @anchor_date,
+           (SELECT COUNT(*) FROM v2_fills WHERE trading_date = @trading_date), @qty_before,
+           @qty_after, @entry_before, @entry_after, @stop_before, @stop_after, @target_before,
+           @target_after, @recorded_at)`,
+      )
+      .run({
+        trading_date: rescale.trading_date,
+        book_id: rescale.book_id,
+        instrument: rescale.instrument,
+        source: rescale.source,
+        ratio: rescale.ratio,
+        anchor_date: rescale.anchor_date,
+        qty_before: before.qty,
+        qty_after: after.qty,
+        entry_before: before.avgPriceGbp,
+        entry_after: after.avgPriceGbp,
+        stop_before: before.stopGbp ?? null,
+        stop_after: after.stopGbp ?? null,
+        target_before: before.targetGbp ?? null,
+        target_after: after.targetGbp ?? null,
+        recorded_at: this.#now(),
+      });
   }
 
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[] {

@@ -210,6 +210,24 @@ const CASES: readonly Case[] = [
       },
     ],
   },
+  {
+    table: 'v2_rescales',
+    seed: `INSERT INTO v2_rescales (rescale_id, trading_date, book_id, instrument, source, ratio,
+        anchor_date, fills_before, qty_before, qty_after, entry_before, entry_after, recorded_at)
+      VALUES (1, '2026-10-01', 'debate/primary', 'NVDA', 'detector', 4, '2026-09-30', 0, 10, 40,
+        400, 100, '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same rescale_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_rescales (rescale_id, trading_date, book_id, instrument,
+            source, ratio, anchor_date, fills_before, qty_before, qty_after, entry_before,
+            entry_after, recorded_at)
+          VALUES (1, '2026-10-01', 'debate/primary', 'NVDA', 'detector', 1, '2026-09-30', 0, 10,
+            10, 400, 400, '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
 ];
 
 function snapshot(db: BetterSqlite3.Database, table: string): unknown[] {
