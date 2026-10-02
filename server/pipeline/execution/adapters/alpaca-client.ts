@@ -49,25 +49,6 @@ export interface AlpacaOcoOrderRequest {
   stop_loss: { stop_price: string };
 }
 
-export interface AlpacaLimitOrderRequest {
-  symbol: string;
-  side: 'buy' | 'sell';
-  qty: string;
-  limit_price: string;
-  time_in_force: string;
-  client_order_id: string;
-}
-
-export interface AlpacaStopLimitOrderRequest {
-  symbol: string;
-  side: 'buy' | 'sell';
-  qty: string;
-  stop_price: string;
-  limit_price: string;
-  time_in_force: string;
-  client_order_id: string;
-}
-
 export interface AlpacaMarketOrderRequest {
   symbol: string;
   side: 'buy' | 'sell';
@@ -87,8 +68,6 @@ export interface AlpacaBrokerClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;
   submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder>;
-  submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder>;
-  submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder>;
   cancelOrder(alpacaOrderId: string): Promise<void>;
   getPositions(): Promise<AlpacaPosition[]>;
   getOrder(alpacaOrderId: string): Promise<AlpacaOrder>;

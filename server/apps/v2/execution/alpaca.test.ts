@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ocoDoubleFillMessage, unpricedFillMessage } from './alpaca.js';
+import { unpricedFillMessage } from './alpaca.js';
 
 describe('Alpaca broker alert messages', () => {
   it('names the fill, its order, size and how long it has gone unpriced', () => {
@@ -18,17 +18,5 @@ describe('Alpaca broker alert messages', () => {
     ).toBe(
       'AAPL stop fill f1 (order v2-debate-primary-2026-09-28-AAPL, qty 3) unpriced for 91 min',
     );
-  });
-
-  it('names both legs of a double-filled bracket', () => {
-    expect(
-      ocoDoubleFillMessage({
-        client_order_id: 'o1',
-        instrument: 'MSFT',
-        stop_order_id: 's1',
-        target_order_id: 't1',
-        observed_at: new Date('2026-09-28T14:00:00Z'),
-      }),
-    ).toBe('MSFT: stop s1 and target t1 both filled (order o1)');
   });
 });

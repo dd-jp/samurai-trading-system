@@ -118,12 +118,6 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
       submitOrder: async () => {
         throw new Error('unreachable: `broker` override bypasses the Alpaca wire client');
       },
-      submitLimitOrder: async () => {
-        throw new Error('unreachable: `broker` override bypasses the Alpaca wire client');
-      },
-      submitStopLimitOrder: async () => {
-        throw new Error('unreachable: `broker` override bypasses the Alpaca wire client');
-      },
       cancelOrder: async () => {
         throw new Error('unreachable: `broker` override bypasses the Alpaca wire client');
       },

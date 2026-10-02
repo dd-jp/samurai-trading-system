@@ -207,16 +207,6 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
     mode: 'paper',
     alpacaBrokerClient: {
       submitOrder,
-      submitLimitOrder: vi.fn(async () => ({
-        id: 'alpaca-order-1',
-        client_order_id: 'k',
-        status: 'accepted',
-      })),
-      submitStopLimitOrder: vi.fn(async () => ({
-        id: 'alpaca-order-2',
-        client_order_id: 'k:stop',
-        status: 'accepted',
-      })),
       cancelOrder: vi.fn(async () => undefined),
       getOrder: vi.fn(async () => ({
         id: 'alpaca-order-1',
@@ -712,10 +702,17 @@ describe('buildProductionComponents', () => {
     const config = stubConfig(db);
     const { steps } = buildProductionComponents(config);
 
-    await steps.execution(goVerdict());
+    const go = goVerdict();
+    const order = {
+      ...(go.order as OrderIntent),
+      instrument: 'AAPL',
+      asset_class: 'stocks' as const,
+    };
+    await steps.execution({ ...go, order });
 
-    expect(config.alpacaBrokerClient.submitLimitOrder).toHaveBeenCalled();
-    expect(config.alpacaBrokerClient.submitOrder).not.toHaveBeenCalled();
+    expect(config.alpacaBrokerClient.submitOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ symbol: 'AAPL', order_class: 'bracket' }),
+    );
   });
 
   it('exposes the same broker instance the execution step submits through', async () => {

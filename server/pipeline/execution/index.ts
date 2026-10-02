@@ -2,9 +2,7 @@ export { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
 export type {
   AlpacaAccount,
   AlpacaBrokerClient,
-  AlpacaLimitOrderRequest,
   AlpacaOrder,
-  AlpacaStopLimitOrderRequest,
 } from './adapters/alpaca-client.js';
 export type { AlpacaTradingEnvironment } from './adapters/alpaca-http-client.js';
 export {
@@ -81,7 +79,6 @@ export type {
 export { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
 export type { LegResizeUnverifiedAlertChannel } from './leg-resize-unverified-alert.js';
 export type { NonSterlingFeeAlertChannel } from './non-sterling-fee-alert.js';
-export type { OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 export { TERMINAL_SWEEP_AGE_MS, UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 export type {
   ResidualExposureAlert,

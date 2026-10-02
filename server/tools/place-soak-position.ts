@@ -169,7 +169,6 @@ async function main(): Promise<void> {
     client,
     state: new SqliteBrokerStateStore(db),
     unpricedFillAlerts: loggingAlertChannel('unpricedFillAlerts', logger),
-    ocoDoubleFillAlerts: loggingAlertChannel('ocoDoubleFillAlerts', logger),
     logger,
   });
 

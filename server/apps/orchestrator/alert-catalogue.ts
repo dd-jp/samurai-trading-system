@@ -12,7 +12,6 @@ export const ALERT_IDS = [
   'orphanAlerts',
   'unpricedFillAlerts',
   'residualExposureAlerts',
-  'ocoDoubleFillAlerts',
   'legResizeAlerts',
   'dormantLegsAlerts',
   'priceUnitAlerts',
@@ -282,34 +281,6 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
         remedyClause
       );
     },
-  },
-
-  ocoDoubleFillAlerts: {
-    method: 'postOcoDoubleFillAlert',
-    delivery: 'awaited',
-    log: (alert) => ({
-      trace_id: 'oco-double-fill',
-      stage: 'execution',
-      event: 'oco_double_fill',
-      level: 'error',
-      message:
-        'both protective legs of an emulated crypto OCO filled — the lot is over-closed and a ' +
-        'reverse position may be open at the venue; check and unwind it by hand',
-      payload: {
-        client_order_id: alert.client_order_id,
-        instrument: alert.instrument,
-        stop_order_id: alert.stop_order_id,
-        target_order_id: alert.target_order_id,
-        observed_at: alert.observed_at.toISOString(),
-      },
-    }),
-    text: (alert) =>
-      `Samurai OCO DOUBLE FILL: ${alert.instrument} — BOTH emulated protective legs filled ` +
-      `(stop ${alert.stop_order_id}, target ${alert.target_order_id}) as of ` +
-      `${alert.observed_at.toISOString()}.\n` +
-      `Lot ${alert.client_order_id}. The lot is over-closed and a REVERSE position may now be ` +
-      'open at the venue. Nothing was unwound automatically — check the position and close it ' +
-      'by hand.',
   },
 
   legResizeAlerts: {

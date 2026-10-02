@@ -235,70 +235,6 @@ describe('AlpacaHttpBrokerClient', () => {
     expect(JSON.parse(init.body as string)).toEqual({ ...MARKET_ORDER_REQUEST, type: 'market' });
   });
 
-  it('submitLimitOrder (#586) POSTs a plain limit body — type on the wire, no order_class', async () => {
-    const limitResponse = {
-      id: 'alpaca-order-3',
-      client_order_id: 'key-btc-1',
-      symbol: 'BTC/USD',
-      side: 'buy',
-      qty: '0.5',
-      status: 'accepted',
-      filled_qty: '0',
-      filled_avg_price: null,
-      filled_at: null,
-    };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(limitResponse));
-    vi.stubGlobal('fetch', fetchMock);
-
-    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
-    const request = {
-      symbol: 'BTC/USD',
-      side: 'buy' as const,
-      qty: '0.5',
-      limit_price: '60000',
-      time_in_force: 'gtc',
-      client_order_id: 'key-btc-1',
-    };
-    const result = await client.submitLimitOrder(request);
-
-    expect(result).toEqual(limitResponse);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://paper-api.alpaca.markets/v2/orders');
-    expect(JSON.parse(init.body as string)).toEqual({ ...request, type: 'limit' });
-  });
-
-  it('submitStopLimitOrder (#586) POSTs type stop_limit with both the trigger and the limit', async () => {
-    const stopLimitResponse = {
-      id: 'alpaca-order-4',
-      client_order_id: 'key-btc-1:stop',
-      symbol: 'BTC/USD',
-      side: 'sell',
-      qty: '0.5',
-      status: 'accepted',
-      filled_qty: '0',
-      filled_avg_price: null,
-      filled_at: null,
-    };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(stopLimitResponse));
-    vi.stubGlobal('fetch', fetchMock);
-
-    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
-    const request = {
-      symbol: 'BTC/USD',
-      side: 'sell' as const,
-      qty: '0.5',
-      stop_price: '57000',
-      limit_price: '57000',
-      time_in_force: 'gtc',
-      client_order_id: 'key-btc-1:stop',
-    };
-    const result = await client.submitStopLimitOrder(request);
-
-    expect(result).toEqual(stopLimitResponse);
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ ...request, type: 'stop_limit' });
-  });
-
   it('submitOcoOrder (#586) sends the VERIFIED nested take_profit shape, type limit on the wire', async () => {
     const ocoResponse = {
       id: 'alpaca-order-5',
@@ -674,31 +610,6 @@ describe('AlpacaHttpBrokerClient', () => {
             order_class: 'oco',
             take_profit: { limit_price: '110' },
             stop_loss: { stop_price: '95' },
-          }),
-      ],
-      [
-        'submitLimitOrder',
-        (client) =>
-          client.submitLimitOrder({
-            symbol: 'BTC/USD',
-            side: 'buy',
-            qty: '0.5',
-            limit_price: '60000',
-            time_in_force: 'gtc',
-            client_order_id: 'key-btc-1',
-          }),
-      ],
-      [
-        'submitStopLimitOrder',
-        (client) =>
-          client.submitStopLimitOrder({
-            symbol: 'BTC/USD',
-            side: 'sell',
-            qty: '0.5',
-            stop_price: '57000',
-            limit_price: '57000',
-            time_in_force: 'gtc',
-            client_order_id: 'key-btc-1:stop',
           }),
       ],
     ];
