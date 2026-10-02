@@ -269,7 +269,8 @@ describe('replayFromFiles', () => {
   });
 });
 
-describe('replay from the US headline journal (#1981)', () => {
+// CPU-heavy: each block runs a full composed day; ~1 s under 3x CPU oversubscription, CI timed out at 5 s
+describe('replay from the US headline journal (#1981)', { timeout: 30_000 }, () => {
   let capped: ReplayCliOptions;
 
   beforeAll(async () => {
@@ -297,7 +298,7 @@ describe('replay from the US headline journal (#1981)', () => {
       writer.close();
     }
     capped = { ...options, storePath };
-  });
+  }, 30_000);
 
   it('replays identical a name whose logged prompt hit the capture cap', async () => {
     const db = new BetterSqlite3(capped.storePath, { readonly: true });
@@ -330,8 +331,11 @@ describe('replay from the US headline journal (#1981)', () => {
   });
 });
 
-describe('replay from the UK headline journal (#1981)', () => {
-  it('replays identical a UK name whose logged prompt hit the capture cap, from its marketaux rows', async () => {
+// CPU-heavy: each block runs a full composed day; ~1 s under 3x CPU oversubscription, CI timed out at 5 s
+describe('replay from the UK headline journal (#1981)', { timeout: 30_000 }, () => {
+  let capped: ReplayCliOptions;
+
+  beforeAll(async () => {
     const storePath = join(directory, 'capped-uk.sqlite');
     const writer = openSharedStore(storePath);
     const publishedAt = new Date(Date.parse(`${TRADING_DATE}T07:30:00.000Z`) - 3_600_000);
@@ -349,7 +353,11 @@ describe('replay from the UK headline journal (#1981)', () => {
     } finally {
       writer.close();
     }
-    const db = new BetterSqlite3(storePath, { readonly: true });
+    capped = { ...options, storePath };
+  }, 30_000);
+
+  it('replays identical a UK name whose logged prompt hit the capture cap, from its marketaux rows', async () => {
+    const db = new BetterSqlite3(capped.storePath, { readonly: true });
     const prompts = db
       .prepare(`SELECT prompt FROM llm_call_log WHERE trace_id = 'v2-${TRADING_DATE}-UP'`)
       .all() as { prompt: string }[];
@@ -358,15 +366,18 @@ describe('replay from the UK headline journal (#1981)', () => {
     expect(providers).toEqual([{ provider: 'marketaux', status: 'ok' }]);
     expect(prompts.length).toBeGreaterThan(0);
     expect(prompts.every((row) => row.prompt.length >= MAX_CAPTURED_PROMPT_CHARS)).toBe(true);
-    const result = await replayFromFiles({ ...options, storePath });
+    const result = await replayFromFiles(capped);
     expect(result.decisions).toBe(3);
     expect(result.divergences).toEqual([]);
-    const unjournalled = join(directory, 'capped-uk-unjournalled.sqlite');
-    copyFileSync(storePath, unjournalled);
-    const tamper = new BetterSqlite3(unjournalled);
+  });
+
+  it('diverges as a news error once the marketaux rows are gone', async () => {
+    const storePath = join(directory, 'capped-uk-unjournalled.sqlite');
+    copyFileSync(capped.storePath, storePath);
+    const tamper = new BetterSqlite3(storePath);
     tamper.exec('DROP TRIGGER v2_news_no_delete; DELETE FROM v2_news');
     tamper.close();
-    const fallback = await replayFromFiles({ ...options, storePath: unjournalled });
+    const fallback = await replayFromFiles({ ...capped, storePath });
     expect(fallback.divergences).toContainEqual(
       expect.objectContaining({ instrument: 'UP', field: 'inputs_hash', replayed: '' }),
     );
