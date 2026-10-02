@@ -1,10 +1,11 @@
-import { readFileSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import type { V2ModeWire } from '../../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import {
   type Clock,
   describeThrownSafely,
+  readSeededFile,
   SystemClock,
   sanitizeLogText,
 } from '../../../shared/index.js';
@@ -81,7 +82,7 @@ export function parseDashboardArgs(
 
 export function readFxOrNone(fxPath: string): ReturnType<typeof parseBoeGbpUsdCsv> {
   try {
-    return parseBoeGbpUsdCsv(readFileSync(fxPath, 'utf8'));
+    return parseBoeGbpUsdCsv(readSeededFile(fxPath));
   } catch (error) {
     process.stderr.write(
       `v2 dashboard: no FX rates (${sanitizeLogText(describeThrownSafely(error))}); USD marks unavailable\n`,

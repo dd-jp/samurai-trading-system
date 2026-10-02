@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { MarketData } from '../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
-import { SystemClock } from '../../shared/index.js';
+import { readSeededFile, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { minbtl } from '../../tools/backtest/index.js';
 import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
@@ -161,12 +161,13 @@ async function runCandidateAgainst(
 async function openMultiVenueMarket(
   options: ResolvedCliOptions,
 ): Promise<{ market: MarketData; bars: BarsSource }> {
+  const fx = parseBoeGbpUsdCsv(readSeededFile(options.fxPath));
   const alpaca = new ParquetBarsSource(options.root, 'alpaca', { optional: true });
   const saxo = new ParquetBarsSource(options.root, 'saxo');
   await alpaca.prime();
   await saxo.prime();
   const bars = new MultiVenueBarsSource([alpaca, saxo]);
-  const market = new BarsMarketData(bars, parseBoeGbpUsdCsv(readFileSync(options.fxPath, 'utf8')));
+  const market = new BarsMarketData(bars, fx);
   return { market, bars };
 }
 

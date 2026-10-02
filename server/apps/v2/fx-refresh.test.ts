@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,7 +14,6 @@ import {
   fxRefreshFor,
   overlapStart,
   refreshBoeFx,
-  seedFxFile,
 } from './fx-refresh.js';
 import { Journal } from './journal/index.js';
 
@@ -248,31 +247,6 @@ describe('fxRefreshFor time limit', () => {
     await fxRefreshFor({ path, fetch: late, logger: recorder().logger, timeLimitMs: 10 }).run();
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(readFileSync(path, 'utf8')).toBe(FILE);
-  });
-});
-
-describe('seedFxFile', () => {
-  it('copies the snapshot only when the live file is absent', () => {
-    const snapshot = fxFile();
-    const live = join(mkdtempSync(join(tmpdir(), 'fx-seed-')), 'live.csv');
-    dirs.push(join(live, '..'));
-    expect(seedFxFile(live, snapshot)).toBe(true);
-    expect(readFileSync(live, 'utf8')).toBe(FILE);
-    writeFileSync(live, `${FILE}25 Sep 2026,1.3301\n`);
-    expect(seedFxFile(live, snapshot)).toBe(false);
-    expect(readFileSync(live, 'utf8')).toBe(`${FILE}25 Sep 2026,1.3301\n`);
-  });
-
-  it('leaves the live file absent when there is no snapshot either', () => {
-    const live = join(mkdtempSync(join(tmpdir(), 'fx-seed-')), 'live.csv');
-    dirs.push(join(live, '..'));
-    expect(seedFxFile(live, join(live, '..', 'absent.csv'))).toBe(false);
-    expect(existsSync(live)).toBe(false);
-  });
-
-  it('throws on any other copy failure', () => {
-    const snapshot = fxFile();
-    expect(() => seedFxFile(join(snapshot, 'not-a-dir', 'live.csv'), snapshot)).toThrow(/ENOTDIR/);
   });
 });
 

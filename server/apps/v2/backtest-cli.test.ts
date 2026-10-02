@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
@@ -6,6 +9,7 @@ import { openSharedStore } from '../../shared/store/index.js';
 import {
   resolveCliOptions,
   runCrossAssetTrendAgainst,
+  runCrossAssetTrendCandidate,
   runMeanReversionAgainst,
 } from './backtest-cli.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
@@ -47,6 +51,22 @@ describe('resolveCliOptions', () => {
       storePath: ':memory:',
       logger,
     });
+  });
+});
+
+describe('the candidate runners', () => {
+  it('restore a deleted FX file from its snapshot before reading it (#2000)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'v2-backtest-fx-'));
+    try {
+      writeFileSync(join(dir, 'fx.snapshot.csv'), 'DATE,XUDLUSS\n31 Dec 2025,1.25\n');
+      const fxPath = join(dir, 'fx.csv');
+      await expect(
+        runCrossAssetTrendCandidate({ barStoreRoot: join(dir, 'no-bars'), fxPath }),
+      ).rejects.toThrow();
+      expect(existsSync(fxPath)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

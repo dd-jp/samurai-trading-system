@@ -10,7 +10,7 @@ import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../providers/market-data-service/index.js';
 import { AlpacaNewsClient } from '../../providers/market-intelligence/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
-import { describeThrownSafely, SystemClock } from '../../shared/index.js';
+import { describeThrownSafely, readSeededFile, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
@@ -48,7 +48,6 @@ import {
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
-import { seedFxFile } from './fx-refresh.js';
 import { heartbeatFor, pingJournal, withHeartbeat } from './heartbeat.js';
 import { cycleInputDigests, RecordingBarsSource, recordInputDigests } from './input-digest.js';
 import { type FaultLedger, Journal } from './journal/index.js';
@@ -513,7 +512,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const constituents = options.constituents ?? constituentsFromCsv(options);
   const market = new BarsMarketData(
     bars,
-    parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
+    parseBoeGbpUsdCsv(readSeededFile(options.fxPath ?? FX_PATH)),
   );
   const cfdGate = cfdGateFor(options);
   const catalogue = cfdCatalogueFor(options, logger);
@@ -664,18 +663,19 @@ export async function main(
         const backup = backupFor(argv, V2_STORE_PATH, env, litestream, logger);
         // barRefresh is constructed lazily, inside the callback withBackup invokes after restore,
         // so a paper run without Alpaca keys still restores the store before it refuses
-        return withBackup(() => {
-          seedFxFile();
-          return runOnce(
-            dryRun,
-            tradingDate,
-            env,
-            clock,
-            logger,
-            barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
-            alerts.notify,
-          );
-        }, backup);
+        return withBackup(
+          () =>
+            runOnce(
+              dryRun,
+              tradingDate,
+              env,
+              clock,
+              logger,
+              barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+              alerts.notify,
+            ),
+          backup,
+        );
       }, heartbeat),
     alerts,
   );

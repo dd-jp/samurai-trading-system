@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import type { LogEntry } from '../../../shared/index.js';
 import {
@@ -11,6 +11,7 @@ import {
   openSharedStore,
   type StoreHandle,
 } from '../../../shared/store/index.js';
+import { FX_SNAPSHOT_PATH } from '../data/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';
 import type { BotResponse } from './telegram-bot.js';
@@ -70,6 +71,11 @@ function migratedStore(): string {
   openSharedStore(path).close();
   return path;
 }
+
+const TEST_FX_DIR = mkdtempSync(join(tmpdir(), 'v2-telegram-fx-'));
+const TEST_FX = join(TEST_FX_DIR, 'fx.csv');
+copyFileSync(FX_SNAPSHOT_PATH, TEST_FX);
+afterAll(() => rmSync(TEST_FX_DIR, { recursive: true, force: true }));
 
 describe('parseTelegramArgs', () => {
   it('defaults to the paper store', () => {
@@ -218,7 +224,7 @@ describe('composeTelegram, every command against a real store', () => {
     };
     const logs: LogEntry[] = [];
     const composed = composeTelegram(
-      parseTelegramArgs(['--store', storePath]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', storePath]),
       { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL },
       { now: () => new Date(clockMs) },
       fetchImpl,
@@ -272,7 +278,7 @@ describe('composeTelegram, every command against a real store', () => {
     dirs.push(dir);
     expect(() =>
       composeTelegram(
-        parseTelegramArgs(['--store', join(dir, 'missing.sqlite')]),
+        parseTelegramArgs(['--fx', TEST_FX, '--store', join(dir, 'missing.sqlite')]),
         { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USER_IDS: String(OWNER) },
         { now: () => NOW },
         () => Promise.reject(new Error('unused')),
@@ -284,7 +290,7 @@ describe('composeTelegram, every command against a real store', () => {
   it('refuses to start without the owner user id, before touching the store', () => {
     expect(() =>
       composeTelegram(
-        parseTelegramArgs(['--store', '/nonexistent/v2.sqlite']),
+        parseTelegramArgs(['--fx', TEST_FX, '--store', '/nonexistent/v2.sqlite']),
         { TELEGRAM_BOT_TOKEN: TOKEN },
         { now: () => NOW },
         () => Promise.reject(new Error('unused')),
@@ -358,6 +364,22 @@ async function runComposed(
 }
 
 describe('composeTelegram wiring', () => {
+  it('restores a deleted FX file from its snapshot before reading it (#2000)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'v2-telegram-seed-'));
+    dirs.push(dir);
+    copyFileSync(FX_SNAPSHOT_PATH, join(dir, 'fx.snapshot.csv'));
+    const fxPath = join(dir, 'fx.csv');
+    const composed = composeTelegram(
+      parseTelegramArgs(['--fx', fxPath, '--store', migratedStore()]),
+      ENV,
+      { now: () => NOW },
+      () => Promise.resolve(reply({ ok: true, result: [] })),
+      { log: () => undefined },
+    );
+    composed.db.close();
+    expect(existsSync(fxPath)).toBe(true);
+  });
+
   it('sends the dead-poller alert as critical, with sound, to the alert chat', async () => {
     const shutdown = new AbortController();
     const sent: unknown[] = [];
@@ -375,7 +397,7 @@ describe('composeTelegram wiring', () => {
       });
     };
     await runComposed(
-      parseTelegramArgs(['--store', migratedStore()]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
       { ...ENV, TELEGRAM_CHAT_ID: '-100777' },
       fetchImpl,
       [],
@@ -393,7 +415,13 @@ describe('composeTelegram wiring', () => {
     const shutdown = new AbortController();
     const flood = Array.from({ length: 1000 }, (_, i) => messageFrom(i + 1, 'halt', STRANGER));
     const b = bench(shutdown, [[...flood, messageFrom(1001, 'halt')]]);
-    await runComposed(parseTelegramArgs(['--store', storePath]), ENV, b.fetchImpl, [], shutdown);
+    await runComposed(
+      parseTelegramArgs(['--fx', TEST_FX, '--store', storePath]),
+      ENV,
+      b.fetchImpl,
+      [],
+      shutdown,
+    );
     expect(b.sent).toEqual([
       { chat_id: OWNER, text: ONLINE },
       {
@@ -419,7 +447,7 @@ describe('composeTelegram wiring', () => {
     const b = bench(shutdown, [[messageFrom(1, 'status')]]);
     const logs: LogEntry[] = [];
     await runComposed(
-      { ...parseTelegramArgs(['--store', migratedStore()]), dryRun: true },
+      { ...parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]), dryRun: true },
       { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL, SAMURAI_ALERTS: 'log-only' },
       b.fetchImpl,
       logs,
@@ -436,7 +464,7 @@ describe('composeTelegram wiring', () => {
     const b = bench(shutdown, []);
     const logs: LogEntry[] = [];
     await runComposed(
-      parseTelegramArgs(['--store', migratedStore()]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
       { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL, SAMURAI_ALERTS: 'log-only' },
       b.fetchImpl,
       logs,
@@ -451,7 +479,7 @@ describe('composeTelegram wiring', () => {
     const b = bench(shutdown, [[], []]);
     const logs: LogEntry[] = [];
     await runComposed(
-      parseTelegramArgs(['--store', migratedStore()]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
       ENV,
       b.fetchImpl,
       logs,
@@ -474,7 +502,7 @@ describe('composeTelegram wiring', () => {
     const b = bench(shutdown, [[], []]);
     const logs: LogEntry[] = [];
     await runComposed(
-      parseTelegramArgs(['--store', migratedStore()]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
       { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: '   ' },
       b.fetchImpl,
       logs,
@@ -488,7 +516,7 @@ describe('composeTelegram wiring', () => {
     storeCalls.failGuard = true;
     expect(() =>
       composeTelegram(
-        parseTelegramArgs(['--store', migratedStore()]),
+        parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
         ENV,
         { now: () => NOW },
         () => Promise.resolve(reply({ ok: true, result: [] })),
@@ -504,7 +532,7 @@ describe('composeTelegram wiring', () => {
     const b = bench(shutdown, [[messageFrom(1, 'resume')]], { failSend: 1 });
     const logs: LogEntry[] = [];
     await runComposed(
-      parseTelegramArgs(['--store', migratedStore()]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
       { ...ENV, HEALTHCHECKS_TELEGRAM_PING_URL: PING_URL },
       b.fetchImpl,
       logs,
@@ -523,7 +551,7 @@ describe('composeTelegram wiring', () => {
   it('writes controls and the journal through sole-writer guards that stay on whatever the env says', () => {
     vi.stubEnv('SAMURAI_STORE_GUARD', 'off');
     const composed = composeTelegram(
-      parseTelegramArgs(['--store', migratedStore()]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
       ENV,
       { now: () => NOW },
       () => Promise.reject(new Error('unused')),
@@ -547,7 +575,7 @@ describe('composeTelegram wiring', () => {
     };
     setTimeout(() => shutdown.abort(), 50);
     await runComposed(
-      parseTelegramArgs(['--store', migratedStore()]),
+      parseTelegramArgs(['--fx', TEST_FX, '--store', migratedStore()]),
       ENV,
       fetchImpl,
       [],
@@ -570,7 +598,7 @@ describe('main', () => {
       }
       return Promise.resolve(reply({ ok: true, result: [] }));
     });
-    await main(['--store', migratedStore()], ENV);
+    await main(['--fx', TEST_FX, '--store', migratedStore()], ENV);
     for (const listener of process.listeners('SIGINT')) {
       if (!sigintBefore.has(listener)) process.off('SIGINT', listener);
     }
@@ -596,7 +624,7 @@ describe('main', () => {
       }
       return Promise.resolve(reply({ ok: true, result: [] }));
     });
-    await main(['--store', migratedStore()], ENV);
+    await main(['--fx', TEST_FX, '--store', migratedStore()], ENV);
     for (const listener of process.listeners('SIGTERM')) {
       if (!sigtermBefore.has(listener)) process.off('SIGTERM', listener);
     }
@@ -605,9 +633,9 @@ describe('main', () => {
   });
 
   it('refuses to start without the owner, before opening the store', async () => {
-    await expect(main(['--store', migratedStore()], { TELEGRAM_BOT_TOKEN: TOKEN })).rejects.toThrow(
-      /TELEGRAM_ALLOWED_USER_IDS/,
-    );
+    await expect(
+      main(['--fx', TEST_FX, '--store', migratedStore()], { TELEGRAM_BOT_TOKEN: TOKEN }),
+    ).rejects.toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
     expect(storeCalls.opened).toEqual([]);
   });
 });

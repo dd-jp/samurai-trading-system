@@ -1,5 +1,4 @@
-import { constants, copyFileSync, readFileSync } from 'node:fs';
-import type { Logger } from '../../shared/index.js';
+import { type Logger, readSeededFile } from '../../shared/index.js';
 import {
   type BarRefresh,
   logRefresh,
@@ -9,13 +8,7 @@ import {
   withinTimeLimit,
 } from './bar-refresh-core.js';
 import { writeAtomically } from './cfd-catalogue-refresh.js';
-import {
-  addDays,
-  FX_PATH,
-  FX_SNAPSHOT_PATH,
-  type FxObservation,
-  parseBoeGbpUsdCsv,
-} from './data/index.js';
+import { addDays, type FxObservation, parseBoeGbpUsdCsv } from './data/index.js';
 
 export type FxFetch = (
   url: string,
@@ -137,7 +130,7 @@ export async function refreshBoeFx(
   leg: FxRefreshLeg,
   limit: TimeLimit = UNLIMITED,
 ): Promise<FxAppend> {
-  const existingText = readFileSync(leg.path, 'utf8');
+  const existingText = readSeededFile(leg.path);
   const from = overlapStart(parseBoeGbpUsdCsv(existingText));
   const response = await leg.fetch(boeXudlussUrl(from), {
     signal: limit.signal,
@@ -148,18 +141,6 @@ export async function refreshBoeFx(
   if (result.added.length > 0)
     await limit.atomic(async () => writeAtomically(leg.path, result.text));
   return result;
-}
-
-export function seedFxFile(path: string = FX_PATH, snapshot: string = FX_SNAPSHOT_PATH): boolean {
-  try {
-    copyFileSync(snapshot, path, constants.COPYFILE_EXCL);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    // Without a snapshot the root's own read of the live file names what is missing
-    if (code === 'EEXIST' || code === 'ENOENT') return false;
-    throw error;
-  }
 }
 
 function summary(added: readonly FxObservation[]): string {
