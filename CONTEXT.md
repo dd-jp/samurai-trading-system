@@ -136,7 +136,7 @@ Every run compares broker positions and cash with the store; any mismatch halts 
 The append-only log of every plumbing fault, one row per fault of the eight kinds. The gate's fault-free weeks are counted from it.
 
 **Tax log**
-Per-disposal record in GBP at the day's rate with the FX rate used, share-matched (same-day and 30-day rules), for a Saxo GIA and an Alpaca account: disposals are CGT events. W-8BEN on the US side.
+Per-disposal record in GBP at the day's rate with the FX rate used, share-matched (same day, then 30 days, then the section 104 pool), for a Saxo GIA and an Alpaca account: disposals are CGT events. Only broker fills are disposals; an instrument it cannot price is held out, never guessed. W-8BEN on the US side.
 
 ### Venues and host
 

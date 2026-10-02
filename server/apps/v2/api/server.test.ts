@@ -23,6 +23,7 @@ import {
   createV2DashboardServer,
   type V2DashboardServer,
 } from './server.js';
+import { TaxReader } from './tax.js';
 
 const TOKEN = 'test-dashboard-token';
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
@@ -75,6 +76,8 @@ async function start(
     research: () => new ResearchReader(join(tmpdir(), 'no-such-research.sqlite'), clock).read(),
     evidence: () => new EvidenceReader(store, clock).read(),
     reconcile: () => new ReconcileReader(store).read(),
+    tax: (query) => new TaxReader(store, clock, []).read(query),
+    taxCsv: (query) => new TaxReader(store, clock, []).csv(query),
     onFault: (error) => faults.push(error),
   });
   await server.start();
@@ -111,6 +114,8 @@ describe('createV2DashboardServer start-up', () => {
         research: UNUSED,
         evidence: UNUSED,
         reconcile: UNUSED,
+        tax: UNUSED,
+        taxCsv: UNUSED,
         onFault: () => undefined,
       }),
     ).toThrow(/SAMURAI_DASHBOARD_TOKEN is not set.*loopback included/s);
@@ -131,6 +136,8 @@ describe('createV2DashboardServer start-up', () => {
       research: UNUSED,
       evidence: UNUSED,
       reconcile: UNUSED,
+      tax: UNUSED,
+      taxCsv: UNUSED,
       onFault: () => undefined,
     });
     await expect(clash.start()).rejects.toThrow(/EADDRINUSE/);
@@ -320,19 +327,34 @@ describe('GET /api/v2/evidence, /api/v2/reconcile and /api/v2/tax', () => {
       contract_version: V2_CONTRACT_VERSION,
       reconcile: { status: 'empty' },
     });
-    const tax = await fetch(`${url}/api/v2/tax?year=2026`, { headers: AUTH });
+    const tax = await fetch(`${url}/api/v2/tax?year=2025`, { headers: AUTH });
     expect(tax.status).toBe(200);
-    expect(await tax.json()).toMatchObject({ year: 2026, disposals: { ticket: '#1947' } });
+    expect(await tax.json()).toEqual({
+      contract_version: V2_CONTRACT_VERSION,
+      year: 2025,
+      years: [],
+      disposals: { status: 'empty' },
+    });
+    const current = await fetch(`${url}/api/v2/tax`, { headers: AUTH });
+    expect(await current.json()).toMatchObject({ year: 2026 });
   });
 
-  it('refuses a bad tax query with 400, and a CSV it cannot build yet with 501', async () => {
+  it('refuses a bad tax query with 400, and serves the year as a CSV download', async () => {
     const url = await start();
     const bad = await fetch(`${url}/api/v2/tax?year=26`, { headers: AUTH });
     expect(bad.status).toBe(400);
     expect(await bad.json()).toEqual({ error: 'year is invalid' });
-    const csv = await fetch(`${url}/api/v2/tax?format=csv`, { headers: AUTH });
-    expect(csv.status).toBe(501);
-    expect(await csv.json()).toEqual({ error: 'tax log not yet fed: Step 4 (#1947)' });
+    const csv = await fetch(`${url}/api/v2/tax?year=2026&format=csv`, { headers: AUTH });
+    expect(csv.status).toBe(200);
+    expect(csv.headers.get('content-type')).toBe('text/csv; charset=utf-8');
+    expect(csv.headers.get('content-disposition')).toBe(
+      'attachment; filename="samurai-tax-2026-27.csv"',
+    );
+    expect(csv.headers.get('cache-control')).toBe('no-store');
+    expect(csv.headers.get('x-content-type-options')).toBe('nosniff');
+    expect((await csv.text()).split('\n')[0]).toMatch(/^disposal_date,instrument,venue,qty,/);
+    const unauthorised = await fetch(`${url}/api/v2/tax?format=csv`);
+    expect(unauthorised.status).toBe(401);
   });
 
   it('allows only GET on each', async () => {

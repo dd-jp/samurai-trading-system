@@ -25,7 +25,7 @@ yet a spec; the wayfinder map is [Samurai v2 #1706](https://github.com/dd-jp/sam
 
 - Every mandatory protective action is venue-resting or watchdog-backed, never tick-dependent (postmortem §3).
 - Windowed data reads carry tested coverage invariants (postmortem §2).
-- Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN.
+- Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN. *Ruled 2026-10-02 (David, chat; [#1947](https://github.com/dd-jp/samurai-trading-system/issues/1947)): the day's rate is the BoE XUDLUSS fix for the fill's date, or the last fix before it when BoE publishes none. The refresh of that series is [#2000](https://github.com/dd-jp/samurai-trading-system/issues/2000).*
 - Paper profit is not evidence of edge; paper gates on fidelity to the backtest.
 
 ## Rulings Q10–Q13

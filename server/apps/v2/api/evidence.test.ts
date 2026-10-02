@@ -5,6 +5,15 @@ import { annualisedSharpe } from '../../../tools/backtest/index.js';
 import { Journal } from '../journal/journal.js';
 import { EvidenceReader } from './evidence.js';
 
+const CAPTURED = {
+  currency: 'USD',
+  price_native: 100,
+  fee_native: 0,
+  fx_quote_per_gbp: 1.25,
+  fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
+  fill_date: null,
+} as const;
+
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 
 let db: StoreHandle;
@@ -62,6 +71,7 @@ function fillOf(
   instrument = 'AAPL',
 ): void {
   new Journal(db, clock).recordFill({
+    ...CAPTURED,
     fill_id: fillId,
     client_order_id: orderId,
     book_id: bookId,

@@ -203,8 +203,8 @@ export function loggedHeadlines(
   return points.length === 1 && points[0] === NO_HEADLINES_KEY_POINT ? [] : points;
 }
 
-// US headlines are journalled only inside the debate prompts that carried them, so a replay
-// reads them back from there; a name with no recoverable prompt replays as a news failure
+// The fallback for UK names and for days before US headlines reached v2_news (#1981): a name
+// with no recoverable prompt replays as a news failure
 export function loggedNewsSource(calls: readonly LoggedCall[]): NewsSource {
   return {
     headlines: (symbol, tradingDate) => {

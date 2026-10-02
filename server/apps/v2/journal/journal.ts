@@ -5,6 +5,7 @@ import type {
   JournalledOrder,
   JournalledReconcile,
   JournalledRefusal,
+  JournalledSplit,
   RecordedFillPart,
   SleeveDecision,
   Venue,
@@ -171,8 +172,9 @@ export class Journal implements DecisionJournal {
     const result = this.db
       .prepare(
         `INSERT OR IGNORE INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument,
-           venue, leg, side, qty, price_gbp, fee_gbp, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           venue, leg, side, qty, price_gbp, fee_gbp, currency, price_native, fee_native,
+           fx_quote_per_gbp, fx_source, fill_date, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         fill.fill_id,
@@ -186,9 +188,32 @@ export class Journal implements DecisionJournal {
         fill.qty,
         fill.price_gbp,
         fill.fee_gbp,
+        fill.currency,
+        fill.price_native,
+        fill.fee_native,
+        fill.fx_quote_per_gbp,
+        fill.fx_source,
+        fill.fill_date,
         this.#now(),
       );
     return result.changes === 1;
+  }
+
+  recordSplit(split: JournalledSplit): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO v2_splits (instrument, venue, split_date, ratio, trading_date,
+           recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        split.instrument,
+        split.venue,
+        split.split_date,
+        split.ratio,
+        split.trading_date,
+        this.#now(),
+      );
   }
 
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[] {

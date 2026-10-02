@@ -1,14 +1,11 @@
 import {
-  type NotYetFedWire,
   type ReconcileRunWire,
   type ReconcileWire,
-  type TaxWire,
   V2_CONTRACT_VERSION,
 } from '../../../../contracts/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 
 export const RECONCILE_RUNS_SHOWN = 60;
-const TAX_OWNER: NotYetFedWire = { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1947' };
 const TAX_PARAMS: ReadonlySet<string> = new Set(['year', 'format']);
 const FORMATS: ReadonlySet<string> = new Set(['json', 'csv']);
 
@@ -80,9 +77,3 @@ export class ReconcileReader {
     }));
   }
 }
-
-export function taxWire(query: TaxQuery): TaxWire {
-  return { contract_version: V2_CONTRACT_VERSION, year: query.year, disposals: TAX_OWNER };
-}
-
-export const TAX_CSV_NOT_FED = `tax log not yet fed: ${TAX_OWNER.owner} (${TAX_OWNER.ticket})`;

@@ -8,6 +8,66 @@
 > income band, other disposals held outside this system, or any relief that
 > might apply, so it computes **gain only**, never tax owed.
 
+## v2 tax log (#1947)
+
+The v2 runtime keeps its own per-disposal GBP log for share and ETF fills at
+both venues (the Saxo GIA and the Alpaca account). The sections after this one
+describe the v1 report, whose matching rules it reuses.
+
+- **Matching.** `server/apps/v2/share-matching.ts` ports v1's matcher in the
+  same order (same day, then acquisitions in the next 30 days earliest first,
+  then the section 104 pool), with the same citations. Dates are UK calendar
+  dates. Matching runs over the full fill history; the tax year
+  (`[6 Apr Y, 6 Apr Y+1)`) only filters what is shown.
+- **What counts.** Only fills of orders that reached a broker. Shadow, control
+  and dry-run books are simulated, so their fills are never disposals. CFD
+  venues are left to their own log (#1867). Paper broker fills appear in a
+  paper store's log, but paper disposals are not taxable.
+- **Capture (migration 0085).** Each `v2_fills` row records `currency`,
+  `price_native`, `fee_native`, `fx_quote_per_gbp`, `fx_source` and
+  `fill_date`. The rate is quoted as native units per £1, so GBP = native ÷
+  rate. It is the rate the row's `price_gbp` was booked at: the fixed
+  1 January BoE rate for USD (U3, source `boe-xudluss:year-start:<year>@<fix
+  date>`, naming the fix used, so a series that ends before 1 January shows
+  as a stale fix) and
+  1 for GBP (source `gbp`). `fill_date` is the London calendar date of the
+  broker's fill time. A row with no fill time is dated by its trading date.
+- **The day's rate.** Doc 66's carried constraint converts each US disposal at
+  the day's rate, not the 1 January rate. `server/apps/v2/api/tax.ts` converts
+  every USD fill, acquisitions included, at the BoE XUDLUSS fix for its date,
+  or the last fix before it when BoE publishes none, within 7 days. It refuses
+  a date the loaded series has not reached yet. Each disposal shows the rate
+  and the fix date it used (`boe-xudluss:<fix date>`). David ruled the BoE
+  XUDLUSS source on 2026-10-02 (doc 66). The committed series ends on
+  2026-09-24 and nothing refreshes it yet (#2000), so a later USD fill holds
+  its instrument out. The dashboard reads the file once at start, so a
+  refresh needs a dashboard restart. The parser refuses a series that is not
+  in strictly ascending date order.
+- **Splits.** When the cycle rescales a held position it journals each split
+  step in `v2_splits` (instrument, venue, the date of the first bar in the new
+  units, ratio). A split held at two venues is journalled twice and counted
+  once; two venues that disagree on its ratio hold the instrument out. The
+  log matches in post-split units and shows each disposal
+  in its own day's units. A split while nothing is held is not journalled. A
+  sale before such a split and a buy back after it within 30 days would then
+  match in mixed units.
+- **Cash in lieu.** A `cash_in_lieu` fill left by a fractional split (#1989)
+  is a disposal and is flagged. Its proceeds are the latest close, not the
+  broker's amount, because neither venue's cash-in-lieu record is read yet.
+  Reading it is needed before live.
+- **Held out, never guessed.** An instrument is held out, with the reason and
+  its fill count, when any of its fills predates migration 0085, has no day
+  rate, or is in a second currency. It is also held out when the section 104
+  pool cannot cover a disposal. That happens with a short sale not bought back
+  inside 30 days, or with missing history. A held-out instrument is never
+  converted or partly matched. It is listed in the year it has fills in, so
+  the year never reads as having no disposals.
+- **Provisional.** A section 104 match is provisional until 30 days after the
+  disposal, as in v1.
+- **Served.** `/api/v2/tax?year` serves the dashboard's tax panel (P13), and
+  `&format=csv` downloads the same year with held-out instruments as
+  `held_out` rows.
+
 ## What this covers
 
 Samurai's live equity leg trades on a **Saxo Capital Markets UK General

@@ -80,6 +80,10 @@ export function fencedMarket(market: MarketData, today: () => string): MarketDat
       fence(`${year}-01-01`);
       return market.gbpUsdAtYearStart(year);
     },
+    gbpUsdYearStartFixDate: (year) => {
+      fence(`${year}-01-01`);
+      return market.gbpUsdYearStartFixDate?.(year);
+    },
   };
 }
 

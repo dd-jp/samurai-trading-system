@@ -34,6 +34,7 @@ import {
   barsBefore,
   CLOSED_VENUE_ROUTER,
   calendarReferenceFor,
+  newsFailureReason,
   sessionsBefore,
   windowCovered,
 } from '../data/index.js';
@@ -408,7 +409,7 @@ async function fetchHeadlines(
   try {
     return { headlines: await deps.news.headlines(symbol, tradingDate, deps.clock.now()) };
   } catch (error) {
-    return { failure: `news_error:${describeThrownSafely(error)}` };
+    return { failure: `news_error:${newsFailureReason(error)}` };
   }
 }
 

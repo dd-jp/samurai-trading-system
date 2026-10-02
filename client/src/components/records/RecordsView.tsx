@@ -1,14 +1,14 @@
-import type { ReconcileWire, ResearchWire, TaxWire, V2OverviewWire } from '@contracts';
+import type { ReconcileWire, ResearchWire, V2OverviewWire } from '@contracts';
 import { type PollOptions, type PollState, usePoll } from '../../hooks/usePoll.ts';
-import { FeedPanel, OwnedPanel } from '../Panel.tsx';
+import { FeedPanel } from '../Panel.tsx';
 import { JournalPanel } from './JournalPanel.tsx';
 import { LlmSpendPanel } from './LlmSpendPanel.tsx';
 import { ReconcilePanel } from './ReconcilePanel.tsx';
 import { ResearchPanel } from './ResearchPanel.tsx';
+import { TaxPanel } from './TaxPanel.tsx';
 
 const RESEARCH_URL = '/api/v2/research';
 const RECONCILE_URL = '/api/v2/reconcile';
-const TAX_URL = '/api/v2/tax';
 
 interface FeedProps {
   readonly token: string | null;
@@ -33,22 +33,6 @@ function Reconcile({ token, options }: FeedProps) {
   );
 }
 
-function Tax({ token, options }: FeedProps) {
-  const tax = usePoll<TaxWire>(TAX_URL, token, options);
-  return (
-    <FeedPanel title="Tax export" state={tax}>
-      {(served, note) => (
-        <OwnedPanel title="Tax export" panel={served.disposals}>
-          <p className="panel-note">
-            The CSV download for a tax year opens once the per-disposal tax log exists.
-          </p>
-          {note}
-        </OwnedPanel>
-      )}
-    </FeedPanel>
-  );
-}
-
 export function RecordsView({
   token,
   options,
@@ -62,7 +46,7 @@ export function RecordsView({
         {(served, note) => <LlmSpendPanel panel={served.llm_spend} note={note} />}
       </FeedPanel>
       <Reconcile token={token} options={options} />
-      <Tax token={token} options={options} />
+      <TaxPanel token={token} options={options} />
     </div>
   );
 }
