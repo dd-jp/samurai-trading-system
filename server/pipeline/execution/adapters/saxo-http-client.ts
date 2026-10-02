@@ -81,16 +81,16 @@ function readNext(body: unknown): string | undefined {
 }
 
 function keepAccountScope(nextPath: string, identity: AccountIdentity, context: string): string {
-  const echoed = new URL(nextPath, 'https://saxo-next.invalid').searchParams;
+  const echoed = [...new URL(nextPath, 'https://saxo-next.invalid').searchParams];
   const missing = new URLSearchParams();
   for (const [key, pinnedValue] of [
     ['AccountKey', identity.accountKey],
     ['ClientKey', identity.clientKey],
   ] as const) {
-    const echoedValue = echoed.get(key);
-    if (echoedValue === null) {
+    const echoedValues = valuesOf(echoed, key);
+    if (echoedValues.length === 0) {
       missing.set(key, pinnedValue);
-    } else if (echoedValue !== pinnedValue) {
+    } else if (echoedValues.some((value) => value !== pinnedValue)) {
       throw new SaxoBrokerProviderError(
         `Saxo API error: __next changed ${key} between pages (${context}).`,
       );
@@ -99,9 +99,17 @@ function keepAccountScope(nextPath: string, identity: AccountIdentity, context: 
   return appendQuery(nextPath, missing.toString());
 }
 
+function valuesOf(params: readonly [string, string][], key: string): string[] {
+  const wanted = key.toLowerCase();
+  return params.filter(([name]) => name.toLowerCase() === wanted).map(([, value]) => value);
+}
+
 function appendQuery(path: string, query: string): string {
   if (query === '') return path;
-  return `${path}${path.includes('?') ? '&' : '?'}${query}`;
+  const hashAt = path.includes('#') ? path.indexOf('#') : path.length;
+  const head = path.slice(0, hashAt);
+  const fragment = path.slice(hashAt);
+  return `${head}${head.includes('?') ? '&' : '?'}${query}${fragment}`;
 }
 
 function requireString(row: Record<string, unknown>, field: string, context: string): string {

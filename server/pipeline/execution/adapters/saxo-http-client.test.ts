@@ -833,6 +833,75 @@ describe('SaxoHttpBrokerClient', () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
       },
     );
+
+    it.each([
+      [
+        'a duplicated AccountKey naming another account',
+        'AccountKey=acct-key&AccountKey=other-key',
+        'AccountKey',
+      ],
+      [
+        'a duplicated ClientKey naming another client',
+        'ClientKey=client-key&ClientKey=other-key',
+        'ClientKey',
+      ],
+      ['a lower-case accountkey naming another account', 'accountkey=other-key', 'AccountKey'],
+      ['an upper-case CLIENTKEY naming another client', 'CLIENTKEY=other-key', 'ClientKey'],
+    ])('refuses to fetch page 2 when __next carries %s', async (_label, scope, key) => {
+      const reader = READERS[0] as PagedReader;
+      const fetchMock = leakyPagedFetch(
+        reader,
+        (parsed) => `${parsed.origin}${parsed.pathname}?${scope}&$skip=500`,
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(reader.read(pinnedClient())).rejects.toThrow(
+        new RegExp(`__next changed ${key} between pages \\(listOpenOrders\\)`),
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats a differently-cased scope key echoing the pinned value as present', async () => {
+      const reader = READERS[0] as PagedReader;
+      const fetchMock = leakyPagedFetch(
+        reader,
+        (parsed) =>
+          `${parsed.origin}${parsed.pathname}?accountkey=acct-key&CLIENTKEY=client-key&$skip=500`,
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      await reader.read(pinnedClient());
+
+      expect(calledPath(fetchMock, 2)).toBe(
+        'https://gateway.example/sim/openapi/port/v1/orders?accountkey=acct-key&CLIENTKEY=client-key&$skip=500',
+      );
+    });
+
+    it.each([
+      [
+        '/port/v1/orders?$skip=500#frag',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key#frag',
+      ],
+      ['/port/v1/orders#frag?x', '/port/v1/orders?AccountKey=acct-key&ClientKey=client-key#frag?x'],
+    ])('appends the missing scope before the fragment of __next %s', async (next, expected) => {
+      const reader = READERS[0] as PagedReader;
+      let pages = 0;
+      const fetchMock = vi.fn(async (url: string | URL) => {
+        const parsed = new URL(String(url));
+        if (parsed.pathname.endsWith('/port/v1/accounts/me')) return jsonResponse(TWO_ACCOUNTS);
+        pages += 1;
+        return pages === 1
+          ? jsonResponse({ Data: [reader.pinnedRow], __next: next })
+          : jsonResponse({ Data: [] });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await reader.read(pinnedClient());
+
+      const page2 = calledPath(fetchMock, 2);
+      expect(page2).toBe(`https://gateway.example/sim/openapi${expected}`);
+      expect(new URL(page2).searchParams.getAll('AccountKey')).toEqual(['acct-key']);
+    });
   });
 
   it('refuses listOpenOrders, listNetPositions, getBalances and listOrderActivities when the login has two accounts and none is pinned', async () => {
