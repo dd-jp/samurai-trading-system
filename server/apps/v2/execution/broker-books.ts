@@ -26,13 +26,25 @@ function signedPosition(position: {
 
 const PROTECTIVE_STOP_TYPES: ReadonlySet<string | undefined> = new Set(['stop', 'stop_limit']);
 
-function openOrder(order: AlpacaOrder): BrokerOpenOrder {
-  const stop = PROTECTIVE_STOP_TYPES.has(order.type);
-  const protects = order.side === 'sell' ? 'long' : 'short';
+function stopOrder(order: AlpacaOrder): BrokerOpenOrder {
+  const what = `${order.symbol} stop ${order.client_order_id}`;
   return {
     clientOrderId: order.client_order_id,
     instrument: order.symbol,
-    protects: stop ? protects : null,
+    protects: order.side === 'sell' ? 'long' : 'short',
+    qty: finite(order.qty ?? '', `${what} qty`),
+    stopPrice: finite(order.stop_price ?? '', `${what} stop price`),
+  };
+}
+
+function openOrder(order: AlpacaOrder): BrokerOpenOrder {
+  if (PROTECTIVE_STOP_TYPES.has(order.type)) return stopOrder(order);
+  return {
+    clientOrderId: order.client_order_id,
+    instrument: order.symbol,
+    protects: null,
+    qty: null,
+    stopPrice: null,
   };
 }
 

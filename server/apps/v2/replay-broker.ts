@@ -225,6 +225,8 @@ function protectiveStops(positions: ReadonlyMap<string, number>): BrokerOpenOrde
       clientOrderId: `replay-${instrument}-stop`,
       instrument,
       protects: qty > 0 ? 'long' : 'short',
+      qty: Math.abs(qty),
+      stopPrice: null,
     }));
 }
 

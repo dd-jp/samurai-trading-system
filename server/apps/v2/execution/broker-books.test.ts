@@ -25,8 +25,22 @@ describe('AlpacaBrokerBooks', () => {
         ],
         orders: [
           { client_order_id: 'entry-1', symbol: 'AAPL', side: 'buy', type: 'limit' },
-          { client_order_id: 'aapl-stop', symbol: 'AAPL', side: 'sell', type: 'stop' },
-          { client_order_id: 'msft-stop', symbol: 'MSFT', side: 'buy', type: 'stop_limit' },
+          {
+            client_order_id: 'aapl-stop',
+            symbol: 'AAPL',
+            side: 'sell',
+            type: 'stop',
+            qty: '6.5',
+            stop_price: '181.25',
+          },
+          {
+            client_order_id: 'msft-stop',
+            symbol: 'MSFT',
+            side: 'buy',
+            type: 'stop_limit',
+            qty: '3',
+            stop_price: '402.1',
+          },
           { client_order_id: 'nvda-tp', symbol: 'NVDA', side: 'buy', type: 'limit' },
           { client_order_id: 'untyped', symbol: 'NVDA', side: 'buy' },
         ],
@@ -39,11 +53,41 @@ describe('AlpacaBrokerBooks', () => {
         { instrument: 'NVDA', qty: -2 },
       ],
       openOrders: [
-        { clientOrderId: 'entry-1', instrument: 'AAPL', protects: null },
-        { clientOrderId: 'aapl-stop', instrument: 'AAPL', protects: 'long' },
-        { clientOrderId: 'msft-stop', instrument: 'MSFT', protects: 'short' },
-        { clientOrderId: 'nvda-tp', instrument: 'NVDA', protects: null },
-        { clientOrderId: 'untyped', instrument: 'NVDA', protects: null },
+        {
+          clientOrderId: 'entry-1',
+          instrument: 'AAPL',
+          protects: null,
+          qty: null,
+          stopPrice: null,
+        },
+        {
+          clientOrderId: 'aapl-stop',
+          instrument: 'AAPL',
+          protects: 'long',
+          qty: 6.5,
+          stopPrice: 181.25,
+        },
+        {
+          clientOrderId: 'msft-stop',
+          instrument: 'MSFT',
+          protects: 'short',
+          qty: 3,
+          stopPrice: 402.1,
+        },
+        {
+          clientOrderId: 'nvda-tp',
+          instrument: 'NVDA',
+          protects: null,
+          qty: null,
+          stopPrice: null,
+        },
+        {
+          clientOrderId: 'untyped',
+          instrument: 'NVDA',
+          protects: null,
+          qty: null,
+          stopPrice: null,
+        },
       ],
       cashQuote: 1000.5,
     });
@@ -56,6 +100,31 @@ describe('AlpacaBrokerBooks', () => {
       'quantity',
       { positions: [{ symbol: 'AAPL', qty: 'x', side: 'long' }] },
       'Alpaca AAPL qty "x" is not a number',
+    ],
+    [
+      'stop quantity',
+      {
+        orders: [
+          { client_order_id: 's', symbol: 'AAPL', side: 'sell', type: 'stop', stop_price: '9' },
+        ],
+      },
+      'Alpaca AAPL stop s qty "" is not a number',
+    ],
+    [
+      'stop price',
+      {
+        orders: [
+          {
+            client_order_id: 's',
+            symbol: 'AAPL',
+            side: 'sell',
+            type: 'stop',
+            qty: '3',
+            stop_price: null,
+          },
+        ],
+      },
+      'Alpaca AAPL stop s stop price "" is not a number',
     ],
   ])('refuses a %s that is not a number', async (_what, overrides, message) => {
     await expect(new AlpacaBrokerBooks(client(overrides)).read('alpaca')).rejects.toThrow(message);

@@ -1,4 +1,5 @@
 export type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
+export { tickFor } from '../../../pipeline/execution/index.js';
 export {
   type BrokerAccess,
   type BrokerAccessParts,

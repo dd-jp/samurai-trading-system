@@ -199,6 +199,7 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
             filled_qty: '0',
             filled_avg_price: null,
             filled_at: null,
+            stop_price: request.stop_loss.stop_price,
           },
         ],
       };
@@ -228,6 +229,7 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
           type: 'stop',
           order_class: 'simple',
           status: 'new',
+          stop_price: order.legs?.[1]?.stop_price ?? null,
         })),
       ),
     ),

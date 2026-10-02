@@ -426,6 +426,8 @@ export interface BrokerOpenOrder {
   readonly clientOrderId: string;
   readonly instrument: string;
   readonly protects: 'long' | 'short' | null;
+  readonly qty: number | null;
+  readonly stopPrice: number | null;
 }
 
 export interface BrokerBook {
@@ -449,6 +451,8 @@ export type ReconcileDiffKind =
   | 'position_missing_at_broker'
   | 'position_qty'
   | 'position_unprotected'
+  | 'protective_qty'
+  | 'protective_price'
   | 'order_missing_at_broker'
   | 'order_unknown_to_store'
   | 'cash'

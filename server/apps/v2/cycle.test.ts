@@ -254,6 +254,8 @@ function primaryBooksMirror(
         clientOrderId: `stop-${instrument}`,
         instrument,
         protects: qty > 0 ? ('long' as const) : ('short' as const),
+        qty: Math.abs(qty),
+        stopPrice: null,
       }));
       return Promise.resolve({
         positions: [...view.positions].map(([instrument, qty]) => ({ instrument, qty })),
@@ -4255,7 +4257,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       {
         level: 'error',
         message: expect.stringMatching(
-          /^debate\/primary AAPL: x10 split on a broker-held position, ledger qty 6 -> 60; check the venue's resting stop and bracket qty and price/,
+          /^debate\/primary AAPL: x10 split on a broker-held position, ledger qty 6 -> 60; nothing amends the venue's resting stop and bracket, reconcile blocks entries until their qty and price match$/,
         ),
       },
     ]);
@@ -4314,6 +4316,100 @@ describe('runCycle: positions held across a split (#1865)', () => {
       ),
     );
   });
+
+  const ONE_FOR_TWO: RawBar = { open: 40, high: 41, low: 39, close: 40 };
+  const oneForTwo = [
+    ...preSplit(0.5),
+    seriesBar('2026-09-28', ONE_FOR_TWO, 1),
+    seriesBar('2026-09-29', ONE_FOR_TWO, 1),
+  ];
+
+  interface RestingStop {
+    readonly qty: number;
+    readonly stopPrice: number;
+  }
+
+  function brokerStop(deps: Harness, held: number, stop: RestingStop): BrokerBookReader {
+    return {
+      read: async (venue) => {
+        const book = await deps.brokerBooks.read(venue);
+        if (venue !== 'alpaca') return book;
+        return {
+          ...book,
+          positions: [{ instrument: 'AAPL', qty: held }],
+          openOrders: [
+            ...book.openOrders.filter((order) => order.instrument !== 'AAPL'),
+            { clientOrderId: 'alpaca-stop-leg', instrument: 'AAPL', protects: 'long', ...stop },
+          ],
+        };
+      },
+    };
+  }
+
+  async function brokerHeld101Across(
+    bars: readonly DailyBar[],
+    broker: (deps: Harness, entryStop: number) => BrokerBookReader,
+  ) {
+    const alpaca = new SplitAlpaca();
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill(BROKER_ENTRY, 'entry', 101, 20);
+    deps.setDecisions([]);
+    await runCycle(withMarket(deps, bars), '2026-09-28');
+    const entryStop = deps.journal.orderFor(BROKER_ENTRY)?.payload.stop as number;
+    const across = await runCycle(
+      { ...withMarket(deps, bars), brokerBooks: broker(deps, entryStop) },
+      '2026-09-29',
+    );
+    return { deps, entries, across, entryStop };
+  }
+
+  it.each([
+    { split: '3:2 forward', bars: () => threeForTwo, held: 151, ratio: 1.5 },
+    { split: '1:2 reverse', bars: () => oneForTwo, held: 50, ratio: 0.5 },
+  ])(
+    'a $split split the broker left the 101-share stop unchanged on raises the reconcile mismatch on its qty and price and blocks entries (#1990)',
+    async ({ bars, held, ratio }) => {
+      const { deps, entries, across, entryStop } = await brokerHeld101Across(bars(), (d, stop) =>
+        brokerStop(d, held, { qty: 101, stopPrice: stop }),
+      );
+      expect(primary(deps)).toMatchObject({ qty: held, splitFactor: ratio });
+      expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+        {
+          level: 'error',
+          payload: [
+            { kind: 'protective_qty', instrument: 'AAPL', store: held, broker: 101 },
+            {
+              kind: 'protective_price',
+              instrument: 'AAPL',
+              order_id: 'alpaca-stop-leg',
+              store: expect.closeTo(entryStop / ratio, 9),
+              broker: entryStop,
+            },
+          ],
+        },
+      ]);
+      expect(across.refusals).toContainEqual(
+        expect.stringMatching(
+          /^debate\/primary: entries blocked, alpaca broker reconcile mismatch: protective_qty AAPL/,
+        ),
+      );
+    },
+  );
+
+  it.each([
+    { split: '3:2 forward', bars: () => threeForTwo, held: 151, ratio: 1.5 },
+    { split: '1:2 reverse', bars: () => oneForTwo, held: 50, ratio: 0.5 },
+  ])(
+    'a $split split whose stop the venue resized and repriced to the rescaled ledger reconciles clean',
+    async ({ bars, held, ratio }) => {
+      const { entries, across } = await brokerHeld101Across(bars(), (d, stop) =>
+        brokerStop(d, held, { qty: held, stopPrice: Math.round((stop / ratio) * 100) / 100 }),
+      );
+      expect(eventsOf(entries, 'v2_reconcile_mismatch')).toEqual([]);
+      expect(across.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+    },
+  );
 
   it('dates the cash in lieu of a late-evening broker exit by the London day, as the exit itself', async () => {
     const alpaca = new SplitAlpaca();
@@ -4594,7 +4690,13 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
         positions: [...book.positions, { instrument: 'TSLA', qty: 2 }],
         openOrders: [
           ...book.openOrders,
-          { clientOrderId: 'stop-TSLA', instrument: 'TSLA', protects: 'long' },
+          {
+            clientOrderId: 'stop-TSLA',
+            instrument: 'TSLA',
+            protects: 'long',
+            qty: 2,
+            stopPrice: null,
+          },
         ],
       }),
       'position_missing_in_store',
@@ -4615,7 +4717,13 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
         ...book,
         openOrders: [
           ...book.openOrders,
-          { clientOrderId: 'manual', instrument: 'TSLA', protects: null },
+          {
+            clientOrderId: 'manual',
+            instrument: 'TSLA',
+            protects: null,
+            qty: null,
+            stopPrice: null,
+          },
         ],
       }),
       'order_unknown_to_store',

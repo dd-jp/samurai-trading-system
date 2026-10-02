@@ -524,13 +524,13 @@ class Cycle {
     }
   }
 
-  // Nothing reads or amends the venue's resting stop and bracket after a split, and reconcile
-  // checks only that a closing-side stop exists, so a person checks its qty and price
+  // Nothing amends the venue's resting stop and bracket after a split: reconcile compares the stop's
+  // qty and price with the rescaled ledger and blocks entries until they match (#1990)
   alertBrokerSplit(bookId: string, held: Position, ratio: number, qty: number): void {
     this.log(
       'error',
       'v2_split_broker_check',
-      `${bookId} ${held.instrument}: x${ratio} split on a broker-held position, ledger qty ${held.qty} -> ${qty}; check the venue's resting stop and bracket qty and price by hand, nothing amends them`,
+      `${bookId} ${held.instrument}: x${ratio} split on a broker-held position, ledger qty ${held.qty} -> ${qty}; nothing amends the venue's resting stop and bracket, reconcile blocks entries until their qty and price match`,
     );
   }
 

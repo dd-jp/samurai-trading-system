@@ -23,6 +23,7 @@ export interface AlpacaOrder {
   filled_at: string | null;
   legs?: AlpacaOrderLeg[];
   limit_price?: string | null;
+  stop_price?: string | null;
 }
 
 export interface AlpacaBracketOrderRequest {

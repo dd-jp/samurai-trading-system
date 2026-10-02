@@ -99,8 +99,8 @@ const LEDGER: Ledger = {
 const CLEAN_BROKER: BrokerBook = {
   positions: [{ instrument: 'AAPL', qty: 6 }],
   openOrders: [
-    { clientOrderId: 'aapl-stop', instrument: 'AAPL', protects: 'long' },
-    { clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null },
+    { clientOrderId: 'aapl-stop', instrument: 'AAPL', protects: 'long', qty: 6, stopPrice: null },
+    { clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null, qty: null, stopPrice: null },
   ],
   cashQuote: 800 * FX,
 };
@@ -120,6 +120,7 @@ function harness(
     tolerance?: number | undefined;
     ledger?: Ledger;
     brokerMode?: BrokerMode;
+    entryStops?: Record<string, number>;
   } = {},
 ): Harness {
   const ledger = options.ledger ?? LEDGER;
@@ -138,6 +139,12 @@ function harness(
     },
     journal: {
       restingEntries: (bookId) => ledger.resting[bookId] ?? [],
+      orderFor: (clientOrderId) => {
+        const stop = options.entryStops?.[clientOrderId];
+        return stop === undefined
+          ? undefined
+          : { ...resting(clientOrderId, ''), payload: { stop } };
+      },
       recordReconcile: (run) => reconciles.push(run),
       recordRefusal: (refusal) => refusals.push(refusal),
     },
@@ -169,9 +176,37 @@ describe('storeView', () => {
     });
     expect(storeView(deps, 'alpaca', [PRIMARY, TREND])).toEqual({
       positions: new Map([['AAPL', 4]]),
-      openOrders: [{ clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null }],
+      openOrders: [
+        {
+          clientOrderId: 'entry-NVDA',
+          instrument: 'NVDA',
+          protects: null,
+          qty: null,
+          stopPrice: null,
+        },
+      ],
       cashGbp: 800,
+      protection: new Map([['AAPL', { entryOrderIds: ['entry-AAPL', 'entry-AAPL'], stops: [] }]]),
     });
+  });
+
+  it('carries each held entry stop into the units the ledger split factor gives it', () => {
+    const { deps } = harness(CLEAN_BROKER, {
+      ledger: {
+        ...LEDGER,
+        positions: {
+          [PRIMARY.id]: [{ ...held('AAPL', 151), splitFactor: 1.5 }],
+          [TREND.id]: [{ ...held('MSFT', 50), clientOrderId: 'entry-MSFT-2', splitFactor: 0.5 }],
+        },
+      },
+      entryStops: { 'entry-AAPL': 90, 'entry-MSFT-2': 45 },
+    });
+    expect(storeView(deps, 'alpaca', [PRIMARY, TREND]).protection).toEqual(
+      new Map([
+        ['AAPL', { entryOrderIds: ['entry-AAPL'], stops: [60] }],
+        ['MSFT', { entryOrderIds: ['entry-MSFT-2'], stops: [90] }],
+      ]),
+    );
   });
 });
 
@@ -255,7 +290,13 @@ describe('reconcileBooks', () => {
       positions: [...CLEAN_BROKER.positions, { instrument: 'MSFT', qty: 5 }],
       openOrders: [
         ...CLEAN_BROKER.openOrders,
-        { clientOrderId: 'msft-stop', instrument: 'MSFT', protects: 'long' },
+        {
+          clientOrderId: 'msft-stop',
+          instrument: 'MSFT',
+          protects: 'long',
+          qty: 5,
+          stopPrice: null,
+        },
       ],
     });
     const outcome = await reconcileBooks(deps, DATE);
@@ -369,7 +410,21 @@ describe('reconcileBooks', () => {
 
   it('pools every primary book on one account: a position split across books reconciles clean', async () => {
     const { deps, reconciles } = harness(
-      { ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 9 }], cashQuote: 1_700 * FX },
+      {
+        ...CLEAN_BROKER,
+        positions: [{ instrument: 'AAPL', qty: 9 }],
+        openOrders: [
+          ...CLEAN_BROKER.openOrders,
+          {
+            clientOrderId: 'aapl-trend-stop',
+            instrument: 'AAPL',
+            protects: 'long',
+            qty: 3,
+            stopPrice: null,
+          },
+        ],
+        cashQuote: 1_700 * FX,
+      },
       {
         ledger: {
           books: [PRIMARY, TREND],

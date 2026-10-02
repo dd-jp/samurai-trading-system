@@ -198,7 +198,9 @@ describe('JournalReplayBrokerBooks', () => {
         ['UP', 3],
         ['DN', -2],
       ]),
-      openOrders: [{ clientOrderId: 'rest', instrument: 'NEW', protects: null }],
+      openOrders: [
+        { clientOrderId: 'rest', instrument: 'NEW', protects: null, qty: null, stopPrice: null },
+      ],
     }));
 
   it('mirrors the replayed store, each position guarded, after a clean journalled reconcile', async () => {
@@ -209,9 +211,21 @@ describe('JournalReplayBrokerBooks', () => {
         { instrument: 'DN', qty: -2 },
       ],
       openOrders: [
-        { clientOrderId: 'rest', instrument: 'NEW', protects: null },
-        { clientOrderId: 'replay-UP-stop', instrument: 'UP', protects: 'long' },
-        { clientOrderId: 'replay-DN-stop', instrument: 'DN', protects: 'short' },
+        { clientOrderId: 'rest', instrument: 'NEW', protects: null, qty: null, stopPrice: null },
+        {
+          clientOrderId: 'replay-UP-stop',
+          instrument: 'UP',
+          protects: 'long',
+          qty: 3,
+          stopPrice: null,
+        },
+        {
+          clientOrderId: 'replay-DN-stop',
+          instrument: 'DN',
+          protects: 'short',
+          qty: 2,
+          stopPrice: null,
+        },
       ],
       cashQuote: 0,
     });

@@ -61,6 +61,7 @@ export {
   SaxoTokenRefresher,
   StaticSaxoTokenSource,
 } from './adapters/saxo-token-source.js';
+export { tickFor } from './adapters/us-equity-price-tick.js';
 export type { DormantLegsUnresolvedAlertChannel } from './dormant-legs-unresolved-alert.js';
 export { ExecutionImpl, executeVerdict } from './execute.js';
 export {

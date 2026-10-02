@@ -7,6 +7,7 @@ import type {
   DecisionJournal,
   MarketData,
   OrderExecutor,
+  Position,
   ReconcileDiff,
   ReconcileSource,
   ReconcileStatus,
@@ -16,12 +17,21 @@ import type {
 import type { Logger } from '../../shared/index.js';
 import { describeThrownSafely, logIfPresent } from '../../shared/index.js';
 import { quotePerGbp } from './data/index.js';
-import { type CashRule, compareVenue, type VenueView } from './reconcile-compare.js';
+import {
+  type CashRule,
+  compareVenue,
+  type HeldProtection,
+  type StoreView,
+  type VenueView,
+} from './reconcile-compare.js';
 
 export interface ReconcileDeps {
   readonly registry: Pick<SleeveSource, 'ids'>;
   readonly books: Pick<BookLedger, 'forSleeve' | 'positions' | 'cash'>;
-  readonly journal: Pick<DecisionJournal, 'restingEntries' | 'recordReconcile' | 'recordRefusal'>;
+  readonly journal: Pick<
+    DecisionJournal,
+    'restingEntries' | 'orderFor' | 'recordReconcile' | 'recordRefusal'
+  >;
   readonly executor: Pick<OrderExecutor, 'simulates'>;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly brokerBooks: BrokerBookReader;
@@ -92,11 +102,33 @@ function netByInstrument(
   return positions;
 }
 
+// The entry's stop is journalled in the units it was priced in; the ledger's split factor carries
+// it into the units the venue now quotes
+function nativeStop(deps: Pick<ReconcileDeps, 'journal'>, held: Position): number[] {
+  const stop = deps.journal.orderFor(held.clientOrderId)?.payload.stop;
+  return typeof stop === 'number' ? [stop / held.splitFactor] : [];
+}
+
+function protectionByInstrument(
+  deps: Pick<ReconcileDeps, 'journal'>,
+  held: readonly Position[],
+): Map<string, HeldProtection> {
+  const protection = new Map<string, HeldProtection>();
+  for (const position of held) {
+    const known = protection.get(position.instrument) ?? { entryOrderIds: [], stops: [] };
+    protection.set(position.instrument, {
+      entryOrderIds: [...known.entryOrderIds, position.clientOrderId],
+      stops: [...known.stops, ...nativeStop(deps, position)],
+    });
+  }
+  return protection;
+}
+
 export function storeView(
   deps: Pick<ReconcileDeps, 'books' | 'journal'>,
   venue: Venue,
   books: readonly BookSpec[],
-): VenueView {
+): StoreView {
   const held = books
     .flatMap((book) => deps.books.positions(book.id))
     .filter((position) => position.venue === venue);
@@ -109,8 +141,11 @@ export function storeView(
       clientOrderId: order.client_order_id,
       instrument: order.instrument,
       protects: null,
+      qty: null,
+      stopPrice: null,
     })),
     cashGbp: books.reduce((sum, book) => sum + deps.books.cash(book.id), 0),
+    protection: protectionByInstrument(deps, held),
   };
 }
 
