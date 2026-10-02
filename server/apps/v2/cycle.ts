@@ -1000,7 +1000,7 @@ class Cycle {
     book: BookSpec,
     order: JournalledOrder,
     level: 'error' | 'warn',
-    event: string,
+    event: 'v2_entry_fill_read_failed' | 'v2_cancel_failed',
     error: unknown,
   ): undefined {
     this.#pendingEntries.add(positionKey(book.id, order.instrument));
