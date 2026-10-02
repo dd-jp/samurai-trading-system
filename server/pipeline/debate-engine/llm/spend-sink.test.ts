@@ -495,6 +495,27 @@ describe('SqliteLlmSpendStore — prompt-tier crossing warning (#1155)', () => {
     ).not.toThrow();
   });
 
+  it('keeps a crossing streak across a failed attempt that did not cross, but resets it on an answered one', () => {
+    const db = openSharedStore(':memory:');
+    const throttle = new PromptTierCrossingThrottle();
+    const store = new SqliteLlmSpendStore(db, undefined, false, recordingChannel(), throttle);
+    const base = {
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'x-ai/grok-4.5',
+      latency_ms: 10,
+      timestamp: NOW,
+    };
+    const zero = { input_tokens: 0, output_tokens: 0 };
+
+    store.record({ ...base, usage: CROSSING_USAGE });
+    store.record({ ...base, usage: zero, error_class: 'LlmRateLimitError' });
+    expect(throttle.observe('x-ai/grok-4.5', true).consecutive).toBe(2);
+
+    store.record({ ...base, usage: zero });
+    expect(throttle.observe('x-ai/grok-4.5', true).consecutive).toBe(1);
+  });
+
   it('shares one throttle across two stores the way production.ts wires the debate and sentiment sinks', () => {
     const db = openSharedStore(':memory:');
     const channel = recordingChannel();

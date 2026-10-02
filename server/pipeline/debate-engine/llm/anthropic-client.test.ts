@@ -681,7 +681,7 @@ describe('AnthropicLlmClient spend metering', () => {
     expect(sink.records[0]?.ttfb_ms).toBeUndefined();
   });
 
-  it('records nothing when the wire client returns no usage block', async () => {
+  it('records an answer with no usage block at zero usage, so its text is still journalled', async () => {
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(textResponse('good')),
     };
@@ -693,7 +693,8 @@ describe('AnthropicLlmClient spend metering', () => {
     );
 
     await client.complete(request());
-    expect(sink.records).toHaveLength(0);
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]).toMatchObject({ usage: { input_tokens: 0, output_tokens: 0 } });
   });
 
   it('meters a refused response, which the provider still billed (#1391)', async () => {
@@ -1087,9 +1088,11 @@ describe('AnthropicLlmClient bills replies the transport rejected', () => {
       expect(sink.records[0]).toMatchObject({
         model: 'openai/gpt-5.6-luna',
         usage,
-        response: '',
+        error_class: type.name,
+        error_message: error.message,
         stage: 'debate',
       });
+      expect(sink.records[0]?.response).toBeUndefined();
       expect(sink.records[0]?.prompt).toContain('analyze this');
       expect(typeof sink.records[0]?.latency_ms).toBe('number');
     },
@@ -1119,7 +1122,25 @@ describe('AnthropicLlmClient bills replies the transport rejected', () => {
     expect(misnamed.records[0]?.model).toBe('openai/gpt-5.6-luna');
   });
 
-  it('records nothing for an error that carries no usage or a malformed one', async () => {
+  it('meters an unbilled failure under the configured priced model when one is set', async () => {
+    const sink = recordingSink();
+    await new AnthropicLlmClient(
+      { createMessage: vi.fn().mockRejectedValue(new LlmProviderError('down')) },
+      {
+        model: 'wire/model',
+        pricedModel: 'priced/model',
+        max_tokens: 100,
+        timeoutMs: 1000,
+        retry: NO_RETRY,
+      },
+      sink,
+    )
+      .complete(request())
+      .catch(() => {});
+    expect(sink.records[0]?.model).toBe('priced/model');
+  });
+
+  it('records a zero-usage row with the error class for an error that carries no usage or a malformed one', async () => {
     for (const error of [
       new LlmProviderError('down'),
       new LlmRateLimitError('slow'),
@@ -1139,11 +1160,63 @@ describe('AnthropicLlmClient bills replies the transport rejected', () => {
       await clientThrowing(error, sink)
         .complete(request())
         .catch(() => {});
-      expect(sink.records).toHaveLength(0);
+      expect(sink.records).toHaveLength(1);
+      expect(sink.records[0]).toMatchObject({
+        model: 'openai/gpt-5.6-luna',
+        usage: { input_tokens: 0, output_tokens: 0 },
+        error_class: error.name,
+        error_message: error.message,
+      });
+      expect(sink.records[0]?.prompt).toContain('analyze this');
     }
   });
 
-  it('does not bill a rate-limited retry twice: only the attempt that carried usage is recorded', async () => {
+  it('tells a status timeout from a deadline one, and names a non-Error throw by its type', async () => {
+    const status = recordingSink();
+    await clientThrowing(new LlmTimeoutError('gateway', 'status'), status)
+      .complete(request())
+      .catch(() => {});
+    expect(status.records[0]?.error_class).toBe('LlmTimeoutError:status');
+    const deadline = recordingSink();
+    await clientThrowing(new LlmTimeoutError('slow'), deadline)
+      .complete(request())
+      .catch(() => {});
+    expect(deadline.records[0]?.error_class).toBe('LlmTimeoutError:deadline');
+    const odd = recordingSink();
+    await new AnthropicLlmClient(
+      { createMessage: () => Promise.reject('bare string' as unknown as Error) },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      odd,
+    )
+      .complete(request())
+      .catch(() => {});
+    expect(odd.records[0]).toMatchObject({
+      error_class: 'LlmProviderError',
+      error_message: 'bare string',
+    });
+  });
+
+  it('records the stop reason of an answered call and no error', async () => {
+    const sink = recordingSink();
+    await new AnthropicLlmClient(
+      {
+        createMessage: vi.fn().mockResolvedValue({
+          content: [{ type: 'text', text: '{}' }],
+          usage,
+          stop_reason: 'refusal',
+        }),
+      },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    )
+      .complete(request())
+      .catch(() => {});
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]).toMatchObject({ stop_reason: 'refusal', response: '{}' });
+    expect(sink.records[0]?.error_class).toBeUndefined();
+  });
+
+  it('records each attempt once: the unbilled rate-limit at zero usage, the billed one with its usage', async () => {
     const sink = recordingSink();
     const createMessage = vi
       .fn()
@@ -1161,6 +1234,9 @@ describe('AnthropicLlmClient bills replies the transport rejected', () => {
     );
     await expect(client.complete(request())).rejects.toBeInstanceOf(LlmTruncatedError);
     expect(createMessage).toHaveBeenCalledTimes(2);
-    expect(sink.records).toHaveLength(1);
+    expect(sink.records.map((entry) => [entry.error_class, entry.usage])).toEqual([
+      ['LlmRateLimitError', { input_tokens: 0, output_tokens: 0 }],
+      ['LlmTruncatedError', usage],
+    ]);
   });
 });

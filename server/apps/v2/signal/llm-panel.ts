@@ -57,6 +57,7 @@ function clientFor(deps: LlmPanelDeps, pin: ModelPin, maxTokens: number): LlmCli
     deps.transportFor(pin),
     {
       model: pin.wire,
+      pricedModel: pin.priced,
       max_tokens: maxTokens,
       timeoutMs: LLM_CALL_TIMEOUT_MS,
       retry: LLM_RETRY,

@@ -5,8 +5,15 @@ import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SleeveDecision } from '../../../contracts/index.js';
-import type { AnthropicMessageRequest } from '../../pipeline/debate-engine/index.js';
-import { MAX_CAPTURED_PROMPT_CHARS } from '../../pipeline/debate-engine/index.js';
+import type {
+  AnthropicMessageRequest,
+  AnthropicMessagesClient,
+} from '../../pipeline/debate-engine/index.js';
+import {
+  LlmProviderError,
+  LlmRateLimitError,
+  MAX_CAPTURED_PROMPT_CHARS,
+} from '../../pipeline/debate-engine/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
@@ -72,14 +79,21 @@ function answer(request: AnthropicMessageRequest): string {
 
 let directory: string;
 let options: ReplayCliOptions;
-let fixture: {
-  barStoreRoot: string;
-  constituentsPath: string;
-  fxPath: string;
-  spreadsPath: string;
+let files: Omit<ReplayCliOptions, 'storePath' | 'venueSessions'>;
+
+const FIXTURE_NEWS: NewsSource = {
+  headlines: (symbol) =>
+    Promise.resolve(symbol === 'UP' ? ['UP beats estimates', 'UP raises guidance'] : []),
 };
 
-async function runFixtureDay(storePath: string, newsSource: NewsSource): Promise<void> {
+const scripted = (pin: ModelPin) => new ScriptedTransport(pin, answer);
+
+async function seedDay(
+  name: string,
+  transportFor: (pin: ModelPin) => AnthropicMessagesClient,
+  newsSource: NewsSource = FIXTURE_NEWS,
+): Promise<ReplayCliOptions> {
+  const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
   new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
     2026,
@@ -88,15 +102,18 @@ async function runFixtureDay(storePath: string, newsSource: NewsSource): Promise
   );
   seed.close();
   const root = composeV2Root({
-    ...fixture,
-    tradingDate: TRADING_DATE,
+    tradingDate: files.tradingDate,
+    barStoreRoot: files.barStoreRoot,
+    constituentsPath: files.constituentsPath,
+    fxPath: files.fxPath,
+    spreadsPath: files.spreadsPath,
+    cfdCataloguePath: files.cfdCataloguePath,
     dryRun: true,
     storePath,
-    cfdCataloguePath: join(directory, 'absent-catalogue.json'),
     clock: new SimulatedClock(new Date(`${TRADING_DATE}T07:30:00.000Z`)),
     logger: { log: () => {} },
     venueSessions: OPEN_EVERY_DAY,
-    transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer),
+    transportFor,
     newsSource,
   });
   try {
@@ -104,6 +121,7 @@ async function runFixtureDay(storePath: string, newsSource: NewsSource): Promise
   } finally {
     root.close();
   }
+  return { ...files, storePath, venueSessions: OPEN_EVERY_DAY };
 }
 
 beforeAll(async () => {
@@ -121,24 +139,16 @@ beforeAll(async () => {
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\nUP,10,0\n');
-  const storePath = join(directory, 'paper.sqlite');
-  fixture = { barStoreRoot, constituentsPath, fxPath, spreadsPath };
-  await runFixtureDay(storePath, {
-    headlines: (symbol) =>
-      Promise.resolve(symbol === 'UP' ? ['UP beats estimates', 'UP raises guidance'] : []),
-  });
-  const cfdCataloguePath = join(directory, 'absent-catalogue.json');
-  options = {
+  files = {
     tradingDate: TRADING_DATE,
-    storePath,
     barStoreRoot,
     constituentsPath,
     fxPath,
-    cfdCataloguePath,
     spreadsPath,
+    cfdCataloguePath: join(directory, 'absent-catalogue.json'),
     saxoSpreadsPath: join(directory, 'absent-saxo-spreads.csv'),
-    venueSessions: OPEN_EVERY_DAY,
   };
+  options = await seedDay('paper', scripted);
 });
 
 afterAll(() => {
@@ -157,6 +167,8 @@ function tamperedCopy(name: string, sql: string): ReplayCliOptions {
   db.close();
   return { ...options, storePath };
 }
+
+const NO_OUTCOME = { stopReason: null, errorClass: null, errorMessage: null } as const;
 
 const DEBATE_CALLS = `SELECT id FROM llm_call_log WHERE trace_id LIKE 'v2-${TRADING_DATE}-UP'`;
 
@@ -231,17 +243,20 @@ describe('replayFromFiles', () => {
     expect(result.divergences.some((entry) => entry.kind === 'decision_field')).toBe(true);
   });
 
-  it('fails closed on a logged response the capture cap truncated', async () => {
-    const long = `${'x'.repeat(4_096)}… (truncated, 5000 chars total)`;
-    const result = await replayFromFiles(
-      tamperedCopy(
-        'truncated',
-        `UPDATE llm_call_log SET response = '${long}' WHERE model = 'anthropic/claude-opus-5.5'`,
-      ),
-    );
-    const [first] = result.divergences;
-    expect(first?.kind === 'llm_request' && first.miss.kind).toBe('response_truncated');
-  });
+  it.each([16_384, 4_096])(
+    'fails closed on a logged response a %i-character capture cap truncated',
+    async (cap) => {
+      const long = `${'x'.repeat(cap)}… (truncated, 20000 chars total)`;
+      const result = await replayFromFiles(
+        tamperedCopy(
+          `truncated-${cap}`,
+          `UPDATE llm_call_log SET response = '${long}' WHERE model = 'anthropic/claude-opus-5.5'`,
+        ),
+      );
+      const [first] = result.divergences;
+      expect(first?.kind === 'llm_request' && first.miss.kind).toBe('response_truncated');
+    },
+  );
 
   it('names changed bars as an inputs hash divergence before the requests they change', async () => {
     const barStoreRoot = join(directory, 'revised-parquet');
@@ -293,11 +308,10 @@ describe('replay from the US headline journal (#1981)', { timeout: 30_000 }, () 
       new SqliteNewsLedger(guardedStore(writer, 'v2')),
     );
     try {
-      await runFixtureDay(storePath, news);
+      capped = await seedDay('capped', scripted, news);
     } finally {
       writer.close();
     }
-    capped = { ...options, storePath };
   }, 30_000);
 
   it('replays identical a name whose logged prompt hit the capture cap', async () => {
@@ -349,11 +363,10 @@ describe('replay from the UK headline journal (#1981)', { timeout: 30_000 }, () 
       ledger: new SqliteNewsLedger(guardedStore(writer, 'v2')),
     });
     try {
-      await runFixtureDay(storePath, news);
+      capped = await seedDay('capped-uk', scripted, news);
     } finally {
       writer.close();
     }
-    capped = { ...options, storePath };
   }, 30_000);
 
   it('replays identical a UK name whose logged prompt hit the capture cap, from its marketaux rows', async () => {
@@ -381,6 +394,109 @@ describe('replay from the UK headline journal (#1981)', { timeout: 30_000 }, () 
     expect(fallback.divergences).toContainEqual(
       expect.objectContaining({ instrument: 'UP', field: 'inputs_hash', replayed: '' }),
     );
+  });
+});
+
+function failingOnce(
+  pin: ModelPin,
+  persona: string,
+  failure: () => Error,
+): AnthropicMessagesClient {
+  const scripted = new ScriptedTransport(pin, answer);
+  let failed = false;
+  return {
+    createMessage: (request, callOptions) => {
+      if (!failed && (request.messages[0]?.content ?? '').includes(persona)) {
+        failed = true;
+        return Promise.reject(failure());
+      }
+      return scripted.createMessage(request, callOptions);
+    },
+  };
+}
+
+function refusingJudge(pin: ModelPin): AnthropicMessagesClient {
+  const retried = failingOnce(pin, 'Bull persona', () => new LlmRateLimitError('Nous 429: slow'));
+  return {
+    createMessage: (request, callOptions) =>
+      (request.messages[0]?.content ?? '').includes('Mediator persona')
+        ? Promise.resolve({
+            content: [{ type: 'text', text: '' }],
+            usage: { input_tokens: 12, output_tokens: 0 },
+            stop_reason: 'refusal',
+            model: pin.priced,
+          })
+        : retried.createMessage(request, callOptions),
+  };
+}
+
+describe('replayFromFiles on failed calls (#1980)', () => {
+  let refused: ReplayCliOptions;
+  let failed: ReplayCliOptions;
+
+  beforeAll(async () => {
+    refused = await seedDay('refused', refusingJudge);
+    failed = await seedDay('failed', (pin) =>
+      failingOnce(pin, 'Bear persona', () => new LlmProviderError('Nous 503: upstream down')),
+    );
+  });
+
+  function rowsOf(path: string, sql: string): unknown[] {
+    const db = new BetterSqlite3(path, { readonly: true });
+    try {
+      return db.prepare(sql).all();
+    } finally {
+      db.close();
+    }
+  }
+
+  it('journals an unbilled retried failure and a refusal, and replays the day identical', async () => {
+    expect(
+      rowsOf(
+        refused.storePath,
+        `SELECT l.error_class, l.error_message, l.stop_reason, l.response, s.cost_usd
+           FROM llm_call_log l JOIN llm_spend s ON s.id = l.spend_id
+          WHERE l.error_class IS NOT NULL OR l.stop_reason = 'refusal' ORDER BY l.id`,
+      ),
+    ).toEqual([
+      {
+        error_class: 'LlmRateLimitError',
+        error_message: 'Nous 429: slow',
+        stop_reason: null,
+        response: null,
+        cost_usd: 0,
+      },
+      {
+        error_class: null,
+        error_message: null,
+        stop_reason: 'refusal',
+        response: '',
+        cost_usd: expect.any(Number),
+      },
+    ]);
+    expect(rowsOf(refused.storePath, 'SELECT DISTINCT reason FROM v2_decisions')).toContainEqual({
+      reason: expect.stringContaining('LLM refused to answer'),
+    });
+    const result = await replayFromFiles(refused);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('replays an unbilled failure that ended the debate to the same reason', async () => {
+    expect(rowsOf(failed.storePath, 'SELECT DISTINCT reason FROM v2_decisions')).toContainEqual({
+      reason: 'llm_error:Nous 503: upstream down',
+    });
+    const result = await replayFromFiles(failed);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges when a logged failure is changed', async () => {
+    const storePath = join(directory, 'failed-tampered.sqlite');
+    copyFileSync(failed.storePath, storePath);
+    const db = new BetterSqlite3(storePath);
+    db.exec(`UPDATE llm_call_log SET error_message = 'other' WHERE error_class IS NOT NULL`);
+    db.close();
+    const result = await replayFromFiles({ ...failed, storePath });
+    expect(result.divergences[0]).toMatchObject({ kind: 'decision_field', field: 'reason' });
   });
 });
 
@@ -521,7 +637,7 @@ describe('compareDecision', () => {
 describe('divergencesOf', () => {
   it('orders inputs, then requests, then outputs, then calls never requested', () => {
     const log = new ReplayLog([
-      { id: 7, traceId: 'v2-x-UP', model: 'm', prompt: 'p', response: 'r' },
+      { ...NO_OUTCOME, id: 7, traceId: 'v2-x-UP', model: 'm', prompt: 'p', response: 'r' },
     ]);
     expect(() => log.serve('m', 'q')).toThrow('request_not_logged');
     const replayed = new Map([
@@ -572,6 +688,7 @@ describe('formatReplay', () => {
     divergences,
   });
   const logged: LoggedCall = {
+    ...NO_OUTCOME,
     id: 4,
     traceId: 'v2-2026-09-30-UP',
     model: 'm',
@@ -678,6 +795,7 @@ describe('main redaction', () => {
     const lines: string[] = [];
     const prefix = 'p'.repeat(70);
     const call: LoggedCall = {
+      ...NO_OUTCOME,
       id: 1,
       traceId: 'v2-2026-09-30-UP',
       model: 'm',

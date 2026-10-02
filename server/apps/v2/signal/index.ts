@@ -75,6 +75,7 @@ export { BULLISH_SCRIPT, ScriptedTransport } from './scripted-transport.js';
 export {
   MIN_SECRET_LENGTH,
   type SecretSource,
+  secretGuardedSink,
   secretsFromEnv,
   secretWireForms,
 } from './secret-guard.js';

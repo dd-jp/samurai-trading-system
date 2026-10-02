@@ -96,7 +96,7 @@ describe('AnthropicLlmClient prompt capture', () => {
     expect(sink.records[0]?.usage?.input_tokens).toBe(120);
   });
 
-  it('captures nothing for an unmetered call', async () => {
+  it('captures an unmetered call at zero usage', async () => {
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'good' }] }),
     };
@@ -104,10 +104,14 @@ describe('AnthropicLlmClient prompt capture', () => {
 
     await new AnthropicLlmClient(wire, CONFIG, sink).complete(request());
 
-    expect(sink.records).toEqual([]);
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]).toMatchObject({
+      usage: { input_tokens: 0, output_tokens: 0 },
+      response: 'good',
+    });
   });
 
-  it('captures nothing when the call itself throws', async () => {
+  it('captures the prompt and the error, and no response, when the call itself throws', async () => {
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockRejectedValue(new Error('upstream exploded')),
     };
@@ -115,7 +119,13 @@ describe('AnthropicLlmClient prompt capture', () => {
 
     await expect(new AnthropicLlmClient(wire, CONFIG, sink).complete(request())).rejects.toThrow();
 
-    expect(sink.records).toEqual([]);
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]).toMatchObject({
+      usage: { input_tokens: 0, output_tokens: 0 },
+      error_class: 'LlmProviderError',
+      error_message: 'upstream exploded',
+    });
+    expect(sink.records[0]?.response).toBeUndefined();
   });
 
   it('does not fail the call when the sink throws while capturing', async () => {

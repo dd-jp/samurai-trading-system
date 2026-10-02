@@ -526,6 +526,37 @@ describe('composeV2Root', () => {
     }
   });
 
+  it('wires the #1881 secret guard into the LLM call log: a prompt carrying a known secret lands withheld (#1980)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const secret = 'fake-alpaca-secret-in-a-headline';
+    const storePath = join(fixtures.directory, 'guarded.sqlite');
+    seededStore(storePath).close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      logger: { log: () => {} },
+      knownSecrets: () => [{ name: 'ALPACA_API_SECRET', value: secret }],
+      newsSource: { headlines: () => Promise.resolve([`UP leaks ${secret}`]) },
+    });
+    try {
+      await root.run();
+      const rows = root.db
+        .prepare('SELECT prompt, response, error_class FROM llm_call_log')
+        .all() as { prompt: string | null; error_class: string | null }[];
+      expect(rows.length).toBeGreaterThan(0);
+      expect(
+        rows.every((row) => row.prompt === null && row.error_class === 'secret_withheld'),
+      ).toBe(true);
+      expect(JSON.stringify(rows)).not.toContain(secret);
+    } finally {
+      root.close();
+    }
+  });
+
   it('dry run: sizes, reaches the dry-run broker, submits nothing, journals every LLM call and fill', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;

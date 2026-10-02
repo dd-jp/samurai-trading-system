@@ -25,11 +25,14 @@ export interface LlmSpendRecord {
   prompt?: string | undefined;
   response?: string | undefined;
   prompt_template_hash?: string | undefined;
+  stop_reason?: string | undefined;
+  error_class?: string | undefined;
+  error_message?: string | undefined;
 }
 
 export const MAX_CAPTURED_PROMPT_CHARS = 16_384;
 
-export const MAX_CAPTURED_RESPONSE_CHARS = 4_096;
+export const MAX_CAPTURED_RESPONSE_CHARS = 16_384;
 
 export interface LlmSpendSink {
   record(entry: LlmSpendRecord): void;
@@ -161,6 +164,8 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
 
   private maybeAlertPromptTierCrossing(entry: LlmSpendRecord): void {
     const crossed = crossesPromptTier(entry.model, entry.usage);
+    // A failed attempt may extend a crossing streak but never resets it: its usage is usually zero
+    if (!crossed && entry.error_class !== undefined) return;
     const { alert, consecutive } = this.promptTierThrottle.observe(entry.model, crossed);
     if (!alert) return;
 
@@ -180,19 +185,18 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
   }
 
   private recordText(entry: LlmSpendRecord, spendId: number): void {
-    if (!this.captureText) return;
-    if (entry.prompt === undefined && entry.response === undefined) return;
+    if (!this.captureText || !hasCallText(entry)) return;
 
-    const prompt =
-      entry.prompt === undefined ? null : maskAndCap(entry.prompt, MAX_CAPTURED_PROMPT_CHARS);
-    const response =
-      entry.response === undefined ? null : maskAndCap(entry.response, MAX_CAPTURED_RESPONSE_CHARS);
+    const prompt = cappedOrNull(entry.prompt, MAX_CAPTURED_PROMPT_CHARS);
+    const response = cappedOrNull(entry.response, MAX_CAPTURED_RESPONSE_CHARS);
+    const errorMessage = cappedOrNull(entry.error_message, MAX_CAPTURED_RESPONSE_CHARS);
 
     this.db
       .prepare(
         `INSERT INTO llm_call_log (
-           spend_id, trace_id, stage, debate_id, model, prompt, response, timestamp
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           spend_id, trace_id, stage, debate_id, model, prompt, response, timestamp,
+           stop_reason, error_class, error_message
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         spendId,
@@ -203,6 +207,9 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         prompt,
         response,
         toStoredTimestamp(entry.timestamp),
+        entry.stop_reason ?? null,
+        entry.error_class ?? null,
+        errorMessage,
       );
 
     this.logger?.log({
@@ -220,6 +227,8 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         cost_usd: priceUsage(entry.model, entry.usage),
         latency_ms: entry.latency_ms,
         ttfb_ms: entry.ttfb_ms,
+        stop_reason: entry.stop_reason,
+        error_class: entry.error_class,
         prompt,
         response,
       },
@@ -227,4 +236,14 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       duration_ms: entry.latency_ms,
     });
   }
+}
+
+function hasCallText(entry: LlmSpendRecord): boolean {
+  return [entry.prompt, entry.response, entry.stop_reason, entry.error_class].some(
+    (field) => field !== undefined,
+  );
+}
+
+function cappedOrNull(text: string | undefined, maxChars: number): string | null {
+  return text === undefined ? null : maskAndCap(text, maxChars);
 }
