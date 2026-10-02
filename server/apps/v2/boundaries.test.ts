@@ -129,10 +129,13 @@ const ALLOWED_CAPITAL_LITERALS = new Set([
   'server/apps/v2/backtest-verdict.ts:CAPITAL_CEILING_DRAWDOWN_MULTIPLE',
   'server/apps/v2/backtest-cli.ts:BACKTEST_START_CAPITAL_GBP',
   'server/apps/v2/backtest-cli.ts:BACKTEST_LOSS_CAP_GBP',
+  'server/apps/v2/backtest-cli.ts:VOL_TARGET_INDEX_START_CAPITAL_GBP',
   'server/apps/v2/signal/cross-asset-trend.ts:CAPITAL_SHARE',
   'server/apps/v2/signal/cross-asset-trend.ts:minimumCapitalGbp',
   'server/apps/v2/signal/mean-reversion.ts:CAPITAL_SHARE',
   'server/apps/v2/signal/mean-reversion.ts:minimumCapitalGbp',
+  'server/apps/v2/signal/vol-target-index.ts:CAPITAL_SHARE',
+  'server/apps/v2/signal/vol-target-index.ts:minimumCapitalGbp',
 ]);
 
 describe('capital literals', () => {
