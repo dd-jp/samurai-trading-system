@@ -33,8 +33,8 @@ Source: the comments on [#1908](https://github.com/dd-jp/samurai-trading-system/
 2026-09-29 ([comment](https://github.com/dd-jp/samurai-trading-system/issues/1908#issuecomment-5893236088)), live Saxo:
 
 - The keep-alive's `main()` ran against the real live token file through a wrapper with an explicit token path: exit 0, refreshed.
-- `refreshTokenExpiresAt` moved to `obtainedAt` + 60 minutes, measured twice (15:48Z to 16:11Z to 16:22Z), so each refresh extends the chain.
-- This run did not go through the `npm run saxo:keepalive` entrypoint guard or the plist.
+- `refreshTokenExpiresAt` moved to `obtainedAt` + 60 minutes, measured twice (15:48 to 16:11 to 16:22, times as reported), so each refresh extends the chain.
+- This run did not go through the script's entrypoint, `npm run saxo:keepalive` or the plist.
 
 2026-09-30 ([comment](https://github.com/dd-jp/samurai-trading-system/issues/1908#issuecomment-5907286519)), on David's Mac:
 
@@ -43,11 +43,12 @@ Source: the comments on [#1908](https://github.com/dd-jp/samurai-trading-system/
 - `data/logs/saxo-keepalive.jsonl` shows launchd-driven refreshes every 10 minutes since 2026-09-29 15:22Z with no failures. Each one rotates the token and moves the refresh expiry to obtained + 60 minutes. <!-- cite-exempt: untracked — gitignored local log on David's Mac -->
 - The chain had lived about 18 hours, so Saxo applies no absolute session cap under 18 hours.
 
-2026-10-01 ([comment](https://github.com/dd-jp/samurai-trading-system/issues/1908#issuecomment-5940228222)): a triage against main `a27fa67f` re-confirmed the points above (bootstrapped, 91 runs, exit 0, pinned node path exists, 10-minute refreshes) and left the items under "Still unverified" open.
+2026-10-01 ([comment](https://github.com/dd-jp/samurai-trading-system/issues/1908#issuecomment-5940228222)): a triage against main `a27fa67f` restated the same facts (bootstrapped, 91 runs, exit 0, pinned node path exists, 10-minute refreshes) without re-measuring them. Its open list was the absolute session age cap, revocation on rotated-token reuse and a manual `npm run saxo:keepalive` run.
 
 ## Still unverified
 
 - whether Saxo caps absolute session age beyond about 18 hours, which only the running chain can answer;
 - whether Saxo revokes the chain on reuse of a rotated refresh token, which has not been provoked;
-- a manual `npm run saxo:keepalive` run: the 2026-09-29 run used a wrapper around `main()`, and the launchd runs use the plist command, so the npm script's entrypoint guard has no recorded run of its own;
+- a manual `npm run saxo:keepalive` run. The launchd runs execute the same script file, so its entrypoint guard (`runWhenInvoked`) is already exercised; a manual run would add only the npm script's own command line (relative script path, cwd-relative `.env.local`, the shell's node);
+- the `plutil -lint` result for the plist, which the comments do not report;
 - real Telegram delivery of the alert.
