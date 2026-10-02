@@ -328,6 +328,40 @@ describe('compareVenue: the protective stop against the position (#1990)', () =>
     expect(penny(0.5003)).toMatchObject([{ kind: 'protective_price' }]);
   });
 
+  it('checks the position even when another name has an entry working', () => {
+    const other = stop('MSFT', 'entry-msft', null, sized(null));
+    expect(
+      compareVenue(
+        view({ AAPL: 151 }, [other], 1_000, aapl([60])),
+        broker(151, other, stop('AAPL', 'leg', 'long', sized(101, 60))),
+        NO_CASH,
+      ),
+    ).toEqual([
+      { kind: 'protective_qty', instrument: 'AAPL', order_id: null, store: 151, broker: 101 },
+    ]);
+  });
+
+  it('skips the qty when any stop on the name has none reported, and a price with no held protection', () => {
+    expect(
+      compareVenue(
+        store(151, [60]),
+        broker(
+          151,
+          stop('AAPL', 'leg-a', 'long', sized(null, 60)),
+          stop('AAPL', 'leg-b', 'long', sized(50, 60)),
+        ),
+        NO_CASH,
+      ),
+    ).toEqual([]);
+    expect(
+      compareVenue(
+        view({ AAPL: 151 }),
+        broker(151, stop('AAPL', 'leg', 'long', sized(151, 90))),
+        NO_CASH,
+      ),
+    ).toEqual([]);
+  });
+
   it('skips a qty or price the venue reader does not report, and a price with no held entry stop', () => {
     expect(
       compareVenue(

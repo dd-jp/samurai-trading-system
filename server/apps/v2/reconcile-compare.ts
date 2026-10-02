@@ -128,11 +128,14 @@ function stopQtyDiff(instrument: string, held: number, stops: BrokerOpenOrder[])
 // Two ticks: the venue snaps the submitted stop onto its grid, and a venue that adjusts its own
 // orders for a split rounds the divided price again; a split moves the price by 20% or more
 const STOP_TICKS = 2;
-const TICK_EPSILON = 1e-6;
+// Ticks are compared to a millionth so the float noise of a price minus a level never decides it
+const TICK_SCALE = 1e6;
 
 function matchesALevel(stopPrice: number, levels: readonly number[]): boolean {
   return levels.some(
-    (level) => Math.abs(stopPrice - level) / tickFor(level) <= STOP_TICKS + TICK_EPSILON,
+    (level) =>
+      Math.round((Math.abs(stopPrice - level) / tickFor(level)) * TICK_SCALE) <=
+      STOP_TICKS * TICK_SCALE,
   );
 }
 
