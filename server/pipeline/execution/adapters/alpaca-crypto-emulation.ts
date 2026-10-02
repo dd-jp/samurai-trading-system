@@ -207,7 +207,7 @@ export class AlpacaCryptoLegEmulation {
     let failed = 0;
     const observedAt = this.deps.clock.now();
 
-    // oxlint-disable-next-line unicorn/no-useless-spread -- the copy itself is the point, see comment above
+    // oxlint-disable-next-line unicorn/no-useless-spread -- the loop awaits while submitBracket can add to or delete from this.brackets
     for (const bracket of [...this.brackets.values()]) {
       if (bracket.donePolling) continue;
       if (await this.sweepOneBracket(bracket, since, observedAt, fills, failures)) failed += 1;

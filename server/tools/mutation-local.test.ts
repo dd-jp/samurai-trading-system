@@ -203,6 +203,36 @@ describe('parseAddedLineRanges', () => {
     ]);
   });
 
+  it('attributes hunks of a renamed file to its new path and ignores a pure rename', () => {
+    const renamed = [
+      'diff --git a/old/a.ts b/new/a.ts',
+      'similarity index 90%',
+      'rename from old/a.ts',
+      'rename to new/a.ts',
+      'index 1111111..2222222 100644',
+      '--- a/old/a.ts',
+      '+++ b/new/a.ts',
+      '@@ -4 +4,2 @@',
+      '-x',
+      '+y',
+      '+z',
+      'diff --git a/old/b.ts b/new/b.ts',
+      'similarity index 100%',
+      'rename from old/b.ts',
+      'rename to new/b.ts',
+      'diff --git a/c.ts b/c.ts',
+      '--- a/c.ts',
+      '+++ b/c.ts',
+      '@@ -1 +1 @@',
+    ].join('\n');
+    expect(parseAddedLineRanges(renamed)).toEqual(
+      new Map([
+        ['new/a.ts', [{ start: 4, end: 5 }]],
+        ['c.ts', [{ start: 1, end: 1 }]],
+      ]),
+    );
+  });
+
   it('ignores hunks before any file header', () => {
     expect(parseAddedLineRanges('@@ -1 +1 @@')).toEqual(new Map());
   });

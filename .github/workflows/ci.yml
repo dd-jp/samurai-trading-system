@@ -287,6 +287,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
+          cache: npm
 
       - name: Find this shard's changed risk, sizing and loss-budget lines
         id: scope
@@ -347,6 +348,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
+          cache: npm
 
       - name: Find changed risk, sizing and loss-budget lines
         id: scope
