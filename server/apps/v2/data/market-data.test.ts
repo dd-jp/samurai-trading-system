@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { V2Bar } from '../../../../contracts/index.js';
-import { BarsMarketData, fillFxOf, londonDateOf, quotePerGbp } from './market-data.js';
+import {
+  BarsMarketData,
+  fillFxOf,
+  londonDateOf,
+  quotePerGbp,
+  yearStartCoverageRefusal,
+} from './market-data.js';
 
 function bar(date: string, rawClose: number): V2Bar {
   return { date, open: 1, high: 1, low: 1, close: 1, volume: 1, rawClose };
@@ -77,5 +83,38 @@ describe('fillFxOf and londonDateOf (#1947)', () => {
     expect(londonDateOf('2026-07-01T23:00:00.000Z')).toBe('2026-07-02');
     expect(londonDateOf('2026-12-01T23:59:59.000Z')).toBe('2026-12-01');
     expect(londonDateOf('2026-12-02T00:00:00.000Z')).toBe('2026-12-02');
+  });
+});
+
+describe('yearStartCoverageRefusal (#2009)', () => {
+  const endsMidDecember = new BarsMarketData({ load: () => undefined }, [
+    { date: '2026-12-18', gbpUsd: 1.3 },
+    { date: '2026-12-19', gbpUsd: 1.31 },
+  ]);
+  const withYearEnd = new BarsMarketData({ load: () => undefined }, [
+    { date: '2026-12-19', gbpUsd: 1.31 },
+    { date: '2026-12-31', gbpUsd: 1.32 },
+  ]);
+
+  it('refuses a series ending 19 December for the 2027 year start, not a rate', () => {
+    expect(yearStartCoverageRefusal(endsMidDecember, '2027-01-04')).toBe(
+      'last BoE XUDLUSS fix on or before 2027-01-01 is 2026-12-19, more than 7 days before it',
+    );
+  });
+
+  it('accepts the 31 December fix, which the exit path keeps pricing at', () => {
+    expect(yearStartCoverageRefusal(withYearEnd, '2027-01-04')).toBeUndefined();
+    expect(fillFxOf(withYearEnd, 'alpaca', '2027-01-04').quotePerGbp).toBe(1.32);
+    expect(fillFxOf(endsMidDecember, 'alpaca', '2027-01-04')).toMatchObject({
+      quotePerGbp: 1.31,
+      source: 'boe-xudluss:year-start:2027@2026-12-19',
+    });
+  });
+
+  it('refuses a year with no fix at all, and leaves a market without fix dates alone', () => {
+    expect(yearStartCoverageRefusal(endsMidDecember, '2026-09-25')).toBe(
+      'fx: no GBPUSD observation on or before 2026-01-01',
+    );
+    expect(yearStartCoverageRefusal({}, '2027-01-04')).toBeUndefined();
   });
 });

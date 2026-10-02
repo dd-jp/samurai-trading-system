@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import type { V2ModeWire } from '../../../../contracts/index.js';
+import type { MarketData, V2ModeWire } from '../../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import {
   type Clock,
@@ -115,6 +115,25 @@ export function reloadingFx(fxPath: string): () => ReturnType<typeof parseBoeGbp
   };
 }
 
+export function reloadingFxMarket(
+  fx: () => ReturnType<typeof parseBoeGbpUsdCsv>,
+): Pick<MarketData, 'gbpUsdAtYearStart' | 'gbpUsdYearStartFixDate'> {
+  let source = fx();
+  let market = new BarsMarketData({ load: () => undefined }, source);
+  const current = (): BarsMarketData => {
+    const next = fx();
+    if (next !== source) {
+      source = next;
+      market = new BarsMarketData({ load: () => undefined }, next);
+    }
+    return market;
+  };
+  return {
+    gbpUsdAtYearStart: (year) => current().gbpUsdAtYearStart(year),
+    gbpUsdYearStartFixDate: (year) => current().gbpUsdYearStartFixDate(year),
+  };
+}
+
 export interface ComposedDashboard {
   readonly server: V2DashboardServer;
   readonly db: StoreHandle;
@@ -129,7 +148,7 @@ export function composeV2Dashboard(
   const fx = reloadingFx(args.fxPath);
   const positions = new PositionsPanel(
     new ParquetMarkSource(args.barStoreRoot),
-    new BarsMarketData({ load: () => undefined }, fx()),
+    reloadingFxMarket(fx),
   );
   const db = openMigratedStore(args.storePath, DASHBOARD_SCHEMA_VERSION);
   try {

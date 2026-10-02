@@ -1,6 +1,13 @@
 import type { MarketData, V2Bar, Venue } from '../../../../contracts/index.js';
+import { describeThrownSafely } from '../../../shared/index.js';
 import { type BarsSource, barsBefore } from './bars.js';
-import { FX_SOURCE_GBP, type FxObservation, yearStartFix, yearStartFxSource } from './fx.js';
+import {
+  FX_SOURCE_GBP,
+  type FxObservation,
+  staleYearStartReason,
+  yearStartFix,
+  yearStartFxSource,
+} from './fx.js';
 import { type QuoteCurrency, quoteCurrencyOf } from './venues.js';
 
 export class BarsMarketData implements MarketData {
@@ -80,4 +87,17 @@ export function quotePerGbp(
   return quoteCurrencyOf(venue) === 'USD'
     ? market.gbpUsdAtYearStart(Number(tradingDate.slice(0, 4)))
     : 1;
+}
+
+export function yearStartCoverageRefusal(
+  market: Pick<MarketData, 'gbpUsdYearStartFixDate'>,
+  tradingDate: string,
+): string | undefined {
+  const year = Number(tradingDate.slice(0, 4));
+  try {
+    const fixDate = market.gbpUsdYearStartFixDate?.(year);
+    return fixDate === undefined ? undefined : staleYearStartReason(year, fixDate);
+  } catch (error) {
+    return describeThrownSafely(error);
+  }
 }

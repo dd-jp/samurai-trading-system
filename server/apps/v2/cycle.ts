@@ -1476,7 +1476,7 @@ class Cycle {
       trading_date: this.tradingDate,
       scope: 'entry',
       parameter,
-      ticket: 'docs/research/66-v2-grill-decisions.md D8',
+      ticket: SIZING_REFUSAL_TICKETS[refusal ?? ''] ?? 'docs/research/66-v2-grill-decisions.md D8',
       message: `${book.id} ${decision.instrument}: ${refusal}`,
       book_id: book.id,
       instrument: decision.instrument,
@@ -1601,8 +1601,13 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   cfd_financing_model_unset: 'CFD_FINANCING_MODEL',
   cfd_borrow_model_unset: 'CFD_BORROW_MODEL',
   cfd_resting_stop_unverified: 'CFD_RESTING_STOP_VERIFIED',
+  fx_year_start_stale: 'FX_YEAR_START_COVERAGE',
   short_requires_cfd: 'CFD_VENUE_ROUTE',
   long_on_cfd: 'CFD_VENUE_ROUTE',
+};
+
+const SIZING_REFUSAL_TICKETS: Readonly<Record<string, string>> = {
+  fx_year_start_stale: '#2009',
 };
 
 function recordRefusal(
@@ -1613,6 +1618,24 @@ function recordRefusal(
 ): void {
   deps.journal.recordRefusal({ trading_date: tradingDate, ...refusal });
   refusals.push(refusal.message);
+}
+
+function recordFxRefusal(deps: CycleDeps, tradingDate: string, refusals: string[]): void {
+  const message = deps.risk.fxRefusal(tradingDate);
+  if (message === undefined) return;
+  recordRefusal(deps, tradingDate, refusals, {
+    scope: 'data',
+    parameter: 'FX_YEAR_START_COVERAGE',
+    ticket: '#2009',
+    message,
+  });
+  deps.logger?.log({
+    trace_id: `v2-${tradingDate}`,
+    stage: 'v2',
+    level: 'error',
+    event: 'v2_fx_year_start_stale',
+    message,
+  });
 }
 
 function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVerdict): string[] {
@@ -1636,6 +1659,7 @@ function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVer
       message: capital,
     });
   }
+  recordFxRefusal(deps, tradingDate, refusals);
   if (!isFresh(deps.market.lastBarBefore(CALENDAR_REFERENCE, tradingDate), tradingDate)) {
     recordRefusal(deps, tradingDate, refusals, {
       scope: 'data',
