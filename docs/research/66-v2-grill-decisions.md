@@ -396,6 +396,38 @@ David ruled in chat, one question at a time; each ruling is recorded on its tick
 
 14. **The BoE GBP/USD file is gitignored and restored from a snapshot ([#2000](https://github.com/dd-jp/samurai-trading-system/issues/2000#issuecomment-5950704268)).** The daily refresh appends to it on the Mac, so it is untracked the way #1929 untracked the Parquet store. Tests and CI restore a committed snapshot.
 
+## Run of 2026-10-02 — candidate 2 (mean reversion) backtest trial, S2
+
+Run under ruling 12 above, exactly as pre-declared on [#1785](https://github.com/dd-jp/samurai-trading-system/issues/1785) (David's answers (a)–(h) of 2026-09-29, the #1912 rulings of 2026-09-29, #1815's entry limit, and ruling 11's `MEAN_REVERSION_FROM` = 2016-10-11): SMA(200) uptrend gate plus an RSI(2) dip trigger, grid RSI(2) entry threshold 10 and 15, RSI(2) > 65 exit, 10-session time stop, resting stop at entry − 5 × ATR(20), risk 0.5% of equity, point-in-time top-300 by 20-day dollar volume, decisions funded in RSI(2) order, risk-matched buy-and-hold benchmark, 16 walk-forward folds with a 10-session embargo, capital share 0.7 of £2,000. Nothing was changed. Command: `npm run v2:backtest -- mean-reversion` (`server/apps/v2/backtest-cli.ts`) on main at `c4793d62`, bars from `npm run bars:snapshot` (#1929 snapshot `ff29a732`), the tracked BoE GBP/USD file, `data/bars/sp500-constituents.csv` and `data/bars/alpaca-spreads.csv`.
+
+**Trial count (h):** 10 before this run, 12 after. Trial 11 = RSI 10 (hash `478efb348a94f03d`), trial 12 = RSI 15 (hash `7cec20c3ae4bd18c`), both `candidate='mean-reversion'`. The benchmark and the 2× cost pass add no rows. MinBTL at this window (8.95 years) and a 0.6 target Sharpe is 15, so 12 of 15 are used. Question (i) of the candidate 2 proposal (whose window sets the limit) is still parked.
+
+**Ledger caveat, for David:** the run was made in a cloud container. The machine-wide ledger on the Mac (`researchStorePath`, `server/apps/v2/trial-ledger.ts`) is not reachable from there. The container's ledger was rebuilt first: the 8 Session B rows from their seed file, then candidate 1's two rows re-derived from the #1863 code at `0e113d39`. Their hashes, `18f04f50a183625e` (SMA 100) and `26a1eb88925a84e3` (SMA 200), are recomputed, not read from the Mac ledger. The DSR therefore deflated over 12 trials, as on the Mac. The Mac ledger does not yet hold trials 11 and 12. Adding them there is David's call: a run on the Mac resolves to the same two hashes, so it adds the same two rows and no others.
+
+**Verdict: FAIL, at 1× and at 2× modelled cost.** The selected trial is 11 (RSI 10) both times.
+
+| | 1× cost | 2× cost |
+| --- | --- | --- |
+| Deflated Sharpe (the gated value, `verdict.deflatedSharpe`) | 0.211 | 0.148 |
+| Deflated Sharpe (walk-forward, reported alongside) | 0.039 | 0.027 |
+| PBO | 0.931 | 0.809 |
+| Strategy Sharpe, full sample (trial 11 / trial 12) | 0.320 / 0.288 | 0.238 / 0.203 |
+| Strategy Sharpe, walk-forward | −0.036 | −0.095 |
+| Strategy Sharpe, walk-forward after the 40% haircut | −0.021 | −0.057 |
+| Benchmark Sharpe, walk-forward (full sample) | 0.870 (0.847) | 0.874 (0.853) |
+| Max drawdown, selected trial (benchmark) | 18.1% (31.0%) | 18.6% (31.0%) |
+| Ending equity of the £1,400 book, trial 11 / trial 12 / benchmark | £1,782 / £1,752 / £5,631 | £1,659 / £1,615 / £5,677 |
+| Capital ceiling, £1,500 / (max DD × 1.5) | £3,864 | £3,762 |
+| `beatsBenchmarkAfterHaircut` | false | false |
+| `deflatedSharpeAtLeast095` | false | false |
+| `pboAtMost010` | false | false |
+
+All three checks fail at both cost levels. The 2× run does not flip `beatsBenchmarkAfterHaircut`'s sign (false both times). DSR is 0.21 against the 0.95 bar. PBO is 0.93 against 0.10: the in-sample pick between RSI 10 and RSI 15 ranks below the median out of sample in most fold combinations. Walk-forward, the selected path's Sharpe is about zero against the benchmark's 0.87. Candidate 2 does not clear the S2 gate, so no paper capital arises under ruling 12. Per S4, candidates 3–5 run regardless.
+
+**Trades and costs (partial, measured):** the CLI reports equity series and the verdict only. The fills live in the run's in-memory store, which closes at the end of the run. The only fill counts read from that store are from the 2× pass, through 2023-05-19: trial 11 had 3,528 entry fills and 3,515 exits (£228k entry notional), trial 12 had 4,361 and 4,346 (£276k), and the benchmark had 69 entries. Regulatory fees on those fills were £11.1 (trial 11) and £13.4 (trial 12); the spread cost sits in the fill prices. Over the whole window, doubling the spread, impact and fee legs cut trial 11's ending equity by £124 and trial 12's by £137. That is a rough measure of their 1× cost, since the two paths differ. The benchmark ends £46 higher at 2× because its funding path differs; it trades rarely, so the same check does not measure its cost. A full trade count needs a re-run that reads the store, and nothing here needed one.
+
+**Technical repeat, recorded:** the first run on this configuration was killed by the container's out-of-memory killer at 11.2 GB RSS, at 2018-04-09 of the 1× pass. It recorded trials 11 and 12, then stopped before any verdict. Cause, measured: better-sqlite3 13.0.1 keeps every prepared statement alive until its database closes. Calling `gc()` does not free them. A standalone loop grew about 2.5 KB of RSS per `prepare`, and the backtest grew about 470 MB per 50,000 prepares. The backtest's one long-lived in-memory cycle store prepares 12.9 million statements over the run, because the journal (`server/apps/v2/journal/journal.ts`) and the cycle call `db.prepare` on every query. The counted run therefore loaded a run-only preload, outside the repo, that reuses one statement per SQL text per in-memory database. Over the run that was 12,934,231 reuses and 70 distinct statements, with peak RSS 2.5 GB. Nothing on the v2 path toggles a statement's mode or iterates a statement, so the reuse changes no result. Checked: the first 374 cycles (2016-10-11 to 2018-04-09) of the killed run and the counted run log byte-identical. The leak is not fixed in the tree: an unmodified run of this candidate does not fit in 16 GB, and any long-lived v2 process that keeps one database open grows the same way. Eight diagnostic runs of 60–100 seconds each, on throwaway copies of the ledger, located the leak. Each was stopped by a timeout long before any verdict, and none was read for results. The runtime was Node 22.22, below `package.json`'s engines floor of Node 24. A standalone check under Node 24.21 showed the same growth. From 2022-11-04 of the 1× pass on, the process's log writes stopped reaching the log file, probably because a neighbouring session filled the disk, and the cycles carried on (inspector samples showed them advancing). The verdict comes from the report the run wrote at exit.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
