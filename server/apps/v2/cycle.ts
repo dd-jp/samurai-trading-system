@@ -1952,6 +1952,21 @@ async function sweepFillsBeforeMarks(
   }
 }
 
+async function tradeSleeveBooks(
+  deps: CycleDeps,
+  cycle: Cycle,
+  sleeve: Sleeve,
+  decisions: readonly SleeveDecision[],
+): Promise<BookSpec[]> {
+  const books = deps.books.forSleeve(sleeve.id);
+  for (const book of books) {
+    await cycle.cancelStaleEntries(book);
+    await cycle.exits(book, decisions);
+    await cycle.entries(book, cycle.withoutSittingOut(book, decisions));
+  }
+  return [...books];
+}
+
 async function runUnmarked(
   deps: CycleDeps,
   tradingDate: string,
@@ -1978,12 +1993,7 @@ async function runUnmarked(
       deps.journal.recordRefusal({ trading_date: tradingDate, ...refusal });
       refusals.push(`${refusal.parameter}: ${refusal.message}`);
     }
-    for (const book of deps.books.forSleeve(sleeve.id)) {
-      books.push(book);
-      await cycle.cancelStaleEntries(book);
-      await cycle.exits(book, output.decisions);
-      await cycle.entries(book, cycle.withoutSittingOut(book, output.decisions));
-    }
+    books.push(...(await tradeSleeveBooks(deps, cycle, sleeve, output.decisions)));
   }
   await sweepFillsBeforeMarks(deps, cycle, tradingDate);
   cycle.refuseMarkIfRescaleThrew();
