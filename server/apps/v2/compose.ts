@@ -131,6 +131,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     createBrokerAccess({
       dryRun: options.dryRun,
       client: options.alpacaClient,
+      brokerMode: options.brokerMode,
       db,
       clock,
       logger,

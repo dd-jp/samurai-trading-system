@@ -44,7 +44,11 @@ import {
   type SitOutCode,
   type VenueSessionGate,
 } from './data/index.js';
-import { type ReconcileOutcome, reconcileOrBlockEntries } from './reconcile.js';
+import {
+  blockEntriesOnThrow,
+  type ReconcileOutcome,
+  reconcileOrBlockEntries,
+} from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
   bracketExit,
@@ -1512,6 +1516,19 @@ export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<Cy
   return report;
 }
 
+async function sweepFillsOrBlockEntries(
+  deps: CycleDeps,
+  cycle: Cycle,
+  tradingDate: string,
+): Promise<ReconcileOutcome | undefined> {
+  try {
+    await cycle.sweepFills();
+    return undefined;
+  } catch (error) {
+    return blockEntriesOnThrow(deps, tradingDate, 'v2_fill_sweep_threw', 'fill sweep', error);
+  }
+}
+
 async function runUnmarked(
   deps: CycleDeps,
   tradingDate: string,
@@ -1523,12 +1540,12 @@ async function runUnmarked(
     ...controlRefusals(deps, tradingDate, control),
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
-  await cycle.sweepFills();
+  const sweepFailure = await sweepFillsOrBlockEntries(deps, cycle, tradingDate);
   cycle.rescaleSplitPositions();
   await cycle.cancelEntriesBlockedAtLastMark();
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
-  cycle.blockEntries(await reconcileOrBlockEntries(deps, tradingDate));
+  cycle.blockEntries(sweepFailure ?? (await reconcileOrBlockEntries(deps, tradingDate)));
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {
