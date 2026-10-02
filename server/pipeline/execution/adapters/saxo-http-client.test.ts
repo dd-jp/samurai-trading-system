@@ -723,10 +723,10 @@ describe('SaxoHttpBrokerClient', () => {
       },
     ];
 
-    function pinnedClient(): SaxoHttpBrokerClient {
+    function pinnedClient(baseUrl = 'https://gateway.example/sim/openapi/'): SaxoHttpBrokerClient {
       return new SaxoHttpBrokerClient({
         accessToken: FAKE_TOKEN,
-        baseUrl: 'https://gateway.example/sim/openapi/',
+        baseUrl,
         accountKey: 'acct-key',
         retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
         rateLimiter: permissiveLimiter(),
@@ -788,7 +788,7 @@ describe('SaxoHttpBrokerClient', () => {
         if (parsed.pathname.endsWith('/port/v1/accounts/me')) return jsonResponse(TWO_ACCOUNTS);
         pages += 1;
         return pages === 1
-          ? jsonResponse({ Data: [reader.pinnedRow], __next: '/port/v1/orders/page-2' })
+          ? jsonResponse({ Data: [reader.pinnedRow], __next: '/port/v1/orders' })
           : jsonResponse({ Data: [] });
       });
       vi.stubGlobal('fetch', fetchMock);
@@ -796,7 +796,7 @@ describe('SaxoHttpBrokerClient', () => {
       await reader.read(pinnedClient());
 
       expect(calledPath(fetchMock, 2)).toBe(
-        'https://gateway.example/sim/openapi/port/v1/orders/page-2?AccountKey=acct-key&ClientKey=client-key',
+        'https://gateway.example/sim/openapi/port/v1/orders?AccountKey=acct-key&ClientKey=client-key',
       );
     });
 
@@ -901,6 +901,74 @@ describe('SaxoHttpBrokerClient', () => {
       const page2 = calledPath(fetchMock, 2);
       expect(page2).toBe(`https://gateway.example/sim/openapi${expected}`);
       expect(new URL(page2).searchParams.getAll('AccountKey')).toEqual(['acct-key']);
+    });
+
+    function singleNextFetch(next: string): ReturnType<typeof vi.fn> {
+      const reader = READERS[0] as PagedReader;
+      let pages = 0;
+      return vi.fn(async (url: string | URL) => {
+        const parsed = new URL(String(url));
+        if (parsed.pathname.endsWith('/port/v1/accounts/me')) return jsonResponse(TWO_ACCOUNTS);
+        pages += 1;
+        return pages === 1
+          ? jsonResponse({ Data: [reader.pinnedRow], __next: next })
+          : jsonResponse({ Data: [reader.otherRow] });
+      });
+    }
+
+    it.each([
+      '/port/v1/orders/me?$skip=500',
+      '/port/v1/netpositions?$skip=500',
+      '/port/v1/orders/../orders/me?$skip=500',
+      '/port/v1/orders/%2e%2e/orders/me',
+      'port/v1/orders?$skip=500',
+      '/\\evil.example/port/v1/orders',
+      'https://[bad/x',
+    ])('refuses to fetch page 2 when listOpenOrders __next %s leaves the route', async (next) => {
+      const fetchMock = singleNextFetch(next);
+      vi.stubGlobal('fetch', fetchMock);
+
+      const read = pinnedClient().listOpenOrders();
+
+      await expect(read).rejects.toBeInstanceOf(SaxoBrokerProviderError);
+      await expect(read).rejects.toThrow(
+        /__next left the \/port\/v1\/orders route \(listOpenOrders\)/,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      '@evil.example/x',
+      '.evil.example/x',
+      '//evil.example/x',
+      'https://gateway.example.evil.example/x',
+      'https://evil.example/port/v1/orders',
+    ])(
+      'refuses a __next of %s on a gateway with no path, so the bearer never leaves the gateway host',
+      async (next) => {
+        const fetchMock = singleNextFetch(next);
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(pinnedClient('https://gateway.example').listOpenOrders()).rejects.toThrow(
+          /__next left the \/port\/v1\/orders route/,
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).host)).toEqual([
+          'gateway.example',
+          'gateway.example',
+        ]);
+      },
+    );
+
+    it('still follows a same-route absolute __next on a gateway with no path', async () => {
+      const fetchMock = singleNextFetch('https://gateway.example/port/v1/orders?$skip=500');
+      vi.stubGlobal('fetch', fetchMock);
+
+      await pinnedClient('https://gateway.example').listOpenOrders();
+
+      expect(calledPath(fetchMock, 2)).toBe(
+        'https://gateway.example/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      );
     });
   });
 

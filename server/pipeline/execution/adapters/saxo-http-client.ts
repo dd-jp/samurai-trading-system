@@ -80,8 +80,27 @@ function readNext(body: unknown): string | undefined {
   return isRecord(body) && typeof body.__next === 'string' ? body.__next : undefined;
 }
 
-function keepAccountScope(nextPath: string, identity: AccountIdentity, context: string): string {
-  const echoed = [...new URL(nextPath, 'https://saxo-next.invalid').searchParams];
+function probeUrl(path: string): URL {
+  return new URL(path, 'https://saxo-next.invalid');
+}
+
+function nextOnRoute(nextPath: string, route: string, context: string): URLSearchParams {
+  const parsed = /^\/(?![/\\])/.test(nextPath) ? probeUrl(nextPath) : undefined;
+  if (parsed === undefined || parsed.pathname !== route) {
+    throw new SaxoBrokerProviderError(
+      `Saxo API error: __next left the ${route} route (${context}).`,
+    );
+  }
+  return parsed.searchParams;
+}
+
+function keepAccountScope(
+  nextPath: string,
+  route: string,
+  identity: AccountIdentity,
+  context: string,
+): string {
+  const echoed = [...nextOnRoute(nextPath, route, context)];
   const missing = new URLSearchParams();
   for (const [key, pinnedValue] of [
     ['AccountKey', identity.accountKey],
@@ -470,6 +489,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     priority: SaxoRequestPriority,
   ): Promise<T[]> {
     const identity = await this.resolveIdentity();
+    const route = probeUrl(firstPath).pathname;
     const rows: T[] = [];
     let path: string | undefined = firstPath;
     while (path !== undefined) {
@@ -487,7 +507,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       path =
         page.next === undefined
           ? undefined
-          : keepAccountScope(this.relativeToGateway(page.next), identity, context);
+          : keepAccountScope(this.relativeToGateway(page.next), route, identity, context);
     }
     return rows;
   }
