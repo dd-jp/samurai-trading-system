@@ -50,6 +50,7 @@ import {
   blockEntriesOnThrow,
   type ReconcileOutcome,
   reconcileOrBlockEntries,
+  type SyncThrowEvent,
 } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
@@ -1645,17 +1646,41 @@ export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<Cy
   return report;
 }
 
-async function sweepFillsOrBlockEntries(
+interface SyncStep {
+  readonly event: SyncThrowEvent;
+  readonly what: string;
+  readonly run: (cycle: Cycle) => unknown;
+}
+
+// fillSimulatedEntries is not a guarded step: a fill quote error must stop the cycle (#1849)
+const SYNC_STEPS: readonly SyncStep[] = [
+  { event: 'v2_fill_sweep_threw', what: 'fill sweep', run: (cycle) => cycle.sweepFills() },
+  {
+    event: 'v2_split_rescale_threw',
+    what: 'split rescale',
+    run: (cycle) => cycle.rescaleSplitPositions(),
+  },
+  {
+    event: 'v2_entry_cancel_threw',
+    what: 'cancel of entries blocked at the last mark',
+    run: (cycle) => cycle.cancelEntriesBlockedAtLastMark(),
+  },
+];
+
+async function syncStepFailures(
   deps: CycleDeps,
   cycle: Cycle,
   tradingDate: string,
-): Promise<ReconcileOutcome | undefined> {
-  try {
-    await cycle.sweepFills();
-    return undefined;
-  } catch (error) {
-    return blockEntriesOnThrow(deps, tradingDate, 'v2_fill_sweep_threw', 'fill sweep', error);
+): Promise<ReconcileOutcome[]> {
+  const failures: ReconcileOutcome[] = [];
+  for (const step of SYNC_STEPS) {
+    try {
+      await step.run(cycle);
+    } catch (error) {
+      failures.push(blockEntriesOnThrow(deps, tradingDate, step.event, step.what, error));
+    }
   }
+  return failures;
 }
 
 async function syncBooksThenReconcile(
@@ -1663,12 +1688,34 @@ async function syncBooksThenReconcile(
   cycle: Cycle,
   tradingDate: string,
 ): Promise<ReconcileOutcome> {
-  const sweepFailure = await sweepFillsOrBlockEntries(deps, cycle, tradingDate);
-  cycle.rescaleSplitPositions();
-  await cycle.cancelEntriesBlockedAtLastMark();
+  const failures = await syncStepFailures(deps, cycle, tradingDate);
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
-  return sweepFailure ?? (await reconcileOrBlockEntries(deps, tradingDate));
+  if (failures.length === 0) return reconcileOrBlockEntries(deps, tradingDate);
+  return {
+    blockedBookIds: new Set(failures.flatMap((failure) => [...failure.blockedBookIds])),
+    refusals: failures.flatMap((failure) => failure.refusals),
+  };
+}
+
+// The date stays unmarked for a retry rather than marked on books missing this cycle's fills
+async function sweepFillsBeforeMarks(
+  deps: CycleDeps,
+  cycle: Cycle,
+  tradingDate: string,
+): Promise<void> {
+  try {
+    await cycle.sweepFills();
+  } catch (error) {
+    blockEntriesOnThrow(
+      deps,
+      tradingDate,
+      'v2_fill_sweep_threw',
+      'fill sweep before the marks',
+      error,
+    );
+    throw error;
+  }
 }
 
 async function runUnmarked(
@@ -1702,7 +1749,7 @@ async function runUnmarked(
       await cycle.entries(book, cycle.withoutSittingOut(book, output.decisions));
     }
   }
-  await cycle.sweepFills();
+  await sweepFillsBeforeMarks(deps, cycle, tradingDate);
   const bookReports = await cycle.markAll(books);
   refusals.push(...cycle.refusals);
   const { tally } = cycle;

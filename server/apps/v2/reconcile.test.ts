@@ -12,6 +12,7 @@ import type {
 } from '../../../contracts/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import {
+  blockEntriesOnThrow,
   type ReconcileDeps,
   reconcileBooks,
   reconcileOrBlockEntries,
@@ -498,6 +499,48 @@ describe('reconcileOrBlockEntries', () => {
         },
       },
       DATE,
+    );
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id, SHADOW.id]));
+  });
+});
+
+describe('blockEntriesOnThrow', () => {
+  it('journals a read_failed run for every venue group, so a same-date clean run no longer reads as the latest (#1927)', () => {
+    const { deps, reconciles } = harness(CLEAN_BROKER);
+    blockEntriesOnThrow(deps, DATE, 'v2_fill_sweep_threw', 'fill sweep', new Error('SQLITE_BUSY'));
+
+    expect(reconciles.map((run) => [run.venue, run.source, run.book_ids])).toEqual([
+      ['alpaca', 'broker', [PRIMARY.id]],
+      ['saxo', 'simulated', [PRIMARY.id, SHADOW.id]],
+      ['saxo_cfd_gbp', 'simulated', [PRIMARY.id, SHADOW.id]],
+      ['saxo_cfd_usd', 'simulated', [PRIMARY.id, SHADOW.id]],
+      ['alpaca', 'simulated', [SHADOW.id]],
+    ]);
+    const failed = {
+      trading_date: DATE,
+      status: 'read_failed',
+      diffs: [],
+      detail: 'fill sweep threw: SQLITE_BUSY',
+    };
+    expect(reconciles).toEqual(reconciles.map(() => expect.objectContaining(failed)));
+  });
+
+  it('still blocks every book when the journal write throws too', () => {
+    const { deps } = harness(CLEAN_BROKER);
+    const outcome = blockEntriesOnThrow(
+      {
+        ...deps,
+        journal: {
+          ...deps.journal,
+          recordReconcile: () => {
+            throw new Error('SQLITE_BUSY');
+          },
+        },
+      },
+      DATE,
+      'v2_split_rescale_threw',
+      'split rescale',
+      new Error('SQLITE_BUSY'),
     );
     expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id, SHADOW.id]));
   });

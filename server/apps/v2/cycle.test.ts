@@ -4477,6 +4477,157 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
   });
 
+  async function heldAaplThrowingAfterSweep(arm: (deps: Harness, swept: () => boolean) => void) {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([exitAapl, longMsft]);
+    let sweeps = 0;
+    const fetchNewFills = deps.executor.fetchNewFills.bind(deps.executor);
+    vi.spyOn(deps.executor, 'fetchNewFills').mockImplementation(async (since) => {
+      const sweep = await fetchNewFills(since);
+      sweeps += 1;
+      return sweep;
+    });
+    arm(deps, () => sweeps > 0);
+    const logs: LogEntry[] = [];
+    const report = await runCycle(
+      { ...deps, logger: { log: (entry) => logs.push(entry) } },
+      '2026-09-29',
+    );
+    return { alpaca, deps, report, logs };
+  }
+
+  function throwOnceWhen<T extends object>(target: T, method: keyof T, when: () => boolean) {
+    const original = (target[method] as (...args: unknown[]) => unknown).bind(target);
+    let thrown = false;
+    vi.spyOn(target, method as never).mockImplementation(((...args: unknown[]) => {
+      if (when() && !thrown) {
+        thrown = true;
+        throw new Error('SQLITE_BUSY');
+      }
+      return original(...args);
+    }) as never);
+  }
+
+  it.each([
+    {
+      step: 'split rescale',
+      event: 'v2_split_rescale_threw',
+      arm: (deps: Harness, swept: () => boolean) => throwOnceWhen(deps.books, 'positions', swept),
+    },
+    {
+      step: 'cancel of entries blocked at the last mark',
+      event: 'v2_entry_cancel_threw',
+      arm: (deps: Harness, swept: () => boolean) => throwOnceWhen(deps.books, 'lastDay', swept),
+    },
+  ])(
+    'a throw from the $step blocks every book entry, still exits and alerts critical (#1927)',
+    async ({ step, event, arm }) => {
+      const { alpaca, deps, report, logs } = await heldAaplThrowingAfterSweep(arm);
+
+      expect(report.skipped).toBe(false);
+      expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+      expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+      expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
+      expect(report.refusals).toEqual(
+        expect.arrayContaining([
+          `debate/primary: entries blocked, ${step} threw: SQLITE_BUSY`,
+          `debate/no-macro-gate: entries blocked, ${step} threw: SQLITE_BUSY`,
+        ]),
+      );
+      expect(logs).toContainEqual(expect.objectContaining({ level: 'error', event }));
+      expect(logs.map((entry) => entry.event)).not.toContain('v2_reconcile_threw');
+    },
+  );
+
+  it('a fill sweep throw supersedes an earlier clean reconcile of the same date for the signals pass (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.journal.recordReconcile({
+      trading_date: '2026-09-29',
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'clean',
+      book_ids: ['debate/primary', 'debate/no-macro-gate'],
+      diffs: [],
+      detail: 'attempt 1',
+    });
+    vi.spyOn(deps.executor, 'fetchNewFills').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    await runCycle(deps, '2026-09-29');
+
+    const verdict = (deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca');
+    expect([...verdict.blocked].sort()).toEqual(['debate/no-macro-gate', 'debate/primary']);
+    expect(
+      rows(
+        deps,
+        "SELECT source, status, detail FROM v2_reconciles WHERE trading_date = '2026-09-29' AND venue = 'alpaca' AND source = 'broker' ORDER BY reconcile_id DESC LIMIT 1",
+      ),
+    ).toEqual([
+      { source: 'broker', status: 'read_failed', detail: 'fill sweep threw: SQLITE_BUSY' },
+    ]);
+  });
+
+  it('a persistent fill sweep failure still exits, then rejects with the date unmarked and entries blocked for the signals pass (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([exitAapl, longMsft]);
+    vi.spyOn(deps.executor, 'fetchNewFills').mockRejectedValue(new Error('alpaca 503'));
+    const logs: LogEntry[] = [];
+
+    await expect(
+      runCycle({ ...deps, logger: { log: (entry) => logs.push(entry) } }, '2026-09-29'),
+    ).rejects.toThrow('alpaca 503');
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-28');
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_fill_sweep_threw',
+        message: 'fill sweep before the marks threw: alpaca 503',
+      }),
+    );
+    expect((deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca').blocked).toContain(
+      'debate/primary',
+    );
+  });
+
+  it('a fill sweep throw before the marks supersedes the clean reconcile journalled earlier in the run (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    const fetchNewFills = deps.executor.fetchNewFills.bind(deps.executor);
+    vi.spyOn(deps.executor, 'fetchNewFills')
+      .mockImplementationOnce(fetchNewFills)
+      .mockRejectedValueOnce(new Error('alpaca 503'));
+
+    await expect(runCycle(deps, '2026-09-29')).rejects.toThrow('alpaca 503');
+    expect(
+      rows(
+        deps,
+        "SELECT status FROM v2_reconciles WHERE trading_date = '2026-09-29' AND venue = 'alpaca' AND source = 'broker' ORDER BY reconcile_id",
+      ),
+    ).toEqual([{ status: 'clean' }, { status: 'read_failed' }]);
+    expect((deps.journal as Journal).latestReconcile('2026-09-29', 'alpaca').blocked).toContain(
+      'debate/primary',
+    );
+  });
+
   it('live: an unset cash tolerance fails closed, primary entries blocked through a refusal, no critical alert', async () => {
     const { deps, logs } = await heldAaplThen(
       (harnessed) => harnessed.brokerBooks,
