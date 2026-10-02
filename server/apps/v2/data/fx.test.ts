@@ -5,6 +5,7 @@ import {
   dayFxSource,
   dayGbpUsd,
   parseBoeGbpUsdCsv,
+  staleYearStartReason,
   yearStartFxSource,
   yearStartGbpUsd,
 } from './fx.js';
@@ -31,6 +32,15 @@ describe('fx', () => {
     expect(yearStartGbpUsd(parseBoeGbpUsdCsv(CSV), 2026)).toBe(1.35);
     expect(yearStartGbpUsd([{ date: '2026-01-01', gbpUsd: 1.4 }], 2026)).toBe(1.4);
     expect(() => yearStartGbpUsd(parseBoeGbpUsdCsv(CSV), 2024)).toThrow(/no GBPUSD/);
+  });
+
+  it('names a year-start fix more than the gap allowance before 1 January as stale (#2009)', () => {
+    expect(staleYearStartReason(2027, '2026-12-31')).toBeUndefined();
+    expect(staleYearStartReason(2027, '2027-01-01')).toBeUndefined();
+    expect(staleYearStartReason(2027, '2026-12-25')).toBeUndefined();
+    expect(staleYearStartReason(2027, '2026-12-24')).toBe(
+      `last BoE XUDLUSS fix on or before 2027-01-01 is 2026-12-24, more than ${DAY_FIX_MAX_GAP_DAYS} days before it`,
+    );
   });
 
   it('tolerates CRLF, padding and blank lines and zero-pads single-digit days', () => {

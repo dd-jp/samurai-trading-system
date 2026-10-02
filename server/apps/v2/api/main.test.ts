@@ -14,6 +14,7 @@ import {
   parseDashboardArgs,
   readFxOrNone,
   reloadingFx,
+  reloadingFxMarket,
 } from './main.js';
 
 const DEFAULT_PATHS = {
@@ -305,5 +306,20 @@ describe('the dashboard schema floor', () => {
     );
     expect(ping).toBeDefined();
     expect(DASHBOARD_SCHEMA_VERSION).toBeGreaterThanOrEqual(ping?.version ?? Infinity);
+  });
+});
+
+describe('reloadingFxMarket (#2009)', () => {
+  it('prices the year start from the latest series the reload hands it, not the startup copy', () => {
+    let series: ReturnType<typeof readFxOrNone> = [{ date: '2026-12-19', gbpUsd: 1.31 }];
+    const fx = vi.fn(() => series);
+    const market = reloadingFxMarket(fx);
+    expect(market.gbpUsdAtYearStart(2027)).toBe(1.31);
+    expect(market.gbpUsdYearStartFixDate?.(2027)).toBe('2026-12-19');
+    series = [...series, { date: '2026-12-31', gbpUsd: 1.32 }];
+    expect(market.gbpUsdAtYearStart(2027)).toBe(1.32);
+    expect(market.gbpUsdYearStartFixDate?.(2027)).toBe('2026-12-31');
+    series = [];
+    expect(() => market.gbpUsdAtYearStart(2027)).toThrow(/no GBPUSD/);
   });
 });

@@ -12,13 +12,13 @@ import {
 import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import { alertsFor } from '../alerts.js';
-import { BarsMarketData, ParquetMarkSource } from '../data/index.js';
+import { ParquetMarkSource } from '../data/index.js';
 import { type Heartbeat, optionalHeartbeat } from '../heartbeat.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';
 import { CommandLog } from './command-log.js';
 import { ControlWriter } from './control-writer.js';
-import { readFxOrNone } from './main.js';
+import { reloadingFx, reloadingFxMarket } from './main.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
 import { type BotResponse, TelegramBot } from './telegram-bot.js';
@@ -143,7 +143,7 @@ export function composeTelegram(
     const log = new CommandLog(guardedStore(db, 'telegram', { enabled: true }), clock);
     const positions = new PositionsPanel(
       new ParquetMarkSource(args.barStoreRoot),
-      new BarsMarketData({ load: () => undefined }, readFxOrNone(args.fxPath)),
+      reloadingFxMarket(reloadingFx(args.fxPath)),
     );
     const overview = new OverviewReader(store, clock, args.dryRun ? 'dry-run' : 'paper', positions);
     const handler = new CommandHandler({
