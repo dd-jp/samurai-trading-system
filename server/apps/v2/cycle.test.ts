@@ -3317,6 +3317,21 @@ describe('runCycle: positions held across a split (#1865)', () => {
 
   function hold(deps: Harness, qty: number, tradingDate = '2026-09-25', scale = 1): void {
     const long = qty > 0;
+    if (deps.journal.orderFor('seed') === undefined) {
+      deps.journal.recordOrder({
+        client_order_id: 'seed',
+        decision_id: null,
+        book_id: 'debate/primary',
+        trading_date: tradingDate,
+        instrument: 'AAPL',
+        venue: 'alpaca',
+        leg: 'entry',
+        side: long ? 'buy' : 'sell',
+        dry_run: true,
+        outcome: 'simulated',
+        payload: {},
+      });
+    }
     deps.books.applyFill('debate/primary', {
       instrument: 'AAPL',
       venue: 'alpaca',
@@ -3487,22 +3502,60 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(across.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
   });
 
-  it('a 3:2 split leaves a fractional qty and keeps qty x price and equity', async () => {
+  const threeForTwo = [
+    ...preSplit(1.5),
+    seriesBar('2026-09-28', THREE_FOR_TWO, 1),
+    seriesBar('2026-09-29', THREE_FOR_TWO, 1),
+  ];
+  const CASH_IN_LIEU_PRIMARY = 'alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-28';
+
+  it('a 3:2 split on 101 shares holds 151 and disposes of the half share as cash in lieu at the rescaled close, keeping equity', async () => {
     const deps = harness([], true);
-    hold(deps, 3);
-    const bars = [
-      ...preSplit(1.5),
-      seriesBar('2026-09-28', THREE_FOR_TWO, 1),
-      seriesBar('2026-09-29', THREE_FOR_TWO, 1),
-    ];
-    await runCycle(withMarket(deps, bars), '2026-09-28');
-    const across = await runCycle(withMarket(deps, bars), '2026-09-29');
+    hold(deps, 101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const across = await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
     expect(across.exits).toBe(0);
     const held = primary(deps);
-    expect(held?.qty).toBeCloseTo(4.5, 12);
+    expect(held?.qty).toBe(151);
     expect(held?.avgPriceGbp).toBeCloseTo(20 / 1.5 / FX, 9);
     expect(held?.stopGbp).toBeCloseTo(19.2 / 1.5 / FX, 9);
+    expect(held?.targetGbp).toBeCloseTo(21.2 / 1.5 / FX, 9);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toEqual([
+      {
+        qty: 0.5,
+        price_gbp: expect.closeTo(40 / 3 / FX, 9),
+        fee_gbp: 0,
+        trading_date: '2026-09-29',
+      },
+    ]);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - (101 * 20) / FX + (0.5 * 40) / 3 / FX,
+      9,
+    );
     expect(across.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    expect(primary(deps)?.qty).toBe(151);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toHaveLength(1);
+  });
+
+  it('a 3:2 split on a whole-share result books no cash in lieu', async () => {
+    const deps = harness([], true);
+    hold(deps, 4);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    expect(primary(deps)?.qty).toBe(6);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toEqual([]);
+  });
+
+  it('a 3:2 split on a short of 101 holds -151 and buys the half share back as cash in lieu', async () => {
+    const deps = harness([], true);
+    hold(deps, -101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    expect(primary(deps)?.qty).toBe(-151);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toMatchObject([{ qty: 0.5 }]);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 + (101 * 20) / FX - (0.5 * 40) / 3 / FX,
+      9,
+    );
   });
 
   it('measures a second split from the anchor the first one left', async () => {
@@ -3620,7 +3673,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(eventsOf(entries, 'v2_split_implausible')).toHaveLength(1);
   });
 
-  it('still rescales a CHK-shaped 1:200 reverse split on a day the adjusted close also gapped 1.6x', async () => {
+  it('still rescales a CHK-shaped 1:200 reverse split on a day the adjusted close also gapped 1.6x, cashing out the sub-share result', async () => {
     const { deps, entries } = loggedDeps(harness([], true));
     hold(deps, 6);
     const afterSplit: RawBar = { open: 6400, high: 6450, low: 6350, close: 6400 };
@@ -3632,8 +3685,12 @@ describe('runCycle: positions held across a split (#1865)', () => {
     await runCycle(withMarket(deps, reverse), '2026-09-30');
     expect(eventsOf(entries, 'v2_split_implausible')).toEqual([]);
     expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
-      { message: expect.stringContaining('qty 6 -> 0.03') },
+      { message: expect.stringContaining('qty 6 -> 0,') },
     ]);
+    expect(primary(deps)).toBeUndefined();
+    expect(
+      deps.journal.fillPartsOf('alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29'),
+    ).toMatchObject([{ qty: expect.closeTo(0.03, 12), price_gbp: expect.closeTo(6400 / FX, 9) }]);
   });
 
   it('a simulated entry filled on a bar before a split already visible this cycle books rescaled to the latest bar, with no phantom loss', async () => {
@@ -3841,7 +3898,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
     }
   }
 
-  it('leaves a broker-held position unrescaled and warns that reconcile must take qty from the broker, while simulated shadow books still rescale', async () => {
+  it('rescales a broker-held position like the simulated shadow books', async () => {
     const alpaca = new SplitAlpaca();
     const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
     await runCycle(deps, '2026-09-25');
@@ -3849,13 +3906,92 @@ describe('runCycle: positions held across a split (#1865)', () => {
     deps.setControl('halt');
     await runCycle(withMarket(deps, snapshot), '2026-09-28');
     await runCycle(withMarket(deps, snapshot), '2026-09-29');
-    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: '2026-09-25' });
-    expect(eventsOf(entries, 'v2_split_broker_qty')).toMatchObject([
-      { level: 'warn', message: expect.stringContaining('#1872') },
+    expect(primary(deps)).toMatchObject({
+      qty: 60,
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-28',
+    });
+    expect(eventsOf(entries, 'v2_split_rescaled').map((entry) => entry.message)).toEqual([
+      expect.stringContaining('debate/primary AAPL: qty 6 -> 60'),
+      expect.stringContaining('debate/no-macro-gate AAPL'),
     ]);
-    expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
-      { message: expect.stringContaining('debate/no-macro-gate') },
+  });
+
+  function brokerHolding(deps: Harness, qty: number): BrokerBookReader {
+    return {
+      read: async (venue) => {
+        const book = await deps.brokerBooks.read(venue);
+        return venue === 'alpaca' ? { ...book, positions: [{ instrument: 'AAPL', qty }] } : book;
+      },
+    };
+  }
+
+  async function brokerHeld101AcrossThreeForTwo(brokerQty: number) {
+    const alpaca = new SplitAlpaca();
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 101, 20);
+    deps.setControl('halt');
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const across = await runCycle(
+      { ...withMarket(deps, threeForTwo), brokerBooks: brokerHolding(deps, brokerQty) },
+      '2026-09-29',
+    );
+    return { deps, entries, across };
+  }
+
+  it('a broker-held 101 shares across 3:2 books 151 and a half-share cash in lieu, and reconciles clean against a broker holding 151', async () => {
+    const { deps, entries, across } = await brokerHeld101AcrossThreeForTwo(151);
+    expect(primary(deps)).toMatchObject({ qty: 151, splitFactor: 1.5 });
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toEqual([
+      {
+        qty: 0.5,
+        price_gbp: expect.closeTo(40 / 3 / FX, 9),
+        fee_gbp: 0,
+        trading_date: '2026-09-29',
+      },
     ]);
+    expect(eventsOf(entries, 'v2_split_cash_in_lieu')).toMatchObject([
+      { level: 'warn', message: expect.stringContaining('debate/primary AAPL: 0.5 share') },
+    ]);
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toEqual([]);
+    expect(across.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+  });
+
+  it('a broker reporting 152 after the 3:2 split raises the reconcile mismatch on the position qty', async () => {
+    const { deps, entries, across } = await brokerHeld101AcrossThreeForTwo(152);
+    expect(primary(deps)?.qty).toBe(151);
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+      { level: 'error', message: expect.stringContaining('position_qty') },
+    ]);
+    expect(across.refusals).toContainEqual(
+      expect.stringMatching(
+        /^debate\/primary: entries blocked, alpaca broker reconcile mismatch: /,
+      ),
+    );
+  });
+
+  it('a broker exit fill of 151 after a 3:2 split on 101 shares closes the position with no stuck half share', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 101, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-three-for-two'),
+      leg: 'stop',
+      price: 12.8,
+      qty: 151,
+      fee: 0,
+      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+    });
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    expect(primary(deps)).toBeUndefined();
+    expect(
+      deps.journal.fillPartsOf('alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29'),
+    ).toMatchObject([{ qty: 0.5, price_gbp: expect.closeTo(40 / 3 / FX, 9) }]);
   });
 
   it('a resting simulated entry that fills on the split day books the order units rescaled, with no false stop_on_entry_bar', async () => {
@@ -3886,8 +4022,10 @@ describe('runCycle: positions held across a split (#1865)', () => {
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
     deps.setControl('halt');
     await runCycle(withMarket(deps, snapshot), '2026-09-30');
-    expect(primary(deps)).toMatchObject({ qty: 6, splitAnchorDate: '2026-09-25' });
-    expect(eventsOf(entries, 'v2_split_broker_qty')).toHaveLength(1);
+    expect(primary(deps)).toMatchObject({ qty: 60, splitAnchorDate: '2026-09-29' });
+    expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
+      { message: expect.stringContaining('debate/primary AAPL: qty 6 -> 60') },
+    ]);
   });
 
   it('a broker exit fill already in post-split units books against the ledger rescaled to its units', async () => {
@@ -4171,6 +4309,48 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     expect(logs).toContainEqual(
       expect.objectContaining({ level: 'error', event: 'v2_reconcile_threw' }),
     );
+  });
+
+  async function heldAaplSweepThrowing(log: (entry: LogEntry) => void) {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([exitAapl, longMsft]);
+    vi.spyOn(deps.executor, 'fetchNewFills').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    const report = await runCycle({ ...deps, logger: { log } }, '2026-09-29');
+    return { alpaca, deps, report };
+  }
+
+  it('a throw from the fill sweep blocks every book entry, still exits and alerts critical (#1927)', async () => {
+    const logs: LogEntry[] = [];
+    const { alpaca, deps, report } = await heldAaplSweepThrowing((entry) => logs.push(entry));
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
+    expect(report.refusals).toEqual(
+      expect.arrayContaining([
+        'debate/primary: entries blocked, fill sweep threw: SQLITE_BUSY',
+        'debate/no-macro-gate: entries blocked, fill sweep threw: SQLITE_BUSY',
+      ]),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'v2_fill_sweep_threw' }),
+    );
+    expect(logs.map((entry) => entry.event)).not.toContain('v2_reconcile_threw');
+  });
+
+  it('a throwing logger does not escape the sweep catch, so exits still run (#1927)', async () => {
+    const { alpaca, report } = await heldAaplSweepThrowing((entry) => {
+      if (entry.event === 'v2_fill_sweep_threw') throw new Error('logger down');
+    });
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
   });
 
   it('live: an unset cash tolerance fails closed, primary entries blocked through a refusal, no critical alert', async () => {
@@ -4648,5 +4828,52 @@ describe('runCycle with per-venue sessions (#1933)', () => {
     });
     expect(report.entries).toBe(2);
     expect(sitOuts(deps)).toEqual([]);
+  });
+});
+
+describe('runCycle: modelled slippage journalled when the order goes out (#1884)', () => {
+  const exitAapl: SleeveDecision = { ...longAapl, action: 'exit', reason: 'judge exit' };
+  const TABLES: FillPricing = { halfSpreadBps: () => 7, impactBps: () => 3, fee: () => 0 };
+
+  function modelled(deps: CycleDeps, bookId: string, orderId: string): unknown {
+    const row = orders(deps, bookId).find((order) => order.client_order_id === orderId);
+    return (JSON.parse(row?.payload ?? '{}') as Record<string, unknown>).modelled_slippage_bps;
+  }
+
+  it('records half spread plus impact on a broker entry and on its flatten, and nothing on a simulated book', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([exitAapl]);
+    await runCycle(deps, '2026-09-28');
+
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeCloseTo(
+      10,
+      9,
+    );
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-28-AAPL-exit')).toBeCloseTo(
+      10,
+      9,
+    );
+    expect(
+      modelled(deps, 'debate/no-macro-gate', 'v2-debate-no-macro-gate-2026-09-25-AAPL'),
+    ).toBeUndefined();
+  });
+
+  it('records nothing on a dry run, where every order is simulated', async () => {
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeUndefined();
+  });
+
+  it('records nothing on an order the broker rejected', async () => {
+    const alpaca = new FakeAlpaca();
+    vi.spyOn(alpaca, 'submitBracket').mockRejectedValueOnce(new Error('no buying power'));
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    const row = orders(deps, 'debate/primary')[0];
+    expect(row?.outcome).toBe('rejected');
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeUndefined();
   });
 });

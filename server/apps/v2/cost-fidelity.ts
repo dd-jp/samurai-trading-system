@@ -11,6 +11,7 @@ import type {
 } from '../../../contracts/index.js';
 import { calendarDaysBetween } from './cycle.js';
 import { quotePerGbp } from './data/index.js';
+import { adversePrice } from './execution/index.js';
 import {
   bracketExit,
   quoted,
@@ -30,7 +31,8 @@ export interface BrokerFillPart {
   readonly feeGbp: number;
 }
 
-// offsetBps: null is an entry at a limit its sleeve set itself; undefined is an exit whose
+// modelledSlippageBps is what the cycle journalled when the order went out; undefined for an order
+// journalled before that, which is priced from today's tables. offsetBps: null is an entry at a limit its sleeve set itself; undefined is an exit whose
 // entry the journal does not hold
 export interface BrokerOrder {
   readonly clientOrderId: string;
@@ -44,6 +46,7 @@ export interface BrokerOrder {
   readonly stop: number | undefined;
   readonly target: number | undefined;
   readonly cancelledOn: string | undefined;
+  readonly modelledSlippageBps: number | undefined;
   readonly offsetBps: number | null | undefined;
   readonly fills: readonly BrokerFillPart[];
 }
@@ -219,8 +222,12 @@ function legCost(
     price: reference,
     crossesSpread,
   });
+  const modelledPrice =
+    order.modelledSlippageBps === undefined
+      ? quote.price
+      : adversePrice(reference, side, crossesSpread ? order.modelledSlippageBps : 0);
   const modelled =
-    group.leg === 'entry' ? withinLimit(side, order.limit as number, quote.price) : quote.price;
+    group.leg === 'entry' ? withinLimit(side, order.limit as number, modelledPrice) : modelledPrice;
   const sign = side === 'buy' ? 1 : -1;
   const referenceGbp = reference / quotePerGbpOn;
   return {
