@@ -1027,8 +1027,8 @@ class Cycle {
         continue;
       }
       if (!stopReplaceable(held, order.venue as Venue)) continue;
-      if (protect === 'rearm') await this.replaceStop(book, held);
-      else await this.submitExit(book, held, 'manual_halt');
+      if (protect === 'exit') await this.submitExit(book, held, 'manual_halt');
+      else await this.replaceStop(book, held);
     }
   }
 

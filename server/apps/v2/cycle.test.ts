@@ -2589,6 +2589,23 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(alpaca.replaces).toEqual([]);
   });
 
+  it('re-arms no part fill whose position already has an exit pending', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(4);
+    const exiting = new Proxy(deps.books, {
+      get: (target, key) => {
+        const value = Reflect.get(target, key, target);
+        if (key !== 'position') return typeof value === 'function' ? value.bind(target) : value;
+        return (bookId: string, instrument: string) => {
+          const held = target.position(bookId, instrument);
+          return held === undefined ? undefined : { ...held, exitClientOrderId: 'pending-exit' };
+        };
+      },
+    });
+    await runCycle({ ...deps, books: exiting }, '2026-09-28').catch(() => undefined);
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
   it('sweeps no extra time for an entry cancelled with nothing filled', async () => {
     const { alpaca, deps } = await partFilledAtVenue(0);
     await runCycle(deps, '2026-09-28');
