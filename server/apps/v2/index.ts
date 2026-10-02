@@ -18,7 +18,7 @@ import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
-import { composeCycle } from './compose.js';
+import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { pushDailySummary } from './daily-summary.js';
 import {
@@ -48,6 +48,7 @@ import {
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import { heartbeatFor, pingJournal, withHeartbeat } from './heartbeat.js';
+import { cycleInputDigests, RecordingBarsSource, recordInputDigests } from './input-digest.js';
 import { type FaultLedger, Journal } from './journal/index.js';
 import {
   assertArm2RunsBesideDebate,
@@ -452,6 +453,32 @@ export async function recordingRefusedCycle<T>(
   }
 }
 
+interface DigestedInputs {
+  readonly db: StoreHandle;
+  readonly clock: Clock;
+  readonly recording: RecordingBarsSource;
+  readonly bars: BarsSource;
+  readonly catalogue: CfdCatalogue | undefined;
+}
+
+export async function runDigestedCycle(
+  cycle: CycleComposition,
+  tradingDate: string,
+  inputs: DigestedInputs,
+): Promise<CycleReport> {
+  inputs.recording.clear();
+  const report = await runCycle(cycle, tradingDate);
+  if (!report.skipped) {
+    recordInputDigests(
+      inputs.db,
+      inputs.clock,
+      tradingDate,
+      cycleInputDigests(inputs.bars, inputs.recording.names(), inputs.catalogue, tradingDate),
+    );
+  }
+  return report;
+}
+
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -468,7 +495,9 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     spendCap,
     logger,
   });
-  const { bars, prime } = barsSourceFor(options);
+  const source = barsSourceFor(options);
+  const { prime } = source;
+  const bars = new RecordingBarsSource(source.bars);
   const constituents = options.constituents ?? constituentsFromCsv(options);
   const market = new BarsMarketData(
     bars,
@@ -531,7 +560,13 @@ export function composeV2Root(options: V2RootOptions): V2Root {
             bothVenuesClosed,
           );
           try {
-            return await runCycle(cycle, options.tradingDate);
+            return await runDigestedCycle(cycle, options.tradingDate, {
+              db,
+              clock,
+              recording: bars,
+              bars: source.bars,
+              catalogue,
+            });
           } finally {
             ukNews?.journalCoverage(options.tradingDate);
           }

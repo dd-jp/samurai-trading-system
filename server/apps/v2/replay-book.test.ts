@@ -199,7 +199,7 @@ describe('replay of sizing, orders, fills and marks', () => {
     expect(formatReplay(result, (text) => text)).toMatch(/identical$/);
   });
 
-  it('detects a changed bar of a held name at the sizing step', async () => {
+  it('names a changed bar of a held name as an input change, then at the sizing step', async () => {
     const barStoreRoot = join(directory, 'revised-parquet');
     const hold = rising(20).map((bar) =>
       bar.date === FILL_DAY ? { ...bar, rawClose: bar.rawClose * 1.03 } : bar,
@@ -207,14 +207,16 @@ describe('replay of sizing, orders, fills and marks', () => {
     await writeBars(barStoreRoot, hold);
     const result = await replayFromFiles({ ...options, barStoreRoot });
     expect(result.divergences[0]).toMatchObject({
+      kind: 'input_changed_since',
+      journalled: { input: 'bars', name: 'HOLD' },
+    });
+    expect(result.divergences[1]).toMatchObject({
       kind: 'row_field',
       stage: 'sizing',
       key: 'debate/primary|UP',
       field: 'size_shares',
     });
-    expect(formatReplay(result, (text) => text)).toContain(
-      'sizing: debate/primary|UP: size_shares differs',
-    );
+    expect(formatReplay(result, (text) => text)).toContain(`HOLD: bars changed since ${EXIT_DAY}`);
   });
 
   it('detects a changed loss-budget state at the gate, before the sizing it changes', async () => {

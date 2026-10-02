@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -195,6 +196,20 @@ describe('loadCfdCatalogue', () => {
     const present = join(dir, 'catalogue.json');
     writeFileSync(present, file({ asOf: '2026-09-29', instruments: [VOD] }));
     expect(loadCfdCatalogue(present)?.lookup('VOD')?.uic).toBe(4_711);
+  });
+
+  it('carries the sha256 of the file bytes and the asOf it read, for the cycle digest', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cfd-catalogue-'));
+    const present = join(dir, 'catalogue.json');
+    writeFileSync(present, `${file({ asOf: '2026-09-29', instruments: [VOD] })}\n`);
+    const bytes = createHash('sha256').update(readFileSync(present)).digest('hex');
+    const loaded = loadCfdCatalogue(present);
+    expect(loaded?.sha256).toBe(bytes);
+    expect(loaded?.asOf).toBe('2026-09-29');
+    expect(parseCfdCatalogue(readFileSync(present, 'utf8')).sha256).toBe(bytes);
+    expect(new CfdCatalogue({ asOf: '2026-09-29', instruments: [] }).sha256).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
   });
 
   it('throws on a present but malformed file rather than pretending it is absent', () => {
