@@ -9,6 +9,7 @@ import {
   healthchecksHeartbeat,
   heartbeatFor,
   NO_HEARTBEAT,
+  optionalHeartbeat,
   pingJournal,
   withHeartbeat,
 } from './heartbeat.js';
@@ -244,5 +245,52 @@ describe('a missing store', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('optionalHeartbeat', () => {
+  const specWith = (unset: string[], dryRun = false) => ({
+    dryRun,
+    envName: 'HC_TEST_URL',
+    subject: 'widget',
+    onUnset: (message: string) => unset.push(message),
+  });
+
+  it('pings the env URL when set', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const unset: string[] = [];
+    const { logger } = recorder();
+    await optionalHeartbeat(specWith(unset), { HC_TEST_URL: SECRET }, fetchImpl, logger)('success');
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([SECRET]);
+    expect(unset).toEqual([]);
+  });
+
+  it.each([undefined, '', '  '])(
+    'reports unset once and never pings when the URL is %j',
+    async (raw) => {
+      const fetchImpl = vi.fn();
+      const unset: string[] = [];
+      const { logger } = recorder();
+      const beat = optionalHeartbeat(specWith(unset), { HC_TEST_URL: raw }, fetchImpl, logger);
+      await beat('success');
+      await beat('fail');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(unset).toEqual(['HC_TEST_URL is not set: no healthchecks ping for the widget']);
+    },
+  );
+
+  it('never pings or reports unset in a dry run', async () => {
+    const fetchImpl = vi.fn();
+    const unset: string[] = [];
+    const { logger } = recorder();
+    await optionalHeartbeat(
+      specWith(unset, true),
+      { HC_TEST_URL: SECRET },
+      fetchImpl,
+      logger,
+    )('success');
+    await optionalHeartbeat(specWith(unset, true), {}, fetchImpl, logger)('success');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(unset).toEqual([]);
   });
 });
