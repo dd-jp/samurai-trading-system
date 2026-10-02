@@ -5270,6 +5270,84 @@ describe('a stale 1 January GBP/USD fix (#2009)', () => {
     ]);
   });
 
+  function fxRefusalRows(deps: CycleDeps) {
+    return journalDb(deps)
+      .prepare(
+        "SELECT trading_date, scope, ticket, book_id, instrument FROM v2_refusals WHERE parameter = 'FX_YEAR_START_COVERAGE' ORDER BY trading_date, scope, book_id",
+      )
+      .all();
+  }
+
+  it('journals no entry refusal for a decision that is not an entry', async () => {
+    const deps = harness([{ ...longAapl, action: 'skip' }], true);
+    vi.spyOn(deps.market, 'gbpUsdYearStartFixDate').mockReturnValue('2025-12-19');
+    const report = await runCycle(deps, '2026-09-25');
+    expect(report.refusals).toContain(STALE);
+    expect(fxRefusalRows(deps)).toEqual([
+      {
+        trading_date: '2026-09-25',
+        scope: 'data',
+        ticket: '#2009',
+        book_id: null,
+        instrument: null,
+      },
+    ]);
+  });
+
+  it('reads the new year’s fix across the year boundary: 31 Dec enters, 2 Jan refuses on a series ending 19 Dec', async () => {
+    const deps = harness([longAapl], true, undefined, [2026, 2027]);
+    const series = new BarsMarketData({ load: () => undefined }, [
+      { date: '2025-12-31', gbpUsd: FX },
+      { date: '2026-12-19', gbpUsd: FX },
+    ]);
+    vi.spyOn(deps.market, 'gbpUsdYearStartFixDate').mockImplementation((year) =>
+      series.gbpUsdYearStartFixDate(year),
+    );
+    const lastDay = await runCycle(deps, '2026-12-31');
+    expect(lastDay.refusals.some((message) => message.includes('XUDLUSS'))).toBe(false);
+    expect(sizeShares(deps, 'debate/primary', '2026-12-31', 'AAPL')).toBeGreaterThan(0);
+    deps.setDecisions([{ ...longAapl, instrument: 'MSFT' }]);
+    const newYear = await runCycle(deps, '2027-01-02');
+    expect(newYear.refusals).toContain(
+      'last BoE XUDLUSS fix on or before 2027-01-01 is 2026-12-19, more than 7 days before it: entries refused (postmortem §2, #2009)',
+    );
+    expect(sizeShares(deps, 'debate/primary', '2027-01-02', 'MSFT')).toBe(0);
+    expect(fxRefusalRows(deps)).toEqual([
+      {
+        trading_date: '2027-01-02',
+        scope: 'data',
+        ticket: '#2009',
+        book_id: null,
+        instrument: null,
+      },
+      {
+        trading_date: '2027-01-02',
+        scope: 'entry',
+        ticket: '#2009',
+        book_id: 'debate/no-macro-gate',
+        instrument: 'MSFT',
+      },
+      {
+        trading_date: '2027-01-02',
+        scope: 'entry',
+        ticket: '#2009',
+        book_id: 'debate/primary',
+        instrument: 'MSFT',
+      },
+    ]);
+  });
+
+  it('a 31 December fix keeps 2 January entries open', async () => {
+    const deps = harness([longAapl], true, undefined, [2026, 2027]);
+    vi.spyOn(deps.market, 'gbpUsdYearStartFixDate').mockImplementation((year) =>
+      year === 2027 ? '2026-12-31' : '2025-12-31',
+    );
+    const report = await runCycle(deps, '2027-01-02');
+    expect(report.refusals.some((message) => message.includes('XUDLUSS'))).toBe(false);
+    expect(sizeShares(deps, 'debate/primary', '2027-01-02', 'AAPL')).toBeGreaterThan(0);
+    expect(fxRefusalRows(deps)).toEqual([]);
+  });
+
   it('a fresh fix leaves entries and the cycle refusals unchanged', async () => {
     const deps = harness([longAapl], true);
     const log = vi.fn();

@@ -629,6 +629,17 @@ describe('V2RiskGate', () => {
       { size: 0, refusal: 'fx_year_start_stale' },
     );
     expect(gate({ fixDate: '2025-12-25' }).approveEntry(request()).size).toBe(6);
+    for (const action of ['skip', 'exit', 'none'] as const) {
+      expect(stale.approveEntry(request({ decision: { ...decision, action } }))).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'zero_size',
+      });
+    }
+    expect(stale.approveEntry(request({ decision: cfdShort }))).toMatchObject({
+      size: 0,
+      refusal: 'fx_year_start_stale',
+    });
     const held: Position = {
       instrument: 'AAPL',
       venue: 'alpaca',

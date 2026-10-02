@@ -60,6 +60,10 @@ function sideOf(decision: SleeveDecision): 'buy' | 'sell' {
   return decision.action === 'enter_short' ? 'sell' : 'buy';
 }
 
+function isEntryDecision(decision: SleeveDecision): boolean {
+  return decision.action === 'enter_long' || decision.action === 'enter_short';
+}
+
 function entryToStop(limit: number, stop: number | undefined): number {
   return stop === undefined ? 0 : Math.abs(limit - stop);
 }
@@ -136,7 +140,7 @@ export class V2RiskGate implements RiskGate {
 
   approveEntry(request: EntryRequest): EntryApproval {
     const { decision } = request;
-    if (this.fxRefusal(request.tradingDate) !== undefined) {
+    if (isEntryDecision(decision) && this.fxRefusal(request.tradingDate) !== undefined) {
       return { size: 0, order: undefined, refusal: 'fx_year_start_stale' };
     }
     const venueRefusal = venueRefusalFor(decision, this.deps.venueRefusal);
@@ -224,7 +228,7 @@ export class V2RiskGate implements RiskGate {
 
   #size(request: EntryRequest): Sizing {
     const { book, decision, tradingDate } = request;
-    if (decision.action !== 'enter_long' && decision.action !== 'enter_short') return { size: 0 };
+    if (!isEntryDecision(decision)) return { size: 0 };
     const capital = this.deps.capital.inForce(tradingDate);
     if (capital === undefined) return { size: 0 };
     const spec = this.deps.spec(book.sleeve);

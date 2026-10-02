@@ -1428,7 +1428,7 @@ class Cycle {
       trading_date: this.tradingDate,
       scope: 'entry',
       parameter,
-      ticket: 'docs/research/66-v2-grill-decisions.md D8',
+      ticket: SIZING_REFUSAL_TICKETS[refusal ?? ''] ?? 'docs/research/66-v2-grill-decisions.md D8',
       message: `${book.id} ${decision.instrument}: ${refusal}`,
       book_id: book.id,
       instrument: decision.instrument,
@@ -1556,6 +1556,10 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   fx_year_start_stale: 'FX_YEAR_START_COVERAGE',
   short_requires_cfd: 'CFD_VENUE_ROUTE',
   long_on_cfd: 'CFD_VENUE_ROUTE',
+};
+
+const SIZING_REFUSAL_TICKETS: Readonly<Record<string, string>> = {
+  fx_year_start_stale: '#2009',
 };
 
 function recordRefusal(
