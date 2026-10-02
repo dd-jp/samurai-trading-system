@@ -181,19 +181,27 @@ export class Journal implements DecisionJournal {
   recordFillRead(read: JournalledFillRead): void {
     this.db
       .prepare(
-        `INSERT INTO v2_fill_reads (trading_date, client_order_id, filled_qty, error, recorded_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(read.trading_date, read.client_order_id, read.filled_qty, read.error, this.#now());
+      .run(
+        read.run_id,
+        read.trading_date,
+        read.client_order_id,
+        read.filled_qty,
+        read.error,
+        this.#now(),
+      );
   }
 
-  recordFillSweep(tradingDate: string): void {
+  recordFillSweep(runId: string, tradingDate: string): void {
     this.db
       .prepare(
-        `INSERT INTO v2_fill_sweeps (trading_date, last_fill_rowid, recorded_at)
-         VALUES (?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), ?)`,
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
+         VALUES (?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), ?)`,
       )
-      .run(tradingDate, this.#now());
+      .run(runId, tradingDate, this.#now());
   }
 
   markCancelled(clientOrderId: string, detail: string): void {

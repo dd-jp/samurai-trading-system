@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   BookDay,
   BookLedger,
@@ -270,6 +271,7 @@ export function stopReplaceable(held: Position | undefined, venue: Venue): held 
 }
 
 class Cycle {
+  readonly runId = randomUUID();
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
   readonly #entriesBlocked = new Set<string>();
@@ -306,8 +308,11 @@ class Cycle {
   async sweepFills(): Promise<void> {
     const sweep = await this.deps.executor.fetchNewFills(this.since());
     for (const failure of sweep.failures) this.log('warn', 'v2_fill_sweep_failed', failure);
-    for (const fill of sweep.fills) this.ingest(fill);
-    this.deps.journal.recordFillSweep(this.tradingDate);
+    try {
+      for (const fill of sweep.fills) this.ingest(fill);
+    } finally {
+      this.deps.journal.recordFillSweep(this.runId, this.tradingDate);
+    }
   }
 
   since(): string {
@@ -1003,6 +1008,7 @@ class Cycle {
 
   recordFillRead(clientOrderId: string, filledQty: number | null, error: string | null): void {
     this.deps.journal.recordFillRead({
+      run_id: this.runId,
       trading_date: this.tradingDate,
       client_order_id: clientOrderId,
       filled_qty: filledQty,

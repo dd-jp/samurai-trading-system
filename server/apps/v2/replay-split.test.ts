@@ -495,6 +495,29 @@ describe('replay of an entry part filled at the venue before the journal booked 
     expect(result.divergences).toEqual([]);
   });
 
+  it('replays a retried date identical from the run that marked it, whatever the run before it journalled (#1990)', async () => {
+    const storePath = tamperedCopy(
+      'retried',
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
+         SELECT 'crashed', trading_date, last_fill_rowid, '${SPLIT_DAY}T07:29:00.000Z'
+           FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}' ORDER BY sweep_id LIMIT 1;
+       INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         SELECT 'crashed', trading_date, client_order_id, NULL, 'order read timed out',
+                '${SPLIT_DAY}T07:29:00.000Z'
+           FROM v2_fill_reads WHERE trading_date = '${SPLIT_DAY}';`,
+      partOptions.storePath,
+    );
+    expect(
+      journalRows(
+        `SELECT COUNT(DISTINCT run_id) AS runs FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'`,
+        storePath,
+      ),
+    ).toEqual([{ runs: 2 }]);
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
   it('diverges when the journalled fill read is missing, never defaulting it', async () => {
     const storePath = tamperedCopy(
       'no-fill-reads',

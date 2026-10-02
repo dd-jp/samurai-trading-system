@@ -98,17 +98,23 @@ export class JournalReplayBroker implements BrokerAdapter {
     return this.#answer(clientOrderId);
   }
 
-  // Each read the replayed cycle makes re-serves the journalled read in turn; one with no recording
-  // fails, since a default would decide the replay differently from the run
+  // Each read the replayed cycle makes re-serves in turn the reads of the last run, by the marks,
+  // that read that order: on a date that ran twice that is the run whose answer was acted on. One
+  // with no recording fails, since a default would decide the replay differently from the run
   getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
     const index = this.#reads.get(clientOrderId) ?? 0;
     this.#reads.set(clientOrderId, index + 1);
-    const read = this.day.db
+    const { db, tradingDate } = this.day;
+    const read = db
       .prepare(
         `SELECT filled_qty, error FROM v2_fill_reads
-         WHERE trading_date = ? AND client_order_id = ? ORDER BY read_id LIMIT 1 OFFSET ?`,
+         WHERE trading_date = @date AND client_order_id = @id AND run_id = (
+           SELECT run_id FROM v2_fill_reads
+            WHERE trading_date = @date AND client_order_id = @id AND recorded_at <= @end
+            ORDER BY recorded_at DESC, read_id DESC LIMIT 1)
+         ORDER BY read_id LIMIT 1 OFFSET @index`,
       )
-      .get(this.day.tradingDate, clientOrderId, index) as
+      .get({ date: tradingDate, id: clientOrderId, end: this.#markedAt(), index }) as
       | { filled_qty: number | null; error: string | null }
       | undefined;
     if (read === undefined) {
@@ -246,18 +252,21 @@ export class JournalReplayBroker implements BrokerAdapter {
     });
   }
 
-  // The cycle reconciles after its first sweep, so a fill journalled after the day's first
-  // reconcile was booked at the second sweep and must not be visible to the decisions or exits
-  // Each sweep serves the fills the journalled sweep in the same place had booked. A day journalled
-  // before sweeps were recorded swept once before its first reconcile and once at the close
+  // Sweep N serves the fills the marking run's sweep N had booked: the last run to sweep by the
+  // day's marks, so a crashed run before it or a flatten pass after it is not served. A day
+  // journalled before sweeps were recorded swept once before its first reconcile and once at the
+  // close
   #sweepCut(sweep: number): number {
     const { db, tradingDate } = this.day;
     const recorded = db
       .prepare(
-        `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps WHERE trading_date = ?
+        `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps
+         WHERE trading_date = @date AND run_id = (
+           SELECT run_id FROM v2_fill_sweeps WHERE trading_date = @date AND recorded_at <= @end
+            ORDER BY recorded_at DESC, sweep_id DESC LIMIT 1)
          ORDER BY sweep_id`,
       )
-      .all(tradingDate) as { cut: number }[];
+      .all({ date: tradingDate, end: this.#markedAt() }) as { cut: number }[];
     if (recorded.length === 0)
       return sweep === 1 ? this.#rowidAt(this.#firstReconcileAt()) : ALL_ROWS;
     const row = recorded[sweep - 1];
@@ -265,6 +274,13 @@ export class JournalReplayBroker implements BrokerAdapter {
       throw new Error(`replay: row_missing: no journalled fill sweep ${sweep} on ${tradingDate}`);
     }
     return row.cut;
+  }
+
+  #markedAt(): string {
+    const row = this.day.db
+      .prepare('SELECT MAX(recorded_at) AS at FROM v2_book_days WHERE trading_date = ?')
+      .get(this.day.tradingDate) as { at: string | null };
+    return row.at ?? LATEST;
   }
 
   #rowidAt(at: string): number {

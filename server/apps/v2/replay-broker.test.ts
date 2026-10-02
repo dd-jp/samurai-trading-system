@@ -117,13 +117,59 @@ describe('JournalReplayBroker', () => {
     expect(await ids()).toEqual(['early', 'late']);
   });
 
-  const swept = () =>
+  const swept = (runId = 'run-1', at = `${DAY}T07:30:00.000Z`) =>
     db
       .prepare(
-        `INSERT INTO v2_fill_sweeps (trading_date, last_fill_rowid, recorded_at)
-         VALUES (?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), 'now')`,
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
+         VALUES (?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), ?)`,
       )
-      .run(DAY);
+      .run(runId, DAY, at);
+
+  const fillRead = (
+    runId: string,
+    clientOrderId: string,
+    qty: number | null,
+    error: string | null = null,
+    at = `${DAY}T07:30:00.000Z`,
+  ) =>
+    db
+      .prepare(
+        `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(runId, DAY, clientOrderId, qty, error, at);
+
+  const marked = (at: string) =>
+    db
+      .prepare(
+        `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
+           ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+         VALUES ('debate/primary', ?, 600, 600, 0, 0, 1, 0, 0, ?)`,
+      )
+      .run(DAY, at);
+
+  it('serves a date that ran twice from the run that marked it, not a crashed run before it or a pass after it (#1990)', async () => {
+    order('sent', 'submitted', {});
+    swept('crashed', `${DAY}T07:30:00.000Z`);
+    fillRead('crashed', 'entry', 1, null, `${DAY}T07:30:00.000Z`);
+    fill('alpaca:first', 'sent', 7);
+    swept('retry', `${DAY}T07:40:00.000Z`);
+    fillRead('retry', 'entry', 3, null, `${DAY}T07:40:00.000Z`);
+    fill('alpaca:mid', 'sent', 7);
+    swept('retry', `${DAY}T07:40:01.000Z`);
+    marked(`${DAY}T07:40:02.000Z`);
+    fill('alpaca:after', 'sent', 7);
+    swept('flatten', `${DAY}T15:00:00.000Z`);
+    fillRead('flatten', 'entry', 7, null, `${DAY}T15:00:00.000Z`);
+    const replay = broker();
+    const ids = async () => (await replay.fetchNewFills()).map((f) => f.broker_fill_id);
+    expect(await ids()).toEqual(['first']);
+    expect(await ids()).toEqual(['first', 'mid']);
+    await expect(replay.fetchNewFills()).rejects.toThrow('row_missing: no journalled fill sweep 3');
+    await expect(replay.getOrder('entry')).resolves.toMatchObject({ filled_qty: 3 });
+    await expect(replay.getOrder('entry')).rejects.toThrow('row_missing');
+  });
 
   it('serves each sweep exactly the fills its journalled sweep had booked, and fails a sweep never journalled (#1990)', async () => {
     order('sent', 'submitted', {});
@@ -145,19 +191,15 @@ describe('JournalReplayBroker', () => {
 
   it('re-serves each journalled fill read of an order in turn, and fails one never journalled (#1990)', async () => {
     const read = (clientOrderId: string, qty: number | null, error: string | null = null) =>
-      db
-        .prepare(
-          `INSERT INTO v2_fill_reads (trading_date, client_order_id, filled_qty, error, recorded_at)
-           VALUES (?, ?, ?, ?, 'now')`,
-        )
-        .run(DAY, clientOrderId, qty, error);
+      fillRead('run-1', clientOrderId, qty, error);
     read('entry', 4);
     read('entry', null);
     read('entry', null, 'order read timed out');
     read('other', 2);
     db.prepare(
-      `INSERT INTO v2_fill_reads (trading_date, client_order_id, filled_qty, error, recorded_at)
-       VALUES ('2026-09-29', 'entry', 9, NULL, 'now')`,
+      `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+         recorded_at)
+       VALUES ('run-0', '2026-09-29', 'entry', 9, NULL, 'now')`,
     ).run();
     const replay = broker();
     await expect(replay.getOrder('entry')).resolves.toEqual({

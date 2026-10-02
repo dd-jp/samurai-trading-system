@@ -1,8 +1,10 @@
 -- What the venue answered during a run, so a replay serves the same answers (#1990). A fill read
 -- is the filled qty the cycle read for an entry before cancelling it (NULL qty: the venue knew no
--- such order); a fill sweep is the last v2_fills rowid booked when that sweep ended
+-- such order); a fill sweep is the last v2_fills rowid booked when that sweep ended. run_id names
+-- the cycle or flatten pass that wrote the row, so a date that ran twice is served run by run
 CREATE TABLE IF NOT EXISTS v2_fill_reads (
   read_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id           TEXT NOT NULL,
   trading_date     TEXT NOT NULL,
   client_order_id  TEXT NOT NULL,
   filled_qty       REAL,
@@ -15,6 +17,7 @@ CREATE INDEX IF NOT EXISTS v2_fill_reads_by_order ON v2_fill_reads (trading_date
 
 CREATE TABLE IF NOT EXISTS v2_fill_sweeps (
   sweep_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id           TEXT NOT NULL,
   trading_date     TEXT NOT NULL,
   last_fill_rowid  INTEGER NOT NULL,
   recorded_at      TEXT NOT NULL

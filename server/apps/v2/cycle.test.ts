@@ -2647,6 +2647,29 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     ]);
   });
 
+  it('journals the cut of a sweep whose booking throws, so the later sweeps keep their places', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(0);
+    const before = venueReads(deps).sweeps.length;
+    alpaca.cumulative(ENTRY, 'entry', 2, 20);
+    let thrown = false;
+    const throwing = new Proxy(deps.journal, {
+      get: (target, key) => {
+        const value = Reflect.get(target, key, target);
+        if (key !== 'recordFill' || thrown) {
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return () => {
+          thrown = true;
+          throw new Error('disk full');
+        };
+      },
+    });
+    await runCycle({ ...deps, journal: throwing }, '2026-09-28').catch(() => undefined);
+    expect(thrown).toBe(true);
+    const sweeps = (venueReads(deps).sweeps as { trading_date: string }[]).slice(before);
+    expect(sweeps.map((sweep) => sweep.trading_date)).toEqual(['2026-09-28', '2026-09-28']);
+  });
+
   it('journals a read the venue answered with no order as null, and a failed read with its error', async () => {
     const { alpaca, deps } = await partFilledAtVenue(0);
     await runCycle(deps, '2026-09-28');
