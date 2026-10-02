@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { wrapUntrusted } from '../../../pipeline/debate-engine/index.js';
+import {
+  LlmMalformedResponseError,
+  LlmProviderError,
+  LlmRateLimitError,
+  LlmRefusalError,
+  LlmTimeoutError,
+  LlmTruncatedError,
+  wrapUntrusted,
+} from '../../../pipeline/debate-engine/index.js';
 import { JUDGE_PIN } from './models.js';
 import {
   commonPrefixLength,
@@ -16,7 +24,16 @@ import {
 const MODEL = JUDGE_PIN.priced;
 
 function call(id: number, prompt: string, response: string | null = `r${id}`): LoggedCall {
-  return { id, traceId: 'v2-2026-09-30-UP', model: MODEL, prompt, response };
+  return {
+    id,
+    traceId: 'v2-2026-09-30-UP',
+    model: MODEL,
+    prompt,
+    response,
+    stopReason: null,
+    errorClass: null,
+    errorMessage: null,
+  };
 }
 
 function debatePrompt(views: unknown): string {
@@ -41,8 +58,10 @@ describe('loggedPromptOf', () => {
 
 describe('isTruncatedResponse', () => {
   it('needs both the cap length and the suffix', () => {
-    expect(isTruncatedResponse(`${'x'.repeat(4_096)}… (truncated, 5000 chars total)`)).toBe(true);
+    expect(isTruncatedResponse(`${'x'.repeat(16_384)}… (truncated, 20000 chars total)`)).toBe(true);
     expect(isTruncatedResponse('short… (truncated, 5000 chars total)')).toBe(false);
+    expect(isTruncatedResponse(`${'x'.repeat(4_096)}… (truncated, 5000 chars total)`)).toBe(true);
+    expect(isTruncatedResponse(`${'x'.repeat(5_000)}… (truncated, 9000 chars total)`)).toBe(false);
     expect(isTruncatedResponse('x'.repeat(5_000))).toBe(false);
   });
 });
@@ -57,15 +76,15 @@ describe('commonPrefixLength', () => {
 describe('ReplayLog', () => {
   it('serves repeated requests in logged order and keeps what was not asked for', () => {
     const log = new ReplayLog([call(3, 'p', 'second'), call(1, 'p', 'first'), call(2, 'q')]);
-    expect(log.serve(MODEL, 'p')).toBe('first');
-    expect(log.serve(MODEL, 'p')).toBe('second');
+    expect(log.serve(MODEL, 'p').response).toBe('first');
+    expect(log.serve(MODEL, 'p').response).toBe('second');
     expect(log.unserved().map((entry) => entry.id)).toEqual([2]);
     expect(log.misses).toEqual([]);
   });
 
   it('matches a prompt whose view timestamps differ from the logged ones', () => {
     const log = new ReplayLog([call(1, '"timestamp": "2026-09-30T07:30:00.000Z"')]);
-    expect(log.serve(MODEL, '"timestamp": "2026-09-30T00:00:00.000Z"')).toBe('r1');
+    expect(log.serve(MODEL, '"timestamp": "2026-09-30T00:00:00.000Z"').id).toBe(1);
   });
 
   it('refuses an unlogged request and names the nearest logged prompt of that model', () => {
@@ -95,6 +114,13 @@ describe('ReplayLog', () => {
     expect(() => log.serve(MODEL, 'p')).toThrow('response_not_logged');
     expect(log.misses[0]).toMatchObject({ kind: 'response_not_logged', offset: 1 });
   });
+
+  it('serves a failed call, which has no response, as itself', () => {
+    const failed = { ...call(1, 'p', null), errorClass: 'LlmProviderError', errorMessage: 'down' };
+    const log = new ReplayLog([failed]);
+    expect(log.serve(MODEL, 'p')).toBe(failed);
+    expect(log.misses).toEqual([]);
+  });
 });
 
 describe('ReplayTransport', () => {
@@ -112,6 +138,45 @@ describe('ReplayTransport', () => {
       stop_reason: 'end_turn',
       model: MODEL,
     });
+  });
+
+  const ask = (transport: ReplayTransport) =>
+    transport.createMessage({
+      model: JUDGE_PIN.wire,
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'p' }],
+    });
+
+  it('answers with the logged stop reason, so a refusal replays as a refusal', async () => {
+    const refused = { ...call(1, 'p', ''), stopReason: 'refusal' };
+    await expect(
+      ask(new ReplayTransport(JUDGE_PIN, new ReplayLog([refused]))),
+    ).resolves.toMatchObject({ stop_reason: 'refusal', content: [{ type: 'text', text: '' }] });
+  });
+
+  it.each([
+    ['LlmTimeoutError:status', LlmTimeoutError, { source: 'status' }],
+    ['LlmTimeoutError:deadline', LlmTimeoutError, { source: 'deadline' }],
+    ['LlmRateLimitError', LlmRateLimitError, {}],
+    ['LlmMalformedResponseError', LlmMalformedResponseError, {}],
+    ['LlmRefusalError', LlmRefusalError, {}],
+    ['LlmTruncatedError', LlmTruncatedError, {}],
+    ['LlmProviderError', LlmProviderError, {}],
+    ['LlmAdmissionRefusedError', LlmProviderError, {}],
+  ])('rejects a logged %s failure with its class and message', async (errorClass, type, fields) => {
+    const failed = { ...call(1, 'p', null), errorClass, errorMessage: 'gone wrong' };
+    const rejection = await ask(new ReplayTransport(JUDGE_PIN, new ReplayLog([failed]))).catch(
+      (error: unknown) => error,
+    );
+    expect(rejection).toBeInstanceOf(type);
+    expect(rejection).toMatchObject({ message: 'gone wrong', ...fields });
+  });
+
+  it('rejects a failure logged without a message with an empty one', async () => {
+    const failed = { ...call(1, 'p', null), errorClass: 'LlmProviderError' };
+    await expect(ask(new ReplayTransport(JUDGE_PIN, new ReplayLog([failed])))).rejects.toThrow(
+      /^$/,
+    );
   });
 
   it('rejects instead of calling a model when the request is not logged', async () => {

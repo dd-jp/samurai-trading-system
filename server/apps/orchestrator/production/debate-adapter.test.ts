@@ -1114,7 +1114,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     ).rejects.toThrow('llm transport blew up mid-debate');
 
     const rows = spendRows(db);
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows.every((row) => row.debate_id === computeDebateId('AAPL', NOW, views))).toBe(true);
   });
 });

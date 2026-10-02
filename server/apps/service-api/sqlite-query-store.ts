@@ -560,6 +560,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
            COALESCE(SUM(output_tokens), 0)               AS output_tokens,
            COALESCE(SUM(cache_read_input_tokens), 0)     AS cache_read_input_tokens,
            COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
+           -- every attempt, unbilled failures included since #1980, as billed ones already were
            COUNT(*)                                      AS calls,
            COALESCE(SUM(cost_usd IS NULL), 0)            AS unpriced_calls,
            COALESCE(SUM(debate_id IS NULL), 0)           AS unattributed_calls
