@@ -318,6 +318,7 @@ describe('JournalReader (P9)', () => {
                 fills: [
                   {
                     fill_id: 'fill-1',
+                    leg: 'entry',
                     qty: 3,
                     price_gbp: 80,
                     fee_gbp: 0.2,
