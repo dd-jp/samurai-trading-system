@@ -1529,6 +1529,19 @@ async function sweepFillsOrBlockEntries(
   }
 }
 
+async function syncBooksThenReconcile(
+  deps: CycleDeps,
+  cycle: Cycle,
+  tradingDate: string,
+): Promise<ReconcileOutcome> {
+  const sweepFailure = await sweepFillsOrBlockEntries(deps, cycle, tradingDate);
+  cycle.rescaleSplitPositions();
+  await cycle.cancelEntriesBlockedAtLastMark();
+  cycle.fillSimulatedEntries();
+  cycle.fillSimulatedExits();
+  return sweepFailure ?? (await reconcileOrBlockEntries(deps, tradingDate));
+}
+
 async function runUnmarked(
   deps: CycleDeps,
   tradingDate: string,
@@ -1540,12 +1553,7 @@ async function runUnmarked(
     ...controlRefusals(deps, tradingDate, control),
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
-  const sweepFailure = await sweepFillsOrBlockEntries(deps, cycle, tradingDate);
-  cycle.rescaleSplitPositions();
-  await cycle.cancelEntriesBlockedAtLastMark();
-  cycle.fillSimulatedEntries();
-  cycle.fillSimulatedExits();
-  cycle.blockEntries(sweepFailure ?? (await reconcileOrBlockEntries(deps, tradingDate)));
+  cycle.blockEntries(await syncBooksThenReconcile(deps, cycle, tradingDate));
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {
