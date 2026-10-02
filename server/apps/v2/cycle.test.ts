@@ -4548,7 +4548,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
     'a $split split whose re-place fails after the cancel flattens the position at market and alerts critical',
     async ({ bars, held }) => {
       const failed = new ProtectiveReplaceError('place', 'oco rejected', { cause: undefined });
-      const { deps, entries, across, alpaca } = await brokerHeld101Across(
+      const { deps, entries, across, alpaca, next } = await brokerHeld101Across(
         bars(),
         held,
         (stop) => ({ qty: 101, stopPrice: stop }),
@@ -4581,6 +4581,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
         },
       ]);
       expect(across.refusals).toContainEqual(expect.stringContaining('the re-place failed'));
+      await next('2026-09-30');
+      expect(alpaca.replaces).toHaveLength(1);
     },
   );
 

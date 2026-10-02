@@ -275,14 +275,9 @@ function blockGroup(
   });
 }
 
-const PROTECTIVE_KINDS: ReadonlySet<ReconcileDiff['kind']> = new Set([
-  'protective_qty',
-  'protective_price',
-]);
-
 function staleStopsOf(venue: Venue, diffs: readonly ReconcileDiff[]): StaleStop[] {
   const instruments = diffs
-    .filter((entry) => PROTECTIVE_KINDS.has(entry.kind))
+    .filter((entry) => entry.kind === 'protective_qty' || entry.kind === 'protective_price')
     .map((entry) => entry.instrument as string);
   return [...new Set(instruments)].map((instrument) => ({ venue, instrument }));
 }
