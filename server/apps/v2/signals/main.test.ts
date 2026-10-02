@@ -5,9 +5,22 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LogEntry } from '../../../shared/index.js';
 import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
-import { SIGNALS_BEAT_EVERY_MS } from './liveness.js';
+import { SIGNALS_BEAT_EVERY_MS, SIGNALS_PASS_STUCK_MS } from './liveness.js';
 import { SIGNAL_POLL_MS } from './loop.js';
 import { composeSignals, main, parsePort, parseSignalsArgs, signalsHeartbeat } from './main.js';
+
+const rootMock = vi.hoisted(() => ({ hang: false }));
+
+vi.mock('../index.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../index.js')>();
+  return {
+    ...real,
+    composeV2Root: (...args: Parameters<typeof real.composeV2Root>) =>
+      rootMock.hang
+        ? { processSignals: () => new Promise<never>(() => {}), close: () => {} }
+        : real.composeV2Root(...args),
+  };
+});
 
 const clock = { now: () => new Date('2026-09-30T15:00:00.000Z') };
 const dirs: string[] = [];
@@ -19,6 +32,7 @@ function tempStorePath(): string {
 }
 
 afterEach(() => {
+  rootMock.hang = false;
   vi.useRealTimers();
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -124,6 +138,39 @@ describe('composeSignals', () => {
       await loop.tick();
       expect(failedPasses()).toBe(5);
       expect(beats).toEqual(['fail']);
+    } finally {
+      await server.stop();
+      db.close();
+    }
+  });
+
+  it('holds its success ping while a pass hangs past the bound', async () => {
+    rootMock.hang = true;
+    let nowMs = clock.now().getTime();
+    const beats: string[] = [];
+    const { server, db, liveness } = composeSignals(
+      { storePath: tempStorePath(), port: 0, dryRun: false },
+      { now: () => new Date(nowMs) },
+      {},
+      { log: () => {} },
+      (outcome) => {
+        beats.push(outcome);
+        return Promise.resolve();
+      },
+    );
+    try {
+      await server.start();
+      await fetch(`${server.url}/api/v2/signals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: 'INTC', entry: 24.5, targets: [26], stop: 23 }),
+      });
+      nowMs += SIGNALS_BEAT_EVERY_MS;
+      liveness.beat();
+      expect(beats).toEqual(['success']);
+      nowMs += SIGNALS_PASS_STUCK_MS;
+      liveness.beat();
+      expect(beats).toEqual(['success']);
     } finally {
       await server.stop();
       db.close();

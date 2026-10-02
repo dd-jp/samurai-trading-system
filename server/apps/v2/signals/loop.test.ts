@@ -150,4 +150,35 @@ describe('SignalLoop', () => {
     }).loop.tick();
     expect(onPass.mock.calls).toEqual([[false]]);
   });
+
+  it('reports the age of the pass in flight and none when idle or after it ends', async () => {
+    let nowMs = NOW.getTime();
+    let release: () => void = () => {};
+    const { loop } = harness(
+      { clock: { now: () => new Date(nowMs) } },
+      () =>
+        new Promise<SignalPass>((resolve) => {
+          release = () => resolve({ ran: true, outcomes: [] });
+        }),
+    );
+    expect(loop.passAgeMs()).toBeUndefined();
+    const running = loop.tick();
+    nowMs += 90_000;
+    expect(loop.passAgeMs()).toBe(90_000);
+    release();
+    await running;
+    expect(loop.passAgeMs()).toBeUndefined();
+  });
+
+  it('has no pass age while nothing is due', async () => {
+    const idle = harness({ signals: { due: () => [], appendEvent: () => {} } });
+    await idle.loop.tick();
+    expect(idle.loop.passAgeMs()).toBeUndefined();
+  });
+
+  it('clears the pass age when the pass throws', async () => {
+    const { loop } = harness({}, () => Promise.reject(new Error('boom')));
+    await loop.tick();
+    expect(loop.passAgeMs()).toBeUndefined();
+  });
 });

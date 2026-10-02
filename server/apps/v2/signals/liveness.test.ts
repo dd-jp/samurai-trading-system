@@ -1,20 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HeartbeatOutcome } from '../heartbeat.js';
-import { SIGNALS_BEAT_EVERY_MS, SIGNALS_FAIL_AFTER, SignalsLiveness } from './liveness.js';
+import {
+  SIGNALS_BEAT_EVERY_MS,
+  SIGNALS_FAIL_AFTER,
+  SIGNALS_PASS_STUCK_MS,
+  SignalsLiveness,
+} from './liveness.js';
 
 function harness() {
   let now = 1_000_000;
+  let passAge: number | undefined;
   const pings: HeartbeatOutcome[] = [];
   const heartbeat = vi.fn((outcome: HeartbeatOutcome) => {
     pings.push(outcome);
     return Promise.resolve();
   });
-  const liveness = new SignalsLiveness(heartbeat, () => now);
+  const liveness = new SignalsLiveness(
+    heartbeat,
+    () => now,
+    () => passAge,
+  );
   return {
     liveness,
     pings,
     advance: (ms: number) => {
       now += ms;
+    },
+    setPassAge: (age: number | undefined) => {
+      passAge = age;
     },
   };
 }
@@ -75,11 +88,33 @@ describe('SignalsLiveness', () => {
     expect(pings).toEqual(['fail', 'success']);
   });
 
+  it('holds the success ping while one pass has been open longer than the bound, and pings at the bound', () => {
+    const { liveness, pings, advance, setPassAge } = harness();
+    advance(SIGNALS_BEAT_EVERY_MS);
+    setPassAge(SIGNALS_PASS_STUCK_MS + 1);
+    liveness.beat();
+    expect(pings).toEqual([]);
+    setPassAge(SIGNALS_PASS_STUCK_MS);
+    liveness.beat();
+    expect(pings).toEqual(['success']);
+  });
+
+  it('resumes the success ping as soon as the stuck pass ends', () => {
+    const { liveness, pings, advance, setPassAge } = harness();
+    advance(SIGNALS_BEAT_EVERY_MS);
+    setPassAge(SIGNALS_PASS_STUCK_MS + 1);
+    liveness.beat();
+    setPassAge(undefined);
+    liveness.beat();
+    expect(pings).toEqual(['success']);
+  });
+
   it('swallows a rejecting heartbeat', async () => {
     let now = 0;
     const liveness = new SignalsLiveness(
       () => Promise.reject(new Error('down')),
       () => now,
+      () => undefined,
     );
     now += SIGNALS_BEAT_EVERY_MS;
     liveness.beat();

@@ -84,7 +84,11 @@ export function composeSignals(
   const db = openSharedStore(args.storePath);
   const store = new SignalStore(guardedStore(db, 'v2', { enabled: true }), clock);
   const calendar = new UsEquityRegularHoursCalendar();
-  const liveness = new SignalsLiveness(heartbeat, () => clock.now().getTime());
+  const liveness = new SignalsLiveness(
+    heartbeat,
+    () => clock.now().getTime(),
+    () => loop.passAgeMs(),
+  );
   const loop = new SignalLoop({
     signals: store,
     calendar,
