@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { V2Bar } from '../../../contracts/index.js';
 import {
   cumulativeSplitRatios,
+  fractionalShares,
   isSplitStep,
   SPLIT_ADJUSTED_GAP_BAND,
   SPLIT_STEP_EPSILON,
@@ -199,5 +200,28 @@ describe('cumulativeSplitRatios', () => {
     expect(cumulativeSplitRatios(decision, rest)).toEqual([1, 10, 10]);
     expect(cumulativeSplitRatios(undefined, rest)).toEqual([1, 10, 10]);
     expect(cumulativeSplitRatios(undefined, [])).toEqual([]);
+  });
+});
+
+describe('fractionalShares', () => {
+  it.each([
+    [151.5, 0.5],
+    [-151.5, -0.5],
+    [151, 0],
+    [0.03, 0.03],
+    [0, 0],
+    [101 * 1.2, 0.2],
+    [6 * 0.1 * 100, 0],
+    [59.9999999999, 0],
+    [-59.9999999999, 0],
+    [60.0000000001, 0],
+    [60.000001, 0.000001],
+  ])('%d post-split shares leave %d beyond the whole shares', (qty, fraction) => {
+    expect(fractionalShares(qty)).toBeCloseTo(fraction, 12);
+  });
+
+  it('leaves exactly whole shares once the fraction is taken off', () => {
+    expect(151.5 - fractionalShares(151.5)).toBe(151);
+    expect(-151.5 - fractionalShares(-151.5)).toBe(-151);
   });
 });

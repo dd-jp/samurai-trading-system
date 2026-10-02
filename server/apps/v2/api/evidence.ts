@@ -37,7 +37,7 @@ interface OffsetRow extends EntryOffsetTradesWire {
 const CLOSED_TRADES_BY_ENTRY_OFFSET = `
   WITH closes AS (
     SELECT book_id, instrument, client_order_id, MIN(rowid) AS at FROM v2_fills
-     WHERE leg <> 'entry' GROUP BY book_id, client_order_id
+     WHERE leg NOT IN ('entry', 'cash_in_lieu') GROUP BY book_id, client_order_id
   ), tagged AS (
     SELECT c.book_id,
            (SELECT COALESCE(json_extract(o.payload, '$.entry_offset_bps'),
