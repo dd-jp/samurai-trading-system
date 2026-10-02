@@ -120,7 +120,7 @@ function venueTotal(venue: Venue, positions: readonly PositionWire[]): VenueTota
 export class PositionsPanel {
   constructor(
     private readonly marks: MarkSource,
-    private readonly market: MarketData,
+    private readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>,
     private readonly timeoutMs = MARK_READ_TIMEOUT_MS,
   ) {}
 

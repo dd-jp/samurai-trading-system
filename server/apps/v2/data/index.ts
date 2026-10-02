@@ -39,7 +39,13 @@ export { journalledNewsSource } from './journalled-news.js';
 export type { MacroGateVerdict } from './macro-calendar.js';
 export { addDays, MACRO_DAY_SIZE_FRACTION, macroGate } from './macro-calendar.js';
 export type { FillFx } from './market-data.js';
-export { BarsMarketData, fillFxOf, londonDateOf, quotePerGbp } from './market-data.js';
+export {
+  BarsMarketData,
+  fillFxOf,
+  londonDateOf,
+  quotePerGbp,
+  yearStartCoverageRefusal,
+} from './market-data.js';
 export { MarketauxClient } from './marketaux-client.js';
 export { MarketauxNewsSource } from './marketaux-news.js';
 export type { HeldInstrument, LastBar, MarkSource } from './marks.js';

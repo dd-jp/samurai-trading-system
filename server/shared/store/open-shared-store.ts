@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { runMigrations } from './migrate.js';
+import { cacheStatements } from './statement-cache.js';
 
 export type StoreHandle = BetterSqlite3.Database;
 
@@ -86,7 +87,7 @@ function applyPragmas(db: StoreHandle): void {
 
 export function openSharedStore(dbPath: string): StoreHandle {
   ensureParentDirectory(dbPath);
-  const db = new BetterSqlite3(dbPath);
+  const db = cacheStatements(new BetterSqlite3(dbPath));
   applyPragmas(db);
   runMigrations(db);
   return db;
@@ -105,7 +106,7 @@ function appliedSchemaVersion(db: StoreHandle): number {
 }
 
 export function openMigratedStore(dbPath: string, minimumVersion: number): StoreHandle {
-  const db = new BetterSqlite3(dbPath, { fileMustExist: true });
+  const db = cacheStatements(new BetterSqlite3(dbPath, { fileMustExist: true }));
   applyPragmas(db);
   const version = appliedSchemaVersion(db);
   if (version < minimumVersion) {
@@ -118,7 +119,7 @@ export function openMigratedStore(dbPath: string, minimumVersion: number): Store
 }
 
 export function openReadOnlyStore(dbPath: string): StoreHandle {
-  const db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true });
+  const db = cacheStatements(new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true }));
   db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
   return db;
 }
@@ -131,7 +132,7 @@ const ROLLBACK_JOURNAL_FORMAT = 1;
 export function inMemoryCopyOf(db: StoreHandle): StoreHandle {
   const image = db.serialize();
   for (const offset of FILE_FORMAT_VERSION_OFFSETS) image[offset] = ROLLBACK_JOURNAL_FORMAT;
-  const copy = new BetterSqlite3(image);
+  const copy = cacheStatements(new BetterSqlite3(image));
   copy.pragma('foreign_keys = ON');
   runMigrations(copy);
   return copy;

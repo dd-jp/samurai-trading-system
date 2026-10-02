@@ -16,7 +16,9 @@ import type {
   OrderOutcome,
   OrderSide,
   Position,
+  PositionLevels,
   RearmPrices,
+  RescaleSource,
   RiskApprovedOrder,
   RiskGate,
   SimulatedFillQuote,
@@ -153,6 +155,15 @@ function bracketLevelsGbp(
   return {
     stopGbp: typeof stop === 'number' ? stop / fx : undefined,
     targetGbp: typeof target === 'number' ? target / fx : undefined,
+  };
+}
+
+function levelsOf(held: Position): PositionLevels {
+  return {
+    qty: held.qty,
+    avgPriceGbp: held.avgPriceGbp,
+    stopGbp: held.stopGbp,
+    targetGbp: held.targetGbp,
   };
 }
 
@@ -297,6 +308,7 @@ class Cycle {
       fx_quote_per_gbp: fx,
       fx_source: fillFx.source,
       fill_date: fill.filled_at === undefined ? null : londonDateOf(fill.filled_at),
+      filled_at: fill.filled_at,
     });
     if (!recorded) return;
     this.tally.fills += 1;
@@ -334,7 +346,7 @@ class Cycle {
     if (before !== undefined || after === undefined || fill.leg !== 'entry' || date === undefined) {
       return;
     }
-    this.deps.books.applySplit(order.book_id, order.instrument, 1, date);
+    this.atomically(() => this.rescaleHeld(order.book_id, order.instrument, 1, date, 'anchor'));
   }
 
   brokerHeld(order: JournalledOrder): Position | undefined {
@@ -364,7 +376,7 @@ class Cycle {
     const reading = this.splitBefore(held, date);
     if (reading.ratio === 1) return;
     const london = londonDateOf(fill.filled_at as string);
-    const qty = this.splitHeld(order.book_id, held, reading, date, london);
+    const qty = this.splitHeld(order.book_id, held, reading, 'broker', date, london);
     this.alertBrokerSplit(order.book_id, held, reading.ratio, qty);
     this.log(
       'warn',
@@ -513,7 +525,7 @@ class Cycle {
       );
     }
     if (ratio === 1) return;
-    const qty = this.splitHeld(book.id, held, reading, latest.date);
+    const qty = this.splitHeld(book.id, held, reading, 'detector', latest.date);
     this.log(
       'info',
       'v2_split_rescaled',
@@ -545,6 +557,7 @@ class Cycle {
     bookId: string,
     held: Position,
     reading: SplitReading,
+    source: RescaleSource,
     anchorDate: string,
     disposalDate = anchorDate,
   ): number {
@@ -558,11 +571,33 @@ class Cycle {
           trading_date: this.tradingDate,
         });
       }
-      this.deps.books.applySplit(bookId, held.instrument, reading.ratio, anchorDate);
+      this.rescaleHeld(bookId, held.instrument, reading.ratio, anchorDate, source);
       return this.floorHeld(bookId, held.instrument, held.clientOrderId, {
         anchorDate,
         disposalDate,
       });
+    });
+  }
+
+  rescaleHeld(
+    bookId: string,
+    instrument: string,
+    ratio: number,
+    anchorDate: string,
+    source: RescaleSource,
+  ): void {
+    const before = this.deps.books.position(bookId, instrument) as Position;
+    this.deps.books.applySplit(bookId, instrument, ratio, anchorDate);
+    const after = this.deps.books.position(bookId, instrument) as Position;
+    this.deps.journal.recordRescale({
+      trading_date: this.tradingDate,
+      book_id: bookId,
+      instrument,
+      source,
+      ratio,
+      anchor_date: anchorDate,
+      before: levelsOf(before),
+      after: levelsOf(after),
     });
   }
 
@@ -734,6 +769,7 @@ class Cycle {
         order.book_id,
         held,
         { ratio: units.ratio, steps: [], rejected: [] },
+        'entry',
         units.date,
       );
       return;
@@ -1476,7 +1512,7 @@ class Cycle {
       trading_date: this.tradingDate,
       scope: 'entry',
       parameter,
-      ticket: 'docs/research/66-v2-grill-decisions.md D8',
+      ticket: SIZING_REFUSAL_TICKETS[refusal ?? ''] ?? 'docs/research/66-v2-grill-decisions.md D8',
       message: `${book.id} ${decision.instrument}: ${refusal}`,
       book_id: book.id,
       instrument: decision.instrument,
@@ -1601,8 +1637,13 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   cfd_financing_model_unset: 'CFD_FINANCING_MODEL',
   cfd_borrow_model_unset: 'CFD_BORROW_MODEL',
   cfd_resting_stop_unverified: 'CFD_RESTING_STOP_VERIFIED',
+  fx_year_start_stale: 'FX_YEAR_START_COVERAGE',
   short_requires_cfd: 'CFD_VENUE_ROUTE',
   long_on_cfd: 'CFD_VENUE_ROUTE',
+};
+
+const SIZING_REFUSAL_TICKETS: Readonly<Record<string, string>> = {
+  fx_year_start_stale: '#2009',
 };
 
 function recordRefusal(
@@ -1613,6 +1654,24 @@ function recordRefusal(
 ): void {
   deps.journal.recordRefusal({ trading_date: tradingDate, ...refusal });
   refusals.push(refusal.message);
+}
+
+function recordFxRefusal(deps: CycleDeps, tradingDate: string, refusals: string[]): void {
+  const message = deps.risk.fxRefusal(tradingDate);
+  if (message === undefined) return;
+  recordRefusal(deps, tradingDate, refusals, {
+    scope: 'data',
+    parameter: 'FX_YEAR_START_COVERAGE',
+    ticket: '#2009',
+    message,
+  });
+  deps.logger?.log({
+    trace_id: `v2-${tradingDate}`,
+    stage: 'v2',
+    level: 'error',
+    event: 'v2_fx_year_start_stale',
+    message,
+  });
 }
 
 function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVerdict): string[] {
@@ -1636,6 +1695,7 @@ function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVer
       message: capital,
     });
   }
+  recordFxRefusal(deps, tradingDate, refusals);
   if (!isFresh(deps.market.lastBarBefore(CALENDAR_REFERENCE, tradingDate), tradingDate)) {
     recordRefusal(deps, tradingDate, refusals, {
       scope: 'data',

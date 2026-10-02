@@ -325,6 +325,7 @@ export interface RiskGate {
   approveExit(request: ExitRequest): RiskApprovedOrder;
   approveRearm(request: RearmRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;
+  fxRefusal(tradingDate: string): string | undefined;
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined;
 }
 
@@ -508,6 +509,7 @@ export interface JournalledFill {
   readonly fx_quote_per_gbp: number;
   readonly fx_source: string;
   readonly fill_date: string | null;
+  readonly filled_at?: string | undefined;
 }
 
 export interface JournalledSplit {
@@ -516,6 +518,26 @@ export interface JournalledSplit {
   readonly split_date: string;
   readonly ratio: number;
   readonly trading_date: string;
+}
+
+export type RescaleSource = 'detector' | 'broker' | 'entry' | 'anchor';
+
+export interface PositionLevels {
+  readonly qty: number;
+  readonly avgPriceGbp: number;
+  readonly stopGbp: number | undefined;
+  readonly targetGbp: number | undefined;
+}
+
+export interface JournalledRescale {
+  readonly trading_date: string;
+  readonly book_id: string;
+  readonly instrument: string;
+  readonly source: RescaleSource;
+  readonly ratio: number;
+  readonly anchor_date: string;
+  readonly before: PositionLevels;
+  readonly after: PositionLevels;
 }
 
 export interface RecordedFillPart {
@@ -551,6 +573,7 @@ export interface DecisionJournal {
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordSplit(split: JournalledSplit): void;
+  recordRescale(rescale: JournalledRescale): void;
   recordRefusal(refusal: JournalledRefusal): void;
   recordReconcile(run: JournalledReconcile): void;
 }
