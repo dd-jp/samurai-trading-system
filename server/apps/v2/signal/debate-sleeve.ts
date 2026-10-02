@@ -488,7 +488,7 @@ async function decideOne(
     views,
     seatModels(context.tradingDate),
   );
-  const cap = deps.panel.spendCap.check();
+  const cap = deps.panel.spendCap.check(symbol);
   if (!cap.admitted) {
     return skipped(
       DEBATE_SLEEVE_ID,

@@ -14,7 +14,6 @@ const REFUSAL_KINDS: readonly string[] = [
 export interface JournalledCheck {
   readonly sleeve_id: string;
   readonly instrument: string;
-  readonly inputs_hash: string;
   readonly reason: string;
 }
 
@@ -37,15 +36,15 @@ function verdictOf(row: JournalledCheck): SpendCapVerdict {
   };
 }
 
-// The debate sleeve checks the cap once per name, right after hashing its inputs, so the names
-// that reached the check are exactly the debate rows with a non-empty inputs_hash, in decision order
+// The sleeve checks the cap once per name before any book sees the decision, and journals a
+// refused name with its llm_spend_cap: reason in every book. Keyed by name, not by journal order,
+// because a book journals its sit-outs before the rest of its decisions
 export function journalledSpendCap(rows: readonly JournalledCheck[]): SpendCap {
-  const seen = new Set<string>();
-  const verdicts: SpendCapVerdict[] = [];
+  const refused = new Map<string, SpendCapVerdict>();
   for (const row of rows) {
-    if (row.sleeve_id !== DEBATE_SLEEVE_ID || seen.has(row.instrument)) continue;
-    seen.add(row.instrument);
-    if (row.inputs_hash !== '') verdicts.push(verdictOf(row));
+    const verdict = verdictOf(row);
+    if (row.sleeve_id === DEBATE_SLEEVE_ID && !verdict.admitted)
+      refused.set(row.instrument, verdict);
   }
-  return { check: () => verdicts.shift() ?? ADMITTED };
+  return { check: (instrument) => refused.get(instrument ?? '') ?? ADMITTED };
 }
