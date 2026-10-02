@@ -178,6 +178,19 @@ const CASES: readonly Case[] = [
       },
     ],
   },
+  {
+    table: 'v2_splits',
+    seed: `INSERT INTO v2_splits (instrument, venue, split_date, ratio, trading_date, recorded_at)
+      VALUES ('NVDA', 'alpaca', '2026-09-30', 4, '2026-10-01', '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same instrument, venue and split date',
+        outcome: 'ignored',
+        sql: `INSERT OR REPLACE INTO v2_splits (instrument, venue, split_date, ratio, trading_date, recorded_at)
+          VALUES ('NVDA', 'alpaca', '2026-09-30', 10, '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+      },
+    ],
+  },
 ];
 
 function snapshot(db: BetterSqlite3.Database, table: string): unknown[] {

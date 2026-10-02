@@ -371,10 +371,45 @@ export interface ReconcileWire {
   readonly reconcile: PanelWire<ReconcileRunsWire>;
 }
 
+export type TaxRuleWire = 'same-day' | '30-day' | 'section-104';
+
+export interface TaxDisposalWire {
+  readonly disposal_date: string;
+  readonly instrument: string;
+  readonly venue: string;
+  readonly qty: number;
+  readonly proceeds_gbp: number;
+  readonly cost_gbp: number;
+  readonly gain_gbp: number;
+  readonly rule: TaxRuleWire;
+  readonly acquisition_date: string | null;
+  readonly currency: string;
+  readonly fx_quote_per_gbp: number;
+  readonly fx_source: string;
+  readonly provisional: boolean;
+  readonly cash_in_lieu: boolean;
+}
+
+export interface TaxHeldOutWire {
+  readonly instrument: string;
+  readonly venue: string;
+  readonly reason: string;
+  readonly fills: number;
+}
+
+export interface TaxLogWire {
+  readonly rows: readonly TaxDisposalWire[];
+  readonly held_out: readonly TaxHeldOutWire[];
+  readonly proceeds_gbp: number;
+  readonly cost_gbp: number;
+  readonly gain_gbp: number;
+}
+
 export interface TaxWire {
   readonly contract_version: string;
-  readonly year: number | null;
-  readonly disposals: NotYetFedWire;
+  readonly year: number;
+  readonly years: readonly number[];
+  readonly disposals: PanelWire<TaxLogWire>;
 }
 
 type PanelFields = keyof NotYetFedWire;
@@ -602,7 +637,25 @@ export const V2_WIRE_FIELD_NAMES = {
     'store',
     'broker',
   ]),
-  tax: fieldsOf<TaxWire>()(['contract_version', 'year', 'disposals']),
+  tax: fieldsOf<TaxWire>()(['contract_version', 'year', 'years', 'disposals']),
+  taxLog: fieldsOf<TaxLogWire>()(['rows', 'held_out', 'proceeds_gbp', 'cost_gbp', 'gain_gbp']),
+  taxDisposal: fieldsOf<TaxDisposalWire>()([
+    'disposal_date',
+    'instrument',
+    'venue',
+    'qty',
+    'proceeds_gbp',
+    'cost_gbp',
+    'gain_gbp',
+    'rule',
+    'acquisition_date',
+    'currency',
+    'fx_quote_per_gbp',
+    'fx_source',
+    'provisional',
+    'cash_in_lieu',
+  ]),
+  taxHeldOut: fieldsOf<TaxHeldOutWire>()(['instrument', 'venue', 'reason', 'fills']),
 };
 
 export function v2WireFieldPaths(): string[] {

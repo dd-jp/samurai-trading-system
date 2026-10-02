@@ -49,8 +49,14 @@ interface RejectedSplitStep {
   readonly adjustedGap: number;
 }
 
-interface SplitReading {
+export interface SplitStep {
+  readonly date: string;
   readonly ratio: number;
+}
+
+export interface SplitReading {
+  readonly ratio: number;
+  readonly steps: readonly SplitStep[];
   readonly rejected: readonly RejectedSplitStep[];
 }
 
@@ -58,14 +64,15 @@ function magnitude(factor: number): number {
   return Math.max(factor, 1 / factor);
 }
 
-const NO_SPLIT: SplitReading = { ratio: 1, rejected: [] };
+const NO_SPLIT: SplitReading = { ratio: 1, steps: [], rejected: [] };
 
 function judgeSplitStep(previous: V2Bar, bar: V2Bar, step: number): SplitReading {
   const adjustedGap = previous.close / bar.close;
   if (magnitude(adjustedGap) < SPLIT_ADJUSTED_GAP_BAND) {
-    return { ratio: snapToSplitRatio(step), rejected: [] };
+    const ratio = snapToSplitRatio(step);
+    return { ratio, steps: [{ date: bar.date, ratio }], rejected: [] };
   }
-  return { ratio: 1, rejected: [{ date: bar.date, step, adjustedGap }] };
+  return { ratio: 1, steps: [], rejected: [{ date: bar.date, step, adjustedGap }] };
 }
 
 function readSplitStep(previous: V2Bar, bar: V2Bar): SplitReading {
@@ -78,17 +85,19 @@ function readSplitStep(previous: V2Bar, bar: V2Bar): SplitReading {
 // snapshot series and in a refreshed one, where the latest bar's factor is always 1
 export function splitRatioAcross(bars: readonly V2Bar[]): SplitReading {
   let ratio = 1;
+  const steps: SplitStep[] = [];
   const rejected: RejectedSplitStep[] = [];
   let previous: V2Bar | undefined;
   for (const bar of bars) {
     if (previous !== undefined) {
       const reading = readSplitStep(previous, bar);
       ratio *= reading.ratio;
+      steps.push(...reading.steps);
       rejected.push(...reading.rejected);
     }
     previous = bar;
   }
-  return { ratio, rejected };
+  return { ratio, steps, rejected };
 }
 
 // Ratio between the units a bar is quoted in and the units of `decisionBar`: entry orders keep
