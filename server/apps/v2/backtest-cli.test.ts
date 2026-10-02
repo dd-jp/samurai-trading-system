@@ -352,6 +352,9 @@ describe('runVolTargetIndexAgainst', () => {
 
 class TrialsRecorded extends Error {}
 
+const NEW_TRIAL =
+  "a changed trial hash is a new trial: the next run counts it against the candidate's 8 (doc 66 S3). Restore the hashed config, or re-pin only when a new trial is intended (#2020)";
+
 async function recordedHashes(
   run: (
     market: BarsMarketData,
@@ -400,7 +403,7 @@ describe('candidate trial hashes', () => {
     const hashes = await recordedHashes((market, bars, ledger) =>
       runCrossAssetTrendAgainst(market, bars, () => 5, ledger, quiet),
     );
-    expect(hashes).toEqual(['039ee8786818d43b', '043b721456d8d5e0']);
+    expect(hashes, NEW_TRIAL).toEqual(['039ee8786818d43b', '043b721456d8d5e0']);
   });
 
   it('candidate 2 (mean reversion, RSI 10 / 15) keeps its recorded identity', async () => {
@@ -414,13 +417,13 @@ describe('candidate trial hashes', () => {
         quiet,
       ),
     );
-    expect(hashes).toEqual(['478efb348a94f03d', '7cec20c3ae4bd18c']);
+    expect(hashes, NEW_TRIAL).toEqual(['478efb348a94f03d', '7cec20c3ae4bd18c']);
   });
 
   it('candidate 3 (vol-target index, ceiling 20% / 25%) keeps its recorded identity', async () => {
     const hashes = await recordedHashes((market, bars, ledger) =>
       runVolTargetIndexAgainst(market, bars, () => 5, ledger, quiet),
     );
-    expect(hashes).toEqual(['af1c47710daf23f4', 'c3839566e157ce07']);
+    expect(hashes, NEW_TRIAL).toEqual(['af1c47710daf23f4', 'c3839566e157ce07']);
   });
 });
