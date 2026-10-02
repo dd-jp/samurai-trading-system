@@ -48,6 +48,7 @@ import {
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
+import { seedFxFile } from './fx-refresh.js';
 import { heartbeatFor, pingJournal, withHeartbeat } from './heartbeat.js';
 import { cycleInputDigests, RecordingBarsSource, recordInputDigests } from './input-digest.js';
 import { type FaultLedger, Journal } from './journal/index.js';
@@ -663,19 +664,18 @@ export async function main(
         const backup = backupFor(argv, V2_STORE_PATH, env, litestream, logger);
         // barRefresh is constructed lazily, inside the callback withBackup invokes after restore,
         // so a paper run without Alpaca keys still restores the store before it refuses
-        return withBackup(
-          () =>
-            runOnce(
-              dryRun,
-              tradingDate,
-              env,
-              clock,
-              logger,
-              barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
-              alerts.notify,
-            ),
-          backup,
-        );
+        return withBackup(() => {
+          seedFxFile();
+          return runOnce(
+            dryRun,
+            tradingDate,
+            env,
+            clock,
+            logger,
+            barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+            alerts.notify,
+          );
+        }, backup);
       }, heartbeat),
     alerts,
   );

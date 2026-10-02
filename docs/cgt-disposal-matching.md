@@ -41,8 +41,9 @@ describe the v1 report, whose matching rules it reuses.
   XUDLUSS source on 2026-10-02 (doc 66). The fourth leg of the bar refresh
   (`server/apps/v2/fx-refresh.ts`, every non-dry run, #2000) re-reads the
   last 14 days from the BoE IADB and appends only the fixes after the file's
-  last row; a refetched row that differs from the file, a missing overlap row
-  or a response that does not parse refuses the append, logs
+  last row; a refetched row that differs from the file, a missing overlap row,
+  a response cut off mid-row, one that does not parse or no answer within
+  30 s refuses the append, logs
   `v2_fx_refresh_failed` and keeps the file. Until a refresh reaches a fill's
   date the fill holds its instrument out. The dashboard's tax reader re-reads
   the file whenever it changes, so no restart is needed. The parser refuses a

@@ -67,6 +67,8 @@ export function yearStartGbpUsd(observations: readonly FxObservation[], year: nu
 
 export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 
+export const FX_SNAPSHOT_PATH = 'data/bars/fx/gbpusd-boe-xudluss.snapshot.csv';
+
 export const FX_SOURCE_GBP = 'gbp';
 
 // BoE publishes no fix on UK bank holidays; Easter and Christmas leave at most four days between

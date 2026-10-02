@@ -31,6 +31,7 @@ export {
   dayFxSource,
   dayGbpUsd,
   FX_PATH,
+  FX_SNAPSHOT_PATH,
   FX_SOURCE_GBP,
   parseBoeGbpUsdCsv,
 } from './fx.js';

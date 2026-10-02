@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,6 +14,7 @@ import {
   fxRefreshFor,
   overlapStart,
   refreshBoeFx,
+  seedFxFile,
 } from './fx-refresh.js';
 import { Journal } from './journal/index.js';
 
@@ -56,12 +57,18 @@ function recorder() {
   return { entries, logger };
 }
 
-function answering(body: string, status = 200): { fetch: FxFetch; urls: string[] } {
+function answering(
+  body: string,
+  status = 200,
+): { fetch: FxFetch; urls: string[]; inits: Parameters<FxFetch>[1][] } {
   const urls: string[] = [];
+  const inits: Parameters<FxFetch>[1][] = [];
   return {
     urls,
-    fetch: (url) => {
+    inits,
+    fetch: (url, init) => {
       urls.push(url);
+      inits.push(init);
       return Promise.resolve({ ok: status === 200, status, text: () => Promise.resolve(body) });
     },
   };
@@ -87,7 +94,7 @@ describe('appendBoeRows', () => {
   const overlap = BOE_REFRESH.replaceAll('\r\n', '\n');
 
   it('appends only the fixes after the last row, as BoE wrote them', () => {
-    const result = appendBoeRows(FILE, overlap, FROM);
+    const result = appendBoeRows(FILE, overlap);
     expect(result.added).toEqual([
       { date: '2026-09-25', gbpUsd: 1.3301 },
       { date: '2026-09-29', gbpUsd: 1.34 },
@@ -96,24 +103,46 @@ describe('appendBoeRows', () => {
   });
 
   it('leaves the file text alone when BoE has nothing newer', () => {
-    expect(appendBoeRows(FILE, FILE, FROM)).toEqual({ text: FILE, added: [] });
+    expect(appendBoeRows(FILE, FILE)).toEqual({ text: FILE, added: [] });
   });
 
   it('refuses a revised fix inside the overlap rather than splice two series', () => {
-    expect(() => appendBoeRows(FILE, overlap.replace('1.3265', '1.3266'), FROM)).toThrow(
+    expect(() => appendBoeRows(FILE, overlap.replace('1.3265', '1.3266'))).toThrow(
       'fx refresh: BoE 2026-09-23 is 1.3266, the file holds 1.3265',
     );
   });
 
   it('refuses an overlap missing a row the file holds', () => {
-    expect(() => appendBoeRows(FILE, overlap.replace('23 Sep 2026,1.3265\n', ''), FROM)).toThrow(
+    expect(() => appendBoeRows(FILE, overlap.replace('23 Sep 2026,1.3265\n', ''))).toThrow(
       'fx refresh: BoE returned 3 rows from 2026-09-10 to 2026-09-24, the file holds 4',
     );
   });
 
+  it('accepts an overlap that starts after the requested day, as an exclusive Datefrom gives', () => {
+    const exclusive = overlap.replace('10 Sep 2026,1.33\n', '');
+    expect(appendBoeRows(FILE, exclusive).added.map((row) => row.date)).toEqual([
+      '2026-09-25',
+      '2026-09-29',
+    ]);
+  });
+
+  it('refuses a response with no row inside the file to compare', () => {
+    expect(() => appendBoeRows(FILE, 'DATE,XUDLUSS\n25 Sep 2026,1.3301\n')).toThrow(
+      "fx refresh: BoE returned no row on or before the file's last fix 2026-09-24",
+    );
+  });
+
+  it('refuses a response cut off inside its last row', () => {
+    expect(() => appendBoeRows(FILE, `${overlap}30 Sep 2026,1.3`)).toThrow(/ends mid-row/);
+    expect(appendBoeRows(FILE, `${overlap}30 Sep 2026,1.3\r\n`).added.at(-1)).toEqual({
+      date: '2026-09-30',
+      gbpUsd: 1.3,
+    });
+  });
+
   it('refuses a response that is not a BoE series in ascending date order', () => {
-    expect(() => appendBoeRows(FILE, '<html>error</html>', FROM)).toThrow(/unexpected header/);
-    expect(() => appendBoeRows(FILE, `${overlap}28 Sep 2026,1.35\n`, FROM)).toThrow(
+    expect(() => appendBoeRows(FILE, '<html>error</html>')).toThrow(/unexpected header/);
+    expect(() => appendBoeRows(FILE, `${overlap}28 Sep 2026,1.35\n`)).toThrow(
       /not strictly ascending/,
     );
   });
@@ -125,6 +154,8 @@ describe('refreshBoeFx', () => {
     const boe = answering(`${FILE}25 Sep 2026,1.3301\n`);
     const result = await refreshBoeFx({ path, fetch: boe.fetch, logger: recorder().logger });
     expect(boe.urls).toEqual([boeXudlussUrl(FROM)]);
+    expect(boe.inits[0]?.headers['User-Agent']).toMatch(/^Mozilla\/5\.0 /);
+    expect(boe.inits[0]?.signal.aborted).toBe(false);
     expect(result.added).toEqual([{ date: '2026-09-25', gbpUsd: 1.3301 }]);
     expect(readFileSync(path, 'utf8')).toBe(`${FILE}25 Sep 2026,1.3301\n`);
   });
@@ -176,6 +207,72 @@ describe('fxRefreshFor', () => {
       ],
     ]);
     expect(readFileSync(path, 'utf8')).toBe(FILE);
+  });
+});
+
+describe('fxRefreshFor time limit', () => {
+  it('gives up on a BoE request that never answers and lets the run go on', async () => {
+    const path = fxFile();
+    const { entries, logger } = recorder();
+    let signal: AbortSignal | undefined;
+    const silent: FxFetch = (_url, init) => {
+      signal = init.signal;
+      return new Promise(() => undefined);
+    };
+    await fxRefreshFor({ path, fetch: silent, logger, timeLimitMs: 10 }).run();
+    expect(signal?.aborted).toBe(true);
+    expect(entries.map(({ level, event, message }) => [level, event, message])).toEqual([
+      [
+        'warn',
+        'v2_fx_refresh_failed',
+        "fx refresh: BoE IADB gave no answer within 0.01 s; the tax log holds out every USD fill after the file's last fix",
+      ],
+    ]);
+    expect(readFileSync(path, 'utf8')).toBe(FILE);
+  });
+
+  it('writes nothing from an answer that arrives after the limit', async () => {
+    const path = fxFile();
+    const late: FxFetch = () =>
+      new Promise((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              ok: true,
+              status: 200,
+              text: () => Promise.resolve(`${FILE}25 Sep 2026,1.3301\n`),
+            }),
+          40,
+        ),
+      );
+    await fxRefreshFor({ path, fetch: late, logger: recorder().logger, timeLimitMs: 10 }).run();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(readFileSync(path, 'utf8')).toBe(FILE);
+  });
+});
+
+describe('seedFxFile', () => {
+  it('copies the snapshot only when the live file is absent', () => {
+    const snapshot = fxFile();
+    const live = join(mkdtempSync(join(tmpdir(), 'fx-seed-')), 'live.csv');
+    dirs.push(join(live, '..'));
+    expect(seedFxFile(live, snapshot)).toBe(true);
+    expect(readFileSync(live, 'utf8')).toBe(FILE);
+    writeFileSync(live, `${FILE}25 Sep 2026,1.3301\n`);
+    expect(seedFxFile(live, snapshot)).toBe(false);
+    expect(readFileSync(live, 'utf8')).toBe(`${FILE}25 Sep 2026,1.3301\n`);
+  });
+
+  it('leaves the live file absent when there is no snapshot either', () => {
+    const live = join(mkdtempSync(join(tmpdir(), 'fx-seed-')), 'live.csv');
+    dirs.push(join(live, '..'));
+    expect(seedFxFile(live, join(live, '..', 'absent.csv'))).toBe(false);
+    expect(existsSync(live)).toBe(false);
+  });
+
+  it('throws on any other copy failure', () => {
+    const snapshot = fxFile();
+    expect(() => seedFxFile(join(snapshot, 'not-a-dir', 'live.csv'), snapshot)).toThrow(/ENOTDIR/);
   });
 });
 

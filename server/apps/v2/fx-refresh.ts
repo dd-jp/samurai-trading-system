@@ -1,10 +1,26 @@
-import { readFileSync } from 'node:fs';
+import { constants, copyFileSync, readFileSync } from 'node:fs';
 import type { Logger } from '../../shared/index.js';
-import { type BarRefresh, logRefresh, messageOf } from './bar-refresh-core.js';
+import {
+  type BarRefresh,
+  logRefresh,
+  messageOf,
+  type TimeLimit,
+  UNLIMITED,
+  withinTimeLimit,
+} from './bar-refresh-core.js';
 import { writeAtomically } from './cfd-catalogue-refresh.js';
-import { addDays, type FxObservation, parseBoeGbpUsdCsv } from './data/index.js';
+import {
+  addDays,
+  FX_PATH,
+  FX_SNAPSHOT_PATH,
+  type FxObservation,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
 
-export type FxFetch = (url: string) => Promise<{
+export type FxFetch = (
+  url: string,
+  init: { readonly signal: AbortSignal; readonly headers: Readonly<Record<string, string>> },
+) => Promise<{
   readonly ok: boolean;
   readonly status: number;
   readonly text: () => Promise<string>;
@@ -13,6 +29,13 @@ export type FxFetch = (url: string) => Promise<{
 // Re-reading the last two weeks proves the new rows join the file's series: a revised or
 // missing overlap row refuses the append instead of splicing two different series
 const OVERLAP_DAYS = 14;
+
+const FX_REFRESH_TIME_LIMIT_MS = 30_000;
+
+// The IADB is reported to answer non-browser user agents with an error page (#2000)
+const BOE_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/129.0.0.0 Safari/537.36';
 
 const BOE_MONTHS = [
   'Jan',
@@ -54,14 +77,18 @@ function dataLines(text: string): string[] {
     .slice(1);
 }
 
+// Counted from BoE's first row, not the requested start, so it holds whether Datefrom is inclusive
 function assertOverlapAgrees(
   existing: readonly FxObservation[],
   fetched: readonly FxObservation[],
-  from: string,
 ): void {
   const last = existing.at(-1)?.date ?? '';
   const known = new Map(existing.map((row) => [row.date, row.gbpUsd]));
   const overlap = fetched.filter((row) => row.date <= last);
+  const from = overlap[0]?.date;
+  if (from === undefined) {
+    throw new Error(`fx refresh: BoE returned no row on or before the file's last fix ${last}`);
+  }
   const expected = existing.filter((row) => row.date >= from).length;
   if (overlap.length !== expected) {
     throw new Error(
@@ -82,10 +109,13 @@ export function overlapStart(existing: readonly FxObservation[]): string {
   return addDays(last.date, -OVERLAP_DAYS);
 }
 
-export function appendBoeRows(existingText: string, fetchedText: string, from: string): FxAppend {
+export function appendBoeRows(existingText: string, fetchedText: string): FxAppend {
   const existing = parseBoeGbpUsdCsv(existingText);
   const fetched = parseBoeGbpUsdCsv(fetchedText);
-  assertOverlapAgrees(existing, fetched, from);
+  if (!fetchedText.endsWith('\n')) {
+    throw new Error('fx refresh: the BoE response ends mid-row, so its last fix may be cut short');
+  }
+  assertOverlapAgrees(existing, fetched);
   const lastDate = existing.at(-1)?.date ?? '';
   const fetchedLines = dataLines(fetchedText);
   const newIndexes = fetched.flatMap((row, index) => (row.date > lastDate ? [index] : []));
@@ -100,16 +130,36 @@ export interface FxRefreshLeg {
   readonly path: string;
   readonly logger: Logger;
   readonly fetch: FxFetch;
+  readonly timeLimitMs?: number;
 }
 
-export async function refreshBoeFx(leg: FxRefreshLeg): Promise<FxAppend> {
+export async function refreshBoeFx(
+  leg: FxRefreshLeg,
+  limit: TimeLimit = UNLIMITED,
+): Promise<FxAppend> {
   const existingText = readFileSync(leg.path, 'utf8');
   const from = overlapStart(parseBoeGbpUsdCsv(existingText));
-  const response = await leg.fetch(boeXudlussUrl(from));
+  const response = await leg.fetch(boeXudlussUrl(from), {
+    signal: limit.signal,
+    headers: { 'User-Agent': BOE_USER_AGENT },
+  });
   if (!response.ok) throw new Error(`fx refresh: BoE IADB answered HTTP ${response.status}`);
-  const result = appendBoeRows(existingText, await response.text(), from);
-  if (result.added.length > 0) writeAtomically(leg.path, result.text);
+  const result = appendBoeRows(existingText, await response.text());
+  if (result.added.length > 0)
+    await limit.atomic(async () => writeAtomically(leg.path, result.text));
   return result;
+}
+
+export function seedFxFile(path: string = FX_PATH, snapshot: string = FX_SNAPSHOT_PATH): boolean {
+  try {
+    copyFileSync(snapshot, path, constants.COPYFILE_EXCL);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Without a snapshot the root's own read of the live file names what is missing
+    if (code === 'EEXIST' || code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function summary(added: readonly FxObservation[]): string {
@@ -123,7 +173,14 @@ export function fxRefreshFor(leg: FxRefreshLeg): BarRefresh {
   return {
     run: async () => {
       try {
-        const { added } = await refreshBoeFx(leg);
+        const limitMs = leg.timeLimitMs ?? FX_REFRESH_TIME_LIMIT_MS;
+        const { added } = await withinTimeLimit(
+          limitMs,
+          (limit) => refreshBoeFx(leg, limit),
+          () => {
+            throw new Error(`fx refresh: BoE IADB gave no answer within ${limitMs / 1000} s`);
+          },
+        );
         logRefresh(leg.logger, 'info', 'v2_fx_refresh_summary', summary(added));
       } catch (error) {
         logRefresh(

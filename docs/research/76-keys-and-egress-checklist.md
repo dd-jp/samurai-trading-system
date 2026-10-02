@@ -22,6 +22,7 @@ Structural backing: `server/apps/v2/boundaries.test.ts` already refuses a `signa
 Limits:
 
 - The Alpaca broker client and the news source are injected fakes, so the test does not exercise their own HTTP calls. Neither sends to an LLM.
+- The test drives `composeV2Root`, not `main`, so the bar refresh that `main` runs first is outside it. Its outbound hosts are Alpaca market data, the Saxo OpenAPI gateway and, since #2000, `www.bankofengland.co.uk` (the IADB XUDLUSS CSV in `server/apps/v2/fx-refresh.ts`: a keyless GET carrying only a `User-Agent` header, over the global `fetch`). None of them is an LLM.
 - The only other v2 Nous caller is the start-up pin check (`server/apps/v2/signal/nous-pin-check.ts`), which sends a models listing request with the key and no body.
 - The test attaches at the transport. An LLM client added later that bypasses `NousPinnedTransport` and global `fetch` is not covered. No v2 veto LLM exists yet; when one lands it should reuse the panel.
 - The runtime guard (below) matches exact secret values only; account data such as cash, positions and the loss cap is not a secret value and rests on this test.
