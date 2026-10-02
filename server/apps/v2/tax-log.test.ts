@@ -185,6 +185,43 @@ describe('buildTaxLog', () => {
     expect(log.disposals).toMatchObject([{ instrument: 'ISF', gain_gbp: expect.closeTo(10, 9) }]);
   });
 
+  it('lists held-out instruments by name', () => {
+    const log = buildTaxLog(
+      [
+        fill('sell', '2026-07-01', 1, 1, { instrument: 'ZZZ' }),
+        fill('sell', '2026-07-01', 1, 1, { instrument: 'AAA' }),
+      ],
+      [],
+      dayRate,
+      AS_OF,
+    );
+    expect(log.heldOut.map((held) => held.instrument)).toEqual(['AAA', 'ZZZ']);
+  });
+
+  it('flags a day’s disposal as cash in lieu when any of its sells is, and never for a buy', () => {
+    const cashInLieu = (side: 'buy' | 'sell', date: string) => ({
+      ...fill(side, date, 0.5, 100),
+      leg: 'cash_in_lieu',
+    });
+    const log = buildTaxLog(
+      [
+        fill('buy', '2026-05-01', 10, 100),
+        fill('sell', '2026-07-01', 2, 110),
+        cashInLieu('sell', '2026-07-01'),
+        cashInLieu('buy', '2026-08-03'),
+        fill('sell', '2026-08-03', 1, 120),
+      ],
+      [],
+      dayRate,
+      AS_OF,
+    );
+    expect(log.disposals.map((row) => [row.disposal_date, row.rule, row.cash_in_lieu])).toEqual([
+      ['2026-07-01', 'section-104', true],
+      ['2026-08-03', 'same-day', false],
+      ['2026-08-03', 'section-104', false],
+    ]);
+  });
+
   it('dates a fill with no recorded fill date by its trading date', () => {
     const log = buildTaxLog(
       [
@@ -276,16 +313,18 @@ describe('buildTaxLog', () => {
     const log = buildTaxLog(
       [
         fill('buy', '2026-05-01', 10, 60),
+        fill('sell', '2026-06-01', 2, 35),
         fill('sell', '2026-07-01', 4, 40),
-        fill('sell', '2026-09-01', 48, 15),
+        fill('sell', '2026-09-01', 42, 15),
       ],
       splits,
       dayRate,
       AS_OF,
     );
     expect(log.disposals).toMatchObject([
+      { disposal_date: '2026-06-01', qty: 2, cost_gbp: expect.closeTo(60, 9) },
       { disposal_date: '2026-07-01', qty: 4, cost_gbp: expect.closeTo(120, 9) },
-      { disposal_date: '2026-09-01', qty: 48, cost_gbp: expect.closeTo(480, 9) },
+      { disposal_date: '2026-09-01', qty: 42, cost_gbp: expect.closeTo(420, 9) },
     ]);
   });
 

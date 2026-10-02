@@ -213,7 +213,7 @@ describe('TaxReader', () => {
         {
           instrument: 'AAPL',
           venue: 'alpaca',
-          reason: 'fill f' + sequence + ': BoE XUDLUSS series ends 2026-10-05, before 2026-10-06',
+          reason: `fill f${sequence}: BoE XUDLUSS series ends 2026-10-05, before 2026-10-06`,
           fills: 1,
         },
       ],

@@ -59,8 +59,10 @@ function Disposals({ log }: { log: TaxLogWire }) {
         ]}
       />
       <tbody>
-        {log.rows.map((row, index) => (
-          <tr key={`${row.disposal_date}-${row.instrument}-${row.rule}-${index}`}>
+        {log.rows.map((row) => (
+          <tr
+            key={`${row.disposal_date}-${row.instrument}-${row.rule}-${row.acquisition_date ?? 'pool'}`}
+          >
             <th scope="row">{row.disposal_date}</th>
             <td>
               {row.instrument} {row.venue}

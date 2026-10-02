@@ -109,19 +109,21 @@ function inThirtyDayWindow(disposal: DayLot, acquisition: DayLot): boolean {
   );
 }
 
-function matchThirtyDay(
-  acquisitions: readonly DayLot[],
-  disposals: readonly DayLot[],
-): ShareMatch[] {
+function thirtyDayMatchesOf(disposal: DayLot, acquisitions: readonly DayLot[]): ShareMatch[] {
   const matches: ShareMatch[] = [];
-  for (const disposal of disposals) {
-    for (const acquisition of acquisitions) {
-      if (!isOpen(disposal)) break;
-      if (!isOpen(acquisition) || !inThirtyDayWindow(disposal, acquisition)) continue;
+  for (const acquisition of acquisitions.filter((lot) => inThirtyDayWindow(disposal, lot))) {
+    if (isOpen(disposal) && isOpen(acquisition)) {
       matches.push(pairLots(disposal, acquisition, '30-day'));
     }
   }
   return matches;
+}
+
+function matchThirtyDay(
+  acquisitions: readonly DayLot[],
+  disposals: readonly DayLot[],
+): ShareMatch[] {
+  return disposals.flatMap((disposal) => thirtyDayMatchesOf(disposal, acquisitions));
 }
 
 interface Pool {

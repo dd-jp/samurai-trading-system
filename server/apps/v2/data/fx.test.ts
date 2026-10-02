@@ -57,11 +57,16 @@ describe('dayGbpUsd (#1947)', () => {
     { date: '2026-04-08', gbpUsd: 1.33 },
   ];
 
-  it('takes the fix of the day itself', () => {
+  it('takes the fix of the day itself, the series’ last day included', () => {
     expect(dayGbpUsd(easter, '2026-04-07')).toEqual({
       ok: true,
       gbpUsd: 1.32,
       fixDate: '2026-04-07',
+    });
+    expect(dayGbpUsd(easter, '2026-04-08')).toEqual({
+      ok: true,
+      gbpUsd: 1.33,
+      fixDate: '2026-04-08',
     });
   });
 

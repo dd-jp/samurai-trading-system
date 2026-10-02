@@ -15,7 +15,7 @@ function matched(legs: readonly MatchLeg[]): readonly ShareMatch[] {
   return outcome.matches;
 }
 
-function closeTo(match: ShareMatch) {
+function closeTo<T extends { qty: number; proceedsGbp: number; costGbp: number }>(match: T) {
   return {
     ...match,
     qty: expect.closeTo(match.qty, 9),
@@ -89,6 +89,24 @@ describe('matchShares: section 104 pool (CG51575)', () => {
     ]);
     expect(matches).toHaveLength(1);
     expect(matches[0]?.costGbp).toBeCloseTo(3, 9);
+  });
+
+  it('leaves no dust disposal behind a same-day match of fractional fills', () => {
+    const matches = matched([
+      buy('2025-03-03', 0.3, 10),
+      sell('2025-03-03', 0.1, 12),
+      sell('2025-03-03', 0.2, 12),
+    ]);
+    expect(matches).toEqual([
+      {
+        disposalDate: '2025-03-03',
+        acquisitionDate: '2025-03-03',
+        qty: 0.3,
+        proceedsGbp: expect.closeTo(3.6, 9),
+        costGbp: expect.closeTo(3, 9),
+        rule: 'same-day',
+      },
+    ]);
   });
 });
 
@@ -258,6 +276,32 @@ describe('matchShares: 30-day bed and breakfast rule (CG51560/CG51570)', () => {
     expect(matches.map(({ acquisitionDate, qty }) => ({ acquisitionDate, qty }))).toEqual([
       { acquisitionDate: '2025-02-10', qty: 50 },
       { acquisitionDate: '2025-02-20', qty: 100 },
+    ]);
+  });
+
+  it('stops matching a disposal once it is covered, leaving the next acquisition to the pool', () => {
+    const matches = matched([
+      sell('2025-02-03', 100, 10),
+      buy('2025-02-10', 100, 9),
+      buy('2025-02-20', 50, 8),
+      sell('2025-06-02', 50, 11),
+    ]);
+    expect(matches.map(({ rule, qty, acquisitionDate }) => [rule, qty, acquisitionDate])).toEqual([
+      ['30-day', 100, '2025-02-10'],
+      ['section-104', 50, null],
+    ]);
+  });
+
+  it('lists the matches by disposal date whichever rule priced them', () => {
+    const matches = matched([
+      buy('2025-01-06', 100, 10),
+      sell('2025-02-03', 50, 12),
+      sell('2025-03-03', 50, 12),
+      buy('2025-03-10', 50, 11),
+    ]);
+    expect(matches.map(({ disposalDate, rule }) => [disposalDate, rule])).toEqual([
+      ['2025-02-03', 'section-104'],
+      ['2025-03-03', '30-day'],
     ]);
   });
 
