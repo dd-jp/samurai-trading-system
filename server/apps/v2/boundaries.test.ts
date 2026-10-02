@@ -133,6 +133,8 @@ const ALLOWED_CAPITAL_LITERALS = new Set([
   'server/apps/v2/signal/cross-asset-trend.ts:minimumCapitalGbp',
   'server/apps/v2/signal/mean-reversion.ts:CAPITAL_SHARE',
   'server/apps/v2/signal/mean-reversion.ts:minimumCapitalGbp',
+  'server/apps/v2/signal/vol-target-index.ts:CAPITAL_SHARE',
+  'server/apps/v2/signal/vol-target-index.ts:minimumCapitalGbp',
 ]);
 
 describe('capital literals', () => {

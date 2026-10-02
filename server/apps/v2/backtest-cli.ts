@@ -31,11 +31,18 @@ import {
   createCrossAssetTrendSleeve,
   createMeanReversionBenchmarkSleeve,
   createMeanReversionSleeve,
+  createVolTargetIndexBenchmarkSleeve,
+  createVolTargetIndexSleeve,
   MEAN_REVERSION_CANDIDATE_ID,
   MEAN_REVERSION_ENTRY_THRESHOLDS,
   MEAN_REVERSION_FROM,
   MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
   MEAN_REVERSION_TO,
+  VOL_TARGET_INDEX_CANDIDATE_ID,
+  VOL_TARGET_INDEX_CEILINGS,
+  VOL_TARGET_INDEX_FROM,
+  VOL_TARGET_INDEX_TO,
+  VOL_TARGET_INDEX_VOL_WINDOW,
 } from './signal/index.js';
 import { researchStorePath, sessionBLedger, TrialLedger } from './trial-ledger.js';
 
@@ -68,6 +75,7 @@ export interface CandidateRunReport {
 }
 export type CrossAssetTrendRunReport = CandidateRunReport;
 export type MeanReversionRunReport = CandidateRunReport;
+export type VolTargetIndexRunReport = CandidateRunReport;
 
 const SILENT_LOGGER: Logger = { log: (_entry: LogEntry) => undefined };
 
@@ -106,6 +114,10 @@ const CROSS_ASSET_TREND_WINDOW: CandidateWindow = {
 const MEAN_REVERSION_WINDOW: CandidateWindow = {
   from: MEAN_REVERSION_FROM,
   to: MEAN_REVERSION_TO,
+};
+const VOL_TARGET_INDEX_WINDOW: CandidateWindow = {
+  from: VOL_TARGET_INDEX_FROM,
+  to: VOL_TARGET_INDEX_TO,
 };
 
 interface CandidateRunSpec {
@@ -202,19 +214,36 @@ export async function runCrossAssetTrendAgainst(
   );
 }
 
-export async function runCrossAssetTrendCandidate(
-  cliOptions: BacktestCliOptions = {},
-): Promise<CrossAssetTrendRunReport> {
+interface ResearchRun {
+  readonly market: MarketData;
+  readonly bars: BarsSource;
+  readonly halfSpreadBps: (instrument: string) => number;
+  readonly ledger: TrialLedger;
+  readonly options: ResolvedCliOptions;
+}
+
+async function withResearchLedger<T>(
+  cliOptions: BacktestCliOptions,
+  run: (research: ResearchRun) => Promise<T>,
+): Promise<T> {
   const options = resolveCliOptions(cliOptions);
   const { market, bars } = await openMultiVenueMarket(options);
   const halfSpreadBps = halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath);
   const db = openSharedStore(options.storePath);
   try {
     const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());
-    return await runCrossAssetTrendAgainst(market, bars, halfSpreadBps, ledger, options.logger);
+    return await run({ market, bars, halfSpreadBps, ledger, options });
   } finally {
     db.close();
   }
+}
+
+export function runCrossAssetTrendCandidate(
+  cliOptions: BacktestCliOptions = {},
+): Promise<CrossAssetTrendRunReport> {
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
+    runCrossAssetTrendAgainst(market, bars, halfSpreadBps, ledger, options.logger),
+  );
 }
 
 export async function runMeanReversionAgainst(
@@ -250,19 +279,14 @@ export async function runMeanReversionAgainst(
   );
 }
 
-export async function runMeanReversionCandidate(
+export function runMeanReversionCandidate(
   cliOptions: BacktestCliOptions = {},
 ): Promise<MeanReversionRunReport> {
-  const options = resolveCliOptions(cliOptions);
-  const { market, bars } = await openMultiVenueMarket(options);
-  const halfSpreadBps = halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath);
-  const constituentsCsv = readFileSync(options.constituentsPath, 'utf8');
-  const constituentsFor = (tradingDate: string): readonly string[] =>
-    currentConstituents(constituentsCsv, tradingDate);
-  const db = openSharedStore(options.storePath);
-  try {
-    const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());
-    return await runMeanReversionAgainst(
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) => {
+    const constituentsCsv = readFileSync(options.constituentsPath, 'utf8');
+    const constituentsFor = (tradingDate: string): readonly string[] =>
+      currentConstituents(constituentsCsv, tradingDate);
+    return runMeanReversionAgainst(
       market,
       bars,
       constituentsFor,
@@ -270,14 +294,53 @@ export async function runMeanReversionCandidate(
       ledger,
       options.logger,
     );
-  } finally {
-    db.close();
-  }
+  });
+}
+
+export async function runVolTargetIndexAgainst(
+  market: MarketData,
+  bars: BarsSource,
+  halfSpreadBps: (instrument: string) => number,
+  ledger: TrialLedger,
+  logger: Logger,
+  window: CandidateWindow = VOL_TARGET_INDEX_WINDOW,
+): Promise<VolTargetIndexRunReport> {
+  const trials = VOL_TARGET_INDEX_CEILINGS.map((ceiling) => ({
+    config: { vol_ceiling: ceiling },
+    sleeve: createVolTargetIndexSleeve(bars, ceiling),
+  }));
+  const benchmark = {
+    config: { benchmark: true },
+    sleeve: createVolTargetIndexBenchmarkSleeve(bars),
+  };
+  return runCandidateAgainst(
+    {
+      candidate: VOL_TARGET_INDEX_CANDIDATE_ID,
+      trials,
+      benchmark,
+      window,
+      calendarReference: calendarReferenceFor('saxo'),
+      embargo: VOL_TARGET_INDEX_VOL_WINDOW,
+    },
+    market,
+    halfSpreadBps,
+    ledger,
+    logger,
+  );
+}
+
+export function runVolTargetIndexCandidate(
+  cliOptions: BacktestCliOptions = {},
+): Promise<VolTargetIndexRunReport> {
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
+    runVolTargetIndexAgainst(market, bars, halfSpreadBps, ledger, options.logger),
+  );
 }
 
 const CANDIDATE_RUNNERS: Record<string, (options: BacktestCliOptions) => Promise<unknown>> = {
   [CROSS_ASSET_TREND_CANDIDATE_ID]: runCrossAssetTrendCandidate,
   [MEAN_REVERSION_CANDIDATE_ID]: runMeanReversionCandidate,
+  [VOL_TARGET_INDEX_CANDIDATE_ID]: runVolTargetIndexCandidate,
 };
 
 async function runNamedCandidate(candidateArg: string): Promise<number> {

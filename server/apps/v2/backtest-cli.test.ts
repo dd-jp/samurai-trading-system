@@ -11,6 +11,7 @@ import {
   runCrossAssetTrendAgainst,
   runCrossAssetTrendCandidate,
   runMeanReversionAgainst,
+  runVolTargetIndexAgainst,
 } from './backtest-cli.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
@@ -236,6 +237,90 @@ describe('runMeanReversionAgainst', () => {
         market,
         barsSource,
         constituentsFor,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        window,
+      );
+      expect(rerun.trialsCounted).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// foldRanges(16, embargo=20) needs length/16 - 2*embargo >= 2, so at least ~672 sessions
+const VOL_TARGET_DATES = weekdays('2021-01-01', 720);
+
+// ISF doubles as the LSE session calendar. IEEM swings ±4% a day through the middle third, far
+// above either ceiling, so the strategy exits there while the benchmark holds
+function volTargetSeries(symbol: string, swing: (index: number) => number): BarSeries {
+  const bars: DailyBar[] = VOL_TARGET_DATES.map((date, index) => {
+    const close = 4 * 1.0002 ** index * swing(index);
+    return {
+      date,
+      open: close,
+      high: close * 1.01,
+      low: close * 0.99,
+      close,
+      volume: 2_000_000,
+      rawClose: close,
+    };
+  });
+  return { symbol, bars };
+}
+
+function volTargetBarsSource() {
+  const third = VOL_TARGET_DATES.length / 3;
+  const volatile = (index: number) =>
+    index > third && index < 2 * third ? (index % 2 === 0 ? 1.04 : 0.96) : 1;
+  const bySymbol = new Map<string, BarSeries>([
+    ['ISF', volTargetSeries('ISF', () => 1)],
+    ['IEEM', volTargetSeries('IEEM', volatile)],
+  ]);
+  return { load: (symbol: string) => bySymbol.get(symbol) };
+}
+
+describe('runVolTargetIndexAgainst', () => {
+  it('#1785: runs both ceilings and the benchmark with the 20-session embargo, idempotently', {
+    timeout: 180_000,
+  }, async () => {
+    const barsSource = volTargetBarsSource();
+    const market = new BarsMarketData(
+      barsSource,
+      parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2020,1.36\n'),
+    );
+    const db = openSharedStore(':memory:');
+    try {
+      const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-02T00:00:00.000Z')), {
+        entries: [],
+      });
+      const window = {
+        from: VOL_TARGET_DATES[45] as string,
+        to: VOL_TARGET_DATES.at(-1) as string,
+      };
+      const report = await runVolTargetIndexAgainst(
+        market,
+        barsSource,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        window,
+      );
+      expect(report.trialsCounted).toBe(2);
+      expect(report.baseline.trials.map((trial) => trial.sleeve)).toEqual([
+        'vol-target-index-v20',
+        'vol-target-index-v25',
+      ]);
+      expect(report.stressed.trials).toHaveLength(2);
+      expect(report.baseline.dates).toEqual(report.stressed.dates);
+      const benchmark = report.baseline.benchmark.equity;
+      expect(new Set(benchmark).size).toBeGreaterThan(1);
+      expect(report.baseline.trials[0]?.equity).not.toEqual(benchmark);
+      expect(report.baseline.verdict.trialsCounted).toBe(2);
+      const rerun = await runVolTargetIndexAgainst(
+        market,
+        barsSource,
         () => 5,
         ledger,
         { log: () => undefined },

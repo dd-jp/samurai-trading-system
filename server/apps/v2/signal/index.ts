@@ -81,3 +81,16 @@ export {
 } from './secret-guard.js';
 export { createSignalsSleeve } from './signals-sleeve.js';
 export { SleeveRegistry } from './sleeve.js';
+export {
+  createVolTargetIndexBenchmarkSleeve,
+  createVolTargetIndexSleeve,
+  realisedVolatility,
+  VOL_TARGET_INDEX_BENCHMARK_ID,
+  VOL_TARGET_INDEX_CANDIDATE_ID,
+  VOL_TARGET_INDEX_CEILINGS,
+  VOL_TARGET_INDEX_FROM,
+  VOL_TARGET_INDEX_TIDMS,
+  VOL_TARGET_INDEX_TO,
+  VOL_TARGET_INDEX_VOL_WINDOW,
+  volTargetIndexSleeveId,
+} from './vol-target-index.js';
