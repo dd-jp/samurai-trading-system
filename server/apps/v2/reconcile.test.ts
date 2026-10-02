@@ -510,6 +510,41 @@ describe('reconcileOrBlockEntries', () => {
     expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
   });
 
+  const unguarded = (extra: BrokerBook['openOrders'] = []): BrokerBook => ({
+    ...CLEAN_BROKER,
+    openOrders: [...CLEAN_BROKER.openOrders.slice(1), ...extra],
+  });
+
+  it('names a held position with no closing stop for re-arming when its entry stop is journalled (David 2026-10-02, #1990)', async () => {
+    const { deps, reconciles } = harness(unguarded(), { entryStops: { 'entry-AAPL': 60 } });
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(reconciles[0]?.diffs).toEqual([
+      { kind: 'position_unprotected', instrument: 'AAPL', order_id: null, store: 6, broker: 6 },
+    ]);
+    expect(outcome.staleStops).toEqual([{ venue: 'alpaca', instrument: 'AAPL' }]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
+  it('leaves an unprotected position with no journalled stop to the alert and the block alone', async () => {
+    const outcome = await reconcileBooks(harness(unguarded()).deps, DATE);
+    expect(outcome.staleStops).toEqual([]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
+  it('does not re-arm an unprotected position whose entry is still working at the venue', async () => {
+    const working = {
+      clientOrderId: 'entry-AAPL',
+      instrument: 'AAPL',
+      protects: null,
+      qty: null,
+      stopPrice: null,
+    };
+    const { deps } = harness(unguarded([working]), { entryStops: { 'entry-AAPL': 60 } });
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(outcome.staleStops).toEqual([]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
   it.each([
     ['qty', { qty: 2, stopPrice: 60 }],
     ['price', { qty: 6, stopPrice: 90 }],

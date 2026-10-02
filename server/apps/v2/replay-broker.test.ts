@@ -336,6 +336,19 @@ describe('JournalReplayBrokerBooks', () => {
     });
   });
 
+  it('mirrors a reconcile that found a position with no stop without its stop, so the replay re-arms it (#1990)', async () => {
+    mismatched([diff('position_unprotected', { broker: 3 })]);
+    const { openOrders } = await books().read('alpaca');
+    expect(openOrders.map((order) => order.clientOrderId)).not.toContain('replay-UP-stop');
+    expect(openOrders.at(-1)).toEqual({
+      clientOrderId: 'replay-DN-stop',
+      instrument: 'DN',
+      protects: 'short',
+      qty: 2,
+      stopPrice: null,
+    });
+  });
+
   it('still fails the read on a mismatch that is not only stale stops', async () => {
     mismatched([diff('protective_qty', { broker: 2 }), diff('position_qty', { broker: 4 })]);
     await expect(books().read('alpaca')).rejects.toThrow('was mismatch: stale');

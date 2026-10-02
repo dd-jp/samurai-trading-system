@@ -24,7 +24,12 @@ import {
   DEFAULT_UNPRICED_FILL_AGE_OUT_MS,
 } from './alpaca-adapter.js';
 import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
-import type { AlpacaBrokerClient, AlpacaOcoOrderRequest, AlpacaOrder } from './alpaca-client.js';
+import type {
+  AlpacaBrokerClient,
+  AlpacaOcoOrderRequest,
+  AlpacaOrder,
+  AlpacaOrderLeg,
+} from './alpaca-client.js';
 import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
 const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
@@ -3460,6 +3465,31 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
     });
   });
 
+  it.each([
+    ['target', 0],
+    ['stop', 1],
+  ] as const)('cancels a %s leg still `held` before it flattens', async (_leg, held) => {
+    const cancelOrder = vi.fn().mockResolvedValue(undefined);
+    const legs = (restingEntryOrder().legs ?? []).map((leg, index) =>
+      index === held ? { ...leg, status: 'held' } : leg,
+    );
+    const adapter = adapterWith(
+      makeClient({
+        getOrderByClientOrderId: noPriorOrders(restingEntryOrder({ legs })),
+        cancelOrder,
+        getOrder: confirmingGetOrder(),
+        getPositions: vi.fn().mockResolvedValue(livePosition()),
+        submitMarketOrder: vi
+          .fn()
+          .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1', status: 'accepted' }),
+      }),
+    );
+
+    await adapter.submitProtectedExit(request());
+
+    expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([TARGET_LEG_ID, STOP_LEG_ID]);
+  });
+
   it('cancels a previously re-armed order instead of re-deriving the original bracket legs', async () => {
     const REARM_LEG_ID = 'alpaca-rearm-1';
     const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
@@ -3748,6 +3778,7 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
     it('cancels the stale target and stop legs, confirms each, and only then places the rescaled OCO', async () => {
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
       const getOrder = confirmingGetOrder();
+      const getPositions = vi.fn().mockResolvedValue(livePosition('151'));
       const submitOcoOrder = vi
         .fn()
         .mockResolvedValue({ ...acceptedOrder(), id: 'oco-1', status: 'accepted' });
@@ -3756,6 +3787,7 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
           getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
           cancelOrder,
           getOrder,
+          getPositions,
           submitOcoOrder,
         }),
       );
@@ -3763,6 +3795,9 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
       await adapter.replaceProtectiveLegs(replace);
 
       expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([TARGET_LEG_ID, STOP_LEG_ID]);
+      expect(getPositions.mock.invocationCallOrder[0]).toBeGreaterThan(
+        Math.max(...getOrder.mock.invocationCallOrder),
+      );
       expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith({
         symbol: 'AAPL',
         side: 'sell',
@@ -3808,6 +3843,7 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
           getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
           cancelOrder: vi.fn().mockResolvedValue(undefined),
           getOrder: confirmingGetOrder(),
+          getPositions: vi.fn().mockResolvedValue(livePosition('151')),
           submitOcoOrder: vi.fn().mockRejectedValue(new Error('insufficient qty')),
         }),
       );
@@ -3822,6 +3858,99 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
           /^replaceProtectiveLegs: the stale legs of key-aapl-1355 on AAPL are cancelled and the replacement failed: /,
         ),
       });
+    });
+
+    function ocoClient(entry: AlpacaOrder, positionQty: string) {
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'oco-1', status: 'accepted' });
+      const client = makeClient({
+        getOrderByClientOrderId: noPriorOrders(entry),
+        cancelOrder,
+        getOrder: confirmingGetOrder(),
+        getPositions: vi.fn().mockResolvedValue(livePosition(positionQty)),
+        submitOcoOrder,
+      });
+      return { cancelOrder, submitOcoOrder, client };
+    }
+
+    async function replacedWith(entry: AlpacaOrder, positionQty: string) {
+      const { cancelOrder, submitOcoOrder, client } = ocoClient(entry, positionQty);
+      await adapterWith(client).replaceProtectiveLegs(replace);
+      return { cancelled: cancelOrder.mock.calls.map(([id]) => id), submitOcoOrder };
+    }
+
+    it('cancels a stop leg Alpaca still holds `held` beside a live target before placing', async () => {
+      const [target, stop] = restingEntryOrder().legs ?? [];
+      const { cancelled, submitOcoOrder } = await replacedWith(
+        restingEntryOrder({ legs: [target, { ...stop, status: 'held' }] as AlpacaOrderLeg[] }),
+        '151',
+      );
+      expect(cancelled).toEqual([TARGET_LEG_ID, STOP_LEG_ID]);
+      expect(submitOcoOrder).toHaveBeenCalledOnce();
+    });
+
+    it('sizes the OCO to the broker position when a stale stop part-filled during the cancel', async () => {
+      const { submitOcoOrder } = await replacedWith(restingEntryOrder(), '100');
+      expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ qty: '100', client_order_id: `${ENTRY_ID}:rearm` }),
+      );
+    });
+
+    it('keeps the ledger qty when the broker holds more', async () => {
+      const { submitOcoOrder } = await replacedWith(restingEntryOrder(), '200');
+      expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ qty: '151' }),
+      );
+    });
+
+    it('places nothing when the stale stop filled the whole position during the cancel', async () => {
+      const { submitOcoOrder } = await replacedWith(restingEntryOrder(), '0');
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+    });
+
+    it('re-arms a holding with no resting stop without cancelling anything (crash after the cancel)', async () => {
+      const done = (restingEntryOrder().legs ?? []).map((leg) => ({ ...leg, status: 'canceled' }));
+      const { cancelled, submitOcoOrder } = await replacedWith(
+        restingEntryOrder({ legs: done }),
+        '151',
+      );
+      expect(cancelled).toEqual([]);
+      expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ qty: '151', client_order_id: `${ENTRY_ID}:rearm` }),
+      );
+    });
+
+    it('cancels a resting re-arm OCO and confirms it before the next wire id goes out', async () => {
+      const prior = { ...acceptedOrder(), id: 'oco-0', client_order_id: `${ENTRY_ID}:rearm` };
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const getOrder = vi.fn().mockResolvedValue({ ...prior, status: 'canceled' });
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'oco-1', status: 'accepted' });
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: vi.fn(async (id: string) => {
+            if (id === prior.client_order_id) return { ...prior, status: 'canceled' };
+            return id === ENTRY_ID ? restingEntryOrder() : null;
+          }),
+          cancelOrder,
+          getOrder,
+          getPositions: vi.fn().mockResolvedValue(livePosition('151')),
+          submitOcoOrder,
+        }),
+      );
+
+      await adapter.replaceProtectiveLegs(replace);
+
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual(['oco-0']);
+      expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ client_order_id: `${ENTRY_ID}:rearm-1` }),
+      );
+      expect(submitOcoOrder.mock.invocationCallOrder[0]).toBeGreaterThan(
+        Math.max(...getOrder.mock.invocationCallOrder),
+      );
     });
   });
 });

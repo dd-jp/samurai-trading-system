@@ -4391,7 +4391,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
   class StopVenue {
     constructor(
       readonly held: number,
-      public stop: RestingStop,
+      public stop: RestingStop | undefined,
     ) {}
 
     reader(deps: Harness): BrokerBookReader {
@@ -4404,12 +4404,16 @@ describe('runCycle: positions held across a split (#1865)', () => {
             positions: [{ instrument: 'AAPL', qty: this.held }],
             openOrders: [
               ...book.openOrders.filter((order) => order.instrument !== 'AAPL'),
-              {
-                clientOrderId: 'alpaca-stop-leg',
-                instrument: 'AAPL',
-                protects: 'long',
-                ...this.stop,
-              },
+              ...(this.stop === undefined
+                ? []
+                : [
+                    {
+                      clientOrderId: 'alpaca-stop-leg',
+                      instrument: 'AAPL',
+                      protects: 'long' as const,
+                      ...this.stop,
+                    },
+                  ]),
             ],
           };
         },
@@ -4420,7 +4424,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
   class ReplacingAlpaca extends SplitAlpaca {
     readonly replaces: ProtectiveReplaceRequest[] = [];
     readonly exits: ProtectedExitRequest[] = [];
-    replaceError: ProtectiveReplaceError | undefined;
+    replaceError: Error | undefined;
     venue: StopVenue | undefined;
 
     replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<void> {
@@ -4443,8 +4447,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
   async function brokerHeld101Across(
     bars: readonly DailyBar[],
     held: number,
-    stopAt: (entryStop: number) => RestingStop,
-    replaceError?: ProtectiveReplaceError,
+    stopAt: (entryStop: number) => RestingStop | undefined,
+    replaceError?: Error,
   ) {
     const alpaca = new ReplacingAlpaca();
     alpaca.replaceError = replaceError;
@@ -4516,7 +4520,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       expect(eventsOf(entries, 'v2_stop_replaced')).toMatchObject([
         {
           level: 'warn',
-          message: `debate/primary AAPL: stale stop cancelled, re-placed at qty ${held}`,
+          message: `debate/primary AAPL: any stale stop cancelled, stop placed for the ledger qty ${held} or the broker's if less`,
         },
       ]);
       expect(venue.stop).toEqual({
@@ -4576,11 +4580,11 @@ describe('runCycle: positions held across a split (#1865)', () => {
         {
           level: 'error',
           message: expect.stringMatching(
-            /^debate\/primary AAPL: stale stop cancelled but the re-place failed, flattening at market: /,
+            /^debate\/primary AAPL: any stale stop cancelled but the place failed, flattening at market: /,
           ),
         },
       ]);
-      expect(across.refusals).toContainEqual(expect.stringContaining('the re-place failed'));
+      expect(across.refusals).toContainEqual(expect.stringContaining('the place failed'));
       await next('2026-09-30');
       expect(alpaca.replaces).toHaveLength(1);
     },
@@ -4605,7 +4609,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       {
         level: 'error',
         message: expect.stringMatching(
-          /^debate\/primary AAPL: the stale stop did not cancel, nothing re-placed: /,
+          /^debate\/primary AAPL: the stale stop did not cancel, nothing placed: cancel unconfirmed$/,
         ),
       },
     ]);
@@ -4633,7 +4637,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       {
         level: 'error',
         message:
-          "debate/primary AAPL: the venue's stop does not match the ledger and no journalled entry stop exists to re-place it at; nothing was cancelled",
+          "debate/primary AAPL: the venue's stop is missing or does not match the ledger and no journalled entry stop exists to re-place it at; nothing was cancelled",
       },
     ]);
   });
@@ -4657,6 +4661,132 @@ describe('runCycle: positions held across a split (#1865)', () => {
     ).catch(() => undefined);
     expect(alpaca.replaces).toHaveLength(1);
     expect(deps.journal.orderFor(RESTOP)?.outcome).toBe('submitted');
+  });
+
+  function unmarkedRerun(deps: Harness, venue: StopVenue, date: string) {
+    const unmarked = new Proxy(deps.books, {
+      get: (target, key) => {
+        if (key === 'isMarked') return () => false;
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    return runCycle(
+      { ...withMarket(deps, threeForTwo), books: unmarked, brokerBooks: venue.reader(deps) },
+      date,
+    ).catch(() => undefined);
+  }
+
+  const noStop = (): undefined => undefined;
+
+  it('re-arms a held position the venue holds no stop for at the rescaled ledger level, as after a crash between cancel and place (David 2026-10-02)', async () => {
+    const { deps, entries, across, entry, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      noStop,
+    );
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+      { payload: [{ kind: 'position_unprotected', instrument: 'AAPL', store: 151, broker: 151 }] },
+    ]);
+    expect(across.refusals).toContainEqual(
+      expect.stringMatching(/^debate\/primary: entries blocked, .*position_unprotected AAPL/),
+    );
+    expect(alpaca.replaces).toEqual([
+      {
+        entryClientOrderId: BROKER_ENTRY,
+        instrument: 'AAPL',
+        side: 'buy',
+        qty: 151,
+        stop: expect.closeTo(entry.stop / 1.5, 9),
+        target: expect.closeTo(entry.target / 1.5, 9),
+      },
+    ]);
+    expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+      outcome: 'submitted',
+      payload: { size: 151, reason: 'split_stop_replace' },
+    });
+    expect(venue.stop).toEqual({ qty: 151, stopPrice: Math.round((entry.stop / 1.5) * 100) / 100 });
+    expect(alpaca.exits).toEqual([]);
+
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(1);
+    const after = await next('2026-09-30');
+    expect(after.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+    expect(alpaca.replaces).toHaveLength(1);
+  });
+
+  it('places the stop on the next run when a cancel that timed out completes late at the venue', async () => {
+    const { deps, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      new ProtectiveReplaceError('cancel', 'cancel unconfirmed', { cause: undefined }),
+    );
+    expect(deps.journal.orderFor(RESTOP)?.outcome).toBe('rejected');
+    venue.stop = undefined;
+    alpaca.replaceError = undefined;
+    await next('2026-09-30');
+    expect(alpaca.replaces).toHaveLength(2);
+    expect(alpaca.replaces[1]).toMatchObject({ qty: 151 });
+    expect(deps.journal.orderFor(RESTOP.replace('09-29', '09-30'))?.outcome).toBe('submitted');
+    expect(venue.stop).toMatchObject({ qty: 151 });
+  });
+
+  it('flattens and alerts critical when the re-arm of an unprotected position fails to place', async () => {
+    const { deps, entries, alpaca } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      noStop,
+      new ProtectiveReplaceError('place', 'oco rejected', { cause: undefined }),
+    );
+    expect(alpaca.exits).toMatchObject([{ entryClientOrderId: BROKER_ENTRY, size: 151 }]);
+    expect(primary(deps)?.exitClientOrderId).toBe('v2-debate-primary-2026-09-29-AAPL-exit');
+    expect(eventsOf(entries, 'v2_stop_replace_failed')).toMatchObject([{ level: 'error' }]);
+  });
+
+  it('keeps only the alert and the entry block for an unprotected position with no journalled stop', async () => {
+    const { deps, entries, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 151, stopPrice: stop / 1.5 }),
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { run: (id: string) => void } } }
+    ).db;
+    db.prepare(
+      "UPDATE v2_orders SET payload = json_remove(payload, '$.stop') WHERE client_order_id = ?",
+    ).run(BROKER_ENTRY);
+    venue.stop = undefined;
+    const after = await next('2026-09-30');
+    expect(alpaca.replaces).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_replace_unpriced')).toEqual([]);
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+      { payload: [{ kind: 'position_unprotected', instrument: 'AAPL' }] },
+    ]);
+    expect(after.refusals).toContainEqual(
+      expect.stringMatching(/^debate\/primary: entries blocked, .*position_unprotected AAPL/),
+    );
+  });
+
+  it('reports a stop replace refused before any cancel by its own reason', async () => {
+    const { deps, entries, across, alpaca } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      new Error('no_broker_for_venue:alpaca'),
+    );
+    expect(deps.journal.orderFor(RESTOP)?.outcome).toBe('rejected');
+    expect(alpaca.exits).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_cancel_failed')).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_replace_refused')).toMatchObject([
+      {
+        level: 'error',
+        message: expect.stringMatching(
+          /^debate\/primary AAPL: the stop replace was refused before any cancel was sent: .*no_broker_for_venue:alpaca/,
+        ),
+      },
+    ]);
+    expect(across.refusals).toContainEqual(expect.stringContaining('refused before any cancel'));
   });
 
   it('dates the cash in lieu of a late-evening broker exit by the London day, as the exit itself', async () => {

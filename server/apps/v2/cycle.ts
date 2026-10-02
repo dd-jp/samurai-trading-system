@@ -231,6 +231,11 @@ function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: st
   return `v2-${book.id.replaceAll('/', '-')}-${tradingDate}-${instrument}`;
 }
 
+const STOP_REPLACE_REFUSAL: Readonly<Record<'cancel' | 'unsent', readonly [string, string]>> = {
+  cancel: ['v2_stop_cancel_failed', 'the stale stop did not cancel, nothing placed'],
+  unsent: ['v2_stop_replace_refused', 'the stop replace was refused before any cancel was sent'],
+};
+
 // A stray has no entry stop to re-place at, and a pending exit has already cancelled the legs
 export function stopReplaceable(held: Position | undefined, venue: Venue): held is Position {
   return held?.venue === venue && !held.stray && held.exitClientOrderId === undefined;
@@ -1214,9 +1219,9 @@ class Cycle {
     );
   }
 
-  // David 2026-10-02 (#1990): a stop that no longer matches the ledger is cancelled and re-placed;
-  // a failed re-place flattens, a failed cancel does nothing more. Entries stay blocked by the
-  // mismatch that found it
+  // David 2026-10-02 (#1990): a stop that no longer matches the ledger is cancelled and re-placed,
+  // and a holding with none is re-armed the same way; a failed place flattens, a failed cancel
+  // does nothing more. Entries stay blocked by the mismatch that found it
   async replaceStaleStops(staleStops: readonly StaleStop[]): Promise<void> {
     for (const stale of staleStops) {
       for (const [book, held] of this.brokerHolders(stale)) await this.replaceStop(book, held);
@@ -1230,7 +1235,7 @@ class Cycle {
     if (prices === undefined) {
       this.stopReplaceAlert(
         'v2_stop_replace_unpriced',
-        `${book.id} ${held.instrument}: the venue's stop does not match the ledger and no journalled entry stop exists to re-place it at; nothing was cancelled`,
+        `${book.id} ${held.instrument}: the venue's stop is missing or does not match the ledger and no journalled entry stop exists to re-place it at; nothing was cancelled`,
       );
       return;
     }
@@ -1248,22 +1253,20 @@ class Cycle {
       this.log(
         'warn',
         'v2_stop_replaced',
-        `${subject}: stale stop cancelled, re-placed at qty ${Math.abs(held.qty)}`,
+        `${subject}: any stale stop cancelled, stop placed for the ledger qty ${Math.abs(held.qty)} or the broker's if less`,
       );
       return;
     }
     if (submission.failedStep === 'place') {
       this.stopReplaceAlert(
         'v2_stop_replace_failed',
-        `${subject}: stale stop cancelled but the re-place failed, flattening at market: ${submission.detail}`,
+        `${subject}: any stale stop cancelled but the place failed, flattening at market: ${submission.detail}`,
       );
       await this.submitExit(book, held, 'stop_replace_failed');
       return;
     }
-    this.stopReplaceAlert(
-      'v2_stop_cancel_failed',
-      `${subject}: the stale stop did not cancel, nothing re-placed: ${submission.detail}`,
-    );
+    const [event, what] = STOP_REPLACE_REFUSAL[submission.failedStep ?? 'unsent'];
+    this.stopReplaceAlert(event, `${subject}: ${what}: ${submission.detail}`);
   }
 
   stopReplaceAlert(event: string, message: string): void {

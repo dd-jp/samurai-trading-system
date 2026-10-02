@@ -49,7 +49,9 @@ const MAX_REARM_ATTEMPTS = 4;
 
 const MAX_CANCEL_CONFIRM_ATTEMPTS = 5;
 const DEFAULT_CANCEL_CONFIRM_WAIT_MS = 250;
-const RESTING_LEG_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
+// A bracket's legs rest `held` until the parent fills, and cancel by id while held
+// (docs/reviews/alpaca-stop-parent-probe-2026-09-30.md)
+const RESTING_LEG_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held'];
 const TERMINAL_LEG_STATES = new Set(['cancelled', 'filled', 'rejected', 'expired']);
 
 function defaultWait(ms: number): Promise<void> {
@@ -279,12 +281,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     await this.cancelBracketLegsForExit(entryClientOrderId, instrument);
 
-    const positions = await this.call('submitProtectedExit', () =>
-      this.input.client.getPositions(),
-    );
-    const live = positions.find((position) => position.symbol === instrument);
-    const brokerQty = live === undefined ? 0 : Math.abs(Number(live.qty));
-    const qty = Math.min(size, brokerQty);
+    const qty = await this.heldQtyUpTo(instrument, size, 'submitProtectedExit');
     if (qty <= 0)
       return { client_order_id: clientOrderId, broker_order_ids: [], order_state: 'closed' };
 
@@ -311,6 +308,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       throw rejected;
     }
     return ack;
+  }
+
+  // A stop that fills during the cancel leaves less held than the ledger knows
+  private async heldQtyUpTo(instrument: string, size: number, operation: string): Promise<number> {
+    const positions = await this.call(operation, () => this.input.client.getPositions());
+    const live = positions.find((position) => position.symbol === instrument);
+    const brokerQty = live === undefined ? 0 : Math.abs(Number(live.qty));
+    return Math.min(size, brokerQty);
   }
 
   private async rearmAfterFailedExit(
@@ -488,7 +493,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   async resizeProtectiveLegs(): Promise<void> {}
 
   // Cancel is confirmed before the new legs go out, so the venue never holds two closing stops
-  // whose sum oversells; the window with no stop is accepted (David 2026-10-02, #1990)
+  // whose sum oversells; the window with no stop is accepted (David 2026-10-02, #1990). With
+  // nothing resting the cancel is a no-op and this re-arms; the wire-id walk adopts a live OCO
+  // a crashed earlier run already placed
   async replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<void> {
     const { entryClientOrderId, instrument } = request;
     try {
@@ -501,11 +508,13 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       );
     }
     try {
+      const qty = await this.heldQtyUpTo(instrument, request.qty, 'replaceProtectiveLegs');
+      if (qty <= 0) return;
       await this.rearmProtectiveLegs(
         entryClientOrderId,
         instrument,
         request.side,
-        request.qty,
+        qty,
         request.stop,
         request.target,
       );
@@ -905,7 +914,7 @@ function rearmOrderMatches(prior: AlpacaOrder, qty: number, stop: number, target
   return true;
 }
 
-const REARM_RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
+const REARM_RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held'];
 const REARM_TERMINAL_STATES: readonly string[] = ['cancelled', 'rejected', 'expired'];
 
 interface RearmWalk {

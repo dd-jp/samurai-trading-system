@@ -257,10 +257,14 @@ function protectiveStops(positions: ReadonlyMap<string, number>): BrokerOpenOrde
     }));
 }
 
-const STALE_STOP_KINDS: ReadonlySet<string> = new Set(['protective_qty', 'protective_price']);
+const STALE_STOP_KINDS: ReadonlySet<string> = new Set([
+  'protective_qty',
+  'protective_price',
+  'position_unprotected',
+]);
 
-// A reconcile whose only differences were stale stops is mirrored with those stops, so the replay
-// finds them and re-runs the replacement the journalled cycle sent (#1990)
+// A reconcile whose only differences were stale or missing stops is mirrored with those stops, so
+// the replay finds them and re-runs the replacement or re-arm the journalled cycle sent (#1990)
 function staleStop(stop: BrokerOpenOrder, diffs: readonly ReconcileDiff[]): BrokerOpenOrder {
   const mine = diffs.filter((entry) => entry.instrument === stop.instrument);
   const qty = mine.find((entry) => entry.kind === 'protective_qty');
@@ -280,8 +284,20 @@ function staleStopsOnly(row: { status: string; diffs: string }): ReconcileDiff[]
   return onlyStale ? diffs : undefined;
 }
 
-// Only a clean journalled reconcile, or one that found only stale stops, is mirrored; any other
-// status blocks the replayed books' entries as it blocked the journalled ones
+function mirroredStops(
+  positions: ReadonlyMap<string, number>,
+  diffs: readonly ReconcileDiff[],
+): BrokerOpenOrder[] {
+  const unguarded = new Set(
+    diffs.filter((entry) => entry.kind === 'position_unprotected').map((entry) => entry.instrument),
+  );
+  return protectiveStops(positions)
+    .filter((stop) => !unguarded.has(stop.instrument))
+    .map((stop) => staleStop(stop, diffs));
+}
+
+// Only a clean journalled reconcile, or one that found only stale or missing stops, is mirrored;
+// any other status blocks the replayed books' entries as it blocked the journalled ones
 export class JournalReplayBrokerBooks implements BrokerBookReader {
   constructor(
     private readonly db: StoreHandle,
@@ -307,10 +323,9 @@ export class JournalReplayBrokerBooks implements BrokerBookReader {
       );
     }
     const book = this.mirror(venue);
-    const stops = protectiveStops(book.positions).map((stop) => staleStop(stop, stale ?? []));
     return Promise.resolve({
       positions: [...book.positions].map(([instrument, qty]) => ({ instrument, qty })),
-      openOrders: [...book.openOrders, ...stops],
+      openOrders: [...book.openOrders, ...mirroredStops(book.positions, stale ?? [])],
       cashQuote: 0,
     });
   }

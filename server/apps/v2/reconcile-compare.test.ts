@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { BrokerOpenOrder } from '../../../contracts/index.js';
-import { compareVenue, type HeldProtection, type StoreView } from './reconcile-compare.js';
+import {
+  compareVenue,
+  type HeldProtection,
+  rearmable,
+  type StoreView,
+} from './reconcile-compare.js';
 
 function view(
   positions: Record<string, number>,
@@ -422,5 +427,24 @@ describe('compareVenue: the protective stop against the position (#1990)', () =>
         NO_CASH,
       ).map((d) => d.kind),
     ).toEqual(['position_qty']);
+  });
+});
+
+describe('rearmable (#1990)', () => {
+  const guarded = { entryOrderIds: ['entry-AAPL'], stops: [60] };
+
+  it('re-arms only a name with a journalled stop and no entry working at the venue', () => {
+    const broker = view({ AAPL: 6 });
+    expect(rearmable(view({ AAPL: 6 }, [], 0, { AAPL: guarded }), broker)('AAPL')).toBe(true);
+    expect(
+      rearmable(view({ AAPL: 6 }, [], 0, { AAPL: { ...guarded, stops: [] } }), broker)('AAPL'),
+    ).toBe(false);
+    expect(rearmable(view({ AAPL: 6 }), broker)('AAPL')).toBe(false);
+    expect(
+      rearmable(
+        view({ AAPL: 6 }, [], 0, { AAPL: guarded }),
+        view({ AAPL: 6 }, [stop('AAPL', 'entry-AAPL', null)]),
+      )('AAPL'),
+    ).toBe(false);
   });
 });

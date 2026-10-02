@@ -114,6 +114,14 @@ function entryWorking(store: StoreView, broker: VenueView, instrument: string): 
   return entries.some((id) => working.has(id));
 }
 
+// David 2026-10-02 (#1990): an unguarded holding is re-armed at its journalled stop, unless an entry
+// still filling owns its protection
+export function rearmable(store: StoreView, broker: VenueView): (instrument: string) => boolean {
+  return (instrument) =>
+    (store.protection.get(instrument)?.stops.length ?? 0) > 0 &&
+    !entryWorking(store, broker, instrument);
+}
+
 // A split the venue did not apply to its resting stop leaves the stop sized and priced for the
 // pre-split share: a forward split sells only part of the position, a reverse one oversells into
 // a short (#1990). A null qty or price is one the venue's reader does not report; the Alpaca
