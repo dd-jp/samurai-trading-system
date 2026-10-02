@@ -120,6 +120,19 @@ describe('composeCycle: per-sleeve loss budgets (David 2026-09-30, #1941)', () =
   });
 });
 
+describe('composeCycle: the cycle transaction seam (#1984)', () => {
+  it('rolls back the books when the work inside it throws', () => {
+    const { atomically, books } = composeCycle(options());
+    const loseThenFail = () => {
+      lose(books, 'debate/primary', 10, 'seam');
+      throw new Error('disk full');
+    };
+    expect(() => atomically?.(loseThenFail)).toThrow('disk full');
+    expect(books.lastDay('debate/primary')).toBeUndefined();
+    expect(books.cash('debate/primary')).toBe(composeCycle(options()).books.cash('debate/primary'));
+  });
+});
+
 describe('composeCycle: costMultiple scales every modelled cost leg (doc 67 "2x modelled cost")', () => {
   const REQUEST = { instrument: 'AAPL', side: 'buy' as const, qty: 10, price: 100 };
 

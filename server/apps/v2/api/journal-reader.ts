@@ -443,7 +443,7 @@ export class JournalReader {
 
   #fills(orders: readonly OrderRow[]): Map<string | null, FillRow[]> {
     const rows = this.#all<FillRow>(
-      `SELECT client_order_id, fill_id, qty, price_gbp, fee_gbp, recorded_at FROM v2_fills
+      `SELECT client_order_id, fill_id, leg, qty, price_gbp, fee_gbp, recorded_at FROM v2_fills
         WHERE client_order_id IN (SELECT value FROM json_each(?))
         ORDER BY recorded_at, fill_id`,
       [JSON.stringify(orders.map((order) => order.client_order_id))],
