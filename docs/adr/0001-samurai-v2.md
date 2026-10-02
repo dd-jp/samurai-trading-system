@@ -138,6 +138,7 @@ Each item is open until David rules or the named ticket closes it. This ADR take
     - (c) Intraday flatten ([#1894](https://github.com/dd-jp/samurai-trading-system/issues/1894)): a control poller reads `v2_controls` every 60 s; a new flatten cancels resting orders and closes every position through `risk.approveExit` and the venue adapter, then journals the result. Halt is unchanged.
     - (d) Stale-price guard ([#1854](https://github.com/dd-jp/samurai-trading-system/issues/1854)): the evidence step runs now on the signals sleeve's history, thresholds 0.5, 1 and 2 × ATR(20) as 3 counted trials; kill line: dropped if the entries it blocks do no worse than those it admits. Open until the trials are run.
     - (e) False-split gap ([#1887](https://github.com/dd-jp/samurai-trading-system/issues/1887) item 4): accepted until the corporate-action feed is bought (doc 66, 2026-10-01); the purchase is the follow-up.
+    - (f) Candidate 1 hash drift ([#2020](https://github.com/dd-jp/samurai-trading-system/issues/2020)): the #1815 50 bps entry offset changed simulated fills, so candidate 1 is re-run at 50 bps on the Mac as two new counted trials; the 0 bps rows stand and the old hashes are not restored.
 
 ## 6. Consequences
 
