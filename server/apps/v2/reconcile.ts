@@ -264,6 +264,11 @@ export type SyncThrowEvent =
   | 'v2_entry_cancel_threw'
   | 'v2_reconcile_threw';
 
+export interface ThrowFailure {
+  readonly event: SyncThrowEvent;
+  readonly what: string;
+}
+
 type ThrowDeps = Pick<ReconcileDeps, 'registry' | 'books' | 'executor' | 'journal' | 'logger'>;
 
 // The signals entry pass gates on the latest journalled reconcile for the date, so a throw must
@@ -292,10 +297,10 @@ function journalThrow(deps: ThrowDeps, tradingDate: string, summary: string): vo
 export function blockEntriesOnThrow(
   deps: ThrowDeps,
   tradingDate: string,
-  event: SyncThrowEvent,
-  what: string,
+  failure: ThrowFailure,
   error: unknown,
 ): ReconcileOutcome {
+  const { event, what } = failure;
   const summary = `${what} threw: ${describeThrownSafely(error)}`;
   logIfPresent(deps.logger, {
     trace_id: `v2-${tradingDate}`,
@@ -319,6 +324,11 @@ export async function reconcileOrBlockEntries(
   try {
     return await reconcileBooks(deps, tradingDate);
   } catch (error) {
-    return blockEntriesOnThrow(deps, tradingDate, 'v2_reconcile_threw', 'reconcile', error);
+    return blockEntriesOnThrow(
+      deps,
+      tradingDate,
+      { event: 'v2_reconcile_threw', what: 'reconcile' },
+      error,
+    );
   }
 }

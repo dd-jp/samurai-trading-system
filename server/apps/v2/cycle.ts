@@ -50,7 +50,7 @@ import {
   blockEntriesOnThrow,
   type ReconcileOutcome,
   reconcileOrBlockEntries,
-  type SyncThrowEvent,
+  type ThrowFailure,
 } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
@@ -1646,9 +1646,7 @@ export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<Cy
   return report;
 }
 
-interface SyncStep {
-  readonly event: SyncThrowEvent;
-  readonly what: string;
+interface SyncStep extends ThrowFailure {
   readonly run: (cycle: Cycle) => unknown;
 }
 
@@ -1677,7 +1675,7 @@ async function syncStepFailures(
     try {
       await step.run(cycle);
     } catch (error) {
-      failures.push(blockEntriesOnThrow(deps, tradingDate, step.event, step.what, error));
+      failures.push(blockEntriesOnThrow(deps, tradingDate, step, error));
     }
   }
   return failures;
@@ -1710,8 +1708,7 @@ async function sweepFillsBeforeMarks(
     blockEntriesOnThrow(
       deps,
       tradingDate,
-      'v2_fill_sweep_threw',
-      'fill sweep before the marks',
+      { event: 'v2_fill_sweep_threw', what: 'fill sweep before the marks' },
       error,
     );
     throw error;

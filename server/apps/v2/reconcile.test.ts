@@ -507,7 +507,12 @@ describe('reconcileOrBlockEntries', () => {
 describe('blockEntriesOnThrow', () => {
   it('journals a read_failed run for every venue group, so a same-date clean run no longer reads as the latest (#1927)', () => {
     const { deps, reconciles } = harness(CLEAN_BROKER);
-    blockEntriesOnThrow(deps, DATE, 'v2_fill_sweep_threw', 'fill sweep', new Error('SQLITE_BUSY'));
+    blockEntriesOnThrow(
+      deps,
+      DATE,
+      { event: 'v2_fill_sweep_threw', what: 'fill sweep' },
+      new Error('SQLITE_BUSY'),
+    );
 
     expect(reconciles.map((run) => [run.venue, run.source, run.book_ids])).toEqual([
       ['alpaca', 'broker', [PRIMARY.id]],
@@ -538,8 +543,7 @@ describe('blockEntriesOnThrow', () => {
         },
       },
       DATE,
-      'v2_split_rescale_threw',
-      'split rescale',
+      { event: 'v2_split_rescale_threw', what: 'split rescale' },
       new Error('SQLITE_BUSY'),
     );
     expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id, SHADOW.id]));
