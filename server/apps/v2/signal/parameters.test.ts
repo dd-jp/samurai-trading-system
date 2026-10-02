@@ -87,8 +87,9 @@ describe('parameters', () => {
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(ARM2_ENTRY_THRESHOLDS);
   });
 
-  it('the reconcile cash tolerance is unset and never refuses a paper cycle (#1872, David 2026-09-29)', () => {
+  it('the reconcile cash tolerance is unset, owned by #1927, and never refuses a paper cycle (David 2026-09-29)', () => {
     expect(isSet(RECONCILE_CASH_TOLERANCE_GBP)).toBe(false);
+    expect(RECONCILE_CASH_TOLERANCE_GBP.ticket).toBe('#1927');
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(RECONCILE_CASH_TOLERANCE_GBP);
   });
 
