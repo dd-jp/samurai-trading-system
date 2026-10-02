@@ -189,6 +189,8 @@ interface Tally {
   fills: number;
 }
 
+type PartFillProtection = 'rearm' | 'exit';
+
 type ExitReason =
   | 'time_stop'
   | 'manual_halt'
@@ -940,57 +942,95 @@ class Cycle {
   }
 
   async cancelStaleEntries(book: BookSpec): Promise<void> {
+    const { journal } = this.deps;
     await this.cancelEntries(
       book,
-      this.deps.journal.unfilledEntriesBefore(book.id, this.tradingDate),
+      journal.unfilledEntriesBefore(book.id, this.tradingDate),
+      'rearm',
+      journal.partFilledEntries(book.id, this.tradingDate),
     );
   }
 
-  async cancelEntries(book: BookSpec, orders: readonly JournalledOrder[]): Promise<number> {
+  async cancelEntries(
+    book: BookSpec,
+    orders: readonly JournalledOrder[],
+    protect: PartFillProtection = 'rearm',
+    booked: readonly JournalledOrder[] = [],
+  ): Promise<number> {
     let cancelled = 0;
-    for (const order of orders) {
+    const partFilled: JournalledOrder[] = [];
+    for (const order of [...orders, ...booked]) {
       const route = routeOf(book, order.venue as Venue);
       if (!this.deps.executor.canRoute(route)) continue;
-      try {
-        if (await this.partFilledAtVenue(book, route, order)) continue;
-        await this.deps.executor.cancel(route, order.client_order_id, order.instrument);
-        this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
-        cancelled += 1;
-      } catch (error) {
-        // Still resting at the broker: block a fresh opposite entry here too, or its fill
-        // could later cross the stale one's fill and flip the position unnoticed (#1778)
-        this.#pendingEntries.add(positionKey(book.id, order.instrument));
-        this.log(
-          'warn',
-          'v2_cancel_failed',
-          `${order.client_order_id}: ${describeThrownSafely(error)}`,
-        );
-      }
+      const outcome = await this.cancelEntry(book, route, order);
+      if (outcome === 'kept') continue;
+      cancelled += 1;
+      if (outcome === 'part_filled' || booked.includes(order)) partFilled.push(order);
     }
+    if (partFilled.length > 0) await this.protectPartFills(book, partFilled, protect);
     return cancelled;
   }
 
-  // The journal calls an entry unfilled until a sweep books its fill, and a sweep that threw or a
-  // fill that landed since leaves a part fill the cancel would strip of its bracket legs (#1990);
-  // it stays working under its own legs, and the run's closing sweep books the fill
-  async partFilledAtVenue(
+  // The journal calls an entry unfilled until a sweep books its fill, and Alpaca holds a bracket's
+  // legs until the entry fills completely, so a part fill the venue reports has no live stop
+  async cancelEntry(
     book: BookSpec,
     route: ExecutionRoute,
     order: JournalledOrder,
-  ): Promise<boolean> {
-    const filled = await this.deps.executor.filledQty(
-      route,
-      order.client_order_id,
-      order.instrument,
-    );
-    if (!((filled ?? 0) > 0)) return false;
+  ): Promise<'kept' | 'cancelled' | 'part_filled'> {
+    const { client_order_id: id, instrument } = order;
+    let filled: number | undefined;
+    try {
+      filled = await this.deps.executor.filledQty(route, id, instrument);
+    } catch (error) {
+      return this.keepEntry(book, order, 'error', 'v2_entry_fill_read_failed', error);
+    }
+    try {
+      await this.deps.executor.cancel(route, id, instrument);
+      this.deps.journal.markCancelled(id, this.tradingDate);
+    } catch (error) {
+      return this.keepEntry(book, order, 'warn', 'v2_cancel_failed', error);
+    }
+    return (filled ?? 0) > 0 ? 'part_filled' : 'cancelled';
+  }
+
+  // Still resting at the broker: block a fresh opposite entry here too, or its fill could later
+  // cross the stale one's fill and flip the position unnoticed (#1778)
+  keepEntry(
+    book: BookSpec,
+    order: JournalledOrder,
+    level: 'error' | 'warn',
+    event: string,
+    error: unknown,
+  ): 'kept' {
     this.#pendingEntries.add(positionKey(book.id, order.instrument));
-    this.log(
-      'warn',
-      'v2_entry_cancel_part_filled',
-      `${order.client_order_id}: the venue reports ${filled} filled that the journal has not booked; left working under its bracket, not cancelled`,
-    );
-    return true;
+    this.log(level, event, `${order.client_order_id}: ${describeThrownSafely(error)}`);
+    return 'kept';
+  }
+
+  // The fill is booked now so the same run protects it: a stop at the ledger level, or the halt's
+  // exit. A sweep that throws leaves it to the next run's reconcile, which re-arms it (#1990)
+  async protectPartFills(
+    book: BookSpec,
+    orders: readonly JournalledOrder[],
+    protect: PartFillProtection,
+  ): Promise<void> {
+    try {
+      await this.sweepFills();
+    } catch (error) {
+      this.log(
+        'error',
+        'v2_part_fill_unbooked',
+        `${book.id}: cancelled ${orders.map((order) => order.client_order_id).join(', ')} part filled, and the sweep to book the fills threw: ${describeThrownSafely(error)}`,
+      );
+      return;
+    }
+    for (const order of orders) {
+      const held = this.deps.books.position(book.id, order.instrument);
+      if (!stopReplaceable(held, order.venue as Venue)) continue;
+      if (protect === 'exit') await this.submitExit(book, held, 'manual_halt');
+      else await this.replaceStop(book, held);
+    }
   }
 
   async cancelEntriesBlockedAtLastMark(): Promise<void> {
@@ -1009,7 +1049,13 @@ class Cycle {
     markDate: string,
   ): Promise<void> {
     if (!state.halted && !state.entriesBlockedAtNextFill) return;
-    const cancelled = await this.cancelEntries(book, this.deps.journal.restingEntries(book.id));
+    const { journal } = this.deps;
+    const cancelled = await this.cancelEntries(
+      book,
+      journal.restingEntries(book.id),
+      'rearm',
+      journal.partFilledEntries(book.id),
+    );
     if (cancelled === 0) return;
     const cause = state.halted ? 'loss budget halt' : 'daily loss cap';
     const message = `${book.id}: ${cause} at the ${markDate} mark cancelled resting entries: ${cancelled}`;
@@ -2137,7 +2183,12 @@ export async function runFlattenPass(
   const books = deps.registry.ids().flatMap((sleeveId) => [...deps.books.forSleeve(sleeveId)]);
   let cancelled = 0;
   for (const book of books) {
-    cancelled += await cycle.cancelEntries(book, deps.journal.restingEntries(book.id));
+    cancelled += await cycle.cancelEntries(
+      book,
+      deps.journal.restingEntries(book.id),
+      'exit',
+      deps.journal.partFilledEntries(book.id),
+    );
   }
   await cycle.sweepFills();
   for (const book of books) await cycle.haltExits(book);

@@ -590,6 +590,7 @@ export interface DecisionJournal {
   unfilledEntriesBefore(bookId: string, tradingDate: string): readonly JournalledOrder[];
   unfilledSimulatedEntriesBefore(tradingDate: string): readonly JournalledOrder[];
   restingEntries(bookId: string): readonly JournalledOrder[];
+  partFilledEntries(bookId: string, before?: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];

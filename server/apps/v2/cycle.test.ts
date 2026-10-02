@@ -40,6 +40,7 @@ import {
   calendarDaysBetween,
   runCycle,
   runEntryPass,
+  runFlattenPass,
   stopReplaceable,
   vetoApplied,
 } from './cycle.js';
@@ -2461,7 +2462,7 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(fillRows(deps)).toHaveLength(1);
   });
 
-  it('leaves a part-filled entry from an earlier date working, so its own bracket legs keep guarding the fill and reconcile does not re-arm it (#1990)', async () => {
+  it('cancels the remainder of a booked part fill from an earlier date and re-arms the fill in the same run, so held legs never leave it bare (#1990)', async () => {
     class RearmingAlpaca extends FakeAlpaca {
       readonly replaces: ProtectiveReplaceRequest[] = [];
       replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
@@ -2475,45 +2476,113 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     deps.setDecisions([]);
     alpaca.cumulative(ENTRY, 'entry', 4, 20);
     await runCycle(deps, '2026-09-28');
-    await runCycle(deps, '2026-09-29');
     expect(heldQty(deps)).toBe(4);
-    expect(alpaca.cancelled).not.toContain(ENTRY);
-    expect(alpaca.replaces).toEqual([]);
+    expect(alpaca.cancelled).toEqual([ENTRY]);
+    expect(deps.journal.orderFor(ENTRY)?.outcome).toBe('cancelled');
+    expect(alpaca.replaces).toMatchObject([{ entryClientOrderId: ENTRY, qty: 4 }]);
+    expect(deps.journal.partFilledEntries('debate/primary')).toEqual([]);
+    await runCycle(deps, '2026-09-29');
+    expect(alpaca.cancelled).toEqual([ENTRY]);
+    expect(alpaca.replaces).toHaveLength(1);
   });
 
-  it('leaves an entry the venue reports part filled working under its bracket when the journal has not booked the fill, and books it by the run end (#1990)', async () => {
-    class PartFilledAlpaca extends FakeAlpaca {
-      override getOrder(): Promise<null> {
-        return Promise.resolve(null);
-      }
-    }
-    const alpaca = new PartFilledAlpaca();
-    const log = vi.fn();
-    const deps = { ...harness([longAapl], false, alpaca), logger: { log } };
-    await runCycle(deps, '2026-09-25');
-    deps.setDecisions([]);
-    (alpaca as unknown as { getOrder: () => Promise<NormalizedOrder> }).getOrder = () => {
-      alpaca.cumulative(ENTRY, 'entry', 4, 20);
+  class VenuePartFill extends FakeAlpaca {
+    readonly replaces: ProtectiveReplaceRequest[] = [];
+    readonly calls: string[] = [];
+    readError: Error | undefined;
+    filled = 0;
+
+    override getOrder(): Promise<null> {
+      if (this.readError !== undefined) return Promise.reject(this.readError);
+      if (this.filled === 0) return Promise.resolve(null);
+      this.calls.push('read');
+      this.cumulative(ENTRY, 'entry', this.filled, 20);
       return Promise.resolve({
         client_order_id: ENTRY,
         broker_order_ids: ['a1'],
         order_state: 'partially_filled',
-        filled_qty: 4,
+        filled_qty: this.filled,
+      } as unknown as null);
+    }
+
+    override cancel(clientOrderId: string): Promise<void> {
+      this.calls.push(`cancel ${clientOrderId}`);
+      return super.cancel(clientOrderId);
+    }
+
+    replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+      this.calls.push(`replace ${request.qty}`);
+      this.replaces.push(request);
+      return Promise.resolve(request.qty);
+    }
+
+    submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
+      this.calls.push(`exit ${request.size}`);
+      return Promise.resolve({
+        client_order_id: request.clientOrderId,
+        broker_order_ids: ['pf1'],
+        order_state: 'submitted',
       });
-    };
+    }
+  }
+
+  async function partFilledAtVenue(filled: number) {
+    const alpaca = new VenuePartFill();
+    const log = vi.fn();
+    const deps = { ...harness([longAapl], false, alpaca), logger: { log } };
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    alpaca.filled = filled;
+    return { alpaca, deps, log };
+  }
+
+  it('cancels the remainder of an entry the venue reports part filled, books the fill and re-arms it in the same run (#1990)', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(4);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.calls).toEqual(['read', `cancel ${ENTRY}`, 'replace 4']);
+    expect(heldQty(deps)).toBe(4);
+    const entry = deps.journal.orderFor(ENTRY)?.payload as { stop: number; target: number };
+    expect(alpaca.replaces).toEqual([
+      {
+        entryClientOrderId: ENTRY,
+        instrument: 'AAPL',
+        side: 'buy',
+        qty: 4,
+        stop: entry.stop,
+        target: entry.target,
+      },
+    ]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-restop')?.outcome).toBe(
+      'submitted',
+    );
+  });
+
+  it('a flatten pass cancels a part-filled entry remainder and flattens the booked fill (#1990, #1894)', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(4);
+    deps.setControl('halt');
+    await runFlattenPass(deps, '2026-09-28');
+    expect(alpaca.calls).toEqual(['read', `cancel ${ENTRY}`, 'exit 4']);
+    expect(deps.journal.restingEntries('debate/primary')).toEqual([]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload).toMatchObject({
+      reason: 'manual_halt',
+    });
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('keeps an entry whose filled qty the venue cannot report, blocks a fresh entry on it and alerts critical', async () => {
+    const { alpaca, deps, log } = await partFilledAtVenue(0);
+    alpaca.readError = new Error('order read timed out');
     deps.setDecisions([longAapl]);
     await runCycle(deps, '2026-09-28');
     expect(alpaca.cancelled).not.toContain(ENTRY);
     expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([ENTRY]);
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
-        level: 'warn',
-        event: 'v2_entry_cancel_part_filled',
-        message: `${ENTRY}: the venue reports 4 filled that the journal has not booked; left working under its bracket, not cancelled`,
+        level: 'error',
+        event: 'v2_entry_fill_read_failed',
+        message: `${ENTRY}: order read timed out`,
       }),
     );
-    expect(heldQty(deps)).toBe(4);
-    expect(deps.journal.orderFor(ENTRY)?.payload).toMatchObject({ stop: expect.any(Number) });
   });
 
   it('cancels an entry from an earlier date that never filled, and re-arms nothing', async () => {
