@@ -38,11 +38,15 @@ describe the v1 report, whose matching rules it reuses.
   or the last fix before it when BoE publishes none, within 7 days. It refuses
   a date the loaded series has not reached yet. Each disposal shows the rate
   and the fix date it used (`boe-xudluss:<fix date>`). David ruled the BoE
-  XUDLUSS source on 2026-10-02 (doc 66). The committed series ends on
-  2026-09-24 and nothing refreshes it yet (#2000), so a later USD fill holds
-  its instrument out. The dashboard reads the file once at start, so a
-  refresh needs a dashboard restart. The parser refuses a series that is not
-  in strictly ascending date order.
+  XUDLUSS source on 2026-10-02 (doc 66). The fourth leg of the bar refresh
+  (`server/apps/v2/fx-refresh.ts`, every non-dry run, #2000) re-reads the
+  last 14 days from the BoE IADB and appends only the fixes after the file's
+  last row; a refetched row that differs from the file, a missing overlap row
+  or a response that does not parse refuses the append, logs
+  `v2_fx_refresh_failed` and keeps the file. Until a refresh reaches a fill's
+  date the fill holds its instrument out. The dashboard's tax reader re-reads
+  the file whenever it changes, so no restart is needed. The parser refuses a
+  series that is not in strictly ascending date order.
 - **Splits.** When the cycle rescales a held position it journals each split
   step in `v2_splits` (instrument, venue, the date of the first bar in the new
   units, ratio). A split held at two venues is journalled twice and counted

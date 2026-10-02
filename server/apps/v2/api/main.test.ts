@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +7,12 @@ import { openSharedStore } from '../../../shared/store/index.js';
 import { listMigrations, MIGRATIONS_DIR } from '../../../shared/store/migrate.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { researchStorePath } from '../trial-ledger.js';
-import { composeV2Dashboard, DASHBOARD_SCHEMA_VERSION, parseDashboardArgs } from './main.js';
+import {
+  composeV2Dashboard,
+  DASHBOARD_SCHEMA_VERSION,
+  parseDashboardArgs,
+  reloadingFx,
+} from './main.js';
 
 const PATHS = {
   barStoreRoot: DEFAULT_BAR_STORE_ROOT,
@@ -245,6 +250,28 @@ describe('composeV2Dashboard', () => {
         clock,
       ),
     ).toThrow();
+  });
+});
+
+describe('reloadingFx', () => {
+  it('re-reads the file only when it changes, and reads a missing file as no rates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'v2-fx-'));
+    dirs.push(dir);
+    const path = join(dir, 'fx.csv');
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const fx = reloadingFx(path);
+    expect(fx()).toEqual([]);
+    writeFileSync(path, 'DATE,XUDLUSS\n24 Sep 2026,1.322\n');
+    const first = fx();
+    expect(first).toEqual([{ date: '2026-09-24', gbpUsd: 1.322 }]);
+    expect(fx()).toBe(first);
+    writeFileSync(path, 'DATE,XUDLUSS\n24 Sep 2026,1.322\n25 Sep 2026,1.3301\n');
+    expect(fx().at(-1)).toEqual({ date: '2026-09-25', gbpUsd: 1.3301 });
+    rmSync(path);
+    expect(fx()).toEqual([]);
+    const unread = stderr.mock.calls.filter(([text]) => String(text).includes(path));
+    expect(unread).toHaveLength(2);
+    stderr.mockRestore();
   });
 });
 

@@ -92,7 +92,7 @@ describe('dayRateOf', () => {
 describe('TaxReader', () => {
   it('serves the current UK tax year as empty when nothing was disposed of', () => {
     const { db } = seeded();
-    expect(new TaxReader(db, clock, FX).read({ year: null, format: 'json' })).toEqual({
+    expect(new TaxReader(db, clock, () => FX).read({ year: null, format: 'json' })).toEqual({
       contract_version: V2_CONTRACT_VERSION,
       year: 2026,
       years: [],
@@ -135,7 +135,7 @@ describe('TaxReader', () => {
         fill_date: '2026-07-01',
       });
     }
-    const served = new TaxReader(store.db, clock, FX).read({ year: 2026, format: 'json' });
+    const served = new TaxReader(store.db, clock, () => FX).read({ year: 2026, format: 'json' });
     expect(served.disposals).toEqual({
       status: 'fed',
       rows: [
@@ -188,7 +188,7 @@ describe('TaxReader', () => {
       ratio: 2,
       trading_date: '2026-06-02',
     });
-    const served = new TaxReader(store.db, clock, FX).read({ year: 2026, format: 'json' });
+    const served = new TaxReader(store.db, clock, () => FX).read({ year: 2026, format: 'json' });
     expect(served.disposals).toMatchObject({
       status: 'fed',
       rows: [{ qty: 20, cost_gbp: 900, proceeds_gbp: 1_000, gain_gbp: 100 }],
@@ -205,7 +205,7 @@ describe('TaxReader', () => {
       price_native: 180,
       fill_date: '2026-10-06',
     });
-    const served = new TaxReader(store.db, clock, FX).read({ year: null, format: 'json' });
+    const served = new TaxReader(store.db, clock, () => FX).read({ year: null, format: 'json' });
     expect(served.disposals).toEqual({
       status: 'fed',
       rows: [],
@@ -240,7 +240,7 @@ describe('TaxReader', () => {
       price_native: 12.344,
       fill_date: '2026-07-01',
     });
-    const csv = new TaxReader(store.db, clock, FX).csv({ year: 2026, format: 'csv' });
+    const csv = new TaxReader(store.db, clock, () => FX).csv({ year: 2026, format: 'csv' });
     expect(csv.filename).toBe('samurai-tax-2026-27.csv');
     expect(csv.body.split('\n')).toEqual([
       'disposal_date,instrument,venue,qty,proceeds_gbp,cost_gbp,gain_gbp,rule,acquisition_date,' +
@@ -248,9 +248,9 @@ describe('TaxReader', () => {
       '2026-07-01,VUSA,saxo,3,37.03,30.00,7.03,section-104,,GBP,1,gbp,false,false,',
       '',
     ]);
-    expect(new TaxReader(store.db, clock, FX).csv({ year: null, format: 'csv' }).filename).toBe(
-      'samurai-tax-2026-27.csv',
-    );
+    expect(
+      new TaxReader(store.db, clock, () => FX).csv({ year: null, format: 'csv' }).filename,
+    ).toBe('samurai-tax-2026-27.csv');
   });
 });
 

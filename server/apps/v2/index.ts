@@ -30,6 +30,7 @@ import {
   type CfdCatalogue,
   createVenueRouter,
   currentConstituents,
+  FX_PATH,
   loadCfdCatalogue,
   MarketauxClient,
   MarketauxNewsSource,
@@ -89,7 +90,7 @@ export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
 export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
 export const SAXO_SPREADS_PATH = 'data/bars/saxo-spreads.csv';
-export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
+export { FX_PATH };
 export const DEFAULT_HALF_SPREAD_BPS = 5;
 const LLM_MAX_IN_FLIGHT_PER_ACCOUNT = 1;
 const LLM_EXPECTED_CALL_MS = 20_000;

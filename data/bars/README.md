@@ -34,6 +34,7 @@ Committed under doc 70 ruling (k) (David, 2026-09-23), except the Parquet store:
 ## `fx/gbpusd-boe-xudluss.csv` — USD per GBP
 
 - Source: Bank of England IADB series `XUDLUSS` (spot, US dollars into sterling), daily from 2010-01-04 to 2026-09-24, fetched 2026-09-25 via `https://www.bankofengland.co.uk/boeapps/iadb/fromshowcolumns.asp?csv.x=yes&Datefrom=01/Jan/2010&Dateto=now&SeriesCodes=XUDLUSS&CSVF=TN&UsingCodes=Y&VPD=Y&VFD=N` (the endpoint redirects; fetch with `curl -L`). Open Government Licence v3.0. The 2026-09-23 pull from 2015-12-01 is a strict subset of this file.
+- Refresh (#2000): the bar refresh's fourth leg, `server/apps/v2/fx-refresh.ts`, refetches from 14 days before the last row on every non-dry paper run and appends only newer rows, as BoE wrote them; a revised or missing overlap row or an unparseable response refuses the append (`v2_fx_refresh_failed`) and leaves the file as it was. The file stays tracked, so the Mac's checkout carries the appended rows as a working-tree change.
 - Use: doc 70 ruling (j) — each calendar year converts at the last published rate on or before 1 January, so FX never enters the loss budget. The sibling splice (`saxo-aux/`) converts each USD bar at the same-day fix or the last fix on or before it.
 
 ## `saxo/` — LSE daily bars (in `parquet/venue=saxo`)

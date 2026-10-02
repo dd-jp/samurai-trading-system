@@ -30,6 +30,7 @@ export {
   DAY_FIX_MAX_GAP_DAYS,
   dayFxSource,
   dayGbpUsd,
+  FX_PATH,
   FX_SOURCE_GBP,
   parseBoeGbpUsdCsv,
 } from './fx.js';
