@@ -60,7 +60,7 @@ async function sendStopReplace(
   if (broker.replaceProtectiveLegs === undefined) {
     throw new Error(`${order.venue} cannot replace a resting stop`);
   }
-  await broker.replaceProtectiveLegs({
+  const placed = await broker.replaceProtectiveLegs({
     entryClientOrderId: order.entryClientOrderId,
     instrument: order.instrument,
     side: order.side === 'buy' ? 'sell' : 'buy',
@@ -68,7 +68,11 @@ async function sendStopReplace(
     stop: order.stop,
     target: order.target,
   });
-  return { client_order_id: child.clientOrderId, broker_order_ids: [], order_state: 'submitted' };
+  return {
+    client_order_id: child.clientOrderId,
+    broker_order_ids: [],
+    order_state: placed > 0 ? 'submitted' : 'closed',
+  };
 }
 
 function sendFlatten(

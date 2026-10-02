@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { ProtectiveReplaceError } from './execution/index.js';
 import { JournalReplayBroker, JournalReplayBrokerBooks, nativeAmountFor } from './replay-broker.js';
 
 const DAY = '2026-09-30';
@@ -167,17 +168,18 @@ describe('JournalReplayBroker', () => {
     await expect(broker().rearmProtectiveLegs('entry', 'UP')).rejects.toThrow('legs held');
   });
 
+  const replace = {
+    entryClientOrderId: 'entry',
+    instrument: 'UP',
+    side: 'buy' as const,
+    qty: 3,
+    stop: 9,
+    target: 12,
+  };
+
   it('replaces a stale stop as the journalled replace went: refused at its step with its detail, else accepted (#1990)', async () => {
     order('entry', 'submitted', {});
-    const replace = {
-      entryClientOrderId: 'entry',
-      instrument: 'UP',
-      side: 'buy' as const,
-      qty: 3,
-      stop: 9,
-      target: 12,
-    };
-    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBeUndefined();
+    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBe(3);
     order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', {
       detail: 'oco refused',
       failed_step: 'place',
@@ -189,34 +191,45 @@ describe('JournalReplayBroker', () => {
     });
   });
 
-  it('replays a journalled replace refused with no step journalled as a cancel failure', async () => {
+  it('replays a journalled replace refused before any step as a plain refusal', async () => {
     order('entry', 'submitted', {});
-    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', {});
-    await expect(
-      broker().replaceProtectiveLegs({
-        entryClientOrderId: 'entry',
-        instrument: 'UP',
-        side: 'buy',
-        qty: 3,
-        stop: 9,
-        target: 12,
-      }),
-    ).rejects.toMatchObject({ step: 'cancel', message: '' });
+    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', { detail: 'no_broker' });
+    const thrown = await broker()
+      .replaceProtectiveLegs(replace)
+      .catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(ProtectiveReplaceError);
+    expect(thrown).toMatchObject({ message: 'no_broker' });
   });
 
-  it('accepts a replace the journal sent and the venue accepted', async () => {
+  it('accepts a replace the journal sent and the venue accepted, at the qty it placed', async () => {
     order('entry', 'submitted', {});
     order('v2-debate-primary-2026-09-30-UP-restop', 'submitted', { detail: 'submitted' });
-    await expect(
-      broker().replaceProtectiveLegs({
-        entryClientOrderId: 'entry',
-        instrument: 'UP',
-        side: 'buy',
-        qty: 3,
-        stop: 9,
-        target: 12,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBe(3);
+  });
+
+  it('re-serves a replace that placed nothing as placing nothing', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'submitted', { detail: 'closed' });
+    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBe(0);
+  });
+
+  it('serves each same-date attempt in turn by its id suffix', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', {
+      detail: 'cancel unconfirmed',
+      failed_step: 'cancel',
+    });
+    order('v2-debate-primary-2026-09-30-UP-restop-2', 'submitted', { detail: 'submitted' });
+    order('v2-debate-primary-2026-09-30-UP-restop-3', 'rejected', {
+      detail: 'oco refused',
+      failed_step: 'place',
+    });
+    const replay = broker();
+    await expect(replay.replaceProtectiveLegs(replace)).rejects.toMatchObject({ step: 'cancel' });
+    await expect(replay.replaceProtectiveLegs(replace)).resolves.toBe(3);
+    await expect(replay.replaceProtectiveLegs(replace)).rejects.toMatchObject({ step: 'place' });
+    await expect(replay.replaceProtectiveLegs(replace)).resolves.toBe(3);
   });
 });
 

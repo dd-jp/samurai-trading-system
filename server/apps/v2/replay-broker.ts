@@ -70,8 +70,15 @@ export interface JournalBrokerDay {
   readonly quotePerGbp: number;
 }
 
+function replaceRefusal(step: StopReplaceStep | null, detail: string): Error {
+  return step === null
+    ? new Error(detail)
+    : new ProtectiveReplaceError(step, detail, { cause: undefined });
+}
+
 export class JournalReplayBroker implements BrokerAdapter {
   #sweeps = 0;
+  readonly #restops = new Map<string, number>();
 
   constructor(private readonly day: JournalBrokerDay) {}
 
@@ -144,25 +151,28 @@ export class JournalReplayBroker implements BrokerAdapter {
     return Promise.resolve();
   }
 
+  // Each replace the replayed cycle sends re-serves the journalled attempt with the same suffix
   replaceProtectiveLegs({
     entryClientOrderId,
     instrument,
-  }: ProtectiveReplaceRequest): Promise<void> {
+    qty,
+  }: ProtectiveReplaceRequest): Promise<number> {
+    const attempt = this.#restops.get(entryClientOrderId) ?? 0;
+    this.#restops.set(entryClientOrderId, attempt + 1);
+    const suffix = attempt === 0 ? '-restop' : `-restop-${attempt + 1}`;
     const sent = this.day.db
       .prepare(
         `SELECT r.outcome, json_extract(r.payload, '$.detail') AS detail,
                 json_extract(r.payload, '$.failed_step') AS step
            FROM v2_orders r JOIN v2_orders e ON e.client_order_id = ?
           WHERE r.book_id = e.book_id AND r.instrument = ? AND r.trading_date = ?
-            AND substr(r.client_order_id, -7) = '-restop'`,
+            AND substr(r.client_order_id, -length(?)) = ?`,
       )
-      .get(entryClientOrderId, instrument, this.day.tradingDate) as
+      .get(entryClientOrderId, instrument, this.day.tradingDate, suffix, suffix) as
       | (SentOrder & { readonly step: StopReplaceStep | null })
       | undefined;
-    if (sent?.outcome !== 'rejected') return Promise.resolve();
-    return Promise.reject(
-      new ProtectiveReplaceError(sent.step ?? 'cancel', sent.detail ?? '', { cause: undefined }),
-    );
+    if (sent?.outcome !== 'rejected') return Promise.resolve(sent?.detail === 'closed' ? 0 : qty);
+    return Promise.reject(replaceRefusal(sent.step, sent.detail ?? ''));
   }
 
   cancel(clientOrderId: string): Promise<void> {

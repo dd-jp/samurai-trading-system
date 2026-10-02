@@ -296,7 +296,7 @@ describe('V2OrderExecutor', () => {
 
   it('submits a stop replace through the venue on the entry side, and names the step a replace failed at (#1990)', async () => {
     const { executor: paper, alpaca } = executor(false);
-    const replaceProtectiveLegs = vi.fn().mockResolvedValue(undefined);
+    const replaceProtectiveLegs = vi.fn().mockResolvedValue(6);
     (
       alpaca as unknown as { replaceProtectiveLegs: typeof replaceProtectiveLegs }
     ).replaceProtectiveLegs = replaceProtectiveLegs;
@@ -327,6 +327,11 @@ describe('V2OrderExecutor', () => {
     });
     replaceProtectiveLegs.mockRejectedValueOnce(new Error('network'));
     expect(await paper.submit(approve('s3'))).not.toHaveProperty('failedStep');
+    replaceProtectiveLegs.mockResolvedValueOnce(0);
+    expect(await paper.submit(approve('s4'))).toMatchObject({
+      outcome: 'submitted',
+      detail: 'closed',
+    });
   });
 
   it('a venue that cannot replace a stop refuses the replace before any step, touching nothing', async () => {

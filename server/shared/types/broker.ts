@@ -98,5 +98,5 @@ export interface BrokerAdapter {
   getOpenPositions(): Promise<NormalizedPosition[]>;
   readonly prices_own_fills?: boolean;
   submitProtectedExit?(request: ProtectedExitRequest): Promise<BrokerAck>;
-  replaceProtectiveLegs?(request: ProtectiveReplaceRequest): Promise<void>;
+  replaceProtectiveLegs?(request: ProtectiveReplaceRequest): Promise<number>;
 }

@@ -231,6 +231,27 @@ function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: st
   return `v2-${book.id.replaceAll('/', '-')}-${tradingDate}-${instrument}`;
 }
 
+const MAX_RESTOP_ATTEMPTS = 4;
+
+const restopId = (base: string, attempt: number): string =>
+  attempt === 0 ? base : `${base}-${attempt + 1}`;
+
+// A same-date re-run that still finds the stop stale or missing tries again under the next id: a
+// cancel that timed out may complete late, and a refused flatten leaves the holding with no stop;
+// an accepted flatten marks the exit pending, which keeps the holding out of here. The bound stops
+// a reconcile that keeps disagreeing from churning the venue's stop
+function nextRestopId(journal: Pick<DecisionJournal, 'orderFor'>, base: string): string | null {
+  for (let attempt = 0; attempt < MAX_RESTOP_ATTEMPTS; attempt += 1) {
+    const id = restopId(base, attempt);
+    if (journal.orderFor(id) === undefined) return id;
+  }
+  return null;
+}
+
+const PLACED = "any stale stop cancelled, stop placed for the ledger qty or the broker's if less";
+const NOTHING_PLACED =
+  'any stale stop cancelled, nothing placed: the broker holds none of it on that side; reconcile names the difference';
+
 const STOP_REPLACE_REFUSAL: Readonly<Record<'cancel' | 'unsent', readonly [string, string]>> = {
   cancel: ['v2_stop_cancel_failed', 'the stale stop did not cancel, nothing placed'],
   unsent: ['v2_stop_replace_refused', 'the stop replace was refused before any cancel was sent'],
@@ -1229,8 +1250,15 @@ class Cycle {
   }
 
   async replaceStop(book: BookSpec, held: Position): Promise<void> {
-    const clientOrderId = this.stopReplaceOrderId(book.id, held.instrument);
-    if (this.deps.journal.orderFor(clientOrderId) !== undefined) return;
+    const base = this.stopReplaceOrderId(book.id, held.instrument);
+    const clientOrderId = nextRestopId(this.deps.journal, base);
+    if (clientOrderId === null) {
+      this.stopReplaceAlert(
+        'v2_stop_replace_exhausted',
+        `${book.id} ${held.instrument}: ${MAX_RESTOP_ATTEMPTS} stop replaces already sent this date; nothing more is sent until the next date`,
+      );
+      return;
+    }
     const prices = nativeRearmPrices(this.deps.journal, held);
     if (prices === undefined) {
       this.stopReplaceAlert(
@@ -1253,7 +1281,7 @@ class Cycle {
       this.log(
         'warn',
         'v2_stop_replaced',
-        `${subject}: any stale stop cancelled, stop placed for the ledger qty ${Math.abs(held.qty)} or the broker's if less`,
+        `${subject}: ${submission.detail === 'closed' ? NOTHING_PLACED : PLACED}`,
       );
       return;
     }

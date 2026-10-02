@@ -2460,6 +2460,43 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(fillRows(deps)).toHaveLength(1);
   });
 
+  it('leaves a part-filled entry from an earlier date working, so its own bracket legs keep guarding the fill and reconcile does not re-arm it (#1990)', async () => {
+    class RearmingAlpaca extends FakeAlpaca {
+      readonly replaces: ProtectiveReplaceRequest[] = [];
+      replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+        this.replaces.push(request);
+        return Promise.resolve(request.qty);
+      }
+    }
+    const alpaca = new RearmingAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    await runCycle(deps, '2026-09-29');
+    expect(heldQty(deps)).toBe(4);
+    expect(alpaca.cancelled).not.toContain(ENTRY);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('cancels an entry from an earlier date that never filled, and re-arms nothing', async () => {
+    class RearmingAlpaca extends FakeAlpaca {
+      readonly replaces: ProtectiveReplaceRequest[] = [];
+      replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+        this.replaces.push(request);
+        return Promise.resolve(request.qty);
+      }
+    }
+    const alpaca = new RearmingAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
   it('kill line: duplicates and a stale report inside one sweep leave the latest cumulative quantity', async () => {
     const { alpaca, deps, log } = await entered();
     for (const qty of [4, 4, 6, 4, 6]) alpaca.cumulative(ENTRY, 'entry', qty, 20);
@@ -4425,15 +4462,16 @@ describe('runCycle: positions held across a split (#1865)', () => {
     readonly replaces: ProtectiveReplaceRequest[] = [];
     readonly exits: ProtectedExitRequest[] = [];
     replaceError: Error | undefined;
+    placedQty: number | undefined;
     venue: StopVenue | undefined;
 
-    replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<void> {
+    replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
       this.replaces.push(request);
       if (this.replaceError !== undefined) return Promise.reject(this.replaceError);
       if (this.venue !== undefined) {
         this.venue.stop = { qty: request.qty, stopPrice: Math.round(request.stop * 100) / 100 };
       }
-      return Promise.resolve();
+      return Promise.resolve(this.placedQty ?? request.qty);
     }
 
     override submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
@@ -4449,9 +4487,11 @@ describe('runCycle: positions held across a split (#1865)', () => {
     held: number,
     stopAt: (entryStop: number) => RestingStop | undefined,
     replaceError?: Error,
+    placedQty?: number,
   ) {
     const alpaca = new ReplacingAlpaca();
     alpaca.replaceError = replaceError;
+    alpaca.placedQty = placedQty;
     const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
     await runCycle(deps, '2026-09-25');
     alpaca.fill(BROKER_ENTRY, 'entry', 101, 20);
@@ -4520,7 +4560,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
       expect(eventsOf(entries, 'v2_stop_replaced')).toMatchObject([
         {
           level: 'warn',
-          message: `debate/primary AAPL: any stale stop cancelled, stop placed for the ledger qty ${held} or the broker's if less`,
+          message:
+            "debate/primary AAPL: any stale stop cancelled, stop placed for the ledger qty or the broker's if less",
         },
       ]);
       expect(venue.stop).toEqual({
@@ -4642,25 +4683,35 @@ describe('runCycle: positions held across a split (#1865)', () => {
     ]);
   });
 
-  it('replaces a stale stop at most once a date: the journalled restop order makes a same-date re-run a no-op', async () => {
-    const { deps, alpaca, venue } = await brokerHeld101Across(threeForTwo, 151, (stop) => ({
-      qty: 101,
-      stopPrice: stop,
-    }));
-    venue.stop = { qty: 101, stopPrice: 90 };
-    const unmarked = new Proxy(deps.books, {
-      get: (target, key) => {
-        if (key === 'isMarked') return () => false;
-        const value = Reflect.get(target, key, target);
-        return typeof value === 'function' ? value.bind(target) : value;
+  it('retries a stop the venue still shows stale on a same-date re-run under the next id, at most four times a date', async () => {
+    const { deps, entries, alpaca, venue } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({
+        qty: 101,
+        stopPrice: stop,
+      }),
+    );
+    const stale = () => {
+      venue.stop = { qty: 101, stopPrice: 90 };
+    };
+    for (const attempt of [2, 3, 4]) {
+      stale();
+      await unmarkedRerun(deps, venue, '2026-09-29');
+      expect(alpaca.replaces).toHaveLength(attempt);
+      expect(deps.journal.orderFor(`${RESTOP}-${attempt}`)?.outcome).toBe('submitted');
+    }
+    stale();
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(4);
+    expect(deps.journal.orderFor(`${RESTOP}-5`)).toBeUndefined();
+    expect(eventsOf(entries, 'v2_stop_replace_exhausted')).toMatchObject([
+      {
+        level: 'error',
+        message:
+          'debate/primary AAPL: 4 stop replaces already sent this date; nothing more is sent until the next date',
       },
-    });
-    await runCycle(
-      { ...withMarket(deps, threeForTwo), books: unmarked, brokerBooks: venue.reader(deps) },
-      '2026-09-29',
-    ).catch(() => undefined);
-    expect(alpaca.replaces).toHaveLength(1);
-    expect(deps.journal.orderFor(RESTOP)?.outcome).toBe('submitted');
+    ]);
   });
 
   function unmarkedRerun(deps: Harness, venue: StopVenue, date: string) {
@@ -4713,6 +4764,38 @@ describe('runCycle: positions held across a split (#1865)', () => {
     const after = await next('2026-09-30');
     expect(after.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
     expect(alpaca.replaces).toHaveLength(1);
+  });
+
+  it('places the stop on a same-date re-run when a cancel that timed out completes late, and a third run sends nothing', async () => {
+    const { deps, entries, alpaca, venue } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      new ProtectiveReplaceError('cancel', 'cancel unconfirmed', { cause: undefined }),
+    );
+    expect(deps.journal.orderFor(RESTOP)?.payload).toMatchObject({ failed_step: 'cancel' });
+    venue.stop = undefined;
+    alpaca.replaceError = undefined;
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(2);
+    expect(alpaca.replaces[1]).toMatchObject({ qty: 151 });
+    expect(deps.journal.orderFor(`${RESTOP}-2`)?.outcome).toBe('submitted');
+    expect(venue.stop).toMatchObject({ qty: 151 });
+    expect(eventsOf(entries, 'v2_stop_replaced')).toHaveLength(1);
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(2);
+    expect(deps.journal.orderFor(`${RESTOP}-3`)).toBeUndefined();
+  });
+
+  it('logs a replace that found nothing left held at the broker as placing nothing', async () => {
+    const { deps, entries } = await brokerHeld101Across(threeForTwo, 151, noStop, undefined, 0);
+    expect(deps.journal.orderFor(RESTOP)?.payload).toMatchObject({ detail: 'closed' });
+    expect(eventsOf(entries, 'v2_stop_replaced')).toMatchObject([
+      {
+        message:
+          'debate/primary AAPL: any stale stop cancelled, nothing placed: the broker holds none of it on that side; reconcile names the difference',
+      },
+    ]);
   });
 
   it('places the stop on the next run when a cancel that timed out completes late at the venue', async () => {

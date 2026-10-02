@@ -3490,6 +3490,25 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
     expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([TARGET_LEG_ID, STOP_LEG_ID]);
   });
 
+  it('closes nothing when the broker holds the name on the other side', async () => {
+    const submitMarketOrder = vi.fn();
+    const adapter = adapterWith(
+      makeClient({
+        getOrderByClientOrderId: noPriorOrders(restingEntryOrder()),
+        cancelOrder: vi.fn().mockResolvedValue(undefined),
+        getOrder: confirmingGetOrder(),
+        getPositions: vi.fn().mockResolvedValue([{ ...livePosition('-6')[0], side: 'short' }]),
+        submitMarketOrder,
+      }),
+    );
+    expect(await adapter.submitProtectedExit(request())).toEqual({
+      client_order_id: EXIT_ID,
+      broker_order_ids: [],
+      order_state: 'closed',
+    });
+    expect(submitMarketOrder).not.toHaveBeenCalled();
+  });
+
   it('cancels a previously re-armed order instead of re-deriving the original bracket legs', async () => {
     const REARM_LEG_ID = 'alpaca-rearm-1';
     const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
@@ -3860,7 +3879,7 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
       });
     });
 
-    function ocoClient(entry: AlpacaOrder, positionQty: string) {
+    function ocoClient(entry: AlpacaOrder, positionQty: string, side: 'long' | 'short' = 'long') {
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
       const submitOcoOrder = vi
         .fn()
@@ -3869,16 +3888,20 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
         getOrderByClientOrderId: noPriorOrders(entry),
         cancelOrder,
         getOrder: confirmingGetOrder(),
-        getPositions: vi.fn().mockResolvedValue(livePosition(positionQty)),
+        getPositions: vi.fn().mockResolvedValue([{ ...livePosition(positionQty)[0], side }]),
         submitOcoOrder,
       });
       return { cancelOrder, submitOcoOrder, client };
     }
 
-    async function replacedWith(entry: AlpacaOrder, positionQty: string) {
-      const { cancelOrder, submitOcoOrder, client } = ocoClient(entry, positionQty);
-      await adapterWith(client).replaceProtectiveLegs(replace);
-      return { cancelled: cancelOrder.mock.calls.map(([id]) => id), submitOcoOrder };
+    async function replacedWith(
+      entry: AlpacaOrder,
+      positionQty: string,
+      side: 'long' | 'short' = 'long',
+    ) {
+      const { cancelOrder, submitOcoOrder, client } = ocoClient(entry, positionQty, side);
+      const placed = await adapterWith(client).replaceProtectiveLegs(replace);
+      return { cancelled: cancelOrder.mock.calls.map(([id]) => id), submitOcoOrder, placed };
     }
 
     it('cancels a stop leg Alpaca still holds `held` beside a live target before placing', async () => {
@@ -3892,22 +3915,50 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
     });
 
     it('sizes the OCO to the broker position when a stale stop part-filled during the cancel', async () => {
-      const { submitOcoOrder } = await replacedWith(restingEntryOrder(), '100');
+      const { submitOcoOrder, placed } = await replacedWith(restingEntryOrder(), '100');
+      expect(placed).toBe(100);
       expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ qty: '100', client_order_id: `${ENTRY_ID}:rearm` }),
       );
     });
 
     it('keeps the ledger qty when the broker holds more', async () => {
-      const { submitOcoOrder } = await replacedWith(restingEntryOrder(), '200');
+      const { submitOcoOrder, placed } = await replacedWith(restingEntryOrder(), '200');
+      expect(placed).toBe(151);
       expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ qty: '151' }),
       );
     });
 
     it('places nothing when the stale stop filled the whole position during the cancel', async () => {
-      const { submitOcoOrder } = await replacedWith(restingEntryOrder(), '0');
+      const { submitOcoOrder, placed } = await replacedWith(restingEntryOrder(), '0');
+      expect(placed).toBe(0);
       expect(submitOcoOrder).not.toHaveBeenCalled();
+    });
+
+    it('places nothing when a stale stop oversold the long into a short during the cancel', async () => {
+      const { submitOcoOrder, placed } = await replacedWith(restingEntryOrder(), '-20', 'short');
+      expect(placed).toBe(0);
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+    });
+
+    it('re-arms a short against a short broker position on the buy side', async () => {
+      const { cancelOrder, submitOcoOrder, client } = ocoClient(
+        restingEntryOrder(),
+        '-151',
+        'short',
+      );
+      const placed = await adapterWith(client).replaceProtectiveLegs({
+        ...replace,
+        side: 'sell',
+        stop: 90,
+        target: 70,
+      });
+      expect(cancelOrder).toHaveBeenCalled();
+      expect(placed).toBe(151);
+      expect(submitOcoOrder).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ side: 'buy', qty: '151' }),
+      );
     });
 
     it('re-arms a holding with no resting stop without cancelling anything (crash after the cancel)', async () => {
