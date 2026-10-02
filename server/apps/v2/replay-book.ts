@@ -431,12 +431,27 @@ function rowsOf(db: StoreHandle, sql: string, tradingDate: string, end: string):
   return db.prepare(sql).all({ date: tradingDate, end }) as Row[];
 }
 
-function rowDivergence(spec: TableSpec, journalled: Row, replayed: Row | undefined) {
-  if (replayed === undefined) {
+const MODELLED_SLIPPAGE_KEY = 'modelled_slippage_bps';
+
+// An order journalled before #1884 carries no modelled slippage, so the replayed one cannot be
+// held to it: every such day would diverge on the payload whatever the tables say
+function comparableTo(journalled: Row, replayed: Row): Row {
+  const [before, after] = [journalled.payload, replayed.payload];
+  if (typeof before !== 'string' || typeof after !== 'string') return replayed;
+  if (MODELLED_SLIPPAGE_KEY in (JSON.parse(before) as Record<string, unknown>)) return replayed;
+  const kept = Object.entries(JSON.parse(after) as Record<string, unknown>).filter(
+    ([name]) => name !== MODELLED_SLIPPAGE_KEY,
+  );
+  return { ...replayed, payload: JSON.stringify(Object.fromEntries(kept)) };
+}
+
+function rowDivergence(spec: TableSpec, journalled: Row, replayedRow: Row | undefined) {
+  if (replayedRow === undefined) {
     return spec.presence
       ? ({ kind: 'row_missing', stage: spec.stage, key: journalled.key } as const)
       : undefined;
   }
+  const replayed = comparableTo(journalled, replayedRow);
   const field = Object.keys(journalled).find((name) => journalled[name] !== replayed[name]);
   if (field === undefined) return undefined;
   return {

@@ -61,6 +61,6 @@ describe('ControlStore', () => {
     expect(() => insert('flatten')).toThrow(/CHECK constraint/);
     expect(() => insert('pause', '   ')).toThrow(/CHECK constraint/);
     insert('pause', 'r', 'same');
-    expect(() => insert('halt', 'r', 'same')).toThrow(/UNIQUE constraint/);
+    expect(() => insert('halt', 'r', 'same')).toThrow(/append-only/);
   });
 });

@@ -235,6 +235,7 @@ describe('readDailySummary', () => {
     seedOrder('x-stop', 'debate/primary', 'stop', 'submitted', BEFORE_WINDOW);
     seedFill('f1', 'e-placed', 'signals/primary', 'entry', IN_WINDOW);
     seedFill('f1#1', 'e-placed', 'signals/primary', 'entry', IN_WINDOW);
+    seedFill('f-cil', 'e-placed', 'signals/primary', 'cash_in_lieu', IN_WINDOW);
     seedFill('f-edge', 'e-edge', 'debate/primary', 'entry', PREVIOUS_MARK);
     seedFill('x1', 'x-stop', 'debate/primary', 'stop', IN_WINDOW);
     seedPosition('signals/primary', 'UP');
@@ -296,6 +297,7 @@ describe('readDailySummary', () => {
       entries_placed: 2,
       entries_filled: 1,
       entries_rejected: 1,
+      exits_filled: 0,
       open_positions: 2,
       refusals: { count: 2, top: [{ code: 'LOSS_BUDGET', count: 2 }] },
     });

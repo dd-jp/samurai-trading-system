@@ -11,13 +11,21 @@ export interface SignalLoopDeps {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly openRoot: (tradingDate: string) => Pick<V2Root, 'processSignals' | 'close'>;
+  readonly onPass?: (ok: boolean) => void;
 }
 
 export class SignalLoop {
   #running: Promise<void> | undefined;
   #again = false;
+  #passStartedMs: number | undefined;
 
   constructor(private readonly deps: SignalLoopDeps) {}
+
+  passAgeMs(): number | undefined {
+    return this.#passStartedMs === undefined
+      ? undefined
+      : this.deps.clock.now().getTime() - this.#passStartedMs;
+  }
 
   tick(): Promise<void> {
     if (this.#running !== undefined) {
@@ -42,12 +50,16 @@ export class SignalLoop {
     let root: Pick<V2Root, 'processSignals' | 'close'> | undefined;
     try {
       if (!signalsDue(this.deps, now)) return;
+      this.#passStartedMs = now.getTime();
       root = this.deps.openRoot(sessionDate(now));
       this.#report(await root.processSignals(this.deps.signals, now));
+      this.deps.onPass?.(true);
     } catch (error) {
       this.#log('error', 'v2_signal_pass_failed', describeThrownSafely(error));
+      this.deps.onPass?.(false);
     } finally {
       root?.close();
+      this.#passStartedMs = undefined;
     }
   }
 

@@ -127,4 +127,58 @@ describe('SignalLoop', () => {
     await loop.tick();
     expect(processSignals).toHaveBeenCalledTimes(3);
   });
+
+  it('reports a settled pass as ok and a thrown one as not ok, and nothing when no pass is due', async () => {
+    const onPass = vi.fn();
+    await harness({ onPass }).loop.tick();
+    expect(onPass.mock.calls).toEqual([[true]]);
+    onPass.mockClear();
+    await harness({ onPass }, () => Promise.reject(new Error('boom'))).loop.tick();
+    expect(onPass.mock.calls).toEqual([[false]]);
+    onPass.mockClear();
+    await harness({ onPass, calendar: { isOpen: () => false } }).loop.tick();
+    expect(onPass).not.toHaveBeenCalled();
+  });
+
+  it('reports a root that fails to open as a failed pass', async () => {
+    const onPass = vi.fn();
+    await harness({
+      onPass,
+      openRoot: () => {
+        throw new Error('no keys');
+      },
+    }).loop.tick();
+    expect(onPass.mock.calls).toEqual([[false]]);
+  });
+
+  it('reports the age of the pass in flight and none when idle or after it ends', async () => {
+    let nowMs = NOW.getTime();
+    let release: () => void = () => {};
+    const { loop } = harness(
+      { clock: { now: () => new Date(nowMs) } },
+      () =>
+        new Promise<SignalPass>((resolve) => {
+          release = () => resolve({ ran: true, outcomes: [] });
+        }),
+    );
+    expect(loop.passAgeMs()).toBeUndefined();
+    const running = loop.tick();
+    nowMs += 90_000;
+    expect(loop.passAgeMs()).toBe(90_000);
+    release();
+    await running;
+    expect(loop.passAgeMs()).toBeUndefined();
+  });
+
+  it('has no pass age while nothing is due', async () => {
+    const idle = harness({ signals: { due: () => [], appendEvent: () => {} } });
+    await idle.loop.tick();
+    expect(idle.loop.passAgeMs()).toBeUndefined();
+  });
+
+  it('clears the pass age when the pass throws', async () => {
+    const { loop } = harness({}, () => Promise.reject(new Error('boom')));
+    await loop.tick();
+    expect(loop.passAgeMs()).toBeUndefined();
+  });
 });
