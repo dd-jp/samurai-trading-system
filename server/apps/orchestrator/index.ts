@@ -138,6 +138,11 @@ export {
   type AnalystSkipAlertChannel,
   buildAnalystsStep,
 } from './production/analysts-adapter.js';
+export { FIRST_TICK_BAR_WINDOWS } from './production/bar-prefetch.js';
+export type {
+  DataFailoverAlert,
+  DataFailoverAlertChannel,
+} from './production/data-failover.js';
 export { buildDebatePersonas, buildDebateStep } from './production/debate-adapter.js';
 export { buildDefaultAlpacaBrokerClient } from './production/defaults.js';
 export {
@@ -154,6 +159,7 @@ export {
   type VerdictStepDeps,
   type VolatilityReadingProvider,
 } from './production/direct-bind.js';
+export { resolveUsEquitySessionCalendar } from './production/us-equity-session-source.js';
 export {
   BENCHMARK_INSTRUMENTS,
   buildProductionComponents,

@@ -56,8 +56,9 @@ function reconcileBody(reconcile: PanelWire<ReconcileRunsWire> = RECONCILE_RUNS)
 }
 const TAX = {
   contract_version: JOURNAL.contract_version,
-  year: null,
-  disposals: { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1746' },
+  year: 2026,
+  years: [],
+  disposals: { status: 'empty' },
 };
 
 function routes(researchBody: unknown = research(), reconcile = reconcileBody()): typeof fetch {
@@ -200,12 +201,11 @@ describe('RecordsView (P9–P13)', () => {
     expect(await screen.findByText('No reconcile has run yet.')).toBeTruthy();
   });
 
-  it('shows tax as owned by its step (P13)', async () => {
+  it('serves the tax log for the current tax year (P13)', async () => {
     mount(routes());
-    await screen.findByText('Not yet fed: Step 4 (#1746).');
+    await screen.findByText('No disposals in 2026-27.');
     const tax = screen.getByRole('region', { name: 'Tax export' });
-    expect(tax.textContent).toContain('CSV download');
-    expect(within(tax).queryByRole('link')).toBeNull();
+    expect(within(tax).getByRole('button', { name: 'Download CSV' })).toBeTruthy();
   });
 
   it('holds each fetched panel in a loading state until its route answers', () => {

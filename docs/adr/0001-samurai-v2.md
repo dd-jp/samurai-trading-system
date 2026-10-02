@@ -82,7 +82,7 @@ The evidence behind the reframe (doc 65 §1, doc 67 §3, doc 71):
 
 - Every mandatory protective action is venue-resting or watchdog-backed, never tick-dependent (postmortem §3).
 - Windowed data reads carry tested coverage invariants (postmortem §2).
-- Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN. The live equity account is a Saxo GIA, so disposals are CGT events.
+- Tax: per-disposal GBP conversion at the day's rate for US trades; W-8BEN. The live equity account is a Saxo GIA, so disposals are CGT events. The day's rate is the BoE XUDLUSS fix for the fill's date (ruled 2026-10-02, doc 66, #1947); its refresh is #2000.
 - Paper profit is not evidence of edge; paper gates on fidelity to the backtest.
 
 ## 3. Definition of done for every step (doc 67 §5)
@@ -137,5 +137,5 @@ Each item is open until David rules or the named ticket closes it. This ADR take
 
 - v1's ADRs and specs are gone from the tree; anyone needing them reads tag `v1-final`. The citation checker never scans `docs/adr/`, so this file may cite deleted paths.
 - Until Step 3 lands, the code in the tree is the frozen v1 runtime; `CLAUDE.md` and `CONTEXT.md` describe v2, not that code.
-- Every step's PR meets §3 before merge. Since 2026-09-25 (doc 66) a session may merge its own PR after a general-purpose subagent review using `code-review-graph`, the review's comments fixed, and green on the full tests, mutation testing, the CRAP gate, fallow and the doc 68 session eval (all on CI since 2026-10-01, mutation testing when risk, sizing or loss-budget files change; the session eval stays a session subagent) — docs-only PRs after the review, `npm run check:citations` and the session eval; otherwise merges are David's.
+- Every step's PR meets §3 before merge. Since 2026-09-25 (doc 66) a session may merge its own PR after a general-purpose subagent review using `code-review-graph`, the review's comments fixed, and green on the full tests, mutation testing, the CRAP gate, fallow and the doc 68 session eval (all on CI since 2026-10-01, mutation testing on the changed lines of risk, sizing and loss-budget files, sharded and incremental (doc 66, 2026-10-01); the session eval stays a session subagent) — docs-only PRs after the review, `npm run check:citations` and the session eval; otherwise merges are David's.
 - No live money until the gate in §2.4 passes and the G12 approval request has run its course.

@@ -24,8 +24,9 @@ import { PositionsPanel } from './positions.js';
 import { ReconcileReader } from './records.js';
 import { ResearchReader } from './research.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
+import { TaxReader } from './tax.js';
 
-const CONTROLS_SCHEMA_VERSION = 70;
+export const DASHBOARD_SCHEMA_VERSION = 85;
 const DEFAULT_PORT = 8788;
 
 export interface V2DashboardArgs {
@@ -105,7 +106,7 @@ export function composeV2Dashboard(
     new ParquetMarkSource(args.barStoreRoot),
     new BarsMarketData({ load: () => undefined }, fx),
   );
-  const db = openMigratedStore(args.storePath, CONTROLS_SCHEMA_VERSION);
+  const db = openMigratedStore(args.storePath, DASHBOARD_SCHEMA_VERSION);
   try {
     const store = guardedStore(db, 'dashboard', { enabled: true });
     const reader = new OverviewReader(store, clock, args.mode, positions);
@@ -113,6 +114,7 @@ export function composeV2Dashboard(
     const research = new ResearchReader(args.researchStorePath, clock);
     const evidence = new EvidenceReader(store, clock);
     const reconcile = new ReconcileReader(store);
+    const tax = new TaxReader(store, clock, fx);
     const server = createV2DashboardServer({
       host: args.host,
       port: args.port,
@@ -124,6 +126,8 @@ export function composeV2Dashboard(
       research: () => research.read(),
       evidence: () => evidence.read(),
       reconcile: () => reconcile.read(),
+      tax: (query) => tax.read(query),
+      taxCsv: (query) => tax.csv(query),
       onFault: (error) =>
         process.stderr.write(
           `v2 dashboard fault: ${sanitizeLogText(describeThrownSafely(error))}\n`,

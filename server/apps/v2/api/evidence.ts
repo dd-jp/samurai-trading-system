@@ -13,6 +13,7 @@ import {
 import type { Clock } from '../../../shared/index.js';
 import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index.js';
 import { annualisedSharpe, maxDrawdown, moments } from '../../../tools/backtest/index.js';
+import { CLOSE_LEGS_SQL, entryOffsetOfPayload, entryPayloadOfClose } from '../entry-offset.js';
 import { ENTRY_LIMIT_OFFSET } from '../risk/index.js';
 
 const G1_CLOSED_TRADES = 100;
@@ -31,23 +32,21 @@ interface OffsetRow extends EntryOffsetTradesWire {
   book_id: string;
 }
 
-// David ruled 2026-09-30 on #1815: the paper sample splits at the offset change. A bracket leg
-// shares its entry's order id; an exit order is matched to the latest entry fill on its book and
-// instrument before it. An entry journalled before the tag carries no limit: it went out at 0 bps
 const CLOSED_TRADES_BY_ENTRY_OFFSET = `
   WITH closes AS (
     SELECT book_id, instrument, client_order_id, MIN(rowid) AS at FROM v2_fills
-     WHERE leg <> 'entry' GROUP BY book_id, client_order_id
+     WHERE ${CLOSE_LEGS_SQL} GROUP BY book_id, client_order_id
   ), tagged AS (
-    SELECT c.book_id,
-           (SELECT COALESCE(json_extract(o.payload, '$.entry_offset_bps'),
-                            CASE WHEN json_extract(o.payload, '$.limit') IS NULL THEN 0 END)
-              FROM v2_fills e JOIN v2_orders o ON o.client_order_id = e.client_order_id
-             WHERE e.book_id = c.book_id AND e.instrument = c.instrument
-               AND e.leg = 'entry' AND e.rowid < c.at
-             ORDER BY e.client_order_id = c.client_order_id DESC, e.rowid DESC
-             LIMIT 1) AS entry_offset_bps
-      FROM closes c
+    SELECT book_id, ${entryOffsetOfPayload('entry_payload')} AS entry_offset_bps
+      FROM (
+        SELECT c.book_id, ${entryPayloadOfClose({
+          bookId: 'c.book_id',
+          instrument: 'c.instrument',
+          orderId: 'c.client_order_id',
+          at: 'c.at',
+        })} AS entry_payload
+          FROM closes c
+      )
   )
   SELECT book_id, entry_offset_bps, COUNT(*) AS closed_trades FROM tagged
    GROUP BY book_id, entry_offset_bps ORDER BY book_id, entry_offset_bps`;

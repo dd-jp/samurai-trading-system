@@ -5,6 +5,7 @@ export type NewsStatus = 'ok' | 'no_news' | 'error' | 'budget_stop' | 'no_key';
 export interface StoredHeadline {
   readonly title: string;
   readonly publishedAt: string;
+  readonly sourceId?: string;
 }
 
 export interface NewsRecord {
@@ -25,10 +26,11 @@ export interface NewsUsage {
 }
 
 export interface NewsLedger {
-  cached(tradingDate: string, symbol: string): NewsRecord | undefined;
+  cached(provider: string, tradingDate: string, symbol: string): NewsRecord | undefined;
   usageSince(provider: string, since: string): NewsUsage;
   record(record: NewsRecord): void;
-  forDate(tradingDate: string): readonly NewsRecord[];
+  forDate(tradingDate: string, provider?: string): readonly NewsRecord[];
+  first(provider: string, tradingDate: string, symbol: string): NewsRecord | undefined;
 }
 
 interface NewsRow {
@@ -62,14 +64,30 @@ function fromRow(row: NewsRow): NewsRecord {
 export class SqliteNewsLedger implements NewsLedger {
   constructor(private readonly db: StoreHandle) {}
 
-  cached(tradingDate: string, symbol: string): NewsRecord | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM v2_news
-         WHERE trading_date = ? AND symbol = ? AND status IN ('ok', 'no_news') AND requested = 1
-         ORDER BY news_id DESC LIMIT 1`,
-      )
-      .get(tradingDate, symbol) as NewsRow | undefined;
+  cached(provider: string, tradingDate: string, symbol: string): NewsRecord | undefined {
+    return this.#one(
+      `SELECT * FROM v2_news
+       WHERE provider = ? AND trading_date = ? AND symbol = ? AND status IN ('ok', 'no_news')
+         AND requested = 1
+       ORDER BY news_id DESC LIMIT 1`,
+      provider,
+      tradingDate,
+      symbol,
+    );
+  }
+
+  first(provider: string, tradingDate: string, symbol: string): NewsRecord | undefined {
+    return this.#one(
+      `SELECT * FROM v2_news WHERE provider = ? AND trading_date = ? AND symbol = ?
+       ORDER BY news_id LIMIT 1`,
+      provider,
+      tradingDate,
+      symbol,
+    );
+  }
+
+  #one(sql: string, ...params: string[]): NewsRecord | undefined {
+    const row = this.db.prepare(sql).get(...params) as NewsRow | undefined;
     return row === undefined ? undefined : fromRow(row);
   }
 
@@ -105,10 +123,13 @@ export class SqliteNewsLedger implements NewsLedger {
       );
   }
 
-  forDate(tradingDate: string): readonly NewsRecord[] {
+  forDate(tradingDate: string, provider?: string): readonly NewsRecord[] {
     const rows = this.db
-      .prepare('SELECT * FROM v2_news WHERE trading_date = ? ORDER BY news_id')
-      .all(tradingDate) as NewsRow[];
+      .prepare(
+        `SELECT * FROM v2_news WHERE trading_date = ? AND (? IS NULL OR provider = ?)
+         ORDER BY news_id`,
+      )
+      .all(tradingDate, provider ?? null, provider ?? null) as NewsRow[];
     return rows.map(fromRow);
   }
 }

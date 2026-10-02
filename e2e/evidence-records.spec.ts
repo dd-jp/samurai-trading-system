@@ -43,7 +43,8 @@ test('Records searches the journal and shows the owned panels', async ({ page })
   await expect(page.getByRole('region', { name: 'Reconcile diffs' })).toContainText(
     /2026-10-05\s*alpaca broker\s*debate\/primary\s*clean/,
   );
-  await expect(page.getByRole('region', { name: 'Tax export' })).toContainText(
-    'Not yet fed: Step 4 (#1746).',
-  );
+  const tax = page.getByRole('region', { name: 'Tax export' });
+  await expect(tax).toContainText(/No disposals in \d{4}-\d{2}\./);
+  await expect(tax.getByRole('button', { name: 'Download CSV' })).toBeVisible();
+  await expect(tax.getByLabel('Tax year')).toBeVisible();
 });

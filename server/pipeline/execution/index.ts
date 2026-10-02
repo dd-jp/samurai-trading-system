@@ -18,6 +18,7 @@ export {
   saxoInstrumentResolverFromVenue,
 } from './adapters/saxo-adapter.js';
 export type {
+  SaxoAccountBalanceReader,
   SaxoAssetType,
   SaxoInstrumentDetails,
   SaxoOpenApiClient,
@@ -28,19 +29,33 @@ export {
   SAXO_CREDENTIAL_ENV_VARS,
   SaxoHttpBrokerClient,
 } from './adapters/saxo-http-client.js';
-export { readKeepAliveState, writeKeepAliveState } from './adapters/saxo-keepalive-state.js';
+export type { SaxoKeepAliveState } from './adapters/saxo-keepalive-state.js';
 export {
+  clearKeepAliveState,
+  readKeepAliveState,
+  writeKeepAliveState,
+} from './adapters/saxo-keepalive-state.js';
+export type {
+  FetchLike,
+  SaxoOAuthConfig,
+  SaxoTokenResponse,
+} from './adapters/saxo-oauth.js';
+export {
+  requestSaxoToken,
   resolveSaxoOAuthConfig,
   SAXO_APP_CREDENTIAL_ENV_VARS,
+  SaxoOAuthError,
 } from './adapters/saxo-oauth.js';
 export type { SaxoTokenFileRecord } from './adapters/saxo-token-file.js';
 export {
   readTokenFile,
   savedSessionExists,
   tokenFilePath,
+  writeTokenFile,
 } from './adapters/saxo-token-file.js';
 export type {
   SaxoSessionLostAlertChannel,
+  SaxoSessionState,
   SaxoTokenSource,
 } from './adapters/saxo-token-source.js';
 export {

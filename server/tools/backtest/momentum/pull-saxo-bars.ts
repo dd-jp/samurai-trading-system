@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/adapters/saxo-oauth.js';
+import { resolveSaxoOAuthConfig } from '../../../pipeline/execution/index.js';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { TRADING_DAYS_PER_YEAR } from '../../../pipeline/momentum/index.js';
 import type { HygieneReport, ShapeRepairReport } from '../../../providers/bar-store/index.js';

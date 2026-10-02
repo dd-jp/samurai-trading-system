@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   BookFill,
@@ -14,6 +17,8 @@ import type {
 } from '../../../contracts/index.js';
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
+import { ParquetBarStore } from '../../providers/bar-store/index.js';
+import { type InstrumentDetails, LSE_MOMENTUM_LINES } from '../../providers/saxo-bars/index.js';
 import {
   type BrokerAck,
   type BrokerAdapter,
@@ -41,6 +46,7 @@ import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
 import { storeView } from './reconcile.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
+import { refreshSaxoBars } from './saxo-bar-refresh.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
 
 const UNSET_CYCLE_PARAMETERS = CYCLE_LEVEL_PARAMETERS.filter((parameter) => !isSet(parameter));
@@ -303,6 +309,7 @@ function harness(
       });
     },
     gbpUsdAtYearStart: () => FX,
+    gbpUsdYearStartFixDate: () => '2025-12-31',
   };
   const books = new PaperBooks(
     db,
@@ -769,6 +776,57 @@ describe('runCycle', () => {
       { leg: 'entry', side: 'buy', price_gbp: 20 / FX, fee_gbp: 0.5 / FX },
       { leg: 'stop', side: 'sell', price_gbp: 19.2 / FX, fee_gbp: 0.5 / FX },
     ]);
+    expect(
+      db
+        .prepare(
+          `SELECT leg, currency, price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date
+           FROM v2_fills WHERE book_id = 'debate/primary' ORDER BY leg`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        leg: 'entry',
+        currency: 'USD',
+        price_native: 20,
+        fee_native: 0.5,
+        fx_quote_per_gbp: FX,
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
+        fill_date: '2026-09-25',
+      },
+      {
+        leg: 'stop',
+        currency: 'USD',
+        price_native: 19.2,
+        fee_native: 0.5,
+        fx_quote_per_gbp: FX,
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
+        fill_date: '2026-09-25',
+      },
+    ]);
+  });
+
+  it('dates a fill by its London calendar day, not the UTC day or the cycle that books it', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-late-evening'),
+      leg: 'entry',
+      price: 20,
+      qty: 6,
+      fee: 0,
+      timestamp: new Date('2026-09-25T23:30:00.000Z'),
+    });
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { get: () => unknown } } }
+    ).db;
+    expect(db.prepare('SELECT trading_date, fill_date FROM v2_fills').get()).toEqual({
+      trading_date: '2026-09-28',
+      fill_date: '2026-09-26',
+    });
   });
 
   it('#1778: one oversized fill that flips long straight to short is journaled loudly, unbracketed', async () => {
@@ -3289,6 +3347,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       barsBefore: (_instrument, tradingDate, count) =>
         bars.filter((dated) => dated.date < tradingDate).slice(-count),
       gbpUsdAtYearStart: () => FX,
+      gbpUsdYearStartFixDate: () => '2025-12-31',
     };
   }
 
@@ -3311,6 +3370,21 @@ describe('runCycle: positions held across a split (#1865)', () => {
 
   function hold(deps: Harness, qty: number, tradingDate = '2026-09-25', scale = 1): void {
     const long = qty > 0;
+    if (deps.journal.orderFor('seed') === undefined) {
+      deps.journal.recordOrder({
+        client_order_id: 'seed',
+        decision_id: null,
+        book_id: 'debate/primary',
+        trading_date: tradingDate,
+        instrument: 'AAPL',
+        venue: 'alpaca',
+        leg: 'entry',
+        side: long ? 'buy' : 'sell',
+        dry_run: true,
+        outcome: 'simulated',
+        payload: {},
+      });
+    }
     deps.books.applyFill('debate/primary', {
       instrument: 'AAPL',
       venue: 'alpaca',
@@ -3406,7 +3480,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
     const report = await runCycle(withMarket(deps, bars), '2026-10-01');
     expect(report.exits).toBe(2);
     expect(deps.journal.orderFor('v2-debate-primary-2026-10-01-AAPL-exit')).toMatchObject({
-      payload: { size: expect.closeTo(filledQty * 10, 9), price: expect.closeTo(1.8, 9) },
+      payload: { size: expect.closeTo(filledQty, 9), price: expect.closeTo(1.8, 9) },
     });
     expect(primary(deps)).toBeUndefined();
   });
@@ -3481,22 +3555,60 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(across.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
   });
 
-  it('a 3:2 split leaves a fractional qty and keeps qty x price and equity', async () => {
+  const threeForTwo = [
+    ...preSplit(1.5),
+    seriesBar('2026-09-28', THREE_FOR_TWO, 1),
+    seriesBar('2026-09-29', THREE_FOR_TWO, 1),
+  ];
+  const CASH_IN_LIEU_PRIMARY = 'alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-28';
+
+  it('a 3:2 split on 101 shares holds 151 and disposes of the half share as cash in lieu at the rescaled close, keeping equity', async () => {
     const deps = harness([], true);
-    hold(deps, 3);
-    const bars = [
-      ...preSplit(1.5),
-      seriesBar('2026-09-28', THREE_FOR_TWO, 1),
-      seriesBar('2026-09-29', THREE_FOR_TWO, 1),
-    ];
-    await runCycle(withMarket(deps, bars), '2026-09-28');
-    const across = await runCycle(withMarket(deps, bars), '2026-09-29');
+    hold(deps, 101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const across = await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
     expect(across.exits).toBe(0);
     const held = primary(deps);
-    expect(held?.qty).toBeCloseTo(4.5, 12);
+    expect(held?.qty).toBe(151);
     expect(held?.avgPriceGbp).toBeCloseTo(20 / 1.5 / FX, 9);
     expect(held?.stopGbp).toBeCloseTo(19.2 / 1.5 / FX, 9);
+    expect(held?.targetGbp).toBeCloseTo(21.2 / 1.5 / FX, 9);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toEqual([
+      {
+        qty: 0.5,
+        price_gbp: expect.closeTo(40 / 3 / FX, 9),
+        fee_gbp: 0,
+        trading_date: '2026-09-29',
+      },
+    ]);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 - (101 * 20) / FX + (0.5 * 40) / 3 / FX,
+      9,
+    );
     expect(across.books[0]?.equity_gbp).toBeCloseTo(1_000, 9);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    expect(primary(deps)?.qty).toBe(151);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toHaveLength(1);
+  });
+
+  it('a 3:2 split on a whole-share result books no cash in lieu', async () => {
+    const deps = harness([], true);
+    hold(deps, 4);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    expect(primary(deps)?.qty).toBe(6);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toEqual([]);
+  });
+
+  it('a 3:2 split on a short of 101 holds -151 and buys the half share back as cash in lieu', async () => {
+    const deps = harness([], true);
+    hold(deps, -101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    expect(primary(deps)?.qty).toBe(-151);
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toMatchObject([{ qty: 0.5 }]);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(
+      1_000 + (101 * 20) / FX - (0.5 * 40) / 3 / FX,
+      9,
+    );
   });
 
   it('measures a second split from the anchor the first one left', async () => {
@@ -3549,6 +3661,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       lastBarBefore: (instrument, date) => real.lastBarBefore(instrument, date),
       barsBefore: (instrument, date, count) => real.barsBefore(instrument, date, count),
       gbpUsdAtYearStart: () => FX,
+      gbpUsdYearStartFixDate: () => '2025-12-31',
     };
     const report = await runCycle({ ...deps, market }, '2026-09-29');
     expect(report.exits).toBe(0);
@@ -3614,7 +3727,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(eventsOf(entries, 'v2_split_implausible')).toHaveLength(1);
   });
 
-  it('still rescales a CHK-shaped 1:200 reverse split on a day the adjusted close also gapped 1.6x', async () => {
+  it('still rescales a CHK-shaped 1:200 reverse split on a day the adjusted close also gapped 1.6x, cashing out the sub-share result', async () => {
     const { deps, entries } = loggedDeps(harness([], true));
     hold(deps, 6);
     const afterSplit: RawBar = { open: 6400, high: 6450, low: 6350, close: 6400 };
@@ -3626,28 +3739,34 @@ describe('runCycle: positions held across a split (#1865)', () => {
     await runCycle(withMarket(deps, reverse), '2026-09-30');
     expect(eventsOf(entries, 'v2_split_implausible')).toEqual([]);
     expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
-      { message: expect.stringContaining('qty 6 -> 0.03') },
+      { message: expect.stringContaining('qty 6 -> 0,') },
     ]);
+    expect(primary(deps)).toBeUndefined();
+    expect(
+      deps.journal.fillPartsOf('alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29'),
+    ).toMatchObject([{ qty: expect.closeTo(0.03, 12), price_gbp: expect.closeTo(6400 / FX, 9) }]);
   });
 
-  it('anchors a simulated entry at its fill bar, so a split between the fill bar and the ingest cycle is rescaled', async () => {
+  it('a simulated entry filled on a bar before a split already visible this cycle books rescaled to the latest bar, with no phantom loss', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-25');
     deps.setDecisions([]);
     const bars = [
+      seriesBar('2026-09-24', PRE, 10),
       seriesBar('2026-09-25', PRE, 10),
       seriesBar('2026-09-28', TEN_TO_ONE, 1),
       seriesBar('2026-09-29', TEN_TO_ONE, 1),
     ];
-    await runCycle(withMarket(deps, bars), '2026-09-30');
-    expect(primary(deps)).toMatchObject({ splitFactor: 1, splitAnchorDate: '2026-09-25' });
-    const filledQty = primary(deps)?.qty ?? 0;
-    await runCycle(withMarket(deps, bars), '2026-10-01');
+    const report = await runCycle(withMarket(deps, bars), '2026-09-30');
+    const entry = deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL');
     expect(primary(deps)).toMatchObject({
-      qty: expect.closeTo(filledQty * 10, 9),
+      qty: expect.closeTo((entry?.payload.size as number) * 10, 9),
       splitFactor: 10,
       splitAnchorDate: '2026-09-29',
     });
+    expect(report.books[0]?.equity_gbp).toBeGreaterThan(995);
+    await runCycle(withMarket(deps, bars), '2026-10-01');
+    expect(primary(deps)).toMatchObject({ splitFactor: 10, splitAnchorDate: '2026-09-29' });
   });
 
   it('a simulated entry filling into an already-held position leaves its split anchor untouched', async () => {
@@ -3673,6 +3792,136 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(entries.filter((entry) => entry.event === 'v2_split_rescaled')).toMatchObject([
       { level: 'info', message: 'debate/primary AAPL: qty 6 -> 60, levels / 10' },
     ]);
+  });
+
+  describe('a held Saxo LSE line, with bars shaped as the refresh writes them (#1899)', () => {
+    function lseBar(date: string, price: number, rawClose: number): DailyBar {
+      return {
+        date,
+        open: price,
+        high: price * 1.01,
+        low: price * 0.99,
+        close: price,
+        volume: 1,
+        rawClose,
+      };
+    }
+
+    function holdIsf(deps: Harness, qty: number, price: number): void {
+      deps.books.applyFill('debate/primary', {
+        instrument: 'ISF',
+        venue: 'saxo',
+        side: 'buy',
+        leg: 'entry',
+        qty,
+        priceGbp: price,
+        feeGbp: 0,
+        clientOrderId: 'seed-isf',
+        tradingDate: '2026-09-25',
+        stopGbp: price * 0.96,
+        targetGbp: price * 1.06,
+      });
+    }
+
+    const isf = (deps: CycleDeps) => deps.books.position('debate/primary', 'ISF');
+
+    it('rescales a held position across a forward split read from actual refresh output', async () => {
+      const root = join(mkdtempSync(join(tmpdir(), 'cycle-saxo-split-')), 'parquet');
+      const store = await ParquetBarStore.open(root);
+      try {
+        const isfLine = LSE_MOMENTUM_LINES.find((line) => line.tidm === 'ISF');
+        if (isfLine === undefined) throw new Error('no ISF line');
+        const flat = (date: string, gbp: number): DailyBar => lseBar(date, gbp, gbp);
+        const stored = ['2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25'];
+        await store.write('saxo', [{ symbol: 'ISF', bars: stored.map((date) => flat(date, 100)) }]);
+        const pulled = Object.fromEntries([
+          ...stored.map((date) => [date, 10]),
+          ['2026-09-28', 10.1],
+          ['2026-09-29', 10.2],
+        ]) as Record<string, number>;
+        const samples = Object.entries(pulled).map(([date, gbp]) => ({
+          Time: `${date}T00:00:00.000000Z`,
+          Open: gbp * 100,
+          High: gbp * 100,
+          Low: gbp * 100,
+          Close: gbp * 100,
+          Volume: 1,
+        }));
+        const api = {
+          instrumentDetails: async (): Promise<InstrumentDetails> => ({
+            symbol: 'ISF',
+            currencyCode: isfLine.unit,
+            priceToContractFactor: 0.01,
+            isTradable: true,
+            isComplex: false,
+            exchangeId: 'LSE_ETF',
+          }),
+          dailyHistory: async () => ({ firstSampleTime: undefined, delayedByMinutes: 15, samples }),
+        };
+        const logger = { log: () => undefined };
+        const report = await refreshSaxoBars({
+          api,
+          store,
+          tradingDate: '2026-09-30',
+          lines: [isfLine],
+          logger,
+        });
+        expect(report.failed).toEqual([]);
+        const series = await store.readSeries('saxo', 'ISF');
+        const deps = harness([], true);
+        holdIsf(deps, 6, 100);
+        const real = new BarsMarketData({ load: () => series }, []);
+        const market: MarketData = {
+          lastBarBefore: (instrument, date) => real.lastBarBefore(instrument, date),
+          barsBefore: (instrument, date, count) => real.barsBefore(instrument, date, count),
+          gbpUsdAtYearStart: () => FX,
+          gbpUsdYearStartFixDate: () => '2025-12-31',
+        };
+        const across = await runCycle({ ...deps, market }, '2026-09-30');
+        expect(across.exits).toBe(0);
+        expect(isf(deps)).toMatchObject({
+          qty: 60,
+          stopGbp: expect.closeTo(9.6, 9),
+          targetGbp: expect.closeTo(10.6, 9),
+          splitFactor: 10,
+        });
+      } finally {
+        store.close();
+      }
+    });
+
+    it.each([
+      { name: 'forward 10:1 split', qty: 6, before: 100, after: 10, ratio: 10 },
+      { name: '1:10 consolidation', qty: 60, before: 10, after: 100, ratio: 0.1 },
+    ])('rescales qty, stop and target across a $name with no phantom exit or P&L', async (c) => {
+      const deps = harness([], true);
+      holdIsf(deps, c.qty, c.before);
+      const bars = [
+        lseBar('2026-09-23', c.after, c.before),
+        lseBar('2026-09-24', c.after, c.before),
+        lseBar('2026-09-25', c.after, c.before),
+        lseBar('2026-09-28', c.after, c.after),
+        lseBar('2026-09-29', c.after, c.after),
+      ];
+      const before = await runCycle(withMarket(deps, bars), '2026-09-28');
+      expect(isf(deps)).toMatchObject({ qty: c.qty, splitFactor: 1 });
+      const across = await runCycle(withMarket(deps, bars), '2026-09-29');
+      expect(across.exits).toBe(0);
+      expect(isf(deps)).toMatchObject({
+        qty: c.qty * c.ratio,
+        avgPriceGbp: expect.closeTo(c.after, 9),
+        stopGbp: expect.closeTo(c.after * 0.96, 9),
+        targetGbp: expect.closeTo(c.after * 1.06, 9),
+        splitFactor: c.ratio,
+      });
+      const custody = deps.books.lastDay('debate/primary')?.custodyAccrualGbp ?? 0;
+      expect(custody).toBeCloseTo((600 * 0.0012) / 365, 12);
+      expect((before.books[0]?.equity_gbp ?? 0) - (across.books[0]?.equity_gbp ?? 0)).toBeCloseTo(
+        custody,
+        12,
+      );
+      expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(false);
+    });
   });
 
   class SplitAlpaca extends FakeAlpaca {
@@ -3704,21 +3953,277 @@ describe('runCycle: positions held across a split (#1865)', () => {
     }
   }
 
-  it('leaves a broker-held position unrescaled and warns that reconcile must take qty from the broker, while simulated shadow books still rescale', async () => {
+  it('rescales a broker-held position like the simulated shadow books', async () => {
     const alpaca = new SplitAlpaca();
     const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
     await runCycle(deps, '2026-09-25');
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
     deps.setControl('halt');
-    await runCycle(deps, '2026-09-28');
+    await runCycle(withMarket(deps, snapshot), '2026-09-28');
     await runCycle(withMarket(deps, snapshot), '2026-09-29');
-    expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1, splitAnchorDate: undefined });
-    expect(eventsOf(entries, 'v2_split_broker_qty')).toMatchObject([
-      { level: 'warn', message: expect.stringContaining('#1872') },
+    expect(primary(deps)).toMatchObject({
+      qty: 60,
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-28',
+    });
+    expect(eventsOf(entries, 'v2_split_rescaled').map((entry) => entry.message)).toEqual([
+      expect.stringContaining('debate/primary AAPL: qty 6 -> 60'),
+      expect.stringContaining('debate/no-macro-gate AAPL'),
     ]);
+  });
+
+  function brokerHolding(deps: Harness, qty: number): BrokerBookReader {
+    return {
+      read: async (venue) => {
+        const book = await deps.brokerBooks.read(venue);
+        return venue === 'alpaca' ? { ...book, positions: [{ instrument: 'AAPL', qty }] } : book;
+      },
+    };
+  }
+
+  async function brokerHeld101AcrossThreeForTwo(brokerQty: number) {
+    const alpaca = new SplitAlpaca();
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 101, 20);
+    deps.setControl('halt');
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-28');
+    const across = await runCycle(
+      { ...withMarket(deps, threeForTwo), brokerBooks: brokerHolding(deps, brokerQty) },
+      '2026-09-29',
+    );
+    return { deps, entries, across };
+  }
+
+  it('a broker-held 101 shares across 3:2 books 151 and a half-share cash in lieu, and reconciles clean against a broker holding 151', async () => {
+    const { deps, entries, across } = await brokerHeld101AcrossThreeForTwo(151);
+    expect(primary(deps)).toMatchObject({ qty: 151, splitFactor: 1.5 });
+    expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toEqual([
+      {
+        qty: 0.5,
+        price_gbp: expect.closeTo(40 / 3 / FX, 9),
+        fee_gbp: 0,
+        trading_date: '2026-09-29',
+      },
+    ]);
+    expect(eventsOf(entries, 'v2_split_cash_in_lieu')).toMatchObject([
+      { level: 'warn', message: expect.stringContaining('debate/primary AAPL: 0.5 share') },
+    ]);
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toEqual([]);
+    expect(across.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+  });
+
+  it('a broker reporting 152 after the 3:2 split raises the reconcile mismatch on the position qty', async () => {
+    const { deps, entries, across } = await brokerHeld101AcrossThreeForTwo(152);
+    expect(primary(deps)?.qty).toBe(151);
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+      { level: 'error', message: expect.stringContaining('position_qty') },
+    ]);
+    expect(across.refusals).toContainEqual(
+      expect.stringMatching(
+        /^debate\/primary: entries blocked, alpaca broker reconcile mismatch: /,
+      ),
+    );
+  });
+
+  it('dates the cash in lieu of a late-evening broker exit by the London day, as the exit itself', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 101, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-late-evening'),
+      leg: 'stop',
+      price: 12.8,
+      qty: 151,
+      fee: 0,
+      timestamp: new Date('2026-09-29T23:30:00.000Z'),
+    });
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT fill_id, leg, fill_date FROM v2_fills WHERE leg IN ('stop', 'cash_in_lieu') ORDER BY leg",
+        )
+        .all(),
+    ).toEqual([
+      {
+        fill_id: 'alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29',
+        leg: 'cash_in_lieu',
+        fill_date: '2026-09-30',
+      },
+      { fill_id: 'alpaca:alp-stop-late-evening', leg: 'stop', fill_date: '2026-09-30' },
+    ]);
+  });
+
+  it('a broker exit fill of 151 after a 3:2 split on 101 shares closes the position with no stuck half share', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 101, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-three-for-two'),
+      leg: 'stop',
+      price: 12.8,
+      qty: 151,
+      fee: 0,
+      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+    });
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    expect(primary(deps)).toBeUndefined();
+    expect(
+      deps.journal.fillPartsOf('alpaca:cash-in-lieu:debate/primary:AAPL:2026-09-29'),
+    ).toMatchObject([{ qty: 0.5, price_gbp: expect.closeTo(40 / 3 / FX, 9) }]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(db.prepare('SELECT instrument, venue, split_date, ratio FROM v2_splits').all()).toEqual([
+      { instrument: 'AAPL', venue: 'alpaca', split_date: '2026-09-28', ratio: 1.5 },
+    ]);
+    expect(
+      db
+        .prepare(
+          `SELECT leg, side, qty, currency, price_native, fx_source, fill_date FROM v2_fills
+           WHERE leg IN ('stop', 'cash_in_lieu') ORDER BY leg`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        leg: 'cash_in_lieu',
+        side: 'sell',
+        qty: 0.5,
+        currency: 'USD',
+        price_native: expect.closeTo(40 / 3, 9),
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
+        fill_date: '2026-09-29',
+      },
+      {
+        leg: 'stop',
+        side: 'sell',
+        qty: 151,
+        currency: 'USD',
+        price_native: 12.8,
+        fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
+        fill_date: '2026-09-29',
+      },
+    ]);
+  });
+
+  it('a resting simulated entry that fills on the split day books the order units rescaled, with no false stop_on_entry_bar', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const resting: RawBar = { open: 25, high: 25.5, low: 24.5, close: 25 };
+    const bars = [
+      seriesBar('2026-09-24', PRE, 10),
+      seriesBar('2026-09-25', resting, 10),
+      seriesBar('2026-09-28', TEN_TO_ONE, 1),
+    ];
+    const report = await runCycle(withMarket(deps, bars), '2026-09-29');
+    expect(report.exits).toBe(0);
+    expect(primary(deps)).toMatchObject({
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-28',
+    });
+    const entry = deps.journal.orderFor('v2-debate-primary-2026-09-25-AAPL');
+    expect(primary(deps)?.qty).toBeCloseTo((entry?.payload.size as number) * 10, 9);
+    expect(primary(deps)?.stopGbp).toBeCloseTo(1.92 / FX, 9);
+  });
+
+  it('a split between a broker fill bar and the ingest cycle after skipped cycles is still detected', async () => {
+    const alpaca = new SplitAlpaca();
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(withMarket(deps, snapshot), '2026-09-30');
+    expect(primary(deps)).toMatchObject({ qty: 60, splitAnchorDate: '2026-09-29' });
     expect(eventsOf(entries, 'v2_split_rescaled')).toMatchObject([
-      { message: expect.stringContaining('debate/no-macro-gate') },
+      { message: expect.stringContaining('debate/primary AAPL: qty 6 -> 60') },
     ]);
+  });
+
+  it('a broker exit fill already in post-split units books against the ledger rescaled to its units', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-post-split'),
+      leg: 'stop',
+      price: 1.92,
+      qty: 60,
+      fee: 0,
+      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+    });
+    await runCycle(withMarket(deps, snapshot), '2026-09-30');
+    expect(primary(deps)).toBeUndefined();
+  });
+
+  class ReReportingAlpaca extends SplitAlpaca {
+    readonly sticky: NormalizedFill[] = [];
+
+    override async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+      return [...(await super.fetchNewFills(since)), ...this.sticky];
+    }
+  }
+
+  it('a cumulative broker exit fill re-reported by every sweep books once in post-split units and leaves no stray', async () => {
+    const alpaca = new ReReportingAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.sticky.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-cumulative'),
+      leg: 'stop',
+      price: 1.92,
+      qty: 60,
+      fee: 0,
+      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+      qty_is_cumulative: true,
+    });
+    await runCycle(withMarket(deps, snapshot), '2026-09-30');
+    await runCycle(withMarket(deps, snapshot), '2026-10-01');
+    expect(primary(deps)).toBeUndefined();
+  });
+
+  it('an add to a broker position after a split books against the rescaled ledger', async () => {
+    const alpaca = new SplitAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+    await runCycle(deps, '2026-09-28');
+    alpaca.pending.push({
+      client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+      broker_fill_id: toBrokerFillId('alp-stop-partial'),
+      leg: 'stop',
+      price: 1.92,
+      qty: 20,
+      fee: 0,
+      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+    });
+    await runCycle(withMarket(deps, snapshot), '2026-09-30');
+    expect(primary(deps)).toMatchObject({
+      qty: 40,
+      splitFactor: 10,
+      splitAnchorDate: '2026-09-29',
+    });
   });
 
   it('a backstop rearm after a recorded split uses the rescaled native prices, not the pre-split entry prices', async () => {
@@ -3928,6 +4433,48 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     expect(logs).toContainEqual(
       expect.objectContaining({ level: 'error', event: 'v2_reconcile_threw' }),
     );
+  });
+
+  async function heldAaplSweepThrowing(log: (entry: LogEntry) => void) {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setDecisions([exitAapl, longMsft]);
+    vi.spyOn(deps.executor, 'fetchNewFills').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    const report = await runCycle({ ...deps, logger: { log } }, '2026-09-29');
+    return { alpaca, deps, report };
+  }
+
+  it('a throw from the fill sweep blocks every book entry, still exits and alerts critical (#1927)', async () => {
+    const logs: LogEntry[] = [];
+    const { alpaca, deps, report } = await heldAaplSweepThrowing((entry) => logs.push(entry));
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT')).toBeUndefined();
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-29-MSFT')).toBeUndefined();
+    expect(report.refusals).toEqual(
+      expect.arrayContaining([
+        'debate/primary: entries blocked, fill sweep threw: SQLITE_BUSY',
+        'debate/no-macro-gate: entries blocked, fill sweep threw: SQLITE_BUSY',
+      ]),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'v2_fill_sweep_threw' }),
+    );
+    expect(logs.map((entry) => entry.event)).not.toContain('v2_reconcile_threw');
+  });
+
+  it('a throwing logger does not escape the sweep catch, so exits still run (#1927)', async () => {
+    const { alpaca, report } = await heldAaplSweepThrowing((entry) => {
+      if (entry.event === 'v2_fill_sweep_threw') throw new Error('logger down');
+    });
+
+    expect(report.skipped).toBe(false);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-29-AAPL-exit']);
   });
 
   it('live: an unset cash tolerance fails closed, primary entries blocked through a refusal, no critical alert', async () => {
@@ -4405,5 +4952,52 @@ describe('runCycle with per-venue sessions (#1933)', () => {
     });
     expect(report.entries).toBe(2);
     expect(sitOuts(deps)).toEqual([]);
+  });
+});
+
+describe('runCycle: modelled slippage journalled when the order goes out (#1884)', () => {
+  const exitAapl: SleeveDecision = { ...longAapl, action: 'exit', reason: 'judge exit' };
+  const TABLES: FillPricing = { halfSpreadBps: () => 7, impactBps: () => 3, fee: () => 0 };
+
+  function modelled(deps: CycleDeps, bookId: string, orderId: string): unknown {
+    const row = orders(deps, bookId).find((order) => order.client_order_id === orderId);
+    return (JSON.parse(row?.payload ?? '{}') as Record<string, unknown>).modelled_slippage_bps;
+  }
+
+  it('records half spread plus impact on a broker entry and on its flatten, and nothing on a simulated book', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([exitAapl]);
+    await runCycle(deps, '2026-09-28');
+
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeCloseTo(
+      10,
+      9,
+    );
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-28-AAPL-exit')).toBeCloseTo(
+      10,
+      9,
+    );
+    expect(
+      modelled(deps, 'debate/no-macro-gate', 'v2-debate-no-macro-gate-2026-09-25-AAPL'),
+    ).toBeUndefined();
+  });
+
+  it('records nothing on a dry run, where every order is simulated', async () => {
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeUndefined();
+  });
+
+  it('records nothing on an order the broker rejected', async () => {
+    const alpaca = new FakeAlpaca();
+    vi.spyOn(alpaca, 'submitBracket').mockRejectedValueOnce(new Error('no buying power'));
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    const row = orders(deps, 'debate/primary')[0];
+    expect(row?.outcome).toBe('rejected');
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeUndefined();
   });
 });

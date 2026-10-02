@@ -2,6 +2,7 @@ import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import {
   applyBarHygiene,
   DEFAULT_BAR_STORE_ROOT,
+  type HygieneReport,
   ParquetBarStore,
   repairBarShape,
   type ShapeRepairReport,
@@ -41,6 +42,7 @@ import {
   type SaxoSessionLedger,
 } from './saxo-session-loss.js';
 import { LSE_LINES } from './signal/index.js';
+import { isSplitStep, splitRatioAcross } from './split.js';
 
 const HISTORY_RESCALE_TOLERANCE = 0.05;
 // Between the 2026-09-25 pull (data/bars/saxo-aux/raw) and the 2026-09-30 store, 0 of 85,175
@@ -169,20 +171,114 @@ function assertFresh(tidm: string, bars: readonly DailyBar[], tradingDate: strin
   );
 }
 
-function warnIfRescaled(
-  existing: BarSeries | undefined,
-  rounded: readonly DailyBar[],
+type SuspectFlips = HygieneReport['suspect_flips'];
+
+function carryRawClose(
+  existing: BarSeries,
+  next: readonly DailyBar[],
+  rewritten: boolean,
+): DailyBar[] {
+  const stored = new Map(existing.bars.map((bar) => [bar.date, bar]));
+  return roundPrices(
+    next.map((bar) => {
+      const prior = stored.get(bar.date);
+      if (prior === undefined) return bar;
+      const rawClose = rewritten ? prior.rawClose : bar.close * (prior.rawClose / prior.close);
+      return { ...bar, rawClose };
+    }),
+  );
+}
+
+function rescaledMessage(symbol: string, factor: number, outcome: string): string {
+  return `${symbol}: Saxo rewrote the stored history by ${Number(factor.toPrecision(4))}x (split?); ${outcome}`;
+}
+
+// A rewritten overlap keeps the stored rawClose, so #1865's detector reads the old scale up to
+// the split and 1 after it, as for Alpaca; a step it cannot tie to a continuous adjusted
+// series is refused and alerted, never guessed
+function stepFromRewrite(
+  existing: BarSeries,
+  pulled: readonly DailyBar[],
+  factor: number,
   logger: Logger,
-): void {
-  const factor = existing === undefined ? undefined : historyRescaleFactor(existing, rounded);
-  if (factor === undefined) return;
+): DailyBar[] {
+  const stepped = carryRawClose(existing, pulled, true);
+  if (splitRatioAcross(stepped).rejected.length === 0) {
+    const outcome = 'rawClose carries the step so held positions rescale';
+    logRefresh(
+      logger,
+      'warn',
+      'v2_saxo_history_rescaled',
+      rescaledMessage(existing.symbol, factor, outcome),
+    );
+    return stepped;
+  }
+  const outcome =
+    'the adjusted closes are not continuous across it, so it is not a split; no rescale, check the line';
   logRefresh(
     logger,
-    'warn',
+    'error',
     'v2_saxo_history_rescaled',
-    `${existing?.symbol}: Saxo rewrote the stored history by ${Number(factor.toPrecision(4))}x ` +
-      '(split?); held quantity, stop and target were set before it and are not rescaled here',
+    rescaledMessage(existing.symbol, factor, outcome),
   );
+  return carryRawClose(existing, pulled, false);
+}
+
+function errorOnUnadjustedStep(existing: BarSeries, flips: SuspectFlips, logger: Logger): void {
+  if (flips === undefined || flips.to <= (existing.bars.at(-1)?.date ?? '')) return;
+  logRefresh(
+    logger,
+    'error',
+    'v2_saxo_unadjusted_step',
+    `${existing.symbol}: ${flips.count} close step(s) beyond 1.35x between ${flips.from} and ${flips.to} with the stored history unrewritten; a split Saxo left unadjusted looks the same, so a held position is not rescaled, check the line`,
+  );
+}
+
+const UNIT_BREAK_BAND_MIN = 90;
+const UNIT_BREAK_BAND_MAX = 110;
+
+function inUnitBreakBand(factor: number): boolean {
+  const size = Math.max(factor, 1 / factor);
+  return size > UNIT_BREAK_BAND_MIN && size < UNIT_BREAK_BAND_MAX;
+}
+
+// normaliseUnitBreaks rescales every earlier bar to the newest bar's unit, so a GBX/GBP flip on
+// the newest bar rewrites the whole overlap by 100x or 0.01x, which is not a split
+function isUnitBreakRewrite(existing: BarSeries, factor: number, report: HygieneReport): boolean {
+  const storedLast = existing.bars.at(-1)?.date ?? '';
+  return inUnitBreakBand(factor) || report.unit_breaks.some((unit) => unit.date > storedLast);
+}
+
+function withSplitStep(
+  existing: BarSeries | undefined,
+  pulled: readonly DailyBar[],
+  report: HygieneReport,
+  logger: Logger,
+): DailyBar[] {
+  if (existing === undefined) return [...pulled];
+  const factor = historyRescaleFactor(existing, pulled);
+  if (factor === undefined) {
+    errorOnUnadjustedStep(existing, report.suspect_flips, logger);
+  } else if (isUnitBreakRewrite(existing, factor, report)) {
+    const outcome = 'a unit break, not a split, so nothing is rescaled; check the line';
+    logRefresh(
+      logger,
+      'error',
+      'v2_saxo_history_rescaled',
+      rescaledMessage(existing.symbol, factor, outcome),
+    );
+  } else if (isSplitStep(factor)) {
+    return stepFromRewrite(existing, pulled, factor, logger);
+  } else {
+    const outcome = 'too small for a split, nothing rescaled, check the line';
+    logRefresh(
+      logger,
+      'error',
+      'v2_saxo_history_rescaled',
+      rescaledMessage(existing.symbol, factor, outcome),
+    );
+  }
+  return carryRawClose(existing, pulled, false);
 }
 
 function repairedDates(report: ShapeRepairReport): string[] {
@@ -242,16 +338,16 @@ async function refreshLine(
   const repaired = repairBarShape(hygiene.bars);
   if (repaired.bars.length === 0) throw new Error(`${line.tidm}: no bars left after shape repair`);
   assertNoRecentRepair(line.tidm, hygiene.bars, repaired.report);
-  const rounded = roundPrices(repaired.bars);
+  const pulled = roundPrices(repaired.bars);
   if (existing !== undefined) {
-    assertNoShrink(line.tidm, existing, rounded);
-    assertHistoryConsistent(line.tidm, existing, rounded);
+    assertNoShrink(line.tidm, existing, pulled);
+    assertHistoryConsistent(line.tidm, existing, pulled);
   }
+  const rounded = withSplitStep(existing, pulled, hygiene.report, options.logger);
   await (options.limit ?? UNLIMITED).atomic(() =>
     options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
   );
   warnIfShapeRepaired(line.tidm, repaired.report, options.logger);
-  warnIfRescaled(existing, rounded, options.logger);
   assertFresh(line.tidm, rounded, options.tradingDate);
   return {
     symbol: line.tidm,

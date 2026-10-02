@@ -56,8 +56,12 @@ export {
   spendCapRefusalRemedy,
   UNCAPPED_SPEND,
 } from './llm/spend-cap.js';
-export type { LlmSpendSink } from './llm/spend-sink.js';
-export { SqliteLlmSpendStore } from './llm/spend-sink.js';
+export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';
+export {
+  MAX_CAPTURED_PROMPT_CHARS,
+  MAX_CAPTURED_RESPONSE_CHARS,
+  SqliteLlmSpendStore,
+} from './llm/spend-sink.js';
 export type {
   LlmClient,
   LlmRequest,

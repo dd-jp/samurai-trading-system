@@ -4,6 +4,15 @@ import type { V2Bar } from '../../../contracts/index.js';
 // restates the factor by as much and would read as a split; a split smaller than 6:5 is missed
 export const SPLIT_STEP_THRESHOLD = 1.2;
 
+// Closes are stored to 4 dp, so a 6:5 step measured across four rounded closes lands up to
+// ~4 x 0.00005 / close under 1.2: 1.199994 at a close near 8, ~2e-4 relative at a 1.00 close
+// 5e-4 covers sub-1.00 closes and sits ~3x below the 0.17% a 1.198 non-split move shows
+export const SPLIT_STEP_EPSILON = 5e-4;
+
+export function isSplitStep(factor: number): boolean {
+  return Math.max(factor, 1 / factor) >= SPLIT_STEP_THRESHOLD * (1 - SPLIT_STEP_EPSILON);
+}
+
 const SNAP_MAX_DENOMINATOR = 5;
 const SNAP_TOLERANCE = 0.005;
 
@@ -40,8 +49,14 @@ interface RejectedSplitStep {
   readonly adjustedGap: number;
 }
 
-interface SplitReading {
+export interface SplitStep {
+  readonly date: string;
   readonly ratio: number;
+}
+
+export interface SplitReading {
+  readonly ratio: number;
+  readonly steps: readonly SplitStep[];
   readonly rejected: readonly RejectedSplitStep[];
 }
 
@@ -49,19 +64,20 @@ function magnitude(factor: number): number {
   return Math.max(factor, 1 / factor);
 }
 
-const NO_SPLIT: SplitReading = { ratio: 1, rejected: [] };
+const NO_SPLIT: SplitReading = { ratio: 1, steps: [], rejected: [] };
 
 function judgeSplitStep(previous: V2Bar, bar: V2Bar, step: number): SplitReading {
   const adjustedGap = previous.close / bar.close;
   if (magnitude(adjustedGap) < SPLIT_ADJUSTED_GAP_BAND) {
-    return { ratio: snapToSplitRatio(step), rejected: [] };
+    const ratio = snapToSplitRatio(step);
+    return { ratio, steps: [{ date: bar.date, ratio }], rejected: [] };
   }
-  return { ratio: 1, rejected: [{ date: bar.date, step, adjustedGap }] };
+  return { ratio: 1, steps: [], rejected: [{ date: bar.date, step, adjustedGap }] };
 }
 
 function readSplitStep(previous: V2Bar, bar: V2Bar): SplitReading {
   const step = adjustmentFactor(previous) / adjustmentFactor(bar);
-  return magnitude(step) >= SPLIT_STEP_THRESHOLD ? judgeSplitStep(previous, bar, step) : NO_SPLIT;
+  return isSplitStep(step) ? judgeSplitStep(previous, bar, step) : NO_SPLIT;
 }
 
 // rawClose/close is the cumulative adjustment for every corporate action after that bar, so it
@@ -69,15 +85,43 @@ function readSplitStep(previous: V2Bar, bar: V2Bar): SplitReading {
 // snapshot series and in a refreshed one, where the latest bar's factor is always 1
 export function splitRatioAcross(bars: readonly V2Bar[]): SplitReading {
   let ratio = 1;
+  const steps: SplitStep[] = [];
   const rejected: RejectedSplitStep[] = [];
   let previous: V2Bar | undefined;
   for (const bar of bars) {
     if (previous !== undefined) {
       const reading = readSplitStep(previous, bar);
       ratio *= reading.ratio;
+      steps.push(...reading.steps);
       rejected.push(...reading.rejected);
     }
     previous = bar;
   }
-  return { ratio, rejected };
+  return { ratio, steps, rejected };
+}
+
+// Ratio between the units a bar is quoted in and the units of `decisionBar`: entry orders keep
+// the units they were priced in, so each bar a resting entry could fill on is compared in them
+export function cumulativeSplitRatios(
+  decisionBar: V2Bar | undefined,
+  bars: readonly V2Bar[],
+): readonly number[] {
+  const ratios: number[] = [];
+  let previous = decisionBar;
+  let cumulative = 1;
+  for (const bar of bars) {
+    if (previous !== undefined) cumulative *= splitRatioAcross([previous, bar]).ratio;
+    ratios.push(cumulative);
+    previous = bar;
+  }
+  return ratios;
+}
+
+const WHOLE_SHARE_EPSILON = 1e-9;
+
+// Whole shares are taken toward zero, so a short's fraction is negative and buys back
+export function fractionalShares(qty: number): number {
+  const whole = Math.sign(qty) * Math.floor(Math.abs(qty) + WHOLE_SHARE_EPSILON);
+  const fraction = qty - whole;
+  return Math.abs(fraction) < WHOLE_SHARE_EPSILON ? 0 : fraction;
 }

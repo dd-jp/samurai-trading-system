@@ -9,7 +9,11 @@ function field<T>(panel: PanelWire<T>, read: (fed: T) => string, empty: string):
   return `not yet fed (${panel.ticket})`;
 }
 
-function Heartbeat({ heartbeat }: { heartbeat: HeartbeatWire }) {
+function nextDueText(due: string, now: string): string {
+  return due < now.slice(0, 10) ? `${due} (overdue, estimate)` : `${due} (estimate)`;
+}
+
+function Heartbeat({ heartbeat, now }: { heartbeat: HeartbeatWire; now: string }) {
   return (
     <>
       <span>
@@ -20,8 +24,17 @@ function Heartbeat({ heartbeat }: { heartbeat: HeartbeatWire }) {
           'none yet',
         )}
       </span>
-      <span>Next due {field(heartbeat.next_due, (next) => next.due_date, 'none')}</span>
-      <span>Ping {field(heartbeat.last_ping, (ping) => utcMinute(ping.pinged_at), 'none')}</span>
+      <span>
+        Next due {field(heartbeat.next_due, (next) => nextDueText(next.due_date, now), 'none')}
+      </span>
+      <span>
+        Ping{' '}
+        {field(
+          heartbeat.last_ping,
+          (ping) => `${ping.outcome} ${utcMinute(ping.pinged_at)}`,
+          'none',
+        )}
+      </span>
     </>
   );
 }
@@ -64,7 +77,7 @@ export function StatusStrip({
         <>
           <p className="strip-line">
             <strong>{overview.mode.toUpperCase()}</strong>
-            <Heartbeat heartbeat={overview.heartbeat} />
+            <Heartbeat heartbeat={overview.heartbeat} now={overview.generated_at} />
             <span>Data as of {utcMinute(overview.generated_at)}</span>
           </p>
           <ControlPanel

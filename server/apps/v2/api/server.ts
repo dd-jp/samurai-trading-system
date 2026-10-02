@@ -6,6 +6,7 @@ import {
   type JournalWire,
   type ReconcileWire,
   type ResearchWire,
+  type TaxWire,
   V2_CONTRACT_VERSION,
   type V2OverviewWire,
 } from '../../../../contracts/index.js';
@@ -24,7 +25,8 @@ import {
   parseControlRequest,
 } from './control-writer.js';
 import { type JournalQuery, parseJournalQuery } from './journal-reader.js';
-import { parseTaxQuery, TAX_CSV_NOT_FED, taxWire } from './records.js';
+import { parseTaxQuery, type TaxQuery } from './records.js';
+import type { TaxCsv } from './tax.js';
 
 export const CONTROL_BODY_MAX_BYTES = 1_024;
 const BUSY_RETRY_AFTER_SECONDS = 1;
@@ -40,6 +42,8 @@ export interface V2DashboardServerOptions {
   readonly research: () => ResearchWire;
   readonly evidence: () => EvidenceWire;
   readonly reconcile: () => ReconcileWire;
+  readonly tax: (query: TaxQuery) => TaxWire;
+  readonly taxCsv: (query: TaxQuery) => TaxCsv;
   readonly onFault: (error: unknown) => void;
 }
 
@@ -164,12 +168,25 @@ function searchParams(req: IncomingMessage): URLSearchParams {
   return new URL(req.url ?? '/', 'http://localhost').searchParams;
 }
 
-const getTax: Handler = (req, res) => {
-  const parsed = parseTaxQuery(searchParams(req));
-  if (!parsed.ok) sendError(res, 400, parsed.reason);
-  else if (parsed.query.format === 'csv') sendError(res, 501, TAX_CSV_NOT_FED);
-  else sendJson(res, 200, taxWire(parsed.query));
-};
+function sendCsv(res: ServerResponse, { filename, body }: TaxCsv): void {
+  res
+    .writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    .end(body);
+}
+
+function getTax(opts: V2DashboardServerOptions): Handler {
+  return (req, res) => {
+    const parsed = parseTaxQuery(searchParams(req));
+    if (!parsed.ok) sendError(res, 400, parsed.reason);
+    else if (parsed.query.format === 'csv') sendCsv(res, opts.taxCsv(parsed.query));
+    else sendJson(res, 200, opts.tax(parsed.query));
+  };
+}
 
 function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Handler>> {
   return new Map([
@@ -182,7 +199,7 @@ function routesFor(opts: V2DashboardServerOptions): Map<string, Map<string, Hand
     ['/api/v2/research', new Map([['GET', (_req, res) => sendJson(res, 200, opts.research())]])],
     ['/api/v2/evidence', new Map([['GET', (_req, res) => sendJson(res, 200, opts.evidence())]])],
     ['/api/v2/reconcile', new Map([['GET', (_req, res) => sendJson(res, 200, opts.reconcile())]])],
-    ['/api/v2/tax', new Map([['GET', getTax]])],
+    ['/api/v2/tax', new Map([['GET', getTax(opts)]])],
   ]);
 }
 

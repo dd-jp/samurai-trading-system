@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BarSeries } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { seedWithoutValidation } from '../../__fixtures__/seed-unvalidated.js';
 import { roundBarPrices } from './bar-csv.js';
 import { syntheticSeries, tradingCalendar } from './fixture.js';
 import { GRID_A } from './grid.js';
@@ -266,6 +267,18 @@ describe('momentum runner end to end on a synthetic fixture', () => {
     );
     await writeBars(fixture.barsRoot, 'saxo', [{ symbol: 'ISF', bars: broken }]);
     await expect(loadLseData(fixture)).rejects.toThrow(/ISF has a unit break at .* ×100/);
+  });
+
+  it('refuses LSE bars whose open or close sits outside high-low', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'momentum-lse-shape-'));
+    const fixture = await writeLseFixture(root);
+    const bars = roundBarPrices(syntheticSeries({ symbol: 'ISF', calendar, seed: 41 }).bars);
+    const bar = bars[500] as (typeof bars)[number];
+    const skewed = bars.map((b, i) => (i === 500 ? { ...b, high: bar.close * 0.9 } : b));
+    await seedWithoutValidation(fixture.barsRoot, 'saxo', [{ symbol: 'ISF', bars: skewed }]);
+    await expect(loadLseData(fixture)).rejects.toThrow(
+      new RegExp(`ISF has 1 bars with open or close outside high-low, first ${bar.date}`),
+    );
   });
 
   it('refuses to run the LSE sub-book until the Saxo bars and manifest land', async () => {

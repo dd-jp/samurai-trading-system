@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import { digest } from '../../../shared/index.js';
 import { addDays } from './macro-calendar.js';
 import type { QuoteCurrency } from './venues.js';
 
@@ -100,10 +102,17 @@ function parseInstrument(raw: unknown): CfdInstrument {
 export class CfdCatalogue {
   readonly #bySymbol = new Map<string, CfdInstrument>();
 
-  constructor(private readonly snapshot: CfdCatalogueSnapshot) {
+  constructor(
+    private readonly snapshot: CfdCatalogueSnapshot,
+    readonly sha256: string = digest(snapshot),
+  ) {
     for (const instrument of snapshot.instruments) {
       this.#bySymbol.set(instrument.symbol, instrument);
     }
+  }
+
+  get asOf(): string {
+    return this.snapshot.asOf;
   }
 
   lookup(symbol: string): CfdInstrument | undefined {
@@ -116,7 +125,11 @@ export class CfdCatalogue {
   }
 }
 
-export function parseCfdCatalogue(text: string): CfdCatalogue {
+function sha256Of(content: string | Uint8Array): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+export function parseCfdCatalogue(text: string, sha256: string = sha256Of(text)): CfdCatalogue {
   const body: unknown = JSON.parse(text);
   if (!isRecord(body) || !isIsoDate(body.asOf) || !Array.isArray(body.instruments)) {
     throw new Error('CFD catalogue: expected { asOf, instruments[] }');
@@ -124,12 +137,13 @@ export function parseCfdCatalogue(text: string): CfdCatalogue {
   const instruments = body.instruments.map(parseInstrument);
   const symbols = new Set(instruments.map((instrument) => instrument.symbol));
   if (symbols.size !== instruments.length) throw new Error('CFD catalogue: duplicate symbol');
-  return new CfdCatalogue({ asOf: body.asOf, instruments });
+  return new CfdCatalogue({ asOf: body.asOf, instruments }, sha256);
 }
 
 export function loadCfdCatalogue(path: string): CfdCatalogue | undefined {
   if (!existsSync(path)) return undefined;
-  return parseCfdCatalogue(new TextDecoder().decode(readFileSync(path)));
+  const bytes = readFileSync(path);
+  return parseCfdCatalogue(new TextDecoder().decode(bytes), sha256Of(bytes));
 }
 
 export function borrowCostPerYear(instrument: CfdInstrument): number | undefined {

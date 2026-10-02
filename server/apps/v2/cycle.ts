@@ -36,7 +36,9 @@ import { describeThrownSafely } from '../../shared/index.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   CALENDAR_REFERENCE,
+  fillFxOf,
   isFresh,
+  londonDateOf,
   MAX_BAR_AGE_CALENDAR_DAYS,
   type MacroGateVerdict,
   macroGate,
@@ -44,7 +46,11 @@ import {
   type SitOutCode,
   type VenueSessionGate,
 } from './data/index.js';
-import { type ReconcileOutcome, reconcileOrBlockEntries } from './reconcile.js';
+import {
+  blockEntriesOnThrow,
+  type ReconcileOutcome,
+  reconcileOrBlockEntries,
+} from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
 import {
   bracketExit,
@@ -53,7 +59,19 @@ import {
   simulateMarketExit,
   withinLimit,
 } from './simulated-entry.js';
-import { splitRatioAcross } from './split.js';
+import {
+  cumulativeSplitRatios,
+  fractionalShares,
+  type SplitReading,
+  splitRatioAcross,
+} from './split.js';
+
+interface CashInLieu {
+  readonly fraction: number;
+  readonly priceGbp: number;
+  readonly anchorDate: string;
+  readonly disposalDate: string;
+}
 
 export interface CycleDeps {
   readonly registry: SleeveSource;
@@ -155,6 +173,7 @@ interface Tally {
 
 type ExitReason = 'time_stop' | 'manual_halt' | 'crossing_fill' | 'signal_exit';
 
+const BPS = 10_000;
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
 
 function positionKey(bookId: string, instrument: string): string {
@@ -245,11 +264,13 @@ class Cycle {
       this.log('warn', 'v2_fill_unmatched', `fill ${fill.broker_fill_id} matches no v2 order`);
       return;
     }
+    this.rescaleHeldToFill(order, fill);
     const baseFillId = `${order.venue}:${fill.broker_fill_id}`;
     const increment = this.incrementOf(order, fill, baseFillId);
     if (increment === undefined) return;
     const side = fill.leg === 'entry' || order.leg === 'exit' ? order.side : opposite(order.side);
-    const fx = this.fxFor(order.venue as Venue);
+    const fillFx = fillFxOf(this.deps.market, order.venue as Venue, this.tradingDate);
+    const fx = fillFx.quotePerGbp;
     const priceGbp = increment.price / fx;
     const recorded = this.deps.journal.recordFill({
       fill_id: `${baseFillId}${increment.idSuffix}`,
@@ -263,6 +284,12 @@ class Cycle {
       qty: increment.qty,
       price_gbp: priceGbp,
       fee_gbp: increment.fee / fx,
+      currency: fillFx.currency,
+      price_native: increment.price,
+      fee_native: increment.fee,
+      fx_quote_per_gbp: fx,
+      fx_source: fillFx.source,
+      fill_date: fill.filled_at === undefined ? null : londonDateOf(fill.filled_at),
     });
     if (!recorded) return;
     this.tally.fills += 1;
@@ -282,6 +309,81 @@ class Cycle {
       targetGbp,
     });
     this.warnIfFillCrossedFlat(order, fill.leg, before, after);
+    this.anchorOpeningFill(order, fill, before, after);
+  }
+
+  fillDate(fill: V2Fill): string | undefined {
+    const date = fill.filled_at?.slice(0, 10);
+    return date !== undefined && date < this.tradingDate ? date : undefined;
+  }
+
+  anchorOpeningFill(
+    order: JournalledOrder,
+    fill: V2Fill,
+    before: Position | undefined,
+    after: Position | undefined,
+  ): void {
+    const date = this.fillDate(fill);
+    if (before !== undefined || after === undefined || fill.leg !== 'entry' || date === undefined) {
+      return;
+    }
+    this.deps.books.applySplit(order.book_id, order.instrument, 1, date);
+  }
+
+  brokerHeld(order: JournalledOrder): Position | undefined {
+    const held = this.deps.books.position(order.book_id, order.instrument);
+    if (held === undefined) return undefined;
+    const book = [...this.deps.registry.ids()]
+      .flatMap((sleeveId) => this.deps.books.forSleeve(sleeveId))
+      .find((spec) => spec.id === order.book_id);
+    if (book === undefined || this.deps.executor.simulates(routeOf(book, held.venue))) {
+      return undefined;
+    }
+    return held;
+  }
+
+  // The broker reports a fill in the units of its own day. The ledger position is rescaled to
+  // them before the fill books, so a re-reported cumulative fill finds the same units booked
+  // (the parts hold the broker's quantity) instead of a converted figure it cannot match
+  rescaleHeldToFill(order: JournalledOrder, fill: V2Fill): void {
+    if (fill.leg === 'entry') return;
+    const held = this.brokerHeld(order);
+    if (held === undefined) return;
+    const date = this.fillDate(fill);
+    if (date === undefined) {
+      this.warnUndatedFill(order, fill);
+      return;
+    }
+    const reading = this.splitBefore(held, date);
+    if (reading.ratio === 1) return;
+    const london = londonDateOf(fill.filled_at as string);
+    const qty = this.splitHeld(order.book_id, held, reading, date, london);
+    this.log(
+      'warn',
+      'v2_fill_post_split_rescaled',
+      `${order.book_id} ${order.instrument}: fill ${fill.broker_fill_id} is in units after a x${reading.ratio} split; ledger qty ${held.qty} -> ${qty} before it books`,
+    );
+  }
+
+  warnUndatedFill(order: JournalledOrder, fill: V2Fill): void {
+    if (fill.filled_at !== undefined) return;
+    this.log(
+      'warn',
+      'v2_fill_undated',
+      `${order.book_id} ${order.instrument}: broker fill ${fill.broker_fill_id} carries no fill time; a split before it cannot be placed`,
+    );
+  }
+
+  splitBefore(held: Position, fillDate: string): SplitReading {
+    const anchorDate =
+      held.splitAnchorDate ??
+      this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
+    if (anchorDate === undefined) return splitRatioAcross([]);
+    const days = calendarDaysBetween(anchorDate, this.tradingDate);
+    const bars = this.deps.market
+      .barsBefore(held.instrument, this.tradingDate, days)
+      .filter((dated) => dated.date >= anchorDate && dated.date <= fillDate);
+    return splitRatioAcross(bars);
   }
 
   // Alpaca re-reports each order's running filled_qty and average price under one order id
@@ -355,7 +457,8 @@ class Cycle {
       .filter((dated) => dated.date >= anchorDate);
     const latest = bars.at(-1);
     if (latest === undefined) return;
-    const { ratio, rejected } = splitRatioAcross(bars);
+    const reading = splitRatioAcross(bars);
+    const { ratio, rejected } = reading;
     for (const step of rejected) {
       this.log(
         'warn',
@@ -364,19 +467,87 @@ class Cycle {
       );
     }
     if (ratio === 1) return;
-    if (!this.deps.executor.simulates(routeOf(book, held.venue))) {
-      this.log(
-        'warn',
-        'v2_split_broker_qty',
-        `${book.id} ${held.instrument}: split x${ratio} on a broker-held position; ledger qty ${held.qty} not rescaled, reconcile (#1872) flags the broker qty and blocks entries`,
-      );
-      return;
-    }
-    this.deps.books.applySplit(book.id, held.instrument, ratio, latest.date);
+    const qty = this.splitHeld(book.id, held, reading, latest.date);
     this.log(
       'info',
       'v2_split_rescaled',
-      `${book.id} ${held.instrument}: qty ${held.qty} -> ${held.qty * ratio}, levels / ${ratio}`,
+      `${book.id} ${held.instrument}: qty ${held.qty} -> ${qty}, levels / ${ratio}`,
+    );
+  }
+
+  // David ruled 2026-10-01 (#1984): the broker keeps whole shares and pays cash for the rest, so
+  // the ledger floors too and books the remainder as a disposal; reconcile (#1872) flags any
+  // broker qty that differs
+  splitHeld(
+    bookId: string,
+    held: Position,
+    reading: SplitReading,
+    anchorDate: string,
+    disposalDate = anchorDate,
+  ): number {
+    const { ratio } = reading;
+    for (const step of reading.steps) {
+      this.deps.journal.recordSplit({
+        instrument: held.instrument,
+        venue: held.venue,
+        split_date: step.date,
+        ratio: step.ratio,
+        trading_date: this.tradingDate,
+      });
+    }
+    this.deps.books.applySplit(bookId, held.instrument, ratio, anchorDate);
+    const fraction = fractionalShares(held.qty * ratio);
+    if (fraction === 0) return held.qty * ratio;
+    const priceGbp = this.markGbp(held.instrument, held.venue) ?? held.avgPriceGbp / ratio;
+    this.disposeCashInLieu(bookId, held, { fraction, priceGbp, anchorDate, disposalDate });
+    return held.qty * ratio - fraction;
+  }
+
+  // The broker's cash-in-lieu amount is not read from any venue; the disposal books at the
+  // latest close, which is already in post-split units
+  disposeCashInLieu(
+    bookId: string,
+    held: Position,
+    { fraction, priceGbp, anchorDate, disposalDate }: CashInLieu,
+  ): void {
+    const side: OrderSide = fraction > 0 ? 'sell' : 'buy';
+    const qty = Math.abs(fraction);
+    const fillFx = fillFxOf(this.deps.market, held.venue, this.tradingDate);
+    const recorded = this.deps.journal.recordFill({
+      fill_id: `${held.venue}:cash-in-lieu:${bookId}:${held.instrument}:${anchorDate}`,
+      client_order_id: held.clientOrderId,
+      book_id: bookId,
+      trading_date: this.tradingDate,
+      instrument: held.instrument,
+      venue: held.venue,
+      leg: 'cash_in_lieu',
+      side,
+      qty,
+      price_gbp: priceGbp,
+      fee_gbp: 0,
+      currency: fillFx.currency,
+      price_native: priceGbp * fillFx.quotePerGbp,
+      fee_native: 0,
+      fx_quote_per_gbp: fillFx.quotePerGbp,
+      fx_source: fillFx.source,
+      fill_date: disposalDate,
+    });
+    if (!recorded) return;
+    this.deps.books.applyFill(bookId, {
+      instrument: held.instrument,
+      venue: held.venue,
+      side,
+      leg: 'cash_in_lieu',
+      qty,
+      priceGbp,
+      feeGbp: 0,
+      clientOrderId: held.clientOrderId,
+      tradingDate: this.tradingDate,
+    });
+    this.log(
+      'warn',
+      'v2_split_cash_in_lieu',
+      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the broker's amount is not read`,
     );
   }
 
@@ -390,6 +561,11 @@ class Cycle {
     const limit = journalledLimit(order) as number;
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
+    const bars = this.barsSince(order);
+    const ratios = cumulativeSplitRatios(
+      this.deps.market.lastBarBefore(order.instrument, order.trading_date),
+      bars,
+    );
     const outcome = simulateLimitEntry(
       {
         side,
@@ -397,7 +573,7 @@ class Cycle {
         stop: numberOrUndefined(order.payload.stop),
         trigger: numberOrUndefined(order.payload.trigger),
       },
-      this.barsSince(order),
+      bars.map((bar, index) => ({ ...bar, rawClose: bar.rawClose * (ratios[index] as number) })),
     );
     if (outcome.kind === 'pending' && daysOpen <= MAX_PENDING_CALENDAR_DAYS) {
       this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
@@ -407,10 +583,21 @@ class Cycle {
       this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
       return;
     }
-    this.settleEntryFill(order, limit, outcome);
+    this.settleEntryFill(order, limit, outcome, {
+      ratio: ratios.at(-1) as number,
+      date: bars.at(-1)?.date as string,
+    });
   }
 
-  settleEntryFill(order: JournalledOrder, limit: number, outcome: FilledLimitEntry): void {
+  // The order and its stop are in the units it was priced in, the position book in the latest
+  // bar's: a new position books in order units and is rescaled to the latest bar's and anchored
+  // there, an add is converted before it books
+  settleEntryFill(
+    order: JournalledOrder,
+    limit: number,
+    outcome: FilledLimitEntry,
+    units: { readonly ratio: number; readonly date: string },
+  ): void {
     const side = order.side as OrderSide;
     const opening = this.deps.books.position(order.book_id, order.instrument) === undefined;
     const qty = order.payload.size as number;
@@ -425,20 +612,36 @@ class Cycle {
       this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
       return;
     }
+    const bookedUnits = opening ? 1 : units.ratio;
     this.ingest({
       client_order_id: order.client_order_id,
       broker_fill_id: `sim-${order.client_order_id}`,
       leg: 'entry',
-      price: withinLimit(side, limit, quote.price),
-      qty,
+      price: withinLimit(side, limit, quote.price) / bookedUnits,
+      qty: qty * bookedUnits,
       fee: quote.fee,
     });
-    const held = this.deps.books.position(order.book_id, order.instrument);
-    if (opening && held !== undefined) {
-      this.deps.books.applySplit(order.book_id, order.instrument, 1, outcome.bar.date);
+    this.afterEntryFill(order, outcome, units, opening);
+  }
+
+  afterEntryFill(
+    order: JournalledOrder,
+    outcome: FilledLimitEntry,
+    units: { readonly ratio: number; readonly date: string },
+    opening: boolean,
+  ): void {
+    if (opening && this.deps.books.position(order.book_id, order.instrument) !== undefined) {
+      this.deps.books.applySplit(order.book_id, order.instrument, units.ratio, units.date);
     }
+    const held = this.deps.books.position(order.book_id, order.instrument);
     if (outcome.stoppedAt !== undefined && held !== undefined) {
-      this.simulatedExit(order.book_id, held, outcome.stoppedAt, true, 'stop_on_entry_bar');
+      this.simulatedExit(
+        order.book_id,
+        held,
+        outcome.stoppedAt / units.ratio,
+        true,
+        'stop_on_entry_bar',
+      );
     }
   }
 
@@ -757,6 +960,7 @@ class Cycle {
         size: order.size,
         detail: submission.detail,
         ...legPayload,
+        modelled_slippage_bps: this.exitSlippageBps(held, order.size, submission.outcome),
         approval: submission.approvalId,
       },
     });
@@ -911,6 +1115,7 @@ class Cycle {
       return undefined;
     }
     this.tally.entries += 1;
+    const side: OrderSide = decision.action === 'enter_short' ? 'sell' : 'buy';
     const submission: Submission =
       approval.order === undefined
         ? { outcome: 'rejected', detail: approval.refusal, approvalId: '' }
@@ -924,7 +1129,7 @@ class Cycle {
       instrument: decision.instrument,
       venue: decision.venue,
       leg: 'entry',
-      side: decision.action === 'enter_short' ? 'sell' : 'buy',
+      side,
       dry_run: this.deps.dryRun,
       outcome: submission.outcome,
       payload: {
@@ -933,6 +1138,17 @@ class Cycle {
         price: decision.price,
         limit: approvedLimit(approval),
         entry_offset_bps: approval.entryOffsetBps,
+        modelled_slippage_bps: this.modelledSlippageBps(
+          decision.venue,
+          {
+            instrument: decision.instrument,
+            side,
+            qty: approval.size,
+            price: approvedLimit(approval) ?? decision.price,
+            crossesSpread: true,
+          },
+          submission.outcome,
+        ),
         trigger: decision.entry_trigger,
         stop: decision.stop_price,
         target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
@@ -940,6 +1156,30 @@ class Cycle {
       },
     });
     return submission.outcome;
+  }
+
+  // Only a submitted order reached a broker, so only its modelled cost is ever compared. The
+  // slippage a crossing fill would be charged at the cost tables of the day the order goes out,
+  // journalled so a later table refresh does not move the cost-fidelity check (#1884)
+  modelledSlippageBps(
+    venue: Venue,
+    request: SimulatedFillRequest,
+    outcome: OrderOutcome,
+  ): number | undefined {
+    if (outcome !== 'submitted' || request.price <= 0) return undefined;
+    const quote = this.deps.executor.quoteSimulatedFill(venue, request);
+    return (Math.abs(quote.price - request.price) / request.price) * BPS;
+  }
+
+  exitSlippageBps(held: Position, qty: number, outcome: OrderOutcome): number | undefined {
+    const bar = this.deps.market.lastBarBefore(held.instrument, this.tradingDate);
+    if (bar === undefined) return undefined;
+    const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
+    return this.modelledSlippageBps(
+      held.venue,
+      { instrument: held.instrument, side, qty, price: bar.rawClose, crossesSpread: true },
+      outcome,
+    );
   }
 
   notionalGbp(decision: SleeveDecision, approval: EntryApproval): number {
@@ -1405,6 +1645,32 @@ export async function runCycle(deps: CycleDeps, tradingDate: string): Promise<Cy
   return report;
 }
 
+async function sweepFillsOrBlockEntries(
+  deps: CycleDeps,
+  cycle: Cycle,
+  tradingDate: string,
+): Promise<ReconcileOutcome | undefined> {
+  try {
+    await cycle.sweepFills();
+    return undefined;
+  } catch (error) {
+    return blockEntriesOnThrow(deps, tradingDate, 'v2_fill_sweep_threw', 'fill sweep', error);
+  }
+}
+
+async function syncBooksThenReconcile(
+  deps: CycleDeps,
+  cycle: Cycle,
+  tradingDate: string,
+): Promise<ReconcileOutcome> {
+  const sweepFailure = await sweepFillsOrBlockEntries(deps, cycle, tradingDate);
+  cycle.rescaleSplitPositions();
+  await cycle.cancelEntriesBlockedAtLastMark();
+  cycle.fillSimulatedEntries();
+  cycle.fillSimulatedExits();
+  return sweepFailure ?? (await reconcileOrBlockEntries(deps, tradingDate));
+}
+
 async function runUnmarked(
   deps: CycleDeps,
   tradingDate: string,
@@ -1416,12 +1682,7 @@ async function runUnmarked(
     ...controlRefusals(deps, tradingDate, control),
   ];
   const cycle = new Cycle(deps, tradingDate, macro, control);
-  await cycle.sweepFills();
-  cycle.rescaleSplitPositions();
-  await cycle.cancelEntriesBlockedAtLastMark();
-  cycle.fillSimulatedEntries();
-  cycle.fillSimulatedExits();
-  cycle.blockEntries(await reconcileOrBlockEntries(deps, tradingDate));
+  cycle.blockEntries(await syncBooksThenReconcile(deps, cycle, tradingDate));
   const books: BookSpec[] = [];
   let decisionCount = 0;
   for (const sleeve of deps.registry.list()) {

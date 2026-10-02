@@ -1,3 +1,6 @@
+import type { LlmSpendRecord, LlmSpendSink } from '../../../pipeline/debate-engine/index.js';
+import type { Logger } from '../../../shared/index.js';
+
 export interface KnownSecret {
   readonly name: string;
   readonly value: string;
@@ -36,6 +39,7 @@ export const SECRET_ENV_NAMES = [
   'TELEGRAM_BOT_TOKEN',
   'HEALTHCHECKS_PING_URL',
   'HEALTHCHECKS_TELEGRAM_PING_URL',
+  'HEALTHCHECKS_SIGNALS_PING_URL',
   'LITESTREAM_SSE_C_KEY',
   'POLYGON_API_KEY',
   'MARKETAUX_API_TOKEN',
@@ -53,7 +57,7 @@ export function secretsFromEnv(env: NodeJS.ProcessEnv): KnownSecret[] {
   return SECRET_ENV_NAMES.map((name) => ({ name, value: env[name] ?? '' }));
 }
 
-function wireForms(value: string): string[] {
+export function secretWireForms(value: string): string[] {
   return [value, encodeURIComponent(value), JSON.stringify(value).slice(1, -1)];
 }
 
@@ -75,6 +79,62 @@ export function leakedSecret(
   return secrets.find(
     (secret) =>
       secret.value.length >= MIN_SECRET_LENGTH &&
-      wireForms(secret.value).some((form) => surfaces.some((surface) => surface.includes(form))),
+      secretWireForms(secret.value).some((form) =>
+        surfaces.some((surface) => surface.includes(form)),
+      ),
   )?.name;
+}
+
+export const SECRET_WITHHELD = 'secret_withheld';
+
+function loggedTextsOf(entry: LlmSpendRecord): string[] {
+  return [
+    entry.prompt,
+    entry.response,
+    entry.error_message,
+    entry.stop_reason,
+    entry.error_class,
+  ].filter((text): text is string => text !== undefined);
+}
+
+function carriedSecret(secrets: readonly KnownSecret[], texts: readonly string[]) {
+  return secrets.find(
+    (secret) =>
+      secret.value.length >= MIN_SECRET_LENGTH &&
+      secretWireForms(secret.value).some((form) => texts.some((text) => text.includes(form))),
+  )?.name;
+}
+
+// A request the egress guard refused is still logged as a failed call; without this its prompt,
+// which carries the secret, would land in llm_call_log verbatim
+export function secretGuardedSink(
+  inner: LlmSpendSink,
+  secrets: SecretSource,
+  logger?: Logger | undefined,
+): LlmSpendSink {
+  return {
+    record: (entry) => {
+      const leaked = carriedSecret(secrets(), loggedTextsOf(entry));
+      if (leaked === undefined) {
+        inner.record(entry);
+        return;
+      }
+      logger?.log({
+        trace_id: entry.trace_id,
+        stage: entry.stage,
+        level: 'error',
+        event: 'v2_llm_log_secret_withheld',
+        message: `llm call text withheld from the journal: it carries the value of ${leaked}`,
+        payload: { model: entry.model, secret: leaked },
+      });
+      inner.record({
+        ...entry,
+        prompt: undefined,
+        response: undefined,
+        error_message: undefined,
+        stop_reason: undefined,
+        error_class: SECRET_WITHHELD,
+      });
+    },
+  };
 }

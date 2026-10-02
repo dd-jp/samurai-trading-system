@@ -3,7 +3,7 @@
   "fetched_at": "2026-09-25T11:43:47.181Z",
   "delayed_by_minutes": 15,
   "fetch_date_bars_dropped": "2026-09-25",
-  "hygiene": "weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw; then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low whose ratio to the median of the other three prices is inside (90, 110) or its inverse is rescaled by 100 or 0.01, a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (open, close and raw_close are never changed); per-line counts in symbols.<TIDM>.hygiene.shape_repair",
+  "hygiene": "weekend-dated and fetch-day bars dropped; a close/close ratio inside (90, 110) or its inverse is a unit break and the earlier segment is rescaled to the latest unit; a ratio beyond 3× that is not a unit break refuses the pull; ratios beyond 1.35× are counted as suspect flips; raw pre-hygiene series under saxo-aux/raw; then the bar shape is repaired because Saxo chart samples carry open or close outside high/low (#1838): an open, high or low whose ratio to the median of the other three prices is inside (90, 110) or its inverse is rescaled by 100 or 0.01, an open, high or low more than 1.1× beyond the previous, next and own closes is replaced by the close (#1904), a bar whose four prices still span more than 1.4× is dropped, and high and low are widened to cover open and close (close and raw_close are never changed, open can be); per-line counts in symbols.<TIDM>.hygiene.shape_repair",
   "calendar_reference": "ISF",
   "window_start": "2016-06-21",
   "window_binding_line": "IITU",
@@ -39,6 +39,24 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2002-09-24",
+              "field": "open"
+            },
+            {
+              "date": "2002-09-24",
+              "field": "high"
+            },
+            {
+              "date": "2003-03-14",
+              "field": "open"
+            },
+            {
+              "date": "2003-03-14",
+              "field": "high"
+            }
+          ],
           "dropped_glitch_dates": [],
           "ranges_widened": 172
         }
@@ -65,7 +83,13 @@
             "factor": 0.01
           }
         ],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "neighbour_repairs": [],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 0
+        }
       }
     },
     "CUKS": {
@@ -87,6 +111,7 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": [],
           "ranges_widened": 156
         }
@@ -111,8 +136,26 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2017-01-20",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-09",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-12",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-17",
+              "field": "high"
+            }
+          ],
           "dropped_glitch_dates": ["2011-02-21"],
-          "ranges_widened": 145
+          "ranges_widened": 148
         }
       }
     },
@@ -140,6 +183,16 @@
         },
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2020-03-09",
+              "field": "open"
+            },
+            {
+              "date": "2020-03-09",
+              "field": "low"
+            }
+          ],
           "dropped_glitch_dates": ["2012-02-06", "2012-02-14", "2012-07-23", "2017-03-02"],
           "ranges_widened": 55
         }
@@ -164,6 +217,7 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": [],
           "ranges_widened": 13
         }
@@ -201,8 +255,30 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2008-09-22",
+              "field": "open"
+            },
+            {
+              "date": "2008-09-22",
+              "field": "high"
+            },
+            {
+              "date": "2008-10-10",
+              "field": "low"
+            },
+            {
+              "date": "2013-12-31",
+              "field": "open"
+            },
+            {
+              "date": "2013-12-31",
+              "field": "high"
+            }
+          ],
           "dropped_glitch_dates": [],
-          "ranges_widened": 187
+          "ranges_widened": 188
         }
       }
     },
@@ -230,6 +306,7 @@
         },
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": ["2014-11-27"],
           "ranges_widened": 14
         }
@@ -267,6 +344,24 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2008-05-27",
+              "field": "open"
+            },
+            {
+              "date": "2008-05-27",
+              "field": "low"
+            },
+            {
+              "date": "2009-02-10",
+              "field": "open"
+            },
+            {
+              "date": "2009-02-10",
+              "field": "low"
+            }
+          ],
           "dropped_glitch_dates": [],
           "ranges_widened": 221
         }
@@ -288,7 +383,18 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2020-03-17",
+              "field": "high"
+            }
+          ],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 0
+        }
       }
     },
     "IESU": {
@@ -310,8 +416,14 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2020-11-12",
+              "field": "low"
+            }
+          ],
           "dropped_glitch_dates": ["2020-05-22", "2022-10-28", "2022-11-04"],
-          "ranges_widened": 744
+          "ranges_widened": 745
         }
       }
     },
@@ -331,7 +443,22 @@
       "hygiene": {
         "dropped_dates": ["2026-09-25"],
         "unit_breaks": [],
-        "holes": []
+        "holes": [],
+        "shape_repair": {
+          "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2020-03-16",
+              "field": "open"
+            },
+            {
+              "date": "2020-03-16",
+              "field": "high"
+            }
+          ],
+          "dropped_glitch_dates": [],
+          "ranges_widened": 0
+        }
       }
     },
     "ICDU": {
@@ -353,6 +480,7 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": [],
           "ranges_widened": 668
         }
@@ -382,6 +510,60 @@
         },
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [
+            {
+              "date": "2012-12-21",
+              "field": "high"
+            },
+            {
+              "date": "2013-08-13",
+              "field": "low"
+            },
+            {
+              "date": "2013-08-14",
+              "field": "low"
+            },
+            {
+              "date": "2020-03-09",
+              "field": "open"
+            },
+            {
+              "date": "2020-03-09",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-16",
+              "field": "low"
+            },
+            {
+              "date": "2020-03-18",
+              "field": "open"
+            },
+            {
+              "date": "2020-03-18",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-19",
+              "field": "low"
+            },
+            {
+              "date": "2020-03-20",
+              "field": "open"
+            },
+            {
+              "date": "2020-03-20",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-23",
+              "field": "low"
+            },
+            {
+              "date": "2021-02-01",
+              "field": "high"
+            }
+          ],
           "dropped_glitch_dates": [
             "2012-01-31",
             "2012-02-09",
@@ -409,7 +591,7 @@
             "2012-08-28",
             "2020-03-17"
           ],
-          "ranges_widened": 148
+          "ranges_widened": 150
         }
       }
     },
@@ -438,8 +620,22 @@
               "factor": 100
             }
           ],
+          "neighbour_repairs": [
+            {
+              "date": "2020-03-13",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-20",
+              "field": "open"
+            },
+            {
+              "date": "2020-03-20",
+              "field": "high"
+            }
+          ],
           "dropped_glitch_dates": ["2020-03-09"],
-          "ranges_widened": 132
+          "ranges_widened": 133
         }
       }
     },
@@ -462,6 +658,7 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": [],
           "ranges_widened": 242
         }
@@ -512,8 +709,30 @@
               "factor": 0.01
             }
           ],
+          "neighbour_repairs": [
+            {
+              "date": "2011-08-08",
+              "field": "high"
+            },
+            {
+              "date": "2011-09-02",
+              "field": "open"
+            },
+            {
+              "date": "2011-09-02",
+              "field": "high"
+            },
+            {
+              "date": "2011-09-06",
+              "field": "high"
+            },
+            {
+              "date": "2020-03-23",
+              "field": "low"
+            }
+          ],
           "dropped_glitch_dates": [],
-          "ranges_widened": 295
+          "ranges_widened": 297
         }
       }
     },
@@ -542,8 +761,14 @@
               "factor": 0.01
             }
           ],
+          "neighbour_repairs": [
+            {
+              "date": "2011-10-07",
+              "field": "high"
+            }
+          ],
           "dropped_glitch_dates": [],
-          "ranges_widened": 293
+          "ranges_widened": 294
         }
       }
     },
@@ -566,6 +791,7 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": ["2014-04-03"],
           "ranges_widened": 639
         }
@@ -595,6 +821,7 @@
         },
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": ["2016-03-11"],
           "ranges_widened": 0
         }
@@ -624,6 +851,7 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": [],
           "ranges_widened": 191
         }
@@ -648,6 +876,7 @@
         "holes": [],
         "shape_repair": {
           "rescaled_fields": [],
+          "neighbour_repairs": [],
           "dropped_glitch_dates": [],
           "ranges_widened": 228
         }

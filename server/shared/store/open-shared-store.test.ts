@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { listMigrations, MIGRATIONS_DIR, runMigrations } from './migrate.js';
 import {
+  inMemoryCopyOf,
   openMigratedStore,
   openReadOnlyStore,
   openSharedStore,
@@ -65,13 +66,16 @@ const TABLES = [
   'v2_signal_events',
   'v2_run_lease',
   'v2_faults',
+  'v2_heartbeat_pings',
+  'v2_splits',
+  'v2_input_digests',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 53;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 56;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 81;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 86;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -542,6 +546,68 @@ describe('openSharedStore', () => {
     }
   });
 
+  it('migration 0085 leaves a legacy fill uncaptured and journals splits append-only (#1947)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 84;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+           leg, side, dry_run, outcome, payload, recorded_at)
+           VALUES ('o1', NULL, 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry', 'buy', 0,
+             'submitted', '{}', '2026-09-29T07:00:00.000Z');
+         INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+           side, qty, price_gbp, fee_gbp, recorded_at)
+           VALUES ('alpaca:f1', 'o1', 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry', 'buy',
+             3, 80, 0.1, '2026-09-29T14:30:00.000Z');`,
+      );
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw
+          .prepare(
+            'SELECT currency, price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date FROM v2_fills',
+          )
+          .all(),
+      ).toEqual([
+        {
+          currency: null,
+          price_native: null,
+          fee_native: null,
+          fx_quote_per_gbp: null,
+          fx_source: null,
+          fill_date: null,
+        },
+      ]);
+      const split = raw.prepare(
+        `INSERT INTO v2_splits (instrument, venue, split_date, ratio, trading_date, recorded_at)
+         VALUES ('AAPL', 'alpaca', '2026-10-01', ?, '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+      );
+      split.run(1.5);
+      split.run(4);
+      expect(raw.prepare('SELECT ratio FROM v2_splits').all()).toEqual([{ ratio: 1.5 }]);
+      expect(() => raw.prepare('UPDATE v2_splits SET ratio = 2').run()).toThrow(
+        'v2_splits is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_splits').run()).toThrow('v2_splits is append-only');
+      expect(() =>
+        raw
+          .prepare(
+            `INSERT INTO v2_splits (instrument, venue, split_date, ratio, trading_date, recorded_at)
+             VALUES ('MSFT', 'alpaca', '2026-10-01', 0, '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+          )
+          .run(),
+      ).toThrow(/CHECK constraint/);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
   it('migration 0050 backfills each flatten row to its lots’ arm, falling back to live (#1124)', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverVersion = 49;
@@ -872,6 +938,26 @@ describe('openMigratedStore', () => {
     const path = tempDbPath();
     expect(() => openMigratedStore(path, 1)).toThrow();
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('inMemoryCopyOf', () => {
+  it('copies a WAL store read-only into a writable in-memory store and leaves the file alone', () => {
+    const path = tempDbPath();
+    const seed = openSharedStore(path);
+    seed.exec(
+      "INSERT INTO v2_controls (action, reason, source, idempotency_key, set_at) VALUES ('pause', 'r', 's', 'k', 'now')",
+    );
+    seed.close();
+    const source = openReadOnlyStore(path);
+    const copy = inMemoryCopyOf(source);
+    copy.exec('DROP TRIGGER v2_controls_no_delete');
+    copy.exec('DELETE FROM v2_controls');
+    expect(copy.prepare('SELECT COUNT(*) AS n FROM v2_controls').get()).toEqual({ n: 0 });
+    expect(copy.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(source.prepare('SELECT COUNT(*) AS n FROM v2_controls').get()).toEqual({ n: 1 });
+    copy.close();
+    source.close();
   });
 });
 

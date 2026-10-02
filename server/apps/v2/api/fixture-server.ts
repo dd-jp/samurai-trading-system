@@ -94,6 +94,9 @@ export function seedFixtureStore(db: StoreHandle, scenario: FixtureScenario = 'd
     `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail, recorded_at)
      VALUES (?, 'alpaca', 'broker', 'clean', '["debate/primary"]', '[]', '', ?)`,
   ).run(FIXTURE_TRADING_DATE, `${FIXTURE_TRADING_DATE}T21:40:00.000Z`);
+  db.prepare("INSERT INTO v2_heartbeat_pings (outcome, pinged_at) VALUES ('success', ?)").run(
+    `${FIXTURE_TRADING_DATE}T21:41:00.000Z`,
+  );
 }
 
 export function createFixtureStore(scenario: FixtureScenario = 'default'): {

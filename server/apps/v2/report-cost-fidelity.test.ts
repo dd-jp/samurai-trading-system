@@ -7,13 +7,7 @@ import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { openReadOnlyStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { BarsMarketData, type BarsSource, parseBoeGbpUsdCsv } from './data/index.js';
 import { FX_PATH } from './index.js';
-import {
-  entryOffsetBps,
-  fillQuoter,
-  main,
-  readBrokerOrders,
-  reportCostFidelity,
-} from './report-cost-fidelity.js';
+import { fillQuoter, main, readBrokerOrders, reportCostFidelity } from './report-cost-fidelity.js';
 
 const NO_BARS: BarsSource = { load: () => undefined };
 const YEAR_START_GBPUSD = new BarsMarketData(
@@ -90,17 +84,6 @@ function journal(path: string, orders: readonly OrderSeed[], fills: readonly Fil
   return db;
 }
 
-describe('entryOffsetBps', () => {
-  it('tags the entry sample the way the paper split was ruled (#1815)', () => {
-    expect(entryOffsetBps(JSON.stringify({ price: 20, limit: 20.1, entry_offset_bps: 50 }))).toBe(
-      50,
-    );
-    expect(entryOffsetBps(JSON.stringify({ price: 20 }))).toBe(0);
-    expect(entryOffsetBps(JSON.stringify({ price: 20, limit: 19.8 }))).toBeNull();
-    expect(entryOffsetBps(null)).toBeUndefined();
-  });
-});
-
 describe('readBrokerOrders', () => {
   it('reads only orders that reached the broker, with their fills and entry offsets', () => {
     const db = journal(
@@ -112,6 +95,7 @@ describe('readBrokerOrders', () => {
             price: 100,
             limit: 100.5,
             entry_offset_bps: 50,
+            modelled_slippage_bps: 12.5,
             trigger: 101,
             stop: 95,
             target: 110,
@@ -134,6 +118,13 @@ describe('readBrokerOrders', () => {
       [
         { id: 'alpaca:f1', order: 'entry', qty: 4, price: 80 },
         { id: 'alpaca:f1#2', order: 'entry', qty: 6, price: 81 },
+        {
+          id: 'alpaca:cash-in-lieu:debate/primary:AAA:2026-09-03',
+          order: 'entry',
+          leg: 'cash_in_lieu',
+          side: 'sell',
+          qty: 0.5,
+        },
         {
           id: 'alpaca:f2',
           order: 'flatten',
@@ -162,11 +153,13 @@ describe('readBrokerOrders', () => {
       stop: 95,
       target: 110,
       cancelledOn: undefined,
+      modelledSlippageBps: 12.5,
       fills: [
         { leg: 'entry', side: 'buy', tradingDate: '2026-09-02', qty: 4, priceGbp: 80, feeGbp: 0 },
         { leg: 'entry', side: 'buy', tradingDate: '2026-09-02', qty: 6, priceGbp: 81, feeGbp: 0 },
       ],
     });
+    expect(orders[1]?.modelledSlippageBps).toBeUndefined();
     expect(orders[2]).toMatchObject({ limit: 90, cancelledOn: '2026-09-04', fills: [] });
     expect(orders[3]?.fills).toEqual([
       { leg: 'exit', side: 'sell', tradingDate: '2026-09-06', qty: 10, priceGbp: 80, feeGbp: 0.02 },

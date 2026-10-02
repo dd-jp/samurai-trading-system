@@ -182,6 +182,7 @@ export class V2OrderExecutor implements OrderExecutor {
             qty: fill.qty,
             fee: fill.fee,
             qty_is_cumulative: fill.qty_is_cumulative,
+            filled_at: fill.timestamp.toISOString(),
           });
         }
       } catch (error) {

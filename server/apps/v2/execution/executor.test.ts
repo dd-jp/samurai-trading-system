@@ -476,6 +476,7 @@ describe('V2OrderExecutor', () => {
           qty: 6,
           fee: 0.5,
           qty_is_cumulative: true,
+          filled_at: '2026-09-25T15:00:00.000Z',
         },
       ],
       failures: [expect.stringContaining('saxo down')],

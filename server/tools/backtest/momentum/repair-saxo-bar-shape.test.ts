@@ -2,10 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DuckDBInstance } from '@duckdb/node-api';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore, SHAPE_REPAIR_MANIFEST_NOTE } from '../../../providers/bar-store/index.js';
+import { seedWithoutValidation } from '../../__fixtures__/seed-unvalidated.js';
 import {
   countShapeViolations,
   planShapeRepairs,
@@ -22,36 +22,6 @@ afterAll(() => {
 
 function ohlc(date: string, open: number, high: number, low: number, close: number): DailyBar {
   return { date, open, high, low, close, volume: 100, rawClose: close };
-}
-
-async function seedWithoutValidation(
-  root: string,
-  venue: string,
-  series: readonly BarSeries[],
-): Promise<void> {
-  const instance = await DuckDBInstance.create(':memory:', { threads: '1' });
-  const db = await instance.connect();
-  await db.run(
-    'CREATE TABLE staged (venue VARCHAR, symbol VARCHAR, date VARCHAR, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume DOUBLE, raw_close DOUBLE)',
-  );
-  const appender = await db.createAppender('staged');
-  for (const one of series) {
-    for (const bar of one.bars) {
-      appender.appendVarchar(venue);
-      appender.appendVarchar(one.symbol);
-      appender.appendVarchar(bar.date);
-      for (const value of [bar.open, bar.high, bar.low, bar.close, bar.volume, bar.rawClose]) {
-        appender.appendDouble(value);
-      }
-      appender.endRow();
-    }
-  }
-  appender.closeSync();
-  await db.run(
-    `COPY (SELECT venue, symbol, CAST(year(CAST(date AS DATE)) AS INTEGER) AS year, CAST(date AS DATE) AS date, open, high, low, close, volume, raw_close FROM staged ORDER BY symbol, date) TO '${root}' (FORMAT parquet, PARTITION_BY (venue, symbol, year), OVERWRITE_OR_IGNORE)`,
-  );
-  db.closeSync();
-  instance.closeSync();
 }
 
 const GLITCHED: BarSeries = {
@@ -218,7 +188,18 @@ describe('updateManifest', () => {
         },
       },
     });
-    expect(updated.symbols.BBB).toEqual(manifest.symbols.BBB);
+    expect(updated.symbols.BBB).toEqual({
+      ...manifest.symbols.BBB,
+      hygiene: {
+        ...manifest.symbols.BBB?.hygiene,
+        shape_repair: {
+          rescaled_fields: [],
+          neighbour_repairs: [],
+          dropped_glitch_dates: [],
+          ranges_widened: 0,
+        },
+      },
+    });
     expect(updated.hygiene).toBe(`${manifest.hygiene}; ${SHAPE_REPAIR_MANIFEST_NOTE}`);
     expect(updateManifest(updated, plan).hygiene).toBe(updated.hygiene);
   });
@@ -235,9 +216,52 @@ describe('updateManifest', () => {
     expect(updated.window_binding_line).toBe('BBB');
   });
 
-  it('returns the manifest itself when nothing was repaired', () => {
-    const manifest = manifestFor([CLEAN]);
-    expect(updateManifest(manifest, [])).toBe(manifest);
+  it('gives every line a shape_repair and replaces a stale note instead of appending a second one', () => {
+    const stale = {
+      ...manifestFor([CLEAN]),
+      hygiene: `weekend-dated bars dropped; then the bar shape is repaired because an old rule (#1838): per-line counts in symbols.<TIDM>.hygiene.shape_repair`,
+    };
+    const refreshed = updateManifest(stale, []);
+    expect(refreshed.hygiene).toBe(`weekend-dated bars dropped; ${SHAPE_REPAIR_MANIFEST_NOTE}`);
+    expect(refreshed.symbols.BBB).toMatchObject({
+      hygiene: {
+        shape_repair: {
+          rescaled_fields: [],
+          neighbour_repairs: [],
+          dropped_glitch_dates: [],
+          ranges_widened: 0,
+        },
+      },
+    });
+    expect(updateManifest(refreshed, [])).toEqual(refreshed);
+  });
+
+  it('keeps the counts an earlier repair recorded and adds a later one without repeating a replayed entry', () => {
+    const base = manifestFor([REPLACE_ONLY]);
+    const earlier = {
+      rescaled_fields: [{ date: '2016-01-04', field: 'low' as const, factor: 100 as const }],
+      dropped_glitch_dates: ['2016-01-05'],
+      ranges_widened: 7,
+    };
+    const manifest = {
+      ...base,
+      symbols: {
+        FFF: {
+          ...base.symbols.FFF,
+          hygiene: { ...base.symbols.FFF?.hygiene, shape_repair: earlier },
+        },
+      },
+    };
+    const plan = planShapeRepairs(new Map([['FFF', REPLACE_ONLY]]));
+    const expected = {
+      rescaled_fields: earlier.rescaled_fields,
+      neighbour_repairs: [{ date: '2016-11-21', field: 'high' }],
+      dropped_glitch_dates: ['2016-01-05'],
+      ranges_widened: 7,
+    };
+    const once = updateManifest(manifest, plan);
+    expect(once.symbols.FFF?.hygiene.shape_repair).toEqual(expected);
+    expect(updateManifest(once, plan).symbols.FFF?.hygiene.shape_repair).toEqual(expected);
   });
 
   it('refuses a repaired line the manifest does not list', () => {
@@ -260,6 +284,37 @@ describe('repairFromArgs', () => {
     );
     expect(second.repairedSymbols).toEqual([]);
     expect(formatted).toHaveLength(1);
+  });
+
+  it('refreshes a manifest that lags a clean store and formats it once', async () => {
+    const { root, manifestPath } = await fixture();
+    const formatted: string[] = [];
+    await repairFromArgs(['--store', root, '--manifest', manifestPath], () => {});
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.hygiene = 'weekend-dated and fetch-day bars dropped';
+    delete manifest.symbols.BBB.hygiene.shape_repair;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const result = await repairFromArgs(['--store', root, '--manifest', manifestPath], (path) =>
+      formatted.push(path),
+    );
+    expect(result).toMatchObject({ repairedSymbols: [], manifestUpdated: true });
+    expect(formatted).toEqual([manifestPath]);
+    const refreshed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    expect(refreshed.symbols.BBB.hygiene.shape_repair.ranges_widened).toBe(0);
+    expect(refreshed.hygiene.endsWith(SHAPE_REPAIR_MANIFEST_NOTE)).toBe(true);
+  });
+
+  it('leaves a manifest byte-identical when a pre-repair store replays a plan it already records', async () => {
+    const { root, manifestPath } = await fixture();
+    const preRepair = parquetBytes(root);
+    await repairFromArgs(['--store', root, '--manifest', manifestPath], () => {});
+    const recorded = readFileSync(manifestPath, 'utf8');
+    expect(JSON.parse(recorded).symbols.AAA.hygiene.shape_repair.ranges_widened).toBe(2);
+    await seedWithoutValidation(root, 'saxo', [GLITCHED, CLEAN, WIDEN_ONLY]);
+    expect(parquetBytes(root)).toBe(preRepair);
+    const replay = await repairFromArgs(['--store', root, '--manifest', manifestPath], () => {});
+    expect(replay).toMatchObject({ repairedSymbols: ['AAA', 'CCC'], manifestUpdated: false });
+    expect(readFileSync(manifestPath, 'utf8')).toBe(recorded);
   });
 
   it('refuses a flag it does not know', async () => {
@@ -315,6 +370,25 @@ describe('repairSaxoStore', () => {
     });
     expect(parquetBytes(root)).toBe(parquetAfterFirst);
     expect(readFileSync(manifestPath, 'utf8')).toBe(manifestAfterFirst);
+  });
+
+  it('brings the manifest in line with the bars when the first run died after the parquet write', async () => {
+    const { root, store, manifestPath } = await fixture();
+    const realWrite = store.write.bind(store);
+    const crash = vi.spyOn(store, 'write').mockImplementationOnce(async (venue, series) => {
+      await realWrite(venue, series);
+      throw new Error('crash');
+    });
+    await expect(repairSaxoStore(store, manifestPath)).rejects.toThrow('crash');
+    crash.mockRestore();
+    expect(countShapeViolations(await store.readVenue('saxo'))).toBe(0);
+    await repairSaxoStore(store, manifestPath);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    expect(manifest.symbols.AAA.bars).toBe(4);
+    expect(manifest.hygiene.split(SHAPE_REPAIR_MANIFEST_NOTE)).toHaveLength(2);
+    const settled = parquetBytes(root);
+    await repairSaxoStore(store, manifestPath);
+    expect(parquetBytes(root)).toBe(settled);
   });
 
   it('runs without a manifest', async () => {

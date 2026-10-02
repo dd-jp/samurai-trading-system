@@ -272,9 +272,13 @@ jobs:
       - name: Smoke
         run: npm run smoke
 
-  mutation:
+  mutation-shard:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -283,25 +287,102 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
+          package-manager-cache: false
 
-      - name: Find changed risk, sizing and loss-budget files
+      - name: Find this shard's changed risk, sizing and loss-budget lines
         id: scope
         run: |
-          CHANGED="$(node server/tools/mutation-local.ts --list origin/main)"
-          if [ -n "$CHANGED" ]; then
-            echo "$CHANGED"
+          RANGES="$(node server/tools/mutation-local.ts --list --shard ${{ matrix.shard }}/4 origin/main)"
+          if [ -n "$RANGES" ]; then
+            echo "$RANGES"
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No risk, sizing or loss-budget file changed; mutation testing skipped."
+            echo "No changed risk, sizing or loss-budget lines in this shard; skipped."
           fi
+
+      - name: Restore the npm cache
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.npm
+          key: node-cache-${{ runner.os }}-${{ runner.arch }}-npm-${{ hashFiles('package-lock.json') }}
 
       - name: Install dependencies
         if: ${{ steps.scope.outputs.run == 'true' }}
         run: npm ci
 
-      - name: Stryker (80% break on changed files)
+      - name: Restore earlier mutation results
         if: ${{ steps.scope.outputs.run == 'true' }}
-        run: npm run mutation:local -- origin/main
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: reports/mutation/incremental.json
+          key: mutation-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mutation-${{ github.event.pull_request.number }}-
+
+      - name: Stryker (shard ${{ matrix.shard }}/4, changed lines)
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        run: |
+          if [ -f reports/mutation/incremental.json ]; then
+            cp reports/mutation/incremental.json reports/mutation/shard-${{ matrix.shard }}.json
+          fi
+          npm run mutation:local -- --shard ${{ matrix.shard }}/4 origin/main
+
+      - name: Upload shard report
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mutation-shard-${{ matrix.shard }}
+          path: reports/mutation/shard-${{ matrix.shard }}.json
+          retention-days: 1
+          if-no-files-found: error
+
+  mutation:
+    needs: mutation-shard
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Shards finished
+        if: ${{ needs.mutation-shard.result != 'success' }}
+        run: |
+          echo "::error::mutation-shard ended ${{ needs.mutation-shard.result }}"
+          exit 1
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Find changed risk, sizing and loss-budget lines
+        id: scope
+        run: |
+          if [ -n "$(node server/tools/mutation-local.ts --list origin/main)" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No risk, sizing or loss-budget line changed; mutation testing skipped."
+          fi
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        with:
+          pattern: mutation-shard-*
+          path: reports/mutation
+          merge-multiple: true
+
+      - name: Score the changed lines (80% break)
+        if: ${{ steps.scope.outputs.run == 'true' }}
+        run: node server/tools/mutation-local.ts --merge 4 origin/main
+
+      - name: Keep the results for the next push
+        if: ${{ !cancelled() && hashFiles('reports/mutation/incremental.json') != '' }}
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: reports/mutation/incremental.json
+          key: mutation-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   e2e:
     runs-on: ubuntu-latest

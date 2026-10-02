@@ -1,4 +1,4 @@
-import type { SaxoAccountBalanceReader } from '../../../pipeline/execution/adapters/saxo-client.js';
+import type { SaxoAccountBalanceReader } from '../../../pipeline/execution/index.js';
 import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
 import type { AccountFunding, AccountFundingSource } from './account-state.js';
 

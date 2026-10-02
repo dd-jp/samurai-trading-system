@@ -18,7 +18,9 @@ export default {
   coverageAnalysis: 'perTest',
   ignorePatterns: ['graphify-out'],
   reporters: ['progress', 'clear-text'],
-  thresholds: { high: 90, low: 70, break: 80 },
+  // mutation-local.ts sets STRYKER_NO_BREAK and applies `break` itself, to the changed lines only:
+  // an incremental run's own score also counts the earlier run's out-of-scope mutants
+  thresholds: { high: 90, low: 70, break: process.env.STRYKER_NO_BREAK ? null : 80 },
   tempDirName: '.stryker-tmp',
   cleanTempDir: 'always',
 };

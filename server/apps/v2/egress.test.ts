@@ -51,6 +51,7 @@ const SECRET_ENV: Readonly<Record<string, string>> = {
   TELEGRAM_BOT_TOKEN: 'sentinel-telegram-bot-token-4a5b',
   HEALTHCHECKS_PING_URL: 'https://hc-ping.egress.test/sentinel-ping-6c7d',
   HEALTHCHECKS_TELEGRAM_PING_URL: 'https://hc-ping.egress.test/sentinel-telegram-9e2f',
+  HEALTHCHECKS_SIGNALS_PING_URL: 'https://hc-ping.egress.test/sentinel-signals-3d7a',
   LITESTREAM_SSE_C_KEY: 'sentinel-litestream-sse-c-key-8e9f',
   POLYGON_API_KEY: 'sentinel-polygon-api-key-0a2b',
   MARKETAUX_API_TOKEN: 'sentinel-marketaux-api-token-1c3d',

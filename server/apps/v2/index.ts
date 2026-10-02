@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import type { BrokerMode, CfdCosts, Sleeve } from '../../../contracts/index.js';
+import type { BrokerMode, CfdCosts, Sleeve, Venue } from '../../../contracts/index.js';
 import type {
   AnthropicMessagesClient,
   LlmSpendSink,
@@ -8,7 +8,7 @@ import type {
 import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../providers/market-data-service/index.js';
-import { AlpacaNewsClient } from '../../providers/market-intelligence/sources/alpaca-news-client.js';
+import { AlpacaNewsClient } from '../../providers/market-intelligence/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';
@@ -18,7 +18,7 @@ import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
-import { composeCycle } from './compose.js';
+import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { pushDailySummary } from './daily-summary.js';
 import {
@@ -42,11 +42,13 @@ import {
   parseBoeGbpUsdCsv,
   SqliteNewsLedger,
   TABLE_VENUE_SESSIONS,
+  type VenueRouter,
   type VenueSessionGate,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
-import { heartbeatFor, withHeartbeat } from './heartbeat.js';
+import { heartbeatFor, pingJournal, withHeartbeat } from './heartbeat.js';
+import { cycleInputDigests, RecordingBarsSource, recordInputDigests } from './input-digest.js';
 import { type FaultLedger, Journal } from './journal/index.js';
 import {
   assertArm2RunsBesideDebate,
@@ -75,6 +77,7 @@ import {
   type SecretSource,
   type SleeveRegistry,
   SqliteMonthlySpendCap,
+  secretGuardedSink,
   secretsFromEnv,
   verifyNousPins,
 } from './signal/index.js';
@@ -183,9 +186,17 @@ function nousTransportFactory(
       apiKey: options.nousApiKey ?? '',
       baseUrl: options.nousBaseUrl ?? '',
       gate: accountGate,
-      secrets: options.knownSecrets ?? knownSecretsFrom(process.env),
+      secrets: secretsFor(options),
       logger,
     });
+}
+
+function secretsFor(options: V2RootOptions): SecretSource {
+  return options.knownSecrets ?? knownSecretsFrom(process.env);
+}
+
+function guardedSpendSink(db: StoreHandle, options: V2RootOptions, logger: Logger): LlmSpendSink {
+  return secretGuardedSink(new SqliteLlmSpendStore(db, logger, true), secretsFor(options), logger);
 }
 
 export function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
@@ -250,7 +261,9 @@ export function halfSpreadLookup(
   return (instrument) => spreads.get(instrument) ?? DEFAULT_HALF_SPREAD_BPS;
 }
 
-function constituentsFromCsv(options: V2RootOptions): (tradingDate: string) => readonly string[] {
+export function constituentsFromCsv(
+  options: Pick<V2RootOptions, 'constituentsPath'>,
+): (tradingDate: string) => readonly string[] {
   const csv = readFileSync(options.constituentsPath ?? CONSTITUENTS_PATH, 'utf8');
   return (tradingDate) => currentConstituents(csv, tradingDate);
 }
@@ -266,15 +279,16 @@ export interface NewsWiring {
 
 export function newsWiringFor(options: V2RootOptions, db: StoreHandle, logger: Logger): NewsWiring {
   if (options.newsSource !== undefined) return { news: options.newsSource, ukNews: undefined };
+  const ledger = new SqliteNewsLedger(guardedStore(db, 'v2'));
   const ukNews = options.dryRun
     ? undefined
     : new MarketauxNewsSource({
         client: marketauxClientFor(options.marketauxApiKey),
-        ledger: new SqliteNewsLedger(guardedStore(db, 'v2')),
+        ledger,
         logger,
       });
   const news = newsForVenue({
-    us: options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient()),
+    us: options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient(), ledger),
     ukStock: ukNews ?? NO_NEWS,
     isUkStock: options.isUkStock ?? (() => false),
     isLseEtf: isLseInstrument,
@@ -302,7 +316,7 @@ function storePathFor(options: V2RootOptions): string {
   return options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH);
 }
 
-function barsSourceFor(options: V2RootOptions): {
+export function barsSourceFor(options: Pick<V2RootOptions, 'bars' | 'barStoreRoot'>): {
   bars: BarsSource;
   prime: () => Promise<void>;
 } {
@@ -348,7 +362,10 @@ function journalLseLegRefusal(
   });
 }
 
-function cfdCatalogueFor(options: V2RootOptions, logger: Logger): CfdCatalogue | undefined {
+export function cfdCatalogueFor(
+  options: Pick<V2RootOptions, 'cfdCatalogue' | 'cfdCataloguePath'>,
+  logger: Logger,
+): CfdCatalogue | undefined {
   if (options.cfdCatalogue !== undefined) return options.cfdCatalogue;
   try {
     return loadCfdCatalogue(options.cfdCataloguePath ?? CFD_CATALOGUE_PATH);
@@ -372,7 +389,7 @@ function venueSessionsFor(options: V2RootOptions): VenueSessionGate {
   return options.venueSessions ?? TABLE_VENUE_SESSIONS;
 }
 
-function quotedBorrowPerDayFrom(
+export function quotedBorrowPerDayFrom(
   catalogue: CfdCatalogue | undefined,
 ): (instrument: string) => number | undefined {
   return (instrument) => catalogue?.lookup(instrument)?.borrowCostPerDay;
@@ -389,6 +406,43 @@ function lastMarkedDate(books: Pick<PaperBooks, 'ids' | 'lastDay'>): string | un
     if (date !== undefined && (latest === undefined || date > latest)) latest = date;
   }
   return latest;
+}
+
+export function venueRouterFor(
+  catalogue: CfdCatalogue | undefined,
+  entryRefusal: () => string | undefined,
+): VenueRouter {
+  return createVenueRouter({
+    catalogue,
+    entryRefusal,
+    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  });
+}
+
+export interface DecisionSleeveInputs {
+  readonly panel: LlmPanel;
+  readonly bars: BarsSource;
+  readonly constituents: (tradingDate: string) => readonly string[];
+  readonly market: BarsMarketData;
+  readonly news: NewsSource;
+  readonly clock: Clock;
+  readonly logger: Logger;
+  readonly router: VenueRouter;
+  readonly lseLegRefusal: string | undefined;
+}
+
+function venueOf(symbol: string): Venue {
+  return isLseInstrument(symbol) ? 'saxo' : 'alpaca';
+}
+
+export function decisionSleeves(inputs: DecisionSleeveInputs): Sleeve[] {
+  const { panel, news, clock, logger, ...technical } = inputs;
+  const shared = { ...technical, venueFor: venueOf };
+  return [
+    createDebateSleeve({ ...shared, panel, news, clock, logger }),
+    createArm2Sleeve({ ...shared, clock }),
+    createSignalsSleeve(),
+  ].map((sleeve) => withoutRefusedLse(sleeve, inputs.lseLegRefusal));
 }
 
 export async function recordingRefusedCycle<T>(
@@ -409,6 +463,32 @@ export async function recordingRefusedCycle<T>(
   }
 }
 
+interface DigestedInputs {
+  readonly db: StoreHandle;
+  readonly clock: Clock;
+  readonly recording: RecordingBarsSource;
+  readonly bars: BarsSource;
+  readonly catalogue: CfdCatalogue | undefined;
+}
+
+export async function runDigestedCycle(
+  cycle: CycleComposition,
+  tradingDate: string,
+  inputs: DigestedInputs,
+): Promise<CycleReport> {
+  inputs.recording.clear();
+  const report = await runCycle(cycle, tradingDate);
+  if (!report.skipped) {
+    recordInputDigests(
+      inputs.db,
+      inputs.clock,
+      tradingDate,
+      cycleInputDigests(inputs.bars, inputs.recording.names(), inputs.catalogue, tradingDate),
+    );
+  }
+  return report;
+}
+
 export function composeV2Root(options: V2RootOptions): V2Root {
   refuseLiveMode(options);
   refuseKeylessPaperRun(options);
@@ -417,7 +497,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const db = options.store ?? openSharedStore(storePathFor(options));
   const { news, ukNews } = newsWiringFor(options, db, logger);
   const scripted: ScriptedTransport[] = [];
-  const spendSink: LlmSpendSink = new SqliteLlmSpendStore(db, logger, true);
+  const spendSink = guardedSpendSink(db, options, logger);
   const spendCap: SpendCap = new SqliteMonthlySpendCap(db, clock, undefined, logger);
   const panel = buildLlmPanel({
     transportFor: transportsFor(options, scripted, logger),
@@ -425,44 +505,27 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     spendCap,
     logger,
   });
-  const { bars, prime } = barsSourceFor(options);
+  const source = barsSourceFor(options);
+  const { prime } = source;
+  const bars = new RecordingBarsSource(source.bars);
   const constituents = options.constituents ?? constituentsFromCsv(options);
   const market = new BarsMarketData(
     bars,
     parseBoeGbpUsdCsv(readFileSync(options.fxPath ?? FX_PATH, 'utf8')),
   );
-  const venueFor = (symbol: string) => (isLseInstrument(symbol) ? 'saxo' : 'alpaca');
   const cfdGate = cfdGateFor(options);
   const catalogue = cfdCatalogueFor(options, logger);
-  const router = createVenueRouter({
-    catalogue,
-    entryRefusal: cfdGate,
-    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  const sleeves = decisionSleeves({
+    panel,
+    bars,
+    constituents,
+    market,
+    news,
+    clock,
+    logger,
+    router: venueRouterFor(catalogue, cfdGate),
+    lseLegRefusal: options.lseLegRefusal,
   });
-  const sleeves = [
-    createDebateSleeve({
-      panel,
-      bars,
-      constituents,
-      venueFor,
-      router,
-      market,
-      news,
-      clock,
-      logger,
-      lseLegRefusal: options.lseLegRefusal,
-    }),
-    createArm2Sleeve({
-      bars,
-      constituents,
-      venueFor,
-      router,
-      market,
-      clock,
-      lseLegRefusal: options.lseLegRefusal,
-    }),
-    createSignalsSleeve(),
-  ].map((sleeve) => withoutRefusedLse(sleeve, options.lseLegRefusal));
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);
   const cycle = composeCycle({
@@ -507,7 +570,13 @@ export function composeV2Root(options: V2RootOptions): V2Root {
             bothVenuesClosed,
           );
           try {
-            return await runCycle(cycle, options.tradingDate);
+            return await runDigestedCycle(cycle, options.tradingDate, {
+              db,
+              clock,
+              recording: bars,
+              bars: source.bars,
+              catalogue,
+            });
           } finally {
             ukNews?.journalCoverage(options.tradingDate);
           }
@@ -584,11 +653,11 @@ export async function main(
 ): Promise<number> {
   const alerts = alertsFor(argv, env, fetchImpl, STDERR_LOGGER);
   const logger = alerts.logger;
-  const heartbeat = heartbeatFor(argv, env, fetchImpl, logger);
+  const clock = new SystemClock();
+  const heartbeat = heartbeatFor(argv, env, fetchImpl, logger, pingJournal(V2_STORE_PATH, clock));
   return withAlerts(
     () =>
       withHeartbeat(() => {
-        const clock = new SystemClock();
         const { dryRun, tradingDate } = parseCliArgs(argv, clock.now().toISOString().slice(0, 10));
         const backup = backupFor(argv, V2_STORE_PATH, env, litestream, logger);
         // barRefresh is constructed lazily, inside the callback withBackup invokes after restore,

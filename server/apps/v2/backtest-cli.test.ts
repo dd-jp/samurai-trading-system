@@ -86,8 +86,9 @@ describe('runCrossAssetTrendAgainst', () => {
   it('#1785: orchestrates trials, benchmark and the cost-stress rerun over a fixed window', {
     timeout: 40_000,
   }, async () => {
+    const trendBars = { load: (symbol: string) => SYNTHETIC_BARS.get(symbol) };
     const market = new BarsMarketData(
-      { load: (symbol) => SYNTHETIC_BARS.get(symbol) },
+      trendBars,
       parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'),
     );
     const db = openSharedStore(':memory:');
@@ -98,6 +99,7 @@ describe('runCrossAssetTrendAgainst', () => {
       const window = { from: DATES[40] as string, to: DATES.at(-1) as string };
       const report = await runCrossAssetTrendAgainst(
         market,
+        trendBars,
         () => 5,
         ledger,
         { log: () => undefined },
@@ -115,6 +117,7 @@ describe('runCrossAssetTrendAgainst', () => {
       // a cost-sensitivity pass is never a new counted trial
       const rerun = await runCrossAssetTrendAgainst(
         market,
+        trendBars,
         () => 5,
         ledger,
         { log: () => undefined },

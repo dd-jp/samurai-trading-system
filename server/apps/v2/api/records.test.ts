@@ -4,13 +4,7 @@ import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { Journal } from '../journal/index.js';
-import {
-  parseTaxQuery,
-  RECONCILE_RUNS_SHOWN,
-  ReconcileReader,
-  TAX_CSV_NOT_FED,
-  taxWire,
-} from './records.js';
+import { parseTaxQuery, RECONCILE_RUNS_SHOWN, ReconcileReader } from './records.js';
 
 describe('parseTaxQuery', () => {
   it('defaults to JSON for no year', () => {
@@ -87,16 +81,5 @@ describe('ReconcileReader', () => {
       recorded_at: '2026-09-28T07:00:00.000Z',
     });
     expect(served.runs.at(-1)?.trading_date).toBe('run-2');
-  });
-});
-
-describe('records panels not yet fed', () => {
-  it('names the owner of the tax log', () => {
-    expect(taxWire({ year: 2026, format: 'json' })).toEqual({
-      contract_version: V2_CONTRACT_VERSION,
-      year: 2026,
-      disposals: { status: 'not-yet-fed', owner: 'Step 4', ticket: '#1746' },
-    });
-    expect(TAX_CSV_NOT_FED).toBe('tax log not yet fed: Step 4 (#1746)');
   });
 });

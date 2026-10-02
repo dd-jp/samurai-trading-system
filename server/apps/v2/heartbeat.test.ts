@@ -1,6 +1,18 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../shared/index.js';
-import { healthchecksHeartbeat, heartbeatFor, NO_HEARTBEAT, withHeartbeat } from './heartbeat.js';
+import { openSharedStore } from '../../shared/store/index.js';
+import { withBackup } from './backup.js';
+import {
+  healthchecksHeartbeat,
+  heartbeatFor,
+  NO_HEARTBEAT,
+  optionalHeartbeat,
+  pingJournal,
+  withHeartbeat,
+} from './heartbeat.js';
 
 const SECRET = 'https://hc-ping.com/secret-uuid';
 
@@ -111,5 +123,174 @@ describe('withHeartbeat', () => {
     const boom = new Error('cycle failed');
     const beat = vi.fn().mockRejectedValue(new Error('logger down'));
     await expect(withHeartbeat(() => Promise.reject(boom), beat)).rejects.toBe(boom);
+  });
+});
+
+describe('journalling a delivered ping', () => {
+  it('hands the outcome to the sink only when healthchecks accepted the ping', async () => {
+    const onSent = vi.fn();
+    const { logger } = recorder();
+    const accepted = healthchecksHeartbeat(
+      SECRET,
+      vi.fn().mockResolvedValue({ ok: true, status: 200 }),
+      logger,
+      onSent,
+    );
+    await accepted('success');
+    await accepted('fail');
+    const refused = healthchecksHeartbeat(
+      SECRET,
+      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+      logger,
+      onSent,
+    );
+    await refused('success');
+    const thrown = healthchecksHeartbeat(
+      SECRET,
+      vi.fn().mockRejectedValue(new Error('x')),
+      logger,
+      onSent,
+    );
+    await thrown('success');
+    expect(onSent.mock.calls).toEqual([['success'], ['fail']]);
+  });
+
+  it('warns and carries on when the sink throws', async () => {
+    const { entries, logger } = recorder();
+    const beat = healthchecksHeartbeat(
+      SECRET,
+      vi.fn().mockResolvedValue({ ok: true, status: 200 }),
+      logger,
+      () => {
+        throw new Error(`disk full near ${SECRET}`);
+      },
+    );
+    await expect(beat('success')).resolves.toBeUndefined();
+    expect(entries.map((entry) => [entry.level, entry.event])).toEqual([
+      ['info', 'v2_heartbeat_sent'],
+      ['warn', 'v2_heartbeat_unjournaled'],
+    ]);
+    expect(JSON.stringify(entries)).not.toContain('secret-uuid');
+  });
+
+  it('passes the sink through heartbeatFor on a real run', async () => {
+    const onSent = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await heartbeatFor(
+      ['--date', '2026-09-28'],
+      { HEALTHCHECKS_PING_URL: SECRET },
+      fetchImpl,
+      recorder().logger,
+      onSent,
+    )('fail');
+    expect(onSent).toHaveBeenCalledWith('fail');
+  });
+
+  it('pingJournal appends one row per ping to the store, stamped by the clock', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'heartbeat-journal-'));
+    const storePath = join(dir, 'v2.sqlite');
+    openSharedStore(storePath).close();
+    try {
+      const sink = pingJournal(storePath, { now: () => new Date('2026-10-05T07:31:00.000Z') });
+      sink('success');
+      sink('fail');
+      const db = openSharedStore(storePath);
+      try {
+        expect(
+          db.prepare('SELECT outcome, pinged_at FROM v2_heartbeat_pings ORDER BY ping_id').all(),
+        ).toEqual([
+          { outcome: 'success', pinged_at: '2026-10-05T07:31:00.000Z' },
+          { outcome: 'fail', pinged_at: '2026-10-05T07:31:00.000Z' },
+        ]);
+        expect(() => db.prepare('DELETE FROM v2_heartbeat_pings').run()).toThrow(/append-only/);
+        expect(() =>
+          db.prepare("INSERT OR REPLACE INTO v2_heartbeat_pings VALUES (1, 'fail', 'x')").run(),
+        ).toThrow(/append-only/);
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a missing store', () => {
+  it('is never created by the ping sink, so a failed restore cannot leave an empty book behind', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'heartbeat-missing-'));
+    const missing = join(dir, 'v2.sqlite');
+    const { entries, logger } = recorder();
+    const clock = { now: () => new Date('2026-10-05T07:31:00.000Z') };
+    try {
+      expect(() => pingJournal(missing, clock)('fail')).toThrow();
+      expect(existsSync(missing)).toBe(false);
+      const boom = new Error('restore failed');
+      const backup = {
+        restore: () => Promise.reject(boom),
+        replicate: () => Promise.resolve(),
+      };
+      await expect(
+        withHeartbeat(
+          () => withBackup(() => Promise.resolve(0), backup),
+          healthchecksHeartbeat(
+            SECRET,
+            vi.fn().mockResolvedValue({ ok: true, status: 200 }),
+            logger,
+            pingJournal(missing, clock),
+          ),
+        ),
+      ).rejects.toBe(boom);
+      expect(existsSync(missing)).toBe(false);
+      expect(entries.map((entry) => entry.event)).toContain('v2_heartbeat_unjournaled');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('optionalHeartbeat', () => {
+  const specWith = (unset: string[], dryRun = false) => ({
+    dryRun,
+    envName: 'HC_TEST_URL',
+    subject: 'widget',
+    onUnset: (message: string) => unset.push(message),
+  });
+
+  it('pings the env URL when set', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const unset: string[] = [];
+    const { logger } = recorder();
+    await optionalHeartbeat(specWith(unset), { HC_TEST_URL: SECRET }, fetchImpl, logger)('success');
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([SECRET]);
+    expect(unset).toEqual([]);
+  });
+
+  it.each([undefined, '', '  '])(
+    'reports unset once and never pings when the URL is %j',
+    async (raw) => {
+      const fetchImpl = vi.fn();
+      const unset: string[] = [];
+      const { logger } = recorder();
+      const beat = optionalHeartbeat(specWith(unset), { HC_TEST_URL: raw }, fetchImpl, logger);
+      await beat('success');
+      await beat('fail');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(unset).toEqual(['HC_TEST_URL is not set: no healthchecks ping for the widget']);
+    },
+  );
+
+  it('never pings or reports unset in a dry run', async () => {
+    const fetchImpl = vi.fn();
+    const unset: string[] = [];
+    const { logger } = recorder();
+    await optionalHeartbeat(
+      specWith(unset, true),
+      { HC_TEST_URL: SECRET },
+      fetchImpl,
+      logger,
+    )('success');
+    await optionalHeartbeat(specWith(unset, true), {}, fetchImpl, logger)('success');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(unset).toEqual([]);
   });
 });

@@ -13,7 +13,7 @@ import { guardedStore, openMigratedStore, type StoreHandle } from '../../../shar
 import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import { alertsFor } from '../alerts.js';
 import { BarsMarketData, ParquetMarkSource } from '../data/index.js';
-import { type Heartbeat, healthchecksHeartbeat, NO_HEARTBEAT } from '../heartbeat.js';
+import { type Heartbeat, optionalHeartbeat } from '../heartbeat.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';
 import { CommandLog } from './command-log.js';
@@ -101,18 +101,24 @@ function pollerHeartbeat(
   fetchImpl: TelegramFetch,
   logger: Logger,
 ): Heartbeat {
-  if (args.dryRun) return NO_HEARTBEAT;
-  if ((env[TELEGRAM_PING_ENV]?.trim() ?? '') === '') {
-    logger.log({
-      trace_id: 'v2-telegram',
-      stage: 'v2',
-      level: 'warn',
-      event: 'v2_telegram_heartbeat_unset',
-      message: `${TELEGRAM_PING_ENV} is not set: no healthchecks ping for the poller`,
-    });
-    return NO_HEARTBEAT;
-  }
-  return healthchecksHeartbeat(env[TELEGRAM_PING_ENV], fetchImpl, logger);
+  return optionalHeartbeat(
+    {
+      dryRun: args.dryRun,
+      envName: TELEGRAM_PING_ENV,
+      subject: 'poller',
+      onUnset: (message) =>
+        logger.log({
+          trace_id: 'v2-telegram',
+          stage: 'v2',
+          level: 'warn',
+          event: 'v2_telegram_heartbeat_unset',
+          message,
+        }),
+    },
+    env,
+    fetchImpl,
+    logger,
+  );
 }
 
 export interface ComposedTelegram {
