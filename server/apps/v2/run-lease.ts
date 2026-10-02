@@ -3,7 +3,7 @@ import type { Clock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 
-export type RunPurpose = 'cycle' | 'signals';
+export type RunPurpose = 'cycle' | 'signals' | 'flatten';
 
 // A holder whose pid a later process reused would otherwise never be reclaimed; no cycle or
 // signals pass runs anywhere near this long

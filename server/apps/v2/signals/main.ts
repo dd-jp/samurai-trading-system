@@ -9,6 +9,9 @@ import {
 } from '../../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { onTerminationSignal, runWhenInvoked } from '../../../tools/cli-entrypoint.js';
+import { type AlertFetch, type Alerts, alertsFor } from '../alerts.js';
+import { FlattenLedger } from '../flatten.js';
+import { FlattenLoop } from '../flatten-loop.js';
 import {
   type Heartbeat,
   type HeartbeatFetch,
@@ -65,8 +68,11 @@ export interface ComposedSignals {
   readonly server: SignalsServer;
   readonly db: StoreHandle;
   readonly loop: SignalLoop;
+  readonly flatten: FlattenLoop;
   readonly liveness: SignalsLiveness;
 }
+
+export type FlattenAlerts = Pick<Alerts, 'logger' | 'flush' | 'notify'>;
 
 const STDERR_LOGGER: Logger = {
   log: (entry) => {
@@ -80,9 +86,15 @@ export function composeSignals(
   env: NodeJS.ProcessEnv = {},
   logger: Logger = STDERR_LOGGER,
   heartbeat: Heartbeat = NO_HEARTBEAT,
+  alerts: FlattenAlerts = {
+    logger,
+    flush: () => Promise.resolve(),
+    notify: () => Promise.resolve(),
+  },
 ): ComposedSignals {
   const db = openSharedStore(args.storePath);
-  const store = new SignalStore(guardedStore(db, 'v2', { enabled: true }), clock);
+  const v2Store = guardedStore(db, 'v2', { enabled: true });
+  const store = new SignalStore(v2Store, clock);
   const calendar = new UsEquityRegularHoursCalendar();
   const liveness = new SignalsLiveness(
     heartbeat,
@@ -101,6 +113,18 @@ export function composeSignals(
       }),
     onPass: (ok) => liveness.passFinished(ok),
   });
+  const flatten = new FlattenLoop({
+    ledger: new FlattenLedger(v2Store, clock),
+    clock,
+    logger: alerts.logger,
+    openRoot: (tradingDate) =>
+      composeV2Root({
+        ...rootOptionsFor(args.dryRun, tradingDate, env, clock, alerts.logger),
+        storePath: args.storePath,
+      }),
+    notify: alerts.notify,
+    flush: alerts.flush,
+  });
   const server = createSignalsServer({
     port: args.port,
     store,
@@ -112,7 +136,7 @@ export function composeSignals(
     onFault: (error) =>
       process.stderr.write(`v2 signals fault: ${sanitizeLogText(describeThrownSafely(error))}\n`),
   });
-  return { server, db, loop, liveness };
+  return { server, db, loop, flatten, liveness };
 }
 
 export function signalsHeartbeat(
@@ -159,7 +183,7 @@ export async function main(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
   pinCheck: PinCheck = NOUS_PIN_CHECK,
-  fetchImpl: HeartbeatFetch = fetch,
+  fetchImpl: AlertFetch = fetch,
 ): Promise<void> {
   const args = parseSignalsArgs(argv, env);
   if (
@@ -172,12 +196,13 @@ export async function main(
   }
   await pinCheck(args.dryRun, env);
   const heartbeat = signalsHeartbeat(args, env, fetchImpl, STDERR_LOGGER);
-  const { server, db, loop, liveness } = composeSignals(
+  const { server, db, loop, flatten, liveness } = composeSignals(
     args,
     new SystemClock(),
     env,
     STDERR_LOGGER,
     heartbeat,
+    alertsFor(argv, env, fetchImpl, STDERR_LOGGER),
   );
   try {
     await server.start();
@@ -191,10 +216,11 @@ export async function main(
     liveness.beat();
   }, SIGNAL_POLL_MS);
   void loop.tick();
+  const stopFlatten = flatten.start();
   onTerminationSignal(() => {
     clearInterval(poll);
-    return loop
-      .tick()
+    stopFlatten();
+    return Promise.all([loop.tick(), flatten.settled()])
       .then(() => server.stop())
       .finally(() => db.close());
   });
