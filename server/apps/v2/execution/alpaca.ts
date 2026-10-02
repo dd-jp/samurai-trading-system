@@ -1,7 +1,6 @@
 import type { BrokerMode } from '../../../../contracts/index.js';
 import type {
   AlpacaBrokerClient,
-  OcoDoubleFillAlertChannel,
   UnpricedFillAlertChannel,
 } from '../../../pipeline/execution/index.js';
 import {
@@ -21,15 +20,10 @@ export interface AlpacaBrokerOptions {
 }
 
 type UnpricedFillAlert = Parameters<UnpricedFillAlertChannel['postUnpricedFillAlert']>[0];
-type OcoDoubleFillAlert = Parameters<OcoDoubleFillAlertChannel['postOcoDoubleFillAlert']>[0];
 
 export function unpricedFillMessage(alert: UnpricedFillAlert): string {
   const minutes = Math.round(alert.unpriced_for_ms / 60_000);
   return `${alert.instrument} ${alert.leg} fill ${alert.broker_fill_id} (order ${alert.client_order_id}, qty ${alert.qty}) unpriced for ${minutes} min`;
-}
-
-export function ocoDoubleFillMessage(alert: OcoDoubleFillAlert): string {
-  return `${alert.instrument}: stop ${alert.stop_order_id} and target ${alert.target_order_id} both filled (order ${alert.client_order_id})`;
 }
 
 function logAlert(logger: Logger, event: string, message: string, alert: unknown): void {
@@ -45,10 +39,6 @@ export function alpacaBroker(options: AlpacaBrokerOptions): BrokerAdapter {
     unpricedFillAlerts: {
       postUnpricedFillAlert: (alert) =>
         Promise.resolve(logAlert(logger, 'v2_unpriced_fill', unpricedFillMessage(alert), alert)),
-    },
-    ocoDoubleFillAlerts: {
-      postOcoDoubleFillAlert: (alert) =>
-        Promise.resolve(logAlert(logger, 'v2_oco_double_fill', ocoDoubleFillMessage(alert), alert)),
     },
     clock: options.clock,
     logger,

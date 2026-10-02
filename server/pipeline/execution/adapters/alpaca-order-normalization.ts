@@ -72,16 +72,6 @@ export function collectFill(
   });
 }
 
-export function toAlpacaSymbol(instrument: string, assetClass?: 'crypto' | 'stocks'): string {
-  const isCrypto = assetClass === undefined ? instrument.endsWith('-USD') : assetClass === 'crypto';
-  if (!isCrypto || !instrument.endsWith('-USD')) return instrument;
-  return `${instrument.slice(0, -'-USD'.length)}/USD`;
-}
-
-export function fromAlpacaSymbol(symbol: string): string {
-  return symbol.endsWith('/USD') ? `${symbol.slice(0, -'/USD'.length)}-USD` : symbol;
-}
-
 export function mapOrderState(status: string): OrderState {
   switch (status) {
     case 'filled':

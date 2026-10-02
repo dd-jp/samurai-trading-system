@@ -14,7 +14,6 @@ import {
   toRequestFields,
   type UnpricedFillRecord,
 } from '../broker-state-store.js';
-import type { OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
 import { ProtectiveRearmUnsupportedError } from '../protective-rearm-unsupported.js';
 import type {
   BrokerAck,
@@ -27,13 +26,10 @@ import type {
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
-import { AlpacaCryptoLegEmulation } from './alpaca-crypto-emulation.js';
 import {
   collectFill,
-  fromAlpacaSymbol,
   mapOrderState,
   resolveFilledAt,
-  toAlpacaSymbol,
   UnpricedFillError,
 } from './alpaca-order-normalization.js';
 import {
@@ -75,7 +71,6 @@ export interface AlpacaBrokerAdapterInput {
   rateLimiter?: TokenBucket;
   state?: BrokerStateStore;
   unpricedFillAlerts: UnpricedFillAlertChannel;
-  ocoDoubleFillAlerts: OcoDoubleFillAlertChannel;
   unpricedFillAgeOutMs?: number;
   clock?: Clock;
   logger: Logger;
@@ -129,7 +124,6 @@ function populateCrossRestartBrackets(
   state: BrokerStateStore,
 ): void {
   for (const record of state.loadBrackets('alpaca')) {
-    if (record.request?.asset_class === 'crypto') continue;
     if (record.entry_order_id === null) continue;
     brackets.set(record.client_order_id, record.entry_order_id);
   }
@@ -146,7 +140,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly state: BrokerStateStore;
   private readonly clock: Clock;
   private readonly unpricedFillAgeOutMs: number;
-  private readonly emulation: AlpacaCryptoLegEmulation;
   private readonly logger: Logger;
   private readonly cancelConfirmWait: (ms: number) => Promise<void>;
   private readonly cancelConfirmWaitMs: number;
@@ -159,14 +152,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     this.logger = input.logger;
     this.cancelConfirmWait = input.cancelConfirmWait ?? defaultWait;
     this.cancelConfirmWaitMs = input.cancelConfirmWaitMs ?? DEFAULT_CANCEL_CONFIRM_WAIT_MS;
-
-    this.emulation = new AlpacaCryptoLegEmulation({
-      client: input.client,
-      state: this.state,
-      clock: this.clock,
-      call: (operation, fn) => this.call(operation, fn),
-      doubleFillAlerts: input.ocoDoubleFillAlerts,
-    });
 
     populateCrossRestartBrackets(this.brackets, this.state);
   }
@@ -190,7 +175,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const submittedAt = this.clock.now();
     const response = await this.call('submitFlatten', () =>
       this.input.client.submitMarketOrder({
-        symbol: toAlpacaSymbol(instrument),
+        symbol: instrument,
         side,
         qty: String(size),
         time_in_force: timeInForce,
@@ -211,11 +196,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
-    if (this.emulation.owns(clientOrderId)) {
-      await this.emulation.cancelAll(clientOrderId);
-      return;
-    }
-
     const { order, rearmedOrder } = await this.resolveCancelTargets(clientOrderId);
 
     if (rearmedOrder !== null) {
@@ -300,7 +280,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const positions = await this.call('submitProtectedExit', () =>
       this.input.client.getPositions(),
     );
-    const live = positions.find((position) => fromAlpacaSymbol(position.symbol) === instrument);
+    const live = positions.find((position) => position.symbol === instrument);
     const brokerQty = live === undefined ? 0 : Math.abs(Number(live.qty));
     const qty = Math.min(size, brokerQty);
     if (qty <= 0)
@@ -369,11 +349,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     entryClientOrderId: string,
     instrument: string,
   ): Promise<void> {
-    if (this.emulation.owns(entryClientOrderId)) {
-      await this.emulation.cancelAll(entryClientOrderId);
-      return;
-    }
-
     const rearmed = await this.lookupLatestRearmOrderId(entryClientOrderId);
     if ('error' in rearmed) throw rearmed.error;
     if (rearmed.id !== null) {
@@ -415,7 +390,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       const avgEntry = Number(position.avg_entry_price);
       return [
         {
-          instrument: fromAlpacaSymbol(position.symbol),
+          instrument: position.symbol,
           qty,
           side: position.side === 'long' ? ('buy' as const) : ('sell' as const),
           avg_entry_price: Number.isFinite(avgEntry) ? avgEntry : null,
@@ -425,8 +400,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
-    if (order.asset_class === 'crypto') {
-      return this.emulation.submitEntry(order);
+    if (order.asset_class !== 'stocks') {
+      throw new Error(
+        `Alpaca adapter refuses '${order.client_order_id}' (${order.instrument}): asset_class ` +
+          `'${order.asset_class}' is not tradable here; only US equities and ETFs are.`,
+      );
     }
 
     const { entry, stop, target } = roundBracketToTick(
@@ -441,7 +419,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const submittedAt = this.clock.now();
     const response = await this.call('submitBracket', () =>
       this.input.client.submitOrder({
-        symbol: toAlpacaSymbol(submitted.instrument, submitted.asset_class),
+        symbol: submitted.instrument,
         side: submitted.side,
         qty: String(submitted.size),
         ...parentPrices,
@@ -485,15 +463,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     );
     if (order === null) return null;
 
-    if (this.emulation.owns(clientOrderId)) {
-      return {
-        client_order_id: clientOrderId,
-        broker_order_ids: this.emulation.brokerOrderIds(clientOrderId),
-        order_state: mapOrderState(order.status),
-        filled_qty: Number.parseFloat(order.filled_qty),
-      };
-    }
-
     this.brackets.set(clientOrderId, order.id);
     this.state.recordBracketOrderIds('alpaca', clientOrderId, {
       entry_order_id: order.id,
@@ -524,17 +493,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     rawStop: number,
     rawTarget: number,
   ): Promise<void> {
-    if (this.emulation.owns(clientOrderId)) {
-      return this.emulation.rearm(clientOrderId, instrument, side, qty, rawStop, rawTarget);
-    }
-    if (instrument.endsWith('-USD')) {
-      throw new Error(
-        `Alpaca adapter cannot re-arm crypto residual '${clientOrderId}' (${instrument}): no ` +
-          'journalled emulated bracket exists for this lot, and the native OCO order class is ' +
-          'rejected for crypto (verified, #550). The residual stays alert-only.',
-      );
-    }
-
     const { stop, target } = roundProtectiveLegsToTick(side, rawStop, rawTarget);
 
     const closingSide = side === 'buy' ? 'sell' : 'buy';
@@ -563,7 +521,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const rearmClientOrderId = rearmWireId(clientOrderId, freeAttempt);
     const response = await this.call('rearmProtectiveLegs', () =>
       this.input.client.submitOcoOrder({
-        symbol: toAlpacaSymbol(instrument),
+        symbol: instrument,
         side: closingSide,
         qty: String(qty),
         time_in_force: 'gtc',
@@ -691,8 +649,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const flattenFailures = await this.sweepFlattens(since, observedAt, fills, failures);
     const rearmFailures = await this.sweepRearmedLegs(since, observedAt, fills, failures);
 
-    const emulationFailures = await this.emulation.sweep(since, fills, failures);
-
     try {
       for (const fill of fills) {
         this.state.clearUnpricedFill('alpaca', fill.client_order_id, fill.broker_fill_id);
@@ -718,7 +674,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           bracket_failures: bracketFailures,
           flatten_failures: flattenFailures,
           rearm_failures: rearmFailures,
-          emulation_failures: emulationFailures,
           fills_read: fills.length,
         },
       );
@@ -729,7 +684,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         failures,
         `Alpaca fetchNewFills: ${failures.length} failure(s) during the sweep ` +
           `(${bracketFailures} bracket(s), ${flattenFailures} flatten(s), ` +
-          `${rearmFailures} rearm(s), ${emulationFailures} emulated crypto bracket(s) failed); ` +
+          `${rearmFailures} rearm(s) failed); ` +
           'no fills could be read',
       );
     }
@@ -751,6 +706,31 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     return 1;
   }
 
+  private collectOrderAndLegs(
+    order: AlpacaOrder,
+    leg: 'entry' | 'target',
+    clientOrderId: string,
+    since: Date,
+    observedAt: Date,
+    fills: NormalizedFill[],
+  ): void {
+    const instrument = symbolOf(order);
+    const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
+    this.auditSinceFloorInvariant(order, leg, clientOrderId, instrument, observedAt, submittedAt);
+    collectFill(order, leg, clientOrderId, instrument, since, observedAt, fills);
+    for (const child of order.legs ?? []) {
+      this.auditSinceFloorInvariant(
+        child,
+        legName(child),
+        clientOrderId,
+        instrument,
+        observedAt,
+        submittedAt,
+      );
+      collectFill(child, legName(child), clientOrderId, instrument, since, observedAt, fills);
+    }
+  }
+
   private async sweepBrackets(
     since: Date,
     observedAt: Date,
@@ -765,28 +745,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.input.client.getOrder(entryOrderId),
         );
 
-        const instrument = fromAlpacaSymbol(symbolOf(entry));
-        const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
-        this.auditSinceFloorInvariant(
-          entry,
-          'entry',
-          clientOrderId,
-          instrument,
-          observedAt,
-          submittedAt,
-        );
-        collectFill(entry, 'entry', clientOrderId, instrument, since, observedAt, fills);
-        for (const leg of entry.legs ?? []) {
-          this.auditSinceFloorInvariant(
-            leg,
-            legName(leg),
-            clientOrderId,
-            instrument,
-            observedAt,
-            submittedAt,
-          );
-          collectFill(leg, legName(leg), clientOrderId, instrument, since, observedAt, fills);
-        }
+        this.collectOrderAndLegs(entry, 'entry', clientOrderId, since, observedAt, fills);
       } catch (error) {
         bracketFailures += this.recordSweepError(error, failures);
       }
@@ -805,7 +764,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        const instrument = fromAlpacaSymbol(symbolOf(order));
+        const instrument = symbolOf(order);
         this.auditSinceFloorInvariant(
           order,
           'exit',
@@ -837,21 +796,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     for (const [lotKey, orderId] of [...this.rearmedLegs]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        const instrument = fromAlpacaSymbol(symbolOf(order));
-        const submittedAt = this.bracketSubmittedAt.get(lotKey);
-        this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt, submittedAt);
-        collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
-        for (const leg of order.legs ?? []) {
-          this.auditSinceFloorInvariant(
-            leg,
-            legName(leg),
-            lotKey,
-            instrument,
-            observedAt,
-            submittedAt,
-          );
-          collectFill(leg, legName(leg), lotKey, instrument, since, observedAt, fills);
-        }
+        this.collectOrderAndLegs(order, 'target', lotKey, since, observedAt, fills);
         if (mapOrderState(order.status) !== 'submitted') {
           this.rearmedLegs.delete(lotKey);
         }

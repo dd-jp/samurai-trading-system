@@ -845,8 +845,8 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
 function bracketRequest(client_order_id: string) {
   return {
     client_order_id,
-    instrument: 'BTC-USD',
-    asset_class: 'crypto' as const,
+    instrument: 'AAPL',
+    asset_class: 'stocks' as const,
     side: 'buy' as const,
     size: 1,
     entry: 100,
@@ -925,16 +925,6 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Stub
         client_order_id: 'k',
         status: 'accepted',
         legs: [],
-      })),
-      submitLimitOrder: vi.fn(async () => ({
-        id: 'alpaca-order-1',
-        client_order_id: 'k',
-        status: 'accepted',
-      })),
-      submitStopLimitOrder: vi.fn(async () => ({
-        id: 'alpaca-order-2',
-        client_order_id: 'k:stop',
-        status: 'accepted',
       })),
       cancelOrder: vi.fn(async () => undefined),
       getOrder: vi.fn(async () => ({
