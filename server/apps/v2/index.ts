@@ -185,9 +185,17 @@ function nousTransportFactory(
       apiKey: options.nousApiKey ?? '',
       baseUrl: options.nousBaseUrl ?? '',
       gate: accountGate,
-      secrets: options.knownSecrets ?? knownSecretsFrom(process.env),
+      secrets: secretsFor(options),
       logger,
     });
+}
+
+function secretsFor(options: V2RootOptions): SecretSource {
+  return options.knownSecrets ?? knownSecretsFrom(process.env);
+}
+
+function guardedSpendSink(db: StoreHandle, options: V2RootOptions, logger: Logger): LlmSpendSink {
+  return secretGuardedSink(new SqliteLlmSpendStore(db, logger, true), secretsFor(options), logger);
 }
 
 export function knownSecretsFrom(env: NodeJS.ProcessEnv): SecretSource {
@@ -461,11 +469,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const db = options.store ?? openSharedStore(storePathFor(options));
   const { news, ukNews } = newsWiringFor(options, db, logger);
   const scripted: ScriptedTransport[] = [];
-  const spendSink: LlmSpendSink = secretGuardedSink(
-    new SqliteLlmSpendStore(db, logger, true),
-    options.knownSecrets ?? knownSecretsFrom(process.env),
-    logger,
-  );
+  const spendSink = guardedSpendSink(db, options, logger);
   const spendCap: SpendCap = new SqliteMonthlySpendCap(db, clock, undefined, logger);
   const panel = buildLlmPanel({
     transportFor: transportsFor(options, scripted, logger),
