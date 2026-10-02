@@ -122,8 +122,14 @@ export function signalsHeartbeat(
       dryRun: args.dryRun,
       envName: SIGNALS_PING_ENV,
       subject: 'signals process',
-      traceId: 'v2-signals',
-      unsetEvent: 'v2_signals_heartbeat_unset',
+      onUnset: (message) =>
+        logger.log({
+          trace_id: 'v2-signals',
+          stage: 'v2',
+          level: 'warn',
+          event: 'v2_signals_heartbeat_unset',
+          message,
+        }),
     },
     env,
     fetchImpl,

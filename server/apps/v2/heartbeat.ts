@@ -37,8 +37,7 @@ export interface OptionalHeartbeatSpec {
   readonly dryRun: boolean;
   readonly envName: string;
   readonly subject: string;
-  readonly traceId: string;
-  readonly unsetEvent: string;
+  readonly onUnset: (message: string) => void;
 }
 
 export function optionalHeartbeat(
@@ -49,13 +48,7 @@ export function optionalHeartbeat(
 ): Heartbeat {
   if (spec.dryRun) return NO_HEARTBEAT;
   if ((env[spec.envName]?.trim() ?? '') === '') {
-    logger.log({
-      trace_id: spec.traceId,
-      stage: 'v2',
-      level: 'warn',
-      event: spec.unsetEvent,
-      message: `${spec.envName} is not set: no healthchecks ping for the ${spec.subject}`,
-    });
+    spec.onUnset(`${spec.envName} is not set: no healthchecks ping for the ${spec.subject}`);
     return NO_HEARTBEAT;
   }
   return healthchecksHeartbeat(env[spec.envName], fetchImpl, logger);

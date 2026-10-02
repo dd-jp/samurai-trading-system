@@ -249,49 +249,48 @@ describe('a missing store', () => {
 });
 
 describe('optionalHeartbeat', () => {
-  const spec = {
-    dryRun: false,
+  const specWith = (unset: string[], dryRun = false) => ({
+    dryRun,
     envName: 'HC_TEST_URL',
     subject: 'widget',
-    traceId: 'v2-widget',
-    unsetEvent: 'v2_widget_heartbeat_unset',
-  };
+    onUnset: (message: string) => unset.push(message),
+  });
 
   it('pings the env URL when set', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const unset: string[] = [];
     const { logger } = recorder();
-    await optionalHeartbeat(spec, { HC_TEST_URL: SECRET }, fetchImpl, logger)('success');
+    await optionalHeartbeat(specWith(unset), { HC_TEST_URL: SECRET }, fetchImpl, logger)('success');
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([SECRET]);
+    expect(unset).toEqual([]);
   });
 
-  it.each([undefined, '', '  '])('warns once and never pings when the URL is %j', async (raw) => {
-    const fetchImpl = vi.fn();
-    const { entries, logger } = recorder();
-    const beat = optionalHeartbeat(spec, { HC_TEST_URL: raw }, fetchImpl, logger);
-    await beat('success');
-    await beat('fail');
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(entries).toEqual([
-      {
-        trace_id: 'v2-widget',
-        stage: 'v2',
-        level: 'warn',
-        event: 'v2_widget_heartbeat_unset',
-        message: 'HC_TEST_URL is not set: no healthchecks ping for the widget',
-      },
-    ]);
-  });
+  it.each([undefined, '', '  '])(
+    'reports unset once and never pings when the URL is %j',
+    async (raw) => {
+      const fetchImpl = vi.fn();
+      const unset: string[] = [];
+      const { logger } = recorder();
+      const beat = optionalHeartbeat(specWith(unset), { HC_TEST_URL: raw }, fetchImpl, logger);
+      await beat('success');
+      await beat('fail');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(unset).toEqual(['HC_TEST_URL is not set: no healthchecks ping for the widget']);
+    },
+  );
 
-  it('never pings or warns in a dry run', async () => {
+  it('never pings or reports unset in a dry run', async () => {
     const fetchImpl = vi.fn();
-    const { entries, logger } = recorder();
+    const unset: string[] = [];
+    const { logger } = recorder();
     await optionalHeartbeat(
-      { ...spec, dryRun: true },
+      specWith(unset, true),
       { HC_TEST_URL: SECRET },
       fetchImpl,
       logger,
     )('success');
+    await optionalHeartbeat(specWith(unset, true), {}, fetchImpl, logger)('success');
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(entries).toEqual([]);
+    expect(unset).toEqual([]);
   });
 });

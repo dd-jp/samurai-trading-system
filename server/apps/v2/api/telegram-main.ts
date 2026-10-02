@@ -106,8 +106,14 @@ function pollerHeartbeat(
       dryRun: args.dryRun,
       envName: TELEGRAM_PING_ENV,
       subject: 'poller',
-      traceId: 'v2-telegram',
-      unsetEvent: 'v2_telegram_heartbeat_unset',
+      onUnset: (message) =>
+        logger.log({
+          trace_id: 'v2-telegram',
+          stage: 'v2',
+          level: 'warn',
+          event: 'v2_telegram_heartbeat_unset',
+          message,
+        }),
     },
     env,
     fetchImpl,
