@@ -233,8 +233,9 @@ function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: st
 
 const MAX_RESTOP_ATTEMPTS = 4;
 
-const restopId = (base: string, attempt: number): string =>
-  attempt === 0 ? base : `${base}-${attempt + 1}`;
+function restopId(base: string, attempt: number): string {
+  return attempt === 0 ? base : `${base}-${attempt + 1}`;
+}
 
 // A same-date re-run that still finds the stop stale or missing tries again under the next id: a
 // cancel that timed out may complete late, and a refused flatten leaves the holding with no stop;
@@ -248,14 +249,17 @@ function nextRestopId(journal: Pick<DecisionJournal, 'orderFor'>, base: string):
   return null;
 }
 
-const PLACED = "any stale stop cancelled, stop placed for the ledger qty or the broker's if less";
-const NOTHING_PLACED =
-  'any stale stop cancelled, nothing placed: the broker holds none of it on that side; reconcile names the difference';
+function stopReplacedMessage(detail: string): string {
+  return detail === 'closed'
+    ? 'any stale stop cancelled, nothing placed: the broker holds none of it on that side; reconcile names the difference'
+    : "any stale stop cancelled, stop placed for the ledger qty or the broker's if less";
+}
 
-const STOP_REPLACE_REFUSAL: Readonly<Record<'cancel' | 'unsent', readonly [string, string]>> = {
-  cancel: ['v2_stop_cancel_failed', 'the stale stop did not cancel, nothing placed'],
-  unsent: ['v2_stop_replace_refused', 'the stop replace was refused before any cancel was sent'],
-};
+function stopReplaceRefusal(step: 'cancel' | undefined): readonly [string, string] {
+  return step === 'cancel'
+    ? ['v2_stop_cancel_failed', 'the stale stop did not cancel, nothing placed']
+    : ['v2_stop_replace_refused', 'the stop replace was refused before any cancel was sent'];
+}
 
 // A stray has no entry stop to re-place at, and a pending exit has already cancelled the legs
 export function stopReplaceable(held: Position | undefined, venue: Venue): held is Position {
@@ -1278,11 +1282,7 @@ class Cycle {
   async afterStopReplace(book: BookSpec, held: Position, submission: Submission): Promise<void> {
     const subject = `${book.id} ${held.instrument}`;
     if (submission.outcome !== 'rejected') {
-      this.log(
-        'warn',
-        'v2_stop_replaced',
-        `${subject}: ${submission.detail === 'closed' ? NOTHING_PLACED : PLACED}`,
-      );
+      this.log('warn', 'v2_stop_replaced', `${subject}: ${stopReplacedMessage(submission.detail)}`);
       return;
     }
     if (submission.failedStep === 'place') {
@@ -1293,7 +1293,7 @@ class Cycle {
       await this.submitExit(book, held, 'stop_replace_failed');
       return;
     }
-    const [event, what] = STOP_REPLACE_REFUSAL[submission.failedStep ?? 'unsent'];
+    const [event, what] = stopReplaceRefusal(submission.failedStep);
     this.stopReplaceAlert(event, `${subject}: ${what}: ${submission.detail}`);
   }
 

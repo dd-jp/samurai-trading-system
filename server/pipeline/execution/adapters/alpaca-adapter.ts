@@ -49,10 +49,6 @@ const MAX_REARM_ATTEMPTS = 4;
 
 const MAX_CANCEL_CONFIRM_ATTEMPTS = 5;
 const DEFAULT_CANCEL_CONFIRM_WAIT_MS = 250;
-// Alpaca reports an unfilled bracket's legs as `held` (docs/reviews/alpaca-stop-parent-probe-2026-09-30.md);
-// whether a filled bracket's stop leg can stay `held` beside its target is unmeasured, so a held
-// leg is cancelled too rather than left beside the replacement
-const RESTING_LEG_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held'];
 const TERMINAL_LEG_STATES = new Set(['cancelled', 'filled', 'rejected', 'expired']);
 
 function defaultWait(ms: number): Promise<void> {
@@ -282,7 +278,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     await this.cancelBracketLegsForExit(entryClientOrderId, instrument);
 
-    const qty = await this.heldQtyUpTo(instrument, size, side, 'submitProtectedExit');
+    const heldSide = side === 'sell' ? 'long' : 'short';
+    const qty = await this.heldQtyUpTo(instrument, size, heldSide, 'submitProtectedExit');
     if (qty <= 0)
       return { client_order_id: clientOrderId, broker_order_ids: [], order_state: 'closed' };
 
@@ -316,12 +313,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private async heldQtyUpTo(
     instrument: string,
     size: number,
-    closingSide: 'buy' | 'sell',
+    heldSide: 'long' | 'short',
     operation: string,
   ): Promise<number> {
     const positions = await this.call(operation, () => this.input.client.getPositions());
     const live = positions.find((position) => position.symbol === instrument);
-    if (live?.side !== (closingSide === 'sell' ? 'long' : 'short')) return 0;
+    if (live?.side !== heldSide) return 0;
     return Math.min(size, Math.abs(Number(live.qty)));
   }
 
@@ -373,7 +370,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const entry = await this.call('submitProtectedExit', () =>
       this.input.client.getOrderByClientOrderId(entryClientOrderId),
     );
-    const legs = (entry?.legs ?? []).filter((leg) => RESTING_LEG_STATUSES.includes(leg.status));
+    // Alpaca reports an unfilled bracket's legs as `held` (docs/reviews/alpaca-stop-parent-probe-2026-09-30.md);
+    // whether a filled bracket's stop leg can stay `held` beside its target is unmeasured, so a held
+    // leg is cancelled too rather than left beside the replacement
+    const resting = ['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held'];
+    const legs = (entry?.legs ?? []).filter((leg) => resting.includes(leg.status));
     const target = legs.find((leg) => leg.type === 'limit');
     const stop = legs.find((leg) => leg.type === 'stop');
     if (target !== undefined) await this.cancelLegAndConfirm(target.id, instrument);
@@ -514,11 +515,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       );
     }
     try {
-      const closingSide = request.side === 'buy' ? 'sell' : 'buy';
+      const heldSide = request.side === 'buy' ? 'long' : 'short';
       const qty = await this.heldQtyUpTo(
         instrument,
         request.qty,
-        closingSide,
+        heldSide,
         'replaceProtectiveLegs',
       );
       if (qty <= 0) return 0;

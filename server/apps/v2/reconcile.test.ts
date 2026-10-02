@@ -525,6 +525,16 @@ describe('reconcileOrBlockEntries', () => {
     expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
   });
 
+  it('re-arms nothing on a position qty difference, even where a stop is journalled', async () => {
+    const { deps, reconciles } = harness(
+      { ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 5 }] },
+      { entryStops: { 'entry-AAPL': 60 } },
+    );
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(reconciles[0]?.diffs).toMatchObject([{ kind: 'position_qty', instrument: 'AAPL' }]);
+    expect(outcome.staleStops).toEqual([]);
+  });
+
   it('leaves an unprotected position with no journalled stop to the alert and the block alone', async () => {
     const outcome = await reconcileBooks(harness(unguarded()).deps, DATE);
     expect(outcome.staleStops).toEqual([]);
