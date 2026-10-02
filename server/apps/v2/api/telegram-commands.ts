@@ -209,7 +209,7 @@ export class CommandHandler {
     this.#pending = { code, requestedAtMs: received.sentAt.getTime() };
     return {
       outcome: 'confirmation_requested',
-      reply: `Flatten cancels resting entries, closes every open position within about a minute (at the next cycle if the signals process is down) and blocks new entries until resume. Nothing happens yet. To confirm within 5 minutes send: flatten ${code}`,
+      reply: `Flatten cancels resting entries, sends an exit for every open position within about a minute (at the next cycle if the signals process is down) and blocks new entries until resume. Nothing happens yet. To confirm within 5 minutes send: flatten ${code}`,
     };
   }
 
@@ -231,7 +231,7 @@ export class CommandHandler {
       'halt',
       'Telegram flatten confirmed',
       received,
-      'Flatten recorded: resting entries are cancelled and every open position closes within about a minute (at the next cycle if the signals process is down); a message follows when it is done. Entries stay blocked until resume.',
+      'Flatten recorded: resting entries are cancelled and an exit goes out for every open position within about a minute (at the next cycle if the signals process is down); a message follows when it is done. Entries stay blocked until resume.',
     );
     if (written.outcome !== 'refused_too_soon') this.#pending = undefined;
     return written;

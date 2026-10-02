@@ -28,7 +28,7 @@ const ACTION_LABELS: Readonly<Record<ControlAction, string>> = {
 
 const ACTION_EFFECTS: Readonly<Record<ControlAction, string>> = {
   pause: 'It takes effect at the next cycle.',
-  halt: 'Positions close within about a minute, or at the next cycle if the signals process is down.',
+  halt: 'Exits go out within about a minute, or at the next cycle if the signals process is down.',
   resume: 'It takes effect at the next cycle.',
 };
 

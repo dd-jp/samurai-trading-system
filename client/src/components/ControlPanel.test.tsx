@@ -88,7 +88,7 @@ describe('ControlPanel (P2)', () => {
     expect((screen.getByLabelText('Reason') as HTMLInputElement).value).toBe('');
   });
 
-  it('says a recorded halt closes positions within about a minute while the signals process runs', async () => {
+  it('says a recorded halt sends exits within about a minute while the signals process runs', async () => {
     const { fetchImpl, onRecorded } = setup();
     fetchImpl.mockResolvedValueOnce(
       jsonResponse(
@@ -104,7 +104,7 @@ describe('ControlPanel (P2)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Halt: flat at next fill' }));
     await waitFor(() => expect(onRecorded).toHaveBeenCalledOnce());
     expect(screen.getByRole('status').textContent).toBe(
-      'Recorded: halt #8. Positions close within about a minute, or at the next cycle if the signals process is down.',
+      'Recorded: halt #8. Exits go out within about a minute, or at the next cycle if the signals process is down.',
     );
   });
 

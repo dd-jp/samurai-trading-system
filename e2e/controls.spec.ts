@@ -64,7 +64,7 @@ test.describe('pause, halt and resume from the UI', () => {
       panel,
       'Halt: flat at next fill',
       'e2e halt',
-      /^Recorded: halt #2\. Positions close within about a minute, or at the next cycle if the signals process is down\.$/,
+      /^Recorded: halt #2\. Exits go out within about a minute, or at the next cycle if the signals process is down\.$/,
     );
     await expect(state).toContainText('State: HALTED (manual)');
     await expect(state).toContainText('e2e halt');

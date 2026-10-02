@@ -420,7 +420,7 @@ describe('flatten', () => {
     advance(30_000);
     const reply = await handler.handle(message(`flatten ${CODE}`));
     expect(reply).toMatch(
-      /Flatten recorded.*every open position closes within about a minute \(at the next cycle if the signals process is down\)/,
+      /Flatten recorded.*an exit goes out for every open position within about a minute \(at the next cycle if the signals process is down\)/,
     );
     expect(controlRows()).toEqual([
       { action: 'halt', reason: 'Telegram flatten confirmed', source: 'telegram' },

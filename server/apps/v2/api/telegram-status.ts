@@ -14,7 +14,7 @@ const STATE_LABELS: Readonly<Record<ControlWire['state'], string>> = {
   running: 'RUNNING',
   paused: 'PAUSED (entries blocked)',
   'halted-manual':
-    'HALTED (manual, closing every position within about a minute, or at the next cycle if the signals process is down)',
+    'HALTED (manual, exits go out within about a minute, or at the next cycle if the signals process is down)',
   'halted-loss-budget': 'HALTED (loss budget)',
 };
 
