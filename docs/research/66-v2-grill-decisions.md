@@ -376,6 +376,24 @@ David ruled in chat, one question at a time, on the four replay limits in debate
 5. **Split rescales are journalled ([#1983](https://github.com/dd-jp/samurai-trading-system/issues/1983)).** Each rescale of a held position is recorded with its ratio and before/after values, and the replay's book rebuild applies them.
 6. **Fractional splits floor and reconcile ([#1984](https://github.com/dd-jp/samurai-trading-system/issues/1984), [#1887](https://github.com/dd-jp/samurai-trading-system/issues/1887#issuecomment-5942522869) item 6).** A held position rescales to `floor(qty × ratio)`, the remainder is a cash-in-lieu disposal in the tax log, and the existing reconcile flag (no new flag) is raised on any mismatch with the broker's qty.
 
+## Rulings of 2026-10-02 — teardown, candidate 2, cash in lieu (#1748, #1785, #1984)
+
+David ruled in chat, one question at a time; each ruling is recorded on its ticket.
+
+1. **Doc 77 deletion list approved as a whole ([#1748](https://github.com/dd-jp/samurai-trading-system/issues/1748#issuecomment-5948690683), Q1).** Each wave is its own reviewed PR and re-runs the reachability script on its base. Anything that has become reachable since drops out of the wave.
+2. **Saxo client: move the transport only ([#1748](https://github.com/dd-jp/samurai-trading-system/issues/1748#issuecomment-5948660279), Q2, option C).** The v1 HTTP transport, client types and errors move into v2, and v1's bracket adapter is deleted. #1930 merges first, #1868 is re-scoped to v2 config, and #1426 is closed or re-scoped. #1916 part 2 builds on the moved transport.
+3. **v1 CGT matcher deleted in wave 3 (Q3).** #1998 ported it to v2 (#1947); tag `v1-final` keeps the reference.
+4. **G18's keep covers the X/social code only (Q4).** v1's sentiment analyst, news ingest agent, item scorer and the Polymarket code are deleted as listed.
+5. **MOVE homes confirmed; `BrokerAdapter` moves to `contracts/` (Q5).**
+6. **Alpaca crypto emulation is cut in its own PR, before the MOVE PR (Q6).**
+7. **The MOVE wave goes first, then deletion waves 1–5 (Q7).**
+8. **Momentum backtest scripts are deleted in wave 1 (Q8).** Doc 70's numbers are then reproducible only from tag `v1-final`.
+9. **`saxo:login` is a v2 root (Q9).**
+10. **The live-money gate list is refreshed now (Q10).** Closed #900 comes off it.
+11. **Candidate 2 keeps `MEAN_REVERSION_FROM` = 2016-10-11 ([#1785](https://github.com/dd-jp/samurai-trading-system/issues/1785#issuecomment-5948646719)).** The pre-declared value stands and the trial hash is unchanged.
+12. **Candidate 2 runs its backtest trial first ([#1785](https://github.com/dd-jp/samurai-trading-system/issues/1785#issuecomment-5948654684)).** Paper capital is decided only if the trial passes DSR/PBO, since the 70% funds the signals sleeve.
+13. **A position paid out wholly as cash in lieu is not a closed trade ([#1984](https://github.com/dd-jp/samurai-trading-system/issues/1984#issuecomment-5948625120)).** It does not count toward the 100-trade debate gate.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
