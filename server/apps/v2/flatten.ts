@@ -122,14 +122,16 @@ export async function flattenControl(
   const report = await runFlattenPass(deps.cycle, target.tradingDate);
   const result = resultOf(deps.cycle, report);
   deps.ledger.finish(target, result);
-  const failed = result.outcome === 'failed';
-  deps.cycle.logger?.log({
+  const base = {
     trace_id: `v2-flatten-${target.controlId}`,
     stage: 'v2',
-    level: failed ? 'error' : 'info',
-    event: failed ? 'v2_flatten_leg_failed' : 'v2_flatten_closed',
     message: `flatten of control ${target.controlId} (${target.tradingDate}): ${result.detail}`,
-  });
+  };
+  if (result.outcome === 'failed') {
+    deps.cycle.logger?.log({ ...base, level: 'error', event: 'v2_flatten_leg_failed' });
+  } else {
+    deps.cycle.logger?.log({ ...base, level: 'info', event: 'v2_flatten_closed' });
+  }
   return result;
 }
 
