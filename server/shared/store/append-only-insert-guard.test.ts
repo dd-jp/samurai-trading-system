@@ -228,6 +228,27 @@ const CASES: readonly Case[] = [
       },
     ],
   },
+  {
+    table: 'v2_flattens',
+    seed: `INSERT INTO v2_controls (control_id, action, reason, source, idempotency_key, set_at)
+        VALUES (1, 'halt', 'r', 'test', 'key-flatten', '2026-10-01T07:00:00.000Z');
+      INSERT INTO v2_flattens (flatten_id, control_id, event, trading_date, outcome, detail, recorded_at)
+        VALUES (1, 1, 'finished', '2026-10-01', 'failed', 'original', '2026-10-01T07:01:00.000Z')`,
+    attacks: [
+      {
+        name: 'same flatten_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_flattens (flatten_id, control_id, event, trading_date, outcome, detail, recorded_at)
+          VALUES (1, 1, 'started', '2026-10-01', NULL, 'rewritten', '2026-10-01T08:00:00.000Z')`,
+      },
+      {
+        name: 'same control and event under a new id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_flattens (control_id, event, trading_date, outcome, detail, recorded_at)
+          VALUES (1, 'finished', '2026-10-01', 'closed', 'rewritten', '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
 ];
 
 function snapshot(db: BetterSqlite3.Database, table: string): unknown[] {

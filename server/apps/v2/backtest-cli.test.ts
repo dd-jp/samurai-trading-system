@@ -349,3 +349,81 @@ describe('runVolTargetIndexAgainst', () => {
     }
   });
 });
+
+class TrialsRecorded extends Error {}
+
+const NEW_TRIAL =
+  "a changed trial hash is a new trial: the next run counts it against the candidate's 8 (doc 66 S3). Restore the hashed config, or re-pin only when a new trial is intended (#2020)";
+
+async function recordedHashes(
+  run: (
+    market: BarsMarketData,
+    bars: { load: (symbol: string) => BarSeries },
+    ledger: TrialLedger,
+  ) => Promise<unknown>,
+): Promise<string[]> {
+  const flat: DailyBar[] = weekdays('2000-01-03', 7_000).map((date) => ({
+    date,
+    open: 1,
+    high: 1,
+    low: 1,
+    close: 1,
+    volume: 1,
+    rawClose: 1,
+  }));
+  const bars = { load: (symbol: string): BarSeries => ({ symbol, bars: flat }) };
+  const market = new BarsMarketData(bars, parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'));
+  const db = openSharedStore(':memory:');
+  try {
+    const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-02T00:00:00.000Z')), {
+      entries: [],
+    });
+    const record = ledger.record.bind(ledger);
+    ledger.record = (candidate, config) => {
+      const trial = record(candidate, config);
+      if (trial === 2) throw new TrialsRecorded();
+      return trial;
+    };
+    await run(market, bars, ledger).catch((error: unknown) => {
+      if (!(error instanceof TrialsRecorded)) throw error;
+    });
+    return ledger.list().map((row) => row.config_hash);
+  } finally {
+    db.close();
+  }
+}
+
+// #2020: the trial identities doc 66 records. A drift re-counts an already-counted trial on the
+// next run. Candidate 1's pre-#1815 0 bps pair, 18f04f50a183625e / 26a1eb88925a84e3, is a
+// different experiment (entries filled at the decision close), not a hash to restore
+describe('candidate trial hashes', () => {
+  const quiet = { log: () => undefined };
+
+  it('candidate 1 (cross-asset trend, SMA 100 / 200) keeps its 50 bps identity', async () => {
+    const hashes = await recordedHashes((market, bars, ledger) =>
+      runCrossAssetTrendAgainst(market, bars, () => 5, ledger, quiet),
+    );
+    expect(hashes, NEW_TRIAL).toEqual(['039ee8786818d43b', '043b721456d8d5e0']);
+  });
+
+  it('candidate 2 (mean reversion, RSI 10 / 15) keeps its recorded identity', async () => {
+    const hashes = await recordedHashes((market, bars, ledger) =>
+      runMeanReversionAgainst(
+        market,
+        bars,
+        () => [],
+        () => 5,
+        ledger,
+        quiet,
+      ),
+    );
+    expect(hashes, NEW_TRIAL).toEqual(['478efb348a94f03d', '7cec20c3ae4bd18c']);
+  });
+
+  it('candidate 3 (vol-target index, ceiling 20% / 25%) keeps its recorded identity', async () => {
+    const hashes = await recordedHashes((market, bars, ledger) =>
+      runVolTargetIndexAgainst(market, bars, () => 5, ledger, quiet),
+    );
+    expect(hashes, NEW_TRIAL).toEqual(['af1c47710daf23f4', 'c3839566e157ce07']);
+  });
+});
