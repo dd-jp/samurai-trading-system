@@ -164,7 +164,7 @@ async function redistributeFlattenFills(
   const positionKeys = new Set(positions.map((position) => position.idempotency_key));
   const flattenNamedLots = new Map<string, Set<string>>();
 
-  // oxlint-disable-next-line unicorn/no-useless-spread -- the copy itself is the point, see comment above
+  // oxlint-disable-next-line unicorn/no-useless-spread -- redistributeOneFlatten deletes from and adds to byLot while this loop runs
   for (const clientOrderId of [...byLot.keys()]) {
     if (positionKeys.has(clientOrderId)) continue;
 
