@@ -494,8 +494,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
   // Cancel is confirmed before the new legs go out, so the venue never holds two closing stops
   // whose sum oversells; the window with no stop is accepted (David 2026-10-02, #1990). With
-  // nothing resting the cancel is a no-op and this re-arms; the wire-id walk adopts a live OCO
-  // a crashed earlier run already placed
+  // nothing resting the cancel is a no-op and this re-arms
   async replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<void> {
     const { entryClientOrderId, instrument } = request;
     try {
@@ -914,7 +913,7 @@ function rearmOrderMatches(prior: AlpacaOrder, qty: number, stop: number, target
   return true;
 }
 
-const REARM_RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held'];
+const REARM_RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
 const REARM_TERMINAL_STATES: readonly string[] = ['cancelled', 'rejected', 'expired'];
 
 interface RearmWalk {

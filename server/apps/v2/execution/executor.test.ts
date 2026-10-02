@@ -329,7 +329,7 @@ describe('V2OrderExecutor', () => {
     expect(await paper.submit(approve('s3'))).not.toHaveProperty('failedStep');
   });
 
-  it('a venue that cannot replace a stop fails the replace at the cancel step, touching nothing', async () => {
+  it('a venue that cannot replace a stop refuses the replace before any step, touching nothing', async () => {
     const { executor: paper, alpaca } = executor(false);
     const order = gate.approveStopReplace({
       book: primary,
@@ -338,11 +338,12 @@ describe('V2OrderExecutor', () => {
       stop: 21,
       target: 18,
     });
-    expect(await paper.submit(order)).toMatchObject({
+    const submission = await paper.submit(order);
+    expect(submission).toMatchObject({
       outcome: 'rejected',
       detail: expect.stringContaining('alpaca cannot replace a resting stop'),
-      failedStep: 'cancel',
     });
+    expect(submission.failedStep).toBeUndefined();
     expect(alpaca.rearmProtectiveLegs).not.toHaveBeenCalled();
     expect(alpaca.submitBracket).not.toHaveBeenCalled();
   });

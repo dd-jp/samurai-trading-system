@@ -58,9 +58,7 @@ async function sendStopReplace(
   child: ChildOrder,
 ): Promise<BrokerAck> {
   if (broker.replaceProtectiveLegs === undefined) {
-    throw new ProtectiveReplaceError('cancel', `${order.venue} cannot replace a resting stop`, {
-      cause: undefined,
-    });
+    throw new Error(`${order.venue} cannot replace a resting stop`);
   }
   await broker.replaceProtectiveLegs({
     entryClientOrderId: order.entryClientOrderId,
