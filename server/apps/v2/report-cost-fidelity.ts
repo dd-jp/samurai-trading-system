@@ -19,6 +19,7 @@ import {
   type QuoteFill,
 } from './cost-fidelity.js';
 import { BarsMarketData, ParquetBarsSource, parseBoeGbpUsdCsv } from './data/index.js';
+import { CLOSE_LEGS_SQL, entryOffsetOfPayload, entryPayloadOfClose } from './entry-offset.js';
 import {
   impactLookup,
   quoteSimulatedFill,
@@ -43,7 +44,8 @@ interface OrderRow {
   readonly leg: string;
   readonly side: string;
   readonly payload: string;
-  readonly entry_payload: string | null;
+  readonly entry_journalled: number;
+  readonly entry_offset_bps: number | null;
 }
 
 interface FillRow {
@@ -56,20 +58,29 @@ interface FillRow {
   readonly fee_gbp: number;
 }
 
+const NO_CLOSE_YET = '9223372036854775807';
+
 // Only a primary book's Alpaca order outside a dry run reaches the broker (V2OrderExecutor
-// .simulates); an exit takes the entry offset of the latest filled entry it closes (#1815)
+// .simulates); an exit takes the entry offset of the entry it closes (#1815)
 const BROKER_ORDERS_SQL = `
-  SELECT o.client_order_id, o.trading_date, o.instrument, o.venue, o.leg, o.side, o.payload,
-         CASE WHEN o.leg = 'entry' THEN o.payload ELSE (
-           SELECT e.payload FROM v2_orders e
-            WHERE e.book_id = o.book_id AND e.instrument = o.instrument AND e.leg = 'entry'
-              AND e.trading_date <= o.trading_date
-              AND EXISTS (SELECT 1 FROM v2_fills f WHERE f.client_order_id = e.client_order_id)
-            ORDER BY e.trading_date DESC, e.client_order_id DESC LIMIT 1) END AS entry_payload
-    FROM v2_orders o JOIN v2_books b ON b.book_id = o.book_id
-   WHERE b.variant = 'primary' AND o.venue = 'alpaca' AND o.dry_run = 0
-     AND o.outcome IN ('submitted', 'cancelled') AND o.trading_date BETWEEN ? AND ?
-   ORDER BY o.trading_date, o.client_order_id`;
+  SELECT t.client_order_id, t.trading_date, t.instrument, t.venue, t.leg, t.side, t.payload,
+         t.entry_payload IS NOT NULL AS entry_journalled,
+         ${entryOffsetOfPayload('t.entry_payload')} AS entry_offset_bps
+    FROM (
+      SELECT o.client_order_id, o.trading_date, o.instrument, o.venue, o.leg, o.side, o.payload,
+             CASE WHEN o.leg = 'entry' THEN o.payload ELSE ${entryPayloadOfClose({
+               bookId: 'o.book_id',
+               instrument: 'o.instrument',
+               orderId: 'o.client_order_id',
+               at: `COALESCE((SELECT MIN(f.rowid) FROM v2_fills f
+                               WHERE f.client_order_id = o.client_order_id AND f.${CLOSE_LEGS_SQL}),
+                             ${NO_CLOSE_YET})`,
+             })} END AS entry_payload
+        FROM v2_orders o JOIN v2_books b ON b.book_id = o.book_id
+       WHERE b.variant = 'primary' AND o.venue = 'alpaca' AND o.dry_run = 0
+         AND o.outcome IN ('submitted', 'cancelled') AND o.trading_date BETWEEN ? AND ?
+    ) t
+   ORDER BY t.trading_date, t.client_order_id`;
 
 const FILLS_SQL = `
   SELECT client_order_id, leg, side, trading_date, qty, price_gbp, fee_gbp FROM v2_fills
@@ -83,16 +94,6 @@ function brokerModeOf(arg: string): BrokerMode {
 function numberIn(payload: Record<string, unknown>, key: string): number | undefined {
   const value = payload[key];
   return typeof value === 'number' ? value : undefined;
-}
-
-// An entry journalled before #1815 carries no limit and went out at 0 bps; one with a limit
-// and no offset had its limit set by its sleeve
-export function entryOffsetBps(entryPayload: string | null): number | null | undefined {
-  if (entryPayload === null) return undefined;
-  const payload = JSON.parse(entryPayload) as Record<string, unknown>;
-  const offset = numberIn(payload, 'entry_offset_bps');
-  if (offset !== undefined) return offset;
-  return numberIn(payload, 'limit') === undefined ? 0 : null;
 }
 
 function partOf(row: FillRow): BrokerFillPart {
@@ -121,7 +122,8 @@ function orderOf(row: OrderRow, fills: readonly BrokerFillPart[]): BrokerOrder {
     stop: numberIn(payload, 'stop'),
     target: numberIn(payload, 'target'),
     cancelledOn: typeof cancelled === 'string' ? cancelled : undefined,
-    offsetBps: entryOffsetBps(row.entry_payload),
+    modelledSlippageBps: numberIn(payload, 'modelled_slippage_bps'),
+    offsetBps: row.entry_journalled === 1 ? row.entry_offset_bps : undefined,
     fills,
   };
 }

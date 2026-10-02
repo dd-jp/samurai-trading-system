@@ -293,4 +293,31 @@ describe('replay of a paper store against journalled Alpaca fills', () => {
     expect(result.divergences).toEqual([]);
     expect(result.orders + result.fills).toBeGreaterThan(0);
   });
+
+  it('journals the modelled slippage on the broker entry and no other book gets one (#1884)', () => {
+    expect(
+      journalRows(
+        `SELECT book_id, json_extract(payload, '$.modelled_slippage_bps') > 2 AS above_spread
+           FROM v2_orders WHERE leg = 'entry' AND trading_date = '${ENTRY_DAY}'
+          ORDER BY book_id`,
+      ),
+    ).toEqual([
+      { book_id: 'arm2/technical-only', above_spread: null },
+      { book_id: 'debate/no-macro-gate', above_spread: null },
+      { book_id: 'debate/primary', above_spread: 1 },
+    ]);
+  });
+
+  it('shows a half-spread refresh since the day as an orders divergence', async () => {
+    const refreshed = join(directory, 'refreshed-spreads.csv');
+    writeFileSync(refreshed, 'symbol,sessions,median_half_spread_bps\nUP,10,9\n');
+    const result = await replayFromFiles({
+      ...options,
+      tradingDate: ENTRY_DAY,
+      spreadsPath: refreshed,
+    });
+    expect(result.divergences).toMatchObject([
+      { kind: 'row_field', stage: 'orders', field: 'payload' },
+    ]);
+  });
 });

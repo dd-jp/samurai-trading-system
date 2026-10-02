@@ -4788,3 +4788,50 @@ describe('runCycle with per-venue sessions (#1933)', () => {
     expect(sitOuts(deps)).toEqual([]);
   });
 });
+
+describe('runCycle: modelled slippage journalled when the order goes out (#1884)', () => {
+  const exitAapl: SleeveDecision = { ...longAapl, action: 'exit', reason: 'judge exit' };
+  const TABLES: FillPricing = { halfSpreadBps: () => 7, impactBps: () => 3, fee: () => 0 };
+
+  function modelled(deps: CycleDeps, bookId: string, orderId: string): unknown {
+    const row = orders(deps, bookId).find((order) => order.client_order_id === orderId);
+    return (JSON.parse(row?.payload ?? '{}') as Record<string, unknown>).modelled_slippage_bps;
+  }
+
+  it('records half spread plus impact on a broker entry and on its flatten, and nothing on a simulated book', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([exitAapl]);
+    await runCycle(deps, '2026-09-28');
+
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeCloseTo(
+      10,
+      9,
+    );
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-28-AAPL-exit')).toBeCloseTo(
+      10,
+      9,
+    );
+    expect(
+      modelled(deps, 'debate/no-macro-gate', 'v2-debate-no-macro-gate-2026-09-25-AAPL'),
+    ).toBeUndefined();
+  });
+
+  it('records nothing on a dry run, where every order is simulated', async () => {
+    const deps = harness([longAapl], true, undefined, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeUndefined();
+  });
+
+  it('records nothing on an order the broker rejected', async () => {
+    const alpaca = new FakeAlpaca();
+    vi.spyOn(alpaca, 'submitBracket').mockRejectedValueOnce(new Error('no buying power'));
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, TABLES);
+    await runCycle(deps, '2026-09-25');
+    const row = orders(deps, 'debate/primary')[0];
+    expect(row?.outcome).toBe('rejected');
+    expect(modelled(deps, 'debate/primary', 'v2-debate-primary-2026-09-25-AAPL')).toBeUndefined();
+  });
+});
