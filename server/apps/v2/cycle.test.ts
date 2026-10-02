@@ -2490,13 +2490,14 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     readonly replaces: ProtectiveReplaceRequest[] = [];
     readonly calls: string[] = [];
     readError: Error | undefined;
+    reportsFill = true;
     filled = 0;
 
     override getOrder(): Promise<null> {
       if (this.readError !== undefined) return Promise.reject(this.readError);
       if (this.filled === 0) return Promise.resolve(null);
       this.calls.push('read');
-      this.cumulative(ENTRY, 'entry', this.filled, 20);
+      if (this.reportsFill) this.cumulative(ENTRY, 'entry', this.filled, 20);
       return Promise.resolve({
         client_order_id: ENTRY,
         broker_order_ids: ['a1'],
@@ -2508,6 +2509,11 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     override cancel(clientOrderId: string): Promise<void> {
       this.calls.push(`cancel ${clientOrderId}`);
       return super.cancel(clientOrderId);
+    }
+
+    override fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+      this.calls.push('sweep');
+      return super.fetchNewFills(since);
     }
 
     replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
@@ -2533,13 +2539,23 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     await runCycle(deps, '2026-09-25');
     deps.setDecisions([]);
     alpaca.filled = filled;
+    alpaca.calls.splice(0);
     return { alpaca, deps, log };
   }
 
   it('cancels the remainder of an entry the venue reports part filled, books the fill and re-arms it in the same run (#1990)', async () => {
     const { alpaca, deps } = await partFilledAtVenue(4);
     await runCycle(deps, '2026-09-28');
-    expect(alpaca.calls).toEqual(['read', `cancel ${ENTRY}`, 'replace 4']);
+    expect(alpaca.calls.filter((call) => call !== 'sweep')).toEqual([
+      'read',
+      `cancel ${ENTRY}`,
+      'replace 4',
+    ]);
+    expect(alpaca.calls.slice(alpaca.calls.indexOf(`cancel ${ENTRY}`), -1)).toEqual([
+      `cancel ${ENTRY}`,
+      'sweep',
+      'replace 4',
+    ]);
     expect(heldQty(deps)).toBe(4);
     const entry = deps.journal.orderFor(ENTRY)?.payload as { stop: number; target: number };
     expect(alpaca.replaces).toEqual([
@@ -2561,12 +2577,40 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     const { alpaca, deps } = await partFilledAtVenue(4);
     deps.setControl('halt');
     await runFlattenPass(deps, '2026-09-28');
-    expect(alpaca.calls).toEqual(['read', `cancel ${ENTRY}`, 'exit 4']);
+    expect(alpaca.calls.filter((call) => call !== 'sweep')).toEqual([
+      'read',
+      `cancel ${ENTRY}`,
+      'exit 4',
+    ]);
     expect(deps.journal.restingEntries('debate/primary')).toEqual([]);
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload).toMatchObject({
       reason: 'manual_halt',
     });
     expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('sweeps no extra time for an entry cancelled with nothing filled', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(0);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(alpaca.calls.filter((call) => call === 'sweep')).toHaveLength(2);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('re-arms nothing when the venue reports a fill the sweep has not delivered yet', async () => {
+    const { alpaca, deps, log } = await partFilledAtVenue(4);
+    alpaca.reportsFill = false;
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(heldQty(deps)).toBe(0);
+    expect(alpaca.replaces).toEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_part_fill_unbooked',
+        message: `${ENTRY}: cancelled with a fill the venue reports and the sweep has not delivered; the next reconcile re-arms it`,
+      }),
+    );
   });
 
   it('keeps an entry whose filled qty the venue cannot report, blocks a fresh entry on it and alerts critical', async () => {

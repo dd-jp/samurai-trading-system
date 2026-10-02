@@ -954,18 +954,18 @@ class Cycle {
   async cancelEntries(
     book: BookSpec,
     orders: readonly JournalledOrder[],
-    protect: PartFillProtection = 'rearm',
-    booked: readonly JournalledOrder[] = [],
+    protect: PartFillProtection,
+    booked: readonly JournalledOrder[],
   ): Promise<number> {
     let cancelled = 0;
     const partFilled: JournalledOrder[] = [];
     for (const order of [...orders, ...booked]) {
       const route = routeOf(book, order.venue as Venue);
       if (!this.deps.executor.canRoute(route)) continue;
-      const outcome = await this.cancelEntry(book, route, order);
-      if (outcome === 'kept') continue;
+      const filled = await this.cancelEntry(book, route, order);
+      if (filled === undefined) continue;
       cancelled += 1;
-      if (outcome === 'part_filled' || booked.includes(order)) partFilled.push(order);
+      if (filled > 0 || booked.includes(order)) partFilled.push(order);
     }
     if (partFilled.length > 0) await this.protectPartFills(book, partFilled, protect);
     return cancelled;
@@ -977,7 +977,7 @@ class Cycle {
     book: BookSpec,
     route: ExecutionRoute,
     order: JournalledOrder,
-  ): Promise<'kept' | 'cancelled' | 'part_filled'> {
+  ): Promise<number | undefined> {
     const { client_order_id: id, instrument } = order;
     let filled: number | undefined;
     try {
@@ -991,7 +991,7 @@ class Cycle {
     } catch (error) {
       return this.keepEntry(book, order, 'warn', 'v2_cancel_failed', error);
     }
-    return (filled ?? 0) > 0 ? 'part_filled' : 'cancelled';
+    return filled ?? 0;
   }
 
   // Still resting at the broker: block a fresh opposite entry here too, or its fill could later
@@ -1002,34 +1002,33 @@ class Cycle {
     level: 'error' | 'warn',
     event: string,
     error: unknown,
-  ): 'kept' {
+  ): undefined {
     this.#pendingEntries.add(positionKey(book.id, order.instrument));
     this.log(level, event, `${order.client_order_id}: ${describeThrownSafely(error)}`);
-    return 'kept';
+    return undefined;
   }
 
   // The fill is booked now so the same run protects it: a stop at the ledger level, or the halt's
-  // exit. A sweep that throws leaves it to the next run's reconcile, which re-arms it (#1990)
+  // exit. One the sweep has not delivered yet is left to the next run's reconcile, which re-arms it
   async protectPartFills(
     book: BookSpec,
     orders: readonly JournalledOrder[],
     protect: PartFillProtection,
   ): Promise<void> {
-    try {
-      await this.sweepFills();
-    } catch (error) {
-      this.log(
-        'error',
-        'v2_part_fill_unbooked',
-        `${book.id}: cancelled ${orders.map((order) => order.client_order_id).join(', ')} part filled, and the sweep to book the fills threw: ${describeThrownSafely(error)}`,
-      );
-      return;
-    }
+    await this.sweepFills();
     for (const order of orders) {
       const held = this.deps.books.position(book.id, order.instrument);
+      if (held === undefined) {
+        this.log(
+          'error',
+          'v2_part_fill_unbooked',
+          `${order.client_order_id}: cancelled with a fill the venue reports and the sweep has not delivered; the next reconcile re-arms it`,
+        );
+        continue;
+      }
       if (!stopReplaceable(held, order.venue as Venue)) continue;
-      if (protect === 'exit') await this.submitExit(book, held, 'manual_halt');
-      else await this.replaceStop(book, held);
+      if (protect === 'rearm') await this.replaceStop(book, held);
+      else await this.submitExit(book, held, 'manual_halt');
     }
   }
 
