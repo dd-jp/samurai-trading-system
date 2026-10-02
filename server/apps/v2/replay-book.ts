@@ -542,6 +542,17 @@ export interface TradingCounts {
   readonly fills: number;
 }
 
+// A store written before #1983 journals no rescale, so every simulated entry its replay fills would
+// read as an extra one; a day is held to its rescales once the journal holds one on or before it
+function comparedTables(journal: StoreHandle, tradingDate: string): readonly TableSpec[] {
+  const journalsRescales = journal
+    .prepare('SELECT 1 FROM v2_rescales WHERE trading_date <= ? LIMIT 1')
+    .get(tradingDate);
+  return journalsRescales === undefined
+    ? TABLES.filter((spec) => spec.stage !== 'rescales')
+    : TABLES;
+}
+
 export function tradingDivergences(comparison: TradingComparison): {
   divergences: BookDivergence[];
   counts: TradingCounts;
@@ -549,7 +560,7 @@ export function tradingDivergences(comparison: TradingComparison): {
   const { journal, replayed, tradingDate } = comparison;
   const end = comparison.markedAt ?? LATEST;
   const counts = { orders: 0, fills: 0 };
-  const divergences = TABLES.flatMap((spec) => {
+  const divergences = comparedTables(journal, tradingDate).flatMap((spec) => {
     const journalled = rowsOf(journal, spec.sql('>'), tradingDate, end);
     if (spec.stage === 'orders' || spec.stage === 'fills') counts[spec.stage] = journalled.length;
     return tableDivergences(spec, journalled, rowsOf(replayed, spec.sql('>'), tradingDate, LATEST));

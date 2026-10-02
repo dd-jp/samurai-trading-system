@@ -309,6 +309,15 @@ describe('replay of positions held across a 2:1 split (#1983)', () => {
     });
   });
 
+  it('holds a store that journals no rescale, as one written before #1983, to its other rows only', async () => {
+    const storePath = tamperedCopy(
+      'before-1983',
+      `DROP TRIGGER v2_rescales_no_delete; DELETE FROM v2_rescales;`,
+    );
+    const result = await replayFromFiles({ ...options, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
   it('misses the anchor and the rescale when the broker fill is served at its sweep time', async () => {
     const storePath = tamperedCopy(
       'undated-fill',
