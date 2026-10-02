@@ -647,24 +647,25 @@ class Cycle {
       return;
     }
     const bookedUnits = opening ? 1 : units.ratio;
-    this.ingest({
-      client_order_id: order.client_order_id,
-      broker_fill_id: `sim-${order.client_order_id}`,
-      leg: 'entry',
-      price: withinLimit(side, limit, quote.price) / bookedUnits,
-      qty: qty * bookedUnits,
-      fee: quote.fee,
+    this.atomically(() => {
+      this.ingest({
+        client_order_id: order.client_order_id,
+        broker_fill_id: `sim-${order.client_order_id}`,
+        leg: 'entry',
+        price: withinLimit(side, limit, quote.price) / bookedUnits,
+        qty: qty * bookedUnits,
+        fee: quote.fee,
+      });
+      this.splitEntryFill(order, units, opening);
     });
-    this.afterEntryFill(order, outcome, units, opening);
+    this.afterEntryFill(order, outcome, units);
   }
 
   afterEntryFill(
     order: JournalledOrder,
     outcome: FilledLimitEntry,
     units: { readonly ratio: number; readonly date: string },
-    opening: boolean,
   ): void {
-    this.splitEntryFill(order, units, opening);
     const held = this.deps.books.position(order.book_id, order.instrument);
     if (outcome.stoppedAt !== undefined && held !== undefined) {
       this.simulatedExit(
@@ -694,10 +695,10 @@ class Cycle {
       );
       return;
     }
-    const dates = { anchorDate: units.date, disposalDate: units.date };
-    this.atomically(() =>
-      this.floorHeld(order.book_id, order.instrument, order.client_order_id, dates),
-    );
+    this.floorHeld(order.book_id, order.instrument, order.client_order_id, {
+      anchorDate: units.date,
+      disposalDate: units.date,
+    });
   }
 
   quoteOrRefuse(

@@ -3681,14 +3681,13 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(deps.journal.fillPartsOf(CASH_IN_LIEU_PRIMARY)).toHaveLength(1);
   });
 
-  it('rolls the split back when its cash in lieu cannot be journalled', async () => {
-    const deps = harness([], true);
-    hold(deps, 101);
-    const journal = new Proxy(deps.journal, {
+  function cashInLieuFails(deps: CycleDeps, source?: string): CycleDeps['journal'] {
+    return new Proxy(deps.journal, {
       get(target, property) {
         if (property === 'recordFill') {
-          return (fill: { leg: string }) => {
-            if (fill.leg === 'cash_in_lieu') throw new Error('disk full');
+          return (fill: { leg: string; client_order_id: string }) => {
+            const ours = source === undefined || fill.client_order_id === source;
+            if (fill.leg === 'cash_in_lieu' && ours) throw new Error('disk full');
             return target.recordFill(fill as Parameters<typeof target.recordFill>[0]);
           };
         }
@@ -3696,6 +3695,12 @@ describe('runCycle: positions held across a split (#1865)', () => {
         return typeof value === 'function' ? value.bind(target) : value;
       },
     });
+  }
+
+  it('rolls the split back when its cash in lieu cannot be journalled', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    const journal = cashInLieuFails(deps);
     await expect(
       runCycle({ ...withMarket(deps, threeForTwo), journal }, '2026-09-29'),
     ).rejects.toThrow('disk full');
@@ -3919,6 +3924,32 @@ describe('runCycle: positions held across a split (#1865)', () => {
     expect(journalledFills(deps, cashInLieuId('2026-09-29', BROKER_ENTRY))).toMatchObject([
       { leg: 'cash_in_lieu', side: 'sell', qty: expect.closeTo(7 + size * 1.2 - held, 9) },
     ]);
+  });
+
+  it('rolls a simulated opening fill back with its split when the cash in lieu cannot be journalled', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    const journal = cashInLieuFails(deps, BROKER_ENTRY);
+    await expect(
+      runCycle({ ...withMarket(deps, sixForFive), journal }, '2026-09-30'),
+    ).rejects.toThrow('disk full');
+    expect(primary(deps)).toBeUndefined();
+    expect(deps.journal.fillPartsOf(`alpaca:sim-${BROKER_ENTRY}`)).toEqual([]);
+  });
+
+  it('rolls a simulated add-on fill back with its floor when the cash in lieu cannot be journalled', async () => {
+    const deps = harness([longAapl], true);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    hold(deps, 6, '2026-09-24');
+    deps.books.applySplit('debate/primary', 'AAPL', 1, '2026-09-24');
+    const journal = cashInLieuFails(deps, BROKER_ENTRY);
+    await expect(
+      runCycle({ ...withMarket(deps, sixForFive), journal }, '2026-09-30'),
+    ).rejects.toThrow('disk full');
+    expect(primary(deps)?.qty).toBe(7);
+    expect(deps.journal.fillPartsOf(`alpaca:sim-${BROKER_ENTRY}`)).toEqual([]);
   });
 
   it('a simulated entry filling into an already-held position leaves its split anchor untouched', async () => {
