@@ -36,14 +36,14 @@ describe('SqliteNewsLedger', () => {
 
   it('caches only ok and no_news, newest first, per date and symbol', () => {
     const { ledger } = ledgerOver();
-    expect(ledger.cached('2026-09-29', 'AZN')).toBeUndefined();
+    expect(ledger.cached('marketaux', '2026-09-29', 'AZN')).toBeUndefined();
     ledger.record(row({ status: 'error', reason: 'http_500', headlines: [] }));
     ledger.record(row({ status: 'budget_stop', reason: 'budget_stop', headlines: [] }));
     ledger.record(row({ status: 'no_key', reason: 'no_api_key', headlines: [] }));
-    expect(ledger.cached('2026-09-29', 'AZN')).toBeUndefined();
+    expect(ledger.cached('marketaux', '2026-09-29', 'AZN')).toBeUndefined();
     ledger.record(row({ status: 'no_news', reason: 'empty', found: 0, headlines: [] }));
     ledger.record(row({ reason: 'found=2' }));
-    expect(ledger.cached('2026-09-29', 'AZN')?.reason).toBe('found=2');
+    expect(ledger.cached('marketaux', '2026-09-29', 'AZN')?.reason).toBe('found=2');
     ledger.record(
       row({
         symbol: 'SHEL',
@@ -53,9 +53,28 @@ describe('SqliteNewsLedger', () => {
         headlines: [],
       }),
     );
-    expect(ledger.cached('2026-09-29', 'SHEL')).toBeUndefined();
-    expect(ledger.cached('2026-09-28', 'AZN')).toBeUndefined();
-    expect(ledger.cached('2026-09-29', 'BP')).toBeUndefined();
+    expect(ledger.cached('marketaux', '2026-09-29', 'SHEL')).toBeUndefined();
+    expect(ledger.cached('marketaux', '2026-09-28', 'AZN')).toBeUndefined();
+    expect(ledger.cached('marketaux', '2026-09-29', 'BP')).toBeUndefined();
+  });
+
+  it('keys the cache, the first lookup and an optional date filter by provider', () => {
+    const { ledger } = ledgerOver();
+    const us = row({
+      provider: 'alpaca',
+      reason: '',
+      headlines: [{ title: 'u', publishedAt: '2026-09-28T09:00:00.000Z', sourceId: '42' }],
+    });
+    ledger.record(us);
+    expect(ledger.cached('marketaux', '2026-09-29', 'AZN')).toBeUndefined();
+    expect(ledger.cached('alpaca', '2026-09-29', 'AZN')).toEqual(us);
+    ledger.record(row());
+    ledger.record(row({ provider: 'alpaca', status: 'error', reason: 'rerun', headlines: [] }));
+    expect(ledger.first('alpaca', '2026-09-29', 'AZN')).toEqual(us);
+    expect(ledger.first('marketaux', '2026-09-29', 'AZN')).toEqual(row());
+    expect(ledger.first('alpaca', '2026-09-28', 'AZN')).toBeUndefined();
+    expect(ledger.forDate('2026-09-29', 'marketaux')).toEqual([row()]);
+    expect(ledger.forDate('2026-09-29')).toHaveLength(3);
   });
 
   it('counts only requests made by that provider since the given instant', () => {

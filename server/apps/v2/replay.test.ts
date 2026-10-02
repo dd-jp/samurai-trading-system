@@ -9,13 +9,18 @@ import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
 } from '../../pipeline/debate-engine/index.js';
-import { LlmProviderError, LlmRateLimitError } from '../../pipeline/debate-engine/index.js';
+import {
+  LlmProviderError,
+  LlmRateLimitError,
+  MAX_CAPTURED_PROMPT_CHARS,
+} from '../../pipeline/debate-engine/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';
-import type { VenueSessionGate } from './data/index.js';
+import { guardedStore, openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';
+import type { NewsSource, VenueSessionGate } from './data/index.js';
+import { AlpacaNewsSource, MarketauxNewsSource, SqliteNewsLedger } from './data/index.js';
 import { composeV2Root } from './index.js';
 import {
   compareDecision,
@@ -76,9 +81,17 @@ let directory: string;
 let options: ReplayCliOptions;
 let files: Omit<ReplayCliOptions, 'storePath' | 'venueSessions'>;
 
+const FIXTURE_NEWS: NewsSource = {
+  headlines: (symbol) =>
+    Promise.resolve(symbol === 'UP' ? ['UP beats estimates', 'UP raises guidance'] : []),
+};
+
+const scripted = (pin: ModelPin) => new ScriptedTransport(pin, answer);
+
 async function seedDay(
   name: string,
   transportFor: (pin: ModelPin) => AnthropicMessagesClient,
+  newsSource: NewsSource = FIXTURE_NEWS,
 ): Promise<ReplayCliOptions> {
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
@@ -101,10 +114,7 @@ async function seedDay(
     logger: { log: () => {} },
     venueSessions: OPEN_EVERY_DAY,
     transportFor,
-    newsSource: {
-      headlines: (symbol) =>
-        Promise.resolve(symbol === 'UP' ? ['UP beats estimates', 'UP raises guidance'] : []),
-    },
+    newsSource,
   });
   try {
     await root.run();
@@ -138,7 +148,7 @@ beforeAll(async () => {
     cfdCataloguePath: join(directory, 'absent-catalogue.json'),
     saxoSpreadsPath: join(directory, 'absent-saxo-spreads.csv'),
   };
-  options = await seedDay('paper', (pin) => new ScriptedTransport(pin, answer));
+  options = await seedDay('paper', scripted);
 });
 
 afterAll(() => {
@@ -271,6 +281,119 @@ describe('replayFromFiles', () => {
   it('reports a day with no journalled decision', async () => {
     const result = await replayFromFiles({ ...options, tradingDate: dateAt(100) });
     expect(result.divergences).toEqual([{ kind: 'nothing_to_replay', tradingDate: dateAt(100) }]);
+  });
+});
+
+// CPU-heavy: each block runs a full composed day; ~1 s under 3x CPU oversubscription, CI timed out at 5 s
+describe('replay from the US headline journal (#1981)', { timeout: 30_000 }, () => {
+  let capped: ReplayCliOptions;
+
+  beforeAll(async () => {
+    const storePath = join(directory, 'capped.sqlite');
+    const writer = openSharedStore(storePath);
+    const long = (index: number) => `UP headline ${index} ${'x'.repeat(2_000)}`;
+    const articles = Array.from({ length: 10 }, (_, index) => ({
+      id: `bz-${index}`,
+      headline: long(index),
+      summary: '',
+      symbols: ['UP'],
+      source: 'benzinga',
+      url: '',
+      created_at: new Date(Date.UTC(2026, 8, 17, index)),
+      updated_at: new Date(Date.UTC(2026, 8, 17, index)),
+      payload: '',
+    }));
+    const news = new AlpacaNewsSource(
+      { fetchNews: ([symbol]) => Promise.resolve(symbol === 'UP' ? articles : []) },
+      new SqliteNewsLedger(guardedStore(writer, 'v2')),
+    );
+    try {
+      capped = await seedDay('capped', scripted, news);
+    } finally {
+      writer.close();
+    }
+  }, 30_000);
+
+  it('replays identical a name whose logged prompt hit the capture cap', async () => {
+    const db = new BetterSqlite3(capped.storePath, { readonly: true });
+    const prompts = db
+      .prepare(`SELECT prompt FROM llm_call_log WHERE trace_id = 'v2-${TRADING_DATE}-UP'`)
+      .all() as { prompt: string }[];
+    db.close();
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts.every((row) => row.prompt.length >= MAX_CAPTURED_PROMPT_CHARS)).toBe(true);
+    const result = await replayFromFiles(capped);
+    expect(result.decisions).toBe(3);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges as a news error without the journal, as before #1981', async () => {
+    const storePath = join(directory, 'capped-unjournalled.sqlite');
+    copyFileSync(capped.storePath, storePath);
+    const db = new BetterSqlite3(storePath);
+    db.exec("DROP TRIGGER v2_news_no_delete; DELETE FROM v2_news WHERE provider = 'alpaca'");
+    db.close();
+    const result = await replayFromFiles({ ...capped, storePath });
+    expect(result.divergences).toContainEqual(
+      expect.objectContaining({
+        kind: 'decision_field',
+        instrument: 'UP',
+        field: 'inputs_hash',
+        replayed: '',
+      }),
+    );
+  });
+});
+
+// CPU-heavy: each block runs a full composed day; ~1 s under 3x CPU oversubscription, CI timed out at 5 s
+describe('replay from the UK headline journal (#1981)', { timeout: 30_000 }, () => {
+  let capped: ReplayCliOptions;
+
+  beforeAll(async () => {
+    const storePath = join(directory, 'capped-uk.sqlite');
+    const writer = openSharedStore(storePath);
+    const publishedAt = new Date(Date.parse(`${TRADING_DATE}T07:30:00.000Z`) - 3_600_000);
+    const articles = Array.from({ length: 10 }, (_, index) => ({
+      title: `UP plc headline ${index} ${'y'.repeat(2_000)}`,
+      publishedAt: new Date(publishedAt.getTime() - index * 60_000).toISOString(),
+      companyCount: 1,
+    }));
+    const news = new MarketauxNewsSource({
+      client: { fetchArticles: () => Promise.resolve({ found: articles.length, articles }) },
+      ledger: new SqliteNewsLedger(guardedStore(writer, 'v2')),
+    });
+    try {
+      capped = await seedDay('capped-uk', scripted, news);
+    } finally {
+      writer.close();
+    }
+  }, 30_000);
+
+  it('replays identical a UK name whose logged prompt hit the capture cap, from its marketaux rows', async () => {
+    const db = new BetterSqlite3(capped.storePath, { readonly: true });
+    const prompts = db
+      .prepare(`SELECT prompt FROM llm_call_log WHERE trace_id = 'v2-${TRADING_DATE}-UP'`)
+      .all() as { prompt: string }[];
+    const providers = db.prepare('SELECT DISTINCT provider, status FROM v2_news').all();
+    db.close();
+    expect(providers).toEqual([{ provider: 'marketaux', status: 'ok' }]);
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts.every((row) => row.prompt.length >= MAX_CAPTURED_PROMPT_CHARS)).toBe(true);
+    const result = await replayFromFiles(capped);
+    expect(result.decisions).toBe(3);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges as a news error once the marketaux rows are gone', async () => {
+    const storePath = join(directory, 'capped-uk-unjournalled.sqlite');
+    copyFileSync(capped.storePath, storePath);
+    const tamper = new BetterSqlite3(storePath);
+    tamper.exec('DROP TRIGGER v2_news_no_delete; DELETE FROM v2_news');
+    tamper.close();
+    const fallback = await replayFromFiles({ ...capped, storePath });
+    expect(fallback.divergences).toContainEqual(
+      expect.objectContaining({ instrument: 'UP', field: 'inputs_hash', replayed: '' }),
+    );
   });
 });
 

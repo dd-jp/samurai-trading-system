@@ -1,9 +1,12 @@
 import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/index.js';
+import { describeThrownSafely, maskCredentials } from '../../../shared/index.js';
 import { addDays } from './macro-calendar.js';
+import type { NewsLedger, NewsRecord, StoredHeadline } from './news-ledger.js';
 
 export const MAX_HEADLINES_PER_NAME = 10;
 const NEWS_LOOKBACK_CALENDAR_DAYS = 1;
 export const ROUNDUP_SYMBOL_LIMIT = 5;
+export const ALPACA_NEWS_PROVIDER = 'alpaca';
 
 export interface NewsSource {
   headlines(symbol: string, tradingDate: string, now: Date): Promise<readonly string[]>;
@@ -15,20 +18,76 @@ export interface NewsFetcher {
 
 export const NO_NEWS: NewsSource = { headlines: () => Promise.resolve([]) };
 
-export function perNameHeadlines(articles: readonly AlpacaNewsArticle[]): readonly string[] {
+function perNameArticles(articles: readonly AlpacaNewsArticle[]): readonly StoredHeadline[] {
   return articles
     .filter((article) => article.symbols.length <= ROUNDUP_SYMBOL_LIMIT)
-    .map((article) => article.headline.trim())
-    .filter((headline) => headline.length > 0)
+    .map((article) => ({
+      title: article.headline.trim(),
+      publishedAt: article.created_at.toISOString(),
+      sourceId: article.id,
+    }))
+    .filter((headline) => headline.title.length > 0)
     .slice(-MAX_HEADLINES_PER_NAME);
 }
 
+export function perNameHeadlines(articles: readonly AlpacaNewsArticle[]): readonly string[] {
+  return perNameArticles(articles).map((headline) => headline.title);
+}
+
+export function newsFailureReason(error: unknown): string {
+  return maskCredentials(describeThrownSafely(error));
+}
+
+type FetchOutcome = Pick<NewsRecord, 'status' | 'reason' | 'found' | 'headlines'>;
+
 export class AlpacaNewsSource implements NewsSource {
-  constructor(private readonly client: NewsFetcher) {}
+  constructor(
+    private readonly client: NewsFetcher,
+    private readonly ledger?: Pick<NewsLedger, 'record'> | undefined,
+  ) {}
 
   async headlines(symbol: string, tradingDate: string, now: Date): Promise<readonly string[]> {
     const start = new Date(`${addDays(tradingDate, -NEWS_LOOKBACK_CALENDAR_DAYS)}T00:00:00.000Z`);
-    return perNameHeadlines(await this.client.fetchNews([symbol], start, now));
+    let articles: AlpacaNewsArticle[];
+    try {
+      articles = await this.client.fetchNews([symbol], start, now);
+    } catch (error) {
+      this.#recordFailure(symbol, tradingDate, now, error);
+      throw error;
+    }
+    const headlines = perNameArticles(articles);
+    const status = headlines.length === 0 ? 'no_news' : 'ok';
+    this.#record(symbol, tradingDate, now, {
+      status,
+      reason: '',
+      found: articles.length,
+      headlines,
+    });
+    return headlines.map((headline) => headline.title);
+  }
+
+  // A ledger write failing here must not replace the fetch error the cycle journals as the reason
+  #recordFailure(symbol: string, tradingDate: string, now: Date, error: unknown): void {
+    const reason = newsFailureReason(error);
+    try {
+      this.#record(symbol, tradingDate, now, {
+        status: 'error',
+        reason,
+        found: undefined,
+        headlines: [],
+      });
+    } catch {}
+  }
+
+  #record(symbol: string, tradingDate: string, now: Date, outcome: FetchOutcome): void {
+    this.ledger?.record({
+      tradingDate,
+      symbol,
+      provider: ALPACA_NEWS_PROVIDER,
+      requested: true,
+      fetchedAt: now.toISOString(),
+      ...outcome,
+    });
   }
 }
 
