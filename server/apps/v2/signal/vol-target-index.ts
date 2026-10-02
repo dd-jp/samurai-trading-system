@@ -14,9 +14,8 @@ import {
 } from '../data/index.js';
 import { baseRead } from './bar-quality.js';
 
-// The equity-index role of #1785 ruling (b). CUKS, CUS1 and CPJ1 price above the 10%-of-equity
-// line cap at this capital, so they are declared and size to 0, as in candidate 1. US-listed ETFs
-// stay out until ADR §5 item 6 confirms UK-resident access (S2)
+// The equity-index role of #1785 ruling (b). US-listed ETFs stay out until ADR §5 item 6
+// confirms UK-resident access (S2)
 export const VOL_TARGET_INDEX_TIDMS: readonly string[] = [
   'ISF',
   'VMID',

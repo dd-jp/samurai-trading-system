@@ -288,7 +288,9 @@ describe('runVolTargetIndexAgainst', () => {
     const barsSource = volTargetBarsSource();
     const market = new BarsMarketData(
       barsSource,
-      parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2020,1.36\n'),
+      parseBoeGbpUsdCsv(
+        'DATE,XUDLUSS\n31 Dec 2020,1.36\n31 Dec 2021,1.35\n30 Dec 2022,1.21\n29 Dec 2023,1.27\n',
+      ),
     );
     const db = openSharedStore(':memory:');
     try {
@@ -314,6 +316,7 @@ describe('runVolTargetIndexAgainst', () => {
       ]);
       expect(report.stressed.trials).toHaveLength(2);
       expect(report.baseline.dates).toEqual(report.stressed.dates);
+      expect(report.baseline.benchmark.equity[0]).toBe(7_000);
       const benchmark = report.baseline.benchmark.equity;
       expect(new Set(benchmark).size).toBeGreaterThan(1);
       expect(report.baseline.trials[0]?.equity).not.toEqual(benchmark);

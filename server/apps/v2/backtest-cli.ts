@@ -50,6 +50,8 @@ import { researchStorePath, sessionBLedger, TrialLedger } from './trial-ledger.j
 // yearly capital config David sets is not consulted here — a backtest run always sizes off a
 // fixed, reproducible starting point
 const BACKTEST_START_CAPITAL_GBP = 2_000;
+// #1785 candidate 3 ruling (d), 2026-10-02: the £10,000 paper start capital of 2026-09-30
+const VOL_TARGET_INDEX_START_CAPITAL_GBP = 10_000;
 const BACKTEST_LOSS_CAP_GBP = 1_500;
 const WALK_FORWARD_FOLDS = 16;
 const COST_STRESS_MULTIPLE = 2;
@@ -127,6 +129,7 @@ interface CandidateRunSpec {
   readonly window: CandidateWindow;
   readonly calendarReference: string;
   readonly embargo?: number;
+  readonly startCapitalGbp?: number;
 }
 
 async function runCandidateAgainst(
@@ -142,7 +145,7 @@ async function runCandidateAgainst(
     benchmark: spec.benchmark,
     from: spec.window.from,
     to: spec.window.to,
-    startCapitalGbp: BACKTEST_START_CAPITAL_GBP,
+    startCapitalGbp: spec.startCapitalGbp ?? BACKTEST_START_CAPITAL_GBP,
     lossCapGbp: BACKTEST_LOSS_CAP_GBP,
     market,
     halfSpreadBps,
@@ -321,6 +324,7 @@ export async function runVolTargetIndexAgainst(
       window,
       calendarReference: calendarReferenceFor('saxo'),
       embargo: VOL_TARGET_INDEX_VOL_WINDOW,
+      startCapitalGbp: VOL_TARGET_INDEX_START_CAPITAL_GBP,
     },
     market,
     halfSpreadBps,
