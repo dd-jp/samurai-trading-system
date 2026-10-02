@@ -54,6 +54,7 @@ import {
 import { selectUniverse } from './universe.js';
 
 const DEBATE_MAX_ROUNDS = 1;
+export const SPEND_CAP_REASON_PREFIX = 'llm_spend_cap:';
 export const SMA_LONG_WINDOW = 200;
 const TRAILING_SHORT_DAYS = 20;
 const TRAILING_LONG_DAYS = 63;
@@ -489,7 +490,14 @@ async function decideOne(
   );
   const cap = deps.panel.spendCap.check();
   if (!cap.admitted) {
-    return skipped(DEBATE_SLEEVE_ID, symbol, venue, read, hash, `llm_spend_cap:${cap.kind}`);
+    return skipped(
+      DEBATE_SLEEVE_ID,
+      symbol,
+      venue,
+      read,
+      hash,
+      `${SPEND_CAP_REASON_PREFIX}${cap.kind}`,
+    );
   }
   return debateDecision(deps, {
     symbol,

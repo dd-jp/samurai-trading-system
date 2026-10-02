@@ -6,7 +6,6 @@ import type {
   SleeveDecision,
   Venue,
 } from '../../../contracts/index.js';
-import { UNCAPPED_SPEND } from '../../pipeline/debate-engine/index.js';
 import type { Logger } from '../../shared/index.js';
 import { maskCredentials, SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
@@ -42,6 +41,7 @@ import {
   JournalReplayBrokerBooks,
   type MirroredBook,
 } from './replay-broker.js';
+import { journalledSpendCap } from './replay-spend-cap.js';
 import {
   ARM2_SLEEVE_ID,
   buildLlmPanel,
@@ -269,12 +269,13 @@ function replaySleeves(
   inputs: ReplayInputs,
   log: ReplayLog,
   calls: readonly LoggedCall[],
+  rows: readonly JournalledDecision[],
 ): Sleeve[] {
   const logger = inputs.logger ?? SILENT;
   const panel = buildLlmPanel({
     transportFor: (pin) => new ReplayTransport(pin, log),
     spendSink: { record: () => {} },
-    spendCap: UNCAPPED_SPEND,
+    spendCap: journalledSpendCap(rows),
     logger,
   });
   return decisionSleeves({
@@ -403,7 +404,9 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
   );
   const log = new ReplayLog(calls);
   const replayed = new Map<string, readonly SleeveDecision[]>();
-  const sleeves = replaySleeves(inputs, log, calls).map((sleeve) => capturing(sleeve, replayed));
+  const sleeves = replaySleeves(inputs, log, calls, rows).map((sleeve) =>
+    capturing(sleeve, replayed),
+  );
   const startedAt = day.startedAt ?? `${tradingDate}T00:00:00.000Z`;
   const copy = rewoundCopy(db, tradingDate, startedAt);
   try {
