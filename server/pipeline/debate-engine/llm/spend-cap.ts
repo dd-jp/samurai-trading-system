@@ -53,7 +53,7 @@ export function spendCapRefusalRemedy(kind: SpendCapRefusalKind): string {
 }
 
 export interface SpendCap {
-  check(): SpendCapVerdict;
+  check(instrument?: string): SpendCapVerdict;
 }
 
 export const UNCAPPED_SPEND: SpendCap = {
