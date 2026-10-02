@@ -107,3 +107,12 @@ export function cumulativeSplitRatios(
   }
   return ratios;
 }
+
+const WHOLE_SHARE_EPSILON = 1e-9;
+
+// Whole shares are taken toward zero, so a short's fraction is negative and buys back
+export function fractionalShares(qty: number): number {
+  const whole = Math.sign(qty) * Math.floor(Math.abs(qty) + WHOLE_SHARE_EPSILON);
+  const fraction = qty - whole;
+  return Math.abs(fraction) < WHOLE_SHARE_EPSILON ? 0 : fraction;
+}
