@@ -23,7 +23,7 @@ describe the v1 report, whose matching rules it reuses.
   and dry-run books are simulated, so their fills are never disposals. CFD
   venues are left to their own log (#1867). Paper broker fills appear in a
   paper store's log, but paper disposals are not taxable.
-- **Capture (migration 0084).** Each `v2_fills` row records `currency`,
+- **Capture (migration 0085).** Each `v2_fills` row records `currency`,
   `price_native`, `fee_native`, `fx_quote_per_gbp`, `fx_source` and
   `fill_date`. The rate is quoted as native units per £1, so GBP = native ÷
   rate. It is the rate the row's `price_gbp` was booked at: the fixed
@@ -56,7 +56,7 @@ describe the v1 report, whose matching rules it reuses.
   broker's amount, because neither venue's cash-in-lieu record is read yet.
   Reading it is needed before live.
 - **Held out, never guessed.** An instrument is held out, with the reason and
-  its fill count, when any of its fills predates migration 0084, has no day
+  its fill count, when any of its fills predates migration 0085, has no day
   rate, or is in a second currency. It is also held out when the section 104
   pool cannot cover a disposal. That happens with a short sale not bought back
   inside 30 days, or with missing history. A held-out instrument is never

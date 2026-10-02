@@ -122,7 +122,7 @@ describe('buildTaxLog', () => {
       {
         instrument: 'VUSA',
         venue: 'saxo',
-        reason: `fill ${legacy.fill_id} predates native price and FX capture (migration 0084)`,
+        reason: `fill ${legacy.fill_id} predates native price and FX capture (migration 0085)`,
         fills: 2,
         taxYears: [2026],
       },

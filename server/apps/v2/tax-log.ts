@@ -80,7 +80,7 @@ function convert(fill: TaxFillRow, splits: readonly TaxSplitRow[], dayRate: DayR
   if (fill.currency === null || fill.price_native === null || fill.fee_native === null) {
     return {
       ok: false,
-      reason: `fill ${fill.fill_id} predates native price and FX capture (migration 0084)`,
+      reason: `fill ${fill.fill_id} predates native price and FX capture (migration 0085)`,
     };
   }
   const date = fillDateOf(fill);

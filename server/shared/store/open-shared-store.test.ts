@@ -74,7 +74,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 55;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 84;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 85;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -545,9 +545,9 @@ describe('openSharedStore', () => {
     }
   });
 
-  it('migration 0084 leaves a legacy fill uncaptured and journals splits append-only (#1947)', () => {
+  it('migration 0085 leaves a legacy fill uncaptured and journals splits append-only (#1947)', () => {
     const raw = new BetterSqlite3(':memory:');
-    const preCutoverVersion = 82;
+    const preCutoverVersion = 84;
     const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
     try {
       runMigrations(raw, preCutoverDir);
