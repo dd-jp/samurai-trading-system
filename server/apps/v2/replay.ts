@@ -122,7 +122,9 @@ const DECISIONS_SQL = `
    ORDER BY d.rowid`;
 
 const CALLS_SQL = `
-  SELECT id, trace_id AS traceId, model, prompt, response FROM llm_call_log
+  SELECT id, trace_id AS traceId, model, prompt, response, stop_reason AS stopReason,
+         error_class AS errorClass, error_message AS errorMessage
+    FROM llm_call_log
    WHERE substr(trace_id, 1, length(?)) = ? AND prompt IS NOT NULL
    ORDER BY id`;
 

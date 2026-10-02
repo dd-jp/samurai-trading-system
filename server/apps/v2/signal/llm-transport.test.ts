@@ -16,6 +16,7 @@ import { NousPinnedTransport } from './llm-transport.js';
 import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, type ModelPin, SONNET_5_PIN } from './models.js';
 import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
 import { ScriptedTransport } from './scripted-transport.js';
+import { SECRET_WITHHELD, secretGuardedSink } from './secret-guard.js';
 
 interface Captured {
   url: string;
@@ -222,6 +223,86 @@ describe('NousPinnedTransport', () => {
     } finally {
       db.close();
     }
+  });
+
+  describe('failed-call journal (#1980)', () => {
+    async function journalOf(prompt: string): Promise<{ rows: unknown[]; logs: LogEntry[] }> {
+      const logs: LogEntry[] = [];
+      const logger = { log: (entry: LogEntry) => logs.push(entry) };
+      const db = openSharedStore(':memory:');
+      const client = new AnthropicLlmClient(
+        transportFor(JUDGE_PIN),
+        {
+          model: 'anthropic/claude-opus-5.5',
+          max_tokens: 64,
+          timeoutMs: 1_000,
+          retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+        },
+        secretGuardedSink(new SqliteLlmSpendStore(db, logger, true), () => KNOWN_SECRETS, logger),
+      );
+      try {
+        await client
+          .complete({
+            prompt,
+            context: { analyst_views: [] },
+            parseResponse: (raw: string) => ({ valid: true as const, data: raw }),
+          })
+          .catch(() => {});
+        const rows = db
+          .prepare(
+            `SELECT l.*, s.cost_usd FROM llm_call_log l JOIN llm_spend s ON s.id = l.spend_id`,
+          )
+          .all();
+        return { rows, logs };
+      } finally {
+        db.close();
+      }
+    }
+
+    it('journals an unbilled HTTP failure with its class and message, and no header or key', async () => {
+      stubFetch(503, { error: { message: 'upstream unavailable' } });
+      const { rows, logs } = await journalOf('hello');
+      expect(rows).toEqual([
+        expect.objectContaining({
+          prompt: expect.stringContaining('hello'),
+          response: null,
+          stop_reason: null,
+          error_class: 'LlmProviderError',
+          error_message: expect.stringContaining('503'),
+          cost_usd: 0,
+        }),
+      ]);
+      expect(JSON.stringify([rows, logs])).not.toMatch(/nous-secret|Bearer|authorization/i);
+    });
+
+    it('withholds the text of a request the egress guard refused, so the secret never lands', async () => {
+      const { rows, logs } = await journalOf('cash fake-alpaca-secret-7f');
+      expect(rows).toEqual([
+        expect.objectContaining({
+          prompt: null,
+          response: null,
+          stop_reason: null,
+          error_class: SECRET_WITHHELD,
+          error_message: null,
+          cost_usd: 0,
+        }),
+      ]);
+      expect(logs.map((entry) => entry.event)).toContain('v2_llm_log_secret_withheld');
+      expect(JSON.stringify([rows, logs])).not.toContain('fake-alpaca-secret-7f');
+    });
+
+    it('withholds an error message that echoes a known secret', async () => {
+      stubFetch(401, { error: { message: 'bad key fake-alpaca-secret-7f' } });
+      const { rows } = await journalOf('hello');
+      expect(rows).toEqual([
+        expect.objectContaining({
+          prompt: null,
+          error_class: SECRET_WITHHELD,
+          error_message: null,
+        }),
+      ]);
+      expect(JSON.stringify(rows)).not.toContain('fake-alpaca-secret-7f');
+    });
   });
 
   it('accepts a reply whose model field is missing and logs it as unreported', async () => {

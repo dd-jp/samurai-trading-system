@@ -1,4 +1,4 @@
-import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
+import { describeThrownSafely, type RetryAttemptReport, withRetry } from '../../../shared/index.js';
 import type { AnthropicUsage } from '../../../shared/llm/index.js';
 import { hashPromptTemplate } from '../../../shared/llm/index.js';
 import {
@@ -75,6 +75,7 @@ export interface LlmCallFailureReport {
 
 export interface AnthropicLlmClientConfig {
   model: string;
+  pricedModel?: string | undefined;
   max_tokens: number;
   timeoutMs: number;
   retry: LlmRetryConfig;
@@ -149,6 +150,19 @@ function billedUsageOf(
   if (!hasTokenCounts(usage)) return undefined;
   const model = fieldOf(error, 'model');
   return { usage, model: typeof model === 'string' ? model : undefined };
+}
+
+type CallOutcome = Pick<
+  LlmSpendRecord,
+  'response' | 'stop_reason' | 'error_class' | 'error_message'
+>;
+
+const NO_USAGE: AnthropicUsage = { input_tokens: 0, output_tokens: 0 };
+
+// A timeout's source decides whether it is retried, so a replay must know which one it was
+function failureClassOf(error: unknown): string {
+  if (error instanceof LlmTimeoutError) return `${error.name}:${error.source}`;
+  return error instanceof Error ? error.name : typeof error;
 }
 
 function retryAfterHintOf(error: unknown): number | undefined {
@@ -239,7 +253,7 @@ export class AnthropicLlmClient implements LlmClient {
     try {
       response = await this.callWithTimeout(content, request.signal, gateStage);
     } catch (error) {
-      this.recordBilledFailure(request, error, Date.now() - start, content);
+      this.recordFailure(request, error, Date.now() - start, content);
       throw error;
     }
     const latency_ms = Date.now() - start;
@@ -248,7 +262,10 @@ export class AnthropicLlmClient implements LlmClient {
     try {
       rawText = extractText(response);
     } finally {
-      this.recordSpend(request, response, latency_ms, content, rawText);
+      this.recordSpend(request, response, latency_ms, content, {
+        response: rawText,
+        stop_reason: response.stop_reason,
+      });
     }
 
     if (response.stop_reason === 'refusal') {
@@ -272,34 +289,37 @@ export class AnthropicLlmClient implements LlmClient {
     response: AnthropicMessageResponse & { usage: AnthropicUsage },
     latency_ms: number,
     prompt: string,
-    responseText: string,
+    outcome: CallOutcome,
   ): LlmSpendRecord {
     return {
       trace_id: request.context.attribution?.trace_id ?? 'unattributed',
       stage: request.context.attribution?.stage ?? 'debate',
       debate_id: request.context.attribution?.debate_id,
-      model: response.model ?? this.config.model,
+      model: response.model ?? this.config.pricedModel ?? this.config.model,
       usage: response.usage,
       latency_ms,
       ttfb_ms: response.ttfb_ms,
       timestamp: new Date(),
       prompt,
-      response: responseText,
       prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
+      ...outcome,
     };
   }
 
-  private recordBilledFailure<T>(
+  private recordFailure<T>(
     request: LlmRequest<T>,
     error: unknown,
     latency_ms: number,
     prompt: string,
   ): void {
     const billed = billedUsageOf(error);
-    if (billed === undefined) return;
-    const response: AnthropicMessageResponse = { content: [], usage: billed.usage };
-    if (billed.model !== undefined) response.model = billed.model;
-    this.recordSpend(request, response, latency_ms, prompt, '');
+    const response: AnthropicMessageResponse = { content: [] };
+    if (billed !== undefined) response.usage = billed.usage;
+    if (billed?.model !== undefined) response.model = billed.model;
+    this.recordSpend(request, response, latency_ms, prompt, {
+      error_class: failureClassOf(error),
+      error_message: describeThrownSafely(error),
+    });
   }
 
   private recordSpend<T>(
@@ -307,17 +327,16 @@ export class AnthropicLlmClient implements LlmClient {
     response: AnthropicMessageResponse,
     latency_ms: number,
     prompt: string,
-    responseText: string,
+    outcome: CallOutcome,
   ): void {
-    if (response.usage === undefined) return;
     try {
       this.spendSink.record(
         this.buildSpendRecord(
           request,
-          { ...response, usage: response.usage },
+          { ...response, usage: response.usage ?? NO_USAGE },
           latency_ms,
           prompt,
-          responseText,
+          outcome,
         ),
       );
     } catch {}
