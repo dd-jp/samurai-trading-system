@@ -4,20 +4,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LogEntry } from '../../../shared/index.js';
+import { openSharedStore } from '../../../shared/store/index.js';
+import { FLATTEN_POLL_MS } from '../flatten.js';
 import { V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { SIGNALS_BEAT_EVERY_MS, SIGNALS_PASS_STUCK_MS } from './liveness.js';
 import { SIGNAL_POLL_MS } from './loop.js';
 import { composeSignals, main, parsePort, parseSignalsArgs, signalsHeartbeat } from './main.js';
 
-const rootMock = vi.hoisted(() => ({ hang: false }));
+const rootMock = vi.hoisted(() => ({
+  hang: false,
+  flatten: undefined as (() => Promise<unknown>) | undefined,
+}));
 
 vi.mock('../index.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../index.js')>();
   return {
     ...real,
     composeV2Root: (...args: Parameters<typeof real.composeV2Root>) =>
-      rootMock.hang
-        ? { processSignals: () => new Promise<never>(() => {}), close: () => {} }
+      rootMock.hang || rootMock.flatten !== undefined
+        ? {
+            processSignals: () => new Promise<never>(() => {}),
+            flatten: rootMock.flatten,
+            close: () => {},
+          }
         : real.composeV2Root(...args),
   };
 });
@@ -31,8 +40,18 @@ function tempStorePath(): string {
   return join(dir, 'v2.sqlite');
 }
 
+function seedHalt(storePath: string): void {
+  const db = openSharedStore(storePath);
+  db.prepare(
+    `INSERT INTO v2_controls (action, reason, source, idempotency_key, set_at)
+     VALUES ('halt', 'Telegram flatten confirmed', 'telegram', 'signals-main-halt', ?)`,
+  ).run(clock.now().toISOString());
+  db.close();
+}
+
 afterEach(() => {
   rootMock.hang = false;
+  rootMock.flatten = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -178,6 +197,43 @@ describe('composeSignals', () => {
   });
 });
 
+describe('composeSignals flatten poller (#1894)', () => {
+  it('opens a root for a new flatten and routes its failure through the alerts logger, then flushes', async () => {
+    const storePath = tempStorePath();
+    seedHalt(storePath);
+    const alerted: LogEntry[] = [];
+    let flushes = 0;
+    const { db, flatten } = composeSignals(
+      { storePath, port: 0, dryRun: false },
+      clock,
+      {},
+      { log: () => {} },
+      undefined,
+      {
+        logger: { log: (entry) => alerted.push(entry) },
+        flush: () => {
+          flushes += 1;
+          return Promise.resolve();
+        },
+        notify: () => Promise.resolve(),
+      },
+    );
+    try {
+      await flatten.tick();
+      expect(alerted).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          event: 'v2_flatten_failed',
+          message: expect.stringContaining('refuses a paper run without NOUS_BASE_URL'),
+        }),
+      );
+      expect(flushes).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 const NOUS_ENV = { NOUS_BASE_URL: 'https://nous.test/v1', NOUS_API_KEY: 'present' };
 const noPinCheck = () => Promise.resolve();
 
@@ -291,6 +347,51 @@ describe('main', () => {
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(lines.filter((line) => line.includes('v2_signals_heartbeat_unset'))).toHaveLength(1);
     });
+  });
+
+  it('polls for a flatten at start and every minute, and sends its result to Telegram', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const storePath = tempStorePath();
+    seedHalt(storePath);
+    const flatten = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('lease table locked'))
+      .mockResolvedValue({ ran: true, result: { outcome: 'closed', detail: 'nothing held' } });
+    rootMock.flatten = flatten;
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const sigintBefore = new Set(process.listeners('SIGINT'));
+    await main(
+      ['--store', storePath],
+      {
+        ...NOUS_ENV,
+        V2_SIGNALS_PORT: '0',
+        TELEGRAM_BOT_TOKEN: 'bot-token',
+        TELEGRAM_CHAT_ID: '42',
+      },
+      noPinCheck,
+      fetchImpl,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(flatten).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(FLATTEN_POLL_MS);
+    expect(flatten).toHaveBeenCalledTimes(2);
+    process.emit('SIGTERM');
+    for (const listener of process.listeners('SIGINT')) {
+      if (!sigintBefore.has(listener)) process.off('SIGINT', listener);
+    }
+    const sent = fetchImpl.mock.calls.map(([url, init]) => [url, JSON.parse(init.body).text]);
+    expect(sent).toEqual([
+      [
+        'https://api.telegram.org/botbot-token/sendMessage',
+        expect.stringMatching(/^Samurai v2 CRITICAL\nv2_flatten_failed: lease table locked$/),
+      ],
+      [
+        'https://api.telegram.org/botbot-token/sendMessage',
+        'Flatten done (control 1): every position has its exit in flight. nothing held',
+      ],
+    ]);
   });
 
   describe('signalsHeartbeat', () => {

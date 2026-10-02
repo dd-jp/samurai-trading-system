@@ -48,6 +48,12 @@ import {
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
+import {
+  FlattenLedger,
+  type FlattenPass,
+  type FlattenTarget,
+  flattenUnderLease,
+} from './flatten.js';
 import { heartbeatFor, pingJournal, withHeartbeat } from './heartbeat.js';
 import { cycleInputDigests, RecordingBarsSource, recordInputDigests } from './input-digest.js';
 import { type FaultLedger, Journal } from './journal/index.js';
@@ -140,6 +146,7 @@ export interface V2Root {
   readonly scriptedTransports: readonly ScriptedTransport[];
   run(): Promise<CycleReport>;
   processSignals(signals: SignalProcessorStore, now: Date): Promise<SignalPass>;
+  flatten(target: FlattenTarget): Promise<FlattenPass>;
   close(): void;
 }
 
@@ -607,6 +614,12 @@ export function composeV2Root(options: V2RootOptions): V2Root {
         release();
       }
     },
+    flatten: (target) =>
+      flattenUnderLease(
+        lease,
+        { cycle, ledger: new FlattenLedger(guardedStore(db, 'v2'), clock), prime },
+        target,
+      ),
     close: () => db.close(),
   };
 }

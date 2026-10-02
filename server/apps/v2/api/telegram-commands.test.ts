@@ -322,7 +322,7 @@ describe('resume', () => {
     await handler.handle(message(`flatten ${CODE}`));
     advance(60_000);
     expect(await handler.handle(message('resume'))).toBe(
-      'Resumed: entries are allowed again from the next cycle. The pending flatten is cancelled.',
+      'Resumed: entries are allowed again from the next cycle. A flatten not yet acted on is cancelled; exits already sent stand.',
     );
   });
 
@@ -416,7 +416,7 @@ describe('flatten', () => {
     await handler.handle(message('flatten'));
     advance(30_000);
     const reply = await handler.handle(message(`flatten ${CODE}`));
-    expect(reply).toMatch(/Flatten recorded.*every open position closes at the next cycle/);
+    expect(reply).toMatch(/Flatten recorded.*every open position closes within about a minute/);
     expect(controlRows()).toEqual([
       { action: 'halt', reason: 'Telegram flatten confirmed', source: 'telegram' },
     ]);

@@ -173,7 +173,10 @@ export class CommandHandler {
     if (state === 'running') {
       return noop(`Already running.${await this.lossBudgetNote()}`);
     }
-    const cancelled = state === 'halted' ? ' The pending flatten is cancelled.' : '';
+    const cancelled =
+      state === 'halted'
+        ? ' A flatten not yet acted on is cancelled; exits already sent stand.'
+        : '';
     const written = this.write(
       'resume',
       reasonFor('resume', received.args),
@@ -196,7 +199,7 @@ export class CommandHandler {
 
   private flatten(received: Received): Outcome {
     if (this.deps.current().state === 'halted') {
-      return noop('Already halted: every open position closes at the next cycle.');
+      return noop('Already halted: the flatten is in force and entries stay blocked until resume.');
     }
     return received.args === '' ? this.requestFlatten(received) : this.confirmFlatten(received);
   }
@@ -206,7 +209,7 @@ export class CommandHandler {
     this.#pending = { code, requestedAtMs: received.sentAt.getTime() };
     return {
       outcome: 'confirmation_requested',
-      reply: `Flatten closes every open position at the next cycle and blocks new entries until resume. Nothing happens yet. To confirm within 5 minutes send: flatten ${code}`,
+      reply: `Flatten cancels resting entries, closes every open position within about a minute and blocks new entries until resume. Nothing happens yet. To confirm within 5 minutes send: flatten ${code}`,
     };
   }
 
@@ -228,7 +231,7 @@ export class CommandHandler {
       'halt',
       'Telegram flatten confirmed',
       received,
-      'Flatten recorded: every open position closes at the next cycle and entries stay blocked until resume.',
+      'Flatten recorded: resting entries are cancelled and every open position closes within about a minute; a message follows when it is done. Entries stay blocked until resume.',
     );
     if (written.outcome !== 'refused_too_soon') this.#pending = undefined;
     return written;

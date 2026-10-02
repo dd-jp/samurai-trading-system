@@ -31,6 +31,7 @@ import {
   toBrokerFillId,
 } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import * as cycleModule from './cycle.js';
 import {
   budgetChanges,
   type CycleDeps,
@@ -5686,5 +5687,121 @@ describe('a stale 1 January GBP/USD fix (#2009)', () => {
       expect.objectContaining({ event: 'v2_fx_year_start_stale' }),
     );
     expect(sizeShares(deps, 'debate/primary', '2026-09-25', 'AAPL')).toBe(6);
+  });
+});
+
+describe('runFlattenPass: the out-of-cycle flatten (#1894)', () => {
+  const longMsft: SleeveDecision = { ...longAapl, instrument: 'MSFT' };
+  const { runFlattenPass } = cycleModule;
+
+  it('cancels every resting entry, books a fill the venue made since the cycle, and exits it', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl, longMsft], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setControl('halt');
+
+    const report = await runFlattenPass(deps, '2026-09-25');
+
+    expect(report).toEqual({
+      cancelled: 4,
+      exits: 1,
+      submitted_orders: 1,
+      simulated_orders: 0,
+      dry_run_refusals: 0,
+      rejected_orders: 0,
+      refusals: [],
+    });
+    expect(alpaca.cancelled).toEqual([
+      'v2-debate-primary-2026-09-25-AAPL',
+      'v2-debate-primary-2026-09-25-MSFT',
+    ]);
+    expect(deps.journal.restingEntries('debate/no-macro-gate')).toEqual([]);
+    expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-25-AAPL-exit']);
+    expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
+      qty: 6,
+      exitClientOrderId: 'v2-debate-primary-2026-09-25-AAPL-exit',
+    });
+    expect(deps.books.position('debate/primary', 'MSFT')).toBeUndefined();
+  });
+
+  it('exits held positions in every book of every sleeve through risk.approveExit', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    deps.setControl('halt');
+    const approveExit = vi.spyOn(deps.risk, 'approveExit');
+
+    const report = await runFlattenPass(deps, '2026-09-28');
+
+    expect(report).toEqual({
+      cancelled: 0,
+      exits: 2,
+      submitted_orders: 1,
+      simulated_orders: 1,
+      dry_run_refusals: 0,
+      rejected_orders: 0,
+      refusals: [],
+    });
+    expect(
+      approveExit.mock.calls.map(([request]) => [request.book.id, request.held.instrument]),
+    ).toEqual([
+      ['debate/primary', 'AAPL'],
+      ['debate/no-macro-gate', 'AAPL'],
+    ]);
+    expect(orders(deps, 'debate/primary')).toContainEqual(
+      expect.objectContaining({
+        client_order_id: 'v2-debate-primary-2026-09-28-AAPL-exit',
+        leg: 'exit',
+        side: 'sell',
+        outcome: 'submitted',
+      }),
+    );
+    expect(deps.books.position('debate/no-macro-gate', 'AAPL')?.exitClientOrderId).toBe(
+      'v2-debate-no-macro-gate-2026-09-28-AAPL-exit',
+    );
+  });
+
+  it('counts a rejected exit and a dry-run refusal, and passes over an exit already in flight', async () => {
+    const alpaca = new FakeAlpaca();
+    const paper = harness([longAapl], false, alpaca);
+    await runCycle(paper, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    await runCycle(paper, '2026-09-28');
+    alpaca.flattenError = new Error('venue closed');
+    const rejected = await runFlattenPass(paper, '2026-09-28');
+    expect(rejected).toMatchObject({ exits: 2, submitted_orders: 0, rejected_orders: 1 });
+    expect(paper.books.position('debate/primary', 'AAPL')?.exitClientOrderId).toBeUndefined();
+
+    const dry = harness([longAapl], true);
+    await runCycle(dry, '2026-09-25');
+    await runCycle(dry, '2026-09-28');
+    const first = await runFlattenPass(dry, '2026-09-28');
+    expect(first).toMatchObject({ exits: 2, dry_run_refusals: 1, simulated_orders: 1 });
+    const again = await runFlattenPass(dry, '2026-09-28');
+    expect(again).toMatchObject({ cancelled: 0, exits: 0, refusals: [] });
+  });
+
+  it('reports the positions it cannot route', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    await runCycle(deps, '2026-09-28');
+    const real = deps.executor.canRoute.bind(deps.executor);
+    vi.spyOn(deps.executor, 'canRoute').mockImplementation((route) =>
+      route.bookVariant === 'primary' ? false : real(route),
+    );
+
+    const report = await runFlattenPass(deps, '2026-09-29');
+
+    expect(report.refusals).toEqual([
+      'halt could not exit AAPL in debate/primary: no route to alpaca',
+    ]);
+    expect(report.exits).toBe(1);
+    expect(alpaca.flattens).toEqual([]);
   });
 });

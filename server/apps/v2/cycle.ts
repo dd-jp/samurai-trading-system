@@ -1967,3 +1967,39 @@ export async function runEntryPass(deps: CycleDeps, pass: EntryPass): Promise<En
     refusals: cycle.refusals,
   };
 }
+
+export interface FlattenPassReport {
+  readonly cancelled: number;
+  readonly exits: number;
+  readonly submitted_orders: number;
+  readonly simulated_orders: number;
+  readonly dry_run_refusals: number;
+  readonly rejected_orders: number;
+  readonly refusals: readonly string[];
+}
+
+// Out of cycle (#1894): every resting entry is cancelled before the sweep, so an entry that fills
+// meanwhile is booked by it and closed by the halt exits below rather than left open
+export async function runFlattenPass(
+  deps: CycleDeps,
+  tradingDate: string,
+): Promise<FlattenPassReport> {
+  const cycle = new Cycle(deps, tradingDate, macroGate(tradingDate), deps.controls.current());
+  const books = deps.registry.ids().flatMap((sleeveId) => [...deps.books.forSleeve(sleeveId)]);
+  let cancelled = 0;
+  for (const book of books) {
+    cancelled += await cycle.cancelEntries(book, deps.journal.restingEntries(book.id));
+  }
+  await cycle.sweepFills();
+  for (const book of books) await cycle.haltExits(book);
+  const { tally } = cycle;
+  return {
+    cancelled,
+    exits: tally.exits,
+    submitted_orders: tally.submitted,
+    simulated_orders: tally.simulated,
+    dry_run_refusals: tally.refused,
+    rejected_orders: tally.rejected,
+    refusals: cycle.refusals,
+  };
+}
