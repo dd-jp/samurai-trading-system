@@ -1,14 +1,14 @@
 import type { BrokerBookReader, OrderExecutor } from '../../../../contracts/index.js';
 import { AlpacaHttpBrokerClient } from '../../../pipeline/execution/index.js';
 import type { BrokerAdapter } from '../../../shared/index.js';
-import type { AlpacaPaperBrokerOptions } from './alpaca.js';
-import { alpacaPaperBroker } from './alpaca.js';
+import type { AlpacaBrokerOptions } from './alpaca.js';
+import { alpacaBroker } from './alpaca.js';
 import { AlpacaBrokerBooks, NO_BROKER_BOOKS } from './broker-books.js';
 import { DryRunBrokerAdapter } from './dry-run-broker.js';
 import { V2OrderExecutor } from './executor.js';
 import type { FillPricing } from './simulated-costs.js';
 
-export interface OrderExecutorOptions extends AlpacaPaperBrokerOptions {
+export interface OrderExecutorOptions extends AlpacaBrokerOptions {
   readonly dryRun: boolean;
   readonly pricing: FillPricing;
 }
@@ -44,11 +44,12 @@ export function createBrokerAccess(options: OrderExecutorOptions): BrokerAccess 
   const { dryRun, pricing } = options;
   const client = dryRun
     ? undefined
-    : (options.client ?? new AlpacaHttpBrokerClient({ environment: 'paper' }));
+    : (options.client ??
+      new AlpacaHttpBrokerClient({ environment: options.brokerMode ?? 'paper' }));
   return brokerAccessFor({
     dryRun,
     pricing,
-    alpaca: client === undefined ? undefined : alpacaPaperBroker({ ...options, client }),
+    alpaca: client === undefined ? undefined : alpacaBroker({ ...options, client }),
     brokerBooks: client === undefined ? NO_BROKER_BOOKS : new AlpacaBrokerBooks(client),
   });
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
+import { type FillLeg, V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { annualisedSharpe } from '../../../tools/backtest/index.js';
 import { Journal } from '../journal/journal.js';
@@ -58,7 +58,7 @@ function fillOf(
   fillId: string,
   orderId: string,
   bookId: string,
-  leg: 'entry' | 'stop' | 'target' | 'exit' = 'exit',
+  leg: FillLeg = 'exit',
   instrument = 'AAPL',
 ): void {
   new Journal(db, clock).recordFill({
@@ -196,7 +196,7 @@ describe('EvidenceReader (P5–P8)', () => {
     expect(read().performance).toMatchObject({ books: [{ max_drawdown: 0.25 }] });
   });
 
-  it('counts closed round trips per book: bracket legs and exits that filled, once per order', () => {
+  it('counts closed round trips per book: bracket legs and exits that filled, once per order, never a cash in lieu', () => {
     open();
     book('debate/primary', 'primary');
     book('debate/no-veto', 'no-veto');
@@ -208,6 +208,7 @@ describe('EvidenceReader (P5–P8)', () => {
     exitOrder('exit-unfilled', 'debate/primary');
     exitOrder('entry-1', 'debate/primary', 'entry');
     fillOf('f4', 'entry-1', 'debate/primary', 'entry');
+    fillOf('f10', 'entry-1', 'debate/primary', 'cash_in_lieu');
     exitOrder('bracket-stopped', 'debate/primary', 'entry');
     fillOf('f6', 'bracket-stopped', 'debate/primary', 'entry');
     fillOf('f7', 'bracket-stopped', 'debate/primary', 'stop');

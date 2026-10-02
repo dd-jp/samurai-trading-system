@@ -69,7 +69,7 @@ describe('CommandLog', () => {
   it('refuses a second row for the same update', () => {
     const commands = log();
     commands.record(entry);
-    expect(() => commands.record(entry)).toThrow(/UNIQUE/);
+    expect(() => commands.record(entry)).toThrow(/append-only/);
   });
 
   it('is append-only', () => {

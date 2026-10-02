@@ -362,6 +362,21 @@ describe('composeCycle: broker reconcile wiring (#1872)', () => {
     expect(composed.executor.simulates({ bookVariant: 'primary', venue: 'alpaca' })).toBe(false);
   });
 
+  it('threads the broker mode into the Alpaca client it builds, so live never borrows the paper credentials', () => {
+    vi.stubEnv('ALPACA_API_KEY', 'paper-key');
+    vi.stubEnv('ALPACA_API_SECRET', 'paper-secret');
+    vi.stubEnv('ALPACA_LIVE_API_KEY', '');
+    vi.stubEnv('ALPACA_LIVE_API_SECRET', '');
+    try {
+      expect(() => composeCycle(options({ dryRun: false, brokerMode: 'paper' }))).not.toThrow();
+      expect(() => composeCycle(options({ dryRun: false, brokerMode: 'live' }))).toThrow(
+        'ALPACA_LIVE_API_KEY',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('a dry run has no broker to read, and the cash tolerance stays unset until David rules', async () => {
     const composed = composeCycle(options());
     await expect(composed.brokerBooks.read('alpaca')).rejects.toThrow('every route is simulated');

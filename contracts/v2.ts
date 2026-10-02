@@ -3,7 +3,7 @@ import type { Direction, OrderState } from './primitives.js';
 export type Venue = 'alpaca' | 'saxo' | 'saxo_cfd_gbp' | 'saxo_cfd_usd';
 export type OrderSide = 'buy' | 'sell';
 export type OrderLeg = 'entry' | 'exit';
-export type FillLeg = 'entry' | 'stop' | 'target' | 'exit';
+export type FillLeg = 'entry' | 'stop' | 'target' | 'exit' | 'cash_in_lieu';
 export type OrderOutcome = 'submitted' | 'refused_dry_run' | 'simulated' | 'rejected' | 'cancelled';
 
 export interface V2Bar {

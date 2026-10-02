@@ -14,7 +14,7 @@ import type {
   Venue,
 } from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
-import { describeThrownSafely } from '../../shared/index.js';
+import { describeThrownSafely, logIfPresent } from '../../shared/index.js';
 import { quotePerGbp } from './data/index.js';
 import { type CashRule, compareVenue, type VenueView } from './reconcile-compare.js';
 
@@ -48,7 +48,7 @@ const VENUE_SET: Readonly<Record<Venue, true>> = {
   saxo_cfd_usd: true,
 };
 const VENUES = Object.keys(VENUE_SET) as Venue[];
-const TICKET = '#1872';
+const TICKET = '#1927';
 
 function sourceOf(deps: ReconcileDeps, book: BookSpec, venue: Venue): ReconcileSource {
   return deps.executor.simulates({ bookVariant: book.variant, venue }) ? 'simulated' : 'broker';
@@ -66,7 +66,7 @@ function addToGroup(
   groups.set(key, group);
 }
 
-function allBooks(deps: ReconcileDeps): BookSpec[] {
+function allBooks(deps: Pick<ReconcileDeps, 'registry' | 'books'>): BookSpec[] {
   return deps.registry.ids().flatMap((sleeveId) => deps.books.forSleeve(sleeveId));
 }
 
@@ -254,9 +254,31 @@ export async function reconcileBooks(
   return { blockedBookIds, refusals };
 }
 
-// Reconcile gates entries only, so a ledger or journal throw blocks entries and must never skip
-// the exits and resting stops after it (postmortem §3, #1927). Logged, not journalled: the
-// journal may be the store that threw
+// A throw in the fill sweep or reconcile blocks entries and must never skip the exits and resting
+// stops after it (postmortem §3, #1927). Logged, not journalled: the journal may be the store
+// that threw, and a throwing logger must not escape either
+export function blockEntriesOnThrow(
+  deps: Pick<ReconcileDeps, 'registry' | 'books' | 'logger'>,
+  tradingDate: string,
+  event: 'v2_fill_sweep_threw' | 'v2_reconcile_threw',
+  what: string,
+  error: unknown,
+): ReconcileOutcome {
+  const summary = `${what} threw: ${describeThrownSafely(error)}`;
+  logIfPresent(deps.logger, {
+    trace_id: `v2-${tradingDate}`,
+    stage: 'v2',
+    level: 'error',
+    event,
+    message: summary,
+  });
+  const bookIds = allBooks(deps).map((book) => book.id);
+  return {
+    blockedBookIds: new Set(bookIds),
+    refusals: bookIds.map((bookId) => `${bookId}: entries blocked, ${summary}`),
+  };
+}
+
 export async function reconcileOrBlockEntries(
   deps: ReconcileDeps,
   tradingDate: string,
@@ -264,18 +286,6 @@ export async function reconcileOrBlockEntries(
   try {
     return await reconcileBooks(deps, tradingDate);
   } catch (error) {
-    const summary = `reconcile threw: ${describeThrownSafely(error)}`;
-    deps.logger?.log({
-      trace_id: `v2-${tradingDate}`,
-      stage: 'v2',
-      level: 'error',
-      event: 'v2_reconcile_threw',
-      message: summary,
-    });
-    const bookIds = allBooks(deps).map((book) => book.id);
-    return {
-      blockedBookIds: new Set(bookIds),
-      refusals: bookIds.map((bookId) => `${bookId}: entries blocked, ${summary}`),
-    };
+    return blockEntriesOnThrow(deps, tradingDate, 'v2_reconcile_threw', 'reconcile', error);
   }
 }

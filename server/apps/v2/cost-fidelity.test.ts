@@ -46,6 +46,7 @@ function order(overrides: Partial<BrokerOrder>): BrokerOrder {
     stop: 95,
     target: 110,
     cancelledOn: undefined,
+    modelledSlippageBps: undefined,
     offsetBps: 0,
     fills: [],
     ...overrides,
@@ -168,6 +169,47 @@ describe('costFidelityReport', () => {
     ]);
     const live = costFidelityReport([paperFill], MARKET, tenBpsAndOneDollar, 'live');
     expect(live.samples[0]?.verdict).toBe('fail');
+  });
+
+  it("prices against the slippage journalled when the order went out, not today's tables", () => {
+    quoteCalls.length = 0;
+    const journalled = { ...ENTRY_WITH_STOP, modelledSlippageBps: 20 };
+    const [entry, stop] = costFidelityReport([journalled], MARKET, tenBpsAndOneDollar, 'live').rows;
+    expect(entry?.cost?.modelledSlippageGbp).toBeCloseTo(usd(1.98), 9);
+    expect(entry?.cost?.modelledFeeGbp).toBeCloseTo(usd(1), 9);
+    expect(stop?.cost?.modelledSlippageGbp).toBeCloseTo(usd(1.9), 9);
+    expect(entry?.cost?.realisedSlippageGbp).toBeCloseTo(usd(1.98), 9);
+  });
+
+  it('charges a journalled slippage only on a leg that crosses the spread', () => {
+    const target = order({
+      side: 'sell',
+      limit: 100,
+      stop: 105,
+      target: 99.8,
+      modelledSlippageBps: 500,
+      fills: [
+        {
+          leg: 'entry',
+          side: 'sell',
+          tradingDate: '2026-09-02',
+          qty: 10,
+          priceGbp: usd(99.9),
+          feeGbp: 0,
+        },
+        {
+          leg: 'target',
+          side: 'buy',
+          tradingDate: '2026-09-03',
+          qty: 10,
+          priceGbp: usd(99.8),
+          feeGbp: 0,
+        },
+      ],
+    });
+    const [, leg] = costFidelityReport([target], MARKET, tenBpsAndOneDollar, 'paper').rows;
+    expect(leg?.fidelity).toBe('match');
+    expect(leg?.cost?.modelledSlippageGbp).toBe(0);
   });
 
   it('caps the modelled entry at the limit, as the simulated book is', () => {

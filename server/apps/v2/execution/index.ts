@@ -14,6 +14,7 @@ export {
 } from './saxo-session.js';
 export { saxoTokenSecrets } from './saxo-token-secrets.js';
 export {
+  adversePrice,
   type FillPricing,
   impactLookup,
   quoteSimulatedFill,

@@ -1,3 +1,4 @@
+import type { BrokerMode } from '../../../../contracts/index.js';
 import type {
   AlpacaBrokerClient,
   OcoDoubleFillAlertChannel,
@@ -11,8 +12,9 @@ import {
 import type { BrokerAdapter, Clock, Logger } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 
-export interface AlpacaPaperBrokerOptions {
+export interface AlpacaBrokerOptions {
   readonly client?: AlpacaBrokerClient | undefined;
+  readonly brokerMode?: BrokerMode | undefined;
   readonly db: StoreHandle;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -34,10 +36,11 @@ function logAlert(logger: Logger, event: string, message: string, alert: unknown
   logger.log({ trace_id: 'v2-root', stage: 'v2', level: 'error', event, message, payload: alert });
 }
 
-export function alpacaPaperBroker(options: AlpacaPaperBrokerOptions): BrokerAdapter {
+export function alpacaBroker(options: AlpacaBrokerOptions): BrokerAdapter {
   const { logger } = options;
   return new AlpacaBrokerAdapter({
-    client: options.client ?? new AlpacaHttpBrokerClient({ environment: 'paper' }),
+    client:
+      options.client ?? new AlpacaHttpBrokerClient({ environment: options.brokerMode ?? 'paper' }),
     state: new SqliteBrokerStateStore(options.db),
     unpricedFillAlerts: {
       postUnpricedFillAlert: (alert) =>
