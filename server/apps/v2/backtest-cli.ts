@@ -38,9 +38,12 @@ import {
   MEAN_REVERSION_FROM,
   MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
   MEAN_REVERSION_TO,
+  VOL_TARGET_INDEX_ATR_WINDOW,
   VOL_TARGET_INDEX_CANDIDATE_ID,
   VOL_TARGET_INDEX_CEILINGS,
   VOL_TARGET_INDEX_FROM,
+  VOL_TARGET_INDEX_LOOKBACK_BARS,
+  VOL_TARGET_INDEX_TIDMS,
   VOL_TARGET_INDEX_TO,
   VOL_TARGET_INDEX_VOL_WINDOW,
 } from './signal/index.js';
@@ -309,7 +312,13 @@ export async function runVolTargetIndexAgainst(
   window: CandidateWindow = VOL_TARGET_INDEX_WINDOW,
 ): Promise<VolTargetIndexRunReport> {
   const trials = VOL_TARGET_INDEX_CEILINGS.map((ceiling) => ({
-    config: { vol_ceiling: ceiling },
+    config: {
+      vol_ceiling: ceiling,
+      universe: VOL_TARGET_INDEX_TIDMS,
+      vol_window: VOL_TARGET_INDEX_VOL_WINDOW,
+      atr_window: VOL_TARGET_INDEX_ATR_WINDOW,
+      lookback_bars: VOL_TARGET_INDEX_LOOKBACK_BARS,
+    },
     sleeve: createVolTargetIndexSleeve(bars, ceiling),
   }));
   const benchmark = {

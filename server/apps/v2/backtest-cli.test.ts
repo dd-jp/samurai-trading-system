@@ -15,7 +15,7 @@ import {
 } from './backtest-cli.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
-import { CROSS_ASSET_TREND_TIDMS } from './signal/index.js';
+import { CROSS_ASSET_TREND_TIDMS, VOL_TARGET_INDEX_TIDMS } from './signal/index.js';
 import { researchStorePath, TrialLedger } from './trial-ledger.js';
 
 describe('resolveCliOptions', () => {
@@ -317,6 +317,20 @@ describe('runVolTargetIndexAgainst', () => {
       expect(report.stressed.trials).toHaveLength(2);
       expect(report.baseline.dates).toEqual(report.stressed.dates);
       expect(report.baseline.benchmark.equity[0]).toBe(7_000);
+      const configs = (
+        db.prepare('SELECT config FROM v2_trials ORDER BY trial').all() as {
+          config: string;
+        }[]
+      ).map((row) => JSON.parse(row.config));
+      expect(configs.map((config) => config.vol_ceiling)).toEqual([0.2, 0.25]);
+      for (const config of configs) {
+        expect(config).toMatchObject({
+          universe: VOL_TARGET_INDEX_TIDMS,
+          vol_window: 20,
+          atr_window: 20,
+          lookback_bars: 40,
+        });
+      }
       const benchmark = report.baseline.benchmark.equity;
       expect(new Set(benchmark).size).toBeGreaterThan(1);
       expect(report.baseline.trials[0]?.equity).not.toEqual(benchmark);

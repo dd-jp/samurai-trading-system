@@ -14,7 +14,7 @@ import {
 } from '../data/index.js';
 import { baseRead } from './bar-quality.js';
 
-// The equity-index role of #1785 ruling (b). US-listed ETFs stay out until ADR §5 item 6
+// The equity-index role of #1785 candidate 1's ruling (b). US-listed ETFs stay out until ADR §5 item 6
 // confirms UK-resident access (S2)
 export const VOL_TARGET_INDEX_TIDMS: readonly string[] = [
   'ISF',
@@ -40,14 +40,14 @@ export const VOL_TARGET_INDEX_TO = '2025-09-24';
 export const VOL_TARGET_INDEX_CEILINGS: readonly number[] = [0.2, 0.25];
 export const VOL_TARGET_INDEX_VOL_WINDOW = 20;
 const TRADING_DAYS_PER_YEAR = 252;
-const ATR_WINDOW = 20;
+export const VOL_TARGET_INDEX_ATR_WINDOW = 20;
 const STOP_ATR_MULTIPLE = 5;
 const SENTINEL_LIMIT = 1_000_000;
 const RISK_FRACTION = 0.0025;
 const ADV_SHARE = 0.01;
 const ADV_WINDOW_BARS = 20;
 const CAPITAL_SHARE = 0.7;
-const LOOKBACK_BARS = 2 * VOL_TARGET_INDEX_VOL_WINDOW;
+export const VOL_TARGET_INDEX_LOOKBACK_BARS = 2 * VOL_TARGET_INDEX_VOL_WINDOW;
 
 function volTargetIndexSpec(): SleeveSpec {
   return {
@@ -96,7 +96,7 @@ type GatedRead =
   | { readonly skip: string; readonly read: VolRead | undefined };
 
 function volRead(raw: readonly V2Bar[]): VolRead | undefined {
-  const read = baseRead(raw, VOL_TARGET_INDEX_VOL_WINDOW, ATR_WINDOW);
+  const read = baseRead(raw, VOL_TARGET_INDEX_VOL_WINDOW, VOL_TARGET_INDEX_ATR_WINDOW);
   if (read === undefined) return undefined;
   return {
     price: read.price,
@@ -109,7 +109,8 @@ function volRead(raw: readonly V2Bar[]): VolRead | undefined {
 function gatedRead(raw: readonly V2Bar[], sessions: readonly string[]): GatedRead {
   const read = volRead(raw);
   if (read === undefined) return { skip: 'bad_last_bar', read };
-  if (!windowCovered(raw, sessions, LOOKBACK_BARS)) return { skip: 'window_coverage', read };
+  if (!windowCovered(raw, sessions, VOL_TARGET_INDEX_LOOKBACK_BARS))
+    return { skip: 'window_coverage', read };
   const { atr, vol } = read;
   if (atr === undefined || vol === undefined) return { skip: 'insufficient_history', read };
   return { warm: { ...read, atr, vol } };
@@ -173,7 +174,11 @@ function createSleeve(
     decide(context): Promise<SleeveOutput> {
       const sessions = sessionsBefore(bars, context.tradingDate, calendarReferenceFor('saxo'));
       const decisions = VOL_TARGET_INDEX_TIDMS.map((instrument) => {
-        const raw = market.barsBefore(instrument, context.tradingDate, LOOKBACK_BARS);
+        const raw = market.barsBefore(
+          instrument,
+          context.tradingDate,
+          VOL_TARGET_INDEX_LOOKBACK_BARS,
+        );
         return decisionFor(
           sleeveId,
           instrument,
@@ -196,7 +201,7 @@ export function createVolTargetIndexSleeve(bars: BarsSource, ceiling: number): S
 }
 
 // Same lines, sizing, stop, warm-up and coverage gate with the ceiling ignored, so the two books
-// differ only by the volatility rule. A stop-out re-enters at the next decision (ruling (d))
+// differ only by the volatility rule. A stop-out re-enters at the next decision (candidate 1's ruling (d))
 export function createVolTargetIndexBenchmarkSleeve(bars: BarsSource): SleeveFactory {
   return createSleeve(bars, VOL_TARGET_INDEX_BENCHMARK_ID, () => true);
 }
