@@ -260,7 +260,7 @@ export async function reconcileBooks(
 export function blockEntriesOnThrow(
   deps: Pick<ReconcileDeps, 'registry' | 'books' | 'logger'>,
   tradingDate: string,
-  event: string,
+  event: 'v2_fill_sweep_threw' | 'v2_reconcile_threw',
   what: string,
   error: unknown,
 ): ReconcileOutcome {
