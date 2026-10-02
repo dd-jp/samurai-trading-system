@@ -3904,8 +3904,22 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
       return { cancelled: cancelOrder.mock.calls.map(([id]) => id), submitOcoOrder, placed };
     }
 
-    it.each(['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held'])(
-      'cancels a stop leg resting as %s and nothing terminal',
+    it.each([
+      'new',
+      'accepted',
+      'pending_new',
+      'accepted_for_bidding',
+      'held',
+      'partially_filled',
+      'pending_cancel',
+      'pending_replace',
+      'done_for_day',
+      'replaced',
+      'stopped',
+      'suspended',
+      'calculated',
+    ])(
+      'cancels and confirms a stop leg that is %s, and skips the terminal target',
       async (status) => {
         const [target, stop] = restingEntryOrder().legs ?? [];
         const { cancelled } = await replacedWith(
@@ -3920,6 +3934,52 @@ describe('AlpacaBrokerAdapter.submitProtectedExit (#1801)', () => {
         expect(cancelled).toEqual([STOP_LEG_ID]);
       },
     );
+
+    it.each(['filled', 'canceled', 'expired', 'rejected'])(
+      'leaves a %s leg alone',
+      async (status) => {
+        const [target, stop] = restingEntryOrder().legs ?? [];
+        const { cancelled, submitOcoOrder } = await replacedWith(
+          restingEntryOrder({
+            legs: [
+              { ...target, status },
+              { ...stop, status },
+            ] as AlpacaOrderLeg[],
+          }),
+          '151',
+        );
+        expect(cancelled).toEqual([]);
+        expect(submitOcoOrder).toHaveBeenCalledOnce();
+      },
+    );
+
+    it('places nothing beside a stale stop leg still pending_cancel from an earlier attempt, and names the cancel step', async () => {
+      const [target, stop] = restingEntryOrder().legs ?? [];
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const submitOcoOrder = vi.fn();
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: noPriorOrders(
+            restingEntryOrder({
+              legs: [
+                { ...target, status: 'canceled' },
+                { ...stop, status: 'pending_cancel' },
+              ] as AlpacaOrderLeg[],
+            }),
+          ),
+          cancelOrder,
+          getOrder: vi.fn().mockResolvedValue({ ...acceptedOrder(), status: 'pending_cancel' }),
+          getPositions: vi.fn().mockResolvedValue(livePosition('151')),
+          submitOcoOrder,
+        }),
+      );
+
+      const thrown = await adapter.replaceProtectiveLegs(replace).catch((error: unknown) => error);
+
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([STOP_LEG_ID]);
+      expect(thrown).toMatchObject({ name: 'ProtectiveReplaceError', step: 'cancel' });
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+    });
 
     it('names the positions read when it fails after the cancel, as the place step', async () => {
       const { cancelOrder, submitOcoOrder } = ocoClient(restingEntryOrder(), '151');

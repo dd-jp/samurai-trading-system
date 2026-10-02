@@ -426,6 +426,11 @@ export interface OrderExecutor {
   canRoute(route: ExecutionRoute): boolean;
   submit(order: RiskApprovedOrder): Promise<Submission>;
   cancel(route: ExecutionRoute, clientOrderId: string, instrument: string): Promise<void>;
+  filledQty(
+    route: ExecutionRoute,
+    clientOrderId: string,
+    instrument: string,
+  ): Promise<number | undefined>;
   resumeFlatten(
     route: ExecutionRoute,
     clientOrderId: string,

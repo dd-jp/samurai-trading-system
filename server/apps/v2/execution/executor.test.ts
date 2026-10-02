@@ -130,6 +130,7 @@ function fakeBroker(name: string, fills: NormalizedFill[] = []) {
     rearmProtectiveLegs: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
     resumeFlatten: vi.fn().mockResolvedValue(null),
+    getOrder: vi.fn().mockResolvedValue(null),
     fetchNewFills: vi.fn().mockResolvedValue(fills),
   };
 }
@@ -332,6 +333,24 @@ describe('V2OrderExecutor', () => {
       outcome: 'submitted',
       detail: 'closed',
     });
+  });
+
+  it('reads an entry filled qty from the venue, and never from a simulated route (#1990)', async () => {
+    const { executor: paper, alpaca, simulated } = executor(false);
+    const route = { bookVariant: 'primary', venue: 'alpaca' } as const;
+    expect(await paper.filledQty(route, 'e1', 'AAPL')).toBeUndefined();
+    alpaca.getOrder.mockResolvedValueOnce({
+      client_order_id: 'e1',
+      broker_order_ids: ['b'],
+      order_state: 'partially_filled',
+      filled_qty: 4,
+    });
+    expect(await paper.filledQty(route, 'e1', 'AAPL')).toBe(4);
+    expect(alpaca.getOrder).toHaveBeenLastCalledWith('e1', 'AAPL');
+    expect(await paper.filledQty({ bookVariant: 'no-veto', venue: 'alpaca' }, 'e1', 'AAPL')).toBe(
+      undefined,
+    );
+    expect(simulated.getOrder).not.toHaveBeenCalled();
   });
 
   it('a venue that cannot replace a stop refuses the replace before any step, touching nothing', async () => {

@@ -370,11 +370,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const entry = await this.call('submitProtectedExit', () =>
       this.input.client.getOrderByClientOrderId(entryClientOrderId),
     );
-    // Alpaca reports an unfilled bracket's legs as `held` (docs/reviews/alpaca-stop-parent-probe-2026-09-30.md);
-    // whether a filled bracket's stop leg can stay `held` beside its target is unmeasured, so a held
-    // leg is cancelled too rather than left beside the replacement
-    const resting = ['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held'];
-    const legs = (entry?.legs ?? []).filter((leg) => resting.includes(leg.status));
+    // Any leg not yet terminal can still execute, `held` and `pending_cancel` included, so each is
+    // cancelled and confirmed terminal before anything replaces it: a leg whose cancel has not
+    // landed fails the confirm, and nothing is placed beside it
+    const legs = (entry?.legs ?? []).filter(
+      (leg) => !TERMINAL_LEG_STATES.has(mapOrderState(leg.status)),
+    );
     const target = legs.find((leg) => leg.type === 'limit');
     const stop = legs.find((leg) => leg.type === 'stop');
     if (target !== undefined) await this.cancelLegAndConfirm(target.id, instrument);

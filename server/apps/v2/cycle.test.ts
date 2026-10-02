@@ -2481,6 +2481,39 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(alpaca.replaces).toEqual([]);
   });
 
+  it('leaves an entry the venue reports part filled working under its bracket when the journal has not booked the fill, and books it by the run end (#1990)', async () => {
+    class PartFilledAlpaca extends FakeAlpaca {
+      override getOrder(): Promise<null> {
+        return Promise.resolve(null);
+      }
+    }
+    const alpaca = new PartFilledAlpaca();
+    const log = vi.fn();
+    const deps = { ...harness([longAapl], false, alpaca), logger: { log } };
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    (alpaca as unknown as { getOrder: () => Promise<NormalizedOrder> }).getOrder = () => {
+      alpaca.cumulative(ENTRY, 'entry', 4, 20);
+      return Promise.resolve({
+        client_order_id: ENTRY,
+        broker_order_ids: ['a1'],
+        order_state: 'partially_filled',
+        filled_qty: 4,
+      });
+    };
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).not.toContain(ENTRY);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        event: 'v2_entry_cancel_part_filled',
+        message: `${ENTRY}: the venue reports 4 filled that the journal has not booked; left working under its bracket, not cancelled`,
+      }),
+    );
+    expect(heldQty(deps)).toBe(4);
+    expect(deps.journal.orderFor(ENTRY)?.payload).toMatchObject({ stop: expect.any(Number) });
+  });
+
   it('cancels an entry from an earlier date that never filled, and re-arms nothing', async () => {
     class RearmingAlpaca extends FakeAlpaca {
       readonly replaces: ProtectiveReplaceRequest[] = [];
@@ -4786,6 +4819,31 @@ describe('runCycle: positions held across a split (#1865)', () => {
     await unmarkedRerun(deps, venue, '2026-09-29');
     expect(alpaca.replaces).toHaveLength(2);
     expect(deps.journal.orderFor(`${RESTOP}-3`)).toBeUndefined();
+  });
+
+  it('leaves a same-date retry whose stale leg is still pending cancel to the next attempt, placing and flattening nothing', async () => {
+    const pending = new ProtectiveReplaceError('cancel', 'leg still pending_cancel', {
+      cause: undefined,
+    });
+    const { deps, entries, alpaca, venue } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      pending,
+    );
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(deps.journal.orderFor(`${RESTOP}-2`)).toMatchObject({
+      outcome: 'rejected',
+      payload: { failed_step: 'cancel' },
+    });
+    expect(alpaca.exits).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_cancel_failed')).toHaveLength(2);
+    alpaca.replaceError = undefined;
+    venue.stop = undefined;
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(deps.journal.orderFor(`${RESTOP}-3`)?.outcome).toBe('submitted');
+    expect(alpaca.replaces).toHaveLength(3);
+    expect(venue.stop).toMatchObject({ qty: 151 });
   });
 
   it('logs a replace that found nothing left held at the broker as placing nothing', async () => {

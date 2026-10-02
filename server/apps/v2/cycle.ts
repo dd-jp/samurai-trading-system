@@ -8,6 +8,7 @@ import type {
   DecisionJournal,
   EntryApproval,
   EntryRoom,
+  ExecutionRoute,
   JournalledOrder,
   LossBudgetState,
   ManualControl,
@@ -951,6 +952,7 @@ class Cycle {
       const route = routeOf(book, order.venue as Venue);
       if (!this.deps.executor.canRoute(route)) continue;
       try {
+        if (await this.partFilledAtVenue(book, route, order)) continue;
         await this.deps.executor.cancel(route, order.client_order_id, order.instrument);
         this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
         cancelled += 1;
@@ -966,6 +968,29 @@ class Cycle {
       }
     }
     return cancelled;
+  }
+
+  // The journal calls an entry unfilled until a sweep books its fill, and a sweep that threw or a
+  // fill that landed since leaves a part fill the cancel would strip of its bracket legs (#1990);
+  // it stays working under its own legs, and the run's closing sweep books the fill
+  async partFilledAtVenue(
+    book: BookSpec,
+    route: ExecutionRoute,
+    order: JournalledOrder,
+  ): Promise<boolean> {
+    const filled = await this.deps.executor.filledQty(
+      route,
+      order.client_order_id,
+      order.instrument,
+    );
+    if (!((filled ?? 0) > 0)) return false;
+    this.#pendingEntries.add(positionKey(book.id, order.instrument));
+    this.log(
+      'warn',
+      'v2_entry_cancel_part_filled',
+      `${order.client_order_id}: the venue reports ${filled} filled that the journal has not booked; left working under its bracket, not cancelled`,
+    );
+    return true;
   }
 
   async cancelEntriesBlockedAtLastMark(): Promise<void> {

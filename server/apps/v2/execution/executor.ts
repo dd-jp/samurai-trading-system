@@ -190,6 +190,16 @@ export class V2OrderExecutor implements OrderExecutor {
     await this.#brokerFor(route)?.cancel(clientOrderId, instrument);
   }
 
+  async filledQty(
+    route: ExecutionRoute,
+    clientOrderId: string,
+    instrument: string,
+  ): Promise<number | undefined> {
+    if (this.simulates(route)) return undefined;
+    const order = await this.#brokerFor(route)?.getOrder(clientOrderId, instrument);
+    return order?.filled_qty;
+  }
+
   async resumeFlatten(
     route: ExecutionRoute,
     clientOrderId: string,
