@@ -70,8 +70,6 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Prod
     mode: 'paper',
     alpacaBrokerClient: {
       submitOrder: vi.fn(),
-      submitLimitOrder: vi.fn(),
-      submitStopLimitOrder: vi.fn(),
       cancelOrder: vi.fn(),
       getOrder: vi.fn(),
       listOrders: vi.fn(async () => []),

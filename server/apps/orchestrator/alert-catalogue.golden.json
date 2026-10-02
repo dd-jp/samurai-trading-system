@@ -189,42 +189,6 @@
       "sendFailedInTrace": null
     }
   ],
-  "ocoDoubleFillAlerts": [
-    {
-      "log": {
-        "trace_id": "oco-double-fill",
-        "stage": "execution",
-        "event": "oco_double_fill",
-        "level": "error",
-        "message": "both protective legs of an emulated crypto OCO filled — the lot is over-closed and a reverse position may be open at the venue; check and unwind it by hand",
-        "payload": {
-          "client_order_id": "lot-3",
-          "instrument": "BTC-USD",
-          "stop_order_id": "stop-1",
-          "target_order_id": "tp-1",
-          "observed_at": "2026-09-10T08:15:00.000Z"
-        }
-      },
-      "logInTrace": {
-        "trace_id": "oco-double-fill",
-        "stage": "execution",
-        "event": "oco_double_fill",
-        "level": "error",
-        "message": "both protective legs of an emulated crypto OCO filled — the lot is over-closed and a reverse position may be open at the venue; check and unwind it by hand",
-        "payload": {
-          "client_order_id": "lot-3",
-          "instrument": "BTC-USD",
-          "stop_order_id": "stop-1",
-          "target_order_id": "tp-1",
-          "observed_at": "2026-09-10T08:15:00.000Z"
-        }
-      },
-      "text": "Samurai OCO DOUBLE FILL: BTC-USD — BOTH emulated protective legs filled (stop stop-1, target tp-1) as of 2026-09-10T08:15:00.000Z.\nLot lot-3. The lot is over-closed and a REVERSE position may now be open at the venue. Nothing was unwound automatically — check the position and close it by hand.",
-      "rejected": "telegram 502",
-      "sendFailed": null,
-      "sendFailedInTrace": null
-    }
-  ],
   "legResizeAlerts": [
     {
       "log": {

@@ -12,7 +12,6 @@ import {
   type ArmComparisonEvidence,
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
-  type CryptoEmulationEvidence,
   type DataFailoverEvidence,
   type DataSourceFactoryEvidence,
   type EntrypointFaultGuardEvidence,
@@ -216,28 +215,10 @@ function meteredSnapshot() {
   return { crypto: { debatesUsed: 1, llmCallsUsed: 4 } };
 }
 
-function healthyCryptoEmulation(
-  overrides: Partial<CryptoEmulationEvidence> = {},
-): CryptoEmulationEvidence {
-  return {
-    journalRow: {
-      phase: 'resolved',
-      asset_class: 'crypto',
-      stop_order_id: 'scenario-alpaca-2',
-      target_order_id: 'scenario-alpaca-3',
-    },
-    entryFillSeen: true,
-    stopFillSeen: true,
-    siblingCancelled: true,
-    ...overrides,
-  };
-}
-
 interface HealthyGateOptionOverrides {
   minTicks?: number;
   alpacaWireClientReached?: boolean;
   exitPath?: ExitPathEvidence;
-  cryptoEmulation?: CryptoEmulationEvidence;
   loggerResilience?: LoggerResilienceEvidence;
   logRetention?: LogRetentionEvidence;
   entrypointFaultGuards?: EntrypointFaultGuardEvidence;
@@ -273,7 +254,6 @@ function healthyGateOptionsGroupA(overrides: HealthyGateOptionOverrides) {
 function healthyGateOptionsGroupB(overrides: HealthyGateOptionOverrides) {
   return {
     exitPath: overrides.exitPath ?? healthyExitPath(),
-    cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
     loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
     logRetention: overrides.logRetention ?? healthyLogRetention(),
     entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
@@ -2205,65 +2185,6 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     );
 
     expect(gate.failures.some((failure) => failure.includes('lot-older, lot-newer'))).toBe(false);
-  });
-
-  it('fails when no emulated-leg journal row exists for the crypto lot (#586)', () => {
-    const gate = evaluateSmokeGate(
-      transactedObservations(),
-      healthyGateOptions({ cryptoEmulation: healthyCryptoEmulation({ journalRow: undefined }) }),
-    );
-
-    expect(gate.passed).toBe(false);
-    expect(gate.failures.some((failure) => failure.includes('no crypto row'))).toBe(true);
-  });
-
-  it('fails when the journal row never got protective-leg order ids (#586)', () => {
-    const gate = evaluateSmokeGate(
-      transactedObservations(),
-      healthyGateOptions({
-        cryptoEmulation: healthyCryptoEmulation({
-          journalRow: {
-            phase: 'pending_entry',
-            asset_class: 'crypto',
-            stop_order_id: null,
-            target_order_id: null,
-          },
-        }),
-      }),
-    );
-
-    expect(gate.passed).toBe(false);
-    expect(gate.failures.some((failure) => failure.includes('never submitted as plain'))).toBe(
-      true,
-    );
-    expect(gate.failures.some((failure) => failure.includes("expected 'resolved'"))).toBe(true);
-  });
-
-  it('fails when the sibling was never cancelled after the stop filled (#586)', () => {
-    const gate = evaluateSmokeGate(
-      transactedObservations(),
-      healthyGateOptions({ cryptoEmulation: healthyCryptoEmulation({ siblingCancelled: false }) }),
-    );
-
-    expect(gate.passed).toBe(false);
-    expect(gate.failures.some((failure) => failure.includes('one-cancels-other'))).toBe(true);
-  });
-
-  it('fails when the emulated fills never came back through the sweep (#586)', () => {
-    const gate = evaluateSmokeGate(
-      transactedObservations(),
-      healthyGateOptions({
-        cryptoEmulation: healthyCryptoEmulation({ entryFillSeen: false, stopFillSeen: false }),
-      }),
-    );
-
-    expect(gate.passed).toBe(false);
-    expect(gate.failures.some((failure) => failure.includes('entry fill never came back'))).toBe(
-      true,
-    );
-    expect(gate.failures.some((failure) => failure.includes('stop-leg fill never came back'))).toBe(
-      true,
-    );
   });
 
   describe('the OHLCV failover (#562)', () => {

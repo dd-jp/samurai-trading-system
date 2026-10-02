@@ -905,8 +905,6 @@ function buildExecutionAndRiskInfra(deps: {
       state: new SqliteBrokerStateStore(guardedStore(config.db, 'execution')),
       unpricedFillAlerts:
         config.unpricedFillAlerts ?? loggingAlertChannel('unpricedFillAlerts', logger),
-      ocoDoubleFillAlerts:
-        config.ocoDoubleFillAlerts ?? loggingAlertChannel('ocoDoubleFillAlerts', logger),
       logger,
       ...(config.unpricedFillAgeOutMs === undefined
         ? {}

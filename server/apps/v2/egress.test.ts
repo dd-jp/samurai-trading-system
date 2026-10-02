@@ -198,8 +198,6 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient {
     },
     submitMarketOrder: () => Promise.reject(new Error('unused')),
     submitOcoOrder: () => Promise.reject(new Error('unused')),
-    submitLimitOrder: () => Promise.reject(new Error('unused')),
-    submitStopLimitOrder: () => Promise.reject(new Error('unused')),
     cancelOrder: () => Promise.resolve(),
     listOpenOrders: () => Promise.resolve([]),
     getPositions: () => Promise.resolve([]),

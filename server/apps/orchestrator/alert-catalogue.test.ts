@@ -62,15 +62,6 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
       observed_at: AT,
     },
   ],
-  ocoDoubleFillAlerts: [
-    {
-      client_order_id: 'lot-3',
-      instrument: 'BTC-USD',
-      stop_order_id: 'stop-1',
-      target_order_id: 'tp-1',
-      observed_at: AT,
-    },
-  ],
   legResizeAlerts: [
     {
       client_order_id: 'lot-4',
@@ -378,7 +369,6 @@ const INVOKE: { readonly [K in AlertId]: (port: AlertPort<K>, alert: AlertOf<K>)
   orphanAlerts: (port, alert) => port.postOrphanAlert(alert),
   unpricedFillAlerts: (port, alert) => port.postUnpricedFillAlert(alert),
   residualExposureAlerts: (port, alert) => port.postResidualExposureAlert(alert),
-  ocoDoubleFillAlerts: (port, alert) => port.postOcoDoubleFillAlert(alert),
   legResizeAlerts: (port, alert) => port.postLegResizeUnverifiedAlert(alert),
   dormantLegsAlerts: (port, alert) => port.postDormantLegsUnresolvedAlert(alert),
   priceUnitAlerts: (port, alert) => port.postUnresolvedPriceUnitAlert(alert),
