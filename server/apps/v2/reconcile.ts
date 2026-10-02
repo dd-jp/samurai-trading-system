@@ -269,6 +269,11 @@ export interface ThrowFailure {
   readonly what: string;
 }
 
+export interface StepThrow {
+  readonly failure: ThrowFailure;
+  readonly error: unknown;
+}
+
 type ThrowDeps = Pick<ReconcileDeps, 'registry' | 'books' | 'executor' | 'journal' | 'logger'>;
 
 // The signals entry pass gates on the latest journalled reconcile for the date, so a throw must
@@ -300,15 +305,26 @@ export function blockEntriesOnThrow(
   failure: ThrowFailure,
   error: unknown,
 ): ReconcileOutcome {
-  const { event, what } = failure;
-  const summary = `${what} threw: ${describeThrownSafely(error)}`;
-  logIfPresent(deps.logger, {
-    trace_id: `v2-${tradingDate}`,
-    stage: 'v2',
-    level: 'error',
-    event,
-    message: summary,
+  return blockEntriesOnThrows(deps, tradingDate, [{ failure, error }]);
+}
+
+export function blockEntriesOnThrows(
+  deps: ThrowDeps,
+  tradingDate: string,
+  thrown: readonly StepThrow[],
+): ReconcileOutcome {
+  const summaries = thrown.map(({ failure: { event, what }, error }) => {
+    const message = `${what} threw: ${describeThrownSafely(error)}`;
+    logIfPresent(deps.logger, {
+      trace_id: `v2-${tradingDate}`,
+      stage: 'v2',
+      level: 'error',
+      event,
+      message,
+    });
+    return message;
   });
+  const summary = summaries.join('; ');
   journalThrow(deps, tradingDate, summary);
   const bookIds = allBooks(deps).map((book) => book.id);
   return {

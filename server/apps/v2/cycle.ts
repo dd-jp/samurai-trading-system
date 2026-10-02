@@ -48,8 +48,10 @@ import {
 } from './data/index.js';
 import {
   blockEntriesOnThrow,
+  blockEntriesOnThrows,
   type ReconcileOutcome,
   reconcileOrBlockEntries,
+  type StepThrow,
   type ThrowFailure,
 } from './reconcile.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
@@ -216,6 +218,8 @@ class Cycle {
   readonly refusals: string[] = [];
   readonly #pendingEntries = new Set<string>();
   readonly #entriesBlocked = new Set<string>();
+  readonly #unrescaled = new Set<string>();
+  readonly #unrescaledBooks = new Set<string>();
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -442,12 +446,47 @@ class Cycle {
     this.log('error', 'v2_crossing_fill', message);
   }
 
+  // A position whose rescale threw keeps its pre-split qty and levels: an exit or mark on them
+  // books a phantom split-sized loss, so it waits for a cycle whose rescale succeeds
   rescaleSplitPositions(): void {
+    const thrown: unknown[] = [];
     for (const sleeveId of this.deps.registry.ids()) {
-      for (const book of this.deps.books.forSleeve(sleeveId)) {
-        for (const held of this.deps.books.positions(book.id)) this.rescaleForSplit(book, held);
+      for (const book of this.deps.books.forSleeve(sleeveId))
+        thrown.push(...this.rescaleBook(book));
+    }
+    if (thrown.length > 0) throw thrown[0];
+  }
+
+  rescaleBook(book: BookSpec): unknown[] {
+    let positions: readonly Position[];
+    try {
+      positions = this.deps.books.positions(book.id);
+    } catch (error) {
+      this.#unrescaledBooks.add(book.id);
+      this.refusals.push(
+        `${book.id}: split rescale threw reading its positions, so no exit and marked at the entry price this cycle`,
+      );
+      return [error];
+    }
+    const thrown: unknown[] = [];
+    for (const held of positions) {
+      try {
+        this.rescaleForSplit(book, held);
+      } catch (error) {
+        this.#unrescaled.add(positionKey(book.id, held.instrument));
+        this.refusals.push(
+          `${book.id} ${held.instrument}: split rescale threw, so no exit and marked at the entry price this cycle`,
+        );
+        thrown.push(error);
       }
     }
+    return thrown;
+  }
+
+  rescaleThrew(bookId: string, instrument: string): boolean {
+    return (
+      this.#unrescaledBooks.has(bookId) || this.#unrescaled.has(positionKey(bookId, instrument))
+    );
   }
 
   rescaleForSplit(book: BookSpec, held: Position): void {
@@ -735,7 +774,9 @@ class Cycle {
 
   fillSimulatedExits(): void {
     for (const bookId of this.deps.books.ids()) {
-      for (const held of this.deps.books.positions(bookId)) this.fillSimulatedExit(held);
+      for (const held of this.deps.books.positions(bookId)) {
+        if (!this.rescaleThrew(bookId, held.instrument)) this.fillSimulatedExit(held);
+      }
     }
   }
 
@@ -957,7 +998,9 @@ class Cycle {
 
   async haltExits(book: BookSpec): Promise<void> {
     for (const held of this.deps.books.positions(book.id)) {
-      if (held.exitClientOrderId !== undefined) continue;
+      if (held.exitClientOrderId !== undefined || this.rescaleThrew(book.id, held.instrument)) {
+        continue;
+      }
       if (this.deps.executor.canRoute(routeOf(book, held.venue))) {
         await this.submitExit(book, held, 'manual_halt');
         continue;
@@ -1125,6 +1168,7 @@ class Cycle {
     held: Position,
     exitSignalled: ReadonlySet<string>,
   ): Promise<void> {
+    if (this.rescaleThrew(book.id, held.instrument)) return;
     await this.resumePendingExit(book, held);
     if (this.deps.executor.simulates(routeOf(book, held.venue))) {
       this.simulatedBracketExit(book, held);
@@ -1469,7 +1513,7 @@ class Cycle {
     this.deps.books.markDay(
       book.id,
       this.tradingDate,
-      (i, v) => this.markGbp(i, v),
+      (i, v) => (this.rescaleThrew(book.id, i) ? undefined : this.markGbp(i, v)),
       calendarDaysBetween(previous?.tradingDate, this.tradingDate),
       this.deps.venueSessions?.timeStopPausedVenues(previous?.tradingDate, this.tradingDate),
     );
@@ -1721,20 +1765,16 @@ const SYNC_STEPS: readonly SyncStep[] = [
   },
 ];
 
-async function syncStepFailures(
-  deps: CycleDeps,
-  cycle: Cycle,
-  tradingDate: string,
-): Promise<ReconcileOutcome[]> {
-  const failures: ReconcileOutcome[] = [];
+async function syncStepThrows(cycle: Cycle): Promise<StepThrow[]> {
+  const thrown: StepThrow[] = [];
   for (const step of SYNC_STEPS) {
     try {
       await step.run(cycle);
     } catch (error) {
-      failures.push(blockEntriesOnThrow(deps, tradingDate, step, error));
+      thrown.push({ failure: step, error });
     }
   }
-  return failures;
+  return thrown;
 }
 
 async function syncBooksThenReconcile(
@@ -1742,14 +1782,11 @@ async function syncBooksThenReconcile(
   cycle: Cycle,
   tradingDate: string,
 ): Promise<ReconcileOutcome> {
-  const failures = await syncStepFailures(deps, cycle, tradingDate);
+  const thrown = await syncStepThrows(cycle);
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
-  if (failures.length === 0) return reconcileOrBlockEntries(deps, tradingDate);
-  return {
-    blockedBookIds: new Set(failures.flatMap((failure) => [...failure.blockedBookIds])),
-    refusals: failures.flatMap((failure) => failure.refusals),
-  };
+  if (thrown.length === 0) return reconcileOrBlockEntries(deps, tradingDate);
+  return blockEntriesOnThrows(deps, tradingDate, thrown);
 }
 
 // The date stays unmarked for a retry rather than marked on books missing this cycle's fills
