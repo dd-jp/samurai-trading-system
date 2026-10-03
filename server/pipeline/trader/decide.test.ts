@@ -2408,7 +2408,7 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
     ).rejects.toThrow(STALL);
   });
 
-  it('does NOT degrade a scale_in either — the same builder serves both call sites (#900)', async () => {
+  it('does NOT degrade a scale_in either — the same builder serves both call sites', async () => {
     await expect(
       decideWithReason(
         traderInput({

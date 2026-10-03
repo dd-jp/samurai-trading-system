@@ -309,7 +309,7 @@ Starting buckets (from titles; verify each against its body):
 | Bucket | Issues |
 |---|---|
 | close-obsolete | #1119, #1149, #1412, #1413, #1498, #1554, #1603, #1604, #1657 |
-| fold/defer — code-cited, do NOT close | #238, #751, #895 (LSE mark source; the Saxo simulated adapter needs bid/ask), #900, #1054 — #895/#900 are in `LIVE_MONEY_GATES` and a test asserts they stay open |
+| fold/defer — code-cited, do NOT close | #238, #751, #895 (LSE mark source; the Saxo simulated adapter needs bid/ask), #1054 — #895 is in `LIVE_MONEY_GATES` and a test asserts it stays open |
 | fold | #756 → Step 2; #750, #1515 → Step 1; #1400, #1302, #1215, #1426, #1581, #1438, #1444 → Steps 3/4; #1521 → tax log; #1516 → Step 4b drift monitor; #1387 → R9; #1685, #1686 (X sentiment archive) → Step 3, G18 social trial |
 | keep | #1648, #1649 (CRAP gate, G15), #1677, #1082, #1427, #1675 |
 | defer | #1652, #1654, #1656, #1658, #1659, #1660, #1661, #1662, #1663, #1665 |

@@ -241,6 +241,7 @@ describe('LIVE_MONEY_GATES', () => {
   it('cites no issue that was closed when this list was verified', () => {
     const closed = [
       526, 519, 548, 549, 550, 551, 562, 384, 375, 333, 525, 798, 800, 826, 894, 886, 888, 925, 932,
+      900,
     ];
 
     for (const gate of LIVE_MONEY_GATES) {
@@ -252,7 +253,7 @@ describe('LIVE_MONEY_GATES', () => {
   });
 
   it('cites the gates that are open today, by number (#868)', () => {
-    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895, 900]);
+    expect(LIVE_MONEY_GATES.map((gate) => gate.issue)).toEqual([895]);
   });
 
   it('hands the reader a command instead of only telling them to re-check', () => {
@@ -280,7 +281,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
   it('names every gate that is open, at the boot path', () => {
     const message = liveBootWarning();
 
-    for (const issue of [895, 900]) {
+    for (const issue of [895]) {
       expect(message).toContain(`#${issue}`);
     }
     expect(message).toContain('#238');
@@ -290,7 +291,7 @@ describe('the live-boot warning as an operator actually receives it', () => {
     const message = liveBootWarning();
 
     for (const issue of [
-      526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886, 888, 925, 932,
+      526, 519, 548, 549, 550, 551, 562, 798, 800, 826, 894, 886, 888, 925, 932, 900,
     ]) {
       expect(message).not.toContain(`#${issue}`);
     }
