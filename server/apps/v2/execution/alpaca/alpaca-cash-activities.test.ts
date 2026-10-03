@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ALPACA_ACTIVITY_MAX_PAGES } from './alpaca-activity-pages.js';
 import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
 import {
-  ALPACA_NON_TRADE_CASH_TYPES,
   AlpacaCashActivityReader,
   alpacaCashActivityReader,
+  alpacaNonTradeCashTypes,
 } from './alpaca-cash-activities.js';
 import type { AlpacaBrokerClient, AlpacaCashActivity } from './alpaca-client.js';
 import { ALPACA_ACTIVITY_PAGE_SIZE, AlpacaHttpBrokerClient } from './alpaca-http-client.js';
@@ -43,12 +43,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('ALPACA_NON_TRADE_CASH_TYPES', () => {
-  it('leaves out fills, cash in lieu, the operator-recorded deposits and corporate actions', () => {
-    for (const type of ['FILL', 'CIL', 'CSD', 'CSW', 'JNLC', 'TRANS', 'MA', 'REORG', 'SPIN']) {
-      expect(ALPACA_NON_TRADE_CASH_TYPES).not.toContain(type);
+describe('alpacaNonTradeCashTypes', () => {
+  it('leaves out fills, cash in lieu, operator moves, corporate actions, crypto and MISC', () => {
+    const excluded = ['FILL', 'CIL', 'CSD', 'CSW', 'JNLC', 'JNL', 'TRANS', 'MA', 'REORG', 'SPIN'];
+    for (const type of [...excluded, 'SSO', 'SSP', 'CFEE', 'MISC']) {
+      expect(alpacaNonTradeCashTypes()).not.toContain(type);
     }
-    expect(ALPACA_NON_TRADE_CASH_TYPES).toEqual([
+    expect(alpacaNonTradeCashTypes()).toEqual([
       'DIV',
       'DIVCGL',
       'DIVCGS',
@@ -143,7 +144,7 @@ describe('AlpacaCashActivityReader', () => {
         status: 'canceled',
       },
     ]);
-    expect(list).toHaveBeenCalledWith(ALPACA_NON_TRADE_CASH_TYPES, '2026-10-01', undefined);
+    expect(list).toHaveBeenCalledWith(alpacaNonTradeCashTypes(), '2026-10-01', undefined);
   });
 
   it('pages on the last id until a short page', async () => {

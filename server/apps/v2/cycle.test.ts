@@ -5971,7 +5971,7 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
       const { alpaca, deps } = await heldAaplThen(withDividendCash, 5, 'live', {
         cashActivities: reader,
       });
-      expect(reader.read).toHaveBeenCalledWith('2026-09-25');
+      expect(reader.read).toHaveBeenCalledWith('2026-09-24');
       expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(PRIMARY_MSFT);
       expect(
         rows(deps, "SELECT reference, amount_quote FROM v2_cash_anchors WHERE kind = 'activity'"),

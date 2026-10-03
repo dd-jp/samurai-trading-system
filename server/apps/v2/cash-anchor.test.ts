@@ -10,7 +10,7 @@ import {
   liveCashCheck,
   SqliteCashAnchors,
 } from './cash-anchor.js';
-import { ALPACA_NON_TRADE_CASH_TYPES } from './execution/alpaca/alpaca-cash-activities.js';
+import { alpacaNonTradeCashTypes } from './execution/alpaca/alpaca-cash-activities.js';
 
 const DATE = '2026-10-05';
 const FX = 1.25;
@@ -345,7 +345,7 @@ describe('SqliteCashAnchors.recordActivity (David 2026-10-03, #2035 item 5)', ()
          0.5, 0, 0, 'USD', 30, 0, 'live', 't')`,
     ).run(DATE);
     expect(anchors.storeFlowSince(LIVE_AT(0), 'alpaca')).toEqual({ ok: true, quote: -10 + 15 });
-    expect(ALPACA_NON_TRADE_CASH_TYPES).not.toContain('CIL');
+    expect(alpacaNonTradeCashTypes()).not.toContain('CIL');
   });
 
   it("sums only the anchor's own account's activities", () => {

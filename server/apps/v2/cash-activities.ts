@@ -21,17 +21,19 @@ export interface CashActivityReadDeps {
   readonly logger?: Logger | undefined;
 }
 
-// Activities carry a date, not a time: one dated on the anchor's own day is taken as already in the
-// anchor's cash
+// The cycle runs at 07:30 London (02:30 ET), so the anchor's cash is read before Alpaca books
+// that US date's activities: one dated on the anchor's own day counts as after it. Alpaca's
+// `after` is exclusive, hence the day before
 async function readSince(
   reader: BrokerCashActivityReader,
   anchor: CashAnchor,
   tradingDate: string,
 ): Promise<readonly BrokerCashActivity[]> {
   const lookback = addDays(tradingDate, -CASH_ACTIVITY_LOOKBACK_DAYS);
-  const since = lookback > anchor.tradingDate ? lookback : anchor.tradingDate;
+  const dayBefore = addDays(anchor.tradingDate, -1);
+  const since = lookback > dayBefore ? lookback : dayBefore;
   const rows = await reader.read(since);
-  return rows.filter((row) => row.activity_date > anchor.tradingDate);
+  return rows.filter((row) => row.activity_date >= anchor.tradingDate);
 }
 
 function journalRows(

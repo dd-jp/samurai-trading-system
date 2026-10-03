@@ -32,6 +32,8 @@ export interface CashAnchorLedger {
     tradingDate: string,
   ): CashAnchor;
   storeFlowSince(anchor: Pick<CashAnchor, 'brokerMode' | 'fillSeq'>, venue: Venue): StoreFlow;
+  // Each status the broker reports brings the activity's sum to that status's amount, and a canceled
+  // activity stays at zero whatever is read after it; a status already journalled is not re-read
   recordActivity(
     venue: Venue,
     brokerMode: BrokerMode,
@@ -63,19 +65,6 @@ const STORE_FLOW = `
   FROM v2_fills f JOIN v2_orders o ON o.client_order_id = f.client_order_id
   WHERE f.venue = ? AND f.broker_mode = ? AND f.fill_seq > ?
     AND o.outcome NOT IN ('simulated', 'refused_dry_run')`;
-
-// Each status the broker reports brings the activity's sum to that status's amount, and a canceled
-// activity stays at zero whatever is read after it; a status already journalled is not re-read
-const RECORD_ACTIVITY = `
-  INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
-    trading_date, recorded_at, broker_mode, activity_id, activity_type, activity_date, status)
-  SELECT @venue, 'activity', @currency,
-    CASE WHEN @status = 'canceled' OR COALESCE(SUM(status = 'canceled'), 0) > 0 THEN 0
-         ELSE @amount END - COALESCE(SUM(amount_quote), 0),
-    NULL, @reference, @tradingDate, @recordedAt, @brokerMode, @activityId, @activityType,
-    @activityDate, @status
-  FROM v2_cash_anchors WHERE venue = @venue AND kind = 'activity' AND activity_id = @activityId
-  HAVING NOT EXISTS (SELECT 1 FROM v2_cash_anchors WHERE venue = @venue AND reference = @reference)`;
 
 export class SqliteCashAnchors implements CashAnchorLedger {
   constructor(
@@ -167,19 +156,32 @@ export class SqliteCashAnchors implements CashAnchorLedger {
     activity: BrokerCashActivity,
     tradingDate: string,
   ): boolean {
-    const inserted = this.db.prepare(RECORD_ACTIVITY).run({
-      venue,
-      currency: quoteCurrencyOf(venue),
-      amount: activity.amount,
-      reference: `activity:${activity.activity_id}:${activity.status}`,
-      tradingDate,
-      recordedAt: toStoredTimestamp(this.clock.now()),
-      brokerMode,
-      activityId: activity.activity_id,
-      activityType: activity.activity_type,
-      activityDate: activity.activity_date,
-      status: activity.status,
-    });
+    const inserted = this.db
+      .prepare(
+        `
+        INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+          trading_date, recorded_at, broker_mode, activity_id, activity_type, activity_date, status)
+        SELECT @venue, 'activity', @currency,
+          CASE WHEN @status = 'canceled' OR COALESCE(SUM(status = 'canceled'), 0) > 0 THEN 0
+               ELSE @amount END - COALESCE(SUM(amount_quote), 0),
+          NULL, @reference, @tradingDate, @recordedAt, @brokerMode, @activityId, @activityType,
+          @activityDate, @status
+        FROM v2_cash_anchors WHERE venue = @venue AND kind = 'activity' AND activity_id = @activityId
+        HAVING NOT EXISTS (SELECT 1 FROM v2_cash_anchors WHERE venue = @venue AND reference = @reference)`,
+      )
+      .run({
+        venue,
+        currency: quoteCurrencyOf(venue),
+        amount: activity.amount,
+        reference: `activity:${activity.activity_id}:${activity.status}`,
+        tradingDate,
+        recordedAt: toStoredTimestamp(this.clock.now()),
+        brokerMode,
+        activityId: activity.activity_id,
+        activityType: activity.activity_type,
+        activityDate: activity.activity_date,
+        status: activity.status,
+      });
     return inserted.changes > 0;
   }
 
