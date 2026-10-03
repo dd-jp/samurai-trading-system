@@ -31,15 +31,7 @@ export {
 export type { RetryAttemptReport, RetryConfig } from './http/retry.js';
 export { withRetry, worstCaseFetchMs } from './http/retry.js';
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';
-export {
-  DEFAULT_POLYGON_PACING,
-  DEFAULT_VENUE_PACING,
-  DISTINCT_BAR_WINDOWS_PER_INSTRUMENT,
-  deriveAnalystDrainMs,
-  deriveAnalystTimeoutMs,
-  resolvePolygonPacing,
-  resolveVenuePacing,
-} from './http/venue-pacing.js';
+export { DEFAULT_VENUE_PACING } from './http/venue-pacing.js';
 export type { InjectableTimers } from './injectable-timers.js';
 export { DEFAULT_INJECTABLE_TIMERS } from './injectable-timers.js';
 export { isFiniteNumber } from './is-finite-number.js';
