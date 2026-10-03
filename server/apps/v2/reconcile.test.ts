@@ -126,10 +126,11 @@ function fakeAnchors(
     anchor: () => current,
     recordAnchor: (venue, brokerMode, cashQuote, tradingDate) => {
       recorded.push({ venue, brokerMode, cashQuote, tradingDate });
-      current = { currency: 'USD', cashQuote, fillSeq: 0, brokerMode };
+      current = { currency: 'USD', cashQuote, fillSeq: 0, brokerMode, tradingDate };
       return current;
     },
     storeFlowSince: () => flow,
+    recordActivity: () => false,
   };
 }
 
@@ -138,6 +139,7 @@ const ANCHORED_AT_CLEAN: CashAnchor = {
   cashQuote: 800 * FX,
   fillSeq: 0,
   brokerMode: 'live',
+  tradingDate: '2026-09-30',
 };
 
 interface Harness {

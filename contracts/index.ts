@@ -94,6 +94,8 @@ export type {
   BrokerActivityStatus,
   BrokerBook,
   BrokerBookReader,
+  BrokerCashActivity,
+  BrokerCashActivityReader,
   BrokerCashInLieu,
   BrokerCashInLieuReader,
   BrokerMode,

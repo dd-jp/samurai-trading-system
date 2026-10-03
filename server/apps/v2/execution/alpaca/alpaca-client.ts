@@ -78,6 +78,19 @@ export interface AlpacaBrokerClient {
   listOpenOrders(): Promise<AlpacaOrder[]>;
   getAccount(): Promise<AlpacaAccount>;
   listCashInLieu?(after: string, pageToken?: string): Promise<AlpacaCashInLieuActivity[]>;
+  listCashActivities?(
+    types: readonly string[],
+    after: string,
+    pageToken?: string,
+  ): Promise<AlpacaCashActivity[]>;
+}
+
+export interface AlpacaCashActivity {
+  id: string;
+  activity_type: string;
+  date: string;
+  net_amount: string;
+  status: BrokerActivityStatus;
 }
 
 export interface AlpacaCashInLieuActivity {
