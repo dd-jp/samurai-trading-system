@@ -1452,6 +1452,35 @@ describe('SaxoHttpBrokerClient', () => {
     });
 
     it.each([
+      ['sim', 'SAXO_SIM_ACCESS_TOKEN', 'SAXO_SIM_GATEWAY', 'SAXO_SIM_ACCOUNT_KEY'],
+      ['live', 'SAXO_LIVE_ACCESS_TOKEN', 'SAXO_LIVE_GATEWAY', 'SAXO_LIVE_ACCOUNT_KEY'],
+    ] as const)(
+      'reads the %s token, gateway and account key from %s, %s and %s',
+      async (environment, token, gateway, accountKey) => {
+        vi.stubEnv(token, 'fake-env-token');
+        vi.stubEnv(gateway, 'https://env-gateway.example/openapi');
+        vi.stubEnv(accountKey, 'fake-cfd-acct');
+        const fetchMock = twoAccountFetch();
+        const client = new SaxoHttpBrokerClient({
+          environment,
+          retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+          rateLimiter: permissiveLimiter(),
+          logger: recordingLogger(),
+        });
+
+        await client.listOpenOrders();
+
+        expect(calledPath(fetchMock, 0)).toBe(
+          'https://env-gateway.example/openapi/port/v1/accounts/me',
+        );
+        expect(calledInit(fetchMock, 0).headers).toMatchObject({
+          authorization: 'Bearer fake-env-token',
+        });
+        expect(calledPath(fetchMock, 1)).toContain('AccountKey=fake-cfd-acct');
+      },
+    );
+
+    it.each([
       ['sim', 'SAXO_SIM_ACCOUNT_KEY'],
       ['live', 'SAXO_LIVE_ACCOUNT_KEY'],
     ] as const)('pins the %s account from %s, trimmed', async (environment, name) => {
