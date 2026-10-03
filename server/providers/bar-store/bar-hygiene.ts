@@ -1,4 +1,4 @@
-import type { DailyBar } from '../../pipeline/momentum/index.js';
+import type { DailyBar } from '../../shared/index.js';
 
 const UNIT_BREAK_MIN_RATIO = 90;
 const UNIT_BREAK_MAX_RATIO = 110;

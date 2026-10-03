@@ -1,7 +1,7 @@
 import type { Venue } from '../../../../contracts/index.js';
-import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
-import { coverageSatisfied, windowCoverage } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import type { BarSeries, DailyBar } from '../../../shared/index.js';
+import { coverageSatisfied, windowCoverage } from '../../../shared/index.js';
 import { addDays } from './macro-calendar.js';
 import { quoteCurrencyOf } from './venues.js';
 

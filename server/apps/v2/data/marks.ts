@@ -1,6 +1,6 @@
 import type { Venue } from '../../../../contracts/index.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 import { barsBefore } from './bars.js';
 import { homeBarVenue } from './venues.js';
 

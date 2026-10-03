@@ -1,4 +1,4 @@
-import { wholeShares } from '../../../pipeline/momentum/index.js';
+import { wholeShares } from '../../../shared/index.js';
 import { MACRO_DAY_SIZE_FRACTION } from '../data/index.js';
 
 export const MAX_POSITION_FRACTION_OF_EQUITY = 0.1;

@@ -1,5 +1,4 @@
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
-import type { LogEventCode, Logger } from '../../shared/index.js';
+import type { BarSeries, DailyBar, LogEventCode, Logger } from '../../shared/index.js';
 import { MAX_BAR_AGE_CALENDAR_DAYS } from './data/index.js';
 
 export interface BarRefreshSymbolResult {

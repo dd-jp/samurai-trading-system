@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { BarSeries } from '../../pipeline/momentum/index.js';
-import type { Clock } from '../../shared/index.js';
+import type { BarSeries, Clock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 import { type BarsSource, barsBefore, type CfdCatalogue } from './data/index.js';

@@ -18,9 +18,9 @@ import type {
   SleeveSpec,
 } from '../../../contracts/index.js';
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { type InstrumentDetails, LSE_MOMENTUM_LINES } from '../../providers/saxo-bars/index.js';
+import type { DailyBar } from '../../shared/index.js';
 import {
   type BrokerAck,
   type BrokerAdapter,

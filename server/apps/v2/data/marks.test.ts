@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 import { heldKey, ParquetMarkSource } from './marks.js';
 
 const dirs: string[] = [];

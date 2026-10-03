@@ -9,11 +9,8 @@ import {
   type V2Bar,
   type Venue,
 } from '../../../../contracts/index.js';
-import {
-  alpacaRegulatoryFees,
-  SAXO_COMMISSION_PER_SIDE,
-} from '../../../pipeline/momentum/index.js';
 import type { Logger } from '../../../shared/index.js';
+import { alpacaRegulatoryFees, SAXO_COMMISSION_PER_SIDE } from '../../../shared/index.js';
 import { averageDailyNotional } from '../risk/index.js';
 
 const BPS = 10_000;

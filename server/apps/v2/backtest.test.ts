@@ -5,8 +5,7 @@ import type {
   SleeveSpec,
   SleeveValidation,
 } from '../../../contracts/index.js';
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
-import type { LogEntry } from '../../shared/index.js';
+import type { BarSeries, DailyBar, LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import {

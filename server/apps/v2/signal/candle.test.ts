@@ -1,4 +1,4 @@
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 import { candleFeatures, candleLine } from './candle.js';
 
 function bar(open: number, high: number, low: number, close: number): DailyBar {
