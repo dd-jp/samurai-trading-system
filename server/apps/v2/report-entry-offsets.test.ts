@@ -1,12 +1,22 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import { openReadOnlyStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import {
+  inMemoryCopyOf,
+  openReadOnlyStore,
+  openSharedStore,
+  type StoreHandle,
+} from '../../shared/store/index.js';
 import { main, readJournalledEntries, reportEntryOffsets } from './report-entry-offsets.js';
 
 const dirs: string[] = [];
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
 
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), 'entry-offsets-'));
@@ -18,8 +28,10 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function journal(path: string, rows: readonly [string, string, string, string, string, string][]) {
-  const db = openSharedStore(path);
+afterAll(() => migrated.close());
+
+function journal(rows: readonly [string, string, string, string, string, string][]) {
+  const db = inMemoryCopyOf(migrated);
   const insert = db.prepare(
     `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
        leg, side, dry_run, outcome, payload, recorded_at)
@@ -31,9 +43,18 @@ function journal(path: string, rows: readonly [string, string, string, string, s
   return db;
 }
 
+function journalFile(
+  path: string,
+  rows: readonly [string, string, string, string, string, string][],
+) {
+  const db = journal(rows);
+  writeFileSync(path, db.serialize());
+  db.close();
+}
+
 describe('readJournalledEntries', () => {
   it('reads one entry per date, instrument and side across books, Alpaca entries only', () => {
-    const db = journal(join(scratch(), 'v2.sqlite'), [
+    const db = journal([
       ['a', 'debate/primary', '2026-09-28', 'AAA', 'alpaca', 'entry'],
       ['b', 'debate/no-macro-gate', '2026-09-28', 'AAA', 'alpaca', 'entry'],
       ['c', 'debate/primary', '2026-09-28', 'BBB', 'saxo', 'entry'],
@@ -63,10 +84,10 @@ describe('reportEntryOffsets', () => {
   it('scores journalled entries against the bar store over the time-stop hold', async () => {
     const dir = scratch();
     const storePath = join(dir, 'v2.sqlite');
-    journal(storePath, [
+    journalFile(storePath, [
       ['a', 'debate/primary', '2026-09-01', 'AAA', 'alpaca', 'entry'],
       ['z', 'debate/primary', '2026-09-01', 'ZZZ', 'alpaca', 'entry'],
-    ]).close();
+    ]);
     const dates = Array.from(
       { length: 12 },
       (_, day) => `2026-09-${String(day + 1).padStart(2, '0')}`,
@@ -114,7 +135,7 @@ describe('reportEntryOffsets', () => {
 
   it('closes the store even when the bar store fails to load', async () => {
     const storePath = join(scratch(), 'v2.sqlite');
-    journal(storePath, []).close();
+    journalFile(storePath, []);
     let closed = false;
     const open = (path: string) => {
       const db = openReadOnlyStore(path);
