@@ -102,10 +102,12 @@ describe('AlpacaHttpBrokerClient.listCashActivities', () => {
 
 describe('AlpacaCashActivityReader', () => {
   it('asks for the non-trade cash types and maps each row to a signed amount', async () => {
-    const list = vi.fn(async () => [
-      ACTIVITY,
-      { ...ACTIVITY, id: 'fee-1', activity_type: 'FEE', net_amount: '-0.03', status: 'canceled' },
-    ]);
+    const list = vi.fn(
+      async (): Promise<AlpacaCashActivity[]> => [
+        ACTIVITY,
+        { ...ACTIVITY, id: 'fee-1', activity_type: 'FEE', net_amount: '-0.03', status: 'canceled' },
+      ],
+    );
     const reader = new AlpacaCashActivityReader(list);
     expect(reader.venue).toBe('alpaca');
     await expect(reader.read('2026-10-01')).resolves.toEqual([
