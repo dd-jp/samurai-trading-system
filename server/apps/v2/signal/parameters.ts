@@ -76,7 +76,9 @@ export const ARM2_ENTRY_THRESHOLDS = set<Arm2EntryThresholds>('ARM2_ENTRY_THRESH
   shortBelow: 0,
 });
 export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774', 750_000);
-export const RECONCILE_CASH_TOLERANCE_GBP = unset<number>('RECONCILE_CASH_TOLERANCE_GBP', '#1927');
+// David 2026-10-02, #1927 comment 5959952395 (doc 66 pre-live items ruling 2): £5 on the anchor
+// delta, the venue-currency gap converted at the day's rate
+export const RECONCILE_CASH_TOLERANCE_GBP = set<number>('RECONCILE_CASH_TOLERANCE_GBP', '#1927', 5);
 
 // #1774, David 2026-09-29 (option 1): on one USD ranking no LSE name reaches the 20
 // (ISF ~53M GBP/day against billions), so LSE holds a reserved share of the liquidity half;

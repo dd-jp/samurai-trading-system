@@ -50,6 +50,7 @@ const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
 const SET_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
+  RECONCILE_CASH_TOLERANCE_GBP,
   ...CFD_COST_PARAMETERS,
 ];
 
@@ -87,8 +88,8 @@ describe('parameters', () => {
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(ARM2_ENTRY_THRESHOLDS);
   });
 
-  it('the reconcile cash tolerance is unset, owned by #1927, and never refuses a paper cycle (David 2026-09-29)', () => {
-    expect(isSet(RECONCILE_CASH_TOLERANCE_GBP)).toBe(false);
+  it("the reconcile cash tolerance is David's GBP 5, owned by #1927, and never refuses a paper cycle (David 2026-10-02)", () => {
+    expect(requireSet(RECONCILE_CASH_TOLERANCE_GBP)).toBe(5);
     expect(RECONCILE_CASH_TOLERANCE_GBP.ticket).toBe('#1927');
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(RECONCILE_CASH_TOLERANCE_GBP);
   });

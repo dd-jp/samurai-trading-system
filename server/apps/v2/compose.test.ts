@@ -400,14 +400,15 @@ describe('composeCycle: broker reconcile wiring (#1872)', () => {
     }
   });
 
-  it('a dry run has no broker to read, and the cash tolerance stays unset until David rules', async () => {
+  it("a dry run has no broker to read; the cash tolerance is David's GBP 5 and the anchor ledger is wired (#1927)", async () => {
     const composed = composeCycle(options());
     await expect(composed.brokerBooks.read('alpaca')).rejects.toThrow('every route is simulated');
-    expect(composed.reconcileCashToleranceGbp).toBeUndefined();
+    expect(composed.reconcileCashToleranceGbp).toBe(5);
+    expect(composed.cashAnchors?.anchor('alpaca')).toBeUndefined();
     expect(composed.brokerMode).toBe('paper');
     expect(composeCycle(options({ brokerMode: 'live' })).brokerMode).toBe('live');
-    expect(composeCycle(options({ reconcileCashToleranceGbp: 5 })).reconcileCashToleranceGbp).toBe(
-      5,
+    expect(composeCycle(options({ reconcileCashToleranceGbp: 1 })).reconcileCashToleranceGbp).toBe(
+      1,
     );
   });
 });

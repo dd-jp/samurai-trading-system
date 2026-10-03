@@ -11,6 +11,7 @@ import type {
   Venue,
 } from '../../../contracts/index.js';
 import type { LogEntry } from '../../shared/index.js';
+import type { CashAnchor, CashAnchorLedger, StoreFlow } from './cash-anchor.js';
 import {
   blockEntriesOnThrow,
   type ReconcileDeps,
@@ -21,6 +22,8 @@ import {
 
 const FX = 1.25;
 const DATE = '2026-09-28';
+const FIX_DATE = '2026-09-25';
+const CASH_MATCHES = `cash since anchor USD: broker 0.00 store 0.00, gap GBP 0.00 at ${FX} (boe-xudluss:${FIX_DATE})`;
 
 const PRIMARY: BookSpec = {
   id: 'debate/primary',
@@ -83,7 +86,6 @@ interface Ledger {
   readonly books: readonly BookSpec[];
   readonly positions: Record<string, readonly Position[]>;
   readonly resting: Record<string, readonly JournalledOrder[]>;
-  readonly cash: Record<string, number>;
 }
 
 const LEDGER: Ledger = {
@@ -93,7 +95,6 @@ const LEDGER: Ledger = {
     [SHADOW.id]: [held('MSFT', 2)],
   },
   resting: { [PRIMARY.id]: [resting('entry-NVDA', 'NVDA'), resting('entry-VUSA', 'VUSA', 'saxo')] },
-  cash: { [PRIMARY.id]: 800, [SHADOW.id]: 950 },
 };
 
 const CLEAN_BROKER: BrokerBook = {
@@ -104,6 +105,30 @@ const CLEAN_BROKER: BrokerBook = {
   ],
   cashQuote: 800 * FX,
 };
+
+interface FakeAnchors extends CashAnchorLedger {
+  readonly recorded: { venue: Venue; cashQuote: number; tradingDate: string }[];
+}
+
+function fakeAnchors(
+  anchor: CashAnchor | undefined,
+  flow: StoreFlow = { ok: true, quote: 0 },
+): FakeAnchors {
+  let current = anchor;
+  const recorded: FakeAnchors['recorded'] = [];
+  return {
+    recorded,
+    anchor: () => current,
+    recordAnchor: (venue, cashQuote, tradingDate) => {
+      recorded.push({ venue, cashQuote, tradingDate });
+      current = { currency: 'USD', cashQuote, fillRowid: 0 };
+      return current;
+    },
+    storeFlowSince: () => flow,
+  };
+}
+
+const ANCHORED_AT_CLEAN: CashAnchor = { currency: 'USD', cashQuote: 800 * FX, fillRowid: 0 };
 
 interface Harness {
   readonly deps: ReconcileDeps;
@@ -121,6 +146,7 @@ function harness(
     ledger?: Ledger;
     brokerMode?: BrokerMode;
     entryStops?: Record<string, number>;
+    anchors?: CashAnchorLedger | undefined;
   } = {},
 ): Harness {
   const ledger = options.ledger ?? LEDGER;
@@ -135,7 +161,6 @@ function harness(
     books: {
       forSleeve: (sleeveId) => ledger.books.filter((book) => book.sleeve === sleeveId),
       positions: (bookId) => ledger.positions[bookId] ?? [],
-      cash: (bookId) => ledger.cash[bookId] ?? 0,
     },
     journal: {
       restingEntries: (bookId) => ledger.resting[bookId] ?? [],
@@ -149,7 +174,7 @@ function harness(
       recordRefusal: (refusal) => refusals.push(refusal),
     },
     executor: { simulates },
-    market: { gbpUsdAtYearStart: () => FX },
+    market: { gbpUsdOnDay: () => ({ gbpUsd: FX, fixDate: FIX_DATE }) },
     brokerBooks: {
       read: (venue) => {
         reads.push(venue);
@@ -158,13 +183,14 @@ function harness(
     },
     brokerMode: options.brokerMode ?? 'live',
     reconcileCashToleranceGbp: 'tolerance' in options ? options.tolerance : 0.01,
+    cashAnchors: 'anchors' in options ? options.anchors : fakeAnchors(ANCHORED_AT_CLEAN),
     logger: { log: (entry) => logs.push(entry) },
   };
   return { deps, reconciles, refusals, logs, reads };
 }
 
 describe('storeView', () => {
-  it('sums one venue across books: positions, resting entries and cash', () => {
+  it('sums one venue across books: positions and resting entries', () => {
     const { deps } = harness(CLEAN_BROKER, {
       ledger: {
         ...LEDGER,
@@ -185,7 +211,6 @@ describe('storeView', () => {
           stopPrice: null,
         },
       ],
-      cashGbp: 800,
       protection: new Map([['AAPL', { entryOrderIds: ['entry-AAPL', 'entry-AAPL'], stops: [] }]]),
     });
   });
@@ -227,7 +252,7 @@ describe('reconcileBooks', () => {
         status: 'clean',
         book_ids: [PRIMARY.id],
         diffs: [],
-        detail: '',
+        detail: CASH_MATCHES,
       },
       {
         trading_date: DATE,
@@ -319,7 +344,7 @@ describe('reconcileBooks', () => {
     ];
     const summary =
       'alpaca broker reconcile mismatch: position_missing_in_store MSFT store 0 broker 5; ' +
-      'order_unknown_to_store MSFT msft-stop store - broker -';
+      `order_unknown_to_store MSFT msft-stop store - broker -; ${CASH_MATCHES}`;
     expect(outcome).toEqual({
       blockedBookIds: new Set([PRIMARY.id]),
       refusals: [`${PRIMARY.id}: entries blocked, ${summary}`],
@@ -346,16 +371,6 @@ describe('reconcileBooks', () => {
         book_id: PRIMARY.id,
       },
     ]);
-  });
-
-  it('compares broker cash in GBP at the venue rate', async () => {
-    const off = harness({ ...CLEAN_BROKER, cashQuote: 800 }, { tolerance: 10 });
-    await reconcileBooks(off.deps, DATE);
-    expect(off.reconciles[0]).toMatchObject({
-      status: 'mismatch',
-      diffs: [{ kind: 'cash', instrument: null, order_id: null, store: 800, broker: 640 }],
-      detail: 'cash cash store 800 broker 640',
-    });
   });
 
   it('a broker read failure blocks entries fail-closed with a warning, never throws', async () => {
@@ -391,11 +406,62 @@ describe('reconcileBooks', () => {
     expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
     expect(reconciles[0]).toMatchObject({
       status: 'unverified',
-      diffs: [{ kind: 'cash_unverified', store: 800, broker: 800 }],
+      diffs: [{ kind: 'cash_unverified', store: null, broker: 800 * FX }],
+      detail: 'cash_unverified cash store - broker 1000; RECONCILE_CASH_TOLERANCE_GBP is not set',
     });
     expect(logs).toEqual([]);
     expect(refusals).toMatchObject([
       { parameter: 'RECONCILE_CASH_TOLERANCE_GBP', ticket: '#1927', book_id: PRIMARY.id },
+    ]);
+  });
+
+  it('live with no anchor yet: a clean read records the broker cash as the anchor and blocks nothing (#1927)', async () => {
+    const anchors = fakeAnchors(undefined);
+    const { deps, reconciles, refusals } = harness(CLEAN_BROKER, { anchors });
+    const outcome = await reconcileBooks(deps, DATE);
+
+    expect(anchors.recorded).toEqual([{ venue: 'alpaca', cashQuote: 800 * FX, tradingDate: DATE }]);
+    expect(outcome.blockedBookIds.size).toBe(0);
+    expect(refusals).toEqual([]);
+    expect(reconciles[0]).toMatchObject({
+      status: 'clean',
+      diffs: [],
+      detail: 'cash anchor recorded: 1000.00 USD (#1927)',
+    });
+  });
+
+  it('live with no anchor yet: a read whose positions differ records none and leaves cash unverified', async () => {
+    const anchors = fakeAnchors(undefined);
+    const { deps, reconciles } = harness({ ...CLEAN_BROKER, positions: [] }, { anchors });
+    await reconcileBooks(deps, DATE);
+
+    expect(anchors.recorded).toEqual([]);
+    expect(reconciles[0]).toMatchObject({ status: 'mismatch' });
+    expect(reconciles[0]?.diffs.map((entry) => entry.kind)).toEqual([
+      'position_missing_at_broker',
+      'cash_unverified',
+    ]);
+  });
+
+  it('live against the anchor: a GBP 4.99 gap is clean and GBP 5.01 blocks with a critical alert', async () => {
+    const run = async (gapGbp: number) => {
+      const ran = harness({ ...CLEAN_BROKER, cashQuote: 800 * FX + gapGbp * FX }, { tolerance: 5 });
+      const outcome = await reconcileBooks(ran.deps, DATE);
+      return { ...ran, outcome };
+    };
+    const inside = await run(4.99);
+    expect(inside.outcome.blockedBookIds.size).toBe(0);
+    expect(inside.reconciles[0]?.status).toBe('clean');
+
+    const outside = await run(5.01);
+    expect(outside.outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+    expect(outside.reconciles[0]).toMatchObject({
+      status: 'mismatch',
+      diffs: [{ kind: 'cash', store: 0 }],
+    });
+    expect(outside.logs.map((entry) => entry.event)).toEqual(['v2_reconcile_mismatch']);
+    expect(outside.refusals).toMatchObject([
+      { parameter: 'BROKER_RECONCILE', book_id: PRIMARY.id },
     ]);
   });
 
@@ -431,8 +497,8 @@ describe('reconcileBooks', () => {
           books: [PRIMARY, TREND],
           positions: { [PRIMARY.id]: [held('AAPL', 6)], [TREND.id]: [held('AAPL', 3)] },
           resting: LEDGER.resting,
-          cash: { [PRIMARY.id]: 800, [TREND.id]: 900 },
         },
+        anchors: fakeAnchors({ ...ANCHORED_AT_CLEAN, cashQuote: 1_700 * FX }),
       },
     );
     await reconcileBooks(deps, DATE);

@@ -108,6 +108,12 @@ export function dayGbpUsd(observations: readonly FxObservation[], date: string):
       reason: `BoE XUDLUSS series ends ${last?.date ?? 'empty'}, before ${date}`,
     };
   }
+  return latestGbpUsd(observations, date);
+}
+
+// A run reads the fix BoE has published by then: the day's own once it is out, else the last
+// before it (#1947), never one more than DAY_FIX_MAX_GAP_DAYS old
+export function latestGbpUsd(observations: readonly FxObservation[], date: string): DayFix {
   const fix = observations.findLast((row) => row.date <= date);
   if (fix === undefined || daysBetween(fix.date, date) > DAY_FIX_MAX_GAP_DAYS) {
     return {

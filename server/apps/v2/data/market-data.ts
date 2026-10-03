@@ -1,9 +1,10 @@
-import type { MarketData, V2Bar, Venue } from '../../../../contracts/index.js';
+import type { GbpUsdFix, MarketData, V2Bar, Venue } from '../../../../contracts/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
 import { type BarsSource, barsBefore } from './bars.js';
 import {
   FX_SOURCE_GBP,
   type FxObservation,
+  latestGbpUsd,
   staleYearStartReason,
   yearStartFix,
   yearStartFxSource,
@@ -34,6 +35,12 @@ export class BarsMarketData implements MarketData {
 
   gbpUsdYearStartFixDate(year: number): string {
     return this.#yearStartFix(year).date;
+  }
+
+  gbpUsdOnDay(date: string): GbpUsdFix {
+    const fix = latestGbpUsd(this.fx, date);
+    if (!fix.ok) throw new Error(fix.reason);
+    return { gbpUsd: fix.gbpUsd, fixDate: fix.fixDate };
   }
 
   #yearStartFix(year: number): FxObservation {
