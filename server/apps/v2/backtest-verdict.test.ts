@@ -1,17 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  annualisedSharpe,
-  foldRanges,
-  sliceByRanges,
-  walkForwardPath,
-} from '../../tools/backtest/index.js';
-import {
   type BookSeries,
   backtestVerdict,
   CAPITAL_CEILING_DRAWDOWN_MULTIPLE,
   capitalCeilingGbp,
   type VerdictInput,
 } from './backtest-verdict.js';
+import { annualisedSharpe, foldRanges, sliceByRanges, walkForwardPath } from './evidence/index.js';
 
 function book(returns: readonly number[]): BookSeries {
   const equity = [1_000];
