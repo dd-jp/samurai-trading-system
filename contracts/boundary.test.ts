@@ -256,12 +256,12 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', { timeout: 15_000
   });
 
   it('the contracts pattern catches nested and multi-dot specifiers, and only excludes index.js/index.ts', () => {
-    expect(CONTRACTS_DEEP_IMPORT.test('../../../contracts/pipeline.js')).toBe(true);
-    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/wire/pipeline.js')).toBe(true);
-    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.v2.js')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../../contracts/broker.js')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/wire/broker.js')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/broker.v2.js')).toBe(true);
     expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/index.js')).toBe(false);
-    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.ts')).toBe(true);
-    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/pipeline.tsx')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/broker.ts')).toBe(true);
+    expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/broker.tsx')).toBe(true);
     expect(CONTRACTS_DEEP_IMPORT.test('../../contracts/index.ts')).toBe(false);
   });
 
@@ -273,11 +273,11 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', { timeout: 15_000
         file,
         [
           'const re = /a\\/*b/;',
-          "import { PIPELINE_STAGES } from '../../../contracts/pipeline.js';",
+          "import { V2_CONTRACT_VERSION } from '../../../contracts/v2-wire.js';",
           '/**',
           ' * a real doc comment further down the file',
           ' */',
-          'export const scratch = { PIPELINE_STAGES };',
+          'export const scratch = { V2_CONTRACT_VERSION };',
           '',
         ].join('\n'),
       );

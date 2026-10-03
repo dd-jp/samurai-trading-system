@@ -1,6 +1,6 @@
 # v1 teardown reachability (#1748, Step 5 phase 1)
 
-Status: **report for David's review. Nothing is deleted or moved by this doc or its PR.** Session F (doc 68) stops here: the waves below run only after David has ruled on the questions in §11. Revised after review round 1 on PR #1999 (§13).
+Status: **report for David's review. Nothing is deleted or moved by this doc or its PR.** Session F (doc 68) stops here: the waves below run only after David has ruled on the questions in §11. Revised after review round 1 on PR #1999 (§13). Waves 1–5 are done; the teardown summary at the end of §4 closes them.
 
 Base: `origin/main` at d692553d (2026-10-02). Rulings applied: doc 66 Q11, G8, G14, G17, G18 and the 2026-10-01 ruling 8 (#1946: concrete broker adapters stay in v1 until Step 5), plus the #1946 scope note on #1748 (option C: the broker code v2 still imports moves to a v2-visible place, its interfaces to `contracts/`).
 
@@ -329,6 +329,47 @@ Wave 5 on this base is 18 production files (1,131 lines) and 11 tests (1,052 lin
 - server/shared/store/ (5 files, 654 lines): key-scheme-guard.test.ts, open-position-row.test.ts, prune-llm-call-log.test.ts, sqlite-decision-record-stores.test.ts, sqlite-llm-spend-cap-store.test.ts
 
 </details>
+
+### Wave 5 status (2026-10-03)
+
+Done. Re-run on base 5e37dd95. The list came out as wave 4 predicted: 18 production files (1,131 lines) and 11 tests (1,052 lines). Against the table above, store/closed-trade-row.ts is gone (wave 3 deleted it early), and book-currency.ts and store/fill-row.ts with its test joined, because doc 66's 2026-10-02 rulings 2 (Q2, option C) and 3 (Q3) released both §6 holds. Nothing dropped out and nothing newly unreachable joined. Of the 332 production files, fallow finds 34 unreachable from the v2 roots and graphify 35. The extra one is `server/shared/types/broker.ts`, a barrel hop that fallow reaches through `server/shared/types.ts`, so it stays (§9). Outside the waves the run still finds only the moved Saxo transport. The G18 keep closure is unchanged: the archive store, archive/mi-sources.ts and nous-responses.ts.
+
+Client check (§8): client/ and e2e/ name none of the 56 exports of contracts/snapshot.ts, metrics.ts, pipeline.ts and providers.ts. The search was word-bounded on every export name. The client still imports only `@contracts`, and its tests pass on the trimmed barrel.
+
+Deleted: the 18 production files and the 11 tests, about 2,290 lines with the barrel trims. No migration is touched. The barrel and contract edits:
+
+- `server/shared/index.ts` loses its seven wave 5 re-exports, `server/shared/store/index.ts` loses the key-scheme guard, and `contracts/index.ts` loses the four v1 wire files.
+- Exports left unused were trimmed until `fallow dead-code` was clean. `server/shared/types.ts` and `server/shared/types/records.ts` stop re-exporting `ExitReason`, whose last users through them were decision-records.ts and store/fill-row.ts. `contracts/primitives.ts` drops `InstrumentSubclass` and `TradingArm`. They had no reader left (the last ones went in wave 4 and with snapshot.ts), but fallow cannot see this, because the client side of `contracts/index.ts` counts as used.
+- Two test fixtures named deleted contract files only as strings: the deep-import regex cases in `contracts/boundary.test.ts` and an `isMutableProductionFile` case in `server/tools/mutation-local.test.ts`. They now name surviving contract files. They test patterns, so the change keeps every case.
+
+No `stryker.config.mjs` glob, `TRADING_PATH_PREFIXES` entry, `.fallowrc.json` or `.oxlintrc.json` entry names a wave 5 path, so none changed, and `mutation-local --list` reports no trading-path file. Doc citations: §10 counted 6 in 3 files. The checker flagged 2, which are now marked: the `SAMURAI_LLM_CALL_LOG_MAX_ROWS` row in `README.md` and the currency section of `docs/cgt-disposal-matching.md`. Every other backticked citation of a wave 5 path was on a line that an earlier wave had already marked. The dashboard spec's note that the v1 wire types go "in Step 5's client pass" now says they went here. Migrations 0039, 0042, 0047 and 0065 still name deleted files in their comments. They are immutable, so they stay as a record.
+
+The `MINIMUM_EVENT_ASSIGNMENTS` floor in `server/shared/types/log-event-code.test.ts` stays at 60. The scan finds 66 assignments on base and on this branch, and no wave 5 file had one.
+
+### Teardown summary, waves 1–5
+
+| Wave | PR | Merge | Production files | Tests | Lines removed |
+|---|---|---|---:|---:|---:|
+| 1. v1 command-line tools | #2039 | 79e88af4 | 38, plus the seed fixture and the CGT barrel | 27 | about 16,300 |
+| 2. v1 apps and the backtest library | #2043 | 8d2bb1a1 | 97, plus 2 wave 3 files early | 114 | about 77,500 |
+| 3. v1 pipeline and the CGT matcher | #2046 | a6d59095 | 116 | 94 | about 63,000 |
+| 4. v1 providers | #2047 | 5e37dd95 | 39 | 36 | about 22,400 |
+| 5. dead shared helpers and v1 wire contracts | this PR | | 18 | 11 | about 2,290 |
+
+The production counts are each wave's re-run list. Lines removed is git's deletion count for each PR. It includes the barrel trims, the config edits and the non-TypeScript assets a wave named (the alert-catalogue golden file and the indicator golden fixture). The re-run on this base finds no deletion candidate left in any wave.
+
+What remains outside the waves:
+
+- **The moved Saxo transport.** server/apps/v2/execution/saxo/saxo-client.ts, saxo-broker-errors.ts and saxo-http-client.ts are unreachable from every v2 root by both methods. They stay for #1916 part 2 under doc 66's Q2 ruling (option C), which builds the live Saxo leg on them.
+- **The G18 keeps.** The three grok/ files, archive/mi-archive-store.ts, archive/mi-sources.ts and server/shared/llm/nous-responses.ts, with their tests and the archive's four migrations. They are unreachable from v2 and stay while G18's trial runs (#1753 open).
+- **The §6 holds.** None is left. Q2 and Q3 released all eleven files, which went in waves 3 and 5.
+- **Test support and config** (§3.5). The four test helpers and the three config files stay.
+- **The §5.2 survivors.** These are 44 production files in v1-named directories that v2 reaches. The debate-engine and momentum survivors still have no ruled home. Putting them under `server/apps/v2/` breaks the v2 module boundaries in `.oxlintrc.json`, so their renames are **David's call**. The other §5.2 groups are proposals that no wave needed. server/pipeline/momentum/loss-budget.ts, which doc 67 Step 3 sent "with Step 5", went in wave 3.
+
+Doc 67 Step 5 status: the reachability list, its review and the per-area deletion waves are done. Each wave merged as its own reviewed PR, in the order doc 66 ruled (Q7). The crypto cut came first (#2010), then the MOVE (§5.1, #2034), the #900 live-gate refresh, `BrokerAdapter` into `contracts/broker.ts` (#2038), and waves 1–5. G17's parked market-intelligence code is deleted, and the X/social code stays under G18. Step 5 is not closed. Two items are left:
+
+- The Step 0 item 8 renames of the §5.2 survivors. They wait on David's homes.
+- The README. Its architecture, status and scripts sections still describe the v1 runtime, and its citations to deleted files are only marked historical. Rewriting it for v2 is outside the waves.
 
 ### 4.6 Surviving tests that need a rewrite
 

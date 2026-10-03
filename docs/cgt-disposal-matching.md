@@ -166,7 +166,7 @@ was already matched against a specific acquisition that exists.
 `fills.fee_currency` also names the currency `fills.price` is denominated
 in (both come off Saxo's `CurrencyCode` for the line — see
 `sqlite-cgt-fill-source.ts`'s header). Classification reuses
-`isPenceCurrency`/`BOOK_CURRENCY` (`server/shared/book-currency.ts`, #1465)
+`isPenceCurrency`/`BOOK_CURRENCY` (`server/shared/book-currency.ts`, #1465) <!-- cite-exempt: historical — deleted in v1 teardown wave 5 (#1748); preserved at tag v1-final -->
 rather than a bespoke check, so the report handles three cases:
 
 - **GBP** — the common case, used as-is.

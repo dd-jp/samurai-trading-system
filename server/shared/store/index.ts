@@ -1,8 +1,3 @@
-export {
-  assertNoStaleKeyScheme,
-  findStaleKeySchemeLots,
-  TERMINAL_ORDER_STATES,
-} from './key-scheme-guard.js';
 export { runMigrations } from './migrate.js';
 export {
   inMemoryCopyOf,
