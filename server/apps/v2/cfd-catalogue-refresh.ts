@@ -11,6 +11,7 @@ import {
   type BarRefresh,
   logRefresh,
   messageOf,
+  stoppedAtCap,
   type TimeLimit,
   UNLIMITED,
   withinTimeLimit,
@@ -406,7 +407,7 @@ export function cfdCatalogueRefreshFor(env: NodeJS.ProcessEnv, leg: CfdCatalogue
   const limitMs = leg.timeLimitMs ?? CFD_CATALOGUE_TIME_LIMIT_MS;
   const work = async (limit: TimeLimit) => {
     const session = connectUnlessLost(() => connect(env, leg.logger, limit.signal), ledger);
-    await refreshInSession(session, leg, ledger, limit);
+    await refreshInSession(stoppedAtCap(session, limit), leg, ledger, limit);
   };
   return {
     run: async () => {

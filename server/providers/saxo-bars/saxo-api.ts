@@ -132,12 +132,14 @@ export function liveTokenSource(
   env: NodeJS.ProcessEnv,
   tokenPath?: string,
   logger: Logger = consoleLogger,
+  signal?: AbortSignal,
 ): SaxoTokenRefresher {
   const refresher = new SaxoTokenRefresher({
     environment: 'live',
     config: resolveSaxoOAuthConfig('live', env),
     tokenPath: tokenPath ?? tokenFilePath('live'),
     logger,
+    signal,
   });
   const state = refresher.start();
   if (state.status !== 'active') {
@@ -161,7 +163,7 @@ export function openSaxoLiveSession(
   signal?: AbortSignal,
 ): SaxoLiveSession {
   const { gatewayBaseUrl } = resolveSaxoOAuthConfig('live', env);
-  const tokens = liveTokenSource(env, tokenPath, logger);
+  const tokens = liveTokenSource(env, tokenPath, logger, signal);
   return {
     api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl, jsonFetcher(), abortableSleep, signal),
     stop: () => tokens.stop(),

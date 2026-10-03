@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import {
   isSpliced,
   LSE_MOMENTUM_LINES,
   type SaxoLine,
+  SaxoReadOnlyApi,
 } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
 import {
@@ -25,7 +26,7 @@ import { cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
 import { saxoSessionRefusal } from './execution/index.js';
 import { readKeepAliveState, writeKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
 import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
-import { SaxoSessionLostError } from './execution/saxo/saxo-token-source.js';
+import { SaxoSessionLostError, SaxoTokenRefresher } from './execution/saxo/saxo-token-source.js';
 import {
   historyRescaleFactor,
   refreshSaxoBars,
@@ -1236,6 +1237,94 @@ describe('saxoBarRefreshFor time cap and session stop (#1900)', () => {
     expect(entries.filter((entry) => entry.event === 'v2_saxo_session_stop_failed')).toEqual([
       expect.objectContaining({ level: 'warn', message: expect.stringContaining('stop failed') }),
     ]);
+  });
+});
+
+describe('saxoBarRefreshFor under the cap during a Saxo token refresh (#2052)', () => {
+  it('holds the capped leg until a token rotation already sent is saved, stopping once', async () => {
+    const path = tokenPath();
+    writeTokenFile(path, {
+      environment: 'live',
+      accessToken: 'access-fixture',
+      refreshToken: 'refresh-fixture',
+      accessTokenExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      obtainedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    let answer: (response: Response) => void = () => {};
+    let capped: () => void = () => {};
+    const cap = new Promise<void>((resolve) => {
+      capped = resolve;
+    });
+    const gateway = vi.fn();
+    let stops = 0;
+    const connect = (_env: NodeJS.ProcessEnv, logger: Logger, signal: AbortSignal) => {
+      signal.addEventListener('abort', () => capped(), { once: true });
+      const tokens = new SaxoTokenRefresher({
+        environment: 'live',
+        config: { tokenUrl: 'https://token.test', appKey: 'k', appSecret: 's' },
+        tokenPath: path,
+        logger,
+        signal,
+        fetchImpl: () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      });
+      tokens.start();
+      return {
+        api: new SaxoReadOnlyApi(
+          tokens,
+          'https://gw.test/openapi',
+          gateway,
+          async () => {},
+          signal,
+        ),
+        stop: async () => {
+          await tokens.stop();
+          stops += 1;
+        },
+      };
+    };
+    const { entries, logger } = recorder();
+    let settled = false;
+    const run = saxoBarRefreshFor({}, TRADING_DATE, logger, {
+      storeRoot: storeRoot(),
+      tokenPath: path,
+      connect,
+      timeLimitMs: 20,
+    })
+      .run()
+      .finally(() => {
+        settled = true;
+      });
+    await cap;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(stops).toBe(0);
+
+    answer(
+      new Response(
+        JSON.stringify({
+          access_token: 'access-rotated',
+          refresh_token: 'refresh-rotated',
+          expires_in: 1200,
+          refresh_token_expires_in: 3600,
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const report = await run;
+    expect(stops).toBe(1);
+    expect(JSON.parse(readFileSync(path, 'utf8')).refreshToken).toBe('refresh-rotated');
+    expect(report.failed).toEqual([
+      { symbol: 'saxo', reason: expect.stringContaining('cut at the 0.02 s cap') },
+    ]);
+    expect(entries.map((entry) => entry.event)).toEqual([
+      'saxo_token_refreshed',
+      'v2_saxo_bar_refresh_unavailable',
+    ]);
+    expect(gateway).not.toHaveBeenCalled();
   });
 });
 
