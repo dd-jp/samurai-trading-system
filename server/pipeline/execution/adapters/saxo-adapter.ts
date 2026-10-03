@@ -29,7 +29,6 @@ import {
   safeLog,
   toBrokerFillId,
 } from '../../../shared/index.js';
-import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
 import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
 import type {
@@ -42,6 +41,8 @@ import type {
 } from '../types.js';
 import type { UnresolvedPriceUnitAlertChannel } from '../unresolved-price-unit-alert.js';
 import { type SaxoQuoteUnit, saxoCashPerShare, saxoQuotedPrice } from './saxo-price-unit.js';
+
+export const SAXO_COMMISSION_RATE = 0.0008;
 
 const SAXO_DUPLICATE_WINDOW_MS = 15_000;
 

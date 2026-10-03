@@ -21,7 +21,7 @@ import { AlwaysOpenCalendar } from '../../../providers/market-data-service/index
 import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import type { AssetClass, OpenPosition } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
-import { type CostModel, SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
+import type { CostModel } from '../../../tools/backtest/index.js';
 import type {
   DormantLegsUnresolvedAlert,
   DormantLegsUnresolvedAlertChannel,
@@ -43,6 +43,7 @@ import {
   DORMANT_DEFER_ALERT_AFTER,
   DORMANT_DEFER_ALERT_REPEAT_EVERY_MS,
   PRICE_UNIT_ALERT_REPEAT_EVERY,
+  SAXO_COMMISSION_RATE,
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
   saxoExternalReference,

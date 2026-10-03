@@ -1,7 +1,7 @@
 import {
   LIVE_MONEY_GATES,
   LIVE_MONEY_GATES_RECHECK_COMMAND,
-} from '../apps/orchestrator/live-money-gates.js';
+} from './live-money-gates.js';
 
 import {
   checkLiveMoneyGates,

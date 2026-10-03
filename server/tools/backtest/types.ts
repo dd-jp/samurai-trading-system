@@ -1,4 +1,3 @@
-import type { TickOutcome } from '../../apps/orchestrator/index.js';
 import type { DateRange } from './universe.js';
 
 export interface FillRequest {
@@ -61,11 +60,4 @@ export interface CostModel {
 
 export interface ReplayTimeline {
   barTimestamps(window: DateRange): Promise<readonly Date[]>;
-}
-
-export interface BacktestReport {
-  config_hash: string;
-  seed: number;
-  tick_outcomes: TickOutcome[];
-  lookahead_audit: 'passed';
 }

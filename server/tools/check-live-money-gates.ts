@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import {
   LIVE_MONEY_GATES,
   LIVE_MONEY_GATES_VERIFIED_ON,
-} from '../apps/orchestrator/live-money-gates.js';
+} from './live-money-gates.js';
 import { isMainModule } from './cli-entrypoint.js';
 
 const execFileAsync = promisify(execFile);

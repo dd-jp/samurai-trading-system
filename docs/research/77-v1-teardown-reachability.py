@@ -20,14 +20,16 @@ import subprocess
 import sys
 
 V2_ROOTS = [
-    'server/apps/v2/index.ts', 'server/apps/v2/set-capital.ts', 'server/apps/v2/report-entry-offsets.ts',
-    'server/apps/v2/report-cost-fidelity.ts', 'server/apps/v2/replay-cli.ts', 'server/apps/v2/backup-cli.ts',
+    'server/apps/v2/index.ts', 'server/apps/v2/set-capital.ts', 'server/apps/v2/cash-move.ts',
+    'server/apps/v2/report-entry-offsets.ts', 'server/apps/v2/report-cost-fidelity.ts',
+    'server/apps/v2/replay-cli.ts', 'server/apps/v2/backup-cli.ts',
     'server/apps/v2/api/main.ts', 'server/apps/v2/api/telegram-main.ts', 'server/apps/v2/signals/main.ts',
     'server/apps/v2/trial-ledger.ts', 'server/apps/v2/backtest-cli.ts',
     'server/apps/v2/execution/sim-cfd-stop-drill-cli.ts', 'server/apps/v2/cfd-catalogue-cli.ts',
     'server/apps/v2/smoke.ts', 'server/apps/v2/api/fixture-server.ts',
-    'server/tools/saxo-keepalive.ts', 'server/tools/saxo-login.ts', 'server/tools/check-live-money-gates.ts',
-    'server/tools/check-path-citations.ts', 'server/tools/crap-gate.ts', 'server/tools/mutation-local.ts',
+    'server/tools/saxo-keepalive.ts', 'server/apps/v2/execution/saxo/saxo-login.ts',
+    'server/tools/check-live-money-gates.ts', 'server/tools/check-path-citations.ts',
+    'server/tools/crap-gate.ts', 'server/tools/mutation-local.ts',
     'client/src/main.tsx', 'e2e/playwright.config.ts', 'e2e/support/port.ts', 'e2e/support/servers.ts',
     'e2e/support/test.ts', 'e2e/support/token.ts',
 ]
@@ -43,7 +45,7 @@ KEEP_G18 = [
 ]
 HOLD = {
     'Q3 CGT matcher (#1947)': [
-        'server/pipeline/cgt/index.ts', 'server/pipeline/cgt/cgt-disposal-matching.ts',
+        'server/pipeline/cgt/cgt-disposal-matching.ts',
         'server/pipeline/cgt/open-readonly-cgt-store.ts', 'server/pipeline/cgt/sqlite-cgt-fill-source.ts',
     ],
     'Q2 Saxo bracket adapter': ['server/pipeline/execution/adapters/saxo-adapter.ts'],
@@ -56,13 +58,15 @@ WAVE_CUTS = {
 }
 KEEP_TESTS = {
     'server/pipeline/debate-engine/llm/prompt-caching.test.ts',
-    'server/pipeline/execution/broker-state-persistence.test.ts',
+    'server/apps/v2/execution/broker-state/broker-state-persistence.test.ts',
 }
 HOLD_TESTS = {'server/pipeline/execution/adapters/saxo-per-request-pacing.test.ts': 'Q2 Saxo bracket adapter'}
 V2_SCRIPTS = {
     'dev:web', 'build:web', 'typecheck', 'test', 'test:coverage', 'test:local', 'test:watch', 'mutation:local',
     'crap', 'crap:report', 'e2e', 'check:citations', 'check:live-gates', 'lint:oxlint', 'lint:oxlint:fix',
     'lint:biome', 'lint:biome:fix', 'lint', 'lint:fix', 'bars:snapshot', 'saxo:login', 'saxo:keepalive',
+    'build:migrations', 'fallow:boundaries', 'fallow:dead-code', 'fallow:dupes', 'fallow:css',
+    'fallow:guard', 'precommit',
 }
 WAVES = [
     (1, ('server/tools/',)),
@@ -393,7 +397,7 @@ def main(out):
         for f in (keep_dead - hold_dead) & alone:
             released_by.setdefault(f, []).append(name)
 
-    delete_prod = sorted(hold_dead)
+    delete_prod = sorted(f for f in hold_dead if wave_of(f))
     delete_wave = settle_waves(copy, tracked, graph, traces, delete_prod)
     held = {f: released_by.get(f, ['all holds']) for f in sorted(keep_dead - hold_dead)}
     tests, review, rewrites = classify_tests(copy, tracked, graph, delete_wave, held)
@@ -410,6 +414,7 @@ def main(out):
         'graphify_only_unreachable': {p: f_why.get(p) for p in sorted(g_dead - f_dead)},
         'kept_by_ruling_closure': sorted(v2_dead - keep_dead - set(keep_roots)),
         'held': held,
+        'unreachable_outside_waves': sorted(f for f in hold_dead if not wave_of(f)),
         'held_without_cuts': uncut_held,
         'hold_cuts': {f'{a} -> {b}': sym for (a, b), sym in HOLD_CUTS.items()},
         'wave_cuts': {f'{a} -> {b}': sym for (a, b), sym in WAVE_CUTS.items()},
