@@ -794,5 +794,5 @@ function modelledLegCostFor(
 }
 
 function earliest(dates: readonly Date[]): string {
-  return dates.reduce((min, date) => (date.getTime() < min.getTime() ? date : min)).toISOString();
+  return new Date(Math.min(...dates.map((date) => date.getTime()))).toISOString();
 }
