@@ -34,7 +34,7 @@ The v2 roots are every entry point that runs v2, builds or tests it, or keeps it
 - **v2 npm scripts** (`package.json`): `v2:run`, `v2:capital`, `v2:entry-offsets`, `v2:cost-fidelity`, `v2:replay`, `v2:backup`, `v2:restore`, `v2:dashboard`, `v2:telegram`, `v2:signals`, `v2:trials`, `v2:backtest`, `v2:sim-cfd-stop-drill` and `v2:cfd-catalogue`. Their files are `server/apps/v2/{index,set-capital,report-entry-offsets,report-cost-fidelity,replay-cli,backup-cli,trial-ledger,backtest-cli,cfd-catalogue-cli}.ts`, `server/apps/v2/api/main.ts`, `server/apps/v2/api/telegram-main.ts`, `server/apps/v2/signals/main.ts` and `server/apps/v2/execution/sim-cfd-stop-drill-cli.ts`.
 - **v2 smoke and e2e**: `server/apps/v2/smoke.ts` (the v2 half of `npm run smoke`), `server/apps/v2/api/fixture-server.ts`, `e2e/playwright.config.ts` and `e2e/support/*.ts`. Every e2e spec runs against the v2 fixture server.
 - **launchd plists** (`ops/launchd/`): `com.samurai.v2-paper` (`server/apps/v2/index.ts`), `com.samurai.v2-signals` (`server/apps/v2/signals/main.ts`), `com.samurai.v2-telegram` (`server/apps/v2/api/telegram-main.ts`) and `com.samurai.saxo-keepalive` (`server/tools/saxo-keepalive.ts`).
-- **Saxo token bootstrap**: `server/tools/saxo-login.ts` (`npm run saxo:login`). The keep-alive needs the token file it writes, and doc 74 names it as the only recovery when a chain dies. Treating it as a v2 root is a judgement call; §9 shows what it keeps alive.
+- **Saxo token bootstrap**: server/tools/saxo-login.ts (`npm run saxo:login`). The keep-alive needs the token file it writes, and doc 74 names it as the only recovery when a chain dies. Treating it as a v2 root is a judgement call; §9 shows what it keeps alive.
 - **Repo gates**: `server/tools/check-path-citations.ts`, `server/tools/check-live-money-gates.ts`, `server/tools/crap-gate.ts` and `server/tools/mutation-local.ts` (CI and CLAUDE.md).
 - **Client**: `client/src/main.tsx`. The UI is kept, and the client imports only `@contracts`, which is `contracts/index.ts`.
 
@@ -92,7 +92,7 @@ After settling, a surviving file reaches a deleted file only in three places: a 
 There are 516 test files (`*.test.ts[x]`, `*.spec.ts`). A test's dependencies are its symbol-level imports (graphify, through barrels), its direct relative imports and `vi.mock` paths, and any file it reads through `new URL(..., import.meta.url)`. Each test is then classified:
 
 - **Same-name subject.** A test whose same-name subject (`foo.test.ts` → `foo.ts`) is on the list is deleted. A test whose subject is held is held. A test whose subject stays, stays.
-- **No same-name subject.** The test is deleted when every non-test file it depends on is on the list, when its directory has no surviving production file, or when its only other dependencies are in `server/shared` and `contracts`. Otherwise the rule still deletes it but flags it for review. 13 tests were flagged; each was checked by hand and is v1-only. Two tests are kept by name because they test surviving code: `server/pipeline/debate-engine/llm/prompt-caching.test.ts` and `server/pipeline/execution/broker-state-persistence.test.ts`. One is held by name with Q2: adapters/saxo-per-request-pacing.test.ts.
+- **No same-name subject.** The test is deleted when every non-test file it depends on is on the list, when its directory has no surviving production file, or when its only other dependencies are in `server/shared` and `contracts`. Otherwise the rule still deletes it but flags it for review. 13 tests were flagged; each was checked by hand and is v1-only. Two tests are kept by name because they test surviving code: `server/pipeline/debate-engine/llm/prompt-caching.test.ts` and server/pipeline/execution/broker-state-persistence.test.ts. One is held by name with Q2: adapters/saxo-per-request-pacing.test.ts.
 - **Wave.** A deleted test leaves in the earliest wave that deletes anything it depends on. For example, server/shared/threshold-bounds-readers.test.ts reads orchestrator/production.ts, so it leaves in wave 2.
 - **Surviving tests.** A kept or held test that depends on a list file needs a rewrite by that file's wave (§4.6).
 
@@ -289,7 +289,7 @@ Holding cost-model.ts, the 1,393-line lse-etp-pool.ts and the v1 execute harness
 
 ### 5.1 The #1946 broker code (wave 6, first)
 
-All 22 files are reachable from the v2 roots: 21 by both methods, and types/broker.ts by fallow only (§9). The paths in are `server/apps/v2/execution/{index,alpaca,saxo-session,create-executor,broker-books,sim-cfd-stop-drill-cli,saxo-token-secrets}.ts`, `server/tools/saxo-keepalive.ts` and `server/tools/saxo-login.ts`. That is 12 import lines across 9 files, plus:
+All 22 files are reachable from the v2 roots: 21 by both methods, and types/broker.ts by fallow only (§9). The paths in are `server/apps/v2/execution/{index,alpaca,saxo-session,create-executor,broker-books,sim-cfd-stop-drill-cli,saxo-token-secrets}.ts`, `server/tools/saxo-keepalive.ts` and server/tools/saxo-login.ts. That is 12 import lines across 9 files, plus:
 
 - the `vi.mock` paths in `server/apps/v2/index.test.ts`, `server/apps/v2/egress.test.ts` and `server/apps/v2/execution/saxo-token-secrets.test.ts`;
 - a fixture in `server/apps/v2/boundaries.test.ts`.
@@ -370,7 +370,7 @@ Four more items need David to say whether G18's keep covers them. Until he answe
 What the reachability shows:
 
 - **The v2 runtime never constructs a Saxo order client.** `createBrokerAccess` (`server/apps/v2/execution/create-executor.ts`) routes `saxo`, `saxo_cfd_gbp` and `saxo_cfd_usd` to `DryRunBrokerAdapter`. v2's real Saxo HTTP traffic is `server/apps/v2/execution/saxo-sim-gateway.ts` (sim-only, the CFD stop drill) and the bars and catalogue reads in server/providers/saxo-bars.
-- **fallow marks saxo-http-client.ts reachable only as a type pass-through.** `server/tools/saxo-login.ts` imports the `SaxoTradingEnvironment` type through the server/pipeline/execution barrel. The barrel re-exports it from saxo-http-client.ts, which re-exports it from saxo-environment.ts. graphify resolves the type straight to saxo-environment.ts and finds saxo-http-client.ts, saxo-client.ts and saxo-broker-errors.ts unreachable (§9). No line of SaxoHttpBrokerClient runs from any v2 root. Pointing that one type import at saxo-environment.ts makes all three files unreachable by both methods.
+- **fallow marks saxo-http-client.ts reachable only as a type pass-through.** server/tools/saxo-login.ts imports the `SaxoTradingEnvironment` type through the server/pipeline/execution barrel. The barrel re-exports it from saxo-http-client.ts, which re-exports it from saxo-environment.ts. graphify resolves the type straight to saxo-environment.ts and finds saxo-http-client.ts, saxo-client.ts and saxo-broker-errors.ts unreachable (§9). No line of SaxoHttpBrokerClient runs from any v2 root. Pointing that one type import at saxo-environment.ts makes all three files unreachable by both methods.
 - **Size.** It is 844 production lines (saxo-http-client.ts 551, saxo-client.ts 127, saxo-broker-errors.ts 166) and 1,601 test lines. saxo-token-source.test.ts also builds a SaxoHttpBrokerClient.
 
 Options:

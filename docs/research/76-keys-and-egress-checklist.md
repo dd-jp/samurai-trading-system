@@ -50,7 +50,7 @@ Doc 69 R16 found that neither venue documents per-key withdrawal control or IP a
 
 - [ ] Secrets are held outside the repository. Today they are in the gitignored env file and the gitignored token directory (`data/saxo-tokens/`, mode 0700, files 0600); doc 69 R16 proposed the macOS Keychain instead. <!-- cite-exempt: untracked — gitignored local secrets directory -->
 - [ ] No key appears in logs, the journal or an LLM prompt: the test above covers LLM prompts.
-- [ ] The rotating Saxo refresh token is written atomically (temp file, fsync, rename): done in code, `server/pipeline/execution/adapters/saxo-token-file.ts`.
+- [ ] The rotating Saxo refresh token is written atomically (temp file, fsync, rename): done in code, `server/apps/v2/execution/saxo/saxo-token-file.ts`.
 
 ## Decisions for David
 

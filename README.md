@@ -437,7 +437,7 @@ Every script in `package.json`, all 42 of them. There are no others.
 | ops | `npm run report:debate-flip-rate` | `tsx server/tools/report-debate-round-flip-rate.ts` |
 | ops | `npm run classify:debate-termination` | `tsx server/tools/classify-debate-termination.ts` |
 | ops | `npm run place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
-| ops | `npm run saxo:login` | `tsx --env-file=.env.local server/tools/saxo-login.ts` — Authorization Code Grant login for Saxo SIM/live, refs #1522 |
+| ops | `npm run saxo:login` | `tsx --env-file=.env.local server/apps/v2/execution/saxo/saxo-login.ts` — Authorization Code Grant login for Saxo SIM/live, refs #1522 |
 
 **Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
 `data`), deliberately. A stale `dist/` fails *silently* — the process boots and

@@ -89,7 +89,7 @@ records the *shape* they arrive in, which fields are present at all, and — new
 
 **The envelope is a BARE object, not `{ "Data": [ … ] }`.** `GET
 /ref/v1/instruments/details/29391797/Etn` returns HTTP 200 with 43 top-level keys and no `Data`
-member. `validateInstrumentDetails` in `server/pipeline/execution/adapters/saxo-http-client.ts`
+member. `validateInstrumentDetails` in `server/apps/v2/execution/saxo/saxo-http-client.ts`
 parses bare while every other endpoint in that file goes through `readData` for the wrapper; the
 bare parse is **correct as shipped**, and `readData` here would fail the resolver on its first
 line. Same shape on the USD control (`3347273/Etn`).

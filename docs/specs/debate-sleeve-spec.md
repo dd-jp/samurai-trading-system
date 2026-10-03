@@ -158,7 +158,7 @@ Each instantiated book is a paper book seeded at its sleeve's share of the year'
 - **Live venues:** the root composes paper only; `SAMURAI_MODE=live` is refused.
 - **Backtest:** both `DEBATE_SLEEVE_SPEC` and `ARM2_SLEEVE_SPEC` declare `validation: 'forward-paper'` (Q15: an LLM verdict cannot be backtested without leaking the future, and arm 2 exists only to be judged beside the debate sleeve in paper, so backtesting it separately would answer nothing), so the Step 3d backtest driver (`server/apps/v2/backtest.ts`) refuses both; the debate sleeve is judged in paper against arm 2 (Q17), and arm 2 itself is counted as trial T9 (§5) rather than judged on its own.
 
-What the root imports from v1: `runDebate` and the three personas plus `AnthropicLlmClient`/`NousMessagesClient`/`SqliteLlmSpendStore` from `server/pipeline/debate-engine/`; `AlpacaBrokerAdapter`, `AlpacaHttpBrokerClient`, `SqliteBrokerStateStore` from `server/pipeline/execution/`; `AlpacaNewsClient` from `server/providers/market-intelligence/sources/`; `NousAccountInFlightGate` and the pricing table from `server/shared/llm/`; `openSharedStore`/`guardedStore` from `server/shared/store/`. Nothing else.
+What the root imports from v1: `runDebate` and the three personas plus `AnthropicLlmClient`/`NousMessagesClient`/`SqliteLlmSpendStore` from `server/pipeline/debate-engine/`; `AlpacaNewsClient` from `server/providers/market-intelligence/sources/`; `NousAccountInFlightGate` and the pricing table from `server/shared/llm/`; `openSharedStore`/`guardedStore` from `server/shared/store/`. Nothing else. `AlpacaBrokerAdapter`, `AlpacaHttpBrokerClient` and `SqliteBrokerStateStore` came from v1 too until #1748 moved them under `server/apps/v2/execution/`.
 
 ## 9. Journal and replay
 
