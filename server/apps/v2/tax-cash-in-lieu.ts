@@ -1,3 +1,4 @@
+import type { BrokerActivityStatus } from '../../../contracts/index.js';
 import type { TaxFillRow } from './tax-log.js';
 
 export interface TaxCashInLieuRow {
@@ -8,6 +9,7 @@ export interface TaxCashInLieuRow {
   readonly qty: number | null;
   readonly amount_native: number;
   readonly currency: string;
+  readonly status: BrokerActivityStatus;
 }
 
 // The broker dates its payment itself: before the estimate when the cycle first saw the split on
@@ -47,6 +49,20 @@ function activityOf(row: TaxCashInLieuRow): string {
   return `${row.venue}:${row.activity_id}`;
 }
 
+function estimatedQty(paired: readonly TaxFillRow[]): number {
+  return paired.reduce((total, fill) => total + fill.qty, 0);
+}
+
+function qtyAgrees(broker: number, ledger: number): boolean {
+  return Math.abs(broker - ledger) <= 1e-6;
+}
+
+function qtyRefusal(row: TaxCashInLieuRow, paired: readonly TaxFillRow[]): string | undefined {
+  const ledger = estimatedQty(paired);
+  if (row.qty === null || qtyAgrees(row.qty, ledger)) return undefined;
+  return `broker cash in lieu ${activityOf(row)} is for ${row.qty} shares, its estimate for ${ledger}`;
+}
+
 function refusal(row: TaxCashInLieuRow, paired: readonly TaxFillRow[]): string | undefined {
   const sides = new Set(paired.map((fill) => fill.side));
   if (sides.size > 1) return `broker cash in lieu ${activityOf(row)} pairs a buy and a sell`;
@@ -57,12 +73,12 @@ function refusal(row: TaxCashInLieuRow, paired: readonly TaxFillRow[]): string |
   if (Math.sign(row.amount_native) !== (first.side === 'sell' ? 1 : -1)) {
     return `broker cash in lieu ${activityOf(row)} of ${row.amount_native} ${row.currency} has the wrong sign for a ${first.side}`;
   }
-  return undefined;
+  return qtyRefusal(row, paired);
 }
 
 function brokerFill(row: TaxCashInLieuRow, paired: readonly TaxFillRow[]): TaxFillRow {
   const first = paired[0] as TaxFillRow;
-  const qty = row.qty ?? paired.reduce((total, fill) => total + fill.qty, 0);
+  const qty = estimatedQty(paired);
   return {
     ...first,
     fill_id: `${row.venue}:cash-in-lieu-activity:${row.activity_id}`,
@@ -96,12 +112,22 @@ function inReadOrder(a: TaxCashInLieuRow, b: TaxCashInLieuRow): number {
   );
 }
 
+// A canceled status on any read voids every row of that activity, the first read included
+export function standingCashInLieu(rows: readonly TaxCashInLieuRow[]): readonly TaxCashInLieuRow[] {
+  const canceled = new Set(rows.filter((row) => row.status === 'canceled').map(activityOf));
+  return rows.filter((row) => !canceled.has(activityOf(row)));
+}
+
 // One broker payment stands for every estimate of its nearest date, since the account holds the
 // books' shares as one position
 export function withBrokerCashInLieu(
   fills: readonly TaxFillRow[],
   rows: readonly TaxCashInLieuRow[],
 ): readonly TaxFillRow[] | string {
+  const correction = rows.find((row) => row.status === 'correct');
+  if (correction !== undefined) {
+    return `broker cash in lieu ${activityOf(correction)} is a correction the broker does not link to the activity it corrects`;
+  }
   let paired: readonly TaxFillRow[] = fills;
   for (const row of [...rows].sort(inReadOrder)) {
     const next = pairOne(paired, row);

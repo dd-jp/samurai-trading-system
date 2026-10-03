@@ -1,3 +1,5 @@
+import type { BrokerActivityStatus } from '../../../../../contracts/index.js';
+
 export interface AlpacaOrderLeg {
   id: string;
   type: 'limit' | 'stop';
@@ -85,6 +87,7 @@ export interface AlpacaCashInLieuActivity {
   net_amount: string;
   symbol: string;
   qty?: string | null;
+  status: BrokerActivityStatus;
 }
 
 export interface AlpacaAccount {

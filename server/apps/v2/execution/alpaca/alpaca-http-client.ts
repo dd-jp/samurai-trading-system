@@ -166,7 +166,7 @@ function validateAlpacaAccount(body: unknown, context: string): AlpacaAccount {
 
 function validateCashInLieuActivity(raw: unknown, context: string): void {
   if (!isRecord(raw)) failValidation(context, 'an activity was not an object', raw);
-  const { id, activity_type, date, net_amount, symbol, qty } = raw;
+  const { id, activity_type, date, net_amount, symbol, qty, status } = raw;
   runValidationRules(
     [
       [typeof id !== 'string' || id === '', 'id must be a non-empty string'],
@@ -175,6 +175,10 @@ function validateCashInLieuActivity(raw: unknown, context: string): void {
       [!isFiniteNumericString(net_amount), 'net_amount must be a numeric string'],
       [typeof symbol !== 'string' || symbol === '', 'symbol must be a non-empty string'],
       [qty != null && !isFiniteNumericString(qty), 'qty must be a numeric string or null'],
+      [
+        status !== 'executed' && status !== 'correct' && status !== 'canceled',
+        "status must be 'executed', 'correct' or 'canceled'",
+      ],
     ],
     context,
     raw,

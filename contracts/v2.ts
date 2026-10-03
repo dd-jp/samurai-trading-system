@@ -468,6 +468,8 @@ export interface BrokerBookReader {
   read(venue: Venue): Promise<BrokerBook>;
 }
 
+export type BrokerActivityStatus = 'executed' | 'correct' | 'canceled';
+
 // amount is signed in the venue's currency, positive for cash paid to the account
 export interface BrokerCashInLieu {
   readonly activity_id: string;
@@ -476,6 +478,7 @@ export interface BrokerCashInLieu {
   readonly qty: number | null;
   readonly amount: number;
   readonly currency: string;
+  readonly status: BrokerActivityStatus;
 }
 
 export interface BrokerCashInLieuReader {
@@ -570,6 +573,7 @@ export interface JournalledCashInLieu {
   readonly qty: number | null;
   readonly amount_native: number;
   readonly currency: string;
+  readonly status: BrokerActivityStatus;
   readonly fx_quote_per_gbp: number;
   readonly fx_source: string;
   readonly trading_date: string;

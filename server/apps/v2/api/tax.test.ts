@@ -226,6 +226,7 @@ describe('TaxReader', () => {
       qty: 0.5,
       amount_native: 91,
       currency: 'USD',
+      status: 'executed',
       fx_quote_per_gbp: 1.3,
       fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
       trading_date: '2026-07-03',

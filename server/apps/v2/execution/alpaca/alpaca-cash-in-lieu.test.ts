@@ -15,6 +15,7 @@ const ACTIVITY: AlpacaCashInLieuActivity = {
   net_amount: '61.20',
   symbol: 'NVDA',
   qty: '0.5',
+  status: 'executed',
 };
 
 function jsonResponse(body: unknown): Response {
@@ -62,6 +63,15 @@ describe('AlpacaHttpBrokerClient.listCashInLieu', () => {
     await expect(client.listCashInLieu('2026-08-30')).resolves.toHaveLength(2);
   });
 
+  it('accepts each status Alpaca gives a non-trade activity', async () => {
+    const rows = (['executed', 'correct', 'canceled'] as const).map((status) => ({
+      ...ACTIVITY,
+      status,
+    }));
+    const { client } = clientServing(rows);
+    await expect(client.listCashInLieu('2026-08-30')).resolves.toEqual(rows);
+  });
+
   it.each([
     ['a body that is not an array', { activities: [] }, 'expected an array'],
     ['a row that is not an object', ['CIL'], 'an activity was not an object'],
@@ -91,6 +101,11 @@ describe('AlpacaHttpBrokerClient.listCashInLieu', () => {
     ['an empty symbol', [{ ...ACTIVITY, symbol: '' }], 'symbol must be a non-empty string'],
     ['a missing symbol', [{ ...ACTIVITY, symbol: undefined }], 'symbol must be a non-empty string'],
     ['an unparseable qty', [{ ...ACTIVITY, qty: 'half' }], 'qty must be a numeric string or null'],
+    ...[undefined, 'EXECUTED', 'pending'].map((status): [string, unknown, string] => [
+      `a status of ${status}`,
+      [{ ...ACTIVITY, status }],
+      "status must be 'executed', 'correct' or 'canceled'",
+    ]),
   ])('refuses %s', async (_name, body, detail) => {
     const { client } = clientServing(body);
     const read = client.listCashInLieu('2026-08-30');
@@ -105,7 +120,7 @@ describe('AlpacaCashInLieuReader', () => {
       ACTIVITY,
       { ...ACTIVITY, id: 'cil-2', qty: '-0.25', net_amount: '-3.10' },
       { ...ACTIVITY, id: 'cil-3', qty: '0' },
-      { ...ACTIVITY, id: 'cil-4', qty: null },
+      { ...ACTIVITY, id: 'cil-4', qty: null, status: 'canceled' },
     ]);
     expect(reader.venue).toBe('alpaca');
     await expect(reader.read('2026-08-30')).resolves.toEqual([
@@ -116,10 +131,11 @@ describe('AlpacaCashInLieuReader', () => {
         qty: 0.5,
         amount: 61.2,
         currency: 'USD',
+        status: 'executed',
       },
       expect.objectContaining({ activity_id: 'cil-2', qty: 0.25, amount: -3.1 }),
       expect.objectContaining({ activity_id: 'cil-3', qty: null }),
-      expect.objectContaining({ activity_id: 'cil-4', qty: null }),
+      expect.objectContaining({ activity_id: 'cil-4', qty: null, status: 'canceled' }),
     ]);
   });
 

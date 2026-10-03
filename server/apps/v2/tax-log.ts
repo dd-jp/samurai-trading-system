@@ -11,7 +11,11 @@ import {
   type ShareMatch,
   THIRTY_DAY_WINDOW_DAYS,
 } from './share-matching.js';
-import { type TaxCashInLieuRow, withBrokerCashInLieu } from './tax-cash-in-lieu.js';
+import {
+  standingCashInLieu,
+  type TaxCashInLieuRow,
+  withBrokerCashInLieu,
+} from './tax-cash-in-lieu.js';
 
 export interface TaxFillRow {
   readonly fill_id: string;
@@ -272,14 +276,15 @@ export function buildTaxLog(
   asOf: string,
   cashInLieu: readonly TaxCashInLieuRow[] = [],
 ): TaxLog {
+  const standing = standingCashInLieu(cashInLieu);
   const disposals: TaxDisposalWire[] = [];
   const held: HeldOutInstrument[] = [];
-  for (const journal of grouped(fills, splits, cashInLieu)) {
+  for (const journal of grouped(fills, splits, standing)) {
     const log = logGroup(journal, dayRate, asOf);
     if (log.ok) disposals.push(...log.disposals);
     else held.push(log.heldOut);
   }
-  held.push(...unpairedByInstrument(fills, cashInLieu));
+  held.push(...unpairedByInstrument(fills, standing));
   disposals.sort(
     (a, b) =>
       a.disposal_date.localeCompare(b.disposal_date) || a.instrument.localeCompare(b.instrument),

@@ -19,6 +19,7 @@ function toCashInLieu(activity: AlpacaCashInLieuActivity): BrokerCashInLieu {
     qty: qtyOf(activity),
     amount: Number(activity.net_amount),
     currency: 'USD',
+    status: activity.status,
   };
 }
 

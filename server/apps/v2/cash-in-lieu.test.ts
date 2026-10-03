@@ -13,6 +13,7 @@ const PAID: BrokerCashInLieu = {
   qty: 0.5,
   amount: 61.2,
   currency: 'USD',
+  status: 'executed',
 };
 
 const MARKET = {
@@ -71,6 +72,7 @@ describe('readBrokerCashInLieu (#2001)', () => {
         qty: 0.5,
         amount_native: 61.2,
         currency: 'USD',
+        status: 'executed',
         fx_quote_per_gbp: 1.25,
         fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
         trading_date: '2026-10-01',
@@ -82,7 +84,7 @@ describe('readBrokerCashInLieu (#2001)', () => {
         level: 'info',
         event: 'v2_cash_in_lieu_read',
         message:
-          'alpaca paid 61.2 USD cash in lieu of 0.5 NVDA on 2026-09-30 (activity cil-1); the tax log uses it in place of the latest-close estimate',
+          'alpaca reported 61.2 USD cash in lieu of 0.5 NVDA on 2026-09-30 (activity cil-1, executed); the tax log uses it in place of the latest-close estimate',
       }),
     ]);
 
@@ -90,6 +92,60 @@ describe('readBrokerCashInLieu (#2001)', () => {
     expect(rows(db)).toHaveLength(1);
     expect(rows(db)).toMatchObject([{ trading_date: '2026-10-01', amount_native: 61.2 }]);
     expect(entries).toHaveLength(1);
+  });
+
+  it('adds a row when a later read reports the same activity in another status', async () => {
+    const db = storeWithEstimate('2026-09-29');
+    const { deps, reader } = harness(db);
+    await readBrokerCashInLieu(deps, '2026-10-01');
+    reader.read.mockResolvedValue([PAID, { ...PAID, status: 'canceled' }]);
+    await expect(readBrokerCashInLieu(deps, '2026-10-02')).resolves.toBe(1);
+    expect(rows(db)).toMatchObject([
+      { activity_id: 'cil-1', status: 'executed', trading_date: '2026-10-01' },
+      { activity_id: 'cil-1', status: 'canceled', trading_date: '2026-10-02' },
+    ]);
+  });
+
+  it('takes no booking rate when the broker reports nothing', async () => {
+    const db = storeWithEstimate('2026-09-29');
+    const { deps, entries } = harness(db, async () => []);
+    const market = {
+      gbpUsdAtYearStart: () => {
+        throw new Error('no fix');
+      },
+      gbpUsdYearStartFixDate: () => '2025-12-31',
+    };
+    await expect(readBrokerCashInLieu({ ...deps, market }, '2026-10-01')).resolves.toBe(0);
+    expect(entries).toEqual([]);
+  });
+
+  it('logs a failed booking rate or journal write at warn and lets the run go on', async () => {
+    const failures = [
+      (deps: ReturnType<typeof harness>['deps']) => ({
+        ...deps,
+        market: {
+          gbpUsdAtYearStart: () => {
+            throw new Error('no fix');
+          },
+          gbpUsdYearStartFixDate: () => '2025-12-31',
+        },
+      }),
+      (deps: ReturnType<typeof harness>['deps']) => {
+        vi.spyOn(deps.journal, 'recordCashInLieu').mockImplementation(() => {
+          throw new Error('disk full');
+        });
+        return deps;
+      },
+    ];
+    for (const fail of failures) {
+      const db = storeWithEstimate('2026-09-29');
+      const { deps, entries } = harness(db);
+      await expect(readBrokerCashInLieu(fail(deps), '2026-10-01')).resolves.toBe(0);
+      expect(rows(db)).toEqual([]);
+      expect(entries).toEqual([
+        expect.objectContaining({ level: 'warn', event: 'v2_cash_in_lieu_read_failed' }),
+      ]);
+    }
   });
 
   it('names an unstated qty in the log line', async () => {

@@ -439,6 +439,7 @@ describe("buildTaxLog with the broker's cash in lieu (#2001)", () => {
       qty: 0.5,
       amount_native: 11,
       currency: 'USD',
+      status: 'executed',
       ...overrides,
     };
   }
@@ -503,16 +504,57 @@ describe("buildTaxLog with the broker's cash in lieu (#2001)", () => {
     ]);
   });
 
-  it('replaces every estimate of the nearest date with one fill at the broker’s qty, or their sum', () => {
+  it('replaces every estimate of the nearest date with one fill at their summed qty', () => {
     const books = [estimate('2026-09-29', 0.5), estimate('2026-09-29', 0.25)];
-    expect(logOf(books, [paid({ qty: 0.75, amount_native: 16.5 })]).disposals).toMatchObject([
-      { qty: 0.75, proceeds_gbp: expect.closeTo(16.5 / 1.25, 9), cash_in_lieu: true },
+    for (const qty of [0.75, null, 0.75 + 9e-7, 0.75 - 9e-7]) {
+      expect(logOf(books, [paid({ qty, amount_native: 16.5 })]).disposals).toMatchObject([
+        { qty: 0.75, proceeds_gbp: expect.closeTo(16.5 / 1.25, 9), cash_in_lieu: true },
+      ]);
+    }
+  });
+
+  it('holds the name out when the broker’s qty differs from the estimates’ by more than 1e-6', () => {
+    const books = [estimate('2026-09-29', 0.5), estimate('2026-09-29', 0.25)];
+    for (const qty of [0.4, 0.75 + 2e-6, 0.75 - 2e-6]) {
+      const log = logOf(books, [paid({ qty })]);
+      expect(log.disposals).toEqual([]);
+      expect(log.heldOut).toMatchObject([
+        { reason: `broker cash in lieu alpaca:cil-1 is for ${qty} shares, its estimate for 0.75` },
+      ]);
+    }
+  });
+
+  it('drops every row of an activity the broker canceled, so the estimate stands', () => {
+    const canceled = [paid(), paid({ status: 'canceled' })];
+    for (const rows of [canceled, [paid({ status: 'canceled' })]]) {
+      const log = logOf([estimate('2026-09-29')], rows);
+      expect(log.heldOut).toEqual([]);
+      expect(log.disposals).toMatchObject([
+        { proceeds_gbp: expect.closeTo(10 / 1.25, 9), cash_in_lieu_activity: null },
+      ]);
+    }
+    const replaced = logOf(
+      [estimate('2026-09-29')],
+      [...canceled, paid({ activity_id: 'cil-2', amount_native: 12 })],
+    );
+    expect(replaced.disposals).toMatchObject([
+      { proceeds_gbp: expect.closeTo(12 / 1.25, 9), cash_in_lieu_activity: 'alpaca:cil-2' },
     ]);
-    expect(logOf(books, [paid({ qty: null, amount_native: 16.5 })]).disposals).toMatchObject([
-      { qty: 0.75, proceeds_gbp: expect.closeTo(16.5 / 1.25, 9) },
+    const orphan = buildTaxLog([], [], dayRate, AS_OF, [
+      paid({ instrument: 'MSFT', status: 'canceled' }),
     ]);
-    expect(logOf(books, [paid({ qty: 0.4 })]).disposals).toMatchObject([
-      { qty: 0.4, proceeds_gbp: expect.closeTo(11 / 1.25, 9) },
+    expect(orphan.heldOut).toEqual([]);
+  });
+
+  it('holds the name out on a correction, which the broker does not link to what it corrects', () => {
+    const rows = [paid(), paid({ activity_id: 'cil-2', status: 'correct' })];
+    const log = logOf([estimate('2026-09-29')], rows);
+    expect(log.disposals).toEqual([]);
+    expect(log.heldOut).toMatchObject([
+      {
+        reason:
+          'broker cash in lieu alpaca:cil-2 is a correction the broker does not link to the activity it corrects',
+      },
     ]);
   });
 

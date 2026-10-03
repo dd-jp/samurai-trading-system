@@ -61,13 +61,16 @@ describe the v1 report, whose matching rules it reuses.
   Alpaca's own payment (its `CIL` account activity, #2001) is journalled in
   `v2_cash_in_lieu`, the log pairs it with the estimates of the same venue and
   name on the nearest estimate date within 30 days either side. Those
-  estimates then give way to one disposal at the broker's qty (or theirs
-  summed, when the broker states none) and amount, on the estimate's date and
-  at that date's rate, and the row names the activity
-  (`cash_in_lieu_activity`). The estimate rows are never changed, so the
-  correction is the appended broker row. A payment with no estimate in the
-  window, in another currency, of the wrong sign, pairing a buy with a sell,
-  or for a name with no fills holds its instrument out. Saxo's corporate-action
+  estimates then give way to one disposal at their summed qty and the broker's
+  amount, on the estimate's date and at that date's rate, and the row names
+  the activity (`cash_in_lieu_activity`). The estimate rows are never changed,
+  so the correction is the appended broker row. Each row carries the broker's
+  status: an activity the broker reports canceled drops with all its rows, and
+  a correction holds its instrument out, since Alpaca does not link it to the
+  activity it corrects. A payment with no estimate in the window, in another
+  currency, of the wrong sign, for a qty more than 1e-6 off the estimates',
+  pairing a buy with a sell, or for a name with no fills holds its instrument
+  out. Saxo's corporate-action
   booking is not read yet, so a Saxo disposal keeps the estimate.
 - **Held out, never guessed.** An instrument is held out, with the reason and
   its fill count, when any of its fills predates migration 0085, has no day

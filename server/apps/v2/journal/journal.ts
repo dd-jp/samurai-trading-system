@@ -277,9 +277,9 @@ export class Journal implements DecisionJournal {
     const result = this.db
       .prepare(
         `INSERT INTO v2_cash_in_lieu (venue, activity_id, instrument, activity_date, qty,
-           amount_native, currency, fx_quote_per_gbp, fx_source, trading_date, recorded_at)
+           amount_native, currency, status, fx_quote_per_gbp, fx_source, trading_date, recorded_at)
          VALUES (@venue, @activity_id, @instrument, @activity_date, @qty, @amount_native,
-           @currency, @fx_quote_per_gbp, @fx_source, @trading_date, @recorded_at)`,
+           @currency, @status, @fx_quote_per_gbp, @fx_source, @trading_date, @recorded_at)`,
       )
       .run({ ...row, recorded_at: this.#now() });
     return result.changes === 1;

@@ -91,6 +91,7 @@ export type {
   BookLedger,
   BookSpec,
   BookVariant,
+  BrokerActivityStatus,
   BrokerBook,
   BrokerBookReader,
   BrokerCashInLieu,

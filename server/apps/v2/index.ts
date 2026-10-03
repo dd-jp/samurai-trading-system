@@ -488,13 +488,13 @@ export async function runDigestedCycle(
   inputs.recording.clear();
   const report = await runCycle(cycle, tradingDate);
   if (!report.skipped) {
-    await readBrokerCashInLieu(cycle, tradingDate);
     recordInputDigests(
       inputs.db,
       inputs.clock,
       tradingDate,
       cycleInputDigests(inputs.bars, inputs.recording.names(), inputs.catalogue, tradingDate),
     );
+    await readBrokerCashInLieu(cycle, tradingDate);
   }
   return report;
 }

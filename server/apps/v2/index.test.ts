@@ -1079,16 +1079,23 @@ describe('composeV2Root', () => {
     const storePath = join(fixtures.directory, 'cash-in-lieu.sqlite');
     const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
     const alpacaClient = fakeAlpacaClient(clock);
-    const listCashInLieu = vi.fn().mockResolvedValue([
-      {
-        id: 'cil-1',
-        activity_type: 'CIL',
-        date: '2026-09-16',
-        net_amount: '12.50',
-        symbol: 'NVDA',
-        qty: '0.5',
-      },
-    ]);
+    let digestsAtRead: unknown;
+    const listCashInLieu = vi.fn(async () => {
+      digestsAtRead = root.db
+        .prepare('SELECT COUNT(*) AS n FROM v2_input_digests WHERE trading_date = ?')
+        .get(ENTRY_DATE);
+      return [
+        {
+          id: 'cil-1',
+          activity_type: 'CIL' as const,
+          date: '2026-09-16',
+          net_amount: '12.50',
+          symbol: 'NVDA',
+          qty: '0.5',
+          status: 'executed' as const,
+        },
+      ];
+    });
     alpacaClient.listCashInLieu = listCashInLieu;
     const seeded = seededStore(storePath);
     seeded
@@ -1124,10 +1131,11 @@ describe('composeV2Root', () => {
     try {
       await root.run();
       expect(listCashInLieu).toHaveBeenCalledWith('2026-08-16', undefined);
+      expect((digestsAtRead as { n: number }).n).toBeGreaterThan(0);
       expect(
         root.db
           .prepare(
-            'SELECT venue, activity_id, instrument, amount_native, currency, trading_date FROM v2_cash_in_lieu',
+            'SELECT venue, activity_id, instrument, amount_native, currency, status, trading_date FROM v2_cash_in_lieu',
           )
           .all(),
       ).toEqual([
@@ -1137,6 +1145,7 @@ describe('composeV2Root', () => {
           instrument: 'NVDA',
           amount_native: 12.5,
           currency: 'USD',
+          status: 'executed',
           trading_date: ENTRY_DATE,
         },
       ]);

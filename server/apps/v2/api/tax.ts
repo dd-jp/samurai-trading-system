@@ -50,7 +50,7 @@ const BROKER_FILLS = `
   ORDER BY f.rowid`;
 
 const BROKER_CASH_IN_LIEU = `
-  SELECT venue, activity_id, instrument, activity_date, qty, amount_native, currency
+  SELECT venue, activity_id, instrument, activity_date, qty, amount_native, currency, status
   FROM v2_cash_in_lieu ORDER BY rowid`;
 
 export function taxYearLabel(year: number): string {
