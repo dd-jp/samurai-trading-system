@@ -74,14 +74,6 @@ export const LSE_MOMENTUM_LINES: readonly (SaxoLine | SplicedLine)[] = [
   },
 ];
 
-// CUKX (accumulating class of ISF's index) is pulled only to measure whether Saxo's series carry
-// distributions: the ISF/CUKX close ratio drifts at the dividend yield if ISF is price-only
-export const LSE_AUX_LINES: readonly SaxoLine[] = [
-  { tidm: 'CUKX', uic: 1322714, assetType: 'Etf', unit: 'GBX', role: 'UK large cap (Acc)' },
-];
-
-export const LSE_CALENDAR_REFERENCE = 'ISF';
-
 export function isSpliced(line: SaxoLine | SplicedLine): line is SplicedLine {
   return 'spliceFrom' in line;
 }

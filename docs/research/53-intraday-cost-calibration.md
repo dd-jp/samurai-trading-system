@@ -12,8 +12,8 @@ edited once it is run.
 [#664](https://github.com/dd-jp/samurai-trading-system/issues/664) (PR
 [#874](https://github.com/dd-jp/samurai-trading-system/pull/874)) made `ReplayDriver` replay intraday bars, so an
 intraday Stage 2 run is reachable for the first time. The cost config it would be scored against —
-`CALIBRATED_COST_CONFIG` in `server/tools/run-stage2.ts` — has a `spreadVolatilityCoefficient` fitted against
-**daily ATR14** (`server/tools/run-spread-calibration.ts`, 36,617 Alpaca quotes, 2026-08-05). `ReplayDriver`
+`CALIBRATED_COST_CONFIG` in `server/tools/run-stage2.ts` — has a `spreadVolatilityCoefficient` fitted against <!-- cite-exempt: historical — deleted in v1 teardown wave 1 (#1748); preserved at tag v1-final -->
+**daily ATR14** (`server/tools/run-spread-calibration.ts`, 36,617 Alpaca quotes, 2026-08-05). `ReplayDriver` <!-- cite-exempt: historical — deleted in v1 teardown wave 1 (#1748); preserved at tag v1-final -->
 hardcodes `marketState.spread = null`, so `CostModelImpl` falls back to `spread = volatility ×
 spreadVolatilityCoefficient` on **every** fill, with `volatility` the ATR of whatever bars the run replays. At
 minute resolution that ATR is far smaller, so the modelled spread is far narrower — flattering, at exactly the

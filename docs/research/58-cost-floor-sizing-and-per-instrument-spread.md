@@ -254,7 +254,7 @@ uncommitted):
 | `debate_log` | 48 |
 
 **Pipeline-generated fills: zero.** Both `fills` rows carry
-`idempotency_key = 'soak-lifecycle-probe-2026-08-26'`, minted by `server/tools/place-soak-position.ts` — a
+`idempotency_key = 'soak-lifecycle-probe-2026-08-26'`, minted by `server/tools/place-soak-position.ts` — a <!-- cite-exempt: historical — deleted in v1 teardown wave 1 (#1748); preserved at tag v1-final -->
 one-off manual probe, not a pipeline decision. `data/samurai.db` <!-- cite-exempt: untracked — gitignored local file --> is **0 bytes**, so no live-leg store exists at
 all. The 2026-08-25 archive DB holds 94 debates and 0 fills; the stale worktree copy holds 78 debates and 0 fills.
 

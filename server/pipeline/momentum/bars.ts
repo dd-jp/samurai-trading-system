@@ -13,7 +13,7 @@ export interface BarSeries {
   readonly bars: readonly DailyBar[];
 }
 
-export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function assertSortedUniqueDates(series: BarSeries): void {
   let previous = '';

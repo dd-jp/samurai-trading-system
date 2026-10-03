@@ -4,11 +4,8 @@ export {
   AnalystOrchestrator,
   DEFAULT_ANALYST_TIMEOUT_MS,
 } from './orchestrator.js';
-export type { AxisAssessment } from './technical-analyst.js';
 export {
   type AxisVote,
-  assessAxes,
-  LOW_CONVICTION_CAP,
   MACD_SPEC,
   momentumVote,
   RSI_SPEC,
@@ -22,4 +19,4 @@ export type {
   IndicatorUnavailableEvent,
   Signal,
 } from './types.js';
-export { INDICATOR_UNAVAILABLE_COUNTER, NO_DATA_MARKER } from './types.js';
+export { INDICATOR_UNAVAILABLE_COUNTER } from './types.js';

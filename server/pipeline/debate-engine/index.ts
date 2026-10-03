@@ -1,7 +1,6 @@
-export type { DebateRoundLogEntry } from '../../shared/index.js';
 export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions, computeInfluenceScore } from './analyst-contribution.js';
-export { computeConvictionScore, EVIDENCE_WEIGHT } from './conviction-score.js';
+export { computeConvictionScore } from './conviction-score.js';
 export { computeDebateId } from './debate-id.js';
 export {
   buildDebateLog,

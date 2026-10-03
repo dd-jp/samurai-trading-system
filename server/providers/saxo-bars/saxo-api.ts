@@ -117,38 +117,6 @@ export function parseInstrumentDetails(body: unknown): InstrumentDetails {
   };
 }
 
-export interface InfoPriceQuote {
-  readonly uic: number;
-  readonly bid: number;
-  readonly ask: number;
-  readonly delayedByMinutes: number | undefined;
-  readonly marketState: string;
-  readonly lastUpdated: string;
-}
-
-export function parseInfoPricesList(body: unknown): InfoPriceQuote[] {
-  if (!isRecord(body) || !Array.isArray(body.Data))
-    throw new Error('Saxo infoprices/list: Data missing');
-  return body.Data.flatMap((item: unknown) => {
-    const quote = parseInfoPriceQuote(item);
-    return quote === undefined ? [] : [quote];
-  });
-}
-
-function parseInfoPriceQuote(item: unknown): InfoPriceQuote | undefined {
-  if (!isRecord(item) || !isRecord(item.Quote) || !isFiniteNumber(item.Uic)) return undefined;
-  const { Bid, Ask, DelayedByMinutes, MarketState } = item.Quote;
-  if (!isFiniteNumber(Bid) || !isFiniteNumber(Ask) || !(Bid > 0) || !(Ask >= Bid)) return undefined;
-  return {
-    uic: item.Uic,
-    bid: Bid,
-    ask: Ask,
-    delayedByMinutes: isFiniteNumber(DelayedByMinutes) ? DelayedByMinutes : undefined,
-    marketState: String(MarketState ?? ''),
-    lastUpdated: String(item.LastUpdated ?? ''),
-  };
-}
-
 const consoleLogger: Logger = {
   log: (entry) => console.log(maskCredentials(`${entry.event ?? entry.level}: ${entry.message}`)),
 };
@@ -261,16 +229,6 @@ export class SaxoReadOnlyApi {
   async instrumentDetails(uic: number, assetType: SaxoAssetType): Promise<InstrumentDetails> {
     return parseInstrumentDetails(
       await this.get(`/ref/v1/instruments/details/${uic}/${assetType}`),
-    );
-  }
-
-  async infoPrices(uics: readonly number[]): Promise<InfoPriceQuote[]> {
-    return parseInfoPricesList(
-      await this.get('/trade/v1/infoprices/list', {
-        Uics: uics.join(','),
-        AssetType: 'Etf',
-        FieldGroups: 'Quote',
-      }),
     );
   }
 

@@ -3,7 +3,7 @@ import type { AnalystRoundStance } from './analyst-contribution.js';
 import type { AnalystView, Direction } from './types.js';
 
 const CONSENSUS_WEIGHT = 0.6;
-export const EVIDENCE_WEIGHT = 0.4;
+const EVIDENCE_WEIGHT = 0.4;
 
 const NO_DATA_SCORE = 0.5;
 
