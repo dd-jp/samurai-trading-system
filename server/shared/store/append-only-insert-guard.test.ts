@@ -16,7 +16,35 @@ interface Case {
 const SIGNAL_COLUMNS = `signal_id, payload_digest, symbol, entry_low, entry_high, entry_is_zone,
   targets, stop, received_at, session, process_after, payload`;
 
+const CASH_ANCHOR_COLUMNS = `anchor_row_id, venue, kind, currency, amount_quote, fill_rowid,
+  reference, trading_date, recorded_at`;
+
 const CASES: readonly Case[] = [
+  {
+    table: 'v2_cash_anchors',
+    seed: `INSERT INTO v2_cash_anchors (${CASH_ANCHOR_COLUMNS})
+      VALUES (1, 'alpaca', 'anchor', 'USD', 12000, 7, 'go-live', '2026-10-01', '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same anchor_row_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_cash_anchors (${CASH_ANCHOR_COLUMNS})
+          VALUES (1, 'alpaca', 'deposit', 'USD', 500, NULL, 'wire-1', '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+      },
+      {
+        name: 'a second anchor for the venue',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_rowid, reference, trading_date, recorded_at)
+          VALUES ('alpaca', 'anchor', 'USD', 1, 9, 'go-live-again', '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+      },
+      {
+        name: 'the same reference under a new id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_rowid, reference, trading_date, recorded_at)
+          VALUES ('alpaca', 'deposit', 'USD', 5, NULL, 'go-live', '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+      },
+    ],
+  },
   {
     table: 'v2_fill_reads',
     seed: `INSERT INTO v2_fill_reads (read_id, run_id, trading_date, client_order_id, filled_qty, error, recorded_at)

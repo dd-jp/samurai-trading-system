@@ -48,15 +48,11 @@ const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
 const SET_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
+  RECONCILE_CASH_TOLERANCE_GBP,
   ...CFD_COST_PARAMETERS,
 ];
 const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
   (parameter) => !SET_PARAMETERS.includes(parameter),
-);
-// The cash tolerance blocks live entries only (David 2026-09-29, #1872), so a paper or dry-run
-// cycle never journals it
-const PAPER_REFUSED_PARAMETERS = STILL_UNSET_PARAMETERS.filter(
-  (parameter) => parameter !== RECONCILE_CASH_TOLERANCE_GBP,
 );
 
 export interface SmokeProbe {
@@ -356,7 +352,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
       ),
       probe(
         'every still-open parameter is journalled as a refusal',
-        PAPER_REFUSED_PARAMETERS.every((parameter) =>
+        STILL_UNSET_PARAMETERS.every((parameter) =>
           report.refusals.some((refusal) => refusal.includes(parameter.name)),
         ),
         report.refusals.join(' | '),

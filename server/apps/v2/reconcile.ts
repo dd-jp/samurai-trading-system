@@ -16,9 +16,8 @@ import type {
 } from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
 import { describeThrownSafely, logIfPresent } from '../../shared/index.js';
-import { quotePerGbp } from './data/index.js';
+import { type CashAnchorLedger, type CashCheck, liveCashCheck } from './cash-anchor.js';
 import {
-  type CashRule,
   compareVenue,
   type HeldProtection,
   rearmable,
@@ -28,16 +27,17 @@ import {
 
 export interface ReconcileDeps {
   readonly registry: Pick<SleeveSource, 'ids'>;
-  readonly books: Pick<BookLedger, 'forSleeve' | 'positions' | 'cash'>;
+  readonly books: Pick<BookLedger, 'forSleeve' | 'positions'>;
   readonly journal: Pick<
     DecisionJournal,
     'restingEntries' | 'orderFor' | 'recordReconcile' | 'recordRefusal'
   >;
   readonly executor: Pick<OrderExecutor, 'simulates'>;
-  readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
+  readonly market: Pick<MarketData, 'gbpUsdOnDay'>;
   readonly brokerBooks: BrokerBookReader;
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp: number | undefined;
+  readonly cashAnchors?: CashAnchorLedger | undefined;
   readonly logger?: Logger | undefined;
 }
 
@@ -151,25 +151,25 @@ export function storeView(
       qty: null,
       stopPrice: null,
     })),
-    cashGbp: books.reduce((sum, book) => sum + deps.books.cash(book.id), 0),
     protection: protectionByInstrument(deps, held),
   };
 }
 
-function brokerView(book: BrokerBook, quotePerGbpRate: number): VenueView {
-  const cashGbp = book.cashQuote / quotePerGbpRate;
-  if (!Number.isFinite(cashGbp)) throw new Error(`broker cash ${book.cashQuote} is not a number`);
-  return { positions: netByInstrument(book.positions), openOrders: book.openOrders, cashGbp };
+function brokerView(book: BrokerBook): VenueView {
+  if (!Number.isFinite(book.cashQuote)) {
+    throw new Error(`broker cash ${book.cashQuote} is not a number`);
+  }
+  return { positions: netByInstrument(book.positions), openOrders: book.openOrders };
 }
 
 type Read =
-  | { readonly ok: true; readonly view: VenueView }
+  | { readonly ok: true; readonly view: VenueView; readonly cashQuote: number }
   | { readonly ok: false; readonly error: string };
 
-async function readBroker(deps: ReconcileDeps, venue: Venue, tradingDate: string): Promise<Read> {
+async function readBroker(deps: ReconcileDeps, venue: Venue): Promise<Read> {
   try {
     const book = await deps.brokerBooks.read(venue);
-    return { ok: true, view: brokerView(book, quotePerGbp(deps.market, venue, tradingDate)) };
+    return { ok: true, view: brokerView(book), cashQuote: book.cashQuote };
   } catch (error) {
     return { ok: false, error: describeThrownSafely(error) };
   }
@@ -201,13 +201,18 @@ const SIMULATED_CLEAN: GroupResult = {
   detail: 'simulated venue: the ledger is its book',
 };
 
-// David 2026-09-29 (#1872): paper compares positions and orders only; the cash check, and the
-// unset tolerance that blocks entries, apply to live alone
+// David 2026-09-29 (#1872): paper compares positions and orders only; the cash check applies to
+// live alone
 const PAPER_CASH_NOT_COMPARED = 'cash not compared on paper (David 2026-09-29, #1872)';
 
-function cashRuleFor(deps: ReconcileDeps): CashRule {
-  if (deps.brokerMode === 'paper') return 'not_compared';
-  return { toleranceGbp: deps.reconcileCashToleranceGbp };
+function cashCheckFor(
+  deps: ReconcileDeps,
+  venue: Venue,
+  read: { readonly cashQuote: number; readonly booksMatch: boolean },
+  tradingDate: string,
+): CashCheck {
+  if (deps.brokerMode === 'paper') return { diffs: [], note: PAPER_CASH_NOT_COMPARED };
+  return liveCashCheck(deps, { venue, ...read }, tradingDate);
 }
 
 function staleStopsOf(
@@ -233,16 +238,21 @@ async function reconcileGroup(
 ): Promise<GroupResult> {
   if (group.source === 'simulated') return SIMULATED_CLEAN;
   const store = storeView(deps, group.venue, group.books);
-  const read = await readBroker(deps, group.venue, tradingDate);
+  const read = await readBroker(deps, group.venue);
   if (!read.ok) return { status: 'read_failed', diffs: [], detail: read.error };
-  const cash = cashRuleFor(deps);
-  const diffs = compareVenue(store, read.view, cash);
-  const notes = cash === 'not_compared' ? [PAPER_CASH_NOT_COMPARED] : [];
+  const bookDiffs = compareVenue(store, read.view);
+  const cash = cashCheckFor(
+    deps,
+    group.venue,
+    { cashQuote: read.cashQuote, booksMatch: bookDiffs.length === 0 },
+    tradingDate,
+  );
+  const diffs = [...bookDiffs, ...cash.diffs];
   return {
     status: statusOf(diffs),
     diffs,
-    detail: [...diffs.map(describeDiff), ...notes].join('; '),
-    staleStops: staleStopsOf(group.venue, diffs, rearmable(store, read.view)),
+    detail: [...diffs.map(describeDiff), cash.note].join('; '),
+    staleStops: staleStopsOf(group.venue, bookDiffs, rearmable(store, read.view)),
   };
 }
 

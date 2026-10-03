@@ -70,6 +70,14 @@ describe('fillFxOf and londonDateOf (#1947)', () => {
     );
   });
 
+  it("reads the day's fix, or the last before it while BoE has not published one (#1927)", () => {
+    expect(market.gbpUsdOnDay('2026-09-24')).toEqual({ gbpUsd: 1.2, fixDate: '2026-09-24' });
+    expect(market.gbpUsdOnDay('2026-09-28')).toEqual({ gbpUsd: 1.2, fixDate: '2026-09-24' });
+    expect(() => market.gbpUsdOnDay('2026-10-02')).toThrow(
+      'no BoE XUDLUSS fix in the 7 days to 2026-10-02',
+    );
+  });
+
   it('needs no rate for sterling', () => {
     expect(fillFxOf(market, 'saxo', '2026-09-25')).toEqual({
       currency: 'GBP',

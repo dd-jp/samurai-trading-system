@@ -37,6 +37,7 @@ import type {
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
+import type { CashAnchorLedger } from './cash-anchor.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   CALENDAR_REFERENCE,
@@ -91,6 +92,7 @@ export interface CycleDeps {
   readonly brokerBooks: BrokerBookReader;
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp: number | undefined;
+  readonly cashAnchors?: CashAnchorLedger | undefined;
   readonly controls: ControlReader;
   readonly market: MarketData;
   readonly clock: Clock;

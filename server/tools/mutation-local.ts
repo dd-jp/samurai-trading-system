@@ -21,6 +21,7 @@ export const TRADING_PATH_PREFIXES = [
   'server/apps/v2/split.ts',
   'server/apps/v2/reconcile.ts',
   'server/apps/v2/reconcile-compare.ts',
+  'server/apps/v2/cash-anchor.ts',
   'server/pipeline/momentum/loss-budget.ts',
   'server/pipeline/momentum/sizing.ts',
 ] as const;

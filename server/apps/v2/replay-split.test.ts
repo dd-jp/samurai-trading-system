@@ -23,6 +23,8 @@ const SPLIT_BAR = 261;
 const SPLIT_DAY = dateAt(262);
 const DAY_AFTER = dateAt(263);
 const BROKER_FILLED_AT = `${ENTRY_DAY}T15:00:00.000Z`;
+const SEEDED_AT = `${dateAt(0)}T00:00:00.000Z`;
+const SPLIT_DAY_MARK = `(SELECT MAX(recorded_at) FROM v2_book_days WHERE trading_date = '${SPLIT_DAY}')`;
 const OPEN_EVERY_DAY: VenueSessionGate = {
   entrySitOut: () => undefined,
   timeStopPausedVenues: () => [],
@@ -272,6 +274,7 @@ async function journalDays(
     100_000,
     1_500,
   );
+  seed.prepare('UPDATE schema_migrations SET applied_at = ?').run(SEEDED_AT);
   seed.close();
   const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
   const broker: Broker = { filled: false, positionScale: 1 };
@@ -409,13 +412,63 @@ describe('replay of positions held across a 2:1 split (#1983)', () => {
     });
   });
 
-  it('holds a store that journals no rescale, as one written before #1983, to its other rows only', async () => {
+  it('holds a day run before the #1983 cutover to its other rows only', async () => {
     const storePath = tamperedCopy(
       'before-1983',
-      `DROP TRIGGER v2_rescales_no_delete; DELETE FROM v2_rescales;`,
+      `DROP TRIGGER v2_rescales_no_delete; DELETE FROM v2_rescales;
+       UPDATE schema_migrations SET applied_at = '${DAY_AFTER}T00:00:00.000Z' WHERE version = 87;`,
     );
     const result = await replayFromFiles({ ...options, storePath, tradingDate: SPLIT_DAY });
     expect(result.divergences).toEqual([]);
+  });
+
+  it('holds a day run before the cutover to its other rows only, whatever a later re-run of it journals (#2019)', async () => {
+    const storePath = tamperedCopy(
+      'rerun-after-1983',
+      `DROP TRIGGER v2_rescales_no_delete; DELETE FROM v2_rescales;
+       UPDATE schema_migrations SET applied_at = '${DAY_AFTER}T00:00:00.000Z' WHERE version = 87;
+       INSERT INTO v2_rescales (trading_date, book_id, instrument, source, ratio, anchor_date,
+         fills_before, qty_before, qty_after, entry_before, entry_after, recorded_at)
+       VALUES ('${SPLIT_DAY}', 'debate/primary', 'UP', 'anchor', 1, '${ENTRY_DAY}', 0, 1, 1,
+         10, 10, '${DAY_AFTER}T09:00:00.000Z');`,
+    );
+    const result = await replayFromFiles({ ...options, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('holds a day marked at the cutover instant to its rescales before the first is journalled (#2019)', async () => {
+    const storePath = tamperedCopy(
+      'deployed-no-rescale-yet',
+      `DROP TRIGGER v2_rescales_no_delete; DELETE FROM v2_rescales;
+       UPDATE schema_migrations SET applied_at = ${SPLIT_DAY_MARK} WHERE version = 87;`,
+    );
+    const result = await replayFromFiles({ ...options, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toContainEqual({
+      kind: 'row_extra',
+      stage: 'rescales',
+      key: `debate/primary|UP|anchor|${ENTRY_DAY}|1`,
+    });
+    expect(result.divergences.every((divergence) => divergence.kind === 'row_extra')).toBe(true);
+  });
+
+  it("keys each of a day's same-key rescales by its order, so a duplicate is not masked (#2019)", async () => {
+    const storePath = tamperedCopy(
+      'duplicate-rescale',
+      `INSERT INTO v2_rescales (trading_date, book_id, instrument, source, ratio, anchor_date,
+         fills_before, qty_before, qty_after, entry_before, entry_after, stop_before, stop_after,
+         target_before, target_after, recorded_at)
+       SELECT trading_date, book_id, instrument, source, ratio, anchor_date, fills_before,
+         qty_before, qty_after, entry_before, entry_after, stop_before, stop_after, target_before,
+         target_after, recorded_at FROM v2_rescales WHERE source = 'detector';`,
+    );
+    const result = await replayFromFiles({ ...options, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([
+      {
+        kind: 'row_missing',
+        stage: 'rescales',
+        key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}|2`,
+      },
+    ]);
   });
 
   it('misses the anchor and the rescale when the broker fill is served at its sweep time', async () => {
@@ -427,7 +480,7 @@ describe('replay of positions held across a 2:1 split (#1983)', () => {
     expect(result.divergences).toContainEqual({
       kind: 'row_missing',
       stage: 'rescales',
-      key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}`,
+      key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}|1`,
     });
   });
 });
@@ -633,6 +686,7 @@ async function journalRetried(name: string, base: ReplayCliOptions, mode: 'resto
     100_000,
     1_500,
   );
+  seed.prepare('UPDATE schema_migrations SET applied_at = ?').run(SEEDED_AT);
   seed.close();
   const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
   const broker: Broker = { filled: false, positionScale: 1 };

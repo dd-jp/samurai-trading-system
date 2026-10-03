@@ -101,6 +101,7 @@ export type {
   ExitRequest,
   FillLeg,
   FillSweep,
+  GbpUsdFix,
   JournalledFill,
   JournalledFillRead,
   JournalledOrder,
