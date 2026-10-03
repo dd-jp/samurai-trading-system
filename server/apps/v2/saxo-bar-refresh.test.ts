@@ -1173,7 +1173,8 @@ describe('saxoBarRefreshFor time cap and session stop (#1900)', () => {
       },
     };
     let stops = 0;
-    await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+    const { entries, logger } = recorder();
+    await saxoBarRefreshFor({}, TRADING_DATE, logger, {
       storeRoot: root,
       tokenPath: tokenPath(),
       connect: () => ({
@@ -1186,6 +1187,7 @@ describe('saxoBarRefreshFor time cap and session stop (#1900)', () => {
     }).run();
     await vi.waitFor(() => expect(stops).toBe(1), { timeout: 2_000 });
     expect((await (await openStore(root)).readVenue('saxo')).size).toBe(0);
+    expect(entries.map((entry) => entry.event)).toEqual(['v2_saxo_bar_refresh_unavailable']);
   });
 
   it('finishes a bar write in flight at the cap before the leg returns, and starts no other', async () => {

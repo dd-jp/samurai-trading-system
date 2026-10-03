@@ -15,6 +15,7 @@ export const SAXO_CHART_PAGE = 1200;
 const CHART_CALLS_PER_MINUTE = 100;
 const RATE_LIMIT_BACKOFF_MS = 65_000;
 const MAX_ATTEMPTS = 4;
+const REQUEST_TIMEOUT_MS = 60_000;
 
 export type SaxoAssetType = 'Etf' | 'Etc';
 export type SaxoCfdAssetType = 'CfdOnStock' | 'CfdOnEtf';
@@ -162,7 +163,7 @@ export function openSaxoLiveSession(
   const { gatewayBaseUrl } = resolveSaxoOAuthConfig('live', env);
   const tokens = liveTokenSource(env, tokenPath, logger);
   return {
-    api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl, jsonFetcher, abortableSleep, signal),
+    api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl, jsonFetcher(), abortableSleep, signal),
     stop: () => tokens.stop(),
     lostReason: () => {
       const state = tokens.sessionState();
@@ -188,7 +189,7 @@ export class SaxoReadOnlyApi {
   constructor(
     private readonly tokens: SaxoTokenSource,
     private readonly gatewayBaseUrl: string,
-    private readonly fetcher: SaxoFetcher = jsonFetcher,
+    private readonly fetcher: SaxoFetcher = jsonFetcher(),
     private readonly sleep: SaxoSleeper = abortableSleep,
     private readonly signal: AbortSignal = new AbortController().signal,
   ) {}
@@ -304,15 +305,12 @@ async function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   await sleepFor(ms, undefined, { signal });
 }
 
-async function jsonFetcher(
-  url: string,
-  accessToken: string,
-  signal: AbortSignal,
-): Promise<FetchResult> {
-  const requestTimeoutMs = 60_000;
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    signal: AbortSignal.any([signal, AbortSignal.timeout(requestTimeoutMs)]),
-  });
-  return jsonOrTextResult(response);
+export function jsonFetcher(timeoutMs = REQUEST_TIMEOUT_MS): SaxoFetcher {
+  return async (url, accessToken, signal) => {
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+      signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
+    });
+    return jsonOrTextResult(response);
+  };
 }

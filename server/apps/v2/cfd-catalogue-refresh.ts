@@ -383,6 +383,10 @@ async function refreshInSession(
   }
 }
 
+// Bounds the leg's wall time, not its worst case: one request alone can take 4 x 60 s timeouts
+// plus 3 x 65 s backoffs (435 s), so a pull that is retrying hard is cut and the last file stands
+const CFD_CATALOGUE_TIME_LIMIT_MS = 5 * 60_000;
+
 function timedOut(limitMs: number, logger: Logger): void {
   logRefresh(
     logger,
@@ -399,9 +403,7 @@ export function cfdCatalogueRefreshFor(env: NodeJS.ProcessEnv, leg: CfdCatalogue
     leg.connect ??
     ((liveEnv, logger, signal) => openSaxoLiveSession(liveEnv, leg.tokenPath, logger, signal));
   const ledger = ledgerFor(leg, leg.logger);
-  // A clean pull is a few search pages and Uic batches of 100; five minutes leaves room for a
-  // 60 s request timeout and a few 65 s 429 backoffs
-  const limitMs = leg.timeLimitMs ?? 5 * 60_000;
+  const limitMs = leg.timeLimitMs ?? CFD_CATALOGUE_TIME_LIMIT_MS;
   const work = async (limit: TimeLimit) => {
     const session = connectUnlessLost(() => connect(env, leg.logger, limit.signal), ledger);
     await refreshInSession(session, leg, ledger, limit);

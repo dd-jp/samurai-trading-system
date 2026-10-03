@@ -11,6 +11,7 @@ import {
 } from './lse-lines.js';
 import {
   type ChartSample,
+  jsonFetcher,
   mergeChartPages,
   parseChartPage,
   parseInstrumentDetails,
@@ -267,6 +268,23 @@ describe('saxo read-only api abort signal (#2027)', () => {
       controller.abort();
       await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
       await closed;
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('gives up on a request the gateway never answers at the per-request timeout', async () => {
+    const server = createServer(() => undefined);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const api = new SaxoReadOnlyApi(tokens, `http://127.0.0.1:${port}`, jsonFetcher(50));
+      const started = Date.now();
+      await expect(api.instrumentDetails(1, 'Etf')).rejects.toMatchObject({
+        name: 'TimeoutError',
+      });
+      expect(Date.now() - started).toBeLessThan(2_000);
     } finally {
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));

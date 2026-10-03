@@ -388,10 +388,12 @@ function warnIfUnguarded(
 export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<BarRefreshReport> {
   const existing = await options.store.readVenue(SAXO_VENUE);
   const buckets: Buckets = { updated: [], noNewBars: [], failed: [] };
+  const report = { attempted: options.lines.length, ...buckets };
   for (const line of options.lines) {
-    if (options.limit?.signal.aborted) break;
+    if (options.limit?.signal.aborted) return report;
     warnIfUnguarded(line.tidm, existing, options.logger);
     const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
+    if (options.limit?.signal.aborted) return report;
     recordOutcome(outcome, buckets, options.logger);
   }
   logRefresh(
@@ -400,7 +402,7 @@ export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<B
     'v2_saxo_bar_refresh_summary',
     `refreshed ${buckets.updated.length}/${options.lines.length} Saxo lines, ${buckets.failed.length} failed`,
   );
-  return { attempted: options.lines.length, ...buckets };
+  return report;
 }
 
 export interface SaxoSession {
