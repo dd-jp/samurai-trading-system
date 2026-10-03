@@ -2756,7 +2756,7 @@ describe('#1001: submit-time quote and decision price', () => {
       expect(row?.decision_price).toBe(100);
       expect(row?.modelled_cost_breakdown_json).toBeNull();
 
-      const fills = await broker.fetchNewFills(new Date(NOW.getTime() - 1));
+      const fills = await broker.fetchNewFills(new Date(NOW.getTime() - 1).toISOString());
       expect(fills[0]?.cost_breakdown).toEqual(modelledCostBreakdown);
     });
 

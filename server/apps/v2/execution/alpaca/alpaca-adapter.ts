@@ -13,6 +13,7 @@ import {
   DEFAULT_VENUE_PACING,
   type Logger,
   logCaughtFailure,
+  parseIsoInstant,
   SystemClock,
   safeLog,
   TokenBucket,
@@ -696,7 +697,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     });
   }
 
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+  async fetchNewFills(sinceIso: string): Promise<NormalizedFill[]> {
+    const since = parseIsoInstant(sinceIso);
     const fills: NormalizedFill[] = [];
     const failures: unknown[] = [];
     const observedAt = this.clock.now();

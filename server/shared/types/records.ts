@@ -18,8 +18,6 @@ export interface OrderIntent {
   metadata: OrderIntentMetadata;
 }
 
-export type ExitReason = 'flatten' | 'signal_decay' | 'direction_flip';
-
 interface OrderIntentMetadata {
   debate_id: string;
   arm?: TradingArm;
@@ -105,9 +103,9 @@ export interface VerdictLog {
   timestamp: Date;
 }
 
-export type { OrderState } from '../../../contracts/index.js';
+export type { BrokerFillId, ExitReason, OrderState } from '../../../contracts/index.js';
 
-import type { OrderState } from '../../../contracts/index.js';
+import type { BrokerFillId, ExitReason, OrderState } from '../../../contracts/index.js';
 
 export interface OpenPosition {
   idempotency_key: string;
@@ -147,7 +145,6 @@ export interface OpenPosition {
   abandon_reason?: string;
 }
 
-export type BrokerFillId = string & { readonly __brand: 'BrokerFillId' };
 export function toBrokerFillId(value: string): BrokerFillId {
   return value as BrokerFillId;
 }

@@ -84,7 +84,7 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
   if (positions.length === 0) return;
 
   const since = earliest(positions.map((position) => position.opened_at));
-  const fills = await broker.fetchNewFills(since);
+  const fills = await broker.fetchNewFills(since.toISOString());
 
   const now = clock.now();
 
@@ -328,7 +328,7 @@ async function persistUnattributedSplits(
   const { store } = input;
   const now = input.clock.now();
   for (const fill of splitFills) {
-    if (fill.timestamp.getTime() > now.getTime()) continue;
+    if (Date.parse(fill.timestamp) > now.getTime()) continue;
     try {
       if (await store.hasFill({ idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id })) {
         continue;
@@ -523,7 +523,7 @@ async function advanceLot(
 ): Promise<void> {
   const { broker, store } = input;
 
-  const lotFills = fills.filter((fill) => fill.timestamp.getTime() <= now.getTime());
+  const lotFills = fills.filter((fill) => Date.parse(fill.timestamp) <= now.getTime());
 
   const collected = await collectNewFillsForLot(input, position, lotFills);
   const { newFills } = collected;
@@ -752,7 +752,7 @@ function toFill(
     price: fill.price,
     qty: fill.qty,
     fee: chargedFee,
-    timestamp: fill.timestamp,
+    timestamp: new Date(fill.timestamp),
     ...(costBreakdown === undefined ? {} : { cost_breakdown: costBreakdown }),
     ...optionalFillFields(fill),
   };

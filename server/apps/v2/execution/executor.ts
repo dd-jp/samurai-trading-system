@@ -216,7 +216,7 @@ export class V2OrderExecutor implements OrderExecutor {
     const failures: string[] = [];
     for (const broker of this.#sweptBrokers()) {
       try {
-        for (const fill of await broker.fetchNewFills(new Date(sinceIso))) {
+        for (const fill of await broker.fetchNewFills(sinceIso)) {
           fills.push({
             client_order_id: fill.client_order_id,
             broker_fill_id: fill.broker_fill_id,
@@ -225,7 +225,7 @@ export class V2OrderExecutor implements OrderExecutor {
             qty: fill.qty,
             fee: fill.fee,
             qty_is_cumulative: fill.qty_is_cumulative,
-            filled_at: fill.timestamp.toISOString(),
+            filled_at: fill.timestamp,
           });
         }
       } catch (error) {

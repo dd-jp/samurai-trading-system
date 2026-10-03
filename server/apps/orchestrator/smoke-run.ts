@@ -128,6 +128,7 @@ import {
   delay,
   GUARDED_THRESHOLD_NAMES,
   isThresholdBoundViolation,
+  parseIsoInstant,
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
@@ -671,7 +672,7 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
     return this.delegate.resumeFlatten(clientOrderId, instrument);
   }
 
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+  async fetchNewFills(since: string): Promise<NormalizedFill[]> {
     const fills = await this.delegate.fetchNewFills(since);
     if (this.partialFlattenFraction.size === 0) return fills;
 
@@ -3149,8 +3150,9 @@ class SmokeWedgedLotBroker implements BrokerAdapter {
   async getOrder(): Promise<NormalizedOrder | null> {
     return this.order;
   }
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
-    return this.scriptedFills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  async fetchNewFills(since: string): Promise<NormalizedFill[]> {
+    const sinceMs = parseIsoInstant(since).getTime();
+    return this.scriptedFills.filter((fill) => Date.parse(fill.timestamp) >= sinceMs);
   }
   async resizeProtectiveLegs(): Promise<void> {
     throw new Error('SmokeWedgedLotBroker.resizeProtectiveLegs: no new fill is ever ingested here');
@@ -3206,7 +3208,7 @@ async function runFilledZeroSizeWedgeScenario(
           qty: 10,
           price: 100,
           fee: 1,
-          timestamp: new Date(openedAt.getTime() - 1),
+          timestamp: new Date(openedAt.getTime() - 1).toISOString(),
         },
       ],
     );

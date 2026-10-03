@@ -37,7 +37,7 @@ export class DryRunBrokerAdapter implements BrokerAdapter {
     return Promise.resolve(null);
   }
 
-  fetchNewFills(_since: Date): Promise<NormalizedFill[]> {
+  fetchNewFills(_since: string): Promise<NormalizedFill[]> {
     return Promise.resolve([]);
   }
 

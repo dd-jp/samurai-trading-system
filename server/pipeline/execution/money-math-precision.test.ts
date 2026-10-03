@@ -127,7 +127,7 @@ function normalized(fills: readonly DecimalFill[], leg: NormalizedFill['leg'], t
       price: Number(decimal.price),
       qty: Number(decimal.qty),
       fee: Number(decimal.fee),
-      timestamp: new Date(OPENED_AT.getTime() + (i + 1) * 1000),
+      timestamp: new Date(OPENED_AT.getTime() + (i + 1) * 1000).toISOString(),
     }),
   );
 }
@@ -166,11 +166,11 @@ class ScriptedBroker implements BrokerAdapter {
       order_state: 'submitted',
     };
   }
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+  async fetchNewFills(since: string): Promise<NormalizedFill[]> {
     this.released = Math.min(this.released + this.batchSize, this.scriptedFills.length);
     return this.scriptedFills
       .slice(0, this.released)
-      .filter((fill) => fill.timestamp.getTime() >= since.getTime());
+      .filter((fill) => Date.parse(fill.timestamp) >= Date.parse(since));
   }
   async resizeProtectiveLegs(): Promise<void> {}
   async rearmProtectiveLegs(): Promise<void> {}

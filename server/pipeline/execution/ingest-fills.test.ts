@@ -113,8 +113,8 @@ class ScriptedBroker implements BrokerAdapter {
       order_state: 'submitted',
     };
   }
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
-    return this.scriptedFills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  async fetchNewFills(since: string): Promise<NormalizedFill[]> {
+    return this.scriptedFills.filter((fill) => Date.parse(fill.timestamp) >= Date.parse(since));
   }
   async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
     this.resizeCalls.push({ clientOrderId, filledQty });
@@ -166,7 +166,7 @@ function fill(overrides: Partial<NormalizedFill> = {}): NormalizedFill {
     price: 100,
     qty: 5,
     fee: 1,
-    timestamp: new Date('2026-07-20T15:00:00Z'),
+    timestamp: '2026-07-20T15:00:00.000Z',
     ...overrides,
   };
 }
@@ -275,7 +275,7 @@ describe('ExecutionImpl.ingestFills', () => {
         leg: 'entry',
         qty: 6,
         price: 101,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -299,7 +299,7 @@ describe('ExecutionImpl.ingestFills', () => {
         qty: 6,
         price: 101,
         fee: 1,
-        timestamp: new Date('2026-07-20T15:15:00Z'),
+        timestamp: '2026-07-20T15:15:00.000Z',
       }),
       fill({
         broker_fill_id: toBrokerFillId('s1'),
@@ -307,7 +307,7 @@ describe('ExecutionImpl.ingestFills', () => {
         qty: 10,
         price: 95,
         fee: 2,
-        timestamp: new Date('2026-07-20T15:45:00Z'),
+        timestamp: '2026-07-20T15:45:00.000Z',
       }),
     ]);
 
@@ -347,7 +347,7 @@ describe('ExecutionImpl.ingestFills', () => {
         qty: 10,
         price: 90,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -385,7 +385,7 @@ describe('ExecutionImpl.ingestFills', () => {
         leg: 'stop',
         qty: 10,
         price: 95,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
       fill({
         client_order_id: 'key-2',
@@ -400,7 +400,7 @@ describe('ExecutionImpl.ingestFills', () => {
         leg: 'target',
         qty: 5,
         price: 110,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -439,7 +439,7 @@ describe('ExecutionImpl.ingestFills', () => {
         leg: 'entry',
         qty: 6,
         price: 101,
-        timestamp: new Date('2026-07-20T17:00:00Z'),
+        timestamp: '2026-07-20T17:00:00.000Z',
       }),
     ]);
 
@@ -460,7 +460,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
 
@@ -486,7 +486,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 10,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
 
@@ -506,7 +506,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       broker.rearmFailure = new Error('venue rejected the OCO order');
@@ -556,7 +556,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       broker.rearmFailure = new ProtectiveRearmUnsupportedError(
@@ -603,7 +603,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       broker.rearmFailure = new ProtectiveRearmUnsupportedError(
@@ -658,7 +658,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       broker.rearmFailure = new ProtectiveRearmUnsupportedError(
@@ -706,7 +706,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       broker.rearmFailure = new ProtectiveRearmUnsupportedError(
@@ -751,7 +751,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       broker.rearmFailure = new Error('venue rejected the OCO order');
@@ -851,7 +851,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 6,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       const residualExposureAlerts = makeResidualExposureAlerts();
@@ -958,7 +958,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 6,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       const residualExposureAlerts = makeResidualExposureAlerts();
@@ -1075,7 +1075,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 4,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       const residualExposureAlerts = makeResidualExposureAlerts();
@@ -1173,7 +1173,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 4,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
 
@@ -1225,7 +1225,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       store.writeLog.length = 0;
@@ -1288,7 +1288,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       store.writeLog.length = 0;
@@ -1352,7 +1352,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       store.writeLog.length = 0;
@@ -1385,7 +1385,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('x1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       await new ExecutionImpl(makeInput(closeDirectly, store)).ingestFills();
@@ -1418,7 +1418,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('fo1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T16:00:00Z'),
+          timestamp: '2026-07-20T16:00:00.000Z',
         }),
       ]);
       store.writeLog.length = 0;
@@ -1477,14 +1477,14 @@ describe('ExecutionImpl.ingestFills', () => {
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       });
       const secondFlattenFill = fill({
         client_order_id: 'flatten-2',
         broker_fill_id: toBrokerFillId('f2'),
         leg: 'exit',
         qty: 4,
-        timestamp: new Date('2026-07-20T15:45:00Z'),
+        timestamp: '2026-07-20T15:45:00.000Z',
       });
 
       const alerts = makeUnattributedFlattenFillAlerts();
@@ -1600,14 +1600,14 @@ describe('ExecutionImpl.ingestFills', () => {
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       });
       const secondFlattenFill = fill({
         client_order_id: 'flatten-2',
         broker_fill_id: toBrokerFillId('f2'),
         leg: 'exit',
         qty: 4,
-        timestamp: new Date('2026-07-20T15:45:00Z'),
+        timestamp: '2026-07-20T15:45:00.000Z',
       });
       const broker = new ScriptedBroker([entry, firstFlattenFill, secondFlattenFill]);
       const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
@@ -1627,7 +1627,7 @@ describe('ExecutionImpl.ingestFills', () => {
       );
       expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-2');
       expect(outcome).not.toBeNull();
-      expect(await broker.fetchNewFills(new Date('2026-07-20T15:50:00Z'))).toEqual([]);
+      expect(await broker.fetchNewFills('2026-07-20T15:50:00.000Z')).toEqual([]);
     });
 
     it('leaves a split dated after the poll clock unbooked', async () => {
@@ -1675,14 +1675,14 @@ describe('ExecutionImpl.ingestFills', () => {
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       });
       const futureFlattenFill = fill({
         client_order_id: 'flatten-2',
         broker_fill_id: toBrokerFillId('f2'),
         leg: 'exit',
         qty: 4,
-        timestamp: new Date(NOW.getTime() + 60_000),
+        timestamp: new Date(NOW.getTime() + 60_000).toISOString(),
       });
 
       const alerts = makeUnattributedFlattenFillAlerts();
@@ -1758,14 +1758,14 @@ describe('ExecutionImpl.ingestFills', () => {
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       });
       const overFill = fill({
         client_order_id: 'flatten-2',
         broker_fill_id: toBrokerFillId('f2'),
         leg: 'exit',
         qty: 6,
-        timestamp: new Date('2026-07-20T15:45:00Z'),
+        timestamp: '2026-07-20T15:45:00.000Z',
       });
 
       const alerts = makeUnattributedFlattenFillAlerts();
@@ -1854,7 +1854,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
 
@@ -1931,7 +1931,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       const residualExposureAlerts = makeResidualExposureAlerts();
@@ -2000,7 +2000,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       const flattenOverfillAlerts = makeFlattenOverfillAlerts();
@@ -2064,7 +2064,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       const flattenOverfillAlerts = makeFlattenOverfillAlerts();
@@ -2118,7 +2118,7 @@ describe('ExecutionImpl.ingestFills', () => {
           broker_fill_id: toBrokerFillId('f1'),
           leg: 'exit',
           qty: 10,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       const failingFlattenOverfillAlerts: FlattenOverfillAlertChannel = {
@@ -2154,7 +2154,7 @@ describe('ExecutionImpl.ingestFills', () => {
           leg: 'exit',
           qty: 4,
           price: 98,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
       broker.rearmFailure = new Error('venue rejected the OCO order');
@@ -2193,7 +2193,7 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
       qty: cumQty,
       price: cumAvgPrice,
       fee: 0,
-      timestamp: new Date(at),
+      timestamp: new Date(at).toISOString(),
       qty_is_cumulative: true,
     });
   }
@@ -2299,7 +2299,7 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
         qty: 100,
         price: 100,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
     await execution.ingestFills();
@@ -2322,7 +2322,7 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
         qty: 40,
         price: 95,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -2336,7 +2336,7 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
         qty: 100,
         price: 95,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:45:00Z'),
+        timestamp: '2026-07-20T15:45:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -2388,7 +2388,7 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
         leg: 'entry',
         qty: 6,
         price: 101,
-        timestamp: new Date('2026-07-20T15:15:00Z'),
+        timestamp: '2026-07-20T15:15:00.000Z',
       }),
     ]);
 
@@ -2467,7 +2467,7 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
           leg,
           qty: 4,
           price: 95,
-          timestamp: new Date('2026-07-20T15:30:00Z'),
+          timestamp: '2026-07-20T15:30:00.000Z',
         }),
       ]);
 
@@ -2499,7 +2499,7 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
         leg: 'stop',
         qty: 10,
         price: 95,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -2525,7 +2525,7 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
         qty: 10,
         price: 95,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -2606,7 +2606,7 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -2678,14 +2678,14 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 5,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
       fill({
         client_order_id: 'flatten-1',
         broker_fill_id: toBrokerFillId('f2'),
         leg: 'exit',
         qty: 5,
-        timestamp: new Date('2026-07-20T15:31:00Z'),
+        timestamp: '2026-07-20T15:31:00.000Z',
       }),
     ]);
 
@@ -2725,7 +2725,7 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
         leg: 'stop',
         qty: 10,
         price: 95,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -2871,7 +2871,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         leg: 'exit',
         qty: 10,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -2919,7 +2919,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         qty: 10,
         price: 110,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 
@@ -2944,7 +2944,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         qty: 50,
         price: 100,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:00:00Z'),
+        timestamp: '2026-07-20T15:00:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -2958,7 +2958,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         qty: 100,
         price: 101,
         fee: 0,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -3081,7 +3081,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 110,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         liveStore,
@@ -3141,7 +3141,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             price: 110,
             fee: exitCost.cost_breakdown.commission,
             cost_breakdown: exitCost.cost_breakdown,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         controlStore,
@@ -3291,7 +3291,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             leg: 'exit',
             qty: 10,
             fee: venueFee,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         store,
@@ -3317,7 +3317,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         qty: 50,
         price: 100,
         fee: 0.4,
-        timestamp: new Date('2026-07-20T15:00:00Z'),
+        timestamp: '2026-07-20T15:00:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -3331,7 +3331,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
         qty: 100,
         price: 100,
         fee: 0.8,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -3381,7 +3381,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 110,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         store,
@@ -3436,7 +3436,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 110,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         store,
@@ -3490,7 +3490,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 110,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         store,
@@ -3523,7 +3523,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 95,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         store,
@@ -3555,7 +3555,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 95,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           }),
         ]),
         store,
@@ -3601,7 +3601,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 95,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           })
         : fill({
             client_order_id: 'flatten-1',
@@ -3610,7 +3610,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
             qty: 10,
             price: 110,
             fee: 0,
-            timestamp: new Date('2026-07-20T15:30:00Z'),
+            timestamp: '2026-07-20T15:30:00.000Z',
           });
     }
 
@@ -3699,7 +3699,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
         leg: 'entry',
         qty: 10,
         price: 100,
-        timestamp: new Date(OPENED_AT.getTime() - 1),
+        timestamp: new Date(OPENED_AT.getTime() - 1).toISOString(),
       }),
     ]);
     broker.scriptedOrder = {
@@ -3742,7 +3742,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
         leg: 'entry',
         qty: 10,
         price: 100,
-        timestamp: new Date(OPENED_AT.getTime() - 1),
+        timestamp: new Date(OPENED_AT.getTime() - 1).toISOString(),
       }),
     ]);
     broker.scriptedOrder = {
@@ -3784,7 +3784,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
       leg: 'entry',
       qty: 10,
       price: 100,
-      timestamp: new Date(OPENED_AT.getTime() - 1),
+      timestamp: new Date(OPENED_AT.getTime() - 1).toISOString(),
     });
     const broker = new ScriptedBroker([entryFill]);
     broker.scriptedOrder = {
@@ -3802,7 +3802,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     await execution.ingestFills();
     expect(logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE)).toHaveLength(1);
 
-    broker.replaceFills([{ ...entryFill, timestamp: new Date('2026-07-20T15:00:00Z') }]);
+    broker.replaceFills([{ ...entryFill, timestamp: '2026-07-20T15:00:00.000Z' }]);
     await execution.ingestFills();
     expect(logger.entries.filter((e) => e.message === FILLED_ZERO_SIZE_CLEARED)).toHaveLength(1);
     expect((await store.getPosition('key-1'))?.filled_size).toBe(10);
@@ -3817,7 +3817,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
         leg: 'entry',
         qty: 10,
         price: 100,
-        timestamp: new Date(OPENED_AT.getTime() - 1),
+        timestamp: new Date(OPENED_AT.getTime() - 1).toISOString(),
       }),
     ]);
     broker.scriptedOrder = {
@@ -3854,7 +3854,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
       leg: 'entry',
       qty: 10,
       price: 100,
-      timestamp: new Date(OPENED_AT.getTime() - 1),
+      timestamp: new Date(OPENED_AT.getTime() - 1).toISOString(),
     });
     const broker = new ScriptedBroker([entryFill]);
     broker.scriptedOrder = {
@@ -3878,7 +3878,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
       leg: 'stop',
       qty: 10,
       price: 95,
-      timestamp: new Date('2026-07-20T15:00:00Z'),
+      timestamp: '2026-07-20T15:00:00.000Z',
     });
     broker.replaceFills([entryFill, stopFill]);
     await execution.ingestFills();
@@ -3903,7 +3903,7 @@ describe('trace_id threading onto alerts (#1348)', () => {
         broker_fill_id: toBrokerFillId('x1'),
         leg: 'exit',
         qty: 4,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
     broker.rearmFailure = new Error('venue rejected the OCO order');
@@ -3957,7 +3957,7 @@ describe('trace_id threading onto alerts (#1348)', () => {
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
     const flattenOverfillAlerts = makeFlattenOverfillAlerts();
@@ -4125,7 +4125,7 @@ describe('a non-sterling fee is a loud contradiction, not a silent GBP sum (#122
       broker_fill_id: toBrokerFillId('f1'),
       leg: 'exit',
       qty: 10,
-      timestamp: new Date('2026-07-20T15:30:00Z'),
+      timestamp: '2026-07-20T15:30:00.000Z',
     });
     const secondFlattenFill = fill({
       client_order_id: 'flatten-2',
@@ -4134,7 +4134,7 @@ describe('a non-sterling fee is a loud contradiction, not a silent GBP sum (#122
       qty: 4,
       fee: 0.8,
       fee_currency: 'USD',
-      timestamp: new Date('2026-07-20T15:45:00Z'),
+      timestamp: '2026-07-20T15:45:00.000Z',
     });
 
     const feeAlerts = makeNonSterlingFeeAlerts();
@@ -4318,7 +4318,7 @@ describe('a non-sterling fee pages an operator, not just a log line (#1465)', ()
         price: 100,
         fee: 0.4,
         fee_currency: 'GBP',
-        timestamp: new Date('2026-07-20T15:00:00Z'),
+        timestamp: '2026-07-20T15:00:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -4349,7 +4349,7 @@ describe('a non-sterling fee pages an operator, not just a log line (#1465)', ()
         price: 100,
         fee: 0.8,
         fee_currency: 'USD',
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
         qty_is_cumulative: true,
       }),
     ]);
@@ -4474,8 +4474,8 @@ describe('ingestFills — exact log lines, leg flags and flatten gating', () => 
   }
 
   class SinceRecordingBroker extends ScriptedBroker {
-    readonly sinces: Date[] = [];
-    override async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    readonly sinces: string[] = [];
+    override async fetchNewFills(since: string): Promise<NormalizedFill[]> {
       this.sinces.push(since);
       return super.fetchNewFills(since);
     }
@@ -4528,7 +4528,7 @@ describe('ingestFills — exact log lines, leg flags and flatten gating', () => 
       broker_fill_id: toBrokerFillId(id),
       leg: 'exit',
       qty,
-      timestamp: FLATTEN_AT,
+      timestamp: FLATTEN_AT.toISOString(),
     });
   }
 
@@ -4635,7 +4635,7 @@ describe('ingestFills — exact log lines, leg flags and flatten gating', () => 
       broker_fill_id: toBrokerFillId('stray'),
       leg: 'exit',
       qty: 1,
-      timestamp: FLATTEN_AT,
+      timestamp: FLATTEN_AT.toISOString(),
     });
 
     await expect(
@@ -4970,7 +4970,12 @@ describe('ingestFills — exact log lines, leg flags and flatten gating', () => 
     await seedPosition(store, { requested_size: 10 });
     const broker = new ScriptedBroker([
       entryOf('key-1', 10),
-      fill({ broker_fill_id: toBrokerFillId('x1'), leg: 'exit', qty: 10, timestamp: FLATTEN_AT }),
+      fill({
+        broker_fill_id: toBrokerFillId('x1'),
+        leg: 'exit',
+        qty: 10,
+        timestamp: FLATTEN_AT.toISOString(),
+      }),
     ]);
 
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
@@ -4994,7 +4999,7 @@ describe('ingestFills — exact log lines, leg flags and flatten gating', () => 
       qty,
       price,
       fee: 0,
-      timestamp: new Date(at),
+      timestamp: new Date(at).toISOString(),
       qty_is_cumulative: true,
     });
   }
@@ -5235,6 +5240,6 @@ describe('ingestFills — exact log lines, leg flags and flatten gating', () => 
 
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
 
-    expect(broker.sinces).toEqual([OPENED_AT]);
+    expect(broker.sinces).toEqual([OPENED_AT.toISOString()]);
   });
 });

@@ -50,6 +50,7 @@ export {
 export type { InjectableTimers } from './injectable-timers.js';
 export { DEFAULT_INJECTABLE_TIMERS } from './injectable-timers.js';
 export { isFiniteNumber } from './is-finite-number.js';
+export { parseIsoInstant } from './iso-instant.js';
 export { median } from './median.js';
 export { NO_DATA_MARKER } from './no-data-marker.js';
 export { isString, readOhlcvBar } from './ohlcv-bar.js';

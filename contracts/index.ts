@@ -1,3 +1,15 @@
+export type {
+  BrokerAck,
+  BrokerAdapter,
+  BrokerFillId,
+  ExitReason,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+  NormalizedPosition,
+  ProtectedExitRequest,
+  ProtectiveReplaceRequest,
+} from './broker.js';
 export { type MetricsSuite, type ProfitFactorWire, toProfitFactorWire } from './metrics.js';
 export {
   DEGRADED_DECISIONS,

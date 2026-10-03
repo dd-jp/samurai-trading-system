@@ -366,7 +366,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       return acceptedOrder();
     });
 
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(client.getOrder).toHaveBeenCalledTimes(1);
   });
@@ -391,7 +391,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toEqual([
       {
@@ -401,11 +401,83 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
         price: 100.02,
         qty: 100,
         fee: 0,
-        timestamp: new Date(filledAt),
+        timestamp: new Date(filledAt).toISOString(),
         qty_is_cumulative: true,
       },
     ]);
   });
+
+  it.each([
+    ['microseconds', '2026-07-15T14:05:00.123456Z', '2026-07-15T14:05:00.123Z'],
+    ['an offset', '2026-07-15T15:05:00.123+01:00', '2026-07-15T14:05:00.123Z'],
+    ['no fraction', '2026-07-15T14:05:00Z', '2026-07-15T14:05:00.000Z'],
+  ])(
+    'stamps a fill dated with %s as a millisecond UTC instant',
+    async (_label, filledAt, expected) => {
+      const client = makeClient({
+        getOrder: vi.fn().mockResolvedValue(
+          acceptedOrder({
+            status: 'filled',
+            filled_qty: '100',
+            filled_avg_price: '100.02',
+            filled_at: filledAt,
+          }),
+        ),
+      });
+      const adapter = new AlpacaBrokerAdapter({
+        client,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        logger: recordingLogger(),
+      });
+      await adapter.submitBracket(makeBracket());
+
+      const [fill] = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+
+      expect(fill?.timestamp).toBe(expected);
+      expect(new Date(fill?.timestamp ?? '').toISOString()).toBe(expected);
+    },
+  );
+
+  it('keeps a fill dated exactly at a millisecond `since` and drops one a millisecond earlier', async () => {
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          filled_at: '2026-07-15T14:05:00.123Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      logger: recordingLogger(),
+    });
+    await adapter.submitBracket(makeBracket());
+
+    expect(await adapter.fetchNewFills('2026-07-15T14:05:00.123Z')).toHaveLength(1);
+    expect(await adapter.fetchNewFills('2026-07-15T14:05:00.124Z')).toEqual([]);
+  });
+
+  it.each(['2026-07-15', '2026-07-15T14:05:00Z', '2026-07-15T15:05:00.000+01:00', 'not a date'])(
+    'rejects a non-canonical `since` %j before calling the venue',
+    async (since) => {
+      const client = makeClient();
+      const adapter = new AlpacaBrokerAdapter({
+        client,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        logger: recordingLogger(),
+      });
+      await adapter.submitBracket(makeBracket());
+
+      await expect(adapter.fetchNewFills(since)).rejects.toThrow(RangeError);
+      expect(client.getOrder).not.toHaveBeenCalled();
+    },
+  );
 
   it('collects a partial fill the venue has not dated, timestamped at the sweep clock', async () => {
     const now = new Date('2026-07-15T14:07:00Z');
@@ -428,7 +500,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toEqual([
       {
@@ -438,7 +510,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
         price: 100.02,
         qty: 50,
         fee: 0,
-        timestamp: now,
+        timestamp: now.toISOString(),
         qty_is_cumulative: true,
       },
     ]);
@@ -471,8 +543,8 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const first = await adapter.fetchNewFills(new Date(0));
-    const second = await adapter.fetchNewFills(new Date(0));
+    const first = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    const second = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(first).toEqual([expect.objectContaining({ broker_fill_id: 'alpaca-entry-1', qty: 50 })]);
     expect(second).toEqual([
@@ -519,7 +591,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
     const legs = fills.map((fill) => fill.leg);
 
     expect(legs).toContain('entry');
@@ -539,7 +611,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    expect(await adapter.fetchNewFills(new Date(0))).toEqual([]);
+    expect(await adapter.fetchNewFills('1970-01-01T00:00:00.000Z')).toEqual([]);
   });
 
   it('serves fills from the poll cursor forward', async () => {
@@ -562,8 +634,10 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    expect(await adapter.fetchNewFills(filledAt)).toHaveLength(1);
-    expect(await adapter.fetchNewFills(new Date(filledAt.getTime() + 1))).toHaveLength(0);
+    expect(await adapter.fetchNewFills(filledAt.toISOString())).toHaveLength(1);
+    expect(
+      await adapter.fetchNewFills(new Date(filledAt.getTime() + 1).toISOString()),
+    ).toHaveLength(0);
   });
 
   it('an unrecognized client order id yields no fills to poll', async () => {
@@ -575,7 +649,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       logger: recordingLogger(),
     });
 
-    expect(await adapter.fetchNewFills(new Date(0))).toEqual([]);
+    expect(await adapter.fetchNewFills('1970-01-01T00:00:00.000Z')).toEqual([]);
     expect(client.getOrder).not.toHaveBeenCalled();
   });
 });
@@ -620,7 +694,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         ],
       }),
     );
-    const afterEntry = await adapter.fetchNewFills(new Date(0));
+    const afterEntry = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
     expect(afterEntry).toEqual([
       {
         client_order_id: 'key-aapl-1355',
@@ -629,7 +703,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         price: 100.02,
         qty: 100,
         fee: 0,
-        timestamp: new Date(entryFilledAt),
+        timestamp: new Date(entryFilledAt).toISOString(),
         qty_is_cumulative: true,
       },
     ]);
@@ -660,7 +734,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         ],
       }),
     );
-    const afterStopOut = await adapter.fetchNewFills(new Date(stopFilledAt));
+    const afterStopOut = await adapter.fetchNewFills(new Date(stopFilledAt).toISOString());
     expect(afterStopOut).toEqual([
       {
         client_order_id: 'key-aapl-1355',
@@ -669,7 +743,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         price: 95,
         qty: 100,
         fee: 0,
-        timestamp: new Date(stopFilledAt),
+        timestamp: new Date(stopFilledAt).toISOString(),
         qty_is_cumulative: true,
       },
     ]);
@@ -689,7 +763,7 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
     });
 
     await adapter.submitBracket(makeBracket());
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(acquire).toHaveBeenCalledTimes(2);
   });
@@ -789,7 +863,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
+    await expect(adapter.fetchNewFills('1970-01-01T00:00:00.000Z')).resolves.toEqual([]);
   });
 
   it('refuses an unparseable filled_qty rather than booking NaN', async () => {
@@ -811,7 +885,9 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const error = await adapter.fetchNewFills(new Date(0)).catch((caught: unknown) => caught);
+    const error = await adapter
+      .fetchNewFills('1970-01-01T00:00:00.000Z')
+      .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(AggregateError);
     expect((error as AggregateError).errors[0]).toMatchObject({
@@ -852,7 +928,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     await adapter.submitBracket(makeBracket({ client_order_id: 'poisoned-lot' }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({ client_order_id: 'healthy-lot', qty: 50, price: 100.02 });
@@ -895,7 +971,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
     await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'broken-lot' }));
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(1);
     expect(logger.entries).toHaveLength(1);
@@ -932,7 +1008,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(1);
     expect(logger.entries).toEqual([]);
@@ -951,7 +1027,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(0);
     expect(logger.entries).toEqual([]);
@@ -983,7 +1059,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(1);
     expect(logger.entries).toEqual([
@@ -1022,9 +1098,9 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    await adapter.fetchNewFills(new Date(0));
-    await adapter.fetchNewFills(new Date(0));
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(logger.entries).toHaveLength(1);
   });
@@ -1059,7 +1135,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     await adapter.submitBracket(makeBracket());
     await adapter.rearmProtectiveLegs('key-aapl-1355', 'AAPL', 'buy', 100, 90, 115);
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(2);
     expect(logger.entries).toEqual([
@@ -1108,7 +1184,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(logger.entries).toEqual([]);
   });
@@ -1134,10 +1210,10 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
       clock,
     });
     await adapter.submitBracket(makeBracket());
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     const laterSince = new Date('2026-07-20T18:00:00Z');
-    await adapter.fetchNewFills(laterSince);
+    await adapter.fetchNewFills(laterSince.toISOString());
 
     expect(logger.entries).toEqual([]);
   });
@@ -1175,7 +1251,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
       state,
     });
 
-    await recoveredAdapter.fetchNewFills(new Date(0));
+    await recoveredAdapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(logger.entries).toEqual([]);
   });
@@ -1209,7 +1285,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
     });
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(1);
     expect(logger.entries).toEqual([
@@ -1251,9 +1327,9 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
     });
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
 
-    await adapter.fetchNewFills(new Date(0));
-    await adapter.fetchNewFills(new Date(0));
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(logger.entries).toHaveLength(1);
   });
@@ -1283,7 +1359,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
     });
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
 
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(logger.entries).toEqual([]);
   });
@@ -1312,7 +1388,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
     });
 
     await adapter.resumeFlatten('flatten-key', 'AAPL');
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(logger.entries).toEqual([]);
   });
@@ -1350,9 +1426,9 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client: makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) }),
     });
 
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS - 1);
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
 
     expect(alerts.posted).toEqual([]);
   });
@@ -1366,11 +1442,11 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client: makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) }),
     });
 
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
     expect(alerts.posted).toEqual([]);
 
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
 
     expect(alerts.posted).toEqual([
       {
@@ -1387,7 +1463,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     ]);
 
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS * 4);
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
     expect(alerts.posted).toHaveLength(1);
   });
 
@@ -1420,9 +1496,9 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       }),
     });
 
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
 
     expect(alerts.posted[0]).toMatchObject({
       instrument: 'TSLA',
@@ -1458,7 +1534,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     await adapter.submitBracket(makeBracket({ client_order_id: 'stuck-lot' }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
 
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
     (client.getOrder as ReturnType<typeof vi.fn>)
@@ -1472,7 +1548,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
           filled_at: '2026-07-15T14:05:00Z',
         }),
       );
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toHaveLength(1);
     expect(alerts.posted).toMatchObject([{ client_order_id: 'stuck-lot', qty: 100 }]);
@@ -1484,7 +1560,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     const client = makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) });
     const adapter = await submitAndSweep({ clock, alerts, client });
 
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
 
     (client.getOrder as ReturnType<typeof vi.fn>).mockResolvedValue(
       acceptedOrder({
@@ -1495,11 +1571,11 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       }),
     );
     clock.advance(1_000);
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
     expect(fills).toHaveLength(1);
 
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS * 2);
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(alerts.posted).toEqual([]);
   });
@@ -1519,9 +1595,9 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client: makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) }),
     });
 
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
 
     expect(state.loadUnpricedFills('alpaca')[0]?.alerted_at).toBeNull();
 
@@ -1535,7 +1611,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       clock,
     });
 
-    await recovered.fetchNewFills(new Date(0)).catch(() => undefined);
+    await recovered.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
 
     expect(alerts.posted).toHaveLength(1);
     expect(state.loadUnpricedFills('alpaca')[0]?.alerted_at).toEqual(clock.now());
@@ -1572,7 +1648,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     await adapter.submitBracket(makeBracket({ client_order_id: 'stuck-lot' }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toMatchObject([{ client_order_id: 'healthy-lot', qty: 50 }]);
   });
@@ -1590,10 +1666,10 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client: makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) }),
     });
 
-    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
     const error = (await adapter
-      .fetchNewFills(new Date(0))
+      .fetchNewFills('1970-01-01T00:00:00.000Z')
       .catch((caught: unknown) => caught)) as AggregateError;
 
     const reported = error.errors.map((each: Error) => each.message).join('\n');
@@ -1615,7 +1691,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     });
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
 
-    await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
+    await expect(adapter.fetchNewFills('1970-01-01T00:00:00.000Z')).resolves.toEqual([]);
   });
 
   it('still collects a healthy bracket fill in the same poll as an unpriced flatten', async () => {
@@ -1644,7 +1720,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     await adapter.submitBracket(makeBracket());
     await adapter.submitFlatten('TSLA', 'sell', 5, 'flatten-key');
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toEqual([
       {
@@ -1654,7 +1730,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
         price: 100.02,
         qty: 100,
         fee: 0,
-        timestamp: new Date(filledAt),
+        timestamp: new Date(filledAt).toISOString(),
         qty_is_cumulative: true,
       },
     ]);
@@ -1706,7 +1782,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     const adapter = adapterWith(makeClient({ submitMarketOrder, getOrder }));
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toEqual([
       {
@@ -1716,7 +1792,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         price: 99.5,
         qty: 12,
         fee: 0,
-        timestamp: new Date(filledAt),
+        timestamp: new Date(filledAt).toISOString(),
         qty_is_cumulative: true,
       },
     ]);
@@ -1731,7 +1807,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
-    await adapter.fetchNewFills(new Date(0));
+    await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(getOrder).toHaveBeenCalledTimes(1);
   });
@@ -2831,7 +2907,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     );
     await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(fills).toEqual([
       {
@@ -2841,7 +2917,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         price: 110,
         qty: 6,
         fee: 0,
-        timestamp: new Date(filledAt),
+        timestamp: new Date(filledAt).toISOString(),
         qty_is_cumulative: true,
       },
     ]);
@@ -3343,12 +3419,12 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         clock: fixedClock,
       });
 
-      expect(await second.fetchNewFills(new Date(0))).toEqual([]);
+      expect(await second.fetchNewFills('1970-01-01T00:00:00.000Z')).toEqual([]);
 
       const resumed = await second.resumeFlatten('flatten-1', 'AAPL');
       expect(resumed).toMatchObject({ client_order_id: 'flatten-1', order_state: 'filled' });
 
-      const fills = await second.fetchNewFills(new Date(0));
+      const fills = await second.fetchNewFills('1970-01-01T00:00:00.000Z');
       expect(fills).toEqual([
         expect.objectContaining({
           client_order_id: 'flatten-1',
@@ -4440,7 +4516,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
         if (source === 'flatten') await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
         if (source === 'rearm') await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
 
-        const error = await caught(adapter.fetchNewFills(new Date(0)));
+        const error = await caught(adapter.fetchNewFills('1970-01-01T00:00:00.000Z'));
 
         expect(error).toBeInstanceOf(AggregateError);
         expect((error as AggregateError).errors).toEqual([
@@ -4571,7 +4647,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
         getOrder: vi.fn().mockResolvedValue(acceptedOrder({ legs: [] })),
       });
 
-      await adapterOn(client, { state }).fetchNewFills(new Date(0));
+      await adapterOn(client, { state }).fetchNewFills('1970-01-01T00:00:00.000Z');
 
       expect(sweptIds(client)).toEqual(['n1', 's1']);
     });
@@ -4646,7 +4722,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       );
 
       await adapter.cancel(KEY, 'AAPL');
-      await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
       expect(cancelledIds(client)).toEqual(['r0', 'alpaca-entry-1']);
       expect(sweptIds(client)).toEqual(['alpaca-entry-1']);
@@ -4917,7 +4993,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
         clock: new FixedClock(T0),
       });
       await adapter.submitBracket(makeBracket());
-      await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
       return logger.entries.filter((entry) => entry.level === 'warn');
     }
 
@@ -5000,7 +5076,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       clock.advance(10 * MINUTE);
       await adapter.submitBracket(makeBracket());
 
-      await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
       expect(logger.entries).toEqual([]);
     });
@@ -5019,7 +5095,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       clock.advance(10 * MINUTE);
       await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
 
-      await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
       expect(logger.entries).toEqual([]);
     });
@@ -5037,11 +5113,11 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       });
       const adapter = adapterOn(client, { logger, clock });
       await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
-      await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
       clock.advance(10 * MINUTE);
       await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
 
-      await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
       expect(payloadOf(logger.entries, 'leg')).toEqual(['exit']);
     });
@@ -5056,8 +5132,8 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       const adapter = adapterOn(client);
       await adapter.submitFlatten('AAPL', 'sell', 6, EXIT);
 
-      await adapter.fetchNewFills(new Date(0));
-      await adapter.fetchNewFills(new Date(0));
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
       expect(sweptIds(client)).toEqual(['f1', 'f1']);
     });
@@ -5088,8 +5164,8 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       const adapter = adapterOn(client, { logger, clock });
       await adapter.submitBracket(makeBracket());
       await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
-      const first = await adapter.fetchNewFills(new Date(0));
-      await adapter.fetchNewFills(new Date(0));
+      const first = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+      await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
       return { client, first, logger };
     }
 
@@ -5123,7 +5199,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       await adapter.submitBracket(makeBracket());
       await adapter.rearmProtectiveLegs(KEY, 'AAPL', 'buy', 6, 95, 110);
 
-      await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
+      await expect(adapter.fetchNewFills('1970-01-01T00:00:00.000Z')).resolves.toEqual([]);
     });
   });
 
@@ -5154,7 +5230,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       const adapter = adapterOn(client, { logger, state, clock: new FixedClock(T0) });
       await adapter.submitBracket(makeBracket());
 
-      const fills = await adapter.fetchNewFills(new Date(0));
+      const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
       expect(fills).toHaveLength(1);
       expect(payloadOf(logger.entries, 'error')).toEqual(['clearUnpricedFill failed']);
@@ -5169,7 +5245,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       const adapter = adapterOn(client, { state });
       await adapter.submitBracket(makeBracket());
 
-      const error = await caught(adapter.fetchNewFills(new Date(0)));
+      const error = await caught(adapter.fetchNewFills('1970-01-01T00:00:00.000Z'));
 
       expect((error as AggregateError).errors).toEqual([new Error('recordUnpricedFill failed')]);
       expect(error.message).toContain('(1 bracket(s), 0 flatten(s), 0 rearm(s)');
@@ -5179,7 +5255,9 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
       const state = new FaultyState();
       state.failing.add('loadUnpricedFills');
 
-      const error = await caught(adapterOn(makeClient(), { state }).fetchNewFills(new Date(0)));
+      const error = await caught(
+        adapterOn(makeClient(), { state }).fetchNewFills('1970-01-01T00:00:00.000Z'),
+      );
 
       expect((error as AggregateError).errors).toEqual([new Error('loadUnpricedFills failed')]);
     });
@@ -5195,7 +5273,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
           state,
           unpricedFillAlerts: alerts,
           clock: new FixedClock(T0),
-        }).fetchNewFills(new Date(0)),
+        }).fetchNewFills('1970-01-01T00:00:00.000Z'),
       );
 
       expect(alerts.posted).toHaveLength(1);
@@ -5217,7 +5295,7 @@ describe('AlpacaBrokerAdapter — exact operations, ids, logs and edges', () => 
             },
           },
           clock: new FixedClock(T0),
-        }).fetchNewFills(new Date(0)),
+        }).fetchNewFills('1970-01-01T00:00:00.000Z'),
       );
 
       expect((error as AggregateError).errors).toEqual([

@@ -111,7 +111,7 @@ class FakeAlpaca implements BrokerAdapter {
   readonly flattens: string[] = [];
   readonly cancelled: string[] = [];
   readonly pending: NormalizedFill[] = [];
-  readonly sinceSeen: Date[] = [];
+  readonly sinceSeen: string[] = [];
   flattenError: Error | undefined;
   cancelError: Error | undefined;
 
@@ -132,7 +132,7 @@ class FakeAlpaca implements BrokerAdapter {
       price,
       qty,
       fee: 0.5,
-      timestamp: clock.now(),
+      timestamp: clock.now().toISOString(),
     });
   }
 
@@ -149,7 +149,7 @@ class FakeAlpaca implements BrokerAdapter {
       price: averagePrice,
       qty: filledQty,
       fee: 0,
-      timestamp: clock.now(),
+      timestamp: clock.now().toISOString(),
       qty_is_cumulative: true,
     });
   }
@@ -162,7 +162,7 @@ class FakeAlpaca implements BrokerAdapter {
     return Promise.resolve(null);
   }
 
-  fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+  fetchNewFills(since: string): Promise<NormalizedFill[]> {
     this.sinceSeen.push(since);
     return Promise.resolve(this.pending.splice(0));
   }
@@ -756,12 +756,12 @@ describe('runCycle', () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
     await runCycle(deps, '2026-09-25');
-    expect(alpaca.sinceSeen.every((since) => since.getTime() === 0)).toBe(true);
+    expect(alpaca.sinceSeen.every((since) => since === '1970-01-01T00:00:00.000Z')).toBe(true);
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
     deps.setDecisions([]);
     await runCycle(deps, '2026-09-28');
-    expect(alpaca.sinceSeen.at(-1)).toEqual(
-      new Date(deps.books.lastDay('debate/primary')?.recordedAt ?? ''),
+    expect(alpaca.sinceSeen.at(-1)).toBe(
+      new Date(deps.books.lastDay('debate/primary')?.recordedAt ?? '').toISOString(),
     );
     expect(deps.books.position('debate/primary', 'AAPL')).toMatchObject({
       qty: 6,
@@ -829,7 +829,7 @@ describe('runCycle', () => {
       price: 20,
       qty: 6,
       fee: 0,
-      timestamp: new Date('2026-09-25T23:30:00.000Z'),
+      timestamp: '2026-09-25T23:30:00.000Z',
     });
     deps.setDecisions([]);
     await runCycle(deps, '2026-09-28');
@@ -2516,7 +2516,7 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
       return super.cancel(clientOrderId);
     }
 
-    override fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    override fetchNewFills(since: string): Promise<NormalizedFill[]> {
       this.calls.push('sweep');
       return super.fetchNewFills(since);
     }
@@ -2680,7 +2680,7 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     const before = venueReads(deps).sweeps.length;
     const fetch = alpaca.fetchNewFills.bind(alpaca);
     let failed = false;
-    alpaca.fetchNewFills = (since: Date) => {
+    alpaca.fetchNewFills = (since: string) => {
       if (failed) return fetch(since);
       failed = true;
       return Promise.reject(new Error('fills endpoint down'));
@@ -5209,7 +5209,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       price: 12.8,
       qty: 151,
       fee: 0,
-      timestamp: new Date('2026-09-29T23:30:00.000Z'),
+      timestamp: '2026-09-29T23:30:00.000Z',
     });
     await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
     const db = (
@@ -5245,7 +5245,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       price: 12.8,
       qty: 151,
       fee: 0,
-      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+      timestamp: '2026-09-29T15:00:00.000Z',
     });
     await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
     expect(primary(deps)).toBeUndefined();
@@ -5350,7 +5350,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       price: 1.92,
       qty: 60,
       fee: 0,
-      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+      timestamp: '2026-09-29T15:00:00.000Z',
     });
     await runCycle(withMarket(deps, snapshot), '2026-09-30');
     expect(primary(deps)).toBeUndefined();
@@ -5363,7 +5363,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
   class ReReportingAlpaca extends SplitAlpaca {
     readonly sticky: NormalizedFill[] = [];
 
-    override async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    override async fetchNewFills(since: string): Promise<NormalizedFill[]> {
       return [...(await super.fetchNewFills(since)), ...this.sticky];
     }
   }
@@ -5382,7 +5382,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       price: 1.92,
       qty: 60,
       fee: 0,
-      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+      timestamp: '2026-09-29T15:00:00.000Z',
       qty_is_cumulative: true,
     });
     await runCycle(withMarket(deps, snapshot), '2026-09-30');
@@ -5404,7 +5404,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       price: 1.92,
       qty: 20,
       fee: 0,
-      timestamp: new Date('2026-09-29T15:00:00.000Z'),
+      timestamp: '2026-09-29T15:00:00.000Z',
     });
     await runCycle(withMarket(deps, snapshot), '2026-09-30');
     expect(primary(deps)).toMatchObject({

@@ -41,8 +41,8 @@ class WedgingBroker implements BrokerAdapter {
   async getOrder(): Promise<NormalizedOrder | null> {
     return this.order;
   }
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
-    return this.scriptedFills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  async fetchNewFills(since: string): Promise<NormalizedFill[]> {
+    return this.scriptedFills.filter((fill) => Date.parse(fill.timestamp) >= Date.parse(since));
   }
   async resizeProtectiveLegs(): Promise<void> {
     throw new Error('WedgingBroker.resizeProtectiveLegs: no new fill is ever ingested here');
@@ -175,7 +175,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
         qty: 10,
         price: 100,
         fee: 1,
-        timestamp: new Date(OPENED_AT.getTime() - 1),
+        timestamp: new Date(OPENED_AT.getTime() - 1).toISOString(),
       },
     ]);
     const config = stubConfig(db, logger);
