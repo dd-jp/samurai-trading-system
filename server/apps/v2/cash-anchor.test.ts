@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BrokerMode, Venue } from '../../../contracts/index.js';
+import type { BrokerCashActivity, BrokerMode, Venue } from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import {
@@ -10,6 +10,7 @@ import {
   liveCashCheck,
   SqliteCashAnchors,
 } from './cash-anchor.js';
+import { ALPACA_NON_TRADE_CASH_TYPES } from './execution/alpaca/alpaca-cash-activities.js';
 
 const DATE = '2026-10-05';
 const FX = 1.25;
@@ -69,6 +70,7 @@ describe('SqliteCashAnchors', () => {
       cashQuote: 12_000,
       fillSeq: 1,
       brokerMode: 'live',
+      tradingDate: DATE,
     });
     expect(db.prepare('SELECT * FROM v2_cash_anchors').all()).toEqual([
       {
@@ -82,6 +84,10 @@ describe('SqliteCashAnchors', () => {
         trading_date: DATE,
         recorded_at: '2026-10-05T07:00:00.000Z',
         broker_mode: 'live',
+        activity_id: null,
+        activity_type: null,
+        activity_date: null,
+        status: null,
       },
     ]);
     expect(anchors.storeFlowSince(LIVE_AT(1), 'alpaca')).toEqual({ ok: true, quote: 0 });
@@ -95,6 +101,7 @@ describe('SqliteCashAnchors', () => {
       cashQuote: 500,
       fillSeq: 0,
       brokerMode: 'live',
+      tradingDate: DATE,
     });
     expect(anchors.anchor('alpaca')).toBeUndefined();
   });
@@ -116,19 +123,30 @@ describe('SqliteCashAnchors', () => {
     });
   });
 
-  it('refuses an anchor without its broker mode, and a move that carries one', () => {
+  it('refuses an anchor or broker activity without its broker mode, and a manual move with one', () => {
     const { db } = store();
     const insert = (kind: string, mode: string | null) =>
       db
         .prepare(
           `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
-             trading_date, recorded_at, broker_mode) VALUES ('alpaca', ?, 'USD', 1, ?, ?, ?, 't', ?)`,
+             trading_date, recorded_at, broker_mode, activity_id, activity_type, activity_date,
+             status) VALUES ('alpaca', ?, 'USD', 1, ?, ?, ?, 't', ?, ?, 'DIV', ?, 'executed')`,
         )
-        .run(kind, kind === 'anchor' ? 0 : null, `${kind}-${mode}`, DATE, mode);
-    const message = /a cash anchor, and only an anchor, records its broker mode/;
+        .run(
+          kind,
+          kind === 'anchor' ? 0 : null,
+          `${kind}-${mode}`,
+          DATE,
+          mode,
+          kind === 'activity' ? `id-${mode}` : null,
+          DATE,
+        );
+    const message = /a cash anchor or broker activity records its broker mode/;
     expect(() => insert('anchor', null)).toThrow(message);
+    expect(() => insert('activity', null)).toThrow(message);
     expect(() => insert('deposit', 'live')).toThrow(message);
     expect(() => insert('anchor', 'live')).not.toThrow();
+    expect(() => insert('activity', 'live')).not.toThrow();
     expect(() => insert('deposit', null)).not.toThrow();
   });
 
@@ -236,6 +254,108 @@ describe('SqliteCashAnchors', () => {
   });
 });
 
+describe('SqliteCashAnchors.recordActivity (David 2026-10-03, #2035 item 5)', () => {
+  const activity = (
+    id: string,
+    amount: number,
+    status: BrokerCashActivity['status'] = 'executed',
+  ): BrokerCashActivity => ({
+    activity_id: id,
+    activity_type: 'DIV',
+    activity_date: '2026-10-06',
+    amount,
+    status,
+  });
+  const anchored = () => {
+    const ledger = store();
+    ledger.anchors.recordAnchor('alpaca', 'live', 12_000, DATE);
+    return ledger;
+  };
+  const record = (anchors: SqliteCashAnchors, row: BrokerCashActivity, mode: BrokerMode = 'live') =>
+    anchors.recordActivity('alpaca', mode, row, '2026-10-07');
+  const cash = (anchors: SqliteCashAnchors) => anchors.anchor('alpaca')?.cashQuote;
+
+  it('journals the activity as a signed move in the venue currency, keyed by id and status', () => {
+    const { db, anchors } = anchored();
+    expect(record(anchors, activity('div-1', 4.2))).toBe(true);
+    expect(record(anchors, activity('fee-1', -0.03))).toBe(true);
+    expect(cash(anchors)).toBeCloseTo(12_004.17, 10);
+    expect(
+      db
+        .prepare("SELECT * FROM v2_cash_anchors WHERE kind = 'activity' ORDER BY anchor_row_id")
+        .get(),
+    ).toEqual({
+      anchor_row_id: 2,
+      venue: 'alpaca',
+      kind: 'activity',
+      currency: 'USD',
+      amount_quote: 4.2,
+      fill_seq: null,
+      reference: 'activity:div-1:executed',
+      trading_date: '2026-10-07',
+      recorded_at: '2026-10-05T07:00:00.000Z',
+      broker_mode: 'live',
+      activity_id: 'div-1',
+      activity_type: 'DIV',
+      activity_date: '2026-10-06',
+      status: 'executed',
+    });
+  });
+
+  it('ignores a re-read in the same status, whatever amount it now carries', () => {
+    const { anchors } = anchored();
+    record(anchors, activity('div-1', 4.2));
+    expect(record(anchors, activity('div-1', 4.2))).toBe(false);
+    expect(record(anchors, activity('div-1', 9))).toBe(false);
+    expect(cash(anchors)).toBe(12_004.2);
+  });
+
+  it('brings a canceled activity to zero and keeps it there', () => {
+    const { anchors } = anchored();
+    record(anchors, activity('div-1', 4.2));
+    expect(record(anchors, activity('div-1', 4.2, 'canceled'))).toBe(true);
+    expect(cash(anchors)).toBe(12_000);
+    expect(record(anchors, activity('div-1', 4.2, 'correct'))).toBe(true);
+    expect(record(anchors, activity('div-1', 4.2, 'canceled'))).toBe(false);
+    expect(cash(anchors)).toBe(12_000);
+  });
+
+  it('records an activity first read as canceled at zero', () => {
+    const { anchors } = anchored();
+    expect(record(anchors, activity('div-1', 4.2, 'canceled'))).toBe(true);
+    expect(cash(anchors)).toBe(12_000);
+  });
+
+  it("takes a correction's amount in place of the one it corrects", () => {
+    const { anchors } = anchored();
+    record(anchors, activity('div-1', 4.2));
+    record(anchors, activity('div-1', 5, 'correct'));
+    expect(cash(anchors)).toBe(12_005);
+    record(anchors, activity('div-2', 1, 'correct'));
+    expect(cash(anchors)).toBe(12_006);
+  });
+
+  it("counts a split's cash in lieu once, through its estimate fill, never as an activity", () => {
+    const { db, anchors, fill } = anchored();
+    fill({ id: 'entry', side: 'buy', qty: 1, price: 10 });
+    db.prepare(
+      `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+         side, qty, price_gbp, fee_gbp, currency, price_native, fee_native, broker_mode, recorded_at)
+       VALUES ('cil', 'order-entry', 'debate/primary', ?, 'AAPL', 'alpaca', 'cash_in_lieu', 'sell',
+         0.5, 0, 0, 'USD', 30, 0, 'live', 't')`,
+    ).run(DATE);
+    expect(anchors.storeFlowSince(LIVE_AT(0), 'alpaca')).toEqual({ ok: true, quote: -10 + 15 });
+    expect(ALPACA_NON_TRADE_CASH_TYPES).not.toContain('CIL');
+  });
+
+  it("sums only the anchor's own account's activities", () => {
+    const { anchors } = anchored();
+    record(anchors, activity('paper-div', 50), 'paper');
+    record(anchors, activity('live-div', 4));
+    expect(cash(anchors)).toBe(12_004);
+  });
+});
+
 describe('dayRateFor', () => {
   it('is 1 on a GBP venue without asking for a rate', () => {
     expect(dayRateFor({}, 'saxo', DATE)).toEqual({ ok: true, quotePerGbp: 1, source: 'gbp' });
@@ -269,7 +389,13 @@ describe('dayRateFor', () => {
 describe('anchorCashCheck (David 2026-10-02, #1927 item 5)', () => {
   const compare = (brokerCashQuote: number, flow: number, quotePerGbp = 1): AnchorCompare => ({
     brokerCashQuote,
-    anchor: { currency: 'GBP', cashQuote: 10_000, fillSeq: 0, brokerMode: 'live' },
+    anchor: {
+      currency: 'GBP',
+      cashQuote: 10_000,
+      fillSeq: 0,
+      brokerMode: 'live',
+      tradingDate: DATE,
+    },
     storeFlow: { ok: true, quote: flow },
     rate: { ok: true, quotePerGbp, source: 's' },
     toleranceGbp: 5,
@@ -368,6 +494,7 @@ describe('liveCashCheck', () => {
       cashQuote: 12_000,
       fillSeq: 0,
       brokerMode: 'live',
+      tradingDate: DATE,
     });
   });
 

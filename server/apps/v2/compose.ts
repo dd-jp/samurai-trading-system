@@ -134,7 +134,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
   });
   const pricing = fillPricingFor(options);
-  const { executor, brokerBooks, cashInLieu } =
+  const { executor, brokerBooks, cashInLieu, cashActivities } =
     options.brokerAccess?.(pricing) ??
     createBrokerAccess({
       dryRun: options.dryRun,
@@ -155,6 +155,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     executor,
     brokerBooks,
     cashInLieu,
+    cashActivities,
     brokerMode: options.brokerMode,
     reconcileCashToleranceGbp: options.reconcileCashToleranceGbp ?? declaredCashToleranceGbp(),
     cashAnchors: new SqliteCashAnchors(v2Store, clock),

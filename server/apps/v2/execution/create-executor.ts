@@ -1,9 +1,11 @@
 import type {
   BrokerBookReader,
+  BrokerCashActivityReader,
   BrokerCashInLieuReader,
   OrderExecutor,
 } from '../../../../contracts/index.js';
 import type { BrokerAdapter } from '../../../shared/index.js';
+import { alpacaCashActivityReader } from './alpaca/alpaca-cash-activities.js';
 import { alpacaCashInLieuReader } from './alpaca/alpaca-cash-in-lieu.js';
 import { AlpacaHttpBrokerClient } from './alpaca/alpaca-http-client.js';
 import type { AlpacaBrokerOptions } from './alpaca.js';
@@ -22,6 +24,7 @@ export interface BrokerAccess {
   readonly executor: OrderExecutor;
   readonly brokerBooks: BrokerBookReader;
   readonly cashInLieu?: BrokerCashInLieuReader | undefined;
+  readonly cashActivities?: BrokerCashActivityReader | undefined;
 }
 
 export interface BrokerAccessParts {
@@ -30,6 +33,7 @@ export interface BrokerAccessParts {
   readonly alpaca: BrokerAdapter | undefined;
   readonly brokerBooks: BrokerBookReader;
   readonly cashInLieu?: BrokerCashInLieuReader | undefined;
+  readonly cashActivities?: BrokerCashActivityReader | undefined;
 }
 
 export function brokerAccessFor(parts: BrokerAccessParts): BrokerAccess {
@@ -44,7 +48,12 @@ export function brokerAccessFor(parts: BrokerAccessParts): BrokerAccess {
     pricing: parts.pricing,
     dryRun: parts.dryRun,
   });
-  return { executor, brokerBooks: parts.brokerBooks, cashInLieu: parts.cashInLieu };
+  return {
+    executor,
+    brokerBooks: parts.brokerBooks,
+    cashInLieu: parts.cashInLieu,
+    cashActivities: parts.cashActivities,
+  };
 }
 
 export function createBrokerAccess(options: OrderExecutorOptions): BrokerAccess {
@@ -59,5 +68,6 @@ export function createBrokerAccess(options: OrderExecutorOptions): BrokerAccess 
     alpaca: client === undefined ? undefined : alpacaBroker({ ...options, client }),
     brokerBooks: client === undefined ? NO_BROKER_BOOKS : new AlpacaBrokerBooks(client),
     cashInLieu: alpacaCashInLieuReader(client),
+    cashActivities: alpacaCashActivityReader(client),
   });
 }

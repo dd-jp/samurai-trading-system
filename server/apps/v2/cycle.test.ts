@@ -7,6 +7,8 @@ import type {
   BookLedger,
   BrokerBook,
   BrokerBookReader,
+  BrokerCashActivity,
+  BrokerCashActivityReader,
   BrokerMode,
   ControlAction,
   LossBudgetState,
@@ -5458,6 +5460,7 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     brokerBooks: (deps: Harness) => BrokerBookReader,
     tolerance: number | undefined,
     brokerMode: BrokerMode = 'paper',
+    extra: Partial<CycleDeps> = {},
   ) {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
@@ -5476,6 +5479,7 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
         brokerMode,
         reconcileCashToleranceGbp: tolerance,
         logger: { log: (entry) => logs.push(entry) },
+        ...extra,
       },
       '2026-09-28',
     );
@@ -5945,6 +5949,51 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
       'live',
     );
     expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(PRIMARY_MSFT);
+  });
+
+  describe("live: the broker's non-trade cash is read before the cash check (David 2026-10-03, #2035 item 5)", () => {
+    const dividend = (read: () => Promise<readonly BrokerCashActivity[]>) =>
+      ({ venue: 'alpaca', read: vi.fn(read) }) satisfies BrokerCashActivityReader;
+    const paidDividend = async () => [
+      {
+        activity_id: 'div-1',
+        activity_type: 'DIV',
+        activity_date: '2026-09-26',
+        amount: 100,
+        status: 'executed' as const,
+      },
+    ];
+    const withDividendCash = (harnessed: Harness) =>
+      brokerWith(harnessed, (book) => ({ ...book, cashQuote: book.cashQuote + 100 }));
+
+    it('journals a dividend as a move, so the cash it paid leaves no gap', async () => {
+      const reader = dividend(paidDividend);
+      const { alpaca, deps } = await heldAaplThen(withDividendCash, 5, 'live', {
+        cashActivities: reader,
+      });
+      expect(reader.read).toHaveBeenCalledWith('2026-09-25');
+      expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(PRIMARY_MSFT);
+      expect(
+        rows(deps, "SELECT reference, amount_quote FROM v2_cash_anchors WHERE kind = 'activity'"),
+      ).toEqual([{ reference: 'activity:div-1:executed', amount_quote: 100 }]);
+    });
+
+    it('a failed read warns, and the unexplained cash still blocks entries', async () => {
+      const reader = dividend(async () => {
+        throw new Error('activities 503');
+      });
+      const { alpaca, logs } = await heldAaplThen(withDividendCash, 5, 'live', {
+        cashActivities: reader,
+      });
+      expect(alpaca.brackets.map((order) => order.client_order_id)).not.toContain(PRIMARY_MSFT);
+      expect(alpaca.flattens).toEqual(['v2-debate-primary-2026-09-28-AAPL-exit']);
+      expect(logs).toContainEqual(
+        expect.objectContaining({ level: 'warn', event: 'v2_cash_activity_read_failed' }),
+      );
+      expect(logs).toContainEqual(
+        expect.objectContaining({ level: 'error', event: 'v2_reconcile_mismatch' }),
+      );
+    });
   });
 
   it('a clean book lets entries through and records the clean run', async () => {

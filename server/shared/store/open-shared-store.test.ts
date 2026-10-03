@@ -81,7 +81,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 62;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 92;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 93;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -685,6 +685,91 @@ describe('openSharedStore', () => {
           )
           .run(),
       ).toThrow(/CHECK constraint/);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0093 rebuilds v2_cash_anchors with every row and id, adding broker activities (#2035)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 92;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_cash_anchors (anchor_row_id, venue, kind, currency, amount_quote, fill_seq,
+           reference, trading_date, recorded_at, broker_mode)
+           VALUES (4, 'alpaca', 'anchor', 'USD', 12000, 3, 'go-live', '2026-09-29', 't', 'live'),
+                  (9, 'alpaca', 'deposit', 'USD', 500, NULL, 'wire-1', '2026-09-30', 't', NULL);`,
+      );
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw
+          .prepare(
+            'SELECT anchor_row_id, kind, amount_quote, fill_seq, broker_mode, activity_id, status FROM v2_cash_anchors',
+          )
+          .all(),
+      ).toEqual([
+        {
+          anchor_row_id: 4,
+          kind: 'anchor',
+          amount_quote: 12000,
+          fill_seq: 3,
+          broker_mode: 'live',
+          activity_id: null,
+          status: null,
+        },
+        {
+          anchor_row_id: 9,
+          kind: 'deposit',
+          amount_quote: 500,
+          fill_seq: null,
+          broker_mode: null,
+          activity_id: null,
+          status: null,
+        },
+      ]);
+      const activity = (reference: string, id: string | null, status: string | null) =>
+        raw
+          .prepare(
+            `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+               trading_date, recorded_at, broker_mode, activity_id, activity_type, activity_date,
+               status)
+               VALUES ('alpaca', 'activity', 'USD', -0.03, NULL, ?, '2026-10-01', 't', 'live', ?,
+                 'FEE', '2026-10-01', ?)`,
+          )
+          .run(reference, id, status);
+      activity('activity:fee-1:executed', 'fee-1', 'executed');
+      expect(raw.prepare('SELECT MAX(anchor_row_id) AS id FROM v2_cash_anchors').get()).toEqual({
+        id: 10,
+      });
+      expect(() => activity('other', 'fee-1', 'executed')).toThrow(/UNIQUE constraint/);
+      expect(() => activity('no-id', null, 'executed')).toThrow(/CHECK constraint/);
+      expect(() => activity('no-status', 'fee-2', null)).toThrow(/CHECK constraint/);
+      expect(() => activity('bad-status', 'fee-3', 'pending')).toThrow(/CHECK constraint/);
+      expect(() => activity('activity:fee-1:executed', 'fee-4', 'executed')).toThrow(
+        'v2_cash_anchors is append-only',
+      );
+      expect(() => raw.prepare('UPDATE v2_cash_anchors SET amount_quote = 0').run()).toThrow(
+        'v2_cash_anchors is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_cash_anchors').run()).toThrow(
+        'v2_cash_anchors is append-only',
+      );
+      expect(() =>
+        raw
+          .prepare(
+            `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+               trading_date, recorded_at, broker_mode)
+               VALUES ('alpaca', 'anchor', 'USD', 1, 0, 'second', '2026-10-01', 't', 'live')`,
+          )
+          .run(),
+      ).toThrow('v2_cash_anchors is append-only');
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

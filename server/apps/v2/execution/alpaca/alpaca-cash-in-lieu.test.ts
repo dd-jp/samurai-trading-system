@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ALPACA_ACTIVITY_MAX_PAGES } from './alpaca-activity-pages.js';
 import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
-import {
-  ALPACA_CASH_IN_LIEU_MAX_PAGES,
-  AlpacaCashInLieuReader,
-  alpacaCashInLieuReader,
-} from './alpaca-cash-in-lieu.js';
+import { AlpacaCashInLieuReader, alpacaCashInLieuReader } from './alpaca-cash-in-lieu.js';
 import type { AlpacaBrokerClient, AlpacaCashInLieuActivity } from './alpaca-client.js';
 import { ALPACA_ACTIVITY_PAGE_SIZE, AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
@@ -160,9 +157,9 @@ describe('AlpacaCashInLieuReader', () => {
     const page = Array.from({ length: ALPACA_ACTIVITY_PAGE_SIZE }, () => ACTIVITY);
     const list = vi.fn(async () => page);
     await expect(new AlpacaCashInLieuReader(list).read('2026-08-30')).rejects.toThrow(
-      `Alpaca CIL activities since 2026-08-30 run past ${ALPACA_CASH_IN_LIEU_MAX_PAGES} pages`,
+      `Alpaca CIL activities since 2026-08-30 run past ${ALPACA_ACTIVITY_MAX_PAGES} pages`,
     );
-    expect(list).toHaveBeenCalledTimes(ALPACA_CASH_IN_LIEU_MAX_PAGES);
+    expect(list).toHaveBeenCalledTimes(ALPACA_ACTIVITY_MAX_PAGES);
   });
 });
 

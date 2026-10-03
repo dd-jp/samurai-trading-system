@@ -1,4 +1,10 @@
-import type { BrokerMode, MarketData, ReconcileDiff, Venue } from '../../../contracts/index.js';
+import type {
+  BrokerCashActivity,
+  BrokerMode,
+  MarketData,
+  ReconcileDiff,
+  Venue,
+} from '../../../contracts/index.js';
 import type { Clock } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
@@ -10,6 +16,7 @@ export interface CashAnchor {
   readonly cashQuote: number;
   readonly fillSeq: number;
   readonly brokerMode: BrokerMode;
+  readonly tradingDate: string;
 }
 
 export type StoreFlow =
@@ -25,6 +32,12 @@ export interface CashAnchorLedger {
     tradingDate: string,
   ): CashAnchor;
   storeFlowSince(anchor: Pick<CashAnchor, 'brokerMode' | 'fillSeq'>, venue: Venue): StoreFlow;
+  recordActivity(
+    venue: Venue,
+    brokerMode: BrokerMode,
+    activity: BrokerCashActivity,
+    tradingDate: string,
+  ): boolean;
 }
 
 export type CashMoveKind = 'deposit' | 'withdrawal';
@@ -51,6 +64,19 @@ const STORE_FLOW = `
   WHERE f.venue = ? AND f.broker_mode = ? AND f.fill_seq > ?
     AND o.outcome NOT IN ('simulated', 'refused_dry_run')`;
 
+// Each status the broker reports brings the activity's sum to that status's amount, and a canceled
+// activity stays at zero whatever is read after it; a status already journalled is not re-read
+const RECORD_ACTIVITY = `
+  INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+    trading_date, recorded_at, broker_mode, activity_id, activity_type, activity_date, status)
+  SELECT @venue, 'activity', @currency,
+    CASE WHEN @status = 'canceled' OR COALESCE(SUM(status = 'canceled'), 0) > 0 THEN 0
+         ELSE @amount END - COALESCE(SUM(amount_quote), 0),
+    NULL, @reference, @tradingDate, @recordedAt, @brokerMode, @activityId, @activityType,
+    @activityDate, @status
+  FROM v2_cash_anchors WHERE venue = @venue AND kind = 'activity' AND activity_id = @activityId
+  HAVING NOT EXISTS (SELECT 1 FROM v2_cash_anchors WHERE venue = @venue AND reference = @reference)`;
+
 export class SqliteCashAnchors implements CashAnchorLedger {
   constructor(
     private readonly db: StoreHandle,
@@ -60,12 +86,19 @@ export class SqliteCashAnchors implements CashAnchorLedger {
   anchor(venue: Venue): CashAnchor | undefined {
     const row = this.db
       .prepare(
-        `SELECT a.currency, a.fill_seq, a.broker_mode,
-           (SELECT SUM(m.amount_quote) FROM v2_cash_anchors m WHERE m.venue = a.venue) AS cash_quote
+        `SELECT a.currency, a.fill_seq, a.broker_mode, a.trading_date,
+           (SELECT SUM(m.amount_quote) FROM v2_cash_anchors m WHERE m.venue = a.venue
+              AND (m.kind <> 'activity' OR m.broker_mode = a.broker_mode)) AS cash_quote
          FROM v2_cash_anchors a WHERE a.venue = ? AND a.kind = 'anchor'`,
       )
       .get(venue) as
-      | { currency: QuoteCurrency; fill_seq: number; broker_mode: BrokerMode; cash_quote: number }
+      | {
+          currency: QuoteCurrency;
+          fill_seq: number;
+          broker_mode: BrokerMode;
+          trading_date: string;
+          cash_quote: number;
+        }
       | undefined;
     if (row === undefined) return undefined;
     return {
@@ -73,6 +106,7 @@ export class SqliteCashAnchors implements CashAnchorLedger {
       cashQuote: row.cash_quote,
       fillSeq: row.fill_seq,
       brokerMode: row.broker_mode,
+      tradingDate: row.trading_date,
     };
   }
 
@@ -125,6 +159,28 @@ export class SqliteCashAnchors implements CashAnchorLedger {
         toStoredTimestamp(this.clock.now()),
       );
     return this.anchor(move.venue) as CashAnchor;
+  }
+
+  recordActivity(
+    venue: Venue,
+    brokerMode: BrokerMode,
+    activity: BrokerCashActivity,
+    tradingDate: string,
+  ): boolean {
+    const inserted = this.db.prepare(RECORD_ACTIVITY).run({
+      venue,
+      currency: quoteCurrencyOf(venue),
+      amount: activity.amount,
+      reference: `activity:${activity.activity_id}:${activity.status}`,
+      tradingDate,
+      recordedAt: toStoredTimestamp(this.clock.now()),
+      brokerMode,
+      activityId: activity.activity_id,
+      activityType: activity.activity_type,
+      activityDate: activity.activity_date,
+      status: activity.status,
+    });
+    return inserted.changes > 0;
   }
 
   storeFlowSince(anchor: Pick<CashAnchor, 'brokerMode' | 'fillSeq'>, venue: Venue): StoreFlow {
