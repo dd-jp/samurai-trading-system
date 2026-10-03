@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { TaxCashInLieuRow } from './tax-cash-in-lieu.js';
 import {
   buildTaxLog,
   type DayRate,
@@ -97,6 +98,7 @@ describe('buildTaxLog', () => {
         fx_source: 'boe-xudluss:2026-07-01',
         provisional: false,
         cash_in_lieu: false,
+        cash_in_lieu_activity: null,
       },
     ]);
   });
@@ -418,5 +420,195 @@ describe('taxYearLog and taxYearsOf', () => {
 
   it('lists every tax year with a disposal or a held-out fill, oldest first and once each', () => {
     expect(taxYearsOf(log)).toEqual([2024, 2025, 2026, 2027]);
+  });
+});
+
+describe("buildTaxLog with the broker's cash in lieu (#2001)", () => {
+  const SPLIT: TaxSplitRow[] = [{ instrument: 'AAPL', split_date: '2026-09-28', ratio: 1.5 }];
+
+  function estimate(date: string, qty = 0.5, overrides: Partial<TaxFillRow> = {}): TaxFillRow {
+    return { ...usd('sell', date, qty, 20), leg: 'cash_in_lieu', ...overrides };
+  }
+
+  function paid(overrides: Partial<TaxCashInLieuRow> = {}): TaxCashInLieuRow {
+    return {
+      venue: 'alpaca',
+      activity_id: 'cil-1',
+      instrument: 'AAPL',
+      activity_date: '2026-09-29',
+      qty: 0.5,
+      amount_native: 11,
+      currency: 'USD',
+      ...overrides,
+    };
+  }
+
+  function logOf(fills: readonly TaxFillRow[], rows: readonly TaxCashInLieuRow[]) {
+    return buildTaxLog([usd('buy', '2026-09-01', 102, 30), ...fills], SPLIT, dayRate, AS_OF, rows);
+  }
+
+  const costPerNewShare = (102 * 30) / 1.2 / 153;
+
+  it("books the broker's amount in place of the latest-close estimate and names the activity", () => {
+    const log = logOf([estimate('2026-09-29')], [paid()]);
+    expect(log.heldOut).toEqual([]);
+    expect(log.disposals).toEqual([
+      {
+        disposal_date: '2026-09-29',
+        instrument: 'AAPL',
+        venue: 'alpaca',
+        qty: 0.5,
+        proceeds_gbp: expect.closeTo(11 / 1.25, 9),
+        cost_gbp: expect.closeTo(0.5 * costPerNewShare, 9),
+        gain_gbp: expect.closeTo(11 / 1.25 - 0.5 * costPerNewShare, 9),
+        rule: 'section-104',
+        acquisition_date: null,
+        currency: 'USD',
+        fx_quote_per_gbp: 1.25,
+        fx_source: 'boe-xudluss:2026-09-29',
+        provisional: false,
+        cash_in_lieu: true,
+        cash_in_lieu_activity: 'alpaca:cil-1',
+      },
+    ]);
+  });
+
+  it('keeps the estimate, flagged as one, while no broker row pairs with it', () => {
+    expect(logOf([estimate('2026-09-29')], []).disposals).toMatchObject([
+      { proceeds_gbp: expect.closeTo(10 / 1.25, 9), cash_in_lieu_activity: null },
+    ]);
+  });
+
+  it('pairs a payment up to 30 days either side of the estimate and keeps the estimate’s date', () => {
+    for (const activityDate of ['2026-10-29', '2026-08-30', '2026-10-02']) {
+      const log = logOf([estimate('2026-09-29')], [paid({ activity_date: activityDate })]);
+      expect(log.heldOut).toEqual([]);
+      expect(log.disposals).toMatchObject([
+        { disposal_date: '2026-09-29', proceeds_gbp: expect.closeTo(11 / 1.25, 9) },
+      ]);
+    }
+  });
+
+  it('holds the name out when a payment has no estimate within 30 days, naming the activity', () => {
+    const log = logOf([estimate('2026-09-29')], [paid({ activity_date: '2026-10-30' })]);
+    expect(log.disposals).toEqual([]);
+    expect(log.heldOut).toEqual([
+      {
+        instrument: 'AAPL',
+        venue: 'alpaca',
+        reason: 'broker cash in lieu alpaca:cil-1 on 2026-10-30 has no estimate within 30 days',
+        fills: 2,
+        taxYears: [2026],
+      },
+    ]);
+  });
+
+  it('replaces every estimate of the nearest date with one fill at the broker’s qty, or their sum', () => {
+    const books = [estimate('2026-09-29', 0.5), estimate('2026-09-29', 0.25)];
+    expect(logOf(books, [paid({ qty: 0.75, amount_native: 16.5 })]).disposals).toMatchObject([
+      { qty: 0.75, proceeds_gbp: expect.closeTo(16.5 / 1.25, 9), cash_in_lieu: true },
+    ]);
+    expect(logOf(books, [paid({ qty: null, amount_native: 16.5 })]).disposals).toMatchObject([
+      { qty: 0.75, proceeds_gbp: expect.closeTo(16.5 / 1.25, 9) },
+    ]);
+    expect(logOf(books, [paid({ qty: 0.4 })]).disposals).toMatchObject([
+      { qty: 0.4, proceeds_gbp: expect.closeTo(11 / 1.25, 9) },
+    ]);
+  });
+
+  it('pairs the nearest estimate date, the earlier one on a tie, and leaves the other estimate', () => {
+    const fills = [estimate('2026-09-29'), estimate('2026-10-15')];
+    const later = logOf(fills, [paid({ activity_date: '2026-10-14' })]);
+    expect(later.disposals.map((d) => [d.disposal_date, d.cash_in_lieu_activity])).toEqual([
+      ['2026-09-29', null],
+      ['2026-10-15', 'alpaca:cil-1'],
+    ]);
+    const tie = logOf(fills, [paid({ activity_date: '2026-10-07' })]);
+    expect(tie.disposals.map((d) => [d.disposal_date, d.cash_in_lieu_activity])).toEqual([
+      ['2026-09-29', 'alpaca:cil-1'],
+      ['2026-10-15', null],
+    ]);
+  });
+
+  it('pairs each estimate once, taking payments by date and then id, whatever the read order', () => {
+    const rows = [
+      paid({ activity_id: 'cil-b', activity_date: '2026-09-30' }),
+      paid({ activity_id: 'cil-c', activity_date: '2026-09-29' }),
+      paid({ activity_id: 'cil-a', activity_date: '2026-09-30' }),
+    ];
+    const log = logOf([estimate('2026-09-29'), estimate('2026-09-15')], rows);
+    expect(log.heldOut).toMatchObject([
+      { reason: 'broker cash in lieu alpaca:cil-b on 2026-09-30 has no estimate within 30 days' },
+    ]);
+    const two = logOf([estimate('2026-09-29'), estimate('2026-09-15')], rows.slice(0, 2));
+    expect(two.heldOut).toEqual([]);
+    expect(two.disposals.map((d) => [d.disposal_date, d.cash_in_lieu_activity])).toEqual([
+      ['2026-09-15', 'alpaca:cil-b'],
+      ['2026-09-29', 'alpaca:cil-c'],
+    ]);
+  });
+
+  it('pairs only an estimate at the payment’s own venue', () => {
+    const elsewhere = estimate('2026-09-29', 0.5, { venue: 'saxo' });
+    expect(logOf([elsewhere], [paid()]).heldOut).toMatchObject([
+      { reason: expect.stringContaining('has no estimate within 30 days') },
+    ]);
+  });
+
+  it('holds out a payment that disagrees with its estimate rather than guess', () => {
+    const cases: [readonly TaxFillRow[], Partial<TaxCashInLieuRow>, string][] = [
+      [[estimate('2026-09-29')], { currency: 'GBP' }, 'is in GBP, its estimate in USD'],
+      [
+        [estimate('2026-09-29')],
+        { amount_native: -11 },
+        'of -11 USD has the wrong sign for a sell',
+      ],
+      [[estimate('2026-09-29')], { amount_native: 0 }, 'of 0 USD has the wrong sign for a sell'],
+      [
+        [estimate('2026-09-29'), estimate('2026-09-29', 0.5, { side: 'buy' })],
+        {},
+        'pairs a buy and a sell',
+      ],
+    ];
+    for (const [fills, override, reason] of cases) {
+      expect(logOf(fills, [paid(override)]).heldOut).toMatchObject([
+        { reason: `broker cash in lieu alpaca:cil-1 ${reason}` },
+      ]);
+    }
+  });
+
+  it('books a short’s cash in lieu paid out of the account as an acquisition at the broker’s amount', () => {
+    const fills = [
+      usd('sell', '2026-09-01', 10, 30),
+      estimate('2026-09-29', 0.5, { side: 'buy' }),
+      usd('buy', '2026-09-29', 14.5, 20),
+    ];
+    const log = buildTaxLog(fills, SPLIT, dayRate, AS_OF, [paid({ amount_native: -11 })]);
+    expect(log.heldOut).toEqual([]);
+    expect(log.disposals).toMatchObject([{ cash_in_lieu: false }]);
+    expect(log.disposals[0]?.cost_gbp).toBeCloseTo((14.5 * 20) / 1.25 + 11 / 1.25, 9);
+  });
+
+  it('holds out a payment for a name with no fills, and ignores one at a CFD venue', () => {
+    const cfdOnly = usd('buy', '2026-09-01', 1, 30);
+    const log = buildTaxLog(
+      [{ ...cfdOnly, instrument: 'MSFT', venue: 'saxo_cfd_usd' }],
+      [],
+      dayRate,
+      AS_OF,
+      [
+        paid({ instrument: 'MSFT', activity_date: '2026-04-05' }),
+        paid({ instrument: 'TSLA', venue: 'saxo_cfd_usd' }),
+      ],
+    );
+    expect(log.heldOut).toEqual([
+      {
+        instrument: 'MSFT',
+        venue: 'alpaca',
+        reason: 'broker cash in lieu alpaca:cil-1 on 2026-04-05 for a name with no fills',
+        fills: 0,
+        taxYears: [2025],
+      },
+    ]);
   });
 });

@@ -14,6 +14,7 @@ import {
   type FxObservation,
   londonDateOf,
 } from '../data/index.js';
+import type { TaxCashInLieuRow } from '../tax-cash-in-lieu.js';
 import {
   buildTaxLog,
   type RateLookup,
@@ -48,6 +49,10 @@ const BROKER_FILLS = `
   WHERE o.outcome NOT IN ('simulated', 'refused_dry_run')
   ORDER BY f.rowid`;
 
+const BROKER_CASH_IN_LIEU = `
+  SELECT venue, activity_id, instrument, activity_date, qty, amount_native, currency
+  FROM v2_cash_in_lieu ORDER BY rowid`;
+
 export function taxYearLabel(year: number): string {
   return `${year}-${String((year + 1) % 100).padStart(2, '0')}`;
 }
@@ -67,6 +72,7 @@ const CSV_COLUMNS = [
   'fx_source',
   'provisional',
   'cash_in_lieu',
+  'cash_in_lieu_activity',
   'note',
 ] as const;
 
@@ -148,12 +154,14 @@ export class TaxReader {
     const splits = this.db
       .prepare('SELECT instrument, split_date, ratio FROM v2_splits')
       .all() as TaxSplitRow[];
+    const cashInLieu = this.db.prepare(BROKER_CASH_IN_LIEU).all() as TaxCashInLieuRow[];
     const fx = this.fx();
     const log = buildTaxLog(
       fills,
       splits,
       (currency, date) => dayRateOf(fx, currency, date),
       today,
+      cashInLieu,
     );
     return { log, year: query.year ?? taxYearOf(today) };
   }

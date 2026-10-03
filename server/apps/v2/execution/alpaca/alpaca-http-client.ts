@@ -16,6 +16,7 @@ import type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaBrokerClient,
+  AlpacaCashInLieuActivity,
   AlpacaMarketOrderRequest,
   AlpacaOcoOrderRequest,
   AlpacaOrder,
@@ -162,6 +163,31 @@ function validateAlpacaAccount(body: unknown, context: string): AlpacaAccount {
   }
   return body as unknown as AlpacaAccount;
 }
+
+function validateCashInLieuActivity(raw: unknown, context: string): void {
+  if (!isRecord(raw)) failValidation(context, 'an activity was not an object', raw);
+  const { id, activity_type, date, net_amount, symbol, qty } = raw;
+  runValidationRules(
+    [
+      [typeof id !== 'string' || id === '', 'id must be a non-empty string'],
+      [activity_type !== 'CIL', "activity_type must be 'CIL'"],
+      [typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date), 'date must be YYYY-MM-DD'],
+      [!isFiniteNumericString(net_amount), 'net_amount must be a numeric string'],
+      [typeof symbol !== 'string' || symbol === '', 'symbol must be a non-empty string'],
+      [qty != null && !isFiniteNumericString(qty), 'qty must be a numeric string or null'],
+    ],
+    context,
+    raw,
+  );
+}
+
+function validateCashInLieuActivities(body: unknown, context: string): AlpacaCashInLieuActivity[] {
+  if (!Array.isArray(body)) failValidation(context, 'expected an array', body);
+  for (const raw of body) validateCashInLieuActivity(raw, context);
+  return body as AlpacaCashInLieuActivity[];
+}
+
+export const ALPACA_ACTIVITY_PAGE_SIZE = 100;
 
 export type AlpacaTradingEnvironment = 'paper' | 'live';
 
@@ -422,6 +448,21 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       { method: 'GET' },
       'listOpenOrders',
       validateAlpacaOrders,
+    );
+  }
+
+  async listCashInLieu(after: string, pageToken?: string): Promise<AlpacaCashInLieuActivity[]> {
+    const query = new URLSearchParams({
+      after,
+      direction: 'asc',
+      page_size: String(ALPACA_ACTIVITY_PAGE_SIZE),
+    });
+    if (pageToken !== undefined) query.set('page_token', pageToken);
+    return this.request<AlpacaCashInLieuActivity[]>(
+      `/v2/account/activities/CIL?${query.toString()}`,
+      { method: 'GET' },
+      'listCashInLieu',
+      validateCashInLieuActivities,
     );
   }
 

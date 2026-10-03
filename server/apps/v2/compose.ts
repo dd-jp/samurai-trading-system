@@ -1,4 +1,10 @@
-import type { BrokerMode, CfdCosts, MarketData, Sleeve } from '../../../contracts/index.js';
+import type {
+  BrokerCashInLieuReader,
+  BrokerMode,
+  CfdCosts,
+  MarketData,
+  Sleeve,
+} from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore } from '../../shared/store/index.js';
@@ -61,6 +67,7 @@ export interface CycleComposition extends CycleDeps {
   readonly capital: CapitalConfigStore;
   readonly journal: Journal;
   readonly faults: FaultLedger;
+  readonly cashInLieu?: BrokerCashInLieuReader | undefined;
 }
 
 function assertCfdFillsPriced(
@@ -127,7 +134,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
   });
   const pricing = fillPricingFor(options);
-  const { executor, brokerBooks } =
+  const { executor, brokerBooks, cashInLieu } =
     options.brokerAccess?.(pricing) ??
     createBrokerAccess({
       dryRun: options.dryRun,
@@ -147,6 +154,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     risk,
     executor,
     brokerBooks,
+    cashInLieu,
     brokerMode: options.brokerMode,
     reconcileCashToleranceGbp: options.reconcileCashToleranceGbp ?? declaredCashToleranceGbp(),
     cashAnchors: new SqliteCashAnchors(v2Store, clock),

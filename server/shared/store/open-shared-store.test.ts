@@ -74,13 +74,14 @@ const TABLES = [
   'v2_fill_reads',
   'v2_fill_sweeps',
   'v2_cash_anchors',
+  'v2_cash_in_lieu',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 61;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 62;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 90;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 91;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));

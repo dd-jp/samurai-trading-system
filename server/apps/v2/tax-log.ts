@@ -11,6 +11,7 @@ import {
   type ShareMatch,
   THIRTY_DAY_WINDOW_DAYS,
 } from './share-matching.js';
+import { type TaxCashInLieuRow, withBrokerCashInLieu } from './tax-cash-in-lieu.js';
 
 export interface TaxFillRow {
   readonly fill_id: string;
@@ -24,6 +25,7 @@ export interface TaxFillRow {
   readonly currency: string | null;
   readonly price_native: number | null;
   readonly fee_native: number | null;
+  readonly cash_in_lieu_activity?: string | null | undefined;
 }
 
 export interface TaxSplitRow {
@@ -113,6 +115,11 @@ function heldOut(fills: readonly TaxFillRow[], reason: string): HeldOutInstrumen
   };
 }
 
+function cashInLieuActivity(days: readonly ConvertedFill[]): string | null {
+  const activities = days.flatMap((day) => day.fill.cash_in_lieu_activity ?? []);
+  return activities.length === 0 ? null : [...new Set(activities)].join(' ');
+}
+
 function toDisposal(
   match: ShareMatch,
   day: ConvertedFill,
@@ -136,6 +143,7 @@ function toDisposal(
     provisional:
       match.rule === 'section-104' && addDays(match.disposalDate, THIRTY_DAY_WINDOW_DAYS) >= asOf,
     cash_in_lieu: days.some((fill) => fill.fill.leg === 'cash_in_lieu'),
+    cash_in_lieu_activity: cashInLieuActivity(days),
   } satisfies TaxDisposalWire;
 }
 
@@ -195,15 +203,30 @@ function distinctSplits(splits: readonly TaxSplitRow[]): readonly TaxSplitRow[] 
   return [...byDate.values()];
 }
 
-function logGroup(
-  fills: readonly TaxFillRow[],
-  splits: readonly TaxSplitRow[],
-  dayRate: DayRate,
-  asOf: string,
-): InstrumentLog {
-  const distinct = distinctSplits(splits);
+interface InstrumentJournal {
+  readonly fills: readonly TaxFillRow[];
+  readonly splits: readonly TaxSplitRow[];
+  readonly cashInLieu: readonly TaxCashInLieuRow[];
+}
+
+function logGroup(journal: InstrumentJournal, dayRate: DayRate, asOf: string): InstrumentLog {
+  const { fills } = journal;
+  const distinct = distinctSplits(journal.splits);
   if (typeof distinct === 'string') return { ok: false, heldOut: heldOut(fills, distinct) };
-  return logInstrument(fills, distinct, dayRate, asOf);
+  const paid = withBrokerCashInLieu(fills, journal.cashInLieu);
+  if (typeof paid === 'string') return { ok: false, heldOut: heldOut(fills, paid) };
+  return logInstrument(paid, distinct, dayRate, asOf);
+}
+
+function unpairedCashInLieu(rows: readonly TaxCashInLieuRow[]): HeldOutInstrument {
+  const first = rows[0] as TaxCashInLieuRow;
+  return {
+    instrument: first.instrument,
+    venue: first.venue,
+    reason: `broker cash in lieu ${first.venue}:${first.activity_id} on ${first.activity_date} for a name with no fills`,
+    fills: 0,
+    taxYears: ascending(rows.map((row) => taxYearOf(row.activity_date))),
+  };
 }
 
 function byInstrument<T extends { readonly instrument: string }>(
@@ -214,21 +237,49 @@ function byInstrument<T extends { readonly instrument: string }>(
   return groups;
 }
 
+function grouped(
+  fills: readonly TaxFillRow[],
+  splits: readonly TaxSplitRow[],
+  cashInLieu: readonly TaxCashInLieuRow[],
+): InstrumentJournal[] {
+  const splitsOf = byInstrument(splits);
+  const cashInLieuOf = byInstrument(cashInLieu.filter((row) => !isCfdVenue(row.venue as Venue)));
+  const shares = byInstrument(fills.filter((fill) => !isCfdVenue(fill.venue as Venue)));
+  return [...shares].map(([instrument, group]) => ({
+    fills: group,
+    splits: splitsOf.get(instrument) ?? [],
+    cashInLieu: cashInLieuOf.get(instrument) ?? [],
+  }));
+}
+
+function unpairedByInstrument(
+  fills: readonly TaxFillRow[],
+  cashInLieu: readonly TaxCashInLieuRow[],
+): HeldOutInstrument[] {
+  const held = new Set(
+    fills.filter((fill) => !isCfdVenue(fill.venue as Venue)).map((fill) => fill.instrument),
+  );
+  const orphans = cashInLieu.filter(
+    (row) => !isCfdVenue(row.venue as Venue) && !held.has(row.instrument),
+  );
+  return [...byInstrument(orphans).values()].map(unpairedCashInLieu);
+}
+
 export function buildTaxLog(
   fills: readonly TaxFillRow[],
   splits: readonly TaxSplitRow[],
   dayRate: DayRate,
   asOf: string,
+  cashInLieu: readonly TaxCashInLieuRow[] = [],
 ): TaxLog {
-  const splitsOf = byInstrument(splits);
   const disposals: TaxDisposalWire[] = [];
   const held: HeldOutInstrument[] = [];
-  const shares = fills.filter((fill) => !isCfdVenue(fill.venue as Venue));
-  for (const [instrument, group] of byInstrument(shares)) {
-    const log = logGroup(group, splitsOf.get(instrument) ?? [], dayRate, asOf);
+  for (const journal of grouped(fills, splits, cashInLieu)) {
+    const log = logGroup(journal, dayRate, asOf);
     if (log.ok) disposals.push(...log.disposals);
     else held.push(log.heldOut);
   }
+  held.push(...unpairedByInstrument(fills, cashInLieu));
   disposals.sort(
     (a, b) =>
       a.disposal_date.localeCompare(b.disposal_date) || a.instrument.localeCompare(b.instrument),
