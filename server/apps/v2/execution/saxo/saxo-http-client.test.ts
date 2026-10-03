@@ -1418,6 +1418,90 @@ describe('SaxoHttpBrokerClient', () => {
     );
   });
 
+  describe('accountKey from the environment', () => {
+    const TWO_ACCOUNTS = {
+      Data: [
+        { AccountKey: 'fake-gia-acct', ClientKey: 'fake-client' },
+        { AccountKey: 'fake-cfd-acct', ClientKey: 'fake-client' },
+      ],
+    };
+
+    function envClient(environment: 'sim' | 'live', accountKey?: string): SaxoHttpBrokerClient {
+      return new SaxoHttpBrokerClient({
+        accessToken: FAKE_TOKEN,
+        environment,
+        baseUrl: 'https://gateway.example/openapi/',
+        ...(accountKey === undefined ? {} : { accountKey }),
+        retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+        rateLimiter: permissiveLimiter(),
+        logger: recordingLogger(),
+      });
+    }
+
+    function twoAccountFetch(): ReturnType<typeof vi.fn> {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(TWO_ACCOUNTS))
+        .mockResolvedValueOnce(jsonResponse({ Data: [] }));
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it.each([
+      ['sim', 'SAXO_SIM_ACCOUNT_KEY'],
+      ['live', 'SAXO_LIVE_ACCOUNT_KEY'],
+    ] as const)('pins the %s account from %s, trimmed', async (environment, name) => {
+      expect(SAXO_CREDENTIAL_ENV_VARS[environment].accountKey).toBe(name);
+      vi.stubEnv(name, '  fake-cfd-acct  ');
+      const fetchMock = twoAccountFetch();
+
+      await envClient(environment).listOpenOrders();
+
+      expect(calledPath(fetchMock, 1)).toContain('AccountKey=fake-cfd-acct');
+    });
+
+    it("does not read the other environment's account key", async () => {
+      vi.stubEnv('SAXO_LIVE_ACCOUNT_KEY', 'fake-cfd-acct');
+      vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', '');
+      twoAccountFetch();
+
+      await expect(envClient('sim').listOpenOrders()).rejects.toThrow(
+        'Saxo: 2 accounts are visible; set SAXO_SIM_ACCOUNT_KEY or pass { accountKey } to pick the trading one.',
+      );
+    });
+
+    it('still refuses 2+ accounts when the variable is blank', async () => {
+      vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', '   ');
+      twoAccountFetch();
+
+      await expect(envClient('sim').listOpenOrders()).rejects.toThrow(
+        /2 accounts are visible; set SAXO_SIM_ACCOUNT_KEY/,
+      );
+    });
+
+    it('prefers an explicit accountKey over the environment', async () => {
+      vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', 'fake-cfd-acct');
+      const fetchMock = twoAccountFetch();
+
+      await envClient('sim', 'fake-gia-acct').listOpenOrders();
+
+      expect(calledPath(fetchMock, 1)).toContain('AccountKey=fake-gia-acct');
+    });
+
+    it('refuses an environment accountKey the token cannot see', async () => {
+      vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', 'fake-missing-acct');
+      twoAccountFetch();
+
+      await expect(envClient('sim').listOpenOrders()).rejects.toThrow(
+        /the configured accountKey is not among the accounts this token can see/,
+      );
+    });
+  });
+
   it('refuses an accounts response with zero accounts, even unpinned', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ Data: [] }));
     const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
