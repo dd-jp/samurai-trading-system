@@ -140,6 +140,8 @@ Each item is open until David rules or the named ticket closes it. This ADR take
     - (e) False-split gap ([#1887](https://github.com/dd-jp/samurai-trading-system/issues/1887) item 4): accepted until the corporate-action feed is bought (doc 66, 2026-10-01); the purchase is the follow-up.
     - (f) Candidate 1 hash drift ([#2020](https://github.com/dd-jp/samurai-trading-system/issues/2020)): the #1815 50 bps entry offset changed simulated fills, so candidate 1 is re-run at 50 bps on the Mac as two new counted trials; the 0 bps rows stand and the old hashes are not restored.
 
+24. **Broker contracts and non-trade cash** (doc 66, 2026-10-03): ruled. (a) `BrokerAdapter` lives in `contracts/` with ISO 8601 strings in place of `Date` (`fetchNewFills(since: string)`, `NormalizedFill.timestamp: string`); the adapters convert at the edge ([#1748](https://github.com/dd-jp/samurai-trading-system/issues/1748)). *Built 2026-10-03* (#2038). Doc 77 §5.2's homes for the momentum and debate-engine survivors, which break the `.oxlintrc.json` v2 module boundaries: open — awaiting David. (b) Non-trade broker cash (dividends, interest, fees) is read from the broker's activities before the cash check and journalled automatically as anchor moves, idempotent by activity id, so the item 23(b) gap reflects only trade drift ([#2035](https://github.com/dd-jp/samurai-trading-system/issues/2035) item 5). **Built before live**; not built yet.
+
 ## 6. Consequences
 
 - v1's ADRs and specs are gone from the tree; anyone needing them reads tag `v1-final`. The citation checker never scans `docs/adr/`, so this file may cite deleted paths.
