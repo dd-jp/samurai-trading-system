@@ -16,6 +16,7 @@ import type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaBrokerClient,
+  AlpacaCashActivity,
   AlpacaCashInLieuActivity,
   AlpacaMarketOrderRequest,
   AlpacaOcoOrderRequest,
@@ -164,31 +165,54 @@ function validateAlpacaAccount(body: unknown, context: string): AlpacaAccount {
   return body as unknown as AlpacaAccount;
 }
 
-function validateCashInLieuActivity(raw: unknown, context: string): void {
-  if (!isRecord(raw)) failValidation(context, 'an activity was not an object', raw);
-  const { id, activity_type, date, net_amount, symbol, qty, status } = raw;
-  runValidationRules(
+type ValidationRules = ReadonlyArray<readonly [failed: boolean, message: string]>;
+
+function activityRules(raw: Record<string, unknown>): ValidationRules {
+  const { id, date, net_amount, status } = raw;
+  return [
+    [typeof id !== 'string' || id === '', 'id must be a non-empty string'],
+    [typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date), 'date must be YYYY-MM-DD'],
+    [!isFiniteNumericString(net_amount), 'net_amount must be a numeric string'],
     [
-      [typeof id !== 'string' || id === '', 'id must be a non-empty string'],
-      [activity_type !== 'CIL', "activity_type must be 'CIL'"],
-      [typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date), 'date must be YYYY-MM-DD'],
-      [!isFiniteNumericString(net_amount), 'net_amount must be a numeric string'],
-      [typeof symbol !== 'string' || symbol === '', 'symbol must be a non-empty string'],
-      [qty != null && !isFiniteNumericString(qty), 'qty must be a numeric string or null'],
-      [
-        status !== 'executed' && status !== 'correct' && status !== 'canceled',
-        "status must be 'executed', 'correct' or 'canceled'",
-      ],
+      status !== 'executed' && status !== 'correct' && status !== 'canceled',
+      "status must be 'executed', 'correct' or 'canceled'",
     ],
-    context,
-    raw,
-  );
+  ];
 }
 
-function validateCashInLieuActivities(body: unknown, context: string): AlpacaCashInLieuActivity[] {
-  if (!Array.isArray(body)) failValidation(context, 'expected an array', body);
-  for (const raw of body) validateCashInLieuActivity(raw, context);
-  return body as AlpacaCashInLieuActivity[];
+function cashInLieuRules(raw: Record<string, unknown>): ValidationRules {
+  const { activity_type, symbol, qty } = raw;
+  return [
+    [activity_type !== 'CIL', "activity_type must be 'CIL'"],
+    [typeof symbol !== 'string' || symbol === '', 'symbol must be a non-empty string'],
+    [qty != null && !isFiniteNumericString(qty), 'qty must be a numeric string or null'],
+  ];
+}
+
+function activitiesValidator<T>(
+  rulesOf: (raw: Record<string, unknown>) => ValidationRules,
+): (body: unknown, context: string) => T[] {
+  return (body, context) => {
+    if (!Array.isArray(body)) failValidation(context, 'expected an array', body);
+    for (const raw of body) {
+      if (!isRecord(raw)) failValidation(context, 'an activity was not an object', raw);
+      runValidationRules([...activityRules(raw), ...rulesOf(raw)], context, raw);
+    }
+    return body as T[];
+  };
+}
+
+const validateCashInLieuActivities = activitiesValidator<AlpacaCashInLieuActivity>(cashInLieuRules);
+
+function cashActivitiesValidator(
+  types: readonly string[],
+): (body: unknown, context: string) => AlpacaCashActivity[] {
+  return activitiesValidator<AlpacaCashActivity>(({ activity_type }) => [
+    [
+      typeof activity_type !== 'string' || !types.includes(activity_type),
+      `activity_type must be one of ${types.join(', ')}`,
+    ],
+  ]);
 }
 
 export const ALPACA_ACTIVITY_PAGE_SIZE = 100;
@@ -456,18 +480,43 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   }
 
   async listCashInLieu(after: string, pageToken?: string): Promise<AlpacaCashInLieuActivity[]> {
+    return this.listActivities(
+      '/v2/account/activities/CIL',
+      { after },
+      pageToken,
+      'listCashInLieu',
+      validateCashInLieuActivities,
+    );
+  }
+
+  async listCashActivities(
+    types: readonly string[],
+    after: string,
+    pageToken?: string,
+  ): Promise<AlpacaCashActivity[]> {
+    return this.listActivities(
+      '/v2/account/activities',
+      { activity_types: types.join(','), after },
+      pageToken,
+      'listCashActivities',
+      cashActivitiesValidator(types),
+    );
+  }
+
+  private async listActivities<T>(
+    path: string,
+    filter: Readonly<Record<string, string>>,
+    pageToken: string | undefined,
+    context: string,
+    validate: (body: unknown, context: string) => T[],
+  ): Promise<T[]> {
     const query = new URLSearchParams({
-      after,
+      ...filter,
       direction: 'asc',
       page_size: String(ALPACA_ACTIVITY_PAGE_SIZE),
     });
     if (pageToken !== undefined) query.set('page_token', pageToken);
-    return this.request<AlpacaCashInLieuActivity[]>(
-      `/v2/account/activities/CIL?${query.toString()}`,
-      { method: 'GET' },
-      'listCashInLieu',
-      validateCashInLieuActivities,
-    );
+    return this.request<T[]>(`${path}?${query.toString()}`, { method: 'GET' }, context, validate);
   }
 
   async getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null> {

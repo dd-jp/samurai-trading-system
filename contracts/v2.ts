@@ -486,6 +486,21 @@ export interface BrokerCashInLieuReader {
   read(sinceDate: string): Promise<readonly BrokerCashInLieu[]>;
 }
 
+// Non-trade cash the broker books outside any fill (dividends, interest, fees); amount is signed in
+// the venue's currency, positive for cash paid to the account
+export interface BrokerCashActivity {
+  readonly activity_id: string;
+  readonly activity_type: string;
+  readonly activity_date: string;
+  readonly amount: number;
+  readonly status: BrokerActivityStatus;
+}
+
+export interface BrokerCashActivityReader {
+  readonly venue: Venue;
+  read(sinceDate: string): Promise<readonly BrokerCashActivity[]>;
+}
+
 export type BrokerMode = 'paper' | 'live';
 
 export type ReconcileSource = 'broker' | 'simulated';

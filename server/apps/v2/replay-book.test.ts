@@ -505,6 +505,58 @@ describe('live-mode replay inputs (#2035)', () => {
     db.close();
   });
 
+  it('keeps the broker activities a day read before its first reconcile, rewinding any read after it (#2035 item 5)', () => {
+    const db = store();
+    const activity = db.prepare(
+      `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+         trading_date, recorded_at, broker_mode, activity_id, activity_type, activity_date, status)
+       VALUES ('alpaca', ?, 'USD', ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)`,
+    );
+    activity.run(
+      'anchor',
+      12_000,
+      0,
+      'go-live',
+      '2026-10-01',
+      '2026-10-01T07:30:00.000Z',
+      null,
+      null,
+      null,
+      null,
+    );
+    activity.run(
+      'activity',
+      4,
+      null,
+      'activity:div-1:executed',
+      DAY,
+      `${DAY}T07:20:00.000Z`,
+      'div-1',
+      'DIV',
+      '2026-10-02',
+      'executed',
+    );
+    activity.run(
+      'activity',
+      -4,
+      null,
+      'activity:div-1:canceled',
+      DAY,
+      `${DAY}T07:50:00.000Z`,
+      'div-1',
+      'DIV',
+      '2026-10-02',
+      'canceled',
+    );
+    reconcile(db, DAY, 'live');
+    const copy = rewoundCopy(db, DAY, `${DAY}T07:00:00.000Z`);
+    expect(
+      copy.prepare('SELECT reference FROM v2_cash_anchors ORDER BY anchor_row_id').all(),
+    ).toEqual([{ reference: 'go-live' }, { reference: 'activity:div-1:executed' }]);
+    copy.close();
+    db.close();
+  });
+
   it('holds the first mirrorable broker reconcile and the day anchor to the replay', () => {
     const journal = store();
     const replayed = store();

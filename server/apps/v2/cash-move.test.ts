@@ -75,6 +75,7 @@ describe('recordCashMove', () => {
       cashQuote: 13_000,
       fillSeq: 0,
       brokerMode: 'live',
+      tradingDate: '2026-10-01',
     });
     db.close();
   });
@@ -93,6 +94,7 @@ describe('main', () => {
         cashQuote: 11_000,
         fillSeq: 0,
         brokerMode: 'live',
+        tradingDate: '2026-10-01',
       });
       expect(() => main(['withdrawal', ...FLAGS, '--store', store], clock)).toThrow(/append-only/);
     } finally {

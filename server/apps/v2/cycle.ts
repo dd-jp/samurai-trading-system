@@ -4,6 +4,7 @@ import type {
   BookLedger,
   BookSpec,
   BrokerBookReader,
+  BrokerCashActivityReader,
   BrokerMode,
   ControlReader,
   DecisionJournal,
@@ -37,6 +38,7 @@ import type {
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
+import { readBrokerCashActivities } from './cash-activities.js';
 import type { CashAnchorLedger } from './cash-anchor.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
@@ -93,6 +95,7 @@ export interface CycleDeps {
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp: number | undefined;
   readonly cashAnchors?: CashAnchorLedger | undefined;
+  readonly cashActivities?: BrokerCashActivityReader | undefined;
   readonly controls: ControlReader;
   readonly market: MarketData;
   readonly clock: Clock;
@@ -2063,6 +2066,7 @@ async function syncBooksThenReconcile(
   const thrown = await syncStepThrows(cycle);
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
+  await readBrokerCashActivities(deps, tradingDate);
   if (thrown.length === 0) return reconcileOrBlockEntries(deps, tradingDate);
   return blockEntriesOnThrows(deps, tradingDate, thrown);
 }
