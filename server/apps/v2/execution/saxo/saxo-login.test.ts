@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,7 +10,7 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildAuthorizeUrl,
@@ -399,6 +400,11 @@ describe('tokenFilePath', () => {
   it('is under data/saxo-tokens, one file per environment', () => {
     expect(tokenFilePath('sim')).toMatch(/data\/saxo-tokens\/sim\.json$/);
     expect(tokenFilePath('live')).toMatch(/data\/saxo-tokens\/live\.json$/);
+  });
+
+  it('resolves under the directory holding package.json', () => {
+    const root = dirname(dirname(dirname(tokenFilePath('sim'))));
+    expect(existsSync(join(root, 'package.json'))).toBe(true);
   });
 
   it('is anchored to the repo root, not the working directory (review round 1, finding 1)', () => {
