@@ -676,7 +676,7 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
     expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_timed_out']);
   });
 
-  it('stops the leg at the cap during a Saxo token refresh, which still lands its rotation (#2052)', async () => {
+  it('holds the capped leg until a Saxo token rotation already sent is saved (#2052)', async () => {
     const tokenPath = join(mkdtempSync(join(tmpdir(), 'cfd-token-')), 'live.json');
     writeTokenFile(tokenPath, {
       environment: 'live',
@@ -712,7 +712,8 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
     };
     const path = tempPath();
     const { entries, logger } = recorder();
-    await cfdCatalogueRefreshFor(
+    let settled = false;
+    const run = cfdCatalogueRefreshFor(
       {},
       {
         tradingDate: AS_OF,
@@ -723,8 +724,13 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
         tokenPath,
         timeLimitMs: 20,
       },
-    ).run();
-    expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_timed_out']);
+    )
+      .run()
+      .finally(() => {
+        settled = true;
+      });
+    await sleep(80);
+    expect(settled).toBe(false);
     expect(stopped).not.toHaveBeenCalled();
 
     answer(
@@ -738,9 +744,14 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
         { status: 201, headers: { 'content-type': 'application/json' } },
       ),
     );
-    await vi.waitFor(() => expect(stopped).toHaveBeenCalledOnce());
-    expect(gateway).not.toHaveBeenCalled();
+    await run;
+    expect(stopped).toHaveBeenCalledOnce();
     expect(JSON.parse(readFileSync(tokenPath, 'utf8')).refreshToken).toBe('refresh-rotated');
+    expect(entries.map((entry) => entry.event)).toEqual([
+      'saxo_token_refreshed',
+      'v2_cfd_catalogue_refresh_timed_out',
+    ]);
+    expect(gateway).not.toHaveBeenCalled();
     expect(readKeepAliveState(tokenPath)).toEqual({});
     expect(existsSync(path)).toBe(false);
   });

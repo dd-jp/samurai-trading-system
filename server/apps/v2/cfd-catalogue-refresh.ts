@@ -396,6 +396,25 @@ function timedOut(limitMs: number, logger: Logger): void {
   );
 }
 
+// Registered before the cap can fire, so the cap's settle waits for the session to stop and a
+// token rotation already sent to Saxo is written before the cycle can exit
+function stoppedAtCap(session: CfdSession, limit: TimeLimit): CfdSession {
+  let stopping: Promise<void> | undefined;
+  const stop = () => {
+    stopping ??= session.stop();
+    return stopping;
+  };
+  limit
+    .atomic(
+      () =>
+        new Promise<void>((resolve) => {
+          limit.signal.addEventListener('abort', () => resolve(stop()), { once: true });
+        }),
+    )
+    .catch(() => undefined);
+  return { ...session, stop };
+}
+
 // The catalogue is not bars, so the leg adds nothing to the bar report; a failure keeps the
 // previous file, which the router stops trusting after CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS
 export function cfdCatalogueRefreshFor(env: NodeJS.ProcessEnv, leg: CfdCatalogueLeg): BarRefresh {
@@ -406,7 +425,7 @@ export function cfdCatalogueRefreshFor(env: NodeJS.ProcessEnv, leg: CfdCatalogue
   const limitMs = leg.timeLimitMs ?? CFD_CATALOGUE_TIME_LIMIT_MS;
   const work = async (limit: TimeLimit) => {
     const session = connectUnlessLost(() => connect(env, leg.logger, limit.signal), ledger);
-    await refreshInSession(session, leg, ledger, limit);
+    await refreshInSession(stoppedAtCap(session, limit), leg, ledger, limit);
   };
   return {
     run: async () => {

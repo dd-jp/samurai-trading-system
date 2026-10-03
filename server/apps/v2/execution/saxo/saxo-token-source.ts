@@ -146,7 +146,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
 
   async getAccessToken(): Promise<string> {
     this.load();
-    await this.inFlight;
+    if (this.inFlight !== undefined) await this.untilAborted(this.inFlight);
     const record = this.record;
     this.assertSessionUsable(record);
     if (Date.parse(record.accessTokenExpiresAt) <= this.clock.now().getTime()) {

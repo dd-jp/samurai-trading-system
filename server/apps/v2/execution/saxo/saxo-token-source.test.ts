@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import {
   existsSync,
   mkdtempSync,
@@ -845,6 +846,36 @@ describe('SaxoTokenRefresher', () => {
 
       await expect(refresher.getAccessToken()).rejects.toThrow(/could not be renewed/);
       expect(refresher.sessionState()).toMatchObject({ status: 'active', failedAttempts: 1 });
+      await refresher.stop();
+    });
+
+    it('releases a caller waiting on a refresh the timer started, at the abort', async () => {
+      expired();
+      const controller = new AbortController();
+      const { refresher, scheduled, calls } = build({
+        signal: controller.signal,
+        fetchImpl: (_url, init) => {
+          calls.push(String(init.body));
+          return new Promise<Response>(() => {});
+        },
+      });
+      refresher.start();
+      expect(scheduled[0]?.delayMs).toBe(0);
+      scheduled[0]?.callback();
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+      const waiting = refresher.getAccessToken();
+      controller.abort(new Error('cap'));
+      await expect(waiting).rejects.toThrow('cap');
+    });
+
+    it('leaves no abort listener behind once a refresh settles', async () => {
+      expired();
+      const controller = new AbortController();
+      const { refresher } = build({ signal: controller.signal });
+
+      expect(await refresher.getAccessToken()).toBe(ROTATED_ACCESS);
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
       await refresher.stop();
     });
 
