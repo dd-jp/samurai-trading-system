@@ -49,7 +49,18 @@ describe('parseCashMoveArgs', () => {
     );
     expect(() =>
       parseCashMoveArgs(['deposit', ...FLAGS.slice(0, 6), '--date', '5/10/2026']),
-    ).toThrow(/--date 5\/10\/2026 is not YYYY-MM-DD/);
+    ).toThrow(/--date 5\/10\/2026 is not a YYYY-MM-DD date/);
+    expect(() =>
+      parseCashMoveArgs(['deposit', ...FLAGS.slice(0, 6), '--date', '2026-13-45']),
+    ).toThrow(/--date 2026-13-45 is not a YYYY-MM-DD date/);
+    expect(() =>
+      parseCashMoveArgs(['deposit', ...FLAGS.slice(0, 6), '--date', '2026-02-30']),
+    ).toThrow(/--date 2026-02-30 is not a YYYY-MM-DD date/);
+    for (const amount of ['0x10', '1e3', ' 5', '-5', '']) {
+      expect(() =>
+        parseCashMoveArgs(['deposit', '--amount', amount, ...FLAGS.slice(0, 2), ...FLAGS.slice(4)]),
+      ).toThrow(`--amount ${amount} is not a decimal`);
+    }
     expect(() => parseCashMoveArgs(['deposit', '--venue'])).toThrow(CASH_MOVE_USAGE);
     expect(() => parseCashMoveArgs(['deposit', 'venue', 'alpaca'])).toThrow(CASH_MOVE_USAGE);
   });

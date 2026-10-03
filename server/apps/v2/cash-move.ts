@@ -36,11 +36,20 @@ function required(parsed: ReadonlyMap<string, string>, name: string): string {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const DECIMAL = /^\d+(\.\d+)?$/;
 
 function isoDate(value: string): string {
-  if (!ISO_DATE.test(value))
-    throw new Error(`--date ${value} is not YYYY-MM-DD\n${CASH_MOVE_USAGE}`);
+  const at = Date.parse(`${value}T00:00:00Z`);
+  const real =
+    ISO_DATE.test(value) && Number.isFinite(at) && new Date(at).toISOString().startsWith(value);
+  if (!real) throw new Error(`--date ${value} is not a YYYY-MM-DD date\n${CASH_MOVE_USAGE}`);
   return value;
+}
+
+function decimal(value: string): number {
+  if (!DECIMAL.test(value))
+    throw new Error(`--amount ${value} is not a decimal\n${CASH_MOVE_USAGE}`);
+  return Number(value);
 }
 
 function oneOf(allowed: ReadonlySet<string>, value: string, what: string): string {
@@ -58,7 +67,7 @@ export function parseCashMoveArgs(argv: readonly string[]): {
     move: {
       kind: oneOf(KINDS, kind, 'move') as CashMove['kind'],
       venue: oneOf(VENUES, required(parsed, 'venue'), 'venue') as Venue,
-      amountQuote: Number(required(parsed, 'amount')),
+      amountQuote: decimal(required(parsed, 'amount')),
       reference: required(parsed, 'reference'),
       tradingDate: isoDate(required(parsed, 'date')),
     },
