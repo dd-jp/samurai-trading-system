@@ -1,4 +1,3 @@
-export { BOOK_CURRENCY, isBookCurrency, isPenceCurrency } from './book-currency.js';
 export type { Clock } from './clock.js';
 export { SimulatedClock, SystemClock } from './clock.js';
 export { digest } from './digest.js';
@@ -18,7 +17,6 @@ export {
 export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export { jsonOrTextResult } from './http/json-or-text.js';
-export { toPolygonDate, validateRawPolygonAggregate } from './http/polygon-aggregates.js';
 export {
   classifyStatus,
   isServerErrorStatus,
@@ -46,10 +44,7 @@ export type { InjectableTimers } from './injectable-timers.js';
 export { DEFAULT_INJECTABLE_TIMERS } from './injectable-timers.js';
 export { isFiniteNumber } from './is-finite-number.js';
 export { parseIsoInstant } from './iso-instant.js';
-export { median } from './median.js';
-export { NO_DATA_MARKER } from './no-data-marker.js';
 export { isString, readOhlcvBar } from './ohlcv-bar.js';
-export { parseJsonColumnAsObject } from './parse-json-column.js';
 export { credentialReader } from './require-credential.js';
 export {
   describeThrown,
@@ -61,21 +56,6 @@ export {
 } from './safe-log.js';
 export { maskAndCap, maskCredentials, sanitizeLogText } from './sanitize-log-text.js';
 export { readSeededFile } from './seeded-file.js';
-export {
-  guardedWrite,
-  installContinueOnFault,
-  retireStdoutOnFirstError,
-  watchStdoutErrors,
-} from './stdout-fault-guard.js';
-export {
-  assertThresholdsWithinBounds,
-  assertThresholdWithinBounds,
-  boundFor,
-  GUARDED_THRESHOLD_BOUNDS,
-  GUARDED_THRESHOLD_NAMES,
-  isThresholdBoundViolation,
-  ThresholdBoundViolationError,
-} from './threshold-bounds.js';
 export { currentTraceId, runWithTraceId } from './trace-context.js';
 export type {
   AssetClass,

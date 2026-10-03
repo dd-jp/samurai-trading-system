@@ -20,7 +20,6 @@ export type {
   DebateLog,
   DebateRoundLogEntry,
   DebateTerminationCause,
-  ExitReason,
   Fill,
   OpenPosition,
   OrderState,

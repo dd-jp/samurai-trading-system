@@ -36,7 +36,7 @@ import {
 describe('isMutableProductionFile', () => {
   it.each([
     ['server/apps/v2/risk/breakers.ts', true],
-    ['contracts/pipeline.ts', true],
+    ['contracts/v2.ts', true],
     ['server/apps/v2/risk/breakers.test.ts', false],
     ['client/src/App.tsx', false],
     ['server/tools/mutation-local.ts', false],

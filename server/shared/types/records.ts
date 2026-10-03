@@ -32,7 +32,7 @@ export interface DebateRoundLogEntry {
   created_at: Date;
 }
 
-export type { BrokerFillId, ExitReason, OrderState } from '../../../contracts/index.js';
+export type { BrokerFillId, OrderState } from '../../../contracts/index.js';
 
 import type { BrokerFillId, ExitReason, OrderState } from '../../../contracts/index.js';
 

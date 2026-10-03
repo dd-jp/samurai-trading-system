@@ -15,7 +15,7 @@ The v1 dashboard (the v3 Rail, old ADR-0021) is replaced, not restyled (G13 (1))
 - the Glance / Live / Review tabs and the Live/Control arm toggle (`TradingArmWire`);
 - Seal, StanceStrip, Track, ColdStart and the stance/conviction displays built around the v1 six-stage pipeline and its 0.55 floor;
 - momentum, crypto and intraday panels;
-- `DashboardSnapshot` and the rest of the v1 wire types. v2 gets its own wire types (§6); the v1 ones are deleted in Step 5's client pass.
+- `DashboardSnapshot` and the rest of the v1 wire types. v2 gets its own wire types (§6); the v1 ones were deleted in v1 teardown wave 5 (#1748).
 
 Kept: the hosting rule (old ADR-0019, restated in the ADR: co-located with the orchestrator, LAN-only, fail-closed bind guard, Bearer token; no tunnel, no VPN), the design tokens and fonts, the Vite build and the lint/test rules.
 
