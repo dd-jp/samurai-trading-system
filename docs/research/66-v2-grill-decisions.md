@@ -501,7 +501,9 @@ David ruled in chat on 2026-10-03, one question at a time; the rulings are recor
 2. **Debate-engine survivors go to `server/shared/debate/`.** All 17 files move unchanged, `llm/` included. `server/shared/llm/` (the Nous helpers) stays a separate module.
 3. **The other §5.2 proposals are confirmed as written.** The backtest survivors move to `server/apps/v2/evidence/`, the market-data service to `server/providers/calendar/`, and market intelligence to `server/providers/news/` with the G18 Grok/X files. `bar-store` and `saxo-bars` stay where they are.
 
-*Built 2026-10-03 (the §5.2 rename PR); doc 77 §5.2 has the move notes.*
+4. **The CRAP splits land first, in their own PR on the old paths (2026-10-03).** The CRAP gate diffs with `--no-renames`, so every moved function counts as touched, and five functions above 7 had been split inside the rename PR. David ruled that those splits land first as a separate PR on the pre-move paths, as #2032 did, so the rename PR #2061 is a pure move: every file moves unchanged except its import paths.
+
+*Built 2026-10-03 (#2061, after the separate CRAP-split PR); doc 77 §5.2 has the move notes.*
 
 ## Still open
 

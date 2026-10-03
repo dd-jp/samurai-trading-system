@@ -427,9 +427,9 @@ These 44 production files are reachable by both methods and live outside `server
 
 `server/shared/` (37 reachable files), `contracts/` and the repo gate tools already carry neutral names and stay where they are.
 
-### 5.2 status (2026-10-03, the §5.2 rename PR)
+### 5.2 status (2026-10-03, #2061)
 
-Moved in this PR with `git mv`, file contents unchanged except import paths:
+Moved in #2061 with `git mv`, file contents unchanged except import paths. The CRAP-gate splits these files needed land first in a separate PR on the old paths (doc 66, §5.2 homes ruling 4), so #2061 is a pure move:
 
 | From | To | Files |
 |---|---|---|
@@ -441,10 +441,10 @@ Moved in this PR with `git mv`, file contents unchanged except import paths:
 
 - server/pipeline/, server/tools/backtest/ and the two old provider directories are gone. `bar-store` and `saxo-bars` stay.
 - The momentum helpers are re-exported from `server/shared/index.ts`, so every importer reaches them through the shared barrel; the oxlint `**/shared/**` pattern already refuses a deep import.
-- `.oxlintrc.json`: each moved directory's barrel pattern is renamed in every override (`**/shared/debate/**`, `**/calendar/**`, `**/news/**`; `**/evidence/**` inside `server/apps/v2/` and `**/v2/evidence/**` elsewhere, because `client/src/components/evidence/` would match the bare name). The old server/tools/backtest override is dropped: `server/apps/v2/**` now covers the evidence files with a superset of its patterns. The news barrel's own override gains the debate pattern, and it now imports `DEBATE_BAR_TIMEFRAME_MS` and `floorToBar` through the debate barrel instead of from the declaring file.
+- `.oxlintrc.json`: each moved directory's barrel pattern is renamed in every override (`**/shared/debate/**`, `**/calendar/**`, `**/news/**`; `**/evidence/**` inside `server/apps/v2/` and `**/v2/evidence/**` elsewhere, because `client/src/components/evidence/` would match the bare name). The old server/tools/backtest override is dropped: `server/apps/v2/**` now covers the evidence files with a superset of its patterns. Inside `server/shared/`, where the moved modules reach each other by short relative paths that the `**/shared/…/**` patterns never see, the `server/shared/**`, `llm`, `store` and `debate` overrides also carry folder-name patterns (`**/llm/**`, `**/debate/**`, `**/market/**`, each module leaving out its own name, and the debate override exempting its own `./llm/` folder), so a deep import between them fails as it did on the old paths. The news barrel's own override gains the debate pattern, and it now imports `DEBATE_BAR_TIMEFRAME_MS` and `floorToBar` through the debate barrel instead of from the declaring file.
 - Mutation: the `TRADING_PATH_PREFIXES` entry and the `stryker.config.mjs` glob move to `server/shared/market/`. The evidence files leave the `server/tools/` exclusion and become advisory mutation targets under `server/apps/v2/`.
 - `npm run build:migrations` copies the archive migrations from their new path; the migration files themselves are untouched.
-- The CRAP gate diffs with `--no-renames`, so every moved function counts as touched. Five functions with complexity above 7 (`runDebate`, the spend cap's refusal path, the Grok agent's archive write, and the X search and Nous sentiment clients' parsing) and two at 7 with partial coverage were split into helpers in the same PR, with the same checks in the same order; their tests pass unchanged.
+- The CRAP gate diffs with `--no-renames`, so every moved function counts as touched. Five functions with complexity above 7 (`runDebate`, the spend cap's refusal path, the Grok agent's archive write, and the X search and Nous sentiment clients' parsing) and two at 7 with partial coverage are split into helpers, with the same checks in the same order, in a separate PR on the old paths that lands ahead of #2061 (David, 2026-10-03; the #2032 precedent). Their tests pass unchanged.
 
 ## 6. KEEP by ruling, and held for a ruling
 
@@ -566,7 +566,7 @@ Doc citations each wave must fix, outside the immutable record directories: wave
 2. **saxo-http-client.ts**: option A, B or C (§7). This decides #1930, #1868 and #1426, and whether the Q2 hold in §6 is released.
 3. **The v1 CGT matcher** (§6): hold it until #1947 ports it, or delete it and port from tag v1-final? This also decides store/fill-row.ts and, together with Q2, book-currency.ts.
 4. **G18 scope** (§6): does "the X/social code" also cover the v1 sentiment analyst, the MI ingest agent and the item scorer? G18 also says "v1's news feed is left as it is", and mi-ingest-agent.ts is that feed's ingest. If the answer is yes, those files move from waves 3 and 4 to KEEP.
-5. **MOVE targets and names** (§5): confirm the proposed homes, and whether `BrokerAdapter` moves from `server/shared` to `contracts/` in the same wave. *Ruled 2026-10-02 and 2026-10-03 (doc 66): §5.1's homes confirmed and built (#2034); `BrokerAdapter` to `contracts/` with ISO 8601 strings, in its own PR after the MOVE (#2038). §5.2's homes ruled 2026-10-03 (doc 66) and moved in the §5.2 rename PR.*
+5. **MOVE targets and names** (§5): confirm the proposed homes, and whether `BrokerAdapter` moves from `server/shared` to `contracts/` in the same wave. *Ruled 2026-10-02 and 2026-10-03 (doc 66): §5.1's homes confirmed and built (#2034); `BrokerAdapter` to `contracts/` with ISO 8601 strings, in its own PR after the MOVE (#2038). §5.2's homes ruled 2026-10-03 (doc 66) and moved in #2061.*
 6. **Alpaca crypto emulation** (§5.1): cut it from the live Alpaca adapter inside the MOVE PR, or in its own PR?
 7. **Order**: waves 1 to 5 and then the MOVE wave, as proposed, or the MOVE first so v2 stops importing `pipeline/` before any deletion? The wave settling in §3.4 holds either way.
 8. **Momentum backtest scripts** (wave 1, server/tools/backtest/momentum): doc 67 Step 3 already sends the momentum loss-budget copy "with Step 5". Confirm that doc 70's numbers are then reproducible only from tag v1-final.

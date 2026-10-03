@@ -243,7 +243,7 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
     {
       name: 'LLM request budget: maxTokens',
       input: '{"maxTokens":1024}',
-      where: 'providers/market-intelligence/grok/x-search-client.ts',
+      where: 'providers/news/grok/x-search-client.ts',
     },
     {
       name: 'order idempotency key (not a credential, an id)',
