@@ -1,6 +1,6 @@
 # Tech Stack
 
-The v2 stack as it stands on `main`. Rulings live in [doc 66](research/66-v2-grill-decisions.md) (design pass D1–D8) and the [ADR](adr/0001-samurai-v2.md); this register records what the tree actually uses. v1's stack (Alpaca-only MVP, ccxt, IBKR, pybroker, the orchestrator tick loop) was deleted in the v1 teardown (#1748) and is preserved at tag `v1-final`.
+The v2 stack as it stands on `main`. Rulings live in [doc 66](research/66-v2-grill-decisions.md) (design pass D1–D8) and the [ADR](adr/0001-samurai-v2.md); this register records what the tree actually uses. v1's stack (the Alpaca-only MVP and the orchestrator tick loop, plus the planned ccxt, IBKR and pybroker integrations that never shipped) is gone with the v1 teardown (#1748); v1's register is preserved at tag `v1-final`.
 
 ---
 
@@ -10,7 +10,7 @@ The v2 stack as it stands on `main`. Rulings live in [doc 66](research/66-v2-gri
 |-------|--------|-------|
 | Everything that trades | TypeScript on Node 24+ (`engines` in `package.json`), run with `tsx` | `server/` |
 | Shared types | `contracts/`: the client/server wire model plus the server's internal module interfaces (D4); imports nothing from `server/` or `client/` | `contracts/v2.ts`, `contracts/v2-wire.ts`, `contracts/v2-signals.ts` |
-| Structure | One-process modular monolith with typed module boundaries: data, signal, risk, execution, journal (D4), enforced by `fallow:boundaries` | `server/apps/v2/` (`data/`, `signal/`, `risk/`, `execution/`, `journal/`), `.fallowrc.json` |
+| Structure | One-process modular monolith with typed module boundaries: data, signal, risk, execution, journal (D4), enforced by oxlint `no-restricted-imports` overrides and proven by a boundaries test; `fallow:boundaries` separately keeps `client/` and `server/` importing each other only through `contracts/` | `server/apps/v2/` (`data/`, `signal/`, `risk/`, `execution/`, `journal/`), `.oxlintrc.json`, `server/apps/v2/boundaries.test.ts`, `.fallowrc.json` |
 | Composition root | `npm run v2:run`; backtest, paper and live share the code and differ in venue and clock adapters | `server/apps/v2/index.ts`, `server/apps/v2/compose.ts` |
 | Research sidecar | Optional offline Python via parquet/ONNX/strategy-spec files, with a TS parity test (G3). No agent framework (no LangGraph, CrewAI or LangSmith) | doc 66 |
 
@@ -51,7 +51,7 @@ The v2 stack as it stands on `main`. Rulings live in [doc 66](research/66-v2-gri
 | Host | Always-on MacBook; a move to a VPS is decided at the live gate (D1) | doc 66 |
 | Dead-man's switch | healthchecks.io ping (D1, D5) | `server/apps/v2/heartbeat.ts` |
 | Alerts and approvals | Telegram bot over the Bot API, alerts by severity (D5) | `server/apps/v2/alerts.ts`, `server/apps/v2/api/telegram-bot.ts` |
-| Dashboard | Vite + React client, served by a loopback-default HTTP server with bearer-token auth (`SAMURAI_DASHBOARD_TOKEN`); no Grafana (D5) | `client/`, `server/apps/v2/api/server.ts`, `server/apps/v2/api/auth.ts`, `docs/specs/dashboard-spec.md` |
+| Dashboard | Vite + React client, served by a loopback-default HTTP server with bearer-token auth (`SAMURAI_DASHBOARD_TOKEN`); no Grafana (D5) | `client/`, `server/apps/v2/api/main.ts`, `server/apps/v2/api/server.ts`, `server/apps/v2/api/auth.ts`, `docs/specs/dashboard-spec.md` |
 | Signals endpoint | Loopback-only HTTP intake for external US-long signals (#1941) | `server/apps/v2/signals/server.ts`, `docs/specs/signals-sleeve-spec.md` |
 
 ## Testing and static analysis
