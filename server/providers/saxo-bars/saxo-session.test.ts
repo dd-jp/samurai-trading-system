@@ -10,14 +10,14 @@ const ENV = { SAXO_LIVE_APP_KEY: 'key', SAXO_LIVE_APP_SECRET: 'secret' };
 const inMinutes = (minutes: number): string =>
   new Date(Date.now() + minutes * 60_000).toISOString();
 
-function tokenFile(): string {
+function tokenFile(accessMinutes = 20): string {
   const path = join(mkdtempSync(join(tmpdir(), 'saxo-session-')), 'live.json');
   writeFileSync(
     path,
     JSON.stringify({
       accessToken: 'a',
       refreshToken: 'r',
-      accessTokenExpiresAt: inMinutes(20),
+      accessTokenExpiresAt: inMinutes(accessMinutes),
       refreshTokenExpiresAt: inMinutes(60),
       environment: 'live',
       obtainedAt: inMinutes(0),
@@ -70,5 +70,15 @@ describe('liveTokenSource', () => {
     const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
     expect(() => liveTokenSource(ENV, '/nonexistent/live.json')).toThrow(/Saxo token dead/);
     expect(stdout).toHaveBeenCalledWith(expect.stringContaining('saxo_session_lost'));
+  });
+
+  it('stops a token refresh at the given signal, before spending the refresh token (#2052)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const controller = new AbortController();
+    controller.abort(new Error('cap'));
+    const tokens = liveTokenSource(ENV, tokenFile(-1), recorder().logger, controller.signal);
+    await expect(tokens.getAccessToken()).rejects.toThrow('cap');
+    await tokens.stop();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

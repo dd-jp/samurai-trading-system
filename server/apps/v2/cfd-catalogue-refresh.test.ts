@@ -19,7 +19,7 @@ import {
 import { createVenueRouter, loadCfdCatalogue } from './data/index.js';
 import { readKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
 import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
-import { StaticSaxoTokenSource } from './execution/saxo/saxo-token-source.js';
+import { SaxoTokenRefresher, StaticSaxoTokenSource } from './execution/saxo/saxo-token-source.js';
 import { LSE_LINES } from './signal/index.js';
 
 const GATEWAY = 'https://gw.test/openapi';
@@ -674,5 +674,74 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
     await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 2_000 });
     expect(existsSync(path)).toBe(false);
     expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_timed_out']);
+  });
+
+  it('stops the leg at the cap during a Saxo token refresh, which still lands its rotation (#2052)', async () => {
+    const tokenPath = join(mkdtempSync(join(tmpdir(), 'cfd-token-')), 'live.json');
+    writeTokenFile(tokenPath, {
+      environment: 'live',
+      accessToken: 'access-fixture',
+      refreshToken: 'refresh-fixture',
+      accessTokenExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      obtainedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    let answer: (response: Response) => void = () => {};
+    const gateway = vi.fn();
+    const stopped = vi.fn();
+    const connect = (_env: NodeJS.ProcessEnv, logger: Logger, signal: AbortSignal) => {
+      const tokens = new SaxoTokenRefresher({
+        environment: 'live',
+        config: { tokenUrl: 'https://token.test', appKey: 'k', appSecret: 's' },
+        tokenPath,
+        logger,
+        signal,
+        fetchImpl: () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      });
+      tokens.start();
+      return {
+        api: new SaxoReadOnlyApi(tokens, GATEWAY, gateway, () => Promise.resolve(), signal),
+        stop: async () => {
+          await tokens.stop();
+          stopped();
+        },
+      };
+    };
+    const path = tempPath();
+    const { entries, logger } = recorder();
+    await cfdCatalogueRefreshFor(
+      {},
+      {
+        tradingDate: AS_OF,
+        constituents: ['AAPL'],
+        path,
+        logger,
+        connect,
+        tokenPath,
+        timeLimitMs: 20,
+      },
+    ).run();
+    expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_timed_out']);
+    expect(stopped).not.toHaveBeenCalled();
+
+    answer(
+      new Response(
+        JSON.stringify({
+          access_token: 'access-rotated',
+          refresh_token: 'refresh-rotated',
+          expires_in: 1200,
+          refresh_token_expires_in: 3600,
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    await vi.waitFor(() => expect(stopped).toHaveBeenCalledOnce());
+    expect(gateway).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(tokenPath, 'utf8')).refreshToken).toBe('refresh-rotated');
+    expect(readKeepAliveState(tokenPath)).toEqual({});
+    expect(existsSync(path)).toBe(false);
   });
 });

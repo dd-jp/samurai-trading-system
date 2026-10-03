@@ -128,6 +128,7 @@ describe('SaxoTokenRefresher', () => {
       backoff?: { baseMs: number; maxMs: number };
       sessionLostAlerts?: SaxoSessionLostAlertChannel;
       sleep?: (ms: number) => Promise<void>;
+      signal?: AbortSignal;
     } = {},
   ) {
     const clock = movableClock();
@@ -151,6 +152,7 @@ describe('SaxoTokenRefresher', () => {
       ...(overrides.writeRecord === undefined ? {} : { writeRecord: overrides.writeRecord }),
       ...(overrides.backoff === undefined ? {} : { backoff: overrides.backoff }),
       ...(overrides.sleep === undefined ? {} : { sleep: overrides.sleep }),
+      ...(overrides.signal === undefined ? {} : { signal: overrides.signal }),
       ...(overrides.sessionLostAlerts === undefined
         ? {}
         : { sessionLostAlerts: overrides.sessionLostAlerts }),
@@ -799,6 +801,91 @@ describe('SaxoTokenRefresher', () => {
       await failing.refresher.renewNow();
       expect(existsSync(`${path}.lock`)).toBe(false);
       await failing.refresher.stop();
+    });
+  });
+
+  describe('under an abort signal (#2052)', () => {
+    const expired = () =>
+      writeTokenFile(
+        path,
+        savedRecord({ accessTokenExpiresAt: new Date(START - 1_000).toISOString() }),
+      );
+
+    it('stops waiting on a refresh at the abort, and still persists the rotation it sent', async () => {
+      expired();
+      const controller = new AbortController();
+      let answer: (response: Response) => void = () => {};
+      const { refresher, entries } = build({
+        signal: controller.signal,
+        fetchImpl: () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+            controller.abort(new Error('cap'));
+          }),
+      });
+
+      await expect(refresher.getAccessToken()).rejects.toThrow('cap');
+      expect(readTokenFile(path)?.refreshToken).toBe(SAVED_REFRESH);
+
+      answer(tokenResponse({ access_token: ROTATED_ACCESS, refresh_token: ROTATED_REFRESH }));
+      await refresher.stop();
+      expect(readTokenFile(path)?.refreshToken).toBe(ROTATED_REFRESH);
+      expect(refresher.sessionState()).toMatchObject({ status: 'active', failedAttempts: 0 });
+      expect(entries.map((entry) => entry.event)).toEqual(['saxo_token_refreshed']);
+    });
+
+    it('passes a refresh failure through when the signal never aborts', async () => {
+      expired();
+      const { refresher } = build({
+        signal: new AbortController().signal,
+        fetchImpl: async () => {
+          throw new Error('network down');
+        },
+      });
+
+      await expect(refresher.getAccessToken()).rejects.toThrow(/could not be renewed/);
+      expect(refresher.sessionState()).toMatchObject({ status: 'active', failedAttempts: 1 });
+      await refresher.stop();
+    });
+
+    it('spends no refresh token once the signal has aborted', async () => {
+      expired();
+      const controller = new AbortController();
+      controller.abort(new Error('cap'));
+      const { refresher, calls } = build({ signal: controller.signal });
+
+      await expect(refresher.getAccessToken()).rejects.toThrow('cap');
+      expect(calls).toEqual([]);
+      expect(existsSync(`${path}.lock`)).toBe(false);
+    });
+
+    it('stops waiting on a held lock when the signal aborts', async () => {
+      expired();
+      writeFileSync(`${path}.lock`, 'peer');
+      const controller = new AbortController();
+      let sleeps = 0;
+      const { refresher, calls } = build({
+        signal: controller.signal,
+        sleep: async () => {
+          sleeps += 1;
+          controller.abort(new Error('cap'));
+        },
+      });
+
+      await expect(refresher.getAccessToken()).rejects.toThrow('cap');
+      await refresher.whenIdle();
+      expect(sleeps).toBe(1);
+      expect(calls).toEqual([]);
+      expect(refresher.sessionState()).toMatchObject({ status: 'active', failedAttempts: 0 });
+    });
+
+    it('hands out a live token without consulting the signal', async () => {
+      writeTokenFile(path, savedRecord());
+      const controller = new AbortController();
+      controller.abort(new Error('cap'));
+      const { refresher } = build({ signal: controller.signal });
+
+      expect(await refresher.getAccessToken()).toBe(SAVED_ACCESS);
     });
   });
 

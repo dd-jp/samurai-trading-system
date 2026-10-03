@@ -82,6 +82,7 @@ export interface SaxoTokenRefresherDeps {
   backoff?: { baseMs: number; maxMs: number };
   sessionLostAlerts?: SaxoSessionLostAlertChannel;
   sleep?: ((ms: number) => Promise<void>) | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 function oauthFailureStatus(cause: unknown): number | undefined {
@@ -107,6 +108,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
   private readonly writeRecord: (path: string, record: SaxoTokenFileRecord) => void;
   private readonly backoff: { baseMs: number; maxMs: number };
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly signal: AbortSignal | undefined;
 
   private record: SaxoTokenFileRecord | undefined;
   private lostReason: string | undefined;
@@ -118,6 +120,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
 
   constructor(private readonly deps: SaxoTokenRefresherDeps) {
     this.clock = deps.clock ?? new SystemClock();
+    this.signal = deps.signal;
     this.fetchImpl =
       deps.fetchImpl ?? ((url, init) => fetchWithTimeout(url, init, DEFAULT_TIMEOUT_MS));
     this.timers = deps.timers ?? DEFAULT_TIMERS;
@@ -147,7 +150,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     const record = this.record;
     this.assertSessionUsable(record);
     if (Date.parse(record.accessTokenExpiresAt) <= this.clock.now().getTime()) {
-      await this.refreshNow();
+      await this.untilAborted(this.refreshNow());
       const renewed = this.record;
       this.assertSessionUsable(renewed);
       if (Date.parse(renewed.accessTokenExpiresAt) <= this.clock.now().getTime()) {
@@ -249,10 +252,10 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
   }
 
   private async runRefresh(): Promise<void> {
-    if (this.record === undefined || this.stopped || this.lostReason !== undefined) return;
+    if (!this.refreshable()) return;
     const release = await this.acquireLock();
     if (release === undefined) {
-      this.onFailure('saxo_token_refresh_failed', new Error('the token refresh lock stayed held'));
+      this.onLockUnavailable();
       return;
     }
     try {
@@ -266,11 +269,35 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     }
   }
 
+  private onLockUnavailable(): void {
+    if (this.signal?.aborted === true) return;
+    this.onFailure('saxo_token_refresh_failed', new Error('the token refresh lock stayed held'));
+  }
+
+  // The signal never cuts a token POST already sent: Saxo refresh tokens are single-use, so a
+  // response dropped mid-flight would strand the session until the next manual login
+  private untilAborted(refresh: Promise<void>): Promise<void> {
+    const signal = this.signal;
+    if (signal === undefined) return refresh;
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      refresh.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+  }
+
+  private refreshable(): boolean {
+    if (this.signal?.aborted === true) return false;
+    return this.record !== undefined && !this.stopped && this.lostReason === undefined;
+  }
+
   private async acquireLock(): Promise<(() => void) | undefined> {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       const release = tryLockTokenFile(this.deps.tokenPath, this.clock.now().getTime());
       if (release !== undefined) return release;
       await this.sleep(LOCK_POLL_MS);
+      if (this.signal?.aborted === true) return undefined;
     }
     return undefined;
   }
