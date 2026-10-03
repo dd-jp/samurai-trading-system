@@ -1,12 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { inMemoryCopyOf, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type {
   AlpacaAccount,
   AlpacaBrokerClient,
@@ -263,6 +263,21 @@ function leaksIn(text: string, held: readonly string[] = []): string[] {
   return [...FORBIDDEN, ...held].filter((value) => text.includes(value));
 }
 
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
+
+afterAll(() => migrated.close());
+
+function seedCapital(storePath: string, clock: SimulatedClock): void {
+  const seed = inMemoryCopyOf(migrated);
+  new CapitalConfigStore(seed, clock).setYear(2026, START_CAPITAL_GBP, LOSS_CAP_GBP);
+  writeFileSync(storePath, seed.serialize());
+  seed.close();
+}
+
 describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
   let directory: string;
   const configuredScreen = LSE_LIQUIDITY_SCREEN.value;
@@ -287,9 +302,7 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
     const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
     writeSaxoTokenFiles(directory, clock.now());
     const storePath = join(directory, 'paper.sqlite');
-    const seed = openSharedStore(storePath);
-    new CapitalConfigStore(seed, clock).setYear(2026, START_CAPITAL_GBP, LOSS_CAP_GBP);
-    seed.close();
+    seedCapital(storePath, clock);
     const alpacaClient = fakeAlpacaClient(clock);
     const captured: CapturedRequest[] = [];
     captureEgress(captured);
@@ -366,9 +379,7 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
     };
     const debated: string[] = [];
     const storePath = join(directory, 'paper.sqlite');
-    const seed = openSharedStore(storePath);
-    new CapitalConfigStore(seed, clock).setYear(2026, START_CAPITAL_GBP, LOSS_CAP_GBP);
-    seed.close();
+    seedCapital(storePath, clock);
     const root = composeV2Root({
       ...rootOptionsFor(false, ENTRY_DATE, { ...ENV }, clock, { log: (entry) => logs.push(entry) }),
       ...fixtures,

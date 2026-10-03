@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
@@ -11,7 +11,12 @@ import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
 import { type LogEntry, SimulatedClock } from '../../../shared/index.js';
-import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import {
+  guardedStore,
+  inMemoryCopyOf,
+  openSharedStore,
+  type StoreHandle,
+} from '../../../shared/store/index.js';
 import { JournalReader } from '../api/journal-reader.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../execution/alpaca/alpaca-client.js';
 import { composeV2Root, type V2Root, type V2RootOptions } from '../index.js';
@@ -42,6 +47,13 @@ interface Fixtures {
 const dirs: string[] = [];
 const handles: StoreHandle[] = [];
 const roots: V2Root[] = [];
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
+
+afterAll(() => migrated.close());
 
 afterEach(() => {
   for (const root of roots.splice(0)) root.close();
@@ -92,7 +104,7 @@ async function writeFixtures(capital: boolean = true): Promise<Fixtures> {
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\n');
   const storePath = join(directory, 'v2.sqlite');
-  const db = openSharedStore(storePath);
+  const db = inMemoryCopyOf(migrated);
   if (capital) {
     new CapitalConfigStore(db, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
       2026,
@@ -100,6 +112,7 @@ async function writeFixtures(capital: boolean = true): Promise<Fixtures> {
       1_500,
     );
   }
+  writeFileSync(storePath, db.serialize());
   db.close();
   return {
     directory,

@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { inMemoryCopyOf, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import {
   type LeaseWait,
   pidAlive,
@@ -15,6 +15,13 @@ let now = new Date('2026-09-30T06:30:00.000Z');
 const clock = { now: () => now };
 const handles: StoreHandle[] = [];
 const dirs: string[] = [];
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
+
+afterAll(() => migrated.close());
 
 afterEach(() => {
   for (const handle of handles.splice(0)) handle.close();
@@ -25,13 +32,22 @@ afterEach(() => {
 function sharedPath(): string {
   const dir = mkdtempSync(join(tmpdir(), 'v2-lease-'));
   dirs.push(dir);
-  return join(dir, 'v2.sqlite');
+  const path = join(dir, 'v2.sqlite');
+  writeFileSync(path, migrated.serialize());
+  return path;
+}
+
+function tracked(handle: StoreHandle): StoreHandle {
+  handles.push(handle);
+  return handle;
 }
 
 function open(path: string): StoreHandle {
-  const handle = openSharedStore(path);
-  handles.push(handle);
-  return handle;
+  return tracked(openSharedStore(path));
+}
+
+function fresh(): StoreHandle {
+  return tracked(inMemoryCopyOf(migrated));
 }
 
 const everyoneAlive = () => true;
@@ -53,7 +69,7 @@ describe('RunLease', () => {
   });
 
   it('refuses a second acquire from the same live process', () => {
-    const lease = new RunLease(open(':memory:'), clock, everyoneAlive, 7);
+    const lease = new RunLease(fresh(), clock, everyoneAlive, 7);
     expect(lease.tryAcquire('cycle')).toBeTypeOf('function');
     expect(lease.tryAcquire('signals')).toBeUndefined();
   });
@@ -88,7 +104,7 @@ describe('RunLease', () => {
   });
 
   it('the lease table holds at most one row', () => {
-    const db = open(':memory:');
+    const db = fresh();
     new RunLease(db, clock, everyoneAlive, 1).tryAcquire('cycle');
     expect(() =>
       db
@@ -135,7 +151,7 @@ function fakeWait(timeoutMs: number): LeaseWait & { slept: number[] } {
 
 describe('withRunLease', () => {
   it('runs under the lease and releases it', async () => {
-    const lease = new RunLease(open(':memory:'), clock, everyoneAlive, 1);
+    const lease = new RunLease(fresh(), clock, everyoneAlive, 1);
     const result = await withRunLease(lease, 'cycle', fakeWait(0), () => {
       expect(lease.current()).toMatchObject({ purpose: 'cycle' });
       return Promise.resolve(42);
@@ -145,7 +161,7 @@ describe('withRunLease', () => {
   });
 
   it('releases the lease when the run throws', async () => {
-    const lease = new RunLease(open(':memory:'), clock, everyoneAlive, 1);
+    const lease = new RunLease(fresh(), clock, everyoneAlive, 1);
     await expect(
       withRunLease(lease, 'signals', fakeWait(0), () => Promise.reject(new Error('boom'))),
     ).rejects.toThrow('boom');

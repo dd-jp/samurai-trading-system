@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import type { LogEntry } from '../../../shared/index.js';
 import {
@@ -53,6 +53,13 @@ const OWNER = 424242;
 const STRANGER = 777;
 const NOW = new Date('2026-09-29T10:00:00.000Z');
 const dirs: string[] = [];
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
+
+afterAll(() => migrated.close());
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -68,7 +75,7 @@ function migratedStore(): string {
   const dir = mkdtempSync(join(tmpdir(), 'v2-telegram-'));
   dirs.push(dir);
   const path = join(dir, 'v2.sqlite');
-  openSharedStore(path).close();
+  writeFileSync(path, migrated.serialize());
   return path;
 }
 

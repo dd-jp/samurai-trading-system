@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   OrderSide,
   Sleeve,
@@ -14,7 +14,7 @@ import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { inMemoryCopyOf, openSharedStore } from '../../shared/store/index.js';
 import type { CommandRunner } from './backup.js';
 import { type BarRefresh, NO_BAR_REFRESH } from './bar-refresh.js';
 import { inSequence } from './bar-refresh-core.js';
@@ -139,14 +139,24 @@ const OPEN_EVERY_DAY: VenueSessionGate = {
   timeStopPausedVenues: () => [],
 };
 
-function seededStore(path = ':memory:'): StoreHandle {
-  const db = openSharedStore(path);
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
+
+afterAll(() => migrated.close());
+
+function seededStore(path: string): StoreHandle {
+  const db = inMemoryCopyOf(migrated);
   new CapitalConfigStore(db, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
     2026,
     1_000,
     1_500,
   );
-  return db;
+  writeFileSync(path, db.serialize());
+  db.close();
+  return openSharedStore(path);
 }
 
 function count(root: { db: { prepare: (sql: string) => { get: () => unknown } } }, table: string) {
@@ -1948,7 +1958,7 @@ describe('newsWiringFor', () => {
   const rows = (db: StoreHandle) => db.prepare('SELECT symbol, status, reason FROM v2_news').all();
 
   it('journals no_key for a UK stock when MARKETAUX_API_KEY is empty, and leaves ETFs and dry runs alone', async () => {
-    const db = openSharedStore(':memory:');
+    const db = inMemoryCopyOf(migrated);
     const { news, ukNews } = newsWiringFor(options, db, quiet);
     expect(ukNews).toBeDefined();
     expect(await news.headlines('ISF', '2026-09-29', NOW)).toEqual([]);
@@ -1956,7 +1966,7 @@ describe('newsWiringFor', () => {
     expect(await news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
     expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_key', reason: 'no_api_key' }]);
 
-    const dryDb = openSharedStore(':memory:');
+    const dryDb = inMemoryCopyOf(migrated);
     const dry = newsWiringFor({ ...options, dryRun: true, marketauxApiKey: 'k' }, dryDb, quiet);
     expect(dry.ukNews).toBeUndefined();
     expect(await dry.news.headlines('VOD', '2026-09-29', NOW)).toEqual([]);
@@ -1964,14 +1974,14 @@ describe('newsWiringFor', () => {
   });
 
   it('treats an unset key like an empty one', async () => {
-    const db = openSharedStore(':memory:');
+    const db = inMemoryCopyOf(migrated);
     const { news } = newsWiringFor({ ...options, marketauxApiKey: undefined }, db, quiet);
     await news.headlines('VOD', '2026-09-29', NOW);
     expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_key', reason: 'no_api_key' }]);
   });
 
   it('sends every non-ETF name to the US source until a pool supplies UK stocks', async () => {
-    const db = openSharedStore(':memory:');
+    const db = inMemoryCopyOf(migrated);
     const urls: string[] = [];
     vi.stubGlobal(
       'fetch',
@@ -1990,7 +2000,7 @@ describe('newsWiringFor', () => {
   it('journals US headlines to v2_news without the keys or request headers (#1981)', async () => {
     vi.stubEnv('ALPACA_API_KEY', 'alpaca-key-id-0123456789');
     vi.stubEnv('ALPACA_API_SECRET', 'alpaca-secret-0123456789');
-    const db = openSharedStore(':memory:');
+    const db = inMemoryCopyOf(migrated);
     const news = {
       news: [
         {
@@ -2037,7 +2047,7 @@ describe('newsWiringFor', () => {
   });
 
   it('uses an injected news source untouched', async () => {
-    const db = openSharedStore(':memory:');
+    const db = inMemoryCopyOf(migrated);
     const injected = { headlines: () => Promise.resolve(['injected']) };
     const { news, ukNews } = newsWiringFor({ ...options, newsSource: injected }, db, quiet);
     expect(news).toBe(injected);
