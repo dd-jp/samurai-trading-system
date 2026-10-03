@@ -6,6 +6,7 @@ import {
   SaxoBrokerTimeoutError,
 } from './saxo-broker-errors.js';
 import type { SaxoOrderRequest } from './saxo-client.js';
+import { saxoAccountKeyEnvVar } from './saxo-environment.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SaxoHttpBrokerClient } from './saxo-http-client.js';
 
 function permissiveLimiter(): TokenBucket {
@@ -1484,7 +1485,7 @@ describe('SaxoHttpBrokerClient', () => {
       ['sim', 'SAXO_SIM_ACCOUNT_KEY'],
       ['live', 'SAXO_LIVE_ACCOUNT_KEY'],
     ] as const)('pins the %s account from %s, trimmed', async (environment, name) => {
-      expect(SAXO_CREDENTIAL_ENV_VARS[environment].accountKey).toBe(name);
+      expect(saxoAccountKeyEnvVar(environment)).toBe(name);
       vi.stubEnv(name, '  fake-cfd-acct  ');
       const fetchMock = twoAccountFetch();
 

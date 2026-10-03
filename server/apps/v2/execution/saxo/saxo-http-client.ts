@@ -26,7 +26,11 @@ import type {
   SaxoOrderRequest,
 } from './saxo-client.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
-import { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS } from './saxo-environment.js';
+import {
+  SAXO_CREDENTIAL_ENV_VARS,
+  SAXO_GATEWAY_URLS,
+  saxoAccountKeyEnvVar,
+} from './saxo-environment.js';
 import type { SaxoTokenSource } from './saxo-token-source.js';
 import { StaticSaxoTokenSource } from './saxo-token-source.js';
 
@@ -416,8 +420,8 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     const names = SAXO_CREDENTIAL_ENV_VARS[environment];
     this.tokenSource = resolveSaxoTokenSource(options, environment, names.token);
     this.baseUrl = resolveSaxoBaseUrl(options, names.gateway, environment);
-    this.accountKeyEnvVar = names.accountKey;
-    this.pinnedAccountKey = options.accountKey ?? saxoFromEnv(names.accountKey);
+    this.accountKeyEnvVar = saxoAccountKeyEnvVar(environment);
+    this.pinnedAccountKey = options.accountKey ?? saxoFromEnv(this.accountKeyEnvVar);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
     this.rateLimiter = resolveSaxoRateLimiter(options);
