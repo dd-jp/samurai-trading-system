@@ -281,7 +281,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
           'close or a full holiday is unknown, and assuming a normal 16:00 ET close is the ' +
           'DANGEROUS direction (#684) — extend US_HOLIDAYS/US_EARLY_CLOSE_DAYS for this date, or ' +
           "source the live table from Alpaca's GET /v2/calendar instead of this hand-entered " +
-          'one (alpaca-session-calendar.ts).',
+          'one.',
       );
     }
     return US_EARLY_CLOSE_DAYS.has(key) ? US_EARLY_CLOSE_MINUTES : SESSION_CLOSE_MINUTES;

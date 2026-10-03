@@ -21,7 +21,7 @@ Market Data Service ─┐
 | Stage | Directory | What it does |
 |-------|-----------|-------------|
 | Market Data Service | `server/providers/market-data-service/` | OHLCV bars + deterministic technical indicators (RSI, ATR, moving averages) with point-in-time discipline. Sources: Alpaca (equities+crypto), ccxt, IBKR, routed by asset class |
-| Market Intelligence | `server/providers/market-intelligence/` | Sentiment/news context via the Grok agent over Nous; WorldMonitor CII consumer (adapter parked until `WORLDMONITOR_API_KEY` is set) |
+| Market Intelligence | `server/providers/market-intelligence/` | Sentiment/news context via the Grok agent over Nous |
 | Analysts | `server/pipeline/analysts/` | Stateless per-tick agents (technical, fundamental, sentiment). Pure function of data + weight | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 | Debate Engine | `server/pipeline/debate-engine/` | Bull/Bear/Mediator personas, round orchestration, semantic disagreement detection, weighted conviction scoring, LLM rate limiting + spend cap |
 | Trader | `server/pipeline/trader/` | Consolidates debate result into broker-agnostic bracket (OrderIntent). Position-aware branching, setup vectors, cosine precedent lookup | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
@@ -120,7 +120,6 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 | --- | --- |
 | `POLYGON_API_KEY` | Stage-2 historical bars (free tier: 5 calls/min, ~2 years of history — a fallback source, not the backfill source) |
 | `SAXO_SIM_ACCOUNT_KEY`, `SAXO_LIVE_ACCOUNT_KEY` | v2 Saxo client (`server/apps/v2/execution/saxo/saxo-http-client.ts`, #1868): the `AccountKey` to trade when the token sees more than one account (GIA + CFD); with two or more and none set, the client refuses. Each environment reads only its own variable, an explicit `accountKey` option wins, and a blank value counts as unset. Treated as a secret by the LLM request guard (#1881). Real keys go in `.env.local` only |
-| `WORLDMONITOR_API_KEY` | WorldMonitor CII feed (ADR-0002). The adapter stays parked until this is set |
 | `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`). Binding `HOST` to anything other than `127.0.0.1`/`::1` refuses to start unless `SAMURAI_DASHBOARD_TOKEN` (below) is also set — see #887/ADR-0019 |
 | `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/apps/service-api/bind-guard.ts` and `request-auth.ts` | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
@@ -255,7 +254,7 @@ samurai-trading-system/
 │   │   └── feedback-loop/ # Attribution, weights, metrics, guardrails
 │   ├── providers/         # external data
 │   │   ├── market-data-service/   # OHLCV + indicators + sources (incl. the free stack)
-│   │   └── market-intelligence/   # Sentiment (Grok/Nous), WorldMonitor CII
+│   │   └── market-intelligence/   # Sentiment (Grok/Nous)
 │   ├── shared/            # Types, clock, SQLite store + migrations, HTTP, LLM
 │   └── tools/             # offline only, never on the money path
 │       ├── backtest/      # Fill simulation, validation, replay, Stage-2 selection
@@ -365,4 +364,3 @@ All twelve charted components are implemented and under test; the pipeline runs 
 - **One real Alpaca paper tick** — ADR-0004 §5's "wiring validated" bar. `npm run smoke` is offline and does not clear it.
 - **14-day unattended soak** (#238) — the "paper trading achieved" bar. Shorter soaks have run, and a hand-placed lifecycle probe on 2026-08-26 took one position entry → bracket → flat-by-close → venue fill → store close against live paper Alpaca (surfacing and fixing #921/#922). The qualifying 14-day unattended window has not.
 - **A Saxo order adapter** — Saxo Capital Markets UK (GIA) over OpenAPI is the decided live venue (ADR-0015, 2026-08-30) and no adapter exists. ccxt and IBKR remain data sources only; IBKR was disqualified as a venue on cost (#906).
-- **WorldMonitor CII feed** — consumer seam built, live wiring parked pending `WORLDMONITOR_API_KEY`.
