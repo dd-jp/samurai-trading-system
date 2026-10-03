@@ -1,7 +1,4 @@
-import {
-  DEBATE_BAR_TIMEFRAME_MS,
-  floorToBar,
-} from '../../pipeline/debate-engine/debate-log-store.js';
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../shared/debate/index.js';
 import type { Clock } from '../../shared/index.js';
 import type {
   AgentIntelligence,

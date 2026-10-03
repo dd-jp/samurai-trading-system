@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
+import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
 import { classifySignalWindow } from './window.js';
 
 const calendar = new UsEquityRegularHoursCalendar();

@@ -1,7 +1,7 @@
 import { request as httpRequest } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SignalWire } from '../../../../contracts/index.js';
-import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
+import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import {
   createSignalsServer,

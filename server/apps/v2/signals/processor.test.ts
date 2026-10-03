@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ParquetBarStore } from '../../../providers/bar-store/index.js';
+import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
 import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
-} from '../../../pipeline/debate-engine/index.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
-import { ParquetBarStore } from '../../../providers/bar-store/index.js';
-import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
+} from '../../../shared/debate/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 import { type LogEntry, SimulatedClock } from '../../../shared/index.js';
 import {
   guardedStore,
