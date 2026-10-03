@@ -13,7 +13,13 @@ import type { VenueSessionGate } from './data/index.js';
 import { createBrokerAccess } from './execution/index.js';
 import { composeV2Root } from './index.js';
 import { formatReplay } from './replay.js';
-import { journalledDay, journalledSessions, rebuildBooks, rewoundCopy } from './replay-book.js';
+import {
+  journalledDay,
+  journalledSessions,
+  rebuildBooks,
+  rewoundCopy,
+  tradingDivergences,
+} from './replay-book.js';
 import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore, PaperBooks } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
@@ -416,6 +422,55 @@ describe('journalledDay', () => {
     expect(journalledDay(db, '2026-09-30').dryRun).toBe(true);
     db.close();
   });
+});
+
+describe('tradingDivergences rescales cutover (#2019)', () => {
+  const CUTOVER = '2026-09-20T07:00:00.000Z';
+  const EXTRA = {
+    kind: 'row_extra',
+    stage: 'rescales',
+    key: 'debate/primary|UP|anchor|2026-09-18|1',
+  } as const;
+
+  function stores(cutover: string | undefined) {
+    const journal = openSharedStore(':memory:');
+    journal.prepare('DELETE FROM schema_migrations WHERE version = 87').run();
+    if (cutover !== undefined) {
+      journal
+        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (87, ?)')
+        .run(cutover);
+    }
+    const replayed = openSharedStore(':memory:');
+    replayed
+      .prepare(
+        `INSERT INTO v2_rescales (trading_date, book_id, instrument, source, ratio, anchor_date,
+           fills_before, qty_before, qty_after, entry_before, entry_after, recorded_at)
+         VALUES ('2026-09-21', 'debate/primary', 'UP', 'anchor', 1, '2026-09-18', 0, 1, 1, 10, 10,
+           '2026-09-21T07:31:00.000Z')`,
+      )
+      .run();
+    return { journal, replayed };
+  }
+
+  it.each([
+    ['marked at the cutover', CUTOVER, '2026-09-19T07:30:00.000Z', CUTOVER, [EXTRA]],
+    ['marked before the cutover', CUTOVER, CUTOVER, '2026-09-20T06:59:59.999Z', []],
+    ['unmarked, started at the cutover', CUTOVER, CUTOVER, undefined, [EXTRA]],
+    ['unmarked, started before it', CUTOVER, '2026-09-20T06:59:59.999Z', undefined, []],
+    ['with no run instant journalled', CUTOVER, undefined, undefined, [EXTRA]],
+    ['in a store that never applied the migration', undefined, CUTOVER, CUTOVER, []],
+  ])(
+    'holds a day %s to its rescales as the cutover says',
+    (_, cutover, startedAt, markedAt, expected) => {
+      const { journal, replayed } = stores(cutover);
+      expect(
+        tradingDivergences({ journal, replayed, tradingDate: '2026-09-21', markedAt, startedAt })
+          .divergences,
+      ).toEqual(expected);
+      journal.close();
+      replayed.close();
+    },
+  );
 });
 
 describe('journalledSessions', () => {
