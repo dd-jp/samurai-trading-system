@@ -363,7 +363,7 @@ re-derive it.
 `response.json()` exactly once and reads the entire parsed body in one pass: `choices[0].message`
 for the completion text, and `usage.{prompt,completion}_tokens` for spend metering — both atomic
 reads of a single complete JSON document. `NousMessagesClient.createMessage`
-(`server/pipeline/debate-engine/llm/nous-messages-client.ts`) wraps that single string into one
+(`server/pipeline/debate-engine/llm/nous-messages-client.ts`) wraps that single string into one <!-- cite-exempt: historical — moved to server/shared/debate/llm/ in the #1748 rename -->
 `content` block; downstream, the debate engine `JSON.parse`s that whole string as
 `{stance, rationale, confidence}` (the same shape §1's probe checks). None of this reads content
 incrementally — nothing in the call chain is written to act on a partial response.

@@ -592,7 +592,7 @@ originally claimed for it is **wrong** — corrected 2026-09-08 while working [#
   **But it is not a replacement for what we have, and flat-by-close was never "a hardcoded
   15:30Z".** Since #668 the Trader flattens at `close − N` resolved through
   `TradingCalendar.sessionEnd`, and `LseRegularHoursCalendar`
-  (`server/providers/market-data-service/trading-calendar.ts`) already models LSE hours, UK bank
+  (`server/providers/market-data-service/trading-calendar.ts`) already models LSE hours, UK bank <!-- cite-exempt: historical — moved to server/providers/calendar/trading-calendar.ts in the #1748 rename -->
   holidays and 12:30 half-days through `Intl.DateTimeFormat` on `Europe/London`. DST is therefore
   already handled against the IANA zone, which is *more* robust than a session feed — and
   `TimeZoneOffset: "01:00:00"` is the offset **right now**, a snapshot rather than a rule, so a

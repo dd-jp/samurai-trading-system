@@ -10,7 +10,7 @@ Throwaway artifact to react to. Not a spec, not a design, not committed to.
 
 Generated at **one model tier only** (Opus). The ticket asked for a Sonnet/Opus side-by-side; producing a fake "Sonnet-style" output would be fabricated evidence flowing straight into the model-tier decision, so it was descoped deliberately rather than faked. [Decide: model tier for the invalidation pass](https://github.com/dd-jp/samurai-trading-system/issues/340) stays blocked.
 
-Both outputs below are generated. Neither is from a live API call — there is no wired client to call — so treat them as *plausible* output shapes, not measured behaviour. The Bear output uses the verbatim prompt from `server/pipeline/debate-engine/personas.ts:142`.
+Both outputs below are generated. Neither is from a live API call — there is no wired client to call — so treat them as *plausible* output shapes, not measured behaviour. The Bear output uses the verbatim prompt from `server/pipeline/debate-engine/personas.ts:142`. <!-- cite-exempt: historical — moved to server/shared/debate/personas.ts in the #1748 rename -->
 
 ---
 

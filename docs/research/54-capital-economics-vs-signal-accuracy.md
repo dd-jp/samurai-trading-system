@@ -132,7 +132,7 @@ withdrawn here.** Each is a 15-minute-cadence, crypto-in-scope number, and crypt
 
 - **$0.0060 per debate run**, 4 calls, ~13s — ADR-0008 §2's #657 amendment, measured over 1,151 calls.
 - **Spend no longer scales with the tick.** Post-#617 the debate is keyed to `DEBATE_BAR_TIMEFRAME_MS = 1h`
-  (`server/pipeline/debate-engine/debate-log-store.ts:48`), so τ = 2 min buys exit resolution, not debates.
+  (`server/pipeline/debate-engine/debate-log-store.ts:48`), so τ = 2 min buys exit resolution, not debates. <!-- cite-exempt: historical — moved to server/shared/debate/debate-log-store.ts in the #1748 rename -->
 - Runs/day = *instruments debated* × *hourly bars in the session* ≈ **7 × 7 = 49**, i.e. **$0.294/day**.
 
 **Both factors are labelled assumptions, not settled facts.** Seven is doc 52's underlying count and the

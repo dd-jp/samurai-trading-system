@@ -46,7 +46,7 @@ none of them survive unmodified:
    one session. Leveraged products decay on multi-day holds (volatility drag) — they are close
    to the wrong instrument for swing, not just a suboptimal one.
 3. **The validation model** (PBO ≤ 0.05, MinBTL trial budget, DSR significance — CONTEXT.md,
-   `server/tools/backtest/overfitting.ts`) assumes a *fixed* strategy tested out-of-sample.
+   `server/apps/v2/evidence/overfitting.ts`) assumes a *fixed* strategy tested out-of-sample.
    "Self-improving" — if it means the strategy logic or thresholds change themselves during
    live operation, not just Feedback-Loop-style weight recalibration inside a fixed
    model — burns a fresh trial on every self-edit. Left unaddressed, this makes every PBO/DSR
