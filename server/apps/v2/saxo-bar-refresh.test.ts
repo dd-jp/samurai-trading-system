@@ -1143,6 +1143,25 @@ describe('saxoBarRefreshFor time cap and session stop (#1900)', () => {
     ]);
   });
 
+  it('hands the session the cap signal, which aborts at the cap (#2027)', async () => {
+    const signals: AbortSignal[] = [];
+    const hung = {
+      instrumentDetails: () => new Promise<InstrumentDetails>(() => undefined),
+      dailyHistory: () => new Promise<ChartPage>(() => undefined),
+    };
+    await saxoBarRefreshFor({}, TRADING_DATE, recorder().logger, {
+      storeRoot: storeRoot(),
+      tokenPath: tokenPath(),
+      connect: (_env, _logger, signal) => {
+        signals.push(signal);
+        return { api: hung, stop: async () => undefined };
+      },
+      timeLimitMs: 20,
+    }).run();
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   it('writes nothing once the cap has passed, then stops the session', async () => {
     const root = storeRoot();
     const api = fakeApi(allLineFixtures());

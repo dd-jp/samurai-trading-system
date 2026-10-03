@@ -7,6 +7,7 @@ import { SaxoReadOnlyApi } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
 import {
   buildCfdCatalogue,
+  type CfdReferenceApi,
   type CfdScope,
   catalogueText,
   cfdCatalogueRefreshFor,
@@ -497,7 +498,7 @@ describe('cfdCatalogueRefreshFor', () => {
       { tradingDate: AS_OF, constituents: ['AAPL'], path, logger, connect, tokenPath: tempPath() },
     );
     expect(await leg.run()).toEqual({ attempted: 0, updated: [], noNewBars: [], failed: [] });
-    expect(connect).toHaveBeenCalledWith({ K: 'v' }, logger);
+    expect(connect).toHaveBeenCalledWith({ K: 'v' }, logger, expect.any(AbortSignal));
     expect(stop).toHaveBeenCalledOnce();
     expect(loadCfdCatalogue(path)?.lookup('AAPL')?.uic).toBe(211);
     expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_written']);
@@ -599,5 +600,79 @@ describe('cfdCatalogueRefreshFor', () => {
       ['v2_cfd_catalogue_refresh_failed', 'warn'],
     ]);
     expect(entries[0]?.message).toContain('was lost (the refresh token was rejected (HTTP 401))');
+  });
+});
+
+describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('cuts a catalogue fetch that never answers at the cap, aborts it and logs the cut', async () => {
+    const path = tempPath();
+    const fetched: AbortSignal[] = [];
+    const hung = (signal: AbortSignal) =>
+      new SaxoReadOnlyApi(
+        new StaticSaxoTokenSource('t'),
+        GATEWAY,
+        (_url, _token, fetchSignal) => {
+          fetched.push(fetchSignal);
+          return new Promise<FetchResult>((_, reject) => {
+            fetchSignal.addEventListener('abort', () => reject(fetchSignal.reason), {
+              once: true,
+            });
+          });
+        },
+        () => Promise.resolve(),
+        signal,
+      );
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const connect = vi.fn((_env: NodeJS.ProcessEnv, _logger: Logger, signal: AbortSignal) => ({
+      api: hung(signal),
+      stop,
+    }));
+    const { entries, logger } = recorder();
+    const leg = cfdCatalogueRefreshFor(
+      {},
+      { tradingDate: AS_OF, constituents: ['AAPL'], path, logger, connect, timeLimitMs: 20 },
+    );
+    const started = Date.now();
+    expect(await leg.run()).toEqual({ attempted: 0, updated: [], noNewBars: [], failed: [] });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(fetched).toEqual([connect.mock.calls[0]?.[2]]);
+    expect(fetched[0]?.aborted).toBe(true);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+    expect(existsSync(path)).toBe(false);
+    expect(entries.map((entry) => [entry.event, entry.level])).toEqual([
+      ['v2_cfd_catalogue_refresh_timed_out', 'warn'],
+    ]);
+    expect(entries[0]?.message).toContain('cut at the 0.02 s cap');
+  });
+
+  it('writes no catalogue once the cap has passed, even when the pull answers later', async () => {
+    const path = tempPath();
+    const { api } = fakeSaxo();
+    const late: CfdReferenceApi = {
+      cfdInstrumentPage: async (...args) => {
+        await sleep(60);
+        return api.cfdInstrumentPage(...args);
+      },
+      cfdInstrumentDetails: (...args) => api.cfdInstrumentDetails(...args),
+      cfdInfoPrices: (...args) => api.cfdInfoPrices(...args),
+    };
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const { entries, logger } = recorder();
+    await cfdCatalogueRefreshFor(
+      {},
+      {
+        tradingDate: AS_OF,
+        constituents: ['AAPL'],
+        path,
+        logger,
+        connect: () => ({ api: late, stop }),
+        timeLimitMs: 20,
+      },
+    ).run();
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 2_000 });
+    expect(existsSync(path)).toBe(false);
+    expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_timed_out']);
   });
 });

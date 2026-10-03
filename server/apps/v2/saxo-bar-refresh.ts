@@ -409,7 +409,7 @@ export interface SaxoSession {
   readonly lostReason?: () => string | undefined;
 }
 
-type SaxoConnect = (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
+type SaxoConnect = (env: NodeJS.ProcessEnv, logger: Logger, signal: AbortSignal) => SaxoSession;
 
 // Each 429 costs a 65 s backoff and each request may wait 60 s, so an all-429 day runs past 1.5
 // hours; ten minutes covers a clean pull of the 22 lines with room for several backoffs
@@ -417,7 +417,7 @@ const SAXO_REFRESH_TIME_LIMIT_MS = 10 * 60_000;
 
 export interface SaxoBarRefreshDeps {
   readonly storeRoot?: string;
-  readonly connect?: (env: NodeJS.ProcessEnv, logger: Logger) => SaxoSession;
+  readonly connect?: (env: NodeJS.ProcessEnv, logger: Logger, signal: AbortSignal) => SaxoSession;
   readonly tokenPath?: string;
   readonly now?: () => Date;
   readonly timeLimitMs?: number;
@@ -467,7 +467,10 @@ async function refreshInSession(
 
 async function connectAndRefresh(leg: SaxoLeg, limit: TimeLimit): Promise<BarRefreshReport> {
   try {
-    const session = connectUnlessLost(() => leg.connect(leg.env, leg.ledger.logger), leg.ledger);
+    const session = connectUnlessLost(
+      () => leg.connect(leg.env, leg.ledger.logger, limit.signal),
+      leg.ledger,
+    );
     return await refreshInSession(session, leg, limit);
   } catch (error) {
     return unavailable(messageOf(error), leg.ledger.logger);
@@ -496,7 +499,9 @@ export function saxoBarRefreshFor(
     env,
     tradingDate,
     storeRoot: deps.storeRoot ?? DEFAULT_BAR_STORE_ROOT,
-    connect: deps.connect ?? ((liveEnv, log) => openSaxoLiveSession(liveEnv, deps.tokenPath, log)),
+    connect:
+      deps.connect ??
+      ((liveEnv, log, signal) => openSaxoLiveSession(liveEnv, deps.tokenPath, log, signal)),
     ledger: ledgerFor(deps, logger),
   };
   const limitMs = deps.timeLimitMs ?? SAXO_REFRESH_TIME_LIMIT_MS;

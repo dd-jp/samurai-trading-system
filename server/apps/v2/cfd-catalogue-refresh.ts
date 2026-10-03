@@ -7,7 +7,14 @@ import {
 } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
 import { isFiniteNumber } from '../../shared/index.js';
-import { type BarRefresh, logRefresh, messageOf } from './bar-refresh-core.js';
+import {
+  type BarRefresh,
+  logRefresh,
+  messageOf,
+  type TimeLimit,
+  UNLIMITED,
+  withinTimeLimit,
+} from './bar-refresh-core.js';
 import { type CfdInstrument, parseCfdCatalogue, type QuoteCurrency } from './data/index.js';
 import {
   connectUnlessLost,
@@ -330,9 +337,10 @@ export async function refreshCfdCatalogue(
   asOf: string,
   path: string,
   logger: Logger,
+  limit: TimeLimit = UNLIMITED,
 ): Promise<CfdCatalogueRefreshReport> {
   const report = await buildCfdCatalogue(api, scopes, asOf);
-  writeAtomically(path, catalogueText(report));
+  await limit.atomic(async () => writeAtomically(path, catalogueText(report)));
   logReport(report, path, logger);
   return report;
 }
@@ -343,7 +351,11 @@ export interface CfdSession {
   readonly lostReason?: () => string | undefined;
 }
 
-export type CfdSessionConnect = (env: NodeJS.ProcessEnv, logger: Logger) => CfdSession;
+export type CfdSessionConnect = (
+  env: NodeJS.ProcessEnv,
+  logger: Logger,
+  signal: AbortSignal,
+) => CfdSession;
 
 export interface CfdCatalogueLeg {
   readonly tradingDate: string;
@@ -353,33 +365,51 @@ export interface CfdCatalogueLeg {
   readonly connect?: CfdSessionConnect;
   readonly tokenPath?: string;
   readonly now?: () => Date;
+  readonly timeLimitMs?: number;
 }
 
 async function refreshInSession(
   session: CfdSession,
   leg: CfdCatalogueLeg,
   ledger: SaxoSessionLedger,
+  limit: TimeLimit,
 ): Promise<void> {
   try {
     const scopes = cfdScopes(leg.constituents);
-    await refreshCfdCatalogue(session.api, scopes, leg.tradingDate, leg.path, leg.logger);
+    await refreshCfdCatalogue(session.api, scopes, leg.tradingDate, leg.path, leg.logger, limit);
   } finally {
     noteSessionLoss(session.lostReason?.(), ledger);
     await session.stop();
   }
 }
 
+function timedOut(limitMs: number, logger: Logger): void {
+  logRefresh(
+    logger,
+    'warn',
+    'v2_cfd_catalogue_refresh_timed_out',
+    `CFD catalogue cut at the ${limitMs / 1000} s cap; every CFD route reads the last written file`,
+  );
+}
+
 // The catalogue is not bars, so the leg adds nothing to the bar report; a failure keeps the
 // previous file, which the router stops trusting after CFD_CATALOGUE_MAX_AGE_CALENDAR_DAYS
 export function cfdCatalogueRefreshFor(env: NodeJS.ProcessEnv, leg: CfdCatalogueLeg): BarRefresh {
   const connect: CfdSessionConnect =
-    leg.connect ?? ((liveEnv, logger) => openSaxoLiveSession(liveEnv, leg.tokenPath, logger));
+    leg.connect ??
+    ((liveEnv, logger, signal) => openSaxoLiveSession(liveEnv, leg.tokenPath, logger, signal));
   const ledger = ledgerFor(leg, leg.logger);
+  // A clean pull is a few search pages and Uic batches of 100; five minutes leaves room for a
+  // 60 s request timeout and a few 65 s 429 backoffs
+  const limitMs = leg.timeLimitMs ?? 5 * 60_000;
+  const work = async (limit: TimeLimit) => {
+    const session = connectUnlessLost(() => connect(env, leg.logger, limit.signal), ledger);
+    await refreshInSession(session, leg, ledger, limit);
+  };
   return {
     run: async () => {
       try {
-        const session = connectUnlessLost(() => connect(env, leg.logger), ledger);
-        await refreshInSession(session, leg, ledger);
+        await withinTimeLimit(limitMs, work, () => timedOut(limitMs, leg.logger));
       } catch (error) {
         logRefresh(
           leg.logger,

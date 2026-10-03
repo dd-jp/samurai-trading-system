@@ -17,6 +17,8 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { CommandRunner } from './backup.js';
 import { type BarRefresh, NO_BAR_REFRESH } from './bar-refresh.js';
+import { inSequence } from './bar-refresh-core.js';
+import { cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
 import type { CycleReport } from './cycle.js';
 import { pushDailySummary } from './daily-summary.js';
 import {
@@ -844,6 +846,56 @@ describe('composeV2Root', () => {
     expect(started.map((instant) => instant?.toISOString())).toEqual([
       `${ENTRY_DATE}T06:30:00.000Z`,
     ]);
+  });
+
+  it('runOnce runs the cycle after a CFD catalogue fetch that never answers is cut at the cap (#2027)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'cfd-cap.sqlite');
+    seededStore(storePath).close();
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const never = () => new Promise<never>(() => undefined);
+    const logs: LogEntry[] = [];
+    const logger: Logger = { log: (entry) => void logs.push(entry) };
+    const catalogue = cfdCatalogueRefreshFor(
+      {},
+      {
+        tradingDate: ENTRY_DATE,
+        constituents: ['AAPL'],
+        path: join(fixtures.directory, 'cfd-catalogue.json'),
+        logger,
+        connect: () => ({
+          api: { cfdInstrumentPage: never, cfdInstrumentDetails: never, cfdInfoPrices: never },
+          stop: async () => undefined,
+        }),
+        timeLimitMs: 20,
+      },
+    );
+    const written = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await runOnce(
+        true,
+        ENTRY_DATE,
+        {},
+        clock,
+        logger,
+        inSequence([catalogue, NO_BAR_REFRESH]),
+        () => Promise.resolve(),
+        (options) => composeV2Root({ ...options, ...fixtures, storePath }),
+      );
+    } finally {
+      written.mockRestore();
+    }
+    expect(logs.filter((entry) => entry.event === 'v2_cfd_catalogue_refresh_timed_out')).toEqual([
+      expect.objectContaining({ level: 'warn' }),
+    ]);
+    const db = openSharedStore(storePath);
+    try {
+      const decisions = db.prepare('SELECT COUNT(*) AS n FROM v2_decisions').get() as { n: number };
+      expect(decisions.n).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
   });
 
   it('journals one SAXO_SESSION refusal against #1876 when the LSE leg is refused, and none otherwise', async () => {
