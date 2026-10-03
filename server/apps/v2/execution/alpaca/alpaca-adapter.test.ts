@@ -1,22 +1,6 @@
-import { ExecutionImpl } from '../../../../pipeline/execution/execute.js';
-import { FilledZeroSizeThrottle } from '../../../../pipeline/execution/filled-zero-size-throttle.js';
-import { openTestExecutionStore } from '../../../../pipeline/execution/sqlite-store-harness.js';
-import type {
-  ExecutionConfig,
-  ExecutionInput,
-  NativeBracketRequest,
-} from '../../../../pipeline/execution/types.js';
-import { UnrecordedVenuePositionThrottle } from '../../../../pipeline/execution/unrecorded-venue-position-throttle.js';
-import type { VerdictDecision } from '../../../../pipeline/verdict/index.js';
-import type {
-  MarketDataService,
-  TradingCalendar,
-} from '../../../../providers/market-data-service/index.js';
-import { AlwaysOpenCalendar } from '../../../../providers/market-data-service/index.js';
-import type { AssetClass, OrderIntent } from '../../../../shared/index.js';
+import type { NativeBracketRequest } from '../../../../shared/index.js';
 import { type Clock, TokenBucket } from '../../../../shared/index.js';
 import { recordingLogger } from '../../../../shared/recording-logger.js';
-import type { CostModel } from '../../../../tools/backtest/index.js';
 import { InMemoryBrokerStateStore, toRequestFields } from '../broker-state/broker-state-store.js';
 import {
   AlpacaBrokerAdapter,
@@ -35,11 +19,6 @@ import { BrokerError } from './broker-error.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import { ProtectiveReplaceError } from './protective-replace-error.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
-
-const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
-  crypto: new AlwaysOpenCalendar(),
-  stocks: new AlwaysOpenCalendar(),
-};
 
 function permissiveLimiter(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
@@ -2960,125 +2939,41 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
   const NOW = new Date('2026-07-20T16:00:00Z');
   const fixedClock: Clock = { now: () => NOW };
 
-  function executionConfig(): ExecutionConfig {
-    return {
-      simulated: {
-        volatility_indicator: {
-          indicator: 'atr',
-          params: { period: 14 },
-          timeframe: '1h',
-          lookback: 15,
-        },
-        adv_window: { timeframe: '1d', lookback: 20 },
-      },
-    };
-  }
-
-  function orderIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
-    return {
-      idempotency_key: 'key-aapl-entry',
-      instrument: 'AAPL',
-      asset_class: 'stocks',
-      side: 'buy',
-      intent_type: 'entry',
-      size: 10,
-      entry: 100,
-      stop: 95,
-      target: 110,
-      time_in_force: 'day',
-      decision_timestamp: NOW,
-      decided_at: NOW,
-      metadata: {
-        debate_id: 'debate-1',
-        conviction: 0.7,
-        converged: true,
-        sizing: {
-          base_risk_fraction: 0.01,
-          conviction_multiplier: 1,
-          vol_floor_factor: 1,
-          non_converged_haircut: 1,
-          cosine_multiplier: 1,
-        },
-        cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
-      },
-      ...overrides,
-    };
-  }
-
-  function goDecision(order: OrderIntent): VerdictDecision {
-    return {
-      status: 'go',
-      order,
-      no_go_reason: null,
-      no_go_detail: null,
-      approval_path: 'automated',
-      would_require_approval: true,
-      idempotency_key: order.idempotency_key,
-      timestamp: NOW,
-    };
-  }
-
-  it('stops polling a flatten once it reaches a terminal state and its fill has closed the lot', async () => {
-    const { store } = openTestExecutionStore();
-
-    const aaplEntry = orderIntent({
-      idempotency_key: 'key-aapl-entry',
-      instrument: 'AAPL',
-      size: 10,
-      entry: 100,
-      stop: 95,
-      target: 110,
-    });
-    const tslaEntry = orderIntent({
-      idempotency_key: 'key-tsla-entry',
-      instrument: 'TSLA',
-      size: 5,
-      entry: 200,
-      stop: 190,
-      target: 220,
-    });
-
+  it('stops polling a flatten once it reaches a terminal state and keeps polling one still working', async () => {
     const getOrder = vi.fn(async (orderId: string) => {
       switch (orderId) {
-        case 'aapl-entry-order':
-          return acceptedOrder({
-            id: 'aapl-entry-order',
-            client_order_id: 'key-aapl-entry',
-            symbol: 'AAPL',
-            status: 'filled',
-            filled_qty: '10',
-            filled_avg_price: '100',
-            filled_at: NOW.toISOString(),
-            legs: [],
-          });
-        case 'tsla-entry-order':
-          return acceptedOrder({
-            id: 'tsla-entry-order',
-            client_order_id: 'key-tsla-entry',
-            symbol: 'TSLA',
-            status: 'filled',
-            filled_qty: '5',
-            filled_avg_price: '200',
-            filled_at: NOW.toISOString(),
-            legs: [],
-          });
         case 'aapl-flatten-order':
           return acceptedOrder({
             id: 'aapl-flatten-order',
+            client_order_id: 'key-aapl-exit',
             symbol: 'AAPL',
+            side: 'sell',
             status: 'filled',
             filled_qty: '10',
             filled_avg_price: '105',
             filled_at: NOW.toISOString(),
             legs: [],
           });
+        case 'tsla-flatten-order':
+          return acceptedOrder({
+            id: 'tsla-flatten-order',
+            client_order_id: 'key-tsla-exit',
+            symbol: 'TSLA',
+            side: 'sell',
+            status: 'accepted',
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+            legs: [],
+          });
         default:
           throw new Error(`unexpected getOrder(${orderId})`);
       }
     });
-    const submitOrder = vi.fn(async (request: { client_order_id: string }) =>
+    const submitMarketOrder = vi.fn(async (request: { client_order_id: string }) =>
       acceptedOrder({
-        id: request.client_order_id === 'key-aapl-entry' ? 'aapl-entry-order' : 'tsla-entry-order',
+        id:
+          request.client_order_id === 'key-aapl-exit' ? 'aapl-flatten-order' : 'tsla-flatten-order',
         client_order_id: request.client_order_id,
         status: 'accepted',
         filled_qty: '0',
@@ -3087,94 +2982,40 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         legs: [],
       }),
     );
-    const submitMarketOrder = vi.fn(async () =>
-      acceptedOrder({
-        id: 'aapl-flatten-order',
-        status: 'accepted',
-        filled_qty: '0',
-        filled_avg_price: null,
-        filled_at: null,
-        legs: [],
-      }),
-    );
-    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
-
-    const client = makeClient({
-      submitOrder,
-      getOrder,
-      submitMarketOrder,
-      getOrderByClientOrderId,
-    });
     const broker = new AlpacaBrokerAdapter({
-      client,
+      client: makeClient({ getOrder, submitMarketOrder }),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       logger: recordingLogger(),
       clock: fixedClock,
     });
-    const input: ExecutionInput = {
-      trace_id: 'trace-1',
-      clock: fixedClock,
-      broker,
-      store,
-      costModel: {} as CostModel,
-      marketData: {} as MarketDataService,
-      config: executionConfig(),
-      sessionCalendars: OPEN_SESSION_CALENDARS,
-      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
-      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
-      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
-      flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
-      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
-      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
-      logger: { log: () => {} },
-    };
-    const execution = new ExecutionImpl(input);
 
-    await execution.execute(goDecision(aaplEntry));
-    await execution.execute(goDecision(tslaEntry));
-    await execution.ingestFills();
+    await broker.submitFlatten('AAPL', 'sell', 10, 'key-aapl-exit');
+    await broker.submitFlatten('TSLA', 'sell', 5, 'key-tsla-exit');
 
-    const exitResult = await execution.execute(
-      goDecision(
-        orderIntent({
-          idempotency_key: 'key-aapl-exit',
-          instrument: 'AAPL',
-          side: 'sell',
-          intent_type: 'exit',
-          size: 10,
-          entry: 105,
-          stop: 105,
-          target: 105,
-          metadata: { ...orderIntent().metadata, exit_reason: 'flatten' },
-        }),
-      ),
-    );
-    expect(exitResult.status).toBe('submitted');
-
-    await execution.ingestFills();
-
-    expect((await store.getPosition('key-aapl-entry'))?.order_state).toBe('closed');
-    expect(await store.getClosedTrades()).toHaveLength(1);
-    expect(await store.getOpenPositions()).toEqual([
-      expect.objectContaining({ idempotency_key: 'key-tsla-entry' }),
+    const first = await broker.fetchNewFills(NOW.toISOString());
+    expect(first).toEqual([
+      {
+        client_order_id: 'key-aapl-exit',
+        broker_fill_id: 'aapl-flatten-order',
+        leg: 'exit',
+        price: 105,
+        qty: 10,
+        fee: 0,
+        timestamp: NOW.toISOString(),
+        qty_is_cumulative: true,
+      },
     ]);
 
-    const flattenOrderCallsAfterClose = getOrder.mock.calls.filter(
-      ([orderId]) => orderId === 'aapl-flatten-order',
-    ).length;
-    expect(flattenOrderCallsAfterClose).toBe(1);
+    expect(await broker.fetchNewFills(NOW.toISOString())).toEqual([]);
 
-    await execution.ingestFills();
-
-    const flattenOrderCallsAfterSecondPoll = getOrder.mock.calls.filter(
-      ([orderId]) => orderId === 'aapl-flatten-order',
-    ).length;
-    expect(flattenOrderCallsAfterSecondPoll).toBe(1);
+    const polls = (orderId: string) =>
+      getOrder.mock.calls.filter(([polled]) => polled === orderId).length;
+    expect(polls('aapl-flatten-order')).toBe(1);
+    expect(polls('tsla-flatten-order')).toBe(2);
   });
 
   it('follows the venue cumulative across polls instead of freezing at the first observation', async () => {
-    const { store } = openTestExecutionStore();
     const getOrder = vi
       .fn()
       .mockResolvedValueOnce(
@@ -3199,118 +3040,80 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
           legs: [],
         }),
       );
-    const client = makeClient({
-      submitOrder: vi.fn(async () =>
-        acceptedOrder({
-          id: 'aapl-entry-order',
-          client_order_id: 'key-aapl-entry',
-          status: 'accepted',
-          filled_qty: '0',
-          filled_avg_price: null,
-          filled_at: null,
-          legs: [],
-        }),
-      ),
-      getOrder,
-    });
     const broker = new AlpacaBrokerAdapter({
-      client,
+      client: makeClient({
+        submitOrder: vi.fn(async () =>
+          acceptedOrder({
+            id: 'aapl-entry-order',
+            client_order_id: 'key-aapl-entry',
+            legs: [],
+          }),
+        ),
+        getOrder,
+      }),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       logger: recordingLogger(),
       clock: fixedClock,
     });
-    const execution = new ExecutionImpl({
-      trace_id: 'trace-1',
-      clock: fixedClock,
-      broker,
-      store,
-      costModel: {} as CostModel,
-      marketData: {} as MarketDataService,
-      config: executionConfig(),
-      sessionCalendars: OPEN_SESSION_CALENDARS,
-      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
-      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
-      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
-      flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
-      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
-      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
-      logger: { log: () => {} },
-    });
 
-    await execution.execute(
-      goDecision(orderIntent({ idempotency_key: 'key-aapl-entry', size: 100 })),
-    );
-    await execution.ingestFills();
-    expect((await store.getPosition('key-aapl-entry'))?.filled_size).toBe(50);
+    await broker.submitBracket(makeBracket({ client_order_id: 'key-aapl-entry', size: 100 }));
 
-    await execution.ingestFills();
+    const first = await broker.fetchNewFills(NOW.toISOString());
+    expect(first).toEqual([
+      expect.objectContaining({ broker_fill_id: 'aapl-entry-order', qty: 50, price: 100 }),
+    ]);
 
-    const position = await store.getPosition('key-aapl-entry');
-    expect(position?.filled_size).toBe(80);
-    expect(position?.avg_entry_price).toBeCloseTo(100.75, 10);
+    const second = await broker.fetchNewFills(NOW.toISOString());
+    expect(second).toEqual([
+      expect.objectContaining({
+        client_order_id: 'key-aapl-entry',
+        broker_fill_id: 'aapl-entry-order',
+        leg: 'entry',
+        qty: 80,
+        price: 100.75,
+        qty_is_cumulative: true,
+      }),
+    ]);
   });
 
-  it('books a partial fill the venue never dated, on a clock that advances between reads (#842)', async () => {
-    const { store } = openTestExecutionStore();
+  it('dates a partial fill the venue never dated at the sweep observation, on a clock that advances between reads (#842)', async () => {
     let tick = 0;
     const advancingClock: Clock = { now: () => new Date(NOW.getTime() + tick++ * 1000) };
-    const getOrder = vi.fn().mockResolvedValue(
-      acceptedOrder({
-        id: 'aapl-entry-order',
-        client_order_id: 'key-aapl-entry',
-        status: 'partially_filled',
-        filled_qty: '50',
-        filled_avg_price: '100',
-        filled_at: null,
-        legs: [],
-      }),
-    );
-    const client = makeClient({
-      submitOrder: vi.fn(async () =>
-        acceptedOrder({
-          id: 'aapl-entry-order',
-          client_order_id: 'key-aapl-entry',
-          status: 'accepted',
-          filled_qty: '0',
-          filled_avg_price: null,
-          filled_at: null,
-          legs: [],
-        }),
-      ),
-      getOrder,
-    });
+    const logger = recordingLogger();
     const broker = new AlpacaBrokerAdapter({
-      client,
+      client: makeClient({
+        submitOrder: vi.fn(async () =>
+          acceptedOrder({ id: 'aapl-entry-order', client_order_id: 'key-aapl-entry', legs: [] }),
+        ),
+        getOrder: vi.fn().mockResolvedValue(
+          acceptedOrder({
+            id: 'aapl-entry-order',
+            client_order_id: 'key-aapl-entry',
+            status: 'partially_filled',
+            filled_qty: '50',
+            filled_avg_price: '100',
+            filled_at: null,
+            legs: [],
+          }),
+        ),
+      }),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
-      logger: recordingLogger(),
+      logger,
       clock: advancingClock,
     });
-    const execution = new ExecutionImpl({
-      trace_id: 'trace-1',
-      clock: advancingClock,
-      broker,
-      store,
-      costModel: {} as CostModel,
-      marketData: {} as MarketDataService,
-      config: executionConfig(),
-      sessionCalendars: OPEN_SESSION_CALENDARS,
-      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
-      filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
-      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
-      flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
-      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
-      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
-      logger: { log: () => {} },
-    });
 
-    await execution.execute(
-      goDecision(orderIntent({ idempotency_key: 'key-aapl-entry', size: 100 })),
-    );
-    await execution.ingestFills();
+    await broker.submitBracket(makeBracket({ client_order_id: 'key-aapl-entry', size: 100 }));
+    const since = new Date(NOW.getTime() + tick * 1000).toISOString();
+    const fills = await broker.fetchNewFills(since);
 
-    expect((await store.getPosition('key-aapl-entry'))?.filled_size).toBe(50);
+    expect(fills).toHaveLength(1);
+    expect(fills[0]).toMatchObject({ qty: 50, price: 100, leg: 'entry' });
+    expect(Date.parse(fills[0]?.timestamp ?? '')).toBeGreaterThanOrEqual(Date.parse(since));
+    expect(
+      logger.entries.filter((e) => e.event === 'alpaca_fill_predates_bracket_submission'),
+    ).toEqual([]);
   });
 
   describe('AlpacaBrokerAdapter.resumeFlatten (#519, #526)', () => {

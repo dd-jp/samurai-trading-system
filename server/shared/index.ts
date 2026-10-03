@@ -4,7 +4,6 @@ export { SimulatedClock, SystemClock } from './clock.js';
 export { digest } from './digest.js';
 export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-integer.js';
 export { escalatesAt } from './escalation-cadence.js';
-export type { ExitFill, LotHeldQuantity } from './held-quantity.js';
 export {
   coversQty,
   heldQuantitiesFor,
@@ -82,16 +81,10 @@ export type {
   AssetClass,
   BrokerAck,
   BrokerAdapter,
-  BrokerFillId,
-  ClosedTrade,
-  ClosedTradeStore,
   DebateLog,
   DebateLogStore,
   DebateRoundLogEntry,
-  DebateTermination,
   DebateTerminationCause,
-  ExitReason,
-  Fill,
   InstrumentSubclass,
   LogEntry,
   LogEntryTemplate,
@@ -101,17 +94,8 @@ export type {
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
-  OpenPosition,
-  OrderIntent,
   OrderState,
   ProtectedExitRequest,
   ProtectiveReplaceRequest,
-  SetupNeighbor,
-  SetupStore,
-  SetupVector,
-  TradingArm,
-  TuningStore,
-  VerdictLog,
-  VerdictLogStore,
 } from './types.js';
 export { toBrokerFillId } from './types.js';

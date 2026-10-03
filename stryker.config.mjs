@@ -5,10 +5,6 @@ export default {
     configFile: 'vitest.config.ts',
   },
   mutate: [
-    'server/pipeline/trader/**/*.ts',
-    'server/pipeline/risk-manager/**/*.ts',
-    'server/pipeline/verdict/**/*.ts',
-    'server/pipeline/execution/**/*.ts',
     'server/pipeline/momentum/**/*.ts',
     'server/apps/v2/**/*.ts',
     '!server/apps/v2/smoke.ts',

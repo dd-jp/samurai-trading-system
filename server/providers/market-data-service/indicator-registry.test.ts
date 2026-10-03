@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
-import { atrIndicatorSpec } from '../../pipeline/trader/decide.js';
 import {
   computeIndicator,
   InsufficientBarsError,
@@ -122,24 +120,5 @@ describe('recommendedWarmupFor — the width question, not the arity one', () =>
 
     expect(Math.abs(recommended - converged)).toBeLessThan(0.5);
     expect(Math.abs(floor - converged)).toBeGreaterThan(Math.abs(recommended - converged));
-  });
-
-  it('is what RSI_SPEC now asks for — the analyst reads a converged Wilder RSI (#722)', () => {
-    expect(RSI_SPEC.lookback).toBe(recommendedWarmupFor(RSI_SPEC));
-    expect(RSI_SPEC.lookback).toBe(57);
-    expect(RSI_SPEC.lookback).toBeGreaterThan(minimumBarsFor(RSI_SPEC));
-    expect(minimumBarsFor(RSI_SPEC)).toBe(15);
-  });
-
-  it('is NOT adopted by SMA, which is warm-up BLIND regardless', () => {
-    expect(SMA_SPEC.lookback).toBe(minimumBarsFor(SMA_SPEC));
-  });
-
-  it('IS adopted by atrIndicatorSpec — the stop/breaker ATR, converged (#757)', () => {
-    const spec = atrIndicatorSpec(PERIOD, '1h');
-    expect(spec.lookback).toBe(recommendedWarmupFor(spec));
-    expect(spec.lookback).toBe(57);
-    expect(spec.lookback).toBeGreaterThan(minimumBarsFor(spec));
-    expect(minimumBarsFor(spec)).toBe(15);
   });
 });

@@ -56,7 +56,7 @@ Universe: **8–15 liquid 1× ETFs**. No 3× wrappers.
 
 | Existing | Modification |
 |---|---|
-| `server/pipeline/trader/` | Drive off sleeve outputs, not debate conviction. Vol-target size × cosine 0.5–1.5×. Multi-day stop, not ±2%/±6% same-session TP engine. |
+| `server/pipeline/trader/` | Drive off sleeve outputs, not debate conviction. Vol-target size × cosine 0.5–1.5×. Multi-day stop, not ±2%/±6% same-session TP engine. | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 | Orchestrator tick | Weekly act / daily watch. Kill 15-min debate-as-clock. |
 | Technical analyst | Features for cosine + crash-brake. Stop treating RSI/MA vote as edge. |
 | Debate engine | Veto/shadow. Fail-open to sleeves. |
@@ -106,7 +106,7 @@ Six-stage wiring, broker adapter, simulated broker, idempotency, reconcile, SQLi
 - Do not add a vector-DB dependency.
 - Do not keep 3× names “for more profit.”
 
-**Access / license:** TSMOM is public-domain factor construction, not Medallion IP. Cosine code already in `server/pipeline/trader/`. Mesfin paper is a falsification of the *old* horizon, not a strategy to copy.
+**Access / license:** TSMOM is public-domain factor construction, not Medallion IP. Cosine code already in `server/pipeline/trader/`. Mesfin paper is a falsification of the *old* horizon, not a strategy to copy. <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 
 **Algorithm to reimplement:** binary TSMOM sign, long-only, weekly, vol-scaled. Strip rank/weight/short as doc 56 already said — but **drop the intraday bar**; that bar was the old product.
 

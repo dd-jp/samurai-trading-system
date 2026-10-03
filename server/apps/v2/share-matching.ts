@@ -1,6 +1,6 @@
 import { addDays } from './data/index.js';
 
-// Ported from v1's server/pipeline/cgt/cgt-disposal-matching.ts (#1518): TCGA92 ss105-106A in
+// Ported from v1's server/pipeline/cgt/cgt-disposal-matching.ts (tag v1-final, #1518): TCGA92 ss105-106A in
 // HMRC's order, same-day (CG51560), then the next 30 days (CG51560/CG51570), then the section 104
 // pool (CG51575). Dates are UK calendar dates, so the v1 UTC-day caveat does not carry over
 export const THIRTY_DAY_WINDOW_DAYS = 30;

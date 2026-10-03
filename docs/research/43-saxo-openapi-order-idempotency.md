@@ -1,6 +1,6 @@
 # Saxo OpenAPI order idempotency — what a duplicate submit actually does
 
-**Status:** MEASURED on the SIM gateway, 2026-09-05, for [#1032](https://github.com/dd-jp/samurai-trading-system/issues/1032) item 4 (successor to [#946](https://github.com/dd-jp/samurai-trading-system/issues/946)). Read this before touching `server/pipeline/execution/adapters/saxo-adapter.ts`'s placement path.
+**Status:** MEASURED on the SIM gateway, 2026-09-05, for [#1032](https://github.com/dd-jp/samurai-trading-system/issues/1032) item 4 (successor to [#946](https://github.com/dd-jp/samurai-trading-system/issues/946)). Read this before touching `server/pipeline/execution/adapters/saxo-adapter.ts`'s placement path. <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 
 **Scope note — the filename says Saxo; round 3 does not.** This doc's question is "does the VENUE dedup a duplicate submit", and it was opened against Saxo because Saxo is where the answer was in doubt. The Alpaca half of that question was asserted here in passing and never measured, so [#1346](https://github.com/dd-jp/samurai-trading-system/issues/1346) measured it and the result is recorded in **Round 3** below rather than in a new doc: it is the same question, the same shape of evidence, and the "What this means for the adapter" section already compares the two venues line by line. Anything in rounds 1-2 is Saxo SIM; round 3 is Alpaca paper. The file is not renamed — `npm run check:citations` and the inbound references cite it by name.
 

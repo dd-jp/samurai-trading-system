@@ -66,7 +66,7 @@ Einstein does not implement. If an implementing agent is later pointed here:
 **Foreground**
 
 1. **Do not** open a new pipeline stage, broker, or overnight hold.
-2. **Access:** Wikipedia + arXiv:2605.04004 are public. Medallion has **no licensed algorithm**. Cosine code is already in `server/pipeline/trader/` (`retrieveCosinePrecedent`, `setup-vector.ts`, `cosine_setups`).
+2. **Access:** Wikipedia + arXiv:2605.04004 are public. Medallion has **no licensed algorithm**. Cosine code is already in `server/pipeline/trader/` (`retrieveCosinePrecedent`, `setup-vector.ts`, `cosine_setups`). <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 3. **License boundary:** no Medallion IP; no scrape of LSE quotes (doc 58 F6 retracted). Mesfin paper is arXiv, not a strategy to copy — it is a **falsification** of OHLCV intraday momentum on MNQ, a cheaper venue than Saxo+ETP.
 4. **Algorithm to reimplement (only if David spends a D4 slot):** binary gate `sign(r_{t-N,t})` with N frozen, threshold **exactly 0**, long-only, flatten by close. Second pre-registered arm: `sign(r_{t-N,t})` as a **fade** (reversal). Strip any quintile/weight/short. This is the modification doc 56 already named.
 5. **Integration:** eligibility **before** debate, or as a skip_reason on the Trader — not a ranked axis inside debate. Must not silently expand `PIPELINE_STAGES`.

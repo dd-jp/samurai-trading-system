@@ -276,7 +276,7 @@ role by measurement (2026-08-06, 8 samples/model, 4 candidates), on the grounds 
 budget is decided by the tail, not the median, and haiku's tail was flat while every alternative's
 was 1.5–2x its own median. That ADR is equities-only scope now (crypto left 2026-08-16, per
 CLAUDE.md), and the live budget it reasons about is the stocks one in
-`server/pipeline/debate-engine/latency-budget.ts`, sized by #1080 at
+`server/pipeline/debate-engine/latency-budget.ts`, sized by #1080 at <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 `llmCallsPerDebate(1) * 28_000 ms = 112_000 ms` for one round.
 
 The #1080 probe (§1) is a fresh, larger candidate set (5 models, not 3) run under closer-to-real

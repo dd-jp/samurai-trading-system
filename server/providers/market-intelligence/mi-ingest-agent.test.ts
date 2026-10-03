@@ -1,8 +1,5 @@
-import { fundamentalAnalyst } from '../../pipeline/analysts/index.js';
-import { NO_DATA_MARKER, NOOP_ANALYST_TELEMETRY } from '../../pipeline/analysts/types.js';
 import type { LlmClient, LlmRequest, SpendCap } from '../../pipeline/debate-engine/index.js';
 import type { Clock, LogEntry, Logger } from '../../shared/index.js';
-import { AlwaysOpenCalendar } from '../market-data-service/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
 import { MI_SOURCES } from './archive/mi-sources.js';
 import { MarketIntelligenceStore } from './index.js';
@@ -135,43 +132,6 @@ describe('MiIngestAgent', () => {
       (e) => e.message === 'market intelligence: ingested scored news items',
     );
     expect(entry?.payload).toMatchObject({ articles: 2, items: 1 });
-  });
-
-  it('stops the fundamental analyst reporting NO DATA', async () => {
-    const { agent, store } = build([article()]);
-
-    const marketData = {
-      getMark: async () => ({
-        price: 100,
-        observed_at: NOW,
-        asset_class: 'stocks' as const,
-        source: 'fixture',
-      }),
-    } as unknown as Parameters<typeof fundamentalAnalyst.run>[0]['market_data'];
-
-    const input = {
-      trace_id: 't',
-      signal: { asset: 'AAPL', asset_class: 'stocks' as const },
-      clock,
-      bar: NOW,
-      market_intelligence: store,
-      market_data: marketData,
-      calendar: new AlwaysOpenCalendar(),
-      telemetry: NOOP_ANALYST_TELEMETRY,
-    };
-
-    const before = await fundamentalAnalyst.run(input);
-    expect(before.key_points.join(' ')).toContain(NO_DATA_MARKER);
-    expect(before.direction).toBe('neutral');
-    expect(before.confidence).toBe(0.05);
-
-    await agent.refresh('t', 'AAPL', 'stocks');
-
-    const after = await fundamentalAnalyst.run(input);
-
-    expect(after.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
-    expect(after.direction).toBe('bullish');
-    expect(after.confidence).toBeGreaterThan(0.05);
   });
 
   it('attributes a multi-symbol article to the instrument being refreshed', async () => {
@@ -737,26 +697,5 @@ describe('MiIngestAgent', () => {
     expect(
       archive.hasScoredItem(MI_SOURCES.alpacaNews, articleB.id, articleB.updated_at, 'AAPL'),
     ).toBe(false);
-
-    const marketData = {
-      getMark: async () => ({
-        price: 150,
-        observed_at: NOW,
-        asset_class: 'stocks' as const,
-        source: 'fixture',
-      }),
-    } as unknown as Parameters<typeof fundamentalAnalyst.run>[0]['market_data'];
-
-    const view = await fundamentalAnalyst.run({
-      trace_id: 't',
-      signal: { asset: 'AAPL', asset_class: 'stocks' as const },
-      clock,
-      bar: NOW,
-      market_intelligence: store,
-      market_data: marketData,
-      calendar: new AlwaysOpenCalendar(),
-      telemetry: NOOP_ANALYST_TELEMETRY,
-    });
-    expect(view.key_points[0]).toContain(NO_DATA_MARKER);
   });
 });

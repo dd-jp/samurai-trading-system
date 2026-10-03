@@ -1,4 +1,4 @@
-export type { AssetClass, InstrumentSubclass, TradingArm } from '../../../contracts/index.js';
+export type { AssetClass, InstrumentSubclass } from '../../../contracts/index.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

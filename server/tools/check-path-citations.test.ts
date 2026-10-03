@@ -135,7 +135,7 @@ describe('the known-bad code fixture (#1345)', () => {
 
 describe('mutation: a deliberately bad in-code citation (#1345)', () => {
   const badSource = '// see `server/pipeline/verdict/gone-for-good.ts` for the mechanism\n';
-  const fixedSource = '// see `server/pipeline/execution/reconcile.ts` for the mechanism\n';
+  const fixedSource = '// see `server/apps/v2/reconcile.ts` for the mechanism\n';
 
   it('fails once a comment cites a path that does not resolve', () => {
     const report = runCitationCheck({
