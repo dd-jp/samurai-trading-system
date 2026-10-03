@@ -26,13 +26,13 @@ The map issue is [#1706](https://github.com/dd-jp/samurai-trading-system/issues/
 
 - **Debate (30%).** A daily swing sleeve. Before the open, three debaters (Sonnet 5, DeepSeek, GPT) argue each screened name and a judge (Opus 5.5) settles it, on daily bars, candle features and news. Positions hold for days to weeks and exit by a broker-resting stop or a time stop; bounded shorts are allowed. Its benchmark is **arm 2**: the same names, stops and exits, with an indicator-only entry and no LLM. The sleeve cannot be backtested honestly, so its proof is forward paper: at least 100 closed trades and a one-sided 95% test against arm 2. Spec: `docs/specs/debate-sleeve-spec.md`.
 - **Signals (the 70% paper share, £7,000).** Since 2026-09-30, external US-long signals arrive on a loopback-only HTTP endpoint. Each entry passes the risk gate and an LLM entry veto, judged against a no-veto shadow book. Spec: `docs/specs/signals-sleeve-spec.md`.
-- **Rules-based candidates (the 70%).** Momentum was dropped on 2026-09-25 (doc 70). Five candidates are backtested in turn, up to 8 counted trials each: cross-asset trend, mean reversion, vol-targeted index hold, post-earnings drift, then the v3 evidence run's fallback entry rule (#1861). A passer carries an LLM entry veto judged against a no-veto shadow. The rulings and each run's result are in doc 66 (S1–S7 and the candidate sections).
+- **Rules-based candidates (no paper cash while signals holds the 70%).** Momentum was dropped on 2026-09-25 (doc 70). Five candidates are backtested in turn, up to 8 counted trials each: cross-asset trend, mean reversion, vol-targeted index hold, post-earnings drift, then the v3 evidence run's fallback entry rule (#1861). A passer carries an LLM entry veto judged against a no-veto shadow. The rulings and each run's result are in doc 66 (S1–S7 and the candidate sections).
 
-**Venues.** Alpaca for US large caps; the paper cycle places real Alpaca paper brackets. Saxo Capital Markets UK GIA over OpenAPI for LSE 1× ETFs/ETCs, plus CFDs on UK and US stocks, indices and ETFs for the debate sleeve and arm 2 only. The LSE leg and the other books are simulated on paper. No 3× ETPs, no UK single stocks except through CFDs, no crypto, no intraday sleeve.
+**Venues.** Alpaca for US large caps; the debate and signals primary books place real Alpaca paper brackets. Saxo Capital Markets UK GIA over OpenAPI for LSE 1× ETFs/ETCs, plus CFDs on UK and US stocks, indices and ETFs for the debate sleeve and arm 2 only (shorts, and UK single-stock longs). No CFD order is placed, simulated included, until a Saxo resting stop on a CFD is verified (#1916). Arm 2, the shadow books and the LSE leg are simulated on paper. No 3× ETPs, no UK single stocks except through CFDs, no crypto, no intraday sleeve.
 
 **Loss budget.** £1,500 net trading loss per calendar year from start capital, both venues, GBP, marked to market, FX excluded. Size halves at −£500, quarters at −£1,000, and trading halts for the year at −£1,500. A daily loss of 1.0% of start capital blocks new entries; exits still run. The cap is a yearly config David sets (`npm run v2:capital`), never loosened mid-year, and no capital figure is a literal in code.
 
-**Gate and autonomy.** A rules-based sleeve reaches live only after DSR ≥ 0.95, PBO ≤ 0.10, a 40% Sharpe haircut, 8–12 weeks of paper inside the backtest's 90% band with costs within ±25%, and 4 fault-free weeks. Then a Telegram approval request goes to David: "no" blocks it, no reply in 24 hours approves it, and the exchange is recorded to a GitHub issue.
+**Gate and autonomy.** A rules-based sleeve reaches live only after DSR ≥ 0.95, PBO ≤ 0.10, a 40% Sharpe haircut, 8–12 weeks of paper inside the backtest's 90% band with costs within ±25%, and 4 fault-free weeks. Capital is at most £1,500 / (backtest max DD × 1.5); demotion follows 4 weeks outside the 95% band or drawdown above 1.5× the backtest max. Any sleeve that passes its gate (the debate sleeve's is above) then sends a Telegram approval request to David: "no" blocks it, no reply in 24 hours approves it, and the exchange is recorded to a GitHub issue.
 
 **Protection.** Every position carries a broker-resting stop. Each cycle reconciles the store against the broker before any entry. Every decision, fill and LLM call is journalled, and any past day replays to the same decisions. LLM spend is capped at about $30 a month; a breach stops LLM calls, never exits. A runtime guard refuses any LLM request that carries a known secret value.
 
@@ -48,7 +48,7 @@ One process, a modular monolith (doc 66 D4). The daily paper cycle is composed i
 | execution | `server/apps/v2/execution/` | Alpaca and Saxo adapters, broker state, simulated venues; an adapter accepts only a `RiskApprovedOrder` |
 | journal | `server/apps/v2/journal/` | The append-only decision journal and the plumbing-fault ledger |
 
-Around the cycle sit `server/apps/v2/signals/` (the signals endpoint), `server/apps/v2/api/` (the dashboard API and the Telegram command poller), reconcile, replay, backup, backtest and the trial ledger. Live state is SQLite, backed up with Litestream. Daily bars are Parquet read through DuckDB. The dead-man's switch is a healthchecks.io ping per process.
+Around the cycle sit `server/apps/v2/signals/` (the signals endpoint), `server/apps/v2/api/` (the dashboard API and the Telegram command poller), reconcile, replay, backup, backtest and the trial ledger. Live state is SQLite, backed up with Litestream. Daily bars are Parquet read through DuckDB. The dead-man's switch is a healthchecks.io ping from the paper cycle, the signals endpoint and the Telegram poller.
 
 ## Repository layout
 
@@ -129,7 +129,7 @@ Broker keys are trade-only with withdrawals disabled, IP-restricted where the ve
 | Script | Does |
 |---|---|
 | `npm test` | The full vitest suite |
-| `npm run test:local` | Only what the branch touched (`vitest --changed origin/main`) |
+| `npm run test:local` | Only what the branch touched (`vitest run --changed origin/main`) |
 | `npm run test:watch`, `npm run test:coverage` | Watch mode, coverage |
 | `npm run e2e` | Playwright dashboard tests |
 | `npm run smoke` | Build, then run the v2 smoke |
