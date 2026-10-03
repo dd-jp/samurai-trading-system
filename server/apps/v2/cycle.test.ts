@@ -2622,11 +2622,11 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
         )
         .all(),
       sweeps: db
-        .prepare(
-          'SELECT trading_date, last_fill_rowid AS cut FROM v2_fill_sweeps ORDER BY sweep_id',
-        )
+        .prepare('SELECT trading_date, last_fill_seq AS cut FROM v2_fill_sweeps ORDER BY sweep_id')
         .all(),
-      fills: db.prepare(`SELECT rowid AS id FROM v2_fills WHERE book_id = 'debate/primary'`).all(),
+      fills: db
+        .prepare(`SELECT fill_seq AS id FROM v2_fills WHERE book_id = 'debate/primary'`)
+        .all(),
     };
   }
 
@@ -4027,6 +4027,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       fx_quote_per_gbp: FX,
       fx_source: 'test',
       fill_date: '2026-09-29',
+      broker_mode: 'paper',
     });
     const cash = deps.books.cash('debate/primary');
     await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
@@ -5463,7 +5464,7 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     await runCycle(deps, '2026-09-25');
     if (brokerMode === 'live') {
       const { cashQuote } = await deps.brokerBooks.read('alpaca');
-      deps.cashAnchors?.recordAnchor('alpaca', cashQuote, '2026-09-25');
+      deps.cashAnchors?.recordAnchor('alpaca', 'live', cashQuote, '2026-09-25');
     }
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
     deps.setDecisions([exitAapl, longMsft]);
@@ -5801,6 +5802,8 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
       book_ids: ['debate/primary', 'debate/no-macro-gate'],
       diffs: [],
       detail: 'attempt 1',
+      broker_mode: 'paper',
+      cash_quote: null,
     });
     vi.spyOn(deps.executor, 'fetchNewFills').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
     await runCycle(deps, '2026-09-29');
@@ -5925,7 +5928,9 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
     deps.setDecisions([longMsft]);
     await runCycle(live, '2026-09-28');
-    expect(deps.cashAnchors?.storeFlowSince('alpaca', anchored?.fillRowid ?? 0)).toEqual({
+    expect(
+      deps.cashAnchors?.storeFlowSince(anchored ?? { brokerMode: 'live', fillSeq: 0 }, 'alpaca'),
+    ).toEqual({
       ok: true,
       quote: -120.5,
     });

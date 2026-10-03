@@ -288,6 +288,7 @@ describe('a USD fill after the file ends', () => {
         fx_quote_per_gbp: 1.3,
         fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
         fill_date: fillDate,
+        broker_mode: 'paper',
       };
       journal.recordFill(row);
     };

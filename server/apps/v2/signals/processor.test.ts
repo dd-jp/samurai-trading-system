@@ -799,6 +799,8 @@ describe('processSignals, paper with a fake Alpaca', () => {
       book_ids: ['debate/primary', 'signals/primary'],
       diffs: [],
       detail: '',
+      broker_mode: 'paper',
+      cash_quote: null,
     });
     const id = post(day.signals, {});
 
@@ -850,6 +852,8 @@ describe('processSignals, paper with a fake Alpaca', () => {
       book_ids: ['signals/primary'],
       diffs: [],
       detail: '',
+      broker_mode: 'paper',
+      cash_quote: null,
     });
     const id = post(day.signals, { entry: [25.5, 25.6], targets: [26, 27] });
 
@@ -881,6 +885,8 @@ describe('processSignals, paper with a fake Alpaca', () => {
       book_ids: ['signals/primary'],
       diffs: [],
       detail: '',
+      broker_mode: 'paper',
+      cash_quote: null,
     });
     const id = post(day.signals, {});
     await day.root.processSignals(day.signals, IN_SESSION);

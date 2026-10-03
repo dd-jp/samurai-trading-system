@@ -271,7 +271,7 @@ describe('replay of a paper store against journalled Alpaca fills', () => {
   it('journals a partial entry fill, its cumulative remainder and a stop fill booked at the second sweep', () => {
     const fills = journalRows(
       `SELECT trading_date, leg, fill_id, qty FROM v2_fills
-        WHERE book_id = 'debate/primary' ORDER BY rowid`,
+        WHERE book_id = 'debate/primary' ORDER BY fill_seq`,
     ) as { trading_date: string; leg: string; fill_id: string; qty: number }[];
     const [partial, remainder, stop] = fills;
     const total = (partial?.qty ?? 0) + (remainder?.qty ?? 0);
@@ -336,6 +336,59 @@ describe('replay of a paper store against journalled Alpaca fills', () => {
       const result = await replayFromFiles({ ...options, storePath: before, tradingDate });
       expect(result.divergences).toEqual([]);
     }
+  });
+
+  it('replays a day the journal ran live in live mode, re-anchoring the cash the reconcile read (#2035)', async () => {
+    const live = join(directory, 'live-day.sqlite');
+    copyFileSync(options.storePath, live);
+    const db = new BetterSqlite3(live);
+    try {
+      db.exec('DROP TRIGGER v2_fills_no_update; DROP TRIGGER v2_reconciles_no_update');
+      db.prepare("UPDATE v2_fills SET broker_mode = 'live' WHERE trading_date = ?").run(STOP_DAY);
+      db.prepare("UPDATE v2_reconciles SET broker_mode = 'live' WHERE trading_date = ?").run(
+        STOP_DAY,
+      );
+    } finally {
+      db.close();
+    }
+    const relabelled = await replayFromFiles({
+      ...options,
+      storePath: live,
+      tradingDate: STOP_DAY,
+    });
+    expect(relabelled.divergences).toEqual([
+      {
+        kind: 'row_field',
+        stage: 'reconciles',
+        key: 'alpaca',
+        field: 'detail',
+        journalled: 'cash not compared on paper (David 2026-09-29, #1872)',
+        replayed: 'cash anchor recorded: 100000.00 USD (#1927)',
+      },
+      { kind: 'row_extra', stage: 'anchors', key: 'alpaca' },
+    ]);
+
+    const anchored = new BetterSqlite3(live);
+    try {
+      anchored
+        .prepare(
+          `UPDATE v2_reconciles SET detail = 'cash anchor recorded: 100000.00 USD (#1927)'
+            WHERE trading_date = ? AND source = 'broker'`,
+        )
+        .run(STOP_DAY);
+      anchored
+        .prepare(
+          `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+             trading_date, recorded_at, broker_mode)
+           SELECT 'alpaca', 'anchor', 'USD', 100000, MAX(fill_seq), 'go-live', ?, ?, 'live'
+             FROM v2_fills WHERE trading_date < ?`,
+        )
+        .run(STOP_DAY, `${STOP_DAY}T07:30:00.000Z`, STOP_DAY);
+    } finally {
+      anchored.close();
+    }
+    const replayed = await replayFromFiles({ ...options, storePath: live, tradingDate: STOP_DAY });
+    expect(replayed.divergences).toEqual([]);
   });
 
   it('shows a half-spread refresh since the day as an orders divergence', async () => {

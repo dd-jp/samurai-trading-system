@@ -502,6 +502,8 @@ export interface JournalledReconcile {
   readonly book_ids: readonly string[];
   readonly diffs: readonly ReconcileDiff[];
   readonly detail: string;
+  readonly broker_mode: BrokerMode;
+  readonly cash_quote: number | null;
 }
 
 export interface JournalledOrder {
@@ -537,6 +539,7 @@ export interface JournalledFill {
   readonly fx_source: string;
   readonly fill_date: string | null;
   readonly filled_at?: string | undefined;
+  readonly broker_mode: BrokerMode;
 }
 
 export interface JournalledSplit {
@@ -607,8 +610,8 @@ export interface DecisionJournal {
   partFilledEntries(bookId: string, before?: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
   recordFillRead(read: JournalledFillRead): void;
-  lastFillRowid(): number;
-  recordFillSweep(runId: string, tradingDate: string, firstFillRowid: number): void;
+  lastFillSeq(): number;
+  recordFillSweep(runId: string, tradingDate: string, firstFillSeq: number): void;
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordSplit(split: JournalledSplit): void;

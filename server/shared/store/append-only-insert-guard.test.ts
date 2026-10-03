@@ -16,32 +16,57 @@ interface Case {
 const SIGNAL_COLUMNS = `signal_id, payload_digest, symbol, entry_low, entry_high, entry_is_zone,
   targets, stop, received_at, session, process_after, payload`;
 
-const CASH_ANCHOR_COLUMNS = `anchor_row_id, venue, kind, currency, amount_quote, fill_rowid,
-  reference, trading_date, recorded_at`;
+const CASH_ANCHOR_COLUMNS = `anchor_row_id, venue, kind, currency, amount_quote, fill_seq,
+  reference, trading_date, recorded_at, broker_mode`;
+
+const FILL_COLUMNS = `fill_seq, fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+  side, qty, price_gbp, fee_gbp, recorded_at, broker_mode`;
 
 const CASES: readonly Case[] = [
   {
     table: 'v2_cash_anchors',
     seed: `INSERT INTO v2_cash_anchors (${CASH_ANCHOR_COLUMNS})
-      VALUES (1, 'alpaca', 'anchor', 'USD', 12000, 7, 'go-live', '2026-10-01', '2026-10-01T07:00:00.000Z')`,
+      VALUES (1, 'alpaca', 'anchor', 'USD', 12000, 7, 'go-live', '2026-10-01', '2026-10-01T07:00:00.000Z', 'live')`,
     attacks: [
       {
         name: 'same anchor_row_id',
         outcome: 'refused',
         sql: `INSERT OR REPLACE INTO v2_cash_anchors (${CASH_ANCHOR_COLUMNS})
-          VALUES (1, 'alpaca', 'deposit', 'USD', 500, NULL, 'wire-1', '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+          VALUES (1, 'alpaca', 'deposit', 'USD', 500, NULL, 'wire-1', '2026-10-02', '2026-10-02T07:00:00.000Z', NULL)`,
       },
       {
         name: 'a second anchor for the venue',
         outcome: 'refused',
-        sql: `INSERT OR REPLACE INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_rowid, reference, trading_date, recorded_at)
-          VALUES ('alpaca', 'anchor', 'USD', 1, 9, 'go-live-again', '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+        sql: `INSERT OR REPLACE INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference, trading_date, recorded_at, broker_mode)
+          VALUES ('alpaca', 'anchor', 'USD', 1, 9, 'go-live-again', '2026-10-02', '2026-10-02T07:00:00.000Z', 'live')`,
       },
       {
         name: 'the same reference under a new id',
         outcome: 'refused',
-        sql: `INSERT OR REPLACE INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_rowid, reference, trading_date, recorded_at)
+        sql: `INSERT OR REPLACE INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference, trading_date, recorded_at)
           VALUES ('alpaca', 'deposit', 'USD', 5, NULL, 'go-live', '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+      },
+    ],
+  },
+  {
+    table: 'v2_fills',
+    seed: `INSERT INTO v2_orders (client_order_id, book_id, trading_date, instrument, venue, leg, side,
+        dry_run, outcome, payload, recorded_at)
+      VALUES ('o-1', 'debate/primary', '2026-10-01', 'AAPL', 'alpaca', 'entry', 'buy', 0, 'submitted', '{}', 't');
+      INSERT INTO v2_fills (${FILL_COLUMNS})
+      VALUES (3, 'f-1', 'o-1', 'debate/primary', '2026-10-01', 'AAPL', 'alpaca', 'entry', 'buy', 1, 100, 0, 't', 'live')`,
+    attacks: [
+      {
+        name: 'same fill_seq under a new fill_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_fills (${FILL_COLUMNS})
+          VALUES (3, 'f-2', 'o-1', 'debate/primary', '2026-10-01', 'AAPL', 'alpaca', 'entry', 'sell', 9, 1, 0, 't', 'paper')`,
+      },
+      {
+        name: 'same fill_id under a new fill_seq',
+        outcome: 'ignored',
+        sql: `INSERT OR REPLACE INTO v2_fills (${FILL_COLUMNS})
+          VALUES (4, 'f-1', 'o-1', 'debate/primary', '2026-10-01', 'AAPL', 'alpaca', 'entry', 'sell', 9, 1, 0, 't', 'paper')`,
       },
     ],
   },
@@ -60,13 +85,13 @@ const CASES: readonly Case[] = [
   },
   {
     table: 'v2_fill_sweeps',
-    seed: `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_rowid, last_fill_rowid, order_rowid, book_day_rowid, recorded_at)
+    seed: `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_seq, last_fill_seq, order_rowid, book_day_rowid, recorded_at)
       VALUES (1, 'run-1', '2026-10-01', 0, 3, 0, 0, '2026-10-01T07:00:00.000Z')`,
     attacks: [
       {
         name: 'same sweep_id',
         outcome: 'refused',
-        sql: `INSERT OR REPLACE INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_rowid, last_fill_rowid, order_rowid, book_day_rowid, recorded_at)
+        sql: `INSERT OR REPLACE INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_seq, last_fill_seq, order_rowid, book_day_rowid, recorded_at)
           VALUES (1, 'run-1', '2026-10-01', 0, 9, 0, 0, '2026-10-01T08:00:00.000Z')`,
       },
     ],
@@ -343,7 +368,7 @@ describe('INSERT OR REPLACE on the append-only v2 tables', () => {
           )
           .all() as { name: string }[]
       ).map((row) => row.name);
-      const covered = new Set<string>([...CASES.map((c) => c.table), 'v2_decisions', 'v2_fills']);
+      const covered = new Set<string>([...CASES.map((c) => c.table), 'v2_decisions']);
       expect(guarded.filter((name) => !covered.has(name))).toEqual([]);
     } finally {
       db.close();

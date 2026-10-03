@@ -1,6 +1,7 @@
 import type {
   BookFill,
   BookLedger,
+  BrokerMode,
   FillLeg,
   MarketData,
   OrderSide,
@@ -12,7 +13,16 @@ import { inMemoryCopyOf, type StoreHandle } from '../../shared/store/index.js';
 import { quotePerGbp, type VenueSessionGate } from './data/index.js';
 import { CapitalConfigStore, PaperBooks } from './risk/index.js';
 
-export type ReplayStage = 'book' | 'gate' | 'sizing' | 'orders' | 'rescales' | 'fills' | 'marks';
+export type ReplayStage =
+  | 'book'
+  | 'gate'
+  | 'sizing'
+  | 'orders'
+  | 'rescales'
+  | 'fills'
+  | 'reconciles'
+  | 'anchors'
+  | 'marks';
 
 export type BookDivergence =
   | {
@@ -63,6 +73,7 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_faults_no_delete',
   'v2_controls_no_delete',
   'v2_rescales_no_delete',
+  'v2_cash_anchors_no_delete',
 ] as const;
 
 // An order cancelled after the cut still rested at it; the outcome it rested under follows from
@@ -85,6 +96,7 @@ export interface JournalledDay {
   readonly startedAt: string | undefined;
   readonly markedAt: string | undefined;
   readonly dryRun: boolean;
+  readonly brokerMode: BrokerMode;
 }
 
 function journalledDryRun(db: StoreHandle, tradingDate: string): boolean {
@@ -98,6 +110,21 @@ function journalledDryRun(db: StoreHandle, tradingDate: string): boolean {
   return row.dry_run === 1;
 }
 
+// A reconcile or fill journalled before migration 0091 records no mode, and every run before it
+// was paper
+function journalledBrokerMode(db: StoreHandle, tradingDate: string): BrokerMode {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(
+         (SELECT broker_mode FROM v2_reconciles WHERE trading_date = @date AND broker_mode IS NOT NULL
+           ORDER BY reconcile_id LIMIT 1),
+         (SELECT broker_mode FROM v2_fills WHERE trading_date = @date ORDER BY fill_seq LIMIT 1),
+         'paper') AS mode`,
+    )
+    .get({ date: tradingDate }) as { mode: BrokerMode };
+  return row.mode;
+}
+
 export function journalledDay(db: StoreHandle, tradingDate: string): JournalledDay {
   const started = db
     .prepare(`SELECT MIN(recorded_at) AS at FROM (${UNION_RECORDED})`)
@@ -109,6 +136,7 @@ export function journalledDay(db: StoreHandle, tradingDate: string): JournalledD
     startedAt: started.at ?? undefined,
     markedAt: marked.at ?? undefined,
     dryRun: journalledDryRun(db, tradingDate),
+    brokerMode: journalledBrokerMode(db, tradingDate),
   };
 }
 
@@ -148,8 +176,8 @@ export function earlierRunsThatActed(db: StoreHandle, tradingDate: string): stri
          SELECT run_id, COUNT(*) AS sweeps, MIN(sweep_id) AS opening FROM v2_fill_sweeps
           WHERE trading_date = @date AND sweep_id < @first GROUP BY run_id),
        bounds AS (
-         SELECT r.run_id, r.sweeps, r.opening, o.last_fill_rowid AS fills_after,
-                o.order_rowid AS orders_after, n.first_fill_rowid AS fills_to,
+         SELECT r.run_id, r.sweeps, r.opening, o.last_fill_seq AS fills_after,
+                o.order_rowid AS orders_after, n.first_fill_seq AS fills_to,
                 n.order_rowid AS orders_to
            FROM runs r JOIN v2_fill_sweeps o ON o.sweep_id = r.opening
            JOIN v2_fill_sweeps n ON n.sweep_id = (
@@ -159,7 +187,7 @@ export function earlierRunsThatActed(db: StoreHandle, tradingDate: string): stri
         WHERE sweeps > 1
            OR EXISTS (SELECT 1 FROM v2_fill_reads x WHERE x.run_id = bounds.run_id)
            OR EXISTS (SELECT 1 FROM v2_fills f WHERE f.trading_date = @date
-                        AND f.rowid > fills_after AND f.rowid <= fills_to)
+                        AND f.fill_seq > fills_after AND f.fill_seq <= fills_to)
            OR EXISTS (SELECT 1 FROM v2_orders o WHERE o.trading_date = @date
                         AND o.rowid > orders_after AND o.rowid <= orders_to)
         ORDER BY opening`,
@@ -181,6 +209,12 @@ export function rewoundCopy(db: StoreHandle, tradingDate: string, startedAt: str
       copy.prepare(`DELETE FROM ${table} WHERE trading_date >= ?`).run(tradingDate);
     }
     copy.prepare('DELETE FROM v2_controls WHERE set_at > ?').run(startedAt);
+    copy
+      .prepare(
+        `DELETE FROM v2_cash_anchors WHERE CASE kind WHEN 'anchor' THEN trading_date >= @date
+           ELSE recorded_at > @startedAt END`,
+      )
+      .run({ date: tradingDate, startedAt });
     copy
       .prepare(
         `UPDATE v2_orders AS o SET outcome = ${reopened.outcome},
@@ -255,11 +289,11 @@ function fillsBefore(copy: StoreHandle): JournalFill[] {
       `SELECT f.book_id, f.trading_date, f.instrument, f.venue, f.leg, f.side, f.qty, f.price_gbp,
          f.fee_gbp, f.client_order_id, json_extract(o.payload, '$.stop') AS stop,
          json_extract(o.payload, '$.target') AS target, f.ordinal
-       FROM (SELECT *, rowid AS seq,
-                    ROW_NUMBER() OVER (PARTITION BY trading_date ORDER BY rowid) - 1 AS ordinal
+       FROM (SELECT *,
+                    ROW_NUMBER() OVER (PARTITION BY trading_date ORDER BY fill_seq) - 1 AS ordinal
                FROM v2_fills) f
        JOIN v2_orders o ON o.client_order_id = f.client_order_id
-       ORDER BY f.trading_date, f.seq`,
+       ORDER BY f.trading_date, f.fill_seq`,
     )
     .all() as JournalFill[];
 }
@@ -485,9 +519,36 @@ type Row = Record<string, unknown> & { readonly key: string };
 
 interface TableSpec {
   readonly stage: Exclude<ReplayStage, 'book' | 'gate'>;
-  readonly sql: (cancelledAfter: string) => string;
+  readonly sql: (cancelledAfter: string, journalled: boolean) => string;
   readonly presence: boolean;
 }
+
+const MIRRORED_DIFF_KINDS = [
+  'protective_qty',
+  'protective_price',
+  'position_unprotected',
+  'cash',
+  'cash_unverified',
+] as const;
+
+// The replay broker serves each venue's first journalled broker reconcile of the day (replay-broker.ts),
+// so only that one is held to the replay, and only when the broker could mirror it: not a failed
+// read, not one with any other difference, and not one from before migration 0091, which
+// journalled no broker cash
+const RECONCILE_SQL = (_after: string, journalled: boolean): string => `
+  SELECT key, status, diffs, detail, broker_mode FROM (
+    SELECT venue AS key, status, diffs, detail, broker_mode, reconcile_id,
+           ROW_NUMBER() OVER (PARTITION BY venue ORDER BY reconcile_id) AS nth FROM v2_reconciles
+     WHERE trading_date = @date AND source = 'broker' AND recorded_at <= @end)
+   WHERE nth = 1 AND ${
+     journalled
+       ? `broker_mode IS NOT NULL
+            AND (status = 'clean' OR (status <> 'read_failed' AND json_array_length(diffs) > 0))
+            AND NOT EXISTS (
+            SELECT 1 FROM json_each(diffs) d WHERE json_extract(d.value, '$.kind') NOT IN (${MIRRORED_DIFF_KINDS.map((kind) => `'${kind}'`).join(', ')}))`
+       : '1'
+}
+   ORDER BY reconcile_id`;
 
 const ORDER_SQL = (after: string): string => {
   const reopened = reopenedSql(after);
@@ -524,8 +585,19 @@ const TABLES: readonly TableSpec[] = [
     stage: 'fills',
     presence: true,
     sql: () => `SELECT fill_id AS key, client_order_id, book_id, trading_date, instrument, venue,
-                  leg, side, qty, price_gbp, fee_gbp FROM v2_fills
-                 WHERE trading_date = @date AND recorded_at <= @end ORDER BY rowid`,
+                  leg, side, qty, price_gbp, fee_gbp, broker_mode FROM v2_fills
+                 WHERE trading_date = @date AND recorded_at <= @end ORDER BY fill_seq`,
+  },
+  { stage: 'reconciles', presence: false, sql: RECONCILE_SQL },
+  {
+    stage: 'anchors',
+    presence: true,
+    sql: () => `SELECT a.venue AS key, a.currency, a.amount_quote, a.broker_mode, a.reference,
+                  (SELECT COUNT(*) FROM v2_fills f
+                    WHERE f.trading_date = a.trading_date AND f.fill_seq <= a.fill_seq) AS day_fills_held
+                  FROM v2_cash_anchors a
+                 WHERE a.trading_date = @date AND a.kind = 'anchor' AND a.recorded_at <= @end
+                 ORDER BY a.anchor_row_id`,
   },
   {
     stage: 'marks',
@@ -624,9 +696,13 @@ export function tradingDivergences(comparison: TradingComparison): {
   const end = comparison.markedAt ?? LATEST;
   const counts = { orders: 0, fills: 0 };
   const divergences = comparedTables(comparison).flatMap((spec) => {
-    const journalled = rowsOf(journal, spec.sql('>'), tradingDate, end);
+    const journalled = rowsOf(journal, spec.sql('>', true), tradingDate, end);
     if (spec.stage === 'orders' || spec.stage === 'fills') counts[spec.stage] = journalled.length;
-    return tableDivergences(spec, journalled, rowsOf(replayed, spec.sql('>'), tradingDate, LATEST));
+    return tableDivergences(
+      spec,
+      journalled,
+      rowsOf(replayed, spec.sql('>', false), tradingDate, LATEST),
+    );
   });
   return { divergences, counts };
 }
