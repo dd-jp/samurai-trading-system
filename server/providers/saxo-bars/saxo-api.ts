@@ -10,7 +10,7 @@ import type { Logger } from '../../shared/index.js';
 import { delay, isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
 import type { FetchResult, Sleeper } from '../bar-store/index.js';
 
-const SAXO_CHART_PAGE = 1200;
+export const SAXO_CHART_PAGE = 1200;
 const CHART_CALLS_PER_MINUTE = 100;
 const RATE_LIMIT_BACKOFF_MS = 65_000;
 const MAX_ATTEMPTS = 4;
@@ -40,7 +40,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function parseChartPage(body: unknown): ChartPage {
+export function parseChartPage(body: unknown): ChartPage {
   if (!isRecord(body)) throw new Error('Saxo chart: non-object body');
   const info = isRecord(body.ChartInfo) ? body.ChartInfo : {};
   const data = body.Data;
@@ -87,7 +87,7 @@ export function samplesToBars(samples: readonly ChartSample[], cashPerQuoted: nu
   return bars;
 }
 
-function mergeChartPages(pages: readonly (readonly ChartSample[])[]): ChartSample[] {
+export function mergeChartPages(pages: readonly (readonly ChartSample[])[]): ChartSample[] {
   const byTime = new Map<string, ChartSample>();
   for (const page of pages) for (const sample of page) byTime.set(sample.Time, sample);
   return [...byTime.values()].sort((a, b) => a.Time.localeCompare(b.Time));
@@ -102,7 +102,7 @@ export interface InstrumentDetails {
   readonly exchangeId: string;
 }
 
-function parseInstrumentDetails(body: unknown): InstrumentDetails {
+export function parseInstrumentDetails(body: unknown): InstrumentDetails {
   if (!isRecord(body)) throw new Error('Saxo details: non-object body');
   const exchange = isRecord(body.Exchange) ? body.Exchange.ExchangeId : undefined;
   return {
