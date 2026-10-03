@@ -1,9 +1,9 @@
 import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
-import { openSharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { listMigrations, MIGRATIONS_DIR } from '../../../shared/store/migrate.js';
 import { FX_SNAPSHOT_PATH } from '../data/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
@@ -29,12 +29,19 @@ copyFileSync(FX_SNAPSHOT_PATH, PATHS.fxPath);
 afterAll(() => rmSync(TEST_FX_DIR, { recursive: true, force: true }));
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };
 const dirs: string[] = [];
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
+
+afterAll(() => migrated.close());
 
 function migratedStore(): string {
   const dir = mkdtempSync(join(tmpdir(), 'v2-dashboard-'));
   dirs.push(dir);
   const path = join(dir, 'v2.sqlite');
-  openSharedStore(path).close();
+  writeFileSync(path, migrated.serialize());
   return path;
 }
 

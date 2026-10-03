@@ -1,10 +1,22 @@
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { MarketData } from '../../../contracts/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import { openReadOnlyStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import {
+  inMemoryCopyOf,
+  openReadOnlyStore,
+  openSharedStore,
+  type StoreHandle,
+} from '../../shared/store/index.js';
 import {
   BarsMarketData,
   type BarsSource,
@@ -20,6 +32,13 @@ const YEAR_START_GBPUSD = new BarsMarketData(
 ).gbpUsdAtYearStart(2026);
 
 const dirs: string[] = [];
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
+
+afterAll(() => migrated.close());
 
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), 'cost-fidelity-'));
@@ -48,8 +67,8 @@ const FILL_DEFAULTS = { leg: 'entry', side: 'buy', date: '2026-09-02', qty: 10, 
 type OrderSeed = { readonly id: string } & Partial<typeof ORDER_DEFAULTS>;
 type FillSeed = { readonly id: string; readonly order: string } & Partial<typeof FILL_DEFAULTS>;
 
-function journal(path: string, orders: readonly OrderSeed[], fills: readonly FillSeed[]) {
-  const db = openSharedStore(path);
+function journal(orders: readonly OrderSeed[], fills: readonly FillSeed[]) {
+  const db = inMemoryCopyOf(migrated);
   const book = db.prepare(
     `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
      VALUES (?, 'debate', ?, 600, 600, '2026-09-01T00:00:00Z')`,
@@ -88,10 +107,15 @@ function journal(path: string, orders: readonly OrderSeed[], fills: readonly Fil
   return db;
 }
 
+function journalFile(path: string, orders: readonly OrderSeed[], fills: readonly FillSeed[]) {
+  const db = journal(orders, fills);
+  writeFileSync(path, db.serialize());
+  db.close();
+}
+
 describe('readBrokerOrders', () => {
   it('reads only orders that reached the broker, with their fills and entry offsets', () => {
     const db = journal(
-      join(scratch(), 'v2.sqlite'),
       [
         {
           id: 'entry',
@@ -210,11 +234,11 @@ describe('reportCostFidelity', () => {
   it('scores the journal against the bar store and the cost model, seeding an absent FX file from its snapshot', async () => {
     const dir = scratch();
     const storePath = join(dir, 'v2.sqlite');
-    journal(
+    journalFile(
       storePath,
       [{ id: 'entry', payload: { price: 100, stop: 90, target: 120 } }],
       [{ id: 'alpaca:f1', order: 'entry', price: 99 / YEAR_START_GBPUSD }],
-    ).close();
+    );
     const store = await ParquetBarStore.open(join(dir, 'bars'));
     await store.write('alpaca', [
       {
@@ -256,7 +280,7 @@ describe('reportCostFidelity', () => {
 
   it('closes the store even when the bar store fails to load', async () => {
     const storePath = join(scratch(), 'v2.sqlite');
-    journal(storePath, [], []).close();
+    journalFile(storePath, [], []);
     let closed = false;
     const open = (path: string) => {
       const db = openReadOnlyStore(path);
