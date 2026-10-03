@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from '../../../shared/index.js';
 import { exitCodeOrOne, isMainModule } from '../../../tools/cli-entrypoint.js';
-import { resolveSaxoOAuthConfig } from './saxo/saxo-oauth.js';
+import { type FetchLike, resolveSaxoOAuthConfig } from './saxo/saxo-oauth.js';
 import { readTokenFile, tokenFilePath } from './saxo/saxo-token-file.js';
 import {
   SaxoTokenRefresher,
@@ -12,7 +12,6 @@ import {
 } from './saxo/saxo-token-source.js';
 import {
   assertSimGateway,
-  type FetchLike,
   SAXO_SIM_GATEWAY,
   SaxoSimGateway,
   SimOnlyRefusal,

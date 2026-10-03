@@ -1,3 +1,5 @@
+import type { FetchLike } from './saxo/saxo-oauth.js';
+
 export const SAXO_SIM_GATEWAY = 'https://gateway.saxobank.com/sim/openapi';
 const SIM_ORIGIN = 'https://gateway.saxobank.com';
 const SIM_PATH_PREFIX = '/sim/openapi/';
@@ -6,8 +8,6 @@ const SIM_PATH_PREFIX = '/sim/openapi/';
 const TRADE_SPACING_MS = 1_100;
 
 export type SaxoMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
-
-export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface SaxoReply {
   readonly status: number;
