@@ -369,7 +369,7 @@ What remains outside the waves:
 Doc 67 Step 5 status: the reachability list, its review and the per-area deletion waves are done. Each wave merged as its own reviewed PR, in the order doc 66 ruled (Q7). The crypto cut came first (#2010), then the MOVE (§5.1, #2034), the #900 live-gate refresh, `BrokerAdapter` into `contracts/broker.ts` (#2038), and waves 1–5. G17's parked market-intelligence code is deleted, and the X/social code stays under G18. Step 5 is not closed. Two items are left:
 
 - The Step 0 item 8 renames of the §5.2 survivors. They wait on David's homes.
-- The README. Its architecture, status and scripts sections still describe the v1 runtime, and its citations to deleted files are only marked historical. Rewriting it for v2 is outside the waves.
+- The README. Its architecture, status and scripts sections still describe the v1 runtime, and its citations to deleted files are only marked historical. Rewriting it for v2 is outside the waves. *Rewritten for v2 in #2049.*
 
 ### 4.6 Surviving tests that need a rewrite
 
