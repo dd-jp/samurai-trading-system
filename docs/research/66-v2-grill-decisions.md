@@ -386,7 +386,7 @@ David ruled in chat, one question at a time; each ruling is recorded on its tick
 5. **MOVE homes confirmed; `BrokerAdapter` moves to `contracts/` (Q5).**
 6. **Alpaca crypto emulation is cut in its own PR, before the MOVE PR (Q6).** It is reviewed and mutation-tested on its own, so the MOVE PR stays a pure move.
 7. **The MOVE wave goes first, then deletion waves 1–5 (Q7).** Order of work: the crypto cut, then the MOVE PR (with `TRADING_PATH_PREFIXES` and the Stryker globs moved in the same PR), then the #900 refresh, then waves 1–5.
-8. **Momentum backtest scripts are deleted in wave 1 (Q8).** Doc 70's numbers are then reproducible only from tag `v1-final`.
+8. **Momentum backtest scripts are deleted in wave 1 (Q8).** Doc 70's numbers are then reproducible only from tag `v1-final`. *Amended 2026-10-03 ([#1748](https://github.com/dd-jp/samurai-trading-system/issues/1748)):* the momentum harness postdates `v1-final`, so the files wave 1 deletes that are not at that tag are cited by commit `09012b29`, the last `main` commit before the deletions; David ruled no new tag (the session cannot push tags).
 9. **`saxo:login` is a v2 root (Q9).** It moves with the Saxo token code to the v2 Saxo execution module.
 10. **The live-money gate list is refreshed now (Q10).** Closed #900 comes off it, in a small PR that also updates the two tests citing it.
 11. **Candidate 2 keeps `MEAN_REVERSION_FROM` = 2016-10-11 ([#1785](https://github.com/dd-jp/samurai-trading-system/issues/1785#issuecomment-5948646719)).** The pre-declared value stands and the trial hash is unchanged.
