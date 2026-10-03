@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
+import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
 import {
   type Clock,
   describeThrownSafely,

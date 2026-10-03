@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { type DuckDBConnection, DuckDBInstance, JSDuckDBValueConverter } from '@duckdb/node-api';
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
-import { assertSortedUniqueDates } from '../../pipeline/momentum/index.js';
+import type { BarSeries, DailyBar } from '../../shared/index.js';
+import { assertSortedUniqueDates } from '../../shared/index.js';
 import { violatesBarShape } from './bar-hygiene.js';
 
 export const DEFAULT_BAR_STORE_ROOT = 'data/bars/parquet';

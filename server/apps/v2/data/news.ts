@@ -1,4 +1,4 @@
-import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/index.js';
+import type { AlpacaNewsArticle } from '../../../providers/news/index.js';
 import { describeThrownSafely, maskCredentials } from '../../../shared/index.js';
 import { addDays } from './macro-calendar.js';
 import type { NewsLedger, NewsRecord, StoredHeadline } from './news-ledger.js';

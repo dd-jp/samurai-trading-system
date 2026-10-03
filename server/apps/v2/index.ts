@@ -1,14 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { BrokerMode, CfdCosts, Sleeve, Venue } from '../../../contracts/index.js';
-import type {
-  AnthropicMessagesClient,
-  LlmSpendSink,
-  SpendCap,
-} from '../../pipeline/debate-engine/index.js';
-import { SqliteLlmSpendStore } from '../../pipeline/debate-engine/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
-import { UsEquityRegularHoursCalendar } from '../../providers/market-data-service/index.js';
-import { AlpacaNewsClient } from '../../providers/market-intelligence/index.js';
+import { UsEquityRegularHoursCalendar } from '../../providers/calendar/index.js';
+import { AlpacaNewsClient } from '../../providers/news/index.js';
+import type { AnthropicMessagesClient, LlmSpendSink, SpendCap } from '../../shared/debate/index.js';
+import { SqliteLlmSpendStore } from '../../shared/debate/index.js';
 import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely, readSeededFile, SystemClock } from '../../shared/index.js';
 import { NousAccountInFlightGate, tryNousEndpoint } from '../../shared/llm/index.js';

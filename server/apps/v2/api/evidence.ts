@@ -12,8 +12,8 @@ import {
 } from '../../../../contracts/index.js';
 import type { Clock } from '../../../shared/index.js';
 import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index.js';
-import { annualisedSharpe, maxDrawdown, moments } from '../../../tools/backtest/index.js';
 import { CLOSE_LEGS_SQL, entryOffsetOfPayload, entryPayloadOfClose } from '../entry-offset.js';
+import { annualisedSharpe, maxDrawdown, moments } from '../evidence/index.js';
 import { ENTRY_LIMIT_OFFSET } from '../risk/index.js';
 
 const G1_CLOSED_TRADES = 100;

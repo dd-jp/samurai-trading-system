@@ -13,8 +13,8 @@ import type {
   Valuation,
   Venue,
 } from '../../../../contracts/index.js';
-import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
 import type { Clock } from '../../../shared/index.js';
+import { saxoCustodyAccrual } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
 import { bookSpecsFor, sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';

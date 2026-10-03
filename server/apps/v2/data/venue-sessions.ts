@@ -9,7 +9,7 @@ import {
   US_TABLE_COVERAGE_END,
   UsEquityRegularHoursCalendar,
   wallClockToInstant,
-} from '../../../providers/market-data-service/index.js';
+} from '../../../providers/calendar/index.js';
 import { homeBarVenue } from './venues.js';
 
 export type Exchange = 'us' | 'lse';

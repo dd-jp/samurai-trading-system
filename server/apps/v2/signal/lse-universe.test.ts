@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
+import type { BarSeries, DailyBar } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { lseInstrumentsAbove, selectLseUniverse } from './lse-universe.js';
 

@@ -3,8 +3,8 @@ import type {
   LlmClient,
   LlmSpendSink,
   SpendCap,
-} from '../../../pipeline/debate-engine/index.js';
-import { AnthropicLlmClient } from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
+import { AnthropicLlmClient } from '../../../shared/debate/index.js';
 import type { Logger } from '../../../shared/index.js';
 import {
   ALL_PINS,

@@ -7,7 +7,7 @@ import {
   LlmTimeoutError,
   LlmTruncatedError,
   wrapUntrusted,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import { JUDGE_PIN } from './models.js';
 import {
   commonPrefixLength,

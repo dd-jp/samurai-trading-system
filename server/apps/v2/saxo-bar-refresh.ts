@@ -1,4 +1,3 @@
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import {
   applyBarHygiene,
   DEFAULT_BAR_STORE_ROOT,
@@ -17,7 +16,7 @@ import {
   type SaxoReadOnlyApi,
   samplesToBars,
 } from '../../providers/saxo-bars/index.js';
-import type { Logger } from '../../shared/index.js';
+import type { BarSeries, DailyBar, Logger } from '../../shared/index.js';
 import {
   assertNoShrink,
   type BarRefresh,

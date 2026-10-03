@@ -10,7 +10,7 @@ import type {
   Venue,
   VenueTotalWire,
 } from '../../../../contracts/index.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import {
   heldKey,

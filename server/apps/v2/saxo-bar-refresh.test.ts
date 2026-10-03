@@ -4,7 +4,6 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import {
   type ChartPage,
@@ -15,7 +14,7 @@ import {
   type SaxoLine,
   SaxoReadOnlyApi,
 } from '../../providers/saxo-bars/index.js';
-import type { Logger } from '../../shared/index.js';
+import type { BarSeries, DailyBar, Logger } from '../../shared/index.js';
 import {
   type BarRefresh,
   type BarRefreshReport,

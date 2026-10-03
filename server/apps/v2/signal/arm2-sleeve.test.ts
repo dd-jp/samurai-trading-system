@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Sleeve, SleeveContext, SleeveOutput } from '../../../../contracts/index.js';
-import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
+import type { BarSeries, DailyBar } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource, CfdInstrument } from '../data/index.js';
 import { addDays, CfdCatalogue, createVenueRouter } from '../data/index.js';

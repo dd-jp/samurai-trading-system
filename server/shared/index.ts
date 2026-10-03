@@ -36,6 +36,19 @@ export type { InjectableTimers } from './injectable-timers.js';
 export { DEFAULT_INJECTABLE_TIMERS } from './injectable-timers.js';
 export { isFiniteNumber } from './is-finite-number.js';
 export { parseIsoInstant } from './iso-instant.js';
+export type { BarSeries, DailyBar } from './market/index.js';
+export {
+  alpacaRegulatoryFees,
+  assertSortedUniqueDates,
+  averageTrueRange,
+  coverageSatisfied,
+  SAXO_COMMISSION_PER_SIDE,
+  saxoCustodyAccrual,
+  TRADING_DAYS_PER_YEAR,
+  trailingReturn,
+  wholeShares,
+  windowCoverage,
+} from './market/index.js';
 export { isString, readOhlcvBar } from './ohlcv-bar.js';
 export { credentialReader } from './require-credential.js';
 export {

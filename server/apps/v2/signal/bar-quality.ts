@@ -1,5 +1,5 @@
 import type { V2Bar } from '../../../../contracts/index.js';
-import { averageTrueRange } from '../../../pipeline/momentum/index.js';
+import { averageTrueRange } from '../../../shared/index.js';
 
 // #1838: a shape-invalid bar is never priced off (fail-closed, the candleFeatures idiom); a
 // caller's read function should reject an invalid last bar and filter invalid bars out of its

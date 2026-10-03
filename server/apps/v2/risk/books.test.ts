@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BookFill, Sleeve, SleeveSpec } from '../../../../contracts/index.js';
-import { saxoCustodyAccrual } from '../../../pipeline/momentum/index.js';
-import { SimulatedClock } from '../../../shared/index.js';
+import { SimulatedClock, saxoCustodyAccrual } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { bookSpecsFor } from './allocation.js';

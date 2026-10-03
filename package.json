@@ -11,7 +11,7 @@
   "scripts": {
     "dev:web": "vite dev --config client/vite.config.ts",
     "build": "tsc -p tsconfig.build.json && npm run build:migrations && npm run build:web",
-    "build:migrations": "node --eval \"const fs=require('node:fs');fs.cpSync('server/shared/store/migrations','dist/server/shared/store/migrations',{recursive:true});fs.cpSync('server/providers/market-intelligence/archive/migrations','dist/server/providers/market-intelligence/archive/migrations',{recursive:true});\"",
+    "build:migrations": "node --eval \"const fs=require('node:fs');fs.cpSync('server/shared/store/migrations','dist/server/shared/store/migrations',{recursive:true});fs.cpSync('server/providers/news/archive/migrations','dist/server/providers/news/archive/migrations',{recursive:true});\"",
     "build:web": "tsc -p client/tsconfig.json && vite build --config client/vite.config.ts",
     "v2:run": "node --env-file-if-exists=.env.local --import tsx server/apps/v2/index.ts",
     "v2:capital": "tsx server/apps/v2/set-capital.ts",

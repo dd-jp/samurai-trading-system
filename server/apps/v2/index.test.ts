@@ -9,9 +9,8 @@ import type {
   SleeveSpec,
   Venue,
 } from '../../../contracts/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import type { LogEntry, Logger } from '../../shared/index.js';
+import type { DailyBar, LogEntry, Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { inMemoryCopyOf, openSharedStore } from '../../shared/store/index.js';

@@ -1,4 +1,4 @@
-import type { DailyBar } from '../../pipeline/momentum/index.js';
+import type { DailyBar } from '../../shared/index.js';
 import type { AlpacaBarsApi, RawDailyBar } from './alpaca-bars-api.js';
 
 export function barDate(timestamp: string): string {

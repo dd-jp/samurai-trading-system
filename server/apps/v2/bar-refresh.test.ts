@@ -2,13 +2,12 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
 import {
   AlpacaBarsApi,
   ParquetBarStore,
   type RawDailyBar,
 } from '../../providers/bar-store/index.js';
-import type { Logger } from '../../shared/index.js';
+import type { DailyBar, Logger } from '../../shared/index.js';
 import { barRefreshFor, NO_BAR_REFRESH, refreshAlpacaBars } from './bar-refresh.js';
 
 const stores: ParquetBarStore[] = [];

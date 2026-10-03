@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import {
   AlpacaBarsApi,
   applyBarHygiene,
@@ -10,7 +9,7 @@ import {
   type QuarantinedBar,
   quarantineImplausibleBars,
 } from '../../providers/bar-store/index.js';
-import type { Logger } from '../../shared/index.js';
+import type { BarSeries, DailyBar, Logger } from '../../shared/index.js';
 import {
   assertNoShrink,
   type BarRefresh,

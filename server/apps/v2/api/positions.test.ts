@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { BarsMarketData, type LastBar, type MarkSource } from '../data/index.js';
 import { PositionsPanel, readHoldings } from './positions.js';

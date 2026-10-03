@@ -5,17 +5,17 @@ import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SleeveDecision } from '../../../contracts/index.js';
+import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
-} from '../../pipeline/debate-engine/index.js';
+} from '../../shared/debate/index.js';
 import {
   LlmProviderError,
   LlmRateLimitError,
   MAX_CAPTURED_PROMPT_CHARS,
-} from '../../pipeline/debate-engine/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
-import { ParquetBarStore } from '../../providers/bar-store/index.js';
+} from '../../shared/debate/index.js';
+import type { DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';

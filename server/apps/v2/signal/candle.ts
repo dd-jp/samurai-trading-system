@@ -1,4 +1,4 @@
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 
 export interface CandleFeatures {
   readonly body: number;
