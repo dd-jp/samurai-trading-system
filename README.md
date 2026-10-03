@@ -367,7 +367,7 @@ dist/server/apps/supervisor/index.js      # npm start
 
 ## Scripts
 
-Every script in `package.json`, all 42 of them. There are no others.
+`package.json` has 52 scripts. This table predates v2: it does not list the `v2:*` scripts, `bars:snapshot`, `crap`, `crap:report` or `saxo:keepalive`.
 
 | Tier | Script | What it does |
 | --- | --- | --- |

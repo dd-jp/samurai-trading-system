@@ -1,3 +1,4 @@
+import { LSE_CALENDAR_REFERENCE } from '../../apps/v2/data/index.js';
 import type { SaxoSessionState } from '../../apps/v2/execution/saxo/saxo-token-source.js';
 import type { FetchResult } from '../bar-store/index.js';
 import {
@@ -47,7 +48,7 @@ const tokens = {
 };
 
 describe('lse lines', () => {
-  it('declares 24 pre-registered lines, two of them spliced from a USD sibling', () => {
+  it('declares 24 pre-registered lines, two of them spliced from a USD sibling, the LSE calendar reference among them', () => {
     expect(LSE_MOMENTUM_LINES.length).toBe(24);
     expect(new Set(LSE_MOMENTUM_LINES.map((line) => line.tidm)).size).toBe(24);
     expect(new Set(LSE_MOMENTUM_LINES.map((line) => line.uic)).size).toBe(24);
@@ -56,6 +57,8 @@ describe('lse lines', () => {
       'USD',
       'USD',
     ]);
+    expect(LSE_CALENDAR_REFERENCE).toBe('ISF');
+    expect(LSE_MOMENTUM_LINES.some((line) => line.tidm === LSE_CALENDAR_REFERENCE)).toBe(true);
   });
 
   it('converts GBX to GBP exactly once by unit and refuses a unit factor for USD', () => {
