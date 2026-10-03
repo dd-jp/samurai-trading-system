@@ -5,7 +5,7 @@ import {
   NousApiError,
   NousRefusalError,
   NousTruncatedError,
-} from '../../../shared/llm/index.js';
+} from '../../llm/index.js';
 import {
   LlmAdmissionRefusedError,
   LlmCancelledError,

@@ -1,7 +1,7 @@
 import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import type { ModelPin } from './models.js';
 
 export interface ScriptedCall {

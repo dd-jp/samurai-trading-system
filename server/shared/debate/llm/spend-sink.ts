@@ -1,5 +1,5 @@
-import type { Logger } from '../../../shared/index.js';
-import { maskAndCap } from '../../../shared/index.js';
+import type { Logger } from '../../index.js';
+import { maskAndCap } from '../../index.js';
 import {
   type AnthropicUsage,
   crossesPromptTier,
@@ -7,9 +7,9 @@ import {
   priceUsage,
   promptTokensOf,
   rateFor,
-} from '../../../shared/llm/index.js';
-import type { StoreHandle } from '../../../shared/store/index.js';
-import { toStoredTimestamp } from '../../../shared/store/index.js';
+} from '../../llm/index.js';
+import type { StoreHandle } from '../../store/index.js';
+import { toStoredTimestamp } from '../../store/index.js';
 import { type PromptTierAlertChannel, PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 
 export interface LlmSpendRecord {

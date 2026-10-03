@@ -1,4 +1,4 @@
-import type { AnthropicUsage, LlmInFlightRefusalReason } from '../../../shared/llm/index.js';
+import type { AnthropicUsage, LlmInFlightRefusalReason } from '../../llm/index.js';
 
 export type LlmTimeoutSource = 'deadline' | 'status';
 

@@ -3,13 +3,13 @@ import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
   LlmSpendSink,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import {
   LlmProviderError,
   runBullPersona,
   runMediatorPersona,
   UNCAPPED_SPEND,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import type { LogEntry } from '../../../shared/index.js';
 import { buildLlmPanel, rotateSeats, seatModels } from './llm-panel.js';
 import { DEBATER_MAX_TOKENS, JUDGE_MAX_TOKENS } from './models.js';

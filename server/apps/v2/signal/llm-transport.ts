@@ -3,8 +3,8 @@ import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
-} from '../../../pipeline/debate-engine/index.js';
-import { LlmProviderError, NousMessagesClient } from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
+import { LlmProviderError, NousMessagesClient } from '../../../shared/debate/index.js';
 import type { Logger } from '../../../shared/index.js';
 import type { LlmInFlightGate } from '../../../shared/llm/index.js';
 import type { ModelPin } from './models.js';

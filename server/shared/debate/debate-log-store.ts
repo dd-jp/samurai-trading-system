@@ -1,4 +1,4 @@
-import type { DebateLog, DebateLogStore, DebateRoundLogEntry } from '../../shared/index.js';
+import type { DebateLog, DebateLogStore, DebateRoundLogEntry } from '../index.js';
 import type { DebateResult } from './types.js';
 
 export function buildDebateLog(

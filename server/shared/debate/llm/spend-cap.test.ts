@@ -1,6 +1,6 @@
-import { runWithTraceId } from '../../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
-import type { LogEntry, Logger } from '../../../shared/types.js';
+import { runWithTraceId } from '../../index.js';
+import { openSharedStore, type StoreHandle } from '../../store/index.js';
+import type { LogEntry, Logger } from '../../types.js';
 import {
   BUDGET_REMEDY,
   CORRUPT_LEDGER_REMEDY,

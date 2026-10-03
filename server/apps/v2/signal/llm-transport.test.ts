@@ -7,7 +7,7 @@ import {
   LlmRefusalError,
   LlmTruncatedError,
   SqliteLlmSpendStore,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { NousAccountInFlightGate, NousApiError } from '../../../shared/llm/index.js';

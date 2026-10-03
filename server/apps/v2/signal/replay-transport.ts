@@ -2,7 +2,7 @@ import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import {
   LlmMalformedResponseError,
   LlmProviderError,
@@ -13,7 +13,7 @@ import {
   MAX_CAPTURED_PROMPT_CHARS,
   MAX_CAPTURED_RESPONSE_CHARS,
   wrapUntrusted,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import { maskAndCap } from '../../../shared/index.js';
 import type { NewsSource } from '../data/index.js';
 import { NO_HEADLINES_KEY_POINT } from './debate-sleeve.js';

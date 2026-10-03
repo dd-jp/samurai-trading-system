@@ -1,4 +1,4 @@
-import { hashPromptTemplate } from '../../shared/llm/index.js';
+import { hashPromptTemplate } from '../llm/index.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import { wrapUntrusted } from './llm/prompt-safety.js';
 import type { LlmClient, LlmRequestContext } from './llm/types.js';

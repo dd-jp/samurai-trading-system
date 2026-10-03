@@ -1,5 +1,5 @@
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
-import type { LogEntry } from '../../../shared/types.js';
+import { openSharedStore, type StoreHandle } from '../../store/index.js';
+import type { LogEntry } from '../../types.js';
 import type { PromptTierAlert, PromptTierAlertChannel } from './prompt-tier-alert.js';
 import { PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 import { SqliteLlmSpendStore } from './spend-sink.js';

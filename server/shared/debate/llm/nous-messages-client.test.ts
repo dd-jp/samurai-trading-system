@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LogEntry } from '../../../shared/index.js';
+import type { LogEntry } from '../../index.js';
 import {
   LlmInFlightRefusedError,
   NousAccountInFlightGate,
   UNGATED_LLM_IN_FLIGHT,
-} from '../../../shared/llm/index.js';
+} from '../../llm/index.js';
 import { AnthropicLlmClient } from './anthropic-client.js';
 import {
   LlmAdmissionRefusedError,
