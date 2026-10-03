@@ -482,7 +482,7 @@ Sections 1-5 all came back favourable. This section is the binding question [#10
 
 ### 6.1 Method
 
-The public Jetstream firehose (`wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post`) was consumed **unauthenticated** and every `create` on `app.bsky.feed.post` matched against the 26 `screening_instrument` values in the checked-in pool (`server/providers/universe-pool/lse-etp-pool.ts`): AAPL AMD AMZN ARM BABA COIN EWY GOOG KWEB META MRNA MSFT MSTR NFLX NIO NVDA PLTR PYPL QQQ RACE SPY TSLA UBER VT XLE XYZ.
+The public Jetstream firehose (`wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post`) was consumed **unauthenticated** and every `create` on `app.bsky.feed.post` matched against the 26 `screening_instrument` values in the checked-in pool (`server/providers/universe-pool/lse-etp-pool.ts`): AAPL AMD AMZN ARM BABA COIN EWY GOOG KWEB META MRNA MSFT MSTR NFLX NIO NVDA PLTR PYPL QQQ RACE SPY TSLA UBER VT XLE XYZ. <!-- cite-exempt: historical — deleted in v1 teardown wave 4 (#1748); preserved at tag v1-final -->
 
 Jetstream was used rather than `searchPosts` deliberately. §8.2 establishes that **`$` is not a discriminating search token** — `q=NVDA` and `q=$NVDA` return identical rkeys and `hitsTotal` — so the API cannot answer "how many people wrote a cashtag". Reading the raw post text off the firehose can.
 

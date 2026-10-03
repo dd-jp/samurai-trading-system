@@ -6,8 +6,7 @@
     "coverage",
     "docs/prototypes",
     "docs/research/archive",
-    "server/tools/__fixtures__",
-    "server/providers/market-data-service/__fixtures__"
+    "server/tools/__fixtures__"
   ],
   "jsPlugins": ["eslint-plugin-no-comment-slop"],
   "rules": {
@@ -80,14 +79,6 @@
           },
           {
             "group": [
-              "**/universe-pool/**",
-              "!**/universe-pool/index.js",
-              "!**/universe-pool/index.ts"
-            ],
-            "message": "reach server/providers/universe-pool only via its index.ts barrel"
-          },
-          {
-            "group": [
               "**/market-intelligence/**",
               "!**/market-intelligence/index.js",
               "!**/market-intelligence/index.ts"
@@ -145,14 +136,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               },
               {
                 "group": [
@@ -216,14 +199,6 @@
               },
               {
                 "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
                   "**/market-intelligence/**",
                   "!**/market-intelligence/index.js",
                   "!**/market-intelligence/index.ts"
@@ -281,14 +256,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               },
               {
                 "group": [
@@ -352,14 +319,6 @@
               },
               {
                 "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
                   "**/market-intelligence/**",
                   "!**/market-intelligence/index.js",
                   "!**/market-intelligence/index.ts"
@@ -413,14 +372,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               },
               {
                 "group": [
@@ -484,14 +435,6 @@
               },
               {
                 "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
                   "**/market-intelligence/**",
                   "!**/market-intelligence/index.js",
                   "!**/market-intelligence/index.ts"
@@ -545,78 +488,6 @@
               {
                 "group": ["**/backtest/**", "!**/backtest/index.js", "!**/backtest/index.ts"],
                 "message": "reach server/tools/backtest only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/market-intelligence/**",
-                  "!**/market-intelligence/index.js",
-                  "!**/market-intelligence/index.ts"
-                ],
-                "message": "reach server/providers/market-intelligence only via its index.ts barrel"
-              },
-              {
-                "group": ["**/bar-store/**", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
-                "message": "reach server/providers/bar-store only via its index.ts barrel"
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "files": ["server/providers/universe-pool/**"],
-      "rules": {
-        "no-restricted-imports": [
-          "error",
-          {
-            "patterns": [
-              {
-                "group": ["**/contracts/**", "!**/contracts/index.js", "!**/contracts/index.ts"],
-                "message": "reach contracts only via its index.ts barrel"
-              },
-              {
-                "group": ["**/shared/**", "!**/shared/index.js", "!**/shared/index.ts"],
-                "message": "reach server/shared only via its index.ts barrel"
-              },
-              {
-                "group": ["**/shared/llm/**", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
-                "message": "reach server/shared/llm only via its index.ts barrel"
-              },
-              {
-                "group": ["**/store/**", "!**/store/index.js", "!**/store/index.ts"],
-                "message": "reach server/shared/store only via its index.ts barrel"
-              },
-              {
-                "group": ["**/execution/**", "!**/execution/index.js", "!**/execution/index.ts"],
-                "message": "reach server/apps/v2/execution only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/debate-engine/**",
-                  "!**/debate-engine/index.js",
-                  "!**/debate-engine/index.ts"
-                ],
-                "message": "reach server/pipeline/debate-engine only via its index.ts barrel"
-              },
-              {
-                "group": ["**/backtest/**", "!**/backtest/index.js", "!**/backtest/index.ts"],
-                "message": "reach server/tools/backtest only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/market-data-service/**",
-                  "!**/market-data-service/index.js",
-                  "!**/market-data-service/index.ts"
-                ],
-                "message": "reach server/providers/market-data-service only via its index.ts barrel"
               },
               {
                 "group": [
@@ -681,14 +552,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               }
             ]
           }
@@ -733,14 +596,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               }
             ]
           }
@@ -789,14 +644,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               },
               {
                 "group": [
@@ -896,14 +743,6 @@
               },
               {
                 "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
                   "**/market-intelligence/**",
                   "!**/market-intelligence/index.js",
                   "!**/market-intelligence/index.ts"
@@ -1000,14 +839,6 @@
               },
               {
                 "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
                   "**/market-intelligence/**",
                   "!**/market-intelligence/index.js",
                   "!**/market-intelligence/index.ts"
@@ -1100,14 +931,6 @@
               },
               {
                 "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
                   "**/market-intelligence/**",
                   "!**/market-intelligence/index.js",
                   "!**/market-intelligence/index.ts"
@@ -1189,14 +1012,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               },
               {
                 "group": [
@@ -1292,14 +1107,6 @@
               },
               {
                 "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
-              },
-              {
-                "group": [
                   "**/market-intelligence/**",
                   "!**/market-intelligence/index.js",
                   "!**/market-intelligence/index.ts"
@@ -1389,14 +1196,6 @@
                   "!**/market-data-service/index.ts"
                 ],
                 "message": "reach server/providers/market-data-service only via its index.ts barrel"
-              },
-              {
-                "group": [
-                  "**/universe-pool/**",
-                  "!**/universe-pool/index.js",
-                  "!**/universe-pool/index.ts"
-                ],
-                "message": "reach server/providers/universe-pool only via its index.ts barrel"
               },
               {
                 "group": [

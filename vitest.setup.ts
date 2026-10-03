@@ -28,8 +28,8 @@ globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestIni
   const escaped = hostname === '' ? '<unparseable URL>' : hostname;
   escapedToNetwork.add(escaped);
   throw new Error(
-    `offline: the test suite must not reach ${escaped}. Inject an offline client (see ` +
-      '`offlinePolymarketClient` in startup.test.ts) or install a file-local `globalThis.fetch` ' +
+    `offline: the test suite must not reach ${escaped}. Inject an offline client or install a ` +
+      'file-local `globalThis.fetch` ' +
       'that answers this host without leaving the process.',
   );
 }) as typeof fetch;

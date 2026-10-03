@@ -313,33 +313,7 @@ describe('MiArchiveStore', () => {
     });
   });
 
-  describe('rawRowsBetween (#1086)', () => {
-    const hour = (n: number): Date => new Date(T0.getTime() + n * 60 * 60 * 1000);
-
-    function seeded(): MiArchiveStore {
-      const store = new MiArchiveStore();
-      store.write(
-        [
-          raw({ source: MI_SOURCES.gdeltGkg, native_id: 'a', updated_at: hour(0) }),
-          raw({ source: MI_SOURCES.gdeltGkg, native_id: 'b', updated_at: hour(1) }),
-          raw({ source: MI_SOURCES.gdeltGkg, native_id: 'c', updated_at: hour(2) }),
-          raw({ source: MI_SOURCES.alpacaNews, native_id: 'd', updated_at: hour(1) }),
-        ],
-        [],
-      );
-      return store;
-    }
-
-    it('returns one source over a half-open span of vendor time, in order', () => {
-      const rows = seeded().rawRowsBetween(MI_SOURCES.gdeltGkg, hour(0), hour(2));
-
-      expect(rows.map((row) => row.native_id)).toEqual(['a', 'b']);
-    });
-
-    it('returns nothing for a span the archive does not reach', () => {
-      expect(seeded().rawRowsBetween(MI_SOURCES.gdeltGkg, hour(-5), hour(-1))).toEqual([]);
-    });
-
+  describe('migration 0003 (#1086)', () => {
     it('seeks through migration 0003s index rather than scanning the source', () => {
       const dir = mkdtempSync(join(tmpdir(), 'mi-archive-window-plan-'));
       const dbPath = join(dir, 'archive.sqlite');

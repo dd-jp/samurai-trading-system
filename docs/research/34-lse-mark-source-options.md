@@ -11,7 +11,7 @@ history. They need a price with an honest observation timestamp, in the book's c
 than `max_mark_age.stocks = 15 minutes`.
 
 Claims marked **VERIFIED** were tested by an HTTP call made 2026-08-18/19 with this project's own
-keys, against the eleven `lse_ticker` values in `server/providers/universe-pool/lse-etp-pool.ts`, or
+keys, against the eleven `lse_ticker` values in `server/providers/universe-pool/lse-etp-pool.ts`, or <!-- cite-exempt: historical — deleted in v1 teardown wave 4 (#1748); preserved at tag v1-final -->
 quoted from a vendor document retrieved at the URL given. Claims that could not be established that
 way are marked **NOT VERIFIED** and nothing is planned against them. No probe placed an order and no
 key appears here.

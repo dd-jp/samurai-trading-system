@@ -194,7 +194,7 @@ row counts exceed the session counts × bars-per-session.
 | PLTR | single-stock | 1Min | 1,160,191 | 1,460 | 2020-10-01 → 2026-07-31 |
 | TSLA | single-stock | 1Min | 1,915,076 | 2,657 | 2016-01-04 → 2026-07-31 |
 
-Universe and subclass mapping read from `server/providers/universe-pool/lse-etp-pool.ts`
+Universe and subclass mapping read from `server/providers/universe-pool/lse-etp-pool.ts` <!-- cite-exempt: historical — deleted in v1 teardown wave 4 (#1748); preserved at tag v1-final -->
 (`countRankableUnderlyings()` = 7 distinct `screening_instrument` values): **index** = SPY, QQQ;
 **single-stock** = AAPL, MSTR, NVDA, PLTR, TSLA.
 

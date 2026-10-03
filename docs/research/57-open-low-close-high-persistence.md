@@ -24,7 +24,7 @@ property of an instrument, or last decade's noise.
 
 **The statistic needs no re-declaration and none is made here.** #707's body registered it in
 2026-08-16 and it survived intact: [#813](https://github.com/dd-jp/samurai-trading-system/issues/813)
-(PR #902) expanded `server/providers/universe-pool/lse-etp-pool.ts` from 7 to **26 distinct
+(PR #902) expanded `server/providers/universe-pool/lse-etp-pool.ts` from 7 to **26 distinct <!-- cite-exempt: historical — deleted in v1 teardown wave 4 (#1748); preserved at tag v1-final -->
 `screening_instrument` values**, which restored the originally pre-registered monthly quintile
 as computable at ~5 names a bucket. The N=7 fork — median split, per-instrument time series, or
 record as unmeasurable — was **withdrawn as posed**, not chosen between. What this document runs
