@@ -35,6 +35,14 @@ function required(parsed: ReadonlyMap<string, string>, name: string): string {
   return value;
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isoDate(value: string): string {
+  if (!ISO_DATE.test(value))
+    throw new Error(`--date ${value} is not YYYY-MM-DD\n${CASH_MOVE_USAGE}`);
+  return value;
+}
+
 function oneOf(allowed: ReadonlySet<string>, value: string, what: string): string {
   if (!allowed.has(value)) throw new Error(`unknown ${what} ${value}\n${CASH_MOVE_USAGE}`);
   return value;
@@ -52,7 +60,7 @@ export function parseCashMoveArgs(argv: readonly string[]): {
       venue: oneOf(VENUES, required(parsed, 'venue'), 'venue') as Venue,
       amountQuote: Number(required(parsed, 'amount')),
       reference: required(parsed, 'reference'),
-      tradingDate: required(parsed, 'date'),
+      tradingDate: isoDate(required(parsed, 'date')),
     },
     storePath: parsed.get('store') ?? V2_STORE_PATH,
   };

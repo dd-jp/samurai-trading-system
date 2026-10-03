@@ -47,6 +47,9 @@ describe('parseCashMoveArgs', () => {
     expect(() => parseCashMoveArgs(['deposit', ...FLAGS.slice(0, 6)])).toThrow(
       /--date is required/,
     );
+    expect(() =>
+      parseCashMoveArgs(['deposit', ...FLAGS.slice(0, 6), '--date', '5/10/2026']),
+    ).toThrow(/--date 5\/10\/2026 is not YYYY-MM-DD/);
     expect(() => parseCashMoveArgs(['deposit', '--venue'])).toThrow(CASH_MOVE_USAGE);
     expect(() => parseCashMoveArgs(['deposit', 'venue', 'alpaca'])).toThrow(CASH_MOVE_USAGE);
   });
