@@ -1,3 +1,4 @@
+import { setTimeout as sleepFor } from 'node:timers/promises';
 import type { SaxoTokenSource } from '../../apps/v2/execution/index.js';
 import {
   resolveSaxoOAuthConfig,
@@ -7,8 +8,8 @@ import {
 } from '../../apps/v2/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import type { Logger } from '../../shared/index.js';
-import { delay, isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
-import type { FetchResult, Sleeper } from '../bar-store/index.js';
+import { isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
+import type { FetchResult } from '../bar-store/index.js';
 
 export const SAXO_CHART_PAGE = 1200;
 const CHART_CALLS_PER_MINUTE = 100;
@@ -34,7 +35,13 @@ export interface ChartPage {
   readonly samples: ChartSample[];
 }
 
-export type SaxoFetcher = (url: string, accessToken: string) => Promise<FetchResult>;
+export type SaxoFetcher = (
+  url: string,
+  accessToken: string,
+  signal: AbortSignal,
+) => Promise<FetchResult>;
+
+type SaxoSleeper = (ms: number, signal: AbortSignal) => Promise<void>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -151,11 +158,12 @@ export function openSaxoLiveSession(
   env: NodeJS.ProcessEnv,
   tokenPath?: string,
   logger?: Logger,
+  signal?: AbortSignal,
 ): SaxoLiveSession {
   const { gatewayBaseUrl } = resolveSaxoOAuthConfig('live', env);
   const tokens = liveTokenSource(env, tokenPath, logger);
   return {
-    api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl),
+    api: new SaxoReadOnlyApi(tokens, gatewayBaseUrl, jsonFetcher(), abortableSleep, signal),
     stop: () => tokens.stop(),
     lostReason: () => {
       const state = tokens.sessionState();
@@ -181,8 +189,9 @@ export class SaxoReadOnlyApi {
   constructor(
     private readonly tokens: SaxoTokenSource,
     private readonly gatewayBaseUrl: string,
-    private readonly fetcher: SaxoFetcher = jsonFetcher,
-    private readonly sleep: Sleeper = delay,
+    private readonly fetcher: SaxoFetcher = jsonFetcher(),
+    private readonly sleep: SaxoSleeper = abortableSleep,
+    private readonly signal: AbortSignal = new AbortController().signal,
   ) {}
 
   async dailyHistory(uic: number, assetType: SaxoAssetType): Promise<ChartPage> {
@@ -265,7 +274,8 @@ export class SaxoReadOnlyApi {
   private async get(path: string, params?: Record<string, string>): Promise<unknown> {
     const url = requestUrl(this.gatewayBaseUrl, path, params);
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const result = await this.fetcher(url, await this.tokens.getAccessToken());
+      this.signal.throwIfAborted();
+      const result = await this.fetcher(url, await this.tokens.getAccessToken(), this.signal);
       if (result.status === 200) return result.body;
       const delayMs = retryDelayMs(result.status, attempt);
       if (delayMs === undefined) {
@@ -273,7 +283,7 @@ export class SaxoReadOnlyApi {
           `Saxo ${result.status} for ${path}: ${JSON.stringify(result.body).slice(0, 300)}`,
         );
       }
-      await this.sleep(delayMs);
+      await this.sleep(delayMs, this.signal);
     }
     throw new Error(`Saxo: ${MAX_ATTEMPTS} attempts exhausted for ${path}`);
   }
@@ -284,17 +294,23 @@ export class SaxoReadOnlyApi {
       this.chartCalls.shift();
     }
     if (this.chartCalls.length >= CHART_CALLS_PER_MINUTE) {
-      await this.sleep(60_000 - (now - (this.chartCalls[0] as number)) + 500);
+      await this.sleep(60_000 - (now - (this.chartCalls[0] as number)) + 500, this.signal);
       this.chartCalls.shift();
     }
     this.chartCalls.push(Date.now());
   }
 }
 
-async function jsonFetcher(url: string, accessToken: string): Promise<FetchResult> {
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  return jsonOrTextResult(response);
+async function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  await sleepFor(ms, undefined, { signal });
+}
+
+export function jsonFetcher(timeoutMs = REQUEST_TIMEOUT_MS): SaxoFetcher {
+  return async (url, accessToken, signal) => {
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+      signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
+    });
+    return jsonOrTextResult(response);
+  };
 }

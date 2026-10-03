@@ -1,4 +1,4 @@
-export type { FetchResult, RawDailyBar, Sleeper } from './alpaca-bars-api.js';
+export type { FetchResult, RawDailyBar } from './alpaca-bars-api.js';
 export {
   AlpacaBarsApi,
   authHeaders,

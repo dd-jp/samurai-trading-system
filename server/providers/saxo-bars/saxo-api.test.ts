@@ -1,3 +1,5 @@
+import { createServer, type IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { LSE_CALENDAR_REFERENCE } from '../../apps/v2/data/index.js';
 import type { SaxoSessionState } from '../../apps/v2/execution/saxo/saxo-token-source.js';
 import type { FetchResult } from '../bar-store/index.js';
@@ -9,6 +11,7 @@ import {
 } from './lse-lines.js';
 import {
   type ChartSample,
+  jsonFetcher,
   mergeChartPages,
   parseChartPage,
   parseInstrumentDetails,
@@ -241,5 +244,146 @@ describe('saxo read-only api', () => {
     expect(sleeps.length).toBe(1);
     expect(sleeps[0]).toBeGreaterThan(0);
     expect(sleeps[0]).toBeLessThanOrEqual(60_500);
+  });
+});
+
+describe('saxo read-only api abort signal (#2027)', () => {
+  it('cancels the request on the wire: fetch rejects with an AbortError and the socket closes', async () => {
+    const received: IncomingMessage[] = [];
+    const server = createServer((request) => void received.push(request));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const controller = new AbortController();
+      const api = new SaxoReadOnlyApi(
+        tokens,
+        `http://127.0.0.1:${port}`,
+        undefined,
+        undefined,
+        controller.signal,
+      );
+      const pending = api.instrumentDetails(1, 'Etf');
+      await vi.waitFor(() => expect(received).toHaveLength(1));
+      const closed = new Promise<void>((resolve) => received[0]?.socket.once('close', resolve));
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      await closed;
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('gives up on a request the gateway never answers at the per-request timeout', async () => {
+    const server = createServer(() => undefined);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const api = new SaxoReadOnlyApi(tokens, `http://127.0.0.1:${port}`, jsonFetcher(50));
+      const started = Date.now();
+      await expect(api.instrumentDetails(1, 'Etf')).rejects.toMatchObject({
+        name: 'TimeoutError',
+      });
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('hands the signal to the fetcher and makes no request once it has aborted', async () => {
+    const controller = new AbortController();
+    const signals: AbortSignal[] = [];
+    const api = new SaxoReadOnlyApi(
+      tokens,
+      'https://gw.example',
+      async (_url, _token, signal) => {
+        signals.push(signal);
+        return { status: 200, body: { Symbol: 'X' } };
+      },
+      async () => {},
+      controller.signal,
+    );
+    await api.instrumentDetails(1, 'Etf');
+    expect(signals).toEqual([controller.signal]);
+    controller.abort();
+    await expect(api.instrumentDetails(1, 'Etf')).rejects.toMatchObject({ name: 'AbortError' });
+    expect(signals).toHaveLength(1);
+  });
+
+  it('cuts a 429 backoff short and does not retry after the abort', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const api = new SaxoReadOnlyApi(
+      tokens,
+      'https://gw.example',
+      async () => {
+        calls++;
+        setTimeout(() => controller.abort(), 5);
+        return { status: 429, body: '' };
+      },
+      undefined,
+      controller.signal,
+    );
+    const started = Date.now();
+    await expect(api.instrumentDetails(1, 'Etf')).rejects.toMatchObject({ name: 'AbortError' });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(calls).toBe(1);
+  });
+
+  it('does not retry after an abort during a sleeper that ignores the signal', async () => {
+    const controller = new AbortController();
+    const sleeps: AbortSignal[] = [];
+    let calls = 0;
+    const api = new SaxoReadOnlyApi(
+      tokens,
+      'https://gw.example',
+      async () => {
+        calls++;
+        return { status: 401, body: '' };
+      },
+      async (_ms, signal) => {
+        sleeps.push(signal);
+        controller.abort();
+      },
+      controller.signal,
+    );
+    await expect(api.instrumentDetails(1, 'Etf')).rejects.toMatchObject({ name: 'AbortError' });
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([controller.signal]);
+  });
+
+  it('requests no further chart page once the signal aborts mid-pagination', async () => {
+    const controller = new AbortController();
+    const dates = calendar.slice(0, SAXO_CHART_PAGE);
+    let calls = 0;
+    const api = new SaxoReadOnlyApi(
+      tokens,
+      'https://gw.example',
+      async () => {
+        calls++;
+        controller.abort();
+        return { status: 200, body: { Data: dates.map((date, i) => sample(date, i + 1)) } };
+      },
+      async () => {},
+      controller.signal,
+    );
+    await expect(api.dailyHistory(1, 'Etf')).rejects.toMatchObject({ name: 'AbortError' });
+    expect(calls).toBe(1);
+  });
+
+  it('passes the signal to the chart pacing wait, which an abort cuts short', async () => {
+    const controller = new AbortController();
+    const api = new SaxoReadOnlyApi(
+      tokens,
+      'https://gw.example',
+      async () => ({ status: 200, body: { Data: [] } }),
+      undefined,
+      controller.signal,
+    );
+    for (let i = 0; i < 100; i++) await api.dailyHistory(1, 'Etf');
+    const paced = api.dailyHistory(1, 'Etf');
+    setTimeout(() => controller.abort(), 5);
+    await expect(paced).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
