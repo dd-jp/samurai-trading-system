@@ -138,7 +138,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isFiniteSeconds(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
+  return Number.isFinite(value);
 }
 
 function isTokenBody(parsed: unknown): parsed is SaxoTokenBody {

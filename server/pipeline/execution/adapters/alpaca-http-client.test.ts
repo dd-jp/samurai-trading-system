@@ -1074,6 +1074,38 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     await expect(client.getPositions()).rejects.toThrow(`(getPositions): ${detail}`);
   });
 
+  it('names a response body that is not JSON', async () => {
+    const response = {
+      ...jsonResponse([]),
+      json: async () => {
+        throw new SyntaxError('Unexpected token');
+      },
+    } as Response;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getPositions()).rejects.toThrow(
+      'Alpaca API error: response body could not be parsed as JSON (getPositions): Unexpected token',
+    );
+  });
+
+  it('names a non-Error JSON failure', async () => {
+    const response = {
+      ...jsonResponse([]),
+      json: async () => {
+        throw 'truncated';
+      },
+    } as Response;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getPositions()).rejects.toThrow(
+      'Alpaca API error: response body could not be parsed as JSON (getPositions): truncated',
+    );
+  });
+
   it('getPositions accepts a short position', async () => {
     const position = { symbol: 'AAPL', qty: '-2', side: 'short', avg_entry_price: '150.00' };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([position])));

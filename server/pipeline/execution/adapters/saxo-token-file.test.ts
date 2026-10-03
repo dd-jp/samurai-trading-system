@@ -60,6 +60,16 @@ describe('readTokenFile', () => {
     );
   });
 
+  it('says "unknown error" when the error code is not a string', () => {
+    vi.mocked(fs.readFileSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('odd'), { code: 5 });
+    });
+    const path = join(dir, 'sim.json');
+    expect(() => readTokenFile(path)).toThrow(
+      `Saxo token file at ${path} could not be read (unknown error).`,
+    );
+  });
+
   it('rejects a file that is not JSON', () => {
     const path = fileWith('{not json');
     expect(() => readTokenFile(path)).toThrow(`Saxo token file at ${path} is not valid JSON.`);

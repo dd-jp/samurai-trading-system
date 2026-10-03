@@ -326,6 +326,25 @@ describe('SaxoTokenRefresher', () => {
     expect(scheduled).toHaveLength(0);
   });
 
+  it('treats a refresh token expiring this instant as expired, and says how to recover', async () => {
+    const expiresAt = new Date(START).toISOString();
+    writeTokenFile(
+      path,
+      savedRecord({
+        accessTokenExpiresAt: new Date(START - 3_600_000).toISOString(),
+        refreshTokenExpiresAt: expiresAt,
+      }),
+    );
+    const { refresher, scheduled, entries } = build();
+
+    await expect(refresher.getAccessToken()).rejects.toThrow(/session is lost/);
+    expect(scheduled).toHaveLength(0);
+    expect(entries.find((entry) => entry.event === 'saxo_session_lost')?.payload).toEqual({
+      environment: 'sim',
+      reason: `the saved refresh token expired at ${expiresAt} — run \`npm run saxo:login -- --env sim\` again`,
+    });
+  });
+
   it('refreshes on demand when the access token expired while the process was down', async () => {
     writeTokenFile(
       path,
