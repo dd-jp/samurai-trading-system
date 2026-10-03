@@ -133,15 +133,22 @@ export class SqliteSpendCap implements SpendCap {
     details: { spent_usd: number; budget_usd: number; reason?: string },
   ): SpendCapVerdict {
     const refused: SpendCapVerdict = { admitted: false, ...details, kind };
+    if (this.#claimAnnouncement(kind)) this.#announce(refused);
+    return refused;
+  }
 
+  #claimAnnouncement(kind: SpendCapRefusalKind): boolean {
     if (kind === 'budget') {
-      if (this.#budgetAnnounced) return refused;
+      if (this.#budgetAnnounced) return false;
       this.#budgetAnnounced = true;
-    } else {
-      if (this.#faultAnnounced) return refused;
-      this.#faultAnnounced = true;
+      return true;
     }
+    if (this.#faultAnnounced) return false;
+    this.#faultAnnounced = true;
+    return true;
+  }
 
+  #announce(refused: Extract<SpendCapVerdict, { admitted: false }>): void {
     try {
       this.onBreach?.(refused);
     } catch (error) {
@@ -156,7 +163,5 @@ export class SqliteSpendCap implements SpendCap {
         payload: { budget_usd: refused.budget_usd, spent_usd: refused.spent_usd },
       });
     }
-
-    return refused;
   }
 }

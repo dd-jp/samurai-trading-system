@@ -105,6 +105,12 @@ export interface XSearchClientOptions {
   gate: LlmInFlightGate;
 }
 
+function itemsFieldOf(parsed: unknown): unknown {
+  return typeof parsed === 'object' && parsed !== null
+    ? (parsed as { items?: unknown }).items
+    : undefined;
+}
+
 export class XSearchClient implements GrokSentimentClient {
   readonly #apiKey: string;
   readonly #baseUrl: string;
@@ -206,14 +212,7 @@ export class XSearchClient implements GrokSentimentClient {
     if (content.trim() === '') return [];
 
     const parseResult = this.#parseJsonContent(content);
-    if (!parseResult.ok) return this.#unreadable(context.instrument);
-    const parsed = parseResult.value;
-
-    if (typeof parsed !== 'object' || parsed === null) {
-      return this.#unreadable(context.instrument);
-    }
-
-    const items_ = (parsed as { items?: unknown }).items;
+    const items_ = parseResult.ok ? itemsFieldOf(parseResult.value) : undefined;
     if (!Array.isArray(items_)) return this.#unreadable(context.instrument);
 
     const cited = this.#buildCitedMap(citations);
@@ -265,31 +264,34 @@ export class XSearchClient implements GrokSentimentClient {
   ): { items: IntelligenceItem[]; unevidenced: number; stale: number; unreadableItems: number } {
     const items: IntelligenceItem[] = [];
     const seen = new Set<string>();
-    let unevidenced = 0;
-    let stale = 0;
-    let unreadableItems = 0;
+    const dropped = { unevidenced: 0, stale: 0, unreadable: 0 };
 
     for (const raw of items_.slice(0, MAX_ITEMS)) {
-      if (typeof raw !== 'object' || raw === null) {
-        unreadableItems += 1;
+      const outcome = this.#classify(raw, cited, context);
+      if (typeof outcome === 'string') {
+        dropped[outcome] += 1;
         continue;
       }
-      const outcome = this.#toItem(raw as RawSentiment, cited, context);
-      if (outcome === 'unevidenced') {
-        unevidenced += 1;
-        continue;
-      }
-      if (outcome === 'stale') {
-        stale += 1;
-        continue;
-      }
-      if (outcome === null) continue;
-      if (seen.has(outcome.id)) continue;
+      if (outcome === null || seen.has(outcome.id)) continue;
       seen.add(outcome.id);
       items.push(outcome);
     }
 
-    return { items, unevidenced, stale, unreadableItems };
+    return {
+      items,
+      unevidenced: dropped.unevidenced,
+      stale: dropped.stale,
+      unreadableItems: dropped.unreadable,
+    };
+  }
+
+  #classify(
+    raw: unknown,
+    cited: ReadonlyMap<string, string>,
+    context: { instrument: string; windowStart: Date; responseAt: Date },
+  ): IntelligenceItem | 'unevidenced' | 'stale' | 'unreadable' | null {
+    if (typeof raw !== 'object' || raw === null) return 'unreadable';
+    return this.#toItem(raw as RawSentiment, cited, context);
   }
 
   #logDroppedItems(
