@@ -202,7 +202,7 @@ Doc 11's control construction: the identical basket, identical sizing rule (inve
 
 - **Walk-forward:** anchored is not proposed. Rolling folds: 16 contiguous, non-overlapping folds over the evaluated window (about 8 months each at 10.7 years). Selection inside each training half uses only training returns; the out-of-sample path is the concatenation of test folds. **No fold overlaps**, no purging needed at monthly cadence beyond dropping the first lookback of each test fold's signals (signals are computed from full history, so no test fold's signal uses data after its own decision bar — the look-ahead test in the eval line).
 - **PBO:** `pbo()` in `server/tools/backtest/overfitting.ts` over the trial × fold matrix (combinatorially symmetric cross-validation, 12,870 partitions at 16 folds). Pass ≤ 0.10 per G9.
-- **Code changes in the build phase (recorded here so the eval can check them):** `KILL_LINE.maxPbo` in `server/tools/backtest/stage2-verdict.ts` (0.05 → 0.10), `max_pbo.max` in `server/shared/threshold-bounds.ts` (0.05 → 0.10), **and** `PBO_REJECT_THRESHOLD` in `server/tools/backtest/overfitting.ts` (0.05 → 0.10) — a third site doc 67 Step 1 does not list, found on reading the file — with their tests. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
+- **Code changes in the build phase (recorded here so the eval can check them):** `KILL_LINE.maxPbo` in `server/tools/backtest/stage2-verdict.ts` (0.05 → 0.10), `max_pbo.max` in `server/shared/threshold-bounds.ts` (0.05 → 0.10), **and** `PBO_REJECT_THRESHOLD` in `server/tools/backtest/overfitting.ts` (0.05 → 0.10) — a third site doc 67 Step 1 does not list, found on reading the file — with their tests. <!-- cite-exempt: historical — deleted in v1 teardown waves 2 and 5 (#1748); preserved at tag v1-final -->
 
 ### 2.15 The strategy is written as the module live code imports
 
@@ -218,7 +218,7 @@ Per trial: annualised return, vol, Sharpe, deflated Sharpe, max drawdown, turnov
 
 ## 3. Rulings this proposal does not touch
 
-Q17's Step 2 verdict (debate sleeve long and short, each a counted trial vs arm 2) and G18 (sentiment/social in the debate sleeve) concern the other sleeve; nothing above depends on or contradicts them. G5's veto shadow book is Step 3. Doc 67's G9 row also names `server/apps/orchestrator/production.ts`, `server/pipeline/feedback-loop/sqlite-tuning-store.ts` and `server/pipeline/risk-manager/risk-thresholds.ts` as 0.05 enforcement points; they read the bound from `server/shared/threshold-bounds.ts`, so the §2.14 change there carries through, and the build phase confirms each with a test rather than assuming it. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
+Q17's Step 2 verdict (debate sleeve long and short, each a counted trial vs arm 2) and G18 (sentiment/social in the debate sleeve) concern the other sleeve; nothing above depends on or contradicts them. G5's veto shadow book is Step 3. Doc 67's G9 row also names `server/apps/orchestrator/production.ts`, `server/pipeline/feedback-loop/sqlite-tuning-store.ts` and `server/pipeline/risk-manager/risk-thresholds.ts` as 0.05 enforcement points; they read the bound from `server/shared/threshold-bounds.ts`, so the §2.14 change there carries through, and the build phase confirms each with a test rather than assuming it. <!-- cite-exempt: historical — deleted in v1 teardown waves 2 and 5 (#1748); preserved at tag v1-final -->
 
 ## 4. Questions for David (nothing below is decided)
 

@@ -334,7 +334,7 @@ Wave 5 on this base is 18 production files (1,131 lines) and 11 tests (1,052 lin
 
 Done. Re-run on base 5e37dd95. The list came out as wave 4 predicted: 18 production files (1,131 lines) and 11 tests (1,052 lines). Against the table above, store/closed-trade-row.ts is gone (wave 3 deleted it early), and book-currency.ts and store/fill-row.ts with its test joined, because doc 66's 2026-10-02 rulings 2 (Q2, option C) and 3 (Q3) released both §6 holds. Nothing dropped out and nothing newly unreachable joined. Of the 332 production files, fallow finds 34 unreachable from the v2 roots and graphify 35. The extra one is `server/shared/types/broker.ts`, a barrel hop that fallow reaches through `server/shared/types.ts`, so it stays (§9). Outside the waves the run still finds only the moved Saxo transport. The G18 keep closure is unchanged: the archive store, archive/mi-sources.ts and nous-responses.ts.
 
-Client check (§8): client/ and e2e/ name none of the 56 exports of contracts/snapshot.ts, metrics.ts, pipeline.ts and providers.ts. The search was word-bounded on every export name. The client still imports only `@contracts`, and its tests pass on the trimmed barrel.
+Client check (§8): client/ and e2e/ name none of the 57 exports of contracts/snapshot.ts, metrics.ts, pipeline.ts and providers.ts. The search was word-bounded on every export name, including `DASHBOARD_SNAPSHOT_FIELD_NAMES`, which was not in the barrel. The client still imports only `@contracts`, and its tests pass on the trimmed barrel.
 
 Deleted: the 18 production files and the 11 tests, about 2,290 lines with the barrel trims. No migration is touched. The barrel and contract edits:
 
