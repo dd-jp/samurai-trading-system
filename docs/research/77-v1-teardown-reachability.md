@@ -302,20 +302,22 @@ The target locations below are **proposals for David to confirm**; the ruling sa
 | Broker state store | broker-state-store.ts (178, InMemoryBrokerStateStore), sqlite-broker-state-store.ts (267) | server/apps/v2/execution/broker-state/ | the BrokerStateStore interface |
 | Saxo token, OAuth, keep-alive | adapters/saxo-environment.ts (13), adapters/saxo-oauth.ts (160), adapters/saxo-token-file.ts (133), adapters/saxo-token-lock.ts (41), adapters/saxo-token-source.ts (434), adapters/saxo-keepalive-state.ts (50), adapters/venue-errors.ts (27) | server/apps/v2/execution/saxo/ | SaxoTokenSource, SaxoSessionState |
 | Alert-channel types | oco-double-fill-alert.ts (11), unpriced-fill-alert.ts (15), and SaxoSessionLostAlertChannel in adapters/saxo-token-source.ts | stays with its producer | OcoDoubleFillAlertChannel, UnpricedFillAlertChannel, SaxoSessionLostAlertChannel |
-| Type barrels | types.ts (58) and types/broker.ts (9), which re-export the server/shared/types/broker.ts types (#1945); index.ts (118) | deleted once importers point at the new homes | `BrokerAdapter` and its order types could move from `server/shared` to `contracts/` in the same wave (**David's call**) |
+| Type barrels | types.ts (58) and types/broker.ts (9), which re-export the server/shared/types/broker.ts types (#1945); index.ts (118) | deleted once importers point at the new homes | `BrokerAdapter` and its order types could move from `server/shared` to `contracts/` in the same wave (**David's call**; ruled 2026-10-03, see the note below the table) |
 
 That is 22 files and 3,977 lines before the barrels. Notes for the build:
 
 - `contracts/` must keep importing nothing from `server/` (`contracts/boundary.test.ts`).
 - **Mutation gating has to move with the files, in the same PR.** `TRADING_PATH_PREFIXES` in `server/tools/mutation-local.ts` lists server/pipeline/execution/ and server/pipeline/momentum/sizing.ts. A moved Alpaca adapter or a moved sizing.ts matches no prefix, so CI would report later changes to it as "changed but not mutated" without failing. The MOVE PR adds the new paths to the prefixes, updates the `server/tools/mutation-local.test.ts` cases that pin the old ones, and moves the `stryker.config.mjs` globs for server/pipeline/execution and server/pipeline/momentum.
 - `server/apps/v2/boundaries.test.ts` has an `imports-v1-broker` fixture that must point at the new path.
+- `BrokerAdapter`'s home: ruled 2026-10-03 (doc 66, broker contracts ruling 1): it moves to `contracts/` with ISO 8601 strings in place of `Date` (`fetchNewFills(since: string)`, `NormalizedFill.timestamp: string`), and the adapters convert at the edge. It shipped as its own PR after the MOVE, #2038 (`a526ef2b`), in `contracts/broker.ts`.
+- The MOVE landed on 2026-10-03: #2032 split the broker functions whose complexity blocked the move, and #2034 moved the groups above into `server/apps/v2/execution/alpaca/`, `server/apps/v2/execution/broker-state/` and `server/apps/v2/execution/saxo/`.
 - adapters/alpaca-crypto-emulation.ts (606 lines) is live only because AlpacaBrokerAdapter calls it, and Q11 lists crypto remnants as known-dead. Cutting it out changes the live Alpaca adapter, which is broker code, so whether that happens in the MOVE PR or in its own PR is **David's call**.
   - Ruled 2026-10-02 (doc 66, items 6–7): its own PR, before the MOVE. The #1748 cut deleted it with its test, oco-double-fill-alert.ts (the emulation was its only producer), the Alpaca client's limit and stop-limit placements (only the emulation sent them), the crypto symbol mapping and the v1 smoke's crypto-emulation probe. The adapter now refuses any bracket that is not stocks. The Alpaca group above moves without those files.
 - adapters/alpaca-adapter.test.ts needs the wave 3 rewrite in §4.6 whichever wave order is chosen.
 
 ### 5.2 Other survivors in v1-named directories (rename, Step 0 item 8)
 
-These 44 production files are reachable by both methods and live outside `server/apps/v2/`. The renames are **proposals**: Step 0 item 8 asks for v2 vocabulary but rules no names.
+These 44 production files are reachable by both methods and live outside `server/apps/v2/`. The renames are **proposals**: Step 0 item 8 asks for v2 vocabulary but rules no names. The proposed homes for the momentum and debate-engine survivors are still **open for David** after the 2026-10-03 rulings: putting them under `server/apps/v2/` breaks the v2 module boundaries in `.oxlintrc.json`.
 
 | Today | Files (lines) | What v2 uses it for | Proposed home |
 |---|---|---|---|
@@ -450,7 +452,7 @@ Doc citations each wave must fix, outside the immutable record directories: wave
 2. **saxo-http-client.ts**: option A, B or C (§7). This decides #1930, #1868 and #1426, and whether the Q2 hold in §6 is released.
 3. **The v1 CGT matcher** (§6): hold it until #1947 ports it, or delete it and port from tag v1-final? This also decides store/fill-row.ts and, together with Q2, book-currency.ts.
 4. **G18 scope** (§6): does "the X/social code" also cover the v1 sentiment analyst, the MI ingest agent and the item scorer? G18 also says "v1's news feed is left as it is", and mi-ingest-agent.ts is that feed's ingest. If the answer is yes, those files move from waves 3 and 4 to KEEP.
-5. **MOVE targets and names** (§5): confirm the proposed homes, and whether `BrokerAdapter` moves from `server/shared` to `contracts/` in the same wave.
+5. **MOVE targets and names** (§5): confirm the proposed homes, and whether `BrokerAdapter` moves from `server/shared` to `contracts/` in the same wave. *Ruled 2026-10-02 and 2026-10-03 (doc 66): §5.1's homes confirmed and built (#2034); `BrokerAdapter` to `contracts/` with ISO 8601 strings, in its own PR after the MOVE (#2038). §5.2's momentum and debate-engine homes stay open.*
 6. **Alpaca crypto emulation** (§5.1): cut it from the live Alpaca adapter inside the MOVE PR, or in its own PR?
 7. **Order**: waves 1 to 5 and then the MOVE wave, as proposed, or the MOVE first so v2 stops importing `pipeline/` before any deletion? The wave settling in §3.4 holds either way.
 8. **Momentum backtest scripts** (wave 1, server/tools/backtest/momentum): doc 67 Step 3 already sends the momentum loss-budget copy "with Step 5". Confirm that doc 70's numbers are then reproducible only from tag v1-final.
