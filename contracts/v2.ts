@@ -16,11 +16,17 @@ export interface V2Bar {
   readonly rawClose: number;
 }
 
+export interface GbpUsdFix {
+  readonly gbpUsd: number;
+  readonly fixDate: string;
+}
+
 export interface MarketData {
   lastBarBefore(instrument: string, tradingDate: string): V2Bar | undefined;
   barsBefore(instrument: string, tradingDate: string, count: number): readonly V2Bar[];
   gbpUsdAtYearStart(year: number): number;
   gbpUsdYearStartFixDate?(year: number): string | undefined;
+  gbpUsdOnDay?(date: string): GbpUsdFix;
 }
 
 export type SleeveAction = 'enter_long' | 'enter_short' | 'exit' | 'skip' | 'none';

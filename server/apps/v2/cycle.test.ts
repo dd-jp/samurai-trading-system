@@ -33,6 +33,7 @@ import {
   toBrokerFillId,
 } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { SqliteCashAnchors } from './cash-anchor.js';
 import * as cycleModule from './cycle.js';
 import {
   budgetChanges,
@@ -265,7 +266,9 @@ function primaryBooksMirror(
       return Promise.resolve({
         positions: [...view.positions].map(([instrument, qty]) => ({ instrument, qty })),
         openOrders: [...view.openOrders, ...stops],
-        cashQuote: view.cashGbp * (venue === 'alpaca' ? FX : 1),
+        cashQuote:
+          primaries.reduce((sum, book) => sum + books.cash(book.id), 0) *
+          (venue === 'alpaca' ? FX : 1),
       });
     },
   };
@@ -317,6 +320,7 @@ function harness(
     },
     gbpUsdAtYearStart: () => FX,
     gbpUsdYearStartFixDate: () => '2025-12-31',
+    gbpUsdOnDay: () => ({ gbpUsd: FX, fixDate: '2025-12-31' }),
   };
   const books = new PaperBooks(
     db,
@@ -347,6 +351,7 @@ function harness(
     atomically: (work) => db.transaction(work)(),
     brokerMode: 'paper',
     reconcileCashToleranceGbp: MIRROR_CASH_TOLERANCE_GBP,
+    cashAnchors: new SqliteCashAnchors(db, clock),
     risk: new V2RiskGate({
       books,
       capital,
@@ -5456,6 +5461,10 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
     await runCycle(deps, '2026-09-25');
+    if (brokerMode === 'live') {
+      const { cashQuote } = await deps.brokerBooks.read('alpaca');
+      deps.cashAnchors?.recordAnchor('alpaca', cashQuote, '2026-09-25');
+    }
     alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
     deps.setDecisions([exitAapl, longMsft]);
     const logs: LogEntry[] = [];
@@ -5897,6 +5906,31 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
     ).toEqual([
       { status: 'clean', detail: 'cash not compared on paper (David 2026-09-29, #1872)' },
     ]);
+  });
+
+  it('live with no anchor: the first clean run records the broker cash, then checks fills against it (#1927)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    const live = { ...deps, brokerMode: 'live' as const, reconcileCashToleranceGbp: 5 };
+    await runCycle(live, '2026-09-25');
+    const anchored = deps.cashAnchors?.anchor('alpaca');
+    expect(anchored).toMatchObject({ currency: 'USD', cashQuote: 1_000 * FX });
+    expect(rows(deps, 'SELECT kind, reference, trading_date FROM v2_cash_anchors')).toEqual([
+      { kind: 'anchor', reference: 'go-live', trading_date: '2026-09-25' },
+    ]);
+    expect(rows(deps, "SELECT detail FROM v2_reconciles WHERE source = 'broker'")).toEqual([
+      { detail: 'cash anchor recorded: 1250.00 USD (#1927)' },
+    ]);
+
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.setDecisions([longMsft]);
+    await runCycle(live, '2026-09-28');
+    expect(deps.cashAnchors?.storeFlowSince('alpaca', anchored?.fillRowid ?? 0)).toEqual({
+      ok: true,
+      quote: -120.5,
+    });
+    expect(alpaca.brackets.map((order) => order.client_order_id)).toContain(PRIMARY_MSFT);
+    expect(rows(deps, 'SELECT COUNT(*) AS n FROM v2_cash_anchors')).toEqual([{ n: 1 }]);
   });
 
   it('live compares cash: a gap inside the set tolerance is clean', async () => {

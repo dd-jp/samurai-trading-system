@@ -4,7 +4,6 @@ import { tickFor } from './execution/index.js';
 export interface VenueView {
   readonly positions: ReadonlyMap<string, number>;
   readonly openOrders: readonly BrokerOpenOrder[];
-  readonly cashGbp: number;
 }
 
 export interface HeldProtection {
@@ -203,22 +202,11 @@ function orderDiffs(store: VenueView, broker: VenueView): ReconcileDiff[] {
   return [...missing, ...unknown];
 }
 
-export type CashRule = 'not_compared' | { readonly toleranceGbp: number | undefined };
-
-function cashDiffs(store: VenueView, broker: VenueView, rule: CashRule): ReconcileDiff[] {
-  if (rule === 'not_compared') return [];
-  const amounts = { store: store.cashGbp, broker: broker.cashGbp };
-  if (rule.toleranceGbp === undefined) return [diff('cash_unverified', amounts)];
-  if (Math.abs(store.cashGbp - broker.cashGbp) <= rule.toleranceGbp) return [];
-  return [diff('cash', amounts)];
-}
-
-export function compareVenue(store: StoreView, broker: VenueView, cash: CashRule): ReconcileDiff[] {
+export function compareVenue(store: StoreView, broker: VenueView): ReconcileDiff[] {
   return [
     ...positionDiffs(store, broker),
     ...unprotectedDiffs(store, broker),
     ...protectiveDiffs(store, broker),
     ...orderDiffs(store, broker),
-    ...cashDiffs(store, broker, cash),
   ];
 }
