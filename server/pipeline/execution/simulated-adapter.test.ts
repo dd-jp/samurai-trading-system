@@ -160,6 +160,25 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     expect(marketState.spread).toBeNull();
   });
 
+  it('models an entry fill carrying the cost breakdown', async () => {
+    const adapter = makeAdapter();
+    await adapter.submitBracket(makeBracket());
+
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    expect(fills).toEqual([
+      {
+        client_order_id: 'key-aapl-1355',
+        broker_fill_id: 'key-aapl-1355:entry',
+        leg: 'entry',
+        price: 100,
+        qty: 100,
+        fee: 1,
+        timestamp: NOW.toISOString(),
+        cost_breakdown: { spread_cost: 0, commission: 1, slippage: 0, market_impact: 0 },
+      },
+    ]);
+  });
+
   it('yields exactly one fill when the same client order id is submitted N times', async () => {
     const adapter = makeAdapter();
 
