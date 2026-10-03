@@ -1,4 +1,3 @@
-export { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from './debate-log-store.js';
 export type {
   AnthropicMessageOptions,
   AnthropicMessageRequest,
@@ -15,7 +14,6 @@ export {
   LlmTruncatedError,
 } from './llm/errors.js';
 export { classifyFailureCause } from './llm/failure-cause.js';
-export { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 export { MockLlmClient } from './llm/mock-client.js';
 export { NousMessagesClient } from './llm/nous-messages-client.js';
 export { wrapUntrusted } from './llm/prompt-safety.js';
@@ -27,7 +25,7 @@ export {
   MAX_CAPTURED_RESPONSE_CHARS,
   SqliteLlmSpendStore,
 } from './llm/spend-sink.js';
-export type { LlmClient, LlmRequest } from './llm/types.js';
+export type { LlmClient } from './llm/types.js';
 export type { PersonaResponse } from './personas.js';
 export { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
 export type { DebatePersonas, MediatorAssessment, RoundContext } from './round-orchestrator.js';

@@ -289,6 +289,28 @@ Not in a wave: the moved transport, server/apps/v2/execution/saxo/saxo-client.ts
 
 </details>
 
+### Wave 4 status (2026-10-03)
+
+Done. Re-run on base a6d59095. The production list came out identical to the one above: 39 files, now 6,843 lines because wave 3 trimmed exports in some of them. The test list gains the three tests wave 3 kept and trimmed (indicator-registry.test.ts, mi-ingest-agent.test.ts and lse-etp-pool.test.ts), whose subjects go here, for 36 tests and 10,269 lines. Nothing dropped out, and nothing newly unreachable joined: outside the waves the run still finds only the moved Saxo transport (§7, wave 3 status). Q4 (doc 66) ruled that G18's keep covers the X/social code only, so the MI ingest agent, the item scorer and the Polymarket code went as listed.
+
+Deleted: the 39 production files, the 36 tests and the indicator golden fixture directory (the generator, 880 lines, and the JSON, 4,098), about 22,100 lines. The config edits are as listed:
+
+- The market-data-service barrel loses its `Bar` and `BarWindow` re-export from types.ts. The market-intelligence barrel had no wave 4 line left.
+- `.oxlintrc.json` loses the universe-pool override and the universe-pool barrel pattern in every other block, and both ignore files lose the fixture directory.
+- `.github/workflows/ci.yml` loses the golden step, and with it the citations job's Python setup, which only that step used. The orchestrate-issues skill's merge gate drops the same two commands.
+- `stryker.config.mjs` and `TRADING_PATH_PREFIXES` name no wave 4 path, so they and their tests are unchanged.
+
+Exports left unused were trimmed until `fallow dead-code` was clean:
+
+- `server/providers/market-data-service/trading-calendar.ts` makes `toZonedTime`, `findSessionClose`, `MAX_SESSION_SEARCH_DAYS` and `SessionSearchDirection` module-private; alpaca-session-calendar.ts was their only other user.
+- The G18 archive files stay. `MiArchiveStore` loses `rawRowsBetween` (only the GDELT scoring pass read it) and the three refusal-streak methods (only the Polymarket agent), and `server/providers/market-intelligence/archive/mi-sources.ts` loses `HYDRATING_MI_SOURCES` and its hydration table (only the MI ingest agent). No migration is touched, and the test that migration 0003's index serves the windowed query stays. Tag v1-final keeps the removed methods.
+- Two wave 5 barrels lose re-exports whose last users went here: `server/shared/index.ts` drops `InstrumentSubclass` (also from `server/shared/types.ts` and `server/shared/types/primitives.ts`; lse-etp-pool.ts) and `LogEntryTemplate` (the GDELT and Polymarket agents). No wave 5 file is deleted.
+- `server/pipeline/debate-engine/index.ts` drops five re-exports that only wave 4 files used: `DEBATE_BAR_TIMEFRAME_MS` and `floorToBar` (market-intelligence imports them from the declaring file), `BARE_JSON_INSTRUCTION` and `unwrapFencedJson` (personas.ts imports them directly), and the `LlmRequest` type. No debate-engine file moves or loses a declaration, so the §5.2 home question is untouched.
+
+The `MINIMUM_EVENT_ASSIGNMENTS` floor in `server/shared/types/log-event-code.test.ts` drops from 80 to 60. The scan finds 66 assignments against 86 on base, and all 20 lost ones were in deleted files: service.ts 2, gdelt-ingest-agent.ts 4, gdelt-scoring-pass.ts 2, mi-ingest-agent.ts 4, polymarket-agent.ts 6 and item-scorer.ts 2. No surviving file's count changed.
+
+Wave 5 on this base is 18 production files (1,131 lines) and 11 tests (1,052 lines).
+
 ### Wave 5: dead shared helpers and v1 wire contracts
 
 17 production files (1,122 lines) and 10 test files (997 lines) at the original run; the re-run on wave 3's head finds 18 production files, without store/closed-trade-row.ts (deleted early in wave 3), and wave 5 refreshes this table from its own base. Trims `server/shared/index.ts`, `server/shared/store/index.ts` and `contracts/index.ts`. contracts/snapshot.ts, metrics.ts, pipeline.ts and providers.ts are the v1 dashboard wire, and §8 confirms the client reads none of them. No migration is touched; the dead store files are row mappers and stores. nous-responses.ts, book-currency.ts and store/fill-row.ts are not here: the first is kept under G18, the other two are held (§6).

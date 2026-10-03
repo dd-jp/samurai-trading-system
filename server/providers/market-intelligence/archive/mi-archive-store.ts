@@ -177,18 +177,6 @@ export class MiArchiveStore {
     return rows.map(toRawArchiveRow);
   }
 
-  rawRowsBetween(source: MiSourceId, from: Date, to: Date): RawArchiveRow[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM mi_archive_raw
-          WHERE source = ? AND updated_at >= ? AND updated_at < ?
-          ORDER BY updated_at ASC`,
-      )
-      .all(source, from.toISOString(), to.toISOString()) as RawRow[];
-
-    return rows.map(toRawArchiveRow);
-  }
-
   purgeOlderThan(cutoff: Date): { rawDeleted: number; itemsDeleted: number } {
     const cutoffIso = cutoff.toISOString();
     return this.db.transaction(() => {
@@ -200,39 +188,6 @@ export class MiArchiveStore {
         .run(cutoffIso).changes;
       return { rawDeleted, itemsDeleted };
     })();
-  }
-
-  refusalStreak(source: MiSourceId, row_id: string): number {
-    const row = this.db
-      .prepare('SELECT streak FROM mi_refusal_streaks WHERE source = ? AND row_id = ?')
-      .get(source, row_id) as { streak: number } | undefined;
-
-    return row?.streak ?? 0;
-  }
-
-  recordRefusalStreak(
-    source: MiSourceId,
-    row_id: string,
-    streak: number,
-    reason: string,
-    asOf: Date,
-  ): void {
-    this.db
-      .prepare(
-        `INSERT INTO mi_refusal_streaks (source, row_id, streak, last_reason, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(source, row_id) DO UPDATE SET
-           streak = excluded.streak,
-           last_reason = excluded.last_reason,
-           updated_at = excluded.updated_at`,
-      )
-      .run(source, row_id, streak, reason, asOf.toISOString());
-  }
-
-  clearRefusalStreak(source: MiSourceId, row_id: string): void {
-    this.db
-      .prepare('DELETE FROM mi_refusal_streaks WHERE source = ? AND row_id = ?')
-      .run(source, row_id);
   }
 
   close(): void {

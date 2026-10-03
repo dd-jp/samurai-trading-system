@@ -92,8 +92,6 @@ npm run lint && npm run typecheck && npm run test:local -- --changed <BASE_SHA> 
 
 ```
 npm run lint && npm run typecheck && npm run build && npm run test && npm run check:citations && npm run smoke && npm run e2e
-python3 server/providers/market-data-service/__fixtures__/generate-indicator-golden.py
-git status --porcelain -- server/providers/market-data-service/__fixtures__/indicator-golden.json   # must be empty
 ```
 
 `npm run smoke` must print `GATE: PASS — the pipeline transacted end to end in a real process.`; exit 0 alone is not the gate. `npm run build` already chains `build:web`. There is no pytest gate. `smoke`/`e2e` only ever run here — they test end-to-end wiring a single branch's diff can't isolate.

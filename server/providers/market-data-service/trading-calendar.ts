@@ -54,7 +54,7 @@ interface ZonedInstant {
   minutesSinceMidnight: number;
 }
 
-export function toZonedTime(instant: Date, zone: string): ZonedInstant {
+function toZonedTime(instant: Date, zone: string): ZonedInstant {
   const parts = wallClockParts(zone).formatToParts(instant);
   const lookup = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((part) => part.type === type)?.value ?? '';
@@ -71,7 +71,7 @@ const WEEKEND = new Set(['Sat', 'Sun']);
 
 const MS_PER_MINUTE = 60_000;
 const MS_PER_DAY = 86_400_000;
-export const MAX_SESSION_SEARCH_DAYS = 10;
+const MAX_SESSION_SEARCH_DAYS = 10;
 const MAX_OFFSET_PASSES = 3;
 
 function civilParts(zone: string): Intl.DateTimeFormat {
@@ -218,9 +218,9 @@ const US_EARLY_CLOSE_DAYS = new Set(['2026-11-27', '2026-12-24', '2027-11-26']);
 
 export const US_TABLE_COVERAGE_END = '2027-12-31';
 
-export type SessionSearchDirection = 'after' | 'before';
+type SessionSearchDirection = 'after' | 'before';
 
-export function findSessionClose(
+function findSessionClose(
   instant: Date,
   zone: string,
   direction: SessionSearchDirection,

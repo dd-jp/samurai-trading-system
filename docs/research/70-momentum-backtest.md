@@ -41,7 +41,7 @@ Sleeve verdict: each sub-book is judged against its own risk-matched buy-and-hol
 
 Not proposed: a single combined cross-sectional book across both venues (mixes an ETF basket with single stocks and a currency), or time-series trend on 500 single names (turnover far above what 0.08%/side and whole shares can carry at £700).
 
-### 2.2 The LSE ETF/ETC list (not `server/providers/universe-pool/lse-etp-pool.ts`, which is the v1 3× pool)
+### 2.2 The LSE ETF/ETC list (not `server/providers/universe-pool/lse-etp-pool.ts`, which is the v1 3× pool) <!-- cite-exempt: historical — deleted in v1 teardown wave 4 (#1748); preserved at tag v1-final -->
 
 Built from the LSE instrument list as at 2026-07-31 (<https://docs.londonstockexchange.com/sites/default/files/reports/Instrument%20list_82.xlsx>, sheets "1.3 ETFs" and "2.2 ETCs") joined by ISIN to HMRC's reporting-fund list dated 2026-09-04 (<https://assets.publishing.service.gov.uk/media/6a9fea9392e72b8ac437eeea/20260904_Master-Weblist.ods>) — the R12/R14 sources, re-downloaded and re-parsed on 2026-09-22.
 

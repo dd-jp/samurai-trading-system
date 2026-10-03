@@ -100,7 +100,7 @@ Declared now:
   verified covers all eleven pool tickers. Research use only; doc 34 §5 rules Yahoo out of the live path on
   licence and freshness grounds and nothing here changes that.
 - **Universe:** the four US validation names, and the eleven `lse_ticker` rows in
-  `server/providers/universe-pool/lse-etp-pool.ts` (3USL, LQQ3, 3SPY, 3LTS, NVD3, 3AAP, 3LNV, 3QQQ, MST3, 3LPA,
+  `server/providers/universe-pool/lse-etp-pool.ts` (3USL, LQQ3, 3SPY, 3LTS, NVD3, 3AAP, 3LNV, 3QQQ, MST3, 3LPA, <!-- cite-exempt: historical — deleted in v1 teardown wave 4 (#1748); preserved at tag v1-final -->
   PLT3).
 - **Window:** the trailing 2 years the free endpoint returns. Not chosen to fit a result; it is what the endpoint
   gives without a key.
@@ -322,7 +322,7 @@ different two instruments are. That direction matters: a dispersion finding from
 Recorded here rather than edited into the criterion above, because the criterion is what it was.
 
 **Correction 1 — the universe is THIRTY lines, not eleven.** The criterion says "the eleven `lse_ticker` rows in
-`server/providers/universe-pool/lse-etp-pool.ts`". That number was inherited from doc 34 §3.2, which *probed*
+`server/providers/universe-pool/lse-etp-pool.ts`". That number was inherited from doc 34 §3.2, which *probed* <!-- cite-exempt: historical — deleted in v1 teardown wave 4 (#1748); preserved at tag v1-final -->
 eleven. `LSE_ETP_POOL` (`lse-etp-pool.ts:355`) holds **30 tradeable lines** — 8 `index_etp_3x` and 22
 `single_stock_etp_3x`, across **26 distinct screening underlyings** (SPY, QQQ, NVDA and PLTR each carry two lines
 from different issuers), from Leverage Shares (16), GraniteShares (12) and WisdomTree (2). Every row is 3x long;

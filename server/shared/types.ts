@@ -11,7 +11,6 @@ export type {
 export type { DebateLogStore } from './types/ports.js';
 export type {
   AssetClass,
-  InstrumentSubclass,
   LogEntry,
   LogEntryTemplate,
   LogEventCode,

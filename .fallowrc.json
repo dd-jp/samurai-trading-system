@@ -26,7 +26,6 @@
     "coverage",
     "docs/prototypes",
     "server/tools/__fixtures__",
-    "server/providers/market-data-service/__fixtures__",
     "docs/research/**/*.mjs",
     "docs/research/**/*.mts"
   ],

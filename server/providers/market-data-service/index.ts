@@ -11,4 +11,3 @@ export {
   UsEquityRegularHoursCalendar,
   wallClockToInstant,
 } from './trading-calendar.js';
-export type { Bar, BarWindow } from './types.js';
