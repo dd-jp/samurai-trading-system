@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ALPACA_ACTIVITY_MAX_PAGES } from './alpaca-activity-pages.js';
 import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
 import {
   ALPACA_NON_TRADE_CASH_TYPES,
@@ -47,7 +48,23 @@ describe('ALPACA_NON_TRADE_CASH_TYPES', () => {
     for (const type of ['FILL', 'CIL', 'CSD', 'CSW', 'JNLC', 'TRANS', 'MA', 'REORG', 'SPIN']) {
       expect(ALPACA_NON_TRADE_CASH_TYPES).not.toContain(type);
     }
-    expect(ALPACA_NON_TRADE_CASH_TYPES).toEqual(expect.arrayContaining(['DIV', 'INT', 'FEE']));
+    expect(ALPACA_NON_TRADE_CASH_TYPES).toEqual([
+      'DIV',
+      'DIVCGL',
+      'DIVCGS',
+      'DIVFEE',
+      'DIVFT',
+      'DIVNRA',
+      'DIVROC',
+      'DIVTW',
+      'DIVTXEX',
+      'INT',
+      'INTNRA',
+      'INTTW',
+      'FEE',
+      'PTC',
+      'PTR',
+    ]);
   });
 });
 
@@ -143,6 +160,15 @@ describe('AlpacaCashActivityReader', () => {
       ['2026-10-01', undefined],
       ['2026-10-01', `a-${ALPACA_ACTIVITY_PAGE_SIZE - 1}`],
     ]);
+  });
+});
+
+describe('AlpacaCashActivityReader page limit', () => {
+  it('fails rather than truncate a read that runs past the page limit', async () => {
+    const page = Array.from({ length: ALPACA_ACTIVITY_PAGE_SIZE }, () => ACTIVITY);
+    await expect(new AlpacaCashActivityReader(async () => page).read('2026-10-01')).rejects.toThrow(
+      `Alpaca non-trade cash activities since 2026-10-01 run past ${ALPACA_ACTIVITY_MAX_PAGES} pages`,
+    );
   });
 });
 
