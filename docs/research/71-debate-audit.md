@@ -40,7 +40,7 @@ The spec (`docs/specs/debate-engine-spec.md`, "Conviction Score Algorithm") stat
 npx tsx server/tools/replay-debate-conviction.ts --db "file:/Users/ddjp/Documents/projects/samurai-trading-system/data/samurai-paper.sqlite?mode=ro"
 ```
 
-(`npm run report:debate-conviction -- --db "<same URI>"` is the same command.) The script is `server/tools/replay-debate-conviction.ts`; it opens the store with `readonly: true, fileMustExist: true` and refuses any `file:` URI whose mode is not `ro`.
+(`npm run report:debate-conviction -- --db "<same URI>"` is the same command.) The script is `server/tools/replay-debate-conviction.ts`; it opens the store with `readonly: true, fileMustExist: true` and refuses any `file:` URI whose mode is not `ro`. <!-- cite-exempt: historical — deleted in v1 teardown wave 1 (#1748); preserved at tag v1-final -->
 
 Two populations:
 

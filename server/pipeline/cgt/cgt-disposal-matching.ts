@@ -6,7 +6,7 @@ export const ANNUAL_EXEMPT_AMOUNT_GBP = 3000;
 
 export const ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR = 2024;
 
-export function assertTaxYearIsSourced(startYear: number): void {
+function assertTaxYearIsSourced(startYear: number): void {
   if (startYear < ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR) {
     throw new Error(
       `CGT: tax year ${taxYearLabelForStartYear(startYear)} is before ${ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR}` +
@@ -305,7 +305,7 @@ export interface CgtTaxYearReport {
   annualExemptAmountGbp: number;
 }
 
-export function taxYearLabelForStartYear(startYear: number): string {
+function taxYearLabelForStartYear(startYear: number): string {
   return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
 }
 

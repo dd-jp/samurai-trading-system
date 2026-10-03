@@ -20,7 +20,6 @@ export {
 export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export { jsonOrTextResult } from './http/json-or-text.js';
-export type { RawPolygonAggregate } from './http/polygon-aggregates.js';
 export { toPolygonDate, validateRawPolygonAggregate } from './http/polygon-aggregates.js';
 export {
   classifyStatus,

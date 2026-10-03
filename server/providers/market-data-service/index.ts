@@ -23,7 +23,6 @@ export {
   ALPACA_BARS_RETRY_CONFIG,
   ALPACA_BARS_TIMEOUT_MS,
   AlpacaHttpDataClient,
-  toAlpacaTimeframe,
 } from './sources/alpaca-http-client.js';
 export type {
   AlpacaBar,
@@ -40,12 +39,11 @@ export {
 } from './sources/failover-data-source.js';
 export type { LseMarkClient } from './sources/lse-mark-source.js';
 export { LseMarkDataSource } from './sources/lse-mark-source.js';
-export type { BarFetcher, FailoverAlerter, FailoverEvent } from './sources/ohlcv-failover.js';
-export { withOhlcvFailover } from './sources/ohlcv-failover.js';
+export type { BarFetcher, FailoverEvent } from './sources/ohlcv-failover.js';
 export { PolygonBarsClient } from './sources/polygon-bars-client.js';
 export { withSessionNormalization } from './sources/session-normalized-fetcher.js';
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
-export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
+export { isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar, ZonedCivilDate } from './trading-calendar.js';
 export {
   AlwaysOpenCalendar,
@@ -72,7 +70,6 @@ export type {
   IndicatorValue,
   Mark,
   MarketDataService,
-  MarketDataStore,
   MarkRead,
   Quote,
 } from './types.js';

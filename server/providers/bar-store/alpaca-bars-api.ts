@@ -1,6 +1,6 @@
 import { delay, isString, jsonOrTextResult, readOhlcvBar } from '../../shared/index.js';
 
-export const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
+const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
 const ALPACA_REQUESTS_PER_MINUTE = 200;
 const PAGE_LIMIT = 10_000;
 const RATE_LIMIT_BACKOFF_MS = 20_000;

@@ -10,7 +10,7 @@ import type { Logger } from '../../shared/index.js';
 import { delay, isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
 import type { FetchResult, Sleeper } from '../bar-store/index.js';
 
-export const SAXO_CHART_PAGE = 1200;
+const SAXO_CHART_PAGE = 1200;
 const CHART_CALLS_PER_MINUTE = 100;
 const RATE_LIMIT_BACKOFF_MS = 65_000;
 const MAX_ATTEMPTS = 4;
@@ -40,7 +40,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-export function parseChartPage(body: unknown): ChartPage {
+function parseChartPage(body: unknown): ChartPage {
   if (!isRecord(body)) throw new Error('Saxo chart: non-object body');
   const info = isRecord(body.ChartInfo) ? body.ChartInfo : {};
   const data = body.Data;
@@ -87,7 +87,7 @@ export function samplesToBars(samples: readonly ChartSample[], cashPerQuoted: nu
   return bars;
 }
 
-export function mergeChartPages(pages: readonly (readonly ChartSample[])[]): ChartSample[] {
+function mergeChartPages(pages: readonly (readonly ChartSample[])[]): ChartSample[] {
   const byTime = new Map<string, ChartSample>();
   for (const page of pages) for (const sample of page) byTime.set(sample.Time, sample);
   return [...byTime.values()].sort((a, b) => a.Time.localeCompare(b.Time));
@@ -102,7 +102,7 @@ export interface InstrumentDetails {
   readonly exchangeId: string;
 }
 
-export function parseInstrumentDetails(body: unknown): InstrumentDetails {
+function parseInstrumentDetails(body: unknown): InstrumentDetails {
   if (!isRecord(body)) throw new Error('Saxo details: non-object body');
   const exchange = isRecord(body.Exchange) ? body.Exchange.ExchangeId : undefined;
   return {
@@ -114,38 +114,6 @@ export function parseInstrumentDetails(body: unknown): InstrumentDetails {
     isTradable: body.IsTradable === true,
     isComplex: body.IsComplex === true,
     exchangeId: String(exchange ?? body.ExchangeId ?? ''),
-  };
-}
-
-export interface InfoPriceQuote {
-  readonly uic: number;
-  readonly bid: number;
-  readonly ask: number;
-  readonly delayedByMinutes: number | undefined;
-  readonly marketState: string;
-  readonly lastUpdated: string;
-}
-
-export function parseInfoPricesList(body: unknown): InfoPriceQuote[] {
-  if (!isRecord(body) || !Array.isArray(body.Data))
-    throw new Error('Saxo infoprices/list: Data missing');
-  return body.Data.flatMap((item: unknown) => {
-    const quote = parseInfoPriceQuote(item);
-    return quote === undefined ? [] : [quote];
-  });
-}
-
-function parseInfoPriceQuote(item: unknown): InfoPriceQuote | undefined {
-  if (!isRecord(item) || !isRecord(item.Quote) || !isFiniteNumber(item.Uic)) return undefined;
-  const { Bid, Ask, DelayedByMinutes, MarketState } = item.Quote;
-  if (!isFiniteNumber(Bid) || !isFiniteNumber(Ask) || !(Bid > 0) || !(Ask >= Bid)) return undefined;
-  return {
-    uic: item.Uic,
-    bid: Bid,
-    ask: Ask,
-    delayedByMinutes: isFiniteNumber(DelayedByMinutes) ? DelayedByMinutes : undefined,
-    marketState: String(MarketState ?? ''),
-    lastUpdated: String(item.LastUpdated ?? ''),
   };
 }
 
@@ -261,16 +229,6 @@ export class SaxoReadOnlyApi {
   async instrumentDetails(uic: number, assetType: SaxoAssetType): Promise<InstrumentDetails> {
     return parseInstrumentDetails(
       await this.get(`/ref/v1/instruments/details/${uic}/${assetType}`),
-    );
-  }
-
-  async infoPrices(uics: readonly number[]): Promise<InfoPriceQuote[]> {
-    return parseInfoPricesList(
-      await this.get('/trade/v1/infoprices/list', {
-        Uics: uics.join(','),
-        AssetType: 'Etf',
-        FieldGroups: 'Quote',
-      }),
     );
   }
 

@@ -1,6 +1,5 @@
 export type { FetchResult, RawDailyBar, Sleeper } from './alpaca-bars-api.js';
 export {
-  ALPACA_DATA_BASE_URL,
   AlpacaBarsApi,
   authHeaders,
   barsUrl,
@@ -24,7 +23,5 @@ export {
   normaliseUnitBreaks,
   quarantineImplausibleBars,
   repairBarShape,
-  SHAPE_REPAIR_MANIFEST_NOTE,
-  violatesBarShape,
 } from './bar-hygiene.js';
 export { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from './parquet-bar-store.js';

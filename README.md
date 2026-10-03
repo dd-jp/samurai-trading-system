@@ -33,7 +33,7 @@ Market Data Service ─┐
 | Orchestrator | `server/apps/orchestrator/` | Tick loop scheduler, trace-ID propagation, audit log, dead-man's-switch heartbeat, alert channels, rotating log sink, production composition root (ADR-0004). Opens no socket |
 | Service API | `server/apps/service-api/` | Read-only HTTP backend on `:8787`: `GET /api/snapshot` plus the built client bundle. Pipeline lanes per instrument, positions, verdicts, provider-status tiles |
 | Supervisor | `server/apps/supervisor/` | Runs the orchestrator and the service API as children of one foreground process |
-| Tools | `server/tools/` | Hand-run Stage-2 tooling: history ingestion, spread calibration, cost decomposition, Stage-2 evaluation |
+| Tools | `server/tools/` | Repo gates (citations, live-money gates, CRAP, mutation) and the Saxo token keep-alive |
 | Shared | `server/shared/` | Types/ports, clock injection, SQLite store + migrations, HTTP (token-bucket pacing, retry, timeouts), Nous LLM client + pricing |
 | Client | `client/` | The Vite + React operator UI (ADR-0010). Built to `dist/client/` and served by the service API — it is not a running process |
 | Contracts | `contracts/` | The wire model both runtimes import and neither owns. JSON-serializable shapes only |
@@ -125,7 +125,6 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 | Variable | Used by |
 | --- | --- |
 | `POLYGON_API_KEY` | Stage-2 historical bars (free tier: 5 calls/min, ~2 years of history — a fallback source, not the backfill source) |
-| `TIINGO_API_KEY` | `npm run ingest-history` — Stage-2 history ingestion |
 | `WORLDMONITOR_API_KEY` | WorldMonitor CII feed (ADR-0002). The adapter stays parked until this is set |
 | `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`). Binding `HOST` to anything other than `127.0.0.1`/`::1` refuses to start unless `SAMURAI_DASHBOARD_TOKEN` (below) is also set — see #887/ADR-0019 |
 | `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/apps/service-api/bind-guard.ts` and `request-auth.ts` |
@@ -257,26 +256,6 @@ npm start              # alias: npm run serve
 
 Builds once, then supervises the orchestrator and the service API as one foreground process; a single Ctrl-C stops both. There is no third process for the UI: the client is a static bundle that the service API serves. Signals are forwarded to the children and the supervisor waits for both to exit rather than exiting first — killing it mid-tick is what creates an orphaned verdict. Either child dying takes the other down with a non-zero exit. `npm run orchestrator` remains the money-path entrypoint for the unattended soak.
 
-### Stage-2 backtest / validation
-
-Hand-run scripts, not part of the tick loop:
-
-```bash
-# Tiingo history → SQLite (needs TIINGO_API_KEY)
-npm run data -- ingest-history        # alias: npm run ingest-history
-
-# Warm-start OHLCV bars for the live universe, from the free stack
-npm run data -- backfill-market-data  # alias: npm run backfill-market-data
-
-# The rest run against dist/ after `npm run build`. They read POLYGON_API_KEY /
-# TIINGO_API_KEY, so pass the env file the same way `npm run orchestrator` does.
-node --env-file=.env.local dist/server/tools/run-stage2.js                   # walk-forward / CPCV / PBO / MinBTL / DSR
-node --env-file=.env.local dist/server/tools/run-spread-calibration.js       # measured spreads for the cost model
-node --env-file=.env.local dist/server/tools/run-stage2-cost-decomposition.js
-```
-
-`SAMURAI_STAGE2_COST_CONFIG=pessimistic` selects the pessimistic cost config for a direct Stage-2 run; anything else uses the calibrated one.
-
 ## Testing
 
 ```bash
@@ -350,13 +329,8 @@ samurai-trading-system/
 │   ├── shared/            # Types, clock, SQLite store + migrations, HTTP, LLM
 │   └── tools/             # offline only, never on the money path
 │       ├── backtest/      # Fill simulation, validation, replay, Stage-2 selection
-│       ├── data-cli.ts    # `npm run data` — history ingestion, market-data backfill
 │       ├── check-path-citations.ts    # `npm run check:citations` — CI gate over the docs
-│       ├── check-live-money-gates.ts  # `npm run check:live-gates` — the cited gates are still open
-│       ├── report-arm-comparison.ts   # `npm run report:arms`
-│       ├── report-cgt-disposals.ts    # `npm run report:cgt`
-│       ├── place-soak-position.ts     # `npm run place-soak-position`
-│       └── run-stage2*.ts, measure-conviction-ceiling.ts  # hand-run, no script
+│       └── check-live-money-gates.ts  # `npm run check:live-gates` — the cited gates are still open
 │
 ├── contracts/             # THE WIRE BOUNDARY — imported by both, importing neither
 │                          # JSON-serializable shapes only; boundary.test.ts enforces it
@@ -407,9 +381,6 @@ Every script in `package.json`, all 42 of them. There are no others.
 | run | `npm run api` | Operator view alone |
 | run | `npm run dashboard` | Alias for `npm run api` |
 | run | `npm run smoke` | Offline end-to-end gate |
-| data | `npm run data -- <cmd>` | Dispatcher: `ingest-history` / `backfill-market-data`. Bare `npm run data` prints usage and exits 1 |
-| data | `npm run ingest-history` | Alias for `npm run data -- ingest-history` |
-| data | `npm run backfill-market-data` | Alias for `npm run data -- backfill-market-data` |
 | quality | `npm run typecheck` | Four projects: server, tests, client tests, e2e |
 | quality | `npm run test` | Full vitest suite |
 | quality | `npm run test:coverage` | Same suite under v8 coverage |
@@ -432,39 +403,26 @@ Every script in `package.json`, all 42 of them. There are no others.
 | quality | `npm run precommit` | `knip` → `lint:fix` → `typecheck` → `test:local` → `fallow:boundaries` → `fallow:dead-code` → `fallow:dupes` → `fallow:css` → `fallow:guard` (staged files only) |
 | quality | `npm run check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
 | ops | `npm run check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
-| ops | `npm run report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
-| ops | `npm run report:cgt` | `tsx server/tools/report-cgt-disposals.ts` — per-tax-year CGT disposal matching for the live Saxo GIA leg (#1518, `docs/cgt-disposal-matching.md`). NOT tax advice |
-| ops | `npm run report:debate-flip-rate` | `tsx server/tools/report-debate-round-flip-rate.ts` |
-| ops | `npm run classify:debate-termination` | `tsx server/tools/classify-debate-termination.ts` |
-| ops | `npm run place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
 | ops | `npm run saxo:login` | `tsx --env-file=.env.local server/apps/v2/execution/saxo/saxo-login.ts` — Authorization Code Grant login for Saxo SIM/live, refs #1522 |
 
-**Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
-`data`), deliberately. A stale `dist/` fails *silently* — the process boots and
+**Four run scripts build first** (`start`, `orchestrator`, `api`, `smoke`),
+deliberately. A stale `dist/` fails *silently* — the process boots and
 serves the previous build — and `sharedStorePath()` resolving against the
 working directory means the wrong cwd yields a fresh empty database and a
 healthy-looking blank page. Redundant `tsc` invocations are the cheaper side of
 that trade. The `dev:*` and `tsx`-run tool scripts are the exception: they
 run from source, which is the whole point of them.
 
-**The four aliases are kept on purpose**, not left over. `serve`/`dashboard`
+**The two aliases are kept on purpose**, not left over. `serve`/`dashboard`
 are the names an operator's muscle memory and several source comments still
-use (`server/apps/supervisor/supervisor.ts`, `e2e/playwright.config.ts`);
-`ingest-history`/`backfill-market-data` predate the `npm run data` dispatcher and
-survive because a runbook or cron entry may name either (see the header of
-`server/tools/data-cli.ts`). Renaming a script an unattended job invokes fails
-silently outside the checkout, where nothing here can see it.
+use (`server/apps/supervisor/supervisor.ts`, `e2e/playwright.config.ts`).
+Renaming a script an unattended job invokes fails silently outside the
+checkout, where nothing here can see it.
 
 **There is no `format` script.** `biome check` formats as well as lints, so
 `npm run lint` already fails on an unformatted file and `npm run lint:fix` already
 rewrites it — a check-only `format` was a strict subset of `lint` that could
 only ever duplicate its verdict.
-
-The Stage-2 tools (`run-stage2`, `run-spread-calibration`,
-`run-stage2-cost-decomposition`) and `measure-conviction-ceiling` have **no**
-script and are not missing one. They are hand-run research jobs, invoked as
-`node --env-file=.env.local dist/server/tools/<name>.js` after a build — see
-[Stage-2 backtest / validation](#stage-2-backtest--validation).
 
 ## Documentation
 

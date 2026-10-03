@@ -267,6 +267,8 @@ lines. See "Currency" above.
 
 ## Running the report
 
+v1's report script and its `report:cgt` npm script were deleted in v1 teardown wave 1 (#1748); this section records how it ran, and tag `v1-final` keeps the code. v2's tax export is the dashboard's P13 panel over `server/apps/v2/tax-log.ts`.
+
 ```
 npm run report:cgt                      # current UK tax year, against SAMURAI_MODE's store
 npm run report:cgt -- --tax-year 2024-25

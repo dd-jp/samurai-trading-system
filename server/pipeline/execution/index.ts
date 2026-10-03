@@ -46,7 +46,7 @@ export {
   saxoInstrumentResolverFromVenue,
 } from './adapters/saxo-adapter.js';
 export type { DormantLegsUnresolvedAlertChannel } from './dormant-legs-unresolved-alert.js';
-export { ExecutionImpl, executeVerdict } from './execute.js';
+export { ExecutionImpl } from './execute.js';
 export {
   ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
   FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS,
@@ -87,7 +87,6 @@ export type {
   ReconcileReport,
   ResidualProtectionSweepResult,
   SharedStore,
-  SubmitInput,
   UnprotectedResidualLot,
   UnresolvedFlattenSubmission,
 } from './types.js';

@@ -53,7 +53,7 @@ export class ExecutionImpl implements Execution {
 
 const ALREADY_EXISTS = 'an order or fill already exists for this idempotency_key';
 
-export async function executeVerdict(
+async function executeVerdict(
   input: SubmitInput,
   verdict: VerdictDecision,
 ): Promise<ExecutionResult> {
