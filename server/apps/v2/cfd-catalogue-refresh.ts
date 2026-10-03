@@ -11,6 +11,7 @@ import {
   type BarRefresh,
   logRefresh,
   messageOf,
+  stoppedAtCap,
   type TimeLimit,
   UNLIMITED,
   withinTimeLimit,
@@ -394,25 +395,6 @@ function timedOut(limitMs: number, logger: Logger): void {
     'v2_cfd_catalogue_refresh_timed_out',
     `CFD catalogue cut at the ${limitMs / 1000} s cap; every CFD route reads the last written file`,
   );
-}
-
-// Registered before the cap can fire, so the cap's settle waits for the session to stop and a
-// token rotation already sent to Saxo is written before the cycle can exit
-function stoppedAtCap(session: CfdSession, limit: TimeLimit): CfdSession {
-  let stopping: Promise<void> | undefined;
-  const stop = () => {
-    stopping ??= session.stop();
-    return stopping;
-  };
-  limit
-    .atomic(
-      () =>
-        new Promise<void>((resolve) => {
-          limit.signal.addEventListener('abort', () => resolve(stop()), { once: true });
-        }),
-    )
-    .catch(() => undefined);
-  return { ...session, stop };
 }
 
 // The catalogue is not bars, so the leg adds nothing to the bar report; a failure keeps the

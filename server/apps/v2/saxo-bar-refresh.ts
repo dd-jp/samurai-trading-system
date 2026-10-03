@@ -30,6 +30,7 @@ import {
   recordOutcome,
   roundPrices,
   type SymbolOutcome,
+  stoppedAtCap,
   type TimeLimit,
   UNLIMITED,
   withinTimeLimit,
@@ -473,7 +474,7 @@ async function connectAndRefresh(leg: SaxoLeg, limit: TimeLimit): Promise<BarRef
       () => leg.connect(leg.env, leg.ledger.logger, limit.signal),
       leg.ledger,
     );
-    return await refreshInSession(session, leg, limit);
+    return await refreshInSession(stoppedAtCap(session, limit), leg, limit);
   } catch (error) {
     return unavailable(messageOf(error), leg.ledger.logger);
   }

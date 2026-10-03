@@ -689,7 +689,12 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
     let answer: (response: Response) => void = () => {};
     const gateway = vi.fn();
     const stopped = vi.fn();
+    let capped: () => void = () => {};
+    const cap = new Promise<void>((resolve) => {
+      capped = resolve;
+    });
     const connect = (_env: NodeJS.ProcessEnv, logger: Logger, signal: AbortSignal) => {
+      signal.addEventListener('abort', () => capped(), { once: true });
       const tokens = new SaxoTokenRefresher({
         environment: 'live',
         config: { tokenUrl: 'https://token.test', appKey: 'k', appSecret: 's' },
@@ -729,7 +734,8 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
       .finally(() => {
         settled = true;
       });
-    await sleep(80);
+    await cap;
+    await new Promise((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     expect(stopped).not.toHaveBeenCalled();
 
@@ -754,5 +760,29 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
     expect(gateway).not.toHaveBeenCalled();
     expect(readKeepAliveState(tokenPath)).toEqual({});
     expect(existsSync(path)).toBe(false);
+  });
+
+  it('still returns the timeout outcome when the session fails to stop at the cap', async () => {
+    const hung = {
+      cfdInstrumentPage: () => new Promise<unknown>(() => undefined),
+      cfdInstrumentDetails: () => new Promise<unknown>(() => undefined),
+      cfdInfoPrices: () => new Promise<unknown>(() => undefined),
+    };
+    const stop = vi.fn().mockRejectedValue(new Error('stop failed'));
+    const { entries, logger } = recorder();
+    const report = await cfdCatalogueRefreshFor(
+      {},
+      {
+        tradingDate: AS_OF,
+        constituents: ['AAPL'],
+        path: tempPath(),
+        logger,
+        connect: () => ({ api: hung, stop }),
+        timeLimitMs: 20,
+      },
+    ).run();
+    expect(report).toEqual({ attempted: 0, updated: [], noNewBars: [], failed: [] });
+    expect(stop).toHaveBeenCalledOnce();
+    expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_timed_out']);
   });
 });

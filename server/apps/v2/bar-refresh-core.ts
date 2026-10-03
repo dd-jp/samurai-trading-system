@@ -120,6 +120,28 @@ export const UNLIMITED: TimeLimit = {
   atomic: (step) => step(),
 };
 
+// Registered before the cap can fire, so the cap's settle waits for the session to stop and a
+// token rotation already sent to Saxo is written before the next leg or the process exit
+export function stoppedAtCap<S extends { readonly stop: () => Promise<void> }>(
+  session: S,
+  limit: TimeLimit,
+): S {
+  let stopping: Promise<void> | undefined;
+  const stop = () => {
+    stopping ??= session.stop();
+    return stopping;
+  };
+  limit
+    .atomic(
+      () =>
+        new Promise<void>((resolve) => {
+          limit.signal.addEventListener('abort', () => resolve(stop()), { once: true });
+        }),
+    )
+    .catch(() => undefined);
+  return { ...session, stop };
+}
+
 // The work is abandoned at the limit, except an atomic step already in flight, which is
 // awaited so that a bar write never overlaps the reads that follow the refresh
 export async function withinTimeLimit<T>(
