@@ -470,7 +470,7 @@ describe('live-mode replay inputs (#2035)', () => {
     db.close();
   });
 
-  it('rewinds an anchor taken on or after the day, and a move journalled after the run started', () => {
+  it("rewinds an anchor taken on or after the day, and a move journalled after the venue's first reconcile, else the run start", () => {
     const db = store();
     const row = db.prepare(
       `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
@@ -488,11 +488,19 @@ describe('live-mode replay inputs (#2035)', () => {
     );
     row.run('alpaca', 'anchor', 'USD', 0, 'go-live', DAY, `${DAY}T07:30:05.000Z`, 'live');
     row.run('saxo', 'deposit', 'GBP', null, 'known', DAY, `${DAY}T07:00:00.000Z`, null);
+    row.run('saxo', 'deposit', 'GBP', null, 'read', DAY, `${DAY}T07:40:00.000Z`, null);
     row.run('saxo', 'deposit', 'GBP', null, 'later', '2026-10-03', `${DAY}T08:00:00.000Z`, null);
+    row.run('alpaca', 'deposit', 'USD', null, 'unread', DAY, `${DAY}T07:40:00.000Z`, null);
+    const reconcileAt = db.prepare(
+      `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+         recorded_at) VALUES (?, 'saxo', 'broker', 'clean', '[]', '[]', 'd', ?)`,
+    );
+    reconcileAt.run(DAY, `${DAY}T07:45:00.000Z`);
+    reconcileAt.run(DAY, `${DAY}T09:00:00.000Z`);
     const copy = rewoundCopy(db, DAY, `${DAY}T07:30:00.000Z`);
     expect(
       copy.prepare('SELECT reference FROM v2_cash_anchors ORDER BY anchor_row_id').all(),
-    ).toEqual([{ reference: 'earlier' }, { reference: 'known' }]);
+    ).toEqual([{ reference: 'earlier' }, { reference: 'known' }, { reference: 'read' }]);
     copy.close();
     db.close();
   });

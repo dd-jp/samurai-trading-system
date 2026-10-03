@@ -19,7 +19,7 @@ import type {
 import { toBrokerFillId } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { ProtectiveReplaceError } from './execution/index.js';
-import { markingRun } from './replay-book.js';
+import { MIRRORED_DIFF_KINDS, markingRun } from './replay-book.js';
 
 interface SentOrder {
   readonly outcome: string;
@@ -333,13 +333,6 @@ function protectiveStops(positions: ReadonlyMap<string, number>): BrokerOpenOrde
     }));
 }
 
-const STALE_STOP_KINDS: ReadonlySet<string> = new Set([
-  'protective_qty',
-  'protective_price',
-  'position_unprotected',
-]);
-const CASH_KINDS: ReadonlySet<string> = new Set(['cash', 'cash_unverified']);
-
 // A reconcile whose only differences were stale or missing stops is mirrored with those stops, so
 // the replay finds them and re-runs the replacement or re-arm the journalled cycle sent (#1990)
 function staleStop(stop: BrokerOpenOrder, diffs: readonly ReconcileDiff[]): BrokerOpenOrder {
@@ -357,9 +350,7 @@ function staleStop(stop: BrokerOpenOrder, diffs: readonly ReconcileDiff[]): Brok
 function mirroredStaleStops(row: { status: string; diffs: string }): ReconcileDiff[] | undefined {
   const diffs = JSON.parse(row.diffs) as ReconcileDiff[];
   const found = row.status === 'clean' || (row.status !== 'read_failed' && diffs.length > 0);
-  const mirrored = diffs.every(
-    (entry) => CASH_KINDS.has(entry.kind) || STALE_STOP_KINDS.has(entry.kind),
-  );
+  const mirrored = diffs.every((entry) => MIRRORED_DIFF_KINDS.has(entry.kind));
   return found && mirrored ? diffs : undefined;
 }
 

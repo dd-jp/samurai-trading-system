@@ -205,16 +205,19 @@ export function rewoundCopy(db: StoreHandle, tradingDate: string, startedAt: str
   for (const trigger of APPEND_ONLY_TRIGGERS) copy.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
   const reopened = reopenedSql('>=');
   copy.transaction(() => {
+    copy
+      .prepare(
+        `DELETE FROM v2_cash_anchors AS a WHERE CASE kind WHEN 'anchor' THEN trading_date >= @date
+           ELSE recorded_at > COALESCE(
+             (SELECT r.recorded_at FROM v2_reconciles r WHERE r.trading_date = @date
+                AND r.source = 'broker' AND r.venue = a.venue ORDER BY r.reconcile_id LIMIT 1),
+             @startedAt) END`,
+      )
+      .run({ date: tradingDate, startedAt });
     for (const table of DATED_TABLES) {
       copy.prepare(`DELETE FROM ${table} WHERE trading_date >= ?`).run(tradingDate);
     }
     copy.prepare('DELETE FROM v2_controls WHERE set_at > ?').run(startedAt);
-    copy
-      .prepare(
-        `DELETE FROM v2_cash_anchors WHERE CASE kind WHEN 'anchor' THEN trading_date >= @date
-           ELSE recorded_at > @startedAt END`,
-      )
-      .run({ date: tradingDate, startedAt });
     copy
       .prepare(
         `UPDATE v2_orders AS o SET outcome = ${reopened.outcome},
@@ -523,13 +526,13 @@ interface TableSpec {
   readonly presence: boolean;
 }
 
-const MIRRORED_DIFF_KINDS = [
+export const MIRRORED_DIFF_KINDS: ReadonlySet<string> = new Set([
   'protective_qty',
   'protective_price',
   'position_unprotected',
   'cash',
   'cash_unverified',
-] as const;
+]);
 
 // The replay broker serves each venue's first journalled broker reconcile of the day (replay-broker.ts),
 // so only that one is held to the replay, and only when the broker could mirror it: not a failed
@@ -545,7 +548,7 @@ const RECONCILE_SQL = (_after: string, journalled: boolean): string => `
        ? `broker_mode IS NOT NULL
             AND (status = 'clean' OR (status <> 'read_failed' AND json_array_length(diffs) > 0))
             AND NOT EXISTS (
-            SELECT 1 FROM json_each(diffs) d WHERE json_extract(d.value, '$.kind') NOT IN (${MIRRORED_DIFF_KINDS.map((kind) => `'${kind}'`).join(', ')}))`
+            SELECT 1 FROM json_each(diffs) d WHERE json_extract(d.value, '$.kind') NOT IN (${[...MIRRORED_DIFF_KINDS].map((kind) => `'${kind}'`).join(', ')}))`
        : '1'
 }
    ORDER BY reconcile_id`;
