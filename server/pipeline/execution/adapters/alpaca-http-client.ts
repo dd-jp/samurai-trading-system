@@ -242,6 +242,18 @@ export interface AlpacaHttpBrokerClientOptions {
   retry?: RetryConfig;
 }
 
+async function parseAlpacaJson(response: Response, context: string): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (cause) {
+    throw new AlpacaBrokerProviderError(
+      `Alpaca API error: response body could not be parsed as JSON (${context}): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+  }
+}
+
 export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
@@ -288,38 +300,29 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     retry: RetryConfig = this.retry,
   ): Promise<T> {
     return withRetry<T>(
-      async () => {
-        let response: Response;
-        try {
-          response = await fetchWithTimeout(
-            `${this.baseUrl}${path}`,
-            { ...init, headers: this.headers(init) },
-            this.timeoutMs,
-          );
-        } catch (cause) {
-          throw classifyAlpacaBrokerNetworkError(cause, context, init.method);
-        }
-
-        if (!response.ok) {
-          throw await classifyAlpacaBrokerResponse(response, context, init.method);
-        }
-
-        let parsed: unknown;
-        try {
-          parsed = await response.json();
-        } catch (cause) {
-          throw new AlpacaBrokerProviderError(
-            `Alpaca API error: response body could not be parsed as JSON (${context}): ${
-              cause instanceof Error ? cause.message : String(cause)
-            }`,
-          );
-        }
-
-        return validate(parsed, context);
-      },
+      async () =>
+        validate(await parseAlpacaJson(await this.send(path, init, context), context), context),
       retry,
       isRetryableAlpacaBrokerError,
     );
+  }
+
+  private async send(path: string, init: AlpacaRequestInit, context: string): Promise<Response> {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(
+        `${this.baseUrl}${path}`,
+        { ...init, headers: this.headers(init) },
+        this.timeoutMs,
+      );
+    } catch (cause) {
+      throw classifyAlpacaBrokerNetworkError(cause, context, init.method);
+    }
+
+    if (!response.ok) {
+      throw await classifyAlpacaBrokerResponse(response, context, init.method);
+    }
+    return response;
   }
 
   private async submitPlacement<T>(

@@ -1049,6 +1049,40 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     await expect(client.getPositions()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
   });
 
+  it.each([
+    ['a non-object position', ['AAPL'], 'a position was not an object'],
+    [
+      'a non-string symbol',
+      [{ symbol: 7, qty: '1', side: 'long', avg_entry_price: '1' }],
+      'symbol must be a string',
+    ],
+    [
+      'an unknown side',
+      [{ symbol: 'AAPL', qty: '1', side: 'flat', avg_entry_price: '1' }],
+      "side must be 'long' or 'short'",
+    ],
+    [
+      'a non-numeric avg_entry_price',
+      [{ symbol: 'AAPL', qty: '1', side: 'short', avg_entry_price: 'x' }],
+      'avg_entry_price must be a numeric string',
+    ],
+  ])('getPositions rejects %s with its own message', async (_label, body, detail) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(body)));
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getPositions()).rejects.toThrow(`(getPositions): ${detail}`);
+  });
+
+  it('getPositions accepts a short position', async () => {
+    const position = { symbol: 'AAPL', qty: '-2', side: 'short', avg_entry_price: '150.00' };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([position])));
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getPositions()).resolves.toEqual([position]);
+  });
+
   it('getPositions rejects a response body that is not an array at all', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ not: 'an array' }));
     vi.stubGlobal('fetch', fetchMock);

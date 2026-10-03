@@ -257,6 +257,70 @@ describe('waitForCallback', () => {
     server.close();
   });
 
+  async function listening(): Promise<{
+    server: ReturnType<typeof waitForCallback>['server'];
+    result: Promise<unknown>;
+    base: string;
+  }> {
+    const { server, result } = waitForCallback('http://127.0.0.1:0/callback', 'expected-state');
+    await new Promise<void>((resolvePromise) => server.once('listening', () => resolvePromise()));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('expected a bound port');
+    return { server, result, base: `http://127.0.0.1:${address.port}` };
+  }
+
+  it('answers 404 off the callback path and keeps waiting for the real callback', async () => {
+    const { server, result, base } = await listening();
+
+    const stray = await fetch(`${base}/favicon.ico?state=expected-state&code=stray`);
+    expect(stray.status).toBe(404);
+    expect(await stray.text()).toBe('');
+    const callback = await fetch(`${base}/callback?state=expected-state&code=real-code`);
+    expect(callback.status).toBe(200);
+    expect(callback.headers.get('content-type')).toBe('text/plain');
+    expect(await callback.text()).toBe('Login complete — you can close this tab.');
+    await expect(result).resolves.toEqual({ code: 'real-code' });
+    server.close();
+  });
+
+  it.each([
+    [
+      'a state mismatch',
+      '?state=wrong&code=c',
+      'State mismatch — refusing to log in.',
+      /state was missing or did not match — refusing the code exchange\./,
+    ],
+    [
+      'an authorize error',
+      '?state=expected-state&error=access_denied',
+      'Saxo login was not completed.',
+      /^Saxo authorize endpoint returned error=access_denied$/,
+    ],
+    [
+      'a missing code',
+      '?state=expected-state',
+      'Missing authorization code.',
+      /^Saxo login callback: no code in the redirect\.$/,
+    ],
+    [
+      'an empty code',
+      '?state=expected-state&code=',
+      'Missing authorization code.',
+      /^Saxo login callback: no code in the redirect\.$/,
+    ],
+  ])('refuses %s with a 400 page and a SaxoLoginError', async (_label, query, page, message) => {
+    const { server, result, base } = await listening();
+
+    const assertion = expect(result).rejects.toThrow(message);
+    const response = await fetch(`${base}/callback${query}`);
+    expect(response.status).toBe(400);
+    expect(response.headers.get('content-type')).toBe('text/plain');
+    expect(await response.text()).toBe(page);
+    await assertion;
+    await expect(result).rejects.toBeInstanceOf(SaxoLoginError);
+    server.close();
+  });
+
   it('rejects — not an uncaught exception — when the port is already bound (review round 1, finding 3)', async () => {
     const blocker = createServer(() => undefined);
     await new Promise<void>((resolvePromise) => blocker.listen(0, '127.0.0.1', resolvePromise));

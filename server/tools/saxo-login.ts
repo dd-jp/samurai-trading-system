@@ -54,6 +54,42 @@ export interface CallbackResult {
 
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
+type CallbackOutcome =
+  | { readonly kind: 'ignore' }
+  | { readonly kind: 'reject'; readonly page: string; readonly error: SaxoLoginError }
+  | { readonly kind: 'accept'; readonly code: string };
+
+function classifyCallback(requestUrl: URL, target: URL, expectedState: string): CallbackOutcome {
+  if (requestUrl.pathname !== target.pathname) return { kind: 'ignore' };
+  const state = requestUrl.searchParams.get('state');
+  if (state === null || state !== expectedState) {
+    return {
+      kind: 'reject',
+      page: 'State mismatch — refusing to log in.',
+      error: new SaxoLoginError(
+        'Saxo login callback: state was missing or did not match — refusing the code exchange.',
+      ),
+    };
+  }
+  const error = requestUrl.searchParams.get('error');
+  if (error !== null) {
+    return {
+      kind: 'reject',
+      page: 'Saxo login was not completed.',
+      error: new SaxoLoginError(`Saxo authorize endpoint returned error=${error}`),
+    };
+  }
+  const code = requestUrl.searchParams.get('code');
+  if (code === null || code.length === 0) {
+    return {
+      kind: 'reject',
+      page: 'Missing authorization code.',
+      error: new SaxoLoginError('Saxo login callback: no code in the redirect.'),
+    };
+  }
+  return { kind: 'accept', code };
+}
+
 export function waitForCallback(
   redirectUri: string,
   expectedState: string,
@@ -72,39 +108,24 @@ export function waitForCallback(
   });
 
   const server = createServer((req, res) => {
-    const requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? target.host}`);
-    if (requestUrl.pathname !== target.pathname) {
+    const outcome = classifyCallback(
+      new URL(req.url ?? '/', `http://${req.headers.host ?? target.host}`),
+      target,
+      expectedState,
+    );
+    if (outcome.kind === 'ignore') {
       res.writeHead(404).end();
       return;
     }
-    const state = requestUrl.searchParams.get('state');
-    if (state === null || state !== expectedState) {
-      res
-        .writeHead(400, { 'content-type': 'text/plain' })
-        .end('State mismatch — refusing to log in.');
-      fail(
-        new SaxoLoginError(
-          'Saxo login callback: state was missing or did not match — refusing the code exchange.',
-        ),
-      );
-      return;
-    }
-    const error = requestUrl.searchParams.get('error');
-    if (error !== null) {
-      res.writeHead(400, { 'content-type': 'text/plain' }).end('Saxo login was not completed.');
-      fail(new SaxoLoginError(`Saxo authorize endpoint returned error=${error}`));
-      return;
-    }
-    const code = requestUrl.searchParams.get('code');
-    if (code === null || code.length === 0) {
-      res.writeHead(400, { 'content-type': 'text/plain' }).end('Missing authorization code.');
-      fail(new SaxoLoginError('Saxo login callback: no code in the redirect.'));
+    if (outcome.kind === 'reject') {
+      res.writeHead(400, { 'content-type': 'text/plain' }).end(outcome.page);
+      fail(outcome.error);
       return;
     }
     res
       .writeHead(200, { 'content-type': 'text/plain' })
       .end('Login complete — you can close this tab.');
-    settle({ code });
+    settle({ code: outcome.code });
   });
 
   server.on('error', (cause) => {
@@ -181,9 +202,13 @@ export function printSafely(line: string): void {
   console.log(maskCredentials(line));
 }
 
+function browserOpener(platform: NodeJS.Platform): string {
+  if (platform === 'darwin') return 'open';
+  return platform === 'win32' ? 'start' : 'xdg-open';
+}
+
 async function openInBrowser(url: string): Promise<void> {
-  const opener =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  const opener = browserOpener(process.platform);
   try {
     await new Promise<void>((resolvePromise, rejectPromise) => {
       const child = spawn(opener, [url], { stdio: 'ignore', detached: true });

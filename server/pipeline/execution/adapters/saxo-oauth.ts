@@ -82,17 +82,26 @@ export type SaxoTokenGrant =
   | { grant_type: 'authorization_code'; code: string; redirect_uri: string }
   | { grant_type: 'refresh_token'; refresh_token: string };
 
-export async function requestSaxoToken(
+interface SaxoTokenBody {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  refresh_token_expires_in: number;
+}
+
+function errorText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+async function postTokenGrant(
   config: Pick<SaxoOAuthConfig, 'tokenUrl' | 'appKey' | 'appSecret'>,
   grant: SaxoTokenGrant,
-  now: Date,
   fetchImpl: FetchLike,
-): Promise<SaxoTokenResponse> {
+): Promise<Response> {
   const basic = Buffer.from(`${config.appKey}:${config.appSecret}`).toString('base64');
   const body = new URLSearchParams({ ...grant });
-  let response: Response;
   try {
-    response = await fetchImpl(config.tokenUrl, {
+    return await fetchImpl(config.tokenUrl, {
       method: 'POST',
       headers: {
         authorization: `Basic ${basic}`,
@@ -101,20 +110,17 @@ export async function requestSaxoToken(
       body: body.toString(),
     });
   } catch (cause) {
-    throw new SaxoOAuthError(
-      `Saxo token exchange failed: network error — ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-    );
+    throw new SaxoOAuthError(`Saxo token exchange failed: network error — ${errorText(cause)}`);
   }
+}
+
+async function tokenResponseText(response: Response): Promise<string> {
   let text: string;
   try {
     text = await response.text();
   } catch (cause) {
     throw new SaxoOAuthError(
-      `Saxo token exchange failed: response body could not be read — ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
+      `Saxo token exchange failed: response body could not be read — ${errorText(cause)}`,
       response.status,
     );
   }
@@ -124,31 +130,54 @@ export async function requestSaxoToken(
       response.status,
     );
   }
+  return text;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isFiniteSeconds(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isTokenBody(parsed: unknown): parsed is SaxoTokenBody {
+  return (
+    isRecord(parsed) &&
+    isNonEmptyString(parsed.access_token) &&
+    isNonEmptyString(parsed.refresh_token) &&
+    isFiniteSeconds(parsed.expires_in) &&
+    isFiniteSeconds(parsed.refresh_token_expires_in)
+  );
+}
+
+function parseTokenBody(text: string, status: number): SaxoTokenBody {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     throw new SaxoOAuthError(
       'Saxo token exchange failed: response body was not valid JSON.',
-      response.status,
+      status,
     );
   }
-  if (
-    !isRecord(parsed) ||
-    typeof parsed.access_token !== 'string' ||
-    parsed.access_token.length === 0 ||
-    typeof parsed.refresh_token !== 'string' ||
-    parsed.refresh_token.length === 0 ||
-    typeof parsed.expires_in !== 'number' ||
-    !Number.isFinite(parsed.expires_in) ||
-    typeof parsed.refresh_token_expires_in !== 'number' ||
-    !Number.isFinite(parsed.refresh_token_expires_in)
-  ) {
+  if (!isTokenBody(parsed)) {
     throw new SaxoOAuthError(
       'Saxo token exchange failed: response body is missing access_token/refresh_token/expires_in/refresh_token_expires_in.',
-      response.status,
+      status,
     );
   }
+  return parsed;
+}
+
+export async function requestSaxoToken(
+  config: Pick<SaxoOAuthConfig, 'tokenUrl' | 'appKey' | 'appSecret'>,
+  grant: SaxoTokenGrant,
+  now: Date,
+  fetchImpl: FetchLike,
+): Promise<SaxoTokenResponse> {
+  const response = await postTokenGrant(config, grant, fetchImpl);
+  const parsed = parseTokenBody(await tokenResponseText(response), response.status);
   return {
     accessToken: parsed.access_token,
     refreshToken: parsed.refresh_token,
