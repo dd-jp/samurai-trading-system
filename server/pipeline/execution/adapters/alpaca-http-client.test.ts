@@ -1080,7 +1080,7 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       json: async () => {
         throw new SyntaxError('Unexpected token');
       },
-    } as Response;
+    } as unknown as Response;
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
 
     const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
@@ -1096,7 +1096,7 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       json: async () => {
         throw 'truncated';
       },
-    } as Response;
+    } as unknown as Response;
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
 
     const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
