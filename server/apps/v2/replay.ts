@@ -386,6 +386,7 @@ async function replayTrading(replay: ReplayCycle): Promise<{
     replayed: copy,
     tradingDate: inputs.tradingDate,
     markedAt: day.markedAt,
+    startedAt: day.startedAt,
   });
   return { state, trading: divergences, counts };
 }
