@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   DecisionJournal,
+  JournalledCashInLieu,
   JournalledFill,
   JournalledFillRead,
   JournalledOrder,
@@ -271,6 +272,32 @@ export class Journal implements DecisionJournal {
         split.trading_date,
         this.#now(),
       );
+  }
+
+  recordCashInLieu(row: JournalledCashInLieu): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT INTO v2_cash_in_lieu (venue, activity_id, instrument, activity_date, qty,
+           amount_native, currency, status, fx_quote_per_gbp, fx_source, trading_date, recorded_at)
+         VALUES (@venue, @activity_id, @instrument, @activity_date, @qty, @amount_native,
+           @currency, @status, @fx_quote_per_gbp, @fx_source, @trading_date, @recorded_at)`,
+      )
+      .run({ ...row, recorded_at: this.#now() });
+    return result.changes === 1;
+  }
+
+  // Only a broker-routed order's estimate is a disposal the broker pays (api/tax.ts)
+  earliestCashInLieuEstimate(venue: Venue, fromDate: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT MIN(COALESCE(f.fill_date, f.trading_date)) AS date
+         FROM v2_fills f JOIN v2_orders o ON o.client_order_id = f.client_order_id
+         WHERE f.leg = 'cash_in_lieu' AND f.venue = ?
+           AND o.outcome NOT IN ('simulated', 'refused_dry_run')
+           AND COALESCE(f.fill_date, f.trading_date) >= ?`,
+      )
+      .get(venue, fromDate) as { date: string | null };
+    return row.date ?? undefined;
   }
 
   recordRescale(rescale: JournalledRescale): void {

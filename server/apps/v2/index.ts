@@ -18,6 +18,7 @@ import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { type AlertFetch, alertsFor, withAlerts } from './alerts.js';
 import { backupFor, type CommandRunner, execRunner, withBackup } from './backup.js';
 import { type BarRefresh, barRefreshFor } from './bar-refresh.js';
+import { readBrokerCashInLieu } from './cash-in-lieu.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { pushDailySummary } from './daily-summary.js';
@@ -493,6 +494,7 @@ export async function runDigestedCycle(
       tradingDate,
       cycleInputDigests(inputs.bars, inputs.recording.names(), inputs.catalogue, tradingDate),
     );
+    await readBrokerCashInLieu(cycle, tradingDate);
   }
   return report;
 }

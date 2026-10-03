@@ -653,8 +653,8 @@ class Cycle {
     });
   }
 
-  // The broker's cash-in-lieu amount is not read from any venue; the disposal books at the
-  // latest close, already in post-split units
+  // The books keep the latest close, already in post-split units; only the tax log takes the
+  // broker's amount, once read after the cycle (#2001)
   floorHeld(
     bookId: string,
     instrument: string,
@@ -712,7 +712,7 @@ class Cycle {
     this.log(
       'warn',
       'v2_split_cash_in_lieu',
-      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the broker's amount is not read`,
+      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the tax log takes the broker's amount once it is read`,
     );
   }
 

@@ -1073,6 +1073,88 @@ describe('composeV2Root', () => {
     }
   });
 
+  it("journals the broker's cash in lieu after a cycle while a broker estimate awaits it (#2001)", async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'cash-in-lieu.sqlite');
+    const clock = new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`));
+    const alpacaClient = fakeAlpacaClient(clock);
+    let digestsAtRead: unknown;
+    const listCashInLieu = vi.fn(async () => {
+      digestsAtRead = root.db
+        .prepare('SELECT COUNT(*) AS n FROM v2_input_digests WHERE trading_date = ?')
+        .get(ENTRY_DATE);
+      return [
+        {
+          id: 'cil-1',
+          activity_type: 'CIL' as const,
+          date: '2026-09-16',
+          net_amount: '12.50',
+          symbol: 'NVDA',
+          qty: '0.5',
+          status: 'executed' as const,
+        },
+      ];
+    });
+    alpacaClient.listCashInLieu = listCashInLieu;
+    const seeded = seededStore(storePath);
+    seeded
+      .prepare(
+        `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument,
+           venue, leg, side, dry_run, outcome, payload, recorded_at)
+         VALUES ('old-nvda', NULL, 'debate/primary', '2026-09-01', 'NVDA', 'alpaca', 'exit', 'sell',
+           0, 'cancelled', '{}', '2026-09-01T14:00:00.000Z')`,
+      )
+      .run();
+    seeded
+      .prepare(
+        `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue,
+           leg, side, qty, price_gbp, fee_gbp, recorded_at, fill_date, broker_mode)
+         VALUES ('alpaca:cash-in-lieu:nvda', 'old-nvda', 'debate/primary', '2026-09-15', 'NVDA',
+           'alpaca', 'cash_in_lieu', 'sell', 0.5, 20, 0, '2026-09-15T07:00:00.000Z', '2026-09-15',
+           'paper')`,
+      )
+      .run();
+    seeded.close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: false,
+      storePath,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      clock,
+      logger: { log: () => {} },
+      transportFor: scriptedFactory([]),
+      alpacaClient,
+      newsSource: { headlines: () => Promise.resolve([]) },
+    });
+    try {
+      await root.run();
+      expect(listCashInLieu).toHaveBeenCalledWith('2026-08-16', undefined);
+      expect((digestsAtRead as { n: number }).n).toBeGreaterThan(0);
+      expect(
+        root.db
+          .prepare(
+            'SELECT venue, activity_id, instrument, amount_native, currency, status, trading_date FROM v2_cash_in_lieu',
+          )
+          .all(),
+      ).toEqual([
+        {
+          venue: 'alpaca',
+          activity_id: 'cil-1',
+          instrument: 'NVDA',
+          amount_native: 12.5,
+          currency: 'USD',
+          status: 'executed',
+          trading_date: ENTRY_DATE,
+        },
+      ]);
+    } finally {
+      root.close();
+    }
+  });
+
   it('records the weekdays no cycle marked as missed runs, and a cycle that cannot take the lease as refused (#1878)', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;

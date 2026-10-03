@@ -110,7 +110,7 @@ function journalledDryRun(db: StoreHandle, tradingDate: string): boolean {
   return row.dry_run === 1;
 }
 
-// A reconcile or fill journalled before migration 0091 records no mode, and every run before it
+// A reconcile or fill journalled before migration 0092 records no mode, and every run before it
 // was paper
 function journalledBrokerMode(db: StoreHandle, tradingDate: string): BrokerMode {
   const row = db
@@ -533,7 +533,7 @@ const MIRRORED_DIFF_KINDS = [
 
 // The replay broker serves each venue's first journalled broker reconcile of the day (replay-broker.ts),
 // so only that one is held to the replay, and only when the broker could mirror it: not a failed
-// read, not one with any other difference, and not one from before migration 0091, which
+// read, not one with any other difference, and not one from before migration 0092, which
 // journalled no broker cash
 const RECONCILE_SQL = (_after: string, journalled: boolean): string => `
   SELECT key, status, diffs, detail, broker_mode FROM (

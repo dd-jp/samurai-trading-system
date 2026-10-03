@@ -1,3 +1,5 @@
+import type { BrokerActivityStatus } from '../../../../../contracts/index.js';
+
 export interface AlpacaOrderLeg {
   id: string;
   type: 'limit' | 'stop';
@@ -75,6 +77,17 @@ export interface AlpacaBrokerClient {
   getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null>;
   listOpenOrders(): Promise<AlpacaOrder[]>;
   getAccount(): Promise<AlpacaAccount>;
+  listCashInLieu?(after: string, pageToken?: string): Promise<AlpacaCashInLieuActivity[]>;
+}
+
+export interface AlpacaCashInLieuActivity {
+  id: string;
+  activity_type: 'CIL';
+  date: string;
+  net_amount: string;
+  symbol: string;
+  qty?: string | null;
+  status: BrokerActivityStatus;
 }
 
 export interface AlpacaAccount {

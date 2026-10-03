@@ -74,13 +74,14 @@ const TABLES = [
   'v2_fill_reads',
   'v2_fill_sweeps',
   'v2_cash_anchors',
+  'v2_cash_in_lieu',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 61;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 62;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 91;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 92;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -600,9 +601,9 @@ describe('openSharedStore', () => {
     }
   });
 
-  it('migration 0091 keeps every fill rowid as its fill_seq and marks the legacy journal paper (#2035)', () => {
+  it('migration 0092 keeps every fill rowid as its fill_seq and marks the legacy journal paper (#2035)', () => {
     const raw = new BetterSqlite3(':memory:');
-    const preCutoverVersion = 90;
+    const preCutoverVersion = 91;
     const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
     try {
       runMigrations(raw, preCutoverDir);
