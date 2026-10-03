@@ -65,21 +65,52 @@ export interface RunDebateOptions {
   signal?: AbortSignal | undefined;
 }
 
+function resolveMaxRounds(requested: number | undefined): number {
+  const maxRounds = requested ?? MAX_ROUNDS;
+  if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_ROUNDS) {
+    throw new Error(
+      `runDebate: maxRounds must be an integer in [1, ${MAX_ROUNDS}] (got ${maxRounds})`,
+    );
+  }
+  return maxRounds;
+}
+
+async function argueRound(
+  personas: DebatePersonas,
+  views: AnalystView[],
+  round: number,
+  priorArguments: DebateArgument[],
+  signal: AbortSignal | undefined,
+): Promise<MediatorAssessment> {
+  signal?.throwIfAborted();
+  const bullContext: RoundContext = { views, round, priorArguments, signal };
+  priorArguments.push(await personas.bull.argue(bullContext));
+
+  signal?.throwIfAborted();
+  const bearContext: RoundContext = { views, round, priorArguments, signal };
+  priorArguments.push(await personas.bear.argue(bearContext));
+
+  signal?.throwIfAborted();
+  const mediatorContext: RoundContext = { views, round, priorArguments, signal };
+  return personas.mediator.assess(mediatorContext);
+}
+
+function openItemsOf(converged: boolean, synthesis: MediatorSynthesis): string[] {
+  return !converged && synthesis.open_items.length === 0
+    ? [synthesis.disagreement_summary]
+    : synthesis.open_items;
+}
+
 export async function runDebate(
   input: DebateInput,
   personas: DebatePersonas,
   options: RunDebateOptions = {},
 ): Promise<DebateResult> {
   const { views, instrument, bar } = input;
-  const { bull, bear, mediator, clock } = personas;
+  const { clock } = personas;
   const { signal } = options;
 
-  const maxRounds = options.maxRounds ?? MAX_ROUNDS;
-  if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_ROUNDS) {
-    throw new Error(
-      `runDebate: maxRounds must be an integer in [1, ${MAX_ROUNDS}] (got ${maxRounds})`,
-    );
-  }
+  const maxRounds = resolveMaxRounds(options.maxRounds);
 
   const startedAt = clock.now().getTime();
   const priorArguments: DebateArgument[] = [];
@@ -90,17 +121,7 @@ export async function runDebate(
   const roundVerdicts: RoundVerdict[] = [];
 
   for (let round = 1; round <= maxRounds; round++) {
-    signal?.throwIfAborted();
-    const bullContext: RoundContext = { views, round, priorArguments, signal };
-    priorArguments.push(await bull.argue(bullContext));
-
-    signal?.throwIfAborted();
-    const bearContext: RoundContext = { views, round, priorArguments, signal };
-    priorArguments.push(await bear.argue(bearContext));
-
-    signal?.throwIfAborted();
-    const mediatorContext: RoundContext = { views, round, priorArguments, signal };
-    const assessment = await mediator.assess(mediatorContext);
+    const assessment = await argueRound(personas, views, round, priorArguments, signal);
 
     roundsCompleted = round;
     lastAssessment = assessment;
@@ -125,18 +146,13 @@ export async function runDebate(
   const converged = lastAssessment.converged;
   const synthesis = lastAssessment.synthesis;
 
-  const openItems =
-    !converged && synthesis.open_items.length === 0
-      ? [synthesis.disagreement_summary]
-      : synthesis.open_items;
-
   return {
     synthesis: synthesis.synthesis,
     position: synthesis.position,
     confidence: synthesis.confidence,
     contributions: buildAnalystContributions(views, roundStances),
     disagreement_summary: synthesis.disagreement_summary,
-    open_items: openItems,
+    open_items: openItemsOf(converged, synthesis),
     converged,
     rounds_completed: roundsCompleted,
     latency_ms: clock.now().getTime() - startedAt,

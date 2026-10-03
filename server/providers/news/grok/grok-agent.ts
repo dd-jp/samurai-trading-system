@@ -231,50 +231,63 @@ export class GrokAgent {
     const archive = this.#deps.archive;
     if (archive === undefined || items.length === 0) return;
 
-    const raws: RawArchiveRow[] = [];
-    const rows: ArchivedItem[] = [];
-
-    for (const item of items) {
-      const projection = toArchiveProjection(item, asOf);
-      if (projection === null) continue;
-
-      raws.push({
-        source: MI_SOURCES.x,
-        native_id: projection.status_id,
-        updated_at: item.timestamp,
-        payload: JSON.stringify(projection),
-        ingested_at: asOf,
-        fidelity: 'backfill',
-      });
-
-      rows.push({
-        source: MI_SOURCES.x,
-        native_id: projection.status_id,
-        updated_at: item.timestamp,
-        entity: item.entity,
-        asset_class: assetClass,
-        item,
-        ingested_at: asOf,
-      });
-    }
-
+    const { raws, rows } = archiveRowsFor(items, asOf, assetClass);
     if (raws.length === 0) return;
 
     try {
       archive.write(raws, rows);
     } catch (error) {
-      this.#deps.logger?.log({
-        trace_id,
-        stage: 'market_intelligence',
-        event: 'grok_archive_write_failed',
-        level: 'warn',
-        message:
-          `grok: archiving ${raws.length} retrieved item(s) failed — ` +
-          `${error instanceof Error ? error.message : String(error)}. The items still reached ` +
-          'the live store, so this run is unaffected; what is lost is replay and the ' +
-          'post-hoc bot-share check for this bucket.',
-        payload: { items: raws.length },
-      });
+      this.#logArchiveFailure(trace_id, raws.length, error);
     }
   }
+
+  #logArchiveFailure(trace_id: string, count: number, error: unknown): void {
+    this.#deps.logger?.log({
+      trace_id,
+      stage: 'market_intelligence',
+      event: 'grok_archive_write_failed',
+      level: 'warn',
+      message:
+        `grok: archiving ${count} retrieved item(s) failed — ` +
+        `${error instanceof Error ? error.message : String(error)}. The items still reached ` +
+        'the live store, so this run is unaffected; what is lost is replay and the ' +
+        'post-hoc bot-share check for this bucket.',
+      payload: { items: count },
+    });
+  }
+}
+
+function archiveRowsFor(
+  items: readonly IntelligenceItem[],
+  asOf: Date,
+  assetClass: AssetClass,
+): { raws: RawArchiveRow[]; rows: ArchivedItem[] } {
+  const raws: RawArchiveRow[] = [];
+  const rows: ArchivedItem[] = [];
+
+  for (const item of items) {
+    const projection = toArchiveProjection(item, asOf);
+    if (projection === null) continue;
+
+    raws.push({
+      source: MI_SOURCES.x,
+      native_id: projection.status_id,
+      updated_at: item.timestamp,
+      payload: JSON.stringify(projection),
+      ingested_at: asOf,
+      fidelity: 'backfill',
+    });
+
+    rows.push({
+      source: MI_SOURCES.x,
+      native_id: projection.status_id,
+      updated_at: item.timestamp,
+      entity: item.entity,
+      asset_class: assetClass,
+      item,
+      ingested_at: asOf,
+    });
+  }
+
+  return { raws, rows };
 }

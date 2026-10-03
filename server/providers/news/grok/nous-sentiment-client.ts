@@ -17,6 +17,36 @@ interface RawSentiment {
   summary?: unknown;
 }
 
+interface ScorableSentiment extends RawSentiment {
+  headline: string;
+  sentiment: 1 | 0 | -1;
+  confidence: number;
+}
+
+function isScorable(raw: RawSentiment): raw is ScorableSentiment {
+  return (
+    typeof raw.headline === 'string' &&
+    raw.headline.trim() !== '' &&
+    (raw.sentiment === 1 || raw.sentiment === 0 || raw.sentiment === -1) &&
+    typeof raw.confidence === 'number' &&
+    Number.isFinite(raw.confidence)
+  );
+}
+
+function parseLenientJson(content: string): { items?: unknown } | undefined {
+  try {
+    return JSON.parse(content) as { items?: unknown };
+  } catch {
+    const match = content.match(/\{[\s\S]*\}/);
+    if (match === null) return undefined;
+    try {
+      return JSON.parse(match[0]) as { items?: unknown };
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 export interface NousSentimentClientOptions {
   apiKey: string;
   baseUrl: string;
@@ -117,20 +147,8 @@ export class NousSentimentClient implements GrokSentimentClient {
   #parseItems(content: string, instrument: string, asOf: Date): IntelligenceItem[] {
     if (content.trim() === '') return [];
 
-    let parsed: { items?: unknown };
-    try {
-      parsed = JSON.parse(content) as { items?: unknown };
-    } catch {
-      const match = content.match(/\{[\s\S]*\}/);
-      if (match === null) return this.#unreadable(instrument);
-      try {
-        parsed = JSON.parse(match[0]) as { items?: unknown };
-      } catch {
-        return this.#unreadable(instrument);
-      }
-    }
-
-    if (!Array.isArray(parsed.items)) return this.#unreadable(instrument);
+    const parsed = parseLenientJson(content);
+    if (parsed === undefined || !Array.isArray(parsed.items)) return this.#unreadable(instrument);
 
     const items: IntelligenceItem[] = [];
     for (const [index, raw] of parsed.items.slice(0, MAX_ITEMS).entries()) {
@@ -146,9 +164,7 @@ export class NousSentimentClient implements GrokSentimentClient {
     asOf: Date,
     index: number,
   ): IntelligenceItem | null {
-    if (typeof raw.headline !== 'string' || raw.headline.trim() === '') return null;
-    if (raw.sentiment !== 1 && raw.sentiment !== 0 && raw.sentiment !== -1) return null;
-    if (typeof raw.confidence !== 'number' || !Number.isFinite(raw.confidence)) return null;
+    if (!isScorable(raw)) return null;
 
     return {
       id: `grok:${instrument}:${asOf.toISOString()}:${index}`,
