@@ -42,6 +42,8 @@ const SECRET_ENV: Readonly<Record<string, string>> = {
   ALPACA_LIVE_API_SECRET: 'sentinel-alpaca-live-secret-6a7b',
   SAXO_SIM_ACCESS_TOKEN: 'sentinel-saxo-sim-access-8c9d',
   SAXO_LIVE_ACCESS_TOKEN: 'sentinel-saxo-live-access-0e1f',
+  SAXO_SIM_ACCOUNT_KEY: 'sentinel-saxo-sim-account-key-7d1c',
+  SAXO_LIVE_ACCOUNT_KEY: 'sentinel-saxo-live-account-key-9f3a',
   SAXO_SIM_APP_KEY: 'sentinel-saxo-sim-app-key-2a3b',
   SAXO_SIM_APP_SECRET: 'sentinel-saxo-sim-app-secret-4c5d',
   SAXO_LIVE_APP_KEY: 'sentinel-saxo-live-app-key-6e7f',

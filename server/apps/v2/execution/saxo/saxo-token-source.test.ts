@@ -24,6 +24,15 @@ import type {
 } from './saxo-token-source.js';
 import { SaxoSessionLostError, SaxoTokenRefresher } from './saxo-token-source.js';
 
+beforeEach(() => {
+  vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', '');
+  vi.stubEnv('SAXO_LIVE_ACCOUNT_KEY', '');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 const CONFIG = {
   tokenUrl: 'https://sim.logonvalidation.net/token',
   appKey: 'app-key-fixture',

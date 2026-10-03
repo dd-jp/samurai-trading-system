@@ -125,6 +125,7 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 | Variable | Used by |
 | --- | --- |
 | `POLYGON_API_KEY` | Stage-2 historical bars (free tier: 5 calls/min, ~2 years of history — a fallback source, not the backfill source) |
+| `SAXO_SIM_ACCOUNT_KEY`, `SAXO_LIVE_ACCOUNT_KEY` | v2 Saxo client (`server/apps/v2/execution/saxo/saxo-http-client.ts`, #1868): the `AccountKey` to trade when the token sees more than one account (GIA + CFD); with two or more and none set, the client refuses. Each environment reads only its own variable, an explicit `accountKey` option wins, and a blank value counts as unset. Treated as a secret by the LLM request guard (#1881). Real keys go in `.env.local` only |
 | `WORLDMONITOR_API_KEY` | WorldMonitor CII feed (ADR-0002). The adapter stays parked until this is set |
 | `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`). Binding `HOST` to anything other than `127.0.0.1`/`::1` refuses to start unless `SAMURAI_DASHBOARD_TOKEN` (below) is also set — see #887/ADR-0019 |
 | `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/apps/service-api/bind-guard.ts` and `request-auth.ts` |

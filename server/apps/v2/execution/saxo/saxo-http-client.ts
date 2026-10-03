@@ -26,7 +26,11 @@ import type {
   SaxoOrderRequest,
 } from './saxo-client.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
-import { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS } from './saxo-environment.js';
+import {
+  SAXO_CREDENTIAL_ENV_VARS,
+  SAXO_GATEWAY_URLS,
+  saxoAccountKeyEnvVar,
+} from './saxo-environment.js';
 import type { SaxoTokenSource } from './saxo-token-source.js';
 import { StaticSaxoTokenSource } from './saxo-token-source.js';
 
@@ -301,7 +305,11 @@ function validateBalance(body: unknown, context: string): SaxoAccountBalance {
   };
 }
 
-function validateIdentity(body: unknown, pinnedAccountKey: string | undefined): AccountIdentity {
+function validateIdentity(
+  body: unknown,
+  pinnedAccountKey: string | undefined,
+  accountKeyEnvVar: string,
+): AccountIdentity {
   const context = 'resolveAccount';
   const rows = readData(body, context).map((row) => {
     if (!isRecord(row)) failValidation(context, 'account rows must be objects', body);
@@ -325,15 +333,19 @@ function validateIdentity(body: unknown, pinnedAccountKey: string | undefined): 
   }
   if (second !== undefined) {
     throw new SaxoBrokerProviderError(
-      `Saxo: ${rows.length} accounts are visible; pass { accountKey } to pick the trading one.`,
+      `Saxo: ${rows.length} accounts are visible; set ${accountKeyEnvVar} or pass { accountKey } to pick the trading one.`,
     );
   }
   return only;
 }
 
-function saxoFromEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
+function nonBlank(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
   return value === undefined || value.length === 0 ? undefined : value;
+}
+
+function saxoFromEnv(name: string): string | undefined {
+  return nonBlank(process.env[name]);
 }
 
 function resolveSaxoTokenSource(
@@ -401,6 +413,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   private readonly tokenSource: SaxoTokenSource;
   readonly baseUrl: string;
   private readonly pinnedAccountKey: string | undefined;
+  private readonly accountKeyEnvVar: string;
   private readonly timeoutMs: number;
   private readonly retry: RetryConfig;
   private readonly rateLimiter: TokenBucket;
@@ -411,7 +424,8 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     const names = SAXO_CREDENTIAL_ENV_VARS[environment];
     this.tokenSource = resolveSaxoTokenSource(options, environment, names.token);
     this.baseUrl = resolveSaxoBaseUrl(options, names.gateway, environment);
-    this.pinnedAccountKey = options.accountKey;
+    this.accountKeyEnvVar = saxoAccountKeyEnvVar(environment);
+    this.pinnedAccountKey = nonBlank(options.accountKey) ?? saxoFromEnv(this.accountKeyEnvVar);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
     this.rateLimiter = resolveSaxoRateLimiter(options);
@@ -479,7 +493,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       '/port/v1/accounts/me',
       { method: 'GET' },
       'resolveAccount',
-      (body) => validateIdentity(body, this.pinnedAccountKey),
+      (body) => validateIdentity(body, this.pinnedAccountKey, this.accountKeyEnvVar),
       'priority',
     ).catch((cause: unknown) => {
       this.identity = undefined;

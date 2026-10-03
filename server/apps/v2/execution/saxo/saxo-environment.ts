@@ -11,3 +11,7 @@ export const SAXO_GATEWAY_URLS: Readonly<Record<SaxoTradingEnvironment, string>>
   sim: 'https://gateway.saxobank.com/sim/openapi',
   live: 'https://gateway.saxobank.com/openapi',
 };
+
+export function saxoAccountKeyEnvVar(environment: SaxoTradingEnvironment): string {
+  return `SAXO_${environment.toUpperCase()}_ACCOUNT_KEY`;
+}

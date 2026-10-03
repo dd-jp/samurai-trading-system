@@ -12,6 +12,15 @@ import {
   saxoExternalReference,
 } from './saxo-adapter.js';
 
+beforeEach(() => {
+  vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', '');
+  vi.stubEnv('SAXO_LIVE_ACCOUNT_KEY', '');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function wireRef(clientOrderId = 'key-3usl-0930', leg?: 'stop' | 'target'): string {
   const base = saxoExternalReference(clientOrderId);
   return leg === undefined ? base : `${base}:${leg}`;

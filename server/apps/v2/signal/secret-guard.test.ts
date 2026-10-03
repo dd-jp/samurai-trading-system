@@ -80,6 +80,20 @@ describe('secretsFromEnv', () => {
     );
     expect(secrets.find((secret) => secret.name === 'ALPACA_API_KEY')?.value).toBe('');
   });
+
+  it('guards the Saxo account keys, so an LLM prompt naming one is refused (#1881)', () => {
+    const secrets = secretsFromEnv({
+      SAXO_SIM_ACCOUNT_KEY: 'fake-sim-account-key-1a2b',
+      SAXO_LIVE_ACCOUNT_KEY: 'fake-live-account-key-3c4d',
+    });
+    const prompt = (key: string) => clean({ body: JSON.stringify({ content: `acct ${key}` }) });
+    expect(leakedSecret(secrets, prompt('fake-sim-account-key-1a2b'), AUTH)).toBe(
+      'SAXO_SIM_ACCOUNT_KEY',
+    );
+    expect(leakedSecret(secrets, prompt('fake-live-account-key-3c4d'), AUTH)).toBe(
+      'SAXO_LIVE_ACCOUNT_KEY',
+    );
+  });
 });
 
 describe('secretGuardedSink', () => {
