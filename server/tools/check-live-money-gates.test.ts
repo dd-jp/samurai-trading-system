@@ -1,15 +1,11 @@
 import {
-  LIVE_MONEY_GATES,
-  LIVE_MONEY_GATES_RECHECK_COMMAND,
-} from './live-money-gates.js';
-
-import {
   checkLiveMoneyGates,
   formatGateReport,
   type GateState,
   type IssueStateLookup,
   parseIssueState,
 } from './check-live-money-gates.js';
+import { LIVE_MONEY_GATES, LIVE_MONEY_GATES_RECHECK_COMMAND } from './live-money-gates.js';
 
 describe('parseIssueState', () => {
   it.each([

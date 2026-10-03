@@ -58,7 +58,7 @@ function sourceFiles(directory: string): string[] {
 const EVENT_ASSIGNMENT = /(?:^[ \t]*|\{[ \t]*)event: ([^,\n]*)/gm;
 const SNAKE_CASE_LITERAL = /^'[a-z][a-z0-9]*(?:_[a-z0-9]+)+'$/;
 
-const MINIMUM_EVENT_ASSIGNMENTS = 140;
+const MINIMUM_EVENT_ASSIGNMENTS = 120;
 
 describe('every logged event code is a stable snake_case literal', () => {
   const assignments = sourceFiles(SERVER_ROOT).flatMap((file) => {

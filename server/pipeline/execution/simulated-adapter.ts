@@ -24,7 +24,6 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   private readonly fills: NormalizedFill[] = [];
   private readonly accepted = new Map<string, NativeBracketRequest>();
   private readonly protectedQty = new Map<string, number>();
-  private readonly cancelled = new Set<string>();
 
   constructor(private readonly input: SimulatedBrokerAdapterInput) {}
 
@@ -169,11 +168,6 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
 
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
     this.protectedQty.delete(clientOrderId);
-    this.cancelled.add(clientOrderId);
-  }
-
-  isCancelled(clientOrderId: string): boolean {
-    return this.cancelled.has(clientOrderId);
   }
 
   async getOpenPositions(): Promise<NormalizedPosition[]> {

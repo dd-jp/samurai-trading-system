@@ -23,7 +23,7 @@ const DEFAULT_TOKEN_URLS: Readonly<Record<SaxoTradingEnvironment, string>> = {
 };
 const DEFAULT_REDIRECT_URI = 'http://localhost:8080/callback';
 
-export const SAXO_APP_CREDENTIAL_ENV_VARS: Readonly<
+const SAXO_APP_CREDENTIAL_ENV_VARS: Readonly<
   Record<SaxoTradingEnvironment, { appKey: string; appSecret: string }>
 > = {
   sim: { appKey: 'SAXO_SIM_APP_KEY', appSecret: 'SAXO_SIM_APP_SECRET' },

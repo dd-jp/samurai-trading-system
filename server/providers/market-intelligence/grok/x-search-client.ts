@@ -12,10 +12,10 @@ const DEFAULT_MAX_TOKENS = 6_000;
 
 const MAX_ITEMS = 10;
 
-export const X_SEARCH_MODEL = '~x-ai/grok-latest';
+const X_SEARCH_MODEL = '~x-ai/grok-latest';
 
-export const DEFAULT_MAX_SEARCH_RESULTS = 3;
-export const MAX_SEARCH_RESULTS_CEILING = 10;
+const DEFAULT_MAX_SEARCH_RESULTS = 3;
+const MAX_SEARCH_RESULTS_CEILING = 10;
 
 const SNOWFLAKE_EPOCH_MS = 1_288_834_974_657n;
 

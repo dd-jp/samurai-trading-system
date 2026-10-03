@@ -238,7 +238,7 @@ column already used — so every figure here is an upper bound if more than one 
 > back **£50**. Two bounds on that, both recorded rather than resolved here. `decide.ts:575` stacks a
 > conviction multiplier on D5's fraction, so £350 is a full-conviction *ceiling* and a low-conviction ask can
 > land under the cap untrimmed. And `per_trade_size_cap` is a **static cash** figure derived from the boot
-> ceiling (`server/pipeline/risk-manager/index.ts:365`, `server/apps/orchestrator/live-profile.ts:66`) while
+> ceiling (`server/pipeline/risk-manager/index.ts:365`, `server/apps/orchestrator/live-profile.ts:66`) while <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 > D5 is a live fraction of `portfolio.equity` (`risk-manager/index.ts:515`) — so which one binds depends on
 > how far equity sits below that ceiling, and the two are not comparable as fractions at all.
 > **The range matters more than the resolution:** across a £50–£350 index notional the bill costs **11.1 pp

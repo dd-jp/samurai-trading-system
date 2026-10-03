@@ -22,7 +22,6 @@ export type {
   LogEntryTemplate,
   LogEventCode,
   Logger,
-  LogLevel,
   TradingArm,
 } from './types/primitives.js';
 export type {

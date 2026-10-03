@@ -41,12 +41,3 @@ export interface MetricsReport {
   breaches: string[];
   not_evaluated: string[];
 }
-
-export interface DailyMetricsSource {
-  getDailyMetrics(): DailyMetricsSample | undefined;
-}
-
-export interface DailyMetricsSample {
-  daily: MetricsSuite;
-  revalidation?: RevalidationSnapshot;
-}

@@ -5,8 +5,6 @@ export const AXIS_VOTE_ANALYST_TYPE = 'technical';
 
 export const CONTROL_DEBATE_ID_PREFIX = 'control:';
 
-export const CONTROL_TRACE_SUFFIX = ':control';
-
 const NO_DEBATE_HAPPENED =
   'Falsifier arm 2 (#753): no debate was held. The direction and confidence below are the ' +
   "technical analyst's deterministic axis vote (assessAxes), thresholded by the Trader's own " +

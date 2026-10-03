@@ -8,7 +8,7 @@ export const PBO_REJECT_THRESHOLD = 0.1;
 
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
-export function windowYears(window: DateRange): number {
+function windowYears(window: DateRange): number {
   return (window.end.getTime() - window.start.getTime()) / MS_PER_YEAR;
 }
 

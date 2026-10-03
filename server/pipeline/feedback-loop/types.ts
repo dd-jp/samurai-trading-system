@@ -1,7 +1,6 @@
 export type {
   ArmComparisonSample,
   ArmComparisonSampleStore,
-  ArmDivergenceAlertChannel,
   PersistedArmComparisonSample,
 } from './types/arm-comparison.js';
 export type {
@@ -12,8 +11,6 @@ export type {
 export type {
   BreachAlert,
   BreachAlertChannel,
-  DailyMetricsSample,
-  DailyMetricsSource,
   KillThresholds,
   MetricsInput,
   MetricsReport,

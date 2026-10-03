@@ -1,7 +1,6 @@
 import {
   chmodSync,
   closeSync,
-  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -25,10 +24,6 @@ function repoRoot(): string {
 
 export function tokenFilePath(environment: SaxoTradingEnvironment): string {
   return resolve(repoRoot(), 'data', 'saxo-tokens', `${environment}.json`);
-}
-
-export function savedSessionExists(path: string): boolean {
-  return existsSync(path);
 }
 
 export interface SaxoTokenFileRecord extends SaxoTokenResponse {

@@ -188,6 +188,16 @@ Open PRs #1988 and #1992 already touch candidates (#1988 edits an orchestrator t
 
 </details>
 
+### Wave 2 status (2026-10-03, PR #2043)
+
+Done. Re-run on base 79e88af4 with refreshed roots before deleting: V2_ROOTS adds `server/apps/v2/cash-move.ts` and replaces the old saxo-login entry with `server/apps/v2/execution/saxo/saxo-login.ts` (Q9, after the MOVE); V2_SCRIPTS adds `build:migrations`, `precommit` and the five `fallow:*` scripts; the Q3 hold drops the CGT barrel that wave 1 deleted; the broker-state persistence test KEEP points at its v2 home. The wave 2 list came out identical to the one above (97 production files, 116 tests), so nothing dropped out. Waves 4 and 5 are unchanged; wave 3 gains the server/pipeline/execution barrel.
+
+Deleted: the 97 production files, the 116 tests and alert-catalogue.golden.json, about 82,000 lines. The pre-steps ran as listed: live-money-gates.ts moved unchanged to `server/tools/live-money-gates.ts`; backtest/types.ts dropped the `TickOutcome` import together with `BacktestReport`, whose only users were wave 2 files; `SAXO_COMMISSION_RATE` moved into the Saxo bracket adapter. The script, `.fallowrc.json`, `.oxlintrc.json`, launch and tsconfig edits are as listed, and `npm run smoke` is now the v2 smoke alone.
+
+Two wave 3 files went early because fallow reported them unused once wave 2 was gone: the server/pipeline/execution barrel (§5.1) and the v1 Telegram Bot API client in server/pipeline/verdict/notifications/telegram. Exports left unused by the deletion were trimmed or removed so `fallow dead-code` stays clean, and two ExecutionStore methods that fallow misreads as unused class members (`isRetryableFlattenError`, `getUnprotectedResidualLots`, called through the interface) were added to `usedClassMembers`.
+
+Newly dead, not deleted: server/apps/v2/execution/saxo/saxo-http-client.ts. Its only route in was the type pass-through from the old saxo-login (§7), which the MOVE re-pointed. It sits in no wave and waits on §7. The Q2 hold now also covers the moved saxo-client.ts and saxo-broker-errors.ts and the two execution type files they import.
+
 ### Wave 3: v1 pipeline
 
 107 production files (14,848 lines) and 90 test files (37,181 lines). Trims the server/pipeline/debate-engine, server/pipeline/execution (index.ts and types.ts) and server/pipeline/momentum barrels. Removes the trader, risk-manager and verdict globs from `stryker.config.mjs`, and the trader, risk-manager, verdict and momentum/loss-budget.ts entries from `TRADING_PATH_PREFIXES` in `server/tools/mutation-local.ts`, with the `server/tools/mutation-local.test.ts` cases that pin those paths. It also removes the analysts, control-arm, feedback-loop, outside-benchmark, risk-manager, trader and verdict `.oxlintrc.json` rules and rewrites the fixture string in `server/tools/check-path-citations.test.ts`. adapters/alpaca-adapter.test.ts must be rewritten in this wave (§4.6). momentum/loss-budget.ts is the copy that doc 67 Step 3 sends "with Step 5".

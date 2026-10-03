@@ -6,10 +6,7 @@ export type {
   FlattenReconcileAlert,
   FlattenReconcileAlertChannel,
 } from './flatten-reconcile-alert.js';
-export type {
-  NonSterlingFeeAlert,
-  NonSterlingFeeAlertChannel,
-} from './non-sterling-fee-alert.js';
+export type { NonSterlingFeeAlert } from './non-sterling-fee-alert.js';
 export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
@@ -51,7 +48,3 @@ export type {
   UnprotectedResidualLot,
   UnresolvedFlattenSubmission,
 } from './types/store.js';
-export type {
-  UnattributedFlattenFillAlert,
-  UnattributedFlattenFillAlertChannel,
-} from './unattributed-flatten-fill-alert.js';

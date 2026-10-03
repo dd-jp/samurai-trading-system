@@ -4,7 +4,7 @@ import { type AnthropicUsage, rateFor } from './pricing.js';
 
 export { truncateForError };
 
-export const DEFAULT_NOUS_TIMEOUT_MS = 60_000;
+const DEFAULT_NOUS_TIMEOUT_MS = 60_000;
 
 export class NousApiError extends Error {
   readonly status: number;

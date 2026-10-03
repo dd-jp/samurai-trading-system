@@ -13,8 +13,6 @@ export interface Signal {
   asset_class: AssetClass;
 }
 
-export const INDICATOR_UNAVAILABLE_COUNTER = 'technical_indicator_unavailable';
-
 export interface IndicatorUnavailableEvent {
   trace_id: string;
   analyst_type: string;

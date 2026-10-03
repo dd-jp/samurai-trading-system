@@ -21,8 +21,8 @@ import type { AlpacaBar, AlpacaMarketDataClient, AlpacaQuote } from './alpaca-so
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
 const ALPACA_CRYPTO_API_VERSION = 'v1beta3';
 const ALPACA_STOCKS_API_VERSION = 'v2';
-export const ALPACA_BARS_TIMEOUT_MS = 10_000;
-export const ALPACA_BARS_RETRY_CONFIG: RetryConfig = {
+const ALPACA_BARS_TIMEOUT_MS = 10_000;
+const ALPACA_BARS_RETRY_CONFIG: RetryConfig = {
   maxAttempts: 3,
   baseDelayMs: 250,
   maxDelayMs: 4_000,

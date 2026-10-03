@@ -83,7 +83,7 @@ GET /v1/corporate-actions?symbols=AAPL&types=cash_dividend&start=2020-01-01
 
 ## 5. The backtest harness cannot replay intraday
 
-`REPLAY_TIMEFRAME = '1d'` is hard-coded in `server/tools/backtest/proxy-strategy.ts:53`. `free-stack-aggregates-client.ts:277` requests `'1Day'`, `replay-driver.ts:497` passes `'1d'`, and `stage2-historical-store.ts` persists a `timeframe` column that every current path writes as daily.
+`REPLAY_TIMEFRAME = '1d'` is hard-coded in `server/tools/backtest/proxy-strategy.ts:53`. `free-stack-aggregates-client.ts:277` requests `'1Day'`, `replay-driver.ts:497` passes `'1d'`, and `stage2-historical-store.ts` persists a `timeframe` column that every current path writes as daily. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 **Intraday replay is unbuilt.** Having ten years of minute bars available does not mean the harness can consume them. This is implementation work that must precede any intraday Stage 2 verdict, and it is not currently ticketed.
 

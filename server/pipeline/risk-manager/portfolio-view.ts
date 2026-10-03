@@ -78,7 +78,7 @@ function markFor(marks: Map<string, number>, instrument: string): number {
   return mark;
 }
 
-export function unrealizedFor(position: OpenPosition, mark: number): number {
+function unrealizedFor(position: OpenPosition, mark: number): number {
   const direction = position.side === 'buy' ? 1 : -1;
   return (mark - position.avg_entry_price) * position.filled_size * direction;
 }

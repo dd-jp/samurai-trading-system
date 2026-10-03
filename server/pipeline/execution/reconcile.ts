@@ -13,7 +13,7 @@ import type {
 } from './types.js';
 import { sweepWedgedZeroFillLots } from './wedged-zero-fill-sweep.js';
 
-export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
+const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
 
 export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
 

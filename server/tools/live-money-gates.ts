@@ -8,14 +8,3 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
 export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-10-03';
 
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'npm run check:live-gates';
-
-export const LIVE_MONEY_GATE_SUMMARY: string =
-  'The reason that does not depend on any bug number: the 14-day paper soak (#238) that ' +
-  'would produce the observations these values are meant to be tuned against has not run, ' +
-  `so every UNSOURCED value in the starting profile is still a guess. As of ` +
-  `${LIVE_MONEY_GATES_VERIFIED_ON}, these further issues were verified OPEN and gate live ` +
-  `money: ` +
-  LIVE_MONEY_GATES.map(({ issue, gap }) => `#${issue} (${gap})`).join('; ') +
-  `. That verification is a snapshot taken on ${LIVE_MONEY_GATES_VERIFIED_ON}, not a live ` +
-  `fact: nothing re-checks it automatically. Run \`${LIVE_MONEY_GATES_RECHECK_COMMAND}\` to ` +
-  're-verify every number above against GitHub before trusting this list.';

@@ -19,14 +19,8 @@ export {
   openMigratedStore,
   openReadOnlyStore,
   openSharedStore,
-  resolveStoreMode,
   type StoreHandle,
-  type StoreMode,
-  sharedStorePath,
 } from './open-shared-store.js';
-export { DEFAULT_MAX_LLM_CALL_ROWS, pruneLlmCallLog } from './prune-llm-call-log.js';
-export { SqliteRiskLogStore, SqliteTraderLogStore } from './sqlite-decision-record-stores.js';
-export { SqliteLlmSpendCapStore } from './sqlite-llm-spend-cap-store.js';
 export {
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
@@ -34,7 +28,4 @@ export {
   toStoredTimestamp,
   toStoredTimestampOrNull,
 } from './sqlite-utils.js';
-export {
-  guardedStore,
-  STAGE_OWNED_TABLES,
-} from './write-guard.js';
+export { guardedStore } from './write-guard.js';

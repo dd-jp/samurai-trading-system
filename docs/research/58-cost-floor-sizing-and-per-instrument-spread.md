@@ -568,7 +568,7 @@ Nothing above replaces these three; see the RETRACTION notice.
 
 ## F4 — the floors are under-sized for the live venue, and this part needs no estimator at all
 
-`server/tools/backtest/cost-model.ts` applies both floors **per component, per side**:
+`server/tools/backtest/cost-model.ts` applies both floors **per component, per side**: <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 ```ts
 const rawSpread =
