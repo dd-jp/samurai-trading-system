@@ -140,6 +140,7 @@ Closed GitHub issues and merged PRs cite the old paths; this table is how you re
 | `polymarket-mi-source-2026-08-06.md` | `23-polymarket-source.md` |
 | `techstack.md` | `../techstack.md` |
 | `trading-agent-handover.md` | `archive/2026-07-14-trading-agent-handover.md` |
+| `PIPELINE-ELI5.md` (repo root) | `archive/2026-09-28-pipeline-eli5.md` (v1 pipeline explainer, archived in the v1 teardown, #1748) |
 | `*.txt` run logs (7) | `archive/raw/2026-08-05-*.txt` |
 | `trend-signal-measurement-2026-08-07.py` | `11-trend-signal-measurement.py` |
 

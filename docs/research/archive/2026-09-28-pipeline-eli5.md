@@ -1,5 +1,7 @@
 # Samurai — how it decides to trade (explained like you're 5)
 
+> **ARCHIVED — describes v1.** The six-stage v1 pipeline was deleted in the v1 teardown ([#1748](https://github.com/dd-jp/samurai-trading-system/issues/1748)) and is preserved at tag `v1-final`.
+
 Six friends work together every time the system thinks about buying or selling a stock.
 
 ## 1. Analysts
