@@ -191,34 +191,40 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
   private load(): void {
     if (this.loaded) return;
     this.loaded = true;
+    const record = this.readSavedRecord();
+    if (record === undefined) return;
+    this.record = record;
+    if (Date.parse(record.refreshTokenExpiresAt) <= this.clock.now().getTime()) {
+      this.lose(
+        `the saved refresh token expired at ${record.refreshTokenExpiresAt} — run \`npm run saxo:login -- --env ${this.deps.environment}\` again`,
+      );
+      return;
+    }
+    this.schedule();
+  }
+
+  private readSavedRecord(): SaxoTokenFileRecord | undefined {
     const { environment, tokenPath } = this.deps;
     let record: SaxoTokenFileRecord | undefined;
     try {
       record = readTokenFile(tokenPath);
     } catch (cause) {
       this.lose(cause instanceof Error ? maskCredentials(cause.message) : 'token file unreadable');
-      return;
+      return undefined;
     }
     if (record === undefined) {
       this.lose(
         `no saved session at ${tokenPath} — run \`npm run saxo:login -- --env ${environment}\` once`,
       );
-      return;
+      return undefined;
     }
     if (record.environment !== environment) {
       this.lose(
         `the saved session at ${tokenPath} is for the ${record.environment} gateway, not ${environment}`,
       );
-      return;
+      return undefined;
     }
-    this.record = record;
-    if (Date.parse(record.refreshTokenExpiresAt) <= this.clock.now().getTime()) {
-      this.lose(
-        `the saved refresh token expired at ${record.refreshTokenExpiresAt} — run \`npm run saxo:login -- --env ${environment}\` again`,
-      );
-      return;
-    }
-    this.schedule();
+    return record;
   }
 
   private schedule(): void {

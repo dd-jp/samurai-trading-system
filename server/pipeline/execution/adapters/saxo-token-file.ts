@@ -95,18 +95,22 @@ function optionalIso(body: Record<string, unknown>, field: string): string | und
   return value;
 }
 
-export function readTokenFile(path: string): SaxoTokenFileRecord | undefined {
-  let text: string;
+function errorCode(cause: unknown): string {
+  return isRecord(cause) && typeof cause.code === 'string' ? cause.code : 'unknown error';
+}
+
+function readTokenText(path: string): string | undefined {
   try {
-    text = readFileSync(path, 'utf8');
+    return readFileSync(path, 'utf8');
   } catch (cause) {
     if (isRecord(cause) && cause.code === 'ENOENT') return undefined;
     throw new SaxoTokenFileError(
-      `Saxo token file at ${path} could not be read (${
-        isRecord(cause) && typeof cause.code === 'string' ? cause.code : 'unknown error'
-      }).`,
+      `Saxo token file at ${path} could not be read (${errorCode(cause)}).`,
     );
   }
+}
+
+function parseTokenObject(path: string, text: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -116,6 +120,13 @@ export function readTokenFile(path: string): SaxoTokenFileRecord | undefined {
   if (!isRecord(parsed)) {
     throw new SaxoTokenFileError(`Saxo token file at ${path} is not an object.`);
   }
+  return parsed;
+}
+
+export function readTokenFile(path: string): SaxoTokenFileRecord | undefined {
+  const text = readTokenText(path);
+  if (text === undefined) return undefined;
+  const parsed = parseTokenObject(path, text);
   const environment = parsed.environment;
   if (environment !== 'sim' && environment !== 'live') {
     throw new SaxoTokenFileError(`Saxo token file at ${path} names no known environment.`);

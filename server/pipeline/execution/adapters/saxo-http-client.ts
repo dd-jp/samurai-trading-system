@@ -373,6 +373,30 @@ function resolveSaxoRateLimiter(options: SaxoHttpBrokerClientOptions): TokenBuck
   );
 }
 
+async function responseText(response: Response, context: string): Promise<string> {
+  try {
+    return await response.text();
+  } catch (cause) {
+    throw new SaxoBrokerProviderError(
+      `Saxo API error: response body could not be read (${context}): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+  }
+}
+
+function parseResponseJson(text: string, context: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    throw new SaxoBrokerProviderError(
+      `Saxo API error: response body could not be parsed as JSON (${context}): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+  }
+}
+
 export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalanceReader {
   private readonly tokenSource: SaxoTokenSource;
   readonly baseUrl: string;
@@ -417,51 +441,37 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   ): Promise<T> {
     return withRetry<T>(
       async () => {
-        if (priority === 'priority') {
-          await this.rateLimiter.acquire();
-        } else {
-          await this.rateLimiter.acquireBackground();
-        }
+        await this.acquireSlot(priority);
         const headers = await this.headers(init, extraHeaders);
-        let response: Response;
-        try {
-          response = await fetchWithTimeout(
-            `${this.baseUrl}${path}`,
-            { ...init, headers },
-            this.timeoutMs,
-          );
-        } catch (cause) {
-          throw classifySaxoBrokerNetworkError(cause, context, init.method);
-        }
-        if (!response.ok) {
-          throw await classifySaxoBrokerResponse(response, context, init.method);
-        }
-        let text: string;
-        try {
-          text = await response.text();
-        } catch (cause) {
-          throw new SaxoBrokerProviderError(
-            `Saxo API error: response body could not be read (${context}): ${
-              cause instanceof Error ? cause.message : String(cause)
-            }`,
-          );
-        }
+        const response = await this.send(path, { ...init, headers }, context);
+        const text = await responseText(response, context);
         if (text.length === 0) return validate(undefined, context);
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch (cause) {
-          throw new SaxoBrokerProviderError(
-            `Saxo API error: response body could not be parsed as JSON (${context}): ${
-              cause instanceof Error ? cause.message : String(cause)
-            }`,
-          );
-        }
-        return validate(parsed, context);
+        return validate(parseResponseJson(text, context), context);
       },
       retry,
       isRetryableSaxoBrokerError,
     );
+  }
+
+  private async acquireSlot(priority: SaxoRequestPriority): Promise<void> {
+    if (priority === 'priority') {
+      await this.rateLimiter.acquire();
+    } else {
+      await this.rateLimiter.acquireBackground();
+    }
+  }
+
+  private async send(path: string, init: SaxoRequestInit, context: string): Promise<Response> {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(`${this.baseUrl}${path}`, init, this.timeoutMs);
+    } catch (cause) {
+      throw classifySaxoBrokerNetworkError(cause, context, init.method);
+    }
+    if (!response.ok) {
+      throw await classifySaxoBrokerResponse(response, context, init.method);
+    }
+    return response;
   }
 
   private resolveIdentity(): Promise<AccountIdentity> {

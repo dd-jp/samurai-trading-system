@@ -875,43 +875,51 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     }
 
     for (const record of recorded) {
-      if (record.alerted_at !== null) continue;
+      await this.escalateUnpricedFill(record, now, failures);
+    }
+  }
 
-      const unpricedForMs = now.getTime() - record.first_seen_at.getTime();
-      if (unpricedForMs < this.unpricedFillAgeOutMs) continue;
+  private async escalateUnpricedFill(
+    record: UnpricedFillRecord,
+    now: Date,
+    failures: unknown[],
+  ): Promise<void> {
+    if (record.alerted_at !== null) return;
 
-      try {
-        await this.input.unpricedFillAlerts.postUnpricedFillAlert({
-          venue: 'alpaca',
-          client_order_id: record.client_order_id,
-          broker_fill_id: record.broker_fill_id,
-          leg: record.leg,
-          instrument: record.instrument,
-          qty: record.qty,
-          first_seen_at: record.first_seen_at,
-          unpriced_for_ms: unpricedForMs,
-          age_out_ms: this.unpricedFillAgeOutMs,
-        });
-      } catch {
-        failures.push(
-          new Error(
-            `Alpaca unpriced-fill alert delivery failed for order ${record.broker_fill_id} ` +
-              `(${record.leg} leg of '${record.client_order_id}')`,
-          ),
-        );
-        continue;
-      }
+    const unpricedForMs = now.getTime() - record.first_seen_at.getTime();
+    if (unpricedForMs < this.unpricedFillAgeOutMs) return;
 
-      try {
-        this.state.markUnpricedFillAlerted(
-          'alpaca',
-          record.client_order_id,
-          record.broker_fill_id,
-          now,
-        );
-      } catch (stateError) {
-        failures.push(stateError);
-      }
+    try {
+      await this.input.unpricedFillAlerts.postUnpricedFillAlert({
+        venue: 'alpaca',
+        client_order_id: record.client_order_id,
+        broker_fill_id: record.broker_fill_id,
+        leg: record.leg,
+        instrument: record.instrument,
+        qty: record.qty,
+        first_seen_at: record.first_seen_at,
+        unpriced_for_ms: unpricedForMs,
+        age_out_ms: this.unpricedFillAgeOutMs,
+      });
+    } catch {
+      failures.push(
+        new Error(
+          `Alpaca unpriced-fill alert delivery failed for order ${record.broker_fill_id} ` +
+            `(${record.leg} leg of '${record.client_order_id}')`,
+        ),
+      );
+      return;
+    }
+
+    try {
+      this.state.markUnpricedFillAlerted(
+        'alpaca',
+        record.client_order_id,
+        record.broker_fill_id,
+        now,
+      );
+    } catch (stateError) {
+      failures.push(stateError);
     }
   }
 }
