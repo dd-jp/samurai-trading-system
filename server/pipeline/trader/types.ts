@@ -61,21 +61,6 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   early_exit: DEFAULT_EARLY_EXIT_CONFIG,
 };
 
-export function assertTraderConfigSound(config: TraderConfig): void {
-  if (!(config.flatten_before_close_ms > 0)) {
-    throw new Error(
-      `traderConfig.flatten_before_close_ms must be > 0 (got ${config.flatten_before_close_ms}); ` +
-        `a non-positive window disables flat-by-close, which ADR-0014 requires`,
-    );
-  }
-  if (!(config.flatten_after_close_ms > 0)) {
-    throw new Error(
-      `traderConfig.flatten_after_close_ms must be > 0 (got ${config.flatten_after_close_ms}); ` +
-        'a non-positive grace restores the forward-only flatten window #1389 removed',
-    );
-  }
-}
-
 export interface TraderInput {
   trace_id: string;
   arm?: TradingArm;

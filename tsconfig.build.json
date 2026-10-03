@@ -9,7 +9,7 @@
     // `.` rather than `src` — there is no root `src/` any more. The two
     // compiled trees are `server/` and `contracts/`, and `rootDir` must be
     // their common ancestor for `dist/` to mirror the source layout
-    // (`dist/server/apps/service-api/index.js`). `client/` is compiled by
+    // (`dist/server/apps/v2/index.js`). `client/` is compiled by
     // Vite, not by this project, and is excluded below.
     "rootDir": ".",
     "strict": true,

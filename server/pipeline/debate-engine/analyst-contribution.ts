@@ -30,7 +30,7 @@ export function buildAnalystContributions(
   });
 }
 
-export function computeInfluenceScore(stanceDuringDebate: Direction[]): number {
+function computeInfluenceScore(stanceDuringDebate: Direction[]): number {
   if (stanceDuringDebate.length < 2) {
     return 0;
   }

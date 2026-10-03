@@ -4,7 +4,7 @@
 
 Live-money multi-agent trading system for **equities**. Crypto left the system's scope on 2026-08-16 (ADR-0015's amendment) and a future separate system inherits it; the crypto code paths named below (the ccxt data source, the BTC-USD smoke run, the per-asset-class breakers) are still in the tree and still run.
 
-The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`server/apps/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade.
+The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`server/apps/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 A seventh **Invalidation** stage (the devil's-advocate critic, between Trader and Risk) was proposed in `docs/specs/devils-advocate-spec.md` and **declined as a standalone stage on 2026-09-02** — the pipeline is six stages and stays six. Its typed, falsifiable invalidation-condition mechanism folds into the already-built Risk Critic inside the Risk Manager instead ([#957](https://github.com/dd-jp/samurai-trading-system/issues/957) built, fold tracked as [#994](https://github.com/dd-jp/samurai-trading-system/issues/994)). `PIPELINE_STAGES` in `contracts/pipeline.ts` and the dashboard's v2 rooms grid carried the seventh stage as a live placeholder until [#998](https://github.com/dd-jp/samurai-trading-system/issues/998) retired it — six stages now, no permanently-dark seventh (the dashboard's v3 lane matrix, [ADR-0021](docs/adr/0021-dashboard-v3-rail-layout.md), draws six cells from `PIPELINE_STAGES` directly). Nothing has ever written an `invalidation` row and nothing ever will. <!-- cite-exempt: historical — v1 record; the spec was deleted per ruling G8 and is preserved at tag v1-final -->
 
@@ -30,12 +30,12 @@ Market Data Service ─┐
 | Execution | `server/pipeline/execution/` | Broker abstraction (Alpaca MVP, Simulated for backtest; ccxt/IBKR sources exist, adapters are long-term). Bracket expansion, fill ingestion, reconcile-on-restart, unpriced-fill alerting |
 | Feedback Loop | `server/pipeline/feedback-loop/` | Post-trade attribution, bounded weight adjustment, daily cycle, metrics suite (Sharpe/Sortino/etc.), kill-threshold guardrails |
 | Cost Model / Backtest | `server/tools/backtest/` | Pessimistic fill simulation, full validation suite (walk-forward, CPCV, PBO, MinBTL, DSR), injected-clock replay, Stage-2 selection + verdict |
-| Orchestrator | `server/apps/orchestrator/` | Tick loop scheduler, trace-ID propagation, audit log, dead-man's-switch heartbeat, alert channels, rotating log sink, production composition root (ADR-0004). Opens no socket |
-| Service API | `server/apps/service-api/` | Read-only HTTP backend on `:8787`: `GET /api/snapshot` plus the built client bundle. Pipeline lanes per instrument, positions, verdicts, provider-status tiles |
-| Supervisor | `server/apps/supervisor/` | Runs the orchestrator and the service API as children of one foreground process |
+| Orchestrator | `server/apps/orchestrator/` | Tick loop scheduler, trace-ID propagation, audit log, dead-man's-switch heartbeat, alert channels, rotating log sink, production composition root (ADR-0004). Opens no socket | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
+| Service API | `server/apps/service-api/` | Read-only HTTP backend on `:8787`: `GET /api/snapshot` plus the built client bundle. Pipeline lanes per instrument, positions, verdicts, provider-status tiles | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
+| Supervisor | `server/apps/supervisor/` | Runs the orchestrator and the service API as children of one foreground process | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 | Tools | `server/tools/` | Repo gates (citations, live-money gates, CRAP, mutation) and the Saxo token keep-alive |
 | Shared | `server/shared/` | Types/ports, clock injection, SQLite store + migrations, HTTP (token-bucket pacing, retry, timeouts), Nous LLM client + pricing |
-| Client | `client/` | The Vite + React operator UI (ADR-0010). Built to `dist/client/` and served by the service API — it is not a running process |
+| Client | `client/` | The Vite + React operator UI (ADR-0010). Built to `dist/client/` — it is not a running process |
 | Contracts | `contracts/` | The wire model both runtimes import and neither owns. JSON-serializable shapes only |
 
 ## Tech Stack
@@ -74,7 +74,7 @@ npm run lint
 npm run lint:fix
 ```
 
-`npm run precommit` runs knip → lint:fix → typecheck → test:local → fallow:boundaries →
+`npm run precommit` runs lint:fix → typecheck → test:local → fallow:boundaries →
 fallow:dead-code → fallow:dupes → fallow:css → fallow:guard (staged files only) in one
 pass. There is no separate format step: `biome check` **is** the formatter as well as
 one of the two linters, so `npm run lint` already fails on an unformatted file and
@@ -83,23 +83,17 @@ chain, which made the gate abort on precisely the fault the next step existed to
 
 ## Running the System
 
-### Orchestrator (live tick loop)
+### Environment
 
-```bash
-npm run orchestrator
-```
-
-Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is QQQ, AAPL, TSLA (`DEFAULT_UNIVERSE` in `server/apps/orchestrator/scheduler.ts`) — SPY was dropped in #1006 and the crypto pair left with the scope change. It is not the live universe either: ADR-0016 puts live instruments on LSE leveraged ETPs.
-
-`npm run orchestrator` builds first, then runs `node --env-file=.env.local dist/server/apps/orchestrator/index.js`. The built entrypoint does **not** read a `.env` file on its own — pass `--env-file` or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
+This reference predates v2. It describes what the v1 orchestrator read; the orchestrator, service API and supervisor were deleted in v1 teardown wave 2 ([#1748](https://github.com/dd-jp/samurai-trading-system/issues/1748)). The tracked `.env` holds empty placeholders; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
 
 #### Required environment
 
-The orchestrator refuses to start rather than guess, and names *every* missing variable in one error (`missingCredentialEnvVars`, `server/apps/orchestrator/index.ts`).
+The orchestrator refuses to start rather than guess, and names *every* missing variable in one error (`missingCredentialEnvVars`, `server/apps/orchestrator/index.ts`). <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 | Variable | Values | Purpose |
 | --- | --- | --- |
-| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. `live` now boots `liveStartingProfile` (`server/apps/orchestrator/live-profile.ts`, #511) rather than being refused: `paperStartingProfile` still refuses it, but the shipped entrypoint routes around it via `startingProfileForMode`. A live run additionally needs `SAMURAI_LIVE_MAX_CAPITAL_USD` below, and still cannot price an LSE book — see [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) |
+| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. `live` now boots `liveStartingProfile` (`server/apps/orchestrator/live-profile.ts`, #511) rather than being refused: `paperStartingProfile` still refuses it, but the shipped entrypoint routes around it via `startingProfileForMode`. A live run additionally needs `SAMURAI_LIVE_MAX_CAPITAL_USD` below, and still cannot price an LSE book — see [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 | `SAMURAI_LIVE_MAX_CAPITAL_USD` | | **Required when `SAMURAI_MODE=live`**, and only then. The capital ceiling every live cap and position size is derived from — a positive number of US dollars, with no default and no fallback. It is a ceiling, not a funding: sizing takes `min(ceiling, account equity)`. A value below the floor is refused rather than clamped. It is USD-denominated against a GBP book and nothing converts — see [#949](https://github.com/dd-jp/samurai-trading-system/issues/949) |
 | `SAMURAI_ALERTS` | `telegram` / `log-only` — **required, no default** | Where operator alerts go |
 | `ALPACA_API_KEY`, `ALPACA_API_SECRET` | | Broker + market data (one per-account rate budget covers both) |
@@ -128,7 +122,7 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 | `SAXO_SIM_ACCOUNT_KEY`, `SAXO_LIVE_ACCOUNT_KEY` | v2 Saxo client (`server/apps/v2/execution/saxo/saxo-http-client.ts`, #1868): the `AccountKey` to trade when the token sees more than one account (GIA + CFD); with two or more and none set, the client refuses. Each environment reads only its own variable, an explicit `accountKey` option wins, and a blank value counts as unset. Treated as a secret by the LLM request guard (#1881). Real keys go in `.env.local` only |
 | `WORLDMONITOR_API_KEY` | WorldMonitor CII feed (ADR-0002). The adapter stays parked until this is set |
 | `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`). Binding `HOST` to anything other than `127.0.0.1`/`::1` refuses to start unless `SAMURAI_DASHBOARD_TOKEN` (below) is also set — see #887/ADR-0019 |
-| `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/apps/service-api/bind-guard.ts` and `request-auth.ts` |
+| `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/apps/service-api/bind-guard.ts` and `request-auth.ts` | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 #### Optional — venue pacing
 
@@ -156,10 +150,10 @@ Alpaca's published limit is **200 requests per minute per account**, shared by t
 | `SAMURAI_LOG_FILE` | `logs/orchestrator.log` | Active log file. Created `0o600` in a `0o700` directory; `logs/` is gitignored |
 | `SAMURAI_LOG_MAX_BYTES` | `16777216` (16 MiB) | Rotate when the active file would exceed this |
 | `SAMURAI_LOG_MAX_FILES` | `10` | Rotated generations kept (`orchestrator.log.1` … `.10`), excluding the active file. On-disk ceiling is therefore ~176 MiB. `0` means **keep nothing**: rotation discards the full file rather than renaming it, so only the last `SAMURAI_LOG_MAX_BYTES` of history survive. It does not mean "never rotate" |
-| `SAMURAI_LOG_RETENTION_DAYS` | `30` | How many days a **finished** log artefact in `logs/` may go unmodified before the boot-time sweep (#1116) removes it. `RotatingFileSink` above bounds only its own configured file; everything else a run leaves in `logs/` — a supervisor's own redirected stdout, a hand-run `> logs/orchestrator-DATE.log` — is unbounded without this. Two name shapes are eligible for this age-based path: a rotation generation (`orchestrator.log.1`) and a datestamped artefact, which since #1206 includes a bare date with no time component (`supervisor-20260904-1020-v3.log`, `soak-boot-20260903-1007.out`, `soak-20260825.log`). An undated bare name (`orchestrator.log`, `service-api.log`, `soak-boot.out`) is the shape a live writer holds open, and is never deleted on age at any window — unlinking a file a process still has open reclaims no space and loses the content — nor is any non-log file ever eligible here. The active sink file and its `.1`…`.N` rotation set are excluded outright as well. The sweep also refuses a directory that is the process's own working directory, warning instead of sweeping, so a `SAMURAI_LOG_FILE` with no directory component never aims it at the repo root. 30 days rather than 14 (the soak's own length, #238) so a completed soak's opening days are still on disk when anyone goes looking afterwards. Refused at startup if malformed or `0`, same reasoning as `SAMURAI_MI_ARCHIVE_RETENTION_DAYS` below (`server/apps/orchestrator/log-retention.ts`) |
+| `SAMURAI_LOG_RETENTION_DAYS` | `30` | How many days a **finished** log artefact in `logs/` may go unmodified before the boot-time sweep (#1116) removes it. `RotatingFileSink` above bounds only its own configured file; everything else a run leaves in `logs/` — a supervisor's own redirected stdout, a hand-run `> logs/orchestrator-DATE.log` — is unbounded without this. Two name shapes are eligible for this age-based path: a rotation generation (`orchestrator.log.1`) and a datestamped artefact, which since #1206 includes a bare date with no time component (`supervisor-20260904-1020-v3.log`, `soak-boot-20260903-1007.out`, `soak-20260825.log`). An undated bare name (`orchestrator.log`, `service-api.log`, `soak-boot.out`) is the shape a live writer holds open, and is never deleted on age at any window — unlinking a file a process still has open reclaims no space and loses the content — nor is any non-log file ever eligible here. The active sink file and its `.1`…`.N` rotation set are excluded outright as well. The sweep also refuses a directory that is the process's own working directory, warning instead of sweeping, so a `SAMURAI_LOG_FILE` with no directory component never aims it at the repo root. 30 days rather than 14 (the soak's own length, #238) so a completed soak's opening days are still on disk when anyone goes looking afterwards. Refused at startup if malformed or `0`, same reasoning as `SAMURAI_MI_ARCHIVE_RETENTION_DAYS` below (`server/apps/orchestrator/log-retention.ts`) | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 | `SAMURAI_LOG_RETENTION_KEEP` | _(none)_ | Comma-separated **basenames** in `logs/` the sweep above must never delete or truncate, whatever their age or size — evidence being kept deliberately, or a datestamped file some long-running writer still holds open. Basenames only: the sweep never leaves the directory it sweeps, so a value containing `/` is refused, as is a stray comma (an entry silently dropped is the one failure this variable exists to prevent) |
-| `SAMURAI_LOG_BARE_TRUNCATE_BYTES` | `16777216` (16 MiB) | The age-based sweep above never removes an undated bare name (`soak-boot.out`) — unlinking a file a live writer still holds open would make its growth invisible rather than bounded, and it has no age or descriptor gate of its own (evidence-loss is possible; use `SAMURAI_LOG_RETENTION_KEEP` to exempt a file). This variable gives that same shape a disk-allocation-based path instead (#1206): once an ALLOWLISTED bare `.log`/`.out` file's **allocated disk usage** (`stat.blocks`, not its apparent length) exceeds this many bytes, the sweep `truncate`s it to empty rather than unlinking it. Defaults on like every other setting on this page — safe to default because `SAMURAI_LOG_BARE_TRUNCATE_NAMES` below, not this threshold, is what scopes which files it can ever reach; an earlier revision of this fix made the threshold itself opt-in instead, which left `soak-boot.out` exactly as unbounded as before #1206 in a deployment that never set it (every deployment, in this repo — none of these seven variables are set in any deployment or launch configuration in it: no `.env.example`, launch script, or `plist` sets one, they all just have code-level defaults for an operator who configures nothing; a handful of test files DO assign one directly onto `process.env` to exercise its parser, e.g. `logger.test.ts:499` and `rotating-file-sink.test.ts:359-361`, which is not the same claim). Eligibility and disk freed are measured in allocated blocks rather than apparent size specifically so a live, non-append writer's next write (which lands at its old, pre-truncation offset and leaves a sparse hole, ballooning `stat.size` back up) does not fool a later boot into truncating again and destroying whatever it had appended since — gating on size would do exactly that. The active sink file and its rotation set (`protectedPaths`) and `SAMURAI_LOG_RETENTION_KEEP` both still exclude a name from it, same as the age-based sweep. Refused at startup if malformed or `0` (`server/apps/orchestrator/log-retention.ts`). A truncated-then-appended file reads back with a NUL-filled hole in front of the new content, so a plain `grep` on it reports "binary file matches" instead of printing lines — use `grep -a`. (The non-append-writer premise itself is an assumption inferred from the ticket that named this gap, since no code in this repo has ever written `soak-boot.out`; under `>>` instead of `>`, none of the hole behaviour applies.) |
-| `SAMURAI_LOG_BARE_TRUNCATE_NAMES` | `soak-boot.out` | The truncate path's own blast-radius narrowing, ADDITIVE to the built-in default above: a bare `.log`/`.out` file is only ever a truncation candidate if its basename is in this set, whatever its size. `isBareLogName`'s shape check alone matches any undated `.log`/`.out` file — real macOS system logs (`install.log`, `wifi.log`, `system.log`) included — so this is what keeps `SAMURAI_LOG_BARE_TRUNCATE_BYTES` safe to default on rather than requiring opt-in. Comma-separated **basenames** ADDED to `soak-boot.out`, never replacing it — there is no way to shrink this list via this variable; `SAMURAI_LOG_RETENTION_KEEP` already exempts any specific file, truncation included, if an operator needs `soak-boot.out` itself left alone. Same validation as `SAMURAI_LOG_RETENTION_KEEP`: basenames only, a stray comma refused rather than silently dropped (`server/apps/orchestrator/log-retention.ts`) |
+| `SAMURAI_LOG_BARE_TRUNCATE_BYTES` | `16777216` (16 MiB) | The age-based sweep above never removes an undated bare name (`soak-boot.out`) — unlinking a file a live writer still holds open would make its growth invisible rather than bounded, and it has no age or descriptor gate of its own (evidence-loss is possible; use `SAMURAI_LOG_RETENTION_KEEP` to exempt a file). This variable gives that same shape a disk-allocation-based path instead (#1206): once an ALLOWLISTED bare `.log`/`.out` file's **allocated disk usage** (`stat.blocks`, not its apparent length) exceeds this many bytes, the sweep `truncate`s it to empty rather than unlinking it. Defaults on like every other setting on this page — safe to default because `SAMURAI_LOG_BARE_TRUNCATE_NAMES` below, not this threshold, is what scopes which files it can ever reach; an earlier revision of this fix made the threshold itself opt-in instead, which left `soak-boot.out` exactly as unbounded as before #1206 in a deployment that never set it (every deployment, in this repo — none of these seven variables are set in any deployment or launch configuration in it: no `.env.example`, launch script, or `plist` sets one, they all just have code-level defaults for an operator who configures nothing; a handful of test files DO assign one directly onto `process.env` to exercise its parser, e.g. `logger.test.ts:499` and `rotating-file-sink.test.ts:359-361`, which is not the same claim). Eligibility and disk freed are measured in allocated blocks rather than apparent size specifically so a live, non-append writer's next write (which lands at its old, pre-truncation offset and leaves a sparse hole, ballooning `stat.size` back up) does not fool a later boot into truncating again and destroying whatever it had appended since — gating on size would do exactly that. The active sink file and its rotation set (`protectedPaths`) and `SAMURAI_LOG_RETENTION_KEEP` both still exclude a name from it, same as the age-based sweep. Refused at startup if malformed or `0` (`server/apps/orchestrator/log-retention.ts`). A truncated-then-appended file reads back with a NUL-filled hole in front of the new content, so a plain `grep` on it reports "binary file matches" instead of printing lines — use `grep -a`. (The non-append-writer premise itself is an assumption inferred from the ticket that named this gap, since no code in this repo has ever written `soak-boot.out`; under `>>` instead of `>`, none of the hole behaviour applies.) | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
+| `SAMURAI_LOG_BARE_TRUNCATE_NAMES` | `soak-boot.out` | The truncate path's own blast-radius narrowing, ADDITIVE to the built-in default above: a bare `.log`/`.out` file is only ever a truncation candidate if its basename is in this set, whatever its size. `isBareLogName`'s shape check alone matches any undated `.log`/`.out` file — real macOS system logs (`install.log`, `wifi.log`, `system.log`) included — so this is what keeps `SAMURAI_LOG_BARE_TRUNCATE_BYTES` safe to default on rather than requiring opt-in. Comma-separated **basenames** ADDED to `soak-boot.out`, never replacing it — there is no way to shrink this list via this variable; `SAMURAI_LOG_RETENTION_KEEP` already exempts any specific file, truncation included, if an operator needs `soak-boot.out` itself left alone. Same validation as `SAMURAI_LOG_RETENTION_KEEP`: basenames only, a stray comma refused rather than silently dropped (`server/apps/orchestrator/log-retention.ts`) | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 A malformed value in these seven variables is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
 
@@ -170,10 +164,10 @@ Retention is deliberately short. These files are the *diagnostic* record; the du
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SAMURAI_LOG_LEVEL` | `info` | `debug` also writes `debug`-level lines. It is the **only** filterable level: `warn` and `error` always write, because they carry the sink-degradation notices a run's last trace depends on, and a verbosity setting must not be able to configure the process into silence |
-| `SAMURAI_LLM_CAPTURE` | on (unset) | The prompt sent and the text returned for every metered LLM call, persisted to `llm_call_log` and written on one `llm call:` log line alongside model, both token counts, `cost_usd` and latency. `off` disables. Both variables parse leniently — only the literal `debug` / `off` (case-insensitive, trimmed) does anything, so a typo silently resolves to the default rather than being refused (`server/apps/orchestrator/logger.ts`, `server/apps/orchestrator/production.ts`). Measured cost of leaving it on: ~7 MB per 14-day soak |
+| `SAMURAI_LLM_CAPTURE` | on (unset) | The prompt sent and the text returned for every metered LLM call, persisted to `llm_call_log` and written on one `llm call:` log line alongside model, both token counts, `cost_usd` and latency. `off` disables. Both variables parse leniently — only the literal `debug` / `off` (case-insensitive, trimmed) does anything, so a typo silently resolves to the default rather than being refused (`server/apps/orchestrator/logger.ts`, `server/apps/orchestrator/production.ts`). Measured cost of leaving it on: ~7 MB per 14-day soak | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 | `SAMURAI_LLM_CALL_LOG_MAX_ROWS` | `5000` | Rows of `llm_call_log` kept. The newest survive; the rest are deleted at boot and again on the daily feedback timer. ~78 days and ~39 MB at the measured capture rate, ~100 MB if every row hit both caps. Unlike the two above, a malformed value is **refused at startup** rather than defaulted — it is retention policy, and a window nobody chose is worse than a refusal. `0` is rejected too: to keep nothing, set `SAMURAI_LLM_CAPTURE=off` (`server/shared/store/prune-llm-call-log.ts`) |
 | `SAMURAI_MI_ARCHIVE_RETENTION_DAYS` | `90` | How many days of `mi_archive_raw`/`mi_items` history the MI archive (`data/samurai-mi-{mode}.sqlite`) keeps. Rows older than the window are deleted at boot and again on the daily feedback timer — the specced 90-day auto-purge (`docs/specs/market-intelligence-spec.md`), unimplemented until #1060. A DAY window here, not a row ceiling like the setting above: archive value is genuinely time-bound (a 90-day-old news item is not useful to a backtest replay of last week), unlike LLM capture volume, which is cadence-bound. Refused at startup if malformed or `0`, same reasoning as `SAMURAI_LLM_CALL_LOG_MAX_ROWS` (`server/providers/market-intelligence/archive/mi-archive-store.ts`) | <!-- cite-exempt: historical — v1 record; the spec was deleted per ruling G8 and is preserved at tag v1-final -->
-| `SAMURAI_ALERT_DELIVERY_FAILURE_RETENTION_DAYS` | `30` | How many days of `alert_delivery_failures` rows the orchestrator keeps ([#1131](https://github.com/dd-jp/samurai-trading-system/issues/1131)), deleted at boot and again on the daily feedback timer like the two rows above. A DAY window rather than a row ceiling for the MI archive's reason: this table's growth tracks outage and event frequency, not a tick cadence. **Refused at startup below `2`, not merely at `0`** — the message is `must be an integer >= 2`, so an operator who guesses `1` gets a boot refusal rather than a silent default, and the floor is worth explaining. `1` day is exactly the trailing window the Rail's alert-channel tile counts this table over (`ALERT_DELIVERY_FAILURE_WINDOW_MS`, 24h), and at that equality the table stops outliving the tile: `contracts/snapshot.ts` drops the tile's former lifetime total and leaves the same question answerable over the retention window by reading `alert_delivery_failures` directly — bounded by that retention, never a lifetime — which at `retention == window` answers nothing the tile does not already show. That the table outlives the window is the whole reason for the floor. The intuitive one survives only in a form far too narrow to size a day-granularity floor against: at `retention == window` the delete and count predicates overlap only for a prune that commits after a live request's `asOf`, which the sub-second sample-then-read gap inside one snapshot build allows and nothing else does. `server/apps/orchestrator/production.ts` carries both halves of the argument |
+| `SAMURAI_ALERT_DELIVERY_FAILURE_RETENTION_DAYS` | `30` | How many days of `alert_delivery_failures` rows the orchestrator keeps ([#1131](https://github.com/dd-jp/samurai-trading-system/issues/1131)), deleted at boot and again on the daily feedback timer like the two rows above. A DAY window rather than a row ceiling for the MI archive's reason: this table's growth tracks outage and event frequency, not a tick cadence. **Refused at startup below `2`, not merely at `0`** — the message is `must be an integer >= 2`, so an operator who guesses `1` gets a boot refusal rather than a silent default, and the floor is worth explaining. `1` day is exactly the trailing window the Rail's alert-channel tile counts this table over (`ALERT_DELIVERY_FAILURE_WINDOW_MS`, 24h), and at that equality the table stops outliving the tile: `contracts/snapshot.ts` drops the tile's former lifetime total and leaves the same question answerable over the retention window by reading `alert_delivery_failures` directly — bounded by that retention, never a lifetime — which at `retention == window` answers nothing the tile does not already show. That the table outlives the window is the whole reason for the floor. The intuitive one survives only in a form far too narrow to size a day-granularity floor against: at `retention == window` the delete and count predicates overlap only for a prune that commits after a live request's `asOf`, which the sub-second sample-then-read gap inside one snapshot build allows and nothing else does. `server/apps/orchestrator/production.ts` carries both halves of the argument | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 Capture answers "what was this call actually asked, and what did it say" — `llm_spend` already records everything *about* a call, and `audit_log` holds digests from which no value can be reconstructed. Text is masked for known credential syntaxes and capped (16 KB prompt, 4 KB response) on the way in. Treat it as a capture, not a scrub: the masker is deliberately narrow, and prompts embed news bodies and analyst free text.
 
@@ -186,76 +180,13 @@ Capture answers "what was this call actually asked, and what did it say" — `ll
 
 There is deliberately no default. A process that silently fell back to log-only would look healthy right up until the day it stopped and nobody noticed.
 
-### Smoke run (pre-soak gate)
+### Smoke run
 
 ```bash
 npm run smoke
 ```
 
-An **offline** end-to-end run through all six stages with no Alpaca call — it proves the wiring, not the credentials or venue semantics. Universe is BTC-USD only, so a closed US session cannot make an empty tick plan look like a clean run. It does not clear ADR-0004 §5's "wiring validated" bar, which needs one real paper tick.
-
-### Service API + client (operator view)
-
-```bash
-npm run api                # http://127.0.0.1:8787   (alias: npm run dashboard)
-```
-
-Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline lanes per instrument, positions, debates, verdicts, per-analyst performance, LLM spend against the cap, and provider-status tiles. It resolves the store path from `SAMURAI_MODE` exactly as the orchestrator does — `NODE_ENV` stopped selecting the file in #330 — so it cannot show a healthy, empty system from the wrong file. Provider credentials are optional here — a missing key degrades that tile to `not_configured` rather than blocking startup.
-
-#### Running it locally against real orchestrator data
-
-**`SAMURAI_MODE` is mandatory.** `resolveStoreMode()` throws rather than defaulting, and `server/apps/service-api/index.ts` calls it before anything else, so a dashboard started without it does not come up at all. That refusal is the point: the alternative is a process that guesses a mode, opens the wrong file, and renders a healthy, empty page while the orchestrator is trading in the other one.
-
-| `SAMURAI_MODE` | Store file the dashboard opens |
-| --- | --- |
-| `paper` | `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — a runtime store file, created on first run and gitignored by design; which of the three exists on any given machine depends only on which modes have been run there --> |
-| `backtest` | `data/samurai-backtest.sqlite` <!-- cite-exempt: untracked — a runtime store file, created on first run and gitignored by design; which of the three exists on any given machine depends only on which modes have been run there --> |
-| `live` | `data/samurai-live.sqlite` <!-- cite-exempt: untracked — a runtime store file, created on first run and gitignored by design; which of the three exists on any given machine depends only on which modes have been run there --> |
-
-**Two ways to run it.**
-
-```bash
-# 1. Built bundle, one process — what an operator runs, and what `npm run api` does.
-#    The same node:http server serves the React bundle from dist/client/ AND /api/snapshot.
-npm run build
-SAMURAI_MODE=paper node dist/server/apps/service-api/index.js        # http://127.0.0.1:8787
-
-# 2. Vite dev server — hot reload while working on client/.
-#    TWO terminals: Vite serves the page, the service API still serves the data.
-SAMURAI_MODE=paper PORT=8799 npm run dev:api                     # data  (tsx watch, no build)
-PORT=8799 npm run dev:web                                        # page → http://localhost:5173
-```
-
-`npm run dev:api` runs the service API from source under `tsx`, so it restarts on
-edit and needs no `npm run build`. It always prints the
-`*** DASHBOARD UI NOT SERVABLE ***` banner, and in dev that is expected noise
-rather than a fault: from source `bundleRoot` resolves to `client/`, the Vite
-*source* template, because in this mode the page is Vite's job on `:5173` and
-the API's job is only `/api/snapshot`.
-
-`vite.config.ts` proxies `/api` to `http://127.0.0.1:${PORT ?? 8787}`, so **both processes must agree on `PORT`** — export it for the dev server too, or the page loads and every poll 404s. Production never proxies; there is one process and no dev server. Vite's dev server binds IPv6 first, so reach it as `localhost`, not `127.0.0.1`; the dashboard server itself binds `127.0.0.1`.
-
-Check the data path before trusting the page:
-
-```bash
-curl -s http://127.0.0.1:8787/api/snapshot | head -c 400
-```
-
-`mode` must be the mode you started with, and the store-backed figures — `debates`, `analysts`, `llm_spend.all_time.cost_usd` — must carry real numbers. Those are the honest check that the page is reading the orchestrator's file.
-
-**`pipeline.lanes` is not that check.** The lane universe is `latest_mark ∪ current_tick`, and `latest_mark` holds one row per instrument the Market Data Service has *priced on demand* — which is neither the tick universe nor a record of what ticked recently. So the hero can show idle chips for instruments that last traded days ago while omitting an instrument that completed a trace a minute ago. See [#619](https://github.com/dd-jp/samurai-trading-system/issues/619).
-
-**An empty-but-healthy page almost always means the wrong working directory.** `sharedStorePath()` returns a **relative** path (`data/samurai-<mode>.sqlite`), which the server resolves against its own cwd, and `openSharedStore()` **creates and migrates** a database that isn't there. Started from a directory with no `data/`, the dashboard therefore opens a brand-new empty store and renders a perfectly healthy screen with nothing in it. Run it from the repo root — the same directory the orchestrator runs from. That relative path is also why a second checkout (a git worktree, say) must **copy** the store rather than point at the running one: opening it read-write would migrate a live database under a running process.
-
-An orchestrator that is up but between ticks legitimately shows idle chips in the Lobby — that is a reading, not a fault. `tick_status: null` with lanes present means no pass is in flight right now.
-
-### Both together — the one command an operator runs
-
-```bash
-npm start              # alias: npm run serve
-```
-
-Builds once, then supervises the orchestrator and the service API as one foreground process; a single Ctrl-C stops both. There is no third process for the UI: the client is a static bundle that the service API serves. Signals are forwarded to the children and the supervisor waits for both to exit rather than exiting first — killing it mid-tick is what creates an orphaned verdict. Either child dying takes the other down with a non-zero exit. `npm run orchestrator` remains the money-path entrypoint for the unattended soak.
+Builds, then runs `node dist/server/apps/v2/smoke.js`: an **offline** dry run of the v2 composition root against a seeded store with scripted LLM transports. It proves the wiring, not the credentials or venue semantics.
 
 ## Testing
 
@@ -291,7 +222,7 @@ CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 - **checks** — `npm run lint:oxlint`, `npm run lint:biome`, Fallow architecture boundaries, `npm run fallow:dead-code`, Fallow duplication (advisory), Fallow design-system drift (advisory), `npm run typecheck`, `npm run build`, `npm run build:web`, `npm run test`, `npm run check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
 - **e2e** — the Playwright suite against the built bundle, on its own runner with Chromium installed; failures upload traces.
 
-`npm run knip` is not wired into CI — an implementer-run gate only. Mutation testing runs on CI as `mutation-shard` (four runners) and `mutation` (the merged 80% score) when a PR changes a risk, sizing or loss-budget line.
+Mutation testing runs on CI as `mutation-shard` (four runners) and `mutation` (the merged 80% score) when a PR changes a risk, sizing or loss-budget line.
 
 Both must pass before merge.
 
@@ -312,10 +243,8 @@ samurai-trading-system/
 │   └── src/               # main.tsx, components/, hooks/, lib/
 │
 ├── server/                # NODE — tsc owns this folder end to end
-│   ├── apps/              # the three runnable programs
-│   │   ├── orchestrator/  # Tick loop, scheduler, audit, heartbeat, composition root
-│   │   ├── service-api/   # Read-only HTTP :8787; serves /api/snapshot + the bundle
-│   │   └── supervisor/    # Runs orchestrator + service-api as one foreground process
+│   ├── apps/
+│   │   └── v2/            # v2 composition root, sleeves, risk, execution, dashboard API
 │   ├── pipeline/          # the six stages + feedback loop
 │   │   ├── analysts/      # Stateless per-tick agents
 │   │   ├── debate-engine/ # Bull/Bear/Mediator, rounds, conviction, LLM client
@@ -355,32 +284,24 @@ samurai-trading-system/
 └── tsconfig.test.json     # Type-checks the test suite
 ```
 
-`dist/` mirrors the source, which is why the entry points can find each other
-without knowing the working directory:
+`dist/` mirrors the source:
 
 ```
 dist/client/                              # vite outDir — the bundle
-dist/server/apps/service-api/index.js     # resolves the bundle as ../../../client/
-dist/server/apps/orchestrator/index.js    # spawned by the supervisor
-dist/server/apps/supervisor/index.js      # npm start
+dist/server/apps/v2/index.js              # v2 composition root
+dist/server/apps/v2/smoke.js              # npm run smoke
 ```
 
 ## Scripts
 
-`package.json` has 52 scripts. This table predates v2: it does not list the `v2:*` scripts, `bars:snapshot`, `crap`, `crap:report` or `saxo:keepalive`.
+`package.json` has 46 scripts. This table predates v2: it does not list the `v2:*` scripts, `bars:snapshot`, `crap`, `crap:report` or `saxo:keepalive`.
 
 | Tier | Script | What it does |
 | --- | --- | --- |
-| dev | `npm run dev:web` | Vite dev server for `client/` → `localhost:5173`. Proxies `/api` to the service API |
-| dev | `npm run dev:api` | Service API from source under `tsx`, restarts on edit. Run alongside `dev:web` |
+| dev | `npm run dev:web` | Vite dev server for `client/` → `localhost:5173`. Proxies `/api` to `127.0.0.1:${V2_DASHBOARD_PORT ?? 8788}` |
 | build | `npm run build` | `tsc` + `build:migrations` + `build:web`. Emits `dist/` |
-| build | `npm run build:migrations` | Copies `server/shared/store/migrations/*.sql` and `server/providers/market-intelligence/archive/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built orchestrator finds no migrations to apply. Sub-step of `build` |
+| build | `npm run build:migrations` | Copies `server/shared/store/migrations/*.sql` and `server/providers/market-intelligence/archive/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built runtime finds no migrations to apply. Sub-step of `build` |
 | build | `npm run build:web` | Client `tsc` + `vite build`. Sub-step of `build`, and **also its own CI step** (`ci.yml`) so a frontend-toolchain failure is named as one instead of surfacing as "build failed" |
-| run | **`npm start`** | **The one full-system command.** Builds, then supervises orchestrator + service API |
-| run | `npm run serve` | Alias for `npm start` |
-| run | `npm run orchestrator` | Money path alone — the unattended-soak entrypoint |
-| run | `npm run api` | Operator view alone |
-| run | `npm run dashboard` | Alias for `npm run api` |
 | run | `npm run smoke` | Offline end-to-end gate |
 | quality | `npm run typecheck` | Four projects: server, tests, client tests, e2e |
 | quality | `npm run test` | Full vitest suite |
@@ -395,30 +316,20 @@ dist/server/apps/supervisor/index.js      # npm start
 | quality | `npm run lint:biome:fix` | `biome check --write .` |
 | quality | `npm run lint` | `lint:oxlint` → `lint:biome`, both gated in CI as separate steps |
 | quality | `npm run lint:fix` | `lint:oxlint:fix` → `lint:biome:fix` |
-| quality | `npm run knip` | Unused-export/dependency check (`knip.json`). Not wired into CI; runs in `precommit` |
 | quality | `npm run fallow:boundaries` | `fallow dead-code --boundary-violations --fail-on-issues` — architecture boundary check. CI step of its own |
 | quality | `npm run fallow:dead-code` | `fallow dead-code` — CI step, annotated |
 | quality | `npm run fallow:dupes` | `fallow dupes` — duplication, advisory CI step |
 | quality | `npm run fallow:css` | `fallow health --css` — design-system drift, advisory CI step |
 | quality | `npm run fallow:guard` | `fallow guard` — run in `precommit` only, against the staged file list |
-| quality | `npm run precommit` | `knip` → `lint:fix` → `typecheck` → `test:local` → `fallow:boundaries` → `fallow:dead-code` → `fallow:dupes` → `fallow:css` → `fallow:guard` (staged files only) |
+| quality | `npm run precommit` | `lint:fix` → `typecheck` → `test:local` → `fallow:boundaries` → `fallow:dead-code` → `fallow:dupes` → `fallow:css` → `fallow:guard` (staged files only) |
 | quality | `npm run check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
 | ops | `npm run check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
 | ops | `npm run saxo:login` | `tsx --env-file=.env.local server/apps/v2/execution/saxo/saxo-login.ts` — Authorization Code Grant login for Saxo SIM/live, refs #1522 |
 
-**Four run scripts build first** (`start`, `orchestrator`, `api`, `smoke`),
-deliberately. A stale `dist/` fails *silently* — the process boots and
-serves the previous build — and `sharedStorePath()` resolving against the
-working directory means the wrong cwd yields a fresh empty database and a
-healthy-looking blank page. Redundant `tsc` invocations are the cheaper side of
-that trade. The `dev:*` and `tsx`-run tool scripts are the exception: they
-run from source, which is the whole point of them.
-
-**The two aliases are kept on purpose**, not left over. `serve`/`dashboard`
-are the names an operator's muscle memory and several source comments still
-use (`server/apps/supervisor/supervisor.ts`, `e2e/playwright.config.ts`).
-Renaming a script an unattended job invokes fails silently outside the
-checkout, where nothing here can see it.
+**`smoke` builds first**, deliberately. A stale `dist/` fails *silently*: the
+process boots and runs the previous build. A redundant `tsc` invocation is the
+cheaper side of that trade. The `dev:*` and `tsx`-run scripts are the
+exception: they run from source, which is the whole point of them.
 
 **There is no `format` script.** `biome check` formats as well as lints, so
 `npm run lint` already fails on an unformatted file and `npm run lint:fix` already

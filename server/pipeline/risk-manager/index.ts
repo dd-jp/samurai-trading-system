@@ -16,49 +16,16 @@ import type {
   SubclassDeploymentCap,
 } from './types.js';
 
-export type {
-  BreakerConfig,
-  BreakerEvalInput,
-  VolatilityReading,
-} from './breakers.js';
-export { CircuitBreakers } from './breakers.js';
-export { countryForInstrument } from './cii-mapping.js';
-export type { CorrelationConfig } from './correlation.js';
-export { computeCorrelationEstimate } from './correlation.js';
-export type { RiskCriticProducer } from './critic.js';
-export { buildRiskCriticProducer } from './critic.js';
-export { SqliteRiskCriticStore } from './critic-store.js';
 export {
   BookValuationError,
   computePortfolioView,
   MarkReadError,
   StaleMarkError,
-  unrealizedFor,
 } from './portfolio-view.js';
-export {
-  RISK_THRESHOLD_KEYS,
-  type RiskThresholdSource,
-  resolveRiskConfig,
-  riskThresholdsFrom,
-} from './risk-thresholds.js';
-export type { BreakerStatePersistence } from './sqlite-breaker-state-store.js';
-export { SqliteBreakerStateStore } from './sqlite-breaker-state-store.js';
-export type {
-  BreakerState,
-  EvaluatedCondition,
-  InvalidationObservable,
-  PersistedBreakerState,
-  PortfolioView,
-  RiskConfig,
-  RiskCriticVerdict,
-  RiskDecision,
-  RiskInput,
-  SessionBasis,
-  SessionBasisByClass,
-  SubclassDeploymentCap,
-} from './types.js';
+export type { RiskThresholdSource } from './risk-thresholds.js';
+export type { BreakerState, RiskConfig, RiskDecision, RiskInput } from './types.js';
 
-export const RISK_CRITIC_SKIPPED_REASON =
+const RISK_CRITIC_SKIPPED_REASON =
   'risk_critic: skipped — no critic verdict was supplied for this evaluation';
 
 function ciiWarnings(instrument: string, cii: Record<string, number>, threshold: number): string[] {

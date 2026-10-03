@@ -224,18 +224,4 @@ export class VerdictImpl implements Verdict {
   }
 }
 
-export { LoggingVerdict } from './logging-verdict.js';
-export { TelegramBotApiClient } from './notifications/telegram/telegram-bot-api-client.js';
-export { TelegramChannel } from './notifications/telegram-channel.js';
-export type { TelegramClient, TradeChannelNotifier } from './notifications/types.js';
-export { NotifyingVerdict } from './notifying-verdict.js';
-export { SqliteVerdictLogStore } from './sqlite-verdict-log-store.js';
-export type {
-  ApprovalChannel,
-  ApprovalOutcome,
-  ApprovalRequest,
-  PositionStore,
-  VerdictConfig,
-  VerdictDecision,
-  VerdictInput,
-} from './types.js';
+export type { VerdictConfig, VerdictDecision, VerdictInput } from './types.js';

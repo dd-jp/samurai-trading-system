@@ -1,4 +1,4 @@
-import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../../shared/index.js';
+import type { TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds } from '../../shared/index.js';
 import type { OutsideBenchmarkSample } from '../outside-benchmark/index.js';
 import type {
@@ -9,21 +9,6 @@ import type {
   OutsideBenchmarkSampleStore,
   PersistedArmComparisonSample,
 } from './types.js';
-
-export class InMemoryClosedTradeStore implements ClosedTradeStore {
-  private readonly trades: ClosedTrade[];
-
-  constructor(trades: ClosedTrade[] = []) {
-    this.trades = [...trades];
-  }
-
-  getClosedTradesBetween(from: Date, to: Date): ClosedTrade[] {
-    return this.trades.filter(
-      (trade) =>
-        trade.closed_at.getTime() > from.getTime() && trade.closed_at.getTime() <= to.getTime(),
-    );
-  }
-}
 
 export class InMemoryTuningStore implements TuningStore {
   private readonly weights: Record<string, number>;

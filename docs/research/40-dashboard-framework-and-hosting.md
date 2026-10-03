@@ -56,7 +56,7 @@ So it is already a single-page application: `fetch('/api/snapshot', {cache:'no-s
 ### The three break points, in order of hardness
 
 **(1) There is no route that can serve a static file. This one is decisive.**
-`server/apps/service-api/server.ts` (116 lines) has exactly three matches and a 404:
+`server/apps/service-api/server.ts` (116 lines) has exactly three matches and a 404: <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 ```
 GET /            or /index.html  →  DASHBOARD_HTML
@@ -396,7 +396,7 @@ Kept brief on purpose — this is the consequence, not the recommendation.
   *"SQLite (initial) → Postgres (scale)"* path, at the cost of a dialect migration.
 
 **Either way, the same breaking change lands.** Every method on `DashboardQueryStore`
-(`server/apps/service-api/types.ts` L320–349) is **synchronous** — all ten of them — because `better-sqlite3`
+(`server/apps/service-api/types.ts` L320–349) is **synchronous** — all ten of them — because `better-sqlite3` <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 is synchronous. Both Turso clients are promise-based (*`await turso.execute(...)`*). So the port goes
 async, `buildSnapshot` goes async, and `server.ts`'s handler goes async. Plus a second copy of the
 data, a network hop on the 3-second poll, and a recurring bill. **This is why Fork B is a

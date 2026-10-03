@@ -62,12 +62,6 @@ function ensureParentDirectory(dbPath: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
-export function miArchivePath(mode: string): string {
-  return `data/samurai-mi-${mode}.sqlite`;
-}
-
-export const DEFAULT_MI_ARCHIVE_RETENTION_DAYS = 90;
-
 export class MiArchiveStore {
   private readonly db: BetterSqlite3.Database;
 

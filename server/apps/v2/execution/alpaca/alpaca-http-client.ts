@@ -209,7 +209,7 @@ function bracketParentType(request: AlpacaBracketOrderRequest): 'limit' | 'stop_
   return request.stop_price === undefined ? 'limit' : 'stop_limit';
 }
 
-export function classifyAlpacaTradingHost(
+function classifyAlpacaTradingHost(
   baseUrl: string,
 ): AlpacaTradingEnvironment | 'other' | 'invalid' {
   let hostname: string;
@@ -261,7 +261,7 @@ function requireAlpacaCredential(
   );
 }
 
-export const ALPACA_CREDENTIAL_ENV_VARS: Readonly<
+const ALPACA_CREDENTIAL_ENV_VARS: Readonly<
   Record<AlpacaTradingEnvironment, { readonly key: string; readonly secret: string }>
 > = {
   paper: { key: 'ALPACA_API_KEY', secret: 'ALPACA_API_SECRET' },

@@ -11,37 +11,6 @@
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
       "skipFiles": ["<node_internals>/**"]
-    },
-    {
-      "name": "Service API (dashboard backend)",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx",
-      "runtimeArgs": ["watch", "--env-file=.env.local", "server/apps/service-api/index.ts"],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "internalConsoleOptions": "neverOpen",
-      "skipFiles": ["<node_internals>/**"],
-      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"]
-    },
-    {
-      "name": "Orchestrator",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx",
-      "runtimeArgs": ["watch", "--env-file=.env.local", "server/apps/orchestrator/index.ts"],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "internalConsoleOptions": "neverOpen",
-      "skipFiles": ["<node_internals>/**"],
-      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"]
-    }
-  ],
-  "compounds": [
-    {
-      "name": "Run all (client + api + orchestrator)",
-      "configurations": ["Client (Vite dev)", "Service API (dashboard backend)", "Orchestrator"],
-      "stopAll": true
     }
   ]
 }

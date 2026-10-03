@@ -12,7 +12,7 @@ export { STORE_MODES, type StoreMode } from '../../../contracts/index.js';
 
 import { STORE_MODES, type StoreMode } from '../../../contracts/index.js';
 
-export function resolveStoreMode(raw: string | undefined = process.env.SAMURAI_MODE): StoreMode {
+function resolveStoreMode(raw: string | undefined = process.env.SAMURAI_MODE): StoreMode {
   const mode = (STORE_MODES as readonly string[]).includes(raw ?? '')
     ? (raw as StoreMode)
     : undefined;

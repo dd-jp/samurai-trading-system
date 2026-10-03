@@ -20,8 +20,6 @@ export type {
   MarketContext,
   MarketContextCallback,
 } from './types.js';
-export type { CiiConsumerConfig, CiiScoreProvider } from './worldmonitor-adapter/cii-consumer.js';
-export { CiiConsumer } from './worldmonitor-adapter/cii-consumer.js';
 
 interface StoredItem {
   asset_class: AssetClass;
@@ -219,42 +217,5 @@ export class MarketIntelligenceStore {
   }
 }
 
-export {
-  DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
-  MiArchiveStore,
-  miArchivePath,
-  type RawArchiveRow,
-} from './archive/mi-archive-store.js';
-export { MI_SOURCES } from './archive/mi-sources.js';
-export {
-  GdeltIngestAgent,
-  SOURCE_GDELT,
-} from './gdelt-ingest-agent.js';
-export { GdeltScoringPass } from './gdelt-scoring-pass.js';
-export {
-  GROK_REFRESH_MS,
-  GrokAgent,
-} from './grok/grok-agent.js';
-export { NousSentimentClient } from './grok/nous-sentiment-client.js';
-export {
-  DEFAULT_MAX_SEARCH_RESULTS,
-  MAX_SEARCH_RESULTS_CEILING,
-  X_SEARCH_MODEL,
-  XSearchClient,
-} from './grok/x-search-client.js';
-export { MiIngestAgent } from './mi-ingest-agent.js';
-export { CURATED_MACRO_MARKETS } from './polymarket/curated-markets.js';
-export {
-  POLYMARKET_ASSET_CLASS,
-  PolymarketAgent,
-  type PolymarketWireClient,
-  SOURCE_POLYMARKET,
-} from './polymarket/polymarket-agent.js';
-export { PolymarketClient } from './polymarket/polymarket-client.js';
 export type { AlpacaNewsArticle } from './sources/alpaca-news-client.js';
 export { AlpacaNewsClient } from './sources/alpaca-news-client.js';
-export {
-  GdeltGkgClient,
-  PROJECTED_COLUMNS,
-} from './sources/gdelt-gkg-client.js';
-export { GDELT_MACRO_ENTITY } from './sources/gdelt-scorer.js';

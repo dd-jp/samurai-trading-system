@@ -6,7 +6,7 @@ import type { DebateResult, Direction, RoundVerdict } from './types.js';
 
 export type { AssetClass };
 
-export const LLM_CALLS_PER_ROUND = 3;
+const LLM_CALLS_PER_ROUND = 3;
 const DISAGREEMENT_DETECTION_CALLS_PER_DEBATE = 1;
 export function llmCallsPerDebate(maxRounds: number): number {
   return LLM_CALLS_PER_ROUND * maxRounds + DISAGREEMENT_DETECTION_CALLS_PER_DEBATE;

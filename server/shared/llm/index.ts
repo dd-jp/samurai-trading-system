@@ -8,20 +8,8 @@ export {
   UNGATED_LLM_IN_FLIGHT,
 } from './in-flight-gate.js';
 export type { NousChatOptions, NousChatResult } from './nous-chat.js';
-export {
-  DEFAULT_NOUS_TIMEOUT_MS,
-  NousApiError,
-  NousRefusalError,
-  NousTruncatedError,
-  nousChat,
-} from './nous-chat.js';
-export type { NousCredentials } from './nous-config.js';
-export {
-  DEFAULT_NOUS_MODELS,
-  nousCredentials,
-  tryNousCredentials,
-  tryNousEndpoint,
-} from './nous-config.js';
+export { NousApiError, NousRefusalError, NousTruncatedError, nousChat } from './nous-chat.js';
+export { tryNousCredentials, tryNousEndpoint } from './nous-config.js';
 export type { NousCitation } from './nous-responses.js';
 export { nousResponses } from './nous-responses.js';
 export type { AnthropicUsage } from './pricing.js';

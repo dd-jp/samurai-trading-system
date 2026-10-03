@@ -14,12 +14,7 @@ import {
 } from './nous-wire.js';
 import type { AnthropicUsage } from './pricing.js';
 
-export {
-  DEFAULT_NOUS_TIMEOUT_MS,
-  NousApiError,
-  NousRefusalError,
-  NousTruncatedError,
-} from './nous-wire.js';
+export { NousApiError, NousRefusalError, NousTruncatedError } from './nous-wire.js';
 
 interface NousChatMessage {
   role: 'system' | 'user' | 'assistant';

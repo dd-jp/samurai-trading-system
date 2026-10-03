@@ -1,7 +1,4 @@
-export {
-  type BenchmarkSeriesSource,
-  MarketDataBenchmarkSeriesSource,
-} from './market-data-benchmark-series-source.js';
+export type { BenchmarkSeriesSource } from './market-data-benchmark-series-source.js';
 export {
   BENCHMARK_COMPOSITION,
   type BenchmarkLeg,

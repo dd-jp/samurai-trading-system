@@ -1,10 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import {
-  LIVE_MONEY_GATES,
-  LIVE_MONEY_GATES_VERIFIED_ON,
-} from '../apps/orchestrator/live-money-gates.js';
 import { isMainModule } from './cli-entrypoint.js';
+import { LIVE_MONEY_GATES, LIVE_MONEY_GATES_VERIFIED_ON } from './live-money-gates.js';
 
 const execFileAsync = promisify(execFile);
 

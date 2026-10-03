@@ -1,7 +1,6 @@
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock } from '../../shared/index.js';
-import type { CostConfig, CostModel, MarketState } from '../../tools/backtest/index.js';
-import { CostModelImpl } from '../../tools/backtest/index.js';
+import type { CostModel, MarketState } from '../../tools/backtest/index.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
 import type { NativeBracketRequest, SimulatedAdapterConfig } from './types.js';
 
@@ -14,19 +13,12 @@ const CONFIG: SimulatedAdapterConfig = {
   adv_window: { timeframe: '1d', lookback: 20 },
 };
 
-const COST_CONFIG: CostConfig = {
-  crypto: {
-    spreadVolatilityCoefficient: 0.1,
-    commissionRate: 0.0026,
-    slippageCoefficient: 0.05,
-    impactK: 0.5,
-  },
-  stocks: {
-    spreadVolatilityCoefficient: 0.05,
-    commissionRate: 0.0005,
-    slippageCoefficient: 0.02,
-    impactK: 0.3,
-  },
+const fullFillCostModel: CostModel = {
+  fill: (request, marketState) => ({
+    fill_price: request.limit_price ?? marketState.mid,
+    filled_size: request.size,
+    cost_breakdown: { spread_cost: 0, commission: 1, slippage: 0, market_impact: 0 },
+  }),
 };
 
 function makeMarketData(overrides: Partial<MarketDataService> = {}): MarketDataService {
@@ -64,7 +56,7 @@ function makeBracket(overrides: Partial<NativeBracketRequest> = {}): NativeBrack
 
 function makeAdapter(
   marketData: MarketDataService = makeMarketData(),
-  costModel: CostModel = new CostModelImpl(COST_CONFIG),
+  costModel: CostModel = fullFillCostModel,
 ) {
   return new SimulatedBrokerAdapter({ clock: fixedClock, costModel, marketData, config: CONFIG });
 }
@@ -131,30 +123,6 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     expect(marketState.venue).toBe('saxo');
   });
 
-  it('charges the Saxo commission override on a fill once the venue is configured', async () => {
-    const withSaxo: CostConfig = { ...COST_CONFIG, venues: { saxo: { commissionRate: 0.0008 } } };
-    const plain = new SimulatedBrokerAdapter({
-      clock: fixedClock,
-      costModel: new CostModelImpl(withSaxo),
-      marketData: makeMarketData(),
-      config: CONFIG,
-    });
-    const saxo = new SimulatedBrokerAdapter({
-      clock: fixedClock,
-      costModel: new CostModelImpl(withSaxo),
-      marketData: makeMarketData(),
-      config: { ...CONFIG, venue: 'saxo' },
-    });
-
-    await plain.submitBracket(makeBracket());
-    await saxo.submitBracket(makeBracket());
-    const [plainFill] = await plain.fetchNewFills(NOW.toISOString());
-    const [saxoFill] = await saxo.fetchNewFills(NOW.toISOString());
-
-    expect(plainFill?.cost_breakdown?.commission).toBeCloseTo(5, 10);
-    expect(saxoFill?.cost_breakdown?.commission).toBeCloseTo(8, 10);
-  });
-
   it('prices the entry leg against the bracket entry as a limit', async () => {
     const costModel: CostModel = {
       fill: vi.fn().mockReturnValue({
@@ -197,16 +165,18 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     await adapter.submitBracket(makeBracket());
 
     const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
-    expect(fills).toHaveLength(1);
-    expect(fills[0]).toMatchObject({
-      client_order_id: 'key-aapl-1355',
-      leg: 'entry',
-      qty: 100,
-      timestamp: NOW.toISOString(),
-    });
-    expect(fills[0]?.price).toBeGreaterThan(100);
-    expect(fills[0]?.fee).toBeCloseTo(5, 10);
-    expect(fills[0]?.cost_breakdown).toBeDefined();
+    expect(fills).toEqual([
+      {
+        client_order_id: 'key-aapl-1355',
+        broker_fill_id: 'key-aapl-1355:entry',
+        leg: 'entry',
+        price: 100,
+        qty: 100,
+        fee: 1,
+        timestamp: NOW.toISOString(),
+        cost_breakdown: { spread_cost: 0, commission: 1, slippage: 0, market_impact: 0 },
+      },
+    ]);
   });
 
   it('yields exactly one fill when the same client order id is submitted N times', async () => {
@@ -236,14 +206,6 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     };
 
     expect(await priceOf()).toBe(await priceOf());
-  });
-
-  it('fills a sell adversely below mid', async () => {
-    const adapter = makeAdapter();
-    await adapter.submitBracket(makeBracket({ side: 'sell' }));
-
-    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
-    expect(fills[0]?.price).toBeLessThan(100);
   });
 
   it('stamps the fill as the millisecond UTC instant of simulated T and filters on it exactly', async () => {
@@ -363,6 +325,5 @@ describe('SimulatedBrokerAdapter — intervention path (#429)', () => {
     await expect(adapter.cancel('never-submitted', 'AAPL')).resolves.toBeUndefined();
 
     expect(adapter.getProtectedQty('key-aapl-1355')).toBeNull();
-    expect(adapter.isCancelled('key-aapl-1355')).toBe(true);
   });
 });

@@ -1,7 +1,6 @@
 export { BOOK_CURRENCY, isBookCurrency, isPenceCurrency } from './book-currency.js';
 export type { Clock } from './clock.js';
 export { SimulatedClock, SystemClock } from './clock.js';
-export type { RiskLogStore, TraderLogStore } from './decision-records.js';
 export { digest } from './digest.js';
 export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-integer.js';
 export { escalatesAt } from './escalation-cadence.js';
@@ -34,9 +33,7 @@ export {
 } from './http/response-errors.js';
 export type { RetryAttemptReport, RetryConfig } from './http/retry.js';
 export { withRetry, worstCaseFetchMs } from './http/retry.js';
-export type { TokenBucketConfig } from './http/token-bucket.js';
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';
-export type { VenuePacingConfig } from './http/venue-pacing.js';
 export {
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
@@ -65,7 +62,6 @@ export {
 } from './safe-log.js';
 export { maskAndCap, maskCredentials, sanitizeLogText } from './sanitize-log-text.js';
 export { readSeededFile } from './seeded-file.js';
-export type { ContinueOnFaultEffects, ErrorStream, StdoutStream } from './stdout-fault-guard.js';
 export {
   guardedWrite,
   installContinueOnFault,
@@ -101,7 +97,6 @@ export type {
   LogEntryTemplate,
   LogEventCode,
   Logger,
-  LogLevel,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,

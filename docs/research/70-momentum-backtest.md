@@ -202,7 +202,7 @@ Doc 11's control construction: the identical basket, identical sizing rule (inve
 
 - **Walk-forward:** anchored is not proposed. Rolling folds: 16 contiguous, non-overlapping folds over the evaluated window (about 8 months each at 10.7 years). Selection inside each training half uses only training returns; the out-of-sample path is the concatenation of test folds. **No fold overlaps**, no purging needed at monthly cadence beyond dropping the first lookback of each test fold's signals (signals are computed from full history, so no test fold's signal uses data after its own decision bar — the look-ahead test in the eval line).
 - **PBO:** `pbo()` in `server/tools/backtest/overfitting.ts` over the trial × fold matrix (combinatorially symmetric cross-validation, 12,870 partitions at 16 folds). Pass ≤ 0.10 per G9.
-- **Code changes in the build phase (recorded here so the eval can check them):** `KILL_LINE.maxPbo` in `server/tools/backtest/stage2-verdict.ts` (0.05 → 0.10), `max_pbo.max` in `server/shared/threshold-bounds.ts` (0.05 → 0.10), **and** `PBO_REJECT_THRESHOLD` in `server/tools/backtest/overfitting.ts` (0.05 → 0.10) — a third site doc 67 Step 1 does not list, found on reading the file — with their tests.
+- **Code changes in the build phase (recorded here so the eval can check them):** `KILL_LINE.maxPbo` in `server/tools/backtest/stage2-verdict.ts` (0.05 → 0.10), `max_pbo.max` in `server/shared/threshold-bounds.ts` (0.05 → 0.10), **and** `PBO_REJECT_THRESHOLD` in `server/tools/backtest/overfitting.ts` (0.05 → 0.10) — a third site doc 67 Step 1 does not list, found on reading the file — with their tests. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 ### 2.15 The strategy is written as the module live code imports
 
@@ -218,7 +218,7 @@ Per trial: annualised return, vol, Sharpe, deflated Sharpe, max drawdown, turnov
 
 ## 3. Rulings this proposal does not touch
 
-Q17's Step 2 verdict (debate sleeve long and short, each a counted trial vs arm 2) and G18 (sentiment/social in the debate sleeve) concern the other sleeve; nothing above depends on or contradicts them. G5's veto shadow book is Step 3. Doc 67's G9 row also names `server/apps/orchestrator/production.ts`, `server/pipeline/feedback-loop/sqlite-tuning-store.ts` and `server/pipeline/risk-manager/risk-thresholds.ts` as 0.05 enforcement points; they read the bound from `server/shared/threshold-bounds.ts`, so the §2.14 change there carries through, and the build phase confirms each with a test rather than assuming it.
+Q17's Step 2 verdict (debate sleeve long and short, each a counted trial vs arm 2) and G18 (sentiment/social in the debate sleeve) concern the other sleeve; nothing above depends on or contradicts them. G5's veto shadow book is Step 3. Doc 67's G9 row also names `server/apps/orchestrator/production.ts`, `server/pipeline/feedback-loop/sqlite-tuning-store.ts` and `server/pipeline/risk-manager/risk-thresholds.ts` as 0.05 enforcement points; they read the bound from `server/shared/threshold-bounds.ts`, so the §2.14 change there carries through, and the build phase confirms each with a test rather than assuming it. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 
 ## 4. Questions for David (nothing below is decided)
 
@@ -515,7 +515,7 @@ which writes `data/backtest/momentum/lse/verdict-{1000,5000}-{whole,fractional}.
 
 - `server/pipeline/momentum/`: `bars` (sorted-unique-date invariant, `windowCoverage`/`coverageSatisfied` on every windowed read), `signal` (time-series trend, cross-sectional top-K), `sizing` (inverse-vol, equal-weight, whole-share rounding), `loss-budget` (G6/G10 state machine, ruling (j) reference and halt), `stop` (ATR(20), entry − 2 × ATR, never moved up, gap fill), `costs` (Saxo 0.08%/side + custody; Alpaca SEC/FINRA TAF/CAT + half spread). 73 unit tests; Stryker mutation score 98.64% across the six modules.
 - `server/tools/backtest/momentum/`: runner, simulation (1-bar execution lag, cash-limited buys, delisting exits, custody accrual, budget marking in GBP), 16-fold CSCV via `overfitting.ts` (`pbo`, `deflatedSharpe`, `minbtl`), verdict and markdown report, trial ledger, Alpaca bar puller and spread measurer, synthetic fixtures. 80 tests including an end-to-end run on a fixture and a byte-identical reproducibility test.
-- G9 alignment (§2.14): `KILL_LINE.maxPbo`, `max_pbo.max` and `PBO_REJECT_THRESHOLD` are 0.10, with tests; `server/shared/threshold-bounds-readers.test.ts` proves `resolveRiskConfig` and `SqliteTuningStore.setRiskThreshold` refuse 0.11 and accept 0.10 through `threshold-bounds`. Refs #1715.
+- G9 alignment (§2.14): `KILL_LINE.maxPbo`, `max_pbo.max` and `PBO_REJECT_THRESHOLD` are 0.10, with tests; `server/shared/threshold-bounds-readers.test.ts` proves `resolveRiskConfig` and `SqliteTuningStore.setRiskThreshold` refuse 0.11 and accept 0.10 through `threshold-bounds`. Refs #1715. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at commit 79e88af4 -->
 - Ruling (l): the Saxo appropriateness test is David's admin; nothing in the code depends on it.
 
 ### 9.6 Session eval (doc 68), run 2026-09-24 on the branch

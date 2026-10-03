@@ -1103,7 +1103,7 @@ variable only; no value appears here or in any log line the run produced.
 
 ### 6.1 Method
 
-`startFromEnvironment` (`server/apps/orchestrator/index.ts`) with the shipped Saxo profile and
+`startFromEnvironment` (`server/apps/orchestrator/index.ts`) with the shipped Saxo profile and <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 **two injections**, each standing in for a seam this repo deliberately leaves unwired —
 `accountState` (§6.3) and `lseMarkClient` (#895). Nothing else was stubbed: the broker adapter,
 the instrument resolver, the calendar, the scheduler, the store and the startup reconcile are
@@ -1279,7 +1279,7 @@ against stored keys, so adapter-side truncation would desynchronise reconcile an
 silently — the #1215 audited-paths hazard. Any real fix changes `computeIdempotencyKey`'s own
 output, or makes it venue-aware. That key is a documented invariant restated across CONTEXT.md and
 the specs by #1487, so it was an owner decision with a decision record behind it, not a patch. **It
-was pinned instead**, by a case in `server/apps/orchestrator/saxo-composition-root.test.ts` that
+was pinned instead**, by a case in `server/apps/orchestrator/saxo-composition-root.test.ts` that <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 drove `startFromEnvironment` to the sixth stage and asserted both the refusal and that the venue
 received nothing.
 

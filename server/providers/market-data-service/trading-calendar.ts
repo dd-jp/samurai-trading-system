@@ -154,7 +154,7 @@ function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate 
   };
 }
 
-export function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
+function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const next = new Date(Date.UTC(year, month - 1, day) + MS_PER_DAY);
 
   return {
@@ -432,36 +432,4 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   coversCloseFor(instant: Date): boolean {
     return civilDateKey(toCivilDate(instant, LONDON_ZONE)) <= LSE_TABLE_COVERAGE_END;
   }
-}
-
-const MINUTES_PER_DAY = 24 * 60;
-
-const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
-const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
-
-export function londonEntryWindow(
-  startMinutes: number = OVERLAP_WINDOW_OPEN_MINUTES,
-  endMinutes: number = OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
-): (instant: Date) => boolean {
-  for (const [name, value] of [
-    ['startMinutes', startMinutes],
-    ['endMinutes', endMinutes],
-  ] as const) {
-    if (!Number.isInteger(value) || value < 0 || value > MINUTES_PER_DAY) {
-      throw new Error(
-        `londonEntryWindow needs ${name} to be a whole minute-of-day in [0, ${MINUTES_PER_DAY}], got ${value}. ` +
-          `Minutes since midnight London — 15:45 is ${15 * 60 + 45}, not 1545.`,
-      );
-    }
-  }
-  if (!(startMinutes < endMinutes)) {
-    throw new Error(
-      `londonEntryWindow needs startMinutes < endMinutes, got ${startMinutes} and ${endMinutes}`,
-    );
-  }
-
-  return (instant: Date): boolean => {
-    const { minutesSinceMidnight } = toZonedTime(instant, LONDON_ZONE);
-    return minutesSinceMidnight >= startMinutes && minutesSinceMidnight < endMinutes;
-  };
 }
